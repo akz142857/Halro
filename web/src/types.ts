@@ -499,7 +499,7 @@ export type ModelCapabilitySource =
 
 export type AvailabilityState = "available" | "unverified" | "unavailable";
 export type TargetLifecycle = "active" | "deprecated" | "unknown";
-export type ResolutionState = "resolved" | "unknown" | "conflicting" | "no_variant";
+export type ResolutionState = "resolved" | "unknown" | "conflicting" | "no_variant" | "covered_elsewhere";
 export type ClaimStatus = "supported" | "unsupported" | "unknown" | "conflicting";
 
 export interface InvocationTargetScopeKey {
@@ -557,6 +557,8 @@ export interface DeploymentVariant {
 export interface ResolvedInvocationTarget extends InvocationTargetDescriptor {
   variants: DeploymentVariant[];
   resolution_state: ResolutionState;
+  /** Interfaces the catalogue lists this model under, when none of them is bound here. */
+  covered_by_profiles?: string[];
   resolution_revision: string;
 }
 
@@ -586,6 +588,8 @@ export interface InvocationTargetCatalog {
   catalog_revision: string;
   provider_revision: number;
   degraded_bindings?: DegradedBinding[];
+  /** The catalogue was never fetched or the copy expired; reading never dials. */
+  not_cached?: boolean;
   fetched_at: string;
   expires_at: string;
   cached: boolean;

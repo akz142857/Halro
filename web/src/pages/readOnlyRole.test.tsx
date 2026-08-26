@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
+import { NotificationProvider } from "../notifications";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { PoliciesPage } from "./PoliciesPage";
 import { ProjectsPage } from "./ProjectsPage";
@@ -67,7 +68,11 @@ function renderAs(role: AdminRole, element: React.ReactElement) {
   // Seeded rather than fetched: App holds this query open in the real console,
   // and the read-only decision has to come from the same cache entry.
   client.setQueryData(["session"], session(role));
-  return render(<QueryClientProvider client={client}>{element}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>
+      <NotificationProvider>{element}</NotificationProvider>
+    </QueryClientProvider>,
+  );
 }
 
 describe("read-only role", () => {
@@ -402,7 +407,7 @@ describe("destructive step-up", () => {
     expect(screen.getByRole("dialog", { name: "GPT 详情" })).toBeVisible();
   });
 
-  it("offers price setup inside the enable error when no effective price exists", async () => {
+  it("says why an enable was refused in its own words, and offers the way out", async () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
@@ -433,10 +438,14 @@ describe("destructive step-up", () => {
     renderAs("administrator", <DeploymentsPage />);
     fireEvent.click(await screen.findByRole("button", { name: /^启用/ }));
 
-    const error = await screen.findByRole("alert");
-    expect(within(error).getByText("该部署没有已生效的价格版本。设置价格后再启用；如模型免费，请明确选择“免费”。")).toBeVisible();
-    expect(within(error).queryByText(/deployment requires an effective/)).not.toBeInTheDocument();
-    fireEvent.click(within(error).getByRole("button", { name: "设置价格" }));
+    // The refusal is a reply to the click, so it is reported once, in the
+    // notification channel — not kept on the card as though it described the
+    // deployment. The upstream's own sentence stays out either way.
+    expect(await screen.findByText("该部署没有已生效的价格版本。设置价格后再启用；如模型免费，请明确选择“免费”。")).toBeVisible();
+    expect(screen.queryByText(/deployment requires an effective/)).not.toBeInTheDocument();
+    // The way to the form is the card's line about the missing price, which is
+    // there whether or not an enable was just refused.
+    fireEvent.click(screen.getByRole("button", { name: "未设置价格" }));
     expect(await screen.findByRole("dialog", { name: "设置价格" })).toBeVisible();
   });
 });

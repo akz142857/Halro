@@ -882,3 +882,44 @@ func TestOnlyTheDeepSeekVisionModelClaimsVision(t *testing.T) {
 		}
 	}
 }
+
+// The console told an operator that a model the catalog lists is "not in the
+// catalogue", because the only question ever asked of it was whether the
+// provider's own bindings covered the model. `deepseek.v3.1` is listed under
+// the Mantle chat interfaces; a provider bound only to the OpenAI-shaped ones
+// resolved it to nothing and offered a billable detection call to decide
+// something already written down.
+func TestProfilesCoveringAnswersWhichInterfaceListsAModel(t *testing.T) {
+	catalog := Builtin()
+	profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "deepseek.v3.1")
+	if len(profiles) == 0 {
+		t.Fatal("a model the builtin catalog lists was reported as covered by nothing")
+	}
+	if !slices.Contains(profiles, domain.ProfileBedrockMantleChat) {
+		t.Fatalf("the interface serving the model was not named: %v", profiles)
+	}
+	if slices.Contains(profiles, domain.ProfileBedrockMantleOpenAIChat) {
+		t.Fatalf("an interface that does not serve the model was named: %v", profiles)
+	}
+	if !slices.IsSorted(profiles) {
+		t.Fatalf("profiles were not returned in a stable order: %v", profiles)
+	}
+}
+
+// Exact on the model, like Lookup. A prefix match would promote an unknown
+// future model to an interface nobody has claimed serves it — which is the
+// guess the whole catalog exists to avoid.
+func TestProfilesCoveringDoesNotMatchOnAPrefix(t *testing.T) {
+	catalog := Builtin()
+	if profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "deepseek.v3"); len(profiles) != 0 {
+		t.Fatalf("a prefix matched a listed model: %v", profiles)
+	}
+	if profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "no.such.model"); len(profiles) != 0 {
+		t.Fatalf("an unlisted model was reported as covered: %v", profiles)
+	}
+	// Provider type is part of the question: the same name under a different
+	// upstream is a different model.
+	if profiles := catalog.ProfilesCovering(domain.ProviderOpenAI, domain.TargetModelID, "deepseek.v3.1"); len(profiles) != 0 {
+		t.Fatalf("a model was reported as covered under the wrong provider type: %v", profiles)
+	}
+}

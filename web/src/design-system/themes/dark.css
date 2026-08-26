@@ -24,7 +24,7 @@
 
   /* Borders */
   --color-border-default: var(--p-ink-700);
-  --color-border-strong: var(--p-ink-400);
+  --color-border-strong: var(--p-ink-350);
 
   /* Actions & focus */
   --color-action-primary: var(--p-lime-400);

@@ -402,14 +402,14 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryFn: api.redactionPolicies,
   });
   const availableRoutes = useQuery({
-    queryKey: ["project-route-aliases"],
-    queryFn: api.allRoutes,
+    queryKey: ["routes"],
+    queryFn: api.routes,
   });
   const routeOptions = useMemo(() => {
     const retained = new Set(current?.allowed_models ?? []);
     const options = new Map<string, { enabledCount: number; strategies: Set<string> }>();
     retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
-    availableRoutes.data?.forEach((route) => {
+    availableRoutes.data?.items.forEach((route) => {
       const existing = options.get(route.public_model) ?? { enabledCount: 0, strategies: new Set<string>() };
       // Both readings come from the enabled routes only. Counting the strategy
       // of a disabled route made a retired row with a different strategy hide

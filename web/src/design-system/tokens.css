@@ -16,7 +16,17 @@
   --p-ink-600: #2c4b43;
   --p-ink-500: #3d5f56;
   --p-ink-400: #526a63;
-  --p-ink-300: #82958f;
+  /* Between 400 and 300, and it exists because those two are each spoken for:
+     ink-400 is the light theme's tertiary text, where lightening it costs
+     contrast rather than gaining it, and ink-300 is a text colour that reads as
+     a line when a border borrows it. A strong border on a card sat at 2.42:1,
+     under the 3:1 that a boundary carrying meaning needs. */
+  --p-ink-350: #667e77;
+  /* Lightened by three steps to clear AA on the raised surface: a card is
+     painted on --p-ink-800, and tertiary text sat at 4.46:1 there. The
+     contrast check could not see it, because the surface a card uses was not
+     in the list of surfaces it checked. */
+  --p-ink-300: #859892;
   --p-ink-200: #b7c6c0;
   --p-ink-100: #d6e2dd;
   --p-ink-50:  #eaf4f0;

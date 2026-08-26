@@ -65,8 +65,15 @@
   gap: var(--resource-identity-gap);
 }
 
+/* h3 is here because a card's name is a heading — the list's is not. Both read
+   as the same line, so both take the same type and the same clamp; without it
+   the h3 fell back to the global 18px and lost the ellipsis, and a long name
+   wrapped the identity slot onto a second line that its neighbours did not
+   have. */
 .resource-identity > strong,
+.resource-identity > h3,
 .resource-identity > span > strong {
+  margin: 0;
   overflow: hidden;
   color: var(--color-text-primary);
   font-size: var(--font-size-md);

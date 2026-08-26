@@ -191,10 +191,26 @@ function unreferencedKeys(): string[] {
   };
   walk(sourceRoot);
   const source = files.map((file) => readFileSync(file, "utf8")).join("\n");
-  const dynamicPrefixes = [...source.matchAll(/`([A-Za-z0-9_.]*?)\$\{/g)].map((match) => match[1]).filter(Boolean);
+  // Only templates that are a t() argument. The scan used to read every
+  // template literal in the tree, so a `curl ${…}` somewhere unrelated
+  // contributed `curl` as a prefix and waved through anything starting with it.
+  //
+  // A one-segment prefix such as `custody.` is kept, because it is a real
+  // reference: the code does build those keys at runtime. It is a broad one —
+  // every key in that namespace passes — and narrowing it is a change to the
+  // call sites, not to this scan, which cannot tell a licence from a lookup.
+  const dynamicPrefixes = [...source.matchAll(/\bt\(\s*`([A-Za-z0-9_.]*?)\$\{/g)]
+    .map((match) => match[1])
+    .filter(Boolean);
   const pluralSuffix = /_(zero|one|two|few|many|other)$/;
+  // A key is referenced when its whole name appears, not when a longer name
+  // starts with it: `deployments.evidence` was counted as read because
+  // `deployments.evidenceValues.` is written somewhere, and the same substring
+  // match hid eight others. The boundary is anything that cannot continue a key.
+  const literalReference = (path: string) =>
+    new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![A-Za-z0-9_.])").test(source);
   const referenced = (path: string) =>
-    source.includes(path) || dynamicPrefixes.some((prefix) => path.startsWith(prefix));
+    literalReference(path) || dynamicPrefixes.some((prefix) => path.startsWith(prefix));
   return flattenKeys(zhCN)
     .filter((path) => !referenced(path) && !referenced(path.replace(pluralSuffix, "")))
     .sort();

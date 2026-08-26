@@ -129,24 +129,27 @@ chat 路径的等价实测尚未做，是第 11.8 节列出的待补验证之一
 Anthropic 都能产出 declared 级的 vision 证据**，Gemini 有规格但无模态，
 OpenAI 家族（含 Mantle chat）只有标识。
 
-### 1.5 新发现：Mantle chat 的枚举路由是错的
+### 1.5 目录是账号级的，枚举**故意**不套路由前缀
 
-`modelCatalogURL()` 不套 `operationPathPrefix`：
+`modelCatalogURL()` 不套 `operationPathPrefix`，这不是缺陷，是实测之后的决定。
+本文曾把它当成"新发现的缺陷"并要求与 F4 一起修；那次修改上线后，两个
+`/openai/v1` 的 Mantle profile 上的每一次模型枚举与连接测试都答 404，于是被撤销
+（`0c886fa`）。2026-08-25 对真实账号（us-east-2）的实测：
 
-```go
-func (a *Adapter) modelCatalogURL() (url.URL, error) {
-    …
-    endpoint.Path = versionedPath(basePath, "models")   // 未使用 a.operationPathPrefix
 ```
-（`internal/provider/openai/adapter.go:151-161`）
+GET /v1/models                        200
+GET /openai/v1/models                 404
+GET /v1/models/openai.gpt-5.5         200
+GET /openai/v1/models/openai.gpt-5.5  404
+```
 
-而同一个适配器的 `operationURL` 是套的（`:543-550`）。Mantle 的
-`bedrock.mantle.openai.chat.v1` 带 `openai/v1` 前缀（`app/providers.go:759-770`），
-于是它的模型枚举会打到 `<base>/v1/models` 而不是 `<base>/openai/v1/models` ——
-发现与它服务的操作对不上同一个 URL，正是那段注释声称要避免的事。
+最后一行是关键：`gpt-5.5` 由 `/openai/v1` 服务，在那条路由下依然没有目录条目。
+**目录是账号级的，推理是路由级的**，两个地址本就不该统一。理由现在写在
+`internal/provider/openai/adapter.go:151` 的注释里，两个测试
+（`TestModelCatalogIsNotScopedToTheOperationRoute`、
+`TestPinnedRouteCarriesOperationsWhileCatalogStaysOnV1`）断言的正是两者**不一致**。
 
-这条第一版完全没看到，且它会让 F4 交付一个"Responses 能枚举、chat 静默走错路由"的
-不一致状态，必须一起修。
+记在这里是因为它是本文第四次诊断被推翻，而前三次都记在开头的修订记录里。
 
 ### 1.6 顺带记录的既有缺口
 
@@ -312,16 +315,17 @@ export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive"
 
 ## 5. 数据缺口清单
 
+已关闭的条目就地删除，不留删除线：D1（Mantle Responses 枚举，F4）、D6（`reasoning`
+探针，F6）、D8（枚举路由，见 §1.5，是被撤销而不是被修复）、D10（探针健康入 Admin
+API，§14.17）。
+
 | # | 缺口 | 位置 | 影响 |
 | --- | --- | --- | --- |
-| D1 | Mantle Responses profile 无模型枚举 | `provider/bedrockmantle/adapter.go` | 该 profile 下模型不进目录 |
 | D2 | OpenAI 家族目录只有标识，无模态 | `provider/openai/adapter.go:206-222` | 这条路上模态行只能是"未知"（**注意 Anthropic 不在此列**，见 §1.4） |
 | D3 | 无模型描述文案 | 全链路 | AWS 抽屉那段简介无对应数据 |
 | D4 | 无服务商 logo | 全链路 | 卡片左上角图标无对应数据 |
 | D5 | 目录层无价格 | 价格挂在部署上 | 目录卡片显示不了参考价 |
-| D6 | `reasoning` 无探针 | `provider/capability_detection.go` | 面板需要 `not_probed` 承接 |
 | **D7** | **部署不留存探针级结果** | `web/src/types.ts:465`、`:333` | 见下 |
-| ~~**D8**~~ | ~~`modelCatalogURL` 忽略路由前缀~~ | `provider/openai/adapter.go` | **已修复**（P1b） |
 
 ### D7 —— 抽屉的完整状态矩阵在部署上无源可取
 
@@ -494,16 +498,18 @@ zh-CN 与 en-US 严格等键（`web/src/i18n/i18n.test.tsx:18`）。实际需要
 | ~~**P0b**~~ | 前端 `capabilityUnavailableReason` 补 `not_probed` 分支加一条文案 | **已完成** —— 新增 `deployments.detectionNotProbed` |
 | ~~**P0c**~~ | 在「验证没有得出结论」横幅里渲染已有的 `error_class` | **已完成** —— 复用既有文案键，零新增 |
 | ~~P1a~~ | F2b：`provider_status` 与 `provider_code` 落到探针结果（**先收敛后持久化**） | **已完成** —— 收敛统一到 `provider.SafeProviderIdentifier` |
-| ~~P1b~~ | D8：`modelCatalogURL` 套上 `operationPathPrefix` | **已完成** —— 枚举与操作走同一路由，测试同时断言两者一致 |
+| P1b | `modelCatalogURL` 套上 `operationPathPrefix` | **已撤销** —— 实测证明目录是账号级，套前缀让每次枚举与连接测试答 404（`0c886fa`）。见 §1.5 |
 | ~~P1c~~ | F4：Mantle Responses profile 加 `ListInvocationTargets` | **已完成** —— 断言了不实现 `ProviderMetadataMapper`，条目上限 2000 |
-| ~~P2a~~ | 抽屉组件 | **不做** —— 操作者决定保留现有弹窗做添加/编辑 |
+| ~~P2a~~ | 抽屉组件 | **已完成** —— 那句「不做」当天即被推翻，抽屉见 §14；添加/编辑仍用现有弹窗 |
 | ~~P2b~~ | 模态映射放进 `internal/domain` 加单测 | **已完成** —— `capability_modality.go`，经服务商 profiles 端点下发，golden 已更新 |
 | ~~P3~~ | 卡片网格 | **已完成** —— 新增 `resource-card.css` 契约，漂移/路由/价格/状态词全部保留在卡片上 |
 | 不做 | 「目录中可添加」分段 | 见 §3.1 |
 | ~~待定~~ | F6 已完成；F5 受阻不做 | 见 §11 |
 
-**P0a 加 P0b 加 P0c 合计约两天，交付全部已陈述的止痛。** 抽屉与卡片是另一件事，
-建议等有值得画的模态数据之后，作为独立文档重开。
+**P0a 加 P0b 加 P0c 合计约两天，交付全部已陈述的止痛。** 抽屉与卡片当时被判为
+「另一件事，建议独立文档重开」；实际上两者都在 08-24/08-25 就地做完了，过程记在
+§13 与 §14。这张表只说这一期的三件止痛，**不要拿它当全文的进度表读** —— §15 的
+P0–P3 才是今天的下一步。
 
 ---
 
@@ -518,9 +524,10 @@ zh-CN 与 en-US 严格等键（`web/src/i18n/i18n.test.tsx:18`）。实际需要
   送到控制台（`internal/app/admin_providers.go:611`、`:681`），是个现成的诱惑；
   面板只展示 `provider_status` 与 `provider_code`。
 - **展开任何目录视图都不得发起上游调用**（§3.1）。
-- **上游可控的展示字符串必须有渲染上限。** `normalizeInvocationTargets` 把
-  `TargetID` 截到 2048，但 `DisplayName`、`OwnedBy`、`Region` 和**条目数**
-  都没有上限（`internal/app/admin_invocation_targets.go:702-730`）。
+- **上游可控的展示字符串必须有渲染上限。** 已落地（2026-08-26，见 §16.5）：条目数超限
+  拒绝而非截断，`DisplayName` / `OwnedBy` 超长只丢标签不丢模型，全部在
+  `normalizeInvocationTargets` 这一个交汇点执行。（`Region` 不在此列 —— 它在任何适配器里
+  都不是上游可控量。）
 
 ---
 
@@ -583,7 +590,6 @@ zh-CN 与 en-US 严格等键（`web/src/i18n/i18n.test.tsx:18`）。实际需要
 它是识别选择指纹的输入之一（`app/admin_model_capability_detections.go:147-151`），
 所以旧结果不会在新语义下被静默复用；这不是相等性闸门，旧记录只是不再命中指纹，
 不会被拒绝。
-
 
 `classifyCapabilityProbeError` 比的是整串，而适配器把 param 拼了进去（§1.2）。
 改法：在比较前按第一个冒号拆开，只比 code 半段；或改成前缀匹配。
@@ -683,8 +689,9 @@ ProviderCode   string `json:"provider_code,omitempty"`
 ### 11.6 F4 / F5 / F6 / F7
 
 **F4 —— Mantle Responses 模型枚举。** 给 `ResponsesAdapter` 实现
-`ListInvocationTargets`，读 `operationURL("models")`（`Probe` 已在打这个端点，
-`adapter.go:93`），并声明 `CanEnumerate`、`CanDescribe`、`CanVerify`。
+`ListInvocationTargets`，并声明 `CanEnumerate`、`CanDescribe`、`CanVerify`。
+（落地时读的是 `operationURL("models")`；2026-08-25 实测后改走账号级的
+`catalogURL()`，见 §1.5。）
 限制写进注释：OpenAI 形状的 `/v1/models` 只给 `id` 与 `owned_by`，**不给模态**。
 `MapCapabilityClaims` 这一期**不实现** —— 没有元数据就不要产 claim。
 同时给枚举结果一个明确的条目上限（§8 最后一条）。
@@ -771,7 +778,8 @@ ProviderCode   string `json:"provider_code,omitempty"`
 
 ### 12.1 已完成
 
-P0a/P0b/P0c、P1a/P1b/P1c、P2b，以及 F0、F2a、F2b、F3、F4、F6、F7 与 D8。要点：
+P0a/P0b/P0c、P1a/P1c、P2b，以及 F0、F2a、F2b、F3、F4、F6、F7。要点：
+（P1b 与 D8 曾记在这里，已于 2026-08-25 被实测撤销 —— 见 §1.5。）
 
 - **F0**：`classifyCapabilityProbeError` 改用 `strings.Cut` 取 code 半段。
   `CapabilityDetectorContractVersion` 提到 `v2`（它是识别选择指纹的输入，
@@ -821,28 +829,6 @@ P0a/P0b/P0c、P1a/P1b/P1c、P2b，以及 F0、F2a、F2b、F3、F4、F6、F7 与 
 2. 拿到两份真实列表的比对结果。
 
 在这之前，抽屉里 Mantle 的模态行显示"该接口不提供模态信息"。
-
-### 12.3 P2a（抽屉）与 P3（卡片网格）：未开工，理由
-
-这两项**没有做**，不是因为工作量，而是因为它们各自卡在一个本文自己列为待决的问题上：
-
-- **D7 是硬阻塞。** 已保存的 `Deployment` 只带三档 `capability_evidence`，
-  七值探针状态只挂在 `ModelCapabilityDetection` 上，**没有按部署返回探针结果的端点**。
-  所以"点部署卡片 → 面板展开完整状态矩阵"目前不可实现。要么在 Deployment 上
-  留存 detection 引用并加端点，要么把完整矩阵限定在创建流程、部署面板只给三档 ——
-  这是产品决定，不是实现细节。
-- **抽屉的模态性要先定。** §6.1 已经指出 `aria-modal` 加 Tab 陷阱与"不阻塞、
-  可与列表同时可见"直接冲突，而 Modal 现有的陷阱实现与它的标记深度耦合、
-  不可直接调用；且整个控制台没有滚动锁定。定成非阻塞就要抽
-  `useDismissable()` 并让 Modal 一起用，这是一次 Modal 重构。
-- **P3 还压着 §6.8 的契约问题**：卡片会让部署页成为唯一脱离 `resource-list.css`
-  的列表，而那个文件存在的目的正是防止这种漂移。
-- **§10 的四个问题里有两个会改变行为**，不是布局问题：漂移部署在抽屉里怎么呈现；
-  重新识别会不会覆盖操作者手动声明的能力（`resetDetection()` 与
-  `setManualDeclaration(true)` 成对出现，暗示互斥，但没有任何地方写明谁赢）。
-
-按四份评审的一致意见：止痛已经交付完毕，剩下的是一次控制台重设计，
-建议等这些决定有了答案、且有值得画的模态数据之后，作为独立文档重开。
 
 ---
 
@@ -1021,7 +1007,6 @@ P0a/P0b/P0c、P1a/P1b/P1c、P2b，以及 F0、F2a、F2b、F3、F4、F6、F7 与 
 - **只读角色**：抽屉里每个写操作都要带 `title` 说明理由（§7.3 的既有要求）。
 
 ### 14.6 数据缺口（补充 §5）
-
 | # | 缺口 | 影响 |
 | --- | --- | --- |
 | D9 | `/usage` 没有 `deployment_id` 过滤（`internal/app/admin_usage.go:349-354` 只有 project / provider / request / model / provider_model / status） | 「这个部署最近花了多少」做不到精确；用 `provider_id` + `provider_model` 近似会把同一上游模型的两个部署混在一起 |
@@ -1644,10 +1629,10 @@ claim 出模型并不具备的能力的那个习惯。
 
 | 期 | 内容 | 依赖 |
 | --- | --- | --- |
-| P0 | S1 组合列表分档 | 无，数据已在响应体里 |
-| P1 | S2 `covered_elsewhere` + 指路文案 | 内置目录的 Mantle 条目（已完成） |
-| P2 | S3 空态三分 + S4 来源徽标 | 无 |
-| P3 | S5 Bedrock 流式字段 | 无 |
+| ~~P0~~ | S1 组合列表分档 | **已完成**（2026-08-26），见 §16.5 |
+| ~~P1~~ | S2 `covered_elsewhere` + 指路文案 | **已完成**（2026-08-26），见 §16.5 |
+| ~~P2~~ | S3 空态三分 + S4 来源徽标 | **已完成**（2026-08-26），见 §16.6 |
+| ~~P3~~ | S5 Bedrock 流式字段 | **已完成**（2026-08-26），见 §16.6 |
 
 验收（每条都要能在没有真实凭据的情况下用测试证明）：
 
@@ -1669,3 +1654,282 @@ claim 出模型并不具备的能力的那个习惯。
 - Anthropic 的 `pdf_input`、`citations`、`code_execution`、`context_management`、`effort`
   五项在 Halro 的能力词典里没有对应项（`anthropic/adapter.go:249` 已记录）。要不要在详情里
   原样展示「上游还声明了这些，Halro 不承载」，属于能力词典演进的范围，另议。
+
+---
+
+## 16. 六角色评审与本轮修复（2026-08-26）
+
+六个角色（领域正确性／运维、信息架构／产品、前端实现、无障碍、后端契约、文档自洽性）
+各读一遍本文并**逐条打开代码核对行号**，前提是不采信本文自述 —— 本文此前已有三次
+「诊断被推翻」的前科，第四次就在这次被找出来（§1.5）。
+
+四条结论被两个以上角色**独立**发现，那几条是最硬的。
+
+### 16.1 本轮已修
+
+- **未分类的探针错误正文写进日志。** `describeProbeFailure` 无条件写 `failure.Reason`，
+  未分类错误走不到 `errors.As`，`Status` 留 0，于是 `probeFailureAttributes` 里
+  「无上游状态码 ⇒ Halro 写的 ⇒ 可以记正文」那条判据正好放行 —— 而这条判据需要一个
+  已分类的错误才站得住。周期性探针每个间隔重复一次。
+  `probeFailure` 增 `Type`，未分类分支记 Go 类型、不记正文；
+  `health_probe_log_test.go` 补第三条用例（桩适配器返回一段含 Bedrock key 形状 canary
+  的散文，该形状**不在** `safelog` 的模式表里，所以断言不可能靠识别格式通过）。
+  这与网关侧同形状的那条修复（`9e9e06b`）是同一条规则的两半。
+- **卡片的第五个孩子。** §14.24 声称移出的 `.deployment-card-error` 仍在渲染，且排在
+  动作栏之后 —— 正是 `resource-card.css` 契约点名禁止的形状（`grid-row: span 4` +
+  `subgrid`，第五个孩子落进隐式轨道，把整行邻居的槽对齐一起打掉）。连同
+  `priceBlockedEnable` 对账 effect（它存在的唯一理由就是那个块会滞留）与
+  `styles.css` 的规则一并删除。错误改由通知通道单独承担，去价格表单的入口是卡片
+  结论行本来就带的 `price` 动作。
+  **测试为什么没发现**：`renderPage()` 没有包 `NotificationProvider`，`useNotify` 在
+  provider 之外是 no-op，所以整套测试里 toast 从未渲染 —— 双重上报无从暴露。已补上。
+  四槽那条断言此前只驱动两条初始渲染的记录，两者都到不了失败的 mutation；现在它
+  在一次被拒的写入之后再断言一次，并做过反向验证。
+- **一条设计系统断言靠注释通过。** `design-system.test.ts` 断言
+  `.resource-card-actions` 匹配 `margin-top: auto`，而该声明早已换成 `align-self: end`
+  —— 正则命中的是同一规则体里解释这次替换的注释。守住「动作栏贴底」的唯一断言在守
+  一段散文。新增 `ruleBody()`：取规则体时先剥注释，五处规则体断言全部改走它，
+  并同时断言旧声明确实不在。
+- **「需要处理」筛出来的是错的一批。** 定义 `!testIsCurrent || last_test_status === "unhealthy"`
+  的第二个子句恒被第一个吞掉，等价于「没有当前版本的通过测试」：漂移、探测未通过、
+  价格隔离 —— `deploymentCondition.ts` 判为 `blocked` 的三项一条都筛不出来，而一个
+  刚建好、只是没测过的部署反而在里面。改为复用同一条阶梯
+  （新增 `deploymentNeedsAttention()` 与 `recordedTestState()`），卡片与筛选从此读同一份
+  定义。两个价格档次留在卡片：价格是按部署读的，列表没有那次读取，**筛选宁可比卡片
+  少说一项，也不猜**。
+- **列表静默截断。** `api.deployments` / `api.providers` / `api.routes` 都丢 `next_cursor`，
+  服务端默认每页 50。派生事实因此说谎：`activeRouteCounts` 建在被截断的路由上，而它是
+  「停用」「删除」的 `disabledReason`；计数文案 `显示 {{visible}} / {{total}}` 里的
+  `total` 就是那 50。仓库里本来就有为这件事写的 fail-closed 版本 `allRoutes`
+  （注释：a truncated answer must never look like a complete one），只有项目页在用 ——
+  一件事的两个答案并存，按 pre-1.0 的规矩不该留。抽成 `listAll()` / `pageOfAll()`，
+  三个列表全部改走它，`allRoutes` 删除，项目页改读 `["routes"]`。
+
+### 16.2 本轮的文档止血
+
+- §1.5 就地改写：那个「新发现的枚举路由缺陷」本身是错的诊断，`0c886fa` 用真实账号
+  实测撤销了它（目录账号级、推理路由级，两个地址本就不该统一）。
+- §5 缺口表删掉已关闭的 D1／D6／D8，并在表头写明「已关闭就地删除，不留删除线」。
+- §7 的 P1b 改成「已撤销」，P2a 改成「已完成」，并写明这张表只讲那一期的三件止痛，
+  不是全文进度表。
+- §11.6 F4 补一句枚举端点已改走 `catalogURL()`。
+- §12.1 的已完成清单去掉 P1b 与 D8。
+- 删除 §12.3 整节 —— 它论证 P2a 与 P3「未开工」，而两者当天就做完了，全节五段今天
+  一段不成立。
+
+### 16.3 刻意没做（是设计决定，不是缺陷）
+
+- **严重度阶梯的排序与真实停流量顺序不符。** 阶梯自称按「多快会停止承接流量」排，
+  实测：默认配置下**没有生效价格**的部署每次请求都被 409 拒绝，阶梯给的是 `warn`；
+  **手动测试失败**根本不参与路由判定，阶梯给的是 `blocked`；**无启用路由**是绝对零
+  流量，根本不在阶梯里（还被 §14.24 主动移出了卡片）。另有四条 registry 扣留原因
+  （区域不匹配、`ValidateProfileModel` 拒绝、能力集为空、价格读取失败）也不在。
+  改档位会改变卡片上每一张的结论，属于产品决定；要么改档位，要么把那句注释改成实话。
+- **§15 的 S2 按字面实现会拿走操作者唯一的出路。** `declaredModel` 完全绑在
+  `resolution_state === "unknown"` 上，驱动手工声明面板、保存放行与那句红字的显示条件。
+  把 `deepseek.v3.1` 改判 `covered_elsewhere` 后这几处全变假：声明面板消失，而红字反而
+  常驻 —— §15.1 抱怨的症状会被放大，且与 §15.5「不因为路由不匹配就禁用保存」冲突。
+  落地时 `declaredModel` 必须是 `unknown || covered_elsewhere`，`covered_elsewhere`
+  只加一条指路横幅，不夺走声明路径。现有五条验收没有一条覆盖它，要补。
+  另外 S2 的触发条件写的是「任何绑定都解析不出变体时」，按字面会把 `conflicting`
+  也一起改写成 `covered_elsewhere`，把一个需要人看的冲突掩盖成一句「换个服务商」——
+  要写死成只在 `unknown` 上触发。
+
+### 16.4 评审查出、本轮未处理
+
+- **暗色卡片上的「已声明」模态标记差 0.04 不达 AA**：`#82958f` on `#16302a` = 4.459:1，
+  门槛 4.5。整条规格行同色。测不出来的原因很具体：`design-system.test.ts` 的对比度用例
+  只枚举 `--color-canvas` 与 `--color-surface-default` 两个背景，**卡片实际用的
+  `--color-surface-raised` 不在清单里**。
+- **`Registry.health` 单调增长**：`Replace` 无条件搬回旧条目，全仓无 `delete`，已删部署
+  会永远继续输出 `halro_deployment_up{deployment_id=...}`。
+- **`h3` 升级只做了一半**：设计系统只给 `.resource-identity > strong` 定型，`h3` 落回
+  全局 18px 并丢掉 ellipsis 钳制，长部署名换行 —— §14.24「槽 1 恒定两行」的前提失效。
+- **§3.1 那条安全建议没做，而注释说做了**：`admin_invocation_targets.go` 写着
+  「it never reaches a Provider」，紧接着缓存未命中就穿透；`requireAdmin` 不查角色，
+  `AdminRoleReadOnly` 真实存在。§15 的 S1 正要把这条 GET 变成主数据源，先决定它。
+- **i18n 未引用键检查的洞**：子串匹配藏住 9 个键，279 个键只靠动态前缀过关（其中 29 个
+  靠一段式前缀），前缀提取扫的是所有模板字面量而不只是 `t()`。
+- **px 棘轮又攒出 26 单位松弛**（基线 724，实际 698）。上次犯这个错时是 4 个单位。
+- **⋯ 菜单没有最上层守卫**：菜单内开确认弹窗后按 ESC，Modal 与 `<details>` 同时响应，
+  焦点归还给一个已被隐藏的按钮，落到 `<body>`。Modal 有这个守卫，OverflowMenu 没有。
+- **`formatAge()` 为可测性加的 `now` 入参，唯一调用点不传**，且该函数零测试。
+- **真实浏览器视觉核对**：这笔账记了三次、还了零次。评审的判断是它的**记法**已经失真 ——
+  §14.15 之后的每一轮都是操作者看着实物驱动的，也就是说人已经在当那个核对员。
+  该结掉，或者改写成它真正缺的那样东西：**没有自动化视觉回归**。
+
+### 16.5 第二轮（2026-08-26）：§11.3、§8、以及 §15 的 P0 与 P1
+
+**§11.3 的 529 —— 已修。** `renderAnthropicGatewayError` 接受 `ProviderCode ==
+"overloaded_error"` 作为过载证据，于是一个上游写进响应体的字符串能决定 Halro 返回给
+客户端的 HTTP 状态。而 Mantle Responses 的流式错误事件把 `ProviderCode` 直接取自事件、
+**不带任何状态码**，所以一个自称 `overloaded_error` 的事件会把 502 改写成一个上游从未
+发过的 529 —— 而 529 正是 SDK 用来决定「退避重试」的那个码。改为只读状态行。
+这条建议从 08-24 起记在 F1 的附注里，此后 15 节没有一处再提。
+
+**§8 的上限铁律 —— 已补。** 那条铁律此前只有 bedrockmantle 一家执行（`maxCatalogEntries
+= 2000`），另外四家适配器与三个展示字段都只靠 16 MiB 的 body 预算兜着 —— 那个尺寸装得下
+几十万条 `{"id":…,"owned_by":…}`。上限放到所有适配器唯一的交汇点
+`normalizeInvocationTargets`：条目数超限**拒绝而不是截断**（截断出来的前缀与完整列表
+不可区分），`DisplayName` / `OwnedBy` 超长则只丢标签不丢模型 —— 丢掉模型会让操作者找不到
+他专程来找的那一个。顺带把 §8 里「`Region` 没有上限」那条删了：它在任何适配器里都不是
+上游可控量（bedrock 从自己的 endpoint 主机名推）。
+
+**结论行阶梯改档（操作者 2026-08-26 决定）。** 阶梯自称按「多快会停止承接流量」排，实测
+三处不符。改后：`未设置价格` 升到 blocked（默认成本治理策略下每次请求都被 409 拒绝），
+`测试失败` 降到 warn（`last_test_status` 不参与任何路由判定），新增 `已禁用` 与
+`无启用路由` 两档 neutral —— 两者都是绝对零流量，此前完全不在阶梯里，而它们是操作者的
+选择不是故障，所以不上警示色。
+连带删掉动作栏末尾的状态词：结论行现在会说「已禁用」，两处就是同一张卡上说两遍 ——
+§14.24 删 `StatusDot` 用的正是这条理由。§14.24 待办里「状态词只反映 `enabled`」那条
+随之消失（服务商停用／binding 停用／出网拒绝三种会在一个探测周期内落到「主动探测未通过」）。
+
+**§15 P0（S1 组合列表分档）—— 已完成。** 目录 GET 本来就对每个绑定做一次解析、每个条目
+都带 `resolution_state`，而选项只渲染一行 `display_name`，于是「能直接建」和「这个服务商
+根本不承载」长得一模一样，操作者填完表单才知道。现在按**下一步动作**分五档，
+`resolved` 在最前。**分档不过滤**：操作者是照着上游自己的控制台抄的名字来找的，搜不到会
+读成 Halro 的目录坏了。
+无障碍上顺带补了三处既有欠账：档名放在 `role="group"` 上而不只是一行小字（只有视觉的
+分档对屏幕阅读器等于没说）；计数条与空态移出 `listbox`（listbox 只该拥有 option 与 group）；
+选项加 `tabIndex={-1}`（此前 Shift+Tab 能落进 popup，而 `aria-activedescendant` 还说焦点
+在输入框上）以及 `aria-setsize` / `aria-posinset`（分组后浏览器推导的计数会以 group 为界）。
+
+**§15 P1（S2 `covered_elsewhere`）—— 已完成。** `modelcatalog.Catalog` 加了一个按
+（provider type, target kind, model）的反查索引（在 `New()` 里建，O(1)，纯进程内，
+不发起任何上游调用），`ProfilesCovering` 回答「目录把这个模型登记在哪些接口下」。
+解析梯**只在 `unknown` 上**升级为 `covered_elsewhere` —— `conflicting` 需要人看，
+`no_variant` 已经知道是哪个绑定不够，把它们改写掉是拿一个能行动的答案换一个对它不成立的。
+消费点四处同步：`boundedResolutionStatus` 允许列表（漏了会静默降级成 `"unknown"`）、
+审计分支、前端联合类型、i18n。
+
+**其中一条是既有测试抓出来的真实错误。** 第一版反查用 `instance.Type` 直接查，于是一个
+OpenAI 兼容端点自称 `gpt-5` 时被判成「由另一套接口服务」——
+`TestCompatibleTargetNameDoesNotImplyCanonicalCapabilityIdentity` 当场失败。逐绑定那条
+路径本来就刻意不按名字读目录（`invocationTargetCatalogEntryWithCatalog` 里那个分支），
+反查绕过了同一条规则。`coverageModel` 现在镜像它：没有显式 canonical 映射的兼容端点模型
+返回空串，反查不问。新增一条测试钉住这件事。
+
+**前端最关键的一条：`covered_elsewhere` 不得夺走手工声明。** `declaredModel` 此前完全
+绑在 `resolution_state === "unknown"` 上，驱动手工声明面板、保存放行与那句红字的显示条件；
+按字面实现 S2 会让这四处全变假 —— 声明面板消失，红字反而常驻，正是 §15.1 抱怨的症状被
+放大。现在 `declaredModel` 是 `unknown || covered_elsewhere`，`covered_elsewhere` 只多加
+一条指路横幅（点名承载它的接口 + 直达服务商页），不关任何门。这条做了反向验证：
+把判断收窄回 `unknown`，「手动配置」按钮当场消失。
+
+每一项都做了反向验证，搜索串都断言过命中数。门禁：`go vet ./...` 与 `go test ./...`
+全绿（65 个包），前端 `typecheck` + **430 项** + `npm run build`（密钥扫描 27 文件干净）。
+
+**§16.4 的清单未动**，仍然欠着；`§15` 的 P2（S3 空态三分 + S4 来源徽标）与 P3
+（S5 Bedrock 流式字段）未开工。
+
+### 16.6 第三轮（2026-08-26）：§16.4 的欠账与 §15 的 P2、P3
+
+§16.4 那张清单除最后一条外全部补完，§15 四期做完。
+
+**对比度（暗色卡片）。** `--color-text-tertiary` 在卡片上是 4.459:1，差 0.04 不达 AA。
+真正的缺陷在检查本身：对比度用例只枚举 `--color-canvas` 与 `--color-surface-default`
+两个背景，而卡片画在 `--color-surface-raised` 上，于是这块屏幕根本不在检查范围内。
+把 raised 加进去之后**当场又暴露第二条同类缺陷**：卡片上的强边框只有 2.42:1，低于
+非文本 3:1。两条都修了 —— `--p-ink-300` 提三档到 `#859892`（4.63:1）；边框不能动
+`--p-ink-400`（它同时是亮色主题的三级文字，提亮会**削弱**那边的对比度），新增
+`--p-ink-350` 只给暗色边框用。
+
+**px 棘轮。** 基线 724、实际 698，26 个单位的松弛。降到实际值，并把断言从
+`toBeLessThanOrEqual` 改成 `toBe`：这个错误犯过两次（上次 4 个单位），而上限型棘轮
+只有在有人记得往下调时才是棘轮。
+
+**`h3` 排版契约。** `.resource-identity > h3` 补进设计系统那条规则（连同 `margin: 0`）。
+此前 h3 落回全局 18px 并丢掉 ellipsis 钳制，长部署名会把身份槽撑成两行 ——
+§14.24「槽 1 恒定两行」的前提本来是假的。
+
+**`Registry.health` 单调增长。** 新增 `RetainDeploymentProbes`，由探针循环调用 ——
+它读的是 store 里的部署列表，是唯一知道哪些 ID 还真实存在的地方。`Replace` 的搬运
+行为不动（那是对的：重载不该把健康的部署报成未探测）。此前已删除的部署会一直留着
+最后的判决，`halro_deployment_up` 也一直为一个不存在的 ID 输出标签。
+
+**⋯ 菜单缺最上层守卫。** 菜单内开确认弹窗后按 ESC，两者都在 document 上监听：菜单先
+关，弹窗随后把焦点还给一个刚被 `<details>` 隐藏的按钮，于是焦点落到 `<body>`。加上与
+`Modal` 同款的判断（有 `.modal-backdrop` 就不响应），指针事件同理。
+
+**`formatAge`。** 那个为可测性加的 `now` 入参，此前零测试。补了每一档单位的边界、
+「小于一分钟说此刻」、以及「浏览器时钟快几秒不得渲染成未来」那条规则；超过一分钟的
+未来是真实信息，保留符号。调用点仍在渲染时读时钟 —— 入参存在是为了让这些断言成立，
+而现在它们存在了。
+
+**§3.1 只读会话触发计费枚举 —— 已堵。** `listAdminInvocationTargets` 上面写着
+「it never reaches a Provider」，而缓存未命中会直接穿透；这条 GET 只过 `requireAdmin`，
+不校验角色，而 `AdminRoleReadOnly` 真实存在。现在未命中就地返回 `not_cached: true`，
+不拨号；拨号是隔壁那个 POST（`requireAdminMutation`）。注释改成实话。
+`not_cached` 是独立信号而不是 `error_class`：上游根本没被访问，用 provider 错误类
+描述它是范畴错误。控制台把「没取过」与「取不到」分开 —— 前者一次点击可解且要花钱，
+后者是故障。
+
+**i18n 未引用键检查。** 两个真洞修了：动态前缀只从 `t(` 开头的模板里提取（此前扫的是
+全部模板字面量，一处 `curl ${…}` 就贡献了一个前缀），字面匹配加了键尾边界（此前
+`deployments.evidence` 因为 `deployments.evidenceValues.` 存在而被算成已引用，另有
+八个同样被藏住）。**没有**按评审建议拒绝一段式前缀 —— 实测那些前缀（`custody.`、
+`navigation.` 等）确实出自真实的 `t()` 调用，判它们死会制造假阳性，比原来的洞更糟；
+这是一条广的引用，收窄它要改调用点，不是改这个扫描。
+暴露出的 9 个键逐个核实为零引用，按 pre-1.0 规矩**删除**而不是记进台账。
+
+**§15 P3（S5）。** `foundationModelSummary` 接上 `responseStreamingSupported`，
+`NormalizedModelMetadata` 加 `ResponseStreaming *bool`。**用指针不用 bool**：缺失与
+false 是两个不同的答案，只有一个是上游给的；只有显式 true 才产 declared claim，
+显式 false 是上游拒绝、缺失是上游没说，两者都不是能力成立的证据。
+
+**§15 P2（S3 + S4）。** 空态按三种原因分开，各配各自的下一步：目录里有它但不在这条
+接口上（识别答不出，所以那块**不显示**计费上限）、上游只给标识（再刷新也不会多出能力）、
+内置目录没有这一条。原来一个面板用「未收录模型 · 需要识别」回答全部三种 —— 对第一种
+是错的（目录明明有），对第二种是把人送回刷新按钮。
+S4 逐项标来源，但只在各项**不一致**时出现：一列八行相同的「内置模型目录」不是可比较的
+信息，段头已经说过一次 —— 这是 §14.15-B4 立的规矩，这里照办。
+
+**顺带（操作者要求）**：「这个能力接口载不动的请求成员」那块去掉边框与底色，
+用留白分组 —— 与 §14.22 第 1 条同一条理由。
+
+门禁：`go vet ./...` 与 `go test ./...` 全绿；前端 `typecheck` + **439 项** +
+`npm run build`（密钥扫描 27 文件干净）。
+
+**仍然欠着，且这次也没还：真实浏览器里的视觉核对。** 本轮改了颜色 token、卡片密度、
+组合框结构，全部是只有看才能验的东西，而本地实例仍需管理员口令登录。
+按评审的判断，这笔账的记法本身已经失真 —— 它真正缺的不是某一次核对，而是
+**没有自动化视觉回归**。要么补一套，要么由操作者跑一次 `make dev` 自己看。
+
+### 16.7 能力编辑器的上限取错了（2026-08-26）
+
+操作者：「高级设置中列出全面的能力，匹配的勾选、没有匹配的不勾选；漏选用户可以自己选。」
+
+**症状**：`AWSBedrock` 上选 `openai.gpt-5.6-terra`，能力区只有「对话」「流式」两行。
+视觉根本没出现 —— 不是灰掉，是没有那一行，所以想勾也勾不上。
+
+**为什么是两行**：内置目录里 Mantle 那批条目用的是 `mantleChat()`
+（`builtin.go:394`），全文只有 `Chat: true, Streaming: true`。种子注释写得很清楚：
+路由归属与 Responses 支持是 08-21 实测的，窗口与最大输出是 08-25 从账号模型列表读的，
+**每个模型的能力本身从未查证**；唯一例外是 `openai.gpt-5.5`，因为只有它的 card 被读过。
+接口上限 `mantleOpenAIChatSet` 本身是带 `Vision: true` 的，所以拦住它的不是接口。
+
+顺带一提，同一个模型在 OpenAI 服务商下有一张完整的卡（`builtin.go:196`，带 vision 与
+reasoning）。目录按 **(服务商类型, 接口, 模型)** 做键，一条路上查证过的证据不会带到另一条路上。
+
+**真正的缺陷在编辑器**：`CapabilitySubsetEditor` 的 `ceiling` 传的是
+`selectedVariant.capabilities` —— 目录声明的那一小撮。于是「上限」和「已声明」是同一个值，
+而行列表取的是窄的那个。**改为两个值分开**：
+
+- `ceiling` = `bindingCeiling`（这条连接开了什么）→ 决定**有哪些行**
+- `claimed` = 变体的声明 → 决定**哪些被勾上**
+
+从上限预填仍然不做（`DeploymentsPage.tsx:1292` 那条既有约束），未记录的行标一句
+「目录未记录」——它与「查过了、不支持」不是一回事。
+选 `bindingCeiling` 而不是 profile 能服务的全集：连接没开的能力要去服务商页开，
+下面的手动编辑器已经这么说了。
+
+**保存要跟着换路**：变体路径会拒绝超出声明的能力
+（`admin_deployments.go:943`「deployment capabilities exceed the selected deployment variant」），
+所以勾了未记录的能力时 `mode: "operator_declared"`，并**去掉** `resolution_revision`——
+同时送这两样，等于请求服务端既守住那个 pin 又打破它。
+后果在保存前说明（新的提示条：证据会记成「管理员声明」而不是「已评审模型目录」；
+上游真不支持的话，网关在调用时才会被拒；也可以改用识别实测，会计费）。
+
+三条测试钉住：行来自接口而勾选来自目录、未记录的行带标记且可勾、勾了之后
+`mode` 变成 `operator_declared` 且不带 `resolution_revision`。三条都做了反向验证。
+前端全套 441 项通过。

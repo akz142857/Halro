@@ -382,11 +382,25 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.providers.Replace(nextRegistry)
+	// A read with nothing cached answers not_cached and reaches no provider:
+	// the endpoint checks a session, not a role, so a read-only admin opening
+	// the create form must not be able to spend the credential.
+	coldRequest := adminRequest(t, http.MethodGet, "/admin/api/v1/providers/"+instance.ID+"/invocation-targets", nil)
+	coldRequest.AddCookie(cookie)
+	coldResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(coldResponse, coldRequest)
+	var cold invocationTargetCatalogResponse
+	if err := json.Unmarshal(coldResponse.Body.Bytes(), &cold); err != nil || !cold.NotCached || len(cold.Items) != 0 {
+		t.Fatalf("cold read=%#v err=%v body=%s", cold, err, coldResponse.Body.String())
+	}
+	if probe.targetLists != 0 {
+		t.Fatalf("a read dialled the provider: upstream calls=%d", probe.targetLists)
+	}
 	for index, step := range []struct {
 		method string
 		path   string
 	}{
-		{http.MethodGet, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
+		{http.MethodPost, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
 		{http.MethodGet, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
 		{http.MethodPost, "/admin/api/v1/providers/" + instance.ID + "/invocation-targets"},
 	} {

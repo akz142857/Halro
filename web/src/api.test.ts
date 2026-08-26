@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ROUTE_PAGE_CEILING, api, clearSensitiveClientState } from "./api";
+import { LIST_PAGE_CEILING, api, clearSensitiveClientState } from "./api";
 
 describe("typed admin API client", () => {
   afterEach(() => {
@@ -60,7 +60,7 @@ describe("typed admin API client", () => {
     expect(JSON.stringify(calls)).not.toContain("localStorage");
   });
 
-  it("follows every route page when building a project authorization list", async () => {
+  it("follows every page of a listing rather than returning the first", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/routes?limit=100")) {
@@ -73,26 +73,50 @@ describe("typed admin API client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.allRoutes()).resolves.toEqual([
-      { id: "rt_1", public_model: "chat" },
-      { id: "rt_2", public_model: "embedding" },
-    ]);
+    await expect(api.routes()).resolves.toEqual({
+      items: [{ id: "rt_1", public_model: "chat" }, { id: "rt_2", public_model: "embedding" }],
+      next_cursor: "",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  // The caller turns this list into a project's model authorization set, so a
-  // truncated answer must never be handed back looking complete. A cursor that
-  // repeats used to loop forever.
+  // Every list the console derives a fact from goes through the same follower.
+  // Deployments is checked by name because it is the one that reports its own
+  // length back to the operator as a total.
+  it("follows every deployment page too", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/deployments?limit=100")) {
+        return response({ items: [{ id: "dep_1" }], next_cursor: "dep_1" });
+      }
+      if (url.endsWith("/deployments?limit=100&cursor=dep_1")) {
+        return response({ items: [{ id: "dep_2" }], next_cursor: "" });
+      }
+      return response({ error: "unexpected request" }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.deployments()).resolves.toEqual({
+      items: [{ id: "dep_1" }, { id: "dep_2" }],
+      next_cursor: "",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Callers turn these lists into a project's model authorization set and into
+  // the count of enabled routes that disables a deployment's delete button, so
+  // a truncated answer must never be handed back looking complete. A cursor
+  // that repeats used to loop forever.
   it("fails closed instead of looping when the route cursor stops advancing", async () => {
     const fetchMock = vi.fn(async () =>
       response({ items: [{ id: "rt_1", public_model: "chat" }], next_cursor: "stuck" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.allRoutes()).rejects.toMatchObject({ code: "route_listing_incomplete" });
+    await expect(api.routes()).rejects.toMatchObject({ code: "listing_incomplete" });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed instead of paging past the route page ceiling", async () => {
+  it("fails closed instead of paging past the listing ceiling", async () => {
     let page = 0;
     const fetchMock = vi.fn(async () => {
       page += 1;
@@ -100,8 +124,8 @@ describe("typed admin API client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(api.allRoutes()).rejects.toMatchObject({ code: "route_listing_incomplete" });
-    expect(fetchMock).toHaveBeenCalledTimes(ROUTE_PAGE_CEILING);
+    await expect(api.routes()).rejects.toMatchObject({ code: "listing_incomplete" });
+    expect(fetchMock).toHaveBeenCalledTimes(LIST_PAGE_CEILING);
   });
 });
 

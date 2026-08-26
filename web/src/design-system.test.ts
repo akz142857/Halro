@@ -5,6 +5,22 @@ import { describe, expect, it } from "vitest";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
+/**
+ * The declarations of a top-level rule, with comments stripped.
+ *
+ * The stripping is the point. An assertion that reads a raw rule body is
+ * satisfied by prose: this file held `.resource-card-actions` to
+ * `margin-top: auto` long after that declaration was replaced, because the
+ * comment explaining the replacement still spelled the words out. The one
+ * assertion guarding where the action bar sits was guarding a sentence, and it
+ * stayed green through the change it existed to catch.
+ */
+function ruleBody(css: string, selector: string): string | undefined {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = css.match(new RegExp(`^${escaped} \\{([^}]*)\\}`, "m"))?.[1];
+  return body === undefined ? undefined : body.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 /** Custom-property names declared (left of `:`) in a CSS file. */
 function declaredTokens(css: string): Set<string> {
   const names = new Set<string>();
@@ -99,7 +115,11 @@ describe("design system themes", () => {
   ])("keeps %s text and key boundaries at WCAG AA contrast", (_name, theme) => {
     const primitives = tokenValues(read("./design-system/tokens.css"));
     const values = new Map([...primitives, ...tokenValues(theme)]);
-    const surfaces = ["--color-canvas", "--color-surface-default"];
+    // The raised surface is here because it is what a card is painted on, and
+    // leaving it out meant the check could not see the card at all: text that
+    // cleared AA on the canvas sat at 4.46:1 on a tile, and every assertion
+    // passed. A surface the product renders text on belongs in this list.
+    const surfaces = ["--color-canvas", "--color-surface-default", "--color-surface-raised"];
     const textTokens = [
       "--color-text-primary",
       "--color-text-secondary",
@@ -158,7 +178,13 @@ describe("design system themes", () => {
   // scored a value as converted for moving out of the file the count is taken
   // from. A stylesheet that owns spacing has to be inside the ratchet, or the
   // next one to own some is where the hand-picked values go.
-  const bareSizeValueBaseline = 724;
+  // Asserted exactly, not as a ceiling. Twice now the baseline has been left
+  // above the real count — four units the first time, twenty-six the second —
+  // and both times the slack was spent by later commits that added hand-picked
+  // values and stayed green. A ceiling only ratchets if someone remembers to
+  // lower it; an exact count makes every change to it deliberate, in both
+  // directions.
+  const bareSizeValueBaseline = 698;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
@@ -169,7 +195,7 @@ describe("design system themes", () => {
     for (const declaration of declarations) {
       bare.push(...(declaration[1].match(/(?<![\w.-])\d+px/g) ?? []));
     }
-    expect(bare.length).toBeLessThanOrEqual(bareSizeValueBaseline);
+    expect(bare.length, "converted a value? lower the baseline. added one? use a token").toBe(bareSizeValueBaseline);
   });
 
   // tokens.css states a 12px floor because CJK glyphs lose stroke separation
@@ -394,7 +420,7 @@ describe("component styling reaches the markup", () => {
   // labels stops being a line. jsdom has no layout, so the declaration is the
   // thing to hold.
   it("starts every drawer fact at the top of its row", () => {
-    const rule = read("./styles.css").match(/^\.detail-fact \{([^}]*)\}/m)?.[1];
+    const rule = ruleBody(read("./styles.css"), ".detail-fact");
     expect(rule, ".detail-fact base rule not found").toBeDefined();
     expect(rule).toMatch(/align-content:\s*start/);
   });
@@ -425,7 +451,7 @@ describe("component styling reaches the markup", () => {
   it("caps a resource card's children at the card's own width", () => {
     const css = read("./design-system/resource-card.css");
     expect(css, "the rule capping card children was removed").toMatch(/^\.resource-card > \* \{[^}]*min-width:\s*0/m);
-    const rule = css.match(/^\.resource-card \{([^}]*)\}/m)?.[1];
+    const rule = ruleBody(css, ".resource-card");
     expect(rule, ".resource-card base rule not found").toBeDefined();
     expect(rule).toMatch(/min-width:\s*0/);
   });
@@ -435,12 +461,16 @@ describe("component styling reaches the markup", () => {
   // its content and still pin them to the bottom.
   it("gives every card in a row the same height and its actions the bottom edge", () => {
     const css = read("./design-system/resource-card.css");
-    const grid = css.match(/^\.resource-card-grid \{([^}]*)\}/m)?.[1];
+    const grid = ruleBody(css, ".resource-card-grid");
     expect(grid, ".resource-card-grid base rule not found").toBeDefined();
     expect(grid).not.toMatch(/align-items:\s*(start|flex-start|baseline)/);
-    const actions = css.match(/^\.resource-card-actions \{([^}]*)\}/m)?.[1];
+    const actions = ruleBody(css, ".resource-card-actions");
     expect(actions, ".resource-card-actions base rule not found").toBeDefined();
-    expect(actions).toMatch(/margin-top:\s*auto/);
+    // `align-self`, not `margin-top: auto`: the auto margin pushed every later
+    // sibling down with it, so a card that rendered anything after the bar took
+    // the bar off the line its neighbours sat on.
+    expect(actions).toMatch(/align-self:\s*end/);
+    expect(actions).not.toMatch(/margin-top:\s*auto/);
   });
 
   it("lets every card action bar wrap inside its card", () => {
@@ -465,7 +495,7 @@ describe("component styling reaches the markup", () => {
   // a height there and stretched every route row from 77px to 229px. The width
   // is declared outright, so the basis has to stay axis-neutral.
   it("keeps the inline test control's flex basis axis-neutral", () => {
-    const rule = read("./styles.css").match(/^\.inline-test-control \{([^}]*)\}/m)?.[1];
+    const rule = ruleBody(read("./styles.css"), ".inline-test-control");
     expect(rule, ".inline-test-control base rule not found").toBeDefined();
     expect(rule).toMatch(/width:\s*196px/);
     expect(rule).toMatch(/flex:\s*0\s+0\s+auto/);

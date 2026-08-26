@@ -16,7 +16,7 @@ import type { Deployment } from "../types";
  * client-side test state: no formatting, no translation, no i18n keys resolved
  * — the caller owns the words, this owns the priority.
  */
-export type ConditionSeverity = "blocked" | "warn" | "running" | "ok" | "quiet";
+export type ConditionSeverity = "blocked" | "warn" | "neutral" | "running" | "ok" | "quiet";
 
 /** What the card can do about the condition it is showing. */
 export type ConditionAction = "drawer" | "price" | "restorePricing" | "retryPrice";
@@ -43,14 +43,28 @@ export interface ConditionInputs {
   priceMissing: boolean;
   /** The price read itself failed, so price readiness is unknown. */
   priceUnknown: boolean;
+  /** Enabled routes pointing at this deployment. Zero means nothing can reach it. */
+  activeRouteCount: number;
 }
 
 /**
- * Ranked worst first. Everything above `success` is a reason an operator has
- * something to do; `success` and `idle` are the resting states and never count
- * towards the suppressed total, because a card cannot be "also fine".
+ * Ranked worst first, by what the router and the gateway actually do — which is
+ * not what this list used to say. It claimed that order and did not hold it:
+ * a deployment with no effective price is refused on every request under the
+ * default cost-governance policy, and sat at `warn`; a failed manual test does
+ * not enter any routing decision at all, and sat at `blocked` above it. Two
+ * conditions that stop traffic outright — disabled, and no enabled route
+ * pointing here — were not on the list in any position.
+ *
+ * `neutral` is for the two the operator chose. They stop traffic as completely
+ * as anything above them, so they belong on the ladder; colouring them as
+ * faults would report a deliberate state as a problem.
+ *
+ * Everything above `neutral` is a reason an operator has something to do;
+ * `success` and `idle` are the resting states and never count towards the
+ * suppressed total, because a card cannot be "also fine".
  */
-function ladder({ deployment, testState, priceMissing, priceUnknown }: ConditionInputs): DeploymentCondition[] {
+function ladder({ deployment, testState, priceMissing, priceUnknown, activeRouteCount }: ConditionInputs): DeploymentCondition[] {
   const review = deployment.capability_review;
   const probe = deployment.probe;
   const found: DeploymentCondition[] = [];
@@ -69,19 +83,31 @@ function ladder({ deployment, testState, priceMissing, priceUnknown }: Condition
   if (deployment.pricing_quarantined) {
     found.push({ severity: "blocked", key: "deployments.pricingQuarantinedShort", suppressed: 0, action: "restorePricing" });
   }
-  if (testState === "failure") {
-    found.push({ severity: "blocked", key: "testControl.failure", observedAt: deployment.last_tested_at, suppressed: 0 });
+  // No effective price version is refused by the gateway on every request
+  // unless cost governance is explicitly waived, and the default configuration
+  // does not waive it. Knowing a price is missing is therefore a blocker;
+  // failing to find out is not the same thing, and stays a warning with a retry.
+  if (!priceUnknown && priceMissing) {
+    found.push({ severity: "blocked", key: "deployments.priceNotConfiguredShort", suppressed: 0, action: "price" });
   }
-  // Not knowing whether a price exists is not the same as knowing one is
-  // missing: the first is the console's own failure and offers a retry, the
-  // second is the operator's and offers the price form.
   if (priceUnknown) {
     found.push({ severity: "warn", key: "deployments.priceUnavailable", suppressed: 0, action: "retryPrice" });
-  } else if (priceMissing) {
-    found.push({ severity: "warn", key: "deployments.priceNotConfiguredShort", suppressed: 0, action: "price" });
+  }
+  // A manual test is a report, not a gate: nothing in the router reads
+  // `last_test_status`. It ranks with the other things worth acting on rather
+  // than with the things that stop traffic.
+  if (testState === "failure") {
+    found.push({ severity: "warn", key: "testControl.failure", observedAt: deployment.last_tested_at, suppressed: 0 });
   }
   if (testState === "stale") {
     found.push({ severity: "warn", key: "testControl.stale", observedAt: deployment.last_tested_at, suppressed: 0 });
+  }
+  // The two the operator chose. Zero traffic either way, and neither is a fault.
+  if (!deployment.enabled) {
+    found.push({ severity: "neutral", key: "common.disabled", suppressed: 0 });
+  }
+  if (activeRouteCount === 0) {
+    found.push({ severity: "neutral", key: "deployments.noActiveRoutes", suppressed: 0, action: "drawer" });
   }
   // An opportunity, not a blocker: the deployment keeps serving what it already
   // declared until someone reviews what the catalogue now offers.
@@ -89,6 +115,49 @@ function ladder({ deployment, testState, priceMissing, priceUnknown }: Condition
     found.push({ severity: "quiet", key: "deployments.capabilitiesToReview", suppressed: 0, action: "drawer" });
   }
   return found;
+}
+
+/**
+ * The test verdict a stored record supports on its own.
+ *
+ * The card refines this with a test the operator started in this session — one
+ * still in flight, or one that failed before it reached the store, which leaves
+ * `last_test_status` describing an older run. The list has neither, and needs
+ * the same vocabulary to rank a record it is only filtering.
+ */
+export function recordedTestState(deployment: Deployment): DeploymentTestState {
+  const current = deployment.last_test_revision === deployment.revision;
+  if (current && deployment.last_test_status === "healthy") return "success";
+  if (current && deployment.last_test_status === "unhealthy") return "failure";
+  return deployment.last_test_status === "healthy" ? "stale" : "idle";
+}
+
+/**
+ * Whether a deployment is one the operator has something to do about.
+ *
+ * This is what the list's "needs attention" filter means, and it reads the same
+ * ladder the card reads, because the two answering differently is how the
+ * filter came to exclude every condition the card ranks highest: it was written
+ * as "no passing test on the current revision", which admits a deployment that
+ * was merely never tested and excludes one that is drifted, failing its probe
+ * and quarantined at once.
+ *
+ * The two price conditions are the exception, and deliberately: price is read
+ * per deployment, by the card, and the list has no such read. A deployment
+ * whose only problem is a missing price is therefore not caught here — the card
+ * still says so, and the filter says less than the card rather than guessing.
+ */
+export function deploymentNeedsAttention(deployment: Deployment): boolean {
+  return ladder({
+    deployment,
+    testState: recordedTestState(deployment),
+    priceMissing: false,
+    priceUnknown: false,
+    // Zero would put every disabled deployment on the list; the filter asks
+    // what is wrong, and having no route pointing at a deployment is a state
+    // rather than a fault. The card still says so.
+    activeRouteCount: 1,
+  }).some((condition) => condition.severity === "blocked" || condition.severity === "warn");
 }
 
 /**

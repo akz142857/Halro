@@ -491,7 +491,14 @@ func TestAdminUsesInvocationTargetRouteAndRemovesLegacyModelsRoute(t *testing.T)
 	if providerResponse.Code != http.StatusCreated || json.Unmarshal(providerResponse.Body.Bytes(), &instance) != nil {
 		t.Fatalf("provider status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
 	}
-	listing := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet, "/admin/api/v1/providers/"+instance.ID+"/invocation-targets", "", nil)
+	// The read never dials, so a cold cache answers not_cached and nothing else.
+	// Spending the credential is the POST, which is behind requireAdminMutation.
+	cold := performAdminMutation(t, runtime, cookie, csrf, http.MethodGet, "/admin/api/v1/providers/"+instance.ID+"/invocation-targets", "", nil)
+	var coldCatalog invocationTargetCatalogResponse
+	if err := json.Unmarshal(cold.Body.Bytes(), &coldCatalog); err != nil || !coldCatalog.NotCached || len(coldCatalog.Items) != 0 {
+		t.Fatalf("a cold read reached the provider: catalog=%#v err=%v body=%s", coldCatalog, err, cold.Body.String())
+	}
+	listing := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/invocation-targets", "", nil)
 	if listing.Code != http.StatusOK {
 		t.Fatalf("targets status=%d body=%s", listing.Code, listing.Body.String())
 	}
@@ -664,5 +671,134 @@ func TestConsoleReadsSucceedWithNeitherOriginNorReferer(t *testing.T) {
 		if response.Code != http.StatusOK {
 			t.Fatalf("console-shaped GET %s status=%d body=%s", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+// Everything an adapter enumerates passes through here, and what it enumerates
+// is written by an upstream. One adapter bounded its own listing; the rest were
+// held back only by the 16 MiB response ceiling, which fits several hundred
+// thousand identifier entries — all of which would land in a cache and then in
+// a console list. The bound belongs at the one place they all cross.
+func TestAnOversizedCatalogueIsRefusedRatherThanTruncated(t *testing.T) {
+	oversized := make([]domain.InvocationTargetDescriptor, maxInvocationTargetEntries+1)
+	for i := range oversized {
+		oversized[i] = domain.InvocationTargetDescriptor{
+			TargetID: fmt.Sprintf("model-%d", i), TargetKind: domain.TargetModelID,
+		}
+	}
+	if _, ok := normalizeInvocationTargets(oversized); ok {
+		t.Fatal("a catalogue past the entry limit was accepted")
+	}
+	// Refused, not trimmed: a prefix of a listing the operator picks a model
+	// from is indistinguishable from the whole of it.
+	atLimit := oversized[:maxInvocationTargetEntries]
+	items, ok := normalizeInvocationTargets(atLimit)
+	if !ok || len(items) != maxInvocationTargetEntries {
+		t.Fatalf("a catalogue at the limit was not served whole: ok=%v len=%d", ok, len(items))
+	}
+}
+
+// The two labels are shown rather than matched on, so an implausible one costs
+// only itself. Dropping the entry would hide a model the operator came looking
+// for; keeping the string would write an upstream's kilobyte into a table cell.
+func TestOversizedCatalogueLabelsAreDroppedWithoutLosingTheModel(t *testing.T) {
+	long := strings.Repeat("x", maxInvocationTargetLabelLength+1)
+	items, ok := normalizeInvocationTargets([]domain.InvocationTargetDescriptor{{
+		TargetID: "openai.gpt-5.6-luna", TargetKind: domain.TargetModelID,
+		DisplayName: long, OwnedBy: long,
+	}})
+	if !ok || len(items) != 1 {
+		t.Fatalf("the model was dropped over its label: ok=%v len=%d", ok, len(items))
+	}
+	if items[0].DisplayName != "openai.gpt-5.6-luna" {
+		t.Fatalf("the display name did not fall back to the identifier: %q", items[0].DisplayName)
+	}
+	if items[0].OwnedBy != "" {
+		t.Fatalf("an oversized owner was kept: %q", items[0].OwnedBy)
+	}
+}
+
+// The screen this came from: an operator on a Mantle provider bound to the
+// OpenAI-shaped chat interface picks `deepseek.v3.1`, a model AWS serves and the
+// builtin catalog lists — under the other Mantle chat interface. Every binding
+// here resolves to nothing, which used to be reported as `unknown`, whose
+// remedy is to declare the capabilities by hand or spend a billable detection
+// call. Neither answers the question: the model is not on this route, and the
+// catalog already knows which route it is on.
+func TestAModelServedByAnotherInterfaceIsNotReportedAsUnknown(t *testing.T) {
+	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderBedrock, Revision: 3}
+	openAIChat := bedrockBinding("openai-chat", domain.ProfileBedrockMantleOpenAIChat)
+	target := domain.InvocationTargetDescriptor{
+		TargetID: "deepseek.v3.1", TargetKind: domain.TargetModelID, DisplayName: "deepseek.v3.1",
+		Availability: domain.AvailabilityAvailable, Lifecycle: domain.TargetLifecycleActive,
+	}
+	response := aggregateInvocationTargets(instance, []bindingTargetCatalog{
+		targetResult(openAIChat, nil, target),
+	}, testResolutionInstant)
+
+	item := findTarget(t, response, target.TargetID)
+	if item.ResolutionState != domain.ResolutionCoveredElsewhere {
+		t.Fatalf("resolution=%q, wanted covered_elsewhere", item.ResolutionState)
+	}
+	// The state alone still leaves the operator nowhere. Naming the interface is
+	// what turns it into an instruction.
+	if !slices.Contains(item.CoveredByProfiles, domain.ProfileBedrockMantleChat) {
+		t.Fatalf("the interface serving the model was not named: %v", item.CoveredByProfiles)
+	}
+	if slices.Contains(item.CoveredByProfiles, domain.ProfileBedrockMantleOpenAIChat) {
+		t.Fatalf("the bound interface was named as serving the model: %v", item.CoveredByProfiles)
+	}
+}
+
+// A self-hosted endpoint that serves something it calls `gpt-5` is not making a
+// claim about OpenAI's gpt-5, and the per-binding lookup refuses to read the
+// catalog by name there. A coverage lookup that ignored that would bring the
+// inheritance back by another route — telling the operator their own endpoint's
+// model lives on an interface they have never heard of.
+func TestACompatibleEndpointsOwnNameIsNotACatalogueIdentity(t *testing.T) {
+	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAICompatible, Revision: 1}
+	binding := testBinding("compatible", domain.ProviderOpenAICompatible, domain.ProfileOpenAICompatible)
+	target := domain.InvocationTargetDescriptor{
+		TargetID: "gpt-5", TargetKind: domain.TargetCustomEndpointModel, Availability: domain.AvailabilityAvailable,
+	}
+	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{
+		targetResult(binding, nil, target),
+	}, testResolutionInstant), target.TargetID)
+	if item.ResolutionState != domain.ResolutionUnknown || len(item.CoveredByProfiles) != 0 {
+		t.Fatalf("a compatible endpoint's own model name was resolved through the catalogue: state=%q covered_by=%v",
+			item.ResolutionState, item.CoveredByProfiles)
+	}
+}
+
+// Only from unknown. A model the catalog has never heard of stays unknown, and
+// the two states above it keep their own answers: a conflict needs a person to
+// read it, and a binding that fell short already knows which one it was.
+// Rewriting either into "it lives on another interface" would replace an answer
+// the operator can act on with one that is not true of it.
+func TestCoveredElsewhereDoesNotOverwriteTheStatesAboveIt(t *testing.T) {
+	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderBedrock, Revision: 3}
+	openAIChat := bedrockBinding("openai-chat", domain.ProfileBedrockMantleOpenAIChat)
+	stranger := domain.InvocationTargetDescriptor{
+		TargetID: "no.such.model", TargetKind: domain.TargetModelID, DisplayName: "no.such.model",
+		Availability: domain.AvailabilityAvailable, Lifecycle: domain.TargetLifecycleActive,
+	}
+	response := aggregateInvocationTargets(instance, []bindingTargetCatalog{
+		targetResult(openAIChat, nil, stranger),
+	}, testResolutionInstant)
+	item := findTarget(t, response, stranger.TargetID)
+	if item.ResolutionState != domain.ResolutionUnknown || len(item.CoveredByProfiles) != 0 {
+		t.Fatalf("state=%q covered_by=%v, wanted an unchanged unknown", item.ResolutionState, item.CoveredByProfiles)
+	}
+
+	// A model this provider's own binding does serve resolves as it always did.
+	served := domain.InvocationTargetDescriptor{
+		TargetID: "openai.gpt-5.6-sol", TargetKind: domain.TargetModelID, DisplayName: "openai.gpt-5.6-sol",
+		Availability: domain.AvailabilityAvailable, Lifecycle: domain.TargetLifecycleActive,
+	}
+	response = aggregateInvocationTargets(instance, []bindingTargetCatalog{
+		targetResult(openAIChat, nil, served),
+	}, testResolutionInstant)
+	if item := findTarget(t, response, served.TargetID); item.ResolutionState != domain.ResolutionResolved {
+		t.Fatalf("a model this binding serves resolved as %q", item.ResolutionState)
 	}
 }

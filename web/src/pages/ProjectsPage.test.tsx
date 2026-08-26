@@ -40,7 +40,7 @@ describe("projects page", () => {
     vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "allRoutes").mockResolvedValue([]);
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "tokenGuardPolicies").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "redactionPolicies").mockResolvedValue({ items: [redactionPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "tokenGuardPoliciesPage").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
@@ -66,12 +66,12 @@ describe("projects page", () => {
   });
 
   it("authorizes one public model alias instead of exposing each candidate route", async () => {
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_openai", public_model: "chat", strategy: "ordered", enabled: true },
       { id: "rt_azure", public_model: "chat", strategy: "ordered", enabled: true },
       { id: "rt_disabled", public_model: "chat", strategy: "ordered", enabled: false },
       { id: "rt_embed", public_model: "embedding", strategy: "round_robin", enabled: true },
-    ] as never);
+    ] } as never);
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
@@ -88,11 +88,11 @@ describe("projects page", () => {
   // so one retired row with the other strategy blanked the label rather than
   // describing the routes that actually serve the alias.
   it("describes the alias by its enabled routes alone", async () => {
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_live", public_model: "chat", strategy: "round_robin", enabled: true },
       { id: "rt_live_two", public_model: "chat", strategy: "round_robin", enabled: true },
       { id: "rt_retired", public_model: "chat", strategy: "ordered", enabled: false },
-    ] as never);
+    ] } as never);
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
@@ -276,9 +276,9 @@ describe("projects page", () => {
   it("surfaces the server's reason for a rejected project", async () => {
     // A localized "the request is invalid" alone cannot tell name from CIDR from policy.
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
-    ] as never);
+    ] } as never);
     vi.spyOn(api, "createProject").mockRejectedValue(
       new ApiError(409, "allowed_models references unknown model alias chatt"),
     );
@@ -296,9 +296,9 @@ describe("projects page", () => {
   // the page to attach to and goes to the notification column.
   it("confirms a created project in the notification column", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
-    ] as never);
+    ] } as never);
     const createProject = vi.spyOn(api, "createProject").mockResolvedValue({ data: project(), etag: '"1"' } as never);
 
     renderPage();
@@ -318,9 +318,9 @@ describe("projects page", () => {
   // the instance's that nobody chose.
   it("sends the project request-body ceiling, defaulting to the instance limit", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
-    ] as never);
+    ] } as never);
     const createProject = vi.spyOn(api, "createProject").mockResolvedValue({ data: project(), etag: '"1"' } as never);
 
     renderPage();
@@ -338,9 +338,9 @@ describe("projects page", () => {
 
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
-    vi.mocked(api.allRoutes).mockResolvedValue([
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
       { id: "rt_1", public_model: "chat", enabled: true, revision: 1 },
-    ] as never);
+    ] } as never);
     const createProject = vi.spyOn(api, "createProject");
 
     renderPage();

@@ -605,10 +605,18 @@ export function OverflowMenu({ label, children }: { label: string; children: Rea
       menu.open = false;
       if (restoreFocus) menu.querySelector<HTMLElement>("summary")?.focus();
     };
+    // A dialog opened from inside this menu is above it, and answering keys or
+    // pointer events under a dialog is what broke the way out of one: Escape
+    // reached both, the menu closed first, and the dialog then restored focus to
+    // a button inside a <details> the UA had just hidden — so focus landed on
+    // <body>. Modal draws the same line for the same reason.
+    const dialogIsAbove = () => document.querySelector(".modal-backdrop") !== null;
     const onPointerDown = (event: PointerEvent) => {
+      if (dialogIsAbove()) return;
       if (!details.current?.contains(event.target as Node)) close();
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (dialogIsAbove()) return;
       if (event.key === "Escape") close(true);
     };
     document.addEventListener("pointerdown", onPointerDown);

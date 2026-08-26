@@ -19,7 +19,7 @@ import {
 } from "../components";
 import { exactNumber, formatAge, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolutionState, ResolvedInvocationTarget } from "../types";
 import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { ModalityMarks } from "../ModalityMarks";
 import { useTranslation } from "react-i18next";
@@ -28,7 +28,7 @@ import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
-import { deploymentCondition } from "./deploymentCondition";
+import { deploymentCondition, deploymentNeedsAttention, recordedTestState } from "./deploymentCondition";
 import { localizedError } from "../i18n/errors";
 
 export function DeploymentsPage() {
@@ -65,11 +65,10 @@ export function DeploymentsPage() {
         providerNames.get(deployment.provider_id) || deployment.provider_id,
         deployment.region,
       ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
-      const testIsCurrent = deployment.last_test_status === "healthy" && deployment.last_test_revision === deployment.revision;
       const matchesStatus = status === "all"
         || (status === "enabled" && deployment.enabled)
         || (status === "disabled" && !deployment.enabled)
-        || (status === "attention" && (!testIsCurrent || deployment.last_test_status === "unhealthy"));
+        || (status === "attention" && deploymentNeedsAttention(deployment));
       return matchesQuery && matchesStatus;
     });
   }, [deployments.data?.items, providerNames, query, status]);
@@ -276,23 +275,12 @@ function DeploymentRow({
       notify({ tone: "success", title: t(deployment.enabled ? "deployments.notifyDisabled" : "deployments.notifyEnabled"), description: deployment.name });
     },
   });
-  // The "no effective price" banner is the failed enable attempt's error, and it
-  // outlives the condition it describes: setting a price refreshes the price
-  // column to "configured" while the dead mutation keeps rendering its blocker,
-  // so the row contradicts itself until the page is reloaded. Drop the error
-  // once the deployment actually has an active price. A price that is only
-  // scheduled leaves the banner up, which is correct — enabling would still be
-  // refused.
-  const priceBlockedEnable = state.error instanceof ApiError && state.error.code === "deployment_price_unavailable";
-  const resetState = state.reset;
-  useEffect(() => {
-    if (priceBlockedEnable && activePrice) resetState();
-  }, [priceBlockedEnable, activePrice, resetState]);
   const capabilities = Object.entries(deployment.capabilities)
     .filter(([, enabled]) => typeof enabled === "boolean" && enabled)
     .map(([name]) => name);
-  const testIsCurrent = deployment.last_test_status === "healthy" && deployment.last_test_revision === deployment.revision;
-  const testFailed = deployment.last_test_status === "unhealthy" && deployment.last_test_revision === deployment.revision;
+  const recordedTest = recordedTestState(deployment);
+  const testIsCurrent = recordedTest === "success";
+  const testFailed = recordedTest === "failure";
   const testState = test.isPending
     ? "running"
     // A test that never reached the store — a 409 on a revision that moved, a
@@ -301,13 +289,7 @@ function DeploymentRow({
     // that just failed.
     : test.isError
       ? "failure"
-      : testFailed
-        ? "failure"
-        : testIsCurrent
-          ? "success"
-          : deployment.last_test_status === "healthy"
-          ? "stale"
-          : "idle";
+      : recordedTest;
   const testFailureReason = useTestFailureReason(test.error, testFailed ? deployment.last_test_error_class : undefined);
   const probe = deployment.probe;
   const probeReason = useTestFailureReason(undefined, probe?.state === "unhealthy" ? probe.error_class : undefined);
@@ -322,7 +304,9 @@ function DeploymentRow({
   const priceNeedsAttention = !prices.isPending && !activePrice;
   // The card's one line about itself: the worst thing true of this deployment,
   // and how much it outranks. See deploymentCondition.ts for the ladder.
-  const condition = deploymentCondition({ deployment, testState, priceMissing: priceNeedsAttention, priceUnknown: prices.isError });
+  const condition = deploymentCondition({
+    deployment, testState, priceMissing: priceNeedsAttention, priceUnknown: prices.isError, activeRouteCount,
+  });
   const conditionAge = formatAge(condition.observedAt);
   // A classified reason is a sentence, and the line is one clipped row: the
   // reason is still on the card, starting where the operator is already
@@ -390,7 +374,7 @@ function DeploymentRow({
     .slice()
     .sort((first, second) => second.effective_from.localeCompare(first.effective_from));
   return (
-    <article id={`deployment-${deployment.id}`} className="resource-card deployment-card" aria-labelledby={nameID}>
+    <article id={`deployment-${deployment.id}`} className="resource-card" aria-labelledby={nameID}>
       {/* Slot 1 — who this is. Two lines, always, so slot 2 starts at the same
           height on every card in the row. */}
       <div className="resource-card-head">
@@ -482,12 +466,10 @@ function DeploymentRow({
             : (!testIsCurrent ? t("deployments.testRequired") : undefined)}
           onToggle={() => state.mutate()}
         />
-        {/* The state the deployment is in, at the end of the bar that changes
-            it: the button says what a click does, the word says where the
-            deployment stands. Last in the bar and last in the reading order,
-            because it is the answer to the control beside it rather than an
-            accessory of the name three lines above. */}
-        <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
+        {/* No state word here any more. The conclusion line above owns where the
+            deployment stands, and being disabled is now one of the things it
+            says — a second copy in the action bar put "已禁用" on the same card
+            twice. The button still says what a click does. */}
       </div>
       {details && <Modal drawer title={t("deployments.detailsTitle", { name: deployment.name })} onClose={() => setDetails(false)}>
         <div className="detail-drawer">
@@ -642,13 +624,6 @@ function DeploymentRow({
 
         </div>
       </Modal>}
-      {(remove.isError || state.isError) && <ErrorState
-        className="deployment-card-error"
-        error={remove.error || state.error}
-        action={state.error instanceof ApiError && state.error.code === "deployment_price_unavailable"
-          ? <button className="button secondary" type="button" onClick={() => setPricing(true)}>{t("deployments.setPrice")}</button>
-          : undefined}
-      />}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} blocking={blockingPrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
@@ -1242,6 +1217,24 @@ export const deploymentCapabilityGroupsForTest = deploymentCapabilityGroups;
 // One list, derived. It used to be written out a second time above these groups,
 // which meant a capability could be in one and not the other.
 const deploymentCapabilityNames = deploymentCapabilityGroups.flatMap((group) => group.capabilities);
+
+/**
+ * The order the model catalogue is banded in, by what the operator does next.
+ *
+ * Ready first, because that is what most visits are for. The rest are not
+ * hidden: an operator arrives with a name read off the upstream's own console,
+ * and a list that quietly omits it reads as Halro's catalogue being wrong
+ * rather than as this provider not serving that model.
+ *
+ * The last two are separate bands because their remedies are opposite —
+ * a catalogue that disagrees with itself needs a person to look, while a model
+ * no binding here can serve needs a different provider or another interface
+ * enabled on this one. Collapsing them would send half the operators the wrong
+ * way, which is the same mistake the resolution state itself makes today by
+ * reporting "not in the catalogue" for a model the catalogue lists under a
+ * profile this provider has not bound.
+ */
+const MODEL_BAND_ORDER: readonly ResolutionState[] = ["resolved", "unknown", "covered_elsewhere", "conflicting", "no_variant"];
 type DeploymentCapabilityName = typeof deploymentCapabilityGroups[number]["capabilities"][number];
 
 function providerBindings(provider?: Provider): SelectableBinding[] {
@@ -1354,8 +1347,40 @@ function DeploymentForm({
     : listedTarget && !canonicalModelRef
       ? listedTarget
       : targetResolution.data ?? null;
-  const declaredModel = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "unknown";
-  const noVariant = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "no_variant";
+  const picked = !current && providerModel.trim() !== "";
+  // Both states mean the same thing about capabilities: nothing here claims any,
+  // so the operator declares them or spends a detection call. They differ in why,
+  // and the pointer below says so — but a model the catalogue serves on another
+  // interface must not lose the way to declare it. The catalogue can be stale,
+  // and the operator may know something Halro does not.
+  const declaredModel = picked
+    && (resolvedTarget?.resolution_state === "unknown" || resolvedTarget?.resolution_state === "covered_elsewhere");
+  const coveredElsewhere = picked && resolvedTarget?.resolution_state === "covered_elsewhere";
+  const coveringProfiles = coveredElsewhere ? resolvedTarget?.covered_by_profiles ?? [] : [];
+  // Why the capability section is empty, which decides what the operator should
+  // do about it. One panel used to answer all three with "not in the catalogue,
+  // run a detection" — wrong for the first, since the catalogue does list the
+  // model, and a detection cannot answer a routing question anyway; and
+  // incomplete for the second, where the interface returns identifiers only and
+  // no amount of refreshing will produce more.
+  // Where each capability's claim came from. Rendered per row only when the
+  // rows disagree: a column reading "built-in catalogue" eight times is not a
+  // comparison, and the header already says it once. When they differ, which
+  // ones were measured and which were merely listed is the whole question.
+  const claimSourceByCapability = useMemo(() => {
+    const sources = new Map<string, string>();
+    for (const claim of selectedVariant?.capability_claims ?? []) {
+      if (claim.status === "supported") sources.set(claim.capability_id, claim.source);
+    }
+    return sources;
+  }, [selectedVariant]);
+  const claimSourcesDiffer = new Set(claimSourceByCapability.values()).size > 1;
+  const emptyCapabilityReason = coveredElsewhere
+    ? "coveredElsewhere"
+    : resolvedTarget?.metadata_source === "none"
+      ? "noUpstreamMetadata"
+      : "notInCatalogue";
+  const noVariant = picked && resolvedTarget?.resolution_state === "no_variant";
   useEffect(() => {
     if (current || manualDeclaration || capabilityDetection) return;
     const variants = resolvedTarget?.variants ?? [];
@@ -1448,12 +1473,17 @@ function DeploymentForm({
     ...(canonicalModelRef ? { capability_model: canonicalModelRef } : {}),
     target_kind: targetKind,
     capabilities,
-    ...(widening || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
+    ...(widening || declaringBeyondVariant || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
     ...(declaredModel && detection?.status === "completed" ? {
       capability_detection_id: detection.id,
       capability_detection_revision: detection.revision,
     } : {}),
-    ...(!current && !manualDeclaration && !detection && selectedVariant ? { resolution_revision: selectedVariant.revision } : {}),
+    // Dropped when the operator declared past the variant: the revision pins
+    // this write to the claims it was resolved from, and the server refuses a
+    // capability set that exceeds them. Sending both would be asking the server
+    // to honour a pin and break it in the same request.
+    ...(!current && !manualDeclaration && !detection && !declaringBeyondVariant && selectedVariant
+      ? { resolution_revision: selectedVariant.revision } : {}),
     region: region.trim(),
     max_concurrency: maxConcurrency,
     enabled: current?.enabled ?? false,
@@ -1504,6 +1534,19 @@ function DeploymentForm({
   // Asking for a separate "I declare" click before the save bought nothing the
   // tick had not already said.
   const widening = Boolean(current && deploymentCapabilityNames.some((name) => !current.capabilities[name] && capabilities[name]));
+  // A capability the operator ticked that the resolved variant does not claim.
+  //
+  // The narrowing editor used to be bounded by the variant, so these could not
+  // be ticked at all: a Mantle model whose catalogue entry says chat and
+  // streaming rendered two rows, and vision — which the interface carries and
+  // the model has — had nowhere to be turned on. The editor is bounded by the
+  // interface now, and this is what it costs: the variant path refuses
+  // capabilities beyond the claims it was resolved from, so a tick past them
+  // has to be saved as the operator's own declaration instead.
+  const declaringBeyondVariant = Boolean(
+    !current && selectedVariant && !manualDeclaration && !detection
+    && deploymentCapabilityNames.some((name) => !selectedVariant.capabilities[name] && capabilities[name]),
+  );
   const preflight = useMutation({
     mutationFn: () => api.preflightDeploymentCapabilities(current!.id, capabilities),
     onSuccess: (result) => {
@@ -1621,6 +1664,34 @@ function DeploymentForm({
     return (targetCatalog.data?.items ?? [])
       .filter((target) => target.target_kind === targetKind && (!query || target.display_name.toLocaleLowerCase().includes(query)));
   }, [targetCatalog.data?.items, providerModel, targetKind]);
+  // The listing already knows which of these the provider can actually serve:
+  // the catalogue GET resolves every binding and returns a resolution state per
+  // target. The options rendered one line each, so a model that is ready to
+  // deploy and one this provider cannot serve at all looked identical, and the
+  // operator found out by filling in the form.
+  //
+  // Banded, not filtered: an operator arrives with a name read off the
+  // upstream's own console, and a list that silently omits it reads as Halro's
+  // catalogue being broken.
+  const modelBands = useMemo(() => {
+    const bands = new Map<ResolutionState, ResolvedInvocationTarget[]>(
+      MODEL_BAND_ORDER.map((state) => [state, []]),
+    );
+    for (const model of visibleModels) {
+      (bands.get(model.resolution_state) ?? bands.get("unknown")!).push(model);
+    }
+    let offset = 0;
+    return MODEL_BAND_ORDER.flatMap((state) => {
+      const items = bands.get(state) ?? [];
+      if (!items.length) return [];
+      const band = { state, items, offset };
+      offset += items.length;
+      return [band];
+    });
+  }, [visibleModels]);
+  // One flat order, derived from the banded one. Arrow keys walk the list the
+  // eye walks; an index into the unbanded array would jump.
+  const orderedModels = useMemo(() => modelBands.flatMap((band) => band.items), [modelBands]);
   useEffect(() => {
     if (!modelPickerOpen) return;
     const closeOnOutsideInteraction = (event: PointerEvent) => {
@@ -1655,15 +1726,15 @@ function DeploymentForm({
       event.preventDefault();
       event.stopPropagation();
       setModelPickerOpen(true);
-      setActiveModelIndex((currentIndex) => Math.min(currentIndex + 1, visibleModels.length - 1));
+      setActiveModelIndex((currentIndex) => Math.min(currentIndex + 1, orderedModels.length - 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       event.stopPropagation();
       setModelPickerOpen(true);
-      setActiveModelIndex((currentIndex) => currentIndex <= 0 ? Math.max(visibleModels.length - 1, 0) : currentIndex - 1);
-    } else if (event.key === "Enter" && modelPickerOpen && activeModelIndex >= 0 && visibleModels[activeModelIndex]) {
+      setActiveModelIndex((currentIndex) => currentIndex <= 0 ? Math.max(orderedModels.length - 1, 0) : currentIndex - 1);
+    } else if (event.key === "Enter" && modelPickerOpen && activeModelIndex >= 0 && orderedModels[activeModelIndex]) {
       event.preventDefault();
-      chooseModel(visibleModels[activeModelIndex]);
+      chooseModel(orderedModels[activeModelIndex]);
     } else if (event.key === "Escape" && modelPickerOpen) {
       event.preventDefault();
       event.stopPropagation();
@@ -1740,7 +1811,7 @@ function DeploymentForm({
     : [];
   // What the save will record, not what the form happens to display: widening
   // sends mode=operator_declared, so the source shown has to say so too.
-  const capabilityEvidenceSource = manualDeclaration || widening
+  const capabilityEvidenceSource = manualDeclaration || widening || declaringBeyondVariant
     ? "operator_declared"
     : detection?.status === "completed" ? detection.source : "";
   const dirty = useDirty({ name, providerID, providerModel, canonicalModelRef, bindingID, capabilities, region, maxConcurrency, targetKind });
@@ -1811,31 +1882,70 @@ function DeploymentForm({
                   />
                   {showModelCatalogControls && <span className="deployment-model-input-icon" aria-hidden="true" />}
                   {showModelCatalogControls && modelPickerOpen && (
-                    <div className="deployment-model-options" id="deployment-provider-model-options" ref={modelOptionsRef} role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
-                      <div className="deployment-model-options-meta" role="presentation">
+                    <div className="deployment-model-options" ref={modelOptionsRef}>
+                      {/* Outside the listbox on purpose: a listbox owns options
+                          and groups, and a count bar sitting among them is
+                          counted as neither by the browser and read as an
+                          option by some screen readers. */}
+                      <div className="deployment-model-options-meta">
                         {targetCatalog.isPending
                           ? t("deployments.modelCatalogLoading")
                           : targetCatalog.isError || refreshTargetCatalog.isError
                             ? t("deployments.modelCatalogUnavailable")
-                            : <>{t("deployments.modelCatalogCountPrefix")} <strong>{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
+                            // Never fetched is not the same as could not be
+                            // fetched: the first is one click away and costs an
+                            // upstream call, the second is a fault. Reading the
+                            // catalogue never dials, so the operator has to be
+                            // the one who decides to spend it.
+                            : targetCatalog.data?.not_cached
+                              ? t("deployments.modelCatalogNotCached")
+                              : <>{t("deployments.modelCatalogCountPrefix")} <strong>{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
                       </div>
-                      {visibleModels.length ? visibleModels.map((model, index) => (
-                        <button
-                          className={index === activeModelIndex ? "active" : ""}
-                          id={`deployment-provider-model-option-${index}`}
-                          data-model-index={index}
-                          key={`${model.target_kind}:${model.target_id}`}
-                          role="option"
-                          aria-selected={providerModel === model.target_id}
-                          type="button"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onMouseEnter={() => setActiveModelIndex(index)}
-                          onClick={() => chooseModel(model)}
-                        >
-                          <strong>{model.display_name}</strong>
-                        </button>
-                      )) : (
-                        <div className="deployment-model-empty">{targetCatalog.isPending ? t("deployments.modelCatalogLoading") : t("deployments.noModelMatches")}</div>
+                      <div id="deployment-provider-model-options" role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
+                        {modelBands.map((band) => (
+                          // The band name goes on the group, not only on the
+                          // heading: the heading is the sighted half, and a
+                          // band that exists only visually tells a screen
+                          // reader nothing about why these are separated.
+                          <div className="deployment-model-band" key={band.state} role="group" aria-label={t(`deployments.modelBands.${band.state}`)}>
+                            <div className="deployment-model-band-name" aria-hidden="true">{t(`deployments.modelBands.${band.state}`)}</div>
+                            {band.items.map((model, itemIndex) => {
+                              const index = band.offset + itemIndex;
+                              return (
+                                <button
+                                  className={`deployment-model-option${index === activeModelIndex ? " active" : ""}`}
+                                  id={`deployment-provider-model-option-${index}`}
+                                  data-model-index={index}
+                                  key={`${model.target_kind}:${model.target_id}`}
+                                  role="option"
+                                  // The input owns the focus; an option that
+                                  // stays tabbable lets a Shift+Tab land inside
+                                  // the popup while aria-activedescendant still
+                                  // says the input has it.
+                                  tabIndex={-1}
+                                  aria-selected={providerModel === model.target_id}
+                                  aria-setsize={orderedModels.length}
+                                  aria-posinset={index + 1}
+                                  type="button"
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onMouseEnter={() => setActiveModelIndex(index)}
+                                  onClick={() => chooseModel(model)}
+                                >
+                                  <strong>{model.display_name}</strong>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      {!orderedModels.length && (
+                        <div className="deployment-model-empty">{
+                          targetCatalog.isPending
+                            ? t("deployments.modelCatalogLoading")
+                            : targetCatalog.data?.not_cached
+                              ? t("deployments.modelCatalogNotCachedHint")
+                              : t("deployments.noModelMatches")
+                        }</div>
                       )}
                     </div>
                   )}
@@ -1922,10 +2032,20 @@ function DeploymentForm({
             {!current && selectedVariant && !manualDeclaration && !detection && <details className="capability-disclosure capability-advanced">
               <summary><span>{t("deployments.capabilityNarrowing")}</span><strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong></summary>
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
-              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={selectedVariant.capabilities} onChange={changeCapabilities} />}
+              {/* The connection's own ceiling, not the variant's. A capability
+                  the profile could serve but this connection has not enabled is
+                  turned on where connections are edited, and the manual editor
+                  below already says so; a capability the connection carries and
+                  the catalogue merely did not record belongs here. */}
+              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={bindingCeiling} claimed={selectedVariant.capabilities} onChange={changeCapabilities} />}
               {!catalogReady && !capabilityCatalog.isError && <Loading />}
               {capabilityCatalog.isError && <CapabilityMatrixError query={capabilityCatalog} />}
             </details>}
+            {!current && coveredElsewhere && coveringProfiles.length > 0 && <div className="notice">
+              <strong>{t("deployments.coveredElsewhereTitle")}</strong>
+              <span>{t("deployments.coveredElsewhereDescription", { profiles: coveringProfiles.join(t("common.dotSeparator")) })}</span>
+              <Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link>
+            </div>}
             {!current && noVariant && <div className="notice warning"><strong>{t("deployments.noVariantTitle")}</strong><span>{t("deployments.noVariantDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
             {!current && resolvedTarget?.resolution_state === "conflicting" && <div className="notice warning"><strong>{t("deployments.resolutionConflictTitle")}</strong><span>{t("deployments.resolutionConflictDescription")}</span></div>}
             {!current && declaredModel && !manualDeclaration && (
@@ -1934,10 +2054,14 @@ function DeploymentForm({
                   <div className="capability-onboarding-card">
                     <header>
                       <div>
-                        <strong>{t("deployments.detectionUnknownTitle")}</strong>
-                        <span>{t("deployments.detectionCostBoundary", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}</span>
+                        <strong>{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.title`)}</strong>
+                        <span>{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.description`)}</span>
+                        {/* The count is the operator's own configured ceiling,
+                            and it is stated before the billable button, not in
+                            the confirmation after it. */}
+                        {emptyCapabilityReason !== "coveredElsewhere" && <span>{t("deployments.detectionCostBoundary", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}</span>}
                       </div>
-                      <span className="capability-onboarding-status">{t("deployments.detectionRequired")}</span>
+                      <span className="capability-onboarding-status">{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.next`)}</span>
                     </header>
                     <div className="capability-onboarding-controls">
                       {selectableBindings.length > 1 && <p className="capability-advanced-note">{t("deployments.detectionResolvesInterface")}</p>}
@@ -2115,7 +2239,13 @@ function DeploymentForm({
                             checked={capabilities[name]}
                             onChange={(event) => changeCapabilities(updateCapabilitySelection(catalogReady, capabilities, name, event.target.checked))}
                           />
-                          <span>{t(`capabilities.${name}`)}{unavailable && <small>{t(reason)}</small>}</span>
+                          <span>
+                            {t(`capabilities.${name}`)}
+                            {unavailable && <small>{t(reason)}</small>}
+                            {!unavailable && claimSourcesDiffer && claimSourceByCapability.has(name) && (
+                              <small className="capability-claim-source">{t(`deployments.capabilitySources.${claimSourceByCapability.get(name)}`)}</small>
+                            )}
+                          </span>
                         </label>;
                       })}
                     </div>
@@ -2149,6 +2279,15 @@ function DeploymentForm({
             {widening && <div className="notice warning deployment-capability-declaration" aria-live="polite">
               <strong>{t("deployments.widenDeclarationTitle")}</strong>
               <span>{t("deployments.widenDeclarationDescription")}</span>
+            </div>}
+            {/* Not a warning: turning on a capability the catalogue never
+                recorded is the supported way to deploy a model Halro has no
+                card for. What it changes is who is answering for it, and that
+                has to be said before the save rather than discovered in the
+                evidence column afterwards. */}
+            {declaringBeyondVariant && <div className="notice deployment-capability-declaration" aria-live="polite">
+              <strong>{t("deployments.declareBeyondCatalogTitle")}</strong>
+              <span>{t("deployments.declareBeyondCatalogDescription")}</span>
             </div>}
             {providerModel.trim() !== "" && !anyOperation && (manualDeclaration || !declaredModel || detection?.status === "completed") && <p className="deployment-operation-required" role="alert">{t("deployments.operationRequired")}</p>}
             {providerModel.trim() !== "" && manualDeclaration && (
@@ -2291,10 +2430,27 @@ function CapabilityMatrixError({ query }: { query: ReturnType<typeof useProvider
   />;
 }
 
-function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
+/**
+ * The capability editor for a model the catalogue resolved.
+ *
+ * `ceiling` is what the interface can carry and decides which rows exist.
+ * `claimed` is what something actually said about this model and decides which
+ * are ticked — nothing is ever pre-ticked from the ceiling, because filling a
+ * form from what an interface permits is how deployments came to claim
+ * capabilities their model does not have.
+ *
+ * The two used to be the same value, and the row list was the narrower one. A
+ * model whose catalogue entry says chat and streaming rendered two rows, so
+ * vision — carried by the interface, present in the model, absent from the
+ * entry — could not be turned on here at all. Listing the ceiling and ticking
+ * the claims keeps both halves: what is known is marked as known, and what is
+ * merely unrecorded stays available to an operator who knows better.
+ */
+function CapabilitySubsetEditor({ catalog, capabilities, ceiling, claimed, onChange }: {
   catalog: ProviderProfilesCatalog;
   capabilities: ProviderCapabilities;
   ceiling: ProviderCapabilities;
+  claimed: ProviderCapabilities;
   onChange: (next: ProviderCapabilities) => void;
 }) {
   const { t } = useTranslation();
@@ -2313,7 +2469,13 @@ function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
               checked={capabilities[name]}
               onChange={(event) => onChange(updateCapabilitySelection(catalog, capabilities, name, event.target.checked))}
             />
-            <span>{t(`capabilities.${name}`)}</span>
+            <span>
+              {t(`capabilities.${name}`)}
+              {/* Marked, not hidden: an unrecorded capability is one nothing has
+                  spoken about, which is a different thing from one that was
+                  checked and found missing. */}
+              {!claimed[name] && <small className="capability-unclaimed">{t("deployments.capabilityUnclaimed")}</small>}
+            </span>
           </label>)}
         </div>
       </section>;

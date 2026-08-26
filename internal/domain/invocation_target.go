@@ -43,6 +43,12 @@ type NormalizedModelMetadata struct {
 	InferenceTypes      []string `json:"inference_types,omitempty"`
 	MaxContextTokens    int64    `json:"max_context_tokens,omitempty"`
 	MaxOutputTokens     int64    `json:"max_output_tokens,omitempty"`
+	// ResponseStreaming is a pointer because absent and false are different
+	// answers and only one of them is the upstream's. A catalog that does not
+	// mention streaming has said nothing about it, and this repo does not turn
+	// silence into a claim; a catalog that says false has said something, and
+	// flattening the two into a bool would let the first become the second.
+	ResponseStreaming *bool `json:"response_streaming,omitempty"`
 }
 
 // InvocationTargetScopeKey prevents evidence from leaking across provider
@@ -198,6 +204,14 @@ const (
 	ResolutionUnknown     ResolutionState = "unknown"
 	ResolutionConflicting ResolutionState = "conflicting"
 	ResolutionNoVariant   ResolutionState = "no_variant"
+	// ResolutionCoveredElsewhere separates "the catalog does not know this
+	// model" from "the catalog knows it, under an interface this provider has
+	// not bound". Both used to answer `unknown`, and the two have opposite
+	// remedies: the first is declared by hand or detected with a billable call,
+	// the second is a different provider or another interface enabled on this
+	// one. Reported as one state, the console sent operators to spend a call
+	// deciding something the catalog already answered.
+	ResolutionCoveredElsewhere ResolutionState = "covered_elsewhere"
 )
 
 type DeploymentVariant struct {

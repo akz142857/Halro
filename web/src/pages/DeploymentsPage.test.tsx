@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import i18n from "../i18n";
+import { NotificationProvider } from "../notifications";
 import type { AdminRole, Deployment, DeploymentPriceVersion, DeploymentVariant, InvocationTargetCatalog, Provider, ProviderCapabilities, ResolvedInvocationTarget, Session } from "../types";
 import { DeploymentsPage, OVERDUE_SCHEDULED_PRICE_REFRESH_MS, PRICE_FETCH_BATCH_SIZE, clockToMinute, minuteToClock, priceFetchDelay, scheduleDraftProblem, scheduledPriceRefreshInterval } from "./DeploymentsPage";
 import { DEFAULT_TIME_ZONE, isoToZonedInput } from "../timezone";
@@ -807,9 +808,169 @@ describe("deployment invocation target workflow", () => {
     expect(refresh.closest(".deployment-model-input-row")).toContainElement(screen.getByLabelText(/^模型 ID/));
     fireEvent.focus(screen.getByLabelText(/^模型 ID/));
     const listbox = await screen.findByRole("listbox", { name: "可用模型" });
-    expect(listbox.querySelector(".deployment-model-options-meta")).toHaveTextContent("可用 2 个模型");
+    // The count sits beside the listbox, not inside it: a listbox owns options
+    // and groups, and a bare div among them is read as neither.
+    expect(listbox.querySelector(".deployment-model-options-meta")).toBeNull();
+    const popup = listbox.closest(".deployment-model-options") as HTMLElement;
+    expect(popup.querySelector(".deployment-model-options-meta")).toHaveTextContent("可用 2 个模型");
     fireEvent.click(refresh);
     await waitFor(() => expect(api.refreshInvocationTargets).toHaveBeenCalledWith(provider.id));
+  });
+
+  // The catalogue GET resolves every binding and returns a state per target, and
+  // the options threw it away: a model ready to deploy and one no binding here
+  // can serve rendered the same single line, so the operator learned the
+  // difference by filling in the form. Banded, never filtered — a name read off
+  // the upstream's own console has to still be findable, or a provider that does
+  // not serve it reads as Halro's catalogue being broken.
+  it("bands the model catalogue by what the operator would do next", async () => {
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([
+      target("gpt-unserved", [], "no_variant"),
+      target("gpt-unknown", [], "unknown"),
+      target("gpt-ready", [variant("gpt-ready", "b-chat", chatCapabilities)]),
+      target("gpt-conflict", [], "conflicting"),
+    ]));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+
+    const listbox = await screen.findByRole("listbox", { name: "可用模型" });
+    // Ready first, and every other model still reachable.
+    expect(Array.from(listbox.querySelectorAll('[role="option"]')).map((option) => option.textContent))
+      .toEqual(["gpt-ready", "gpt-unknown", "gpt-conflict", "gpt-unserved"]);
+    // The band name is on the group, not only on the heading: a band that exists
+    // only visually tells a screen reader nothing about why these are separated.
+    expect(within(listbox).getByRole("group", { name: "可直接创建" })).toBeVisible();
+    // Two bands, not one: a catalogue that disagrees with itself needs a person
+    // to look, and a model no binding here serves needs a different provider.
+    expect(within(listbox).getByRole("group", { name: "目录说法冲突，需要人工确认" })).toBeVisible();
+    expect(within(listbox).getByRole("group", { name: "当前服务商上建不了" })).toBeVisible();
+    // Arrow keys walk the order the eye walks.
+    fireEvent.keyDown(screen.getByLabelText(/^模型 ID/), { key: "ArrowDown" });
+    expect(screen.getByLabelText(/^模型 ID/)).toHaveAttribute("aria-activedescendant", "deployment-provider-model-option-0");
+    expect(document.getElementById("deployment-provider-model-option-0")).toHaveTextContent("gpt-ready");
+  });
+
+  // The state exists to give an operator the one instruction the console could
+  // not give before. What it must not do is take away the instruction they
+  // already had: the catalogue can be stale, and the operator may know something
+  // Halro does not, so declaring the capabilities by hand stays available.
+  it("points at the interface serving the model without closing the declare path", async () => {
+    const elsewhere = target("deepseek.v3.1", [], "covered_elsewhere");
+    elsewhere.covered_by_profiles = ["bedrock.mantle.chat.v1"];
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([elsewhere]));
+    vi.mocked(api.resolveInvocationTarget).mockResolvedValue(elsewhere);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+    fireEvent.click(await screen.findByRole("option", { name: "deepseek.v3.1" }));
+
+    // Names the interface: without it the console can say "not here" but not
+    // "there", which is the whole reason the state is worth having.
+    expect(await screen.findByText("该模型由另一套接口服务")).toBeVisible();
+    expect(screen.getByText(/bedrock\.mantle\.chat\.v1/)).toBeVisible();
+    // And the way out the operator had under `unknown` is still on the screen.
+    expect(screen.getByRole("button", { name: "手动配置" })).toBeVisible();
+  });
+
+  // Three different reasons the capability section can be empty, with three
+  // different things to do about them. One panel used to answer all three with
+  // "not in the catalogue, run a detection" — wrong for a model the catalogue
+  // does list, and a detection cannot answer a routing question anyway.
+  it("says why the capabilities are empty, and does not offer a call that cannot answer", async () => {
+    const elsewhere = target("deepseek.v3.1", [], "covered_elsewhere");
+    elsewhere.covered_by_profiles = ["bedrock.mantle.chat.v1"];
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([elsewhere]));
+    vi.mocked(api.resolveInvocationTarget).mockResolvedValue(elsewhere);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+    fireEvent.click(await screen.findByRole("option", { name: "deepseek.v3.1" }));
+
+    expect(await screen.findByText("目录里有它，只是不在这条接口上")).toBeVisible();
+    expect(screen.getByText(/识别帮不上忙/)).toBeVisible();
+    // The billable call's ceiling belongs on the panels where pressing it can
+    // answer something, not on the one where it cannot.
+    expect(screen.queryByText(/最多/)).toBeNull();
+  });
+
+  // The other empty reason on the same panel: the upstream returns identifiers
+  // and nothing else, so refreshing forever produces no capabilities. Saying
+  // "not in the catalogue" alone sends the operator back to a refresh button.
+  it("separates an upstream that says nothing from a catalogue that lists nothing", async () => {
+    const silent = target("openai.gpt-5.6-luna", [], "unknown");
+    silent.metadata_source = "none";
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([silent]));
+    vi.mocked(api.resolveInvocationTarget).mockResolvedValue(silent);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+    fireEvent.click(await screen.findByRole("option", { name: "openai.gpt-5.6-luna" }));
+
+    expect(await screen.findByText("谁都没说过这个模型能做什么")).toBeVisible();
+    expect(screen.getByText(/再刷新多少次都不会多出能力信息/)).toBeVisible();
+  });
+
+  // The narrowing editor was bounded by the variant, so a model whose catalogue
+  // entry claims chat and streaming rendered two rows — and vision, which the
+  // interface carries and the model has, had nowhere to be turned on. It is
+  // bounded by the interface now: every row the connection can serve is there,
+  // the recorded ones are ticked, the rest are marked and left to the operator.
+  it("lists what the interface carries and ticks only what the catalogue recorded", async () => {
+    // What the connection carries but the catalogue entry does not record. The
+    // real case is vision on a Mantle model; the shape is the same.
+    const claimed = { ...emptyCapabilities, chat: true, streaming: true };
+    const ready = target("openai.gpt-5.6-terra", [variant("openai.gpt-5.6-terra", "b-chat", claimed)]);
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([ready]));
+    vi.mocked(api.resolveInvocationTarget).mockResolvedValue(ready);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+    fireEvent.click(await screen.findByRole("option", { name: "openai.gpt-5.6-terra" }));
+
+    fireEvent.click(await screen.findByText("高级设置：收窄能力"));
+    const unrecorded = await screen.findByRole("checkbox", { name: /工具调用/ });
+    // Present, selectable, and marked as something nothing has recorded — an
+    // unrecorded capability is not a capability found missing.
+    expect(unrecorded).toBeEnabled();
+    expect(unrecorded).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /对话/ })).toBeChecked();
+    expect(within(unrecorded.closest("label") as HTMLElement).getByText("目录未记录")).toBeVisible();
+  });
+
+  // Ticking past the claims changes who is answering for the capability, and
+  // the request has to change with it: the resolution pin binds the write to the
+  // claims it was resolved from, and the server refuses a set that exceeds them.
+  it("saves a capability the catalogue never recorded as the operator's own declaration", async () => {
+    const claimed = { ...emptyCapabilities, chat: true, streaming: true };
+    const ready = target("openai.gpt-5.6-terra", [variant("openai.gpt-5.6-terra", "b-chat", claimed)]);
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([ready]));
+    vi.mocked(api.resolveInvocationTarget).mockResolvedValue(ready);
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型部署" }));
+    fireEvent.change(await screen.findByLabelText("部署名称"), { target: { value: "Terra" } });
+    fireEvent.change(await screen.findByLabelText(/^服务商/), { target: { value: provider.id } });
+    fireEvent.focus(await screen.findByLabelText(/^模型 ID/));
+    fireEvent.click(await screen.findByRole("option", { name: "openai.gpt-5.6-terra" }));
+    fireEvent.click(await screen.findByText("高级设置：收窄能力"));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /工具调用/ }));
+
+    // Said before the save, not discovered in the evidence column after it.
+    expect(await screen.findByText("有能力是你自己声明的")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    const [body] = create.mock.calls[0] as [Record<string, unknown>, string];
+    expect(body.mode).toBe("operator_declared");
+    // Both would be asking the server to honour a pin and break it at once.
+    expect(body).not.toHaveProperty("resolution_revision");
+    expect((body.capabilities as Record<string, boolean>).tools).toBe(true);
   });
 
   it("keeps the model refresh control visible while the initial catalog is loading", async () => {
@@ -897,13 +1058,14 @@ describe("deployment card keeps what the row decided", () => {
     });
     renderPage();
 
-    const card = (await screen.findByText("Deployment dep_card")).closest("article.deployment-card") as HTMLElement;
+    const card = (await screen.findByText("Deployment dep_card")).closest("article.resource-card") as HTMLElement;
     // Enabled says "not routing" when the snapshot drifted, so the correction
     // has to sit beside the flag rather than behind an expander.
     expect(within(card).getByText("能力已不再受支持")).toBeVisible();
-    // Colour is never the only signal: the state exists as words too, in the
-    // state cell rather than anywhere the word happens to appear.
-    expect(card.querySelector(".resource-state")).toHaveTextContent("启用");
+    // Colour is never the only signal: the state exists as words, and it is the
+    // conclusion line that carries them now — a second copy in the action bar
+    // put the same word on the card twice.
+    expect(card.querySelector(".resource-state")).toBeNull();
     // Routed deployments cannot be disabled, and the bar's own button is what
     // says so rather than a menu the operator has to open to find out.
     const disable = within(card).getByRole("button", { name: /^禁用/ });
@@ -937,7 +1099,7 @@ describe("deployment card keeps what the row decided", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
 
-    const card = (await screen.findByText("Deployment dep_quiet")).closest("article.deployment-card") as HTMLElement;
+    const card = (await screen.findByText("Deployment dep_quiet")).closest("article.resource-card") as HTMLElement;
     await waitFor(() => expect(within(card).queryByText("价格设置")).not.toBeInTheDocument());
     expect(within(card).queryByText("并发上限")).not.toBeInTheDocument();
     expect(within(card).queryByText("路由依赖")).not.toBeInTheDocument();
@@ -953,11 +1115,12 @@ describe("deployment card keeps what the row decided", () => {
       .toEqual(["编辑", "查看详情", "禁用"]);
     const head = card.querySelector(".resource-card-head") as HTMLElement;
     expect(within(head).getByLabelText(/^更多操作/)).toBeInTheDocument();
-    // The state word ends the action bar rather than trailing the name: it is
-    // the answer to the control beside it.
+    // The bar ends with the control, not with a word about the state: where the
+    // deployment stands is the conclusion line's answer, and being disabled is
+    // one of the things that line says.
     const bar = card.querySelector(".resource-card-actions") as HTMLElement;
-    expect(bar.lastElementChild).toHaveClass("resource-state");
-    expect(bar.lastElementChild).toHaveTextContent("已启用");
+    expect(bar.querySelector(".resource-state")).toBeNull();
+    expect(bar.lastElementChild).toHaveTextContent("禁用");
     const menu = card.querySelector(".row-overflow-menu") as HTMLElement;
     expect(Array.from(menu.querySelectorAll(".button")).map((button) => button.textContent))
       .toEqual(["创建替代", "删除"]);
@@ -978,17 +1141,20 @@ describe("deployment card keeps what the row decided", () => {
     const update = vi.spyOn(api, "updateDeployment").mockResolvedValue({} as never);
     renderPage();
 
-    const enabledCard = (await screen.findByText("Deployment dep_on")).closest("article.deployment-card") as HTMLElement;
-    // The head reports the state; the bar's button is named for what it does.
-    expect(enabledCard.querySelector(".resource-state")).toHaveTextContent("启用");
+    const enabledCard = (await screen.findByText("Deployment dep_on")).closest("article.resource-card") as HTMLElement;
+    // Enabled and nothing wrong: the conclusion line has no state to report, so
+    // it reports the resting verdict instead.
+    expect(within(enabledCard).queryByText("已禁用")).toBeNull();
     fireEvent.click(within(enabledCard).getByRole("button", { name: /^禁用/ }));
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     expect(update).toHaveBeenCalledWith("dep_on", expect.objectContaining({ enabled: false }), 1);
 
     // Untested: enabling is refused, and the button says why rather than
     // sending a request the server answers with a 409.
-    const untestedCard = (await screen.findByText("Deployment dep_untested")).closest("article.deployment-card") as HTMLElement;
-    expect(untestedCard.querySelector(".resource-state")).toHaveTextContent("禁用");
+    const untestedCard = (await screen.findByText("Deployment dep_untested")).closest("article.resource-card") as HTMLElement;
+    // Disabled outranks the resting verdict: it is the reason nothing reaches
+    // this deployment, whatever the last test said.
+    expect(within(untestedCard).getByText("已禁用")).toBeVisible();
     const enable = within(untestedCard).getByRole("button", { name: /^启用/ });
     expect(enable).toBeDisabled();
     expect(enable).toHaveAttribute("title", "请先测试当前版本");
@@ -1002,7 +1168,7 @@ describe("deployment card keeps what the row decided", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
 
-    const card = (await screen.findByText("Deployment dep_named")).closest("article.deployment-card") as HTMLElement;
+    const card = (await screen.findByText("Deployment dep_named")).closest("article.resource-card") as HTMLElement;
     const heading = within(card).getByRole("heading", { level: 3 });
     expect(heading).toHaveTextContent("Deployment dep_named");
     expect(card).toHaveAttribute("aria-labelledby", heading.id);
@@ -1038,7 +1204,7 @@ describe("deployment card keeps what the row decided", () => {
 
     await screen.findByText("Deployment dep_stale");
     const verdict = (id: string) => {
-      const card = screen.getByText(`Deployment ${id}`).closest("article.deployment-card") as HTMLElement;
+      const card = screen.getByText(`Deployment ${id}`).closest("article.resource-card") as HTMLElement;
       return within(card).getByRole("button", { name: /^测试/ }).getAttribute("data-test-state");
     };
     expect(verdict("dep_pass")).toBe("success");
@@ -1068,11 +1234,20 @@ describe("deployment card keeps what the row decided", () => {
 
     await screen.findByText("Deployment dep_loud_slots");
     const slots = (id: string) => {
-      const card = screen.getByText(`Deployment ${id}`).closest("article.deployment-card") as HTMLElement;
+      const card = screen.getByText(`Deployment ${id}`).closest("article.resource-card") as HTMLElement;
       return Array.from(card.children).map((child) => child.className.split(" ")[0]);
     };
     expect(slots("dep_quiet_slots")).toEqual(["resource-card-head", "deployment-condition", "deployment-spec", "resource-card-actions"]);
     expect(slots("dep_loud_slots")).toEqual(slots("dep_quiet_slots"));
+
+    // The count has to hold on the path that used to break it. Both records
+    // above render on mount, and neither can reach a rejected mutation — which
+    // is how a fifth child came back after being removed: it appears only once
+    // a write fails, and nothing here looked there.
+    vi.spyOn(api, "updateDeployment").mockRejectedValue(new ApiError(409, "no price", "deployment_price_unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "禁用 — Deployment dep_quiet_slots" }));
+    await screen.findByText(PRICE_BLOCKER);
+    expect(slots("dep_quiet_slots")).toEqual(["resource-card-head", "deployment-condition", "deployment-spec", "resource-card-actions"]);
   });
 
   // A tile that grew to full width pushed every card after it down the page,
@@ -1086,7 +1261,7 @@ describe("deployment card keeps what the row decided", () => {
     renderPage();
 
     const open = await screen.findByRole("button", { name: /^查看详情/ });
-    const card = open.closest("article.deployment-card") as HTMLElement;
+    const card = open.closest("article.resource-card") as HTMLElement;
     // A dialog is not a disclosure: the control must not claim an expanded state.
     expect(open).not.toHaveAttribute("aria-expanded");
     // jsdom does not focus a clicked button the way a browser does, and the
@@ -1212,7 +1387,7 @@ describe("deployment card keeps what the row decided", () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
     renderPage();
 
-    const card = (await screen.findByText("Deployment dep_1")).closest("article.deployment-card") as HTMLElement;
+    const card = (await screen.findByText("Deployment dep_1")).closest("article.resource-card") as HTMLElement;
     // The probe is what decides routing, so it outranks the manual test that
     // passed — the card must not report 1336ms of health for a deployment the
     // router has already dropped. The classified reason rides the same line.
@@ -1334,7 +1509,7 @@ describe("deployment card keeps what the row decided", () => {
     });
     renderPage();
 
-    const card = (await screen.findByText("Deployment dep_marks")).closest("article.deployment-card") as HTMLElement;
+    const card = (await screen.findByText("Deployment dep_marks")).closest("article.resource-card") as HTMLElement;
     // Each mark names its direction, its modality and the evidence behind it,
     // so what is on screen is never the only thing carrying the fact.
     // The marks appear once the profile bundle lands: the mapping is the
@@ -1361,7 +1536,11 @@ describe("deployment connection test", () => {
   beforeEach(() => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
+    // Priced, so the card's one line is about the test. A missing price outranks
+    // a failed test — it is refused on every request, where a failed manual test
+    // is refused on none — and an unpriced fixture would put these assertions in
+    // front of a line about the price instead.
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [activePriceVersion()], next_cursor: "" });
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -1400,7 +1579,14 @@ describe("deployment connection test", () => {
   // operator just made.
   it("reports a test that never reached the store rather than the record's older verdict", async () => {
     vi.spyOn(api, "deployments").mockResolvedValue({
-      items: [deployment("dep_1", { last_test_status: "healthy", last_test_revision: 1 })],
+      items: [deployment("dep_1", { enabled: true, last_test_status: "healthy", last_test_revision: 1 })],
+      next_cursor: "",
+    });
+    // Enabled and routed, so the resting verdict is what the card has to say. A deployment
+    // nothing points at carries no traffic either, and the card says that
+    // instead of reporting a passing test on something unreachable.
+    vi.mocked(api.routes).mockResolvedValue({
+      items: [{ id: "route_1", public_model: "gpt", deployment_id: "dep_1", priority: 0, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" }],
       next_cursor: "",
     });
     vi.spyOn(api, "testDeployment").mockRejectedValue(
@@ -1515,11 +1701,15 @@ describe("deployment price panel", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "不可用" })).not.toBeInTheDocument());
   });
 
-  // The blocker is the refused enable attempt's error, so it used to outlive the
-  // condition it names: setting the very price it demanded left the row showing
-  // "no effective price version" directly under a price column reading
-  // "configured", until the page was reloaded.
-  it("clears the missing-price blocker once the price it demanded exists", async () => {
+  // The refusal is a reply to one click, not a property of the deployment, so it
+  // is reported once through the notification channel and nowhere else. The card
+  // used to keep a copy of it too — a conditional block rendered after the
+  // action bar, which the card contract forbids by name because it takes the
+  // action bars of every tile beside it off their shared line. That copy also
+  // outlived what it described, needing an effect to retract it once the price
+  // it demanded existed; the condition line reads `activePrice` on every render
+  // and cannot go stale that way.
+  it("reports a refused enable once and stops naming the price once it exists", async () => {
     vi.mocked(api.deployments).mockResolvedValue({
       items: [deployment("dep_1", { last_test_status: "healthy", last_test_revision: 1 })],
       next_cursor: "",
@@ -1532,9 +1722,13 @@ describe("deployment price panel", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: /^启用/ }));
-    expect(await screen.findByText(PRICE_BLOCKER)).toBeVisible();
+    // One report, in the channel a one-time answer belongs in.
+    expect(await screen.findAllByText(PRICE_BLOCKER)).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "设置价格" }));
+    // The way to the form is the card's own line about the missing price, which
+    // is on every card that lacks one rather than only on the card whose enable
+    // was just refused.
+    fireEvent.click(screen.getByRole("button", { name: "未设置价格" }));
     fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
@@ -1544,7 +1738,7 @@ describe("deployment price panel", () => {
     // The price fact was on the card because it was missing. Once it exists the
     // card has nothing to say about it, and the whole cell goes.
     await waitFor(() => expect(screen.queryByText("价格设置")).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.queryByText(PRICE_BLOCKER)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("button", { name: "未设置价格" })).not.toBeInTheDocument());
   });
 
   // The provider zone decides which hours a window means, and it used to be
@@ -1782,7 +1976,15 @@ function renderPage(role: AdminRole = "administrator") {
     username: "admin", role, locale: "system", appearance: "dark", csrf_token: "csrf",
     absolute_expires_at: "2026-08-08T00:00:00Z", idle_expires_at: "2026-08-07T01:00:00Z",
   } satisfies Session);
-  return render(<QueryClientProvider client={queryClient}><DeploymentsPage /></QueryClientProvider>);
+  // Without the provider `useNotify` is a no-op, so every toast the page raises
+  // went unrendered and unasserted — which is how a card kept an inline copy of
+  // an error the notification channel was already reporting, with no test able
+  // to see the duplicate.
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <NotificationProvider><DeploymentsPage /></NotificationProvider>
+    </QueryClientProvider>,
+  );
 }
 
 // Detection spends the operator's Provider credential, so the console states

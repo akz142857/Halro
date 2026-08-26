@@ -115,6 +115,30 @@ describe("admin accessibility baseline", () => {
     expect(trigger).toHaveFocus();
   });
 
+  // A confirmation opened from inside the menu sits above it, and both listened
+  // on the document: one Escape closed the menu first, then the dialog restored
+  // focus to a button the UA had just hidden with the <details> — so focus
+  // landed on <body> and the keyboard user was back at the top of the page.
+  it("leaves the keys to the dialog when one is open above the menu", () => {
+    const { container } = render(
+      <>
+        <OverflowMenu label="更多操作"><button>删除</button></OverflowMenu>
+        <div className="modal-backdrop"><div className="modal" /></div>
+      </>,
+    );
+    const trigger = screen.getByLabelText("更多操作");
+    const details = container.querySelector("details")!;
+
+    fireEvent.click(trigger);
+    expect(details).toHaveAttribute("open");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(details).toHaveAttribute("open");
+    // The same rule for pointer events: a click inside the dialog is not an
+    // outside interaction the menu should answer.
+    fireEvent.pointerDown(container.querySelector(".modal")!);
+    expect(details).toHaveAttribute("open");
+  });
+
   it("keeps one main landmark and exposes settings sections and field descriptions", async () => {
     vi.spyOn(api, "systemStatus").mockResolvedValue({ build: { version: "dev", commit: "local", date: "" }, accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {}, time_context: timeContext() });
     vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });

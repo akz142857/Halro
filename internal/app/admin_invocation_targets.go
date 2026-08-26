@@ -40,7 +40,12 @@ type adminInvocationTarget struct {
 	Variants            []domain.DeploymentVariant `json:"variants"`
 	ConflictingBindings []string                   `json:"conflicting_bindings,omitempty"`
 	ResolutionState     domain.ResolutionState     `json:"resolution_state"`
-	ResolutionRevision  string                     `json:"resolution_revision"`
+	// CoveredByProfiles names the interfaces the catalog lists this model under
+	// when this provider has bound none of them. Present only with
+	// ResolutionCoveredElsewhere, and the reason that state is worth having:
+	// without the list the console can say "not here" but not "there".
+	CoveredByProfiles  []domain.ProviderProfileID `json:"covered_by_profiles,omitempty"`
+	ResolutionRevision string                     `json:"resolution_revision"`
 }
 
 type degradedBinding struct {
@@ -56,17 +61,25 @@ type invocationTargetCatalogResponse struct {
 	CatalogRevision  string                                       `json:"catalog_revision"`
 	ProviderRevision uint64                                       `json:"provider_revision"`
 	DegradedBindings []degradedBinding                            `json:"degraded_bindings,omitempty"`
-	FetchedAt        time.Time                                    `json:"fetched_at"`
-	ExpiresAt        time.Time                                    `json:"expires_at"`
-	Cached           bool                                         `json:"cached"`
+	// NotCached says the catalogue was never fetched, or the copy expired —
+	// not that fetching it failed. The console reads it as "press refresh",
+	// which is the control that is allowed to spend the credential.
+	NotCached bool      `json:"not_cached,omitempty"`
+	FetchedAt time.Time `json:"fetched_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Cached    bool      `json:"cached"`
 }
 
 type bindingTargetCatalog struct {
-	binding            domain.ProviderProfileBinding
-	items              []domain.InvocationTargetDescriptor
-	fetchedAt          time.Time
-	expiresAt          time.Time
-	cached             bool
+	binding   domain.ProviderProfileBinding
+	items     []domain.InvocationTargetDescriptor
+	fetchedAt time.Time
+	expiresAt time.Time
+	cached    bool
+	// notCached is a read that stopped rather than a binding that failed: the
+	// cache had nothing live and the read is not allowed to dial. It is not an
+	// error class, because no provider was reached to produce one.
+	notCached          bool
 	failed             bool
 	errorClass         provider.ErrorClass
 	discovery          domain.InvocationTargetDiscoveryCapabilities
@@ -74,8 +87,13 @@ type bindingTargetCatalog struct {
 	credentialRevision uint64
 }
 
-// Reading the cached catalog is a read: any authenticated role may ask for it
-// and it never reaches a Provider.
+// Reading the cached catalog is a read: any authenticated role may ask for it,
+// and it never reaches a Provider — a miss answers not_cached rather than
+// dialling. That was once only a comment: the miss fell through to the
+// upstream, so an endpoint guarded by requireAdmin, which checks a session and
+// not a role, spent the operator's provider credential once per binding
+// whenever a read-only admin opened the create form. Spending it is the POST
+// next door, behind requireAdminMutation, where the console says so first.
 func (r *Runtime) listAdminInvocationTargets(writer http.ResponseWriter, request *http.Request) {
 	r.writeInvocationTargetCatalog(writer, request, false)
 }
@@ -228,7 +246,8 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, evaluatedAt, r.effectiveModelCatalog())
 	}
 	r.capabilityMetrics.recordResolution(instance.Type, resolved.TargetKind, resolved.ResolutionState, resolutionSource(resolved))
-	if resolved.ResolutionState == domain.ResolutionConflicting || resolved.ResolutionState == domain.ResolutionNoVariant || len(resolved.ConflictingBindings) > 0 {
+	if resolved.ResolutionState == domain.ResolutionConflicting || resolved.ResolutionState == domain.ResolutionNoVariant ||
+		resolved.ResolutionState == domain.ResolutionCoveredElsewhere || len(resolved.ConflictingBindings) > 0 {
 		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 		actionState := string(resolved.ResolutionState)
 		if len(resolved.ConflictingBindings) > 0 && resolved.ResolutionState == domain.ResolutionResolved {
@@ -259,8 +278,8 @@ func (r *Runtime) describeInvocationTarget(ctx context.Context, instance domain.
 	if err != nil {
 		return domain.InvocationTargetDescriptor{}, false
 	}
-	items := normalizeInvocationTargets([]domain.InvocationTargetDescriptor{described})
-	if len(items) != 1 || items[0].TargetID != target.TargetID || items[0].TargetKind != target.TargetKind {
+	items, ok := normalizeInvocationTargets([]domain.InvocationTargetDescriptor{described})
+	if !ok || len(items) != 1 || items[0].TargetID != target.TargetID || items[0].TargetKind != target.TargetKind {
 		return domain.InvocationTargetDescriptor{}, false
 	}
 	currentProvider, providerErr := r.store.GetProvider(ctx, instance.ID)
@@ -349,6 +368,15 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 			result.fetchedAt, result.expiresAt, result.cached = cached.FetchedAt, cached.ExpiresAt, true
 			return result
 		}
+		// A miss ends the read here. It used to fall through and dial, which
+		// made the GET's own comment false and put a billable upstream call
+		// behind an endpoint that checks a session and not a role: a read-only
+		// admin opening the create form spent the operator's provider
+		// credential once per binding, without a control on the screen that
+		// said so. Refreshing is the POST next door, which is behind
+		// requireAdminMutation and says what it costs.
+		result.notCached = true
+		return result
 	}
 	timeout := r.config.Gateway.AttemptResponseHeaderTimeout.Value()
 	if timeout <= 0 {
@@ -367,8 +395,14 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 		}
 		return result
 	}
-	r.capabilityMetrics.recordCatalogRefresh(instance.Type, binding.ProfileID, true)
-	items = normalizeInvocationTargets(items)
+	// Counted after the listing is judged, not after it arrives: a catalogue
+	// too large to serve is a refresh that did not succeed.
+	items, withinBounds := normalizeInvocationTargets(items)
+	r.capabilityMetrics.recordCatalogRefresh(instance.Type, binding.ProfileID, withinBounds)
+	if !withinBounds {
+		result.failed, result.errorClass = true, provider.ErrorMalformed
+		return result
+	}
 	if r.store != nil {
 		currentProvider, providerErr := r.store.GetProvider(ctx, instance.ID)
 		currentCredential, credentialErr := r.store.GetCredential(ctx, instance.CredentialID)
@@ -427,6 +461,10 @@ func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, res
 	var keys []string
 	for _, result := range results {
 		response.Discovery = mergeDiscovery(response.Discovery, result.discovery)
+		if result.notCached {
+			response.NotCached = true
+			continue
+		}
 		if result.failed {
 			response.DegradedBindings = append(response.DegradedBindings, degradedBinding{BindingID: result.binding.ID, ProfileID: result.binding.ProfileID, ErrorClass: result.errorClass})
 			continue
@@ -554,6 +592,13 @@ func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target
 		resolved.ResolutionState = domain.ResolutionConflicting
 	} else if claimsExist {
 		resolved.ResolutionState = domain.ResolutionNoVariant
+	} else if profiles := catalog.ProfilesCovering(instance.Type, target.TargetKind, coverageModel(instance, target)); len(profiles) > 0 {
+		// Only from unknown. A conflict needs a person to read it and a
+		// no_variant already knows which binding fell short; rewriting either
+		// into "it lives on another interface" would replace an answer the
+		// operator can act on with a different one that is not true of it.
+		resolved.ResolutionState = domain.ResolutionCoveredElsewhere
+		resolved.CoveredByProfiles = profiles
 	}
 	if len(allRevisions) == 0 {
 		allRevisions = []string{instance.ID, strconv.FormatUint(instance.Revision, 10), target.TargetID, string(target.TargetKind), string(resolved.ResolutionState), catalog.Revision()}
@@ -613,6 +658,27 @@ func resolutionSource(resolved adminInvocationTarget) domain.ClaimSource {
 
 func invocationTargetCatalogEntry(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, target domain.InvocationTargetDescriptor) (string, modelcatalog.Entry) {
 	return invocationTargetCatalogEntryWithCatalog(instance, binding, target, modelcatalog.Builtin())
+}
+
+// coverageModel is the model name the catalog would list this target under,
+// independently of any binding. The per-binding derivation cannot answer that:
+// it is asked which interface serves the model, and the question here is
+// whether any interface does.
+//
+// An empty result means the question must not be asked. A self-hosted
+// OpenAI-compatible endpoint may serve something it calls `gpt-5`, and that name
+// is not a claim about OpenAI's gpt-5 — the per-binding lookup refuses to read
+// the catalog by name there for exactly that reason, and a coverage lookup that
+// did would reintroduce the inheritance by another route, telling the operator
+// their own endpoint's model "lives on another interface".
+func coverageModel(instance domain.ProviderInstance, target domain.InvocationTargetDescriptor) string {
+	if model := strings.TrimSpace(target.CanonicalModelRef); model != "" {
+		return model
+	}
+	if instance.Type == domain.ProviderOpenAICompatible && target.TargetKind == domain.TargetCustomEndpointModel {
+		return ""
+	}
+	return strings.TrimSpace(target.TargetID)
 }
 
 func invocationTargetCatalogEntryWithCatalog(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, target domain.InvocationTargetDescriptor, catalog *modelcatalog.Catalog) (string, modelcatalog.Entry) {
@@ -699,7 +765,26 @@ func setCapability(value *domain.ProviderCapabilities, name string) {
 	domain.SetCapability(value, name, true)
 }
 
-func normalizeInvocationTargets(items []domain.InvocationTargetDescriptor) []domain.InvocationTargetDescriptor {
+// maxInvocationTargetEntries bounds a catalogue Halro did not write, at the one
+// point every adapter's listing passes through. One adapter already bounded its
+// own, which left the other four holding nothing back but the 16 MiB response
+// ceiling — and a body that size holds several hundred thousand
+// `{"id":…,"owned_by":…}` entries, all of which would reach a cache and then a
+// console list. An account an operator picks a model from does not have this
+// many, so exceeding it is an upstream misbehaving rather than a large account,
+// and the refresh fails instead of quietly keeping a prefix.
+const maxInvocationTargetEntries = 2000
+
+// maxInvocationTargetLabelLength bounds the two strings the upstream writes that
+// are shown rather than matched on. Unlike the identifier, which is dropped when
+// it is implausible, an oversized label costs only itself: the name falls back
+// to the identifier and the owner is cleared, so the model stays selectable.
+const maxInvocationTargetLabelLength = 256
+
+func normalizeInvocationTargets(items []domain.InvocationTargetDescriptor) ([]domain.InvocationTargetDescriptor, bool) {
+	if len(items) > maxInvocationTargetEntries {
+		return nil, false
+	}
 	seen := make(map[string]struct{}, len(items))
 	normalized := make([]domain.InvocationTargetDescriptor, 0, len(items))
 	for _, item := range items {
@@ -712,8 +797,12 @@ func normalizeInvocationTargets(items []domain.InvocationTargetDescriptor) []dom
 			continue
 		}
 		seen[key] = struct{}{}
-		if strings.TrimSpace(item.DisplayName) == "" {
+		item.DisplayName = strings.TrimSpace(item.DisplayName)
+		if item.DisplayName == "" || len(item.DisplayName) > maxInvocationTargetLabelLength {
 			item.DisplayName = item.TargetID
+		}
+		if len(strings.TrimSpace(item.OwnedBy)) > maxInvocationTargetLabelLength {
+			item.OwnedBy = ""
 		}
 		if item.Availability == "" {
 			item.Availability = domain.AvailabilityAvailable
@@ -726,7 +815,7 @@ func normalizeInvocationTargets(items []domain.InvocationTargetDescriptor) []dom
 	slices.SortFunc(normalized, func(left, right domain.InvocationTargetDescriptor) int {
 		return strings.Compare(left.DisplayName+"\x00"+left.TargetID, right.DisplayName+"\x00"+right.TargetID)
 	})
-	return normalized
+	return normalized, true
 }
 
 func mergeDiscovery(left, right domain.InvocationTargetDiscoveryCapabilities) domain.InvocationTargetDiscoveryCapabilities {

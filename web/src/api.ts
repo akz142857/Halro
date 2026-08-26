@@ -66,13 +66,53 @@ export interface ApiResult<T> {
   etag: string;
 }
 
-// 100 pages of 100 routes is far beyond any single instance, so reaching it
-// means the cursor is misbehaving rather than that the operator has that many
-// routes.
-export const ROUTE_PAGE_CEILING = 100;
+// 100 pages of 100 records is far beyond any single instance, so reaching it
+// means the cursor is misbehaving rather than that the operator has that many.
+export const LIST_PAGE_CEILING = 100;
 
-function routeListingIncomplete(reason: string) {
-  return new ApiError(0, reason, "route_listing_incomplete");
+function listingIncomplete(resource: string, reason: string) {
+  return new ApiError(0, `${resource} listing ${reason}`, "listing_incomplete");
+}
+
+/**
+ * Every page of a listing, or an error — never a prefix.
+ *
+ * The console derives facts from these lists that are wrong when the list is
+ * short: how many enabled routes point at a deployment, which is the reason its
+ * delete button is disabled; how many deployments exist, which is printed as a
+ * total. Reading one page and dropping `next_cursor` made those answers quietly
+ * describe the first fifty records and present themselves as describing all of
+ * them, and the server's default page size is fifty.
+ *
+ * So the pages are followed to the end, and the two ways that can go wrong —
+ * a cursor that stops advancing, a listing that outruns the ceiling — fail
+ * rather than return what has been collected so far. A truncated answer must
+ * never look like a complete one.
+ */
+async function listAll<T>(resource: string, path: string): Promise<T[]> {
+  const items: T[] = [];
+  const seenCursors = new Set<string>();
+  let cursor = "";
+  for (let page = 0; page < LIST_PAGE_CEILING; page++) {
+    const query = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
+    const result = await request<Page<T>>(`${path}?${query}`).then((value) => value.data);
+    items.push(...(result.items ?? []));
+    const next = result.next_cursor;
+    if (!next) return items;
+    if (seenCursors.has(next)) throw listingIncomplete(resource, "cursor did not advance");
+    seenCursors.add(next);
+    cursor = next;
+  }
+  throw listingIncomplete(resource, `exceeded ${LIST_PAGE_CEILING} pages`);
+}
+
+/**
+ * A complete listing in the page shape its callers already read. `next_cursor`
+ * is empty because there is no next page left to fetch, not because the caller
+ * should ignore one.
+ */
+async function pageOfAll<T>(resource: string, path: string): Promise<Page<T>> {
+  return { items: await listAll<T>(resource, path), next_cursor: "" };
 }
 
 async function request<T>(
@@ -306,7 +346,7 @@ export const api = {
       json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
-  providers: () => request<Page<Provider>>("/providers").then((value) => value.data),
+  providers: () => pageOfAll<Provider>("provider", "/providers"),
   // Reading the cached catalog is a GET. The two calls below reach the provider
   // with the operator's credential, so they are POSTs and carry the CSRF token
   // this client only attaches to non-GET requests.
@@ -357,8 +397,7 @@ export const api = {
       json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
-  deployments: () =>
-    request<Page<Deployment>>("/deployments").then((value) => value.data),
+  deployments: () => pageOfAll<Deployment>("deployment", "/deployments"),
   developerConfig: () =>
     request<{ gateway_base_url: string; enabled?: boolean; max_request_bytes?: number }>("/developer/config").then((value) => value.data),
   developerExecute: (endpoint: string, gatewayKey: string, value: unknown, streaming: boolean, signal: AbortSignal) => {
@@ -416,27 +455,11 @@ export const api = {
     request<{ proposal: DeploymentPriceProposal; price_version: DeploymentPriceVersion }>(`/deployments/${encodeURIComponent(deploymentID)}/price-proposals/${encodeURIComponent(proposalID)}/adopt`, json("POST", value), `"${revision}"`).then((result) => result.data),
   rejectDeploymentPriceProposal: (deploymentID: string, proposalID: string, revision: number) =>
     request<DeploymentPriceProposal>(`/deployments/${encodeURIComponent(deploymentID)}/price-proposals/${encodeURIComponent(proposalID)}/reject`, json("POST"), `"${revision}"`).then((result) => result.data),
-  routes: () => request<Page<Route>>("/routes").then((value) => value.data),
+  routes: () => pageOfAll<Route>("route", "/routes"),
   // The caller builds a project's model authorization list out of this, so a
   // truncated answer must never look like a complete one. A cursor that stops
   // advancing, or a listing that outruns the page ceiling, fails closed rather
   // than returning a prefix the caller cannot tell apart from the whole list.
-  allRoutes: async () => {
-    const items: Route[] = [];
-    const seenCursors = new Set<string>();
-    let cursor = "";
-    for (let page = 0; page < ROUTE_PAGE_CEILING; page++) {
-      const query = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
-      const result = await request<Page<Route>>(`/routes?${query}`).then((value) => value.data);
-      items.push(...(result.items ?? []));
-      const next = result.next_cursor;
-      if (!next) return items;
-      if (seenCursors.has(next)) throw routeListingIncomplete("route listing cursor did not advance");
-      seenCursors.add(next);
-      cursor = next;
-    }
-    throw routeListingIncomplete(`route listing exceeded ${ROUTE_PAGE_CEILING} pages`);
-  },
   createRoute: (value: unknown, idempotencyKey: string) =>
     request<Route>("/routes", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
   updateRoute: (id: string, value: unknown, revision: number) =>
