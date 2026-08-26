@@ -345,6 +345,17 @@ func (a *Adapter) Close() {
 }
 
 func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	if a.responses {
+		// The Responses profile addresses /v1/responses and nothing else. Chat is
+		// still the shape capability detection and the connection test speak, so
+		// it is served here by translating rather than by addressing the other
+		// endpoint: a probe that reached /v1/chat/completions would record
+		// verified evidence for a surface this profile never calls, and a key
+		// scoped to only one of the two would pass detection and then fail the
+		// first real request — after the budget was reserved, which is the exact
+		// failure this profile exists to remove.
+		return a.chatViaResponses(ctx, call)
+	}
 	if a.azure && !validAzureDeployment(call.ProviderModel) {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid azure deployment name"}
 	}
@@ -371,6 +382,31 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response is missing required fields"}
 	}
 	return result, nil
+}
+
+// chatViaResponses answers a Chat-shaped call on the Responses profile by
+// translating both ways around the endpoint the profile actually addresses.
+//
+// It is the same round trip the Bedrock Mantle Responses adapter makes, and for
+// the same reason: the callers that speak Chat here — capability detection, the
+// connection test — are asking a question about this profile, and the answer is
+// only true if it came from this profile's own surface.
+func (a *Adapter) chatViaResponses(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	canonical, err := openaiwire.DecodeGenerate(call.Request)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "decode provider Chat request", Cause: err}
+	}
+	result, err := a.GenerateSemantic(ctx, provider.GenerateCall{
+		RequestID: call.RequestID, ProviderModel: call.ProviderModel, Request: canonical,
+	})
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	chat, err := openaiwire.RenderGenerateResult(result)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "render provider Chat result", Cause: err}
+	}
+	return chat, nil
 }
 
 // GenerateSemantic serves the Responses profile, which is the one OpenAI surface
@@ -518,6 +554,12 @@ func (a *Adapter) ChatStream(
 ) (*openaiapi.Usage, error) {
 	if emit == nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "stream callback is required"}
+	}
+	if a.responses {
+		// The Responses profile binds no stream primitive, so nothing should reach
+		// here. Refusing beats falling through to /v1/chat/completions, which
+		// would stream from an endpoint this profile does not address.
+		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "this OpenAI profile does not serve streaming"}
 	}
 	if a.azure && !validAzureDeployment(call.ProviderModel) {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid azure deployment name"}
