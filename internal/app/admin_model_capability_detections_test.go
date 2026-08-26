@@ -739,6 +739,20 @@ func TestVerificationProbesAModelTheCatalogAlreadyCovers(t *testing.T) {
 	if !completed.Recommended.Chat || !completed.Recommended.Vision {
 		t.Fatalf("verification dropped a claim it never measured: %#v", completed.Recommended)
 	}
+	// The token limits are the plainest thing no probe asks about, so the same
+	// rule covers them. Recommending zero is not "no opinion": zero is unbounded
+	// to the routing filter, so a deployment that adopts it stops refusing an
+	// over-long request before the reservation and starts collecting the refusal
+	// from the upstream after it.
+	if completed.Recommended.MaxContextTokens != completed.Baseline.MaxContextTokens ||
+		completed.Recommended.MaxOutputTokens != completed.Baseline.MaxOutputTokens {
+		t.Fatalf("verification dropped the token limits: recommended ctx=%d out=%d, baseline ctx=%d out=%d",
+			completed.Recommended.MaxContextTokens, completed.Recommended.MaxOutputTokens,
+			completed.Baseline.MaxContextTokens, completed.Baseline.MaxOutputTokens)
+	}
+	if completed.Baseline.MaxContextTokens == 0 || completed.Baseline.MaxOutputTokens == 0 {
+		t.Fatal("this assertion is vacuous: the catalogue entry behind it declares no bound")
+	}
 	// And the deployment that adopts it says which half was measured.
 	deploymentResponse := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
 		"name": "Verified", "provider_id": instance.ID, "provider_model": "gpt-4o-mini", "target_kind": "model_id",

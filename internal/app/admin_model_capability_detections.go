@@ -837,6 +837,23 @@ func (r *Runtime) finalizeCapabilityDetection(d domain.ModelCapabilityDetection)
 	}
 	recommended := domain.RecommendedFromProbes(d.Baseline, d.Results)
 	recommended.MaxContextTokens, recommended.MaxOutputTokens = d.Recommended.MaxContextTokens, d.Recommended.MaxOutputTokens
+	// The two token limits are the plainest case of what the baseline is for: no
+	// probe is allowed to ask about them, so a verification keeps what was
+	// claimed instead of replacing it. The carried value is the binding's own
+	// bound, which an operator sets on almost no binding, so taking it
+	// unconditionally turned a verification of a catalogue-covered model into a
+	// recommendation of zero — and zero is unbounded to everything downstream,
+	// including the routing filter that is supposed to keep an over-long request
+	// off the target before the reservation. The baseline is already clamped to
+	// the binding, so preferring it can only lower the bound, never raise it.
+	if d.Baseline != nil {
+		if d.Baseline.MaxContextTokens > 0 {
+			recommended.MaxContextTokens = d.Baseline.MaxContextTokens
+		}
+		if d.Baseline.MaxOutputTokens > 0 {
+			recommended.MaxOutputTokens = d.Baseline.MaxOutputTokens
+		}
+	}
 	d.Recommended = recommended
 	// A verification that answered nothing is a failed verification, whatever
 	// the baseline it carried through says. The recommendation alone cannot see
