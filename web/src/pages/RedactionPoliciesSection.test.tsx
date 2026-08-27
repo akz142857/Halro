@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { stepUpRequired } from "../test/fixtures";
 import type { RedactionPolicy } from "../types";
 import { RedactionPoliciesSection } from "./RedactionPoliciesSection";
 
@@ -106,7 +107,11 @@ describe("RedactionPoliciesSection form safety", () => {
   });
 
   it("edits an existing policy with binding impact and preserves rule ids", async () => {
-    const update = vi.spyOn(api, "updateRedactionPolicy").mockResolvedValue({} as never);
+    // The window is closed here, so the first save is refused and the second
+    // carries what the operator typed.
+    const update = vi.spyOn(api, "updateRedactionPolicy")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValue({} as never);
     const policy: RedactionPolicy = {
       id: "rdp_existing", name: "Production", enabled: true, mode: "strict", revision: 7, bound_projects: 2,
       rules: [{
@@ -122,18 +127,26 @@ describe("RedactionPoliciesSection form safety", () => {
     expect(within(dialog).getByLabelText("名称")).toHaveValue("Email");
     fireEvent.change(within(dialog).getByLabelText(/^优先级/), { target: { value: "30" } });
     // Editing an existing policy can take enforcement away, so the server asks
-    // who is doing it and the form collects it.
-    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    // who is doing it — but only once the re-authentication window has closed,
+    // which is what the first save finds out.
+    fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
+    fireEvent.change(await within(dialog).findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "编译并保存" }));
 
-    await waitFor(() => expect(update).toHaveBeenCalledOnce());
-    expect(update).toHaveBeenCalledWith("rdp_existing", expect.objectContaining({
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+    expect(update).toHaveBeenLastCalledWith("rdp_existing", expect.objectContaining({
       rules: [expect.objectContaining({ id: "rrl_existing", priority: 30 })],
     }), 7, expect.objectContaining({ currentPassword: "a passphrase" }));
   });
 
   it("enables and disables policies directly from the policy list", async () => {
-    const update = vi.spyOn(api, "updateRedactionPolicy").mockResolvedValue({} as never);
+    // Each toggle is refused once first: this fixture has no open window, so
+    // both go through the console's ask-then-send path.
+    const update = vi.spyOn(api, "updateRedactionPolicy")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValueOnce({} as never)
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValue({} as never);
     const rule = {
       id: "rrl_existing", name: "Email", kind: "builtin" as const, builtin: "email", scopes: ["inbound" as const],
       action: "mask" as const, enabled: true, priority: 20, computed_max_match_bytes: 128,
@@ -145,7 +158,8 @@ describe("RedactionPoliciesSection form safety", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "启用" }));
     const enableDialog = await screen.findByRole("alertdialog");
-    fireEvent.change(within(enableDialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    fireEvent.click(within(enableDialog).getByRole("button", { name: "启用" }));
+    fireEvent.change(await within(enableDialog).findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(enableDialog).getByRole("button", { name: "启用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_off", expect.objectContaining({
       enabled: true,
@@ -157,7 +171,8 @@ describe("RedactionPoliciesSection form safety", () => {
     fireEvent.click(screen.getByRole("button", { name: "禁用" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/未脱敏内容直连服务商/)).toBeVisible();
-    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
+    fireEvent.change(await within(dialog).findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("rdp_on", expect.objectContaining({ enabled: false }), 4, expect.objectContaining({ currentPassword: "a passphrase" })));
   });

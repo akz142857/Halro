@@ -2073,7 +2073,6 @@ function DeploymentForm({
                 confirmLabel={t("deployments.verifySpendConfirm", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}
                 disabled={!targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending}
                 requireStepUp
-                stepUpOnDemand
                 onConfirm={verifyCatalogClaims}
               />}
             </header>
@@ -2161,7 +2160,7 @@ function DeploymentForm({
                       {selectableBindings.length > 1 && <p className="capability-advanced-note">{t("deployments.detectionResolvesInterface")}</p>}
                       <div className="form-actions">
                         <button type="button" className="button ghost" onClick={() => { setManualDeclaration(true); setCapabilities(emptyCapabilities()); }}>{t("deployments.advancedManualDeclaration")}</button>
-                        <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")} title={t("deployments.confirmAndDetect")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} requireStepUp stepUpOnDemand onConfirm={(reauth) => detectCapabilities.mutateAsync({ requestedSelectionRevision: selectionRevision, reauth })} />
+                        <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmAndDetect")} title={t("deployments.confirmAndDetect")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!providerModel.trim() || !targetCatalog.data?.discovery.can_verify || detectCapabilities.isPending} requireStepUp onConfirm={(reauth) => detectCapabilities.mutateAsync({ requestedSelectionRevision: selectionRevision, reauth })} />
                       </div>
                     </div>
                   </div>
@@ -2192,7 +2191,7 @@ function DeploymentForm({
                     </Field>
                     <div className="form-actions">
                       {declaredModel && <button type="button" className="button ghost" onClick={() => { resetDetection(); setManualDeclaration(true); }}>{t("deployments.advancedManualDeclaration")}</button>}
-                      <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")} title={t("deployments.confirmDetectionBinding")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!detectionBindingID || detectCapabilities.isPending} requireStepUp stepUpOnDemand onConfirm={confirmDetectionBinding} />
+                      <ConfirmButton className="button primary" label={detectCapabilities.isPending ? t("common.working") : t("deployments.confirmDetectionBinding")} title={t("deployments.confirmDetectionBinding")} confirmLabel={t("deployments.detectionSpendConfirm")} disabled={!detectionBindingID || detectCapabilities.isPending} requireStepUp onConfirm={confirmDetectionBinding} />
                     </div>
                   </div>
                 </div>}

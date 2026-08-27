@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../api";
+import { stepUpRequired } from "../test/fixtures";
 import type { Credential } from "../types";
 import { NotificationProvider } from "../notifications";
 import { ProvidersPage } from "./ProvidersPage";
@@ -454,7 +455,9 @@ describe("ProvidersPage profile and credential bindings", () => {
       revision: 1,
     };
     vi.mocked(api.credentials).mockResolvedValue({ items: [credential], next_cursor: "" });
-    const rotate = vi.spyOn(api, "rotateCredential").mockResolvedValue({} as never);
+    const rotate = vi.spyOn(api, "rotateCredential")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValue({} as never);
     renderPage();
 
     fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
@@ -463,12 +466,15 @@ describe("ProvidersPage profile and credential bindings", () => {
     const displayBaseURL = boundBaseURL.replace(/:443$/, "");
     expect(screen.getByLabelText(/^地址绑定/)).toHaveValue(displayBaseURL);
     fireEvent.change(screen.getByLabelText(/^新密钥/), { target: { value: "rotated-secret" } });
-    // Replacing credential material asks who is doing it, like deleting it does.
-    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    // Replacing credential material asks who is doing it, like deleting it does
+    // — once the re-authentication window has closed, which the first attempt
+    // finds out.
+    fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
+    fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
 
-    await waitFor(() => expect(rotate).toHaveBeenCalledOnce());
-    expect(rotate.mock.calls[0]).toEqual([
+    await waitFor(() => expect(rotate).toHaveBeenCalledTimes(2));
+    expect(rotate.mock.calls[1]).toEqual([
       credential.id,
       expect.objectContaining({
         type: "bedrock",

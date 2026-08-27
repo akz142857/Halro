@@ -17,7 +17,7 @@ import (
 // reauthRequired reports whether the endpoint refused for want of step-up
 // material, as opposed to succeeding or failing for any other reason. The tests
 // below turn on that distinction alone, so they do not depend on a detection
-// running to completion.
+// running to completion or a delete finding anything to delete.
 func reauthRequired(t *testing.T, response *httptest.ResponseRecorder) bool {
 	t.Helper()
 	if response.Code != http.StatusUnauthorized {
@@ -78,7 +78,7 @@ func elevationRuntime(t *testing.T, window time.Duration, start time.Time) (*Run
 	t.Helper()
 	runtime, bootstrap := bootstrapForCapabilityTest(t)
 	value := config.Duration(window)
-	runtime.config.Admin.ModelCapabilityDetection.ElevationWindow = &value
+	runtime.config.Admin.ReauthElevationWindow = &value
 	clock := &testClock{at: start}
 	// Installed once, before anything can be in flight, and never replaced.
 	runtime.now = clock.now
@@ -92,7 +92,7 @@ func elevationRuntime(t *testing.T, window time.Duration, start time.Time) (*Run
 // The window amortises step-up over one sitting; it does not remove it. Both
 // halves are pinned, because "never asks" and "always asks" are both plausible
 // readings of the same code and only one is wanted.
-func TestDetectionElevationWindowAsksOncePerSitting(t *testing.T) {
+func TestStepUpElevationWindowAsksOncePerSitting(t *testing.T) {
 	start := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	runtime, instance, clock := elevationRuntime(t, 10*time.Minute, start)
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
@@ -118,7 +118,7 @@ func TestDetectionElevationWindowAsksOncePerSitting(t *testing.T) {
 // The grant belongs to one session. A second session — stolen, or simply a
 // second browser — inherits nothing, which is what separates this from
 // remembering the answer per account.
-func TestDetectionElevationIsBoundToOneSession(t *testing.T) {
+func TestStepUpElevationIsBoundToOneSession(t *testing.T) {
 	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
 	first := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
@@ -133,7 +133,7 @@ func TestDetectionElevationIsBoundToOneSession(t *testing.T) {
 
 // Zero is what an operator writes to keep the prompt on every detection, and it
 // has to survive Normalize, which fills absent values with the default.
-func TestDetectionElevationWindowZeroAsksEveryTime(t *testing.T) {
+func TestStepUpElevationWindowZeroAsksEveryTime(t *testing.T) {
 	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	runtime, instance, _ := elevationRuntime(t, 0, pinned)
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
@@ -146,7 +146,7 @@ func TestDetectionElevationWindowZeroAsksEveryTime(t *testing.T) {
 }
 
 // Signing out ends the elevation with the session that earned it.
-func TestDetectionElevationEndsWithTheSession(t *testing.T) {
+func TestStepUpElevationEndsWithTheSession(t *testing.T) {
 	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
@@ -167,10 +167,10 @@ func TestDetectionElevationEndsWithTheSession(t *testing.T) {
 	}
 }
 
-// Only detection reads the window. A delete still asks every time, because its
-// damage is done the moment the request lands, where a detection's is bounded
-// by MaxProviderCalls and recorded either way.
-func TestDetectionElevationDoesNotCoverDeletes(t *testing.T) {
+// A delete reads the same window. Proving who you are once covers the sitting
+// that follows, which is the whole point of widening this past detection: an
+// operator clearing out six Routes types a password once, not six times.
+func TestStepUpElevationCoversDeletes(t *testing.T) {
 	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
 	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
@@ -180,18 +180,81 @@ func TestDetectionElevationDoesNotCoverDeletes(t *testing.T) {
 	if got := runtime.elevationGrantCount(); got != 1 {
 		t.Fatalf("the session did not elevate: %d grants", got)
 	}
-	deleteRequest := adminMutationRequest(t, http.MethodDelete,
-		"/admin/api/v1/providers/"+instance.ID, session, map[string]any{})
-	// The revision precondition is checked before step-up, so without it the
-	// endpoint answers 428 and the assertion below would pass without ever
-	// reaching the guard it is about.
-	deleteRequest.Header.Set("If-Match", fmt.Sprintf("%q", strconv.FormatUint(instance.Revision, 10)))
-	response := httptest.NewRecorder()
-	runtime.adminRouter().ServeHTTP(response, deleteRequest)
-	if !reauthRequired(t, response) {
-		t.Fatalf("a delete accepted the detection elevation instead of asking: %d %s",
+	response := deleteProviderWithoutMaterial(t, runtime, instance, session)
+	if reauthRequired(t, response) {
+		t.Fatalf("an elevated session was asked again for a delete: %d %s",
 			response.Code, response.Body.String())
 	}
+}
+
+// The window amortises the proof; it does not remove it. A session that never
+// proved itself is still asked before it can delete anything.
+func TestStepUpElevationDoesNotExcuseAnUnprovenSession(t *testing.T) {
+	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	response := deleteProviderWithoutMaterial(t, runtime, instance, session)
+	if !reauthRequired(t, response) {
+		t.Fatalf("a delete from a session that never proved itself was accepted: %d %s",
+			response.Code, response.Body.String())
+	}
+}
+
+// The console asks whether the window is still open by attempting the action
+// with no credentials. That question must not spend the guessing budget or land
+// in the audit trail as a failed re-authentication — otherwise the operator who
+// deletes six rows throttles themselves on their own console's probes.
+func TestStepUpProbeWithoutMaterialCostsNoBudget(t *testing.T) {
+	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	for attempt := 0; attempt < adminStepUpFailuresPerMinute+2; attempt++ {
+		if !reauthRequired(t, deleteProviderWithoutMaterial(t, runtime, instance, session)) {
+			t.Fatalf("probe %d was not refused for want of step-up", attempt)
+		}
+	}
+	// The real proof still has to work after all those probes.
+	if reauthRequired(t, postDetection(t, runtime, instance, session, "correct horse battery staple", "after")) {
+		t.Fatal("probing exhausted the failure budget the probes were not supposed to spend")
+	}
+}
+
+// The admin-account endpoints keep their own credential rules and are outside
+// the window, because they are how a stolen session would make itself
+// permanent: an intruder who elevated once must not be able to change the
+// password without proving anything.
+func TestStepUpElevationDoesNotCoverPasswordChange(t *testing.T) {
+	pinned := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	runtime, instance, _ := elevationRuntime(t, 10*time.Minute, pinned)
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	if reauthRequired(t, postDetection(t, runtime, instance, session, "correct horse battery staple", "one")) {
+		t.Fatal("step-up was refused")
+	}
+	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/session/password", session,
+		map[string]any{"current_password": "", "new_password": "another correct horse battery"})
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("an elevated session changed its password without the current one: %d %s",
+			response.Code, response.Body.String())
+	}
+}
+
+// deleteProviderWithoutMaterial is the shape the console sends before it knows
+// whether the window is open: the mutation, no credentials.
+func deleteProviderWithoutMaterial(
+	t *testing.T, runtime *Runtime, instance domain.ProviderInstance, session loggedInAdmin,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := adminMutationRequest(t, http.MethodDelete,
+		"/admin/api/v1/providers/"+instance.ID, session, map[string]any{})
+	// The revision precondition is checked before step-up, so without it the
+	// endpoint answers 428 and the assertions above would never reach the guard
+	// they are about.
+	request.Header.Set("If-Match", fmt.Sprintf("%q", strconv.FormatUint(instance.Revision, 10)))
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	return response
 }
 
 func (r *Runtime) elevationGrantCount() int {

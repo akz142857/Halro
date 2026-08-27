@@ -429,7 +429,6 @@ export function ConfirmButton({
   disabled,
   disabledReason,
   requireStepUp = false,
-  stepUpOnDemand = false,
 }: {
   label: string;
   confirmLabel: string;
@@ -445,15 +444,14 @@ export function ConfirmButton({
   // Actions the server step-up gates ask for the credentials here, in the same
   // dialog that states the consequence — an operator confirms and proves who
   // they are in one step rather than being sent to a second prompt.
-  requireStepUp?: boolean;
-  // Asks for credentials only once the server has said it needs them.
   //
-  // The dialog serves two purposes, and they are not the same purpose: it
-  // states the consequence, and it proves who is asking. Where the server
-  // remembers a recent proof for a window — capability detection does — the
-  // second is already satisfied while the first is not, so the consequence is
-  // still stated and the fields appear only if the attempt comes back asking.
-  stepUpOnDemand?: boolean;
+  // The credentials are asked for only once the server has said it needs them.
+  // The dialog serves two purposes and they are not the same purpose: it states
+  // the consequence, and it proves who is asking. Inside the re-authentication
+  // window the second is already satisfied while the first is not, so the
+  // consequence is still stated and the fields appear only if the attempt comes
+  // back asking.
+  requireStepUp?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -465,44 +463,29 @@ export function ConfirmButton({
   // them.
   const readOnly = useIsReadOnly();
   const unavailable = disabled || readOnly;
-  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  // Once the server has asked, it stays asked for this dialog: a second attempt
+  // that silently dropped the fields would read as the console losing the
+  // request.
+  const stepUp = useStepUpPrompt();
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
-  // Starts false only when the server may already be satisfied. Once the
-  // server has asked, it stays asked for this dialog: a second attempt that
-  // silently dropped the fields would read as the console losing the request.
-  const [stepUpAsked, setStepUpAsked] = useState(!stepUpOnDemand);
-  // Cleared on the way out rather than left in state: the password must not
-  // survive a dialog the operator closed.
   const close = () => {
-    setReauth({ currentPassword: "", totpCode: "" });
+    stepUp.reset();
     setFailure(null);
     setPending(false);
-    setStepUpAsked(!stepUpOnDemand);
     setOpen(false);
   };
   const submit = async () => {
     setFailure(null);
     setPending(true);
     try {
-      await onConfirm(reauth);
+      await onConfirm(stepUp.values);
       close();
     } catch (error) {
-      // The password stays typed; only the code is dropped, because a TOTP
-      // step is consumed once and the next attempt needs a fresh one. Leaving
-      // the spent code in the field invites retrying it and reading the second
-      // refusal as a wrong password.
-      setReauth((values) => ({ ...values, totpCode: "" }));
-      // The first attempt of an on-demand dialog carries no credentials by
-      // design, so the server asking for them is the expected answer rather
-      // than a failure to report. Anything else is reported as usual.
-      const asksForStepUp = error instanceof ApiError && error.code === "recent_reauth_required";
-      if (asksForStepUp && !stepUpAsked) {
-        setStepUpAsked(true);
-        setPending(false);
-        return;
-      }
-      setFailure(error);
+      // The first attempt carries no credentials by design, so the server
+      // asking for them is the expected answer rather than a failure to report.
+      // Anything else is reported as usual.
+      if (!stepUp.absorb(error)) setFailure(error);
       setPending(false);
     }
   };
@@ -524,12 +507,12 @@ export function ConfirmButton({
           dangerous
           title={title || t("common.confirmAction")}
           describedBy={consequenceID}
-          dirty={Boolean(reauth.currentPassword)}
+          dirty={Boolean(stepUp.values.currentPassword)}
           onClose={close}
         >
           <form className="confirmation-dialog" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
             <p id={consequenceID}>{confirmLabel}</p>
-            {requireStepUp && stepUpAsked && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpDestructive")} />}
+            {requireStepUp && stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpDestructive")} />}
             {Boolean(failure) && <ErrorState error={failure} />}
             {Boolean(failure) && requireStepUp && <p className="form-note">{t("auth.stepUpRetryNeedsNewCode")}</p>}
             <div className="form-actions">
@@ -537,7 +520,7 @@ export function ConfirmButton({
               <button
                 type="button"
                 className="button danger"
-                disabled={pending || (requireStepUp && stepUpAsked && !reauth.currentPassword)}
+                disabled={pending || (requireStepUp && stepUp.asked && !stepUp.values.currentPassword)}
                 onClick={submit}
               >{pending ? t("common.working") : label}</button>
             </div>
@@ -676,6 +659,68 @@ export function Field({
 export interface ReauthValues {
   currentPassword: string;
   totpCode: string;
+}
+
+const noReauth: ReauthValues = { currentPassword: "", totpCode: "" };
+
+// isStepUpPrompt reports whether a failure is the server asking for step-up
+// material rather than rejecting what it was given. The two are one status and
+// one code on the wire — a caller who sent nothing and a caller who sent the
+// wrong password both get 401 recent_reauth_required — so the difference is
+// held here, by whether this console had sent anything yet.
+export function isStepUpPrompt(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "recent_reauth_required";
+}
+
+// useStepUpPrompt collects step-up material for a form that only asks for it
+// once the server has said it needs it.
+//
+// The console cannot know whether the re-authentication window is still open;
+// only the server knows, and asking would be a second source of truth that goes
+// stale the moment it is read. So the mutation is attempted with nothing and
+// the refusal is the question: absorb turns that first refusal into the fields
+// appearing, and every refusal after it is a real one, reported as usual.
+export function useStepUpPrompt() {
+  const [values, setValues] = useState<ReauthValues>(noReauth);
+  const [asked, setAsked] = useState(false);
+  // A ref beside the state because absorb runs from a mutation callback, where
+  // reading asked out of a stale render closure would let a second refusal be
+  // swallowed as if it were the first.
+  const askedRef = useRef(false);
+  // True only while the displayed failure is the console's own question. It
+  // gates the error banner: a form that reported "recent re-authentication
+  // required" beside the fields it just opened would read as a refusal of
+  // credentials the operator has not typed yet.
+  const [probing, setProbing] = useState(false);
+  return {
+    values,
+    setValues,
+    asked,
+    probing,
+    // Called as the attempt starts: whatever happens next is answering the
+    // material now on screen, not the empty attempt before it.
+    begin: () => setProbing(false),
+    // Returns whether this failure was the console's own question, which the
+    // caller reports as nothing at all.
+    absorb: (error: unknown) => {
+      // The password stays typed; only the code is dropped, because a TOTP step
+      // is consumed once and the next attempt needs a fresh one.
+      setValues((current) => ({ ...current, totpCode: "" }));
+      if (askedRef.current || !isStepUpPrompt(error)) return false;
+      askedRef.current = true;
+      setAsked(true);
+      setProbing(true);
+      return true;
+    },
+    // Cleared on the way out rather than left in state: the password must not
+    // survive a form the operator closed.
+    reset: () => {
+      askedRef.current = false;
+      setValues(noReauth);
+      setAsked(false);
+      setProbing(false);
+    },
+  };
 }
 
 // Step-up re-authentication: the caller resupplies their own password and a

@@ -27,11 +27,15 @@ const adminStepUpFailuresPerMinute = 5
 // admin-account endpoints already ask for, so an operator meets one shape
 // across the console rather than one per endpoint.
 //
-// A request without a body fails here. There is no "no body means skip"
+// A request without a body fails here, unless the session has already proved
+// itself inside the elevation window. There is no "no body means skip"
 // fallback: that would make the check optional for exactly the caller who
 // omits it.
 func (r *Runtime) requireDestructiveStepUp(writer http.ResponseWriter, request *http.Request) bool {
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	if r.stepUpElevated(admin.session, r.clockNow()) {
+		return true
+	}
 	var input struct {
 		CurrentPassword string `json:"current_password"`
 		TOTPCode        string `json:"totp_code"`
@@ -52,7 +56,7 @@ func (r *Runtime) requireDestructiveStepUp(writer http.ResponseWriter, request *
 	// scrubbed from the process. What actually bounds this material is
 	// everything around it: it is never logged, never persisted, never echoed,
 	// and never leaves this call.
-	return r.verifyAdminStepUp(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode)
+	return r.verifyStepUpAndElevate(writer, request, admin.session, input.CurrentPassword, input.TOTPCode)
 }
 
 // stepUpMaterial carries the same two fields requireDestructiveStepUp reads,
@@ -86,7 +90,36 @@ func (r *Runtime) requireStepUpMaterial(
 	writer http.ResponseWriter, request *http.Request, material stepUpMaterial,
 ) bool {
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-	return r.verifyAdminStepUp(writer, request, admin.session.Username, material.CurrentPassword, material.TOTPCode)
+	if r.stepUpElevated(admin.session, r.clockNow()) {
+		return true
+	}
+	return r.verifyStepUpAndElevate(writer, request, admin.session, material.CurrentPassword, material.TOTPCode)
+}
+
+// verifyStepUpAndElevate verifies the material and, on success, records that
+// this session proved itself so the rest of the sitting is not asked again.
+//
+// A request carrying no material at all is refused without spending the failure
+// budget or writing an audit failure. That shape is not a guess: it is how the
+// console asks whether the window is still open, sent before any credentials
+// exist to send. Counting it would let an operator clearing out six Routes
+// throttle themselves, and recording it would fill the trail meant for real
+// refusals with the console's own question.
+func (r *Runtime) verifyStepUpAndElevate(
+	writer http.ResponseWriter, request *http.Request, session domain.AdminSession, password, totpCode string,
+) bool {
+	if password == "" {
+		writeJSON(writer, http.StatusUnauthorized, map[string]string{
+			"error": "recent re-authentication required",
+			"code":  "recent_reauth_required",
+		})
+		return false
+	}
+	if !r.verifyAdminStepUp(writer, request, session.Username, password, totpCode) {
+		return false
+	}
+	r.elevateStepUp(session, r.clockNow())
+	return true
 }
 
 // verifyAdminStepUp is verifyReauthenticationMaterial with the two things a
@@ -231,39 +264,11 @@ type adminElevationGrant struct {
 	generation uint64
 }
 
-// requireDetectionStepUp is requireStepUpMaterial with the answer remembered
-// for the configured window.
-//
-// Capability detection is guarded because it spends the Provider credential
-// outside project accounting and writes capability evidence a Deployment
-// adopts. Neither becomes untrue on the second detection, so the guard is not
-// dropped — it is amortised. An operator configuring six Deployments proves
-// themselves once instead of typing a password and a TOTP code six times, and a
-// session that has not proved itself inside the window still proves itself now.
-//
-// Only this endpoint reads the window. Deletes and the edits that weaken a
-// protection in force keep asking every time, because those are the actions
-// whose damage is done the moment the request lands, where detection's is
-// bounded by MaxProviderCalls and visible in the audit trail either way.
-func (r *Runtime) requireDetectionStepUp(
-	writer http.ResponseWriter, request *http.Request, material stepUpMaterial,
-) bool {
-	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
-	if r.detectionElevated(admin.session, r.clockNow()) {
-		return true
-	}
-	if !r.requireStepUpMaterial(writer, request, material) {
-		return false
-	}
-	r.elevateDetection(admin.session, r.clockNow())
-	return true
-}
-
-// detectionElevated reports whether this exact session proved itself recently
+// stepUpElevated reports whether this exact session proved itself recently
 // enough. Every uncertainty answers false: an absent grant, an expired one, one
 // belonging to a superseded generation, and a window configured to zero.
-func (r *Runtime) detectionElevated(session domain.AdminSession, now time.Time) bool {
-	window := r.detectionElevationWindow()
+func (r *Runtime) stepUpElevated(session domain.AdminSession, now time.Time) bool {
+	window := r.stepUpElevationWindow()
 	if window <= 0 {
 		return false
 	}
@@ -276,11 +281,11 @@ func (r *Runtime) detectionElevated(session domain.AdminSession, now time.Time) 
 	return true
 }
 
-// elevateDetection records a proven re-authentication. The window runs from the
+// elevateStepUp records a proven re-authentication. The window runs from the
 // proof rather than from the last use, so a long sitting asks again instead of
 // holding itself open.
-func (r *Runtime) elevateDetection(session domain.AdminSession, now time.Time) {
-	window := r.detectionElevationWindow()
+func (r *Runtime) elevateStepUp(session domain.AdminSession, now time.Time) {
+	window := r.stepUpElevationWindow()
 	if window <= 0 {
 		return
 	}
@@ -300,16 +305,16 @@ func (r *Runtime) elevateDetection(session domain.AdminSession, now time.Time) {
 	}
 }
 
-// clearDetectionElevation drops a session's grant. Signing out ends the
-// elevation with the session that earned it rather than leaving it to expire.
-func (r *Runtime) clearDetectionElevation(session domain.AdminSession) {
+// clearStepUpElevation drops a session's grant. Signing out ends the elevation
+// with the session that earned it rather than leaving it to expire.
+func (r *Runtime) clearStepUpElevation(session domain.AdminSession) {
 	r.adminElevation.mu.Lock()
 	defer r.adminElevation.mu.Unlock()
 	delete(r.adminElevation.grants, session.IDHash)
 }
 
-func (r *Runtime) detectionElevationWindow() time.Duration {
-	window := r.config.Admin.ModelCapabilityDetection.ElevationWindow
+func (r *Runtime) stepUpElevationWindow() time.Duration {
+	window := r.config.Admin.ReauthElevationWindow
 	if window == nil {
 		return 0
 	}

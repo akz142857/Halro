@@ -65,12 +65,9 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	// so a stolen session is the only thing between an attacker and a bill;
 	// see requireStepUpMaterial.
 	//
-	// Asked once per elevation window rather than once per detection. The
-	// reasons above hold for every detection, so the guard stays; what changes
-	// is that configuring six Deployments costs one proof instead of six, which
-	// is the flow the per-action prompt was interrupting. See
-	// requireDetectionStepUp for what the window is bound to and what it is not.
-	if !r.requireDetectionStepUp(writer, request, input.stepUpMaterial) {
+	// Asked once per admin.reauth_elevation_window rather than once per
+	// detection, the same as every other step-up-guarded action.
+	if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
 		return
 	}
 	input.ProviderModel, input.Region, input.BindingID = strings.TrimSpace(input.ProviderModel), strings.TrimSpace(input.Region), strings.TrimSpace(input.BindingID)

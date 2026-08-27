@@ -7,6 +7,7 @@ import {
   ErrorState,
   Field,
   InlineTestControl,
+  isStepUpPrompt,
   Loading,
   Modal,
   PageHeader,
@@ -98,7 +99,7 @@ export function RoutesPage() {
       {/* Every other resource page surfaces its delete failure here. This one
           did not, so a refused deletion left the route in the list with nothing
           to explain why. */}
-      {remove.isError && <ErrorState error={remove.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
       {setEnabled.isError && <ErrorState error={setEnabled.error} />}
       {routes.data?.items.length === 0 && (
         <EmptyState title={t("routes.emptyTitle")}>{t("routes.emptyDescription")}</EmptyState>

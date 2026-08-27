@@ -7,6 +7,7 @@ import {
   ErrorState,
   Field,
   InlineTestControl,
+  isStepUpPrompt,
   Loading,
   LoadMore,
   Modal,
@@ -260,7 +261,7 @@ function AlertRow({
       </div>
       {/* A revocation or a disable that failed silently leaves the operator believing an
           endpoint stopped receiving events when it has not. */}
-      {remove.isError && <ErrorState error={remove.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
       {toggle.isError && <ErrorState error={toggle.error} />}
       {/* The classified reason replaces the generic failure notice rather than
           joining it: two boxes saying the request failed, one of them without

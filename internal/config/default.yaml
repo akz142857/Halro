@@ -67,6 +67,15 @@ admin:
   # loopback-only Admin listener; on a reachable one it means network controls
   # applied to the Gateway listener do not cover this path, and startup warns.
   developer_workbench: enabled
+  # How long one proven re-authentication keeps letting the same admin session
+  # delete or weaken things without proving itself again. Deletes, credential
+  # replacement and edits that remove a protection in force ask for the account
+  # password (and a TOTP code, if the account has an authenticator), so that a
+  # stolen session alone cannot do them — this amortises that proof over the
+  # sitting an operator spends administering rather than dropping it. Bound to
+  # the session, never to the account, and never covering the admin-account
+  # endpoints. Set 0s to ask every time.
+  reauth_elevation_window: 10m
   model_capability_detection:
     fresh_ttl: 24h0m0s
     retention: 720h0m0s
@@ -79,13 +88,6 @@ admin:
     # against the one that did.
     max_provider_calls: 10
     create_rpm: 6
-    # How long one proven re-authentication keeps letting the same admin session
-    # start detections without proving itself again. Detection spends the
-    # Provider credential outside any project budget and writes capability
-    # evidence a Deployment adopts, so it is guarded — this amortises the guard
-    # over the sitting an operator spends configuring rather than dropping it.
-    # Bound to the session, never to the account. Set 0s to ask every time.
-    elevation_window: 10m
 
 usage:
   # "balanced" batches accounting writes; "strict" fsyncs every one of them,

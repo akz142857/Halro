@@ -257,15 +257,20 @@ describe("destructive step-up", () => {
       next_cursor: "",
     });
     vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
-    const remove = vi.spyOn(api, "deleteRoute").mockResolvedValue(undefined as never);
+    // The first attempt carries nothing, because only the server knows whether
+    // the re-authentication window is still open; here it is not.
+    const remove = vi.spyOn(api, "deleteRoute")
+      .mockRejectedValueOnce(new ApiError(401, "recent re-authentication required", "recent_reauth_required"))
+      .mockResolvedValue(undefined as never);
     renderAs("administrator", <RoutesPage />);
 
     const row = (await screen.findByText("chat")).closest("tr");
     fireEvent.click(within(row!).getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
 
     // Nothing is deleted until the operator has proved who they are.
-    expect(within(dialog).getByRole("button", { name: "删除" })).toBeDisabled();
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "删除" })).toBeDisabled());
 
     fireEvent.change(within(dialog).getByLabelText(/当前密码/), { target: { value: "correct horse battery staple" } });
     fireEvent.change(within(dialog).getByLabelText(/身份验证器验证码/), { target: { value: "123456" } });

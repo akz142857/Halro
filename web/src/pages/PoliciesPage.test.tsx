@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
+import { stepUpRequired } from "../test/fixtures";
 import type { TokenGuardPolicy } from "../types";
 import { PoliciesPage } from "./PoliciesPage";
 
@@ -66,13 +67,39 @@ describe("token guard policy workflow", () => {
     expect(screen.getByLabelText("每分钟请求数达到")).toHaveValue(0);
     expect(screen.getByLabelText("每分钟令牌数达到")).toHaveValue(0);
     expect(screen.getByLabelText("单次请求平均令牌数达到")).toHaveValue(0);
-    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", expect.objectContaining({
       ewma_absolute_rpm: 0,
       ewma_absolute_tpm: 0,
       ewma_absolute_tokens_per_request: 0,
-    }), 1, expect.objectContaining({ currentPassword: "a passphrase" })));
+    }), 1, { currentPassword: "", totpCode: "" }));
+  });
+
+  // The editor cannot know whether the re-authentication window is open, so it
+  // saves with nothing and lets the refusal be the question. Both halves are
+  // pinned: the fields stay away while the server is satisfied, and the retry
+  // actually carries what the operator typed rather than sending the same empty
+  // request a second time.
+  it("asks for the password only when the server does, then sends it", async () => {
+    vi.mocked(api.tokenGuardPoliciesPage).mockResolvedValue({ items: [policy], next_cursor: "" });
+    const update = vi.spyOn(api, "updateTokenGuardPolicy")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValue({ data: policy, etag: '"2"' });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    expect(screen.queryByLabelText(/^当前密码/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
+    // The refusal opened the fields; it is not reported as a failure, because
+    // the operator has not typed anything to be refused yet.
+    fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/验证码/), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
+
+    await waitFor(() => expect(update).toHaveBeenLastCalledWith("tgp_test", expect.anything(), 1, {
+      currentPassword: "a passphrase", totpCode: "123456",
+    }));
   });
 
   it("uses adaptive detection with recommended settings by default", async () => {
@@ -117,12 +144,11 @@ describe("token guard policy workflow", () => {
     // The switch has to be reachable, so the block opens for a policy the
     // recommended defaults cannot describe.
     expect(screen.getByLabelText("启用自适应检测")).not.toBeChecked();
-    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith(
       "tgp_test", expect.objectContaining({ ewma_enabled: false }), 1,
-      expect.objectContaining({ currentPassword: "a passphrase" })));
+      { currentPassword: "", totpCode: "" }));
   });
 
   // The server accepts ewma_enabled: false together with zero EWMA parameters.
@@ -139,7 +165,6 @@ describe("token guard policy workflow", () => {
     const update = vi.spyOn(api, "updateTokenGuardPolicy").mockResolvedValue({ data: offPolicy, etag: '"2"' });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
-    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
@@ -255,7 +280,6 @@ describe("token guard policy workflow", () => {
     // many Projects that is.
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/已绑定的 2 个项目/)).toBeVisible();
-    fireEvent.change(within(dialog).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", {
@@ -283,7 +307,7 @@ describe("token guard policy workflow", () => {
       ewma_absolute_tpm: 50000,
       ewma_absolute_tokens_per_request: 4000,
       ewma_absolute_cost_micros_per_minute: 1000000,
-    }, 1, expect.objectContaining({ currentPassword: "a passphrase" })));
+    }, 1, { currentPassword: "", totpCode: "" }));
   });
 
   it("holds only the row whose status change is in flight", async () => {
@@ -297,7 +321,6 @@ describe("token guard policy workflow", () => {
     const second = screen.getByText("Second guard").closest("tr")!;
     fireEvent.click(within(first).getByRole("button", { name: "禁用" }));
     const confirmation = await screen.findByRole("alertdialog");
-    fireEvent.change(within(confirmation).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(confirmation).getByRole("button", { name: "禁用" }));
 
     await waitFor(() => expect(within(first).getByRole("button", { name: "禁用" })).toBeDisabled());
@@ -315,7 +338,6 @@ describe("token guard policy workflow", () => {
     const second = screen.getByText("Second guard").closest("tr")!;
     fireEvent.click(within(first).getByRole("button", { name: "禁用" }));
     const confirmation = await screen.findByRole("alertdialog");
-    fireEvent.change(within(confirmation).getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(within(confirmation).getByRole("button", { name: "禁用" }));
 
     expect(await within(first).findByText("无法完成请求")).toBeVisible();

@@ -242,6 +242,11 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 	input.CurrentPassword = ""
 	projectID := chi.URLParam(request, "id")
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	// Asked every time, outside admin.reauth_elevation_window: this call hands
+	// out a live credential that spends the operator's budget, which is the same
+	// class as minting an admin account rather than the ordinary administration
+	// the window amortises. Deleting a key is inside the window — that only ends
+	// access.
 	if !r.verifyAdminStepUp(writer, request, admin.session.Username, password, input.TOTPCode) {
 		return
 	}
