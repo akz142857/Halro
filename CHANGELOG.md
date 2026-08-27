@@ -8,6 +8,34 @@ semantic versioning.
 
 ### Changed
 
+- **Re-authentication is asked once per sitting, not once per action.** Deleting
+  a Route, replacing a Provider credential, or editing a protection down to
+  nothing still requires the account password (and a TOTP code where the account
+  has an authenticator) — a stolen session alone must not be able to do those.
+  What changed is that one proof now counts for
+  `admin.reauth_elevation_window` (default 10m) instead of for exactly one
+  request, so clearing out six Routes costs one prompt rather than six. The
+  window is bound to the single session that proved itself, ends when that
+  session signs out or its password changes, and `0s` restores the
+  ask-every-time behaviour.
+
+  Two things stay outside it, deliberately: the admin-account endpoints
+  (changing a password, removing an authenticator, disabling MFA, creating or
+  deleting an administrator) and minting a Gateway Key. Those are how a stolen
+  session would turn itself into standing access, so they are asked every time.
+
+  **Config change:** the key that used to be
+  `admin.model_capability_detection.elevation_window` is now
+  `admin.reauth_elevation_window` and governs every step-up, capability
+  detection included. Config decoding is strict, so an instance still carrying
+  the old key **refuses to start** — `field elevation_window not found in type
+  config.ModelCapabilityDetection`, naming the line. Move the value up to
+  `admin:` before upgrading.
+
+  In the console the credential fields no longer appear until the server asks
+  for them: the confirmation still states the consequence, and the fields open
+  only when the window has closed.
+
 - **`json_mode` became two capabilities: `json_object` and `structured_outputs`.**
   One switch could not describe any provider honestly — Anthropic enforces a
   schema and has no schema-less mode, DeepSeek has the schema-less mode and no

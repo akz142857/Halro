@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { stepUpRequired } from "../test/fixtures";
 import type { Project } from "../types";
 import { DeveloperPage } from "./DeveloperPage";
 
@@ -434,10 +435,12 @@ describe("DeveloperPage", () => {
     // plaintext exists. It goes straight into the field and nowhere else.
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
-    const createKey = vi.spyOn(api, "createKey").mockResolvedValue({
-      data: { key: "hm_created_secret", metadata: { name: "工作台调试 2026-08-05 10:00:00" } },
-      etag: '"1"',
-    } as never);
+    const createKey = vi.spyOn(api, "createKey")
+      .mockRejectedValueOnce(stepUpRequired())
+      .mockResolvedValue({
+        data: { key: "hm_created_secret", metadata: { name: "工作台调试 2026-08-05 10:00:00" } },
+        etag: '"1"',
+      } as never);
     const localWrite = vi.spyOn(Storage.prototype, "setItem");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
@@ -445,18 +448,20 @@ describe("DeveloperPage", () => {
     expect(screen.getByLabelText("Gateway Key")).toHaveValue("");
 
     fireEvent.click(screen.getByRole("button", { name: "新建调试 Key" }));
-    // Minting is gated the same way a deletion is: the key is shown once and
-    // outlives this session, so the dialog asks who is asking.
-    fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
+    // Minting stays outside the re-authentication window — the key is shown once
+    // and outlives this session — so the server asks every time, and the dialog
+    // opens its fields as soon as the first attempt comes back asking.
+    fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
+    fireEvent.change(await screen.findByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
     fireEvent.click(screen.getAllByRole("button", { name: "新建调试 Key" }).at(-1)!);
 
     await waitFor(() => expect(screen.getByLabelText("Gateway Key")).toHaveValue("hm_created_secret"));
     // The key expires on its own so a forgotten debug key cannot stay usable.
-    expect(createKey).toHaveBeenCalledWith(
+    expect(createKey).toHaveBeenLastCalledWith(
       project.id, expect.stringContaining("工作台调试"), expect.any(String),
       expect.objectContaining({ currentPassword: "a passphrase" }), expect.any(String),
     );
-    const expiresAt = Date.parse(createKey.mock.calls[0][4] as string);
+    const expiresAt = Date.parse(createKey.mock.calls.at(-1)![4] as string);
     expect(expiresAt).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);
     expect(screen.getByLabelText("Gateway Key")).toHaveAttribute("type", "password");

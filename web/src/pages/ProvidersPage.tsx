@@ -2,19 +2,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { api } from "../api";
 import {
+  ConfirmButton,
   EmptyState,
   ErrorState,
   Field,
   InlineTestControl,
+  isStepUpPrompt,
   Loading,
   Modal,
+  OverflowMenu,
   PageHeader,
   ReauthFields,
-  StatusDot,
-  ConfirmButton,
-  OverflowMenu,
   ResourceToolbar,
+  StatusDot,
   useDirty,
+  useStepUpPrompt,
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
@@ -363,7 +365,7 @@ function ProviderRow({ provider, credential, editable, highlighted, onCredential
           </div>
         </div>}
       </article>
-      {deleteMutation.isError && <ErrorState error={deleteMutation.error} />}
+      {deleteMutation.isError && !isStepUpPrompt(deleteMutation.error) && <ErrorState error={deleteMutation.error} />}
       {stateMutation.isError && <ErrorState error={stateMutation.error} />}
     </>
   );
@@ -431,7 +433,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
           </dl>
         </section>}
       </article>
-      {remove.isError && <ErrorState error={remove.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
       {rotating && catalog && <CredentialForm current={credential} catalog={catalog} onClose={() => setRotating(false)} />}
     </>
   );
@@ -485,8 +487,10 @@ function CredentialForm({
   const [expiresAt, setExpiresAt] = useState(isoToZonedInput(current?.expires_at, timeZone));
   // Replacing the material an existing credential holds is the same
   // trust-boundary change as deleting it; the server asks on both. Creating one
-  // establishes new material and does not ask.
-  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  // establishes new material and does not ask. Asked on demand: inside the
+  // re-authentication window the server is already satisfied, so the fields
+  // appear only if this rotation comes back asking for them.
+  const stepUp = useStepUpPrompt();
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => {
@@ -507,11 +511,16 @@ function CredentialForm({
         expires_at: zonedInputToISO(expiresAt, timeZone) || null,
       };
       return current
-        ? api.rotateCredential(current.id, value, current.revision, reauth)
+        ? api.rotateCredential(current.id, value, current.revision, stepUp.values)
         : api.createCredential({ ...value, secret });
     },
-    onSettled: () => { setSecret(""); setReauth((values) => ({ ...values, totpCode: "" })); },
+    onMutate: stepUp.begin,
+    // The typed secret survives the console's own step-up question, and only
+    // that. Clearing it there would leave the retry rotating to nothing, having
+    // silently thrown away material the operator cannot retype from memory.
+    onError: (error) => { if (!stepUp.absorb(error)) setSecret(""); },
     onSuccess: () => {
+      setSecret("");
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
       notify({ tone: "success", title: t(current ? "providers.notifyCredentialRotated" : "providers.notifyCredentialSaved"), description: name });
       onClose();
@@ -521,15 +530,15 @@ function CredentialForm({
   // operator who clicked, not sit in a scrolled-away part of the modal.
   const submitError = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!mutation.isError) return;
+    if (!mutation.isError || stepUp.probing) return;
     requestAnimationFrame(() => {
       submitError.current?.scrollIntoView?.({ block: "center" });
       submitError.current?.focus();
     });
-  }, [mutation.isError, mutation.error]);
+  }, [mutation.isError, mutation.error, stepUp.probing]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (name.trim() && baseURL.trim() && (current || secret) && (!current || reauth.currentPassword)) mutation.mutate();
+    if (name.trim() && baseURL.trim() && (current || secret) && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
   };
   const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret, expiresAt });
   return (
@@ -585,14 +594,14 @@ function CredentialForm({
         <Field label={t("providers.credentialExpiry")} hint={t("providers.credentialExpiryHint")}>
           <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
-        {mutation.isError && (
+        {mutation.isError && !stepUp.probing && (
           <div ref={submitError} tabIndex={-1} className="form-submit-error"><ErrorState error={mutation.error} /></div>
         )}
-        {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
+        {stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} />}
         </div>
         <div className="form-actions sticky-form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (!current && !secret) || (Boolean(current) && !reauth.currentPassword)}>
+          <button className="button primary" disabled={mutation.isPending || (!current && !secret) || (stepUp.asked && !stepUp.values.currentPassword)}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}
           </button>
         </div>

@@ -555,6 +555,30 @@ This removes all factors and recovery codes, invalidates sessions and pending
 challenges, and appends `admin.mfa.reset_offline` to the trusted Audit chain.
 With `mfa_policy: required`, the next password login is restricted to setup.
 
+### Re-authentication for destructive actions
+
+Deleting a Route, Deployment, Provider, Project, Gateway Key, webhook or policy
+— and any edit that replaces credential material or takes a protection out of
+force — asks for the administrator's own password, plus a TOTP code where the
+account has an authenticator. A session cookie alone is not enough to do them.
+
+`admin.reauth_elevation_window` (default `10m`) is how long one such proof keeps
+counting. Inside the window the console stops asking; the confirmation dialog
+still states what is about to happen, and the credential fields appear only once
+the window has closed. The grant belongs to the one session that earned it: a
+second browser inherits nothing, signing out ends it, and changing the account
+password invalidates it. Set `0s` to be asked on every action.
+
+Two groups stay outside the window and are asked every time — the admin-account
+endpoints (password change, authenticator removal, disabling MFA, creating or
+deleting an administrator) and minting a Gateway Key. Those hand out or preserve
+access rather than ending it, which is what an intruder holding a stolen session
+would reach for first.
+
+Five failed attempts per account per minute are refused with `429`
+`reauth_rate_limited`; every failure and every throttled window is appended to
+the Audit chain as `admin.reauthentication`.
+
 ## Master Key rotation
 
 The `--new-key-file` procedure below applies to `storage.master_key.mode: file`.

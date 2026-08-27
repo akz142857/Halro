@@ -86,18 +86,26 @@ describe("InlineTestControl", () => {
 // structurally, because the behaviour itself belongs to the browser and cannot
 // be reproduced in jsdom.
 describe("step-up confirmation dialog", () => {
-  const renderDialog = () => {
+  // The fields appear only once the server has asked, so the dialog is driven to
+  // that point: confirm with nothing, take back the refusal that says the
+  // re-authentication window is not open.
+  const renderDialog = async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const refuse = () => Promise.reject(
+      new ApiError(401, "recent re-authentication required", "recent_reauth_required"),
+    );
     render(
       <QueryClientProvider client={client}>
-        <ConfirmButton label="删除" confirmLabel="确认删除?" requireStepUp onConfirm={() => {}} />
+        <ConfirmButton label="删除" confirmLabel="确认删除?" requireStepUp onConfirm={refuse} />
       </QueryClientProvider>,
     );
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" }).at(-1)!);
+    await screen.findByLabelText(/^当前密码/);
   };
 
-  it("keeps the browser's credential matching inside the dialog", () => {
-    renderDialog();
+  it("keeps the browser's credential matching inside the dialog", async () => {
+    await renderDialog();
     const password = document.querySelector('input[type="password"]');
     expect(password).not.toBeNull();
 

@@ -267,7 +267,6 @@ describe("projects page", () => {
     const row = (await screen.findByText("service-a")).closest(".key-row")!;
     fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("alertdialog");
-    fireEvent.change(within(dialog).getByLabelText(/当前密码/), { target: { value: "correct horse battery staple" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));
 
     expect(await screen.findByText("无法完成请求")).toBeVisible();

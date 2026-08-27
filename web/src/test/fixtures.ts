@@ -1,3 +1,4 @@
+import { ApiError } from "../api";
 import type { TimeContext, WritePathSummary } from "../types";
 
 /**
@@ -39,3 +40,16 @@ export function emptyWritePath(overrides: Partial<WritePathSummary> = {}): Write
 // matrix, and a console built against a wrong idea of it is exactly the drift
 // serving the matrix removes. That Go test fails when the two diverge.
 export { default as providerProfilesFixture } from "./provider-profiles.golden.json";
+
+/**
+ * The 401 the Admin API answers with when a step-up-guarded call arrives
+ * without material and the session's re-authentication window is not open.
+ *
+ * The console never knows the window's state in advance — only the server does
+ * — so it attempts the call with nothing and lets this refusal be the question.
+ * A test that wants to see the credential fields drives the mutation to this
+ * answer first, exactly as the console does.
+ */
+export function stepUpRequired(): ApiError {
+  return new ApiError(401, "recent re-authentication required", "recent_reauth_required");
+}

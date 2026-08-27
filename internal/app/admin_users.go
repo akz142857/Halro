@@ -14,6 +14,12 @@ import (
 // what it is used for here. It shares the rate limit and the audit trail with
 // every other step-up in the console: a per-endpoint budget would let an
 // attacker take the same number of guesses again at each endpoint.
+//
+// What it deliberately does not share is admin.reauth_elevation_window. The
+// window amortises proving who you are across a sitting of ordinary
+// administration; minting an account with system access, or removing one, is
+// how an intruder would turn a stolen session into standing access, so it is
+// asked for every time and never satisfied by an earlier proof.
 func (r *Runtime) verifyAdminReauthentication(writer http.ResponseWriter, request *http.Request, username, passwordText, code string) bool {
 	return r.verifyAdminStepUp(writer, request, username, passwordText, code)
 }

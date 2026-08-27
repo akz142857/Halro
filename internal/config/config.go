@@ -192,12 +192,35 @@ const (
 )
 
 type Admin struct {
-	SessionTTL               Duration                 `yaml:"session_ttl"`
-	IdleTimeout              Duration                 `yaml:"idle_timeout"`
-	LoginRPM                 int                      `yaml:"login_rpm"`
-	ExternalOrigin           string                   `yaml:"external_origin"`
-	MFAPolicy                string                   `yaml:"mfa_policy"`
-	DeveloperWorkbench       string                   `yaml:"developer_workbench"`
+	SessionTTL         Duration `yaml:"session_ttl"`
+	IdleTimeout        Duration `yaml:"idle_timeout"`
+	LoginRPM           int      `yaml:"login_rpm"`
+	ExternalOrigin     string   `yaml:"external_origin"`
+	MFAPolicy          string   `yaml:"mfa_policy"`
+	DeveloperWorkbench string   `yaml:"developer_workbench"`
+	// ReauthElevationWindow is how long one proven re-authentication keeps
+	// letting the same admin session perform step-up-guarded actions without
+	// proving itself again.
+	//
+	// Step-up exists so that a stolen session alone cannot delete a Route,
+	// replace a Provider credential, or edit a protection down to nothing. That
+	// remains true of the second such action in a row, so the guard is not
+	// dropped — it is amortised over the sitting an operator spends
+	// administering, where the alternative was a password and a TOTP code per
+	// row of a table.
+	//
+	// A pointer for the reason Gateway.SourceRateLimit.RequestsPerMinute is one:
+	// absent and "the operator wrote 0" are different answers. Absent takes the
+	// default; an explicit 0 asks on every action, for an operator who means it.
+	// Normalize resolves the absent case, so everything downstream reads a
+	// value.
+	//
+	// The window is bound to the session, never to the account: a second
+	// session, stolen or otherwise, inherits nothing. It also does not cover the
+	// admin-account endpoints — changing a password, removing an authenticator,
+	// disabling MFA — which keep asking every time, because those are how an
+	// intruder would make a stolen session permanent.
+	ReauthElevationWindow    *Duration                `yaml:"reauth_elevation_window"`
 	ModelCapabilityDetection ModelCapabilityDetection `yaml:"model_capability_detection"`
 }
 
@@ -210,26 +233,6 @@ type ModelCapabilityDetection struct {
 	ProviderConcurrency int      `yaml:"provider_concurrency"`
 	MaxProviderCalls    int      `yaml:"max_provider_calls"`
 	CreateRPM           int      `yaml:"create_rpm"`
-	// ElevationWindow is how long one proven re-authentication keeps letting
-	// the same admin session start detections without proving itself again.
-	//
-	// Step-up guards this endpoint because a detection spends the Provider
-	// credential outside project accounting and writes capability evidence a
-	// Deployment adopts. Both of those are still true of the second detection
-	// in a row, so the guard is not dropped — it is amortised over the window
-	// an operator spends configuring, where the alternative was a password and
-	// a TOTP code per Deployment.
-	//
-	// A pointer for the reason Gateway.SourceRateLimit.RequestsPerMinute is one:
-	// absent and "the operator wrote 0" are different answers. Absent takes the
-	// default, so a config file written before this existed still gets the
-	// window; an explicit 0 asks on every detection, for an operator who means
-	// it. Normalize resolves the absent case, so everything downstream reads a
-	// value.
-	//
-	// The window is bound to the session, never to the account: a second
-	// session, stolen or otherwise, inherits nothing.
-	ElevationWindow *Duration `yaml:"elevation_window"`
 }
 
 // Providers holds what varies by deployment about reaching an upstream, as
@@ -318,15 +321,15 @@ type Gateway struct {
 // gateway.source_rate_limit.requests_per_minute takes.
 const defaultSourceRequestsPerMinute = 600
 
-// defaultDetectionElevationWindow is how long one proven re-authentication
-// keeps letting the same admin session start capability detections.
+// defaultReauthElevationWindow is how long one proven re-authentication keeps
+// letting the same admin session perform step-up-guarded actions.
 //
-// Long enough to cover the run of Deployments an operator configures in one
-// sitting, which is the flow the per-action prompt was interrupting, and short
-// enough that a session stolen afterwards is back to proving itself. It does
-// not extend on use: the window is measured from the re-authentication, so a
-// long sitting asks again rather than staying open indefinitely.
-const defaultDetectionElevationWindow = 10 * time.Minute
+// Long enough to cover the run of changes an operator makes in one sitting,
+// which is the flow the per-action prompt was interrupting, and short enough
+// that a session stolen afterwards is back to proving itself. It does not
+// extend on use: the window is measured from the re-authentication, so a long
+// sitting asks again rather than staying open indefinitely.
+const defaultReauthElevationWindow = 10 * time.Minute
 
 // Pricing clock tolerances an omitted gateway.pricing_clock_* key takes. Zero is
 // not a usable value for either — a zero forward tolerance makes every priced
@@ -689,6 +692,17 @@ func (c *Config) Normalize() error {
 	if c.Admin.DeveloperWorkbench == "" {
 		c.Admin.DeveloperWorkbench = "enabled"
 	}
+	if c.Admin.ReauthElevationWindow == nil {
+		window := Duration(defaultReauthElevationWindow)
+		c.Admin.ReauthElevationWindow = &window
+	}
+	// A negative window is not "ask every time by accident": it is normalised to
+	// zero, which is the value that does ask every time, rather than left to be
+	// compared against and quietly behave as an expired grant.
+	if *c.Admin.ReauthElevationWindow < 0 {
+		zero := Duration(0)
+		c.Admin.ReauthElevationWindow = &zero
+	}
 	defaultDetection := Default().Admin.ModelCapabilityDetection
 	if c.Admin.ModelCapabilityDetection.FreshTTL == 0 {
 		c.Admin.ModelCapabilityDetection.FreshTTL = defaultDetection.FreshTTL
@@ -701,14 +715,6 @@ func (c *Config) Normalize() error {
 	}
 	if c.Admin.ModelCapabilityDetection.TotalTimeout == 0 {
 		c.Admin.ModelCapabilityDetection.TotalTimeout = defaultDetection.TotalTimeout
-	}
-	if c.Admin.ModelCapabilityDetection.ElevationWindow == nil {
-		window := Duration(defaultDetectionElevationWindow)
-		c.Admin.ModelCapabilityDetection.ElevationWindow = &window
-	}
-	if *c.Admin.ModelCapabilityDetection.ElevationWindow < 0 {
-		zero := Duration(0)
-		c.Admin.ModelCapabilityDetection.ElevationWindow = &zero
 	}
 	if c.Admin.ModelCapabilityDetection.GlobalConcurrency == 0 {
 		c.Admin.ModelCapabilityDetection.GlobalConcurrency = defaultDetection.GlobalConcurrency

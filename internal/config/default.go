@@ -42,16 +42,16 @@ func Default() Config {
 			},
 		},
 		Admin: Admin{
-			SessionTTL:         Duration(8 * time.Hour),
-			IdleTimeout:        Duration(30 * time.Minute),
-			LoginRPM:           5,
-			MFAPolicy:          "optional",
-			DeveloperWorkbench: "enabled",
+			SessionTTL:            Duration(8 * time.Hour),
+			IdleTimeout:           Duration(30 * time.Minute),
+			LoginRPM:              5,
+			MFAPolicy:             "optional",
+			DeveloperWorkbench:    "enabled",
+			ReauthElevationWindow: durationPointer(defaultReauthElevationWindow),
 			ModelCapabilityDetection: ModelCapabilityDetection{
 				FreshTTL: Duration(24 * time.Hour), Retention: Duration(30 * 24 * time.Hour),
 				RefreshCooldown: Duration(5 * time.Minute), TotalTimeout: Duration(90 * time.Second),
 				GlobalConcurrency: 4, ProviderConcurrency: 1, MaxProviderCalls: 10, CreateRPM: 6,
-				ElevationWindow: durationPointer(defaultDetectionElevationWindow),
 			},
 		},
 		Usage: Usage{

@@ -6,12 +6,14 @@ import {
   EmptyState,
   ErrorState,
   Field,
+  isStepUpPrompt,
   Loading,
   Modal,
   PageHeader,
   ReauthFields,
   StatusDot,
   useDirty,
+  useStepUpPrompt,
   type ReauthValues,
 } from "../components";
 import { compactNumber, money } from "../format";
@@ -125,7 +127,7 @@ export function PoliciesPage() {
           // failure has to name the row it came from — a notice under the table
           // says only that "something" failed.
           const rowBusy = toggleStatus.isPending && toggleStatus.variables?.policy.id === policy.id;
-          const rowFailed = toggleStatus.isError && toggleStatus.variables?.policy.id === policy.id;
+          const rowFailed = toggleStatus.isError && !isStepUpPrompt(toggleStatus.error) && toggleStatus.variables?.policy.id === policy.id;
           return <tr key={policy.id}>
           <td><strong>{policy.name}</strong><code>{policy.id}</code></td>
           <td><span className="inline-status"><StatusDot ok={policy.enabled} />{policy.enabled ? t("common.enabled") : t("common.disabled")}</span></td>
@@ -139,7 +141,7 @@ export function PoliciesPage() {
             ? <ConfirmButton className="button secondary policy-status-toggle" label={t("policies.disableAction")} title={t("policies.disableTitle")} confirmLabel={t("policies.disableConfirm", { name: policy.name, count: policy.bound_projects ?? 0 })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggleStatus.mutateAsync({ policy, reauth })} />
             : <ConfirmButton className="button secondary policy-status-toggle" label={t("policies.enableAction")} confirmLabel={t("policies.enableConfirm", { name: policy.name })} disabled={rowBusy} requireStepUp onConfirm={(reauth) => toggleStatus.mutateAsync({ policy, reauth })} />}<button className="button ghost" onClick={() => setPreviewing(policy)}>{t("policies.simulate")}</button><button className="button ghost" disabled={readOnly || rowBusy} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setEditing(policy)}>{t("common.edit")}</button><ConfirmButton label={t("common.delete")} confirmLabel={t("policies.deleteConfirm", { name: policy.name })} disabled={remove.isPending || rowBusy} requireStepUp onConfirm={(reauth) => remove.mutateAsync({ policy, reauth })} /></div>{rowFailed && <ErrorState error={toggleStatus.error} />}</td>
         </tr>;
-        })}</tbody></table>{remove.isError && <ErrorState error={remove.error} />}</div>}
+        })}</tbody></table>{remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}</div>}
         {policies.hasNextPage && <button className="button ghost policy-load-more" disabled={policies.isFetchingNextPage} onClick={() => policies.fetchNextPage()}>{policies.isFetchingNextPage ? t("common.loading") : t("common.loadMore")}</button>}
       </section>}
       {tab === "redaction" && <RedactionPoliciesSection panelID={policyPanelID("redaction")} labelledBy={policyTabID("redaction")} policies={redactionItems} isPending={redactionPolicies.isPending} error={redactionPolicies.isError ? redactionPolicies.error : undefined} hasNextPage={redactionPolicies.hasNextPage} isFetchingNextPage={redactionPolicies.isFetchingNextPage} onLoadMore={() => redactionPolicies.fetchNextPage()} />}
@@ -322,14 +324,17 @@ function PolicyForm({
     ewma_absolute_cost_micros_per_minute: Math.round(ewmaCostFloor * 1_000_000),
   };
   // Editing an existing policy can raise every limit to unlimited or switch it
-  // off, so the server asks who is doing it; creating one cannot.
-  const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  // off, so the server asks who is doing it; creating one cannot. Asked on
+  // demand: inside the re-authentication window the server is already
+  // satisfied, so the fields appear only if the save comes back asking.
+  const stepUp = useStepUpPrompt();
   const { notify } = useNotify();
   const mutation = useMutation({
     mutationFn: () => current
-      ? api.updateTokenGuardPolicy(current.id, body, current.revision, reauth)
+      ? api.updateTokenGuardPolicy(current.id, body, current.revision, stepUp.values)
       : api.createTokenGuardPolicy(body),
-    onSettled: () => setReauth((values) => ({ ...values, totpCode: "" })),
+    onMutate: stepUp.begin,
+    onError: stepUp.absorb,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["token-guard-policies"] });
       notify({ tone: "success", title: t(current ? "policies.notifyUpdated" : "policies.notifyCreated"), description: name });
@@ -413,8 +418,8 @@ function PolicyForm({
           </div>
         )}
         </section>
-        {mutation.isError && <ErrorState error={mutation.error} />}
-        {current && <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpSecurityControl")} />}
+        {mutation.isError && !stepUp.probing && <ErrorState error={mutation.error} />}
+        {stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} />}
         <div className="form-actions sticky-form-actions">
           <div className="form-footer-state">
             <label className="form-footer-enable">
@@ -428,7 +433,7 @@ function PolicyForm({
                 : t("policies.ewmaDefaultSummary")}</small></div>
           </div>
           <button type="button" className="button ghost" disabled={mutation.isPending} data-modal-close>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (Boolean(current) && !reauth.currentPassword)}>{mutation.isPending ? t("common.saving") : enabled && current ? t("policies.saveAndApply") : t("policies.save")}</button>
+          <button className="button primary" disabled={mutation.isPending || (stepUp.asked && !stepUp.values.currentPassword)}>{mutation.isPending ? t("common.saving") : enabled && current ? t("policies.saveAndApply") : t("policies.save")}</button>
         </div>
       </form>
     </Modal>

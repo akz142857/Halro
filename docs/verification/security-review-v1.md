@@ -32,7 +32,7 @@ on every push and pull request.
 | Admin authentication | Process-wide bounded Argon2id work, signed server-side session, fixation rotation, absolute/idle expiry tests | Pass |
 | Admin TOTP MFA | Encrypted independent seeds, short-lived hash-only pre-auth challenges, atomic replay protection and recovery codes | Pass |
 | Admin mutations | Same-origin + CSRF + exact administrator role, optimistic revisions, mandatory create idempotency | Pass |
-| Credential-spending calls | Invocation-target refresh/resolve are POSTs behind the administrator role, CSRF and same-origin; capability detection additionally requires step-up, asked once per `admin.model_capability_detection.elevation_window` and bound to the one session that proved itself | Pass |
+| Credential-spending calls | Invocation-target refresh/resolve are POSTs behind the administrator role, CSRF and same-origin; capability detection additionally requires step-up, asked once per `admin.reauth_elevation_window` and bound to the one session that proved itself | Pass |
 | Security-control edits | Replacing credential material and editing a redaction or Token Guard policy require step-up, not only deleting them; swept by route family so a new verb is in scope when registered | Pass |
 | Gateway keys | One-time plaintext, hash-only persistence, fail-closed revocation snapshot activation | Pass |
 | Provider/Webhook secrets | AES-GCM + HKDF audience binding; API, errors, telemetry and heap canaries exclude protected values | Pass |

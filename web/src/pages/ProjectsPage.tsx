@@ -9,6 +9,7 @@ import {
   EmptyState,
   ErrorState,
   Field,
+  isStepUpPrompt,
   Loading,
   LoadMore,
   Modal,
@@ -290,9 +291,9 @@ function ProjectDetail({ project }: { project: Project }) {
           <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
         </div>
       </details>
-      {unblock.isError && <ErrorState error={unblock.error} />}
+      {unblock.isError && !isStepUpPrompt(unblock.error) && <ErrorState error={unblock.error} />}
       {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
-      {remove.isError && <ErrorState error={remove.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
       <header className="section-header">
         <div><p className="eyebrow">{t("projects.credentials")}</p><h3>{t("projects.gatewayKeys")}</h3></div>
         <button className="button secondary" disabled={readOnly} onClick={() => setKeyDialog(true)}>{t("projects.createKey")}</button>
@@ -384,7 +385,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
       {/* A revocation that silently failed leaves a live credential the operator believes
           is gone, so both key mutations report their errors in place. */}
       {mutation.isError && <ErrorState error={mutation.error} />}
-      {remove.isError && <ErrorState error={remove.error} />}
+      {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
     </>
   );
 }
