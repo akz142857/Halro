@@ -207,7 +207,12 @@ raise the ceiling rather than the budget.
 User-controlled Project, Key, Route, model, request ID, source IP, and raw error
 values are deliberately excluded. Provider/Deployment IDs are bounded managed
 identifiers. `halro_deployment_up` is absent until the first active probe;
-absence must not be interpreted as healthy.
+absence must not be interpreted as healthy. The same probe result is reported to
+the Admin console on the deployment record (`probe.state` is `healthy`,
+`unhealthy` or `not_probed`), so an operator does not have to read metrics to
+learn that a deployment has been taken out of the router's candidates. Only the
+classified error travels with it — the upstream's own sentence about the request
+stays inside the error, as it does everywhere else.
 
 `halro_tls_certificate_expiry_seconds` reports when a served certificate stops
 being valid. `scope` is `serving` (the Gateway and Admin listeners, which share

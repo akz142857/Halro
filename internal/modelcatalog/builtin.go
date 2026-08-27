@@ -372,36 +372,164 @@ func bedrockConverseModels() []Entry {
 // model names do not inherit native-only tools, JSON, reasoning or token limits.
 // These exact IDs are also the choices offered when an operator maps a custom
 // endpoint alias to a reviewed underlying model.
-// bedrockMantleModels covers the OpenAI-family models Bedrock serves on its
-// Mantle endpoint. The catalog had no entry for any of them, so every Mantle
-// deployment resolved as "not covered" and its operator had to declare the
-// capabilities by hand — which is what forces a widening, a revalidation, and a
-// route taken out of service to turn one capability on.
-//
-// Two things about these entries are not guesses and are easy to get wrong:
-//
-//   - The context window is Bedrock's, not OpenAI's. GPT-5.5 is 272K here and
-//     1,050,000 on the direct API. Carrying the direct number over would let a
-//     request four times too large through the deployment's own ceiling.
-//   - Vision without the fetch. Bedrock reads an image from the bytes a request
-//     carries and retrieves nothing, so these claim vision and not fetched_image
-//     — which is also all the Mantle profile ceilings permit.
-//
-// Max output is absent from the model card ("N/A"), so it is left undeclared
-// rather than invented; zero means the upstream limit applies.
-//
-// The profile is the Responses one because the card says so: Chat Completions,
-// Converse and Invoke are all marked unsupported for this model, and it answers
-// on the openai/v1 path that ProfileBedrockMantleOpenAIResponses addresses.
-//
-// Sources reviewed 2026-08-23, documentation only — no live account:
-//   - https://docs.aws.amazon.com/bedrock/latest/userguide/model-cards.html
-//   - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-55.html
-func bedrockMantleModels() []Entry {
-	const provider, profile = domain.ProviderBedrock, domain.ProfileBedrockMantleOpenAIResponses
-	return []Entry{
-		builtinEntry(provider, profile, "openai.gpt-5.5", with(chat(272_000, 0), visionInline)),
+// mantleModel is one row of the measured Mantle matrix: an exact model
+// identifier, the window Bedrock gives it, and whether the route it sits on
+// also serves it over Responses.
+type mantleModel struct {
+	model         string
+	contextTokens int64
+	outputTokens  int64
+	responses     bool
+}
+
+// mantleChat is what the matrix run established for a Mantle chat model and
+// nothing beyond it: the operation and its stream, both measured on every model
+// the account lists. Tools, JSON mode, vision, developer role and reasoning are
+// all inside the Mantle ceiling and none of them was exercised per model, so no
+// entry claims them — the seeding policy at the top of this file rules out
+// reading a capability off a model's name, and the asymmetry is not close: an
+// under-claiming entry costs an operator one deliberate declaration, while a
+// wrong one costs them a refusal they cannot explain. Capability detection
+// fills these in per account, with verified evidence rather than declared.
+func mantleChat(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+	return domain.ProviderCapabilities{
+		Chat: true, Streaming: true,
+		MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
 	}
+}
+
+// bedrockMantleModels covers the models Bedrock serves on its Mantle endpoint.
+// Until this grew past one entry, every Mantle deployment but `openai.gpt-5.5`
+// resolved as "not covered" and its operator had to declare the capabilities by
+// hand — which is what forces a widening, a revalidation, and a route taken out
+// of service to turn one capability on.
+//
+// Three things about these entries are not guesses and are easy to get wrong:
+//
+//   - The route is a property of the profile, never of the identifier. Mantle
+//     serves each model from exactly one of /v1, /openai/v1 and /anthropic/v1,
+//     and there are four counterexamples to every rule an identifier suggests:
+//     openai.gpt-oss-* answer on /v1 while every openai.gpt-5.x answers on
+//     /openai/v1, and google.gemma-3-* and google.gemma-4-* split the same way.
+//     So a model appears under the chat profile for its own route and nowhere
+//     else; addressed on the other one it is refused, never served.
+//   - Responses is not the chat set minus something. It was reachable on 13 of
+//     49 models, and the sharpest counterexample sits inside one family:
+//     openai.gpt-oss-20b and -120b serve it while openai.gpt-oss-safeguard-20b
+//     and -120b — same vendor, same route, adjacent names — do not. Only a
+//     measured yes puts a model under a Responses profile here.
+//   - The context window is Bedrock's, not the vendor's. GPT-5.5 is 272K here
+//     and 1,050,000 on the direct API. Carrying the direct number over would
+//     let a request four times too large through the deployment's own ceiling.
+//     Where the console gives no maximum output, zero is recorded and the
+//     upstream limit applies; nothing is invented to fill the column.
+//
+// One earlier claim here was wrong and is corrected rather than kept beside its
+// replacement: this file used to offer gpt-5.5 on the Responses profile only,
+// because its model card marks Chat Completions unsupported. The live run
+// reached chat on all 49 chat models including that one. The card is the weaker
+// evidence and the model is now offered on both, with the vision claim its card
+// does support — vision without the fetch, since Bedrock reads image bytes a
+// request carries and retrieves nothing, which is also all the Mantle ceilings
+// permit.
+//
+// The dated snapshots — openai.gpt-5.4-2026-03-05 and openai.gpt-5.5-2026-04-23
+// — take the window of the model they are a snapshot of. Bedrock's catalogue
+// gives them no card of their own; it lists one card per model line and the
+// dated identifiers resolve to it, which is the same relationship Halro records
+// here. If a snapshot ever ships a different window, its card will say so and
+// this is the line to change.
+//
+// One identifier the account lists is deliberately absent: zai.glm-4.6 has no
+// card in the console's model list — only 4.7, 4.7-flash and 5 appear there — so
+// there is no window to record for it, and a window is the one number an entry
+// cannot leave to the upstream. It resolves as uncovered until a card exists,
+// which costs an operator a declaration and costs nobody a wrong ceiling.
+//
+// Routes and Responses support: measured against a real account 2026-08-21.
+// Windows and maximum output: the account's own model list, read 2026-08-25.
+// The 50 identifiers were re-read from GET /v1/models the same day and every
+// one seeded here matched exactly. Both are recorded in
+// docs/verification/provider-real-matrix.md.
+func bedrockMantleModels() []Entry {
+	const provider = domain.ProviderBedrock
+	defaultRoute := []mantleModel{
+		{model: "deepseek.v3.1", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "deepseek.v3.2", contextTokens: 164_000, outputTokens: 8_000},
+		{model: "google.gemma-3-4b-it", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "google.gemma-3-12b-it", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "google.gemma-3-27b-it", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "minimax.minimax-m2", contextTokens: 1_000_000, outputTokens: 8_000},
+		{model: "minimax.minimax-m2.1", contextTokens: 196_000, outputTokens: 8_000},
+		{model: "minimax.minimax-m2.5", contextTokens: 196_000, outputTokens: 8_000},
+		{model: "mistral.devstral-2-123b", contextTokens: 256_000, outputTokens: 32_000},
+		{model: "mistral.magistral-small-2509", contextTokens: 128_000, outputTokens: 40_000},
+		{model: "mistral.ministral-3-3b-instruct", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "mistral.ministral-3-8b-instruct", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "mistral.ministral-3-14b-instruct", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "mistral.mistral-large-3-675b-instruct", contextTokens: 256_000, outputTokens: 32_000},
+		{model: "mistral.voxtral-mini-3b-2507", contextTokens: 32_000, outputTokens: 0},
+		{model: "mistral.voxtral-small-24b-2507", contextTokens: 32_000, outputTokens: 0},
+		{model: "moonshotai.kimi-k2-thinking", contextTokens: 256_000, outputTokens: 16_000},
+		{model: "moonshotai.kimi-k2.5", contextTokens: 256_000, outputTokens: 16_000},
+		{model: "nvidia.nemotron-nano-9b-v2", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "nvidia.nemotron-nano-12b-v2", contextTokens: 128_000, outputTokens: 8_000},
+		{model: "nvidia.nemotron-nano-3-30b", contextTokens: 256_000, outputTokens: 8_000},
+		{model: "nvidia.nemotron-super-3-120b", contextTokens: 256_000, outputTokens: 32_000},
+		{model: "openai.gpt-oss-20b", contextTokens: 128_000, outputTokens: 16_000, responses: true},
+		{model: "openai.gpt-oss-120b", contextTokens: 128_000, outputTokens: 16_000, responses: true},
+		{model: "openai.gpt-oss-safeguard-20b", contextTokens: 128_000, outputTokens: 16_000},
+		{model: "openai.gpt-oss-safeguard-120b", contextTokens: 128_000, outputTokens: 16_000},
+		{model: "qwen.qwen3-32b", contextTokens: 32_000, outputTokens: 8_000},
+		{model: "qwen.qwen3-235b-a22b-2507", contextTokens: 256_000, outputTokens: 8_000},
+		{model: "qwen.qwen3-coder-30b-a3b-instruct", contextTokens: 256_000, outputTokens: 16_000},
+		{model: "qwen.qwen3-coder-480b-a35b-instruct", contextTokens: 128_000, outputTokens: 16_000},
+		{model: "qwen.qwen3-coder-next", contextTokens: 256_000, outputTokens: 16_000},
+		{model: "qwen.qwen3-next-80b-a3b-instruct", contextTokens: 256_000, outputTokens: 8_000},
+		{model: "qwen.qwen3-vl-235b-a22b-instruct", contextTokens: 256_000, outputTokens: 8_000},
+		{model: "writer.palmyra-vision-7b", contextTokens: 4_000, outputTokens: 4_000},
+		{model: "zai.glm-4.7", contextTokens: 203_000, outputTokens: 4_000},
+		{model: "zai.glm-4.7-flash", contextTokens: 203_000, outputTokens: 4_000},
+		{model: "zai.glm-5", contextTokens: 200_000, outputTokens: 128_000},
+	}
+	openAIRoute := []mantleModel{
+		{model: "google.gemma-4-26b-a4b", contextTokens: 256_000, outputTokens: 0, responses: true},
+		{model: "google.gemma-4-31b", contextTokens: 256_000, outputTokens: 0, responses: true},
+		{model: "google.gemma-4-e2b", contextTokens: 128_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.4", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.4-2026-03-05", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.5-2026-04-23", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.6-luna", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.6-sol", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "openai.gpt-5.6-terra", contextTokens: 272_000, outputTokens: 0, responses: true},
+		{model: "xai.grok-4.3", contextTokens: 1_000_000, outputTokens: 0, responses: true},
+	}
+	entries := make([]Entry, 0, 2*(len(defaultRoute)+len(openAIRoute))+3)
+	addRoute := func(models []mantleModel, chatProfile, responsesProfile domain.ProviderProfileID) {
+		for _, model := range models {
+			capabilities := mantleChat(model.contextTokens, model.outputTokens)
+			entries = append(entries, builtinEntry(provider, chatProfile, model.model, capabilities))
+			if model.responses {
+				entries = append(entries, builtinEntry(provider, responsesProfile, model.model, capabilities))
+			}
+		}
+	}
+	addRoute(defaultRoute, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleResponses)
+	addRoute(openAIRoute, domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleOpenAIResponses)
+	// gpt-5.5 is the one model whose card was read, so it is the one model
+	// carrying claims the matrix run did not measure — vision, and the chat
+	// enhancements chat() covers. Its card is left standing rather than narrowed
+	// to match the rest: this catalog under-claims where it has no evidence, not
+	// where it has some.
+	gpt55 := with(chat(272_000, 0), visionInline)
+	entries = append(entries,
+		builtinEntry(provider, domain.ProfileBedrockMantleOpenAIChat, "openai.gpt-5.5", gpt55),
+		builtinEntry(provider, domain.ProfileBedrockMantleOpenAIResponses, "openai.gpt-5.5", gpt55),
+		// Claude on Mantle reaches Halro through the Anthropic Messages profile,
+		// which is the only route that serves it. Responses refuses it by name.
+		builtinEntry(provider, domain.ProfileBedrockMantleAnthropicMessages, "anthropic.claude-haiku-4-5", mantleChat(200_000, 64_000)),
+	)
+	return entries
 }
 
 func openAICompatibleModels() []Entry {

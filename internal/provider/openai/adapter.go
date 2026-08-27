@@ -154,8 +154,29 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	}
 	endpoint := *a.endpoint
 	basePath := strings.TrimRight(endpoint.Path, "/")
-	// The same base-is-literal rule as versionedPath, so discovery and the
-	// operation it discovers for cannot disagree about the URL.
+	// Discovery ignores the operation route prefix on purpose, because on the
+	// one upstream that pins a prefix the catalogue is not route-scoped.
+	// Measured against a real Bedrock Mantle account on 2026-08-25, us-east-2:
+	//
+	//	GET /v1/models                        200
+	//	GET /openai/v1/models                 404
+	//	GET /v1/models/openai.gpt-5.5         200
+	//	GET /openai/v1/models/openai.gpt-5.5  404
+	//
+	// Addressing the catalogue at the operation route was meant to stop
+	// discovery and the calls it discovers for from disagreeing about the URL.
+	// The route they disagree about has no catalogue at all, so that reading
+	// 404'd every model list and every connection test on the two /openai/v1
+	// Mantle profiles — which is how it was found.
+	//
+	// The disagreement cannot be removed here, because it belongs to the
+	// service: Mantle lists the account's models once and serves each of them
+	// from exactly one route, and the list does not say which. So a profile
+	// pinned to /openai/v1 enumerates models that route will refuse. What keeps
+	// that from being silent is the upstream itself — a model addressed on the
+	// wrong route is refused with "isn't supported on this route", never served
+	// by a fallback — and a connection test passing here means the model exists
+	// on the account, not that this route serves it.
 	endpoint.Path = versionedPath(basePath, "models")
 	return endpoint, nil
 }
@@ -600,7 +621,7 @@ func validAzureDeployment(value string) bool {
 // parameter was refused without saying which, and the operator is left to bisect
 // a request they did not write.
 func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
-	result := &provider.Error{StatusCode: status, Message: "provider rejected request", ProviderCode: refusal.Code}
+	result := &provider.Error{StatusCode: status, ProviderCode: refusal.Code}
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		result.Class = provider.ErrorAuthentication
@@ -627,10 +648,31 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 	default:
 		result.Class = provider.ErrorBadRequest
 	}
-	if refusal.Message != "" {
-		result.Message = fmt.Sprintf("provider error (%d): %s", status, refusal.Message)
-	}
+	result.Message = fmt.Sprintf("provider error (%d): %s", status, refusalSentence(refusal))
 	return result
+}
+
+// refusalSentence is the part of the message after the status code. When the
+// upstream wrote a sentence it is quoted verbatim; when it did not, the stand-in
+// says which silence this was, because the two send an operator to different
+// places. A body that is not an OpenAI-shaped envelope usually means the thing
+// answering is not the provider API — a proxy, a CDN, or a path that does not
+// exist upstream — while a well-formed envelope with an empty message means the
+// provider itself declined to say why.
+//
+// The stand-in must never borrow another status code's name. Reading back
+// "provider error (404): Bad Gateway" costs an operator the one fact the line
+// carried, because the status says the route was not found and the sentence
+// says a gateway failed, and only one of them is true.
+func refusalSentence(refusal upstreamRefusal) string {
+	switch {
+	case refusal.Message != "":
+		return refusal.Message
+	case refusal.Unreadable:
+		return "upstream sent no OpenAI-shaped error body"
+	default:
+		return "upstream sent no error message"
+	}
 }
 
 // upstreamRefusal is the machine-readable part of an OpenAI-shaped error body,
@@ -638,16 +680,22 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 type upstreamRefusal struct {
 	Message string
 	Code    string
+	// Unreadable records that the body could not be parsed as an OpenAI error
+	// envelope at all, as opposed to parsing into one that carried no sentence.
+	// Only the message the upstream actually wrote belongs in Message, so that a
+	// stand-in Halro authored can never be mistaken for something a provider
+	// said.
+	Unreadable bool
 }
 
 func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	payload, err := io.ReadAll(io.LimitReader(reader, 4096))
 	if err != nil {
-		return upstreamRefusal{}
+		return upstreamRefusal{Unreadable: true}
 	}
 	var envelope openaiapi.ErrorEnvelope
 	if json.Unmarshal(payload, &envelope) != nil {
-		return upstreamRefusal{Message: http.StatusText(http.StatusBadGateway)}
+		return upstreamRefusal{Unreadable: true}
 	}
 	refusal := upstreamRefusal{Message: envelope.Error.Message, Code: strings.TrimSpace(envelope.Error.Code)}
 	if refusal.Code == "" {
@@ -662,9 +710,12 @@ func limitedErrorMessage(reader io.Reader) upstreamRefusal {
 	if param := strings.TrimSpace(pointerValue(envelope.Error.Param)); param != "" && refusal.Code != "" {
 		refusal.Code += ":" + param
 	}
-	if refusal.Message == "" {
-		refusal.Message = http.StatusText(http.StatusBadGateway)
-	}
+	// Narrowed where it is born. The code reaches a log attribute, a durable
+	// probe result and a console cell, and every one of those inherits whatever
+	// this returns — an upstream that answers with a wall of text, or with the
+	// credential it has just rejected, would otherwise be writing it into all
+	// three. Bounding it here means no consumer has to remember to.
+	refusal.Code = provider.SafeProviderIdentifier(refusal.Code)
 	return refusal
 }
 

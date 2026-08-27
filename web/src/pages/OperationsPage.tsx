@@ -332,9 +332,9 @@ function AlertForm({
       onClose={onClose}
     >
       <form onSubmit={submit} autoComplete="off">
-        <Field label={t("operations.name")}><input data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label={t("operations.name")}><input autoComplete="off" data-modal-initial value={name} onChange={(event) => setName(event.target.value)} /></Field>
         <Field label={t("operations.url")} hint={t("operations.urlHint")}>
-          <input type="url" inputMode="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://hooks.example.com/halro" />
+          <input autoComplete="off" type="url" inputMode="url" value={url} onChange={(event) => setURL(event.target.value)} placeholder="https://hooks.example.com/halro" />
         </Field>
         <Field label={t("operations.header")}>
           <select value={header} disabled={removeSecret} onChange={(event) => setHeader(event.target.value)}>

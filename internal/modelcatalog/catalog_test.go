@@ -729,6 +729,141 @@ func TestTheMantleModelIsCoveredWithBedrocksOwnNumbers(t *testing.T) {
 	}
 }
 
+// The route is a property of the profile and cannot be read off the identifier,
+// so a Mantle model has to appear under its own route's profile and under no
+// other. Addressed on the wrong route the upstream refuses it by name; a catalog
+// that covered both would be offering a deployment that cannot work.
+func TestMantleModelsAreCoveredOnlyOnTheirOwnRoute(t *testing.T) {
+	catalog := Builtin()
+	covered := func(profile domain.ProviderProfileID, model string) bool {
+		_, ok := catalog.Lookup(Key{ProviderType: domain.ProviderBedrock, Profile: profile, Model: model})
+		return ok
+	}
+	for _, test := range []struct {
+		model         string
+		chat, notChat domain.ProviderProfileID
+	}{
+		// The identifier points the wrong way in both directions: an openai.*
+		// model on the default route, a google.* one on the OpenAI route.
+		{"openai.gpt-oss-20b", domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat},
+		{"google.gemma-3-27b-it", domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat},
+		{"google.gemma-4-31b", domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleChat},
+		{"xai.grok-4.3", domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleChat},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			if !covered(test.chat, test.model) {
+				t.Errorf("%s is not covered on the route that serves it", test.model)
+			}
+			if covered(test.notChat, test.model) {
+				t.Errorf("%s is covered on a route that refuses it", test.model)
+			}
+		})
+	}
+	// Responses is measured per model, not inherited from the route: two members
+	// of one family serve it and their two safeguard siblings do not.
+	for model, serves := range map[string]bool{
+		"openai.gpt-oss-20b":            true,
+		"openai.gpt-oss-120b":           true,
+		"openai.gpt-oss-safeguard-20b":  false,
+		"openai.gpt-oss-safeguard-120b": false,
+	} {
+		if got := covered(domain.ProfileBedrockMantleResponses, model); got != serves {
+			t.Errorf("%s covered on the Responses profile = %v, want %v", model, got, serves)
+		}
+	}
+	// Claude reaches Mantle through the Anthropic Messages profile only.
+	if !covered(domain.ProfileBedrockMantleAnthropicMessages, "anthropic.claude-haiku-4-5") {
+		t.Error("anthropic.claude-haiku-4-5 is not covered on the Anthropic Messages profile")
+	}
+	if covered(domain.ProfileBedrockMantleChat, "anthropic.claude-haiku-4-5") {
+		t.Error("anthropic.claude-haiku-4-5 is covered on an OpenAI-shaped route that does not serve it")
+	}
+}
+
+// The 50 identifiers Bedrock Mantle listed for a real account on 2026-08-25,
+// read from GET /v1/models and sorted. A seeded model that is not on this list
+// is a typo — an entry keyed to a name nothing serves, which resolves as
+// uncovered exactly like having no entry, and says nothing about why.
+var mantleAccountListing = []string{
+	"anthropic.claude-haiku-4-5",
+	"deepseek.v3.1", "deepseek.v3.2",
+	"google.gemma-3-12b-it", "google.gemma-3-27b-it", "google.gemma-3-4b-it",
+	"google.gemma-4-26b-a4b", "google.gemma-4-31b", "google.gemma-4-e2b",
+	"minimax.minimax-m2", "minimax.minimax-m2.1", "minimax.minimax-m2.5",
+	"mistral.devstral-2-123b", "mistral.magistral-small-2509",
+	"mistral.ministral-3-14b-instruct", "mistral.ministral-3-3b-instruct", "mistral.ministral-3-8b-instruct",
+	"mistral.mistral-large-3-675b-instruct",
+	"mistral.voxtral-mini-3b-2507", "mistral.voxtral-small-24b-2507",
+	"moonshotai.kimi-k2-thinking", "moonshotai.kimi-k2.5",
+	"nvidia.nemotron-nano-12b-v2", "nvidia.nemotron-nano-3-30b", "nvidia.nemotron-nano-9b-v2",
+	"nvidia.nemotron-super-3-120b",
+	"openai.gpt-5.4", "openai.gpt-5.4-2026-03-05", "openai.gpt-5.5", "openai.gpt-5.5-2026-04-23",
+	"openai.gpt-5.6-luna", "openai.gpt-5.6-sol", "openai.gpt-5.6-terra",
+	"openai.gpt-oss-120b", "openai.gpt-oss-20b",
+	"openai.gpt-oss-safeguard-120b", "openai.gpt-oss-safeguard-20b",
+	"qwen.qwen3-235b-a22b-2507", "qwen.qwen3-32b",
+	"qwen.qwen3-coder-30b-a3b-instruct", "qwen.qwen3-coder-480b-a35b-instruct", "qwen.qwen3-coder-next",
+	"qwen.qwen3-next-80b-a3b-instruct", "qwen.qwen3-vl-235b-a22b-instruct",
+	"writer.palmyra-vision-7b",
+	"xai.grok-4.3",
+	"zai.glm-4.6", "zai.glm-4.7", "zai.glm-4.7-flash", "zai.glm-5",
+}
+
+// Both directions of the reconciliation, because each catches a different
+// mistake: a seeded name absent from the listing is a typo, and a listed name
+// absent from the catalog is a model an operator has to declare by hand. The
+// second is allowed to happen — but only on purpose, and only where the reason
+// is written down. zai.glm-4.6 is the one such model: the console lists no card
+// for it, so it has no window to record.
+func TestSeededMantleModelsReconcileWithTheAccountListing(t *testing.T) {
+	listed := make(map[string]bool, len(mantleAccountListing))
+	for _, model := range mantleAccountListing {
+		listed[model] = true
+	}
+	seeded := map[string]bool{}
+	for _, entry := range Builtin().Entries() {
+		if !domain.IsBedrockMantleProfile(entry.Key.Profile) {
+			continue
+		}
+		seeded[entry.Key.Model] = true
+		if !listed[entry.Key.Model] {
+			t.Errorf("%s is seeded but the account lists no such model", entry.Key.Model)
+		}
+	}
+	for _, model := range mantleAccountListing {
+		if seeded[model] || model == "zai.glm-4.6" {
+			continue
+		}
+		t.Errorf("%s is served by the account and covered by no entry", model)
+	}
+	if seeded["zai.glm-4.6"] {
+		t.Error("zai.glm-4.6 is seeded; it has no published window, so record one before covering it")
+	}
+}
+
+// Every seeded Mantle model but gpt-5.5 claims the two operations the matrix run
+// measured and nothing else. The ceiling permits tools, JSON mode, vision,
+// developer role and reasoning; none of them was exercised per model, and a
+// claim nobody checked is the one thing this catalog must not ship.
+func TestSeededMantleModelsClaimOnlyWhatWasMeasured(t *testing.T) {
+	for _, entry := range Builtin().Entries() {
+		if !domain.IsBedrockMantleProfile(entry.Key.Profile) || entry.Key.Model == "openai.gpt-5.5" {
+			continue
+		}
+		capabilities := entry.Capabilities
+		if !capabilities.Chat || !capabilities.Streaming {
+			t.Errorf("%s claims neither chat nor streaming", entry.Key.Model)
+		}
+		if capabilities.Tools || capabilities.JSONMode || capabilities.Vision ||
+			capabilities.DeveloperRole || capabilities.Reasoning || capabilities.StreamUsage {
+			t.Errorf("%s on %s claims an unmeasured capability: %#v", entry.Key.Model, entry.Key.Profile, capabilities)
+		}
+		if capabilities.MaxContextTokens <= 0 {
+			t.Errorf("%s has no context window", entry.Key.Model)
+		}
+	}
+}
+
 func TestOnlyTheDeepSeekVisionModelClaimsVision(t *testing.T) {
 	catalog := Builtin()
 	for model, want := range map[string]bool{
@@ -745,5 +880,46 @@ func TestOnlyTheDeepSeekVisionModelClaimsVision(t *testing.T) {
 		if entry.Capabilities.Vision != want {
 			t.Fatalf("%s vision = %v, want %v", model, entry.Capabilities.Vision, want)
 		}
+	}
+}
+
+// The console told an operator that a model the catalog lists is "not in the
+// catalogue", because the only question ever asked of it was whether the
+// provider's own bindings covered the model. `deepseek.v3.1` is listed under
+// the Mantle chat interfaces; a provider bound only to the OpenAI-shaped ones
+// resolved it to nothing and offered a billable detection call to decide
+// something already written down.
+func TestProfilesCoveringAnswersWhichInterfaceListsAModel(t *testing.T) {
+	catalog := Builtin()
+	profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "deepseek.v3.1")
+	if len(profiles) == 0 {
+		t.Fatal("a model the builtin catalog lists was reported as covered by nothing")
+	}
+	if !slices.Contains(profiles, domain.ProfileBedrockMantleChat) {
+		t.Fatalf("the interface serving the model was not named: %v", profiles)
+	}
+	if slices.Contains(profiles, domain.ProfileBedrockMantleOpenAIChat) {
+		t.Fatalf("an interface that does not serve the model was named: %v", profiles)
+	}
+	if !slices.IsSorted(profiles) {
+		t.Fatalf("profiles were not returned in a stable order: %v", profiles)
+	}
+}
+
+// Exact on the model, like Lookup. A prefix match would promote an unknown
+// future model to an interface nobody has claimed serves it — which is the
+// guess the whole catalog exists to avoid.
+func TestProfilesCoveringDoesNotMatchOnAPrefix(t *testing.T) {
+	catalog := Builtin()
+	if profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "deepseek.v3"); len(profiles) != 0 {
+		t.Fatalf("a prefix matched a listed model: %v", profiles)
+	}
+	if profiles := catalog.ProfilesCovering(domain.ProviderBedrock, domain.TargetModelID, "no.such.model"); len(profiles) != 0 {
+		t.Fatalf("an unlisted model was reported as covered: %v", profiles)
+	}
+	// Provider type is part of the question: the same name under a different
+	// upstream is a different model.
+	if profiles := catalog.ProfilesCovering(domain.ProviderOpenAI, domain.TargetModelID, "deepseek.v3.1"); len(profiles) != 0 {
+		t.Fatalf("a model was reported as covered under the wrong provider type: %v", profiles)
 	}
 }

@@ -254,6 +254,41 @@ export function useDirty(values: Record<string, unknown>): boolean {
   return Object.keys(values).some((key) => values[key] !== initial.current[key]);
 }
 
+// While a dialog is open the page behind it must not scroll. Two things move a
+// page: the wheel over the backdrop, and the wheel over a panel that has already
+// hit its own end — the browser hands the leftover distance to the nearest
+// scrollable ancestor, which is the document. Holding the document still answers
+// both, and .modal's own overscroll-behavior keeps the panel from passing its
+// leftover along in the first place.
+//
+// The count is what makes stacking safe: the price form opens over the details
+// drawer, and its close must not hand scrolling back while the drawer is still up.
+let openDialogs = 0;
+let restoreOverflow = "";
+let restorePadding = "";
+
+function holdDocumentStill(): () => void {
+  const root = document.documentElement;
+  if (openDialogs === 0) {
+    restoreOverflow = root.style.overflowY;
+    restorePadding = root.style.paddingRight;
+    // The stylesheet reserves a stable scrollbar gutter, so this is normally
+    // zero. It is measured rather than assumed, because a browser that does
+    // take the scrollbar away would otherwise shift the whole page sideways at
+    // the moment a dialog opens.
+    const gutter = window.innerWidth - root.clientWidth;
+    root.style.overflowY = "hidden";
+    if (gutter > 0) root.style.paddingRight = `${gutter}px`;
+  }
+  openDialogs += 1;
+  return () => {
+    openDialogs -= 1;
+    if (openDialogs > 0) return;
+    root.style.overflowY = restoreOverflow;
+    root.style.paddingRight = restorePadding;
+  };
+}
+
 export function Modal({
   title,
   children,
@@ -261,6 +296,12 @@ export function Modal({
   dangerous = false,
   closeDisabled = false,
   wide = false,
+  // A drawer is the same dialog — portal, focus trap, Escape, backdrop — moored
+  // to the right edge at full height instead of centred. It is the shape for
+  // reading about the thing still visible behind it: the card stays where the
+  // operator left it, and closing returns them to it rather than to a list that
+  // reflowed while a tile was expanded.
+  drawer = false,
   describedBy,
   dirty = false,
 }: {
@@ -270,6 +311,7 @@ export function Modal({
   dangerous?: boolean;
   closeDisabled?: boolean;
   wide?: boolean;
+  drawer?: boolean;
   describedBy?: string;
   dirty?: boolean;
 }) {
@@ -305,6 +347,7 @@ export function Modal({
     container.querySelector<HTMLElement>(selector)?.focus();
   }, [confirmingDiscard]);
   useEffect(() => {
+    const releaseScroll = holdDocumentStill();
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const container = dialog.current;
     // React applies autoFocus during commit, before this effect. Taking the focus back
@@ -313,6 +356,13 @@ export function Modal({
     if (initial) initial.focus();
     else if (container && !container.contains(document.activeElement)) container.focus();
     const onKeyDown = (event: KeyboardEvent) => {
+      // Dialogs stack — a price form opens over the details drawer — and every
+      // one of them listens on the document. Only the top dialog may answer a
+      // key, or Escape closes the drawer underneath the form being typed into
+      // and Tab trades focus between two traps.
+      const backdrops = document.querySelectorAll(".modal-backdrop");
+      const top = backdrops[backdrops.length - 1];
+      if (top && container && !top.contains(container)) return;
       // Escape means "cancel", never "confirm", so a dangerous dialog honours it too.
       // Only a modal that must not be dismissed at all (closeDisabled) ignores it.
       if (event.key === "Escape" && !closeDisabledRef.current) requestCloseRef.current();
@@ -330,13 +380,14 @@ export function Modal({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      releaseScroll();
       previouslyFocused?.focus();
     };
   }, []);
   return createPortal(
-    <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!dangerous && !closeDisabled) requestClose(); }}>
+    <div className={`modal-backdrop ${drawer ? "drawer-backdrop" : ""}`} role="presentation" onMouseDown={() => { if (!dangerous && !closeDisabled) requestClose(); }}>
       <section
-        className={`modal ${dangerous ? "dangerous" : ""} ${wide ? "wide" : ""} ${confirmingDiscard ? "discarding" : ""}`}
+        className={`modal ${drawer ? "drawer" : ""} ${dangerous ? "dangerous" : ""} ${wide ? "wide" : ""} ${confirmingDiscard ? "discarding" : ""}`}
         role={dangerous ? "alertdialog" : "dialog"}
         aria-modal="true"
         aria-labelledby={titleID}
@@ -554,10 +605,18 @@ export function OverflowMenu({ label, children }: { label: string; children: Rea
       menu.open = false;
       if (restoreFocus) menu.querySelector<HTMLElement>("summary")?.focus();
     };
+    // A dialog opened from inside this menu is above it, and answering keys or
+    // pointer events under a dialog is what broke the way out of one: Escape
+    // reached both, the menu closed first, and the dialog then restored focus to
+    // a button inside a <details> the UA had just hidden — so focus landed on
+    // <body>. Modal draws the same line for the same reason.
+    const dialogIsAbove = () => document.querySelector(".modal-backdrop") !== null;
     const onPointerDown = (event: PointerEvent) => {
+      if (dialogIsAbove()) return;
       if (!details.current?.contains(event.target as Node)) close();
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (dialogIsAbove()) return;
       if (event.key === "Escape") close(true);
     };
     document.addEventListener("pointerdown", onPointerDown);

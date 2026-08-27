@@ -559,20 +559,17 @@ type probeFailure struct {
 	Code      string
 	RequestID string
 	Reason    string
+	// Type names the Go type of a failure that arrived unclassified, and is
+	// empty for every classified one. It exists because the absence of an
+	// upstream status means two different things on those two paths, and
+	// probeFailureAttributes has to tell them apart.
+	Type string
 }
 
 // maxProbeReasonLength bounds the upstream sentence. Provider error bodies are
 // already read under a limit, but the reason reaches a table cell that does not
 // want four kilobytes of it.
 const maxProbeReasonLength = 300
-
-// maxProbeIdentifierLength bounds the two identifiers the upstream names itself
-// by. Both are decoded from an upstream body or header read under a megabyte
-// limit, and both travel into a log line and a console cell; a hostile or
-// misconfigured host answering with a multi-kilobyte `error.type` should not be
-// able to write it to disk. Real values are short — `AccessDeniedException`,
-// a request UUID.
-const maxProbeIdentifierLength = 120
 
 // persistedProbeClass is the class a failed connection test stores.
 //
@@ -613,9 +610,14 @@ func describeProbeFailure(err error) probeFailure {
 	if errors.As(err, &classified) {
 		failure.Class = classified.Class
 		failure.Status = classified.StatusCode
-		failure.Code = probeIdentifier(classified.ProviderCode)
-		failure.RequestID = probeIdentifier(classified.ProviderRequestID)
+		failure.Code = provider.SafeProviderIdentifier(classified.ProviderCode)
+		failure.RequestID = provider.SafeProviderIdentifier(classified.ProviderRequestID)
+		return failure
 	}
+	// Nothing classified this, so nothing established which side of the
+	// boundary wrote the sentence it carries. The type is recorded instead, and
+	// the log reads it in place of the text.
+	failure.Type = fmt.Sprintf("%T", err)
 	return failure
 }
 
@@ -623,21 +625,6 @@ func describeProbeFailure(err error) probeFailure {
 // outside the shape real provider codes and request IDs take is dropped rather
 // than trimmed, because a value that is not one of those is not an identifier
 // and has no business in a log attribute.
-func probeIdentifier(value string) string {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" || len(trimmed) > maxProbeIdentifierLength {
-		return ""
-	}
-	for _, r := range trimmed {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.' || r == '_' || r == '-' || r == ':':
-		default:
-			return ""
-		}
-	}
-	return trimmed
-}
 
 // probeReason unwraps the cause a provider error carries. provider.Error.Error
 // returns its own headline and stops there, so a transport refusal arrived as
@@ -708,25 +695,44 @@ func (r *Runtime) logProbeResultWriteFailure(kind, id string, err error) {
 
 // logProbeFailure records a connection test the operator ran and the upstream
 // refused. Without it the only trace of a failed test is an audit action name,
-// which says a test failed and never why.
-//
-// What it does not write is the upstream's own sentence. That text is a provider
-// response body, which this repo does not persist anywhere outside its one-time
-// response — the operator who ran the test still reads it in the reply, where it
-// lives for one request rather than on disk. A pattern denylist is not a basis
-// for writing an upstream body to a log file: it knows the credential formats it
-// was told about, and the one thing an upstream is most likely to echo is the
-// key it just refused. A refusal Halro produced itself carries no provider body
-// and is the case the sentence was added for, so that one is still logged.
+// which says a test failed and never why. What may be said about the failure
+// itself is probeFailureAttributes' decision, not this function's.
 func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailure, latencyMS int64) {
-	attributes := []any{
-		kind + "_id", id,
-		"error_class", string(failure.Class),
-		"latency_ms", latencyMS,
-	}
+	attributes := []any{kind + "_id", id, "latency_ms", latencyMS}
 	if bindingID != "" {
 		attributes = append(attributes, "binding_id", bindingID)
 	}
+	r.logger.Warn(kind+" connection test failed", append(attributes, probeFailureAttributes(failure)...)...)
+}
+
+// probeFailureAttributes is everything about a failed probe that may be written
+// to the process log, and it is deliberately the only place that decides so —
+// every probe, manual or periodic, logs through here.
+//
+// What it leaves out is the upstream's own sentence. That text is a provider
+// response body, which this repo does not persist anywhere outside its one-time
+// response — the operator who ran a test still reads it in the reply, and the
+// console reads it redacted through probeFailure.Reason, both of which live for
+// one request rather than on disk. A pattern denylist is not a basis for writing
+// an upstream body to a log file: it knows the credential formats it was told
+// about, and the one thing an upstream is most likely to echo is the key it just
+// refused.
+//
+// Reason is admitted only when no response came back at all. With no status
+// there was no upstream body to quote, so the sentence is one Halro wrote — a
+// dial failure, a refusal to probe — and withholding it would leave the line
+// with nothing but a class.
+//
+// That inference needs a classified error to stand on. An unclassified one
+// never went through the classification that decides what may be said about it,
+// so it is either Halro's own error or an adapter that did not honour the
+// contract, and from here the two are indistinguishable — one of them can be
+// holding a response body. Its Go type goes in and its text stays out: a type
+// name is produced by the code rather than by an upstream, and it answers what
+// this line is actually asked, which is what produced a failure nothing
+// classified.
+func probeFailureAttributes(failure probeFailure) []any {
+	attributes := []any{"error_class", string(failure.Class)}
 	if failure.Status > 0 {
 		attributes = append(attributes, "provider_status", failure.Status)
 	}
@@ -736,10 +742,13 @@ func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailu
 	if failure.RequestID != "" {
 		attributes = append(attributes, "provider_request_id", failure.RequestID)
 	}
+	if failure.Type != "" {
+		return append(attributes, "error_type", failure.Type)
+	}
 	if failure.Reason != "" && failure.Status == 0 {
 		attributes = append(attributes, "reason", failure.Reason)
 	}
-	r.logger.Warn(kind+" connection test failed", attributes...)
+	return attributes
 }
 
 func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, routes []domain.Route) string {

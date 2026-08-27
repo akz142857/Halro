@@ -33,7 +33,7 @@ export function RuntimeSettingsForm({ settings }: { settings: { health_probe_int
       <form className="settings-form runtime-form" aria-busy={mutation.isPending} onSubmit={submit}>
         <div className="runtime-editable">
           <Field label={t("settings.probeInterval")} hint={t("settings.probeHint")}>
-            <input type="number" min="10" max="3600" required value={interval} onChange={(event) => { mutation.reset(); setInterval(Number(event.target.value)); }} />
+            <input autoComplete="off" type="number" min="10" max="3600" required value={interval} onChange={(event) => { mutation.reset(); setInterval(Number(event.target.value)); }} />
           </Field>
           {mutation.isError && <ErrorState error={mutation.error} />}
           <div className="form-actions"><button className="button primary" disabled={readOnly || mutation.isPending || interval === settings.health_probe_interval_seconds}>{mutation.isPending ? t("settings.saving") : t("settings.saveRuntime")}</button></div>

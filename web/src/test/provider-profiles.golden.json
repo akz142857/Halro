@@ -28,6 +28,70 @@
       "chat"
     ]
   },
+  "capability_modalities": [
+    {
+      "capabilities": [
+        "chat",
+        "embeddings",
+        "moderations",
+        "images",
+        "speech",
+        "rerank",
+        "async_generate"
+      ],
+      "direction": "input",
+      "modality": "text"
+    },
+    {
+      "capabilities": [
+        "vision"
+      ],
+      "direction": "input",
+      "modality": "image"
+    },
+    {
+      "capabilities": [
+        "fetched_image"
+      ],
+      "direction": "input",
+      "modality": "fetched_image"
+    },
+    {
+      "capabilities": [
+        "transcriptions"
+      ],
+      "direction": "input",
+      "modality": "audio"
+    },
+    {
+      "capabilities": [
+        "chat"
+      ],
+      "direction": "output",
+      "modality": "text"
+    },
+    {
+      "capabilities": [
+        "images"
+      ],
+      "direction": "output",
+      "modality": "image"
+    },
+    {
+      "capabilities": [
+        "speech"
+      ],
+      "direction": "output",
+      "modality": "audio"
+    },
+    {
+      "capabilities": [
+        "embeddings"
+      ],
+      "direction": "output",
+      "modality": "embedding"
+    }
+  ],
   "capability_names": [
     "chat",
     "streaming",
@@ -51,6 +115,19 @@
   ],
   "capability_opt_in_warnings": [
     "provider_executed_tools"
+  ],
+  "non_modal_capabilities": [
+    "streaming",
+    "tools",
+    "json_mode",
+    "developer_role",
+    "reasoning",
+    "stream_usage",
+    "provider_executed_tools",
+    "files",
+    "batches",
+    "max_context_tokens",
+    "max_output_tokens"
   ],
   "provider_types": [
     {

@@ -433,6 +433,16 @@ export interface ProviderProfilesCatalog {
    * never passes through Halro's transport. The wording is this bundle's; which
    * capabilities need it is not. */
   capability_opt_in_warnings: string[];
+  /** Halro's capability vocabulary rendered as the input/output view a model
+   * catalogue uses. Served rather than derived in the browser: the mapping is
+   * not obvious (transcriptions is an operation whose input is audio, speech is
+   * text-to-audio and so has no input row of its own), and a second copy here
+   * would be a second thing to keep true. Capabilities within a row are any-of. */
+  capability_modalities: { direction: "input" | "output"; modality: string; capabilities: string[] }[];
+  /** Capabilities that describe the protocol rather than the data, listed rather
+   * than left over — so a modality view can say "these are not missing, they are
+   * not modalities" instead of silently omitting them. */
+  non_modal_capabilities: string[];
   provider_types: ProviderTypeDescriptor[];
 }
 
@@ -489,7 +499,7 @@ export type ModelCapabilitySource =
 
 export type AvailabilityState = "available" | "unverified" | "unavailable";
 export type TargetLifecycle = "active" | "deprecated" | "unknown";
-export type ResolutionState = "resolved" | "unknown" | "conflicting" | "no_variant";
+export type ResolutionState = "resolved" | "unknown" | "conflicting" | "no_variant" | "covered_elsewhere";
 export type ClaimStatus = "supported" | "unsupported" | "unknown" | "conflicting";
 
 export interface InvocationTargetScopeKey {
@@ -547,6 +557,8 @@ export interface DeploymentVariant {
 export interface ResolvedInvocationTarget extends InvocationTargetDescriptor {
   variants: DeploymentVariant[];
   resolution_state: ResolutionState;
+  /** Interfaces the catalogue lists this model under, when none of them is bound here. */
+  covered_by_profiles?: string[];
   resolution_revision: string;
 }
 
@@ -576,12 +588,14 @@ export interface InvocationTargetCatalog {
   catalog_revision: string;
   provider_revision: number;
   degraded_bindings?: DegradedBinding[];
+  /** The catalogue was never fetched or the copy expired; reading never dials. */
+  not_cached?: boolean;
   fetched_at: string;
   expires_at: string;
   cached: boolean;
 }
 
-export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled";
+export type CapabilityProbeStatus = "supported" | "unsupported" | "inconclusive" | "unavailable" | "unauthorized" | "not_probed" | "canceled" | "assertion_failed";
 
 export interface DetectionBindingCandidate {
   binding_id: string;
@@ -615,7 +629,7 @@ export interface ModelCapabilityDetection {
   completed_at?: string;
   expires_at?: string;
   cancel_requested_at?: string;
-  capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; probe_kind: string }>;
+  capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; provider_status?: number; provider_code?: string; probe_kind: string }>;
   recommended_capabilities: ProviderCapabilities;
   selection_revision?: string;
   revision: number;
@@ -703,9 +717,19 @@ export interface Deployment {
 	pricing_quarantined?: boolean;
 	pricing_quarantine_reason?: string;
   capability_review: CapabilityReview;
+  /** What the active probe last said. `not_probed` is its own state: a
+   * deployment stays eligible for routing until a probe has actually failed. */
+  probe?: DeploymentProbe;
   /** Capabilities the operator switched off, kept apart from the ones nothing
    * ever established. */
   operator_disabled?: string[];
+}
+
+export interface DeploymentProbe {
+  state: "healthy" | "unhealthy" | "not_probed";
+  observed_at?: string;
+  /** Classified only — never the upstream's sentence about the request. */
+  error_class?: string;
 }
 
 export type DeploymentTargetKind =

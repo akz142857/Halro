@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, api } from "../api";
 import {
   ConfirmButton,
@@ -17,15 +17,19 @@ import {
   useTestFailureReason,
   type ReauthValues,
 } from "../components";
-import { money, useInstantFormatter } from "../format";
+import { exactNumber, formatAge, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolvedInvocationTarget } from "../types";
+import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolutionState, ResolvedInvocationTarget } from "../types";
 import { interfaceCeiling, profileRequestConstraints, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
+import { ModalityMarks } from "../ModalityMarks";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
+import { deploymentCondition, deploymentNeedsAttention, recordedTestState } from "./deploymentCondition";
+import { localizedError } from "../i18n/errors";
 
 export function DeploymentsPage() {
   const { t } = useTranslation();
@@ -34,6 +38,9 @@ export function DeploymentsPage() {
   const [replacement, setReplacement] = useState<Deployment>();
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get("q") ?? "");
   const [status, setStatus] = useState<"all" | "enabled" | "disabled" | "attention">("all");
+  // What the grid's single live region is currently saying. Cards publish here
+  // rather than each owning a region of its own.
+  const [announcement, setAnnouncement] = useState("");
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
@@ -58,11 +65,10 @@ export function DeploymentsPage() {
         providerNames.get(deployment.provider_id) || deployment.provider_id,
         deployment.region,
       ].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
-      const testIsCurrent = deployment.last_test_status === "healthy" && deployment.last_test_revision === deployment.revision;
       const matchesStatus = status === "all"
         || (status === "enabled" && deployment.enabled)
         || (status === "disabled" && !deployment.enabled)
-        || (status === "attention" && (!testIsCurrent || deployment.last_test_status === "unhealthy"));
+        || (status === "attention" && deploymentNeedsAttention(deployment));
       return matchesQuery && matchesStatus;
     });
   }, [deployments.data?.items, providerNames, query, status]);
@@ -85,7 +91,7 @@ export function DeploymentsPage() {
           <div className="deployment-toolbar" role="search" aria-label={t("deployments.filters")}>
             <label className="deployment-search">
               <span>{t("deployments.search")}</span>
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("deployments.searchPlaceholder")} />
+              <input autoComplete="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("deployments.searchPlaceholder")} />
             </label>
             <label>
               <span>{t("deployments.statusFilter")}</span>
@@ -99,18 +105,27 @@ export function DeploymentsPage() {
             <span className="deployment-result-count" role="status">{t("deployments.resultCount", { visible: filteredDeployments.length, total: deployments.data.items.length })}</span>
           </div>
           {filteredDeployments.length ? (
-            filteredDeployments.map((deployment, index) => (
-              <DeploymentRow
-                key={deployment.id}
-                deployment={deployment}
-                listIndex={index}
-                providerName={providerNames.get(deployment.provider_id) || deployment.provider_id}
-                activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
-                onEdit={() => setEditing(deployment)}
-                onReplace={() => { setReplacement(deployment); setEditing("new"); }}
-              />
-            ))
+            <div className="resource-card-grid deployment-grid">
+              {filteredDeployments.map((deployment, index) => (
+                <DeploymentRow
+                  key={deployment.id}
+                  deployment={deployment}
+                  listIndex={index}
+                  providerName={providerNames.get(deployment.provider_id) || deployment.provider_id}
+                  activeRouteCount={activeRouteCounts.get(deployment.id) ?? 0}
+                  onEdit={() => setEditing(deployment)}
+                  onReplace={() => { setReplacement(deployment); setEditing("new"); }}
+                  onAnnounce={setAnnouncement}
+                />
+              ))}
+            </div>
           ) : <EmptyState title={t("deployments.noMatches")}>{t("deployments.noMatchesDescription")}</EmptyState>}
+          {/* One live region for the whole grid, naming the deployment it is
+              speaking about. A region per card is fifty registered regions that
+              announce a bare "失败" with no way to tell which card produced
+              it — and announce again whenever a filter keystroke remounts
+              them. */}
+          <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
         </section>
       )}
       {editing && providers.isSuccess && (
@@ -125,6 +140,59 @@ export function DeploymentsPage() {
   );
 }
 
+// Token counts on a card are read at a glance, so they are abbreviated the way
+// every model catalogue abbreviates them. The exact figure stays available in
+// the details drawer, which is where an operator goes to check one.
+function tokenCount(tokens: number) {
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`;
+  return String(tokens);
+}
+
+/*
+ * Enable and disable, as one button in the card's action bar.
+ *
+ * The button is named for what a click does, not for the state it leaves — the
+ * state is the word in the card's head, which reports and does not act. One
+ * button rather than two, because only one of the pair is ever available and a
+ * greyed-out twin beside it says nothing the label does not.
+ *
+ * Neither direction confirms. Disabling is refused outright while any enabled
+ * route still points at the deployment (see routeBlocked), so what remains
+ * reachable here is a deployment nothing routes through, and one click undoes
+ * one click. Enabling wants a test of the current revision, and a blocked
+ * button states why in the accessibility tree as well as its tooltip, because
+ * a disabled button carries no tooltip in some browsers and is skipped in tab
+ * order.
+ */
+function DeploymentStateToggle({ name, enabled, pending, blockedReason, onToggle }: {
+  name: string;
+  enabled: boolean;
+  pending: boolean;
+  blockedReason?: string;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
+  const reasonID = useId();
+  const reason = readOnly ? t("navigation.readOnlyAction") : blockedReason;
+  const blocked = Boolean(reason);
+  return (
+    <>
+      <button
+        type="button"
+        className="button ghost"
+        disabled={blocked || pending}
+        title={blocked ? reason : undefined}
+        aria-describedby={blocked ? reasonID : undefined}
+        aria-label={t(enabled ? "deployments.disableDeployment" : "deployments.enableDeployment", { name })}
+        onClick={onToggle}
+      >{enabled ? t("common.disable") : t("common.enable")}</button>
+      {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
+    </>
+  );
+}
+
 function DeploymentRow({
   deployment,
   listIndex,
@@ -132,6 +200,7 @@ function DeploymentRow({
   activeRouteCount,
   onEdit,
   onReplace,
+  onAnnounce,
 }: {
   deployment: Deployment;
   listIndex: number;
@@ -139,19 +208,26 @@ function DeploymentRow({
   activeRouteCount: number;
   onEdit: () => void;
   onReplace: () => void;
+  /** Publishes into the page's single live region — see the card's test effect. */
+  onAnnounce: (message: string) => void;
 }) {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const readOnly = useIsReadOnly();
-  const [expanded, setExpanded] = useState(false);
+  const nameID = useId();
+  const conditionID = useId();
+  const [details, setDetails] = useState(false);
   const [pricing, setPricing] = useState(false);
 	const [confirmingRestore, setConfirmingRestore] = useState(false);
   const queryClient = useQueryClient();
-  // The collapsed price column is worth having, but a fifty-row page must not
-  // turn into fifty simultaneous price reads — each one runs a lifecycle
-  // derivation server-side. Rows load in bounded batches instead, and an
-  // expanded row jumps its queue because the operator is looking at it.
-  const priceSlotReady = useDeferredSlot(expanded ? 0 : priceFetchDelay(listIndex));
+  // The card's price fact is worth having, but a fifty-card page must not turn
+  // into fifty simultaneous price reads — each one runs a lifecycle derivation
+  // server-side. Cards load in bounded batches instead, and the card whose
+  // details are open jumps the queue because the operator is looking at it.
+  const priceSlotReady = useDeferredSlot(details ? 0 : priceFetchDelay(listIndex));
+  // Cached with staleTime Infinity and shared across every card, so asking per
+  // card costs one fetch for the page rather than one per deployment.
+  const profiles = useProviderProfiles();
   const prices = useQuery({
     queryKey: ["deployment-prices", deployment.id],
     queryFn: () => api.deploymentPrices(deployment.id),
@@ -199,23 +275,12 @@ function DeploymentRow({
       notify({ tone: "success", title: t(deployment.enabled ? "deployments.notifyDisabled" : "deployments.notifyEnabled"), description: deployment.name });
     },
   });
-  // The "no effective price" banner is the failed enable attempt's error, and it
-  // outlives the condition it describes: setting a price refreshes the price
-  // column to "configured" while the dead mutation keeps rendering its blocker,
-  // so the row contradicts itself until the page is reloaded. Drop the error
-  // once the deployment actually has an active price. A price that is only
-  // scheduled leaves the banner up, which is correct — enabling would still be
-  // refused.
-  const priceBlockedEnable = state.error instanceof ApiError && state.error.code === "deployment_price_unavailable";
-  const resetState = state.reset;
-  useEffect(() => {
-    if (priceBlockedEnable && activePrice) resetState();
-  }, [priceBlockedEnable, activePrice, resetState]);
   const capabilities = Object.entries(deployment.capabilities)
     .filter(([, enabled]) => typeof enabled === "boolean" && enabled)
     .map(([name]) => name);
-  const testIsCurrent = deployment.last_test_status === "healthy" && deployment.last_test_revision === deployment.revision;
-  const testFailed = deployment.last_test_status === "unhealthy" && deployment.last_test_revision === deployment.revision;
+  const recordedTest = recordedTestState(deployment);
+  const testIsCurrent = recordedTest === "success";
+  const testFailed = recordedTest === "failure";
   const testState = test.isPending
     ? "running"
     // A test that never reached the store — a 409 on a revision that moved, a
@@ -224,235 +289,347 @@ function DeploymentRow({
     // that just failed.
     : test.isError
       ? "failure"
-      : testFailed
-        ? "failure"
-        : testIsCurrent
-          ? "success"
-          : deployment.last_test_status === "healthy"
-          ? "stale"
-          : "idle";
+      : recordedTest;
   const testFailureReason = useTestFailureReason(test.error, testFailed ? deployment.last_test_error_class : undefined);
-  const evidence = evidenceSummary(deployment.capability_evidence).map((value) => t(`deployments.evidenceValues.${value}`));
+  const probe = deployment.probe;
+  const probeReason = useTestFailureReason(undefined, probe?.state === "unhealthy" ? probe.error_class : undefined);
   const review = deployment.capability_review;
   const routeBlocked = activeRouteCount > 0;
+  const testVerdict = testState === "success" && deployment.last_test_latency_millis !== undefined
+    ? t("testControl.success", { latency: deployment.last_test_latency_millis })
+    : testState === "success" ? t("testControl.successPlain") : t(`testControl.${testState}`);
+  // The card says a price is missing. While the read is still in flight nothing
+  // is missing yet, and saying so then would put a condition on every card for
+  // as long as the batch takes and take it back again.
+  const priceNeedsAttention = !prices.isPending && !activePrice;
+  // The card's one line about itself: the worst thing true of this deployment,
+  // and how much it outranks. See deploymentCondition.ts for the ladder.
+  const condition = deploymentCondition({
+    deployment, testState, priceMissing: priceNeedsAttention, priceUnknown: prices.isError, activeRouteCount,
+  });
+  const conditionAge = formatAge(condition.observedAt);
+  // A classified reason is a sentence, and the line is one clipped row: the
+  // reason is still on the card, starting where the operator is already
+  // reading, and the tooltip carries the part the width cut off. The drawer
+  // keeps the whole of it either way.
+  const conditionDetail = condition.key === "testControl.failure"
+    ? testFailureReason
+    : condition.key === "deployments.probeUnhealthyShort"
+      ? probeReason
+      : condition.key === "deployments.pricingQuarantinedShort"
+        ? deployment.pricing_quarantine_reason
+        : undefined;
+  const conditionText = [t(condition.key, condition.params ?? {}), conditionDetail, conditionAge]
+    .filter(Boolean).join(t("common.dotSeparator"));
+  // A read-only session reads the condition and acts on none of it, so the line
+  // stays text rather than offering a control the server would refuse.
+  const conditionAct = readOnly
+    ? undefined
+    : condition.action === "price"
+      ? () => setPricing(true)
+      : condition.action === "restorePricing"
+        ? () => setConfirmingRestore(true)
+        : condition.action === "retryPrice"
+          ? () => { void prices.refetch(); }
+          : condition.action === "drawer"
+            ? () => setDetails(true)
+            : undefined;
+  // One line of machine facts, in the order an operator checks them. It clips
+  // rather than wraps: a band that can become two lines is what made every card
+  // in a row a different height.
+  const tokenSpec = [
+    deployment.capabilities.max_context_tokens ? tokenCount(deployment.capabilities.max_context_tokens) : "",
+    deployment.capabilities.max_output_tokens ? tokenCount(deployment.capabilities.max_output_tokens) : "",
+  ].filter(Boolean).join("/");
+  // A verdict that arrives while nothing announces it is a click with no
+  // answer. The page owns one live region for the whole grid — fifty cards each
+  // owning one announced anonymously, and announced again on every filter
+  // keystroke that remounted them.
+  const settledTest = useRef(testState);
+  useEffect(() => {
+    if (settledTest.current === "running" && testState !== "running") {
+      onAnnounce(t("deployments.testAnnouncement", { name: deployment.name, verdict: conditionText }));
+    }
+    settledTest.current = testState;
+  }, [testState, conditionText, deployment.name, onAnnounce, t]);
+  // Enable, disable and delete report through the notification channel their
+  // successes already use. A failed mutation is a transient answer to a click,
+  // not a property of the deployment, and rendering it inside the card put a
+  // block below the action bar that broke the one alignment the grid keeps.
+  const stateError = state.error;
+  const removeError = remove.error;
+  useEffect(() => {
+    if (stateError) notify({ tone: "error", title: t("common.requestFailed"), description: localizedError(t, stateError) });
+  }, [stateError, notify, t]);
+  useEffect(() => {
+    if (removeError) notify({ tone: "error", title: t("common.requestFailed"), description: localizedError(t, removeError) });
+  }, [removeError, notify, t]);
+  // Newest first, and cancelled versions stay out: they never took effect and
+  // never will, so they are not part of what this deployment charged.
+  const evidenceOf = (capability: string) => deployment.capability_evidence[capability] ?? "unrecorded";
+  const evidenceKinds = new Set(capabilities.map(evidenceOf));
+  const uniformEvidence = evidenceKinds.size === 1 ? [...evidenceKinds][0] : undefined;
+  const priceTimeline = priceItems
+    .filter((price) => price.status !== "cancelled")
+    .slice()
+    .sort((first, second) => second.effective_from.localeCompare(first.effective_from));
   return (
-    <article id={`deployment-${deployment.id}`} className="deployment-row">
-      <div className="deployment-row-main">
+    <article id={`deployment-${deployment.id}`} className="resource-card" aria-labelledby={nameID}>
+      {/* Slot 1 — who this is. Two lines, always, so slot 2 starts at the same
+          height on every card in the row. */}
+      <div className="resource-card-head">
         <div className="resource-identity">
-          <span><StatusDot ok={deployment.enabled} /><strong>{deployment.name}</strong></span>
-          <small>{providerName}</small>
+          {/* A heading, so a screen reader can walk the grid card by card, and
+              the article's accessible name. Thirty nameless articles were
+              thirty stops that announced nothing. */}
+          <h3 id={nameID}>{deployment.name}</h3>
+          {/* Provider and upstream model are one identity, not two lines: which
+              connection, and which model on it. The label that names the mono
+              string is real text — aria-label on a <code> has no role to attach
+              to and browsers drop it. */}
+          <small>
+            {providerName}
+            {" · "}
+            <span className="sr-only">{t("deployments.upstreamTarget")}{t("common.labelSeparator")}</span>
+            <code title={deployment.provider_model}>{deployment.provider_model}</code>
+          </small>
         </div>
-        <div className="resource-fact deployment-fact-target">
-          <small>{t("deployments.upstreamTarget")}</small>
-          <code>{deployment.provider_model}</code>
-        </div>
-        <div className="resource-fact deployment-fact-concurrency">
-          <small>{t("deployments.concurrency")}</small>
-          <strong>{deployment.max_concurrency || t("deployments.unlimited")}</strong>
-        </div>
-        <div className="resource-fact deployment-fact-routes">
-          <small>{t("deployments.routeDependency")}</small>
-          {activeRouteCount
-            ? <Link className="resource-link" href="/admin/routes">{t("deployments.activeRoutesCompact", { count: activeRouteCount })} →</Link>
-            : <strong>{t("deployments.noActiveRoutes")}</strong>}
-        </div>
-        <div className="resource-fact deployment-fact-price">
-          <small>{t("deployments.priceSetting")}</small>
-          {prices.isPending ? (
-            <span className="deployment-price-value">{t("common.loading")}</span>
-          ) : activePrice ? (
-            <button
-              className="deployment-price-link configured"
-              type="button"
-              aria-label={t("deployments.viewDeploymentPrice", { name: deployment.name })}
-              onClick={() => setExpanded(true)}
-            >{t("deployments.priceConfigured")}</button>
-          ) : prices.isError ? (
-            // Without a way back this cell was a dead end: it neither told an
-            // assistive reader that something failed nor offered the one action
-            // that can fix it.
-            <span className="deployment-price-value" role="alert">
-              <span>{t("deployments.priceUnavailable")}</span>
-              <button className="button ghost" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>
-            </span>
-          ) : (
-            <button
-              className="deployment-price-link missing"
-              type="button"
-              disabled={readOnly}
-              title={readOnly ? t("navigation.readOnlyAction") : t("deployments.priceRequired")}
-              aria-label={t("deployments.setDeploymentPrice", { name: deployment.name })}
-              onClick={() => setPricing(true)}
-            >{t("deployments.priceNotConfigured")}</button>
-          )}
-        </div>
-        <div className="resource-row-state">
-          <small>{t("deployments.status")}</small>
-          <span className={`resource-state ${deployment.enabled ? "enabled" : ""}`}>{deployment.enabled ? t("common.enabled") : t("common.disabled")}</span>
-          {/* A drifted deployment is not routing whatever the enabled flag says,
-              so the state that decides that has to be visible in the row. */}
-          {review && review.state !== "current" && (
-            <small className="capability-review-state" data-state={review.state}>
-              {review.state === "drifted" ? t("deployments.capabilitiesUnsupported") : t("deployments.capabilitiesToReview")}
-            </small>
-          )}
-        </div>
-        <div className="row-actions deployment-compact-actions">
-          {/* Test, enable and create-replacement are writes. ConfirmButton
-              gates itself; these three did not, so a read-only session was
-              shown three controls that would 403 on click. §7.3 also requires a
-              disabled control to say why, so each carries the reason. */}
-          <InlineTestControl state={testState} latency={deployment.last_test_latency_millis} onTest={() => test.mutate()} disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} />
-          <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("common.edit")}</button>
-          <button className="button ghost deployment-expand" aria-expanded={expanded} aria-controls={`deployment-details-${deployment.id}`} onClick={() => setExpanded((value) => !value)}>
-            <span>{expanded ? t("deployments.collapseDetails") : t("deployments.expandDetails")}</span>
-            {/* Reserves the width of the other label so toggling never resizes the row. */}
-            <span aria-hidden="true">{expanded ? t("deployments.expandDetails") : t("deployments.collapseDetails")}</span>
-          </button>
-          {/* The sizer keeps enable and disable rows equally wide so columns line up across the list. */}
-          <span className="deployment-state-toggle">
-            {deployment.enabled ? (
-              <ConfirmButton className="button ghost" label={t("common.disable")} title={t("deployments.disableTitle")} confirmLabel={t("deployments.disableConfirm", { name: deployment.name })} disabled={state.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} onConfirm={() => state.mutateAsync()} />
-            ) : (
-              <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : !testIsCurrent ? t("deployments.testRequired") : undefined} disabled={readOnly || state.isPending || !testIsCurrent} onClick={() => state.mutate()}>{t("common.enable")}</button>
-            )}
-            <span className="button ghost deployment-state-sizer" aria-hidden="true">{deployment.enabled ? t("common.enable") : t("common.disable")}</span>
-          </span>
-          <OverflowMenu label={t("deployments.moreActions")}>
+        {/* The actions that are neither daily nor undoable. The state word used
+            to sit here too; it reads better at the foot beside the control that
+            changes it — see the action bar. */}
+        <div className="resource-row-state deployment-card-state">
+          <OverflowMenu label={t("deployments.moreActionsFor", { name: deployment.name })}>
             <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onReplace}>{t("deployments.createReplacement")}</button>
             <ConfirmButton label={t("common.delete")} confirmLabel={t("deployments.deleteConfirm", { name: deployment.name })} requireStepUp onConfirm={(reauth) => remove.mutateAsync(reauth)} disabled={remove.isPending || routeBlocked} disabledReason={routeBlocked ? t("deployments.routeBlocked") : undefined} />
           </OverflowMenu>
         </div>
       </div>
-      {/* The reason belongs in the row that failed, not behind the expander:
-          the operator is looking at the button they just pressed. */}
-      {testState === "failure" && testFailureReason && (
-        <p className="row-test-failure" role="status">{testFailureReason}</p>
-      )}
-      {expanded && <div id={`deployment-details-${deployment.id}`} className="deployment-details">
-        <dl className="deployment-facts">
-          <DeploymentFact label={t("deployments.priceStatus")} value={activePrice ? activePrice.billing_mode === "free" ? t("deployments.freePrice") : t("deployments.versionedPrice") : prices.isPending ? t("common.loading") : t("deployments.unknownPrice")} meta={activePrice ? `v${activePrice.version} · ${dateTime(activePrice.effective_from)}` : t("deployments.priceRequired")} unset={!activePrice} />
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.inputPrice")} value={activePrice ? money(activePrice.input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {/* Shown even when it equals the input rate: that is itself the fact
-              worth reading, since it means cached prompt tokens are not priced
-              separately on this deployment. */}
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.cachedInputPrice")} value={activePrice ? money(activePrice.cached_input_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {(deployment.capabilities.chat || deployment.capabilities.embeddings) && <DeploymentFact label={t("deployments.outputPrice")} value={activePrice ? money(activePrice.output_micros_per_million) : t("deployments.notConfigured")} meta={t("deployments.perMillionTokens")} unset={!activePrice} />}
-          {activePrice && <DeploymentFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
-          {/* With a schedule the three rates above are only what applies
-              outside the windows, so leaving them to stand alone would read as
-              the whole price. */}
-          {activePrice?.schedule && <DeploymentFact
-            label={t("deployments.priceSchedule")}
-            value={t("deployments.scheduleWindowCount", { count: activePrice.schedule.windows.length })}
-            meta={`${activePrice.schedule.timezone} · ${activePrice.schedule.windows.map((window) => `${minuteToClock(window.start_minute)}–${minuteToClock(window.end_minute)}`).join(" ")}`}
-          />}
-          <DeploymentFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} meta={t("deployments.deploymentScope")} />
-          {deployment.region && <DeploymentFact label={t("deployments.region")} value={deployment.region} meta={t("deployments.deploymentScope")} />}
-          <DeploymentFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-          <DeploymentFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens || t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
-        </dl>
-        <CapabilityReviewNotice review={review} />
-        {/* Every write in this panel is gated the way the compact row's price
-            action already is; §7.3 also requires the disabled control to say
-            why, so each one carries the reason. */}
-        {deployment.pricing_quarantined && <div className="notice warning deployment-pricing-warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
-        {prices.isError && <ErrorState
-          className="deployment-card-error"
-          error={prices.error}
-          action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
-        />}
-        <div className="deployment-pricing-grid single">
-          <section className="deployment-pricing-panel">
-            <header>
-              <div>
-                <strong>{t("deployments.priceTimeline")}</strong>
-                <small>{activePrice
-                  ? t("deployments.priceSourceSummary", { type: activePrice.source.type, assurance: activePrice.source.assurance, reference: activePrice.source.reference || "—" })
-                  : prices.isError ? t("deployments.priceUnavailable") : prices.isPending ? t("common.loading") : t("deployments.noPriceVersions")}</small>
-              </div>
-              <button className="button secondary deployment-pricing-action" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
-            </header>
-            {!!scheduledPrices.length && <div className="deployment-pricing-list">
-              {scheduledPrices.map((price) => <div key={price.id}>
-                <span><code>v{price.version}</code><small>{dateTime(price.effective_from)} · {price.billing_mode}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small></span>
-                <button className="button ghost" disabled={readOnly || cancelPrice.isPending} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => cancelPrice.mutate(price)}>{t("common.cancel")}</button>
-              </div>)}
+      {/* Slot 2 — the worst thing true of this deployment, and the control that
+          changes the answer. One line whatever is wrong, so the card's verdict
+          is always at the same height and the dot is the only coloured mark on
+          the card. What it outranks is counted, never dropped. */}
+      <div className="deployment-condition" data-severity={condition.severity}>
+        <span className="deployment-condition-dot" aria-hidden="true" />
+        {conditionAct ? (
+          <button type="button" className="deployment-condition-text" id={conditionID} title={conditionText} onClick={conditionAct}>{conditionText}</button>
+        ) : (
+          <span className="deployment-condition-text" id={conditionID} title={conditionText}>{conditionText}</span>
+        )}
+        {condition.suppressed > 0 && (
+          <button
+            type="button"
+            className="deployment-condition-more"
+            aria-label={t("deployments.moreConditions", { count: condition.suppressed, name: deployment.name })}
+            onClick={() => setDetails(true)}
+          >+{condition.suppressed}</button>
+        )}
+        <button
+          type="button"
+          className="button ghost deployment-condition-test"
+          // The button reports its own last verdict, not the card's condition:
+          // a probe failure can outrank a manual test that passed, and tinting
+          // the control red for something it did not measure would say the test
+          // failed when it did not.
+          data-test-state={testState}
+          disabled={readOnly || testState === "running"}
+          title={readOnly ? t("navigation.readOnlyAction") : undefined}
+          aria-describedby={conditionID}
+          aria-label={t("deployments.testDeployment", { name: deployment.name })}
+          onClick={() => test.mutate()}
+        >{t("common.test")}</button>
+      </div>
+      {/* Slot 3 — what this model is, on one clipped line. The exact figures are
+          in the drawer; concurrency is last because it is the first thing a
+          narrow card should give up. */}
+      <p className="deployment-spec">
+        <ModalityMarks catalog={profiles.data} capabilities={deployment.capabilities} evidence={deployment.capability_evidence} />
+        <span>{t("deployments.capabilityCount", { count: capabilities.length })}</span>
+        {tokenSpec && <span>{tokenSpec}</span>}
+        {deployment.max_concurrency > 0 && <span>{t("deployments.concurrencyCompact", { count: deployment.max_concurrency })}</span>}
+      </p>
+      {/* Slot 4 — what an operator does to a deployment they are working on.
+          ConfirmButton gates itself; these do not, so a read-only session was
+          shown controls that would 403 on click. §7.3 also requires a disabled
+          control to say why, so each carries the reason. */}
+      <div className="resource-card-actions row-actions deployment-compact-actions">
+        <button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} aria-label={t("deployments.editDeployment", { name: deployment.name })} onClick={onEdit}>{t("common.edit")}</button>
+        {/* A dialog, not a disclosure: the label never changes and the card
+            never resizes, so aria-expanded would describe a state the card no
+            longer has. */}
+        <button className="button ghost" aria-haspopup="dialog" aria-label={t("deployments.viewDeploymentDetails", { name: deployment.name })} onClick={() => setDetails(true)}>{t("deployments.expandDetails")}</button>
+        <DeploymentStateToggle
+          name={deployment.name}
+          enabled={deployment.enabled}
+          pending={state.isPending}
+          blockedReason={deployment.enabled
+            ? (routeBlocked ? t("deployments.routeBlocked") : undefined)
+            : (!testIsCurrent ? t("deployments.testRequired") : undefined)}
+          onToggle={() => state.mutate()}
+        />
+        {/* No state word here any more. The conclusion line above owns where the
+            deployment stands, and being disabled is now one of the things it
+            says — a second copy in the action bar put "已禁用" on the same card
+            twice. The button still says what a click does. */}
+      </div>
+      {details && <Modal drawer title={t("deployments.detailsTitle", { name: deployment.name })} onClose={() => setDetails(false)}>
+        <div className="detail-drawer">
+          <section className="detail-section">
+            <div className="detail-section-head">
+              <h3>{t("deployments.sectionBilling")}</h3>
+              <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setPricing(true)}>{activePrice ? t("deployments.adjustPrice") : t("deployments.setPrice")}</button>
+            </div>
+            {deployment.pricing_quarantined && <div className="notice warning"><strong>{t("deployments.pricingQuarantined")}</strong><span>{deployment.pricing_quarantine_reason}</span><button className="button ghost" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => setConfirmingRestore(true)}>{t("deployments.confirmRestoredPricing")}</button></div>}
+            {prices.isError && <ErrorState
+              error={prices.error}
+              action={<button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => prices.refetch()}>{t("common.retry")}</button>}
+            />}
+            {/* A free price needs no rate grid at all — the version row in the
+                timeline below states it once, with the date and the source that
+                fixed it. Repeating it here made the same fact appear three times
+                on one screen, counting the status strip. */}
+            {(activePrice?.billing_mode === "metered" || !activePrice) && <div className="detail-facts">
+              {activePrice?.billing_mode === "metered" && (deployment.capabilities.chat || deployment.capabilities.embeddings) && <>
+                <DetailFact label={t("deployments.inputPrice")} value={money(activePrice.input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                {/* Shown even when it equals the input rate: that is itself the
+                    fact worth reading, since it means cached prompt tokens are
+                    not priced separately on this deployment. */}
+                <DetailFact label={t("deployments.cachedInputPrice")} value={money(activePrice.cached_input_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+                <DetailFact label={t("deployments.outputPrice")} value={money(activePrice.output_micros_per_million)} meta={t("deployments.perMillionTokens")} />
+              </>}
+              {activePrice?.billing_mode === "metered" && <DetailFact label={t("deployments.fixedPrice")} value={money(activePrice.fixed_request_micros_usd)} meta={t("deployments.perRequest")} />}
+              {/* With a schedule the rates above are only what applies outside
+                  the windows, so leaving them to stand alone would read as the
+                  whole price. */}
+              {activePrice?.schedule && <DetailFact
+                label={t("deployments.priceSchedule")}
+                value={t("deployments.scheduleWindowCount", { count: activePrice.schedule.windows.length })}
+                meta={`${activePrice.schedule.timezone} · ${activePrice.schedule.windows.map((window) => `${minuteToClock(window.start_minute)}–${minuteToClock(window.end_minute)}`).join(" ")}`}
+              />}
+              {!activePrice && <DetailFact
+                label={t("deployments.priceStatus")}
+                value={prices.isPending ? t("common.loadingShort") : prices.isError ? t("deployments.priceUnavailable") : t("deployments.priceNotConfigured")}
+                meta={t("deployments.priceRequired")}
+                unset
+              />}
             </div>}
+            {/* The panel used to promise a timeline and render only the versions
+                that had not taken effect yet, so the one in force and everything
+                it replaced were invisible. The read already returns them. */}
+            <div className="detail-subhead"><strong>{t("deployments.priceTimeline")}</strong></div>
+            {priceTimeline.length ? (
+              <ol className="detail-timeline">
+                {priceTimeline.map((price) => (
+                  <li key={price.id} data-status={price.status}>
+                    <code>v{price.version}</code>
+                    <div>
+                      <strong>{t(`deployments.priceVersionStatus.${price.status}`)} · {t(price.billing_mode === "free" ? "deployments.freeLabel" : "deployments.meteredLabel")}</strong>
+                      <small>{dateTime(price.effective_from)} · {priceSourceWords(price.source, t)}{price.schedule ? ` · ${t("deployments.scheduleWindowCount", { count: price.schedule.windows.length })}` : ""}</small>
+                    </div>
+                    {price.status === "scheduled" && <button
+                      className="button ghost"
+                      // Every scheduled row carries this button, so the visible
+                      // word cannot be the whole accessible name.
+                      aria-label={t("deployments.cancelPriceVersion", { version: price.version })}
+                      disabled={readOnly || cancelPrice.isPending}
+                      title={readOnly ? t("navigation.readOnlyAction") : undefined}
+                      onClick={() => cancelPrice.mutate(price)}
+                    >{t("common.cancel")}</button>}
+                  </li>
+                ))}
+              </ol>
+            ) : <p className="detail-empty">{prices.isPending ? t("common.loadingShort") : prices.isError ? t("deployments.priceUnavailable") : t("deployments.noPriceVersions")}</p>}
           </section>
+
+          <section className="detail-section">
+            <div className="detail-section-head">
+              <h3>{t("deployments.capabilities")}</h3>
+              <small>{[
+                t("deployments.capabilityCount", { count: capabilities.length }),
+                uniformEvidence ? t("deployments.uniformEvidence", { evidence: t(`deployments.evidenceValues.${uniformEvidence}`) }) : "",
+              ].filter(Boolean).join(" · ")}</small>
+            </div>
+            {/* Every capability, with what establishes it. The card truncates
+                because a tile has a width; the drawer is the one place that can
+                list them all, so truncating here answered nothing.
+                The evidence column only appears when there is something to
+                compare — eight rows all reading "已声明" is one fact printed
+                eight times, and it says it in the section head instead. */}
+            {capabilities.length ? (
+              <ul className="detail-capability-list" aria-label={t("deployments.capabilities")}>
+                {capabilities.map((capability) => (
+                  <li key={capability}>
+                    <span>{t(`capabilities.${capability}`)}</span>
+                    {!uniformEvidence && <small data-evidence={evidenceOf(capability)}>
+                      {t(`deployments.evidenceValues.${evidenceOf(capability)}`)}
+                    </small>}
+                  </li>
+                ))}
+              </ul>
+            ) : <p className="detail-empty">{t("deployments.noCapabilities")}</p>}
+            <CapabilityReviewNotice review={review} readOnly={readOnly} onEdit={() => { setDetails(false); onEdit(); }} />
+          </section>
+
+          <section className="detail-section">
+            <div className="detail-section-head"><h3>{t("deployments.sectionRuntime")}</h3></div>
+            <div className="detail-facts">
+              <DetailFact label={t("deployments.status")} value={deployment.enabled ? t("common.enabled") : t("common.disabled")} unset={!deployment.enabled} />
+              {/* The state that decides routing today. A manual test can be days
+                  old; this is what the router acted on last. */}
+              <DetailFact
+                label={t("deployments.probe")}
+                value={t(`deployments.probeStates.${probe?.state ?? "not_probed"}`)}
+                meta={probe?.state === "unhealthy"
+                  ? [t("deployments.probeUnhealthyMeta"), probeReason].filter(Boolean).join(" · ")
+                  : probe?.state === "healthy"
+                    ? probe.observed_at ? dateTime(probe.observed_at) : undefined
+                    : t("deployments.probeNotProbedMeta")}
+                unset={probe?.state === "unhealthy"}
+              />
+              <DetailFact
+                label={t("deployments.lastTest")}
+                value={testVerdict}
+                meta={testState === "failure" && testFailureReason ? testFailureReason : deployment.last_tested_at ? dateTime(deployment.last_tested_at) : undefined}
+                unset={testState === "failure"}
+              />
+              <DetailFact
+                label={t("deployments.routeDependency")}
+                value={activeRouteCount ? t("deployments.activeRoutesEnabled", { count: activeRouteCount }) : t("deployments.noActiveRoutes")}
+              />
+              <DetailFact label={t("deployments.concurrency")} value={deployment.max_concurrency || t("deployments.unlimited")} />
+              {deployment.region && <DetailFact label={t("deployments.region")} value={deployment.region} />}
+              <DetailFact label={t("deployments.context")} value={deployment.capabilities.max_context_tokens ? exactNumber(deployment.capabilities.max_context_tokens) : t("deployments.upstreamApplies")} meta={deployment.capabilities.max_context_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+              <DetailFact label={t("deployments.maxOutput")} value={deployment.capabilities.max_output_tokens ? exactNumber(deployment.capabilities.max_output_tokens) : t("deployments.upstreamApplies")} meta={deployment.capabilities.max_output_tokens ? t("deployments.tokens") : t("deployments.undeclared")} />
+            </div>
+          </section>
+
+          {/* Identifiers were behind a disclosure, which put one extra click in
+              front of the one thing an operator opens the drawer for while
+              reading a log line. Last is far enough. */}
+          <section className="detail-section">
+            <div className="detail-section-head"><h3>{t("deployments.sectionConnection")}</h3></div>
+            <div className="detail-facts">
+              <DetailFact label={t("deployments.provider")} value={providerName} href={`/admin/providers#provider-${deployment.provider_id}`} />
+              <DetailFact label={t("deployments.upstreamTarget")} value={deployment.provider_model} mono />
+              {/* The question this answers is which API shape a client has to
+                  speak, so it is named and worded that way rather than by the
+                  internal surface id. */}
+              <DetailFact label={t("deployments.compatibleInterface")} value={t(`deployments.accessSurfaces.${deployment.access_surface}`, { defaultValue: deployment.access_surface })} />
+              {/* The revision number is Halro's optimistic-concurrency counter,
+                  the same kind of internal identifier as the profile and binding
+                  ids. What an operator reads it for is "has anyone changed this,
+                  and when" — which is the timestamp, not the counter. */}
+              {deployment.updated_at && <DetailFact label={t("deployments.lastUpdated")} value={dateTime(deployment.updated_at)} />}
+            </div>
+          </section>
+
         </div>
-        <div className="deployment-capability-summary deployment-capability-strip">
-          <strong>{t("deployments.capabilityCount", { count: capabilities.length })}</strong>
-          <div className="capability-list" aria-label={t("deployments.capabilities")}>
-            {capabilities.slice(0, 5).map((capability) => <span className="badge" key={capability}>{t(`capabilities.${capability}`)}</span>)}
-            {capabilities.length > 5 && <span className="badge">+{capabilities.length - 5}</span>}
-          </div>
-        </div>
-        <details className="technical-details deployment-technical-details">
-          <summary>{t("deployments.technicalDetails")}</summary>
-          <dl>
-            <div><dt>{t("deployments.accessSurface")}</dt><dd><code>{deployment.access_surface}</code></dd></div>
-            <div><dt>{t("deployments.profile")}</dt><dd><code>{deployment.profile_id}</code></dd></div>
-            <div><dt>{t("deployments.deploymentID")}</dt><dd><code>{deployment.id}</code></dd></div>
-            {deployment.binding_id && <div><dt>{t("deployments.bindingID")}</dt><dd><code>{deployment.binding_id}</code></dd></div>}
-            <div><dt>{t("deployments.evidence")}</dt><dd>{evidence.length ? evidence.join(" / ") : "—"}</dd></div>
-          </dl>
-        </details>
-      </div>}
-      {(remove.isError || state.isError) && <ErrorState
-        className="deployment-card-error"
-        error={remove.error || state.error}
-        action={state.error instanceof ApiError && state.error.code === "deployment_price_unavailable"
-          ? <button className="button secondary" type="button" onClick={() => setPricing(true)}>{t("deployments.setPrice")}</button>
-          : undefined}
-      />}
+      </Modal>}
       {pricing && <PriceVersionForm deployment={deployment} current={activePrice} blocking={blockingPrice} onClose={() => setPricing(false)} />}
 	  {confirmingRestore && <RestorePricingConfirm deployment={deployment} onClose={() => setConfirmingRestore(false)} />}
     </article>
   );
 }
 
-// The saved capability answer and what supports it now can diverge without the
-// deployment being touched, so the console states which it is rather than
-// leaving the operator to infer it from a deployment that stopped serving.
-function CapabilityReviewNotice({ review }: { review: CapabilityReview | undefined }) {
-  const { t } = useTranslation();
-  if (!review || review.state === "current") return null;
-  const drifted = review.state === "drifted";
-  const unavailable = review.state === "catalog_unavailable";
-  const names = (values: string[] | undefined) =>
-    (values ?? []).map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
-  return (
-    <div className={`notice ${drifted ? "warning" : ""} deployment-capability-review`}>
-      <strong>{drifted ? t("deployments.capabilitiesUnsupported") : unavailable ? t("deployments.catalogUnavailableTitle") : t("deployments.capabilitiesToReview")}</strong>
-      <span>{t(`deployments.reviewReasons.${review.reason ?? "catalog_revision_advanced"}`)}</span>
-      <dl className="deployment-review-facts">
-        <div>
-          <dt>{t("deployments.capabilitySource")}</dt>
-          <dd>{t(`deployments.capabilitySources.${review.source}`, { defaultValue: review.source })}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.noLongerSupported")}</dt>
-          <dd>{names(review.no_longer_supported) || "—"}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.availableForReview")}</dt>
-          <dd>{names(review.available_for_review) || "—"}</dd>
-        </div>
-        <div>
-          <dt>{t("deployments.switchedOff")}</dt>
-          <dd>{names(review.operator_disabled) || "—"}</dd>
-        </div>
-      </dl>
-      <span className="deployment-review-consequence">
-        {drifted ? t("deployments.driftedConsequence") : unavailable ? t("deployments.catalogUnavailableConsequence") : t("deployments.reviewAvailableConsequence")}
-      </span>
-    </div>
-  );
-}
-
-// What the narrowing would do to live routing, listed per route so the operator
-// confirms against the actual consequence rather than a warning about one.
 function CapabilityImpactNotice({ impact }: { impact: CapabilityPreflight }) {
   const { t } = useTranslation();
   const removed = impact.removed_capabilities.map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
@@ -473,6 +650,64 @@ function CapabilityImpactNotice({ impact }: { impact: CapabilityPreflight }) {
   );
 }
 
+// What the deployment claims, against what establishes it now.
+//
+// The panel used to open with two sentences of explanation, list five facts —
+// three of them usually a dash — and close with a third sentence, without ever
+// saying what to do. It now states the disagreement as the capability names it
+// is about, one line each, and carries the one action that resolves it.
+//
+// Two things are kept because they change what the reader should do, and only
+// in the state where they do: drift says why (a profile that narrowed cannot be
+// fixed by editing, a catalog that dropped the model can) and what it costs
+// (that deployment is not serving traffic). A review costs nothing and needs
+// neither.
+function CapabilityReviewNotice({ review, readOnly, onEdit }: { review: CapabilityReview | undefined; readOnly: boolean; onEdit: () => void }) {
+  const { t } = useTranslation();
+  if (!review || review.state === "current") return null;
+  const drifted = review.state === "drifted";
+  const unavailable = review.state === "catalog_unavailable";
+  const names = (values: string[] | undefined) =>
+    (values ?? []).map((name) => t(`capabilities.${name}`)).join(t("common.listSeparator"));
+  const offered = review.available_for_review ?? [];
+  // Claimed here and not established by the catalog. Under drift that means
+  // nothing supports it any more; under review it means the catalog disagrees
+  // with a declaration that is still being served — a different fact, and it
+  // used to wear the same label and the same warning colour as the first.
+  const disputed = review.no_longer_supported ?? [];
+  const switchedOff = review.operator_disabled ?? [];
+  const title = drifted
+    ? t("deployments.capabilitiesUnsupported")
+    : unavailable
+      ? t("deployments.catalogUnavailableTitle")
+      // A title that says "new capabilities" over a panel whose loudest line is
+      // a disagreement describes half of what happened.
+      : disputed.length ? t("deployments.capabilitiesDisagree") : t("deployments.capabilitiesToReview");
+  return (
+    <div className={`notice ${drifted ? "warning" : ""} ${unavailable ? "" : "has-action"} deployment-capability-review`}>
+      <div className="notice-copy">
+        <strong>{title}</strong>
+        {drifted && <span>{t(`deployments.reviewReasons.${review.reason ?? "catalog_revision_advanced"}`)}</span>}
+        <div className="capability-review-rows">
+          {!!offered.length && <div><small>{t("deployments.canEnable")}</small><span>{names(offered)}</span></div>}
+          {!!disputed.length && <div>
+            <small>{drifted ? t("deployments.noLongerSupported") : t("deployments.catalogDisputes")}</small>
+            <span>{names(disputed)}{drifted ? "" : ` · ${t("deployments.stillServing")}`}</span>
+          </div>}
+          {!!switchedOff.length && <div><small>{t("deployments.switchedOff")}</small><span>{names(switchedOff)}</span></div>}
+        </div>
+        {drifted && <span>{t("deployments.driftedConsequence")}</span>}
+        {unavailable && <span>{t("deployments.catalogUnavailableConsequence")}</span>}
+      </div>
+      {/* The instruction was "turn a capability on and retest", and following it
+          meant closing the drawer and finding the card again. */}
+      {!unavailable && <div className="notice-action">
+        <button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={onEdit}>{t("deployments.editCapabilities")}</button>
+      </div>}
+    </div>
+  );
+}
+
 function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment; onClose: () => void }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -481,19 +716,57 @@ function RestorePricingConfirm({ deployment, onClose }: { deployment: Deployment
 	const mutation = useMutation({ mutationFn: () => api.confirmRestoredDeploymentPricing(deployment.id, { current_password: password, totp_code: totp }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["deployments"] }); queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }); onClose(); } });
 	return <Modal title={t("deployments.confirmRestoredPricing")} onClose={onClose}><form onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
 		<p>{t("deployments.restorePricingWarning")}</p>
-		<Field label={t("usage.currentPassword")}><input type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
-		<Field label={t("usage.totpOptional")}><input inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
+		<Field label={t("usage.currentPassword")}><input autoComplete="off" type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+		<Field label={t("usage.totpOptional")}><input autoComplete="off" inputMode="numeric" value={totp} onChange={(event) => setTotp(event.target.value)} /></Field>
 		{mutation.isError && <ErrorState error={mutation.error} />}<button className="button primary" disabled={mutation.isPending}>{t("deployments.confirmRestoredPricing")}</button>
 	</form></Modal>;
 }
 
-function DeploymentFact({ label, value, meta, unset = false }: { label: string; value: string | number; meta: string; unset?: boolean }) {
+// One fact in the details drawer: label, value, and an optional line naming the
+// unit or the scope the value is in.
+//
+// It is a `.resource-fact` — the same label/value typography the cards and the
+// resource lists use, from resource-list.css. Only two things differ, and both
+// follow from the container: a drawer has no column to keep to, so the value
+// wraps instead of ellipsizing, and a fact that is missing something the
+// deployment needs says so in the warning colour.
+function DetailFact({ label, value, meta, unset = false, mono = false, href }: {
+  label: string;
+  value: string | number;
+  meta?: string;
+  unset?: boolean;
+  mono?: boolean;
+  href?: string;
+}) {
   return (
-    <div>
-      <dt>{label}</dt>
-      <dd className={unset ? "unset" : undefined}><span>{value}</span><small>{meta}</small></dd>
+    <div className={`resource-fact detail-fact ${unset ? "unset" : ""}`}>
+      <small>{label}</small>
+      {href
+        ? <Link className="resource-link" href={href}>{value} →</Link>
+        : mono ? <code>{value}</code> : <strong>{value}</strong>}
+      {meta ? <small className="detail-fact-meta">{meta}</small> : null}
     </div>
   );
+}
+
+// The version's provenance in words. `manual · asserted · temporary_estimate`
+// is three identifiers from three different enums; printed raw it reads as a
+// system trace rather than as an answer to "how much do we trust this price".
+const PRICE_SOURCE_KINDS: Record<string, string> = {
+  official_public_price: "officialPublicPrice",
+  contract_price: "contractPrice",
+  internal_cost: "internalCost",
+  temporary_estimate: "temporaryEstimate",
+};
+
+function priceSourceWords(source: DeploymentPriceVersion["source"], t: TFunction): string {
+  const reference = (source.reference ?? "").trim();
+  const kind = PRICE_SOURCE_KINDS[reference];
+  return [
+    kind ? t(`deployments.sourceKinds.${kind}`) : reference,
+    t(`deployments.priceSourceTypes.${source.type}`, { defaultValue: source.type }),
+    t(`deployments.priceAssurances.${source.assurance}`, { defaultValue: source.assurance }),
+  ].filter(Boolean).join(" · ");
 }
 
 function PriceVersionForm({ deployment, current, blocking, onClose }: { deployment: Deployment; current?: DeploymentPriceVersion; blocking?: DeploymentPriceVersion; onClose: () => void }) {
@@ -632,8 +905,8 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
         </fieldset>
         {mode === "metered" && <>
           <div className="price-form-grid">
-            <Field label={t("deployments.inputUSD")}><input inputMode="decimal" required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
-            <Field label={t("deployments.outputUSD")}><input inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
+            <Field label={t("deployments.inputUSD")}><input autoComplete="off" inputMode="decimal" required value={input} onChange={(event) => setInput(event.target.value)} /></Field>
+            <Field label={t("deployments.outputUSD")}><input autoComplete="off" inputMode="decimal" required value={output} onChange={(event) => setOutput(event.target.value)} /></Field>
           </div>
           {/* Every provider that reports a cache-read tier bills it well below
               the input rate, so this field is asked for beside the other two
@@ -643,7 +916,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
               wrapped its own three-line explanation into the other half. The row
               spans instead, and the box keeps the width of the two above it. */}
           <div className="price-form-grid price-cached-row">
-            <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
+            <Field label={t("deployments.cachedInputUSD")} hint={t("deployments.cachedInputHint")}><input autoComplete="off" inputMode="decimal" required value={cachedInputValue} onChange={(event) => setCachedInput(event.target.value)} /></Field>
           </div>
           {/* Some providers publish peak and off-peak rates. Without this the
               operator can only enter one number, and which way the accounting
@@ -651,7 +924,7 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
           <PriceScheduleFields schedule={schedule} onChange={setSchedule} problem={scheduleProblem} baseRates={{ input, cachedInput: cachedInputValue, output, fixed }} />
           <details className="price-advanced">
             <summary>{t("deployments.advancedPricing")}</summary>
-            <Field label={t("deployments.fixedRequestUSD")}><input inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
+            <Field label={t("deployments.fixedRequestUSD")}><input autoComplete="off" inputMode="decimal" required value={fixed} onChange={(event) => setFixed(event.target.value)} /></Field>
           </details>
         </>}
         <div className="price-form-grid">
@@ -662,9 +935,9 @@ function PriceVersionForm({ deployment, current, blocking, onClose }: { deployme
             point: without it the operator only learns that "immediately" is
             unavailable, not which scheduled version to cancel to get it back. */}
         {blocking && <p className="field-hint">{t("deployments.scheduledBlocksImmediate", { version: blocking.version, effective: dateTime(blocking.effective_from) })}</p>}
-        {effectiveMode === "scheduled" && <Field label={t("deployments.effectiveFrom")}><input type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>}
+        {effectiveMode === "scheduled" && <Field label={t("deployments.effectiveFrom")}><input autoComplete="off" type="datetime-local" required value={effective} onChange={(event) => setEffective(event.target.value)} /></Field>}
         {!validEffective && <p className="field-hint error">{blocking ? t("deployments.effectiveAfterScheduled", { version: blocking.version, effective: dateTime(blocking.effective_from) }) : t("deployments.invalidEffectiveTime")}</p>}
-        <Field label={t("deployments.sourceNote")}><textarea value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
+        <Field label={t("deployments.sourceNote")}><textarea autoComplete="off" value={sourceNote} onChange={(event) => setSourceNote(event.target.value)} placeholder={t("deployments.sourceNotePlaceholder")} /></Field>
         {!validSource && <p className="field-hint error">{t("deployments.sourceEvidenceRequired")}</p>}
         {!validPrice && <p className="field-hint error">{t("deployments.invalidPrice")}</p>}
         <div className="form-actions"><button className="button primary" disabled={!validDetails}>{t("deployments.nextReview")}</button></div>
@@ -843,8 +1116,8 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
         <legend>{t("deployments.scheduleWindowLabel", { index: index + 1 })}</legend>
         <div className="price-schedule-window-head">
           <div className="price-schedule-range">
-            <label><span>{t("deployments.scheduleStart")}</span><input value={window.start} onChange={(event) => update(index, { start: event.target.value })} placeholder="09:00" inputMode="numeric" /></label>
-            <label><span>{t("deployments.scheduleEnd")}</span><input value={window.end} onChange={(event) => update(index, { end: event.target.value })} placeholder="12:00" inputMode="numeric" /></label>
+            <label><span>{t("deployments.scheduleStart")}</span><input autoComplete="off" value={window.start} onChange={(event) => update(index, { start: event.target.value })} placeholder="09:00" inputMode="numeric" /></label>
+            <label><span>{t("deployments.scheduleEnd")}</span><input autoComplete="off" value={window.end} onChange={(event) => update(index, { end: event.target.value })} placeholder="12:00" inputMode="numeric" /></label>
           </div>
           {/* Ghost rendered as borderless grey text floating at the far edge of
               the card, which read as a caption rather than as the destructive
@@ -852,10 +1125,10 @@ function PriceScheduleFields({ schedule, onChange, problem, baseRates }: {
           <button type="button" className="button danger-text" onClick={() => onChange({ ...schedule, windows: schedule.windows.filter((_, position) => position !== index) })}>{t("deployments.removeScheduleWindow")}</button>
         </div>
         <div className="price-schedule-rates">
-          <label><span>{t("deployments.scheduleRateInput")}</span><input inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></label>
-          <label><span>{t("deployments.scheduleRateCachedInput")}</span><input inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></label>
-          <label><span>{t("deployments.scheduleRateOutput")}</span><input inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></label>
-          <label><span>{t("deployments.scheduleRateFixed")}</span><input inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateInput")}</span><input autoComplete="off" inputMode="decimal" value={window.input} onChange={(event) => update(index, { input: event.target.value })} aria-label={t("deployments.inputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateCachedInput")}</span><input autoComplete="off" inputMode="decimal" value={window.cachedInput} onChange={(event) => update(index, { cachedInput: event.target.value })} aria-label={t("deployments.cachedInputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateOutput")}</span><input autoComplete="off" inputMode="decimal" value={window.output} onChange={(event) => update(index, { output: event.target.value })} aria-label={t("deployments.outputUSD")} /></label>
+          <label><span>{t("deployments.scheduleRateFixed")}</span><input autoComplete="off" inputMode="decimal" value={window.fixed} onChange={(event) => update(index, { fixed: event.target.value })} aria-label={t("deployments.fixedRequestUSD")} /></label>
         </div>
       </fieldset>)}
       <div className="price-schedule-actions">
@@ -922,11 +1195,6 @@ function useDeferredSlot(delayMillis: number): boolean {
   return ready;
 }
 
-function evidenceSummary(evidence: Record<string, string>) {
-  const values = [...new Set(Object.values(evidence).filter((value) => value !== "unsupported"))];
-  return values;
-}
-
 type SelectableBinding = ProviderBinding & { id: string };
 
 // How the capabilities are grouped on screen. Which group a capability belongs
@@ -949,6 +1217,24 @@ export const deploymentCapabilityGroupsForTest = deploymentCapabilityGroups;
 // One list, derived. It used to be written out a second time above these groups,
 // which meant a capability could be in one and not the other.
 const deploymentCapabilityNames = deploymentCapabilityGroups.flatMap((group) => group.capabilities);
+
+/**
+ * The order the model catalogue is banded in, by what the operator does next.
+ *
+ * Ready first, because that is what most visits are for. The rest are not
+ * hidden: an operator arrives with a name read off the upstream's own console,
+ * and a list that quietly omits it reads as Halro's catalogue being wrong
+ * rather than as this provider not serving that model.
+ *
+ * The last two are separate bands because their remedies are opposite —
+ * a catalogue that disagrees with itself needs a person to look, while a model
+ * no binding here can serve needs a different provider or another interface
+ * enabled on this one. Collapsing them would send half the operators the wrong
+ * way, which is the same mistake the resolution state itself makes today by
+ * reporting "not in the catalogue" for a model the catalogue lists under a
+ * profile this provider has not bound.
+ */
+const MODEL_BAND_ORDER: readonly ResolutionState[] = ["resolved", "unknown", "covered_elsewhere", "conflicting", "no_variant"];
 type DeploymentCapabilityName = typeof deploymentCapabilityGroups[number]["capabilities"][number];
 
 function providerBindings(provider?: Provider): SelectableBinding[] {
@@ -1061,8 +1347,40 @@ function DeploymentForm({
     : listedTarget && !canonicalModelRef
       ? listedTarget
       : targetResolution.data ?? null;
-  const declaredModel = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "unknown";
-  const noVariant = !current && providerModel.trim() !== "" && resolvedTarget?.resolution_state === "no_variant";
+  const picked = !current && providerModel.trim() !== "";
+  // Both states mean the same thing about capabilities: nothing here claims any,
+  // so the operator declares them or spends a detection call. They differ in why,
+  // and the pointer below says so — but a model the catalogue serves on another
+  // interface must not lose the way to declare it. The catalogue can be stale,
+  // and the operator may know something Halro does not.
+  const declaredModel = picked
+    && (resolvedTarget?.resolution_state === "unknown" || resolvedTarget?.resolution_state === "covered_elsewhere");
+  const coveredElsewhere = picked && resolvedTarget?.resolution_state === "covered_elsewhere";
+  const coveringProfiles = coveredElsewhere ? resolvedTarget?.covered_by_profiles ?? [] : [];
+  // Why the capability section is empty, which decides what the operator should
+  // do about it. One panel used to answer all three with "not in the catalogue,
+  // run a detection" — wrong for the first, since the catalogue does list the
+  // model, and a detection cannot answer a routing question anyway; and
+  // incomplete for the second, where the interface returns identifiers only and
+  // no amount of refreshing will produce more.
+  // Where each capability's claim came from. Rendered per row only when the
+  // rows disagree: a column reading "built-in catalogue" eight times is not a
+  // comparison, and the header already says it once. When they differ, which
+  // ones were measured and which were merely listed is the whole question.
+  const claimSourceByCapability = useMemo(() => {
+    const sources = new Map<string, string>();
+    for (const claim of selectedVariant?.capability_claims ?? []) {
+      if (claim.status === "supported") sources.set(claim.capability_id, claim.source);
+    }
+    return sources;
+  }, [selectedVariant]);
+  const claimSourcesDiffer = new Set(claimSourceByCapability.values()).size > 1;
+  const emptyCapabilityReason = coveredElsewhere
+    ? "coveredElsewhere"
+    : resolvedTarget?.metadata_source === "none"
+      ? "noUpstreamMetadata"
+      : "notInCatalogue";
+  const noVariant = picked && resolvedTarget?.resolution_state === "no_variant";
   useEffect(() => {
     if (current || manualDeclaration || capabilityDetection) return;
     const variants = resolvedTarget?.variants ?? [];
@@ -1155,12 +1473,17 @@ function DeploymentForm({
     ...(canonicalModelRef ? { capability_model: canonicalModelRef } : {}),
     target_kind: targetKind,
     capabilities,
-    ...(widening || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
+    ...(widening || declaringBeyondVariant || declaredModel && manualDeclaration ? { mode: "operator_declared" } : {}),
     ...(declaredModel && detection?.status === "completed" ? {
       capability_detection_id: detection.id,
       capability_detection_revision: detection.revision,
     } : {}),
-    ...(!current && !manualDeclaration && !detection && selectedVariant ? { resolution_revision: selectedVariant.revision } : {}),
+    // Dropped when the operator declared past the variant: the revision pins
+    // this write to the claims it was resolved from, and the server refuses a
+    // capability set that exceeds them. Sending both would be asking the server
+    // to honour a pin and break it in the same request.
+    ...(!current && !manualDeclaration && !detection && !declaringBeyondVariant && selectedVariant
+      ? { resolution_revision: selectedVariant.revision } : {}),
     region: region.trim(),
     max_concurrency: maxConcurrency,
     enabled: current?.enabled ?? false,
@@ -1211,6 +1534,19 @@ function DeploymentForm({
   // Asking for a separate "I declare" click before the save bought nothing the
   // tick had not already said.
   const widening = Boolean(current && deploymentCapabilityNames.some((name) => !current.capabilities[name] && capabilities[name]));
+  // A capability the operator ticked that the resolved variant does not claim.
+  //
+  // The narrowing editor used to be bounded by the variant, so these could not
+  // be ticked at all: a Mantle model whose catalogue entry says chat and
+  // streaming rendered two rows, and vision — which the interface carries and
+  // the model has — had nowhere to be turned on. The editor is bounded by the
+  // interface now, and this is what it costs: the variant path refuses
+  // capabilities beyond the claims it was resolved from, so a tick past them
+  // has to be saved as the operator's own declaration instead.
+  const declaringBeyondVariant = Boolean(
+    !current && selectedVariant && !manualDeclaration && !detection
+    && deploymentCapabilityNames.some((name) => !selectedVariant.capabilities[name] && capabilities[name]),
+  );
   const preflight = useMutation({
     mutationFn: () => api.preflightDeploymentCapabilities(current!.id, capabilities),
     onSuccess: (result) => {
@@ -1263,6 +1599,48 @@ function DeploymentForm({
   const configurableCapabilityNames = deploymentCapabilityNames.filter(
     (name) => capabilityCeiling[name] || capabilities[name] || servableCeiling[name],
   );
+  // Three different dead ends used to wear one label. "Enable it on the
+  // connection" is the next step only when the connection is what withholds
+  // the capability; for one the connection already carries, the box is grey
+  // because this identification did not put it in the recommended set, and
+  // sending the operator to tick a box they ticked already is a detour with
+  // nothing at the end of it. The probe outcome separates the two answers that
+  // are not interchangeable either: refused upstream is a finding, unestablished
+  // is the absence of one, and only the second is worth re-running.
+  const capabilityUnavailableReason = (name: (typeof deploymentCapabilityNames)[number]) => {
+    if (!servableCeiling[name]) return "providers.unsupportedByInterface";
+    if (!bindingCeiling[name]) return "deployments.enableOnConnection";
+    if (detection?.status === "completed" && !current) {
+      // Six outcomes with six next steps. The server has always told them
+      // apart; the form used to say "could not be verified" to all of them,
+      // which is the right sentence for exactly one and an invitation to a
+      // pointless re-run for the rest. A capability missing from the map
+      // entirely was never reached, same as not_probed.
+      const result = detection.capabilities[name];
+      // A capability the profile serves and the call budget could not fit. It
+      // was not skipped by policy and it is not a model answer — it is a
+      // ceiling, and the operator can raise it or verify this one by hand.
+      if (result?.status === "not_probed" && result.probe_kind === "probe_budget") {
+        return "deployments.detectionProbeBudget";
+      }
+      switch (result?.status) {
+        // Probed, and the upstream refused.
+        case "unsupported": return "deployments.detectionRefused";
+        // The upstream answered; the answer carried no evidence. Re-running
+        // sends the identical request and gets the identical answer.
+        case "assertion_failed": return "deployments.detectionAssertionFailed";
+        // Not the model's answer at all — the provider, or this credential.
+        // Both are fixed somewhere other than this form.
+        case "unavailable": return "deployments.detectionUnavailable";
+        case "unauthorized": return "deployments.detectionUnauthorized";
+        // Refused, and Halro could not read why. This is the one worth
+        // identifying again.
+        case "inconclusive": return "deployments.detectionUnestablished";
+        default: return "deployments.detectionNotProbed";
+      }
+    }
+    return "deployments.notDeclaredByModel";
+  };
   const requestConstraints = catalogReady ? profileRequestConstraints(catalogReady, activeProfileIDs) : [];
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
@@ -1286,6 +1664,34 @@ function DeploymentForm({
     return (targetCatalog.data?.items ?? [])
       .filter((target) => target.target_kind === targetKind && (!query || target.display_name.toLocaleLowerCase().includes(query)));
   }, [targetCatalog.data?.items, providerModel, targetKind]);
+  // The listing already knows which of these the provider can actually serve:
+  // the catalogue GET resolves every binding and returns a resolution state per
+  // target. The options rendered one line each, so a model that is ready to
+  // deploy and one this provider cannot serve at all looked identical, and the
+  // operator found out by filling in the form.
+  //
+  // Banded, not filtered: an operator arrives with a name read off the
+  // upstream's own console, and a list that silently omits it reads as Halro's
+  // catalogue being broken.
+  const modelBands = useMemo(() => {
+    const bands = new Map<ResolutionState, ResolvedInvocationTarget[]>(
+      MODEL_BAND_ORDER.map((state) => [state, []]),
+    );
+    for (const model of visibleModels) {
+      (bands.get(model.resolution_state) ?? bands.get("unknown")!).push(model);
+    }
+    let offset = 0;
+    return MODEL_BAND_ORDER.flatMap((state) => {
+      const items = bands.get(state) ?? [];
+      if (!items.length) return [];
+      const band = { state, items, offset };
+      offset += items.length;
+      return [band];
+    });
+  }, [visibleModels]);
+  // One flat order, derived from the banded one. Arrow keys walk the list the
+  // eye walks; an index into the unbanded array would jump.
+  const orderedModels = useMemo(() => modelBands.flatMap((band) => band.items), [modelBands]);
   useEffect(() => {
     if (!modelPickerOpen) return;
     const closeOnOutsideInteraction = (event: PointerEvent) => {
@@ -1320,15 +1726,15 @@ function DeploymentForm({
       event.preventDefault();
       event.stopPropagation();
       setModelPickerOpen(true);
-      setActiveModelIndex((currentIndex) => Math.min(currentIndex + 1, visibleModels.length - 1));
+      setActiveModelIndex((currentIndex) => Math.min(currentIndex + 1, orderedModels.length - 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
       event.stopPropagation();
       setModelPickerOpen(true);
-      setActiveModelIndex((currentIndex) => currentIndex <= 0 ? Math.max(visibleModels.length - 1, 0) : currentIndex - 1);
-    } else if (event.key === "Enter" && modelPickerOpen && activeModelIndex >= 0 && visibleModels[activeModelIndex]) {
+      setActiveModelIndex((currentIndex) => currentIndex <= 0 ? Math.max(orderedModels.length - 1, 0) : currentIndex - 1);
+    } else if (event.key === "Enter" && modelPickerOpen && activeModelIndex >= 0 && orderedModels[activeModelIndex]) {
       event.preventDefault();
-      chooseModel(visibleModels[activeModelIndex]);
+      chooseModel(orderedModels[activeModelIndex]);
     } else if (event.key === "Escape" && modelPickerOpen) {
       event.preventDefault();
       event.stopPropagation();
@@ -1373,11 +1779,21 @@ function DeploymentForm({
   // when the plan meant to reach it — the risk policy leaves everything outside
   // the safe-automatic set unprobed by design, and reporting that as an open
   // question would make every detection look incomplete.
+  // The outcome travels with the name. The reason a probe settled nothing is
+  // already in this same response object — it was rendered only for a failed
+  // detection, so a completed one with an inconclusive capability showed the
+  // operator a bare sentence while the answer sat one field away.
   const unestablishedCapabilities = detection?.status === "completed"
-    ? deploymentCapabilityNames.filter((name) => {
+    ? deploymentCapabilityNames.flatMap((name) => {
       const result = detection.capabilities[name];
-      if (!result) return false;
-      return result.status === "inconclusive" || result.status === "not_probed" && result.probe_kind !== "risk_policy";
+      if (!result) return [];
+      // risk_policy rows are capabilities the plan never meant to reach, so they
+      // are not outcomes. Everything else the editor cannot express belongs here.
+      const unestablished = result.status === "inconclusive" || result.status === "assertion_failed"
+        || result.status === "unavailable" || result.status === "unauthorized"
+        || (result.status === "not_probed" && result.probe_kind !== "risk_policy");
+      if (!unestablished) return [];
+      return [{ name, status: result.status, errorClass: result.error_class, providerStatus: result.provider_status, providerCode: result.provider_code }];
     })
     : [];
   // What every probe on the resolved interface actually came back with. A
@@ -1395,7 +1811,7 @@ function DeploymentForm({
     : [];
   // What the save will record, not what the form happens to display: widening
   // sends mode=operator_declared, so the source shown has to say so too.
-  const capabilityEvidenceSource = manualDeclaration || widening
+  const capabilityEvidenceSource = manualDeclaration || widening || declaringBeyondVariant
     ? "operator_declared"
     : detection?.status === "completed" ? detection.source : "";
   const dirty = useDirty({ name, providerID, providerModel, canonicalModelRef, bindingID, capabilities, region, maxConcurrency, targetKind });
@@ -1404,11 +1820,11 @@ function DeploymentForm({
       {enabledProviders.length === 0 ? (
         <div className="notice warning"><strong>{t("deployments.providerRequired")}</strong><span>{t("deployments.providerRequiredDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>
       ) : (
-        <form className="deployment-form" onSubmit={submit}>
+        <form className="deployment-form" onSubmit={submit} autoComplete="off">
           <section className="deployment-form-section" aria-labelledby="deployment-target-heading">
             <header><h3 id="deployment-target-heading">{t("deployments.targetSection")}</h3><p>{t("deployments.targetSectionDescription")}</p></header>
             <div className="form-grid deployment-target-grid">
-          <Field label={t("deployments.name")}><input autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field>
+          <Field label={t("deployments.name")}><input autoComplete="off" autoFocus required value={name} onChange={(event) => setName(event.target.value)} /></Field>
           <Field label={t("deployments.provider")}>
             <select required disabled={identityLocked} value={providerID} onChange={(event) => {
               const next = event.target.value;
@@ -1442,6 +1858,8 @@ function DeploymentForm({
                     id="deployment-provider-model-id"
                     required
                     disabled={identityLocked}
+                    autoComplete="off"
+                    spellCheck={false}
                     role={showModelCatalogControls ? "combobox" : undefined}
                     aria-autocomplete={showModelCatalogControls ? "list" : undefined}
                     aria-expanded={showModelCatalogControls ? modelPickerOpen : undefined}
@@ -1464,31 +1882,70 @@ function DeploymentForm({
                   />
                   {showModelCatalogControls && <span className="deployment-model-input-icon" aria-hidden="true" />}
                   {showModelCatalogControls && modelPickerOpen && (
-                    <div className="deployment-model-options" id="deployment-provider-model-options" ref={modelOptionsRef} role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
-                      <div className="deployment-model-options-meta" role="presentation">
+                    <div className="deployment-model-options" ref={modelOptionsRef}>
+                      {/* Outside the listbox on purpose: a listbox owns options
+                          and groups, and a count bar sitting among them is
+                          counted as neither by the browser and read as an
+                          option by some screen readers. */}
+                      <div className="deployment-model-options-meta">
                         {targetCatalog.isPending
                           ? t("deployments.modelCatalogLoading")
                           : targetCatalog.isError || refreshTargetCatalog.isError
                             ? t("deployments.modelCatalogUnavailable")
-                            : <>{t("deployments.modelCatalogCountPrefix")} <strong>{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
+                            // Never fetched is not the same as could not be
+                            // fetched: the first is one click away and costs an
+                            // upstream call, the second is a fault. Reading the
+                            // catalogue never dials, so the operator has to be
+                            // the one who decides to spend it.
+                            : targetCatalog.data?.not_cached
+                              ? t("deployments.modelCatalogNotCached")
+                              : <>{t("deployments.modelCatalogCountPrefix")} <strong>{targetCatalog.data?.items?.length ?? 0}</strong> {t("deployments.modelCatalogCountSuffix")}</>}
                       </div>
-                      {visibleModels.length ? visibleModels.map((model, index) => (
-                        <button
-                          className={index === activeModelIndex ? "active" : ""}
-                          id={`deployment-provider-model-option-${index}`}
-                          data-model-index={index}
-                          key={`${model.target_kind}:${model.target_id}`}
-                          role="option"
-                          aria-selected={providerModel === model.target_id}
-                          type="button"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onMouseEnter={() => setActiveModelIndex(index)}
-                          onClick={() => chooseModel(model)}
-                        >
-                          <strong>{model.display_name}</strong>
-                        </button>
-                      )) : (
-                        <div className="deployment-model-empty">{targetCatalog.isPending ? t("deployments.modelCatalogLoading") : t("deployments.noModelMatches")}</div>
+                      <div id="deployment-provider-model-options" role="listbox" aria-label={t("deployments.modelCatalogLabel")}>
+                        {modelBands.map((band) => (
+                          // The band name goes on the group, not only on the
+                          // heading: the heading is the sighted half, and a
+                          // band that exists only visually tells a screen
+                          // reader nothing about why these are separated.
+                          <div className="deployment-model-band" key={band.state} role="group" aria-label={t(`deployments.modelBands.${band.state}`)}>
+                            <div className="deployment-model-band-name" aria-hidden="true">{t(`deployments.modelBands.${band.state}`)}</div>
+                            {band.items.map((model, itemIndex) => {
+                              const index = band.offset + itemIndex;
+                              return (
+                                <button
+                                  className={`deployment-model-option${index === activeModelIndex ? " active" : ""}`}
+                                  id={`deployment-provider-model-option-${index}`}
+                                  data-model-index={index}
+                                  key={`${model.target_kind}:${model.target_id}`}
+                                  role="option"
+                                  // The input owns the focus; an option that
+                                  // stays tabbable lets a Shift+Tab land inside
+                                  // the popup while aria-activedescendant still
+                                  // says the input has it.
+                                  tabIndex={-1}
+                                  aria-selected={providerModel === model.target_id}
+                                  aria-setsize={orderedModels.length}
+                                  aria-posinset={index + 1}
+                                  type="button"
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onMouseEnter={() => setActiveModelIndex(index)}
+                                  onClick={() => chooseModel(model)}
+                                >
+                                  <strong>{model.display_name}</strong>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                      {!orderedModels.length && (
+                        <div className="deployment-model-empty">{
+                          targetCatalog.isPending
+                            ? t("deployments.modelCatalogLoading")
+                            : targetCatalog.data?.not_cached
+                              ? t("deployments.modelCatalogNotCachedHint")
+                              : t("deployments.noModelMatches")
+                        }</div>
                       )}
                     </div>
                   )}
@@ -1535,7 +1992,7 @@ function DeploymentForm({
               ))}
             </select>
           </Field>}
-          {regional && <Field label={t("deployments.region")} hint={t("deployments.regionHint")}><input disabled={identityLocked} value={region} placeholder={t("deployments.regionAutomatic")} onChange={(event) => { resetDetection(); setRegion(event.target.value); setSelectedTarget(null); setSelectedVariant(null); setBindingID(""); setCapabilities(emptyCapabilities()); }} /></Field>}
+          {regional && <Field label={t("deployments.region")} hint={t("deployments.regionHint")}><input autoComplete="off" disabled={identityLocked} value={region} placeholder={t("deployments.regionAutomatic")} onChange={(event) => { resetDetection(); setRegion(event.target.value); setSelectedTarget(null); setSelectedVariant(null); setBindingID(""); setCapabilities(emptyCapabilities()); }} /></Field>}
           {identityLocked && <div className="notice"><strong>{t("deployments.targetLocked")}</strong><span>{t("deployments.targetLockedDescription")}</span></div>}
             </div>
           </section>
@@ -1575,10 +2032,20 @@ function DeploymentForm({
             {!current && selectedVariant && !manualDeclaration && !detection && <details className="capability-disclosure capability-advanced">
               <summary><span>{t("deployments.capabilityNarrowing")}</span><strong>{t("providers.selectedCapabilities", { count: selectedCapabilityNames.length })}</strong></summary>
               <p className="capability-advanced-note">{t("deployments.inheritedCapabilitiesHint")}</p>
-              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={selectedVariant.capabilities} onChange={changeCapabilities} />}
+              {/* The connection's own ceiling, not the variant's. A capability
+                  the profile could serve but this connection has not enabled is
+                  turned on where connections are edited, and the manual editor
+                  below already says so; a capability the connection carries and
+                  the catalogue merely did not record belongs here. */}
+              {catalogReady && <CapabilitySubsetEditor catalog={catalogReady} capabilities={capabilities} ceiling={bindingCeiling} claimed={selectedVariant.capabilities} onChange={changeCapabilities} />}
               {!catalogReady && !capabilityCatalog.isError && <Loading />}
               {capabilityCatalog.isError && <CapabilityMatrixError query={capabilityCatalog} />}
             </details>}
+            {!current && coveredElsewhere && coveringProfiles.length > 0 && <div className="notice">
+              <strong>{t("deployments.coveredElsewhereTitle")}</strong>
+              <span>{t("deployments.coveredElsewhereDescription", { profiles: coveringProfiles.join(t("common.dotSeparator")) })}</span>
+              <Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link>
+            </div>}
             {!current && noVariant && <div className="notice warning"><strong>{t("deployments.noVariantTitle")}</strong><span>{t("deployments.noVariantDescription")}</span><Link className="notice-link" href="/admin/providers">{t("deployments.openProviders")}</Link></div>}
             {!current && resolvedTarget?.resolution_state === "conflicting" && <div className="notice warning"><strong>{t("deployments.resolutionConflictTitle")}</strong><span>{t("deployments.resolutionConflictDescription")}</span></div>}
             {!current && declaredModel && !manualDeclaration && (
@@ -1587,10 +2054,14 @@ function DeploymentForm({
                   <div className="capability-onboarding-card">
                     <header>
                       <div>
-                        <strong>{t("deployments.detectionUnknownTitle")}</strong>
-                        <span>{t("deployments.detectionCostBoundary", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}</span>
+                        <strong>{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.title`)}</strong>
+                        <span>{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.description`)}</span>
+                        {/* The count is the operator's own configured ceiling,
+                            and it is stated before the billable button, not in
+                            the confirmation after it. */}
+                        {emptyCapabilityReason !== "coveredElsewhere" && <span>{t("deployments.detectionCostBoundary", { count: targetCatalog.data?.discovery.max_verification_calls ?? 0 })}</span>}
                       </div>
-                      <span className="capability-onboarding-status">{t("deployments.detectionRequired")}</span>
+                      <span className="capability-onboarding-status">{t(`deployments.emptyCapabilities.${emptyCapabilityReason}.next`)}</span>
                     </header>
                     <div className="capability-onboarding-controls">
                       {selectableBindings.length > 1 && <p className="capability-advanced-note">{t("deployments.detectionResolvesInterface")}</p>}
@@ -1692,9 +2163,29 @@ function DeploymentForm({
                     the only one still named here. */}
                 {!!unestablishedCapabilities.length && <div className="notice" role="status">
                   <strong>{t("deployments.detectionUnestablishedTitle", {
-                    capabilities: unestablishedCapabilities.map((name) => t(`capabilities.${name}`)).join("、"),
+                    capabilities: unestablishedCapabilities.map((outcome) => t(`capabilities.${outcome.name}`)).join(t("common.listSeparator")),
                   })}</strong>
                   <span>{t("deployments.detectionUnestablishedDescription")}</span>
+                  {/* Same rows the failed-detection panel already draws, on the
+                      completed path that had none. A capability with no recorded
+                      error class is one the upstream answered without proving
+                      anything, and has nothing to add here. */}
+                  {unestablishedCapabilities.some((outcome) => outcome.errorClass) && <ul className="detection-candidate-outcomes">
+                    {unestablishedCapabilities.filter((outcome) => outcome.errorClass).map((outcome) => <li key={outcome.name}>
+                      <strong>{t("deployments.detectionCandidateOutcome", {
+                        capability: t(`capabilities.${outcome.name}`),
+                        status: t(`deployments.detectionProbeStatus.${outcome.status}`),
+                      })}</strong>
+                      <span>{t(`testControl.reasons.${outcome.errorClass}`, { defaultValue: t("testControl.reasons.unknown") })}</span>
+                      {/* The class says what kind of failure; these say which
+                          request and which field. Identifiers only — the
+                          upstream's own sentence never reaches this cell. */}
+                      {(outcome.providerStatus || outcome.providerCode) && <small className="technical">{t("deployments.detectionProbeUpstream", {
+                        status: outcome.providerStatus || t("common.unknown"),
+                        code: outcome.providerCode || t("common.none"),
+                      })}</small>}
+                    </li>)}
+                  </ul>}
                 </div>}
                 {detection?.status === "completed" && detection.expires_at && <small className="technical detection-freshness">{t("deployments.detectionFreshUntil", { date: dateTime(detection.expires_at) })}</small>}
                 {(detectCapabilities.isError || detectionQuery.isError || cancelDetection.isError) && <ErrorState error={detectCapabilities.error || detectionQuery.error || cancelDetection.error} />}
@@ -1740,8 +2231,7 @@ function DeploymentForm({
                     <div className="deployment-capabilities capability-grid" data-count={names.length}>
                       {names.map((name) => {
                         const unavailable = !capabilityCeiling[name];
-                        // Two different dead ends, and only one of them is one.
-                        const reason = servableCeiling[name] ? "deployments.enableOnConnection" : "providers.unsupportedByInterface";
+                        const reason = capabilityUnavailableReason(name);
                         return <label className={`capability-option ${unavailable ? "unavailable" : ""}`} key={name}>
                           <input
                             type="checkbox"
@@ -1749,7 +2239,13 @@ function DeploymentForm({
                             checked={capabilities[name]}
                             onChange={(event) => changeCapabilities(updateCapabilitySelection(catalogReady, capabilities, name, event.target.checked))}
                           />
-                          <span>{t(`capabilities.${name}`)}{unavailable && <small>{t(reason)}</small>}</span>
+                          <span>
+                            {t(`capabilities.${name}`)}
+                            {unavailable && <small>{t(reason)}</small>}
+                            {!unavailable && claimSourcesDiffer && claimSourceByCapability.has(name) && (
+                              <small className="capability-claim-source">{t(`deployments.capabilitySources.${claimSourceByCapability.get(name)}`)}</small>
+                            )}
+                          </span>
                         </label>;
                       })}
                     </div>
@@ -1783,6 +2279,15 @@ function DeploymentForm({
             {widening && <div className="notice warning deployment-capability-declaration" aria-live="polite">
               <strong>{t("deployments.widenDeclarationTitle")}</strong>
               <span>{t("deployments.widenDeclarationDescription")}</span>
+            </div>}
+            {/* Not a warning: turning on a capability the catalogue never
+                recorded is the supported way to deploy a model Halro has no
+                card for. What it changes is who is answering for it, and that
+                has to be said before the save rather than discovered in the
+                evidence column afterwards. */}
+            {declaringBeyondVariant && <div className="notice deployment-capability-declaration" aria-live="polite">
+              <strong>{t("deployments.declareBeyondCatalogTitle")}</strong>
+              <span>{t("deployments.declareBeyondCatalogDescription")}</span>
             </div>}
             {providerModel.trim() !== "" && !anyOperation && (manualDeclaration || !declaredModel || detection?.status === "completed") && <p className="deployment-operation-required" role="alert">{t("deployments.operationRequired")}</p>}
             {providerModel.trim() !== "" && manualDeclaration && (
@@ -1820,12 +2325,12 @@ function DeploymentForm({
                     upstream ceiling still applies, which is a billing and
                     throttling fact, so each field states it. */}
                 <Field label={t("deployments.maxContext")} hint={t("deployments.maxContextHint")}>
-                  <input min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
+                  <input autoComplete="off" min="0" type="number" value={capabilities.max_context_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_context_tokens: Number(event.target.value) })} />
                 </Field>
                 <Field label={t("deployments.maxOutputTokens")} hint={t("deployments.maxOutputHint")}>
-                  <input min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
+                  <input autoComplete="off" min="0" type="number" value={capabilities.max_output_tokens} onChange={(event) => setCapabilities({ ...capabilities, max_output_tokens: Number(event.target.value) })} />
                 </Field>
-                <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
+                <Field label={t("deployments.concurrencyLimit")} hint={t("deployments.concurrencyHint")}><input autoComplete="off" min="0" type="number" value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></Field>
               </div>
               {!tokenLimitsValid && <div className="notice warning"><span>{t("deployments.tokenLimitInvalid")}</span></div>}
             </div>
@@ -1925,10 +2430,27 @@ function CapabilityMatrixError({ query }: { query: ReturnType<typeof useProvider
   />;
 }
 
-function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
+/**
+ * The capability editor for a model the catalogue resolved.
+ *
+ * `ceiling` is what the interface can carry and decides which rows exist.
+ * `claimed` is what something actually said about this model and decides which
+ * are ticked — nothing is ever pre-ticked from the ceiling, because filling a
+ * form from what an interface permits is how deployments came to claim
+ * capabilities their model does not have.
+ *
+ * The two used to be the same value, and the row list was the narrower one. A
+ * model whose catalogue entry says chat and streaming rendered two rows, so
+ * vision — carried by the interface, present in the model, absent from the
+ * entry — could not be turned on here at all. Listing the ceiling and ticking
+ * the claims keeps both halves: what is known is marked as known, and what is
+ * merely unrecorded stays available to an operator who knows better.
+ */
+function CapabilitySubsetEditor({ catalog, capabilities, ceiling, claimed, onChange }: {
   catalog: ProviderProfilesCatalog;
   capabilities: ProviderCapabilities;
   ceiling: ProviderCapabilities;
+  claimed: ProviderCapabilities;
   onChange: (next: ProviderCapabilities) => void;
 }) {
   const { t } = useTranslation();
@@ -1947,7 +2469,13 @@ function CapabilitySubsetEditor({ catalog, capabilities, ceiling, onChange }: {
               checked={capabilities[name]}
               onChange={(event) => onChange(updateCapabilitySelection(catalog, capabilities, name, event.target.checked))}
             />
-            <span>{t(`capabilities.${name}`)}</span>
+            <span>
+              {t(`capabilities.${name}`)}
+              {/* Marked, not hidden: an unrecorded capability is one nothing has
+                  spoken about, which is a different thing from one that was
+                  checked and found missing. */}
+              {!claimed[name] && <small className="capability-unclaimed">{t("deployments.capabilityUnclaimed")}</small>}
+            </span>
           </label>)}
         </div>
       </section>;

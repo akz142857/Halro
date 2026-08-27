@@ -153,7 +153,8 @@ func boundedResolutionTargetKind(value domain.DeploymentTargetKind) string {
 
 func boundedResolutionStatus(value domain.ResolutionState) string {
 	switch value {
-	case domain.ResolutionResolved, domain.ResolutionUnknown, domain.ResolutionConflicting, domain.ResolutionNoVariant:
+	case domain.ResolutionResolved, domain.ResolutionUnknown, domain.ResolutionConflicting,
+		domain.ResolutionNoVariant, domain.ResolutionCoveredElsewhere:
 		return string(value)
 	default:
 		return "unknown"

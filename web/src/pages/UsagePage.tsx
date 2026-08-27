@@ -70,7 +70,7 @@ export function UsagePage() {
         description={t("usage.description")}
       />
       <div className="filter-bar">
-        <label><span>Request ID</span><input value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
+        <label><span>Request ID</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label>
           <span>{t("usage.project")}</span>
           <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>
@@ -85,8 +85,8 @@ export function UsagePage() {
             {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
           </select>
         </label>
-        <label><span>{t("usage.provider")}</span><input value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
-        <label><span>{t("usage.actualModel")}</span><input value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
+        <label><span>{t("usage.provider")}</span><input autoComplete="off" value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
+        <label><span>{t("usage.actualModel")}</span><input autoComplete="off" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
         <label>
           <span>{t("usage.status")}</span>
           <select value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -95,8 +95,8 @@ export function UsagePage() {
             <option value="error">{t("usage.error")}</option>
           </select>
         </label>
-        <label><span>{t("usage.start")}</span><input type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-        <label><span>{t("usage.end")}</span><input type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+        <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}

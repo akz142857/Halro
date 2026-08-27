@@ -299,6 +299,37 @@ with `id`, `object`, `status`, `owned_by`, `created` and `data_retention`, and
 nothing about which route serves it. So the route is fixed by the Provider
 Profile, which is why there are five Mantle profiles rather than three.
 
+#### The catalogue is account-wide, not route-scoped
+
+Measured 2026-08-25 against the same account, us-east-2:
+
+| request | status |
+| --- | --- |
+| `GET /v1/models` | 200 |
+| `GET /openai/v1/models` | 404 |
+| `GET /v1/models/openai.gpt-5.5` | 200 |
+| `GET /openai/v1/models/openai.gpt-5.5` | 404 |
+
+The last row is the sharp one: `openai.gpt-5.5` is served on `/openai/v1`, and
+that route still has no entry for it to read. Discovery exists at `/v1` only.
+
+This says what Halro's discovery cannot do. A profile pinned to `/openai/v1`
+enumerates the account's whole model list — including the 38 models that route
+will refuse — because no route-scoped list exists to enumerate instead, and the
+route cannot be derived from the identifier (above). Halro addresses `/v1` for
+the model list and the connection test whatever route the profile pins for
+inference. Two consequences worth stating rather than discovering:
+
+- A connection test that passes proves the model exists on the account and the
+  credential reaches it. It does not prove this route serves that model.
+- Nothing here is silent. A model addressed on the wrong route is refused with
+  ``model `x` isn't supported on this route``, never served by a fallback.
+
+Making discovery follow the pinned prefix — an earlier attempt to keep
+discovery and inference on one URL — is what the 404 above rules out: it broke
+the model list and the connection test on both `/openai/v1` profiles while
+inference on that route kept working.
+
 ### What each model answers, measured
 
 Streaming was reachable on **49 of 49** chat models, `text/event-stream` in every
@@ -360,6 +391,22 @@ and `-120b` — same vendor, same route, adjacent names — do not.
 | `zai.glm-4.7` | `/v1` | no |
 | `zai.glm-4.7-flash` | `/v1` | no |
 | `zai.glm-5` | `/v1` | no |
+
+The account listed 50 identifiers on 2026-08-25, one more than the 49 chat
+models measured above plus nothing new: the extra is `zai.glm-4.6`, and the
+three the console's model page does not show a card for are `zai.glm-4.6`,
+`openai.gpt-5.4-2026-03-05` and `openai.gpt-5.5-2026-04-23`. The two dated
+snapshots resolve to their base model's card; `zai.glm-4.6` resolves to none,
+so no context window is recorded for it anywhere.
+
+This table is what seeds `bedrockMantleModels()` in
+`internal/modelcatalog/builtin.go`: the route decides which chat profile a model
+appears under, and only a measured `yes` in the Responses column puts it under a
+Responses profile as well. The windows and maximum output beside them come from
+the account's own model list, read 2026-08-25. Nothing else about these models is
+claimed there — tools, JSON mode, vision, developer role and reasoning are all
+inside the Mantle ceiling and none was exercised per model, so they stay for
+capability detection to establish against a real account.
 
 ### Request members
 

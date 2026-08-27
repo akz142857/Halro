@@ -5,6 +5,22 @@ import { describe, expect, it } from "vitest";
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
+/**
+ * The declarations of a top-level rule, with comments stripped.
+ *
+ * The stripping is the point. An assertion that reads a raw rule body is
+ * satisfied by prose: this file held `.resource-card-actions` to
+ * `margin-top: auto` long after that declaration was replaced, because the
+ * comment explaining the replacement still spelled the words out. The one
+ * assertion guarding where the action bar sits was guarding a sentence, and it
+ * stayed green through the change it existed to catch.
+ */
+function ruleBody(css: string, selector: string): string | undefined {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const body = css.match(new RegExp(`^${escaped} \\{([^}]*)\\}`, "m"))?.[1];
+  return body === undefined ? undefined : body.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 /** Custom-property names declared (left of `:`) in a CSS file. */
 function declaredTokens(css: string): Set<string> {
   const names = new Set<string>();
@@ -99,7 +115,11 @@ describe("design system themes", () => {
   ])("keeps %s text and key boundaries at WCAG AA contrast", (_name, theme) => {
     const primitives = tokenValues(read("./design-system/tokens.css"));
     const values = new Map([...primitives, ...tokenValues(theme)]);
-    const surfaces = ["--color-canvas", "--color-surface-default"];
+    // The raised surface is here because it is what a card is painted on, and
+    // leaving it out meant the check could not see the card at all: text that
+    // cleared AA on the canvas sat at 4.46:1 on a tile, and every assertion
+    // passed. A surface the product renders text on belongs in this list.
+    const surfaces = ["--color-canvas", "--color-surface-default", "--color-surface-raised"];
     const textTokens = [
       "--color-text-primary",
       "--color-text-secondary",
@@ -158,10 +178,16 @@ describe("design system themes", () => {
   // scored a value as converted for moving out of the file the count is taken
   // from. A stylesheet that owns spacing has to be inside the ratchet, or the
   // next one to own some is where the hand-picked values go.
-  const bareSizeValueBaseline = 724;
+  // Asserted exactly, not as a ceiling. Twice now the baseline has been left
+  // above the real count — four units the first time, twenty-six the second —
+  // and both times the slack was spent by later commits that added hand-picked
+  // values and stayed green. A ceiling only ratchets if someone remembers to
+  // lower it; an exact count makes every change to it deliberate, in both
+  // directions.
+  const bareSizeValueBaseline = 698;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
-    const styles = read("./styles.css") + read("./design-system/resource-list.css");
+    const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
     const declarations = styles.matchAll(
       /\b(?:gap|row-gap|column-gap|padding|padding-top|padding-right|padding-bottom|padding-left|margin|margin-top|margin-right|margin-bottom|margin-left|border-radius|inset)\s*:\s*([^;{}]*)/g,
     );
@@ -169,7 +195,7 @@ describe("design system themes", () => {
     for (const declaration of declarations) {
       bare.push(...(declaration[1].match(/(?<![\w.-])\d+px/g) ?? []));
     }
-    expect(bare.length).toBeLessThanOrEqual(bareSizeValueBaseline);
+    expect(bare.length, "converted a value? lower the baseline. added one? use a token").toBe(bareSizeValueBaseline);
   });
 
   // tokens.css states a 12px floor because CJK glyphs lose stroke separation
@@ -328,12 +354,30 @@ describe("component styling reaches the markup", () => {
 
   // A class name in the markup with no rule anywhere renders at whatever the
   // cascade happens to give it, which is how an introductory sentence ended up
-  // outweighing the dialog heading above it. jsdom cannot see that, so this is
-  // a ratchet like the spacing one: the count may fall, never rise.
-  const unstyledClassBaseline = 12;
+  // outweighing the dialog heading above it.
+  //
+  // This used to be a count ("may fall, never rise"), which a rename can walk
+  // straight through: drop four names and add one and the total falls while a
+  // live element is left unstyled. The ledger below is the debt that exists
+  // today; a name may leave it, and a name that wants to join it has to be
+  // added deliberately.
+  const KNOWN_UNSTYLED_CLASSES = [
+    "account-footer",
+    "anomaly-panel",
+    "appearance-preview-",
+    "attribution-panel",
+    "auth-challenge-form",
+    "chart-panel",
+    "developer-page",
+    "enrollment-form",
+    "provider-expand",
+    "providers-page",
+    "setup-page",
+    "technical",
+  ];
 
   it("does not add class names the stylesheets never style", () => {
-    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/tokens.css"];
+    const cssFiles = ["./styles.css", "./design-system/index.css", "./design-system/components.css", "./design-system/resource-list.css", "./design-system/resource-card.css", "./design-system/tokens.css"];
     let css = "";
     for (const file of cssFiles) {
       try {
@@ -367,7 +411,81 @@ describe("component styling reaches the markup", () => {
     visit(dirname(fileURLToPath(new URL(stylesPath, import.meta.url))));
 
     const unstyled = Array.from(used).filter((name) => !defined.has(name)).sort();
-    expect(unstyled.length, `unstyled classes: ${unstyled.join(", ")}`).toBeLessThanOrEqual(unstyledClassBaseline);
+    expect(unstyled).toEqual(KNOWN_UNSTYLED_CLASSES.filter((name) => unstyled.includes(name)));
+  });
+
+  // `.resource-fact` centres its content, which is right for a cell on a row and
+  // wrong for a cell in a stack: one neighbour wrapping to two lines makes the
+  // grid row taller and every shorter fact in it gets centred, so a line of
+  // labels stops being a line. jsdom has no layout, so the declaration is the
+  // thing to hold.
+  it("starts every drawer fact at the top of its row", () => {
+    const rule = ruleBody(read("./styles.css"), ".detail-fact");
+    expect(rule, ".detail-fact base rule not found").toBeDefined();
+    expect(rule).toMatch(/align-content:\s*start/);
+  });
+
+  // Renaming the drawer's content wrapper left this rule pointing at the old
+  // name, and the whole panel lost its inset: headings and facts ran into the
+  // left edge while the header above them kept its own padding. Nothing else
+  // catches it — the wrapper still had a rule (its grid), just not this one,
+  // and jsdom has no layout to measure.
+  it("insets the drawer body the way the drawer header is inset", () => {
+    const styles = read("./styles.css");
+    const bodies = [...styles.matchAll(/\.modal\.drawer > \.([a-z-]+) \{([^}]*)\}/g)];
+    const inset = bodies.find(([, , body]) => /padding:/.test(body));
+    expect(inset, ".modal.drawer > .<wrapper> rule with a padding not found").toBeDefined();
+    const wrapper = inset![1];
+    const markup = read("./pages/DeploymentsPage.tsx");
+    expect(markup, `.modal.drawer > .${wrapper} styles a wrapper the drawer no longer renders`)
+      .toContain(`className="${wrapper}"`);
+  });
+
+  // The deployment cards shipped with an action bar held on a single line
+  // (flex-wrap: nowrap) whose min-content width was larger than the card track.
+  // The card was a grid then, so its single column grew to the bar and took the
+  // head, the target and the fact strip with it, out past the card's own border
+  // and under the tile beside it. Two declarations keep that from happening
+  // again — every child is capped at the card's width, and nothing inside a card
+  // refuses to wrap.
+  it("caps a resource card's children at the card's own width", () => {
+    const css = read("./design-system/resource-card.css");
+    expect(css, "the rule capping card children was removed").toMatch(/^\.resource-card > \* \{[^}]*min-width:\s*0/m);
+    const rule = ruleBody(css, ".resource-card");
+    expect(rule, ".resource-card base rule not found").toBeDefined();
+    expect(rule).toMatch(/min-width:\s*0/);
+  });
+
+  // A row of tiles ends on one line only if every tile in it is the height of
+  // the tallest, and the action bars line up only if the card can be taller than
+  // its content and still pin them to the bottom.
+  it("gives every card in a row the same height and its actions the bottom edge", () => {
+    const css = read("./design-system/resource-card.css");
+    const grid = ruleBody(css, ".resource-card-grid");
+    expect(grid, ".resource-card-grid base rule not found").toBeDefined();
+    expect(grid).not.toMatch(/align-items:\s*(start|flex-start|baseline)/);
+    const actions = ruleBody(css, ".resource-card-actions");
+    expect(actions, ".resource-card-actions base rule not found").toBeDefined();
+    // `align-self`, not `margin-top: auto`: the auto margin pushed every later
+    // sibling down with it, so a card that rendered anything after the bar took
+    // the bar off the line its neighbours sat on.
+    expect(actions).toMatch(/align-self:\s*end/);
+    expect(actions).not.toMatch(/margin-top:\s*auto/);
+  });
+
+  it("lets every card action bar wrap inside its card", () => {
+    const styles = read("./styles.css");
+    let checked = 0;
+    for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const [, selector, body] = rule;
+      if (!/deployment-compact-actions/.test(selector)) continue;
+      checked++;
+      expect(body, `${selector.trim()} stops the card action bar wrapping`).not.toMatch(/flex-wrap:\s*nowrap/);
+      // Scrolling the bar sideways hides controls behind a gesture no pointer
+      // announces; inside a card there is room to wrap instead.
+      expect(body, `${selector.trim()} scrolls the card action bar sideways`).not.toMatch(/overflow(-x)?:\s*auto/);
+    }
+    expect(checked, "no .deployment-compact-actions rules were found to check").toBeGreaterThan(0);
   });
 
   // A length flex-basis binds to the parent's main axis, so one declaration is a
@@ -377,7 +495,7 @@ describe("component styling reaches the markup", () => {
   // a height there and stretched every route row from 77px to 229px. The width
   // is declared outright, so the basis has to stay axis-neutral.
   it("keeps the inline test control's flex basis axis-neutral", () => {
-    const rule = read("./styles.css").match(/^\.inline-test-control \{([^}]*)\}/m)?.[1];
+    const rule = ruleBody(read("./styles.css"), ".inline-test-control");
     expect(rule, ".inline-test-control base rule not found").toBeDefined();
     expect(rule).toMatch(/width:\s*196px/);
     expect(rule).toMatch(/flex:\s*0\s+0\s+auto/);

@@ -60,6 +60,24 @@ describe("admin accessibility baseline", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
+  // A panel that has scrolled to its end hands the leftover wheel distance to the
+  // document, so reading to the bottom of a details drawer used to scroll the page
+  // behind it out from under the operator. The document is held still for as long
+  // as any dialog is open — the count matters, because a price form closing over
+  // an open drawer must not hand scrolling back while the drawer is still there.
+  it("holds the page still while dialogs are open and gives it back when the last one closes", () => {
+    const outer = render(<Modal title="部署详情" drawer onClose={vi.fn()}><p>细节</p></Modal>);
+    expect(document.documentElement.style.overflowY).toBe("hidden");
+    expect(document.querySelector(".modal.drawer")).toBeInTheDocument();
+
+    const inner = render(<Modal title="设置价格" onClose={vi.fn()}><button>保存</button></Modal>);
+    inner.unmount();
+    expect(document.documentElement.style.overflowY).toBe("hidden");
+
+    outer.unmount();
+    expect(document.documentElement.style.overflowY).toBe("");
+  });
+
   it("closes a modal with nothing filled in without asking", () => {
     const close = vi.fn();
     render(<Modal title="创建 Deployment" onClose={close}><button>保存</button></Modal>);
@@ -95,6 +113,30 @@ describe("admin accessibility baseline", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(details).not.toHaveAttribute("open");
     expect(trigger).toHaveFocus();
+  });
+
+  // A confirmation opened from inside the menu sits above it, and both listened
+  // on the document: one Escape closed the menu first, then the dialog restored
+  // focus to a button the UA had just hidden with the <details> — so focus
+  // landed on <body> and the keyboard user was back at the top of the page.
+  it("leaves the keys to the dialog when one is open above the menu", () => {
+    const { container } = render(
+      <>
+        <OverflowMenu label="更多操作"><button>删除</button></OverflowMenu>
+        <div className="modal-backdrop"><div className="modal" /></div>
+      </>,
+    );
+    const trigger = screen.getByLabelText("更多操作");
+    const details = container.querySelector("details")!;
+
+    fireEvent.click(trigger);
+    expect(details).toHaveAttribute("open");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(details).toHaveAttribute("open");
+    // The same rule for pointer events: a click inside the dialog is not an
+    // outside interaction the menu should answer.
+    fireEvent.pointerDown(container.querySelector(".modal")!);
+    expect(details).toHaveAttribute("open");
   });
 
   it("keeps one main landmark and exposes settings sections and field descriptions", async () => {

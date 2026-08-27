@@ -20,6 +20,13 @@ type ModelCapabilityDetectionStatus string
 // the model does not serve fails before the provider does any work.
 const MaxDetectionProviderCalls = 12
 
+// maxProbeProviderCodeLength is the widest a narrowed provider identifier can
+// be: two bounded halves and the colon that joins them. It is stated here as a
+// number rather than imported because domain sits underneath provider, and the
+// point of the check is to refuse a record that reached storage without being
+// narrowed at all — not to re-derive the narrowing rule.
+const maxProbeProviderCodeLength = 2*128 + 1
+
 const (
 	DetectionQueued      ModelCapabilityDetectionStatus = "queued"
 	DetectionRunning     ModelCapabilityDetectionStatus = "running"
@@ -53,21 +60,40 @@ const (
 	ProbeUnauthorized CapabilityProbeStatus = "unauthorized"
 	ProbeNotProbed    CapabilityProbeStatus = "not_probed"
 	ProbeCanceled     CapabilityProbeStatus = "canceled"
+	// ProbeAssertionFailed is the upstream answering normally without the answer
+	// showing the capability — a tool probe whose reply carries no tool call, an
+	// image probe that came back with no choice. It used to be indistinguishable
+	// from ProbeInconclusive, which is the opposite situation: there, the
+	// upstream refused and Halro could not read why. The two have different next
+	// steps. A refusal Halro could not parse is worth identifying again, because
+	// the same request may parse next time; an answer that simply did not carry
+	// the evidence is not, because nothing about the request will change.
+	ProbeAssertionFailed CapabilityProbeStatus = "assertion_failed"
 )
 
 func (s CapabilityProbeStatus) Valid() bool {
 	return slices.Contains([]CapabilityProbeStatus{ProbeSupported, ProbeUnsupported, ProbeInconclusive,
-		ProbeUnavailable, ProbeUnauthorized, ProbeNotProbed, ProbeCanceled}, s)
+		ProbeUnavailable, ProbeUnauthorized, ProbeNotProbed, ProbeCanceled, ProbeAssertionFailed}, s)
 }
 
 type CapabilityProbeResult struct {
-	Status      CapabilityProbeStatus `json:"status"`
-	Evidence    CapabilityEvidence    `json:"evidence,omitempty"`
-	ErrorClass  string                `json:"error_class,omitempty"`
-	BindingID   string                `json:"binding_id"`
-	ProbeKind   string                `json:"probe_kind"`
-	StartedAt   *time.Time            `json:"started_at,omitempty"`
-	CompletedAt *time.Time            `json:"completed_at,omitempty"`
+	Status   CapabilityProbeStatus `json:"status"`
+	Evidence CapabilityEvidence    `json:"evidence,omitempty"`
+	// ErrorClass is Halro's own classification. ProviderStatus and ProviderCode
+	// are the upstream's, and they are here because the class alone answers
+	// "what kind of failure" without answering "which field" — an operator
+	// reading "could not tell" had to go find a log line that, for a probe, was
+	// never written. The upstream's sentence is deliberately absent and must
+	// stay absent: it is a provider response body, and this record is durable,
+	// served to the console and copied into backups. Only identifiers, narrowed
+	// by provider.SafeProviderIdentifier before they get here.
+	ErrorClass     string     `json:"error_class,omitempty"`
+	ProviderStatus int        `json:"provider_status,omitempty"`
+	ProviderCode   string     `json:"provider_code,omitempty"`
+	BindingID      string     `json:"binding_id"`
+	ProbeKind      string     `json:"probe_kind"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
 }
 
 // DetectionProviderCall is the durable accounting boundary around a possibly
@@ -252,6 +278,15 @@ func (d ModelCapabilityDetection) Validate() error {
 		}
 		if result.Status != ProbeSupported && result.Evidence == EvidenceVerified {
 			problems = append(problems, fmt.Errorf("non-supported capability %q cannot carry verified evidence", capability))
+		}
+		// An upstream-chosen value reaching a durable record is bounded here as
+		// well as at capture. Capture is where it is narrowed; this is where a
+		// record that skipped that step is refused rather than stored.
+		if result.ProviderStatus != 0 && (result.ProviderStatus < 100 || result.ProviderStatus > 599) {
+			problems = append(problems, fmt.Errorf("capability %q carries an out-of-range provider status", capability))
+		}
+		if len(result.ProviderCode) > maxProbeProviderCodeLength {
+			problems = append(problems, fmt.Errorf("capability %q carries an oversized provider code", capability))
 		}
 	}
 	if d.Status == DetectionAmbiguous {

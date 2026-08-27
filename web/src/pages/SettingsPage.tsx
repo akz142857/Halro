@@ -331,7 +331,7 @@ function ConfigPreviewCard({ yaml, entries }: { yaml: string; entries: SystemCon
     <div className="config-list-toolbar">
       <label>
         <span className="sr-only">{t("settings.searchConfig")}</span>
-        <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("settings.searchConfigPlaceholder")} />
+        <input autoComplete="off" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("settings.searchConfigPlaceholder")} />
       </label>
       <span>{t("settings.configResultCount", { visible: visibleEntries.length, total: entries.length })}</span>
     </div>

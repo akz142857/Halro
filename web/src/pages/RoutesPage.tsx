@@ -262,7 +262,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
       ) : (
         <form className="route-form" onSubmit={submit}>
           <div className="route-form-body form-grid">
-          <Field label={t("routes.publicAlias")}><input autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
+          <Field label={t("routes.publicAlias")}><input autoComplete="off" autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
           <Field label={t("routes.deployment")}>
             <select required value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
               {enabled.map((deployment) => (
@@ -276,7 +276,7 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
               <option value="round_robin">{t("routes.roundRobin")}</option>
             </select>
           </Field>
-          <Field label={t("routes.priority")}><input type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
+          <Field label={t("routes.priority")}><input autoComplete="off" type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
           {mutation.isError && <ErrorState error={mutation.error} />}
           </div>
           {/* Whether this alias will answer requests is the state the save

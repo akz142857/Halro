@@ -593,6 +593,10 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 // would not decode — carries no provider body and is the case an operator most
 // needs, so that text is logged, on the same rule the connection tests use: an
 // error with no upstream status is one Halro wrote.
+//
+// That rule needs a classified error to stand on. An unclassified one gets its
+// type logged and its text withheld, because nothing has established which side
+// of the boundary wrote it.
 func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	if providerErr == nil {
 		return
@@ -632,7 +636,23 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	} else if errors.Is(providerErr, context.Canceled) || errors.Is(providerErr, context.DeadlineExceeded) {
 		attributes = append(attributes, "error_class", "client_disconnected_or_timed_out")
 	} else {
-		attributes = append(attributes, "error_class", string(provider.ErrorUnknown), "reason", providerErr.Error())
+		// The rule above reads an absent upstream status as "Halro wrote this",
+		// and here that inference is not available: an error that is not a
+		// *provider.Error never went through the classification that decides
+		// what may be said about it. The adapter contract delivers provider
+		// failures classified, so anything arriving unclassified is either
+		// Halro's own internal error or an adapter that did not honour the
+		// contract — and from this line the two are indistinguishable. One of
+		// them can be holding a response body.
+		//
+		// So the text stays out and the Go type goes in. A type name is an
+		// identifier, produced by the code rather than by an upstream, and it
+		// answers the question this branch is actually asked: which component
+		// produced a failure nothing classified. Redacting the sentence instead
+		// would be the pattern denylist the comment above already refuses to
+		// rely on.
+		attributes = append(attributes, "error_class", string(provider.ErrorUnknown),
+			"error_type", fmt.Sprintf("%T", providerErr))
 	}
 	attempt.service.logger.Warn("provider attempt failed", attributes...)
 }

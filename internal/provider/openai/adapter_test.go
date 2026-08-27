@@ -267,33 +267,50 @@ func TestProfileOperationURLs(t *testing.T) {
 	}
 }
 
-func TestConnectionProbeUsesNonBillableEndpoint(t *testing.T) {
-	wantURL := "https://provider.example/v1/models/org%2Fgpt-test"
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Method != http.MethodGet || request.URL.String() != wantURL {
-			t.Fatalf("unexpected probe: %s %s want=%s", request.Method, request.URL, wantURL)
-		}
-		if request.Header.Get("Authorization") != "Bearer provider-key" {
-			t.Fatal("probe authorization was not set")
-		}
-		return &http.Response{
-			StatusCode: http.StatusOK, Header: make(http.Header),
-			Body:    io.NopCloser(strings.NewReader(`{"object":"list","data":[]}`)),
-			Request: request,
-		}, nil
-	})}
-	endpoint, _ := url.Parse("https://provider.example")
-	adapter, err := New(endpoint, []byte("provider-key"), client)
+// Discovery does not address the route the operations do, because on the only
+// upstream that pins one the catalogue is not route-scoped. Measured on a real
+// Bedrock Mantle account, 2026-08-25 (us-east-2): GET /v1/models is 200 and GET
+// /openai/v1/models is 404, and the same split holds for /models/{id}. The
+// earlier reading — discovery follows the operation prefix — 404'd every model
+// list and every connection test on the two /openai/v1 profiles.
+func TestModelCatalogIsNotScopedToTheOperationRoute(t *testing.T) {
+	for _, test := range []struct {
+		name, base, prefix, want string
+	}{
+		{"default route", "https://api.openai.com", "", "https://api.openai.com/v1/models"},
+		{"literal base path", "https://llm.internal/api/paas/v4", "", "https://llm.internal/api/paas/v4/models"},
+		{"bedrock mantle openai route", "https://bedrock-mantle.us-east-2.api.aws", "openai/v1", "https://bedrock-mantle.us-east-2.api.aws/v1/models"},
+		{"bedrock mantle default route", "https://bedrock-mantle.us-east-2.api.aws", "v1", "https://bedrock-mantle.us-east-2.api.aws/v1/models"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			endpoint, _ := url.Parse(test.base)
+			adapter := &Adapter{endpoint: endpoint, operationPathPrefix: test.prefix}
+			catalog, err := adapter.modelCatalogURL()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := catalog.String(); got != test.want {
+				t.Fatalf("catalog URL=%q want=%q", got, test.want)
+			}
+		})
+	}
+}
+
+// The divergence is deliberate and has to stay visible: the pinned route still
+// carries every operation, and only the catalogue falls back to /v1. A change
+// that quietly unifies them breaks one side or the other.
+func TestPinnedRouteCarriesOperationsWhileCatalogStaysOnV1(t *testing.T) {
+	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-2.api.aws")
+	adapter := &Adapter{endpoint: endpoint, operationPathPrefix: "openai/v1"}
+	catalog, err := adapter.modelCatalogURL()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer adapter.Close()
-	if err := adapter.Probe(context.Background(), "org/gpt-test"); err != nil {
-		t.Fatal(err)
+	if got, want := catalog.Path, "/v1/models"; got != want {
+		t.Fatalf("catalog path=%q want=%q", got, want)
 	}
-	wantURL = "https://provider.example/v1/models"
-	if err := adapter.Probe(context.Background(), ""); err != nil {
-		t.Fatal(err)
+	if got, want := adapter.operationURL("openai.gpt-5.5", "chat/completions").Path, "/openai/v1/chat/completions"; got != want {
+		t.Fatalf("operation path=%q want=%q", got, want)
 	}
 }
 
@@ -443,6 +460,78 @@ func TestFakeProviderHTTPErrorMatrix(t *testing.T) {
 			if got.Class != test.class || got.Retryable != test.retryable ||
 				got.Ambiguous != test.ambiguous || got.StatusCode != test.status {
 				t.Fatalf("status=%d error=%#v", test.status, got)
+			}
+		})
+	}
+}
+
+// TestUpstreamRefusalMessageMatchesStatus covers the sentence half of a
+// classified refusal: whatever fills it, it must be either something the
+// upstream actually wrote or a stand-in that agrees with the status beside it.
+// The regression this pins down shipped a stand-in reading "Bad Gateway" onto
+// every unparseable body, so a probe against a path the upstream does not have
+// logged "provider error (404): Bad Gateway" — two different failures in one
+// line, sending the operator to look for a gateway that was never involved.
+func TestUpstreamRefusalMessageMatchesStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "upstream sentence is quoted verbatim",
+			status: http.StatusNotFound,
+			body:   `{"error":{"message":"The model does not exist","code":"model_not_found"}}`,
+			want:   "provider error (404): The model does not exist",
+		},
+		{
+			// What a proxy, a CDN, or a route the upstream does not serve
+			// returns: a body that never parses as an OpenAI envelope.
+			name:   "html body names no status but its own",
+			status: http.StatusNotFound,
+			body:   "<html><head><title>404 Not Found</title></head></html>",
+			want:   "provider error (404): upstream sent no OpenAI-shaped error body",
+		},
+		{
+			name:   "empty body names no status but its own",
+			status: http.StatusNotFound,
+			body:   "",
+			want:   "provider error (404): upstream sent no OpenAI-shaped error body",
+		},
+		{
+			// Shaped correctly, but the provider declined to say why. That is a
+			// different fact from the body being unreadable, and an operator
+			// chasing the two looks in different places.
+			name:   "well-formed envelope with no sentence",
+			status: http.StatusNotFound,
+			body:   `{"error":{"code":"model_not_found"}}`,
+			want:   "provider error (404): upstream sent no error message",
+		},
+		{
+			name:   "a real 502 still reads as one",
+			status: http.StatusBadGateway,
+			body:   "<html>502</html>",
+			want:   "provider error (502): upstream sent no OpenAI-shaped error body",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := classifyHTTPError(test.status, limitedErrorMessage(strings.NewReader(test.body)))
+			if got.Message != test.want {
+				t.Fatalf("message = %q, want %q", got.Message, test.want)
+			}
+			// The stand-in is Halro's own prose, so nothing stops a later edit
+			// from reaching for another status name again. Reject any that is
+			// not this response's own.
+			for status := 400; status < 600; status++ {
+				name := http.StatusText(status)
+				if name == "" || status == test.status {
+					continue
+				}
+				if strings.Contains(got.Message, name) {
+					t.Fatalf("message %q borrows the name of status %d (%q)", got.Message, status, name)
+				}
 			}
 		})
 	}

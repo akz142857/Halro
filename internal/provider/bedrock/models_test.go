@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,43 @@ func TestBedrockMetadataMapsOnlyReviewedModalities(t *testing.T) {
 	claims := adapter.MapCapabilityClaims(target, scope, time.Now().UTC())
 	if len(claims) != 2 || claims[0].CapabilityID != "chat" || claims[1].CapabilityID != "vision" {
 		t.Fatalf("claims=%#v", claims)
+	}
+}
+
+// The control plane states streaming outright, so this is declared evidence for
+// free — but only when it says yes. Absent means the catalog has not spoken, and
+// an explicit false is the upstream declining rather than Halro guessing;
+// neither is evidence for the capability, and this adapter does not produce
+// claims against one.
+func TestBedrockReadsStreamingOnlyWhenTheCatalogueClaimsIt(t *testing.T) {
+	adapter := newTestAdapter(t, refuseEveryRequest(t))
+	defer adapter.Close()
+	scope := domain.InvocationTargetScopeKey{
+		ProviderID: "provider", TargetKind: domain.TargetBedrockFoundationModel,
+		TargetID: "vendor.future-v1:0", BindingID: "binding", ProfileID: domain.ProfileBedrockConverseText,
+	}
+	claimed := func(streaming *bool) []string {
+		target := domain.InvocationTargetDescriptor{
+			TargetID: scope.TargetID,
+			Metadata: domain.NormalizedModelMetadata{
+				InputModalities: []string{"TEXT"}, OutputModalities: []string{"TEXT"}, ResponseStreaming: streaming,
+			},
+		}
+		names := make([]string, 0, 2)
+		for _, claim := range adapter.MapCapabilityClaims(target, scope, time.Now().UTC()) {
+			names = append(names, claim.CapabilityID)
+		}
+		return names
+	}
+	yes, no := true, false
+	if got := claimed(&yes); !slices.Equal(got, []string{"chat", "streaming"}) {
+		t.Fatalf("an explicit yes did not become a claim: %v", got)
+	}
+	if got := claimed(&no); !slices.Equal(got, []string{"chat"}) {
+		t.Fatalf("an explicit no produced a claim: %v", got)
+	}
+	if got := claimed(nil); !slices.Equal(got, []string{"chat"}) {
+		t.Fatalf("silence produced a claim: %v", got)
 	}
 }
 

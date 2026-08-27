@@ -4,11 +4,13 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // adminDeploymentView is a deployment as the console reads it: the stored record
@@ -16,7 +18,47 @@ import (
 // move without the record being rewritten.
 type adminDeploymentView struct {
 	domain.Deployment
-	CapabilityReview capabilityReview `json:"capability_review"`
+	CapabilityReview capabilityReview    `json:"capability_review"`
+	Probe            deploymentProbeView `json:"probe"`
+}
+
+// deploymentProbeView is the active probe's last word on this deployment.
+//
+// It is reported because it is the one state that removes a deployment from
+// routing without anything in the record changing: enabled, tested and priced
+// all still read as they did, and no traffic arrives. The console showed the
+// manual connection test instead — an operator-triggered result that can be days
+// old — so a black-holed deployment looked healthy.
+//
+// Not probed is its own state, not a failure: a deployment stays eligible until
+// a probe has actually said otherwise, so that a restart or a probe that has not
+// come round yet cannot take traffic away.
+type deploymentProbeView struct {
+	State      string `json:"state"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	// Classified, never the upstream's sentence about the request.
+	ErrorClass string `json:"error_class,omitempty"`
+}
+
+const (
+	deploymentProbeNotProbed = "not_probed"
+	deploymentProbeHealthy   = "healthy"
+	deploymentProbeUnhealthy = "unhealthy"
+)
+
+func probeView(probes map[string]provider.DeploymentProbe, deploymentID string) deploymentProbeView {
+	probe, probed := probes[deploymentID]
+	if !probed {
+		return deploymentProbeView{State: deploymentProbeNotProbed}
+	}
+	view := deploymentProbeView{State: deploymentProbeHealthy, ErrorClass: probe.ErrorClass}
+	if !probe.Healthy {
+		view.State = deploymentProbeUnhealthy
+	}
+	if !probe.ObservedAt.IsZero() {
+		view.ObservedAt = probe.ObservedAt.UTC().Format(time.RFC3339)
+	}
+	return view
 }
 
 // deploymentBinding resolves the profile binding a deployment runs against,

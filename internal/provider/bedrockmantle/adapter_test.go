@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,49 @@ func TestResponsesAdapterAddressesTheRouteTheProfileFixed(t *testing.T) {
 	}
 }
 
+// The catalogue is not on the route the profile pins. Measured on a real Mantle
+// account, 2026-08-25 (us-east-2): GET /v1/models is 200 while GET
+// /openai/v1/models is 404. Following the operation prefix into discovery
+// therefore 404'd both the model list and the connection test on every
+// /openai/v1 profile, while inference on that route was fine.
+func TestCatalogAndProbeStayOnV1WhileOperationsFollowTheProfileRoute(t *testing.T) {
+	endpoint, _ := url.Parse("https://bedrock-mantle.us-east-1.api.aws")
+	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "Authorization", "Bearer ", []byte("bedrock-key"), "api-key", "x-api-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		seen = append(seen, request.URL.Path)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"openai.gpt-5.5","owned_by":"openai"}]}`))}, nil
+	})
+	adapter, err := NewResponses(ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: &http.Client{Transport: transport},
+		Capabilities: provider.Capabilities{Chat: true}, OperationPathPrefix: "openai/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	if err := adapter.Probe(context.Background(), "openai.gpt-5.5"); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].TargetID != "openai.gpt-5.5" {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+	for _, path := range seen {
+		if path != "/v1/models" {
+			t.Fatalf("discovery addressed %q, want /v1/models", path)
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("expected a probe and a catalog request, saw %v", seen)
+	}
+}
+
 func TestResponsesAdapterUsesMantleWireAndDisablesStorage(t *testing.T) {
 	adapter := testAdapter(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodPost || request.URL.Path != "/v1/responses" {
@@ -154,6 +198,60 @@ func TestResponsesAdapterValidatesStreamLifecycleAndUsage(t *testing.T) {
 	}
 	if len(events) != 3 || events[0].Outputs[0].Content[0].Text != "hello" || events[1].Outputs[0].Termination != "complete" || events[2].Kind != semantic.EventUsage || usage == nil || usage.TotalTokens != 3 {
 		t.Fatalf("unexpected stream events=%#v usage=%#v", events, usage)
+	}
+}
+
+// Enumeration and claim production are separate jobs, and this route can only
+// do the first: the OpenAI-shaped catalog carries an identifier and an owner,
+// so any capability read off it would be a guess wearing declared evidence.
+func TestResponsesAdapterEnumeratesWithoutClaimingAnything(t *testing.T) {
+	var requested string
+	adapter := testAdapter(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requested = request.URL.String()
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"openai.gpt-5.6-luna","owned_by":"openai"},{"id":"  ","owned_by":"x"},{"id":"moonshotai.kimi-k2.5"}]}`))}, nil
+	}))
+	discovery := adapter.InvocationTargetDiscovery()
+	if !discovery.CanEnumerate || !discovery.CanDescribe || !discovery.CanVerify {
+		t.Fatalf("discovery does not advertise enumeration: %#v", discovery)
+	}
+	targets, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested != "https://bedrock-mantle.us-east-1.api.aws/v1/models" {
+		t.Fatalf("catalog addressed %q", requested)
+	}
+	if len(targets) != 2 || targets[0].TargetID != "openai.gpt-5.6-luna" || targets[1].TargetID != "moonshotai.kimi-k2.5" {
+		t.Fatalf("targets=%#v", targets)
+	}
+	for _, target := range targets {
+		// No metadata means no metadata source. A target that claimed one would
+		// let a downstream merge treat emptiness as an answer.
+		if target.MetadataSource != domain.MetadataSourceNone {
+			t.Fatalf("target %q claims a metadata source", target.TargetID)
+		}
+		if len(target.Metadata.InputModalities) != 0 || len(target.Metadata.OutputModalities) != 0 || len(target.Metadata.SupportedOperations) != 0 {
+			t.Fatalf("target %q invented metadata: %#v", target.TargetID, target.Metadata)
+		}
+	}
+	// The claim mapper is the thing that must not exist on this route.
+	if _, ok := any(adapter).(provider.ProviderMetadataMapper); ok {
+		t.Fatal("Mantle Responses claims capabilities it has no evidence for")
+	}
+}
+
+func TestResponsesAdapterBoundsTheModelCatalog(t *testing.T) {
+	entries := make([]string, maxCatalogEntries+1)
+	for index := range entries {
+		entries[index] = `{"id":"m` + strconv.Itoa(index) + `"}`
+	}
+	adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[` + strings.Join(entries, ",") + `]}`))}, nil
+	}))
+	if _, err := adapter.ListInvocationTargets(context.Background(), domain.TargetQuery{}); err == nil {
+		t.Fatal("an unbounded catalog was accepted")
 	}
 }
 
@@ -293,6 +391,42 @@ func TestResponsesAdapterClassifiesTheMantleStatusMatrix(t *testing.T) {
 		if strings.Contains(classified.Message, "access_denied") {
 			t.Fatalf("status %d carried the provider error type into the message: %q", test.status, classified.Message)
 		}
+		// The type is kept, out of the sentence and in the identifier field the
+		// attempt log prints. A refusal that reaches the operator as a bare
+		// status says a request was refused without saying for what.
+		if classified.ProviderCode != "access_denied" {
+			t.Fatalf("status %d dropped the refusal identifier: %q", test.status, classified.ProviderCode)
+		}
+	}
+}
+
+// The parameter a refusal names is the part an operator acts on, and Mantle
+// answers in the OpenAI error shape, so both halves arrive on the wire. The
+// sentence is a provider response body and stays inside the error; the code,
+// joined to the parameter, is what leaves it. "unsupported_parameter" without
+// the field names a category, not something to change.
+func TestResponsesAdapterKeepsTheRefusedParameterInTheIdentifier(t *testing.T) {
+	adapter := testAdapter(t, roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 400,
+			Header:     http.Header{"X-Amzn-Requestid": []string{"aws-request-param"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"message":"Unsupported parameter: 'max_completion_tokens'.","type":"invalid_request_error","param":"max_completion_tokens","code":"unsupported_parameter"}}`)),
+		}, nil
+	}))
+	_, err := adapter.Chat(context.Background(), mantleChatCall())
+	var classified *provider.Error
+	if !errors.As(err, &classified) {
+		t.Fatalf("refusal was not classified: %v", err)
+	}
+	if classified.Class != provider.ErrorBadRequest || classified.ProviderRequestID != "aws-request-param" {
+		t.Fatalf("unexpected classification: class=%s request_id=%q", classified.Class, classified.ProviderRequestID)
+	}
+	if classified.ProviderCode != "unsupported_parameter:max_completion_tokens" {
+		t.Fatalf("refusal identifier lost the parameter: %q", classified.ProviderCode)
+	}
+	if strings.Contains(classified.ProviderCode, "Unsupported parameter") {
+		t.Fatalf("provider sentence reached the identifier: %q", classified.ProviderCode)
 	}
 }
 
@@ -383,5 +517,35 @@ func mantleChatCall() provider.ChatCall {
 			Model:    "public",
 			Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
 		},
+	}
+}
+
+// The code reaches a log attribute, a durable probe result and a console cell,
+// and each of those takes whatever the adapter hands it. An upstream is free to
+// answer with a wall of text, or with the credential it has just rejected —
+// which is exactly what the gateway's own logging comment says it will not rely
+// on a pattern denylist to catch. So it is bounded where it is born.
+func TestAnUpstreamRefusalCodeIsBoundedBeforeItLeavesTheAdapter(t *testing.T) {
+	for name, test := range map[string]struct {
+		code, param, want string
+	}{
+		"an ordinary refusal":  {"unsupported_parameter", "image_url", "unsupported_parameter:image_url"},
+		"an indexed JSON path": {"invalid_image_url", "messages[0].content[1].image_url", "invalid_image_url:messages[0].content[1].image_url"},
+		// The half that decides the verdict survives the half that only annotates it.
+		"a sentence in param":  {"unsupported_parameter", "the messages you sent", "unsupported_parameter"},
+		"an echoed credential": {"invalid_api_key", "sk-" + strings.Repeat("a", 200), "invalid_api_key"},
+		"a wall of text":       {strings.Repeat("x", 4096), "", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			envelope := openaiapi.ErrorEnvelope{}
+			envelope.Error.Code = test.code
+			if test.param != "" {
+				param := test.param
+				envelope.Error.Param = &param
+			}
+			if got := refusalCode(envelope); got != test.want {
+				t.Fatalf("refusalCode = %q, want %q", got, test.want)
+			}
+		})
 	}
 }

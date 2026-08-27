@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -82,6 +83,61 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error {
 	return e.Cause
+}
+
+// MaxProviderIdentifierLength bounds an identifier the upstream chose. The
+// value is read from a provider response body, so it is attacker-influenceable
+// in the same sense every upstream field is; anything longer than this is not
+// an identifier.
+const MaxProviderIdentifierLength = 128
+
+// SafeProviderIdentifier narrows an upstream-chosen identifier to something a
+// log, a durable record and a console cell can all hold.
+//
+// The bound and the character set were written twice already — once for Bedrock
+// exception names, once for the connection-test log attributes — and a third
+// copy was about to be written for the probe results this now feeds. The rule
+// is the same in all three places: an identifier is short and is made of the
+// characters identifiers are made of; a value that is neither is not an
+// identifier and is dropped rather than trimmed, because a truncated identifier
+// is a different identifier.
+//
+// The code and the parameter it names are narrowed separately. They arrive
+// joined ("unsupported_parameter:messages[0].content") and the parameter is the
+// half most likely to carry something outside the set — a JSON path with
+// brackets, say. Narrowing the pair as one string would drop the code with it,
+// losing the half that decides the verdict to keep company with the half that
+// only annotates it.
+func SafeProviderIdentifier(value string) string {
+	code, parameter, joined := strings.Cut(strings.TrimSpace(value), ":")
+	if code = boundedIdentifier(code); code == "" || !joined {
+		return code
+	}
+	if parameter = boundedIdentifier(parameter); parameter == "" {
+		return code
+	}
+	return code + ":" + parameter
+}
+
+func boundedIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > MaxProviderIdentifierLength {
+		return ""
+	}
+	for _, char := range value {
+		switch {
+		case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		// Brackets are in the set because the parameter half is a JSON path and
+		// that is what a JSON path is made of. The comment above already named
+		// "messages[0].content" as the shape to expect while the set rejected
+		// it, so every upstream that answered with an indexed path lost the
+		// annotation this field exists to carry.
+		case char == '.' || char == '_' || char == '-' || char == '[' || char == ']':
+		default:
+			return ""
+		}
+	}
+	return value
 }
 
 // Unsent reports whether a transport error happened before any byte of the
@@ -278,7 +334,7 @@ type Registry struct {
 	// Provider ID as their binding identity.
 	adapters         map[string]Adapter
 	providerBindings map[string][]string
-	health           map[string]bool
+	health           map[string]DeploymentProbe
 	// Why a provider or binding has no adapter here, keyed by binding identity
 	// and by Provider ID for a provider-wide exclusion. It lives beside the
 	// adapters rather than next to the load report so it swaps with them: a
@@ -292,7 +348,7 @@ func NewRegistry() *Registry {
 		targets: make(map[string][]Target), next: make(map[string]*atomic.Uint64),
 		adapters:         make(map[string]Adapter),
 		providerBindings: make(map[string][]string),
-		health:           make(map[string]bool),
+		health:           make(map[string]DeploymentProbe),
 		unavailable:      make(map[string]string),
 	}
 }
@@ -491,8 +547,8 @@ func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Op
 func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	targets := cloneTargets(r.targets[publicModel])
 	targets = slices.DeleteFunc(targets, func(target Target) bool {
-		healthy, probed := r.health[target.DeploymentID]
-		return target.DeploymentID != "" && probed && !healthy
+		probe, probed := r.health[target.DeploymentID]
+		return target.DeploymentID != "" && probed && !probe.Healthy
 	})
 	return filterByOperation(targets, operation, minimum)
 }
@@ -599,23 +655,63 @@ func cloneTargets(targets []Target) []Target {
 	return result
 }
 
-// SetDeploymentHealthy updates active-probe health. Unknown deployments remain
+// DeploymentProbe is the last active probe result for one deployment.
+//
+// It carries why as well as whether, because the verdict alone leaves an
+// operator with a deployment that is enabled, tested and priced and still takes
+// no traffic. The reason is the classified error only: a probe failure's
+// sentence is the upstream's prose about the request, and it stays inside the
+// error rather than being copied into state the console and the logs read.
+type DeploymentProbe struct {
+	Healthy    bool
+	ObservedAt time.Time
+	// Empty when healthy. The classified form the console already has wording
+	// for, so a probe failure and a manual test failure read the same way.
+	ErrorClass string
+}
+
+// SetDeploymentProbe records an active-probe result. Unknown deployments remain
 // eligible so startup and transient probe scheduling cannot black-hole traffic.
-func (r *Registry) SetDeploymentHealthy(deploymentID string, healthy bool) {
+func (r *Registry) SetDeploymentProbe(deploymentID string, probe DeploymentProbe) {
 	if deploymentID == "" {
 		return
 	}
 	r.mu.Lock()
-	r.health[deploymentID] = healthy
+	r.health[deploymentID] = probe
 	r.mu.Unlock()
 }
 
-func (r *Registry) DeploymentHealth() map[string]bool {
+// RetainDeploymentProbes drops the probe result of every deployment not named.
+//
+// Nothing else removes one. Replace carries forward whatever it does not
+// overwrite, which is right — a reload must not report a healthy deployment as
+// unprobed — but it means a deleted deployment kept its last verdict for the
+// life of the process, and the metrics exporter kept emitting
+// halro_deployment_up for an ID that no longer exists. A label set that only
+// ever grows is the shape this repo bans by name.
+//
+// The caller is the probe loop, which reads the deployment list from the store
+// and is therefore the only place that knows which IDs are still real.
+func (r *Registry) RetainDeploymentProbes(deploymentIDs []string) {
+	live := make(map[string]struct{}, len(deploymentIDs))
+	for _, id := range deploymentIDs {
+		live[id] = struct{}{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id := range r.health {
+		if _, ok := live[id]; !ok {
+			delete(r.health, id)
+		}
+	}
+}
+
+func (r *Registry) DeploymentProbes() map[string]DeploymentProbe {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make(map[string]bool, len(r.health))
-	for deploymentID, healthy := range r.health {
-		result[deploymentID] = healthy
+	result := make(map[string]DeploymentProbe, len(r.health))
+	for deploymentID, probe := range r.health {
+		result[deploymentID] = probe
 	}
 	return result
 }
@@ -758,7 +854,7 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	next.next = make(map[string]*atomic.Uint64)
 	next.adapters = make(map[string]Adapter)
 	next.providerBindings = make(map[string][]string)
-	next.health = make(map[string]bool)
+	next.health = make(map[string]DeploymentProbe)
 	next.unavailable = make(map[string]string)
 	next.mu.Unlock()
 
@@ -772,9 +868,9 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	r.providerBindings = replacementProviderBindings
 	r.health = replacementHealth
 	r.unavailable = replacementUnavailable
-	for deploymentID, healthy := range oldHealth {
+	for deploymentID, probe := range oldHealth {
 		if _, exists := r.health[deploymentID]; !exists {
-			r.health[deploymentID] = healthy
+			r.health[deploymentID] = probe
 		}
 	}
 	r.mu.Unlock()
@@ -824,7 +920,7 @@ func (r *Registry) Close() {
 	r.next = make(map[string]*atomic.Uint64)
 	r.adapters = make(map[string]Adapter)
 	r.providerBindings = make(map[string][]string)
-	r.health = make(map[string]bool)
+	r.health = make(map[string]DeploymentProbe)
 	for adapter := range adapters {
 		adapter.Close()
 	}

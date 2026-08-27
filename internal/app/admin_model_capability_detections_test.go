@@ -642,3 +642,60 @@ func TestCapabilityDetectionCancelDiscardsALateSupportedResult(t *testing.T) {
 	}
 	t.Fatal("detection did not reach canceled")
 }
+
+// A capability the plan could not fit is recorded under probe_budget, and that
+// kind is the whole point: the console filters risk_policy rows out of both the
+// unestablished-capability banner and the failed-probe list, because a policy
+// decision is not something an operator can act on. A budget ceiling is — they
+// can raise it or declare the capability by hand.
+//
+// The entry was written into the in-memory detection and then thrown away: the
+// probe loop opens by re-reading the record from the store and assigning over
+// it, so the first iteration replaced the map. finalizeCapabilityDetection
+// filled the missing name back in as risk_policy, and the capability vanished
+// from the page.
+func TestABudgetDeferredCapabilityIsStoredAsSuchRatherThanAsAPolicy(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := instance.EffectiveProfileBindings()
+	if len(bindings) != 1 {
+		t.Fatalf("this test needs a single candidate so identification spends nothing; bindings=%d", len(bindings))
+	}
+	detector := &deferringCapabilityDetector{scriptedCapabilityDetector: scriptedCapabilityDetector{
+		supported: map[string]bool{"chat": true},
+	}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{bindings[0].ID: detector})
+
+	completed := runDetectionForTest(t, runtime, instance, "budget-deferred-model")
+
+	result, recorded := completed.Results["reasoning"]
+	if !recorded {
+		t.Fatalf("reasoning is absent from the stored results entirely: %#v", completed.Results)
+	}
+	if result.ProbeKind != "probe_budget" {
+		t.Fatalf("the budget ceiling was stored as %q, so the console hides it: %#v", result.ProbeKind, result)
+	}
+	if result.Status != domain.ProbeNotProbed {
+		t.Fatalf("a deferred capability was given a verdict: %#v", result)
+	}
+}
+
+// deferringCapabilityDetector is a plan whose ceiling cut one capability, which
+// is what the real OpenAI chat set does: it serves nine probeable capabilities
+// and the plan may ask for eight. The scripted detector it embeds returns a plan
+// with nothing deferred, so it cannot reach this path at all.
+type deferringCapabilityDetector struct {
+	scriptedCapabilityDetector
+}
+
+func (d *deferringCapabilityDetector) CapabilityDetectionPlan(target provider.ModelCapabilityDetectionTarget) (provider.CapabilityDetectionPlan, error) {
+	plan, err := d.scriptedCapabilityDetector.CapabilityDetectionPlan(target)
+	if err != nil {
+		return plan, err
+	}
+	plan.Deferred = []string{"reasoning"}
+	return plan, nil
+}

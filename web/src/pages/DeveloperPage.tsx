@@ -386,7 +386,7 @@ export function DeveloperPage() {
                 hint={developerConfig.isError ? t("developer.gatewayURLUnavailable") : t("developer.gatewayURLHint")}
                 error={gatewayURL && !gatewayURLValid ? t("developer.invalidGatewayURL") : undefined}
               >
-                <input type="url" value={gatewayURL} onChange={(event) => setGatewayURL(event.target.value)} spellCheck={false} />
+                <input autoComplete="off" type="url" value={gatewayURL} onChange={(event) => setGatewayURL(event.target.value)} spellCheck={false} />
               </Field>
               <div className="field developer-key-field">
                 <label htmlFor="developer-gateway-key">{t("developer.gatewayKey")}</label>
@@ -428,13 +428,13 @@ export function DeveloperPage() {
               {requestMode === "form" ? (
                 <>
                   <Field label={t("developer.input")}>
-                    <textarea rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
+                    <textarea autoComplete="off" rows={6} value={input} placeholder={t("developer.inputPlaceholder")} onChange={(event) => setInput(event.target.value)} />
                   </Field>
                   {endpoint !== "embeddings" && (
                     <div className="field developer-image-field">
                       <label htmlFor="developer-image-url">{t("developer.images")}</label>
                       <div className="developer-image-add">
-                        <input
+                        <input autoComplete="off"
                           id="developer-image-url"
                           type="url"
                           value={imageURL}
@@ -502,7 +502,7 @@ export function DeveloperPage() {
                 </>
               ) : (
                 <Field label={t("developer.rawJSON")} hint={t("developer.rawJSONHint")} error={parsedJSON.error ? t("developer.invalidJSON") : undefined}>
-                  <textarea className="developer-json-editor" rows={14} value={rawJSON} spellCheck={false} onChange={(event) => setRawJSON(event.target.value)} />
+                  <textarea autoComplete="off" className="developer-json-editor" rows={14} value={rawJSON} spellCheck={false} onChange={(event) => setRawJSON(event.target.value)} />
                 </Field>
               )}
             </div>

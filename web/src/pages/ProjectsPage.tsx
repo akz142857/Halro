@@ -402,14 +402,14 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryFn: api.redactionPolicies,
   });
   const availableRoutes = useQuery({
-    queryKey: ["project-route-aliases"],
-    queryFn: api.allRoutes,
+    queryKey: ["routes"],
+    queryFn: api.routes,
   });
   const routeOptions = useMemo(() => {
     const retained = new Set(current?.allowed_models ?? []);
     const options = new Map<string, { enabledCount: number; strategies: Set<string> }>();
     retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
-    availableRoutes.data?.forEach((route) => {
+    availableRoutes.data?.items.forEach((route) => {
       const existing = options.get(route.public_model) ?? { enabledCount: 0, strategies: new Set<string>() };
       // Both readings come from the enabled routes only. Counting the strategy
       // of a disabled route made a retired row with a different strategy hide
@@ -497,7 +497,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         <section className="project-form-section" aria-labelledby="project-basics-title">
           <header><h3 id="project-basics-title">{t("projects.basicInfo")}</h3><p>{t("projects.basicInfoDescription")}</p></header>
           <div className="form-grid">
-            <Field label={t("projects.name")} error={errors.name?.message}><input data-modal-initial maxLength={MAX_PROJECT_NAME} {...register("name")} /></Field>
+            <Field label={t("projects.name")} error={errors.name?.message}><input autoComplete="off" data-modal-initial maxLength={MAX_PROJECT_NAME} {...register("name")} /></Field>
             <div className="model-picker" role="group" aria-labelledby="project-model-title" aria-describedby="project-model-help">
               <div className="model-picker-heading">
                 <strong id="project-model-title">{t("projects.aliases")}</strong>
@@ -525,11 +525,11 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
         <section className="project-form-section" aria-labelledby="project-capacity-title">
           <header><h3 id="project-capacity-title">{t("projects.capacityControls")}</h3><p>{t("projects.capacityControlsDescription")}</p></header>
           <div className="form-grid compact-number-grid">
-            <Field label={t("projects.rpm")}><input type="number" {...register("rpm")} /></Field>
-            <Field label={t("projects.tpm")}><input type="number" {...register("tpm")} /></Field>
-            <Field label={t("projects.maxConcurrency")}><input type="number" {...register("concurrency")} /></Field>
-            <Field label={t("projects.dailyBudgetUSD")}><input type="number" step="0.01" {...register("budget")} /></Field>
-            <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input type="number" min={0} {...register("requestKB")} /></Field>
+            <Field label={t("projects.rpm")}><input autoComplete="off" type="number" {...register("rpm")} /></Field>
+            <Field label={t("projects.tpm")}><input autoComplete="off" type="number" {...register("tpm")} /></Field>
+            <Field label={t("projects.maxConcurrency")}><input autoComplete="off" type="number" {...register("concurrency")} /></Field>
+            <Field label={t("projects.dailyBudgetUSD")}><input autoComplete="off" type="number" step="0.01" {...register("budget")} /></Field>
+            <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input autoComplete="off" type="number" min={0} {...register("requestKB")} /></Field>
           </div>
         </section>
         <section className="project-form-section" aria-labelledby="project-security-title">
@@ -537,7 +537,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
           <div className="form-grid">
             <Field label={t("projects.tokenGuardPolicy")}><select {...register("tokenGuardPolicyID")}><option value="">{t("projects.noBinding")}</option>{policies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.action === "temporary_block" ? t("policies.temporaryBlock") : policy.action === "alert" ? t("policies.alert") : t("policies.observe")}</option>)}</select></Field>
             <Field label={t("projects.redactionPolicy")}><select {...register("redactionPolicyID")}><option value="">{t("projects.noBinding")}</option>{redactionPolicies.data?.items.filter((policy) => policy.enabled).map((policy) => <option value={policy.id} key={policy.id}>{policy.name} · {policy.mode === "strict" ? t("redaction.strictBadge") : policy.mode === "bounded_stream" ? t("redaction.boundedBadge") : t("redaction.detectStreamBadge")}</option>)}</select></Field>
-            <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")} error={errors.cidrs?.message}><textarea rows={3} placeholder={t("projects.cidrPlaceholder")} {...register("cidrs")} /></Field>
+            <Field label={t("projects.allowedCIDR")} hint={t("projects.cidrHint")} error={errors.cidrs?.message}><textarea autoComplete="off" rows={3} placeholder={t("projects.cidrPlaceholder")} {...register("cidrs")} /></Field>
           </div>
         </section>
         {mutation.isError && <ErrorState error={mutation.error} />}
@@ -649,10 +649,10 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         }}
       >
         <Field label={t("projects.keyName")} hint={t("projects.keyNameHint")}>
-          <input data-modal-initial value={name} onChange={(event) => setName(event.target.value)} />
+          <input autoComplete="off" data-modal-initial value={name} onChange={(event) => setName(event.target.value)} />
         </Field>
         <Field label={t("projects.keyExpiry")} hint={t("projects.keyExpiryHint")}>
-          <input type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
+          <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
         <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpMintKey")} />
         {mutation.isError && <ErrorState error={mutation.error} />}

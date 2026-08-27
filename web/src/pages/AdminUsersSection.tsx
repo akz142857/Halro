@@ -95,7 +95,7 @@ function CreateAdminUserModal({ onClose, onCreated }: { onClose: () => void; onC
   return <Modal title={t("adminUsers.create")} onClose={onClose} dirty={Boolean(username || password || reauth.currentPassword)}>
     <form className="settings-form credential-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
       <Field label={t("adminUsers.username")}>
-        <input autoFocus required value={username} onChange={(event) => setUsername(event.target.value)} />
+        <input autoComplete="off" autoFocus required value={username} onChange={(event) => setUsername(event.target.value)} />
       </Field>
       <Field label={t("adminUsers.password")} hint={t("auth.passwordHint", { count: MIN_PASSWORD_CHARACTERS })}>
         <input required type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} />

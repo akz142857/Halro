@@ -575,7 +575,19 @@ func ValidateDependencies(capabilities domain.ProviderCapabilities) error {
 type Catalog struct {
 	entries  map[string]Entry
 	ordered  []Entry
+	profiles map[coverageKey][]domain.ProviderProfileID
 	revision string
+}
+
+// coverageKey identifies a model independently of the interface serving it —
+// Lookup's identity with the profile and the region removed. It answers the
+// question the resolution ladder could not ask: not "does this provider's
+// bindings cover the model", but "does anything in the catalogue cover it, and
+// under which interface".
+type coverageKey struct {
+	providerType domain.ProviderType
+	targetKind   domain.DeploymentTargetKind
+	model        string
 }
 
 // New validates entries and computes the catalog digest.
@@ -609,6 +621,13 @@ func New(entries ...Entry) (*Catalog, error) {
 		}
 		catalog.entries[key] = entry
 		catalog.ordered = append(catalog.ordered, entry)
+		coverage := coverageKey{providerType: entry.Key.ProviderType, targetKind: entry.Key.TargetKind, model: entry.Key.Model}
+		if catalog.profiles == nil {
+			catalog.profiles = make(map[coverageKey][]domain.ProviderProfileID)
+		}
+		if !slices.Contains(catalog.profiles[coverage], entry.Key.Profile) {
+			catalog.profiles[coverage] = append(catalog.profiles[coverage], entry.Key.Profile)
+		}
 	}
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
@@ -644,6 +663,25 @@ func (c *Catalog) Lookup(key Key) (Entry, bool) {
 		}
 	}
 	return Unknown(key), false
+}
+
+// ProfilesCovering names every interface the catalog lists this model under,
+// for this provider type, in ascending order. It is the answer to "the operator
+// typed a real model name and got told it is not in the catalogue": the model
+// is there, under a profile this provider has not bound, and knowing which one
+// turns a dead end into an instruction.
+//
+// Exact on the model, like Lookup — a prefix must never promote an unknown
+// future model to a known interface. Region is not part of the question: a
+// model served in one region and not another is still served by that interface.
+func (c *Catalog) ProfilesCovering(providerType domain.ProviderType, targetKind domain.DeploymentTargetKind, model string) []domain.ProviderProfileID {
+	found := c.profiles[coverageKey{providerType: providerType, targetKind: targetKind, model: model}]
+	if len(found) == 0 {
+		return nil
+	}
+	profiles := slices.Clone(found)
+	slices.Sort(profiles)
+	return profiles
 }
 
 // Revision is the digest of the whole catalog. It is diagnostic only.

@@ -10,6 +10,16 @@ export function compactNumber(value: number) {
     .format(value || 0);
 }
 
+/**
+ * A count read as an exact figure rather than at a glance: grouped, never
+ * abbreviated. The cards abbreviate token limits because a tile has a width;
+ * the details drawer is where the operator goes to read the actual number, and
+ * `1050000` unseparated is the one form that is harder to read than either.
+ */
+export function exactNumber(value: number) {
+  return new Intl.NumberFormat(locale()).format(value || 0);
+}
+
 export function money(micros: number) {
   return new Intl.NumberFormat(locale(), {
     style: "currency",
@@ -55,4 +65,39 @@ export function useInstantFormatter() {
   const timeZone = useAccountingTimeZone();
   return (value: string | number | Date | undefined, style: InstantStyle = "dateTime") =>
     formatInstant(value, timeZone, style);
+}
+
+const AGE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 365 * 24 * 60 * 60_000],
+  ["month", 30 * 24 * 60 * 60_000],
+  ["day", 24 * 60 * 60_000],
+  ["hour", 60 * 60_000],
+  ["minute", 60_000],
+];
+
+/**
+ * How long ago something was observed, in the coarsest unit that still says
+ * something — "2 天前", not a timestamp.
+ *
+ * A verdict without an age is the console's most misleading element: a test
+ * that passed two months ago against a model the upstream has since retired
+ * renders exactly like one from this morning. The exact instant stays in the
+ * details drawer, where it is read rather than scanned.
+ *
+ * `now` is a parameter so a caller can render a fixed instant — a component
+ * reading the wall clock during a test run is the one thing that makes the
+ * output untestable.
+ */
+export function formatAge(value: string | number | Date | undefined, now: number = Date.now()): string {
+  if (value === undefined || value === null || value === "") return "";
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const elapsed = now - parsed.getTime();
+  // A clock that disagrees with the server by a few seconds must not render
+  // "in 3 seconds"; anything under a minute is simply just now.
+  const formatter = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
+  for (const [unit, millis] of AGE_UNITS) {
+    if (Math.abs(elapsed) >= millis) return formatter.format(-Math.round(elapsed / millis), unit);
+  }
+  return formatter.format(0, "minute");
 }

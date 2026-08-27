@@ -110,6 +110,56 @@ func TestAnUpstreamRefusalIsLoggedWithTheCodeItNamed(t *testing.T) {
 	}
 }
 
+// The unclassified branch had no test at all, which is how it kept the one
+// behaviour the two branches beside it were written to prevent: it logged the
+// error's full text, unbounded and unexamined.
+//
+// Every in-tree adapter classifies its failures, so nothing here reaches that
+// branch today — but the registry serves extension adapters too, and one
+// returning a plain error holding a response body would have had it written
+// out verbatim. The branch is the only entry to this line with no contract
+// behind it, so it is the one that must assume the worst about what it holds.
+func TestAnUnclassifiedFailureIsLoggedByTypeNotByText(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	logs := &bytes.Buffer{}
+	f.service.logger = safelog.New(slog.NewJSONHandler(logs, nil))
+	// What an adapter that ignored the error contract could hand back: prose it
+	// took from an upstream, with the key that upstream refused inside it. The
+	// canary is a Bedrock API key shape, which safelog's pattern list does not
+	// know — the point being that this line must not depend on recognising the
+	// format to keep it out.
+	f.adapter.err = errors.New(
+		"upstream refused: not authorized to call this project with " + unclassifiedKeyCanary)
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+
+	logged := logs.String()
+	// The failure still has to be reported, and reported with enough to chase:
+	// a test that only checks for absence is satisfied by a branch that logs
+	// nothing at all.
+	if !strings.Contains(logged, "provider attempt failed") ||
+		!strings.Contains(logged, `"error_class":"unknown"`) ||
+		!strings.Contains(logged, `"deployment_id":"dep_target_1"`) {
+		t.Fatalf("the unclassified failure was not reported: %s", logged)
+	}
+	// A Go type name is produced by the code, never by an upstream.
+	if !strings.Contains(logged, `"error_type":"*errors.errorString"`) {
+		t.Fatalf("the log did not name the type that produced the failure: %s", logged)
+	}
+	if strings.Contains(logged, "not authorized to call this project") {
+		t.Fatalf("an unclassified error's text was written to the log: %s", logged)
+	}
+	if strings.Contains(logged, unclassifiedKeyCanary) {
+		t.Fatalf("the attempt log leaked a credential: %s", logged)
+	}
+}
+
+// A Bedrock API key shape, deliberately outside safelog's pattern list.
+const unclassifiedKeyCanary = "ABSKQmVkcm9ja0FQSUtleUNhbmFyeQ=="
+
 // A service built without a logger must not panic on the first failure. Tests
 // and embedders construct one that way, and a nil logger reached only on the
 // error path is the shape that survives every green run.

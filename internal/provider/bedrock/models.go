@@ -33,7 +33,10 @@ type foundationModelSummary struct {
 	InputModalities         []string `json:"inputModalities"`
 	OutputModalities        []string `json:"outputModalities"`
 	InferenceTypesSupported []string `json:"inferenceTypesSupported"`
-	ModelLifecycle          struct {
+	// A pointer: the field is absent for models the control plane says nothing
+	// about, and absent is not false. Only an explicit true becomes a claim.
+	ResponseStreamingSupported *bool `json:"responseStreamingSupported"`
+	ModelLifecycle             struct {
 		Status string `json:"status"`
 	} `json:"modelLifecycle"`
 }
@@ -127,7 +130,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 			MetadataSource: domain.MetadataSourceProvider, Availability: domain.AvailabilityAvailable, FetchedAt: now,
 			Metadata: domain.NormalizedModelMetadata{
 				InputModalities: slices.Clone(summary.InputModalities), OutputModalities: slices.Clone(summary.OutputModalities),
-				InferenceTypes: slices.Clone(summary.InferenceTypesSupported),
+				InferenceTypes: slices.Clone(summary.InferenceTypesSupported), ResponseStreaming: summary.ResponseStreamingSupported,
 			},
 		})
 	}
@@ -141,6 +144,14 @@ func (a *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, 
 	}
 	if containsFold(target.Metadata.InputModalities, "IMAGE") && containsFold(target.Metadata.OutputModalities, "TEXT") {
 		capabilityIDs = append(capabilityIDs, "vision")
+	}
+	// The control plane states this outright, so reading it costs nothing and
+	// replaces a probe. Only an explicit true claims anything: a model the
+	// catalog is silent about has not said it cannot stream, and a false is the
+	// upstream declining rather than Halro guessing — neither is evidence for
+	// the capability, and this adapter does not produce claims against one.
+	if target.Metadata.ResponseStreaming != nil && *target.Metadata.ResponseStreaming {
+		capabilityIDs = append(capabilityIDs, "streaming")
 	}
 	claims := make([]domain.CapabilityClaim, 0, len(capabilityIDs))
 	for _, capabilityID := range capabilityIDs {

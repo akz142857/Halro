@@ -254,12 +254,12 @@ func TestRegistryExcludesActivelyUnhealthyDeploymentAndRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	registry.SetDeploymentHealthy("dep_primary", false)
+	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: false})
 	candidates := registry.ResolveCandidates("chat")
 	if len(candidates) != 1 || candidates[0].DeploymentID != "dep_fallback" {
 		t.Fatalf("unhealthy deployment was not excluded: %#v", candidates)
 	}
-	registry.SetDeploymentHealthy("dep_primary", true)
+	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: true})
 	if candidates = registry.ResolveCandidates("chat"); len(candidates) != 2 || candidates[0].DeploymentID != "dep_primary" {
 		t.Fatalf("healthy deployment did not recover: %#v", candidates)
 	}
@@ -535,5 +535,34 @@ func TestRoundRobinCounterResetsWithTheRegistry(t *testing.T) {
 	live.Replace(build())
 	if got := live.ResolveCandidates("chat")[0].ID; got != "route_0" {
 		t.Fatalf("start after reload %q; the counter did not come with the new target set", got)
+	}
+}
+
+// Nothing used to remove a probe result. Replace carries forward what it does
+// not overwrite — correct, or a reload would report every healthy deployment as
+// unprobed — so a deleted deployment kept its last verdict for the life of the
+// process, and the metrics exporter went on emitting halro_deployment_up for an
+// ID that no longer exists. An ever-growing label set is the shape this repo
+// bans by name.
+func TestProbeResultsDoNotOutliveTheirDeployments(t *testing.T) {
+	registry := NewRegistry()
+	registry.SetDeploymentProbe("dep_live", DeploymentProbe{Healthy: true})
+	registry.SetDeploymentProbe("dep_deleted", DeploymentProbe{Healthy: false, ErrorClass: string(ErrorConnect)})
+
+	registry.RetainDeploymentProbes([]string{"dep_live"})
+
+	probes := registry.DeploymentProbes()
+	if _, kept := probes["dep_deleted"]; kept {
+		t.Fatal("a deleted deployment kept its probe result")
+	}
+	live, found := probes["dep_live"]
+	if !found || !live.Healthy {
+		t.Fatalf("pruning dropped a live deployment's result: %#v", probes)
+	}
+	// Naming nothing prunes everything: an empty deployment list is a real
+	// state, not a signal to skip.
+	registry.RetainDeploymentProbes(nil)
+	if len(registry.DeploymentProbes()) != 0 {
+		t.Fatalf("probes survived an empty deployment list: %#v", registry.DeploymentProbes())
 	}
 }

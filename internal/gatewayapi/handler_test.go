@@ -267,6 +267,29 @@ func TestAnthropicOverloadedErrorPreservesProtocolStatus(t *testing.T) {
 	}
 }
 
+// The status a client is answered with is Halro's to decide, and the only
+// evidence of an overload it accepts is the status line the upstream sent.
+// An `error.code` is a string the upstream wrote into a body, and one path
+// carries it with no status behind it at all: a Mantle Responses stream error
+// event fills ProviderCode straight from the event. Read as an overload marker,
+// it turned a 502 into a 529 that no upstream ever sent — and 529 is the status
+// SDKs treat as "back off and retry", so the upstream would have been choosing
+// the client's retry behaviour.
+func TestAnthropicOverloadIsReadFromTheStatusNotTheUpstreamsWord(t *testing.T) {
+	handler, _ := New(&fakeService{}, 2048)
+	response := httptest.NewRecorder()
+	handler.renderAnthropicGatewayError(response, &gateway.Error{
+		Code: "provider_error", Message: "provider request failed", HTTPStatus: http.StatusBadGateway,
+		Cause: &provider.Error{Class: provider.ErrorProvider5xx, ProviderCode: "overloaded_error"},
+	}, "req_test")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("an upstream-chosen code set the response status: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"type":"api_error"`) {
+		t.Fatalf("the 502 was not reported as an api_error: %s", response.Body.String())
+	}
+}
+
 func TestAnthropicNativeModeUsesNativeServiceAndRawSSE(t *testing.T) {
 	service := &fakeService{}
 	handler, _ := New(service, 2048)
