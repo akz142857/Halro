@@ -160,6 +160,22 @@ func SafeProviderIdentifier(value string) string {
 	return code + ":" + parameter
 }
 
+// RefusalParameter is the parameter half of a narrowed provider identifier, or
+// empty when the upstream named no parameter.
+//
+// It exists so a caller can be told which field of their own request was
+// refused. The code half stays behind: it is the upstream's vocabulary, and
+// naming it to an application would publish which provider is behind a public
+// model alias. The parameter is the caller's own field path — they wrote it —
+// so returning it discloses nothing they do not already have.
+func RefusalParameter(value string) string {
+	_, parameter, joined := strings.Cut(strings.TrimSpace(value), ":")
+	if !joined {
+		return ""
+	}
+	return boundedIdentifier(parameter)
+}
+
 // RefusalFromOpenAIBody maps an OpenAI-shaped refusal onto the normalized kind.
 // Two families answer in this shape — OpenAI itself (including Azure and the
 // OpenAI-compatible endpoints) and Bedrock Mantle — so the rule lives here

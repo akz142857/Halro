@@ -255,6 +255,45 @@ func TestAnthropicMessagesRejectsBetaAndAmbiguousCredentials(t *testing.T) {
 	}
 }
 
+// The Anthropic body has no `param`, so the field a refusal named travels in
+// the sentence — the shape upstream Anthropic itself writes, and the shape this
+// surface's own decoder rejections already arrive in. Before this, a provider
+// refusal that named a field reached an Anthropic-protocol caller with the
+// field dropped, while the same refusal on the OpenAI surface named it.
+func TestAnthropicRefusalNamesTheFieldInTheMessage(t *testing.T) {
+	handler, _ := New(&fakeService{}, 2048)
+	response := httptest.NewRecorder()
+	handler.renderAnthropicGatewayError(response, &gateway.Error{
+		Code: "invalid_request_error", Message: "provider rejected the request",
+		HTTPStatus: http.StatusBadRequest, Param: "messages[0].content[1].image_url",
+	}, "req_test")
+	var envelope anthropicapi.ErrorResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if response.Code != http.StatusBadRequest ||
+		envelope.Error.Message != "messages[0].content[1].image_url: provider rejected the request" {
+		t.Fatalf("status=%d message=%q", response.Code, envelope.Error.Message)
+	}
+}
+
+// A failure about the request as a whole is not prefixed with an empty field
+// name — the sentence is the whole message.
+func TestAnthropicErrorWithoutAFieldIsNotPrefixed(t *testing.T) {
+	handler, _ := New(&fakeService{}, 2048)
+	response := httptest.NewRecorder()
+	handler.renderAnthropicGatewayError(response, &gateway.Error{
+		Code: "budget_exceeded", Message: "daily budget exceeded", HTTPStatus: http.StatusForbidden,
+	}, "req_test")
+	var envelope anthropicapi.ErrorResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error.Message != "daily budget exceeded" {
+		t.Fatalf("message=%q", envelope.Error.Message)
+	}
+}
+
 func TestAnthropicOverloadedErrorPreservesProtocolStatus(t *testing.T) {
 	handler, _ := New(&fakeService{}, 2048)
 	response := httptest.NewRecorder()
@@ -393,6 +432,58 @@ func TestGatewayErrorIsMappedWithoutLeakingCause(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "sensitive") {
 		t.Fatal("internal cause leaked to the client")
+	}
+}
+
+// The field an upstream refusal named has to survive the HTTP boundary, in the
+// same `param` slot the decoder rejections already use. Every gateway failure
+// reached this boundary through a call that passed nil, so `param` was null
+// even when the gateway knew exactly which field was refused.
+func TestProviderRefusalRendersTheRefusedField(t *testing.T) {
+	service := &fakeService{err: &gateway.Error{
+		Code: "invalid_request_error", Message: "provider rejected the request",
+		HTTPStatus: http.StatusBadRequest, Param: "messages[0].content[1].image_url",
+	}}
+	handler, _ := New(service, 1024)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`),
+	)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	handler.ChatCompletions(response, request)
+	var envelope openaiapi.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if response.Code != http.StatusBadRequest ||
+		envelope.Error.Param == nil || *envelope.Error.Param != "messages[0].content[1].image_url" {
+		t.Fatalf("status=%d param=%v", response.Code, envelope.Error.Param)
+	}
+}
+
+// A failure that is about the request as a whole leaves `param` null rather than
+// pointing the caller at an empty field name.
+func TestGatewayErrorWithoutAFieldLeavesParamNull(t *testing.T) {
+	service := &fakeService{err: &gateway.Error{
+		Code: "budget_exceeded", Message: "daily budget exceeded", HTTPStatus: http.StatusForbidden,
+	}}
+	handler, _ := New(service, 1024)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`),
+	)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	handler.ChatCompletions(response, request)
+	var envelope openaiapi.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envelope.Error.Param != nil {
+		t.Fatalf("param=%q on a failure that named no field", *envelope.Error.Param)
 	}
 }
 

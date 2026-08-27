@@ -52,7 +52,14 @@ type Error struct {
 	Message    string
 	HTTPStatus int
 	RetryAfter time.Duration
-	Cause      error
+	// Param names the field of the caller's request the failure is about, in
+	// the caller's own wire shape ("messages[0].content[1].image_url"). It is
+	// empty whenever nothing named a field, which is most failures — a budget
+	// refusal or a rate limit is about the request as a whole. A facade that
+	// has somewhere to put it renders it; the Anthropic surface has no such
+	// field and ignores it.
+	Param string
+	Cause error
 }
 
 func (e *Error) Error() string {
@@ -909,22 +916,43 @@ func (s *Service) Chat(
 	plaintextKey string,
 	request openaiapi.ChatCompletionRequest,
 ) (openaiapi.ChatCompletionResponse, error) {
+	var response openaiapi.ChatCompletionResponse
+	if err := s.chatWithRender(ctx, plaintextKey, request, func(result semantic.GenerateResult) error {
+		rendered, renderErr := openaiwire.RenderGenerateResult(result)
+		if renderErr != nil {
+			return renderErr
+		}
+		response = rendered
+		return nil
+	}); err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	return response, nil
+}
+
+// chatWithRender is Chat with the wire rendering left to the caller. Messages
+// reaches chat completions through here rather than through Chat itself, because
+// its own two renderings have to happen inside the request rather than after it
+// has been answered — for the same reason Chat's does.
+//
+// It is not a way around Chat's routing or its capability filtering: the request
+// is decoded and routed exactly as Chat decodes and routes it, which is what
+// keeps a portable Messages request confined to what the Chat wire can say.
+func (s *Service) chatWithRender(
+	ctx context.Context,
+	plaintextKey string,
+	request openaiapi.ChatCompletionRequest,
+	render func(semantic.GenerateResult) error,
+) error {
 	if request.Stream {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "streaming is not available yet", 400, nil)
+		return gatewayError("unsupported_feature", "streaming is not available yet", 400, nil)
 	}
 	canonical, err := openaiwire.DecodeGenerate(request)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
-	result, err := s.generate(ctx, plaintextKey, request.Model, canonical)
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, err
-	}
-	response, err := openaiwire.RenderGenerateResult(result)
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, s.returnFailure(ctx, "chat", "provider response cannot be rendered safely", err)
-	}
-	return response, nil
+	_, err = s.generate(ctx, plaintextKey, request.Model, canonical, render)
+	return err
 }
 
 // generate is the unary generation hot path, and it is the whole of it: every
@@ -941,11 +969,15 @@ func (s *Service) Chat(
 // The steps and their order are unchanged. Resolution and capability filtering
 // come first, then redaction, then the estimate the reservation is made
 // against, and only then any provider work.
+// render turns the semantic answer into the caller's wire form. It is passed in
+// rather than applied by the facade afterwards because a render that fails is a
+// request that failed, and the ledger has to hear about it before it is closed.
 func (s *Service) generate(
 	ctx context.Context,
 	plaintextKey string,
 	publicModel string,
 	canonical semantic.GenerateRequest,
+	render func(semantic.GenerateResult) error,
 ) (semantic.GenerateResult, error) {
 	principal, targets, err := s.resolveRequest(
 		ctx, plaintextKey, publicModel, provider.OperationChat,
@@ -1039,25 +1071,55 @@ func (s *Service) generate(
 				semanticResponse, err = s.redactor.ProcessOutboundGenerateResult(
 					principal.Project.RedactionPolicyID, semanticResponse,
 				)
-				outcome := "success"
-				if err != nil {
+				// The caller is answered with the model they named. The
+				// upstream identifier never leaves this function: a public alias
+				// is the whole point of the route, and restoring it per facade
+				// would be one place per endpoint to forget.
+				semanticResponse.Model = publicModel
+				// Everything that can still refuse this answer runs before the
+				// ledger is told how the request ended. Redaction can rewrite an
+				// answer into one that no longer satisfies its own invariants — a
+				// replacement template that expands to nothing empties a citation
+				// URL — and a wire form can be unable to carry a content kind the
+				// upstream produced. Both used to be discovered by the facade,
+				// after finish and finalize had already committed the attempt, so
+				// the ledger recorded success for a request the caller saw fail.
+				// Neither a refund nor a retry is owed: the upstream call really
+				// happened and really cost money. What is owed is that the record
+				// and the answer say the same thing.
+				outcome, failure := "success", error(nil)
+				switch {
+				case err != nil:
 					outcome = "policy_rejected"
+					failure = gatewayError(
+						"sensitive_output_detected", "provider output violated redaction policy", 422, err,
+					)
+				default:
+					if invalidErr := semanticResponse.Validate(); invalidErr != nil {
+						// The policy did not reject this answer, it broke it.
+						// Saying so names the operator's rule as the thing to
+						// fix, where a provider error would send them upstream.
+						outcome = "policy_rejected"
+						failure = gatewayError(
+							"redaction_policy_error",
+							"redaction rewrote the provider output into one that cannot be represented",
+							500, invalidErr,
+						)
+					} else if renderErr := render(semanticResponse); renderErr != nil {
+						outcome = "provider_error"
+						failure = gatewayError(
+							"provider_error", "provider response cannot be rendered safely", 502, renderErr,
+						)
+					}
 				}
 				if finalizeErr := run.finalize(outcome); finalizeErr != nil {
 					return semantic.GenerateResult{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, finalizeErr,
 					)
 				}
-				if err != nil {
-					return semantic.GenerateResult{}, gatewayError(
-						"sensitive_output_detected", "provider output violated redaction policy", 422, err,
-					)
+				if failure != nil {
+					return semantic.GenerateResult{}, failure
 				}
-				// The caller is answered with the model they named. The
-				// upstream identifier never leaves this function: a public alias
-				// is the whole point of the route, and restoring it per facade
-				// would be one place per endpoint to forget.
-				semanticResponse.Model = publicModel
 				return semanticResponse, nil
 			}
 			lastErr = providerErr
@@ -1101,13 +1163,16 @@ func (s *Service) Responses(
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
-	result, err := s.generate(ctx, plaintextKey, request.Model, canonical)
-	if err != nil {
+	var response openaiapi.Response
+	if _, err := s.generate(ctx, plaintextKey, request.Model, canonical, func(result semantic.GenerateResult) error {
+		rendered, renderErr := openaiwire.RenderResponseResult(result, request)
+		if renderErr != nil {
+			return renderErr
+		}
+		response = rendered
+		return nil
+	}); err != nil {
 		return openaiapi.Response{}, err
-	}
-	response, err := openaiwire.RenderResponseResult(result, request)
-	if err != nil {
-		return openaiapi.Response{}, s.returnFailure(ctx, "responses", "provider response cannot be rendered safely", err)
 	}
 	return response, nil
 }
@@ -1184,17 +1249,29 @@ func (s *Service) Messages(
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
 	}
-	chatResponse, err := s.Chat(ctx, plaintextKey, chatRequest)
-	if err != nil {
+	// Both renderings happen inside the request, not after it. They can fail —
+	// reasoning content and a tool call whose arguments are not valid JSON both
+	// reach here — and a failure discovered afterwards arrives too late to be
+	// recorded: the attempt is settled and the request is finalized as a success
+	// the caller never saw.
+	var message anthropicapi.Message
+	if err := s.chatWithRender(ctx, plaintextKey, chatRequest, func(semanticResult semantic.GenerateResult) error {
+		chatResponse, renderErr := openaiwire.RenderGenerateResult(semanticResult)
+		if renderErr != nil {
+			return renderErr
+		}
+		result, decodeErr := openaiwire.DecodeGenerateResult(chatResponse)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		rendered, renderErr := anthropicwire.RenderResult(result, request.Model)
+		if renderErr != nil {
+			return renderErr
+		}
+		message = rendered
+		return nil
+	}); err != nil {
 		return anthropicapi.Message{}, err
-	}
-	result, err := openaiwire.DecodeGenerateResult(chatResponse)
-	if err != nil {
-		return anthropicapi.Message{}, s.returnFailure(ctx, "messages", "provider response cannot be represented safely", err)
-	}
-	message, err := anthropicwire.RenderResult(result, request.Model)
-	if err != nil {
-		return anthropicapi.Message{}, s.returnFailure(ctx, "messages", "provider response cannot be rendered safely", err)
 	}
 	return message, nil
 }
@@ -3008,6 +3085,17 @@ func mapProviderError(err error) error {
 		mapped = gatewayError("provider_error", "provider request failed", 502, err)
 	}
 	mapped.RetryAfter = classified.RetryAfter
+	// The upstream's own identifier does not travel to the caller: it is the
+	// provider's vocabulary, and an application reading `anthropic_error` off a
+	// public model alias learns who is behind it. The parameter joined to it is
+	// the caller's own field, and without it "provider rejected the request" is
+	// a refusal they can only act on by bisecting a payload they wrote.
+	mapped.Param = provider.RefusalParameter(classified.ProviderCode)
+	// The upstream's own identifier does not travel to the caller: it is the
+	// provider's vocabulary, and an application reading `anthropic_error` off a
+	// public model alias learns who is behind it. The parameter joined to it is
+	// the caller's own field, and without it "provider rejected the request" is
+	// a refusal they can only act on by bisecting a payload they wrote.
 	return mapped
 }
 

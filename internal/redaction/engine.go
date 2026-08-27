@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -374,6 +375,24 @@ func (e *Engine) processContent(policyID, scope string, parts []semantic.Content
 			return parts, err
 		}
 		if err := e.validateMandatory(part.Name); err != nil {
+			return parts, err
+		}
+		// Detail and Status are the two remaining members carrying a string that
+		// no other pass on this path looks at. Detail is the caller's word for how
+		// much of an image to read — a closed vocabulary upstream, a free string
+		// once it is here — and Status is whatever the upstream called the state of
+		// a tool call it ran itself, which reaches the caller beside the query the
+		// case above already rewrites. Leaving them out was the gap the query had:
+		// one member of a part answered for, its neighbour verbatim.
+		//
+		// Checked rather than rewritten, like CallID and Name above: both are read
+		// as a fixed vocabulary at the other end, so masking one would hand the
+		// caller a value its own switch has no case for. Refusing says the same
+		// thing without inventing a word nobody can act on.
+		if err := e.validateMandatory(part.Detail); err != nil {
+			return parts, err
+		}
+		if err := e.validateMandatory(part.Status); err != nil {
 			return parts, err
 		}
 	}
@@ -781,6 +800,11 @@ func compileRule(rule domain.RedactionRule) (compiledRule, error) {
 		}
 		rule.ComputedMaxMatchBytes = maxMatchBytes(parsed)
 	}
+	if rule.Action == "replace" {
+		if err := validateReplacementReferences(rule.Replacement, pattern); err != nil {
+			return compiledRule{}, err
+		}
+	}
 	compiled := compiledRule{rule: rule, pattern: pattern}
 	switch rule.Builtin {
 	case "bank_card_candidate":
@@ -789,6 +813,85 @@ func compileRule(rule domain.RedactionRule) (compiledRule, error) {
 		compiled.validator = validChinaID
 	}
 	return compiled, nil
+}
+
+// validateReplacementReferences refuses a replacement template that names a
+// capture group the pattern does not have.
+//
+// Nothing else checks the template against its own pattern: the domain rejects
+// only an empty or over-long string, and Expand answers an unknown reference with
+// nothing at all. So `$1` on a pattern with no groups is stored happily and then
+// deletes what it matched instead of masking it — on a field that is required to
+// be non-empty, such as a citation URL, that turns a redaction rule into a rule
+// that destroys the answer.
+//
+// Only out-of-range references are refused, because only they are unambiguously a
+// mistake. A reference to a group that exists but did not take part in the match
+// — an optional group — also expands to nothing, and that is a legitimate way to
+// write a rule; so is a template that is nothing but `$1`, which is how a rule
+// keeps the last four digits and drops the rest. Those stay allowed, and the
+// gateway's post-redaction check is what stands behind them.
+func validateReplacementReferences(template string, pattern *regexp.Regexp) error {
+	names := pattern.SubexpNames()
+	for _, reference := range replacementReferences(template) {
+		if index, err := strconv.Atoi(reference); err == nil {
+			if index < 0 || index >= len(names) {
+				return fmt.Errorf("replacement refers to capture group %s, which the pattern does not have", reference)
+			}
+			continue
+		}
+		if !slices.Contains(names, reference) {
+			return fmt.Errorf("replacement refers to capture group %q, which the pattern does not have", reference)
+		}
+	}
+	return nil
+}
+
+// replacementReferences lists the group names a template expands, reading it the
+// way Expand does: `$name` takes the longest run of letters, digits and
+// underscores, `${name}` is delimited, and `$$` is an escaped dollar sign rather
+// than a reference.
+func replacementReferences(template string) []string {
+	references := make([]string, 0, 2)
+	for index := 0; index < len(template); index++ {
+		if template[index] != '$' {
+			continue
+		}
+		index++
+		if index >= len(template) {
+			break
+		}
+		if template[index] == '$' {
+			continue
+		}
+		brace := template[index] == '{'
+		if brace {
+			index++
+		}
+		start := index
+		for index < len(template) && isReferenceByte(template[index]) {
+			index++
+		}
+		name := template[start:index]
+		if brace {
+			if index >= len(template) || template[index] != '}' {
+				// Expand treats an unterminated brace as no reference at all, so
+				// neither does this.
+				continue
+			}
+		} else {
+			index--
+		}
+		if name != "" {
+			references = append(references, name)
+		}
+	}
+	return references
+}
+
+func isReferenceByte(value byte) bool {
+	return value >= '0' && value <= '9' || value >= 'a' && value <= 'z' ||
+		value >= 'A' && value <= 'Z' || value == '_'
 }
 
 func (r compiledRule) matches(value string) bool {

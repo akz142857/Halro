@@ -6,6 +6,98 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **`json_mode` became two capabilities: `json_object` and `structured_outputs`.**
+  One switch could not describe any provider honestly — Anthropic enforces a
+  schema and has no schema-less mode, DeepSeek has the schema-less mode and no
+  schema, and on OpenAI the split is per model. A deployment that ticked
+  `json_mode` on the strength of the half it had was routed the other half and
+  refused upstream, after the budget reservation.
+
+  **Upgrading turns both halves off for every existing deployment, and nothing
+  says so at the time.** The old bit cannot say which half a target actually
+  had, and off refuses a request where on forwards a doomed one — so migration
+  32 clears both, marks the evidence unsupported, and empties the detection
+  buckets. Until you re-tick the capabilities a deployment really has, **every
+  request carrying `response_format: json_object` or `json_schema` is refused
+  with 400 `unsupported_feature`.** Plan for that window.
+
+  What you will and will not see: the startup log does not mention the
+  migration; `halro doctor` reports `capability_drift` as "catalog capabilities
+  available for review", and only for models the built-in catalogue covers — a
+  self-declared model gets no signal at all. Re-running capability detection
+  restores verified evidence at the cost of billable upstream probes.
+
+- **The unary generation path is entered with a semantic request.** Every facade
+  decodes its own wire form and calls one hot path; Responses no longer writes
+  itself as a Chat Completions request first. Redaction and the token estimate
+  moved onto the semantic request with it, so one traversal covers every
+  endpoint.
+
+- **An answer that cannot be delivered is no longer recorded as a success.**
+  Rendering the provider's answer into the caller's wire form, and validating
+  what redaction did to it, now happen before the request is finalized rather
+  than after. Previously a request whose answer could not be rendered — or whose
+  redaction policy rewrote it into something invalid — was settled and finalized
+  as a success while the caller received a 502. The upstream call really
+  happened and is still charged for; what changed is that the record and the
+  answer now agree, and a policy that breaks its own output is reported as
+  `redaction_policy_error` naming the policy, rather than as a provider error.
+
+- **A replacement template may no longer name a capture group its pattern does
+  not have.** `$1` on a rule with no capture groups expands to nothing, which
+  deleted what it matched instead of masking it. Templates whose references are
+  valid — including a bare `$1` that keeps only the captured part — are
+  unchanged.
+
+### Added
+
+- **`openai.responses.v1`, a profile that addresses `/v1/responses` directly.**
+  It carries OpenAI's provider-executed `web_search`, which is off by default
+  and gated on the `provider_executed_tools` capability, because running it
+  means the upstream originates network calls that never pass through Halro's
+  own egress controls. `code_interpreter` and `file_search` are refused: they
+  are provider-side state a single-process gateway has nowhere to hold. Searches
+  come back as `web_search_call` items and `url_citation` annotations, and a
+  profile that cannot carry either refuses the result rather than returning an
+  answer with its sources removed.
+
+- **A `json_schema` detection probe**, which sends a strict schema and checks the
+  answer against it — a model told to return JSON returns parseable JSON whether
+  or not it can enforce a schema. The probe budget went from 8 to 9 so no
+  capability stopped being verified as a side effect.
+
+### Fixed
+
+- **Capability detection probes the surface the profile actually calls.**
+  Detection spoke Chat and reached every adapter through the legacy bridge, so a
+  detection on `openai.responses.v1` measured six capabilities against
+  `/v1/chat/completions` and stored them as verified evidence for a surface the
+  profile never calls. A key whose permissions covered only one of the two then
+  passed detection green and failed the first real request, after the budget was
+  reserved.
+
+- **A model the catalogue already covers keeps its token limits when verified.**
+  Verification previously recommended a context and output bound of zero.
+
+- **Identification probes get the whole budget they can use.** When several
+  interfaces are candidates, the pass that decides which one a model answers on
+  runs only the probes that depend on nothing — but it divided the remaining
+  time by the length of the whole plan, leaving each root probe a ninth of the
+  budget on a nine-probe plan. A model that needs longer than that slice was
+  reported as a timeout, and the console showed it as "temporarily unavailable".
+
+- **Redaction covers the provider's own tool call and the sources beside it.**
+  The search query the model wrote, and every citation URL and title the upstream
+  returned, previously reached the caller with neither the Project policy nor the
+  mandatory baseline having run, while every other string in the same message was
+  rewritten — so the same secret could come back masked in the answer and verbatim
+  in `action.query`. Citation offsets now collapse to zero length when the text
+  they point into changed, rather than reporting a span that covers different
+  words. `detail` on an image part and `status` on a provider tool call are
+  covered by the mandatory baseline for the same reason.
+
 ## [0.3.0] - 2026-08-24
 
 ### Added

@@ -105,8 +105,7 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		var gatewayError *gateway.Error
 		if errors.As(err, &gatewayError) {
-			setRetryAfter(writer, gatewayError.RetryAfter)
-			writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+			writeGatewayError(writer, gatewayError)
 			return
 		}
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error", nil)
@@ -162,8 +161,7 @@ func (h *Handler) responsesStream(writer http.ResponseWriter, request *http.Requ
 	if !started && err != nil {
 		var gatewayError *gateway.Error
 		if errors.As(err, &gatewayError) {
-			setRetryAfter(writer, gatewayError.RetryAfter)
-			writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+			writeGatewayError(writer, gatewayError)
 		} else if !errors.Is(err, context.Canceled) {
 			writeError(writer, http.StatusBadGateway, "provider_error", "provider stream failed", nil)
 		}
@@ -214,8 +212,7 @@ func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) 
 	if err != nil {
 		var gatewayError *gateway.Error
 		if errors.As(err, &gatewayError) {
-			setRetryAfter(writer, gatewayError.RetryAfter)
-			writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+			writeGatewayError(writer, gatewayError)
 			return
 		}
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error", nil)
@@ -269,8 +266,7 @@ func (h *Handler) chatCompletionsStream(
 	if !started && err != nil {
 		var gatewayError *gateway.Error
 		if errors.As(err, &gatewayError) {
-			setRetryAfter(writer, gatewayError.RetryAfter)
-			writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+			writeGatewayError(writer, gatewayError)
 		} else if !errors.Is(err, context.Canceled) {
 			writeError(writer, http.StatusBadGateway, "provider_error", "provider stream failed", nil)
 		}
@@ -688,6 +684,7 @@ func (h *Handler) renderAnthropicGatewayError(writer http.ResponseWriter, err er
 		return
 	}
 	setRetryAfter(writer, gatewayError.RetryAfter)
+	message := anthropicMessage(gatewayError)
 	// 529 is Anthropic's own overload status, and it is read from the status
 	// line rather than from the body. The upstream's `error.code` used to be
 	// accepted here too, which let a string an upstream chose decide the status
@@ -697,7 +694,7 @@ func (h *Handler) renderAnthropicGatewayError(writer http.ResponseWriter, err er
 	// `overloaded_error` rewrote a 502 into a 529 that no upstream ever sent.
 	var providerError *provider.Error
 	if errors.As(err, &providerError) && providerError.StatusCode == 529 {
-		writeAnthropicError(writer, 529, "overloaded_error", gatewayError.Message, requestID)
+		writeAnthropicError(writer, 529, "overloaded_error", message, requestID)
 		return
 	}
 	kind := "invalid_request_error"
@@ -717,7 +714,24 @@ func (h *Handler) renderAnthropicGatewayError(writer http.ResponseWriter, err er
 	case 503:
 		kind = "overloaded_error"
 	}
-	writeAnthropicError(writer, gatewayError.HTTPStatus, kind, gatewayError.Message, requestID)
+	writeAnthropicError(writer, gatewayError.HTTPStatus, kind, message, requestID)
+}
+
+// anthropicMessage names the refused field the way this surface names fields:
+// inside the sentence. The Anthropic error body is {type, message} and has
+// nowhere else to put one — upstream Anthropic writes the same shape, as in
+// "messages: roles must alternate between ..." — so a `param` field of Halro's
+// own invention here would be a field no Anthropic SDK reads.
+//
+// This surface already carries field paths that way: a decoder rejection
+// arrives as "messages[3].role is invalid" while the OpenAI facade renders the
+// same path in `param`. A provider refusal that named a field was the one case
+// that reached the caller with the path dropped.
+func anthropicMessage(failure *gateway.Error) string {
+	if failure.Param == "" {
+		return failure.Message
+	}
+	return failure.Param + ": " + failure.Message
 }
 
 func writeAnthropicError(writer http.ResponseWriter, status int, kind, message, requestID string) {
@@ -770,8 +784,7 @@ func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Requ
 	if err != nil {
 		var gatewayError *gateway.Error
 		if errors.As(err, &gatewayError) {
-			setRetryAfter(writer, gatewayError.RetryAfter)
-			writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+			writeGatewayError(writer, gatewayError)
 			return
 		}
 		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error", nil)
@@ -1113,6 +1126,24 @@ func isFieldPath(candidate string) bool {
 		}
 	}
 	return true
+}
+
+// writeGatewayError renders a gateway failure, including the field of the
+// caller's request it names. Every surface reached this through the same three
+// lines and passed nil for the parameter, so the field an upstream refusal
+// identified stopped at the gateway boundary; there is one call site now so it
+// cannot stop at four of them again.
+func writeGatewayError(writer http.ResponseWriter, failure *gateway.Error) {
+	setRetryAfter(writer, failure.RetryAfter)
+	writeError(writer, failure.HTTPStatus, failure.Code, failure.Message, optionalParam(failure.Param))
+}
+
+// optionalParam keeps `param` null rather than empty when nothing named a field.
+func optionalParam(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 func writeError(writer http.ResponseWriter, status int, code, message string, param *string) {

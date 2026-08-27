@@ -1683,6 +1683,42 @@ func TestChatStreamNeverFallsBackAfterPayload(t *testing.T) {
 	}
 }
 
+// A refusal that named a field has to reach the caller naming it. The upstream's
+// own code stays behind — it identifies the provider sitting behind a public
+// model alias — but the parameter is the caller's own field, and without it the
+// only way to act on "provider rejected the request" is to bisect the payload.
+func TestProviderRefusalNamesTheFieldButNotTheProvider(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		providerCode string
+		param        string
+	}{
+		{"joined path", "unsupported_parameter:messages[0].content[1].image_url", "messages[0].content[1].image_url"},
+		{"code only", "invalid_request_error", ""},
+		{"no code at all", "", ""},
+		{"parameter outside the identifier set", "unsupported_parameter:a b", ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			mapped := mapProviderError(&provider.Error{
+				Class: provider.ErrorBadRequest, StatusCode: 400,
+				Message: "prose the upstream wrote about the request", ProviderCode: testCase.providerCode,
+			})
+			var gatewayErr *Error
+			if !errors.As(mapped, &gatewayErr) {
+				t.Fatalf("not a gateway error: %v", mapped)
+			}
+			if gatewayErr.Param != testCase.param {
+				t.Fatalf("param=%q want %q", gatewayErr.Param, testCase.param)
+			}
+			if strings.Contains(gatewayErr.Code, "unsupported_parameter") ||
+				strings.Contains(gatewayErr.Message, "unsupported_parameter") ||
+				strings.Contains(gatewayErr.Message, "prose the upstream wrote") {
+				t.Fatalf("upstream vocabulary reached the caller: code=%q message=%q", gatewayErr.Code, gatewayErr.Message)
+			}
+		})
+	}
+}
+
 func TestProviderRetryAfterPropagatesAndDelaysRetry(t *testing.T) {
 	upstream := &provider.Error{
 		Class: provider.ErrorRateLimit, Retryable: true, RetryAfter: 50 * time.Millisecond,

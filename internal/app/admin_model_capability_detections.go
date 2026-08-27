@@ -569,13 +569,7 @@ func (r *Runtime) runCapabilityDetection(parent context.Context, detectionID str
 			// established is bounded by the attempt timeout instead, and one
 			// still waiting on an unresolved dependency is not counted, because
 			// it may never be asked at all.
-			runnable := 0
-			for _, pending := range plan.Probes[probeIndex:] {
-				if probeDependenciesSupported(d.Results, pending.DependsOn) {
-					runnable++
-				}
-			}
-			fairShare := time.Until(deadline) / time.Duration(max(runnable, 1))
+			fairShare := time.Until(deadline) / time.Duration(max(runnableProbes(d.Results, plan.Probes[probeIndex:]), 1))
 			probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value())
 			if probeTimeout > 0 {
 				probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)
@@ -760,7 +754,7 @@ func (r *Runtime) spendDetectionProbe(ctx context.Context, d domain.ModelCapabil
 	d = stored
 	probeContext, probeCancel := ctx, func() {}
 	if deadline, ok := ctx.Deadline(); ok && len(remaining) > 0 {
-		fairShare := time.Until(deadline) / time.Duration(len(remaining))
+		fairShare := time.Until(deadline) / time.Duration(max(runnableProbes(d.Results, remaining), 1))
 		if probeTimeout := min(fairShare, r.config.Gateway.AttemptResponseHeaderTimeout.Value()); probeTimeout > 0 {
 			probeContext, probeCancel = context.WithTimeout(ctx, probeTimeout)
 		}
@@ -814,6 +808,25 @@ func probeOutcomeRank(status domain.CapabilityProbeStatus) int {
 	default:
 		return 0
 	}
+}
+
+// runnableProbes counts the probes that could actually be asked next. A probe
+// whose dependencies are established will run and therefore deserves a share of
+// what is left; one still waiting on an unresolved dependency may never be asked
+// at all, and counting it shrinks everyone else's share for nothing.
+//
+// Both places that divide the remaining time call this. They used to divide it
+// two different ways: the identification pass counted every probe in the plan
+// while running only the one or two that depend on nothing, so on a nine-probe
+// plan it gave each of them a ninth of the budget instead of the whole of it.
+func runnableProbes(results map[string]domain.CapabilityProbeResult, remaining []provider.CapabilityProbe) int {
+	runnable := 0
+	for _, pending := range remaining {
+		if probeDependenciesSupported(results, pending.DependsOn) {
+			runnable++
+		}
+	}
+	return runnable
 }
 
 func probeDependenciesSupported(results map[string]domain.CapabilityProbeResult, dependencies []string) bool {
