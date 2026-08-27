@@ -19,7 +19,8 @@ func TestImmutableProfileBindingCannotExceedItsCeiling(t *testing.T) {
 	}{
 		{"mantle chat gains embeddings", ProfileBedrockMantleOpenAIChat, func(c *ProviderCapabilities) { c.Embeddings = true }},
 		{"mantle responses gains reasoning", ProfileBedrockMantleOpenAIResponses, func(c *ProviderCapabilities) { c.Reasoning = true }},
-		{"mantle messages gains json mode", ProfileBedrockMantleAnthropicMessages, func(c *ProviderCapabilities) { c.JSONMode = true }},
+		{"mantle messages gains json object", ProfileBedrockMantleAnthropicMessages, func(c *ProviderCapabilities) { c.JSONObject = true }},
+		{"mantle messages gains structured outputs", ProfileBedrockMantleAnthropicMessages, func(c *ProviderCapabilities) { c.StructuredOutputs = true }},
 		{"mantle messages gains developer role", ProfileBedrockMantleAnthropicMessages, func(c *ProviderCapabilities) { c.DeveloperRole = true }},
 		{"titan embed gains chat", ProfileBedrockInvokeTitanEmbedV2, func(c *ProviderCapabilities) { c.Chat = true }},
 	}

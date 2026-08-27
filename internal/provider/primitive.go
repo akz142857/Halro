@@ -20,6 +20,7 @@ const (
 	PrimitiveAnthropicMessagesStream              Primitive = "anthropic.messages.stream"
 	PrimitiveOpenAIChatStream                     Primitive = "openai.chat-completions.stream"
 	PrimitiveOpenAIEmbeddings                     Primitive = "openai.embeddings"
+	PrimitiveOpenAIResponses                      Primitive = "openai.responses"
 	PrimitiveAzureChatCompletions                 Primitive = "azure-openai.chat-completions"
 	PrimitiveAzureChatStream                      Primitive = "azure-openai.chat-completions.stream"
 	PrimitiveAzureEmbeddings                      Primitive = "azure-openai.embeddings"
@@ -250,6 +251,7 @@ func (adapter legacyEmbeddingPrimitive) EmbedSemantic(ctx context.Context, call 
 func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 	switch primitive {
 	case PrimitiveOpenAIChatCompletions, PrimitiveOpenAIChatStream, PrimitiveOpenAIEmbeddings,
+		PrimitiveOpenAIResponses,
 		PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream,
 		PrimitiveBedrockMantleOpenAIChat, PrimitiveBedrockMantleOpenAIChatStream,
 		PrimitiveBedrockMantleOpenAIResponses, PrimitiveBedrockMantleOpenAIResponsesStream,
@@ -350,4 +352,81 @@ func (target Target) NativeMessages(stream bool) (NativeMessagesAdapter, error) 
 		return nil, errors.New("provider adapter does not implement native Messages")
 	}
 	return adapter, nil
+}
+
+// SemanticGenerator is an adapter whose upstream wire can carry what the
+// semantic request contains, so it takes the request as it is rather than as a
+// Chat Completions request written from it.
+//
+// Every other generate adapter reaches the gateway through
+// legacyGenerationPrimitive, which renders the semantic request into Chat wire
+// on the way down and reads the Chat response on the way back. That is exact for
+// an upstream whose own surface is Chat Completions, and it is a ceiling for
+// everyone else: a member the Chat wire has no place for cannot cross it, which
+// is why provider-executed tools were unreachable on OpenAI while the Responses
+// endpoint that serves them was already implemented.
+type SemanticGenerator interface {
+	Adapter
+	GenerateSemantic(context.Context, GenerateCall) (semantic.GenerateResult, error)
+}
+
+// semanticGenerationPrimitives names the primitives whose adapter must be a
+// SemanticGenerator. It is a declaration, not an inference: the alternative —
+// checking every adapter for the method and using it when present — cannot tell
+// "this profile deliberately speaks semantic" from "this adapter happens to have
+// grown a method", and it is invisible in the profile table where a reader looks
+// for what a profile does.
+var semanticGenerationPrimitives = map[Primitive]bool{
+	PrimitiveOpenAIResponses: true,
+}
+
+// unwrapSemanticGenerator finds the adapter under the profile wrapper.
+//
+// The wrapper embeds the Adapter interface, so the concrete adapter's own
+// methods are not promoted through it — asserting on the wrapper would always
+// fail and every request would be refused for a reason nothing explains.
+func unwrapSemanticGenerator(adapter Adapter) (SemanticGenerator, bool) {
+	for {
+		if generator, ok := adapter.(SemanticGenerator); ok {
+			return generator, true
+		}
+		unwrapper, ok := adapter.(interface{ UnwrapAdapter() Adapter })
+		if !ok {
+			return nil, false
+		}
+		adapter = unwrapper.UnwrapAdapter()
+	}
+}
+
+type semanticGenerationPrimitive struct {
+	adapter   SemanticGenerator
+	primitive Primitive
+	operation Operation
+}
+
+func (adapter semanticGenerationPrimitive) LegacyOperation() Operation { return adapter.operation }
+func (adapter semanticGenerationPrimitive) SemanticOperation() semantic.Operation {
+	return semantic.OperationGenerate
+}
+func (adapter semanticGenerationPrimitive) ProviderPrimitive() Primitive { return adapter.primitive }
+
+func (adapter semanticGenerationPrimitive) Generate(ctx context.Context, call GenerateCall) (semantic.GenerateResult, error) {
+	result, err := adapter.adapter.GenerateSemantic(ctx, call)
+	if err != nil {
+		return semantic.GenerateResult{}, err
+	}
+	result.Translation = translationForPrimitive(adapter.primitive)
+	if err := result.Validate(); err != nil {
+		return semantic.GenerateResult{}, &Error{Class: ErrorMalformed, Ambiguous: true, Message: "normalize provider generate result", Cause: err}
+	}
+	return result, nil
+}
+
+// GenerateStream is present because GenerationAdapter requires it and absent in
+// effect because no profile binds this primitive to a streaming operation. A
+// profile that wants streaming here has to bind a stream primitive, and until
+// one does, a streaming request is refused by the target filter rather than by
+// an adapter improvising a single chunk out of a unary answer.
+func (adapter semanticGenerationPrimitive) GenerateStream(context.Context, GenerateCall, func(semantic.Event) error) (*semantic.Usage, error) {
+	return nil, &Error{Class: ErrorBadRequest, Message: "this provider primitive does not stream"}
 }

@@ -46,6 +46,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 	return New(concat(
 		pinnedBedrockProfiles(),
 		openAIChatModels(),
+		openAIResponsesModels(),
 		openAIEmbeddingModels(),
 		openAIMediaModels(),
 		deepSeekModels(),
@@ -128,9 +129,14 @@ func builtinEntry(providerType domain.ProviderType, profile domain.ProviderProfi
 // plus the enhancements every current chat model on this profile carries.
 // Anything a specific model does beyond this is added at its entry, and
 // anything it does not do is left off there.
+// json_object is in the shared shape and structured_outputs is not, because the
+// schema-less mode is the half every model on this profile family serves —
+// OpenAI, DeepSeek and Mantle alike — while an enforced schema is a per-model
+// claim. Adding it here would credit DeepSeek, whose profile has no schema mode
+// at its ceiling at all.
 func chat(contextTokens, outputTokens int64) domain.ProviderCapabilities {
 	return domain.ProviderCapabilities{
-		Chat: true, Streaming: true, StreamUsage: true, Tools: true, JSONMode: true,
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true, JSONObject: true,
 		MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
 	}
 }
@@ -160,6 +166,16 @@ func visionInline(capabilities *domain.ProviderCapabilities)  { capabilities.Vis
 func reasoning(capabilities *domain.ProviderCapabilities)     { capabilities.Reasoning = true }
 func developerRole(capabilities *domain.ProviderCapabilities) { capabilities.DeveloperRole = true }
 
+// structuredOutputs is the schema half. Every OpenAI model this catalog covers
+// is gpt-4o or later and OpenAI documents an enforced json_schema from
+// gpt-4o-2024-08-06 onward, which is what the `gpt-4o` alias resolves to; the
+// models that took json_object and nothing else are older than every identifier
+// seeded here. It is a modifier rather than part of chat() because the same
+// shared shape describes DeepSeek, which has no schema mode.
+func structuredOutputs(capabilities *domain.ProviderCapabilities) {
+	capabilities.StructuredOutputs = true
+}
+
 // openAIChatModels covers the text models reachable through the OpenAI chat and
 // embeddings profile.
 //
@@ -170,16 +186,16 @@ func developerRole(capabilities *domain.ProviderCapabilities) { capabilities.Dev
 func openAIChatModels() []Entry {
 	const provider, profile = domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings
 	return []Entry{
-		builtinEntry(provider, profile, "gpt-4o", with(chat(128_000, 16_384), vision)),
-		builtinEntry(provider, profile, "gpt-4o-mini", with(chat(128_000, 16_384), vision)),
-		builtinEntry(provider, profile, "gpt-4.1", with(chat(1_047_576, 32_768), vision, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-mini", with(chat(1_047_576, 32_768), vision, developerRole)),
-		builtinEntry(provider, profile, "gpt-4.1-nano", with(chat(1_047_576, 32_768), vision, developerRole)),
-		builtinEntry(provider, profile, "o3", with(chat(200_000, 100_000), vision, developerRole, reasoning)),
-		builtinEntry(provider, profile, "o4-mini", with(chat(200_000, 100_000), vision, developerRole, reasoning)),
-		builtinEntry(provider, profile, "gpt-5", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
-		builtinEntry(provider, profile, "gpt-5-mini", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
-		builtinEntry(provider, profile, "gpt-5-nano", with(chat(400_000, 128_000), vision, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-4o", with(chat(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o-mini", with(chat(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4.1", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-mini", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-nano", with(chat(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "o3", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "o4-mini", with(chat(200_000, 100_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-mini", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
+		builtinEntry(provider, profile, "gpt-5-nano", with(chat(400_000, 128_000), vision, structuredOutputs, developerRole, reasoning)),
 		// The 5.4 generation onward. Each model's own page states 1,050,000
 		// context and 128,000 max output, text and image input, reasoning with an
 		// effort ladder, function calling and structured outputs.
@@ -190,11 +206,53 @@ func openAIChatModels() []Entry {
 		// same way either way — an entry that under-claims costs an operator one
 		// deliberate declaration, an entry that over-claims routes a request to a
 		// provider that refuses it.
-		builtinEntry(provider, profile, "gpt-5.4", with(chat(1_050_000, 128_000), vision, reasoning)),
-		builtinEntry(provider, profile, "gpt-5.5", with(chat(1_050_000, 128_000), vision, reasoning)),
-		builtinEntry(provider, profile, "gpt-5.6-sol", with(chat(1_050_000, 128_000), vision, reasoning)),
-		builtinEntry(provider, profile, "gpt-5.6-terra", with(chat(1_050_000, 128_000), vision, reasoning)),
-		builtinEntry(provider, profile, "gpt-5.6-luna", with(chat(1_050_000, 128_000), vision, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.4", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.5", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-sol", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-terra", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+		builtinEntry(provider, profile, "gpt-5.6-luna", with(chat(1_050_000, 128_000), vision, structuredOutputs, reasoning)),
+	}
+}
+
+// openAIResponsesModels covers the same OpenAI text models reached through the
+// Responses endpoint.
+//
+// They are separate entries rather than the chat entries reused, because a
+// model's capabilities are a property of the surface it is reached on as much as
+// of the model: nothing here claims streaming or stream usage, since this
+// profile binds no stream primitive, and nothing claims reasoning, since the
+// canonical response mapper cannot preserve reasoning items.
+//
+// provider_executed_tools is claimed by no entry. It is at the profile ceiling
+// and off in its defaults, which is where an operator accepts the upstream
+// egress it implies; a catalogue entry asserting it would make that acceptance
+// automatic for every model.
+func openAIResponsesModels() []Entry {
+	const provider, profile = domain.ProviderOpenAI, domain.ProfileOpenAIResponses
+	return []Entry{
+		builtinEntry(provider, profile, "gpt-4o", with(responses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4o-mini", with(responses(128_000, 16_384), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-4.1", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-mini", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-4.1-nano", with(responses(1_047_576, 32_768), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "o3", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "o4-mini", with(responses(200_000, 100_000), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-5", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-5-mini", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-5-nano", with(responses(400_000, 128_000), vision, structuredOutputs, developerRole)),
+		builtinEntry(provider, profile, "gpt-5.4", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-5.5", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-5.6-sol", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-5.6-terra", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+		builtinEntry(provider, profile, "gpt-5.6-luna", with(responses(1_050_000, 128_000), vision, structuredOutputs)),
+	}
+}
+
+// responses is chat() without the two streaming claims.
+func responses(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+	return domain.ProviderCapabilities{
+		Chat: true, Tools: true, JSONObject: true,
+		MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
 	}
 }
 

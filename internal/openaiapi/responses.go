@@ -27,6 +27,12 @@ type ResponseRequest struct {
 	User              string              `json:"user,omitempty"`
 }
 
+// ProviderExecutedToolWebSearch is the wire type of the one tool this endpoint
+// accepts that the upstream runs itself. Routing gates it on a capability an
+// operator turns on per connection, because running it originates network calls
+// from the provider that never pass through SafeTransport.
+const ProviderExecutedToolWebSearch = "web_search"
+
 type ResponseTool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name"`
@@ -117,8 +123,18 @@ func (r ResponseRequest) Validate() error {
 		}
 	}
 	for index, tool := range r.Tools {
+		// web_search is the one tool the caller names rather than describes: it
+		// is run by the upstream, so it carries no schema of the caller's and
+		// nothing for the caller to answer. Everything else on this endpoint is a
+		// function the caller will be called back about.
+		if tool.Type == ProviderExecutedToolWebSearch {
+			if tool.Name != "" || tool.Description != "" || len(tool.Parameters) > 0 || tool.Strict != nil {
+				problems = append(problems, fmt.Errorf("tools[%d] is provider-executed and takes no function fields", index))
+			}
+			continue
+		}
 		if tool.Type != "function" || tool.Name == "" {
-			problems = append(problems, fmt.Errorf("tools[%d] must be a named function", index))
+			problems = append(problems, fmt.Errorf("tools[%d] must be a named function or a supported provider-executed tool", index))
 		}
 		if len(tool.Parameters) > 0 && (!json.Valid(tool.Parameters) || bytes.TrimSpace(tool.Parameters)[0] != '{') {
 			problems = append(problems, fmt.Errorf("tools[%d].parameters must be a JSON object", index))
@@ -128,7 +144,7 @@ func (r ResponseRequest) Validate() error {
 		}
 	}
 	if r.Stream && len(r.Tools) > 0 {
-		problems = append(problems, errors.New("streaming function tools are not available in Phase 1A"))
+		problems = append(problems, errors.New("streaming tools are not available yet"))
 	}
 	if r.Reasoning != nil {
 		problems = append(problems, errors.New("reasoning output cannot be represented losslessly in Phase 1A"))
@@ -190,6 +206,10 @@ type ResponseTextOut struct {
 	Format ResponseTextFormat `json:"format"`
 }
 
+// OutputItemWebSearchCall is the item an upstream emits to report a search it
+// ran during the turn.
+const OutputItemWebSearchCall = "web_search_call"
+
 type ResponseOutputItem struct {
 	ID        string                  `json:"id"`
 	Type      string                  `json:"type"`
@@ -199,15 +219,44 @@ type ResponseOutputItem struct {
 	CallID    string                  `json:"call_id,omitempty"`
 	Name      string                  `json:"name,omitempty"`
 	Arguments string                  `json:"arguments,omitempty"`
+	Action    *ResponseToolAction     `json:"action,omitempty"`
 }
 
 type ResponseOutputContent struct {
-	Type        string `json:"type"`
-	Text        string `json:"text"`
-	Refusal     string `json:"refusal,omitempty"`
-	Annotations []any  `json:"annotations"`
-	Logprobs    []any  `json:"logprobs"`
+	Type    string `json:"type"`
+	Text    string `json:"text"`
+	Refusal string `json:"refusal,omitempty"`
+	// Annotations were `[]any` while nothing produced them. A provider-executed
+	// search does, and untyped is the one shape that cannot be checked: an
+	// annotation kind nobody has modelled would have been copied through as
+	// whatever JSON arrived, or re-emitted as an empty list, and neither is a
+	// statement about where the answer came from that a reader can trust.
+	Annotations []ResponseAnnotation `json:"annotations"`
+	Logprobs    []any                `json:"logprobs"`
 }
+
+// AnnotationURLCitation is the only annotation type carried. A web search
+// attributes a span of the answer to a page it read.
+const AnnotationURLCitation = "url_citation"
+
+type ResponseAnnotation struct {
+	Type       string `json:"type"`
+	URL        string `json:"url,omitempty"`
+	Title      string `json:"title,omitempty"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+}
+
+// ResponseToolAction is what a provider-executed tool was asked to do. For a
+// web search that is the query the model wrote, which is the only part of the
+// call a reader can check against the answer.
+type ResponseToolAction struct {
+	Type  string `json:"type"`
+	Query string `json:"query,omitempty"`
+}
+
+// ToolActionSearch is the one action kind carried.
+const ToolActionSearch = "search"
 
 func (content ResponseOutputContent) MarshalJSON() ([]byte, error) {
 	if content.Type == "refusal" {

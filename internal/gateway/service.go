@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	cryptorand "crypto/rand"
@@ -913,54 +912,84 @@ func (s *Service) Chat(
 	if request.Stream {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "streaming is not available yet", 400, nil)
 	}
-	principal, targets, err := s.resolveRequest(
-		ctx, plaintextKey, request.Model, provider.OperationChat,
-		"model route does not support chat completions",
-	)
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, err
-	}
 	canonical, err := openaiwire.DecodeGenerate(request)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	result, err := s.generate(ctx, plaintextKey, request.Model, canonical)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	response, err := openaiwire.RenderGenerateResult(result)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, s.returnFailure(ctx, "chat", "provider response cannot be rendered safely", err)
+	}
+	return response, nil
+}
+
+// generate is the unary generation hot path, and it is the whole of it: every
+// facade decodes its own wire form into a semantic request and hands it here.
+//
+// It used to be Chat's body, with the other facades reaching it by rendering
+// themselves into a Chat Completions request first. That worked, and it fixed
+// what a request could contain to what the Chat wire can say: a Responses
+// request carrying something with no Chat member — a tool the upstream runs
+// itself is the case in hand — lost it at the facade, before routing could
+// even see it. Nothing was silently dropped while the semantic model stayed
+// inside what Chat expresses, which is exactly the constraint being removed.
+//
+// The steps and their order are unchanged. Resolution and capability filtering
+// come first, then redaction, then the estimate the reservation is made
+// against, and only then any provider work.
+func (s *Service) generate(
+	ctx context.Context,
+	plaintextKey string,
+	publicModel string,
+	canonical semantic.GenerateRequest,
+) (semantic.GenerateResult, error) {
+	principal, targets, err := s.resolveRequest(
+		ctx, plaintextKey, publicModel, provider.OperationChat,
+		"model route does not support chat completions",
+	)
+	if err != nil {
+		return semantic.GenerateResult{}, err
 	}
 	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChat)
 	if len(targets) == 0 {
-		return openaiapi.ChatCompletionResponse{}, s.unservableError(
+		return semantic.GenerateResult{}, s.unservableError(
 			"model route does not support the requested chat capabilities",
 			unservableReasons(candidates, canonical, provider.OperationChat),
 		)
 	}
-	request, err = s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, request)
+	canonical, err = s.redactor.ProcessInboundGenerate(principal.Project.RedactionPolicyID, canonical)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
+		return semantic.GenerateResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	canonical, err = openaiwire.DecodeGenerate(request)
-	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
+	if err := redactionPreservedRequirements(canonical); err != nil {
+		return semantic.GenerateResult{}, gatewayError("sensitive_data_detected", "redacted request no longer matches the route it was filtered against", 400, err)
 	}
-	inputTokens := estimateGenerateInputTokens(request.EstimatedInputBytes(), canonical)
+	inputTokens := estimateGenerateInputTokens(canonical.EstimatedInputBytes(), canonical)
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
+		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
 	}
-	outputTokens, err := requestedOutputTokens(request, principal.Project.MaxOutputTokens)
+	outputTokens, err := requestedOutputTokens(canonical, principal.Project.MaxOutputTokens)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, err
+		return semantic.GenerateResult{}, err
 	}
 	totalTokens, err := addTokens(inputTokens, outputTokens)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
+		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
 	targets = filterTokenCapabilities(targets, inputTokens, outputTokens)
 	if len(targets) == 0 {
-		return openaiapi.ChatCompletionResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
+		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, err
+		return semantic.GenerateResult{}, err
 	}
 	defer run.close()
 	requestID := run.requestID
@@ -985,10 +1014,10 @@ func (s *Service) Chat(
 			if err != nil {
 				var fatal *Error
 				if errors.As(err, &fatal) {
-					return openaiapi.ChatCompletionResponse{}, fatal
+					return semantic.GenerateResult{}, fatal
 				}
 				if errors.Is(err, budget.ErrExceeded) {
-					return openaiapi.ChatCompletionResponse{}, s.exhaustedAttemptsError(err)
+					return semantic.GenerateResult{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
 				break
@@ -997,51 +1026,48 @@ func (s *Service) Chat(
 			generation, resolveErr := target.Generation(provider.OperationChat)
 			if resolveErr != nil {
 				abortErr := attempt.abort("unsupported_feature")
-				return openaiapi.ChatCompletionResponse{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
+				return semantic.GenerateResult{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
 			}
 			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
-			response := openaiapi.ChatCompletionResponse{}
-			if providerErr == nil {
-				response, err = openaiwire.RenderGenerateResult(semanticResponse)
-				if err != nil {
-					providerErr = &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "render canonical generate result", Cause: err}
-				}
-			}
 			settlement := settlementForResult(
 				semanticResponse, providerErr, inputTokens, outputTokens, attempt.pricingTarget, attempt.accounting.ReservationMicrosUSD,
 			)
 			if err := attempt.finish(providerErr, settlement); err != nil {
-				return openaiapi.ChatCompletionResponse{}, err
+				return semantic.GenerateResult{}, err
 			}
 			if providerErr == nil {
-				response, err = s.redactor.ProcessOutboundChat(
-					principal.Project.RedactionPolicyID, response,
+				semanticResponse, err = s.redactor.ProcessOutboundGenerateResult(
+					principal.Project.RedactionPolicyID, semanticResponse,
 				)
 				outcome := "success"
 				if err != nil {
 					outcome = "policy_rejected"
 				}
 				if finalizeErr := run.finalize(outcome); finalizeErr != nil {
-					return openaiapi.ChatCompletionResponse{}, gatewayError(
+					return semantic.GenerateResult{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, finalizeErr,
 					)
 				}
 				if err != nil {
-					return openaiapi.ChatCompletionResponse{}, gatewayError(
+					return semantic.GenerateResult{}, gatewayError(
 						"sensitive_output_detected", "provider output violated redaction policy", 422, err,
 					)
 				}
-				response.Model = request.Model
-				return response, nil
+				// The caller is answered with the model they named. The
+				// upstream identifier never leaves this function: a public alias
+				// is the whole point of the route, and restoring it per facade
+				// would be one place per endpoint to forget.
+				semanticResponse.Model = publicModel
+				return semanticResponse, nil
 			}
 			lastErr = providerErr
 			if !retryable(providerErr) {
 				if err := run.finalize("provider_error"); err != nil {
-					return openaiapi.ChatCompletionResponse{}, gatewayError(
+					return semantic.GenerateResult{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
 					)
 				}
-				return openaiapi.ChatCompletionResponse{}, terminalProviderError(providerErr)
+				return semantic.GenerateResult{}, terminalProviderError(providerErr)
 			}
 		}
 		if attemptCount >= s.maxAttempts || ctx.Err() != nil {
@@ -1049,15 +1075,20 @@ func (s *Service) Chat(
 		}
 	}
 	if err := run.finalize("provider_error"); err != nil {
-		return openaiapi.ChatCompletionResponse{}, gatewayError(
+		return semantic.GenerateResult{}, gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503, err,
 		)
 	}
-	return openaiapi.ChatCompletionResponse{}, s.exhaustedAttemptsError(lastErr)
+	return semantic.GenerateResult{}, s.exhaustedAttemptsError(lastErr)
 }
 
-// Responses implements the Phase 1A stateless Responses facade by translating
-// the declared portable subset to the existing semantic generation hot path.
+// Responses implements the stateless Responses facade. It decodes its own wire
+// form and enters the semantic generation hot path directly.
+//
+// It used to render itself into a Chat Completions request and call Chat, which
+// decoded that back into the same semantic request one line later. Two of the
+// three translations were round trip, and the shape of the middle one decided
+// what a Responses request was allowed to contain.
 func (s *Service) Responses(
 	ctx context.Context,
 	plaintextKey string,
@@ -1070,17 +1101,9 @@ func (s *Service) Responses(
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
-	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
-	if err != nil {
-		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
-	}
-	chatResponse, err := s.Chat(ctx, plaintextKey, chatRequest)
+	result, err := s.generate(ctx, plaintextKey, request.Model, canonical)
 	if err != nil {
 		return openaiapi.Response{}, err
-	}
-	result, err := openaiwire.DecodeGenerateResult(chatResponse)
-	if err != nil {
-		return openaiapi.Response{}, s.returnFailure(ctx, "responses", "provider response cannot be represented safely", err)
 	}
 	response, err := openaiwire.RenderResponseResult(result, request)
 	if err != nil {
@@ -1102,10 +1125,6 @@ func (s *Service) ResponsesStream(
 	if err != nil {
 		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
-	chatRequest, err := openaiwire.RenderGenerateRequest(canonical, request.Model)
-	if err != nil {
-		return gatewayError("invalid_request_error", "request cannot be translated safely", 400, err)
-	}
 	renderer := openaiwire.NewResponseStreamRenderer(request)
 	emittedResponseEvent := false
 	streamTranslationError := func(err error) error {
@@ -1114,7 +1133,7 @@ func (s *Service) ResponsesStream(
 		}
 		return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Responses stream failed after payload", Cause: err}
 	}
-	err = s.ChatStream(ctx, plaintextKey, chatRequest, func(chunk openaiapi.ChatCompletionResponse) error {
+	err = s.generateStream(ctx, plaintextKey, request.Model, canonical, func(chunk openaiapi.ChatCompletionResponse) error {
 		event, decodeErr := openaiwire.DecodeEvent(chunk)
 		if decodeErr != nil {
 			return streamTranslationError(decodeErr)
@@ -1853,16 +1872,35 @@ func (s *Service) ChatStream(
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
+	canonical, err := openaiwire.DecodeGenerate(request)
+	if err != nil {
+		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
+	}
+	return s.generateStream(ctx, plaintextKey, request.Model, canonical, emit)
+}
+
+// generateStream is generate's streaming twin on the way in: every facade
+// decodes its own wire form and hands the semantic request here.
+//
+// On the way out it is still Chat-shaped. The stream redactor rewrites Chat
+// chunks across chunk boundaries, and moving it to semantic events is its own
+// change with its own risk — so the chunks a caller receives are rendered here
+// and a Responses caller translates them, as it did before. What is fixed is
+// the request side: a streaming Responses request no longer has to survive
+// being written as a Chat request first.
+func (s *Service) generateStream(
+	ctx context.Context,
+	plaintextKey string,
+	publicModel string,
+	canonical semantic.GenerateRequest,
+	emit func(openaiapi.ChatCompletionResponse) error,
+) error {
 	principal, targets, err := s.resolveRequest(
-		ctx, plaintextKey, request.Model, provider.OperationChatStream,
+		ctx, plaintextKey, publicModel, provider.OperationChatStream,
 		"model route does not support streaming",
 	)
 	if err != nil {
 		return err
-	}
-	canonical, err := openaiwire.DecodeGenerate(request)
-	if err != nil {
-		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
 	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
@@ -1881,19 +1919,18 @@ func (s *Service) ChatStream(
 			400, nil,
 		)
 	}
-	request, err = s.redactor.ProcessInboundChat(principal.Project.RedactionPolicyID, request)
+	canonical, err = s.redactor.ProcessInboundGenerate(principal.Project.RedactionPolicyID, canonical)
 	if err != nil {
 		return gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
-	canonical, err = openaiwire.DecodeGenerate(request)
-	if err != nil {
-		return gatewayError("invalid_request_error", "redacted request cannot be represented safely", 400, err)
+	if err := redactionPreservedRequirements(canonical); err != nil {
+		return gatewayError("sensitive_data_detected", "redacted request no longer matches the route it was filtered against", 400, err)
 	}
-	inputTokens := estimateGenerateInputTokens(request.EstimatedInputBytes(), canonical)
+	inputTokens := estimateGenerateInputTokens(canonical.EstimatedInputBytes(), canonical)
 	if principal.Project.MaxInputTokens > 0 && inputTokens > principal.Project.MaxInputTokens {
 		return gatewayError("token_limit_exceeded", "estimated input tokens exceed the project limit", 400, nil)
 	}
-	outputTokens, err := requestedOutputTokens(request, principal.Project.MaxOutputTokens)
+	outputTokens, err := requestedOutputTokens(canonical, principal.Project.MaxOutputTokens)
 	if err != nil {
 		return err
 	}
@@ -1905,7 +1942,7 @@ func (s *Service) ChatStream(
 	if len(targets) == 0 {
 		return gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
 		return err
 	}
@@ -1976,7 +2013,7 @@ func (s *Service) ChatStream(
 					return redactionErr
 				}
 				for _, safeChunk := range chunks {
-					safeChunk.Model = request.Model
+					safeChunk.Model = publicModel
 					if err := emit(safeChunk); err != nil {
 						return err
 					}
@@ -1996,7 +2033,7 @@ func (s *Service) ChatStream(
 					if providerErr != nil {
 						break
 					}
-					safeChunk.Model = request.Model
+					safeChunk.Model = publicModel
 					providerErr = emit(safeChunk)
 					if providerErr == nil {
 						attemptDeliveredBytes += deliveredChunkBytes(safeChunk)
@@ -2497,7 +2534,8 @@ var capabilityRequirements = []struct {
 	{"tools", func(r semantic.Requirements) bool { return r.Tools }, func(c provider.Capabilities) bool { return c.Tools }},
 	{"vision", func(r semantic.Requirements) bool { return r.Vision }, func(c provider.Capabilities) bool { return c.Vision }},
 	{"fetched_image", func(r semantic.Requirements) bool { return r.FetchedImage }, func(c provider.Capabilities) bool { return c.FetchedImage }},
-	{"json_mode", func(r semantic.Requirements) bool { return r.JSONMode }, func(c provider.Capabilities) bool { return c.JSONMode }},
+	{"json_object", func(r semantic.Requirements) bool { return r.JSONObject }, func(c provider.Capabilities) bool { return c.JSONObject }},
+	{"structured_outputs", func(r semantic.Requirements) bool { return r.StructuredOutputs }, func(c provider.Capabilities) bool { return c.StructuredOutputs }},
 	{"developer_role", func(r semantic.Requirements) bool { return r.DeveloperRole }, func(c provider.Capabilities) bool { return c.DeveloperRole }},
 	{"reasoning", func(r semantic.Requirements) bool { return r.Reasoning }, func(c provider.Capabilities) bool { return c.Reasoning }},
 	{"stream_usage", func(r semantic.Requirements) bool { return r.StreamUsage }, func(c provider.Capabilities) bool { return c.StreamUsage }},
@@ -2564,24 +2602,6 @@ func requestUsesVision(request openaiapi.ChatCompletionRequest) bool {
 		}
 	}
 	return false
-}
-
-func requestUsesJSONMode(raw json.RawMessage) bool {
-	if !hasJSONValue(raw) {
-		return false
-	}
-	var format struct {
-		Type string `json:"type"`
-	}
-	if json.Unmarshal(raw, &format) != nil {
-		return true
-	}
-	return format.Type == "json_object" || format.Type == "json_schema"
-}
-
-func hasJSONValue(raw json.RawMessage) bool {
-	trimmed := bytes.TrimSpace(raw)
-	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 func authorizeSource(ctx context.Context, project domain.Project) error {
@@ -2882,19 +2902,27 @@ func validSemanticUsage(usage *semantic.Usage) bool {
 	return err == nil && usage.TotalTokens >= total
 }
 
-func requestedOutputTokens(request openaiapi.ChatCompletionRequest, projectLimit int64) (int64, error) {
+// requestedOutputTokens is what the reservation is made against: what the caller
+// asked to be allowed to generate, or the Project ceiling when they asked for
+// nothing.
+//
+// The two limits are the semantic pair rather than the Chat wire's: a caller
+// that named the visible output alone and one that named the whole completion
+// have both said the same thing to a budget, and the second wins where both are
+// present, which is how the Chat wire's own pair resolved.
+func requestedOutputTokens(request semantic.GenerateRequest, projectLimit int64) (int64, error) {
 	requested := defaultMaximumOutputTokens
-	if request.MaxTokens != nil {
-		requested = *request.MaxTokens
+	if request.VisibleOutputTokenLimit != nil {
+		requested = *request.VisibleOutputTokenLimit
 	}
-	if request.MaxCompletionTokens != nil {
-		requested = *request.MaxCompletionTokens
+	if request.CompletionTokenLimit != nil {
+		requested = *request.CompletionTokenLimit
 	}
 	if projectLimit > 0 {
 		if requested > projectLimit {
 			return 0, gatewayError("token_limit_exceeded", "requested output tokens exceed the project limit", 400, nil)
 		}
-		if request.MaxTokens == nil && request.MaxCompletionTokens == nil {
+		if request.VisibleOutputTokenLimit == nil && request.CompletionTokenLimit == nil {
 			requested = projectLimit
 		}
 	}
@@ -2928,6 +2956,30 @@ func estimateGenerateInputTokens(bytes int64, request semantic.GenerateRequest) 
 		return estimateInputTokens(bytes)
 	}
 	return estimateInputTokens(bytes) + images*semantic.ImageInputTokenCeiling
+}
+
+// redactionPreservedRequirements refuses a request whose redaction changed what
+// it asks of a target.
+//
+// Capability filtering runs before redaction, on the requirements the caller's
+// request derived. Redaction rewrites text, tool arguments and the address an
+// image is named by — and that last one can move a requirement: masking inside
+// a data URL turns bytes the request carried into an address somebody has to go
+// and get, which is fetched_image, which the chosen target may not have.
+//
+// Re-filtering afterwards would be the other answer, and it is the wrong one:
+// the caller would silently be served by a different deployment than the one
+// their request selected, at a different price. Refusing says what happened.
+//
+// The previous arrangement re-derived the requirements by decoding the redacted
+// Chat request again, and then used them without comparing — so this case
+// routed on one set of requirements and executed under another.
+func redactionPreservedRequirements(request semantic.GenerateRequest) error {
+	derived := request.DeriveRequirements()
+	if derived != request.Requirements {
+		return errors.New("redaction changed the capabilities the request requires")
+	}
+	return nil
 }
 
 func addTokens(left, right int64) (int64, error) {

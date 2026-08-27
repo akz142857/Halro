@@ -330,6 +330,36 @@ discovery and inference on one URL — is what the 404 above rules out: it broke
 the model list and the connection test on both `/openai/v1` profiles while
 inference on that route kept working.
 
+### The vision probe's own image was invalid, measured 2026-08-26
+
+`openai.gpt-5.4` on `/openai/v1` reads images, and Halro's capability detection
+recorded vision as unsupported for it. The refusal was real and it was ours:
+
+| what was sent | answer |
+| --- | --- |
+| text only | 200 |
+| the probe's compiled-in 1x1 PNG | 400 `validation_error` — `Invalid or unsupported image format` |
+| a rebuilt 1x1 RGBA transparent PNG | 200 |
+| 1x1 opaque RGB, 1x1 grayscale, 8x8, 64x64, 256x256 | 200 |
+
+Neither the size nor the alpha channel decides it — a rebuilt image of the same
+1x1 transparent shape is accepted. The compiled-in bytes were a corrupt PNG:
+`IDAT` failed its chunk CRC and the zlib stream failed its Adler-32. Lenient
+decoders accept it, which is why it survived; Mantle's does not.
+
+Two things follow, and both are fixed rather than noted. The probe image is now
+a byte-valid 8x8 PNG that `image/png` decodes, with a test that decodes it — the
+old one cannot pass that test. And the console now prints the upstream status and
+identifier beside a refused capability, because "this model does not support it"
+was Halro's sentence for what was in fact the upstream rejecting Halro's own
+payload, and an operator holding the model card had nothing to check it against.
+
+The residual limit is worth stating: a refusal that names no parameter is
+attributed to the field the probe added, which is the right field and not
+necessarily the right conclusion. Nothing reads the sentence beside it, so an
+upstream that refuses a probe's payload for its own reasons still reads as
+"unsupported" — the identifiers on screen are what makes that visible.
+
 ### What each model answers, measured
 
 Streaming was reachable on **49 of 49** chat models, `text/event-stream` in every
@@ -404,9 +434,9 @@ This table is what seeds `bedrockMantleModels()` in
 appears under, and only a measured `yes` in the Responses column puts it under a
 Responses profile as well. The windows and maximum output beside them come from
 the account's own model list, read 2026-08-25. Nothing else about these models is
-claimed there — tools, JSON mode, vision, developer role and reasoning are all
-inside the Mantle ceiling and none was exercised per model, so they stay for
-capability detection to establish against a real account.
+claimed there — tools, both JSON halves, vision, developer role and reasoning
+are all inside the Mantle ceiling and none was exercised per model, so they
+stay for capability detection to establish against a real account.
 
 ### Request members
 

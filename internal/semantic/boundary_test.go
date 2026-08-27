@@ -47,11 +47,12 @@ func TestExportedCanonicalSchemaMatchesReviewedSnapshot(t *testing.T) {
 		// form. It is carried rather than dropped so that the profiles which
 		// cannot express it declare the loss instead of feeding a model a failed
 		// result dressed as a successful one.
-		"Content":          {"Kind=kind", "Text=text", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments", "ToolError=tool_error"},
+		"Citation":         {"URL=url", "Title=title", "StartIndex=start_index", "EndIndex=end_index"},
+		"Content":          {"Kind=kind", "Text=text", "URL=url", "Detail=detail", "CallID=call_id", "Name=name", "Arguments=arguments", "ToolError=tool_error", "Status=status", "Citations=citations"},
 		"Message":          {"Role=role", "Name=name", "Content=content"},
 		"Source":           {"ProfileID=profile_id", "ProfileRevision=profile_revision"},
-		"Requirements":     {"Streaming=streaming", "StreamUsage=stream_usage", "Tools=tools", "ParallelTools=parallel_tools", "Vision=vision", "FetchedImage=fetched_image", "JSONMode=json_mode", "DeveloperRole=developer_role", "Reasoning=reasoning", "Seed=seed", "MultipleCandidates=multiple_candidates", "EndUserReference=end_user_reference", "ProviderExecutedTools=provider_executed_tools"},
-		"Tool":             {"Name=name", "Description=description", "Schema=schema"},
+		"Requirements":     {"Streaming=streaming", "StreamUsage=stream_usage", "Tools=tools", "ParallelTools=parallel_tools", "Vision=vision", "FetchedImage=fetched_image", "JSONObject=json_object", "StructuredOutputs=structured_outputs", "DeveloperRole=developer_role", "Reasoning=reasoning", "Seed=seed", "MultipleCandidates=multiple_candidates", "EndUserReference=end_user_reference", "ProviderExecutedTools=provider_executed_tools"},
+		"Tool":             {"Name=name", "Description=description", "Schema=schema", "Execution=execution"},
 		"ToolChoice":       {"Mode=mode", "Name=name"},
 		"OutputFormat":     {"Kind=kind", "Name=name", "Description=description", "Schema=schema", "Strict=strict"},
 		"GenerateRequest":  {"Operation=operation", "Source=source", "Mode=mode", "RequestedModel=requested_model", "Messages=messages", "Tools=tools", "ToolChoice=tool_choice", "ParallelTools=parallel_tools", "OutputFormat=output_format", "Temperature=temperature", "TopP=top_p", "VisibleOutputTokenLimit=visible_output_token_limit", "CompletionTokenLimit=completion_token_limit", "Candidates=candidates", "Stop=stop", "Seed=seed", "ReasoningEffort=reasoning_effort", "EndUserRef=end_user_ref", "Stream=stream", "IncludeUsage=include_usage", "Requirements=requirements"},

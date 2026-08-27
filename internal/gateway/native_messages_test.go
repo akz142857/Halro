@@ -572,7 +572,7 @@ func TestMessagesCountTokensRefusesBedrockMantle(t *testing.T) {
 func TestNativeMessagesFiltersOnRequirementsDerivedFromTheRequest(t *testing.T) {
 	service, fake, key, closeFixture := newNativeMessagesFixture(t)
 	defer closeFixture()
-	// The fixture registers a target without JSONMode.
+	// The fixture registers a target without StructuredOutputs.
 	request, err := anthropicapi.DecodeMessageRequest(bytes.NewBufferString(`{"model":"claude","max_tokens":64,"output_config":{"format":{"type":"json_schema","name":"invoice","schema":{"type":"object"}}},"messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)

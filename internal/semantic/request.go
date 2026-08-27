@@ -16,8 +16,14 @@ type Requirements struct {
 	// it. It is a separate requirement because it is a separate claim about the
 	// target: reading a picture and going to get one are different things, and a
 	// target that does only the first must not be handed the second.
-	FetchedImage       bool `json:"fetched_image,omitempty"`
-	JSONMode           bool `json:"json_mode,omitempty"`
+	FetchedImage bool `json:"fetched_image,omitempty"`
+	// JSONObject and StructuredOutputs are set by the two output formats that
+	// used to raise one requirement between them. A schema-less json_object
+	// request and a schema-backed one ask a target for different things, and the
+	// providers divide on exactly that line, so one requirement could not keep a
+	// schema request off a target that serves only the schema-less mode.
+	JSONObject         bool `json:"json_object,omitempty"`
+	StructuredOutputs  bool `json:"structured_outputs,omitempty"`
 	DeveloperRole      bool `json:"developer_role,omitempty"`
 	Reasoning          bool `json:"reasoning,omitempty"`
 	Seed               bool `json:"seed,omitempty"`
@@ -30,11 +36,46 @@ type Requirements struct {
 	ProviderExecutedTools bool `json:"provider_executed_tools,omitempty"`
 }
 
+// ToolExecution says who runs a tool. It is not a formatting distinction: a
+// caller-executed tool comes back as a call for the caller to answer, while a
+// provider-executed one is run upstream, which means the provider originates
+// network calls Halro never sees and SafeTransport never filters.
+//
+// That is why it is a member here rather than a naming convention: routing has
+// to be able to keep a request that implies upstream egress off a connection
+// whose operator never accepted it, and it can only do that if the request says
+// so in a field.
+type ToolExecution string
+
+const (
+	ToolExecutionCaller   ToolExecution = "caller"
+	ToolExecutionProvider ToolExecution = "provider"
+)
+
+// ProviderToolWebSearch is the only provider-executed tool this model carries.
+//
+// The others were considered and left out, each for the same reason rather than
+// for want of demand. A code interpreter runs in a container that survives the
+// call and returns files stored on the provider's side; a file search reads a
+// vector store the provider holds. Both are provider-side state, and a gateway
+// whose consistency boundary is one process owning one data directory has
+// nowhere to put a handle to somebody else's state. Web search has no such
+// handle: it takes a query and returns text with citations.
+const ProviderToolWebSearch = "web_search"
+
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Schema      json.RawMessage `json:"schema,omitempty"`
+	// Execution is empty for a caller-executed tool, which is what an absent
+	// member has always meant here. A provider-executed tool carries the
+	// upstream's own name for it in Name and no schema of its own — the caller
+	// is not describing a function, they are naming one the provider already has.
+	Execution ToolExecution `json:"execution,omitempty"`
 }
+
+// ProviderExecuted reports a tool the upstream runs itself.
+func (tool Tool) ProviderExecuted() bool { return tool.Execution == ToolExecutionProvider }
 
 type ToolChoiceMode string
 
@@ -103,6 +144,19 @@ func (request GenerateRequest) Validate() error {
 		if tool.Name == "" || (len(tool.Schema) > 0 && (!json.Valid(tool.Schema) || bytes.TrimSpace(tool.Schema)[0] != '{')) {
 			return errors.New("semantic tool is invalid")
 		}
+		switch tool.Execution {
+		case "", ToolExecutionCaller:
+		case ToolExecutionProvider:
+			// A schema or a description would be the caller describing a function
+			// the provider already owns. Neither is carried, so neither is accepted:
+			// silently ignoring them would let a caller believe they had constrained
+			// something they had not.
+			if tool.Name != ProviderToolWebSearch || len(tool.Schema) > 0 || tool.Description != "" {
+				return errors.New("semantic provider-executed tool is invalid")
+			}
+		default:
+			return errors.New("semantic tool execution is invalid")
+		}
 	}
 	if request.ToolChoice != nil {
 		switch request.ToolChoice.Mode {
@@ -148,9 +202,21 @@ func (request GenerateRequest) Validate() error {
 }
 
 func (request GenerateRequest) DeriveRequirements() Requirements {
-	structuredJSON := request.OutputFormat != nil && (request.OutputFormat.Kind == OutputJSONObject || request.OutputFormat.Kind == OutputJSONSchema)
+	jsonObject := request.OutputFormat != nil && request.OutputFormat.Kind == OutputJSONObject
+	structuredOutputs := request.OutputFormat != nil && request.OutputFormat.Kind == OutputJSONSchema
 	parallelTools := request.ParallelTools != nil && *request.ParallelTools
-	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: len(request.Tools) > 0 || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, JSONMode: structuredJSON, Reasoning: request.ReasoningEffort != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
+	// A provider-executed tool is not a function the caller can be asked to run,
+	// so it raises its own requirement and not the tools one: a target that does
+	// function calling and no upstream search would otherwise look like a match.
+	callerTools, providerTools := false, false
+	for _, tool := range request.Tools {
+		if tool.ProviderExecuted() {
+			providerTools = true
+			continue
+		}
+		callerTools = true
+	}
+	result := Requirements{Streaming: request.Stream, StreamUsage: request.IncludeUsage, Tools: callerTools || request.ToolChoice != nil || parallelTools, ParallelTools: parallelTools, ProviderExecutedTools: providerTools, JSONObject: jsonObject, StructuredOutputs: structuredOutputs, Reasoning: request.ReasoningEffort != "", Seed: request.Seed != nil, MultipleCandidates: request.Candidates != nil && *request.Candidates > 1, EndUserReference: request.EndUserRef != ""}
 	for _, message := range request.Messages {
 		if message.Role == RoleDeveloper {
 			result.DeveloperRole = true
@@ -202,4 +268,35 @@ func (request EmbeddingRequest) Validate() error {
 
 func (request EmbeddingRequest) DeriveRequirements() Requirements {
 	return Requirements{EndUserReference: request.EndUserRef != ""}
+}
+
+// EstimatedInputBytes is the size of what the caller sent, measured on the
+// portable representation rather than on any one wire form.
+//
+// It is deliberately a property of the semantic request: every facade's bytes
+// differ — the same conversation is longer in Responses items than in Chat
+// messages — and charging a caller a different estimate for the same content
+// because of the endpoint they used is not something a wire-level measurement
+// can avoid.
+//
+// Image bytes are counted here and taken back out by whoever converts this to
+// tokens: a data URL is the whole picture in base64, and there is no useful
+// reading of it as text.
+func (request GenerateRequest) EstimatedInputBytes() int64 {
+	var total int64
+	for _, message := range request.Messages {
+		total += int64(len(message.Role) + len(message.Name))
+		for _, part := range message.Content {
+			// The kind is not counted. It is this model's discriminator, not
+			// anything the caller wrote, and charging for it would make the
+			// estimate depend on how many parts a wire form happened to split the
+			// same text into.
+			total += int64(len(part.Text) + len(part.URL) + len(part.Detail) +
+				len(part.CallID) + len(part.Name) + len(part.Arguments))
+		}
+	}
+	for _, tool := range request.Tools {
+		total += int64(len(tool.Name) + len(tool.Description) + len(tool.Schema))
+	}
+	return total
 }

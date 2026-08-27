@@ -359,7 +359,13 @@ export interface ProviderCapabilities {
   /** Whether the target will retrieve an image the request only names, as
    * opposed to reading one the request carries. Bedrock does the second only. */
   fetched_image: boolean;
-  json_mode: boolean;
+  /** The schema-less JSON mode, which only promises the answer parses. Separate
+   * from structured_outputs because no provider serves them as one thing:
+   * Anthropic has the schema and not this, DeepSeek has this and not the schema. */
+  json_object: boolean;
+  /** A schema the upstream enforces — OpenAI json_schema, Anthropic
+   * output_config.format. */
+  structured_outputs: boolean;
   developer_role: boolean;
   reasoning: boolean;
   stream_usage: boolean;
@@ -630,6 +636,10 @@ export interface ModelCapabilityDetection {
   expires_at?: string;
   cancel_requested_at?: string;
   capabilities: Record<string, { status: CapabilityProbeStatus; evidence?: CapabilityEvidence; error_class?: string; provider_status?: number; provider_code?: string; probe_kind: string }>;
+  /** What the catalogue claimed when this run was asked to verify it. Absent for
+   * a model the catalogue does not cover, where there is nothing to measure
+   * against — a probe verdict is then the only claim. */
+  baseline_capabilities?: ProviderCapabilities;
   recommended_capabilities: ProviderCapabilities;
   selection_revision?: string;
   revision: number;

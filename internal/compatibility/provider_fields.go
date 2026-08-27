@@ -78,9 +78,14 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.Seed != nil, "seed")
 		// Structured output is supported, but only as a schema: Anthropic has no
 		// counterpart to the schema-less json_object mode, and it has no relaxed
-		// mode either — a schema it is given is enforced. Declaring the gaps
-		// precisely lets routing pick another provider rather than failing the
-		// request at render time.
+		// mode either — a schema it is given is enforced.
+		//
+		// The first of those is also the json_object capability, absent from this
+		// profile's ceiling, so routing has already dropped the target before this
+		// runs. It is still declared here because this file is the renderer's
+		// contract as much as it is routing's input: the manifest coverage tests
+		// hold every field the wire cannot carry to a declaration, and a fact
+		// stated in only one of the two layers is a fact the other can contradict.
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONObject, "response_format")
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema && !request.OutputFormat.Strict, "response_format")
 		// The ladder is bounded by the portable representation, not by Anthropic.
@@ -122,6 +127,21 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.ReasoningEffort != "", "reasoning_effort")
 	}, domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// The direct OpenAI Responses surface. Its losses are the stateless
+		// Responses form's, not this account's: an input item has no speaker name,
+		// no stop list and no seed, and one request produces one response.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(hasNamedMessage(request), "messages[].name")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(len(request.Stop) > 0, "stop")
+		add(request.Seed != nil, "seed")
+		// Reasoning is declared rather than left to the capability filter alone.
+		// The filter does drop this target for a request that asks to think — the
+		// ceiling carries no reasoning — but a caller told "no route supports
+		// this" learns less than one told which field cost them the route.
+		add(request.ReasoningEffort != "", "reasoning_effort")
+	}, domain.ProfileOpenAIResponses)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// DeepSeek speaks this wire format but accepts a smaller set of members
 		// than OpenAI does; deepseek.go holds the list and the renderer that has
 		// to agree with it. Sharing OpenAI's branch declared none of the gap, so
@@ -154,10 +174,10 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.CompletionTokenLimit != nil &&
 			(deepSeekThinkingIsOn(request.ReasoningEffort) || request.VisibleOutputTokenLimit != nil),
 			"max_completion_tokens")
-		// DeepSeek has json_object and no schema mode, so support is value-
-		// dependent the way it is on the Anthropic profile: a schema request is
-		// routed away rather than sent to a surface that would refuse it after
-		// the budget was already reserved.
+		// DeepSeek has json_object and no schema mode. The structured_outputs
+		// capability is what routes a schema request elsewhere; this is the same
+		// fact stated to the renderer, which refuses the format on the wire and
+		// must not be the only place that knows.
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema, "response_format")
 		// Value-dependent too. `none` reaches thinking.type=disabled and low/high
 		// reach thinking.reasoning_effort; minimal, medium and xhigh have no
@@ -243,7 +263,34 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 	} else {
 		legacyFieldRules(add, request)
 	}
+	// Declared once for every profile rather than repeated in each rule set,
+	// because the answer is the same everywhere but one: a tool the upstream runs
+	// itself only exists on a surface that has such tools, and writing the same
+	// negative into a dozen rule sets is a dozen places for the next profile to
+	// be forgotten. The allowlist inverts that — a new profile carries it only by
+	// being named here.
+	add(hasProviderExecutedTool(request) && !slices.Contains(providerExecutedToolProfiles, profileID), "tools[].type")
 	return unsupported
+}
+
+// providerExecutedToolProfiles are the profiles whose wire form can carry a tool
+// the upstream runs itself.
+//
+// The Anthropic Messages profile is deliberately absent even though its ceiling
+// permits the capability: Anthropic's own provider-executed tools reach it
+// through native mode, where the request is forwarded as the caller wrote it.
+// The portable path has no way to express them, so a portable request naming one
+// is refused here rather than translated into a function declaration the model
+// would try to call back about.
+var providerExecutedToolProfiles = []domain.ProviderProfileID{domain.ProfileOpenAIResponses}
+
+func hasProviderExecutedTool(request semantic.GenerateRequest) bool {
+	for _, tool := range request.Tools {
+		if tool.ProviderExecuted() {
+			return true
+		}
+	}
+	return false
 }
 
 // hasFailedToolResult reports a tool result the caller marked as failed. Only

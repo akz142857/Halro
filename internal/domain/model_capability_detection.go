@@ -168,23 +168,40 @@ type ModelCapabilityDetection struct {
 	Status               ModelCapabilityDetectionStatus   `json:"status"`
 	Source               string                           `json:"source"`
 	Results              map[string]CapabilityProbeResult `json:"capabilities"`
-	Recommended          ProviderCapabilities             `json:"recommended_capabilities"`
-	ProviderCalls        int                              `json:"provider_calls"`
-	MaxProviderCalls     int                              `json:"max_provider_calls"`
-	Calls                []DetectionProviderCall          `json:"provider_call_records,omitempty"`
-	StartedAt            *time.Time                       `json:"started_at,omitempty"`
-	CompletedAt          *time.Time                       `json:"completed_at,omitempty"`
-	ExpiresAt            *time.Time                       `json:"expires_at,omitempty"`
-	CancelRequestedAt    *time.Time                       `json:"cancel_requested_at,omitempty"`
-	ExpiryRecordedAt     *time.Time                       `json:"expiry_recorded_at,omitempty"`
-	CreatedBy            string                           `json:"created_by"`
-	IdempotencyKeyHash   string                           `json:"idempotency_key_hash"`
-	RequestHash          string                           `json:"request_hash"`
-	SelectionRevision    string                           `json:"selection_revision,omitempty"`
-	ForceRefresh         bool                             `json:"-"`
-	Revision             uint64                           `json:"revision"`
-	CreatedAt            time.Time                        `json:"created_at"`
-	UpdatedAt            time.Time                        `json:"updated_at"`
+	// Baseline is what the catalog claimed for this model when a verification
+	// was asked for, and is nil for a detection of a model the catalog does not
+	// cover.
+	//
+	// A pointer because absence has to be real on the wire: `omitempty` does not
+	// omit a struct, so a value field serialized an all-false object on every
+	// detection and the console could not tell a verification from an ordinary
+	// run — it reported a first-time detection's own findings as capabilities
+	// established "beyond the catalog".
+	//
+	// It is kept because a verification measures a subset and would otherwise
+	// silently delete the rest: probes never reach images, speech, files or
+	// batches — one is a real generation at generation prices, the other leaves
+	// an object behind — so a recommendation built from probe results alone
+	// reports every one of them as absent. What a probe established replaces the
+	// claim; what no probe could reach keeps it.
+	Baseline           *ProviderCapabilities   `json:"baseline_capabilities,omitempty"`
+	Recommended        ProviderCapabilities    `json:"recommended_capabilities"`
+	ProviderCalls      int                     `json:"provider_calls"`
+	MaxProviderCalls   int                     `json:"max_provider_calls"`
+	Calls              []DetectionProviderCall `json:"provider_call_records,omitempty"`
+	StartedAt          *time.Time              `json:"started_at,omitempty"`
+	CompletedAt        *time.Time              `json:"completed_at,omitempty"`
+	ExpiresAt          *time.Time              `json:"expires_at,omitempty"`
+	CancelRequestedAt  *time.Time              `json:"cancel_requested_at,omitempty"`
+	ExpiryRecordedAt   *time.Time              `json:"expiry_recorded_at,omitempty"`
+	CreatedBy          string                  `json:"created_by"`
+	IdempotencyKeyHash string                  `json:"idempotency_key_hash"`
+	RequestHash        string                  `json:"request_hash"`
+	SelectionRevision  string                  `json:"selection_revision,omitempty"`
+	ForceRefresh       bool                    `json:"-"`
+	Revision           uint64                  `json:"revision"`
+	CreatedAt          time.Time               `json:"created_at"`
+	UpdatedAt          time.Time               `json:"updated_at"`
 }
 
 func (d *ModelCapabilityDetection) GetRevision() uint64  { return d.Revision }
@@ -320,29 +337,110 @@ func (d ModelCapabilityDetection) Validate() error {
 }
 
 func validateDetectionRecommendation(d ModelCapabilityDetection) error {
-	expected := ProviderCapabilities{MaxContextTokens: d.Recommended.MaxContextTokens, MaxOutputTokens: d.Recommended.MaxOutputTokens}
-	for capability, result := range d.Results {
-		if result.Status == ProbeSupported {
-			setCapability(&expected, capability, true)
-		}
-	}
+	expected := RecommendedFromProbes(d.Baseline, d.Results)
+	expected.MaxContextTokens, expected.MaxOutputTokens = d.Recommended.MaxContextTokens, d.Recommended.MaxOutputTokens
 	if !ProviderCapabilitiesSubset(expected, d.Recommended) || !ProviderCapabilitiesSubset(d.Recommended, expected) {
-		return errors.New("recommended capabilities must equal supported probe results")
+		return errors.New("recommended capabilities must be the probe results over the baseline")
 	}
 	if d.Recommended.Streaming && !d.Recommended.Chat || d.Recommended.StreamUsage && !d.Recommended.Streaming ||
-		(d.Recommended.Tools || d.Recommended.Vision || d.Recommended.JSONMode || d.Recommended.DeveloperRole || d.Recommended.Reasoning) && !d.Recommended.Chat {
+		(d.Recommended.Tools || d.Recommended.Vision || d.Recommended.JSONObject ||
+			d.Recommended.StructuredOutputs || d.Recommended.DeveloperRole ||
+			d.Recommended.Reasoning || d.Recommended.FetchedImage) && !d.Recommended.Chat {
 		return errors.New("recommended capability dependencies are incomplete")
 	}
 	return nil
+}
+
+// RecommendedFromProbes is what a detection recommends: every capability a probe
+// established, plus the baseline's claim for the ones no probe answered.
+//
+// The three outcomes are deliberately unequal. Supported and unsupported are
+// answers and overrule what was claimed before, which is the point of paying for
+// a verification. Everything else — not probed, inconclusive, unavailable,
+// canceled — is silence, and silence must not delete a claim: a detection whose
+// credential was rejected halfway through would otherwise recommend switching
+// off capabilities nothing disagreed with, and a verification never reaches
+// images, speech, files or batches at all. The baseline is empty for a model the
+// catalog does not cover, so silence there still means false.
+//
+// The write path and the validator both call this, so a record cannot be stored
+// under one reading of the results and refused under another.
+func RecommendedFromProbes(baseline *ProviderCapabilities, results map[string]CapabilityProbeResult) ProviderCapabilities {
+	claimed := ProviderCapabilities{}
+	if baseline != nil {
+		claimed = *baseline
+	}
+	c := ProviderCapabilities{}
+	for _, name := range capabilityNames {
+		enabled := false
+		switch results[name].Status {
+		case ProbeSupported:
+			enabled = true
+		case ProbeUnsupported:
+			enabled = false
+		default:
+			enabled, _ = CapabilityValue(claimed, name)
+		}
+		if enabled {
+			setCapability(&c, name, true)
+		}
+	}
+	// A carried claim is still bound by what the probes disproved underneath it.
+	// The catalog can claim vision on a model whose chat probe came back
+	// unsupported, and a recommendation that kept both would be refused by the
+	// dependency check above — leaving the detection unable to finish rather than
+	// finishing with the narrower answer, which is the honest one.
+	if !c.Chat {
+		c.Streaming, c.Tools, c.Vision, c.DeveloperRole, c.Reasoning = false, false, false, false, false
+		c.JSONObject, c.StructuredOutputs, c.FetchedImage = false, false, false
+	}
+	if !c.Streaming {
+		c.StreamUsage = false
+	}
+	return c
+}
+
+// AnyProbeSupported reports whether anything was actually established. It is the
+// question "is this recommendation worth anything", asked of the probes rather
+// than of the merged set, because the merged set carries claims no probe made.
+func AnyProbeSupported(results map[string]CapabilityProbeResult) bool {
+	for _, result := range results {
+		if result.Status == ProbeSupported {
+			return true
+		}
+	}
+	return false
 }
 
 func setCapability(c *ProviderCapabilities, name string, value bool) {
 	SetCapability(c, name, value)
 }
 
+// DetectionCapabilitySnapshot records what a deployment adopts from a detection.
+//
+// Evidence is per capability rather than per snapshot because a verification
+// against a catalog entry produces both kinds at once: what a probe answered was
+// measured, and what the baseline carried through was only ever claimed. Calling
+// the whole set verified would record a measurement that never happened for the
+// capabilities no probe is allowed to reach.
 func DetectionCapabilitySnapshot(d ModelCapabilityDetection, retained ProviderCapabilities, at time.Time) ModelCapabilitySnapshot {
 	snapshot := ModelCapabilitySnapshot{ProviderModel: d.ProviderModel, ModelRevision: d.ModelRevision,
 		Source: "verified_probe", Status: "known", CapturedAt: at, Capabilities: retained}
-	snapshot.Evidence = SnapshotEvidence(snapshot)
+	snapshot.Evidence = DetectionSnapshotEvidence(snapshot, d)
 	return snapshot
+}
+
+// DetectionSnapshotEvidence is SnapshotEvidence for a snapshot adopted from a
+// detection. Both the snapshot constructor and the deployment write path call
+// it, because the write path recomputes the evidence unconditionally at the end
+// of its own assembly and would otherwise overwrite the per-capability result
+// with the source-wide rule, which cannot tell the two halves apart.
+func DetectionSnapshotEvidence(snapshot ModelCapabilitySnapshot, d ModelCapabilityDetection) CapabilityEvidenceSet {
+	evidence := SnapshotEvidence(snapshot)
+	for name, value := range evidence {
+		if value == EvidenceVerified && d.Results[name].Status != ProbeSupported {
+			evidence[name] = EvidenceDeclared
+		}
+	}
+	return evidence
 }

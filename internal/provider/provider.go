@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -62,6 +63,42 @@ func TransportClass(err error) ErrorClass {
 	}
 }
 
+// RefusalKind is what a bad-request refusal says about the request, in terms
+// every profile family can answer.
+//
+// The identifiers upstreams refuse in are not comparable across families. An
+// OpenAI-shaped body names the offending field with a code of its own
+// ("unsupported_parameter"), Anthropic answers every malformed request with the
+// single type "invalid_request_error", Bedrock raises "ValidationException",
+// and Gemini reports an RPC status. Reading the sentence beside them would make
+// them comparable and is not an option here — it is provider prose, and no
+// verdict of Halro's is ever taken from it.
+//
+// So each adapter maps its own dialect once, at the point where it already
+// parses the refusal, and everything downstream compares this instead. The two
+// kinds are deliberately unequal in strength: RefusalUnsupported is the upstream
+// naming a field or value it does not serve, which is a verdict on its own,
+// while RefusalInvalid is the upstream refusing the request without saying which
+// part was wrong — true of a request whose model does not exist just as much as
+// one whose field is unsupported. Turning the second into a capability verdict
+// needs something else to have established that the rest of the request was
+// good; see classifyCapabilityProbeError.
+type RefusalKind string
+
+const (
+	// RefusalNone is every error that is not an upstream refusal of the request
+	// body — transport failures, rate limits, and the bad requests Halro raises
+	// about its own rendering before anything is sent. A refusal Halro authored
+	// says what Halro believes, and detection records what the provider said.
+	RefusalNone RefusalKind = ""
+	// RefusalUnsupported: the upstream named the field or value as one it does
+	// not support.
+	RefusalUnsupported RefusalKind = "unsupported"
+	// RefusalInvalid: the upstream refused the request without attributing the
+	// refusal to a part of it.
+	RefusalInvalid RefusalKind = "invalid"
+)
+
 type Error struct {
 	Class             ErrorClass
 	StatusCode        int
@@ -70,8 +107,12 @@ type Error struct {
 	Message           string
 	ProviderRequestID string
 	ProviderCode      string
-	RetryAfter        time.Duration
-	Cause             error
+	// Refusal is set only by the adapter that decoded an upstream refusal, and
+	// only for ErrorBadRequest. It carries no routing or accounting meaning: a
+	// refusal is a refusal to the gateway either way.
+	Refusal    RefusalKind
+	RetryAfter time.Duration
+	Cause      error
 }
 
 func (e *Error) Error() string {
@@ -117,6 +158,43 @@ func SafeProviderIdentifier(value string) string {
 		return code
 	}
 	return code + ":" + parameter
+}
+
+// RefusalFromOpenAIBody maps an OpenAI-shaped refusal onto the normalized kind.
+// Two families answer in this shape — OpenAI itself (including Azure and the
+// OpenAI-compatible endpoints) and Bedrock Mantle — so the rule lives here
+// rather than being written once per adapter and drifting.
+//
+// Three things have to be true before a refusal names a kind at all, and each
+// one was a way of manufacturing a verdict out of nothing:
+//
+//   - The upstream chose an identifier. An empty code is what a body that is not
+//     an OpenAI envelope decodes to — a proxy, a CDN, a path that does not exist
+//     upstream, or one of the many OpenAI-compatible servers that answer in their
+//     own shape. Nothing was said about the request, so nothing is reported.
+//   - The status is one an upstream uses to refuse a request body. Both adapters
+//     reach ErrorBadRequest as the fall-through of a status switch, so a 404, a
+//     409 or a 413 arrives here looking exactly like a 400.
+//   - Only "unsupported_parameter" and "unsupported_value" name the field itself
+//     as unsupported. Every other code leaves the refusal unattributed, and only
+//     something that already knows the rest of the request was good can read a
+//     capability out of that.
+//
+// Only the code half is inspected: the parameter it names travels joined to it
+// ("unsupported_parameter:image_url") and annotates the verdict rather than
+// deciding it.
+func RefusalFromOpenAIBody(status int, code string) RefusalKind {
+	name, _, _ := strings.Cut(strings.TrimSpace(code), ":")
+	if name == "" {
+		return RefusalNone
+	}
+	if strings.EqualFold(name, "unsupported_parameter") || strings.EqualFold(name, "unsupported_value") {
+		return RefusalUnsupported
+	}
+	if status == http.StatusBadRequest || status == http.StatusUnprocessableEntity {
+		return RefusalInvalid
+	}
+	return RefusalNone
 }
 
 func boundedIdentifier(value string) string {

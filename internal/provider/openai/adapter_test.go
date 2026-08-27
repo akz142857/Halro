@@ -708,3 +708,51 @@ func TestChatStreamRequiresDoneSentinel(t *testing.T) {
 		t.Fatalf("unexpected error: %#v", err)
 	}
 }
+
+// The OpenAI family is the only one whose refusal can name the field it refused
+// as unsupported, and that is the strongest evidence a capability probe can get
+// without a baseline behind it. Everything else the family refuses with — a
+// nonexistent model, a malformed body — stays unattributed.
+func TestBadRequestRefusalKindComesFromTheUpstreamCode(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		body   string
+		want   provider.RefusalKind
+	}{
+		{400, `{"error":{"message":"no","code":"unsupported_parameter","param":"image_url"}}`, provider.RefusalUnsupported},
+		{400, `{"error":{"message":"no","code":"unsupported_value","param":"reasoning_effort"}}`, provider.RefusalUnsupported},
+		{400, `{"error":{"message":"no","type":"invalid_request_error"}}`, provider.RefusalInvalid},
+		// Not a refusal of the request body. ErrorBadRequest is the
+		// fall-through of the status switch, so this arrives looking exactly
+		// like a 400 and must not be read as one.
+		{404, `{"error":{"message":"no","code":"model_not_found"}}`, provider.RefusalNone},
+		// A body Halro could not read is not the upstream saying anything about
+		// the request, so it names no kind rather than the weaker one. Same for
+		// an envelope that parsed and carried no identifier.
+		{400, `<html>bad gateway</html>`, provider.RefusalNone},
+		{400, `{"error":{"message":"no"}}`, provider.RefusalNone},
+		{429, `{"error":{"message":"busy","type":"rate_limit_error"}}`, provider.RefusalNone},
+		{503, `{"error":{"message":"busy"}}`, provider.RefusalNone},
+	} {
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header), Request: request}, nil
+		})}
+		endpoint, _ := url.Parse("https://provider.example")
+		adapter, err := New(endpoint, []byte("provider-key"), client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = adapter.Chat(context.Background(), provider.ChatCall{
+			RequestID: "req_1", ProviderModel: "gpt-test",
+			Request: openaiapi.ChatCompletionRequest{Model: "chat", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}}},
+		})
+		adapter.Close()
+		var classified *provider.Error
+		if !errors.As(err, &classified) {
+			t.Fatalf("status %d was not classified: %v", test.status, err)
+		}
+		if classified.Refusal != test.want {
+			t.Fatalf("status %d body %s mapped to %q, want %q", test.status, test.body, classified.Refusal, test.want)
+		}
+	}
+}

@@ -51,9 +51,24 @@ The Responses endpoint has its own typed item and event contract; it is not a
 Chat Completions response with renamed fields. Phase 1A supports strict Create
 and text SSE only. Omitted `store` is treated as false. `store: true`,
 `previous_response_id`, Conversations, background mode, prompt resources,
-webhooks, retrieve/delete/cancel/input-items operations, hosted tools, strict
-function tools, reasoning output, and streaming function calls are rejected
-before Provider I/O.
+webhooks, retrieve/delete/cancel/input-items operations, strict function tools,
+reasoning output, and streaming tools are rejected before Provider I/O.
+
+`tools: [{"type": "web_search"}]` is the one hosted tool accepted. It names a
+tool the upstream runs itself, so it is routed against the
+`provider_executed_tools` capability and reaches only a connection whose
+operator turned that on — enabling it accepts that the provider originates
+network calls that never pass through SafeTransport. It is served by the
+`openai.responses.v1` provider profile and by no other, because no other
+profile's wire form can carry it. `code_interpreter` and `file_search` are
+rejected: both are provider-side state, and a gateway whose consistency
+boundary is one process owning one data directory has nowhere to hold a handle
+to somebody else's.
+
+A search comes back as a `web_search_call` output item, with the query the
+model wrote, and as `url_citation` annotations on the answer text. Both are
+carried; a profile that cannot represent either refuses the result rather than
+returning the answer with its sources removed.
 
 For redaction safety, Phase 1A does not echo original instructions, tool
 definitions/tool choice, or structured schema bodies in response metadata;
@@ -62,6 +77,13 @@ those response fields use conservative null/empty/default values.
 Portable input messages, instructions, scalar generation controls, supported
 function calls, and supported text formats are mapped to semantic `generate`
 and executed through the selected deployment's versioned generation primitive.
+That mapping is direct: the endpoint decodes its own wire form into the
+semantic request and enters the same hot path Chat Completions enters, rather
+than writing itself as a Chat Completions request first. What a Responses
+request may contain is therefore bounded by the semantic model and by the
+selected profile's declared coverage, not by what the Chat Completions wire can
+express.
+
 The exact per-provider field coverage is authoritative in
 [`endpoint-manifests.json`](../compatibility/endpoint-manifests.json).
 

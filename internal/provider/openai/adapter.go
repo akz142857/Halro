@@ -34,6 +34,11 @@ type Adapter struct {
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
+	// responses says this adapter was built for the Responses profile. It is a
+	// property of the profile the connection is bound to, not something inferred
+	// from a request, so a deployment cannot address a surface its operator did
+	// not choose.
+	responses bool
 }
 
 func New(endpoint *url.URL, apiKey []byte, client *http.Client) (*Adapter, error) {
@@ -41,7 +46,7 @@ func New(endpoint *url.URL, apiKey []byte, client *http.Client) (*Adapter, error
 		Endpoint: endpoint, APIKey: apiKey, Client: client, ProviderType: "openai",
 		Capabilities: provider.Capabilities{
 			Chat: true, Streaming: true, Embeddings: true, Tools: true,
-			Vision: true, JSONMode: true, StreamUsage: true,
+			Vision: true, JSONObject: true, StructuredOutputs: true, StreamUsage: true,
 		},
 	})
 }
@@ -56,6 +61,10 @@ type Options struct {
 	Capabilities     provider.Capabilities
 	Authorizer       provider.Authorizer
 	CredentialScheme domain.CredentialScheme
+	// Responses builds an adapter for the OpenAI Responses profile: the same
+	// account and credential, a different endpoint, and a request that stays
+	// semantic all the way to the wire.
+	Responses bool
 	// BedrockProjectID is set only for Bedrock Mantle providers, and only when
 	// they address a project other than the account default.
 	BedrockProjectID string
@@ -117,6 +126,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
+		responses:           options.Responses,
 	}, nil
 }
 
@@ -335,6 +345,17 @@ func (a *Adapter) Close() {
 }
 
 func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	if a.responses {
+		// The Responses profile addresses /v1/responses and nothing else. Chat is
+		// still the shape capability detection and the connection test speak, so
+		// it is served here by translating rather than by addressing the other
+		// endpoint: a probe that reached /v1/chat/completions would record
+		// verified evidence for a surface this profile never calls, and a key
+		// scoped to only one of the two would pass detection and then fail the
+		// first real request — after the budget was reserved, which is the exact
+		// failure this profile exists to remove.
+		return a.chatViaResponses(ctx, call)
+	}
 	if a.azure && !validAzureDeployment(call.ProviderModel) {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid azure deployment name"}
 	}
@@ -349,22 +370,103 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
-	endpoint := a.operationURL(call.ProviderModel, "chat/completions")
+	payload, err := a.postJSON(ctx, call.ProviderModel, "chat/completions", call.RequestID, encoded)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	var result openaiapi.ChatCompletionResponse
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider response", Cause: err}
+	}
+	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response is missing required fields"}
+	}
+	return result, nil
+}
+
+// chatViaResponses answers a Chat-shaped call on the Responses profile by
+// translating both ways around the endpoint the profile actually addresses.
+//
+// It is the same round trip the Bedrock Mantle Responses adapter makes, and for
+// the same reason: the callers that speak Chat here — capability detection, the
+// connection test — are asking a question about this profile, and the answer is
+// only true if it came from this profile's own surface.
+func (a *Adapter) chatViaResponses(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	canonical, err := openaiwire.DecodeGenerate(call.Request)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "decode provider Chat request", Cause: err}
+	}
+	result, err := a.GenerateSemantic(ctx, provider.GenerateCall{
+		RequestID: call.RequestID, ProviderModel: call.ProviderModel, Request: canonical,
+	})
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	chat, err := openaiwire.RenderGenerateResult(result)
+	if err != nil {
+		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "render provider Chat result", Cause: err}
+	}
+	return chat, nil
+}
+
+// GenerateSemantic serves the Responses profile, which is the one OpenAI surface
+// whose request cannot be written as a Chat Completions request without losing
+// something — a provider-executed tool has no Chat member, and the answer comes
+// back with citations Chat has nowhere to put.
+//
+// It is refused on every other OpenAI profile rather than quietly serving them
+// too: the chat profile addresses /v1/chat/completions and a deployment on it
+// asking for /v1/responses would be reaching an endpoint its operator never
+// chose.
+func (a *Adapter) GenerateSemantic(ctx context.Context, call provider.GenerateCall) (semantic.GenerateResult, error) {
+	if !a.responses {
+		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "this OpenAI profile does not serve the Responses surface"}
+	}
+	request, err := openaiwire.RenderProviderResponseRequest(call.Request, call.ProviderModel)
+	if err != nil {
+		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "render provider Responses request", Cause: err}
+	}
+	request.Stream = false
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider Responses request", Cause: err}
+	}
+	payload, err := a.postJSON(ctx, call.ProviderModel, "responses", call.RequestID, encoded)
+	if err != nil {
+		return semantic.GenerateResult{}, err
+	}
+	var wire openaiapi.Response
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider Responses result", Cause: err}
+	}
+	result, err := openaiwire.DecodeProviderResponse(wire)
+	if err != nil {
+		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "normalize provider Responses result", Cause: err}
+	}
+	return result, nil
+}
+
+// postJSON is the one place an OpenAI-family unary call crosses the network: it
+// applies the credential, bounds what it will read back, and classifies a
+// refusal. Chat and Responses share it because the differences between them are
+// in the bodies, and a second copy of the transport rules is a second place for
+// a size bound or an error class to drift.
+func (a *Adapter) postJSON(ctx context.Context, providerModel, operation, requestID string, encoded []byte) ([]byte, error) {
+	endpoint := a.operationURL(providerModel, operation)
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(encoded))
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
+		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "create provider request", Cause: err}
 	}
 	if err := a.prepareRequest(request); err != nil {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
+		return nil, &provider.Error{Class: provider.ErrorAuthentication, Message: "authorize provider request", Cause: err}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
-	request.Header.Set("X-Request-ID", call.RequestID)
-
+	request.Header.Set("X-Request-ID", requestID)
 	response, err := a.client.Do(request)
 	if err != nil {
 		class := provider.TransportClass(err)
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{
+		return nil, &provider.Error{
 			Class:     class,
 			Retryable: class == provider.ErrorConnect || class == provider.ErrorTimeout,
 			Ambiguous: !provider.Unsent(err),
@@ -375,24 +477,17 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message := limitedErrorMessage(response.Body)
-		return openaiapi.ChatCompletionResponse{}, classifyHTTPError(response.StatusCode, message)
+		return nil, classifyHTTPError(response.StatusCode, message)
 	}
 	limited := io.LimitReader(response.Body, maxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "read provider response", Cause: err}
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "read provider response", Cause: err}
 	}
 	if len(payload) > maxResponseBytes {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response exceeded size limit"}
+		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response exceeded size limit"}
 	}
-	var result openaiapi.ChatCompletionResponse
-	if err := json.Unmarshal(payload, &result); err != nil {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider response", Cause: err}
-	}
-	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response is missing required fields"}
-	}
-	return result, nil
+	return payload, nil
 }
 
 func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
@@ -459,6 +554,12 @@ func (a *Adapter) ChatStream(
 ) (*openaiapi.Usage, error) {
 	if emit == nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "stream callback is required"}
+	}
+	if a.responses {
+		// The Responses profile binds no stream primitive, so nothing should reach
+		// here. Refusing beats falling through to /v1/chat/completions, which
+		// would stream from an endpoint this profile does not address.
+		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "this OpenAI profile does not serve streaming"}
 	}
 	if a.azure && !validAzureDeployment(call.ProviderModel) {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "invalid azure deployment name"}
@@ -647,6 +748,12 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 		result.Ambiguous = true
 	default:
 		result.Class = provider.ErrorBadRequest
+		// A body that could not be read as an OpenAI envelope says nothing about
+		// the request, whatever status carried it, so it names no refusal kind
+		// rather than the weaker one.
+		if !refusal.Unreadable {
+			result.Refusal = provider.RefusalFromOpenAIBody(status, refusal.Code)
+		}
 	}
 	result.Message = fmt.Sprintf("provider error (%d): %s", status, refusalSentence(refusal))
 	return result

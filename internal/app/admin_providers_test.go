@@ -124,7 +124,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 			// what happens to a caller who sends them here.
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true, "embeddings": true, "tools": true,
-				"vision": true, "json_mode": true, "developer_role": true,
+				"vision": true, "json_object": true, "structured_outputs": true, "developer_role": true,
 				"reasoning": true, "stream_usage": true,
 			},
 		},
@@ -206,7 +206,7 @@ func TestAdminProviderCredentialRouteLifecycle(t *testing.T) {
 			"mode": "operator_declared",
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true, "embeddings": true, "tools": true,
-				"vision": true, "json_mode": true, "developer_role": true,
+				"vision": true, "json_object": true, "structured_outputs": true, "developer_role": true,
 				"reasoning": true, "stream_usage": true,
 				// The provider declares 128/64; a deployment may narrow a
 				// non-zero limit but may not leave it undeclared.

@@ -284,7 +284,7 @@ describe("destructive step-up", () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-      async_generate: false, tools: false, vision: false, json_mode: false,
+      async_generate: false, tools: false, vision: false, json_object: false, structured_outputs: false,
       developer_role: false, reasoning: false, stream_usage: false,
       max_context_tokens: 0, max_output_tokens: 0,
     };
@@ -325,7 +325,7 @@ describe("destructive step-up", () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-      async_generate: false, tools: false, vision: false, json_mode: false,
+      async_generate: false, tools: false, vision: false, json_object: false, structured_outputs: false,
       developer_role: false, reasoning: false, stream_usage: false,
       max_context_tokens: 0, max_output_tokens: 0,
     };
@@ -367,7 +367,7 @@ describe("destructive step-up", () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-      async_generate: false, tools: false, vision: false, json_mode: false,
+      async_generate: false, tools: false, vision: false, json_object: false, structured_outputs: false,
       developer_role: false, reasoning: false, stream_usage: false,
       max_context_tokens: 0, max_output_tokens: 0,
     };
@@ -411,7 +411,7 @@ describe("destructive step-up", () => {
     const capabilities = {
       chat: true, streaming: true, embeddings: false, moderations: false, images: false,
       transcriptions: false, speech: false, files: false, batches: false, rerank: false,
-      async_generate: false, tools: false, vision: false, json_mode: false,
+      async_generate: false, tools: false, vision: false, json_object: false, structured_outputs: false,
       developer_role: false, reasoning: false, stream_usage: false,
       max_context_tokens: 0, max_output_tokens: 0,
     };

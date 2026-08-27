@@ -46,7 +46,8 @@ func TestAdminRefusesMantleCapabilitiesAboveTheProfileCeiling(t *testing.T) {
 	}{
 		{"chat claims embeddings", domain.ProfileBedrockMantleOpenAIChat, func(c *domain.ProviderCapabilities) { c.Embeddings = true }},
 		{"responses claims reasoning", domain.ProfileBedrockMantleOpenAIResponses, func(c *domain.ProviderCapabilities) { c.Reasoning = true }},
-		{"messages claims json mode", domain.ProfileBedrockMantleAnthropicMessages, func(c *domain.ProviderCapabilities) { c.JSONMode = true }},
+		{"messages claims json object", domain.ProfileBedrockMantleAnthropicMessages, func(c *domain.ProviderCapabilities) { c.JSONObject = true }},
+		{"messages claims structured outputs", domain.ProfileBedrockMantleAnthropicMessages, func(c *domain.ProviderCapabilities) { c.StructuredOutputs = true }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

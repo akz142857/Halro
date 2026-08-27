@@ -274,7 +274,8 @@ func smokeCapabilities() provider.Capabilities {
 	declared := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderAnthropic, domain.ProfileAnthropicMessages)
 	return provider.Capabilities{
 		Chat: declared.Chat, Streaming: declared.Streaming, Embeddings: declared.Embeddings,
-		Tools: declared.Tools, Vision: declared.Vision, JSONMode: declared.JSONMode,
+		Tools: declared.Tools, Vision: declared.Vision,
+		JSONObject: declared.JSONObject, StructuredOutputs: declared.StructuredOutputs,
 		DeveloperRole: declared.DeveloperRole, Reasoning: declared.Reasoning,
 		StreamUsage:      declared.StreamUsage,
 		MaxContextTokens: declared.MaxContextTokens, MaxOutputTokens: declared.MaxOutputTokens,

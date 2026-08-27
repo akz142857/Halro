@@ -186,7 +186,8 @@ func domainCapabilities(profileID domain.ProviderProfileID) provider.Capabilitie
 	declared := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBedrock, profileID)
 	return provider.Capabilities{
 		Chat: declared.Chat, Streaming: declared.Streaming, Embeddings: declared.Embeddings,
-		Tools: declared.Tools, Vision: declared.Vision, JSONMode: declared.JSONMode,
+		Tools: declared.Tools, Vision: declared.Vision,
+		JSONObject: declared.JSONObject, StructuredOutputs: declared.StructuredOutputs,
 		DeveloperRole: declared.DeveloperRole, Reasoning: declared.Reasoning,
 		StreamUsage: declared.StreamUsage,
 		Moderations: declared.Moderations, Images: declared.Images,

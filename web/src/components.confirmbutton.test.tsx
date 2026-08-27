@@ -62,4 +62,23 @@ describe("ConfirmButton", () => {
     settle!();
     await waitFor(() => expect(screen.queryByText("删除模型路由？")).not.toBeInTheDocument());
   });
+
+  // Opening a confirmation must not be the action. The trigger used to carry no
+  // type, which makes it a submit button, and every ConfirmButton inside a form
+  // — the deployment editor is one — saved that form on the way to asking
+  // whether the operator meant it. The dialog then confirmed something that had
+  // already happened.
+  it("opens the dialog without submitting the form it sits in", async () => {
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const onConfirm = vi.fn();
+    renderConfirm(
+      <form onSubmit={onSubmit}>
+        <ConfirmButton label="实测校验" confirmLabel="这会调用上游。" onConfirm={onConfirm} />
+      </form>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "实测校验" }));
+    expect(await screen.findByRole("alertdialog")).toBeVisible();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

@@ -7,19 +7,20 @@ import (
 	"testing"
 
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 func TestInboundSecretDetectionParsesEscapedJSON(t *testing.T) {
 	engine := NewDefault()
-	request := openaiapi.ChatCompletionRequest{
-		Model: "chat",
-		Messages: []openaiapi.Message{{
-			Role:    "user",
-			Content: json.RawMessage(`"sk-abcdefghijklmnop\u0051RST"`),
+	request := semantic.GenerateRequest{
+		RequestedModel: "chat",
+		Messages: []semantic.Message{{
+			Role:    semantic.RoleUser,
+			Content: []semantic.Content{{Kind: semantic.ContentText, Text: "sk-abcdefghijklmnop\u0051RST"}},
 		}},
 	}
-	if !errors.Is(engine.ValidateInboundChat(request), ErrSecretDetected) {
-		t.Fatal("escaped secret was not detected")
+	if _, err := engine.ProcessInboundGenerate("", request); !errors.Is(err, ErrSecretDetected) {
+		t.Fatalf("escaped secret was not detected: %v", err)
 	}
 }
 

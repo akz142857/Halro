@@ -46,6 +46,13 @@ func RenderProviderResponseRequest(request semantic.GenerateRequest, providerMod
 		return openaiapi.ResponseRequest{}, err
 	}
 	for _, tool := range request.Tools {
+		if tool.ProviderExecuted() {
+			if tool.Name != semantic.ProviderToolWebSearch {
+				return openaiapi.ResponseRequest{}, errors.New("provider-executed tool is not portable to Responses")
+			}
+			result.Tools = append(result.Tools, openaiapi.ResponseTool{Type: openaiapi.ProviderExecutedToolWebSearch})
+			continue
+		}
 		result.Tools = append(result.Tools, openaiapi.ResponseTool{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: bytes.Clone(tool.Schema)})
 	}
 	result.ToolChoice, err = renderProviderResponseToolChoice(request.ToolChoice)
@@ -126,8 +133,15 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 			for _, content := range item.Content {
 				switch content.Type {
 				case "output_text":
-					message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: content.Text})
+					citations, err := decodeProviderAnnotations(content)
+					if err != nil {
+						return semantic.GenerateResult{}, err
+					}
+					message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: content.Text, Citations: citations})
 				case "refusal":
+					if len(content.Annotations) > 0 {
+						return semantic.GenerateResult{}, errors.New("provider Responses refusal carries annotations")
+					}
 					message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentText, Text: content.Refusal})
 				default:
 					return semantic.GenerateResult{}, errors.New("provider Responses output content is unsupported")
@@ -138,6 +152,26 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 				return semantic.GenerateResult{}, errors.New("provider Responses function call is invalid")
 			}
 			message.Content = append(message.Content, semantic.Content{Kind: semantic.ContentToolCall, CallID: item.CallID, Name: item.Name, Arguments: item.Arguments})
+		case openaiapi.OutputItemWebSearchCall:
+			// The upstream reporting a search it already ran. The query is kept
+			// because it is the model's own words and the only part of the call a
+			// reader can weigh against the answer; an action shape this mapping
+			// does not know is refused rather than reported as a bare "a search
+			// happened".
+			if item.ID == "" || item.Status == "" {
+				return semantic.GenerateResult{}, errors.New("provider Responses web search call is invalid")
+			}
+			query := ""
+			if item.Action != nil {
+				if item.Action.Type != openaiapi.ToolActionSearch {
+					return semantic.GenerateResult{}, errors.New("provider Responses tool action is unsupported")
+				}
+				query = item.Action.Query
+			}
+			message.Content = append(message.Content, semantic.Content{
+				Kind: semantic.ContentProviderToolCall, CallID: item.ID,
+				Name: semantic.ProviderToolWebSearch, Status: item.Status, Text: query,
+			})
 		default:
 			return semantic.GenerateResult{}, errors.New("provider Responses output item is unsupported")
 		}
@@ -152,6 +186,34 @@ func DecodeProviderResponse(response openaiapi.Response) (semantic.GenerateResul
 	usage := decodeProviderResponseUsage(response.Usage)
 	result := semantic.GenerateResult{ID: response.ID, Created: response.CreatedAt, Model: response.Model, Choices: []semantic.GenerateChoice{{Index: 0, Message: message, Termination: termination, NativeTermination: response.Status}}, Usage: usage, Translation: semantic.TranslationNone, MappingRevision: MappingRevision}
 	return result, result.Validate()
+}
+
+// decodeProviderAnnotations converts the sources an upstream attributed spans of
+// its answer to. An annotation kind this mapping does not model is refused: a
+// citation dropped on the way through is an answer that looks like the model's
+// own knowledge.
+func decodeProviderAnnotations(content openaiapi.ResponseOutputContent) ([]semantic.Citation, error) {
+	if len(content.Annotations) == 0 {
+		return nil, nil
+	}
+	citations := make([]semantic.Citation, 0, len(content.Annotations))
+	for _, annotation := range content.Annotations {
+		if annotation.Type != openaiapi.AnnotationURLCitation || annotation.URL == "" {
+			return nil, errors.New("provider Responses annotation is unsupported")
+		}
+		// A span that does not point into the text it annotates cannot be
+		// rendered back, and a citation attached to the wrong words is worse than
+		// none. Out-of-range spans are clamped away rather than carried: the
+		// source is still reported, the false precision is not.
+		start, end := annotation.StartIndex, annotation.EndIndex
+		if start < 0 || end < start || end > len(content.Text) {
+			start, end = 0, 0
+		}
+		citations = append(citations, semantic.Citation{
+			URL: annotation.URL, Title: annotation.Title, StartIndex: start, EndIndex: end,
+		})
+	}
+	return citations, nil
 }
 
 func decodeProviderResponseUsage(usage *openaiapi.ResponseUsage) *semantic.Usage {

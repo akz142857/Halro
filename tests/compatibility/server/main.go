@@ -90,7 +90,7 @@ func (s *service) Responses(_ context.Context, key string, request openaiapi.Res
 		ID: "resp_compat", Object: "response", CreatedAt: completedAt, Status: "completed", Background: false,
 		CompletedAt: &completedAt, Error: nil, IncompleteDetails: nil, Instructions: nil,
 		MaxOutputTokens: request.MaxOutputTokens, Model: request.Model,
-		Output:            []openaiapi.ResponseOutputItem{{ID: "msg_compat", Type: "message", Status: "completed", Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: "compat-ok", Annotations: []any{}, Logprobs: []any{}}}}},
+		Output:            []openaiapi.ResponseOutputItem{{ID: "msg_compat", Type: "message", Status: "completed", Role: "assistant", Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: "compat-ok", Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}}}},
 		ParallelToolCalls: true, PreviousResponseID: nil, Reasoning: openaiapi.ResponseReasoningOut{Effort: nil, Summary: nil},
 		Store: false, Temperature: request.Temperature, Text: openaiapi.ResponseTextOut{Format: openaiapi.ResponseTextFormat{Type: "text"}},
 		ToolChoice: "auto", Tools: []openaiapi.ResponseTool{}, TopP: request.TopP, Truncation: "disabled",
@@ -122,7 +122,7 @@ func (s *service) ResponsesStream(ctx context.Context, key string, request opena
 	}
 	outputIndex, contentIndex := 0, 0
 	item := openaiapi.ResponseOutputItem{ID: "msg_compat", Type: "message", Status: "in_progress", Role: "assistant", Content: []openaiapi.ResponseOutputContent{}}
-	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []any{}, Logprobs: []any{}}
+	part := openaiapi.ResponseOutputContent{Type: "output_text", Text: "", Annotations: []openaiapi.ResponseAnnotation{}, Logprobs: []any{}}
 	if err := emitEvent(openaiapi.ResponseStreamEvent{Type: "response.output_item.added", OutputIndex: &outputIndex, Item: &item}); err != nil {
 		return err
 	}

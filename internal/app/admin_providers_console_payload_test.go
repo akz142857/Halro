@@ -30,7 +30,7 @@ func TestAdminProviderSplitsTheConsoleCapabilitySetAcrossProfiles(t *testing.T) 
 			"credential_id": credentialID, "enabled": true,
 			"capabilities": map[string]any{
 				"chat": true, "streaming": true, "embeddings": true, "tools": true, "vision": true,
-				"json_mode": true, "developer_role": true, "reasoning": true, "stream_usage": true,
+				"json_object": true, "structured_outputs": true, "developer_role": true, "reasoning": true, "stream_usage": true,
 				"moderations": true, "images": true, "transcriptions": true,
 				"speech": true, "files": true, "batches": true,
 			},

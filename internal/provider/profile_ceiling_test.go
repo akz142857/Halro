@@ -17,8 +17,9 @@ import (
 // cannot be told when a profile is added, which is the whole reason the table
 // became enumerable.
 func TestCeilingWithinProfileManifestOperations(t *testing.T) {
-	// Capabilities that name an operation. The rest — tools, vision, json_mode,
-	// developer_role, reasoning, stream_usage, provider_executed_tools — shape a
+	// Capabilities that name an operation. The rest — tools, vision, json_object,
+	// structured_outputs, developer_role, reasoning, stream_usage,
+	// provider_executed_tools — shape a
 	// chat request rather than reaching a separate endpoint, so no manifest
 	// operation corresponds to them.
 	operationFor := map[string][]Operation{

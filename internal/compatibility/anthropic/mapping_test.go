@@ -146,7 +146,7 @@ func TestOutputConfigRoundTripsThroughTheSemanticModel(t *testing.T) {
 	}
 	// The derived requirements are what routing filters on; without them a
 	// structured-output request could land on a provider that cannot honour it.
-	if !canonical.Requirements.JSONMode || !canonical.Requirements.Reasoning {
+	if !canonical.Requirements.StructuredOutputs || !canonical.Requirements.Reasoning {
 		t.Fatalf("requirements not derived: %#v", canonical.Requirements)
 	}
 	rendered, err := RenderPortableRequest(canonical, "claude-provider")

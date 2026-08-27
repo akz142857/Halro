@@ -243,6 +243,9 @@ func RenderResult(result semantic.GenerateResult, publicModel string) (anthropic
 	for _, part := range output.Message.Content {
 		switch part.Kind {
 		case semantic.ContentText:
+			if len(part.Citations) > 0 {
+				return anthropicapi.Message{}, errors.New("provider result contains non-portable content")
+			}
 			content = append(content, anthropicapi.ContentBlock{Type: "text", Text: part.Text})
 		case semantic.ContentToolCall:
 			input := json.RawMessage(part.Arguments)

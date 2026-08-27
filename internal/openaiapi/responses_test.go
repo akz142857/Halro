@@ -26,13 +26,33 @@ func TestDecodeResponseRequestRejectsStatefulUnknownAndLossyFields(t *testing.T)
 		`{"model":"route","input":"hello","conversation":"conv_1"}`,
 		`{"model":"route","input":"hello","background":true}`,
 		`{"model":"route","input":"hello","reasoning":{"effort":"high"}}`,
-		`{"model":"route","input":"hello","tools":[{"type":"web_search"}]}`,
+		// A provider-executed tool is named, not described: the caller is not
+		// declaring a function, so function fields on it are a caller who thinks
+		// they are constraining something they are not.
+		`{"model":"route","input":"hello","tools":[{"type":"web_search","name":"search"}]}`,
+		`{"model":"route","input":"hello","tools":[{"type":"web_search","parameters":{"type":"object"}}]}`,
+		`{"model":"route","input":"hello","tools":[{"type":"code_interpreter"}]}`,
+		`{"model":"route","input":"hello","tools":[{"type":"file_search"}]}`,
 		`{"model":"route","input":"hello","tools":[{"type":"function","name":"f","strict":true}],"stream":true}`,
 	}
 	for _, body := range tests {
 		if _, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(body))); err == nil {
 			t.Fatalf("accepted unsafe request: %s", body)
 		}
+	}
+}
+
+// web_search is accepted and nothing else hosted is. Whether a given deployment
+// may actually run it is a routing decision made later, against the
+// provider_executed_tools capability its operator turned on.
+func TestDecodeResponseRequestAcceptsWebSearchAlone(t *testing.T) {
+	request, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(
+		`{"model":"route","input":"hello","tools":[{"type":"web_search"}]}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Type != ProviderExecutedToolWebSearch {
+		t.Fatalf("unexpected tools: %#v", request.Tools)
 	}
 }
 

@@ -551,7 +551,8 @@ func ValidateDependencies(capabilities domain.ProviderCapabilities) error {
 		{"tools", capabilities.Tools},
 		{"vision", capabilities.Vision},
 		{"fetched_image", capabilities.FetchedImage},
-		{"json_mode", capabilities.JSONMode},
+		{"json_object", capabilities.JSONObject},
+		{"structured_outputs", capabilities.StructuredOutputs},
 		{"developer_role", capabilities.DeveloperRole},
 		{"reasoning", capabilities.Reasoning},
 	} {
@@ -698,7 +699,7 @@ func (c *Catalog) Len() int { return len(c.ordered) }
 var CapabilityNames = []string{
 	"chat", "embeddings", "moderations", "images", "transcriptions", "speech",
 	"files", "batches", "rerank", "async_generate",
-	"streaming", "tools", "vision", "fetched_image", "json_mode", "developer_role", "reasoning", "stream_usage",
+	"streaming", "tools", "vision", "fetched_image", "json_object", "structured_outputs", "developer_role", "reasoning", "stream_usage",
 	"provider_executed_tools",
 	"max_context_tokens", "max_output_tokens",
 }

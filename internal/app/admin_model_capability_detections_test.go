@@ -309,6 +309,7 @@ func runDetectionForTest(t *testing.T, runtime *Runtime, instance domain.Provide
 type scriptedCapabilityDetector struct {
 	fixedCapabilityDetector
 	supported    map[string]bool
+	unsupported  map[string]bool
 	unauthorized map[string]bool
 }
 
@@ -333,6 +334,9 @@ func (d *scriptedCapabilityDetector) DetectCapability(_ context.Context, target 
 	if d.supported[probe.Capability] {
 		return domain.CapabilityProbeResult{Status: domain.ProbeSupported, Evidence: domain.EvidenceVerified, BindingID: target.BindingID, ProbeKind: probe.Kind}
 	}
+	if d.unsupported[probe.Capability] {
+		return domain.CapabilityProbeResult{Status: domain.ProbeUnsupported, ErrorClass: "bad_request", BindingID: target.BindingID, ProbeKind: probe.Kind}
+	}
 	if d.unauthorized[probe.Capability] {
 		return domain.CapabilityProbeResult{Status: domain.ProbeUnauthorized, ErrorClass: "authentication", BindingID: target.BindingID, ProbeKind: probe.Kind}
 	}
@@ -355,7 +359,7 @@ func (*budgetRecordingDetector) CapabilityDetectionPlan(target provider.ModelCap
 		return provider.CapabilityDetectionPlan{}, errors.New("capability detection target does not match adapter profile")
 	}
 	probes := []provider.CapabilityProbe{{Capability: "chat", Kind: "minimal_chat", MaxOutputTokens: 8, MayBill: true}}
-	for _, dependent := range []string{"streaming", "tools", "json_mode", "developer_role", "vision"} {
+	for _, dependent := range []string{"streaming", "tools", "json_object", "developer_role", "vision"} {
 		probes = append(probes, provider.CapabilityProbe{Capability: dependent, Kind: dependent,
 			DependsOn: []string{"chat"}, MaxOutputTokens: 8, MayBill: true})
 	}
@@ -641,6 +645,329 @@ func TestCapabilityDetectionCancelDiscardsALateSupportedResult(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("detection did not reach canceled")
+}
+
+// A model the catalog covers used to be unverifiable: the catalog answered, the
+// handler short-circuited, and no amount of asking would spend a probe on it.
+// The catalog is a review of what a model was, and an operator whose account
+// behaves otherwise had nowhere to go but a manual declaration.
+//
+// A refresh is what asks. It declines the answers that already exist — the
+// stored detection and the catalog's review alike — and measures instead, while
+// the ordinary path still costs nothing.
+func TestVerificationProbesAModelTheCatalogAlreadyCovers(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := instance.EffectiveProfileBindings()[0]
+	original := runtime.providers
+	registry := provider.NewRegistry()
+	detector := &fixedCapabilityDetector{}
+	if err := registry.RegisterBindingAdapter(instance.ID, binding.ID, detector); err != nil {
+		t.Fatal(err)
+	}
+	runtime.providers = registry
+	original.Close()
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+
+	create := func(key string, refresh bool) *httptest.ResponseRecorder {
+		body := map[string]any{
+			"provider_model": "gpt-4o-mini", "target_kind": "model_id", "risk_tier": "safe_automatic",
+			"current_password": "correct horse battery staple",
+		}
+		if refresh {
+			body["force_refresh"] = true
+		}
+		request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, body)
+		request.Header.Set("Idempotency-Key", key)
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		return response
+	}
+
+	fromCatalog := create("catalog-answer", false)
+	if fromCatalog.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", fromCatalog.Code, fromCatalog.Body.String())
+	}
+	var answered domain.ModelCapabilityDetection
+	if err := json.Unmarshal(fromCatalog.Body.Bytes(), &answered); err != nil {
+		t.Fatal(err)
+	}
+	if answered.Source != "builtin_catalog" || answered.MaxProviderCalls != 0 || detector.calls.Load() != 0 {
+		t.Fatalf("the catalog answer spent something: detection=%#v calls=%d", answered, detector.calls.Load())
+	}
+
+	verified := create("verify-instead", true)
+	if verified.Code != http.StatusAccepted {
+		t.Fatalf("verification status=%d body=%s", verified.Code, verified.Body.String())
+	}
+	var started domain.ModelCapabilityDetection
+	if err := json.Unmarshal(verified.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	var completed domain.ModelCapabilityDetection
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		completed, err = runtime.store.GetModelCapabilityDetection(context.Background(), started.ID)
+		if err == nil && completed.Status.Terminal() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if completed.Status != domain.DetectionCompleted || completed.Source != "verified_probe" {
+		t.Fatalf("verification did not run: %#v", completed)
+	}
+	if detector.calls.Load() == 0 || completed.ProviderCalls == 0 {
+		t.Fatalf("verification spent nothing: calls=%d detection=%#v", detector.calls.Load(), completed)
+	}
+	// It probes where the catalog already says the model runs, rather than
+	// spending calls identifying an interface that is not in question.
+	if completed.BindingID != binding.ID {
+		t.Fatalf("verification ran on %q, want %q", completed.BindingID, binding.ID)
+	}
+	if completed.Baseline == nil || !completed.Baseline.Chat || !completed.Baseline.Vision {
+		t.Fatalf("verification recorded no baseline to measure against: %#v", completed.Baseline)
+	}
+	if completed.Results["chat"].Status != domain.ProbeSupported || completed.Results["chat"].Evidence != domain.EvidenceVerified {
+		t.Fatalf("chat was not verified: %#v", completed.Results["chat"])
+	}
+	// The plan reaches chat and nothing else, and what it cannot reach it must
+	// not delete: vision stays on the catalog's claim rather than being reported
+	// as absent by a run that never asked about it.
+	if !completed.Recommended.Chat || !completed.Recommended.Vision {
+		t.Fatalf("verification dropped a claim it never measured: %#v", completed.Recommended)
+	}
+	// The token limits are the plainest thing no probe asks about, so the same
+	// rule covers them. Recommending zero is not "no opinion": zero is unbounded
+	// to the routing filter, so a deployment that adopts it stops refusing an
+	// over-long request before the reservation and starts collecting the refusal
+	// from the upstream after it.
+	if completed.Recommended.MaxContextTokens != completed.Baseline.MaxContextTokens ||
+		completed.Recommended.MaxOutputTokens != completed.Baseline.MaxOutputTokens {
+		t.Fatalf("verification dropped the token limits: recommended ctx=%d out=%d, baseline ctx=%d out=%d",
+			completed.Recommended.MaxContextTokens, completed.Recommended.MaxOutputTokens,
+			completed.Baseline.MaxContextTokens, completed.Baseline.MaxOutputTokens)
+	}
+	if completed.Baseline.MaxContextTokens == 0 || completed.Baseline.MaxOutputTokens == 0 {
+		t.Fatal("this assertion is vacuous: the catalogue entry behind it declares no bound")
+	}
+	// And the deployment that adopts it says which half was measured.
+	deploymentResponse := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
+		"name": "Verified", "provider_id": instance.ID, "provider_model": "gpt-4o-mini", "target_kind": "model_id",
+		"capabilities": map[string]any{"chat": true, "vision": true}, "capability_detection_id": completed.ID,
+		"capability_detection_revision": completed.Revision, "max_concurrency": 0, "enabled": false,
+	})
+	if deploymentResponse.Code != http.StatusCreated {
+		t.Fatalf("deployment status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
+	}
+	var deployment domain.Deployment
+	if err := json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment); err != nil {
+		t.Fatal(err)
+	}
+	if deployment.ModelCapabilitySnapshot.Evidence["chat"] != domain.EvidenceVerified {
+		t.Fatalf("probed capability was not recorded as verified: %#v", deployment.ModelCapabilitySnapshot.Evidence)
+	}
+	if deployment.ModelCapabilitySnapshot.Evidence["vision"] != domain.EvidenceDeclared {
+		t.Fatalf("carried claim recorded as %q, want declared", deployment.ModelCapabilitySnapshot.Evidence["vision"])
+	}
+}
+
+// requestVerification asks for a model the catalog may already answer for to be
+// measured anyway. It returns the raw response so a test can assert on a refusal
+// as well as on a run.
+func requestVerification(t *testing.T, runtime *Runtime, instance domain.ProviderInstance, model, key string) *httptest.ResponseRecorder {
+	t.Helper()
+	session := loginTestAdmin(t, runtime, "admin", "correct horse battery staple")
+	request := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/providers/"+instance.ID+"/model-capability-detections", session, map[string]any{
+		"provider_model": model, "target_kind": "model_id", "risk_tier": "safe_automatic", "force_refresh": true,
+		"current_password": "correct horse battery staple",
+	})
+	request.Header.Set("Idempotency-Key", key)
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, request)
+	return response
+}
+
+func awaitDetection(t *testing.T, runtime *Runtime, response *httptest.ResponseRecorder) domain.ModelCapabilityDetection {
+	t.Helper()
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("verification was not accepted: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var created domain.ModelCapabilityDetection
+	if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err := runtime.store.GetModelCapabilityDetection(context.Background(), created.ID)
+		if err == nil && current.Status.Terminal() {
+			return current
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("verification did not reach a terminal status")
+	return domain.ModelCapabilityDetection{}
+}
+
+// The catalog names the interface, so a verification has nothing to identify and
+// must not spend anything trying. With one probeable interface this is
+// unfalsifiable — there is nothing else to pick — so the provider is given two.
+func TestVerificationProbesOnlyTheInterfaceTheCatalogNames(t *testing.T) {
+	runtime, instance, chat, media := twoInterfaceProviderForTest(t)
+	chatDetector := &scriptedCapabilityDetector{supported: map[string]bool{"chat": true}}
+	mediaDetector := &scriptedCapabilityDetector{supported: map[string]bool{"moderations": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{chat.ID: chatDetector, media.ID: mediaDetector})
+
+	completed := awaitDetection(t, runtime, requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-pinned"))
+	if completed.Status != domain.DetectionCompleted || completed.BindingID != chat.ID {
+		t.Fatalf("verification ran on %q with status %s", completed.BindingID, completed.Status)
+	}
+	if mediaDetector.calls.Load() != 0 {
+		t.Fatalf("verification spent %d calls identifying an interface the catalog already named", mediaDetector.calls.Load())
+	}
+}
+
+// The catalog answering is not the same as something being able to probe. When
+// the named interface has no detector the request is refused outright, with
+// nothing spent — the earlier predicate said "the catalog knows this one" and
+// let an empty candidate list through to be indexed.
+func TestVerificationIsRefusedWhenTheNamedInterfaceCannotBeProbed(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := instance.EffectiveProfileBindings()[0]
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{binding.ID: &detectorlessAdapter{}})
+
+	response := requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-undetectable")
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":"no_detectable_binding"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+// A verification that answered nothing is a failed verification, whatever
+// baseline it carried. Silence keeps the catalog's claim, so a run whose every
+// probe was refused by a revoked credential recommends the whole catalog entry —
+// and would otherwise be stored as verified_probe, the one source allowed to
+// claim verified evidence and the one that is exempt from catalog drift.
+func TestVerificationThatMeasuredNothingFailsInsteadOfAdoptingTheCatalog(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := instance.EffectiveProfileBindings()[0]
+	detector := &scriptedCapabilityDetector{supported: map[string]bool{},
+		unauthorized: map[string]bool{"chat": true, "embeddings": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{binding.ID: detector})
+
+	finished := awaitDetection(t, runtime, requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-revoked"))
+	if finished.Status != domain.DetectionFailed {
+		t.Fatalf("status=%s recommended=%#v", finished.Status, finished.Recommended)
+	}
+	if finished.ExpiresAt != nil || finished.Fresh(time.Now().UTC()) {
+		t.Fatalf("a verification that measured nothing became adoptable: %#v", finished)
+	}
+}
+
+// What the probes disprove still binds what the baseline may carry. The catalog
+// claims chat, streaming and vision; the upstream refuses chat; everything that
+// needs chat has to go with it, and the record has to remain storable — a
+// recommendation whose dependencies do not hold is refused by the validator, and
+// a detection that cannot be stored never reaches a terminal status at all.
+func TestVerificationClearsBaselineDependentsWhenTheirBaselineIsRefused(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := instance.EffectiveProfileBindings()[0]
+	detector := &scriptedCapabilityDetector{supported: map[string]bool{"embeddings": true},
+		unsupported: map[string]bool{"chat": true}}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{binding.ID: detector})
+
+	completed := awaitDetection(t, runtime, requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-no-chat"))
+	if completed.Status != domain.DetectionCompleted {
+		t.Fatalf("status=%s", completed.Status)
+	}
+	if completed.Baseline == nil || !completed.Baseline.Chat || !completed.Baseline.Vision {
+		t.Fatalf("baseline=%#v", completed.Baseline)
+	}
+	if completed.Recommended.Chat || completed.Recommended.Vision || completed.Recommended.Streaming || completed.Recommended.StreamUsage {
+		t.Fatalf("a refused baseline kept its dependents: %#v", completed.Recommended)
+	}
+	if !completed.Recommended.Embeddings {
+		t.Fatalf("an independent verified capability was dropped: %#v", completed.Recommended)
+	}
+	if err := completed.Validate(); err != nil {
+		t.Fatalf("stored record does not validate: %v", err)
+	}
+}
+
+// The cooldown still holds for what it was written to bound. Only the catalog's
+// free answer is exempt, and it is identified by the ceiling it was written with
+// rather than by the calls it has made so far — a queued verification has made
+// none either.
+func TestASecondVerificationInsideTheWindowIsRefused(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	instance, err := runtime.store.GetProvider(context.Background(), bootstrap.ProviderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := instance.EffectiveProfileBindings()[0]
+	detector := &fixedCapabilityDetector{}
+	registerBindingDetectors(t, runtime, instance, map[string]provider.Adapter{binding.ID: detector})
+
+	first := awaitDetection(t, runtime, requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-once"))
+	if first.Status != domain.DetectionCompleted {
+		t.Fatalf("status=%s", first.Status)
+	}
+	spent := detector.calls.Load()
+	second := requestVerification(t, runtime, instance, "gpt-4o-mini", "verify-twice")
+	if second.Code != http.StatusTooManyRequests || !strings.Contains(second.Body.String(), `"code":"capability_detection_cooldown"`) {
+		t.Fatalf("status=%d body=%s", second.Code, second.Body.String())
+	}
+	if detector.calls.Load() != spent {
+		t.Fatalf("the refused verification spent %d more calls", detector.calls.Load()-spent)
+	}
+}
+
+// An adapter that serves traffic and cannot answer questions about a model. Not
+// every profile has a detector, and the difference decides whether a
+// verification can be asked for at all.
+type detectorlessAdapter struct{}
+
+func (*detectorlessAdapter) Type() string { return string(domain.ProviderOpenAI) }
+func (*detectorlessAdapter) Close()       {}
+func (*detectorlessAdapter) Chat(context.Context, provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	return openaiapi.ChatCompletionResponse{}, nil
+}
+func (*detectorlessAdapter) ChatStream(context.Context, provider.ChatCall, func(semantic.Event) error) (*openaiapi.Usage, error) {
+	return nil, nil
+}
+func (*detectorlessAdapter) Embed(context.Context, provider.EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+	return openaiapi.EmbeddingResponse{}, nil
+}
+
+// The console tells a verification from an ordinary detection by whether the
+// record carries a baseline, so absence has to be real on the wire. It was not:
+// `omitempty` does not omit a struct, so every detection carried an all-false
+// baseline object, which is truthy in a browser — a first-time detection of a
+// model the catalog does not cover reported its own findings as capabilities
+// established beyond a catalog that never mentioned it.
+func TestOnlyAVerificationCarriesABaselineOnTheWire(t *testing.T) {
+	ordinary := publicCapabilityDetection(domain.ModelCapabilityDetection{ID: "mcd_ordinary"})
+	if _, present := ordinary["baseline_capabilities"]; present {
+		t.Fatalf("an ordinary detection carried a baseline: %#v", ordinary["baseline_capabilities"])
+	}
+	baseline := domain.ProviderCapabilities{Chat: true}
+	verification := publicCapabilityDetection(domain.ModelCapabilityDetection{ID: "mcd_verified", Baseline: &baseline})
+	if _, present := verification["baseline_capabilities"]; !present {
+		t.Fatalf("a verification lost the baseline it was measured against: %#v", verification)
+	}
 }
 
 // A capability the plan could not fit is recorded under probe_budget, and that

@@ -219,15 +219,19 @@ func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target dom
 // of the Messages API — a target it enumerates is a Messages target by
 // construction, and this profile only enumerates when it is talking to
 // Anthropic's own surface. They are claimed from that fact rather than from an
-// absent field, and they have to be: dependencyClosure drops vision, json_mode
-// and reasoning from any target that does not also claim chat.
+// absent field, and they have to be: dependencyClosure drops vision,
+// structured_outputs and reasoning from any target that does not also claim
+// chat.
 //
 // Tool use has no flag either, and unlike chat it is not implied by the
 // endpoint, so nothing is claimed for it here — a capability the upstream never
 // asserted is left to the model catalog rather than assumed.
 func (adapter *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescriptor, scope domain.InvocationTargetScopeKey, observedAt time.Time) []domain.CapabilityClaim {
 	mapping := map[string]string{
-		"image_input": "vision", "thinking": "reasoning", "structured_outputs": "json_mode", "batch": "batches",
+		// Anthropic's own key and Halro's are the same word now. It maps to the
+		// schema half only: Anthropic reports an enforced schema and has nothing
+		// to report for the schema-less mode, which it does not serve.
+		"image_input": "vision", "thinking": "reasoning", "structured_outputs": "structured_outputs", "batch": "batches",
 	}
 	claim := func(capabilityID, evidenceKey string) domain.CapabilityClaim {
 		return domain.CapabilityClaim{
@@ -675,7 +679,23 @@ func decodeHTTPError(response *http.Response) error {
 	if message == "" {
 		message = http.StatusText(response.StatusCode)
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, RetryAfter: parseRetryAfter(response.Header)}
+	// Anthropic answers every refused request with one type — "invalid_request_error"
+	// covers an unsupported field, a model that does not exist, and a malformed
+	// body alike — so a refusal here never attributes itself, whatever the type
+	// says. The sentence beside it does distinguish them, and is not read: it is
+	// provider prose, and nothing here takes a verdict from prose.
+	//
+	// The two conditions are what keeps this from being manufactured. Class is no
+	// use for it: ErrorBadRequest is the fall-through of the switch above, so a
+	// 404, a 409 and a 413 all land on it looking like a refused body. And a
+	// missing type is what an HTML error page from something in front of the API
+	// decodes to, which is not Anthropic saying anything at all.
+	var refusal provider.RefusalKind
+	if status := response.StatusCode; (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) &&
+		strings.TrimSpace(envelope.Error.Type) != "" {
+		refusal = provider.RefusalInvalid
+	}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, Refusal: refusal, RetryAfter: parseRetryAfter(response.Header)}
 }
 
 func upstreamRequestID(header http.Header) string {

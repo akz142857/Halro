@@ -65,6 +65,7 @@
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
+      "openai.responses.v1",
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
@@ -81,6 +82,22 @@
       {
         "profile_id": "openai.chat-embeddings.v1",
         "status": "compatible"
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "stop",
+          "seed",
+          "reasoning_effort"
+        ],
+        "declared_transforms": [
+          "Chat messages are mapped to stateless Responses input items",
+          "store=false is always sent upstream",
+          "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field"
+        ]
       },
       {
         "profile_id": "anthropic.messages.2023-06-01",
@@ -456,13 +473,15 @@
     "documented_deviations": [
       "only POST create is available; retrieval, deletion, cancellation, input_items, Conversations, background mode, and webhooks are unavailable",
       "store defaults to false and store=true is rejected",
-      "hosted tools, strict function tools, reasoning output, and streaming function calls are rejected",
+      "strict function tools, reasoning output, and streaming tools are rejected",
+      "tools[].type=web_search is the one hosted tool accepted; it is routed against the provider_executed_tools capability and served only by the OpenAI Responses profile, and code_interpreter and file_search stay rejected because both are provider-side state",
       "request instructions, tool definitions, tool choice, and structured schema bodies are returned as conservative null, empty, or default response metadata because the original Responses object has not passed through outbound redaction",
       "portable requests are translated through the selected profile's existing generation primitive",
       "unknown fields and unsupported item types are rejected before provider I/O"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
+      "openai.responses.v1",
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
@@ -481,6 +500,15 @@
         "status": "compatible",
         "declared_transforms": [
           "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive"
+        ]
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "compatible",
+        "declared_transforms": [
+          "stateless Responses are sent directly with store=false",
+          "tools[].type=web_search requires the selected connection to declare provider_executed_tools",
+          "url_citation annotations are carried back on the output text"
         ]
       },
       {
@@ -701,6 +729,7 @@
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
+      "openai.responses.v1",
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
@@ -725,6 +754,22 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through OpenAI Chat Completions"
+        ]
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "top_k",
+          "stop_sequences",
+          "thinking",
+          "metadata",
+          "service_tier",
+          "output_config.effort"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through the OpenAI Responses endpoint",
+          "this profile binds no stream primitive, so a streaming Messages request is routed away rather than refused by field"
         ]
       },
       {

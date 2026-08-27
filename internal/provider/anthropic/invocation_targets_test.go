@@ -107,7 +107,7 @@ func TestAnthropicCapabilityMetadataIgnoresUnknownAndUnsupportedFields(t *testin
 	// chat and streaming come from the endpoint rather than from a flag, and
 	// effort maps onto no Halro capability, so it contributes no claim.
 	if len(claims) != 4 || claims[0].CapabilityID != "chat" || claims[1].CapabilityID != "streaming" ||
-		claims[2].CapabilityID != "batches" || claims[3].CapabilityID != "json_mode" {
+		claims[2].CapabilityID != "batches" || claims[3].CapabilityID != "structured_outputs" {
 		t.Fatalf("claims=%#v", claims)
 	}
 }

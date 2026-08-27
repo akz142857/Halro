@@ -512,7 +512,12 @@ export function ConfirmButton({
   const blocked = Boolean(unavailable && reason);
   return (
     <>
-      <button className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
+      {/* Explicitly not a submit. This button lives inside forms — the
+          deployment editor is one — and a button with no type submits the form
+          it is in, so opening the confirmation also saved the form behind it.
+          The dialog then confirmed an action whose consequence had already
+          happened. */}
+      <button type="button" className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
       {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
       {open && (
         <Modal

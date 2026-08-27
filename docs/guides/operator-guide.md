@@ -616,7 +616,7 @@ needs it and the hostname/IP boundary has been reviewed.
 
 | Type | Base URL example | Secret format | Declared v1 profile |
 |---|---|---|---|
-| OpenAI | `https://api.openai.com` | API key | GA chat/embeddings or isolated Phase 2 media/resources profile |
+| OpenAI | `https://api.openai.com` | API key | GA chat/embeddings, GA Responses, or isolated Phase 2 media/resources profile |
 | Azure OpenAI | resource endpoint | API key plus explicit API version on Provider | GA deployment paths |
 | DeepSeek | `https://api.deepseek.com` | API key | GA chat/stream profile |
 | OpenAI-compatible | reviewed HTTPS origin | API key | conservative capabilities; opt in extras |
@@ -624,6 +624,16 @@ needs it and the hostname/IP boundary has been reviewed.
 | Bedrock Runtime | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta Converse, Titan Embeddings/Image, or Nova Reel Async profile |
 | Bedrock Agent Runtime | `https://bedrock-agent-runtime.us-east-1.amazonaws.com` | JSON below | Beta Cohere Rerank 3.5 profile only |
 | Bedrock Mantle | `https://bedrock-mantle.us-east-1.api.aws` | Bedrock API key | Beta OpenAI Chat, stateless Responses, or Anthropic Messages |
+
+An OpenAI connection on the Responses profile addresses `/v1/responses`
+instead of `/v1/chat/completions`. It is the same account and the same
+credential; what it adds is `web_search`, a tool OpenAI runs itself. That
+capability is at the profile's ceiling and off in its defaults, so it takes a
+deliberate tick per connection — and what you are accepting when you tick it is
+that the provider makes network calls on your behalf that never pass through
+Halro's host allowlist and never appear in its audit trail. The profile does not
+stream and does not serve embeddings; keep the chat/embeddings connection for
+those.
 
 Bedrock JSON is one encrypted secret. `session_token` is optional and `region`
 must match the endpoint hostname:
@@ -647,7 +657,8 @@ and make no call at all. Discovery requires `bedrock:ListFoundationModels`; it i
 read-only and lists no customised or provisioned resources.
 
 The Bedrock Runtime profiles do not read environment credentials or IMDS. The
-Converse profile does not declare embeddings, tools, vision, or JSON mode. The
+Converse profile does not declare embeddings, tools, vision, or either JSON
+output capability. The
 separate `bedrock.runtime.invoke.titan-embed-text-v2.v1` profile declares
 embeddings only, pins `amazon.titan-embed-text-v2:0`, and accepts one string with
 float output and 256/512/1024 dimensions. It never exposes arbitrary InvokeModel

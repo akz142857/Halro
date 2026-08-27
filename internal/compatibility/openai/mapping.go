@@ -311,6 +311,12 @@ func renderMessage(message semantic.Message) (openaiapi.Message, error) {
 	for _, part := range message.Content {
 		switch part.Kind {
 		case semantic.ContentText:
+			// Citations are attribution, not decoration: the Chat wire has no
+			// member for them, and a cited answer rendered without its sources
+			// reads as the model's own knowledge. Refuse rather than strip.
+			if len(part.Citations) > 0 {
+				return openaiapi.Message{}, errors.New("cited text is not portable to Chat Completions")
+			}
 			textParts = append(textParts, part.Text)
 			rich = append(rich, map[string]any{"type": "text", "text": part.Text})
 		case semantic.ContentInputImage:
@@ -326,6 +332,12 @@ func renderMessage(message semantic.Message) (openaiapi.Message, error) {
 		case semantic.ContentToolResult:
 			result.ToolCallID = part.CallID
 			toolResults = append(toolResults, part.Text)
+		default:
+			// Silence here used to mean "dropped": a content kind this renderer
+			// did not know about produced a message without it, and the caller
+			// was answered as though they had never sent it. A kind the Chat wire
+			// cannot carry is a request this profile cannot serve.
+			return openaiapi.Message{}, errors.New("content kind is not portable to Chat Completions")
 		}
 	}
 	if len(toolResults) == 1 {
