@@ -95,8 +95,7 @@ func (h *Handler) inferenceResourcesJSON(writer http.ResponseWriter, request *ht
 func (h *Handler) inferenceResourcesError(writer http.ResponseWriter, err error) {
 	var gatewayError *gateway.Error
 	if errors.As(err, &gatewayError) {
-		setRetryAfter(writer, gatewayError.RetryAfter)
-		writeError(writer, gatewayError.HTTPStatus, gatewayError.Code, gatewayError.Message, nil)
+		writeGatewayError(writer, gatewayError)
 		return
 	}
 	writeError(writer, 500, "internal_error", "internal server error", nil)

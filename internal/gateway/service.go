@@ -52,7 +52,14 @@ type Error struct {
 	Message    string
 	HTTPStatus int
 	RetryAfter time.Duration
-	Cause      error
+	// Param names the field of the caller's request the failure is about, in
+	// the caller's own wire shape ("messages[0].content[1].image_url"). It is
+	// empty whenever nothing named a field, which is most failures — a budget
+	// refusal or a rate limit is about the request as a whole. A facade that
+	// has somewhere to put it renders it; the Anthropic surface has no such
+	// field and ignores it.
+	Param string
+	Cause error
 }
 
 func (e *Error) Error() string {
@@ -3078,6 +3085,17 @@ func mapProviderError(err error) error {
 		mapped = gatewayError("provider_error", "provider request failed", 502, err)
 	}
 	mapped.RetryAfter = classified.RetryAfter
+	// The upstream's own identifier does not travel to the caller: it is the
+	// provider's vocabulary, and an application reading `anthropic_error` off a
+	// public model alias learns who is behind it. The parameter joined to it is
+	// the caller's own field, and without it "provider rejected the request" is
+	// a refusal they can only act on by bisecting a payload they wrote.
+	mapped.Param = provider.RefusalParameter(classified.ProviderCode)
+	// The upstream's own identifier does not travel to the caller: it is the
+	// provider's vocabulary, and an application reading `anthropic_error` off a
+	// public model alias learns who is behind it. The parameter joined to it is
+	// the caller's own field, and without it "provider rejected the request" is
+	// a refusal they can only act on by bisecting a payload they wrote.
 	return mapped
 }
 
