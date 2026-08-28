@@ -6,7 +6,34 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-28
+
 ### Changed
+
+- **The deployment list is a card grid, and a greyed capability says which dead
+  end it is in.** One sentence used to cover every reason a capability was not
+  established; there are eight, and they need different answers — the interface
+  cannot carry it, the connection has not enabled it, the upstream refused it,
+  the upstream answered without proving it, the upstream was unreachable, the
+  credential was not authorised, the plan never reached it, or the call budget
+  ran out first. The reason was already in the response and the page threw it
+  away. Each card now carries the upstream status and identifier beside it,
+  modality marks for what goes in and what comes out, and one verdict line
+  ranked by how soon the deployment stops taking traffic, with the rest folded
+  into a `+N` that opens the drawer rather than dropped.
+
+  The "needs attention" filter reads that same ranking, so the list and the card
+  answer the same question. It previously matched a deployment that had merely
+  never been tested and missed drift, a failing probe and quarantined pricing —
+  the three conditions that actually stop traffic.
+
+- **A deployment the active probe has taken out of routing no longer reads as
+  healthy.** Enabled, tested and priced all stayed as they were while no traffic
+  arrived, because the console was showing the manual connection test — an
+  operator-triggered result that can be days old. The probe verdict is now its
+  own field with three states, so a restart or a probe that has not come round
+  yet cannot take traffic away, and a failure carries its classified reason and
+  the age of the observation.
 
 - **Re-authentication is asked once per sitting, not once per action.** Deleting
   a Route, replacing a Provider credential, or editing a protection down to
@@ -81,6 +108,18 @@ semantic versioning.
 
 ### Added
 
+- **The builtin catalogue covers 49 of the 50 Bedrock Mantle models an account
+  lists**, up from one. Every other deployment resolved as "not covered" and its
+  operator had to declare capabilities by hand, which is a widening, a
+  revalidation and a route out of service to turn one capability on. Each model
+  appears under the chat profile for its own route — `openai.gpt-oss-*` answer on
+  `/v1` while `openai.gpt-5.x` answer on `/openai/v1` — and Responses is recorded
+  per model rather than inherited. Capabilities stop at what the matrix run
+  established; tools, JSON mode, vision, developer role and reasoning are left to
+  detection rather than claimed. `zai.glm-4.6` is left uncovered on purpose: it
+  publishes no context window, and a window is the one number an entry cannot
+  leave to the upstream.
+
 - **`openai.responses.v1`, a profile that addresses `/v1/responses` directly.**
   It carries OpenAI's provider-executed `web_search`, which is off by default
   and gated on the `provider_executed_tools` capability, because running it
@@ -125,6 +164,164 @@ semantic versioning.
   they point into changed, rather than reporting a span that covers different
   words. `detail` on an image part and `status` on a provider tool call are
   covered by the mandatory baseline for the same reason.
+
+- **A capability probe the upstream refused is answerable.** The verdict was read
+  off the whole provider code while the adapters join the refused parameter onto
+  it, so the branch that records a definite "unsupported" was unreachable on
+  OpenAI, on OpenAI-compatible endpoints and on both Bedrock Mantle routes — every
+  refusal came back as "could not tell", and nothing recorded why. The comparison
+  now reads the code half, the Bedrock Mantle adapter populates the code and the
+  parameter it had been dropping, and the stored probe result records the upstream
+  status and identifier. "The upstream refused and Halro could not parse the
+  refusal" and "the upstream answered and the answer proved nothing" are now
+  separate outcomes; only the first is worth asking again.
+
+- **Reasoning can be verified.** The probe sent effort `minimal`, which is a rung
+  on OpenAI's ladder and on no other, so Anthropic and DeepSeek refused it while
+  the request was still being rendered — every run spent a call from the budget to
+  learn nothing. The depth now comes off each wire format's own ladder, and the
+  probe takes the cheapest rung above `none`, because it is asking whether
+  reasoning happens rather than paying to find out how deep it goes. Anthropic is
+  deliberately not asked: its answer is a signed thinking block the portable Chat
+  mapping refuses by design, so a valid depth would only move the failure from the
+  request to the response, still after paying for it.
+
+- **A capability deferred by the probe budget is recorded instead of lost.** It
+  was written into the in-memory detection and then overwritten by the probe
+  loop's first re-read, and finalization filled the missing name back in as
+  `risk_policy` — the one kind the console filters out, because a policy decision
+  is not something an operator can act on. A budget ceiling is: raise it, or
+  declare the capability by hand. On every OpenAI and Azure detection, where nine
+  probeable capabilities meet a ceiling of eight, the capability that disappeared
+  was reasoning.
+
+- **Bedrock Mantle connection tests and model lists no longer answer 404.**
+  Discovery addressed the route the operations use, on the assumption that a
+  route-scoped catalogue existed there; measured against a real account it does
+  not. The catalogue is account-wide and inference is route-scoped, so a profile
+  pinned to `/openai/v1` enumerates models that route refuses. Nothing is silent
+  about it — the upstream refuses a wrongly routed model by name — but a
+  connection test that passes proves the model exists on the account, not that
+  this route serves it. Bedrock Mantle Responses can enumerate models at all now,
+  and deliberately claims no capabilities from that listing, which carries an
+  identifier and an owner and nothing a capability could be read off.
+
+- **A 404 is no longer reported as a bad gateway.** An OpenAI-shaped refusal whose
+  body could not be parsed borrowed `http.StatusText(502)` as its sentence, so a
+  probe against a path the upstream does not serve logged `provider error (404):
+  Bad Gateway` once per interval, sending an operator to look for a gateway that
+  was never involved. A body that is not an error envelope and an envelope with an
+  empty message are now separate messages, because an operator chases them in
+  different places.
+
+- **An Anthropic overload is read from the status line, not the body.** The
+  renderer also accepted `error.code == "overloaded_error"`, which let a string an
+  upstream wrote into a body choose the status Halro returns — and a Bedrock
+  Mantle Responses stream error event fills that field straight from the event, so
+  an event naming itself `overloaded_error` rewrote a 502 into a 529 no upstream
+  ever sent. 529 is the status SDKs read as "back off and retry", so the upstream
+  was choosing the client's retry behaviour.
+
+- **An unclassified provider failure is logged by Go type rather than by its
+  text.** Both the gateway's attempt log and the periodic deployment probe treated
+  an absent upstream status as "Halro wrote this" and logged the sentence on that
+  inference. Anything arriving as a plain error never went through the
+  classification that decides what may be said about it, so it is either Halro's
+  own or an adapter holding a response body — and the probe loop runs unattended
+  on every enabled deployment, so an upstream that echoed a key back inside its
+  refusal had it written to disk once per probe interval for as long as the
+  process ran. The operator who runs a manual test still reads the sentence in the
+  reply, which lives for one request rather than on disk.
+
+- **An upstream refusal code is bounded where it is born.** The code an upstream
+  chooses reaches a log attribute, a durable probe result and a console cell, and
+  neither adapter that builds one bounded it, so an upstream answering with a wall
+  of text — or with the credential it had just rejected — wrote it to all three.
+  Both adapters narrow through the shared helper now, and an indexed parameter
+  path like `messages[0].content` survives instead of taking the code half down
+  with it.
+
+- **A deleted deployment's probe result is dropped.** Nothing removed one, so a
+  deleted deployment kept its last verdict for the life of the process and the
+  metrics exporter went on emitting `halro_deployment_up` for an ID that no longer
+  exists — a label set that only ever grows.
+
+- **Opening the create-deployment form no longer spends the Provider
+  credential.** The catalogue read answers from cache or not at all; that endpoint
+  checks a session and not a role, so a read-only administrator opening the form
+  was buying an upstream call per binding. Resolution, which is a mutation behind
+  the administrator role, does dial on a cache miss — it had been sharing the
+  read's flag and dialling nothing, so typing a real model the seeded catalogue
+  does not carry came back `unknown` with no variants and a suggestion to declare
+  by hand or pay for a detection run.
+
+- **A model the catalogue lists under an interface this connection has not bound
+  is named as such**, instead of resolving to `unknown` — whose two remedies,
+  declaring by hand or spending a billable detection call, neither answer it, and
+  detection cannot, because a route refusal is not an unsupported parameter.
+
+- **Three deployment listings stopped at the first fifty records** while
+  presenting themselves as complete, so the route counts behind two disabled
+  buttons and a total the page prints all described a page rather than the set.
+
+- **The browser's own form history no longer covers the console's suggestions.**
+  Typing a model id dropped a menu of every value ever submitted from that field
+  on top of the console's model picker. Credential fields keep their explicit
+  autocomplete values — those are how a password manager recognises a login, not
+  form history.
+
+- **Two colour pairs that failed WCAG AA are fixed** — tertiary text at 4.46:1 on
+  a card and a strong border at 2.42:1. The contrast check could not see either,
+  because the surface a card is painted on was missing from the list of surfaces
+  it checks.
+
+### Operator impact
+
+- **`config.yaml` must be edited, whether or not you ever tuned this.** Unknown
+  YAML fields are refused, and a `config.yaml` written by v0.3.0 carries
+  `admin.model_capability_detection.elevation_window` because the generated
+  template includes it — so an unedited file stops the process at load with
+  `field elevation_window not found in type config.ModelCapabilityDetection`,
+  naming the line. Delete that line and add the key one level up:
+
+  ```yaml
+  admin:
+    reauth_elevation_window: 10m
+  ```
+
+  It now governs every step-up, not only capability detection; `0s` keeps the
+  per-action prompt.
+
+- **`json_object` and `structured_outputs` are off on every existing
+  deployment.** Migration 32 cannot say which half of the old `json_mode` bit a
+  target actually had, and off refuses a request where on forwards a doomed one,
+  so it clears both, marks the evidence unsupported and empties the detection
+  buckets. Until you re-tick what a deployment really has, **every request
+  carrying `response_format: json_object` or `json_schema` is refused with 400
+  `unsupported_feature`.** Re-running capability detection restores verified
+  evidence at the cost of billable upstream probes.
+
+- **Storage schema 32 upgrades in place on the first start; no
+  re-initialisation.** Verified by starting this release against a data directory
+  a v0.3.0 binary created. As in 0.3.0, `halro doctor` does not migrate — run
+  against that directory before the first start it reports `metadata: fail —
+  metadata schema version 31 does not match required version 32`, which is the
+  strict check working rather than damage. Start once; `doctor` then reports
+  `bbolt schema v32`.
+
+- **Stored capability-detection results from v0.3.0 are not reused.** The
+  detector contract went from `capability-detector-v1` to `-v5` across this
+  release — the classifier that reads a joined provider code, what the reasoning
+  probe asks and where, classifying a refusal by the normalized kind every
+  adapter reports rather than by an OpenAI-shaped code, and the `json_mode`
+  split. Each of those makes an older result an answer to a question no longer
+  asked, so it is refused rather than carried forward as though something had
+  measured it. Deployments keep their evidence; the next detection re-probes.
+
+- **A Bedrock Mantle deployment whose model the seeded catalogue now covers no
+  longer needs hand-declared capabilities.** Existing hand declarations are left
+  alone — nothing rewrites an operator's own claim — but a new deployment on one
+  of the 49 covered identifiers resolves from the catalogue.
 
 ## [0.3.0] - 2026-08-24
 
@@ -760,7 +957,8 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Halro/compare/v0.3.0...main
+[Unreleased]: https://github.com/akz142857/Halro/compare/v0.4.0...main
+[0.4.0]: https://github.com/akz142857/Halro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/akz142857/Halro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akz142857/Halro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/akz142857/Halro/compare/v1.0.0-rc.1...v0.1.0
