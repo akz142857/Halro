@@ -17,12 +17,12 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.43.6 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.32.37 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.36 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.6 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.27.8 | Apache-2.0 | runtime |
-| `github.com/go-chi/chi/v5` | 5.3.1 | MIT | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.43.7 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.32.38 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.37 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.7 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.27.9 | Apache-2.0 | runtime |
+| `github.com/go-chi/chi/v5` | 5.3.2 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
@@ -30,14 +30,19 @@ module and lock files.
 | `golang.org/x/sys` | 0.47.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
-The 2026-08-21 refresh moved six direct versions and added, removed, and
+The 2026-08-28 refresh moved six direct versions and added, removed, and
 relicensed nothing: the module path sets in `go.mod` and `go.sum` are identical
 to the reviewed tree before it, so every row above is a version change rather
-than an inventory change. Five are AWS SDK patch releases on the KMS custody
-path described below. The sixth is `golang.org/x/crypto` 0.54.0 to 0.55.0, and
-the runtime links exactly two packages from that module — `argon2` and
-`blake2b` — both of which are byte-identical between the two versions, as is
-the module LICENSE. Nothing that reaches the binary changed.
+than an inventory change, and every one of the six module LICENSE files is
+byte-identical across its bump. Five are AWS SDK and smithy patch releases on
+the KMS custody path described below. The sixth is `github.com/go-chi/chi/v5`
+5.3.1 to 5.3.2, which is the one that moves behaviour and not only a version:
+it de-duplicates the method list chi records behind a 405, and it changes what
+`Routes()` and `Walk()` report for a `Mount()` stub handler. The runtime links
+only the root `chi` package and not `chi/middleware`, where the rest of that
+release landed, and the frozen Admin route contract — which enumerates the
+router through `chi.Walk` and compares it against an exact expected set — still
+matches.
 
 The AWS KMS custody path is part of this review. The linked AWS SDK config and
 credential modules can resolve environment, shared-file, web-identity,
@@ -96,8 +101,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `5759531ea56103e64bbc3f981947d7592fa7973a`
-- `go.sum`: `54bfd4b3cca98c81e2a0660047fe49e1f0cbe098`
+- `go.mod`: `2111333dc9b3a5dfaf7539366263147d62e382ae`
+- `go.sum`: `83ad5b798f68cc7bbc8524310f1f3f6ea49be605`
 - `web/package.json`: `36a53606b14909e46c1e4a408e8f5aa81c91b733`
 - `web/package-lock.json`: `bf55c4a56e92872167dd828d603b78fc801efd84`
 
