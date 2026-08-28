@@ -60,16 +60,29 @@ is linked into the Go runtime.
 
 | Package | Version | License |
 |---|---:|---|
-| `@hookform/resolvers` | 5.7.1 | MIT |
-| `@tanstack/react-query` | 5.101.4 | MIT |
-| `i18next` | 26.3.6 | MIT |
+| `@hookform/resolvers` | 5.9.1 | MIT |
+| `@tanstack/react-query` | 5.102.3 | MIT |
+| `i18next` | 26.4.0 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |
-| `react-hook-form` | 7.85.0 | MIT |
-| `react-i18next` | 17.0.11 | MIT |
+| `react-hook-form` | 7.86.0 | MIT |
+| `react-i18next` | 17.0.12 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.4.3 | MIT |
+
+The same 2026-08-28 refresh moved five of the rows above — `@hookform/resolvers`
+5.7.1 to 5.9.1, `@tanstack/react-query` 5.101.4 to 5.102.3, `i18next` 26.3.6 to
+26.4.0, `react-hook-form` 7.85.0 to 7.86.0, `react-i18next` 17.0.11 to 17.0.12 —
+and every one stayed MIT. It also moved four dev dependencies that are absent
+from the table because they are not shipped: `@types/react-dom`,
+`@vitejs/plugin-react`, `vite` 8.2.1 to 8.2.2 and `vitest`. The
+`@hookform/resolvers` minor releases adopt Joi 18 and Vest 6 in resolvers this
+project does not import, and neither package is in the lockfile, so no entry was
+added to the dependency surface. The build-tooling bump did rewrite
+`internal/webui/dist` — chunk contents and hashed names moved, and one
+auto-named shared chunk regrouped — with no change to which packages reach the
+bundle.
 
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
@@ -103,15 +116,15 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `2111333dc9b3a5dfaf7539366263147d62e382ae`
 - `go.sum`: `83ad5b798f68cc7bbc8524310f1f3f6ea49be605`
-- `web/package.json`: `36a53606b14909e46c1e4a408e8f5aa81c91b733`
-- `web/package-lock.json`: `bf55c4a56e92872167dd828d603b78fc801efd84`
+- `web/package.json`: `ebb7ca49d78e9ded3af3cf20a6df8e80cc019689`
+- `web/package-lock.json`: `d0828e598ebfeb1667ab101f346ae9be69ab6c91`
 
 The Go hashes moved for the six-module bump recorded above. The two web hashes
-moved for `chore(release): v0.2.0`, again for `v0.3.0`, and again for `v0.4.0`,
-each of which bumped the `version` field in both files and changed nothing else
-— no dependency was added, removed, or upgraded, so the inventory above still
-describes the reviewed tree and the review date is unchanged. The gate hashes
-whole files
+moved for the nine-package Admin UI bump recorded above, and before that only
+for `chore(release): v0.2.0`, again for `v0.3.0`, and again for `v0.4.0`, each
+of which bumped the `version` field in both files and changed nothing else.
+Nothing in any of it added, removed, or relicensed a dependency, so the
+inventory above still describes the reviewed tree. The gate hashes whole files
 rather than dependency sections, which is the right trade: it cannot be talked
 out of noticing a change, at the cost of occasionally flagging one that carries
 no dependency in it.
