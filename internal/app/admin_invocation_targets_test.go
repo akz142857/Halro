@@ -463,6 +463,10 @@ func TestInvocationTargetFetchIsConcurrencyBounded(t *testing.T) {
 }
 
 func TestAdminUsesInvocationTargetRouteAndRemovesLegacyModelsRoute(t *testing.T) {
+	// Built on Titan Embed, whose profile is withheld from this build.
+	if domain.IsWithheldProfile(domain.ProfileBedrockInvokeTitanEmbedV2) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no connection can be created on it")
+	}
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)

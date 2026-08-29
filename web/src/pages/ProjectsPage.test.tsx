@@ -440,6 +440,6 @@ describe("projects page", () => {
 
     fireEvent.click(summary);
     expect(block.open).toBe(true);
-    expect(within(block).getByText("令牌防护策略")).toBeVisible();
+    expect(within(block).getByText("词元防护策略")).toBeVisible();
   });
 });

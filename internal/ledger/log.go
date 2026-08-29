@@ -171,9 +171,14 @@ type AppendStats struct {
 	// Carried as a duration in Go and as seconds on the wire: a time.Duration
 	// marshals to a bare nanosecond integer, which reaches an operator as an
 	// unreadable 11-digit number.
-	SyncDuration  time.Duration `json:"-"`
-	QueueDepth    int           `json:"queue_depth"`
-	QueueCapacity int           `json:"queue_capacity"`
+	SyncDuration time.Duration `json:"-"`
+	// MaxBatch is the coalescing ceiling this log was opened with. Reported
+	// alongside the observed mean because the two together answer a question
+	// neither answers alone: a mean of 1.0 against a ceiling of 128 says the
+	// barrier cost is being paid per record and does not have to be.
+	MaxBatch      int `json:"max_batch"`
+	QueueDepth    int `json:"queue_depth"`
+	QueueCapacity int `json:"queue_capacity"`
 }
 
 // SyncSeconds reports the cumulative durability barrier cost for the wire and
@@ -489,6 +494,7 @@ func (l *Log) Stats() AppendStats {
 		Batches: l.batches.Load(), Records: l.writtenRecords.Load(),
 		Errors: l.appendErrors.Load(),
 		Syncs:  l.syncs.Load(), SyncDuration: time.Duration(l.syncNanos.Load()),
+		MaxBatch:      l.options.MaxBatch,
 		QueueDepth:    len(l.appendQueue),
 		QueueCapacity: cap(l.appendQueue),
 	}

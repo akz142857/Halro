@@ -697,7 +697,7 @@ Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定�
 - 请求里的值**只能收窄本来就有上限的 profile**，绝不会给一个没有上限的 profile 造出一个。
 - 超出该 profile 上限 → 400 并指名（`capabilities_unservable`）。
 - 请求了一个**这条连接上没有任何 profile 能承载**的上限 → 400 并指名
-  （`capabilities_limit_unavailable`），文案指向「令牌上限属于模型规格，请在部署里声明」。
+  （`capabilities_limit_unavailable`），文案指向「词元上限属于模型规格，请在部署里声明」。
   不静默丢弃：否则调用方拿到 201，会以为这条连接被限住了，而它并没有。
 - 端点下发的 `connection_ceiling` 数值取**同组中最严的已声明上限**（Bedrock runtime 组是
   8192），因为那才是保存会接受的最大值；报「无限制」会让表单给出一个必被拒的数字。
@@ -772,7 +772,7 @@ Bedrock runtime 的 profile 都由操作员在「能力实现」里显式选定�
 2. 省略 `capabilities` 的请求，含义是「该 profile 自身的 defaults」（单 binding），
    与控制台表单预勾的连接级并集不同——后者是表单起点，前者是「调用方什么都没说」。
 3. Azure OpenAI 与 `openai_compatible` 新建连接时不再预填 Base URL，必须自己填。
-4. **连接层不再能声明令牌上限**：只有声明了上限的 profile（今天只有 Titan Embed）能被收窄，
+4. **连接层不再能声明词元上限**：只有声明了上限的 profile（今天只有 Titan Embed）能被收窄，
    其余会以 `capabilities_limit_unavailable` 拒绝并指名；填得比 profile 允许的还大则是
    `capabilities_limit_too_large`。模型的上下文/输出上限在**部署**里声明——部署表单本来就有
    这一节。控制台的连接表单相应去掉了这两个输入框，已收窄的值不会被后续编辑放宽。
@@ -819,7 +819,7 @@ review 还指出 Bedrock「能力实现」选择器不再决定连接声明什�
 
 对修复后的工作区又跑了一次 review，7 条全部修复：
 
-1. **收窄过的令牌上限被无关编辑悄悄放宽**（中）。`boundedLimit` 在请求值为 0 时回填 profile
+1. **收窄过的词元上限被无关编辑悄悄放宽**（中）。`boundedLimit` 在请求值为 0 时回填 profile
    的完整上限，而控制台现在**总是**发 0（表单和列表启停都发），于是一条把 Titan Embed 收窄到
    4096 的连接，只要启停一次就变回 8192——`internal/gateway/service.go` 的
    `filterTokenCapabilities` 读这个值，等于悄悄拆掉操作员设的路由护栏。
@@ -840,7 +840,7 @@ review 还指出 Bedrock「能力实现」选择器不再决定连接声明什�
    哪些能力（承载它的是那个 profile），所以连接级不再给数值，一律 0，并在注释里写明这不是
    「无限制」而是「这不是连接级的问题」；每个 profile 自己的上限仍在 `ceiling` 里下发。
    同时把「超出上限」从 `capabilities_unservable` 拆成 `capabilities_limit_too_large`——
-   「这个连接无法提供最大上下文令牌」既不准确也没指出该怎么办。
+   「这个连接无法提供最大上下文词元」既不准确也没指出该怎么办。
 6. **显式指定的 `profile_id` 会被静默替换**（低）：选中的实现如果一个能力都没落上，
    连接的 profile 投影会取第一个 binding，于是返回一个调用方没要过的 profile_id。
    改为 400 并说明原因，与紧邻的歧义拒绝保持同一种态度。

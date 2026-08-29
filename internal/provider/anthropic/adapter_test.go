@@ -75,8 +75,7 @@ func TestBedrockMantleMessagesUsesNativePathAndAPIKey(t *testing.T) {
 			t.Errorf("unexpected Mantle request: %s %#v", request.URL.Path, request.Header)
 		}
 		// Halro addresses the account's default Bedrock project, so no resource
-		// header is sent. anthropic-workspace would select a non-default one;
-		// anthropic-workspace-id belongs to Claude Platform on AWS entirely.
+		// header is sent — anthropic-workspace-id would select a non-default one.
 		assertNoBedrockResourceHeaders(t, request.Header)
 		var body map[string]json.RawMessage
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {

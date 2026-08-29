@@ -1046,10 +1046,13 @@ export interface ActivationStatus {
 export interface WritePathSummary {
   wal_sync_seconds: number;
   wal_batch_size: number;
+  wal_events_per_second: number;
+  wal_max_events_per_second: number;
   project_lock_wait_seconds: number;
   project_lock_held_seconds: number;
   project_events_per_second: number;
-  project_requests_per_second: number;
+  requests_per_second: number;
+  bound_by: string;
   metadata_batch_size: number;
   metadata_write_seconds: number;
 }

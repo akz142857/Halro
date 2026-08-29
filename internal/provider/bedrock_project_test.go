@@ -24,15 +24,15 @@ func TestApplyBedrockProjectSetsOnlyTheProtocolsOwnHeader(t *testing.T) {
 func TestApplyBedrockProjectClearsEveryResourceHeaderItKnows(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages", nil)
 	request.Header.Set(HeaderBedrockOpenAIProject, "proj_carried_in")
-	request.Header.Set(HeaderBedrockAnthropicWorkspace, "proj_carried_in")
-	request.Header.Set("anthropic-workspace-id", "wrkspc_carried_in")
+	request.Header.Set(HeaderBedrockAnthropicWorkspace, "wrkspc_carried_in")
+	request.Header.Set("anthropic-workspace", "proj_carried_in")
 	request.Header.Set("OpenAI-Organization", "org_carried_in")
 
 	ApplyBedrockProject(request, HeaderBedrockAnthropicWorkspace, "")
 
 	for _, name := range []string{
 		HeaderBedrockOpenAIProject, HeaderBedrockAnthropicWorkspace,
-		"anthropic-workspace-id", "OpenAI-Organization",
+		"anthropic-workspace", "OpenAI-Organization",
 	} {
 		if value := request.Header.Get(name); value != "" {
 			t.Fatalf("%s survived into a default-project request: %q", name, value)
@@ -40,16 +40,35 @@ func TestApplyBedrockProjectClearsEveryResourceHeaderItKnows(t *testing.T) {
 	}
 }
 
-// anthropic-workspace-id belongs to Claude Platform on AWS. Selecting a Bedrock
-// project must never produce it, whichever protocol asked.
-func TestApplyBedrockProjectNeverSendsTheClaudePlatformHeader(t *testing.T) {
-	for _, header := range []string{HeaderBedrockOpenAIProject, HeaderBedrockAnthropicWorkspace} {
+// A value someone else put on the request never survives, whichever protocol
+// asked. Bedrock and Claude Platform on AWS spell this header the same way, so
+// a carried-in wrkspc_ id is exactly the shape that would otherwise ride along
+// — cleared here, and refused at the write path by ValidateBedrockProjectID.
+func TestApplyBedrockProjectReplacesACarriedInWorkspaceValue(t *testing.T) {
+	for _, test := range []struct {
+		header string
+		want   string
+	}{
+		{HeaderBedrockOpenAIProject, ""},
+		{HeaderBedrockAnthropicWorkspace, "proj_abc123"},
+	} {
 		request := httptest.NewRequest(http.MethodPost, "https://bedrock-mantle.us-east-1.api.aws/v1/responses", nil)
-		request.Header.Set("anthropic-workspace-id", "wrkspc_01AbCdEf23GhIj")
-		ApplyBedrockProject(request, header, "proj_abc123")
-		if request.Header.Get("anthropic-workspace-id") != "" {
-			t.Fatalf("addressing via %s left the Claude Platform header in place", header)
+		request.Header.Set(HeaderBedrockAnthropicWorkspace, "wrkspc_01AbCdEf23GhIj")
+		ApplyBedrockProject(request, test.header, "proj_abc123")
+		if got := request.Header.Get(HeaderBedrockAnthropicWorkspace); got != test.want {
+			t.Fatalf("addressing via %s left %s=%q, want %q", test.header, HeaderBedrockAnthropicWorkspace, got, test.want)
 		}
+	}
+}
+
+// The name Halro used to send selects nothing. It must not reach the provider
+// from a caller or an intermediary that learned it.
+func TestApplyBedrockProjectClearsTheSupersededSpelling(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages", nil)
+	request.Header.Set("anthropic-workspace", "proj_carried_in")
+	ApplyBedrockProject(request, HeaderBedrockAnthropicWorkspace, "proj_abc123")
+	if value := request.Header.Get("anthropic-workspace"); value != "" {
+		t.Fatalf("the superseded spelling survived: %q", value)
 	}
 }
 

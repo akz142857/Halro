@@ -1,5 +1,11 @@
 # 选择 AWS 接入面：Bedrock Runtime 还是 Bedrock Mantle
 
+> **当前构建只开放 Bedrock Mantle。** 五个 Runtime / Agent Runtime Profile
+> （Converse 文本、Titan 文本向量 V2、Titan 图像生成 V2、Cohere 重排 3.5、Nova Reel
+> 异步）在 `internal/domain/provider_table.go` 里标记为 `Withheld`：能力实现列表不
+> 再列出它们，凭据与连接的写入路径也会拒绝。适配器实现和契约都还在，去掉标记即可
+> 重新开放。本文余下部分描述的是两个接入面的完整设计，Runtime 一侧目前不可选。
+
 Halro 对 AWS 有**两个并存的接入面**，不是一个在替代另一个。它们是同一个 Provider
 类型（`bedrock`）下的两组 Profile，凭据方案、Endpoint 和能力上限都不同，一个 Provider
 实例只能选其中一个。
@@ -25,7 +31,7 @@ profiles 表，本文不重复。
 | Endpoint | `bedrock-runtime.<region>.amazonaws.com`（含 FIPS、`.com.cn`、PrivateLink `.vpce.`）与 `bedrock-agent-runtime.<region>.*` | 仅 `bedrock-mantle.<region>.api.aws` |
 | 凭据 | AWS SigV4（Access Key + Secret + 可选 Session Token + Region，加密为一条 audience-bound 凭据） | Bedrock API Key（静态 Header） |
 | 协议 | AWS 原生（Converse / InvokeModel / Agent Runtime） | OpenAI 与 Anthropic 兼容线 |
-| Profile 数 | 5 | 3 |
+| Profile 数 | 5（当前全部 Withheld） | 5 |
 
 **Runtime 凭据不能挂到 Mantle 上，反之亦然。** 这由 Profile 的
 `CredentialScheme` 强制（`AWSSigV4Explicit` vs `BedrockAPIKey`），装配期就会拒绝。
@@ -139,8 +145,10 @@ bearer token 走 Mantle 端点”。
 规则不重试、不 fallback。在自动刷新立项完成前，请使用长期 key 并人工轮换。
 
 **Bedrock Project 是 Provider 级属性。** AWS 把 Workspaces（Anthropic 协议）与
-Projects（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace`
-与 `OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。
+Projects（OpenAI 协议）实现为同一种 Bedrock project 资源，分别由 `anthropic-workspace-id`
+与 `OpenAI-Project` 请求头选择；省略请求头时归入账户的 default project。Claude Platform
+on AWS 用的是同一个头名，区分两者的是主机与 ID 前缀（Bedrock 是 `proj_`，Claude Platform
+是 `wrkspc_`），所以表单只接受 `proj_`。
 
 Halro 的做法：Provider 表单上的 **Bedrock Project ID** 留空即 default project（不发头），
 填写 `proj_` 开头的 ID 则该实例的全部请求都归入该 project。
@@ -164,7 +172,7 @@ Halro 的做法：Provider 表单上的 **Bedrock Project ID** 留空即 default
 超出上限的能力会被拒绝。这与 Runtime 的 Converse 不同，后者仍由运维声明。
 
 **连接测试的费用不一样。** Anthropic Messages 没有免费的元数据接口，它的探测是一次
-真实推理调用（输出限 1 个令牌）——会计费。Chat 与 Responses 两个实现读取模型元数据，
+真实推理调用（输出限 1 个词元）——会计费。Chat 与 Responses 两个实现读取模型元数据，
 不计费。控制台在选中 Messages 实现时会给出提示。
 
 顺带一条与记账有关的事实：能力识别、连接测试与健康探测都可能产生上游费用，但**不进

@@ -22,7 +22,8 @@ func TestBedrockMantleChatUsesBearerAPIKeyAndOpenAIPath(t *testing.T) {
 			t.Fatalf("unexpected Mantle request: %s %#v", request.URL, request.Header)
 		}
 		// Halro addresses the account's default Bedrock project, so OpenAI-Project
-		// is never sent. anthropic-workspace-id belongs to a different AWS service.
+		// is never sent, nor is the Anthropic protocol's spelling of the same
+		// resource on an OpenAI-shaped request.
 		assertNoBedrockResourceHeaders(t, request.Header)
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"amazon.nova-pro","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)), Request: request}, nil
 	})}

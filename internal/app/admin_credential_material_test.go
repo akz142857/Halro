@@ -19,6 +19,11 @@ import (
 // field to change. The refusal belongs at the moment the operator is still
 // looking at the value.
 func TestCredentialRefusesAWSMaterialItsEndpointCannotSign(t *testing.T) {
+	// The check is on the SigV4 credential constructor, which only the Runtime
+	// surfaces use. Withholding them takes away the way in, not the rule.
+	if domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no credential can be created on it")
+	}
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
@@ -100,6 +105,9 @@ func TestCredentialRefusesAWSMaterialItsEndpointCannotSign(t *testing.T) {
 // the binding was left out, so the refusal carries that class and the console
 // can say which record to open.
 func TestProviderTestNamesWhyTheBindingHasNoAdapter(t *testing.T) {
+	if domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no connection can be created on it")
+	}
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)

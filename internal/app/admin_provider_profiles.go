@@ -101,6 +101,13 @@ type providerProfilesView struct {
 func buildProviderProfilesView(region string) providerProfilesView {
 	profilesByType := make(map[domain.ProviderType][]providerProfileView)
 	for _, profile := range domain.AllProviderProfiles() {
+		// A withheld profile is refused on every write, so offering it here would
+		// be the first shape of drift this endpoint exists to prevent: a form
+		// wider than the server, whose save is rejected without saying which
+		// field caused it.
+		if profile.Withheld {
+			continue
+		}
 		combines := make([]domain.ProviderProfileID, 0)
 		for _, peer := range domain.ConnectionProfiles(profile.Type, profile.ID)[1:] {
 			combines = append(combines, peer.ID)

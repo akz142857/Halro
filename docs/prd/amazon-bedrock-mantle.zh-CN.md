@@ -19,8 +19,9 @@
 >   Credential expiry 已部分落地，见 §4.3 的归档订正。
 
 > 本文评估的是 **Amazon Bedrock 的 `bedrock-mantle` 访问面**，不是 Claude Platform on AWS。
-> 初始输入截图包含了属于另一产品线的 `anthropic-workspace-id` 信息，不能继续作为
-> Bedrock Mantle wire contract 的依据。本文以 AWS 当前官方文档和本仓代码为准。
+> 初始输入截图包含的是另一产品线（Claude Platform on AWS）的 workspace 信息，不能继续
+> 作为 Bedrock Mantle wire contract 的依据。本文以 AWS 当前官方文档和本仓代码为准。
+> 注意两者的资源头**同名**，区分靠主机与 ID 前缀——见 §1.1 的 2026-08-29 订正。
 >
 > 本轮没有执行真实 Provider 调用。真实调用可能计费，必须由用户显式授权后再运行。
 
@@ -30,8 +31,8 @@
 
 Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原评估的两个核心前提错误：
 
-1. `anthropic-workspace-id` 属于 Claude Platform on AWS；Bedrock Mantle 使用
-   `anthropic-workspace`（Messages）和 `OpenAI-Project`（Chat/Responses）。Bedrock
+1. Bedrock Mantle 使用 `anthropic-workspace-id`（Messages）和 `OpenAI-Project`
+   （Chat/Responses）。该头名与 Claude Platform on AWS 相同，区分靠主机与 ID 前缀。Bedrock
    账户已有 default project/workspace，省略资源头的请求归入 default。因此当前路径不是
    “可能 100% 不可用”，准确口径是：**default project 可用但未经真实账户验证，非 default
    project 无法显式寻址**。
@@ -63,7 +64,8 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 |---|---|---|
 | 服务端点 | `bedrock-mantle.<region>.api.aws` | `aws-external-anthropic.<region>.api.aws` |
 | 运营方 | AWS / Amazon Bedrock | Anthropic on AWS |
-| Anthropic 资源头 | `anthropic-workspace` | `anthropic-workspace-id`（必填） |
+| Anthropic 资源头 | `anthropic-workspace-id` | `anthropic-workspace-id`（必填） |
+| 资源 ID 前缀 | `proj_`（Projects API 资源） | `wrkspc_` |
 | OpenAI 资源头 | `OpenAI-Project` | 不适用 |
 | SigV4 service | `bedrock-mantle` | `aws-external-anthropic` |
 
@@ -79,6 +81,19 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 `anthropic-workspace-id` 必填要求，均已于 2026-08-12 对上述文档页逐条核对。
 本节其余推断若与后续文档更新冲突，以文档为准并回改本文。
 
+> **订正（2026-08-29）。** 2026-08-12 那次核对在头名这一项上得出了错误结论，并且这个
+> 结论进了代码：Bedrock Mantle 的 Messages 资源头是 `anthropic-workspace-id`，与 Claude
+> Platform on AWS **同名**。头名不是两条产品线的分界，分界是主机（`bedrock-mantle`
+> vs `aws-external-anthropic`）与 ID 前缀（`proj_` vs `wrkspc_`）。Halro 此前发送的
+> `anthropic-workspace` 没有任何服务读取，同时把文档记载的头名删掉，后果是填了 Project
+> 的连接被静默归入账户 default —— 不报错。已于 2026-08-29 修正
+> （`internal/provider/bedrock_project.go`）。依据：
+> [Workspaces (Anthropic-compatible)](https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html)
+> 与 [Workspaces 成本归属](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-workspaces.html)
+> 两页均写明该头名并给出 curl 示例，
+> [Claude Platform Workspaces](https://docs.aws.amazon.com/claude-platform/latest/userguide/workspaces.html)
+> 写明同名但 ID 为 `wrkspc_`。仍未对真实账户验证。
+
 ### 1.2 Bedrock Mantle 已能由官方文档确定的事实
 
 | Profile | 请求路径 | API-key 认证 | 显式资源头 |
@@ -87,7 +102,7 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 | `bedrock.mantle.openai.chat.v1` | `/openai/v1/chat/completions` | `Authorization: Bearer` | `OpenAI-Project` |
 | `bedrock.mantle.responses.v1` | `/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
 | `bedrock.mantle.openai.responses.v1` | `/openai/v1/responses` | `Authorization: Bearer` | `OpenAI-Project` |
-| `bedrock.mantle.anthropic.messages.v1` | `/anthropic/v1/messages` | `x-api-key` | `anthropic-workspace` |
+| `bedrock.mantle.anthropic.messages.v1` | `/anthropic/v1/messages` | `x-api-key` | `anthropic-workspace-id` |
 
 Workspaces 与 Projects 是同一种 Bedrock Project 资源在不同协议中的名称。每个账户有
 default project/workspace；省略资源头时，请求关联到 default。因此上述 host、path、API-key
@@ -173,8 +188,8 @@ Halro 的具体实现是否符合契约，但不能用单次 smoke 代替协议�
 ### 3.1 当前精确能力（Phase 2 之后）
 
 Provider 可选填 `BedrockProjectID`：留空不发资源头、归入账户 default project；填写则按
-协议渲染 `OpenAI-Project` 或 `anthropic-workspace`。`anthropic-workspace-id` 仍然
-不得出现在任何 Mantle 请求上——它属于另一条产品线，代码里只用于删除。
+协议渲染 `OpenAI-Project` 或 `anthropic-workspace-id`。旧拼写 `anthropic-workspace`
+不得出现在任何 Mantle 请求上——它不被任何服务读取，代码里只用于删除。
 
 仍然成立的限制：两者都没有真实账户证据；project 是 Provider 级而非请求级。
 
@@ -191,7 +206,7 @@ Provider 可选填 `BedrockProjectID`：留空不发资源头、归入账户 def
 
 - 空值：显式表示使用 AWS default project，不发送资源头；
 - 非空：OpenAI Chat/Responses 渲染 `OpenAI-Project`，Anthropic Messages 渲染
-  `anthropic-workspace`；
+  `anthropic-workspace-id`；
 - 一个 Provider 只指向一个 Project；需要多个 Project 时创建多个 Provider，并复用同一
   Credential；Provider 各自保留并发、熔断、证据和运维状态；
 - `BedrockProjectID` 作为不透明标识符处理，不写入日志、错误、Metrics 或真实证据；
@@ -436,7 +451,8 @@ Operator Guide、release notes、provider real matrix。
 文档口径（无条件，不依赖真实账户结果）：
 
 - ADR 0007 增补修订节：ceiling 此前并非真的不可变、Workspaces/Projects 是同一种资源
-  且头名按协议不同、`anthropic-workspace-id` 属于另一条产品线、Region 一致性；
+  且头名按协议不同（Messages 侧的头名与 Claude Platform 相同，靠 ID 前缀区分）、
+  Region 一致性；
 - release notes：Provider 表新增 Mantle 行；已知限制新增"Mantle 无真实账户证据"，
   并改写原第 7 条（它写的"Admin 可以存超出上限的声明"在 Phase 0 之后不再成立）；
 - `docs/verification/provider-real-matrix.md`：明写三个 profile 在任何 commit 上都
@@ -459,8 +475,8 @@ Operator Guide、release notes、provider real matrix。
 - 校验 `domain.ValidateBedrockProjectID`：`proj_` + 字母数字、长度上限；字面量 `default`
   由 `NormalizeBedrockProjectID` 归一为空；`wrkspc_` 前缀按名拒绝；非 Mantle 访问面拒绝；
 - 渲染由 `provider.ApplyBedrockProject` 单点负责：OpenAI 形态发 `OpenAI-Project`，
-  Messages 发 `anthropic-workspace`，并在设置前清掉它认识的全部资源头（含
-  `anthropic-workspace-id`——它在这份名单里只为被删除）。**不是自由 header map，
+  Messages 发 `anthropic-workspace-id`，并在设置前清掉它认识的全部资源头（含旧拼写
+  `anthropic-workspace`——它在这份名单里只为被删除）。**不是自由 header map，
   也不走 credential authorizer**；
 - 三个适配器均改为"协议头与资源寻址在先、认证在后"，即 §3.3 的顺序要求；
 - Admin API、Provider 表单、i18n（zh-CN/en-US）、类型定义同步。
@@ -468,7 +484,7 @@ Operator Guide、release notes、provider real matrix。
 验收（含反向验证）：
 
 - `domain`：ID 形状、`wrkspc_` 具名拒绝、`default` 归一、非 Mantle 面拒绝；
-- `provider`：只发本协议的头、清掉全部已知资源头、永不发 `anthropic-workspace-id`、
+- `provider`：只发本协议的头、清掉全部已知资源头、永不发已废弃的 `anthropic-workspace`、
   伪造的 `Authorization` 仍被 authorizer 清除；
 - 三个适配器各自的 project 渲染（有值/空值）与凭据头不受影响；
 - `app`：两个 Provider 共用一条 Credential、各自的 project 不串且重启后仍然如此；
@@ -565,7 +581,7 @@ Operator Guide、release notes、provider real matrix。
 
 ## 9. 明确禁止
 
-- 不把 `anthropic-workspace-id` 加到 Bedrock Mantle；
+- 不把 `wrkspc_` 前缀的 Claude Platform workspace ID 接受进 Bedrock Mantle；
 - 不接受 `wrkspc_` 前缀的值作为 `BedrockProjectID`；
 - 不暴露或代理 Mantle 控制面路径（`/v1/organization/projects`）——Halro 只使用数据面；
 - 不在 Provider 保存路径上发起 project 存在性的在线校验；

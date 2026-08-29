@@ -240,6 +240,18 @@ function ReloadCard({ reload }: { reload: ReloadStatus }) {
 // The durable write path. This is the answer to "what is this instance doing
 // right now" for an operator who has not stood up Prometheus — the same numbers
 // the metrics endpoint exposes, already reduced to the means that matter.
+// One Gateway request appends exactly five Ledger records — accepted,
+// reserved, started, settled, finalized — which is what turns a record rate
+// into the request rate an operator thinks in. The server applies the same
+// divisor; it is repeated here only for the "what it becomes under load"
+// sentence, which is a projection the server does not compute.
+const accountingEventsPerRequest = 5;
+
+// Enough records that a batch size of 1 says something about how requests
+// arrive rather than about how few there were. Five thousand records is a
+// thousand requests.
+const notCoalescingMinimumRecords = 5_000;
+
 function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batches: number }) {
   const { t } = useTranslation();
   // Optional even though the server always sends it: this is the card an
@@ -253,27 +265,46 @@ function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batch
   const rows: [string, string][] = summary ? [
     [t("settings.walSyncSeconds"), formatMillis(summary.wal_sync_seconds)],
     [t("settings.walBatchSize"), formatFactor(summary.wal_batch_size)],
+    // Both ceilings are shown, not just the one that won. Which of the two is
+    // binding is the whole diagnosis, and a single number cannot carry it.
+    [t("settings.walEventsPerSecond"), formatFactor(summary.wal_events_per_second)],
     [t("settings.projectLockWaitSeconds"), formatMillis(summary.project_lock_wait_seconds)],
     [t("settings.projectLockHeldSeconds"), formatMillis(summary.project_lock_held_seconds)],
     [t("settings.projectEventsPerSecond"), formatFactor(summary.project_events_per_second)],
     [t("settings.metadataBatchSize"), formatFactor(summary.metadata_batch_size)],
     [t("settings.metadataWriteSeconds"), formatMillis(summary.metadata_write_seconds)],
   ] : [];
-  // The reading that looks like a slow disk and is not. Only stated once there
-  // is enough traffic for the batch size to mean anything.
-  const notCoalescing = !!summary && batches >= 20 && summary.wal_batch_size > 0 && summary.wal_batch_size < 1.2;
+  // The reading that looks like a slow disk and is not.
+  //
+  // The threshold is on records rather than batches, and is high enough that a
+  // handful of sequential requests cannot reach it: a batch size of 1 is the
+  // correct and healthy reading when nothing is arriving concurrently, and the
+  // old bar of 20 batches was four requests, so a freshly started instance
+  // always tripped it. It is still a statement about offered concurrency rather
+  // than proof of a fault, which is why it says what the ceiling becomes under
+  // load instead of naming a problem.
+  const notCoalescing = !!summary && batches * summary.wal_batch_size >= notCoalescingMinimumRecords
+    && summary.wal_batch_size > 0 && summary.wal_batch_size < 1.2
+    && summary.wal_max_events_per_second > summary.wal_events_per_second;
   return (
     <details className="panel system-card diagnostic-details write-path" open>
       <summary>
         <span>{t("settings.writePathTitle")}</span>
-        <strong>{idle || !summary?.project_requests_per_second
+        <strong>{idle || !summary?.requests_per_second
           ? t("settings.writePathUnknownRate")
-          : t("settings.writePathRequestsPerSecond", { rate: formatFactor(summary.project_requests_per_second).trim() })}</strong>
+          : t("settings.writePathRequestsPerSecond", { rate: formatFactor(summary.requests_per_second).trim() })}</strong>
       </summary>
       <p className="write-path-caption">{t("settings.writePathDescription")}</p>
       <dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       <p className="write-path-meta">{idle ? t("settings.writePathIdle") : t("settings.writePathWindow")}</p>
-      {notCoalescing && <p className="notice warning">{t("settings.writePathNotCoalescing")}</p>}
+      {!idle && summary?.bound_by && <p className="write-path-meta">{t(summary.bound_by === "wal"
+        ? "settings.writePathBoundByWAL"
+        : "settings.writePathBoundByProject")}</p>}
+      {notCoalescing && summary && <p className="notice warning">{t("settings.writePathNotCoalescing", {
+        size: formatFactor(summary.wal_batch_size).trim(),
+        max: Math.round(summary.wal_max_events_per_second * summary.wal_sync_seconds),
+        rate: formatFactor(summary.wal_max_events_per_second / accountingEventsPerRequest).trim(),
+      })}</p>}
     </details>
   );
 }

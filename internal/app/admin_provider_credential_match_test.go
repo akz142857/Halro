@@ -16,6 +16,11 @@ import (
 // explain what it is not told, so each refusal carries its own code and both
 // compared values as data.
 func TestAdminExplainsWhichCredentialDimensionDidNotMatch(t *testing.T) {
+	// The access-surface arm of this needs two Bedrock surfaces that disagree, and
+	// only Mantle is offered while the Runtime profiles are withheld.
+	if domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no credential can be created on it")
+	}
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)

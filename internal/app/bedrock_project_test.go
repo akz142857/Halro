@@ -159,7 +159,15 @@ func TestAdminRefusesUnusableBedrockProjectIdentifiers(t *testing.T) {
 }
 
 // The field is Mantle's. On Bedrock Runtime it would be stored and never sent.
+//
+// Guarded rather than deleted: the refusal is still in the write path and still
+// correct, but a withheld surface cannot be reached through this API to
+// exercise it. Offering Bedrock Runtime again restores this coverage with no
+// edit here.
 func TestAdminRefusesABedrockProjectOnTheRuntimeSurface(t *testing.T) {
+	if domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no credential can be created on it")
+	}
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
@@ -192,7 +200,7 @@ func TestAdminRefusesABedrockProjectOnTheRuntimeSurface(t *testing.T) {
 }
 
 // The composition root decides which profile renders the project as
-// OpenAI-Project and which renders it as anthropic-workspace. That mapping had
+// OpenAI-Project and which renders it as anthropic-workspace-id. That mapping had
 // no test: deleting it from all three branches left every other test passing,
 // so the feature could have shipped storing a project it never sent.
 func TestProviderWiringRendersTheBedrockProjectPerProtocol(t *testing.T) {
@@ -203,7 +211,7 @@ func TestProviderWiringRendersTheBedrockProjectPerProtocol(t *testing.T) {
 	}{
 		{domain.ProfileBedrockMantleOpenAIChat, "OpenAI-Project"},
 		{domain.ProfileBedrockMantleOpenAIResponses, "OpenAI-Project"},
-		{domain.ProfileBedrockMantleAnthropicMessages, "anthropic-workspace"},
+		{domain.ProfileBedrockMantleAnthropicMessages, "anthropic-workspace-id"},
 	} {
 		var seen *http.Request
 		client := &http.Client{Transport: recordingTransport(func(request *http.Request) (*http.Response, error) {

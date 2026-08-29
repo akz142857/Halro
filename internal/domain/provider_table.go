@@ -38,6 +38,15 @@ import "strings"
 // outbound host allowlist is derived from the saved connection rather than from
 // this. RegionPlaceholder, where present, is substituted from configuration —
 // the region is a deployment choice, unlike everything else in this row.
+//
+// Withheld says this build does not offer the profile: it is absent from the
+// served matrix and refused on every write, so no connection or credential can
+// be created on it. The row stays because the profile is still implemented and
+// still bound by the invariant tests that walk this table — withholding scopes
+// what an operator may reach, it does not retire the profile. It is deliberately
+// not a read-path gate: an install that already holds a withheld connection has
+// to start in order for the operator to delete it, and refusing to resolve a
+// stored row would take that away.
 type profileRow struct {
 	ID              ProviderProfileID
 	Type            ProviderType
@@ -45,6 +54,7 @@ type profileRow struct {
 	Scheme          CredentialScheme
 	BaseURLTemplate string
 	Immutable       bool
+	Withheld        bool
 	Defaults        ProviderCapabilities
 	Ceiling         ProviderCapabilities
 }
@@ -198,9 +208,16 @@ var profileTable = []profileRow{
 	},
 	{
 		// Beta profile intentionally declares only Converse text chat and usage.
+		//
+		// Withheld with the four rows below it: this build supports Bedrock
+		// through the Mantle surface only. The five Runtime and Agent Runtime
+		// profiles reach two other hosts on a different credential scheme, and
+		// offering them means offering three Bedrock connection shapes that share
+		// nothing but a name. Removing the withholding is one field per row.
 		ID: ProfileBedrockConverseText, Type: ProviderBedrock,
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
+		Withheld:        true,
 		Defaults:        bedrockConverseSet, Ceiling: bedrockConverseSet,
 	},
 	{
@@ -208,6 +225,7 @@ var profileTable = []profileRow{
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
+		Withheld:        true,
 		Defaults:        titanEmbedSet, Ceiling: titanEmbedSet,
 	},
 	{
@@ -222,6 +240,7 @@ var profileTable = []profileRow{
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
+		Withheld:        true,
 		Defaults:        ProviderCapabilities{Images: true}, Ceiling: ProviderCapabilities{Images: true},
 	},
 	{
@@ -229,6 +248,7 @@ var profileTable = []profileRow{
 		Surface: SurfaceBedrockAgentRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockAgentRuntimeEndpoint,
 		Immutable:       true,
+		Withheld:        true,
 		Defaults:        ProviderCapabilities{Rerank: true}, Ceiling: ProviderCapabilities{Rerank: true},
 	},
 	{
@@ -236,6 +256,7 @@ var profileTable = []profileRow{
 		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
+		Withheld:        true,
 		Defaults:        ProviderCapabilities{AsyncGenerate: true}, Ceiling: ProviderCapabilities{AsyncGenerate: true},
 	},
 	{
@@ -364,7 +385,12 @@ var providerTypeTable = []providerTypeRow{
 	{ProviderDeepSeek, ProfileDeepSeekChat, deepSeekSet},
 	{ProviderOpenAICompatible, ProfileOpenAICompatible, openAICompatibleSet},
 	{ProviderGemini, ProfileGeminiText, geminiTextSet},
-	{ProviderBedrock, ProfileBedrockConverseText, bedrockConverseSet},
+	// Mantle Chat leads Bedrock because the Runtime profiles are withheld: the
+	// default has to be a profile a new connection can actually be created on.
+	// LegacyDefaults stays the narrower Converse set — it is a floor for the two
+	// callers that start from the type alone, and TestTypeDefaultsWithinDefaultProfile
+	// only requires it to sit inside the default profile's own defaults.
+	{ProviderBedrock, ProfileBedrockMantleChat, bedrockConverseSet},
 }
 
 var profileIndex = func() map[ProviderProfileID]profileRow {
@@ -392,8 +418,12 @@ type ProviderProfileSummary struct {
 	CredentialScheme CredentialScheme
 	BaseURLTemplate  string
 	Immutable        bool
-	Defaults         ProviderCapabilities
-	Ceiling          ProviderCapabilities
+	// Withheld travels with the row rather than being a second list a caller
+	// keeps: AllProviderProfiles stays the one enumeration, and whoever presents
+	// the matrix decides what to do with a withheld row. See profileRow.
+	Withheld bool
+	Defaults ProviderCapabilities
+	Ceiling  ProviderCapabilities
 }
 
 // AllProviderProfiles returns every registered profile in table order.
@@ -407,8 +437,8 @@ func AllProviderProfiles() []ProviderProfileSummary {
 		summaries = append(summaries, ProviderProfileSummary{
 			ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
 			CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
-			Immutable: row.Immutable,
-			Defaults:  row.Defaults, Ceiling: row.Ceiling,
+			Immutable: row.Immutable, Withheld: row.Withheld,
+			Defaults: row.Defaults, Ceiling: row.Ceiling,
 		})
 	}
 	return summaries
