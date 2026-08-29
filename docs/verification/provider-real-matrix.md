@@ -462,6 +462,49 @@ stay for capability detection to establish against a real account.
   cannot answer the question a probe is asking. Establishing what a Mantle model
   supports costs a real inference call.
 
+## The Ledger write path, measured (2026-08-29)
+
+The Settings card reports a request-rate ceiling for this instance. The numbers
+behind it were arithmetic over counters until this date. A load harness drove
+`ledger.Log` directly — the shipped defaults, `MaxBatch: 128` and a 2 ms
+`FlushInterval`, real fsyncs on an APFS laptop volume — 4000 appends per level,
+at rising concurrency.
+
+| offered concurrency | records per flush | fsync | sustained |
+| --- | --- | --- | --- |
+| 1 | 1.00 | 4.40 ms | 29 req/s |
+| 4 | 4.00 | 4.31 ms | 119 req/s |
+| 16 | 16.00 | 4.51 ms | 460 req/s |
+| 64 | 64.00 | 4.43 ms | 1,837 req/s |
+| 128 | 128.00 | 4.40 ms | 5,256 req/s |
+| 256 | 128.00 | 4.38 ms | 5,318 req/s |
+
+Three things this settles.
+
+**Group commit works, and the batch size is exactly the offered concurrency**
+until it saturates at `MaxBatch`. Between one and 128 concurrent appenders the
+same disk carries 175× the traffic. So a batch size of 1 is a statement about
+arrival, not about the disk, and the ceiling it implies is a floor that rises —
+which is what the card now says instead of naming a fault.
+
+**A ceiling derived from the barrier alone is optimistic**, by 55% at
+concurrency 1 and 14% at saturation. The gap is the flush interval: at
+concurrency 1 a batch occupies 6.7 ms, of which the fsync is 4.4 ms and the rest
+is `collectBatch` lingering for an appender that never arrives. The Ledger now
+measures the writer's own busy time (`AppendStats.BatchDuration`) and the card
+divides records by that; reported and actual then agree within 1% at every
+level above.
+
+**The per-project lock is not the binding constraint here.** Its hold implies
+six figures of requests per second while the Ledger sustains four, so on this
+host the minimum is always the Ledger's. That is the case the card used to get
+wrong by reporting the lock alone.
+
+Scope: one host, one filesystem. The shape — batch size tracking concurrency,
+the linger showing up as the gap between derived and actual — is the finding;
+the absolute numbers are this laptop's. Nothing here involves a provider, so it
+costs nothing to re-run elsewhere.
+
 ## AWS Bedrock Mantle: the workspace header, measured (2026-08-29)
 
 A second, narrow measurement against a real account, in `us-east-2` against

@@ -112,6 +112,16 @@ type Log struct {
 	// server, so a benchmark taken anywhere else is not transferable without it.
 	syncs     atomic.Uint64
 	syncNanos atomic.Int64
+	// batchNanos is the writer's own wall clock: from the moment an append is
+	// taken off the queue to the moment its batch is durable, which is the
+	// interval one batch actually occupies. It is longer than the barrier —
+	// collectBatch lingers for FlushInterval, and the frames still have to be
+	// encoded and written — and that difference is the whole reason it is
+	// measured rather than derived. Deriving a throughput ceiling from the
+	// barrier alone reported this filesystem 55% faster than it is at low
+	// concurrency, because the linger is idle time the ceiling still has to
+	// spend.
+	batchNanos atomic.Int64
 
 	// chainKey, chainHash and chainSequence carry the epoch-4 MAC/hash-chain
 	// state forward from whatever OpenWithOptions established (the verified
@@ -172,6 +182,10 @@ type AppendStats struct {
 	// marshals to a bare nanosecond integer, which reaches an operator as an
 	// unreadable 11-digit number.
 	SyncDuration time.Duration `json:"-"`
+	// BatchDuration over Records is the sustained record rate this writer
+	// achieved, and unlike Records/Batches over SyncDuration it needs no
+	// assumption about what else a batch costs.
+	BatchDuration time.Duration `json:"-"`
 	// MaxBatch is the coalescing ceiling this log was opened with. Reported
 	// alongside the observed mean because the two together answer a question
 	// neither answers alone: a mean of 1.0 against a ceiling of 128 says the
@@ -494,6 +508,7 @@ func (l *Log) Stats() AppendStats {
 		Batches: l.batches.Load(), Records: l.writtenRecords.Load(),
 		Errors: l.appendErrors.Load(),
 		Syncs:  l.syncs.Load(), SyncDuration: time.Duration(l.syncNanos.Load()),
+		BatchDuration: time.Duration(l.batchNanos.Load()),
 		MaxBatch:      l.options.MaxBatch,
 		QueueDepth:    len(l.appendQueue),
 		QueueCapacity: cap(l.appendQueue),
@@ -505,13 +520,20 @@ func (l *Log) writerLoop() {
 	for {
 		select {
 		case first := <-l.appendQueue:
+			// Timed from here, not from inside writeBatch: collectBatch's linger
+			// is part of what a batch costs, and leaving it out is what made the
+			// derived ceiling optimistic.
+			started := time.Now()
 			batch := l.collectBatch(first)
 			l.writeBatch(batch)
+			l.batchNanos.Add(int64(time.Since(started)))
 		case <-l.closeSignal:
 			for {
 				select {
 				case request := <-l.appendQueue:
+					started := time.Now()
 					l.writeBatch(l.collectBatch(request))
+					l.batchNanos.Add(int64(time.Since(started)))
 				default:
 					return
 				}

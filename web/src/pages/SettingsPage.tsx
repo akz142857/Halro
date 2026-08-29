@@ -302,7 +302,7 @@ function WritePathCard({ summary, batches }: { summary?: WritePathSummary; batch
         : "settings.writePathBoundByProject")}</p>}
       {notCoalescing && summary && <p className="notice warning">{t("settings.writePathNotCoalescing", {
         size: formatFactor(summary.wal_batch_size).trim(),
-        max: Math.round(summary.wal_max_events_per_second * summary.wal_sync_seconds),
+        max: summary.wal_max_batch_size,
         rate: formatFactor(summary.wal_max_events_per_second / accountingEventsPerRequest).trim(),
       })}</p>}
     </details>

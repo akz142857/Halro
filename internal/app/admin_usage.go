@@ -84,16 +84,28 @@ type writePathSummary struct {
 	// once per record rather than shared, which is what separates "this host's
 	// fsync is the ceiling" from "not enough concurrent appenders to coalesce".
 	WALBatchSize float64 `json:"wal_batch_size"`
-	// The Ledger's own ceiling, in accounting events per second: one durability
-	// barrier carries WALBatchSize records, so the log sustains that many per
-	// barrier interval. There is one writer for the whole process, so this bound
-	// is global — unlike the per-project one below, it is not escaped by
+	// The Ledger's own ceiling, in accounting events per second, measured as
+	// records over the writer's own busy time rather than derived from the
+	// barrier: a batch costs its flush interval and its encode as well as its
+	// fsync, and a ceiling that counts only the fsync reports the instance
+	// faster than it is. There is one writer for the whole process, so this
+	// bound is global — unlike the per-project one below, it is not escaped by
 	// spreading load across projects.
 	WALEventsPerSecond float64 `json:"wal_events_per_second"`
-	// What the same barrier would sustain with coalescing saturated, which is
-	// what makes WALEventsPerSecond readable: measured at a batch size of 1 it
-	// is a floor that rises with concurrency, not a wall.
+	// What the same writer sustains with coalescing saturated, which is what
+	// makes WALEventsPerSecond readable: measured at a batch size of 1 it is a
+	// floor that rises with concurrency, not a wall. Scaled from the observed
+	// rate by how far the batch size is from its ceiling, so it inherits the
+	// measured per-batch cost instead of assuming one. Conservative by
+	// construction: a batch measured at size 1 spent the flush interval
+	// waiting, and a saturated one fills before that timer expires, so the real
+	// saturated rate sits somewhat above this — understating what concurrency
+	// buys is the safe direction for a projection.
 	WALMaxEventsPerSecond float64 `json:"wal_max_events_per_second"`
+	// The coalescing ceiling itself, so a reader can say "one flush carries up
+	// to this many" without recovering it from the two rates above — an
+	// identity that only held while the rate was derived from the barrier.
+	WALMaxBatchSize int `json:"wal_max_batch_size"`
 	// Mean wait for, and hold of, the per-project accounting lock. The hold is
 	// the per-project serialization budget: one project cannot exceed
 	// 1/hold accounting events per second no matter how many requests it offers.
@@ -145,8 +157,9 @@ func (r *Runtime) writePathSummary() writePathSummary {
 		MetadataWriteSeconds:   perOperationSeconds(metadata.PageWriteDuration, uint64(max(metadata.PageWrites, 0))),
 	}
 	summary.ProjectEventsPerSecond = ratio(1, summary.ProjectLockHeldSeconds)
-	summary.WALEventsPerSecond = ratio(summary.WALBatchSize, summary.WALSyncSeconds)
-	summary.WALMaxEventsPerSecond = ratio(float64(wal.MaxBatch), summary.WALSyncSeconds)
+	summary.WALEventsPerSecond = ratio(float64(wal.Records), wal.BatchDuration.Seconds())
+	summary.WALMaxEventsPerSecond = summary.WALEventsPerSecond * ratio(float64(wal.MaxBatch), summary.WALBatchSize)
+	summary.WALMaxBatchSize = wal.MaxBatch
 	summary.RequestsPerSecond, summary.BoundBy = requestCeiling(summary.WALEventsPerSecond, summary.ProjectEventsPerSecond)
 	return summary
 }

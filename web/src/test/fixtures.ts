@@ -26,6 +26,7 @@ export function emptyWritePath(overrides: Partial<WritePathSummary> = {}): Write
     wal_batch_size: 0,
     wal_events_per_second: 0,
     wal_max_events_per_second: 0,
+    wal_max_batch_size: 0,
     project_lock_wait_seconds: 0,
     project_lock_held_seconds: 0,
     project_events_per_second: 0,

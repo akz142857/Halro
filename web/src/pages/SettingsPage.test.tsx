@@ -530,6 +530,7 @@ describe("SettingsPage system configuration pane", () => {
       write_path: emptyWritePath({
         wal_sync_seconds: 0.004, wal_batch_size: 1,
         wal_events_per_second: 250, wal_max_events_per_second: 32_000,
+        wal_max_batch_size: 128,
       }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
@@ -537,10 +538,9 @@ describe("SettingsPage system configuration pane", () => {
     renderWithClient(<SettingsPage />);
     const warning = await screen.findByText(/合批没起作用/);
     expect(warning).toBeInTheDocument();
-    // 32000 events/s over a 4 ms barrier is 128 records per flush, and 32000
-    // over the five-event request lifecycle is 6400 req/s. Both belong in the
-    // sentence: the first says what is not happening, the second says what it
-    // would be worth.
+    // One flush carries up to 128 records, and 32000 events/s over the
+    // five-event request lifecycle is 6400 req/s. Both belong in the sentence:
+    // the first says what is not happening, the second says what it is worth.
     expect(warning).toHaveTextContent("128");
     expect(warning).toHaveTextContent("6400");
     // Rendered as the shared notice component rather than another paragraph, so
