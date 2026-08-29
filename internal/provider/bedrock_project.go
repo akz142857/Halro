@@ -17,11 +17,14 @@ import "net/http"
 // `wrkspc_`. ValidateBedrockProjectID is where that boundary is enforced, and it
 // is the only place it can be.
 //
-// AWS documents the name in two places, both read 2026-08-29:
-// userguide/workspaces.html ("reference them in Messages API requests using the
-// anthropic-workspace-id header", with a curl example) and
-// userguide/cost-mgmt-workspaces.html. Not yet confirmed against a real account:
-// Mantle still has no real-provider coverage.
+// Measured against a real account on 2026-08-29, us-east-2: the same request
+// carrying the same nonexistent project id answers 404 under this name and 200
+// under the old one. A name the service reads has to reject an unknown project;
+// a name it does not read cannot. The 200 is the bug — served against the
+// account default, carrying a project that does not exist.
+// See docs/verification/provider-real-matrix.md. Still unmeasured: that a valid
+// id lands on that project rather than merely passing validation, which is a
+// CloudWatch reading, and that Halro's own path sends what curl sent.
 const (
 	HeaderBedrockOpenAIProject      = "OpenAI-Project"
 	HeaderBedrockAnthropicWorkspace = "anthropic-workspace-id"

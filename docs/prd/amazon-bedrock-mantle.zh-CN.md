@@ -92,7 +92,11 @@ Mantle 不是从零接入：三个 profile 已注册并接入适配器。但原�
 > 与 [Workspaces 成本归属](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-workspaces.html)
 > 两页均写明该头名并给出 curl 示例，
 > [Claude Platform Workspaces](https://docs.aws.amazon.com/claude-platform/latest/userguide/workspaces.html)
-> 写明同名但 ID 为 `wrkspc_`。仍未对真实账户验证。
+> 写明同名但 ID 为 `wrkspc_`。2026-08-29 已在 `us-east-2` 实测：同一请求带一个不存在的
+> 项目 id，用 `anthropic-workspace-id` 返回 404、用 `anthropic-workspace` 返回 200——
+> 前者被读取并校验，后者被忽略并静默落到 default。见
+> `docs/verification/provider-real-matrix.md`。仍未测的两项：有效 id 是否真的归属到该
+> 项目（需读 CloudWatch），以及 Halro 自身路径是否发出了 curl 发出的那个头。
 
 ### 1.2 Bedrock Mantle 已能由官方文档确定的事实
 

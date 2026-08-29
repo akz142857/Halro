@@ -462,6 +462,50 @@ stay for capability detection to establish against a real account.
   cannot answer the question a probe is asking. Establishing what a Mantle model
   supports costs a real inference call.
 
+## AWS Bedrock Mantle: the workspace header, measured (2026-08-29)
+
+A second, narrow measurement against a real account, in `us-east-2` against
+`anthropic.claude-opus-4-6-v1`. It settles one question the 2026-08-21 run did
+not ask: which header selects a Bedrock Project on `/anthropic/v1/messages`.
+
+The measurement is an A/B on one request. The same body, the same credential,
+and the same **nonexistent** project id, changing only the header name:
+
+| header | project id | status |
+| --- | --- | --- |
+| `anthropic-workspace-id` | `proj_zzzzzzzzzzzzzzzzzzzz` | **404** |
+| `anthropic-workspace` | `proj_zzzzzzzzzzzzzzzzzzzz` | **200** |
+
+A nonexistent project is the discriminator, and it is what makes this cheap: a
+name the service reads has to reject it, and a name the service does not read
+cannot. The 200 is the whole finding — the request was served, against the
+account default, carrying a project id that does not exist.
+
+So `anthropic-workspace-id` is read and validated, and `anthropic-workspace` —
+the name Halro sent until this date — is ignored. A connection that named a
+Bedrock Project was billed to the account default without any error to say so.
+The header name is also **not** what separates Bedrock from Claude Platform on
+AWS: both spell it `anthropic-workspace-id`, and the separation is the host plus
+the identifier prefix, `proj_` against `wrkspc_`.
+
+An earlier request in the same session, with a real project id, answered 200
+(`req_73rietrkqqo5kr5lj5wlkhzhubscpxpayzjlr5jjtmhhw3cpqcwq`).
+
+### What this does not establish
+
+- **Positive attribution.** That a valid project id causes usage to be recorded
+  against that project — rather than merely to pass validation — is visible in
+  CloudWatch `AWS/BedrockMantle`, whose `Inferences` and token metrics carry a
+  `Project` dimension. That reading has not been taken.
+- **Halro's own path.** These were `curl` requests against the service. They say
+  the header name is right; they do not say Halro sends it. `tests/provider-matrix`
+  still has no Mantle coverage, and the smoke in
+  `internal/provider/bedrockmantle/real_smoke_test.go` cannot close this gap as
+  written: it asserts that a request succeeds, and an ignored header succeeds
+  too. Verifying Halro end to end means running the smoke with
+  `HALRO_SMOKE_BEDROCK_PROJECT_ID` set and then reading the CloudWatch
+  attribution — the assertion cannot be synchronous, because the metric is not.
+
 ### Not yet established
 
 - `data_retention` on the model object offers `allowed_modes`

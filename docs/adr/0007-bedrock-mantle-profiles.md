@@ -95,7 +95,12 @@ the OpenAI-shaped paths.
 > [Workspaces (Anthropic-compatible)](https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html),
 > [Workspaces cost attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-workspaces.html),
 > [Claude Platform on AWS Workspaces](https://docs.aws.amazon.com/claude-platform/latest/userguide/workspaces.html).
-> Still unconfirmed against a real account: Mantle has no real-provider coverage.
+> Measured 2026-08-29 in `us-east-2`: one request carrying a nonexistent project
+> id answers 404 under `anthropic-workspace-id` and 200 under
+> `anthropic-workspace`, so the first is read and validated and the second is
+> ignored. See `docs/verification/provider-real-matrix.md`. Still unmeasured:
+> that a valid id is attributed to that project rather than merely accepted, and
+> that Halro's own path sends what curl sent.
 
 Each AWS account has a default project, and a request that omits the header is
 associated with it. At the time of this amendment Halro sent neither header, so
