@@ -465,10 +465,19 @@ stay for capability detection to establish against a real account.
 ## The Ledger write path, measured (2026-08-29)
 
 The Settings card reports a request-rate ceiling for this instance. The numbers
-behind it were arithmetic over counters until this date. A load harness drove
-`ledger.Log` directly — the shipped defaults, `MaxBatch: 128` and a 2 ms
-`FlushInterval`, real fsyncs on an APFS laptop volume — 4000 appends per level,
-at rising concurrency.
+behind it were arithmetic over counters until this date. They are now measured,
+and the harness is committed rather than thrown away:
+
+```
+go test ./internal/ledger/ -run '^$' -bench ReportedCeiling -benchtime 2000x
+```
+
+`BenchmarkReportedCeilingTracksAchieved` drives `ledger.Log` under the shipped
+configuration — `MaxBatch: 128` and a 2 ms `FlushInterval`, which the sibling
+`BenchmarkConcurrentAppend` does not, since it runs the package defaults where
+there is no linger. Real fsyncs on an APFS laptop volume; on darwin
+`os.File.Sync` issues `F_FULLFSYNC`, so these are pessimistic bounds that do not
+transfer to a Linux NVMe host.
 
 | offered concurrency | records per flush | fsync | sustained |
 | --- | --- | --- | --- |
@@ -488,7 +497,8 @@ arrival, not about the disk, and the ceiling it implies is a floor that rises �
 which is what the card now says instead of naming a fault.
 
 **A ceiling derived from the barrier alone is optimistic**, by 55% at
-concurrency 1 and 14% at saturation. The gap is the flush interval: at
+concurrency 1 and 14% at saturation — the benchmark reports exactly this as
+`barrier-derived/achieved`, 1.53 and 1.15, beside `reported/achieved` at 1.00. The gap is the flush interval: at
 concurrency 1 a batch occupies 6.7 ms, of which the fsync is 4.4 ms and the rest
 is `collectBatch` lingering for an appender that never arrives. The Ledger now
 measures the writer's own busy time (`AppendStats.BatchDuration`) and the card

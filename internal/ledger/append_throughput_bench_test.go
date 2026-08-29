@@ -12,6 +12,11 @@ package ledger
 // Linux NVMe host.
 //
 //	go test ./internal/ledger/ -run '^$' -bench ConcurrentAppend -benchtime 300x
+//
+// BenchmarkReportedCeilingTracksAchieved below asks a different question against
+// the shipped configuration, and the two are separate because the options
+// differ: this one runs the package defaults, where FlushInterval is 0 and the
+// writer never lingers.
 
 import (
 	"context"
@@ -78,6 +83,85 @@ func BenchmarkConcurrentAppend(b *testing.B) {
 	}
 }
 
+// BenchmarkReportedCeilingTracksAchieved compares the ceiling the Settings card
+// reports against the rate this host actually sustained, under the configuration
+// a shipped instance runs: MaxBatch 128 and a 2 ms FlushInterval.
+//
+// The card used to derive its ceiling from the durability barrier alone, which
+// measured 55% high at one appender on the host this was written against: a
+// batch there occupies 6.7 ms, of which the fsync is 4.4 ms and the rest is
+// collectBatch waiting out its flush interval for an appender that never
+// arrives. Records over AppendStats.BatchDuration includes that wait, and the
+// reported/achieved metric below is 1.0 when the two agree.
+//
+// The configuration is the whole point of it being a second benchmark: the one
+// above runs the package defaults, where FlushInterval is 0 and there is no
+// linger to miss. A benchmark cannot fail, so this reports rather than asserts —
+// what it guards is that a change to the derivation shows up as a ratio moving
+// off 1.0, next to the batch size that explains why.
+//
+//	go test ./internal/ledger/ -run '^$' -bench ReportedCeiling -benchtime 2000x
+func BenchmarkReportedCeilingTracksAchieved(b *testing.B) {
+	for _, appenders := range []int{1, 8, 64, 128, 256} {
+		b.Run(fmt.Sprintf("appenders=%d", appenders), func(b *testing.B) {
+			status := NewStatus()
+			log, err := OpenWithOptions(filepath.Join(b.TempDir(), "usage.wal"), status, Options{
+				ChainKey: benchChainKey(),
+				// internal/config's defaults, so this measures what an operator runs.
+				QueueCapacity: 4096, MaxBatch: 128, FlushInterval: 2 * time.Millisecond,
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer log.Close()
+			ctx := context.Background()
+
+			var next atomic.Int64
+			var failures atomic.Int64
+			var group sync.WaitGroup
+			b.ResetTimer()
+			start := time.Now()
+			for appender := 0; appender < appenders; appender++ {
+				group.Add(1)
+				go func() {
+					defer group.Done()
+					for {
+						index := int(next.Add(1)) - 1
+						if index >= b.N {
+							return
+						}
+						event := validReservation(fmt.Sprintf("evt_ceiling_%d", index), fmt.Sprintf("att_ceiling_%d", index))
+						if _, err := log.Append(ctx, event); err != nil {
+							if failures.Add(1) == 1 {
+								b.Error(err)
+							}
+							return
+						}
+					}
+				}()
+			}
+			group.Wait()
+			elapsed := time.Since(start)
+			b.StopTimer()
+
+			stats := log.Stats()
+			if stats.Batches == 0 || elapsed <= 0 || stats.BatchDuration <= 0 {
+				b.Skip("nothing was committed, so there is nothing to compare")
+			}
+			achieved := float64(stats.Records) / elapsed.Seconds()
+			reported := float64(stats.Records) / stats.BatchDuration.Seconds()
+			b.ReportMetric(float64(stats.Records)/float64(stats.Batches), "events/batch")
+			b.ReportMetric(achieved, "achieved-events/s")
+			b.ReportMetric(reported/achieved, "reported/achieved")
+			// The half the fix removed: what the card would have said had it kept
+			// deriving the ceiling from the barrier. Reported beside the honest
+			// ratio so the gap stays visible rather than remembered.
+			barrier := float64(stats.Records) / float64(stats.Batches) * float64(stats.Syncs) / stats.SyncDuration.Seconds()
+			b.ReportMetric(barrier/achieved, "barrier-derived/achieved")
+		})
+	}
+}
+
 func benchChainKey() []byte {
 	key := make([]byte, 32)
 	for index := range key {
@@ -125,6 +209,17 @@ func TestAppendStatsRecordDurabilityWork(t *testing.T) {
 	}
 	if stats.SyncDuration <= 0 {
 		t.Fatalf("sync duration is %s; the fsync cost every ceiling here is bounded by went unmeasured", stats.SyncDuration)
+	}
+	// The writer's own busy time is what the reported ceiling divides by, so a
+	// counter stuck at zero would report an instance as serving nothing. It has
+	// to contain the barrier it wraps: the fsync happens inside the timed
+	// region, and a BatchDuration below SyncDuration would mean the two are
+	// measuring different work.
+	if stats.BatchDuration <= 0 {
+		t.Fatal("no batch wall time was counted, so no throughput can be reported from it")
+	}
+	if stats.BatchDuration < stats.SyncDuration {
+		t.Fatalf("batch duration %s is below the sync duration %s it contains", stats.BatchDuration, stats.SyncDuration)
 	}
 	// One barrier per committed batch: if these ever diverge, the mean derived in
 	// Prometheus from _sum/_count stops describing one fsync.
