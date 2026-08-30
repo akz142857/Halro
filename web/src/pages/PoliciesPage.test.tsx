@@ -33,7 +33,7 @@ describe("token guard policy workflow", () => {
   it("creates policies disabled and reports domain validation at the fields", async () => {
     const create = vi.spyOn(api, "createTokenGuardPolicy").mockResolvedValue({} as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
 
     expect(screen.getByLabelText("启用此策略")).not.toBeChecked();
     expect(screen.getByText("启用此策略 · 已禁用").closest(".sticky-form-actions")).toContainElement(screen.getByLabelText("启用此策略"));
@@ -51,7 +51,7 @@ describe("token guard policy workflow", () => {
 
   it("explains temporary-block escalation instead of implying immediate rejection", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.click(screen.getByRole("radio", { name: /临时封禁/ }));
     expect(screen.getByText("非立即拒绝")).toBeVisible();
     expect(screen.getByText(/达到样本和违规双门槛前，请求仍会放行/)).toBeVisible();
@@ -65,8 +65,8 @@ describe("token guard policy workflow", () => {
     fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
     expect(screen.getByLabelText("高级设置")).toBeChecked();
     expect(screen.getByLabelText("每分钟请求数达到")).toHaveValue(0);
-    expect(screen.getByLabelText("每分钟令牌数达到")).toHaveValue(0);
-    expect(screen.getByLabelText("单次请求平均令牌数达到")).toHaveValue(0);
+    expect(screen.getByLabelText("每分钟词元数达到")).toHaveValue(0);
+    expect(screen.getByLabelText("单次请求平均词元数达到")).toHaveValue(0);
     fireEvent.click(screen.getByRole("button", { name: "保存并立即应用" }));
     await waitFor(() => expect(update).toHaveBeenCalledWith("tgp_test", expect.objectContaining({
       ewma_absolute_rpm: 0,
@@ -105,7 +105,7 @@ describe("token guard policy workflow", () => {
   it("uses adaptive detection with recommended settings by default", async () => {
     const create = vi.spyOn(api, "createTokenGuardPolicy").mockResolvedValue({} as never);
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.change(screen.getByLabelText("策略名称"), { target: { value: "Adaptive guard" } });
     fireEvent.click(screen.getByRole("button", { name: "保存策略" }));
 
@@ -121,7 +121,7 @@ describe("token guard policy workflow", () => {
   // defaults. Nothing in the control says so, and there is no undo.
   it("treats the advanced panel as a disclosure that never discards tuned values", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     const advanced = screen.getByLabelText("高级设置");
 
     fireEvent.click(advanced);
@@ -173,7 +173,7 @@ describe("token guard policy workflow", () => {
 
   it("reopens the adaptive panel rather than reporting an error nobody can reach", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.change(screen.getByLabelText("策略名称"), { target: { value: "Adaptive guard" } });
     const advanced = screen.getByLabelText("高级设置");
     fireEvent.click(advanced);
@@ -189,12 +189,12 @@ describe("token guard policy workflow", () => {
   // Thirty fields behind an Escape key and a backdrop click.
   it("asks before discarding a changed token guard draft", async () => {
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.change(screen.getByLabelText("策略名称"), { target: { value: "Changed" } });
     fireEvent.keyDown(document, { key: "Escape" });
 
     expect(screen.getByRole("alert")).toHaveTextContent("关闭会丢弃此处已填写的内容");
-    expect(screen.getByRole("heading", { name: "创建令牌防护策略" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "创建词元防护策略" })).toBeVisible();
   });
 
   it("passes every relevant window signal to the simulator", async () => {
@@ -221,8 +221,8 @@ describe("token guard policy workflow", () => {
   });
 
   it.each([
-    ["request_tokens", "单次请求令牌数超过上限"],
-    ["tokens_per_minute", "一分钟内累计令牌数超过上限"],
+    ["request_tokens", "单次请求词元数超过上限"],
+    ["tokens_per_minute", "一分钟内累计词元数超过上限"],
     ["cost_per_minute", "一分钟内累计成本超过上限"],
     ["concurrency", "当前并发请求数超过上限"],
     ["unique_ip", "一分钟内来源 IP 数超过上限"],
@@ -233,14 +233,14 @@ describe("token guard policy workflow", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "模拟" }));
     if (reason === "request_tokens") {
-      fireEvent.change(screen.getByLabelText("本次请求预计令牌数"), { target: { value: "32003" } });
+      fireEvent.change(screen.getByLabelText("本次请求预计词元数"), { target: { value: "32003" } });
     }
     fireEvent.click(screen.getByRole("button", { name: "运行模拟" }));
 
     expect(await screen.findByText(title)).toBeVisible();
     expect(screen.queryByText(`命中：${reason}`)).not.toBeInTheDocument();
     if (reason === "request_tokens") {
-      expect(screen.getByText("本次请求预计使用 32003 个令牌，策略上限为 32000 个。")).toBeVisible();
+      expect(screen.getByText("本次请求预计使用 32003 个词元，策略上限为 32000 个。")).toBeVisible();
     }
     expect(screen.getByText("模拟处置：放行本次请求，并发送告警")).toBeVisible();
   });
@@ -249,14 +249,14 @@ describe("token guard policy workflow", () => {
     let finish!: (value: never) => void;
     vi.spyOn(api, "createTokenGuardPolicy").mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     renderPage();
-    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建令牌防护策略" }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建词元防护策略" }));
     fireEvent.change(screen.getByLabelText("策略名称"), { target: { value: "Pending guard" } });
     fireEvent.click(screen.getByRole("button", { name: "保存策略" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
     expect(screen.getByRole("button", { name: "关闭" })).toBeDisabled();
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.getByRole("heading", { name: "创建令牌防护策略" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "创建词元防护策略" })).toBeVisible();
     finish({} as never);
   });
 
@@ -356,10 +356,10 @@ describe("token guard policy workflow", () => {
 
   it("keeps one contextual create action in the active tab filter bar", async () => {
     renderPage();
-    expect(await screen.findAllByRole("button", { name: "＋ 新建令牌防护策略" })).toHaveLength(1);
+    expect(await screen.findAllByRole("button", { name: "＋ 新建词元防护策略" })).toHaveLength(1);
     fireEvent.click(screen.getByRole("tab", { name: "脱敏策略 0" }));
     expect(window.location.search).toBe("?tab=redaction");
-    expect(screen.queryByRole("button", { name: "＋ 新建令牌防护策略" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "＋ 新建词元防护策略" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "＋ 新建脱敏策略" })).toHaveLength(1);
   });
 
@@ -368,7 +368,7 @@ describe("token guard policy workflow", () => {
     renderPage();
 
     expect(await screen.findByRole("tab", { name: "脱敏策略 0" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("tab", { name: "令牌防护策略 0" }));
+    fireEvent.click(screen.getByRole("tab", { name: "词元防护策略 0" }));
     expect(window.location.search).toBe("?tab=token&project_id=project_a");
     expect(window.location.hash).toBe("#policies");
 
@@ -381,7 +381,7 @@ describe("token guard policy workflow", () => {
   // activate the tab already under focus, and neither tab points at its panel.
   it("moves between policy tabs with the arrow keys and names its panel", async () => {
     renderPage();
-    const tokenTab = await screen.findByRole("tab", { name: "令牌防护策略 0" });
+    const tokenTab = await screen.findByRole("tab", { name: "词元防护策略 0" });
     expect(tokenTab).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("tab", { name: "脱敏策略 0" })).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("tabpanel")).toHaveAttribute("id", tokenTab.getAttribute("aria-controls"));
@@ -394,13 +394,13 @@ describe("token guard policy workflow", () => {
     expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", redactionTab.getAttribute("id"));
 
     fireEvent.keyDown(redactionTab, { key: "ArrowLeft" });
-    expect(screen.getByRole("tab", { name: "令牌防护策略 0" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "词元防护策略 0" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("falls back to token guard policies for an unknown tab parameter", async () => {
     window.history.replaceState({}, "", "/admin/policies?tab=unknown");
     renderPage();
-    expect(await screen.findByRole("tab", { name: "令牌防护策略 0" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "词元防护策略 0" })).toHaveAttribute("aria-selected", "true");
   });
 });
 

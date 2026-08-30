@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Halro: single-binary, security-first LLM gateway (Go). One governed API for multiple
 model providers (OpenAI, Anthropic, Azure OpenAI, DeepSeek, Gemini Beta, AWS Bedrock
-Beta, AWS Bedrock Mantle Beta), with credentials, budgets, routing, redaction, audit, and
-usage accounting all owned locally — no external DB, cache, CDN, or browser-side secret
+Mantle Beta), with credentials, budgets, routing, redaction, audit, and usage
+accounting all owned locally — no external DB, cache, CDN, or browser-side secret
 storage. Ships with an embedded React Admin console (`web/`) built into
 `internal/webui/dist` and compiled into the Go binary.
 
@@ -85,6 +85,14 @@ Key `internal/` packages and what owns what:
   Provider Profile that fixes its Access Surface, credential scheme, and capability
   evidence. Capability filtering happens before Provider I/O; unsupported fields are
   rejected, never silently dropped.
+  A profile row can be marked `Withheld` in `internal/domain/provider_table.go`: the
+  implementation stays and the invariant tests still walk it, but the served matrix
+  omits it and every write path refuses it. Bedrock's five Runtime and Agent Runtime
+  profiles are withheld today — `provider/bedrock` is built but unreachable, and Bedrock
+  is offered through Mantle alone. Withholding is deliberately not a read gate, so an
+  install holding a withheld connection still starts and can delete it. Tests whose
+  subject is a withheld profile guard on `domain.IsWithheldProfile` rather than being
+  deleted, so offering one again restores its coverage with no edit.
 - `safetransport` — the only path to the network for provider/webhook calls: HTTPS-only,
   explicit host allowlists, DNS/IP validation, pinned dialing, no redirects, no env
   proxies. Never bypass this for outbound calls.
@@ -148,8 +156,10 @@ and why a merge conflict in it is resolved by rebuilding rather than by hand.
   captured before replay, not regenerated during it.
 - **Retry/fallback is bounded** and stops being invisible once downstream response bytes
   are visible to the client — no silent provider-switch mid-stream.
-- Don't widen Gemini/Bedrock Beta capability limits or make Azure API versions implicit
-  without deliberate contract review — they're pinned on purpose.
+- Don't widen Gemini/Bedrock Mantle Beta capability limits or make Azure API versions
+  implicit without deliberate contract review — they're pinned on purpose. The same goes
+  for un-withholding a profile: it changes what every connection form offers and what the
+  write path accepts, so it is a decision, not a cleanup.
 
 Full detail: `.github/copilot-instructions.md` (review checklist used for this repo),
 `docs/architecture/threat-model.md`, `docs/contracts/gateway-correctness.md`,

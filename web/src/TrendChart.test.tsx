@@ -35,7 +35,7 @@ describe("TrendChart", () => {
   it("exposes the selected metric summary and respects a narrow container width", () => {
     render(<TrendChart buckets={[bucket()]} metric="tokens" />);
 
-    expect(screen.getByRole("img", { name: /令牌用量.*18/ })).toBeVisible();
+    expect(screen.getByRole("img", { name: /词元用量.*18/ })).toBeVisible();
 
     act(() => {
       resize([{ contentRect: { width: 240 } } as ResizeObserverEntry], {} as ResizeObserver);

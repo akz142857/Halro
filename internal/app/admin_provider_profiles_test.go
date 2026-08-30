@@ -21,6 +21,11 @@ import (
 // it. This walks the domain table and demands a row in the response for each
 // entry, so a profile added there and forgotten here fails rather than silently
 // disappearing from every connection form.
+//
+// A withheld row is the one exception, and it is checked in both directions: it
+// must not be served, and everything else must be. Serving one would offer a
+// connection form the write path refuses; dropping a row that is not withheld is
+// the silent disappearance this test exists to catch.
 func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 	runtime, cookie := providerProfilesFixture(t)
 	view := fetchProviderProfiles(t, runtime, cookie)
@@ -36,10 +41,20 @@ func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 	}
 
 	table := domain.AllProviderProfiles()
-	if len(served) != len(table) {
-		t.Fatalf("served %d profiles, the table has %d", len(served), len(table))
+	offered := make([]domain.ProviderProfileSummary, 0, len(table))
+	for _, row := range table {
+		if row.Withheld {
+			if _, served := served[row.ID]; served {
+				t.Errorf("%s is withheld but was served", row.ID)
+			}
+			continue
+		}
+		offered = append(offered, row)
 	}
-	for _, want := range table {
+	if len(served) != len(offered) {
+		t.Fatalf("served %d profiles, the table offers %d", len(served), len(offered))
+	}
+	for _, want := range offered {
 		got, ok := served[want.ID]
 		if !ok {
 			t.Errorf("%s is in the table but not in the response", want.ID)
@@ -191,18 +206,38 @@ func TestAdminProviderProfilesCarriesNumericLimits(t *testing.T) {
 	runtime, cookie := providerProfilesFixture(t)
 	view := fetchProviderProfiles(t, runtime, cookie)
 
+	served := make(map[domain.ProviderProfileID]providerProfileView)
 	for _, providerType := range view.ProviderTypes {
 		for _, profile := range providerType.Profiles {
-			if profile.ID != domain.ProfileBedrockInvokeTitanEmbedV2 {
-				continue
-			}
-			if profile.Ceiling.MaxContextTokens != 8192 {
-				t.Fatalf("titan embed context limit is %d, want 8192", profile.Ceiling.MaxContextTokens)
-			}
-			return
+			served[profile.ID] = profile
 		}
 	}
-	t.Fatal("titan embed was not served")
+	// Every row that declares a bound is either served carrying it or withheld.
+	// Titan Embed is the only such row today and it is withheld, so the second
+	// arm is what runs — which is the point of writing it this way rather than
+	// naming Titan: offering Titan again turns the first arm back on by itself,
+	// and a bound that goes missing from a row that is served still fails here.
+	checked := 0
+	for _, row := range domain.AllProviderProfiles() {
+		if row.Ceiling.MaxContextTokens == 0 && row.Ceiling.MaxOutputTokens == 0 {
+			continue
+		}
+		checked++
+		got, ok := served[row.ID]
+		if !ok {
+			if !row.Withheld {
+				t.Errorf("%s declares a bound but was not served", row.ID)
+			}
+			continue
+		}
+		if got.Ceiling.MaxContextTokens != row.Ceiling.MaxContextTokens ||
+			got.Ceiling.MaxOutputTokens != row.Ceiling.MaxOutputTokens {
+			t.Errorf("%s bounds were not carried: %#v", row.ID, got.Ceiling)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no profile declares a numeric bound, so this test proves nothing")
+	}
 }
 
 // The endpoint exists to fill a form, so the endpoint it offers must be the one
@@ -215,7 +250,10 @@ func TestAdminProviderProfilesResolvesTheConfiguredRegion(t *testing.T) {
 	view := fetchProviderProfiles(t, runtime, cookie)
 
 	want := map[domain.ProviderProfileID]string{
-		domain.ProfileBedrockConverseText:     "https://bedrock-runtime.eu-central-1.amazonaws.com",
+		// No Bedrock Runtime row here: its endpoint carries the placeholder too,
+		// but the profile is withheld and never served, so naming it would assert
+		// nothing. The Mantle rows cover the substitution.
+		domain.ProfileBedrockMantleChat:       "https://bedrock-mantle.eu-central-1.api.aws",
 		domain.ProfileBedrockMantleOpenAIChat: "https://bedrock-mantle.eu-central-1.api.aws",
 		domain.ProfileOpenAIChatEmbeddings:    "https://api.openai.com",
 		// Two profiles have no endpoint to offer, and an empty field is the honest

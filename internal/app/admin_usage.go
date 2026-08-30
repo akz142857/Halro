@@ -80,9 +80,32 @@ type writePathSummary struct {
 	// Mean cost of one Ledger durability barrier. Every ceiling here is bounded
 	// by it, and it spans orders of magnitude between filesystems.
 	WALSyncSeconds float64 `json:"wal_sync_seconds"`
-	// Mean records per barrier. Near 1.0 under load means appends are not
-	// coalescing — a concurrency problem, not a disk problem.
+	// Mean records per barrier. Near 1.0 means the barrier cost is being paid
+	// once per record rather than shared, which is what separates "this host's
+	// fsync is the ceiling" from "not enough concurrent appenders to coalesce".
 	WALBatchSize float64 `json:"wal_batch_size"`
+	// The Ledger's own ceiling, in accounting events per second, measured as
+	// records over the writer's own busy time rather than derived from the
+	// barrier: a batch costs its flush interval and its encode as well as its
+	// fsync, and a ceiling that counts only the fsync reports the instance
+	// faster than it is. There is one writer for the whole process, so this
+	// bound is global — unlike the per-project one below, it is not escaped by
+	// spreading load across projects.
+	WALEventsPerSecond float64 `json:"wal_events_per_second"`
+	// What the same writer sustains with coalescing saturated, which is what
+	// makes WALEventsPerSecond readable: measured at a batch size of 1 it is a
+	// floor that rises with concurrency, not a wall. Scaled from the observed
+	// rate by how far the batch size is from its ceiling, so it inherits the
+	// measured per-batch cost instead of assuming one. Conservative by
+	// construction: a batch measured at size 1 spent the flush interval
+	// waiting, and a saturated one fills before that timer expires, so the real
+	// saturated rate sits somewhat above this — understating what concurrency
+	// buys is the safe direction for a projection.
+	WALMaxEventsPerSecond float64 `json:"wal_max_events_per_second"`
+	// The coalescing ceiling itself, so a reader can say "one flush carries up
+	// to this many" without recovering it from the two rates above — an
+	// identity that only held while the rate was derived from the barrier.
+	WALMaxBatchSize int `json:"wal_max_batch_size"`
 	// Mean wait for, and hold of, the per-project accounting lock. The hold is
 	// the per-project serialization budget: one project cannot exceed
 	// 1/hold accounting events per second no matter how many requests it offers.
@@ -92,13 +115,24 @@ type writePathSummary struct {
 	// single project. Reported as observed rather than promised: it is a
 	// measurement of this instance's recent behaviour, not a rating.
 	ProjectEventsPerSecond float64 `json:"project_events_per_second"`
-	// The same ceiling expressed in requests, which is the unit an operator
-	// thinks in. One request lifecycle is five accounting events — request
-	// accepted, reservation, started, settled, finalized — so this is
-	// ProjectEventsPerSecond over that. Approximate by construction: a request
-	// that retries or falls back spends more than five, so the real ceiling for
-	// such traffic is lower than this reports.
-	ProjectRequestsPerSecond float64 `json:"project_requests_per_second"`
+	// The lower of the two ceilings above, expressed in requests, which is the
+	// unit an operator thinks in. One request lifecycle is five accounting
+	// events — request accepted, reservation, started, settled, finalized — so
+	// this is that event rate over five.
+	//
+	// The minimum, not the per-project one: the two are independent
+	// serialization points and the instance is bounded by whichever binds first.
+	// Reporting the project lock alone read as a rate the instance could serve
+	// and was wrong by three orders of magnitude whenever appends were not
+	// coalescing, because the barrier the caption names was not in the number.
+	//
+	// Approximate by construction: a request that retries or falls back spends
+	// more than five events, so the real ceiling for such traffic is lower than
+	// this reports.
+	RequestsPerSecond float64 `json:"requests_per_second"`
+	// Which of the two ceilings the number above came from, so the reader knows
+	// what to change. "wal" or "project"; empty while there is nothing measured.
+	BoundBy string `json:"bound_by"`
 	// Mean batched metadata calls per write transaction, the bbolt counterpart
 	// of WALBatchSize.
 	MetadataBatchSize    float64 `json:"metadata_batch_size"`
@@ -123,8 +157,34 @@ func (r *Runtime) writePathSummary() writePathSummary {
 		MetadataWriteSeconds:   perOperationSeconds(metadata.PageWriteDuration, uint64(max(metadata.PageWrites, 0))),
 	}
 	summary.ProjectEventsPerSecond = ratio(1, summary.ProjectLockHeldSeconds)
-	summary.ProjectRequestsPerSecond = ratio(summary.ProjectEventsPerSecond, accountingEventsPerRequest)
+	summary.WALEventsPerSecond = ratio(float64(wal.Records), wal.BatchDuration.Seconds())
+	summary.WALMaxEventsPerSecond = summary.WALEventsPerSecond * ratio(float64(wal.MaxBatch), summary.WALBatchSize)
+	summary.WALMaxBatchSize = wal.MaxBatch
+	summary.RequestsPerSecond, summary.BoundBy = requestCeiling(summary.WALEventsPerSecond, summary.ProjectEventsPerSecond)
 	return summary
+}
+
+// requestCeiling reduces the two serialization points to the one an operator
+// asked about, and says which of them produced it.
+//
+// They are independent: the Ledger has one writer for the whole process, and
+// each project has its own accounting lock. An instance is bounded by whichever
+// binds first, so the answer is the minimum — reporting the project lock alone
+// read as a rate the instance could serve while the durability barrier held it
+// three orders of magnitude lower.
+//
+// A ceiling of zero means "not measured yet", never "zero per second", so an
+// unmeasured half must not win the minimum and report an instance that has
+// served traffic as unable to serve any.
+func requestCeiling(walEventsPerSecond, projectEventsPerSecond float64) (float64, string) {
+	events, boundBy := walEventsPerSecond, "wal"
+	if walEventsPerSecond <= 0 || (projectEventsPerSecond > 0 && projectEventsPerSecond < walEventsPerSecond) {
+		events, boundBy = projectEventsPerSecond, "project"
+	}
+	if events <= 0 {
+		return 0, ""
+	}
+	return ratio(events, accountingEventsPerRequest), boundBy
 }
 
 func perOperationSeconds(total time.Duration, operations uint64) float64 {

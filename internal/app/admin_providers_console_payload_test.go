@@ -158,6 +158,13 @@ func TestAPutThatOmitsCapabilitiesKeepsTheConnectionIntact(t *testing.T) {
 // 4096 back to 8192 on the next enable/disable — removing a routing guard
 // nobody asked to remove, and doing it silently.
 func TestANarrowedBoundSurvivesAnEditThatDoesNotMentionIt(t *testing.T) {
+	// Titan Embed is the only profile that declares a bound, and it is withheld
+	// from this build. The rule itself stays covered by the domain tests that
+	// call AssignConnectionCapabilities directly — this one adds the store round
+	// trip, and comes back with the profile.
+	if domain.IsWithheldProfile(domain.ProfileBedrockInvokeTitanEmbedV2) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no connection can be created on it")
+	}
 	runtime, cookie, csrf, credentialID := bedrockRuntimeFixture(t)
 
 	created := performAdminMutation(t, runtime, cookie, csrf,

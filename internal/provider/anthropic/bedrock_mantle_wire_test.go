@@ -65,7 +65,7 @@ func assertNoBedrockResourceHeaders(t *testing.T, header http.Header) {
 	}
 }
 
-// A Mantle provider that names a project sends anthropic-workspace — the
+// A Mantle provider that names a project sends anthropic-workspace-id — the
 // Anthropic protocol's spelling of the same Bedrock Project resource the
 // OpenAI-shaped profiles select with OpenAI-Project.
 func TestBedrockMantleMessagesRendersTheProjectAsAWorkspaceHeader(t *testing.T) {
@@ -95,10 +95,10 @@ func TestBedrockMantleMessagesRendersTheProjectAsAWorkspaceHeader(t *testing.T) 
 		if err := adapter.Probe(context.Background(), "anthropic.claude-test"); err != nil {
 			t.Fatalf("project %q: %v", test.projectID, err)
 		}
-		if got := seen.Header.Get("anthropic-workspace"); got != test.expected {
-			t.Fatalf("project %q rendered anthropic-workspace=%q", test.projectID, got)
+		if got := seen.Header.Get("anthropic-workspace-id"); got != test.expected {
+			t.Fatalf("project %q rendered anthropic-workspace-id=%q", test.projectID, got)
 		}
-		if seen.Header.Get("OpenAI-Project") != "" || seen.Header.Get("anthropic-workspace-id") != "" {
+		if seen.Header.Get("OpenAI-Project") != "" || seen.Header.Get("anthropic-workspace") != "" {
 			t.Fatalf("project %q leaked a foreign resource header: %v", test.projectID, seen.Header)
 		}
 		if seen.Header.Get("x-api-key") != "bedrock-key" {
@@ -186,7 +186,7 @@ func TestBedrockMantleMessagesStreamAuthenticationFailureIsTerminal(t *testing.T
 // fallback would hide that.
 func TestBedrockMantleMessagesTreatsAnUnusableProjectAsAuthenticationFailure(t *testing.T) {
 	adapter := newMantleMessagesAdapter(t, func(writer http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("anthropic-workspace") != "proj_archived" {
+		if request.Header.Get("anthropic-workspace-id") != "proj_archived" {
 			t.Errorf("the project was not addressed: %v", request.Header)
 		}
 		writer.WriteHeader(http.StatusForbidden)

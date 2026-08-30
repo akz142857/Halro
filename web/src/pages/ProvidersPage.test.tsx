@@ -408,24 +408,28 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(within(rows as HTMLElement).getByText("未设置到期时间")).toBeVisible();
   });
 
-  it("creates an isolated Bedrock Agent Runtime credential for Cohere Rerank", async () => {
+  // The form used to ask which Bedrock surface a credential was for. This build
+  // offers Mantle alone, so the question is gone and the answer is taken from
+  // the served matrix — a form that still asked would let an operator seal a
+  // credential to a surface no connection can be created on.
+  it("seals a Bedrock credential to Mantle without asking which surface", async () => {
     const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
     renderPage();
 
     fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
     fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
-    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Rerank credential" } });
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Mantle credential" } });
     fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bedrock" } });
-    fireEvent.change(await screen.findByRole("combobox", { name: /^Bedrock 访问面/ }), { target: { value: "bedrock-agent-runtime" } });
-    fireEvent.change(await screen.findByLabelText(/^AWS 凭据 JSON/), { target: { value: "{\"access_key_id\":\"test\"}" } });
+    expect(screen.queryByRole("combobox", { name: /^Bedrock 访问面/ })).not.toBeInTheDocument();
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "bedrock-api-key" } });
     fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
       type: "bedrock",
-      access_surface: "bedrock-agent-runtime",
-      scheme: "aws.sigv4.explicit-session",
-      base_url: "https://bedrock-agent-runtime.us-east-1.amazonaws.com",
+      access_surface: "bedrock-mantle",
+      scheme: "aws.bedrock.api-key",
+      base_url: "https://bedrock-mantle.us-east-1.api.aws",
     });
   });
 
@@ -443,6 +447,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       boundBaseURL: "https://bedrock-mantle.ap-southeast-1.api.aws:443",
     },
   ])("hides the default port while rotating a Bedrock $name credential", async ({ name, surface, scheme, boundBaseURL }) => {
+    void surface;
+    void scheme;
     const credential: Credential = {
       id: `credential_${name}`,
       name,
@@ -479,13 +485,16 @@ describe("ProvidersPage profile and credential bindings", () => {
       expect.objectContaining({
         type: "bedrock",
         base_url: displayBaseURL,
-        access_surface: surface,
-        scheme,
         secret: "rotated-secret",
       }),
       credential.revision,
       expect.objectContaining({ currentPassword: "a passphrase" }),
     ]);
+    // The pair is left out of a rotation so the server keeps what the credential
+    // was sealed to. Sending the form's own answer would re-point a credential
+    // stored on a surface this build no longer offers at the one it does.
+    expect(rotate.mock.calls[1][1]).not.toHaveProperty("access_surface");
+    expect(rotate.mock.calls[1][1]).not.toHaveProperty("scheme");
   });
 
   // The Bedrock Mantle profiles are Beta and their capability set is fixed by
@@ -966,12 +975,26 @@ describe("ProvidersPage profile and credential bindings", () => {
 
   // Converse text stays operator-declared. If the fixed list grew to cover it,
   // the check above would still pass while silently removing a real choice.
-  it("keeps Bedrock Converse capabilities selectable", async () => {
+  // Bedrock leads with Mantle Chat now, whose capability set is fixed by the
+  // build, so choosing the type lands on the fixed-protocol notice rather than
+  // on a grid of checkboxes. The Runtime profiles that were selectable are not
+  // offered at all, which this pins from the operator's side.
+  it("offers Bedrock only through its Mantle implementations", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bedrock" } });
 
-    expect(await screen.findByRole("checkbox", { name: "对话" })).toBeInTheDocument();
+    const implementations = await screen.findByRole("combobox", { name: /^能力实现/ });
+    const offered = within(implementations).getAllByRole("option").map((option) => option.getAttribute("value"));
+    expect(offered).toEqual([
+      "bedrock.mantle.chat.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1",
+    ]);
+    expect(screen.getByText("该能力实现使用固定协议，无需额外配置。")).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: "对话" })).not.toBeInTheDocument();
   });
 });
 

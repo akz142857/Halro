@@ -462,6 +462,103 @@ stay for capability detection to establish against a real account.
   cannot answer the question a probe is asking. Establishing what a Mantle model
   supports costs a real inference call.
 
+## The Ledger write path, measured (2026-08-29)
+
+The Settings card reports a request-rate ceiling for this instance. The numbers
+behind it were arithmetic over counters until this date. They are now measured,
+and the harness is committed rather than thrown away:
+
+```
+go test ./internal/ledger/ -run '^$' -bench ReportedCeiling -benchtime 2000x
+```
+
+`BenchmarkReportedCeilingTracksAchieved` drives `ledger.Log` under the shipped
+configuration — `MaxBatch: 128` and a 2 ms `FlushInterval`, which the sibling
+`BenchmarkConcurrentAppend` does not, since it runs the package defaults where
+there is no linger. Real fsyncs on an APFS laptop volume; on darwin
+`os.File.Sync` issues `F_FULLFSYNC`, so these are pessimistic bounds that do not
+transfer to a Linux NVMe host.
+
+| offered concurrency | records per flush | fsync | sustained |
+| --- | --- | --- | --- |
+| 1 | 1.00 | 4.40 ms | 29 req/s |
+| 4 | 4.00 | 4.31 ms | 119 req/s |
+| 16 | 16.00 | 4.51 ms | 460 req/s |
+| 64 | 64.00 | 4.43 ms | 1,837 req/s |
+| 128 | 128.00 | 4.40 ms | 5,256 req/s |
+| 256 | 128.00 | 4.38 ms | 5,318 req/s |
+
+Three things this settles.
+
+**Group commit works, and the batch size is exactly the offered concurrency**
+until it saturates at `MaxBatch`. Between one and 128 concurrent appenders the
+same disk carries 175× the traffic. So a batch size of 1 is a statement about
+arrival, not about the disk, and the ceiling it implies is a floor that rises —
+which is what the card now says instead of naming a fault.
+
+**A ceiling derived from the barrier alone is optimistic**, by 55% at
+concurrency 1 and 14% at saturation — the benchmark reports exactly this as
+`barrier-derived/achieved`, 1.53 and 1.15, beside `reported/achieved` at 1.00. The gap is the flush interval: at
+concurrency 1 a batch occupies 6.7 ms, of which the fsync is 4.4 ms and the rest
+is `collectBatch` lingering for an appender that never arrives. The Ledger now
+measures the writer's own busy time (`AppendStats.BatchDuration`) and the card
+divides records by that; reported and actual then agree within 1% at every
+level above.
+
+**The per-project lock is not the binding constraint here.** Its hold implies
+six figures of requests per second while the Ledger sustains four, so on this
+host the minimum is always the Ledger's. That is the case the card used to get
+wrong by reporting the lock alone.
+
+Scope: one host, one filesystem. The shape — batch size tracking concurrency,
+the linger showing up as the gap between derived and actual — is the finding;
+the absolute numbers are this laptop's. Nothing here involves a provider, so it
+costs nothing to re-run elsewhere.
+
+## AWS Bedrock Mantle: the workspace header, measured (2026-08-29)
+
+A second, narrow measurement against a real account, in `us-east-2` against
+`anthropic.claude-opus-4-6-v1`. It settles one question the 2026-08-21 run did
+not ask: which header selects a Bedrock Project on `/anthropic/v1/messages`.
+
+The measurement is an A/B on one request. The same body, the same credential,
+and the same **nonexistent** project id, changing only the header name:
+
+| header | project id | status |
+| --- | --- | --- |
+| `anthropic-workspace-id` | `proj_zzzzzzzzzzzzzzzzzzzz` | **404** |
+| `anthropic-workspace` | `proj_zzzzzzzzzzzzzzzzzzzz` | **200** |
+
+A nonexistent project is the discriminator, and it is what makes this cheap: a
+name the service reads has to reject it, and a name the service does not read
+cannot. The 200 is the whole finding — the request was served, against the
+account default, carrying a project id that does not exist.
+
+So `anthropic-workspace-id` is read and validated, and `anthropic-workspace` —
+the name Halro sent until this date — is ignored. A connection that named a
+Bedrock Project was billed to the account default without any error to say so.
+The header name is also **not** what separates Bedrock from Claude Platform on
+AWS: both spell it `anthropic-workspace-id`, and the separation is the host plus
+the identifier prefix, `proj_` against `wrkspc_`.
+
+An earlier request in the same session, with a real project id, answered 200
+(`req_73rietrkqqo5kr5lj5wlkhzhubscpxpayzjlr5jjtmhhw3cpqcwq`).
+
+### What this does not establish
+
+- **Positive attribution.** That a valid project id causes usage to be recorded
+  against that project — rather than merely to pass validation — is visible in
+  CloudWatch `AWS/BedrockMantle`, whose `Inferences` and token metrics carry a
+  `Project` dimension. That reading has not been taken.
+- **Halro's own path.** These were `curl` requests against the service. They say
+  the header name is right; they do not say Halro sends it. `tests/provider-matrix`
+  still has no Mantle coverage, and the smoke in
+  `internal/provider/bedrockmantle/real_smoke_test.go` cannot close this gap as
+  written: it asserts that a request succeeds, and an ignored header succeeds
+  too. Verifying Halro end to end means running the smoke with
+  `HALRO_SMOKE_BEDROCK_PROJECT_ID` set and then reading the CloudWatch
+  attribution — the assertion cannot be synchronous, because the metric is not.
+
 ### Not yet established
 
 - `data_retention` on the model object offers `allowed_modes`

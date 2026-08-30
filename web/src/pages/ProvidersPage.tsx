@@ -80,14 +80,14 @@ function credentialExpiry(value: string | undefined, now = Date.now()) {
   return { expired: at <= now, days, soon: at > now && days <= credentialExpiryWarningDays };
 }
 
-type BedrockCredentialSurface = "bedrock-runtime" | "bedrock-agent-runtime" | "bedrock-mantle";
-
-// Which profile a Bedrock credential is created for. The surfaces have
-// different hosts and different credential schemes, so the form asks first and
-// then takes the endpoint from whichever profile leads that surface — the
-// served matrix decides which that is, rather than a list repeated here.
-function leadProfileForSurface(catalog: ProviderProfilesCatalog, surface: BedrockCredentialSurface) {
-  return profilesForType(catalog, "bedrock").find((profile) => profile.access_surface === surface);
+// Which profile a Bedrock credential is created for.
+//
+// The form used to ask, because Bedrock's surfaces have different hosts and
+// different credential schemes. The served matrix answers it now: this build
+// offers Mantle alone, so the type's default profile is the only binding a new
+// credential can take, and a question with one answer is not asked.
+function bedrockCredentialProfile(catalog: ProviderProfilesCatalog) {
+  return findProfile(catalog, "bedrock", defaultProfileID(catalog, "bedrock"));
 }
 
 // The anthropic-beta header is comma separated, so the form takes one comma
@@ -472,11 +472,6 @@ function CredentialForm({
   const [baseURL, setBaseURL] = useState(
     current ? displayBoundBaseURL(current.bound_base_url) : endpointForType(catalog, "openai"),
   );
-  const [bedrockSurface, setBedrockSurface] = useState<BedrockCredentialSurface>(
-    current?.access_surface === "bedrock-mantle" || current?.access_surface === "bedrock-agent-runtime"
-      ? current.access_surface
-      : "bedrock-runtime",
-  );
   const [secret, setSecret] = useState("");
   // datetime-local has no zone of its own. Read and written in the accounting
   // zone, which is the zone every timestamp the console displays is rendered in
@@ -494,8 +489,12 @@ function CredentialForm({
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => {
-      const bedrockBinding = type === "bedrock"
-        ? leadProfileForSurface(catalog, bedrockSurface)
+      // Sent on creation only. A rotation leaves the pair out so the server keeps
+      // whatever the credential was sealed to — including a surface this build no
+      // longer offers, which must be deleted rather than silently re-pointed at
+      // the one that is.
+      const bedrockBinding = type === "bedrock" && !current
+        ? bedrockCredentialProfile(catalog)
         : undefined;
       const value = {
         name,
@@ -540,7 +539,7 @@ function CredentialForm({
     event.preventDefault();
     if (name.trim() && baseURL.trim() && (current || secret) && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
   };
-  const dirty = useDirty({ name, type, baseURL, bedrockSurface, secret, expiresAt });
+  const dirty = useDirty({ name, type, baseURL, secret, expiresAt });
   return (
     <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
       {/* Like the other modal forms: the form drops the modal's margin so the
@@ -553,35 +552,19 @@ function CredentialForm({
             const next = event.target.value as ProviderType;
             setType(next);
             setBaseURL(endpointForType(catalog, next));
-            setBedrockSurface("bedrock-runtime");
           }}>
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
-        {type === "bedrock" && (
-          <Field label={t("providers.bedrockSurface")} hint={t("providers.bedrockSurfaceHint")}>
-            <select value={bedrockSurface} disabled={Boolean(current)} onChange={(event) => {
-              const next = event.target.value as BedrockCredentialSurface;
-              setBedrockSurface(next);
-              setBaseURL(leadProfileForSurface(catalog, next)?.default_base_url ?? "");
-            }}>
-              <option value="bedrock-runtime">{t("providers.bedrockRuntime")}</option>
-              <option value="bedrock-agent-runtime">{t("providers.bedrockAgentRuntime")}</option>
-              <option value="bedrock-mantle">{t("providers.bedrockMantle")}</option>
-            </select>
-          </Field>
-        )}
         <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
-          label={current ? t("providers.newSecret") : type === "bedrock" && bedrockSurface !== "bedrock-mantle" ? t("providers.awsCredentialJSON") : t("providers.providerSecret")}
+          label={current ? t("providers.newSecret") : t("providers.providerSecret")}
           hint={current
             ? t("providers.secretConfigured")
-            : type === "bedrock" && bedrockSurface !== "bedrock-mantle"
-              ? t("providers.bedrockHint")
-              : type === "bedrock"
-                ? t("providers.bedrockMantleHint")
+            : type === "bedrock"
+              ? t("providers.bedrockMantleHint")
               : t("providers.secretHint")}
         >
           <input
@@ -796,7 +779,8 @@ function ProviderForm({
               setType(next);
               setBaseURL(endpointForType(catalog, next));
               setProfileID(defaultProfileID(catalog, "bedrock"));
-              setCredentialID(credentials.find((credential) => credential.type === next && (next !== "bedrock" || credential.access_surface === "bedrock-runtime"))?.id ?? "");
+              setCredentialID(credentials.find((credential) => credential.type === next
+                && (next !== "bedrock" || credential.access_surface === bedrockCredentialProfile(catalog)?.access_surface))?.id ?? "");
               setCapabilities(connectionDefaults(catalog, next, defaultProfileID(catalog, next)));
             }}>
               <ProviderTypeOptions t={t} />

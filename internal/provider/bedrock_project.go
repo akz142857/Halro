@@ -6,22 +6,41 @@ import "net/http"
 // documents Workspaces (Anthropic-compatible) and Projects (OpenAI-compatible)
 // as one underlying project resource named differently per protocol, so which
 // header carries it is decided by the wire protocol, not by the operator.
+//
+// The Messages spelling is `anthropic-workspace-id`, the same name Claude
+// Platform on AWS uses. The header name is not what separates the two products —
+// this was the error that shipped: Halro sent `anthropic-workspace`, which no
+// service reads, and deleted the documented name, so a connection that named a
+// project was silently billed to the account default. What separates them is the
+// host (bedrock-mantle vs aws-external-anthropic) and the identifier: Bedrock
+// workspaces are the Projects API's `proj_` resource, Claude Platform's are
+// `wrkspc_`. ValidateBedrockProjectID is where that boundary is enforced, and it
+// is the only place it can be.
+//
+// Measured against a real account on 2026-08-29, us-east-2: the same request
+// carrying the same nonexistent project id answers 404 under this name and 200
+// under the old one. A name the service reads has to reject an unknown project;
+// a name it does not read cannot. The 200 is the bug — served against the
+// account default, carrying a project that does not exist.
+// See docs/verification/provider-real-matrix.md. Still unmeasured: that a valid
+// id lands on that project rather than merely passing validation, which is a
+// CloudWatch reading, and that Halro's own path sends what curl sent.
 const (
 	HeaderBedrockOpenAIProject      = "OpenAI-Project"
-	HeaderBedrockAnthropicWorkspace = "anthropic-workspace"
+	HeaderBedrockAnthropicWorkspace = "anthropic-workspace-id"
 )
 
 // bedrockResourceHeaders is every project-selecting header this gateway knows
-// about, including the one that belongs to a different AWS service. All of them
-// are cleared before the correct one is set, so a header carried in from
-// anywhere else cannot survive into a provider request.
+// about. All of them are cleared before the correct one is set, so a header
+// carried in from anywhere else cannot survive into a provider request.
 //
-// anthropic-workspace-id is Claude Platform on AWS. It is listed here to be
-// deleted, never to be sent.
+// `anthropic-workspace` is in the list only to be deleted: it is the name Halro
+// used to send, so a caller or an intermediary that learned it must not have it
+// reach the provider now that it selects nothing.
 var bedrockResourceHeaders = []string{
 	HeaderBedrockOpenAIProject,
 	HeaderBedrockAnthropicWorkspace,
-	"anthropic-workspace-id",
+	"anthropic-workspace",
 	"OpenAI-Organization",
 }
 

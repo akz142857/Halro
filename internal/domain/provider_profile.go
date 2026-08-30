@@ -162,10 +162,13 @@ const MaxBedrockProjectIDLength = 128
 // changes nothing.
 //
 // `wrkspc_` is refused by name. That prefix belongs to Claude Platform on AWS —
-// a different service, on a different host, whose workspace header is spelled
-// differently — and pasting one product's identifier into the other's field is
-// the most likely mistake here. A prefix check is the cheapest place to catch
-// it, and the error says which product the value came from.
+// a different service, on a different host — and pasting one product's
+// identifier into the other's field is the most likely mistake here. The prefix
+// is the whole of the distinction on the wire: both products carry this resource
+// in an `anthropic-workspace-id` header, and only the identifier says which one
+// the value is for. So this check is not a convenience, it is where the boundary
+// between the two products is actually drawn, and the error says which product
+// the value came from.
 const (
 	// MaxAnthropicBetaTokenLength bounds one token. Anthropic's are short
 	// (`feature-name-YYYY-MM-DD`); the bound exists so a pasted blob cannot
@@ -249,6 +252,17 @@ func NormalizeBedrockProjectID(value string) string {
 // them reach capability detection and the data plane.
 func IsImmutableCapabilityProfile(id ProviderProfileID) bool {
 	return profileIndex[id].Immutable
+}
+
+// IsWithheldProfile reports whether this build offers the profile at all.
+//
+// A withheld profile is implemented and still walked by the invariant tests, but
+// it is absent from the served matrix and refused on every write, so nothing new
+// can be created on it. Reads are deliberately untouched: an install that
+// already holds a withheld connection must still start, or the operator cannot
+// delete it. See profileRow.
+func IsWithheldProfile(id ProviderProfileID) bool {
+	return profileIndex[id].Withheld
 }
 
 // IsBedrockMantleProfile reports whether a profile addresses the Bedrock Mantle

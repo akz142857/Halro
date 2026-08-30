@@ -78,10 +78,29 @@ refusing the load.
 **Workspaces and Projects are one Bedrock resource, and the header names differ
 per protocol.** AWS documents Workspaces (Anthropic-compatible) and Projects
 (OpenAI-compatible) as the same underlying project resource, selected by
-`anthropic-workspace` on `/anthropic/v1/messages` and by `OpenAI-Project` on
-the OpenAI-shaped paths. `anthropic-workspace-id` belongs to Claude Platform on
-AWS — a different service on `aws-external-anthropic.<region>.api.aws` — and
-must never be sent to Mantle.
+`anthropic-workspace-id` on `/anthropic/v1/messages` and by `OpenAI-Project` on
+the OpenAI-shaped paths.
+
+> **Correction, 2026-08-29.** This ADR originally recorded the Messages header as
+> `anthropic-workspace`, and treated `anthropic-workspace-id` as belonging to
+> Claude Platform on AWS and never to be sent to Mantle. Both halves were wrong,
+> and the code shipped that way: Halro sent a name no service reads and deleted
+> the documented one, so a connection that named a project was silently billed to
+> the account default. The two products spell the header identically. What
+> separates them is the host — `bedrock-mantle.<region>.api.aws` versus
+> `aws-external-anthropic.<region>.api.aws` — and the identifier: a Bedrock
+> workspace is the Projects API's `proj_` resource, a Claude Platform workspace is
+> `wrkspc_`. `ValidateBedrockProjectID` is therefore the whole of that boundary,
+> not a convenience check. Sources, both read 2026-08-29:
+> [Workspaces (Anthropic-compatible)](https://docs.aws.amazon.com/bedrock/latest/userguide/workspaces.html),
+> [Workspaces cost attribution](https://docs.aws.amazon.com/bedrock/latest/userguide/cost-mgmt-workspaces.html),
+> [Claude Platform on AWS Workspaces](https://docs.aws.amazon.com/claude-platform/latest/userguide/workspaces.html).
+> Measured 2026-08-29 in `us-east-2`: one request carrying a nonexistent project
+> id answers 404 under `anthropic-workspace-id` and 200 under
+> `anthropic-workspace`, so the first is read and validated and the second is
+> ignored. See `docs/verification/provider-real-matrix.md`. Still unmeasured:
+> that a valid id is attributed to that project rather than merely accepted, and
+> that Halro's own path sends what curl sent.
 
 Each AWS account has a default project, and a request that omits the header is
 associated with it. At the time of this amendment Halro sent neither header, so
@@ -119,10 +138,10 @@ be defined. Nothing asks for that yet.
 
 **Rendering.** Empty sends no header and AWS associates the request with the
 account default. A value renders as `OpenAI-Project` on the two OpenAI-shaped
-profiles and as `anthropic-workspace` on the Messages profile. One helper owns
-both header names and clears every project-selecting header it knows —
-including `anthropic-workspace-id`, which it exists to delete and never to send
-— before setting the right one. It is deliberately not part of the credential
+profiles and as `anthropic-workspace-id` on the Messages profile. One helper owns
+both header names and clears every project-selecting header it knows — including
+`anthropic-workspace`, the superseded spelling, which is in that list only to be
+deleted — before setting the right one. It is deliberately not part of the credential
 authorizer and deliberately not a free-form header map: a map would let a stored
 value name `Authorization`, and the authorizer's header clearing exists to make
 that impossible.

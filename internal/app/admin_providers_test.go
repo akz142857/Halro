@@ -563,12 +563,19 @@ func TestAdminCredentialViewPreservesBedrockBoundBaseURLForRotation(t *testing.T
 		// The rotation replaces the material, so it has to be material the
 		// scheme accepts too.
 		rotatedSecret string
+		// The profile whose withholding decides whether this surface can be
+		// reached at all. A withheld one is skipped rather than dropped, so
+		// offering it again restores the case.
+		profile domain.ProviderProfileID
 	}{
-		{name: "agent runtime", baseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com", surface: domain.SurfaceBedrockAgentRuntime, scheme: domain.CredentialAWSSigV4Explicit, secret: awsCredentialForTest("eu-west-1"), rotatedSecret: awsCredentialForTest("eu-west-1")},
-		{name: "mantle", baseURL: "https://bedrock-mantle.ap-southeast-1.api.aws", surface: domain.SurfaceBedrockMantle, scheme: domain.CredentialBedrockAPIKey, secret: "test-secret", rotatedSecret: "rotated-secret"},
+		{name: "agent runtime", baseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com", surface: domain.SurfaceBedrockAgentRuntime, scheme: domain.CredentialAWSSigV4Explicit, secret: awsCredentialForTest("eu-west-1"), rotatedSecret: awsCredentialForTest("eu-west-1"), profile: domain.ProfileBedrockAgentRerankCohere35},
+		{name: "mantle", baseURL: "https://bedrock-mantle.ap-southeast-1.api.aws", surface: domain.SurfaceBedrockMantle, scheme: domain.CredentialBedrockAPIKey, secret: "test-secret", rotatedSecret: "rotated-secret", profile: domain.ProfileBedrockMantleChat},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if domain.IsWithheldProfile(test.profile) {
+				t.Skip("this access surface is withheld from this build")
+			}
 			created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
 				"name": test.name, "type": "bedrock", "base_url": test.baseURL,
 				"access_surface": test.surface, "scheme": test.scheme, "secret": test.secret,
@@ -726,7 +733,7 @@ func TestAdminProviderRejectsCredentialAudienceMismatch(t *testing.T) {
 	}
 }
 
-func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
+func TestAdminBedrockProviderHotLoadsMantleCapabilities(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -740,26 +747,34 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 	}
 	defer runtime.Close()
 	cookie, csrf := loginAdminForTest(t, runtime)
-	secret := `{"access_key_id":"AKIDEXAMPLE12345678","secret_access_key":"test-secret-access-key-value","session_token":"session-token","region":"us-east-1"}`
+	// No access surface or scheme is sent, so this also pins what a Bedrock
+	// connection defaults to: Mantle Chat, the profile the type leads with now
+	// that the Runtime ones are withheld.
+	const secret = "bedrock-mantle-api-key-value"
+	const endpoint = "https://bedrock-mantle.us-east-1.api.aws"
 	credentialResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
 			"name": "Bedrock test", "type": "bedrock",
-			"base_url": "https://bedrock-runtime.us-east-1.amazonaws.com", "secret": secret,
+			"base_url": endpoint, "secret": secret,
 		})
-	if credentialResponse.Code != http.StatusCreated || strings.Contains(credentialResponse.Body.String(), "AKIDEXAMPLE") {
+	if credentialResponse.Code != http.StatusCreated || strings.Contains(credentialResponse.Body.String(), secret) {
 		t.Fatalf("credential create status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
 	}
 	var credential credentialView
 	if err := json.Unmarshal(credentialResponse.Body.Bytes(), &credential); err != nil {
 		t.Fatal(err)
 	}
+	if credential.AccessSurface != domain.SurfaceBedrockMantle || credential.Scheme != domain.CredentialBedrockAPIKey {
+		t.Fatalf("a Bedrock credential did not default to Mantle: %#v", credential)
+	}
 	providerResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 			"name": "Bedrock", "type": "bedrock",
-			"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
+			"base_url":      endpoint,
 			"credential_id": credential.ID, "enabled": true,
+			"capabilities": map[string]any{"chat": true, "streaming": true, "stream_usage": true},
 		})
-	if providerResponse.Code != http.StatusCreated || strings.Contains(providerResponse.Body.String(), "AKIDEXAMPLE") {
+	if providerResponse.Code != http.StatusCreated || strings.Contains(providerResponse.Body.String(), secret) {
 		t.Fatalf("provider create status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
 	}
 	var instance struct {
@@ -802,6 +817,13 @@ func TestAdminBedrockProviderHotLoadsConverseCapabilities(t *testing.T) {
 }
 
 func TestAdminBedrockTitanEmbeddingProfilePinsModelFamily(t *testing.T) {
+	// The family pin itself is covered where it lives — internal/provider/bedrock
+	// refuses cohere.embed-v4:0 on the Titan adapter, and internal/modelcatalog
+	// keys the catalogue by profile. What is unreachable while the profile is
+	// withheld is this end-to-end wiring of it.
+	if domain.IsWithheldProfile(domain.ProfileBedrockInvokeTitanEmbedV2) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no connection can be created on it")
+	}
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)

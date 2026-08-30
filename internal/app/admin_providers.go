@@ -1085,6 +1085,14 @@ func (r *Runtime) credentialFromInput(
 	if !ok {
 		return domain.Credential{}, fmt.Errorf("credential access surface %q or scheme %q is incompatible with provider type %q", surface, scheme, input.Type)
 	}
+	// Refused here rather than only hidden from the served matrix: the console is
+	// one caller of this API, and a surface this build does not offer must not be
+	// reachable by the others either. A rotation of a credential stored before the
+	// profile was withheld lands here too, which is intended — it can be deleted,
+	// not carried forward.
+	if domain.IsWithheldProfile(profile.ProfileID) {
+		return domain.Credential{}, fmt.Errorf("credential access surface %q is not supported by this build", profile.AccessSurface)
+	}
 	if profile.AccessSurface == domain.SurfaceBedrockMantle {
 		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
 			return domain.Credential{}, err
@@ -1294,6 +1302,9 @@ func (r *Runtime) providerFromInput(
 	if !ok {
 		return domain.ProviderInstance{}, errors.New("provider profile is not implemented")
 	}
+	if domain.IsWithheldProfile(profile.ProfileID) {
+		return domain.ProviderInstance{}, errors.New("the selected capability implementation is not supported by this build")
+	}
 	if input.AccessSurface != "" && input.AccessSurface != profile.AccessSurface ||
 		input.ProfileID != "" && input.ProfileID != profile.ProfileID ||
 		input.CredentialScheme != "" && input.CredentialScheme != profile.CredentialScheme {
@@ -1433,6 +1444,9 @@ func (r *Runtime) providerFromInput(
 		bound, ok := domain.ResolveProviderProfile(input.Type, assigned.ProfileID)
 		if !ok {
 			return domain.ProviderInstance{}, errors.New("provider binding profile is not implemented")
+		}
+		if domain.IsWithheldProfile(assigned.ProfileID) {
+			return domain.ProviderInstance{}, errors.New("a selected capability implementation is not supported by this build")
 		}
 		binding := domain.ProviderProfileBinding{
 			ID:               domain.DefaultProviderProfileBindingID(id, assigned.ProfileID),

@@ -371,9 +371,12 @@ describe("SettingsPage system configuration pane", () => {
       write_path: emptyWritePath({
         wal_sync_seconds: 0.0043,
         wal_batch_size: 8.25,
+        wal_events_per_second: 1918.6,
+        wal_max_events_per_second: 29767.4,
         project_lock_held_seconds: 0.0221,
         project_events_per_second: 45.2,
-        project_requests_per_second: 9.04,
+        requests_per_second: 9.04,
+        bound_by: "project",
       }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
@@ -390,6 +393,38 @@ describe("SettingsPage system configuration pane", () => {
     // requests per second can this take" should not have to expand a card and
     // divide by five to find out.
     expect(screen.getByText("≈ 9.04 请求/秒")).toBeInTheDocument();
+    // Both ceilings are on the table, and the card says which one produced the
+    // headline — the number alone does not tell an operator what to change.
+    expect(screen.getByText("1918.6")).toBeInTheDocument();
+    expect(screen.getByText(/上限由单 Project 锁决定/)).toBeInTheDocument();
+  });
+
+  // The headline is the lower of two independent serialization points. It used
+  // to be the per-project lock alone, which read as a rate the instance could
+  // serve while the durability barrier — the one the caption names — held it
+  // three orders of magnitude lower.
+  it("takes the request ceiling from whichever write path binds first", async () => {
+    vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {},
+      write_path: emptyWritePath({
+        wal_sync_seconds: 0.00307,
+        wal_batch_size: 1,
+        wal_events_per_second: 325.7,
+        wal_max_events_per_second: 41693.8,
+        project_lock_held_seconds: 0.000002,
+        project_events_per_second: 500000,
+        requests_per_second: 65.14,
+        bound_by: "wal",
+      }),
+      audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findByText("≈ 65.1 请求/秒")).toBeInTheDocument();
+    expect(screen.getByText(/上限由落盘决定/)).toBeInTheDocument();
   });
 
   // The panel exists because the file on disk stopped being the answer to
@@ -484,36 +519,53 @@ describe("SettingsPage system configuration pane", () => {
 
   // A batch size of 1.0 and a saturated disk read the same from a latency graph,
   // and only the first is fixed by adding concurrency. The card has to say which
-  // one it is looking at, and must stay quiet until the reading is real.
-  it("says when appends are not coalescing, and only once traffic makes that real", async () => {
+  // one it is looking at, and must say what the ceiling becomes once coalescing
+  // has something to coalesce — otherwise it reads as a fault when it is a
+  // description of the offered load.
+  it("says when appends are not coalescing, and what the ceiling becomes under load", async () => {
     vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
     vi.spyOn(api, "systemStatus").mockResolvedValue({
       build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
-      accounting_status: 0, draining: false, wal: { batches: 400 },
-      write_path: emptyWritePath({ wal_sync_seconds: 0.004, wal_batch_size: 1 }),
+      accounting_status: 0, draining: false, wal: { batches: 20_000 },
+      write_path: emptyWritePath({
+        wal_sync_seconds: 0.004, wal_batch_size: 1,
+        wal_events_per_second: 250, wal_max_events_per_second: 32_000,
+        wal_max_batch_size: 128,
+      }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
-    const warning = await screen.findByText(/未合批/);
+    const warning = await screen.findByText(/合批没起作用/);
     expect(warning).toBeInTheDocument();
+    // One flush carries up to 128 records, and 32000 events/s over the
+    // five-event request lifecycle is 6400 req/s. Both belong in the sentence:
+    // the first says what is not happening, the second says what it is worth.
+    expect(warning).toHaveTextContent("128");
+    expect(warning).toHaveTextContent("6400");
     // Rendered as the shared notice component rather than another paragraph, so
     // a conditional warning does not read at the same weight as the table.
     expect(warning).toHaveClass("notice", "warning");
   });
 
+  // Twenty batches is four requests. A batch size of 1 there is the correct
+  // reading — nothing arrived concurrently — so saying it is a concurrency
+  // shortage would fire on every freshly started instance.
   it("stays quiet about coalescing on an instance with almost no traffic", async () => {
     vi.spyOn(api, "systemConfig").mockResolvedValue({ yaml: "" } as never);
     vi.spyOn(api, "systemStatus").mockResolvedValue({
       build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
-      accounting_status: 0, draining: false, wal: { batches: 3 },
-      write_path: emptyWritePath({ wal_sync_seconds: 0.004, wal_batch_size: 1 }),
+      accounting_status: 0, draining: false, wal: { batches: 20 },
+      write_path: emptyWritePath({
+        wal_sync_seconds: 0.004, wal_batch_size: 1,
+        wal_events_per_second: 250, wal_max_events_per_second: 32_000,
+      }),
       audit: {}, alerts: {}, usage_watermark: {},
     } as never);
     window.history.replaceState({}, "", "/admin/settings/diagnostics");
     renderWithClient(<SettingsPage />);
     await screen.findByText("Halro 1.0.0");
-    expect(screen.queryByText(/未合批/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/合批没起作用/)).not.toBeInTheDocument();
   });
 
   // An instance that has served nothing has no means to report. Zero is what the

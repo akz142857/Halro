@@ -19,15 +19,16 @@ import (
 // rather than having it quietly overridden, and the flat set is bounded by the
 // same table that decides which profile serves what.
 func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
+	const mantleEndpoint = "https://bedrock-mantle.us-east-1.api.aws"
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
 
 	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
-		"name": "Bedrock Runtime", "type": "bedrock",
-		"base_url":       "https://bedrock-runtime.us-east-1.amazonaws.com",
-		"secret":         `{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY","region":"us-east-1"}`,
-		"access_surface": domain.SurfaceBedrockRuntime, "scheme": domain.CredentialAWSSigV4Explicit,
+		"name": "Bedrock Mantle", "type": "bedrock",
+		"base_url":       mantleEndpoint,
+		"secret":         "bedrock-mantle-api-key-value",
+		"access_surface": domain.SurfaceBedrockMantle, "scheme": domain.CredentialBedrockAPIKey,
 	})
 	if credentialResponse.Code != http.StatusCreated {
 		t.Fatalf("create credential: status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
@@ -39,18 +40,18 @@ func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Converse text serves chat, streaming and stream usage. Tools and vision are
-	// the two the adapter rejects before Provider I/O, so declaring them buys the
-	// caller nothing but a route that offers an operation it answers with an
-	// error — and, on the profiles with no per-field rejection behind them, a
-	// field that really is sent upstream.
+	// The Mantle profiles serve chat and the shapes around it. Embeddings and
+	// rerank are served by no profile this credential reaches, so declaring them
+	// buys the caller nothing but a route that offers an operation it answers
+	// with an error — and, on the profiles with no per-field rejection behind
+	// them, a field that really is sent upstream.
 	beyond := map[string]any{
-		"chat": true, "streaming": true, "stream_usage": true, "tools": true, "vision": true,
+		"chat": true, "streaming": true, "stream_usage": true, "embeddings": true, "rerank": true,
 	}
 
 	viaCapabilities := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Bedrock via capabilities", "type": "bedrock",
-		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"base_url":      mantleEndpoint,
 		"credential_id": credential.ID, "enabled": true, "capabilities": beyond,
 	})
 	if viaCapabilities.Code != http.StatusBadRequest {
@@ -67,7 +68,7 @@ func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 	if err := json.Unmarshal(viaCapabilities.Body.Bytes(), &refusal); err != nil {
 		t.Fatal(err)
 	}
-	if refusal.Code != "capabilities_unservable" || refusal.Capabilities != "tools,vision" {
+	if refusal.Code != "capabilities_unservable" || refusal.Capabilities != "embeddings,rerank" {
 		t.Fatalf("the refusal did not name the capabilities: %s", viaCapabilities.Body.String())
 	}
 
@@ -76,10 +77,10 @@ func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 	// something else.
 	viaBindings := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Bedrock via bindings", "type": "bedrock",
-		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"base_url":      mantleEndpoint,
 		"credential_id": credential.ID, "enabled": true,
 		"bindings": []map[string]any{{
-			"profile_id": domain.ProfileBedrockConverseText, "enabled": true, "capabilities": beyond,
+			"profile_id": domain.ProfileBedrockMantleChat, "enabled": true, "capabilities": beyond,
 		}},
 	})
 	if viaBindings.Code != http.StatusBadRequest {
@@ -92,7 +93,7 @@ func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 	// say so.
 	within := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
 		"name": "Bedrock within its ceiling", "type": "bedrock",
-		"base_url":      "https://bedrock-runtime.us-east-1.amazonaws.com",
+		"base_url":      mantleEndpoint,
 		"credential_id": credential.ID, "enabled": true,
 		"capabilities": map[string]any{"chat": true},
 	})
@@ -110,6 +111,9 @@ func TestProviderCapabilitiesCannotExceedWhatTheConnectionServes(t *testing.T) {
 // down across restarts until someone rotated it back. The write path compared
 // only type and audience, which are exactly the two this rotation leaves alone.
 func TestRotatingCredentialCannotChangeAccessSurfaceWhileInUse(t *testing.T) {
+	if domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
+		t.Skip("Bedrock Runtime is withheld from this build, so no credential can be created on it")
+	}
 	cfg := testConfig(t)
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)

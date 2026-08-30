@@ -123,7 +123,7 @@ describe("deployment invocation target workflow", () => {
     expect(screen.getByText("选择服务商和实际调用的模型；能力接口默认由 Halro 自动确定。")).toBeVisible();
     expect(screen.getByText("这里保存模型实际开放的能力；识别后可以继续关闭不需要的能力。")).toBeVisible();
     expect(screen.getByText("运行限制").closest("details")).toBeNull();
-    expect(screen.getByLabelText(/^最大输出令牌/)).toBeVisible();
+    expect(screen.getByLabelText(/^最大输出词元/)).toBeVisible();
     expect(screen.queryByText("默认")).not.toBeInTheDocument();
   });
 
@@ -131,8 +131,8 @@ describe("deployment invocation target workflow", () => {
   // declaring one, which is a billing and throttling fact, not a nicety.
   it("says what a zero token limit actually means on every limit field", async () => {
     await openCreate();
-    expect(screen.getByLabelText(/^最大上下文令牌/)).toHaveAccessibleDescription("0 表示不在部署层声明，运行时仍受上游限制");
-    expect(screen.getByLabelText(/^最大输出令牌/)).toHaveAccessibleDescription("0 表示不在部署层声明，运行时仍受上游限制；填写后不得超过最大上下文令牌");
+    expect(screen.getByLabelText(/^最大上下文词元/)).toHaveAccessibleDescription("0 表示不在部署层声明，运行时仍受上游限制");
+    expect(screen.getByLabelText(/^最大输出词元/)).toHaveAccessibleDescription("0 表示不在部署层声明，运行时仍受上游限制；填写后不得超过最大上下文词元");
     expect(screen.getByLabelText(/^并发上限/)).toHaveAccessibleDescription("0 表示不在部署层限制并发，仅受服务商自身限制");
     expect(screen.queryByText("0 为自动")).not.toBeInTheDocument();
   });
@@ -1843,7 +1843,7 @@ describe("deployment price panel", () => {
     // is on every card that lacks one rather than only on the card whose enable
     // was just refused.
     fireEvent.click(screen.getByRole("button", { name: "未设置价格" }));
-    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
@@ -1894,8 +1894,8 @@ describe("deployment price panel", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
-    expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("0.1");
-    fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/), { target: { value: "0.5" } });
+    expect(await screen.findByLabelText(/^缓存输入 USD \/ 百万词元/)).toHaveValue("0.1");
+    fireEvent.change(screen.getByLabelText(/^缓存输入 USD \/ 百万词元/), { target: { value: "0.5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     expect(await screen.findByText("$0.1 → $0.5")).toBeVisible();
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
@@ -1914,7 +1914,7 @@ describe("deployment price panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     const cached = (await screen.findByText("缓存输入价格")).closest("div")!;
     expect(within(cached).getByText("US$0.10")).toBeVisible();
-    expect(within(cached).getByText("USD / 百万令牌")).toBeVisible();
+    expect(within(cached).getByText("USD / 百万词元")).toBeVisible();
   });
 
   // A first price is the case with nothing to copy from, and zero is the one
@@ -1927,8 +1927,8 @@ describe("deployment price panel", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
-    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
-    expect(screen.getByLabelText(/^缓存输入 USD \/ 百万令牌/)).toHaveValue("5");
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
+    expect(screen.getByLabelText(/^缓存输入 USD \/ 百万词元/)).toHaveValue("5");
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
@@ -1959,7 +1959,7 @@ describe("deployment price panel", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
-    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
     // The field reads in the accounting zone, so the value it is given has to be
     // written in that zone too.
     fireEvent.change(screen.getByLabelText("生效时间"), {
@@ -1983,7 +1983,7 @@ describe("deployment price panel", () => {
     renderPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "未设置价格" }));
-    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
     fireEvent.change(await screen.findByLabelText("当前密码"), { target: { value: "pw" } });
     fireEvent.click(screen.getByRole("button", { name: "确认并创建价格版本" }));
@@ -2027,11 +2027,11 @@ describe("deployment price panel", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
-    expect(await screen.findByLabelText("输入 USD / 百万令牌")).toBeVisible();
+    expect(await screen.findByLabelText("输入 USD / 百万词元")).toBeVisible();
 
     fireEvent.keyDown(document, { key: "Escape" });
 
-    await waitFor(() => expect(screen.queryByLabelText("输入 USD / 百万令牌")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByLabelText("输入 USD / 百万词元")).not.toBeInTheDocument());
     expect(screen.getByRole("dialog", { name: "Deployment dep_1 详情" })).toBeVisible();
   });
 
@@ -2042,7 +2042,7 @@ describe("deployment price panel", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
-    fireEvent.change(await screen.findByLabelText("输入 USD / 百万令牌"), { target: { value: "5" } });
+    fireEvent.change(await screen.findByLabelText("输入 USD / 百万词元"), { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "下一步：核对" }));
 
     expect(await screen.findByText("当前版本：v3")).toBeVisible();
