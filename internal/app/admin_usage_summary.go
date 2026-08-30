@@ -171,20 +171,27 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
-	dimension := domain.RollupDimensionTotal
-	switch {
-	case groupBy != "":
-		dimension = groupBy
-	case filterDimension != "":
-		dimension = filterDimension
+	// What the totals and the chart report, and what the table breaks down, are
+	// two different rows. The totals cover the range whatever the operator
+	// chose to group by, so they come from the stored total row — reading them
+	// off the grouped rows made "completed requests" collapse to zero the
+	// moment a dimension with no request identity was selected.
+	reportDimension := domain.RollupDimensionTotal
+	if filterDimension != "" {
+		reportDimension = filterDimension
 	}
-	rows, changes, err := r.collectSummaryRows(start, end, dimension, filterValue)
+	wanted := []string{reportDimension}
+	if groupBy != "" && groupBy != reportDimension {
+		wanted = append(wanted, groupBy)
+	}
+	rows, changes, err := r.collectSummaryRows(start, end, wanted, filterValue)
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
 
-	buckets, totals, groups, truncated, otherCount := summarize(rows, granularity, groupBy, limit)
+	buckets, totals, groups, truncated, otherCount := summarize(
+		rows[reportDimension], rows[groupBy], granularity, reportDimension, groupBy, limit)
 	body := map[string]any{
 		"granularity":        granularity,
 		"start":              start,
@@ -220,18 +227,28 @@ type summaryRow struct {
 // collectSummaryRows reads the stored rollup and folds in the increment that
 // has not been written yet, so the answer covers the same events the dashboard
 // beside it is already showing.
+//
+// One walk serves every dimension the response needs: the range is the
+// expensive part, and the totals and the breakdown are always read over the
+// same one.
 func (r *Runtime) collectSummaryRows(
-	start, end, dimension, filterValue string,
-) ([]summaryRow, []summaryTimezoneChange, error) {
+	start, end string, dimensions []string, filterValue string,
+) (map[string][]summaryRow, []summaryTimezoneChange, error) {
+	wanted := map[string]struct{}{}
+	for _, dimension := range dimensions {
+		wanted[dimension] = struct{}{}
+	}
 	merged := map[domain.RollupKey]*domain.DailyRollup{}
 	keep := func(key domain.RollupKey, row domain.DailyRollup) error {
 		if key.PeriodID < start || key.PeriodID > end {
 			return nil
 		}
-		if key.Dimension != dimension {
+		if _, want := wanted[key.Dimension]; !want {
 			return nil
 		}
-		if filterValue != "" && key.DimensionKey != filterValue {
+		// The filter names a value of the dimension being reported on, not of
+		// the one being broken down, so it only narrows its own rows.
+		if filterValue != "" && key.Dimension != domain.RollupDimensionTotal && key.DimensionKey != filterValue {
 			return nil
 		}
 		existing := merged[key]
@@ -267,7 +284,11 @@ func (r *Runtime) collectSummaryRows(
 		}
 		return rows[i].key.DimensionKey < rows[j].key.DimensionKey
 	})
-	return rows, summaryTimezoneChanges(rows), nil
+	byDimension := map[string][]summaryRow{}
+	for _, row := range rows {
+		byDimension[row.key.Dimension] = append(byDimension[row.key.Dimension], row)
+	}
+	return byDimension, summaryTimezoneChanges(rows), nil
 }
 
 // summaryTimezoneChanges reports where the accounting timezone generation
@@ -293,8 +314,11 @@ func summaryTimezoneChanges(rows []summaryRow) []summaryTimezoneChange {
 	return changes
 }
 
+// summarize renders the two halves of the response from the two row sets they
+// are actually about: the range totals and the chart from the reporting
+// dimension, the breakdown from the grouped one.
 func summarize(
-	rows []summaryRow, granularity, groupBy string, limit int,
+	reportRows, groupRows []summaryRow, granularity, reportDimension, groupBy string, limit int,
 ) ([]summaryBucket, summaryMetrics, []summaryGroup, bool, int) {
 	byBucket := map[string]*domain.DailyRollup{}
 	bucketSpan := map[string][2]int64{}
@@ -302,9 +326,10 @@ func summarize(
 	byGroup := map[string]*domain.DailyRollup{}
 	groupOrder := []string{}
 	total := domain.DailyRollup{}
-	requestLevel := groupBy == "" || domain.RequestMetricDimensions[groupBy]
+	requestLevel := domain.RequestMetricDimensions[reportDimension]
+	groupRequestLevel := groupBy != "" && domain.RequestMetricDimensions[groupBy]
 
-	for _, row := range rows {
+	for _, row := range reportRows {
 		label := bucketLabel(row.key.PeriodID, granularity)
 		bucket := byBucket[label]
 		if bucket == nil {
@@ -330,15 +355,22 @@ func summarize(
 		}
 		_ = bucket.Add(contribution)
 		_ = total.Add(contribution)
-		if groupBy != "" {
-			group := byGroup[row.key.DimensionKey]
-			if group == nil {
-				group = &domain.DailyRollup{}
-				byGroup[row.key.DimensionKey] = group
-				groupOrder = append(groupOrder, row.key.DimensionKey)
-			}
-			_ = group.Add(contribution)
+	}
+
+	for _, row := range groupRows {
+		contribution := row.row
+		contribution.PeriodID, contribution.TimezoneVersion = "", 0
+		contribution.Timezone, contribution.PeriodStartMicros, contribution.PeriodEndMicros = "", 0, 0
+		if !groupRequestLevel {
+			contribution.DropRequestMetrics()
 		}
+		group := byGroup[row.key.DimensionKey]
+		if group == nil {
+			group = &domain.DailyRollup{}
+			byGroup[row.key.DimensionKey] = group
+			groupOrder = append(groupOrder, row.key.DimensionKey)
+		}
+		_ = group.Add(contribution)
 	}
 
 	sort.Strings(bucketOrder)
@@ -353,7 +385,7 @@ func summarize(
 		})
 	}
 
-	groups, truncated, otherCount := renderGroups(byGroup, groupOrder, limit, requestLevel)
+	groups, truncated, otherCount := renderGroups(byGroup, groupOrder, limit, groupRequestLevel)
 	return buckets, renderMetrics(total, requestLevel), groups, truncated, otherCount
 }
 

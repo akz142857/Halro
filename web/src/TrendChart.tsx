@@ -27,6 +27,19 @@ function formatValue(metric: TrendMetric, value: number | null) {
   return compactNumber(value);
 }
 
+// uPlot gives a y axis a fixed 50px gutter and never measures what it draws
+// there, so a label wider than that is clipped rather than making room for
+// itself — "100.0%" on the success-rate view lost its leading digit, which
+// reads as 00.0% at a glance. The gutter is sized from the widest label the
+// axis is about to draw, at the axis font's own character width.
+const AXIS_CHARACTER_WIDTH = 7;
+const AXIS_TICK_GUTTER = 18;
+
+export function axisGutter(values: string[] | null): number {
+  const widest = (values ?? []).reduce((max, value) => Math.max(max, value.length), 0);
+  return Math.max(50, widest * AXIS_CHARACTER_WIDTH + AXIS_TICK_GUTTER);
+}
+
 function seriesKeys(metric: TrendMetric) {
   if (metric === "requests") return ["successful", "failed"];
   if (metric === "tokens" || metric === "cost") return ["confirmed", "estimated"];
@@ -66,6 +79,7 @@ export default function TrendChart({ points, metric }: { points: TrendPoint[]; m
           {
             stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace",
             values: (_chart, values) => values.map((value) => formatValue(metric, value)),
+            size: (_chart, values) => axisGutter(values),
           },
         ],
         series: [

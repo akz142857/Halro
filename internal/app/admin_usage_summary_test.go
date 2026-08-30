@@ -191,6 +191,38 @@ func TestUsageSummaryOmitsRequestCountsOnProviderGroups(t *testing.T) {
 	}
 }
 
+// The range totals answer "what did this window cost", which does not depend on
+// how the operator chose to break it down. Summing them off the grouped rows
+// made completed requests collapse to zero the moment a dimension with no
+// request identity was picked — 26 attempts and, beside them, no requests.
+func TestUsageSummaryTotalsSurviveAGroupingWithoutRequestIdentity(t *testing.T) {
+	runtime, cookie := summaryRuntime(t, 2)
+	runtime.saveUsageCheckpoint()
+
+	ungrouped := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day")
+	byProvider := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day&group_by=provider")
+
+	if ungrouped.Totals.Requests == nil || *ungrouped.Totals.Requests != 2 {
+		t.Fatalf("fixture totals=%#v", ungrouped.Totals)
+	}
+	if byProvider.Totals.Requests == nil || *byProvider.Totals.Requests != *ungrouped.Totals.Requests {
+		t.Fatalf("grouping changed the range totals: %#v", byProvider.Totals)
+	}
+	if byProvider.Totals.Attempts != ungrouped.Totals.Attempts ||
+		byProvider.Totals.CostMicrosUSD != ungrouped.Totals.CostMicrosUSD {
+		t.Fatalf("grouped totals=%#v ungrouped=%#v", byProvider.Totals, ungrouped.Totals)
+	}
+	// The breakdown still refuses to claim requests it cannot attribute.
+	if len(byProvider.Groups) != 1 || byProvider.Groups[0].Requests != nil {
+		t.Fatalf("provider groups=%#v", byProvider.Groups)
+	}
+	// And the chart reads the same totals, not the grouped rows.
+	if len(byProvider.Buckets) != 1 || byProvider.Buckets[0].Requests == nil ||
+		*byProvider.Buckets[0].Requests != 2 {
+		t.Fatalf("buckets=%#v", byProvider.Buckets)
+	}
+}
+
 // A month is a whole number of accounting days, so both ends are inclusive.
 // Half-open date labels would drop the 31st from August every time.
 func TestUsageSummaryRangeIsInclusiveAndBounded(t *testing.T) {
