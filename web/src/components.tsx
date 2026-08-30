@@ -812,8 +812,18 @@ export function ReauthFields({
 const MENU_GAP = 4;
 const MENU_MARGIN = 12;
 const MENU_MAX_HEIGHT = 288;
-// Below this the menu is not worth opening downwards, so it flips instead.
+// Below this the menu is not worth opening downwards, so it flips instead —
+// but only when the menu actually wants that much room. The threshold used to
+// be flat, so a one-row menu with 150px of space beneath it still flipped and
+// landed on top of the field's own label.
 const MENU_MIN_HEIGHT = 176;
+// What the list needs, from what it is about to render: a row per option, the
+// gap between them, its own padding, and the count row when there is one. An
+// estimate is enough — it only has to distinguish "a short list fits here"
+// from "a long one does not", and the real height is then clamped by maxHeight.
+const MENU_ROW_HEIGHT = 38;
+const MENU_PADDING = 8;
+const MENU_META_HEIGHT = 34;
 
 export interface ComboboxOption {
   value: string;
@@ -922,7 +932,12 @@ export function Combobox({
       const box = shell.current?.getBoundingClientRect();
       if (!box) return;
       const room = { below: window.innerHeight - box.bottom - MENU_MARGIN, above: box.top - MENU_MARGIN };
-      const flip = room.below < MENU_MIN_HEIGHT && room.above > room.below;
+      const rows = visible.length || (emptyText ? 1 : 0);
+      const wanted = Math.min(
+        MENU_MIN_HEIGHT,
+        MENU_PADDING + (meta ? MENU_META_HEIGHT : 0) + rows * MENU_ROW_HEIGHT,
+      );
+      const flip = room.below < wanted && room.above > room.below;
       setAnchor({
         left: box.left,
         width: box.width,
@@ -942,7 +957,7 @@ export function Combobox({
       window.removeEventListener("scroll", measure, true);
       window.removeEventListener("resize", measure);
     };
-  }, [open]);
+  }, [open, visible.length, emptyText, meta]);
   useEffect(() => {
     if (activeIndex < 0) return;
     list.current?.querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" });
