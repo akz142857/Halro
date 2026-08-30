@@ -924,6 +924,11 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .resource-link { max-width: 100%; padding: 0; overflow: hidden; color: var(--mint); background: transparent; border: 0; font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); line-height: 1.35; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .resource-link:hover { color: var(--lime); text-decoration: underline; text-underline-offset: 3px; }
 .resource-link.inline { display: inline; color: inherit; font-size: inherit; font-weight: inherit; }
+/* The bound credential used to carry a trailing arrow as its only affordance.
+   An underline says the same thing without spending a glyph inside a column
+   that already truncates the credential name. */
+.provider-row .resource-fact > .resource-link,
+.provider-facts .resource-link { text-decoration: underline; text-underline-offset: 3px; }
 .resource-highlight { background: var(--accent-tint); box-shadow: inset 3px 0 var(--lime); }
 .provider-capability-summary { gap: 7px; margin-top: 16px; padding: 0; }
 .provider-capability-summary .badge { padding: 6px 10px; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .03em; }
@@ -966,7 +971,7 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .resource-toolbar { padding-inline: 26px; }
 .resource-search { flex: 1 1 320px; max-width: 520px; }
 .resource-result-count { margin-left: auto; padding: 9px 4px; color: var(--muted); font: var(--font-size-xs) var(--mono); white-space: nowrap; }
-.provider-row { grid-template-columns: 42px minmax(130px, .85fr) minmax(180px, 1.35fr) minmax(120px, .75fr) minmax(82px, .45fr) minmax(82px, .45fr) auto; grid-template-rows: minmax(3.375rem, auto) auto; align-items: center; min-height: var(--resource-row-min-height); padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); column-gap: var(--resource-row-column-gap); row-gap: 0; }
+.provider-row { grid-template-columns: 42px minmax(190px, 1.3fr) minmax(180px, 1.4fr) minmax(120px, .78fr) minmax(72px, .22fr) minmax(82px, .42fr) auto; grid-template-rows: minmax(3.375rem, auto) auto; align-items: center; min-height: var(--resource-row-min-height); padding: var(--resource-row-padding-block) var(--resource-row-padding-inline); column-gap: var(--resource-row-column-gap); row-gap: 0; }
 .provider-compact-status { justify-items: end; }
 .provider-compact-status small.good { color: var(--lime); }
 .provider-compact-status small.bad { color: var(--danger); }

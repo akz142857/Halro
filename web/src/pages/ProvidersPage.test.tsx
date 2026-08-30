@@ -95,7 +95,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
     renderPage();
 
-    const boundCredential = await screen.findByRole("button", { name: "OpenAI production →" });
+    const boundCredential = await screen.findByRole("button", { name: "OpenAI production" });
     fireEvent.click(boundCredential);
     expect(window.location.search).toBe("?view=credentials");
     expect(screen.getByText("被 1 个服务商使用", { exact: false })).toBeInTheDocument();
