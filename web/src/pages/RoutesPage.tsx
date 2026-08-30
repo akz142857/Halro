@@ -263,10 +263,10 @@ export function RoutesPage() {
         </div>
       )}
       {creating && (
-        <RouteForm deployments={deployments.data?.items ?? []} onClose={() => setCreating(false)} />
+        <RouteForm routes={routes.data?.items ?? []} deployments={deployments.data?.items ?? []} onClose={() => setCreating(false)} />
       )}
       {editing && (
-        <RouteForm current={editing} deployments={deployments.data?.items ?? []} onClose={() => setEditing(undefined)} />
+        <RouteForm current={editing} routes={routes.data?.items ?? []} deployments={deployments.data?.items ?? []} onClose={() => setEditing(undefined)} />
       )}
     </>
   );
@@ -300,7 +300,7 @@ function RouteTestAction({ route }: { route: Route }) {
   );
 }
 
-function RouteForm({ current, deployments, onClose }: { current?: Route; deployments: Deployment[]; onClose: () => void }) {
+function RouteForm({ current, routes, deployments, onClose }: { current?: Route; routes: Route[]; deployments: Deployment[]; onClose: () => void }) {
   const { t } = useTranslation();
   const enabled = deployments.filter((item) => item.enabled || item.id === current?.deployment_id);
   const [publicModel, setPublicModel] = useState(current?.public_model ?? "chat");
@@ -338,6 +338,41 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
     if (publicModel.trim() && deploymentID) mutation.mutate();
   };
   const dirty = useDirty({ publicModel, deploymentID, priority, strategy, routeEnabled });
+  const deploymentNames = useMemo(
+    () => new Map(deployments.map((item) => [item.id, `${item.name} · ${item.provider_model}`])),
+    [deployments],
+  );
+  // The alias is the grouping key, so typing one that already exists joins that
+  // group rather than creating something new. It was a bare text box, which
+  // made the two outcomes look identical and a typo silently produce a second
+  // alias with one target — no error, and the project that authorized the first
+  // one cannot reach it.
+  const aliases = useMemo(
+    () => Array.from(new Set(routes.map((route) => route.public_model))).sort((left, right) => left.localeCompare(right)),
+    [routes],
+  );
+  // What the operator is about to join. Facts only: which targets the alias
+  // already has, in the order the engine tries them. What joining it *costs*
+  // — the Phase 2 endpoints it gives up, the projects whose reach it widens —
+  // is C2's other half and waits on D1 and D5.
+  const joining = useMemo(() => {
+    const alias = publicModel.trim();
+    const siblings = routes
+      .filter((route) => route.public_model === alias && route.id !== current?.id)
+      .sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id));
+    if (siblings.length === 0) return undefined;
+    const enabledSiblings = siblings.filter((route) => route.enabled);
+    return {
+      alias,
+      siblings,
+      // Both are refusals the Admin API already makes. Saying so here turns a
+      // 400 after the fact into something visible before the save.
+      duplicateDeployment: routeEnabled
+        && enabledSiblings.some((route) => route.deployment_id === deploymentID),
+      strategyConflict: routeEnabled
+        && enabledSiblings.some((route) => (route.strategy || "ordered") !== strategy),
+    };
+  }, [routes, publicModel, current?.id, deploymentID, strategy, routeEnabled]);
   return (
     <Modal title={current ? t("routes.edit") : t("routes.createTitle")} dirty={dirty} onClose={onClose}>
       {enabled.length === 0 ? (
@@ -345,7 +380,18 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
       ) : (
         <form className="route-form" onSubmit={submit}>
           <div className="route-form-body form-grid">
-          <Field label={t("routes.publicAlias")}><input autoComplete="off" autoFocus required value={publicModel} onChange={(event) => setPublicModel(event.target.value)} /></Field>
+          {/* A native combobox: pick an existing alias to join its group, or
+              type a new name to start one. Both outcomes stay reachable — the
+              list is a suggestion, not a constraint, because the first route on
+              a new alias has nothing to pick from. The datalist sits outside the
+              Field because Field labels a single control. */}
+          <Field label={t("routes.publicAlias")} hint={t("routes.publicAliasHint")}>
+            <input autoComplete="off" autoFocus required list="route-alias-options"
+              value={publicModel} onChange={(event) => setPublicModel(event.target.value)} />
+          </Field>
+          <datalist id="route-alias-options">
+            {aliases.map((alias) => <option value={alias} key={alias} />)}
+          </datalist>
           <Field label={t("routes.deployment")}>
             <select required value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
               {enabled.map((deployment) => (
@@ -359,7 +405,25 @@ function RouteForm({ current, deployments, onClose }: { current?: Route; deploym
               <option value="round_robin">{t("routes.roundRobin")}</option>
             </select>
           </Field>
-          <Field label={t("routes.priority")}><input autoComplete="off" type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
+          <Field label={t("routes.priority")} hint={t("routes.priorityHint")}><input autoComplete="off" type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
+          {joining && (
+            <div className="route-join-notice notice">
+              <strong>{t("routes.joiningAlias", { alias: joining.alias, count: joining.siblings.length })}</strong>
+              {/* In the engine's order, so the priority being typed above can be
+                  placed against the ones already there rather than guessed. */}
+              <ul className="route-join-targets">
+                {joining.siblings.map((sibling) => (
+                  <li key={sibling.id}>
+                    <code>{sibling.priority}</code>
+                    <span>{deploymentNames.get(sibling.deployment_id) || sibling.deployment_id}</span>
+                    <small>{(sibling.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}{sibling.enabled ? "" : ` · ${t("common.disabled")}`}</small>
+                  </li>
+                ))}
+              </ul>
+              {joining.duplicateDeployment && <span className="route-join-refusal">{t("routes.joinDuplicateDeployment")}</span>}
+              {joining.strategyConflict && <span className="route-join-refusal">{t("routes.joinStrategyConflict")}</span>}
+            </div>
+          )}
           {mutation.isError && <ErrorState error={mutation.error} />}
           </div>
           {/* Whether this alias will answer requests is the state the save

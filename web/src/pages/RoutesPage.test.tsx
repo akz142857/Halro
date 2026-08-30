@@ -167,6 +167,99 @@ describe("RoutesPage", () => {
     expect(screen.queryByText("没有可用目标")).toBeNull();
   });
 
+  // The alias is the grouping key, and a bare text box made "join chat" and
+  // "create a new alias" look like the same act. A typo produced a second alias
+  // with one target, no error, and no way for the project that authorized the
+  // first one to reach it.
+  it("offers the existing aliases to join, and still accepts a new name", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_a", public_model: "chat", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_b", public_model: "zeta", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
+
+    const alias = screen.getByLabelText(/公共模型别名/);
+    expect(alias).toHaveAttribute("list", "route-alias-options");
+    expect(Array.from(
+      document.getElementById("route-alias-options")!.querySelectorAll("option"),
+      (option) => option.getAttribute("value"),
+    )).toEqual(["chat", "zeta"]);
+
+    // The list is a suggestion, not a constraint: the first route on a new
+    // alias has nothing to pick from.
+    fireEvent.change(alias, { target: { value: "brand-new" } });
+    expect(screen.queryByText(/将加入已有别名/)).toBeNull();
+  });
+
+  // Typing an existing alias joins its group, and the priority typed above only
+  // means something against the ones already there.
+  it("shows what an existing alias already holds, in the engine's order", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_slow", public_model: "chat", deployment_id: "deployment_azure", priority: 20, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_fast", public_model: "chat", deployment_id: "deployment_gpt", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_claude", name: "Claude", provider_id: "p", provider_model: "sonnet", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
+    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+
+    expect(await screen.findByText(/将加入已有别名“chat”，它当前有 2 个目标/)).toBeVisible();
+    const priorities = Array.from(document.querySelectorAll(".route-join-targets code"), (cell) => cell.textContent);
+    expect(priorities).toEqual(["8", "20"]);
+  });
+
+  // Both of these are refusals the Admin API already makes. Saying so in the
+  // form turns a 400 after the fact into something visible before the save.
+  it("says before the save that a duplicate deployment will be refused", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_a", public_model: "chat", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
+    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+
+    // The deployment select defaults to the first enabled one, which is the one
+    // the existing route already uses.
+    expect(await screen.findByText(/重复指向同一部署会被拒绝/)).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
+    expect(screen.queryByText(/重复指向同一部署会被拒绝/)).toBeNull();
+  });
+
+  it("says before the save that a mixed strategy will be refused", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_a", public_model: "chat", deployment_id: "deployment_gpt", priority: 10, strategy: "round_robin", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
+    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+    fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
+
+    // The form defaults to ordered, and the alias is on round robin.
+    expect(await screen.findByText(/必须用同一个策略|保存会被拒绝/)).toBeVisible();
+  });
+
   // The confirmation counted enabled rows, and a withheld row is enabled and
   // serving nothing. It therefore told the operator another route would keep
   // answering while this same page showed that route as withheld, and the alias
