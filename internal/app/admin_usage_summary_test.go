@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 type summaryResponse struct {
@@ -40,7 +42,9 @@ type summaryResponse struct {
 		Attempts      int64  `json:"attempts"`
 		CostMicrosUSD int64  `json:"cost_micros_usd"`
 	} `json:"groups"`
-	GroupsTruncated bool `json:"groups_truncated"`
+	GroupsTruncated bool   `json:"groups_truncated"`
+	Sort            string `json:"sort"`
+	Order           string `json:"order"`
 	TimezoneChanges []struct {
 		PeriodID string `json:"period_id"`
 	} `json:"timezone_changes"`
@@ -220,6 +224,64 @@ func TestUsageSummaryTotalsSurviveAGroupingWithoutRequestIdentity(t *testing.T) 
 	if len(byProvider.Buckets) != 1 || byProvider.Buckets[0].Requests == nil ||
 		*byProvider.Buckets[0].Requests != 2 {
 		t.Fatalf("buckets=%#v", byProvider.Buckets)
+	}
+}
+
+// Ranking happens before the tail is folded, so the rows on screen are the
+// largest by the measure that was asked for. Sorting a cost-selected page by
+// tokens afterwards would print a heading above rows that were never selected
+// for it, with the true leader hidden inside __other__.
+func TestUsageSummaryRanksTheBreakdownBeforeFoldingIt(t *testing.T) {
+	runtime, cookie := summaryRuntime(t, 1)
+	runtime.saveUsageCheckpoint()
+
+	byCost := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?group_by=project&sort=cost")
+	byTokens := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?group_by=project&sort=tokens&order=asc")
+	if len(byCost.Groups) != 1 || len(byTokens.Groups) != 1 {
+		t.Fatalf("fixture groups cost=%#v tokens=%#v", byCost.Groups, byTokens.Groups)
+	}
+	// The response says which ranking produced it, so the console cannot label
+	// a list by a measure the server did not use.
+	if byCost.Sort != "cost" || byCost.Order != "desc" {
+		t.Fatalf("cost ranking reported as %s/%s", byCost.Sort, byCost.Order)
+	}
+	if byTokens.Sort != "tokens" || byTokens.Order != "asc" {
+		t.Fatalf("token ranking reported as %s/%s", byTokens.Sort, byTokens.Order)
+	}
+
+	response := authenticatedAdminGet(t, runtime, cookie,
+		"/admin/api/v1/usage/summary?group_by=project&sort=cheapest")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown sort measure must be refused, got %d", response.Code)
+	}
+	response = authenticatedAdminGet(t, runtime, cookie,
+		"/admin/api/v1/usage/summary?group_by=project&order=sideways")
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown order must be refused, got %d", response.Code)
+	}
+}
+
+// Ordering by success rate puts the worst first when asked ascending, and a
+// dimension value with no calls at all ranks as healthy rather than as the
+// worst — an idle project is not a failing one.
+func TestSummaryRankingBySuccessRateTreatsIdleAsHealthy(t *testing.T) {
+	busy := domain.DailyRollup{Requests: 10, RequestErrors: 5}
+	idle := domain.DailyRollup{}
+	perfect := domain.DailyRollup{Requests: 4}
+	if groupRank(busy, "success_rate", true) >= groupRank(perfect, "success_rate", true) {
+		t.Fatal("a half-failing row must rank below a clean one")
+	}
+	if groupRank(idle, "success_rate", true) != groupRank(perfect, "success_rate", true) {
+		t.Fatal("a row with no calls must not rank as the worst performer")
+	}
+	if groupRank(busy, "calls", true) != 10 || groupRank(busy, "errors", true) != 5 {
+		t.Fatalf("call and error ranking read the wrong columns: %#v", busy)
+	}
+	// On a dimension without request identity the same measures read the
+	// attempt columns instead, which is what its table shows.
+	attempts := domain.DailyRollup{Attempts: 7, Errors: 2}
+	if groupRank(attempts, "calls", false) != 7 || groupRank(attempts, "errors", false) != 2 {
+		t.Fatalf("attempt-level ranking read the wrong columns: %#v", attempts)
 	}
 }
 

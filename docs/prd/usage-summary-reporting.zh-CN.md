@@ -1,6 +1,6 @@
 # 用量汇总报表（按日 / 按月 / 按年）：设计与实施计划
 
-- 状态：In progress — D6/D7/D9 取 a、D8 取 d，均已实现。S0/S1 完成并已提交；S2 只差「环比上一期」；§六 的空态骨架未做；S3 另议
+- 状态：In progress — D6/D7/D9 取 a、D8 取 d，均已实现。S0/S1 完成；S2 只差「环比上一期」；真机验证只在数据副本上做过（见 §八）；S3 另议
 - 目标版本：metadata schema v33 / usage checkpoint v8 / Admin API v1
 - 日期：2026-08-30
 - 文档语言：中文
@@ -400,6 +400,8 @@ GET /admin/api/v1/usage/summary
   &project_id= | &provider_id= | &deployment_id= | &model= | &provider_model=
 
   &limit=50                                  // groups 条数，默认 50，上限 100
+  &sort=cost|calls|tokens|errors|success_rate // 默认 cost；排序在折叠之前进行
+  &order=desc|asc                            // 默认 desc
 ```
 
 响应：
@@ -475,7 +477,7 @@ GET /admin/api/v1/usage/summary
 │   粒度：日 / 月 / 年 / 自定义      对比：上一期（可关）
 │   KPI：调用数 · 成功率 · 令牌（报告/估算） · 已知成本（估算部分与未知计费另行标注）
 │   趋势图：月视图按天、年视图按月，指标切换
-│   维度表：项目 / 公开模型 / 服务商 / 部署，可排序，行内「查看明细 →」
+│   维度表：项目 / 公开模型 / 服务商 / 部署，表头可排序（服务端排），行内「查看明细 →」
 │   导出 CSV（当前筛选与区间）
 └─ [调用明细]  ← 现有表格与筛选条，原样保留
 ```
@@ -486,9 +488,13 @@ GET /admin/api/v1/usage/summary
   过去的某个月）；`:35` 用固定秒步长生成 x 轴（月不是固定秒数，账期日在夏令时也不是）；`:29` 按
   UTC 纪元对齐桶（换成 86400 就是 UTC 午夜，正好把 §一.1 的分叉搬回图表），而图轴按账期时区渲染
   （`TrendChart.tsx` 的 `uPlot.tzDate`）；`:27/:105` 硬读 `bucket.hour`。现有单测钉死这套形状
-  （`trend.test.ts:9-17`）。改法：`buildTrendSeries` 改为接收服务端返回的 `buckets[]`（每桶自带
-  `start/end`），x 轴取桶边界本身、不再步长生成，窗口取 `[buckets[0].start, 末桶.end]`；桶的时间
-  字段从 `hour` **就地改**成通用名（不并存两个字段）；`summarizeTrend` 去掉 now 锚定。
+  （`trend.test.ts:9-17`）。**已实现**：`buildTrendSeries` 改为接收与桶形状无关的 `TrendPoint[]`
+  （每点自带 `startSeconds`），x 轴取桶边界本身、不再步长生成，`summarizeTrend` 去掉 now 锚定。
+  > 与初稿的差别：初稿要求把桶的时间字段从 `hour` **就地改名**。实际做法是加一层适配
+  > （`hourlyTrendPoints` / `periodTrendPoints`）。`Bucket.hour` 是 `/dashboard` 的响应契约，改名
+  > 要连带改 Go 侧 JSON tag、前端类型和一批总览页测试；而初稿真正要防的「同一个类型上并存两个
+  > 时间字段」并没有发生——`Bucket` 只有 `hour`，`SummaryBucket` 只有 `start`/`end`，图表两者都不
+  > 直接读。
 - **默认落在哪个标签页**（已实现）：URL 显式带 `tab=` 就听它的；否则只要 URL 带了任何一个明细
   筛选（`request_id` / `project_id` / `model` / `provider_id` / `provider_model` / `deployment_id` /
   `status` / `start` / `end`）就落在「调用明细」，其余情况落在「汇总」。这样一条下钻链接不会
@@ -507,7 +513,16 @@ GET /admin/api/v1/usage/summary
   解析约定。导出范围即当前响应范围；若 groups 被截断，CSV 必须带上 `__other__` 行。
 - 文案按运维语言，不用实现术语：「按月看用量」而不是「rollup 聚合」；「近似 P95」标注清楚；
   非请求级维度（provider / deployment / provider_model）的成功率标注为「尝试成功率」（D9-a）。
-- 空态保留表格骨架与行标签，解释一句为什么是空的，不整块替换成插图。
+- **排序在服务端**（已实现）：表头点击把 `sort`/`order` 发给服务端，因为长尾是在服务端折叠的
+  ——前端对一个「按成本选出来的 Top-N」再按令牌排序，会给一份列表安上它并不成立的标题，真正的
+  令牌大户可能正躺在 `__other__` 里。响应回显 `sort`/`order`，表头按**服务端答复的**排序标注
+  `aria-sort`，而不是按控件此刻的状态。成本/调用量/令牌默认降序，成功率默认升序（问的是「谁最
+  差」）。
+- **重排不清空面板**（已实现）：换排序或粒度是对同一主题的重读，不是换主题，所以查询在途时保留
+  上一份数据（`keepPreviousData`），否则每点一次表头整块面板都会闪成加载态，运维刚点的那个控件
+  会从指针底下消失。
+- 空态保留表格骨架与行标签，解释一句为什么是空的，不整块替换成插图（**已实现**：无数据时表头与
+  可排序按钮仍在，表体只有一行说明）。
 - i18n：zh-CN 与 en 同步补 `usage.summary.*` 键。
 
 ## 七、分期
@@ -516,7 +531,7 @@ GET /admin/api/v1/usage/summary
 |---|---|---|
 | **S0（已完成）** | rollup 存储 + 迁移 33（含 `requiredBuckets` 登记）+ `AttemptEvent`/`RequestSummary` 补账期字段 + `Dashboard.Today` 改按 `PeriodID` 归集 + Apply 内增量 + checkpoint/rollup 单事务落盘 + 双向拒读重建 + `rebuild-summary` + 明细端点 `deployment_id` + `GET /usage/summary`（日/月/年）+ 每维度键上限（D8-d） | 见 §八 前四条，均已有测试并做过逆向验证 |
 | **S1（已完成）** | 「汇总」标签页：KPI、趋势图（`buildTrendSeries` 已按桶边界重构）、维度表、下钻联动 | 已实现并有测试：下钻链接带 `tab=attempts` + 维度筛选 + **绝对时间边界**，明细页从 URL 还原为账期时区的本地输入 |
-| **S2（部分完成）** | 年视图 ✓、CSV 导出 ✓、时区变更提示 ✓、区间上限（按桶数，见 §五）✓；**未做**：环比上一期 | CSV 由前端从当前响应生成（含 `__other__` 行），不新增端点 |
+| **S2（部分完成）** | 年视图 ✓、CSV 导出 ✓、时区变更提示 ✓、区间上限（按桶数，见 §五）✓、维度表服务端排序 ✓、空态骨架 ✓；**未做**：环比上一期 | CSV 由前端从当前响应生成（含 `__other__` 行），不新增端点 |
 | **S3（另议）** | 内存 aggregate 的裁剪策略（见 R1），以及在其之上才谈得上的「明细可查下界」 | 单独提案，不与本功能同期改 |
 
 ## 八、验证

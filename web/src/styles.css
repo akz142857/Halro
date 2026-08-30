@@ -1095,6 +1095,18 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 /* A qualifier under a panel. It states what the figure above can and cannot
    claim, so it is set as a note rather than as another number. */
 .panel-note { margin: var(--space-2) var(--space-3) 0; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
+/* A sortable heading is a button, not decorated text: it has to be reachable
+   by keyboard and to say which way it is sorting. It inherits the heading's
+   own type so the row still reads as a header. */
+.column-sort {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0; color: inherit; font: inherit; background: none; border: 0; cursor: pointer;
+}
+.column-sort:hover { color: var(--color-action-primary); }
+.column-sort:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.column-sort i { color: var(--muted-2); font-style: normal; }
+th[aria-sort="ascending"] .column-sort, th[aria-sort="descending"] .column-sort { color: var(--color-action-primary); }
+th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sort i { color: inherit; }
 .usage-table { table-layout: fixed; }
 .usage-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
 .cost-evidence { max-width: 100%; margin-top: 4px; color: var(--color-text-tertiary); font-size: var(--font-size-xs); line-height: 1.5; white-space: normal; }

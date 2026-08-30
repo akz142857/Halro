@@ -183,6 +183,8 @@ export interface UsageSummary {
   groups?: SummaryGroup[];
   groups_truncated?: boolean;
   groups_other_count?: number;
+  sort?: string;
+  order?: string;
   filter?: { dimension: string; value: string };
   timezone_changes: Array<{ period_id: string; from_version: number; to_version: number }>;
   resource_labels?: Record<string, string>;

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, Metric, SegmentedChoice, SegmentedTabs } from "../components";
@@ -11,6 +11,17 @@ import type { SummaryGroup, SummaryMetrics, UsageSummary } from "../types";
 const TrendChart = lazy(() => import("../TrendChart"));
 
 type Granularity = "day" | "month" | "year";
+type SortKey = "calls" | "success_rate" | "tokens" | "cost";
+
+// Which measure each sortable column ranks by, and which direction reads first.
+// Cost and volume are asked as "who is biggest"; a success rate is asked as
+// "what is worst", so it opens ascending.
+const sortableColumns: Array<{ key: SortKey; ascendingFirst: boolean }> = [
+  { key: "calls", ascendingFirst: false },
+  { key: "success_rate", ascendingFirst: true },
+  { key: "tokens", ascendingFirst: false },
+  { key: "cost", ascendingFirst: false },
+];
 type Dimension = "" | "project" | "requested_model" | "provider" | "deployment" | "provider_model";
 
 // The attempt-detail filter each dimension drills into. A dimension with no
@@ -29,19 +40,33 @@ export function UsageSummaryPanel() {
   const [granularity, setGranularity] = useState<Granularity>("month");
   const [dimension, setDimension] = useState<Dimension>("project");
   const [metric, setMetric] = useState<TrendMetric>("cost");
+  const [sort, setSort] = useState<SortKey>("cost");
+  const [ascending, setAscending] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
 
   const query = useMemo(() => {
     const params = new URLSearchParams({ granularity });
-    if (dimension) params.set("group_by", dimension);
+    if (dimension) {
+      params.set("group_by", dimension);
+      // The ranking goes to the server because the tail is folded there: a page
+      // selected by cost and then sorted here by tokens would head a list whose
+      // true leader is inside __other__.
+      params.set("sort", sort);
+      params.set("order", ascending ? "asc" : "desc");
+    }
     if (start) params.set("start", start);
     if (end) params.set("end", end);
     return `?${params}`;
-  }, [granularity, dimension, start, end]);
+  }, [granularity, dimension, sort, ascending, start, end]);
   const summary = useQuery({
     queryKey: ["usage-summary", query],
     queryFn: () => api.usageSummary(query),
+    // Changing the ranking or the granularity is a re-read of the same subject,
+    // not a move to another one. Without this the whole panel — totals, chart
+    // and table — is replaced by a spinner on every click, and the control the
+    // operator just used disappears from under the pointer.
+    placeholderData: keepPreviousData,
   });
 
   if (summary.isPending) return <Loading />;
@@ -51,11 +76,21 @@ export function UsageSummaryPanel() {
   const requests = totals.requests ?? 0;
   const successRate = requests ? (requests - (totals.request_errors ?? 0)) / requests : 1;
   const groupedBy = (report.group_by ?? "") as Dimension;
+  const rankBy = (next: SortKey) => {
+    if (next === sort) {
+      setAscending(!ascending);
+      return;
+    }
+    setSort(next);
+    setAscending(sortableColumns.find((column) => column.key === next)?.ascendingFirst ?? false);
+  };
   const estimatedTokens = totals.estimated_input_tokens + totals.estimated_output_tokens;
   const reportedTokens = Math.max(0, totals.input_tokens + totals.output_tokens - estimatedTokens);
 
   return (
-    <section className="usage-summary" aria-label={t("usage.summary.title")}>
+    // Keeping the previous answer on screen means a refetch is otherwise
+    // invisible; aria-busy says it is happening without flashing the panel.
+    <section className="usage-summary" aria-label={t("usage.summary.title")} aria-busy={summary.isFetching}>
       {/* The three time controls sit together because they answer one question
           — which stretch of the ledger, at what resolution — and the grouping
           dimension, which changes the table rather than the window, follows
@@ -176,6 +211,9 @@ export function UsageSummaryPanel() {
             groups={report.groups ?? []}
             labels={report.resource_labels ?? {}}
             range={rangeInstants(report)}
+            sort={report.sort ?? sort}
+            ascending={(report.order ?? "desc") === "asc"}
+            onSort={rankBy}
           />
         </article>
       )}
@@ -183,31 +221,47 @@ export function UsageSummaryPanel() {
   );
 }
 
-function SummaryGroupTable({ dimension, groups, labels, range }: {
+function SummaryGroupTable({ dimension, groups, labels, range, sort, ascending, onSort }: {
   dimension: Exclude<Dimension, "">;
   groups: SummaryGroup[];
   labels: Record<string, string>;
   range: { start: string; end: string } | null;
+  sort: string;
+  ascending: boolean;
+  onSort: (key: SortKey) => void;
 }) {
   const { t } = useTranslation();
-  if (groups.length === 0) {
-    return <EmptyState title={t("usage.summary.emptyTitle")}>{t("usage.summary.emptyDescription")}</EmptyState>;
-  }
   const requestLevel = dimension === "project" || dimension === "requested_model";
+  const headings: Record<SortKey, string> = {
+    calls: requestLevel ? t("dashboard.completedRequests") : t("usage.summary.attempts"),
+    success_rate: requestLevel ? t("dashboard.requestSuccessRate") : t("usage.summary.attemptSuccessRate"),
+    tokens: t("dashboard.reportedTokens"),
+    cost: t("dashboard.knownCost"),
+  };
   return (
     <div className="table-shell">
       <table>
         <thead>
           <tr>
             <th>{t(`usage.summary.dimensions.${dimension}`)}</th>
-            <th>{requestLevel ? t("dashboard.completedRequests") : t("usage.summary.attempts")}</th>
-            <th>{requestLevel ? t("dashboard.requestSuccessRate") : t("usage.summary.attemptSuccessRate")}</th>
-            <th>{t("dashboard.reportedTokens")}</th>
-            <th>{t("dashboard.knownCost")}</th>
+            {sortableColumns.map((column) => (
+              <th key={column.key} aria-sort={sort === column.key ? (ascending ? "ascending" : "descending") : "none"}>
+                <button type="button" className="column-sort" onClick={() => onSort(column.key)}>
+                  {headings[column.key]}
+                  <i aria-hidden="true">{sort === column.key ? (ascending ? "↑" : "↓") : "↕"}</i>
+                </button>
+              </th>
+            ))}
             <th />
           </tr>
         </thead>
         <tbody>
+          {/* The skeleton stays when there is nothing to put in it: an empty
+              table still says which questions this view answers, where a
+              replacement panel says only that something is missing. */}
+          {groups.length === 0 && (
+            <tr><td colSpan={6}>{t("usage.summary.emptyDescription")}</td></tr>
+          )}
           {groups.map((group) => {
             const total = requestLevel ? group.requests ?? 0 : group.attempts;
             const failed = requestLevel ? group.request_errors ?? 0 : group.errors;

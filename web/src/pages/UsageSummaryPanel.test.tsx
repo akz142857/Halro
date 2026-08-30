@@ -153,6 +153,63 @@ describe("UsageSummaryPanel", () => {
     expect(query.get("granularity")).toBe("day");
   });
 
+  // The tail is folded on the server, so the ranking has to be decided there
+  // too. A page selected by cost and re-sorted in the browser would head a list
+  // whose true leader is sitting inside __other__.
+  it("sends the ranking to the server and reflects the one it answered with", async () => {
+    const request = vi.spyOn(api, "usageSummary").mockImplementation(async (query = "") => {
+      const params = new URLSearchParams(query.slice(1));
+      return summary({
+        group_by: "project",
+        groups: [{ key: "prj_a", ...metrics({ requests: 10, attempts: 12, cost_micros_usd: 1 }) } as SummaryGroup],
+        sort: params.get("sort") ?? "cost",
+        order: params.get("order") ?? "desc",
+      });
+    });
+    renderPanel();
+
+    await screen.findByRole("table");
+    // The header is looked up again before each click: re-rendering replaces
+    // the node, and a click on the detached one does nothing at all.
+    fireEvent.click(screen.getByRole("button", { name: /已报告词元/ }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    let params = new URLSearchParams((request.mock.calls[1][0] ?? "").slice(1));
+    expect(params.get("sort")).toBe("tokens");
+    expect(params.get("order")).toBe("desc");
+
+    // Clicking the column it is already sorted by turns it around.
+    fireEvent.click(screen.getByRole("button", { name: /已报告词元/ }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    params = new URLSearchParams((request.mock.calls[2][0] ?? "").slice(1));
+    expect(params.get("order")).toBe("asc");
+
+    // A rate is asked as "what is worst", so it opens ascending.
+    fireEvent.click(screen.getByRole("button", { name: /请求成功率/ }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    params = new URLSearchParams((request.mock.calls[3][0] ?? "").slice(1));
+    expect(params.get("sort")).toBe("success_rate");
+    expect(params.get("order")).toBe("asc");
+
+    // And the header shows the ranking the server reported, not the one the
+    // control happens to hold while a query is in flight.
+    await waitFor(() => {
+      const heading = screen.getByRole("button", { name: /请求成功率/ }).closest("th");
+      expect(heading).toHaveAttribute("aria-sort", "ascending");
+    });
+  });
+
+  // An empty table still names the questions this view answers. Replacing it
+  // with a panel says only that something is missing.
+  it("keeps the table and its headings when a range has no rows", async () => {
+    vi.spyOn(api, "usageSummary").mockResolvedValue(summary({ group_by: "project", groups: [] }));
+    renderPanel();
+
+    const table = within(await screen.findByRole("table"));
+    expect(table.getByRole("button", { name: /已知成本/ })).toBeVisible();
+    expect(table.getAllByRole("columnheader")).toHaveLength(6);
+    expect(table.getByText(/换一个时间范围/)).toBeVisible();
+  });
+
   it("asks the server for the selected granularity and dimension", async () => {
     const request = vi.spyOn(api, "usageSummary").mockResolvedValue(summary());
     renderPanel();

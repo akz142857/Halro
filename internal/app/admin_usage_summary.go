@@ -26,6 +26,16 @@ const (
 // range illegal.
 var summaryBucketCeilings = map[string]int{"day": 400, "month": 36, "year": 10}
 
+// summarySortKeys are the measures a breakdown can be ordered by.
+//
+// The order is applied before the tail is folded, not after, so the rows on
+// screen really are the largest by the measure the operator chose. Sorting a
+// cost-selected top twenty by tokens would put a heading above rows that were
+// never selected for it — the true token leader could sit inside __other__.
+var summarySortKeys = map[string]struct{}{
+	"cost": {}, "calls": {}, "tokens": {}, "errors": {}, "success_rate": {},
+}
+
 // summaryDimensionFilters maps a query parameter to the rollup dimension it
 // selects. The names match the attempt detail endpoint so an operator moving
 // between the two pages is spelling the same filter the same way.
@@ -106,6 +116,7 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 	query := request.URL.Query()
 	allowed := map[string]struct{}{
 		"granularity": {}, "start": {}, "end": {}, "group_by": {}, "limit": {},
+		"sort": {}, "order": {},
 		"project_id": {}, "model": {}, "provider_id": {}, "deployment_id": {}, "provider_model": {},
 	}
 	for name := range query {
@@ -143,6 +154,19 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 	if groupBy != "" && filterDimension != "" {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": "group_by and a dimension filter cannot be combined; the summary stores no cross terms"})
+		return
+	}
+	sortKey := query.Get("sort")
+	if sortKey == "" {
+		sortKey = "cost"
+	}
+	if _, known := summarySortKeys[sortKey]; !known {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "unknown sort measure"})
+		return
+	}
+	ascending := query.Get("order") == "asc"
+	if order := query.Get("order"); order != "" && order != "asc" && order != "desc" {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "order must be asc or desc"})
 		return
 	}
 	limit := summaryDefaultGroupLimit
@@ -191,7 +215,8 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 	}
 
 	buckets, totals, groups, truncated, otherCount := summarize(
-		rows[reportDimension], rows[groupBy], granularity, reportDimension, groupBy, limit)
+		rows[reportDimension], rows[groupBy], granularity, reportDimension, groupBy,
+		summaryOrder{key: sortKey, ascending: ascending}, limit)
 	body := map[string]any{
 		"granularity":        granularity,
 		"start":              start,
@@ -207,6 +232,8 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 		body["groups"] = groups
 		body["groups_truncated"] = truncated
 		body["groups_other_count"] = otherCount
+		body["sort"] = sortKey
+		body["order"] = map[bool]string{true: "asc", false: "desc"}[ascending]
 	}
 	if filterDimension != "" {
 		body["filter"] = map[string]string{"dimension": filterDimension, "value": filterValue}
@@ -317,8 +344,15 @@ func summaryTimezoneChanges(rows []summaryRow) []summaryTimezoneChange {
 // summarize renders the two halves of the response from the two row sets they
 // are actually about: the range totals and the chart from the reporting
 // dimension, the breakdown from the grouped one.
+// summaryOrder is the measure and direction a breakdown is ranked by.
+type summaryOrder struct {
+	key       string
+	ascending bool
+}
+
 func summarize(
-	reportRows, groupRows []summaryRow, granularity, reportDimension, groupBy string, limit int,
+	reportRows, groupRows []summaryRow, granularity, reportDimension, groupBy string,
+	order summaryOrder, limit int,
 ) ([]summaryBucket, summaryMetrics, []summaryGroup, bool, int) {
 	byBucket := map[string]*domain.DailyRollup{}
 	bucketSpan := map[string][2]int64{}
@@ -385,24 +419,29 @@ func summarize(
 		})
 	}
 
-	groups, truncated, otherCount := renderGroups(byGroup, groupOrder, limit, groupRequestLevel)
+	groups, truncated, otherCount := renderGroups(byGroup, groupOrder, order, limit, groupRequestLevel)
 	return buckets, renderMetrics(total, requestLevel), groups, truncated, otherCount
 }
 
-// renderGroups keeps the largest groups by cost and folds the rest into one
-// row, on the server. Handing the console a truncated list instead would let
-// the rows it shows add up to less than the total it shows beside them.
+// renderGroups ranks the breakdown by the requested measure, keeps the leading
+// rows, and folds the rest into one, on the server. Handing the console a
+// truncated list instead would let the rows it shows add up to less than the
+// total printed beside them.
 func renderGroups(
-	byGroup map[string]*domain.DailyRollup, order []string, limit int, requestLevel bool,
+	byGroup map[string]*domain.DailyRollup, order []string, ranking summaryOrder, limit int, requestLevel bool,
 ) ([]summaryGroup, bool, int) {
 	sort.Slice(order, func(i, j int) bool {
-		left, right := byGroup[order[i]], byGroup[order[j]]
-		if left.CostMicrosUSD != right.CostMicrosUSD {
-			return left.CostMicrosUSD > right.CostMicrosUSD
+		left, right := *byGroup[order[i]], *byGroup[order[j]]
+		leftValue, rightValue := groupRank(left, ranking.key, requestLevel), groupRank(right, ranking.key, requestLevel)
+		if leftValue != rightValue {
+			if ranking.ascending {
+				return leftValue < rightValue
+			}
+			return leftValue > rightValue
 		}
-		if left.Attempts != right.Attempts {
-			return left.Attempts > right.Attempts
-		}
+		// Ties break on the key so the same data always renders in the same
+		// order — a list that reshuffles between refreshes reads as changing
+		// data.
 		return order[i] < order[j]
 	})
 	groups := make([]summaryGroup, 0, len(order))
@@ -436,6 +475,32 @@ func renderGroups(
 		Key: domain.RollupOtherKey, summaryMetrics: renderMetrics(other, requestLevel),
 	})
 	return groups, true, len(order) - limit
+}
+
+// groupRank is the value one row is ranked by. Success rate is scaled rather
+// than divided into a float so ordering stays exact, and a row with nothing to
+// measure ranks as a full success rather than as zero — an idle project is not
+// the worst-performing one.
+func groupRank(row domain.DailyRollup, key string, requestLevel bool) int64 {
+	calls, failures := row.Attempts, row.Errors
+	if requestLevel {
+		calls, failures = row.Requests, row.RequestErrors
+	}
+	switch key {
+	case "calls":
+		return calls
+	case "tokens":
+		return row.InputTokens + row.OutputTokens
+	case "errors":
+		return failures
+	case "success_rate":
+		if calls == 0 {
+			return 100_000
+		}
+		return (calls - failures) * 100_000 / calls
+	default:
+		return row.CostMicrosUSD
+	}
 }
 
 func renderMetrics(row domain.DailyRollup, requestLevel bool) summaryMetrics {
