@@ -184,17 +184,22 @@ describe("RoutesPage", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
 
-    const alias = screen.getByLabelText(/公共模型别名/);
-    expect(alias).toHaveAttribute("list", "route-alias-options");
+    // The console's own combobox, not a native datalist — the browser draws
+    // that popup itself and no stylesheet can reach it.
+    const alias = screen.getByRole("combobox", { name: "公共模型别名" });
+    fireEvent.focus(alias);
+    // Scoped to the popup: the deployment and strategy selects carry option
+    // elements of their own.
     expect(Array.from(
-      document.getElementById("route-alias-options")!.querySelectorAll("option"),
-      (option) => option.getAttribute("value"),
-    )).toEqual(["chat", "zeta"]);
+      within(screen.getByRole("listbox")).getAllByRole("option"),
+      (option) => option.textContent,
+    )).toEqual(["chat1 个已启用目标", "zeta1 个已启用目标"]);
 
     // The list is a suggestion, not a constraint: the first route on a new
     // alias has nothing to pick from.
     fireEvent.change(alias, { target: { value: "brand-new" } });
     expect(screen.queryByText(/将加入已有别名/)).toBeNull();
+    expect(screen.getByText(/没有匹配的已有别名/)).toBeVisible();
   });
 
   // Typing an existing alias joins its group, and the priority typed above only
@@ -212,7 +217,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
-    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "公共模型别名" }), { target: { value: "chat" } });
 
     expect(await screen.findByText(/将加入已有别名“chat”，它当前有 2 个目标/)).toBeVisible();
     const priorities = Array.from(document.querySelectorAll(".route-join-targets code"), (cell) => cell.textContent);
@@ -232,7 +237,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
-    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "公共模型别名" }), { target: { value: "chat" } });
 
     // The deployment select defaults to the first enabled one, which is the one
     // the existing route already uses.
@@ -253,7 +258,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
-    fireEvent.change(screen.getByLabelText(/公共模型别名/), { target: { value: "chat" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "公共模型别名" }), { target: { value: "chat" } });
     fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
 
     // The form defaults to ordered, and the alias is on round robin.

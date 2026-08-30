@@ -5,6 +5,7 @@ import {
   ConfirmButton,
   EmptyState,
   ErrorState,
+  Combobox,
   Field,
   InlineTestControl,
   isStepUpPrompt,
@@ -303,7 +304,10 @@ function RouteTestAction({ route }: { route: Route }) {
 function RouteForm({ current, routes, deployments, onClose }: { current?: Route; routes: Route[]; deployments: Deployment[]; onClose: () => void }) {
   const { t } = useTranslation();
   const enabled = deployments.filter((item) => item.enabled || item.id === current?.deployment_id);
-  const [publicModel, setPublicModel] = useState(current?.public_model ?? "chat");
+  // Empty rather than a guessed "chat": the field is a combobox now, and a
+  // prefilled value is also a filter — it would hide every alias that does not
+  // contain it, which is the opposite of offering what exists.
+  const [publicModel, setPublicModel] = useState(current?.public_model ?? "");
   const [deploymentID, setDeploymentID] = useState(current?.deployment_id ?? enabled[0]?.id ?? "");
   const [priority, setPriority] = useState(current?.priority ?? 10);
   const [strategy, setStrategy] = useState<"ordered" | "round_robin">(current?.strategy || "ordered");
@@ -347,10 +351,20 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
   // made the two outcomes look identical and a typo silently produce a second
   // alias with one target — no error, and the project that authorized the first
   // one cannot reach it.
-  const aliases = useMemo(
-    () => Array.from(new Set(routes.map((route) => route.public_model))).sort((left, right) => left.localeCompare(right)),
-    [routes],
-  );
+  const aliasOptions = useMemo(() => {
+    const targets = new Map<string, number>();
+    routes.forEach((route) => {
+      if (route.enabled) targets.set(route.public_model, (targets.get(route.public_model) ?? 0) + 1);
+    });
+    return Array.from(new Set(routes.map((route) => route.public_model)))
+      .sort((left, right) => left.localeCompare(right))
+      .map((alias) => ({
+        value: alias,
+        // How many enabled routes the alias already has, so picking one is not
+        // a blind choice between names that look alike.
+        secondary: t("routes.aliasTargetCount", { count: targets.get(alias) ?? 0 }),
+      }));
+  }, [routes, t]);
   // What the operator is about to join. Facts only: which targets the alias
   // already has, in the order the engine tries them. What joining it *costs*
   // — the Phase 2 endpoints it gives up, the projects whose reach it widens —
@@ -380,18 +394,23 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
       ) : (
         <form className="route-form" onSubmit={submit}>
           <div className="route-form-body form-grid">
-          {/* A native combobox: pick an existing alias to join its group, or
-              type a new name to start one. Both outcomes stay reachable — the
-              list is a suggestion, not a constraint, because the first route on
-              a new alias has nothing to pick from. The datalist sits outside the
-              Field because Field labels a single control. */}
-          <Field label={t("routes.publicAlias")} hint={t("routes.publicAliasHint")}>
-            <input autoComplete="off" autoFocus required list="route-alias-options"
-              value={publicModel} onChange={(event) => setPublicModel(event.target.value)} />
-          </Field>
-          <datalist id="route-alias-options">
-            {aliases.map((alias) => <option value={alias} key={alias} />)}
-          </datalist>
+          {/* Pick an existing alias to join its group, or type a new name to
+              start one. Both outcomes stay reachable — the list is a
+              suggestion, not a constraint, because the first route on a new
+              alias has nothing to pick from. This is the console's own
+              combobox rather than a native <datalist>, whose popup the browser
+              draws itself and no stylesheet can reach. */}
+          <Combobox
+            label={t("routes.publicAlias")}
+            value={publicModel}
+            onChange={setPublicModel}
+            options={aliasOptions}
+            listLabel={t("routes.aliasListLabel")}
+            emptyText={t("routes.aliasNoMatches")}
+            note={t("routes.publicAliasHint")}
+            required
+            autoFocus
+          />
           <Field label={t("routes.deployment")}>
             <select required value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
               {enabled.map((deployment) => (

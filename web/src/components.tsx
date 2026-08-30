@@ -815,53 +815,94 @@ const MENU_MAX_HEIGHT = 288;
 // Below this the menu is not worth opening downwards, so it flips instead.
 const MENU_MIN_HEIGHT = 176;
 
-export function TimeZoneField({
+export interface ComboboxOption {
+  value: string;
+  /** Shown after the value, dimmed. Empty for options that need no gloss. */
+  secondary?: string;
+  /** Read instead of the value when the two together are what identifies it. */
+  ariaLabel?: string;
+}
+
+/**
+ * A text input that also offers what already exists: type a value the list does
+ * not hold, or pick one from it. Both outcomes stay reachable on purpose — the
+ * fields that use this one (a timezone, a model alias) accept names the console
+ * has never seen, so a plain select would make the common case tidy and the
+ * necessary case impossible.
+ *
+ * The list is portalled and positioned against the input's box on screen rather
+ * than absolutely inside the shell, because every ancestor that could contain
+ * it also clips it: a modal scrolls its own body, and a card ends well above
+ * the foot of the list.
+ */
+export function Combobox({
   label,
-  hint,
-  error,
   value,
   onChange,
+  options,
+  listLabel,
+  emptyText,
+  meta,
+  note,
+  noteIsError = false,
+  invalid = false,
+  enumerable = true,
   required = false,
   disabled = false,
+  autoFocus = false,
+  placeholder,
+  spellCheck,
+  className = "",
+  suffix,
 }: {
   label: string;
-  hint?: string;
-  error?: string;
   value: string;
   onChange: (value: string) => void;
+  options: ComboboxOption[];
+  listLabel: string;
+  emptyText?: string;
+  /** Given the number of options the current query leaves, for the row above
+   * the list. Called with the visible count, never the total. */
+  meta?: (visibleCount: number) => string;
+  note?: string;
+  noteIsError?: boolean;
+  invalid?: boolean;
+  enumerable?: boolean;
   required?: boolean;
   disabled?: boolean;
+  autoFocus?: boolean;
+  placeholder?: string;
+  spellCheck?: boolean;
+  className?: string;
+  suffix?: ReactNode;
 }) {
-  const { t } = useTranslation();
   const inputID = useId();
   const listID = useId();
   const descriptionID = useId();
   const shell = useRef<HTMLDivElement>(null);
-  const options = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [anchor, setAnchor] = useState<CSSProperties | null>(null);
-  const zones = supportedTimeZones();
-  const enumerable = zones.length > 0;
   const visible = useMemo(() => {
     // Matched with "_" as a space so "new york" finds America/New_York, which
     // is how the city is spelled everywhere except in the zone name.
     //
-    // Case-folded with toLowerCase, not toLocaleLowerCase: zone names are ASCII
-    // and the host locale is not the console's. Folding them in the host's
-    // locale turns the "I" of Indian/Maldives into a dotless "ı" on a Turkish
-    // machine, so a typed "indian" — already lowercase, and left alone — stops
-    // matching the very zone it names.
+    // Case-folded with toLowerCase, not toLocaleLowerCase: these names are
+    // ASCII and the host locale is not the console's. Folding them in the
+    // host's locale turns the "I" of Indian/Maldives into a dotless "i" on a
+    // Turkish machine, so a typed "indian" — already lowercase, and left
+    // alone — stops matching the very zone it names.
     const query = value.trim().toLowerCase().replace(/[\s_]+/g, " ");
-    if (!query) return zones;
-    return zones.filter((zone) => zone.toLowerCase().replace(/_/g, " ").includes(query));
-  }, [zones, value]);
+    if (!query) return options;
+    return options.filter((option) => option.value.toLowerCase().replace(/_/g, " ").includes(query));
+  }, [options, value]);
   useEffect(() => {
     if (!open) return;
     const closeOnOutsideInteraction = (event: PointerEvent) => {
       const target = event.target as Node;
       // The list is portalled out of the shell, so "outside" is both of them.
-      if (!shell.current?.contains(target) && !options.current?.contains(target)) {
+      if (!shell.current?.contains(target) && !list.current?.contains(target)) {
         setOpen(false);
         setActiveIndex(-1);
       }
@@ -904,10 +945,10 @@ export function TimeZoneField({
   }, [open]);
   useEffect(() => {
     if (activeIndex < 0) return;
-    options.current?.querySelector<HTMLElement>(`[data-zone-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" });
+    list.current?.querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex]);
-  const choose = (zone: string) => {
-    onChange(zone);
+  const choose = (next: string) => {
+    onChange(next);
     setOpen(false);
     setActiveIndex(-1);
   };
@@ -923,7 +964,7 @@ export function TimeZoneField({
       setActiveIndex((index) => index <= 0 ? Math.max(visible.length - 1, 0) : index - 1);
     } else if (event.key === "Enter" && open && activeIndex >= 0 && visible[activeIndex]) {
       event.preventDefault();
-      choose(visible[activeIndex]);
+      choose(visible[activeIndex].value);
     } else if (event.key === "Escape" && open) {
       event.preventDefault();
       event.stopPropagation();
@@ -931,68 +972,119 @@ export function TimeZoneField({
       setActiveIndex(-1);
     }
   };
-  // Only worth saying once the operator has stopped typing a name that goes
-  // nowhere; it is a warning, not a gate, for the same reason the list is open.
-  const unrecognised = Boolean(value.trim()) && !isSupportedTimeZone(value.trim());
-  const offset = !unrecognised && value.trim() ? zoneOffsetLabel(value.trim()) : "";
-  const note = error || (unrecognised ? t("timeZonePicker.unknownZone") : "") || hint;
   return (
-    <div className="field timezone-field">
+    <div className={`field ${className}`.trim()}>
       <label htmlFor={inputID}>{label}</label>
-      <div className={`timezone-input-shell ${open ? "open" : ""}`} ref={shell}>
+      <div className={`combobox-shell ${open ? "open" : ""}`} ref={shell}>
         <input
           id={inputID}
           required={required}
           disabled={disabled}
-          spellCheck={false}
+          autoFocus={autoFocus}
+          spellCheck={spellCheck}
           autoComplete="off"
           value={value}
+          placeholder={placeholder}
           role={enumerable ? "combobox" : undefined}
           aria-autocomplete={enumerable ? "list" : undefined}
           aria-expanded={enumerable ? open : undefined}
           aria-controls={enumerable ? listID : undefined}
           aria-activedescendant={open && activeIndex >= 0 ? `${listID}-option-${activeIndex}` : undefined}
           aria-describedby={note ? descriptionID : undefined}
-          aria-invalid={error ? true : undefined}
-          placeholder="Asia/Shanghai"
+          aria-invalid={invalid ? true : undefined}
           onFocus={() => { if (enumerable) setOpen(true); }}
           onClick={() => { if (enumerable) setOpen(true); }}
           onChange={(event) => { onChange(event.target.value); setOpen(enumerable); setActiveIndex(-1); }}
           onKeyDown={onKeyDown}
         />
-        {offset && <span className="timezone-offset" aria-hidden="true">{offset}</span>}
-        {enumerable && <span className="timezone-input-icon" aria-hidden="true" />}
+        {suffix}
+        {enumerable && <span className="combobox-icon" aria-hidden="true" />}
         {enumerable && open && anchor && createPortal(
-          <div className="timezone-options" style={anchor} id={listID} ref={options} role="listbox" aria-label={t("timeZonePicker.listLabel")}>
-            <div className="timezone-options-meta" role="presentation">{t("timeZonePicker.count", { count: visible.length })}</div>
-            {visible.length ? visible.map((zone, index) => (
+          <div className="combobox-options" style={anchor} id={listID} ref={list} role="listbox" aria-label={listLabel}>
+            {meta && <div className="combobox-options-meta" role="presentation">{meta(visible.length)}</div>}
+            {visible.length ? visible.map((option, index) => (
               <button
                 className={index === activeIndex ? "active" : ""}
                 id={`${listID}-option-${index}`}
-                data-zone-index={index}
-                key={zone}
+                data-option-index={index}
+                key={option.value}
                 role="option"
-                aria-selected={value.trim() === zone}
+                aria-selected={value.trim() === option.value}
                 // Out of the tab order on purpose: the list is driven by the
                 // arrow keys through aria-activedescendant, and 400-odd zones
                 // left tabbable would sit between the field and the next
                 // control — inside the price modal, between the field and Save.
                 tabIndex={-1}
-                aria-label={zoneOffsetLabel(zone) ? `${zone} ${zoneOffsetLabel(zone)}` : zone}
+                aria-label={option.ariaLabel}
                 type="button"
                 onMouseDown={(event) => event.preventDefault()}
                 onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => choose(zone)}
+                onClick={() => choose(option.value)}
               >
-                <span>{zone}</span>
-                <small>{zoneOffsetLabel(zone)}</small>
+                <span>{option.value}</span>
+                <small>{option.secondary}</small>
               </button>
-            )) : <div className="timezone-options-empty" role="presentation">{t("timeZonePicker.noMatches")}</div>}
+            )) : emptyText ? <div className="combobox-options-empty" role="presentation">{emptyText}</div> : null}
           </div>,
           document.body,
         )}
       </div>
-      {note && <small id={descriptionID} className={error || unrecognised ? "field-error" : ""}>{note}</small>}
+      {note && <small id={descriptionID} className={noteIsError ? "field-error" : ""}>{note}</small>}
     </div>
+  );
+}
+
+export function TimeZoneField({
+  label,
+  hint,
+  error,
+  value,
+  onChange,
+  required = false,
+  disabled = false,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const zones = supportedTimeZones();
+  const enumerable = zones.length > 0;
+  const options = useMemo(
+    () => zones.map((zone) => ({
+      value: zone,
+      secondary: zoneOffsetLabel(zone),
+      ariaLabel: zoneOffsetLabel(zone) ? `${zone} ${zoneOffsetLabel(zone)}` : zone,
+    })),
+    [zones],
+  );
+  // Only worth saying once the operator has stopped typing a name that goes
+  // nowhere; it is a warning, not a gate, for the same reason the list is open.
+  const unrecognised = Boolean(value.trim()) && !isSupportedTimeZone(value.trim());
+  const offset = !unrecognised && value.trim() ? zoneOffsetLabel(value.trim()) : "";
+  return (
+    <Combobox
+      className="timezone-field"
+      label={label}
+      value={value}
+      onChange={onChange}
+      options={options}
+      listLabel={t("timeZonePicker.listLabel")}
+      meta={(count) => t("timeZonePicker.count", { count })}
+      emptyText={t("timeZonePicker.noMatches")}
+      note={error || (unrecognised ? t("timeZonePicker.unknownZone") : "") || hint}
+      noteIsError={Boolean(error) || unrecognised}
+      invalid={Boolean(error)}
+      enumerable={enumerable}
+      required={required}
+      disabled={disabled}
+      placeholder="Asia/Shanghai"
+      spellCheck={false}
+      suffix={offset ? <span className="timezone-offset" aria-hidden="true">{offset}</span> : undefined}
+    />
   );
 }

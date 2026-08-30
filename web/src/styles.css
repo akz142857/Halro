@@ -829,28 +829,28 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
    type in. */
 .timezone-field { position: relative; min-width: 0; }
 .timezone-field > label { display: block; margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
-.timezone-input-shell { position: relative; min-width: 0; }
-.timezone-input-shell input { width: 100%; padding-right: var(--space-10); }
-.timezone-input-shell:has(> .timezone-offset) input { padding-right: 6.75rem; }
-.timezone-input-shell.open input { border-color: var(--color-focus-ring); box-shadow: var(--shadow-focus); }
+.combobox-shell { position: relative; min-width: 0; }
+.combobox-shell input { width: 100%; padding-right: var(--space-10); }
+.combobox-shell:has(> .timezone-offset) input { padding-right: 6.75rem; }
+.combobox-shell.open input { border-color: var(--color-focus-ring); box-shadow: var(--shadow-focus); }
 .timezone-offset { position: absolute; top: 50%; right: 2.375rem; color: var(--muted); font: var(--font-size-xs) var(--mono); pointer-events: none; transform: translateY(-50%); }
-.timezone-input-icon { position: absolute; top: 50%; right: 15px; width: 11px; height: 11px; border: 1.5px solid var(--color-text-secondary); border-radius: 50%; pointer-events: none; transform: translateY(-58%); }
-.timezone-input-icon::after { content: ""; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.5px; background: var(--color-text-secondary); transform: rotate(45deg); transform-origin: left center; }
+.combobox-icon { position: absolute; top: 50%; right: 15px; width: 11px; height: 11px; border: 1.5px solid var(--color-text-secondary); border-radius: 50%; pointer-events: none; transform: translateY(-58%); }
+.combobox-icon::after { content: ""; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.5px; background: var(--color-text-secondary); transform: rotate(45deg); transform-origin: left center; }
 /* Position, width and height come from the component's measurement of the
    field; the stylesheet owns everything that does not depend on where the
    field happens to be. Above --z-modal because it is portalled to the body and
    has to clear the dialog it belongs to. */
-.timezone-options { position: fixed; z-index: var(--z-popover); display: grid; gap: var(--space-1); padding: var(--space-1); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--color-border-strong) var(--surface-deep); scrollbar-width: thin; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
-.timezone-options::-webkit-scrollbar { width: 8px; }
-.timezone-options::-webkit-scrollbar-track { background: var(--surface-overlay-solid); }
-.timezone-options::-webkit-scrollbar-thumb { background: var(--color-border-strong); border: 2px solid var(--surface-overlay-solid); border-radius: var(--radius-md); }
-.timezone-options-meta { padding: var(--space-2) var(--space-3); color: var(--muted); border-bottom: 1px solid var(--line); font-size: var(--font-size-xs); line-height: 1.45; }
-.timezone-options-empty { padding: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
-.timezone-options > button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: 2.125rem; padding: var(--space-2) var(--space-3); color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
-.timezone-options > button:hover, .timezone-options > button.active, .timezone-options > button[aria-selected="true"] { background: var(--overlay-hover); }
-.timezone-options > button.active { box-shadow: inset 2px 0 var(--lime); }
-.timezone-options > button > span { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.timezone-options > button > small { flex: 0 0 auto; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.combobox-options { position: fixed; z-index: var(--z-popover); display: grid; gap: var(--space-1); padding: var(--space-1); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--color-border-strong) var(--surface-deep); scrollbar-width: thin; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
+.combobox-options::-webkit-scrollbar { width: 8px; }
+.combobox-options::-webkit-scrollbar-track { background: var(--surface-overlay-solid); }
+.combobox-options::-webkit-scrollbar-thumb { background: var(--color-border-strong); border: 2px solid var(--surface-overlay-solid); border-radius: var(--radius-md); }
+.combobox-options-meta { padding: var(--space-2) var(--space-3); color: var(--muted); border-bottom: 1px solid var(--line); font-size: var(--font-size-xs); line-height: 1.45; }
+.combobox-options-empty { padding: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.combobox-options > button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: 2.125rem; padding: var(--space-2) var(--space-3); color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
+.combobox-options > button:hover, .combobox-options > button.active, .combobox-options > button[aria-selected="true"] { background: var(--overlay-hover); }
+.combobox-options > button.active { box-shadow: inset 2px 0 var(--lime); }
+.combobox-options > button > span { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.combobox-options > button > small { flex: 0 0 auto; color: var(--muted); font: var(--font-size-xs) var(--mono); }
 .timezone-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .timezone-field > small.field-error { color: var(--danger); }
 .deployment-model-empty { padding: 14px 12px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
