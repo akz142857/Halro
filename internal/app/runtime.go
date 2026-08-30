@@ -302,7 +302,13 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
-	usageAggregate, usageWatermark := restoreUsageAggregate(metadata, ledgerHead, logger)
+	usageAggregate, usageWatermark, err := restoreUsageAggregate(metadata, ledgerHead, logger)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
 	if _, err := ledgerLog.Replay(usageWatermark, usageAggregate.Apply); err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -810,29 +816,67 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 // data and land mid-frame on whatever is written next — a corruption reported
 // minutes later, far from its cause. Rebuilding from scratch is always safe:
 // the aggregate is a derivative, and the WAL is the authority.
-func restoreUsageAggregate(store *boltstore.Store, head ledger.Watermark, logger *slog.Logger) (*usage.Aggregate, ledger.Watermark) {
+//
+// The daily rollup is discarded with it, always. The two are written in one
+// transaction and describe the same prefix of the WAL, so keeping one while
+// the other rebuilds from zero would count every stored row a second time —
+// silently, because a replay reports no error. That is also why a reset
+// failure refuses the start instead of degrading: serving doubled totals is
+// worse than not serving.
+func restoreUsageAggregate(
+	store *boltstore.Store,
+	head ledger.Watermark,
+	logger *slog.Logger,
+) (*usage.Aggregate, ledger.Watermark, error) {
+	aggregate, watermark, reason := loadUsageCheckpoint(store, head)
+	if reason == "" {
+		return aggregate, watermark, nil
+	}
+	logger.Warn("usage derivatives rebuilt from the ledger", "reason", reason)
+	if err := store.ResetUsageDerivatives(); err != nil {
+		return nil, ledger.Watermark{}, fmt.Errorf("reset usage derivatives: %w", err)
+	}
+	return usage.NewAggregate(), ledger.Watermark{}, nil
+}
+
+// loadUsageCheckpoint returns the restored aggregate, or the reason it cannot
+// be trusted. Every rejection path names itself so the log says which one fired
+// rather than only that something was ignored.
+func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.Aggregate, ledger.Watermark, string) {
 	watermark, payload, err := store.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
-		return usage.NewAggregate(), ledger.Watermark{}
+		return nil, ledger.Watermark{}, "no usage checkpoint"
 	}
 	if err != nil {
-		logger.Warn("usage checkpoint ignored", "error", err)
-		return usage.NewAggregate(), ledger.Watermark{}
+		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint unreadable: %v", err)
 	}
 	aggregate, err := usage.RestoreCheckpoint(payload)
 	if err != nil {
-		logger.Warn("usage checkpoint ignored", "error", err)
-		return usage.NewAggregate(), ledger.Watermark{}
+		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint rejected: %v", err)
 	}
 	if aggregate.Snapshot().Watermark != watermark {
-		logger.Warn("usage checkpoint ignored", "error", "envelope watermark does not match payload")
-		return usage.NewAggregate(), ledger.Watermark{}
+		return nil, ledger.Watermark{}, "usage checkpoint envelope does not match its payload"
 	}
 	if watermark.Sequence > head.Sequence || watermark.Offset > head.Offset {
-		logger.Warn("usage checkpoint ignored", "error", "checkpoint is ahead of the ledger head")
-		return usage.NewAggregate(), ledger.Watermark{}
+		return nil, ledger.Watermark{}, "usage checkpoint is ahead of the ledger head"
 	}
-	return aggregate, watermark
+	rollup, err := store.UsageRollupState()
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return nil, ledger.Watermark{}, "usage rollup state is missing"
+	}
+	if err != nil {
+		return nil, ledger.Watermark{}, fmt.Sprintf("usage rollup state unreadable: %v", err)
+	}
+	if rollup.Version != domain.RollupVersion {
+		return nil, ledger.Watermark{}, fmt.Sprintf(
+			"usage rollup version %d is not %d", rollup.Version, domain.RollupVersion)
+	}
+	// Equality, not ordering: a rollup that lags its checkpoint would have the
+	// gap replayed into rows that already counted it.
+	if rollup.Watermark != watermark {
+		return nil, ledger.Watermark{}, "usage rollup and checkpoint describe different ledger positions"
+	}
+	return aggregate, watermark, ""
 }
 
 func (r *Runtime) runUsageMaintenance(ctx context.Context) {
@@ -881,18 +925,32 @@ func (r *Runtime) saveUsageCheckpoint() {
 		r.logger.Warn("usage checkpoint catch-up failed", "error", err)
 		return
 	}
-	watermark, payload, err := r.usage.MarshalCheckpoint()
+	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
 		return
 	}
-	if watermark.Sequence == 0 {
+	// TakeCheckpoint drained the rollup increment, so every path from here that
+	// does not persist it has to hand it back. Dropping it would leave those
+	// events counted in no stored row and in no later increment.
+	if snapshot.Watermark.Sequence == 0 {
+		r.returnUsageCheckpoint(snapshot)
 		return
 	}
-	if err := r.store.PutUsageCheckpoint(watermark, payload); err != nil {
+	if err := r.store.PutUsageCheckpoint(
+		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+	); err != nil {
 		r.logger.Warn("usage checkpoint save failed", "error", err)
+		r.returnUsageCheckpoint(snapshot)
+		return
 	}
 	r.advanceLedgerChainCheckpoint()
+}
+
+func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
+	if err := r.usage.ReturnCheckpoint(snapshot); err != nil {
+		r.logger.Error("usage rollup increment could not be restored", "error", err)
+	}
 }
 
 // advanceLedgerChainCheckpoint moves the trusted chain head forward while the
@@ -1412,6 +1470,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/configuration-stale", r.adminConfigurationStaleRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/file-master-key-rotation", r.adminFileMasterKeyRotationRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
+	router.With(r.requireAdmin).Get("/admin/api/v1/usage/summary", r.adminUsageSummary)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/config", r.adminSystemConfig)

@@ -13,16 +13,51 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-func (s *Store) PutUsageCheckpoint(watermark ledger.Watermark, payload []byte) error {
+// UsageRollupState is the durable position of the daily rollup: which
+// structure version wrote it, and how much of the Ledger it has consumed.
+//
+// It is written in the same transaction as the Usage checkpoint, so the two
+// can only ever describe the same prefix of the WAL. Startup checks them for
+// equality rather than ordering: if either is missing or they disagree, the
+// rollup is cleared and rebuilt. Accepting "rollup is behind" would mean
+// replaying a suffix into rows that already counted it.
+type UsageRollupState struct {
+	Version   int              `json:"version"`
+	Watermark ledger.Watermark `json:"watermark"`
+}
+
+// PutUsageCheckpoint durably advances both Usage derivatives at once: the
+// aggregate checkpoint and the daily-rollup increment that covers exactly the
+// same events.
+//
+// Both live in one bbolt transaction because a checkpoint that advanced
+// without its increment would leave the rollup describing a prefix of the WAL
+// nobody can name — the next start would replay from the checkpoint's
+// watermark and the events in between would be counted nowhere. The increment
+// is applied as a read-modify-write per row: every column is additive, which
+// is what lets the incremental path and a full rebuild reach the same numbers.
+func (s *Store) PutUsageCheckpoint(
+	watermark ledger.Watermark,
+	payload []byte,
+	rollupVersion int,
+	rollup map[string]domain.DailyRollup,
+) error {
 	if watermark.Sequence == 0 || watermark.Offset <= 0 || watermark.Generation != 1 {
 		return errors.New("usage checkpoint watermark is invalid")
 	}
 	if len(payload) == 0 {
 		return errors.New("usage checkpoint payload cannot be empty")
 	}
+	if rollupVersion <= 0 {
+		return errors.New("usage rollup version is required")
+	}
 	encoded, err := json.Marshal(usageCheckpoint{Watermark: watermark, Payload: bytes.Clone(payload)})
 	if err != nil {
 		return fmt.Errorf("encode usage checkpoint envelope: %w", err)
+	}
+	state, err := json.Marshal(UsageRollupState{Version: rollupVersion, Watermark: watermark})
+	if err != nil {
+		return fmt.Errorf("encode usage rollup state: %w", err)
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
@@ -35,8 +70,123 @@ func (s *Store) PutUsageCheckpoint(watermark ledger.Watermark, payload []byte) e
 				return errors.New("usage checkpoint watermark cannot move backwards")
 			}
 		}
+		if err := applyUsageRollupDelta(tx, rollup); err != nil {
+			return err
+		}
+		if err := meta.Put(keyUsageRollupState, state); err != nil {
+			return err
+		}
 		return meta.Put(keyUsageCheckpoint, encoded)
 	})
+}
+
+// applyUsageRollupDelta folds one increment into the stored rows, keeping each
+// accounting day's per-dimension key count bounded.
+//
+// New values are admitted in ledger order — the earliest sequence that reached
+// each row — and everything past the cap is merged into a single
+// domain.RollupOtherKey row. Ledger order is what makes the cap deterministic:
+// the incremental path sees the day in many increments and a rebuild sees it in
+// one, and both admit the same values because both walk the same events in the
+// same order. Choosing the largest values instead would need the day to be
+// finished, and an accounting day never provably is: a request admitted at
+// 23:59 and settled at 00:02 is charged to the day it was admitted on.
+func applyUsageRollupDelta(tx *bbolt.Tx, rollup map[string]domain.DailyRollup) error {
+	if len(rollup) == 0 {
+		return nil
+	}
+	bucket := tx.Bucket(bucketUsageDailyRollup)
+	if bucket == nil {
+		return errors.New("usage rollup bucket is missing")
+	}
+	type pending struct {
+		key domain.RollupKey
+		row domain.DailyRollup
+	}
+	groups := map[string][]pending{}
+	for encoded, row := range rollup {
+		parsed, err := domain.DecodeRollupKey(encoded)
+		if err != nil {
+			return err
+		}
+		if parsed.PeriodID != row.PeriodID || parsed.TimezoneVersion != row.TimezoneVersion {
+			return fmt.Errorf("usage rollup row %q does not match its key", encoded)
+		}
+		prefix := domain.RollupDimensionPrefix(parsed.PeriodID, parsed.TimezoneVersion, parsed.Dimension)
+		groups[prefix] = append(groups[prefix], pending{key: parsed, row: row})
+	}
+	prefixes := make([]string, 0, len(groups))
+	for prefix := range groups {
+		prefixes = append(prefixes, prefix)
+	}
+	sort.Strings(prefixes)
+
+	for _, prefix := range prefixes {
+		admitted, err := storedDimensionKeys(bucket, prefix)
+		if err != nil {
+			return err
+		}
+		items := groups[prefix]
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].row.FirstSequence != items[j].row.FirstSequence {
+				return items[i].row.FirstSequence < items[j].row.FirstSequence
+			}
+			return items[i].key.DimensionKey < items[j].key.DimensionKey
+		})
+		for _, item := range items {
+			key := item.key
+			if key.Dimension != domain.RollupDimensionTotal && key.DimensionKey != domain.RollupOtherKey {
+				if _, known := admitted[key.DimensionKey]; !known {
+					if len(admitted) >= domain.MaxRollupKeysPerDimension {
+						key.DimensionKey = domain.RollupOtherKey
+					} else {
+						admitted[key.DimensionKey] = struct{}{}
+					}
+				}
+			}
+			if err := mergeRollupRow(bucket, key, item.row); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// storedDimensionKeys reports which values one day's one dimension already
+// holds. RollupOtherKey is excluded: it is the overflow row, not one of the
+// values the cap counts.
+func storedDimensionKeys(bucket *bbolt.Bucket, prefix string) (map[string]struct{}, error) {
+	keys := map[string]struct{}{}
+	cursor := bucket.Cursor()
+	seek := []byte(prefix)
+	for key, _ := cursor.Seek(seek); key != nil && bytes.HasPrefix(key, seek); key, _ = cursor.Next() {
+		value := string(key[len(prefix):])
+		if value == domain.RollupOtherKey {
+			continue
+		}
+		keys[value] = struct{}{}
+	}
+	return keys, nil
+}
+
+func mergeRollupRow(bucket *bbolt.Bucket, key domain.RollupKey, increment domain.DailyRollup) error {
+	encoded := []byte(key.Encode())
+	row := increment
+	if existing := bucket.Get(encoded); existing != nil {
+		var stored domain.DailyRollup
+		if err := json.Unmarshal(existing, &stored); err != nil {
+			return fmt.Errorf("decode usage rollup row: %w", err)
+		}
+		if err := stored.Add(increment); err != nil {
+			return err
+		}
+		row = stored
+	}
+	payload, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("encode usage rollup row: %w", err)
+	}
+	return bucket.Put(encoded, payload)
 }
 
 func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
@@ -61,11 +211,85 @@ func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
 	return saved.Watermark, bytes.Clone(saved.Payload), nil
 }
 
-// DeleteUsageCheckpoint removes only the rebuildable aggregate accelerator.
-// The Ledger remains authoritative and the next startup replays it from zero.
-func (s *Store) DeleteUsageCheckpoint() error {
+// UsageRollupState reports where the stored rollup stands.
+func (s *Store) UsageRollupState() (UsageRollupState, error) {
+	var state UsageRollupState
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyUsageRollupState)
+		if raw == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(raw, &state)
+	})
+	if err != nil {
+		return UsageRollupState{}, err
+	}
+	return state, nil
+}
+
+// ResetUsageDerivatives discards both rebuildable Usage views together: the
+// aggregate checkpoint and every rollup row.
+//
+// They are dropped in one transaction on purpose. Clearing only the checkpoint
+// would leave a complete rollup on disk while the next start replays the whole
+// WAL from zero — every row counted twice, with nothing in the logs to say so.
+// The Ledger remains authoritative; the next start rebuilds both from it.
+func (s *Store) ResetUsageDerivatives() error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		return tx.Bucket(bucketMeta).Delete(keyUsageCheckpoint)
+		meta := tx.Bucket(bucketMeta)
+		if err := meta.Delete(keyUsageCheckpoint); err != nil {
+			return err
+		}
+		if err := meta.Delete(keyUsageRollupState); err != nil {
+			return err
+		}
+		if tx.Bucket(bucketUsageDailyRollup) != nil {
+			if err := tx.DeleteBucket(bucketUsageDailyRollup); err != nil {
+				return err
+			}
+		}
+		_, err := tx.CreateBucketIfNotExists(bucketUsageDailyRollup)
+		return err
+	})
+}
+
+// UsageRollupRange walks the stored rows whose accounting date falls in
+// [startPeriodID, endPeriodID], in key order, and hands the visitor a decoded
+// copy. An empty bound is open on that side.
+//
+// The range is over the date label rather than a key prefix: a prefix scan can
+// only ever answer for one day, and every question this feeds — a month, a
+// year, a custom window — spans many. Period ids are fixed-width local dates,
+// so lexicographic key order is chronological and the walk can stop at the
+// first row past the end instead of reading the whole bucket.
+func (s *Store) UsageRollupRange(
+	startPeriodID, endPeriodID string,
+	visit func(domain.RollupKey, domain.DailyRollup) error,
+) error {
+	return s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketUsageDailyRollup)
+		if bucket == nil {
+			return errors.New("usage rollup bucket is missing")
+		}
+		cursor := bucket.Cursor()
+		key, value := cursor.Seek([]byte(startPeriodID))
+		for ; key != nil; key, value = cursor.Next() {
+			parsed, err := domain.DecodeRollupKey(string(key))
+			if err != nil {
+				return err
+			}
+			if endPeriodID != "" && parsed.PeriodID > endPeriodID {
+				return nil
+			}
+			var row domain.DailyRollup
+			if err := json.Unmarshal(value, &row); err != nil {
+				return fmt.Errorf("decode usage rollup row: %w", err)
+			}
+			if err := visit(parsed, row); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

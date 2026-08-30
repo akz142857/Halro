@@ -1,7 +1,8 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bucket } from "./types";
-import TrendChart from "./TrendChart";
+import TrendChart, { axisGutter } from "./TrendChart";
+import { hourlyTrendPoints } from "./trend";
 
 const chartMocks = vi.hoisted(() => ({
   setSize: vi.fn(),
@@ -33,7 +34,7 @@ describe("TrendChart", () => {
   });
 
   it("exposes the selected metric summary and respects a narrow container width", () => {
-    render(<TrendChart buckets={[bucket()]} metric="tokens" />);
+    render(<TrendChart points={hourlyTrendPoints([bucket()], Date.parse(bucket().hour) + 3_600_000)} metric="tokens" />);
 
     expect(screen.getByRole("img", { name: /词元用量.*18/ })).toBeVisible();
 
@@ -63,3 +64,17 @@ function bucket(): Bucket {
     latency_millis: 0,
   };
 }
+
+describe("chart axis gutter", () => {
+  it("widens for a label that would not fit uPlot's fixed gutter", () => {
+    // The success-rate axis draws "100.0%", which is wider than the 50px uPlot
+    // reserves by default and was being clipped to "00.0%".
+    expect(axisGutter(["0.0%", "100.0%"])).toBeGreaterThan(50);
+    expect(axisGutter(["0.0%", "100.0%"])).toBeGreaterThanOrEqual("100.0%".length * 7);
+  });
+
+  it("keeps the default gutter for narrow labels", () => {
+    expect(axisGutter(["0", "5"])).toBe(50);
+    expect(axisGutter(null)).toBe(50);
+  });
+});

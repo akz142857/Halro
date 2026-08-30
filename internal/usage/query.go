@@ -13,6 +13,7 @@ type AttemptQuery struct {
 	Limit          int
 	ProjectID      string
 	ProviderID     string
+	DeploymentID   string
 	RequestID      string
 	RequestedModel string
 	ProviderModel  string
@@ -81,6 +82,7 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 		}
 		if query.ProjectID != "" && attempt.ProjectID != query.ProjectID ||
 			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
+			query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
 			query.RequestID != "" && attempt.RequestID != query.RequestID ||
 			query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
 			query.ProviderModel != "" && attempt.ProviderModel != query.ProviderModel ||
@@ -133,14 +135,22 @@ func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool) {
 // governed setting that only the caller can resolve, and the figures must cover
 // exactly the interval the response advertises alongside them — deriving it
 // twice is how the totals and the interval drift apart.
+// Period is the accounting day a dashboard reports on. It carries the period's
+// identity, not just its interval, because membership is decided by the stamp
+// an event was admitted with rather than by when it finished — a request
+// accepted at 23:59 and settled at 00:02 is charged to the day it was admitted
+// on, and the summary rollup keys on that same stamp.
 type Period struct {
-	Start time.Time
-	End   time.Time
+	ID              string
+	TimezoneVersion uint64
 }
 
-// Contains reports whether an instant falls inside the period.
-func (p Period) Contains(instant time.Time) bool {
-	return !instant.Before(p.Start) && instant.Before(p.End)
+// Includes reports whether work stamped with this period identity belongs to
+// it. There is deliberately no instant here: membership is the stamp, and a
+// second interval-based rule beside it is how the dashboard and the summary
+// would start disagreeing about which day a call belongs to.
+func (p Period) Includes(periodID string, timezoneVersion uint64) bool {
+	return periodID == p.ID && timezoneVersion == p.TimezoneVersion
 }
 
 func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
@@ -186,7 +196,7 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 				hourlyRequestLatencies[hour.Unix()] = append(hourlyRequestLatencies[hour.Unix()], latency)
 			}
 		}
-		if period.Contains(summary.CompletedAt) {
+		if period.Includes(summary.PeriodID, summary.PeriodTimezoneVersion) {
 			result.Today.Requests++
 			if summary.Outcome != "success" {
 				result.Today.RequestErrors++
@@ -212,7 +222,7 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 				result.Hourly[bucketIndex].EstimatedOutputTokens += attempt.ProviderOutputTokens
 			}
 		}
-		if period.Contains(attempt.CompletedAt) {
+		if period.Includes(attempt.PeriodID, attempt.PeriodTimezoneVersion) {
 			result.Today.Attempts++
 			result.Today.InputTokens += attempt.ProviderInputTokens
 			result.Today.OutputTokens += attempt.ProviderOutputTokens

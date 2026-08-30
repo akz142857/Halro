@@ -116,9 +116,12 @@ func TestUsageCheckpointAheadOfLedgerHeadIsDiscarded(t *testing.T) {
 	defer store.Close()
 	// An empty head is what a wiped WAL replays to. The checkpoint recorded a
 	// real offset a moment ago, so it is now describing bytes that are gone.
-	restored, watermark := restoreUsageAggregate(
+	restored, watermark, err := restoreUsageAggregate(
 		store, ledger.Watermark{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if watermark.Offset != 0 || restored.Snapshot().Watermark.Offset != 0 {
 		t.Fatalf("usage checkpoint ahead of the ledger head must be discarded: watermark=%+v", watermark)
 	}

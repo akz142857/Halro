@@ -2,6 +2,7 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bucket } from "./types";
 import TrendChart from "./TrendChart";
+import { hourlyTrendPoints } from "./trend";
 import { adoptTimeContext, resetAccountingTimeZone } from "./timezone";
 import { timeContext } from "./test/fixtures";
 
@@ -43,7 +44,7 @@ describe("TrendChart time zone", () => {
   // totals rendered beside it, which are summed over the server's day.
   it("draws its axis in the server's accounting zone, not the browser's", async () => {
     adoptTimeContext(timeContext({ accounting_timezone: "Asia/Shanghai" }));
-    render(<TrendChart buckets={[bucket()]} metric="requests" />);
+    render(<TrendChart points={hourlyTrendPoints([bucket()], Date.parse(bucket().hour) + 3_600_000)} metric="requests" />);
 
     const options = captured.options.at(-1);
     expect(options).toBeDefined();
@@ -58,11 +59,11 @@ describe("TrendChart time zone", () => {
 
   it("rebuilds the chart when the accounting zone changes", () => {
     adoptTimeContext(timeContext({ accounting_timezone: "UTC" }));
-    const view = render(<TrendChart buckets={[bucket()]} metric="requests" />);
+    const view = render(<TrendChart points={hourlyTrendPoints([bucket()], Date.parse(bucket().hour) + 3_600_000)} metric="requests" />);
     const before = captured.options.length;
 
     adoptTimeContext(timeContext({ accounting_timezone: "America/New_York" }));
-    view.rerender(<TrendChart buckets={[bucket()]} metric="requests" />);
+    view.rerender(<TrendChart points={hourlyTrendPoints([bucket()], Date.parse(bucket().hour) + 3_600_000)} metric="requests" />);
 
     expect(captured.options.length).toBeGreaterThan(before);
   });

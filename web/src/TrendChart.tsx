@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { Bucket } from "./types";
-import { buildTrendSeries, summarizeTrend, type TrendMetric } from "./trend";
+import { buildTrendSeries, summarizeTrend, type TrendMetric, type TrendPoint } from "./trend";
 import { compactNumber } from "./format";
 import { useTranslation } from "react-i18next";
 import { useAppearance } from "./theme";
@@ -28,19 +27,32 @@ function formatValue(metric: TrendMetric, value: number | null) {
   return compactNumber(value);
 }
 
+// uPlot gives a y axis a fixed 50px gutter and never measures what it draws
+// there, so a label wider than that is clipped rather than making room for
+// itself — "100.0%" on the success-rate view lost its leading digit, which
+// reads as 00.0% at a glance. The gutter is sized from the widest label the
+// axis is about to draw, at the axis font's own character width.
+const AXIS_CHARACTER_WIDTH = 7;
+const AXIS_TICK_GUTTER = 18;
+
+export function axisGutter(values: string[] | null): number {
+  const widest = (values ?? []).reduce((max, value) => Math.max(max, value.length), 0);
+  return Math.max(50, widest * AXIS_CHARACTER_WIDTH + AXIS_TICK_GUTTER);
+}
+
 function seriesKeys(metric: TrendMetric) {
   if (metric === "requests") return ["successful", "failed"];
   if (metric === "tokens" || metric === "cost") return ["confirmed", "estimated"];
   return [metric];
 }
 
-export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; metric: TrendMetric }) {
+export default function TrendChart({ points, metric }: { points: TrendPoint[]; metric: TrendMetric }) {
   const { t } = useTranslation();
   const appearance = useAppearance();
   const timeZone = useAccountingTimeZone();
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
-  const summary = summarizeTrend(buckets, metric);
+  const summary = summarizeTrend(points, metric);
   const accessibleLabel = t("dashboard.trendAria", {
     metric: t(`dashboard.trendMetrics.${metric}`),
     value: formatValue(metric, summary.value),
@@ -48,7 +60,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
 
   useEffect(() => {
     if (!host.current) return;
-    const chartData = buildTrendSeries(buckets, metric);
+    const chartData = buildTrendSeries(points, metric);
     const tokens = readChartTokens(host.current);
     const keys = seriesKeys(metric);
     const chart = new uPlot(
@@ -67,6 +79,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
           {
             stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace",
             values: (_chart, values) => values.map((value) => formatValue(metric, value)),
+            size: (_chart, values) => axisGutter(values),
           },
         ],
         series: [
@@ -99,10 +112,10 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const series = buildTrendSeries(buckets, metric);
+    const series = buildTrendSeries(points, metric);
     chart.setData(series.data);
     chart.setScale("x", { min: series.range[0], max: series.range[1] });
-  }, [buckets, metric]);
+  }, [points, metric]);
 
   return <div className="trend-chart" ref={host} role="img" aria-label={accessibleLabel} />;
 }

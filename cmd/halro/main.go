@@ -653,7 +653,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 	case "usage":
 		if len(arguments) < 2 {
-			return errors.New("usage: halro usage <compact|verify|prune>")
+			return errors.New("usage: halro usage <compact|verify|prune|rebuild-summary>")
 		}
 		flags := flag.NewFlagSet("usage "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
@@ -674,6 +674,12 @@ func run(arguments []string, logger *slog.Logger) error {
 			return json.NewEncoder(os.Stdout).Encode(manifest)
 		case "verify":
 			report, err := app.VerifyUsage(context.Background(), cfg)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "rebuild-summary":
+			report, err := app.RebuildUsageSummary(context.Background(), cfg)
 			if err != nil {
 				return err
 			}

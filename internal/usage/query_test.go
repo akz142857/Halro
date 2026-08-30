@@ -76,7 +76,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {
 		t.Fatalf("detail=%#v exists=%v", detail, exists)
 	}
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
 	if dashboard.Today.Requests != 3 || dashboard.Today.Attempts != 3 ||
 		dashboard.Today.InputTokens != 6 {
 		t.Fatalf("dashboard=%#v", dashboard)
@@ -103,7 +103,7 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
 	if dashboard.Today.InputTokens != 16 || dashboard.Today.OutputTokens != 16_551 {
 		t.Fatalf("accounting totals changed: %#v", dashboard.Today)
 	}
@@ -138,7 +138,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), utcDay(now.Add(time.Hour)))
+	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
 	projects := dashboard.Breakdowns["project"]["calls"]
 	if len(projects) != 1 || projects[0].Key != "project_a" || projects[0].Calls != 2 ||
 		projects[0].Errors != 1 || projects[0].CostMicrosUSD != 3_000 || projects[0].EstimatedCostMicros != 2_000 {
@@ -158,7 +158,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 }
 
 func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
-	dashboard := NewAggregate().Dashboard(time.Now(), utcDay(time.Now()))
+	dashboard := NewAggregate().Dashboard(time.Now(), stampedDay())
 	if dashboard.Hourly == nil || dashboard.RecentAnomalies == nil {
 		t.Fatalf("empty dashboard collections must encode as arrays: %#v", dashboard)
 	}
@@ -198,7 +198,7 @@ func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(base.Add(time.Hour), utcDay(base))
+	dashboard := aggregate.Dashboard(base.Add(time.Hour), stampedDay())
 	if dashboard.Today.Requests != 2 || dashboard.Today.RequestErrors != 1 ||
 		dashboard.Today.RequestLatencySamples != 2 || dashboard.Today.RequestLatencyP50Millis != 100 ||
 		dashboard.Today.RequestLatencyP95Millis != 900 {
@@ -210,9 +210,7 @@ func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
 	}
 }
 
-// utcDay is the UTC calendar day containing instant — the period these tests
-// previously got implicitly by passing time.UTC.
-func utcDay(instant time.Time) Period {
-	start := instant.UTC().Truncate(24 * time.Hour)
-	return Period{Start: start, End: start.Add(24 * time.Hour)}
-}
+// stampedDay is the accounting period every event in these tests carries. The
+// dashboard reports the day an event was stamped with, so the fixture and the
+// query have to name the same one.
+func stampedDay() Period { return Period{ID: "period"} }

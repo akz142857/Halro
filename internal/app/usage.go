@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/usage"
 )
@@ -58,6 +60,76 @@ func PruneUsage(
 	}
 	if err := exporter.Verify(nil); err != nil {
 		return usage.RetentionReport{}, fmt.Errorf("verify retained usage: %w", err)
+	}
+	return report, nil
+}
+
+// SummaryRebuildReport is what a rebuild wrote, so an operator can compare it
+// against what the console shows instead of taking the command's word for it.
+type SummaryRebuildReport struct {
+	Watermark      ledger.Watermark `json:"watermark"`
+	RollupVersion  int              `json:"rollup_version"`
+	RollupRows     int              `json:"rollup_rows"`
+	AccountingDays int              `json:"accounting_days"`
+}
+
+// RebuildUsageSummary discards both Usage derivatives and rewrites them from
+// the Ledger.
+//
+// It needs a writable metadata handle, which is what separates it from compact,
+// verify and prune — those only read a derived view. It also replays into a
+// full aggregate rather than streaming straight into rollup rows: the rollup
+// and the checkpoint have to be written in one transaction describing one
+// position in the WAL, and the checkpoint payload only exists if the aggregate
+// does. That makes the command pay the same memory cost as `usage compact`
+// already does on a long-lived instance.
+//
+// The instance must be stopped: the data lock is exclusive, by design, because
+// one process owns one data directory.
+func RebuildUsageSummary(ctx context.Context, cfg config.Config) (SummaryRebuildReport, error) {
+	aggregate, _, closeResources, err := openUsageOffline(ctx, cfg)
+	if err != nil {
+		return SummaryRebuildReport{}, err
+	}
+	defer closeResources()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		return SummaryRebuildReport{}, fmt.Errorf("open metadata: %w", err)
+	}
+	defer store.Close()
+	snapshot, err := aggregate.TakeCheckpoint()
+	if err != nil {
+		return SummaryRebuildReport{}, err
+	}
+	// Clear first: a stale row that the rebuild does not happen to overwrite
+	// would survive as a phantom day, and the increments are additive, so a
+	// surviving row would be added to rather than replaced.
+	if err := store.ResetUsageDerivatives(); err != nil {
+		return SummaryRebuildReport{}, fmt.Errorf("reset usage derivatives: %w", err)
+	}
+	report := SummaryRebuildReport{
+		Watermark: snapshot.Watermark, RollupVersion: domain.RollupVersion,
+		RollupRows: len(snapshot.Rollup),
+	}
+	days := make(map[string]struct{})
+	for encoded := range snapshot.Rollup {
+		key, err := domain.DecodeRollupKey(encoded)
+		if err != nil {
+			return SummaryRebuildReport{}, err
+		}
+		days[domain.RollupDayPrefix(key.PeriodID, key.TimezoneVersion)] = struct{}{}
+	}
+	report.AccountingDays = len(days)
+	if snapshot.Watermark.Sequence == 0 {
+		// An empty ledger has nothing to write, and PutUsageCheckpoint refuses a
+		// zero watermark. Both views are already cleared, which is the correct
+		// state for an instance that has billed nothing.
+		return report, nil
+	}
+	if err := store.PutUsageCheckpoint(
+		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+	); err != nil {
+		return SummaryRebuildReport{}, fmt.Errorf("write usage derivatives: %w", err)
 	}
 	return report, nil
 }

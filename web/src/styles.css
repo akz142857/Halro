@@ -1072,6 +1072,41 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 /* Fixed columns so opening a row's pricing evidence disclosure cannot resize
    the Cost column and shift every other column out from under its header —
    auto table layout resizes columns to the widest content across all rows. */
+/* The summary stacks a control bar, a metric row, a chart and a dimension
+   table; the gap is the same rhythm the rest of the console puts between
+   sections, so the tab does not read as a denser page than the log beside it. */
+.usage-summary { display: flex; flex-direction: column; gap: var(--space-4); }
+.usage-summary-controls { flex-wrap: wrap; }
+/* Export is the only action in a bar of filters, so it sits at the far end
+   rather than in the middle of them. */
+.usage-summary-controls .button { margin-left: auto; }
+/* One control made of segments, not three loose buttons: joined, the same
+   height as the inputs beside it, and carrying its own caption like every
+   other field in the bar. */
+.segmented-choice { display: inline-flex; height: 34px; background: var(--surface); border: 1px solid var(--line); }
+.segmented-choice button {
+  height: 100%; padding: 0 var(--space-3); color: var(--muted-2); background: transparent;
+  border: 0; border-right: 1px solid var(--line); font: var(--font-size-xs) var(--mono); cursor: pointer;
+}
+.segmented-choice button:last-child { border-right: 0; }
+.segmented-choice button:hover { color: var(--text); }
+.segmented-choice button[aria-checked="true"] { color: var(--color-action-primary); background: var(--accent-tint); }
+.segmented-choice button:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -2px; }
+/* A qualifier under a panel. It states what the figure above can and cannot
+   claim, so it is set as a note rather than as another number. */
+.panel-note { margin: var(--space-2) var(--space-3) 0; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
+/* A sortable heading is a button, not decorated text: it has to be reachable
+   by keyboard and to say which way it is sorting. It inherits the heading's
+   own type so the row still reads as a header. */
+.column-sort {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  padding: 0; color: inherit; font: inherit; background: none; border: 0; cursor: pointer;
+}
+.column-sort:hover { color: var(--color-action-primary); }
+.column-sort:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.column-sort i { color: var(--muted-2); font-style: normal; }
+th[aria-sort="ascending"] .column-sort, th[aria-sort="descending"] .column-sort { color: var(--color-action-primary); }
+th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sort i { color: inherit; }
 .usage-table { table-layout: fixed; }
 .usage-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
 .cost-evidence { max-width: 100%; margin-top: 4px; color: var(--color-text-tertiary); font-size: var(--font-size-xs); line-height: 1.5; white-space: normal; }
@@ -1109,7 +1144,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   display: flex; align-items: flex-end; gap: 12px; margin-bottom: 15px; padding: 13px;
   background: var(--surface); border: 1px solid var(--line);
 }
-.filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
+.filter-bar label span, .filter-bar .filter-field > span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 /* A height, because the min-height here never was one. The base control rule
    pads 9px above and below and the button carries a 44px floor, so every
    control in this bar was sized by its own content — text inputs and selects

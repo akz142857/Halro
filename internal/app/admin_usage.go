@@ -34,9 +34,13 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		adminStoreError(writer)
 		return
 	}
-	// The same interval the response advertises in time_context, so the totals
-	// and the window they claim to cover cannot disagree.
-	dashboard := r.usage.Dashboard(now, usage.Period{Start: period.Start, End: period.End})
+	// The same accounting period the response advertises in time_context. The
+	// totals are the work stamped with this period at admission, not the work
+	// that happened to finish inside its interval, so a request that crosses
+	// midnight is reported by exactly one day.
+	dashboard := r.usage.Dashboard(now, usage.Period{
+		ID: period.ID, TimezoneVersion: period.TimezoneVersion,
+	})
 	accountingStatus := r.status.Load()
 	draining := r.draining.Load()
 	activation := r.activation.status()
@@ -379,7 +383,8 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	}
 	allowed := map[string]struct{}{
 		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
-		"model": {}, "provider_model": {}, "status": {}, "start": {}, "end": {},
+		"deployment_id": {}, "model": {}, "provider_model": {}, "status": {},
+		"start": {}, "end": {},
 	}
 	for name := range request.URL.Query() {
 		if _, exists := allowed[name]; !exists {
@@ -408,6 +413,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		BeforeSequence: cursor, Limit: limit,
 		ProjectID:      request.URL.Query().Get("project_id"),
 		ProviderID:     request.URL.Query().Get("provider_id"),
+		DeploymentID:   request.URL.Query().Get("deployment_id"),
 		RequestID:      request.URL.Query().Get("request_id"),
 		RequestedModel: request.URL.Query().Get("model"),
 		ProviderModel:  request.URL.Query().Get("provider_model"),

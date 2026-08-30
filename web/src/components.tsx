@@ -120,6 +120,74 @@ export function useWebhookTestFailureReason(error: unknown) {
   return parts.join(" · ");
 }
 
+// Metric is one figure with its label and the sentence that qualifies it. The
+// qualifier is not decoration: a cost with no note about estimated or unpriced
+// work reads as exact when it is not.
+export function Metric({ label, value, detail, alert = false }: { label: string; value: string; detail: string; alert?: boolean }) {
+  return <article className={`metric ${alert ? "alert" : ""}`}><span>{label}</span><strong>{value}</strong><small title={detail}>{detail}</small></article>;
+}
+
+// SegmentedChoice picks one value out of a few. It is a radio group, not a tab
+// strip: nothing is shown or hidden by it, it changes what the panel asks the
+// server for. Marking it up as tabs put a second tab strip on a page that
+// already has real ones, and told a screen reader to expect panels that do not
+// exist.
+export function SegmentedChoice<T extends string>({ label, value, items, onChange }: { label: string; value: T; items: { key: T; label: string }[]; onChange: (value: T) => void }) {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  // Arrow keys move within the group and it holds one stop in the tab order,
+  // which is what a keyboard operator expects of a radio group.
+  const move = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next = index;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % items.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = items.length - 1;
+    else return;
+    event.preventDefault();
+    onChange(items[next].key);
+    refs.current[next]?.focus();
+  };
+  return (
+    <div className="segmented-choice" role="radiogroup" aria-label={label}>
+      {items.map((item, index) => (
+        <button
+          ref={(node) => { refs.current[index] = node; }}
+          key={item.key}
+          type="button"
+          role="radio"
+          aria-checked={value === item.key}
+          tabIndex={value === item.key ? 0 : -1}
+          onKeyDown={(event) => move(event, index)}
+          onClick={() => onChange(item.key)}
+        >{item.label}</button>
+      ))}
+    </div>
+  );
+}
+
+// SegmentedTabs switches which measure a panel shows. It lives here rather than
+// beside its first caller because a second page needs it, and importing it from
+// a lazily loaded page would drag that page's whole chunk along.
+//
+// APG tab behaviour: the strip is one stop in the tab order and the arrow keys
+// move within it, so a keyboard operator is not stuck on whichever tab they
+// happened to land on.
+export function SegmentedTabs<T extends string>({ id, label, value, items, onChange }: { id: string; label: string; value: T; items: { key: T; label: string }[]; onChange: (value: T) => void }) {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
+  const move = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => {
+    let next = index;
+    if (event.key === "ArrowRight") next = (index + 1) % items.length;
+    else if (event.key === "ArrowLeft") next = (index - 1 + items.length) % items.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = items.length - 1;
+    else return;
+    event.preventDefault();
+    onChange(items[next].key);
+    refs.current[next]?.focus();
+  };
+  return <div className="dashboard-tabs" role="tablist" aria-label={label}>{items.map((item, index) => <button ref={(node) => { refs.current[index] = node; }} id={`${id}-tab-${item.key}`} aria-controls={`${id}-panel`} tabIndex={value === item.key ? 0 : -1} type="button" role="tab" aria-selected={value === item.key} key={item.key} onKeyDown={(event) => move(event, index)} onClick={() => onChange(item.key)}>{item.label}</button>)}</div>;
+}
+
 export function EmptyState({
   title,
   children,

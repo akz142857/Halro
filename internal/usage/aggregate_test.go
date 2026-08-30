@@ -35,11 +35,11 @@ func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testin
 			}
 			recovered := NewAggregate()
 			if checkpointEnd > 0 {
-				_, payload, err := prefix.MarshalCheckpoint()
+				snapshot, err := prefix.TakeCheckpoint()
 				if err != nil {
 					t.Fatal(err)
 				}
-				recovered, err = RestoreCheckpoint(payload)
+				recovered, err = RestoreCheckpoint(snapshot.Payload)
 				if err != nil {
 					t.Fatalf("kill=%d committed=%t restore: %v", killPoint, checkpointCommitted, err)
 				}
@@ -230,11 +230,12 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	watermark, payload, err := aggregate.MarshalCheckpoint()
+	snapshot, err := aggregate.TakeCheckpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := RestoreCheckpoint(payload)
+	watermark := snapshot.Watermark
+	restored, err := RestoreCheckpoint(snapshot.Payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,11 +258,11 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	snapshot := restored.Snapshot()
-	if snapshot.Totals.Requests != 1 || snapshot.Totals.Attempts != 1 ||
-		len(snapshot.Requests) != 1 || snapshot.Requests[0].KeyID != "k" ||
-		snapshot.Attempts[0].StartedAt != now.Add(time.Millisecond) {
-		t.Fatalf("restored snapshot=%#v", snapshot)
+	state := restored.Snapshot()
+	if state.Totals.Requests != 1 || state.Totals.Attempts != 1 ||
+		len(state.Requests) != 1 || state.Requests[0].KeyID != "k" ||
+		state.Attempts[0].StartedAt != now.Add(time.Millisecond) {
+		t.Fatalf("restored snapshot=%#v", state)
 	}
 }
 
@@ -284,11 +285,11 @@ func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
 	}
 	before := aggregate.Snapshot().Totals
 
-	_, payload, err := aggregate.MarshalCheckpoint()
+	snapshot, err := aggregate.TakeCheckpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := RestoreCheckpoint(payload)
+	restored, err := RestoreCheckpoint(snapshot.Payload)
 	if err != nil {
 		t.Fatal(err)
 	}

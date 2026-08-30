@@ -1,15 +1,38 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
-import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
+
+const usageTabs = ["summary", "attempts"] as const;
+type UsageTab = (typeof usageTabs)[number];
+
+// Which filters a drill-down link can carry. A link that names one of them is
+// asking for the list it filters, so it opens there rather than on the summary
+// the operator would then have to leave.
+const attemptFilterParams = [
+  "request_id", "project_id", "model", "provider_id", "provider_model", "deployment_id",
+  "status", "start", "end",
+];
+
+function usageTabFromURL(): UsageTab {
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("tab");
+  if (requested === "summary" || requested === "attempts") return requested;
+  return attemptFilterParams.some((name) => params.get(name)) ? "attempts" : "summary";
+}
+
+const usageTabID = (tab: UsageTab) => `usage-tab-${tab}`;
+const usagePanelID = (tab: UsageTab) => `usage-panel-${tab}`;
 
 export function UsagePage() {
   const { t } = useTranslation();
+  const [tab, setTab] = useState<UsageTab>(usageTabFromURL);
   const dateTime = useInstantFormatter();
   // Every project ever billed can show up in Usage history, including a
   // disabled or since-deleted one, so this list is unfiltered — narrowing it
@@ -39,16 +62,24 @@ export function UsagePage() {
   const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+  const [deploymentID, setDeploymentID] = useState(() => new URLSearchParams(window.location.search).get("deployment_id") ?? "");
   const timeZone = useAccountingTimeZone();
+  // A summary row links here with the absolute interval it covered. The inputs
+  // are wall-clock in the accounting zone, so the instants are converted once
+  // on arrival rather than being reconstructed from a date label — the same
+  // label under two generations of the zone is two different windows.
+  const [start, setStart] = useState(() => isoToZonedInput(
+    new URLSearchParams(window.location.search).get("start") ?? undefined, accountingTimeZone()));
+  const [end, setEnd] = useState(() => isoToZonedInput(
+    new URLSearchParams(window.location.search).get("end") ?? undefined, accountingTimeZone()));
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, providerModel, providerID, requestID, projectID, start, end, timeZone],
+    queryKey: ["usage", status, model, providerModel, providerID, deploymentID, requestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
       ...(providerID ? { provider_id: providerID } : {}),
+      ...(deploymentID ? { deployment_id: deploymentID } : {}),
       ...(providerModel ? { provider_model: providerModel } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
       ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
@@ -71,6 +102,30 @@ export function UsagePage() {
     if (model) aliases.add(model);
     return [...aliases].sort((left, right) => left.localeCompare(right));
   }, [routes.data?.items, usage.data?.pages, model]);
+  useEffect(() => {
+    const syncTab = () => setTab(usageTabFromURL());
+    window.addEventListener("popstate", syncTab);
+    return () => window.removeEventListener("popstate", syncTab);
+  }, []);
+  const selectTab = (next: UsageTab) => {
+    if (next === tab) return;
+    setTab(next);
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", next);
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+  const onTabKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const index = usageTabs.indexOf(tab);
+    const next = event.key === "ArrowRight" ? (index + 1) % usageTabs.length
+      : event.key === "ArrowLeft" ? (index + usageTabs.length - 1) % usageTabs.length
+        : event.key === "Home" ? 0
+          : event.key === "End" ? usageTabs.length - 1
+            : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    selectTab(usageTabs[next]);
+    document.getElementById(usageTabID(usageTabs[next]))?.focus();
+  };
   return (
     <>
       <PageHeader
@@ -78,6 +133,28 @@ export function UsagePage() {
         title={t("usage.title")}
         description={t("usage.description")}
       />
+      <div className="provider-tabs-shell">
+        <div className="provider-tabs" role="tablist" aria-label={t("usage.views")} onKeyDown={onTabKeys}>
+          {usageTabs.map((key) => (
+            <button
+              key={key}
+              role="tab"
+              id={usageTabID(key)}
+              aria-controls={usagePanelID(key)}
+              aria-selected={tab === key}
+              tabIndex={tab === key ? 0 : -1}
+              onClick={() => selectTab(key)}
+            >{t(`usage.tabs.${key}`)}</button>
+          ))}
+        </div>
+      </div>
+      {tab === "summary" && (
+        <section role="tabpanel" id={usagePanelID("summary")} aria-labelledby={usageTabID("summary")}>
+          <UsageSummaryPanel />
+        </section>
+      )}
+      {tab === "attempts" && (
+      <section role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
       <div className="filter-bar">
         <label><span>Request ID</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label>
@@ -95,6 +172,14 @@ export function UsagePage() {
           </select>
         </label>
         <label><span>{t("usage.provider")}</span><input autoComplete="off" value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
+        <label>
+          <span>{t("usage.deployment")}</span>
+          <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
+            <option value="">{t("usage.all")}</option>
+            {(deployments.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
+            {deploymentID && !deploymentNames[deploymentID] && <option value={deploymentID}>{deploymentID}</option>}
+          </select>
+        </label>
         <label><span>{t("usage.actualModel")}</span><input autoComplete="off" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
         <label>
           <span>{t("usage.status")}</span>
@@ -171,6 +256,8 @@ export function UsagePage() {
             <LoadMore label={t("common.loadMore")} busy={usage.isFetchingNextPage} onLoad={() => usage.fetchNextPage()} />
           )}
         </div>
+      )}
+      </section>
       )}
     </>
   );
