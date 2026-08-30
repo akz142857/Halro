@@ -15,12 +15,16 @@ import (
 const (
 	summaryDefaultGroupLimit = 50
 	summaryMaxGroupLimit     = 100
-	// A year view is 12 buckets; two years is the most a single response is
-	// allowed to cover. Beyond that the caller is asked to narrow the range
-	// rather than being handed a silently truncated one.
-	summaryMaxMonths  = 24
-	summaryDateLayout = "2006-01-02"
+	summaryDateLayout        = "2006-01-02"
 )
+
+// summaryBucketCeilings bounds a response by what actually costs something —
+// the buckets it carries and the days it walks to build them — rather than by
+// one span expressed in months. A span limit cannot mean the same thing at
+// three resolutions: two years is 730 points on a day view and two points on a
+// year view, and a ceiling written in months made the year view's own default
+// range illegal.
+var summaryBucketCeilings = map[string]int{"day": 400, "month": 36, "year": 10}
 
 // summaryDimensionFilters maps a query parameter to the rollup dimension it
 // selects. The names match the attempt detail endpoint so an operator moving
@@ -455,6 +459,10 @@ func bucketLabel(periodID, granularity string) string {
 // half-open instants: a date label names a whole day, and asking for August and
 // getting the 31st dropped is the kind of quiet arithmetic an operator only
 // notices at month end.
+//
+// Every default window fits inside its own ceiling, and a test holds that: a
+// default that cannot be served turns the view it belongs to into a page that
+// only ever shows an error.
 func summaryRange(rawStart, rawEnd, granularity, today string) (string, string, error) {
 	end := today
 	if rawEnd != "" {
@@ -466,14 +474,7 @@ func summaryRange(rawStart, rawEnd, granularity, today string) (string, string, 
 	}
 	start := rawStart
 	if start == "" {
-		switch granularity {
-		case "month":
-			start = endDate.AddDate(0, -11, 0).Format(summaryDateLayout)
-		case "year":
-			start = endDate.AddDate(-2, 0, 0).Format(summaryDateLayout)
-		default:
-			start = endDate.AddDate(0, 0, -29).Format(summaryDateLayout)
-		}
+		start = defaultSummaryStart(endDate, granularity).Format(summaryDateLayout)
 	}
 	startDate, err := time.Parse(summaryDateLayout, start)
 	if err != nil {
@@ -482,11 +483,41 @@ func summaryRange(rawStart, rawEnd, granularity, today string) (string, string, 
 	if startDate.After(endDate) {
 		return "", "", fmt.Errorf("start is after end")
 	}
-	months := (endDate.Year()-startDate.Year())*12 + int(endDate.Month()) - int(startDate.Month()) + 1
-	if months > summaryMaxMonths {
-		return "", "", fmt.Errorf("range covers %d months; the maximum is %d", months, summaryMaxMonths)
+	buckets := summaryBucketCount(startDate, endDate, granularity)
+	ceiling, known := summaryBucketCeilings[granularity]
+	if !known {
+		return "", "", fmt.Errorf("granularity must be day, month, or year")
+	}
+	if buckets > ceiling {
+		return "", "", fmt.Errorf(
+			"a %s view covers at most %d %ss; this range covers %d — narrow it",
+			granularity, ceiling, granularity, buckets)
 	}
 	return startDate.Format(summaryDateLayout), endDate.Format(summaryDateLayout), nil
+}
+
+func defaultSummaryStart(end time.Time, granularity string) time.Time {
+	switch granularity {
+	case "month":
+		return end.AddDate(0, -11, 0)
+	case "year":
+		return end.AddDate(-2, 0, 0)
+	default:
+		return end.AddDate(0, 0, -29)
+	}
+}
+
+// summaryBucketCount is how many buckets the range renders at this resolution —
+// the arithmetic bucketLabel performs, counted rather than applied.
+func summaryBucketCount(start, end time.Time, granularity string) int {
+	switch granularity {
+	case "month":
+		return (end.Year()-start.Year())*12 + int(end.Month()) - int(start.Month()) + 1
+	case "year":
+		return end.Year() - start.Year() + 1
+	default:
+		return int(end.Sub(start)/(24*time.Hour)) + 1
+	}
 }
 
 // summaryResourceLabels names the projects and deployments a grouped response

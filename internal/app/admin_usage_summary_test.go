@@ -198,8 +198,8 @@ func TestUsageSummaryRangeIsInclusiveAndBounded(t *testing.T) {
 		start != "2026-08-01" || end != "2026-08-31" {
 		t.Fatalf("start=%s end=%s err=%v", start, end, err)
 	}
-	if _, _, err := summaryRange("2024-01-01", "2026-08-31", "month", "2026-08-30"); err == nil {
-		t.Fatal("a range beyond the two-year ceiling must be refused, not truncated")
+	if _, _, err := summaryRange("2020-01-01", "2026-08-31", "month", "2026-08-30"); err == nil {
+		t.Fatal("a range beyond the month ceiling must be refused, not truncated")
 	}
 	if _, _, err := summaryRange("2026-09-01", "2026-08-31", "day", "2026-08-30"); err == nil {
 		t.Fatal("a backwards range must be refused")
@@ -207,5 +207,46 @@ func TestUsageSummaryRangeIsInclusiveAndBounded(t *testing.T) {
 	start, _, err := summaryRange("", "2026-08-30", "month", "2026-08-30")
 	if err != nil || start != "2025-09-30" {
 		t.Fatalf("default month window start=%s err=%v", start, err)
+	}
+}
+
+// The ceiling and the default window are two halves of one decision, and they
+// were written apart: a limit expressed in months rejected the year view's own
+// three-year default, so that view answered nothing but an error. Each default
+// is checked against the ceiling it will actually be measured by.
+func TestUsageSummaryDefaultRangeFitsItsOwnCeiling(t *testing.T) {
+	for _, granularity := range []string{"day", "month", "year"} {
+		start, end, err := summaryRange("", "", granularity, "2026-08-30")
+		if err != nil {
+			t.Fatalf("%s: the default range is not servable: %v", granularity, err)
+		}
+		startDate, parseErr := time.Parse(summaryDateLayout, start)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		endDate, parseErr := time.Parse(summaryDateLayout, end)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		buckets := summaryBucketCount(startDate, endDate, granularity)
+		if buckets > summaryBucketCeilings[granularity] {
+			t.Fatalf("%s: default window is %d buckets, ceiling is %d",
+				granularity, buckets, summaryBucketCeilings[granularity])
+		}
+		if buckets < 2 {
+			t.Fatalf("%s: default window is %d bucket, which charts nothing", granularity, buckets)
+		}
+	}
+}
+
+// A year view of three years is three points, and refusing it because the same
+// span is 25 months at another resolution is the defect that put a permanent
+// error on the page.
+func TestUsageSummaryCeilingCountsBucketsNotMonths(t *testing.T) {
+	if _, _, err := summaryRange("2024-08-30", "2026-08-30", "year", "2026-08-30"); err != nil {
+		t.Fatalf("a three-year year view must be servable: %v", err)
+	}
+	if _, _, err := summaryRange("2024-08-30", "2026-08-30", "day", "2026-08-30"); err == nil {
+		t.Fatal("the same span at day resolution is 731 points and must be refused")
 	}
 }
