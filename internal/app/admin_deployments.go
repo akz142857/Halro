@@ -135,7 +135,7 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, request 
 func (r *Runtime) createAdminDeployment(writer http.ResponseWriter, request *http.Request) {
 	var input deploymentInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	if err := refuseOperationBindings(input); err != nil {
@@ -209,7 +209,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	}
 	var input deploymentInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	if err := refuseOperationBindings(input); err != nil {
@@ -416,17 +416,17 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	}
 	instance, err := r.store.GetProvider(request.Context(), deployment.ProviderID)
 	if err != nil || !instance.Enabled || instance.DeletedAt != nil {
-		adminBadRequest(writer, "deployment provider is unavailable")
+		adminBadRequestCode(writer, "deployment_provider_unavailable", "deployment provider is unavailable")
 		return
 	}
 	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
-		adminBadRequest(writer, "deployment provider adapter is unavailable")
+		adminBadRequestCode(writer, "deployment_provider_adapter_unavailable", "deployment provider adapter is unavailable")
 		return
 	}
 	prober, ok := adapter.(provider.Prober)
 	if !ok {
-		adminBadRequest(writer, "provider does not support connection testing")
+		adminBadRequestCode(writer, "provider_test_unsupported", "provider does not support connection testing")
 		return
 	}
 	testedRevision := deployment.Revision

@@ -56,7 +56,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		stepUpMaterial
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// Detection spends the operator's Provider credential on up to
@@ -75,7 +75,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 		input.RiskTier = "safe_automatic"
 	}
 	if input.ProviderModel == "" || len(input.ProviderModel) > 512 || len(input.SelectionRevision) > 256 || input.RiskTier != "safe_automatic" {
-		adminBadRequest(writer, "invalid capability detection target")
+		adminBadRequestCode(writer, "capability_detection_target_invalid", "invalid capability detection target")
 		return
 	}
 	providerID := chi.URLParam(request, "id")

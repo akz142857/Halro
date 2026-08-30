@@ -42,8 +42,8 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
         <Field label={t("settings.interfaceLanguage")}>
           <select value={locale} disabled={preferenceMutation.isPending} onChange={(event) => { const value = event.target.value as LocalePreference; setLocale(value); preferenceMutation.mutate(value); }}>
             <option value="system">{t("settings.followInstance")}</option>
-            <option value="zh-CN">{t("settings.zhCN")}</option>
-            <option value="en-US">{t("settings.enUS")}</option>
+            <option value="zh-CN">{t("common.localeZhCN")}</option>
+            <option value="en-US">{t("common.localeEnUS")}</option>
           </select>
         </Field>
         {preferenceMutation.isError && <ErrorState error={preferenceMutation.error} />}
@@ -75,8 +75,8 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
       <form className="settings-form compact-form" aria-busy={instanceMutation.isPending} onSubmit={(event) => { event.preventDefault(); instanceMutation.mutate(); }}>
         <Field label={t("settings.instanceLanguage")}>
           <select value={defaultLocale} onChange={(event) => { instanceMutation.reset(); setDefaultLocale(event.target.value as SupportedLocale); }}>
-            <option value="zh-CN">{t("settings.zhCN")}</option>
-            <option value="en-US">{t("settings.enUS")}</option>
+            <option value="zh-CN">{t("common.localeZhCN")}</option>
+            <option value="en-US">{t("common.localeEnUS")}</option>
           </select>
         </Field>
         <div className="form-actions"><button className="button primary" disabled={readOnly || instanceMutation.isPending || !instanceChanged}>{instanceMutation.isPending ? t("settings.saving") : t("settings.saveInstanceLanguage")}</button></div>

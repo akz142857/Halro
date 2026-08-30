@@ -81,7 +81,7 @@ func (r *Runtime) getAdminRedactionPolicy(writer http.ResponseWriter, request *h
 func (r *Runtime) createAdminRedactionPolicy(writer http.ResponseWriter, request *http.Request) {
 	var input redactionPolicyInput
 	if err := decodeAdminJSONLimit(request, &input, 256<<10); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	policyID, err := id.New("rdp")
@@ -123,7 +123,7 @@ func (r *Runtime) updateAdminRedactionPolicy(writer http.ResponseWriter, request
 		stepUpMaterial
 	}
 	if err := decodeAdminJSONLimit(request, &input, 256<<10); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// Before the store is touched, for the reason deleteAdminProject gives: the
@@ -222,7 +222,7 @@ func (r *Runtime) testAdminRedactionPolicy(writer http.ResponseWriter, request *
 	}
 	var input redactionTestInput
 	if err := decodeAdminJSON(request, &input); err != nil || len(input.Input) > 16<<10 {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	matches, err := r.redactor.Test(policy.ID, input.Input, input.Scope)

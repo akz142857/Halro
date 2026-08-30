@@ -51,7 +51,7 @@ type gatewayKeyInput struct {
 func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.Request) {
 	var input projectInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
@@ -104,7 +104,7 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 	}
 	var input projectInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// validateProjectReferences reads routes, so the topology coordinator is held
@@ -235,7 +235,7 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 	}
 	var input gatewayKeyInput
 	if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.Name) == "" {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	password := input.CurrentPassword
@@ -319,7 +319,7 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	}
 	var input gatewayKeyInput
 	if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.Name) == "" {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	r.adminProjectMu.Lock()
