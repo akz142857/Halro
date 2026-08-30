@@ -1,6 +1,6 @@
 # 用量汇总报表（按日 / 按月 / 按年）：设计与实施计划
 
-- 状态：In progress — D6/D7/D9 取 a、D8 取 d，均已实现（S0/S1 完成，S2 部分完成，未提交）
+- 状态：In progress — D6/D7/D9 取 a、D8 取 d，均已实现。S0/S1 完成并已提交；S2 只差「环比上一期」；§六 的空态骨架未做；S3 另议
 - 目标版本：metadata schema v33 / usage checkpoint v8 / Admin API v1
 - 日期：2026-08-30
 - 文档语言：中文
@@ -255,9 +255,10 @@ Bedrock inference-profile ARN，域模型只校验非空去空格，`internal/do
 `total` 单独存一行，让「只要总量」的查询不必扫全部维度行再求和（也避免求和口径与 `total` 漂移）。
 前缀 Seek 不受分隔符影响；反解一律 `SplitN(key, "\x00", 4)`，`dimension_key` 取最后一段。
 
-长尾按 D8-a 折叠：当天不折叠；账期日关闭后由 `foldClosedDay(periodID, tzVersion)` 一次性按
-`(排序指标降序, key 升序)` 取前 N、其余合并为 `__other__`。已关闭日另存一个 `folded` 标记，
-重复调用是幂等的——这是增量与 `rebuild-summary` 能落到同一结果的前提。
+长尾按 D8-d 折叠：每个 `(日, 维度)` 保留**账本顺序**最先出现的
+`domain.MaxRollupKeysPerDimension`（200）个键，其余并入 `__other__`。准入顺序取行上的
+`FirstSequence`（该键首次出现的账本序号），不取键名、也不取落盘批次——这是增量与
+`rebuild-summary` 能落到同一批键的前提，且不需要判断某一天是否已经结束。
 
 值（JSON）：
 
@@ -513,9 +514,9 @@ GET /admin/api/v1/usage/summary
 
 | 阶段 | 内容 | 完成标准 |
 |---|---|---|
-| **S0（已完成，未提交）** | rollup 存储 + 迁移 33（含 `requiredBuckets` 登记）+ `AttemptEvent`/`RequestSummary` 补账期字段 + `Dashboard.Today` 改按 `PeriodID` 归集 + Apply 内增量 + checkpoint/rollup 单事务落盘 + 双向拒读重建 + `rebuild-summary` + 明细端点 `deployment_id` + `GET /usage/summary`（日/月/年）+ 每维度键上限（D8-d） | 见 §八 前四条，均已有测试并做过逆向验证 |
-| **S1（已完成，未提交）** | 「汇总」标签页：KPI、趋势图（`buildTrendSeries` 已按桶边界重构）、维度表、下钻联动 | 已实现并有测试：下钻链接带 `tab=attempts` + 维度筛选 + **绝对时间边界**，明细页从 URL 还原为账期时区的本地输入 |
-| **S2（部分完成）** | 年视图 ✓、CSV 导出 ✓、时区变更提示 ✓、24 个月上限 ✓；**未做**：环比上一期 | CSV 由前端从当前响应生成（含 `__other__` 行），不新增端点 |
+| **S0（已完成）** | rollup 存储 + 迁移 33（含 `requiredBuckets` 登记）+ `AttemptEvent`/`RequestSummary` 补账期字段 + `Dashboard.Today` 改按 `PeriodID` 归集 + Apply 内增量 + checkpoint/rollup 单事务落盘 + 双向拒读重建 + `rebuild-summary` + 明细端点 `deployment_id` + `GET /usage/summary`（日/月/年）+ 每维度键上限（D8-d） | 见 §八 前四条，均已有测试并做过逆向验证 |
+| **S1（已完成）** | 「汇总」标签页：KPI、趋势图（`buildTrendSeries` 已按桶边界重构）、维度表、下钻联动 | 已实现并有测试：下钻链接带 `tab=attempts` + 维度筛选 + **绝对时间边界**，明细页从 URL 还原为账期时区的本地输入 |
+| **S2（部分完成）** | 年视图 ✓、CSV 导出 ✓、时区变更提示 ✓、区间上限（按桶数，见 §五）✓；**未做**：环比上一期 | CSV 由前端从当前响应生成（含 `__other__` 行），不新增端点 |
 | **S3（另议）** | 内存 aggregate 的裁剪策略（见 R1），以及在其之上才谈得上的「明细可查下界」 | 单独提案，不与本功能同期改 |
 
 ## 八、验证
@@ -529,8 +530,8 @@ GET /admin/api/v1/usage/summary
   并另有一条专门的跨界用例：23:59 受理、次日 00:02 结算的请求，rollup 与总览必须都记在受理日。
 - **重建等价性**：增量写出的 rollup 与 `rebuild-summary` 全量重放结果完全一致，覆盖：中途
   checkpoint、进程重启、collector 队列溢出后 `CatchUp` 补齐（并断言 `CatchUp` 之后 rollup 与
-  `aggregate.totals` 相等）、以及 `foldClosedDay` 折叠后的已关闭日（D8-a：对同一个已关闭日，
-  增量路径与全量重建必须落到同一批 `__other__` 成员，含并列值的 tie-break）。
+  `aggregate.totals` 相等）、以及超出每维度键上限的日子（D8-d：同一批事件无论分成几次增量落盘，
+  都必须准入同一批键、折叠出同一个 `__other__`）。
 - **双向拒读**（§4.2 的两个反向）：① 删除或写坏 usage checkpoint 后重启，rollup **不得翻倍**；
   ② 人为把 rollup `Version` 改旧后启动，结果必须等于**全量**重放而非后缀重放；
   ③ `rebuild-summary` 之后的第一次启动，数字不变。
@@ -561,8 +562,8 @@ GET /admin/api/v1/usage/summary
 
 - **R1 · 内存 aggregate 无界增长**：明细只增不裁（`aggregate.go:328` 唯一追加点，无截断），
   checkpoint 是全量 JSON。本功能不加重它，但会让长期运行的实例第一次被人认真审视，且
-  `rebuild-summary` 若走 `aggregate.Apply` 全量重放会直接撞上它（所以 §4.2 要求流式重建）。
-  **不在本期修**，在 S0 的 PR 描述里点名。
+  `rebuild-summary` 走全量重放会直接撞上它（见 §4.2：流式重建做不到，rollup 必须与 checkpoint
+  同事务）。**不在本期修**，PR 描述里必须点名——原文见附录二，开 PR 时照抄。
 - **R2 · 维度基数与体量**：`provider_model × 天` 基数最高。两个量级要分别算清：
   *典型安装*（每天每维度几十个键，5 个非 total 维度 ≈ 百余行/天 ≈ 数万行/年，单行数百字节 →
   年级别十几 MB）与 *上限口径*（每天每维度 500 键 ≈ 2500 行/天 ≈ 91 万行/年 → 数百 MB）。
@@ -570,8 +571,9 @@ GET /admin/api/v1/usage/summary
   下调到与之自洽的量级（**已定为每天每维度 200**，`domain.MaxRollupKeysPerDimension`），
   配 D8-d 的账本顺序准入。按此上限，最坏情况约 1000 行/天、36 万行/年。
   另外 rollup 计入 metadata.db，因而**计入每一份离线备份归档**（`backup.go:642`）。
-- **R3 · 口径解释**：Parquet 按 UTC 日、报表按账期日，二者本来就不同。`docs/guides/` 要有一句话
-  说明，避免有人拿 Parquet 文件数量质疑月报。
+- **R3 · 口径解释**：Parquet 按 UTC 日、报表按账期日，二者本来就不同。已写入
+  `docs/guides/operator-guide.md` 的 `usage.retention_days` 段落，避免有人拿 Parquet 文件数量
+  质疑月报。
 - **R4 · 双真相源的诱惑**：一旦报表好用，就会有人想直接从 rollup 出账。代码注释与 API 响应里要
   保持「派生物」定位，账务结论仍以 Ledger 为准。
 - **R5 · 落盘路径的并发**：增量移进 `Apply` 意味着 rollup 状态与 aggregate 共享 `a.mu`，
@@ -584,3 +586,11 @@ GET /admin/api/v1/usage/summary
 备份、第二套一致性窗口与第二个失败域，而本功能的数据量（天 × 维度）在典型安装下用 bbolt 一个
 bucket 就装得下。规模真的越界时（R2 的上限量级、或备份归档因它明显变大），正确的下一步是把
 rollup 落到 Parquet 侧的汇总分区并复用既有 manifest 校验，而不是引入外部 DB。
+
+## 附录二 · PR 描述里必须点名的一段（R1）
+
+> 本 PR **没有**修内存 Usage aggregate 的无界增长：`usage.Aggregate` 的明细列表只追加不裁剪
+> （`internal/usage/aggregate.go:328` 是唯一写入点），checkpoint 把全部明细序列化成一份 JSON。
+> 本 PR 不加重这个问题，但两处会让它更容易被撞上：`halro usage rebuild-summary` 走全量重放，
+> 内存占用与 `usage compact` 同级；而汇总报表会鼓励运维保留更长的历史。裁剪策略是 S3 的独立
+> 提案（见本文档 §九 R1 与 §七 S3），不与本功能同期改。

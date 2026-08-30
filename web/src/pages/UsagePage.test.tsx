@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { UsagePage, billedTierLabel } from "./UsagePage";
@@ -201,6 +201,25 @@ describe("UsagePage view selection", () => {
     await waitFor(() => expect(api.usage).toHaveBeenCalled());
     const query = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
     expect(new URLSearchParams(query.slice(1)).get("deployment_id")).toBe("dep_primary");
+  });
+
+  // Switching views pushes history, so the back button has to take the operator
+  // to the view they came from. Without a popstate listener the URL changes and
+  // the page does not, which is worse than not pushing at all.
+  it("follows the back button between the two views", async () => {
+    window.history.replaceState({}, "", "/admin/usage");
+    renderUsage();
+    expect(await screen.findByRole("tab", { name: "汇总", selected: true })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "调用明细" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "调用明细", selected: true })).toBeVisible());
+    expect(new URL(window.location.href).searchParams.get("tab")).toBe("attempts");
+
+    act(() => {
+      window.history.replaceState({}, "", "/admin/usage");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() => expect(screen.getByRole("tab", { name: "汇总", selected: true })).toBeVisible());
   });
 
   // A summary row links here with the interval it covered. Dropping it would

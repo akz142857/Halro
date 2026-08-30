@@ -447,6 +447,15 @@ are dated in UTC while the promise is read in the operator's own day, so pruning
 keeps one extra day; an instance at UTC+8 never loses a local day it was told it
 still had.
 
+For the same reason, do not reconcile the Usage summary against the Parquet
+files by counting them. A partition is a UTC day; the summary — like the daily
+budget and the dashboard's "today" — is an accounting day, and on any instance
+away from UTC the two contain different calls at their edges. The summary reads
+neither the partitions nor their dates: it reads a rollup keyed by the
+accounting period each event was stamped with when its request was admitted, so
+a request accepted at 23:59 and settled at 00:02 is reported on the day it
+reserved budget against and appears in the *next* day's partition.
+
 Only IANA names are accepted; a fixed offset such as `UTC+08:00` cannot express
 summer time and would make the days on either side of a transition the wrong
 length. A day is 23 or 25 hours where summer time applies, and the daily budget

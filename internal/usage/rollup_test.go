@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"sort"
 	"testing"
 	"time"
 
@@ -285,5 +286,126 @@ func TestReturnCheckpointMergesTheUnwrittenIncrement(t *testing.T) {
 	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
 	if total.Attempts != 4 || total.CostMicrosUSD != 205 {
 		t.Fatalf("merged increment lost or duplicated work: %#v", total)
+	}
+}
+
+// The stamp decides the day on both sides. The dashboard's half of this is
+// covered in period_test; this is the rollup's: a request admitted just before
+// midnight and settled just after is charged, in the stored row, to the day it
+// reserved budget against.
+func TestRollupFilesLateSettlementUnderTheAdmittedDay(t *testing.T) {
+	aggregate := NewAggregate()
+	midnight := time.Date(2026, 8, 30, 16, 0, 0, 0, time.UTC) // 2026-08-31 00:00 in Asia/Shanghai
+	events := []ledger.Event{
+		{EventID: "late_accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_late",
+			ProjectID: "prj_a", RequestedModel: "chat", PeriodID: "2026-08-30", PeriodTimezoneVersion: 1,
+			OccurredAt: midnight.Add(-time.Minute)},
+		{EventID: "late_settled", Kind: ledger.EventAttemptSettled, RequestID: "req_late",
+			AttemptID: "att_late", ProjectID: "prj_a", RequestedModel: "chat", ProviderID: "prov_a",
+			PeriodID: "2026-08-30", PeriodTimezoneVersion: 1, OccurredAt: midnight.Add(2 * time.Minute),
+			ProviderInputTokens: 5, CommittedMicrosUSD: ledger.MicrosUSD(50), Outcome: "success"},
+		{EventID: "late_final", Kind: ledger.EventRequestFinalized, RequestID: "req_late",
+			ProjectID: "prj_a", RequestedModel: "chat", PeriodID: "2026-08-30", PeriodTimezoneVersion: 1,
+			OccurredAt: midnight.Add(3 * time.Minute), Outcome: "success"},
+		{EventID: "next_accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_next",
+			ProjectID: "prj_a", RequestedModel: "chat", PeriodID: "2026-08-31", PeriodTimezoneVersion: 1,
+			OccurredAt: midnight.Add(4 * time.Minute)},
+		{EventID: "next_settled", Kind: ledger.EventAttemptSettled, RequestID: "req_next",
+			AttemptID: "att_next", ProjectID: "prj_a", RequestedModel: "chat", ProviderID: "prov_a",
+			PeriodID: "2026-08-31", PeriodTimezoneVersion: 1, OccurredAt: midnight.Add(5 * time.Minute),
+			ProviderInputTokens: 5, CommittedMicrosUSD: ledger.MicrosUSD(70), Outcome: "success"},
+	}
+	for index, event := range events {
+		if err := aggregate.Apply(ledger.Record{
+			Sequence: uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows := rollupRows(t, aggregate)
+	admitted := rows[domain.RollupKey{PeriodID: "2026-08-30", TimezoneVersion: 1,
+		Dimension: domain.RollupDimensionTotal, DimensionKey: domain.RollupTotalKey}]
+	next := rows[domain.RollupKey{PeriodID: "2026-08-31", TimezoneVersion: 1,
+		Dimension: domain.RollupDimensionTotal, DimensionKey: domain.RollupTotalKey}]
+	if admitted.Attempts != 1 || admitted.Requests != 1 || admitted.CostMicrosUSD != 50 {
+		t.Fatalf("the day it was admitted on=%#v", admitted)
+	}
+	if next.Attempts != 1 || next.CostMicrosUSD != 70 {
+		t.Fatalf("the following day=%#v", next)
+	}
+}
+
+// A jurisdiction crossing the date line erases a calendar date outright — Samoa
+// had no 2011-12-30. The rollup keys off the labels the ledger carries and
+// never derives its own, so the missing label simply has no row; a rollup that
+// filled a range would invent a day that never existed.
+func TestRollupHasNoRowForADateThatNeverExisted(t *testing.T) {
+	aggregate := NewAggregate()
+	for index, day := range []string{"2011-12-29", "2011-12-31"} {
+		event := ledger.Event{
+			EventID: "settled_" + day, Kind: ledger.EventAttemptSettled, RequestID: "req_" + day,
+			AttemptID: "att_" + day, ProjectID: "prj_a", ProviderID: "prov_a",
+			PeriodID: day, PeriodTimezoneVersion: 1,
+			OccurredAt:         time.Date(2011, 12, 29+index*2, 12, 0, 0, 0, time.UTC),
+			CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success",
+		}
+		if err := aggregate.Apply(ledger.Record{
+			Sequence: uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	days := map[string]struct{}{}
+	for key := range rollupRows(t, aggregate) {
+		days[key.PeriodID] = struct{}{}
+	}
+	if len(days) != 2 {
+		t.Fatalf("days=%v, want only the two the ledger named", days)
+	}
+	if _, invented := days["2011-12-30"]; invented {
+		t.Fatal("the rollup invented a date the accounting calendar skipped")
+	}
+}
+
+// A percentile read off a histogram lands on the bucket bound above the true
+// value, never below it, and never further away than that bucket is wide.
+// Reporting it as if it were exact — or reporting a value under the truth — is
+// how an approximation starts being compared against the dashboard's figure.
+func TestApproximateP95StaysInsideItsBucket(t *testing.T) {
+	for _, latencies := range [][]int64{
+		{5, 8, 12, 30, 44, 60, 90, 120, 200, 400},
+		{1, 1, 1, 1, 1, 1, 1, 1, 1, 3000},
+		{700, 800, 900, 1000, 1100},
+	} {
+		var histogram [latencyBucketCount]uint64
+		var overflow uint64
+		sorted := append([]int64(nil), latencies...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		for _, latency := range sorted {
+			index, over := latencyBucketIndex(uint64(latency))
+			if over {
+				overflow++
+				continue
+			}
+			histogram[index]++
+		}
+		exact := percentile(sorted, 95)
+		approximate, beyond := ApproximateLatencyPercentile(histogram, overflow, 95)
+		if beyond {
+			t.Fatalf("%v: the fixture was supposed to stay inside the buckets", latencies)
+		}
+		if approximate < exact {
+			t.Fatalf("%v: approximate=%d is below the exact P95=%d", latencies, approximate, exact)
+		}
+		width := approximate
+		for index, bound := range LatencyBucketsMillis {
+			if int64(bound) == approximate && index > 0 {
+				width = approximate - int64(LatencyBucketsMillis[index-1])
+			}
+		}
+		if approximate-exact > width {
+			t.Fatalf("%v: approximate=%d exact=%d differ by more than the %dms bucket",
+				latencies, approximate, exact, width)
+		}
 	}
 }
