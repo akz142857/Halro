@@ -205,7 +205,11 @@ export function RoutesPage() {
                             {[providerNames.get(providerID) || providerID, deployment?.provider_model]
                               .filter(Boolean).join(" · ") || route.deployment_id}
                           </span>
-                          {route.id === primaryID && <span className="badge" title={t("routes.primaryTargetTitle")}>{t("routes.primaryTarget")}</span>}
+                          {/* Not a badge: the pill's radius turns one CJK
+                              character into a circle. A bracketed tag reads as
+                              the annotation it is, and the brackets are drawn
+                              rather than written so the text stays one word. */}
+                          {route.id === primaryID && <span className="route-primary-tag" title={t("routes.primaryTargetTitle")}>{t("routes.primaryTarget")}</span>}
                           {/* The group heading states the strategy in force, so
                               a row only speaks up when its own disagrees —
                               which is the case where editing it does nothing,

@@ -1087,6 +1087,9 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .route-target-name { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .route-target-meta { overflow: hidden; color: var(--color-text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
 .route-target-meta code { display: inline; }
+.route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
+.route-primary-tag::before { content: "["; }
+.route-primary-tag::after { content: "]"; }
 .route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
 .route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
 .route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
