@@ -20,9 +20,18 @@ export function UsagePage() {
   // empty table and no way to tell that apart from "no calls yet". The public
   // aliases come from the routes, which is what a caller is able to ask for.
   const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
+  // Names for the deployment each attempt actually ran on. A deleted deployment
+  // is absent from this list and its history is not, so every read falls back to
+  // the ID — which is the value the ledger and the Parquet partitions carry, and
+  // the one to correlate with.
+  const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const projectNames = useMemo(
     () => Object.fromEntries((projects.data?.items ?? []).map((project) => [project.id, project.name])),
     [projects.data?.items],
+  );
+  const deploymentNames = useMemo(
+    () => Object.fromEntries((deployments.data?.items ?? []).map((item) => [item.id, item.name])),
+    [deployments.data?.items],
   );
   const [status, setStatus] = useState("");
   const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
@@ -111,10 +120,11 @@ export function UsagePage() {
         <div className="table-shell">
           <table className="usage-table">
             <colgroup>
-              <col style={{ width: "16%" }} /><col style={{ width: "10%" }} /><col style={{ width: "11%" }} /><col style={{ width: "14%" }} />
-              <col style={{ width: "21%" }} /><col style={{ width: "8%" }} /><col style={{ width: "7%" }} /><col style={{ width: "13%" }} />
+              <col style={{ width: "14%" }} /><col style={{ width: "9%" }} /><col style={{ width: "10%" }} /><col style={{ width: "13%" }} />
+              <col style={{ width: "12%" }} /><col style={{ width: "18%" }} /><col style={{ width: "6%" }} /><col style={{ width: "6%" }} />
+              <col style={{ width: "12%" }} />
             </colgroup>
-            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th></tr></thead>
+            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th></tr></thead>
             <tbody>
               {attempts.map((attempt) => (
                 <tr key={attempt.event_id}>
@@ -123,9 +133,28 @@ export function UsagePage() {
                     <Link className="resource-link" href={`/admin/projects?project_id=${encodeURIComponent(attempt.project_id)}`}>{projectNames[attempt.project_id] || attempt.project_id}</Link>
                     {projectNames[attempt.project_id] && <small><code>{attempt.project_id}</code></small>}
                   </td>
+                  {/* The alias is what the caller asked for; it is the same on
+                      every attempt of a fallback chain, which is why it cannot
+                      be the only thing this row identifies the target by. */}
                   <td>
-                    <Link className="resource-link" href={`/admin/deployments?q=${encodeURIComponent(attempt.deployment_id || attempt.provider_model || "")}`}>{attempt.requested_model || "—"}</Link>
+                    {attempt.requested_model || "—"}
                     <small>{attempt.provider_model}</small>
+                  </td>
+                  {/* Which deployment actually served this attempt. Without it
+                      two targets of one alias on the same upstream model — the
+                      safest way to configure redundancy — are indistinguishable
+                      here, and a fallback cannot be verified from the console at
+                      all. The ID is shown as well as the name because the ID is
+                      what the ledger and the usage partitions carry. */}
+                  <td>
+                    {attempt.deployment_id ? (
+                      <>
+                        <Link className="resource-link" href={`/admin/deployments?q=${encodeURIComponent(attempt.deployment_id)}`}>
+                          {deploymentNames[attempt.deployment_id] || attempt.deployment_id}
+                        </Link>
+                        {deploymentNames[attempt.deployment_id] && <small><code>{attempt.deployment_id}</code></small>}
+                      </>
+                    ) : "—"}
                   </td>
                   <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
                   <td><CostCell attempt={attempt} /></td>

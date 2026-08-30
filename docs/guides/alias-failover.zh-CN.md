@@ -186,10 +186,14 @@ Profile Binding 与同一个上游模型，指向它们的两条路由仍然是�
   `attempt_number`、`retry_count`、`fallback_count`
 - `internal/usage/parquet.go` 的同名列，**每次尝试一行**
 
-所以一条回退链的每一跳都可以事后重建。但**控制台的「用量与调用」看不到它**：表格的模型
-列渲染的是 `requested_model`（别名），`deployment_id` 只出现在链接的 href 里
-（`web/src/pages/UsagePage.tsx:127`）。对「同一个上游模型的多个部署」这种最安全的冗余配法，
-两个目标在页面上完全无法区分。
+所以一条回退链的每一跳都可以事后重建，**控制台的「用量与调用」也能直接看到**：模型列渲染
+`requested_model`（别名），旁边的「模型部署」列给出这次尝试实际落到的部署——有名字显示名字
+并在下方附上 ID，部署已删除时直接显示 ID。对「同一个上游模型的多个部署」这种最安全的冗余
+配法，两个目标从此可以区分。按 `request_id` 过滤即可看到同一请求的全部尝试，从而读出主目标
+失败、备目标成功这条链。
+
+用量查询暂不支持按 deployment 过滤（只有 project / provider / request / model /
+provider_model / status），验证回退不需要它。
 
 `halro_fallbacks_total`（无标签）统计的是每请求 `FallbackCount` 最大值之和，即「多用了几个
 目标」，不是「有多少请求发生了回退」。告警 `HalroFallbackSaturation`
