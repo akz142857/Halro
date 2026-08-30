@@ -21,12 +21,14 @@ import (
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
 
-// Version 7 persists the dedup window. Version 6 dropped the duplicate cost columns. Retiring cost adjustments left
-// original/final/committed holding the same number on every row and in every
-// bucket, so a reader had three names for one value and no way to tell which
-// one was authoritative. A checkpoint written before this carries them, and
-// rebuilding from the Ledger is cheap, so it is refused rather than migrated.
-const checkpointVersion = 7
+// Version 8 records the accounting period on attempts and request summaries.
+// Without it the aggregate could say when a call finished but not which
+// accounting day it was charged to, and the daily rollup — which keys on the
+// period stamped at admission — had nothing to key on. Version 7 persisted the
+// dedup window; version 6 dropped the duplicate cost columns. A checkpoint
+// written before this is refused rather than migrated: it is a derivative, and
+// rebuilding it from the Ledger is cheap.
+const checkpointVersion = 8
 
 const latencyBucketCount = 12
 
@@ -35,20 +37,27 @@ var LatencyBucketsMillis = [latencyBucketCount]uint64{
 }
 
 type AttemptEvent struct {
-	EventID              string `json:"event_id"`
-	RequestID            string `json:"request_id"`
-	AttemptID            string `json:"attempt_id"`
-	Sequence             uint64 `json:"sequence"`
-	AttemptNumber        int    `json:"attempt"`
-	ProjectID            string `json:"project_id"`
-	KeyID                string `json:"key_id,omitempty"`
-	RouteID              string `json:"route_id,omitempty"`
-	DeploymentID         string `json:"deployment_id,omitempty"`
-	ProviderID           string `json:"provider_id,omitempty"`
-	RequestedModel       string `json:"requested_model,omitempty"`
-	ProviderModel        string `json:"provider_model,omitempty"`
-	ProviderInputTokens  int64  `json:"provider_input_tokens"`
-	ProviderOutputTokens int64  `json:"provider_output_tokens"`
+	EventID       string `json:"event_id"`
+	RequestID     string `json:"request_id"`
+	AttemptID     string `json:"attempt_id"`
+	Sequence      uint64 `json:"sequence"`
+	AttemptNumber int    `json:"attempt"`
+	ProjectID     string `json:"project_id"`
+	KeyID         string `json:"key_id,omitempty"`
+	RouteID       string `json:"route_id,omitempty"`
+	DeploymentID  string `json:"deployment_id,omitempty"`
+	// The accounting day this attempt was charged to, decided when its request
+	// was admitted and inherited from there. It is not the completion instant
+	// truncated to a date: a request accepted at 23:59 and settled at 00:02
+	// belongs to the day it was admitted on, and every view has to agree on
+	// that or the same call lands in two different days.
+	PeriodID              string `json:"period_id"`
+	PeriodTimezoneVersion uint64 `json:"period_timezone_version,omitempty"`
+	ProviderID            string `json:"provider_id,omitempty"`
+	RequestedModel        string `json:"requested_model,omitempty"`
+	ProviderModel         string `json:"provider_model,omitempty"`
+	ProviderInputTokens   int64  `json:"provider_input_tokens"`
+	ProviderOutputTokens  int64  `json:"provider_output_tokens"`
 	// Breakdown subsets of the two totals above, not additions to them.
 	ProviderCachedInputTokens     int64                      `json:"provider_cached_input_tokens,omitempty"`
 	ProviderCacheWriteInputTokens int64                      `json:"provider_cache_write_input_tokens,omitempty"`
@@ -84,19 +93,22 @@ func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
 }
 
 type RequestSummary struct {
-	RequestID       string    `json:"request_id"`
-	ProjectID       string    `json:"project_id"`
-	KeyID           string    `json:"key_id,omitempty"`
-	RequestedModel  string    `json:"requested_model,omitempty"`
-	Attempts        int64     `json:"attempts"`
-	InputTokens     int64     `json:"input_tokens"`
-	OutputTokens    int64     `json:"output_tokens"`
-	CostMicrosUSD   int64     `json:"cost_micros_usd"`
-	UnknownAttempts int64     `json:"unknown_attempts"`
-	Fallbacks       int64     `json:"fallbacks"`
-	Outcome         string    `json:"outcome"`
-	AcceptedAt      time.Time `json:"accepted_at"`
-	CompletedAt     time.Time `json:"completed_at"`
+	RequestID      string `json:"request_id"`
+	ProjectID      string `json:"project_id"`
+	KeyID          string `json:"key_id,omitempty"`
+	RequestedModel string `json:"requested_model,omitempty"`
+	// The accounting day the request was admitted into; see AttemptEvent.
+	PeriodID              string    `json:"period_id"`
+	PeriodTimezoneVersion uint64    `json:"period_timezone_version,omitempty"`
+	Attempts              int64     `json:"attempts"`
+	InputTokens           int64     `json:"input_tokens"`
+	OutputTokens          int64     `json:"output_tokens"`
+	CostMicrosUSD         int64     `json:"cost_micros_usd"`
+	UnknownAttempts       int64     `json:"unknown_attempts"`
+	Fallbacks             int64     `json:"fallbacks"`
+	Outcome               string    `json:"outcome"`
+	AcceptedAt            time.Time `json:"accepted_at"`
+	CompletedAt           time.Time `json:"completed_at"`
 }
 
 type Bucket struct {
@@ -174,6 +186,12 @@ type Aggregate struct {
 	attempts     []AttemptEvent
 	summaries    []RequestSummary
 	hourly       map[int64]Bucket
+	// rollupDelta is the daily-rollup increment that has not been persisted
+	// yet. It lives here, behind the same lock as the watermark, because Apply
+	// is the only place that knows an event was neither a duplicate nor a
+	// replay — the Collector cannot tell, and startup replay and CatchUp both
+	// bypass it entirely.
+	rollupDelta  map[domain.RollupKey]*domain.DailyRollup
 	attemptIndex map[string]int
 	summaryIndex map[string]int
 	totals       Bucket
@@ -184,6 +202,7 @@ func NewAggregate() *Aggregate {
 	return &Aggregate{
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
 		requests: make(map[string]*requestAccumulator), hourly: make(map[int64]Bucket),
+		rollupDelta:  make(map[domain.RollupKey]*domain.DailyRollup),
 		attemptIndex: make(map[string]int), summaryIndex: make(map[string]int),
 	}
 }
@@ -231,9 +250,13 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	return aggregate, nil
 }
 
-func (a *Aggregate) MarshalCheckpoint() (ledger.Watermark, []byte, error) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+// TakeCheckpoint captures the aggregate's state and drains the pending rollup
+// increment in one critical section, so the two describe exactly the same
+// prefix of the Ledger. The caller writes both in a single transaction and, if
+// that write fails, must hand the increment back with ReturnCheckpoint.
+func (a *Aggregate) TakeCheckpoint() (CheckpointSnapshot, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	active := make(map[string]RequestSummary, len(a.requests))
 	for requestID, accumulator := range a.requests {
 		active[requestID] = accumulator.summary
@@ -248,9 +271,9 @@ func (a *Aggregate) MarshalCheckpoint() (ledger.Watermark, []byte, error) {
 	}
 	payload, err := json.Marshal(saved)
 	if err != nil {
-		return ledger.Watermark{}, nil, fmt.Errorf("encode usage checkpoint: %w", err)
+		return CheckpointSnapshot{}, fmt.Errorf("encode usage checkpoint: %w", err)
 	}
-	return a.watermark, payload, nil
+	return CheckpointSnapshot{Watermark: a.watermark, Payload: payload, Rollup: a.takeRollupDelta()}, nil
 }
 
 func (a *Aggregate) Apply(record ledger.Record) error {
@@ -270,7 +293,9 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 	if accumulator == nil {
 		accumulator = &requestAccumulator{summary: RequestSummary{
 			RequestID: event.RequestID, ProjectID: event.ProjectID, KeyID: event.KeyID,
-			RequestedModel: event.RequestedModel,
+			RequestedModel:        event.RequestedModel,
+			PeriodID:              event.PeriodID,
+			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
 		}}
 		a.requests[event.RequestID] = accumulator
 	}
@@ -307,8 +332,10 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			EventID: event.EventID, RequestID: event.RequestID, AttemptID: event.AttemptID,
 			Sequence: record.Sequence, AttemptNumber: event.AttemptNumber,
 			ProjectID: event.ProjectID, KeyID: event.KeyID, RouteID: event.RouteID,
-			DeploymentID: event.DeploymentID,
-			ProviderID:   event.ProviderID, RequestedModel: event.RequestedModel,
+			DeploymentID:          event.DeploymentID,
+			PeriodID:              event.PeriodID,
+			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
+			ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
 			ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
 			ProviderOutputTokens:          event.ProviderOutputTokens,
 			ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
@@ -418,6 +445,9 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			return err
 		}
 		recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
+		if err := a.addAttemptRollup(event, record.Sequence, committedCost, costKnown); err != nil {
+			return err
+		}
 		delete(a.started, event.AttemptID)
 	case ledger.EventRequestFinalized:
 		accumulator.summary.Outcome = event.Outcome
@@ -440,15 +470,20 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		} else {
 			a.metrics.RequestsError++
 		}
-		if !accumulator.summary.AcceptedAt.IsZero() &&
-			event.OccurredAt.After(accumulator.summary.AcceptedAt) {
-			latencyMillis := uint64(event.OccurredAt.Sub(
+		var latencyMillis uint64
+		latencyKnown := !accumulator.summary.AcceptedAt.IsZero() &&
+			event.OccurredAt.After(accumulator.summary.AcceptedAt)
+		if latencyKnown {
+			latencyMillis = uint64(event.OccurredAt.Sub(
 				accumulator.summary.AcceptedAt,
 			).Milliseconds())
 			if err := addUint64(&a.metrics.RequestLatencyMillis, latencyMillis); err != nil {
 				return err
 			}
 			recordLatency(&a.metrics.RequestLatencyBuckets, latencyMillis)
+		}
+		if err := a.addRequestRollup(event, record.Sequence, latencyMillis, latencyKnown); err != nil {
+			return err
 		}
 		if err := addUint64(&a.metrics.Fallbacks, uint64(accumulator.summary.Fallbacks)); err != nil {
 			return err

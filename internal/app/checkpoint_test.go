@@ -66,7 +66,7 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.DeleteUsageCheckpoint(); err != nil {
+	if err := store.ResetUsageDerivatives(); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}
@@ -98,11 +98,12 @@ func TestCheckpointWatermarkRejectsAlreadyAggregatedLedgerPrefix(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	watermark, payload, err := aggregate.MarshalCheckpoint()
+	snapshot, err := aggregate.TakeCheckpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored, err := usage.RestoreCheckpoint(payload)
+	watermark := snapshot.Watermark
+	restored, err := usage.RestoreCheckpoint(snapshot.Payload)
 	if err != nil {
 		t.Fatal(err)
 	}

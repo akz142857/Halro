@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 32
+const schemaVersion uint64 = 33
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -87,9 +87,11 @@ var (
 	bucketModelCapabilityDetections  = []byte("model_capability_detections")
 	bucketCapabilityDetectionIdem    = []byte("model_capability_detection_idempotency")
 	bucketCapabilityDetectionIndex   = []byte("model_capability_detection_fingerprint_index")
+	bucketUsageDailyRollup           = []byte("usage_daily_rollup")
 	keySchemaVersion                 = []byte("schema_version")
 	keyVaultCheck                    = []byte("vault_key_check")
 	keyUsageCheckpoint               = []byte("usage_checkpoint")
+	keyUsageRollupState              = []byte("usage_rollup_state")
 	keyTokenGuardCheckpoint          = []byte("token_guard_checkpoint")
 	keyAuditCheckpoint               = []byte("audit_checkpoint")
 	keyAuditHMACEnvelope             = []byte("audit_hmac_envelope")
@@ -895,6 +897,15 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_structured_output_capability_split")
+	}},
+	{version: 33, name: "usage_daily_rollup", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_usage_daily_rollup"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageDailyRollup); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_usage_daily_rollup")
 	}},
 }
 
@@ -1766,6 +1777,7 @@ func requiredBuckets() [][]byte {
 		bucketModelCapabilityDetections,
 		bucketCapabilityDetectionIdem,
 		bucketCapabilityDetectionIndex,
+		bucketUsageDailyRollup,
 	}
 }
 
