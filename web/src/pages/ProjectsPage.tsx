@@ -548,15 +548,18 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
                     const failover = route.targetCount > 1 && strategy
                       ? ` · ${strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`
                       : "";
+                    // The same four sentences the route list uses, from the
+                    // same keys: two pages describing one alias must not word
+                    // it differently, which is how they came to disagree.
                     const summary = targetStateUnknown
-                      ? t("projects.targetStateUnknown")
+                      ? t("aliasTargets.unknown")
                       : route.enabledCount === 0
                         ? t("projects.unavailableAlias")
                         : route.targetCount === 0
-                          ? t("projects.noEffectiveTarget")
+                          ? t("aliasTargets.none")
                           : route.targetCount === 1
-                            ? t("projects.singleTarget")
-                            : t("projects.targetCount", { count: route.targetCount });
+                            ? t("aliasTargets.single")
+                            : t("aliasTargets.count", { count: route.targetCount });
                     return <label className="model-option" key={route.value}>
                       <input type="checkbox" value={route.value} {...register("routes")} />
                       <span>

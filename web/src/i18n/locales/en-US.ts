@@ -48,6 +48,16 @@ export const enUS = {
     collapseDetails: "Hide details",
     loadingMore: "Loading more",
   },
+  // How many targets an alias actually has, said the same way wherever it is
+  // said. The project form and the route list derive this from the same rule,
+  // and used to word it differently — which is how two pages came to give
+  // contradictory answers about one alias.
+  aliasTargets: {
+    single: "Single target · no failover",
+    count: "{{count}} targets",
+    none: "No usable target",
+    unknown: "Target state could not be read",
+  },
   notifications: { region: "System notifications", dismiss: "Dismiss notification" },
   timeZonePicker: {
     listLabel: "Time zones",
@@ -943,13 +953,17 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save", createAndL
     notifyCreated: "Route created", notifyUpdated: "Route saved", notifyDeleted: "Route deleted", notifyEnabled: "Route enabled", notifyDisabled: "Route disabled",
     eyebrow: "Model fabric", title: "Routes", description: "Public model aliases reference deployments only; model identity, pricing, capabilities, and concurrency policy are maintained by each deployment.",
     create: "＋ New route", emptyTitle: "No model routes", emptyDescription: "Create a route before the OpenAI-compatible API can resolve a public model alias.", list: "Model route list",
-    publicModel: "Public model", deployment: "Deployment", provider: "Provider", upstreamModel: "Upstream model", strategy: "Strategy", priority: "Priority", status: "Status",
+    routeColumn: "Route", deployment: "Deployment", provider: "Provider", upstreamModel: "Upstream model", strategy: "Strategy", priority: "Priority", status: "Status",
     disableTitle: "Disable route?", disableConfirm: "Disable route “{{name}}”? {{count}} other route(s) still serve this alias.", disableConfirmLast: "Disable route “{{name}}”? This is the last enabled route for the alias, so requests for “{{name}}” will be refused.",
     healthy: "Healthy · {{latency}}ms", unhealthy: "Unhealthy", testing: "Testing", deleteConfirm: "Delete route “{{name}}”?", edit: "Edit route", createTitle: "Create route",
     deploymentRequired: "An enabled deployment is required", deploymentRequiredDescription: "Create and enable a model deployment on the Deployments page first.", openDeployments: "Open model deployments →", publicAlias: "Public model alias",
     enabledImpact: "Applications can request this deployment as \"{{alias}}\"", disabledImpact: "Requests for this alias are refused",
     routeStrategy: "Routing strategy", ordered: "Ordered fallback", roundRobin: "Round robin", enable: "Enable route", save: "Save and hot-reload", createAndLoad: "Create and hot-reload",
     withheld: "Withheld",
+    primaryTarget: "Primary",
+    primaryTargetTitle: "The highest-priority effective candidate; ordered failover tries it first every time",
+    mixedStrategy: "Mixed strategy",
+    mixedStrategyTitle: "The effective candidates on this alias disagree on strategy. The engine reads only the highest-priority target's, and the others have no effect.",
     withheldReasons: {
       deployment_unavailable: "The deployment this route names is disabled or deleted.",
       binding_unavailable: "The provider connection behind this deployment has no usable adapter.",
@@ -973,7 +987,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save", createAndL
     allowedModels: "Allowed model aliases", rateLimit: "Rate limit", concurrency: "Concurrency", dailyBudget: "Daily budget", notAttached: "Not attached",
     credentials: "Internal credentials", gatewayKeys: "Gateway keys", createKey: "＋ Create key", loadingKeys: "Loading keys", noKeys: "This project has no available keys.",
     created: "Created {{date}}", keyDisableTitle: "Disable gateway key?", keyDisableConfirm: "Disable gateway key “{{name}}”? New requests using this key will be rejected immediately.", keyDeleteConfirm: "Permanently disable key “{{name}}”? This cannot be undone.",
-    edit: "Edit project", createTitle: "Create project", name: "Name", aliases: "Allowed model aliases (route entries)", aliasesHint: "Select the public model aliases this project may call. Each alias is provided by one or more model routes; the project does not bind a specific route or upstream model.", loadingModels: "Loading route entries", unavailableAlias: "No enabled routes", noEffectiveTarget: "No usable target", singleTarget: "Single target · no failover", targetCount: "{{count}} targets", targetStateUnknown: "Target state could not be read", noConfiguredModels: "No route entries are available", noConfiguredModelsDescription: "Configure and enable at least one public model alias on the Routes page first.", openRoutes: "Open route configuration →", selectedAliases: "{{count}} selected", maxConcurrency: "Maximum concurrency",
+    edit: "Edit project", createTitle: "Create project", name: "Name", aliases: "Allowed model aliases (route entries)", aliasesHint: "Select the public model aliases this project may call. Each alias is provided by one or more model routes; the project does not bind a specific route or upstream model.", loadingModels: "Loading route entries", unavailableAlias: "No enabled routes", noConfiguredModels: "No route entries are available", noConfiguredModelsDescription: "Configure and enable at least one public model alias on the Routes page first.", openRoutes: "Open route configuration →", selectedAliases: "{{count}} selected", maxConcurrency: "Maximum concurrency",
     maxRequestKB: "Request body limit (KB)", maxRequestKBHint: "0 follows the instance limit. An image sent as base64 inside the request is about 1.37× the size of the file.",
     dailyBudgetUSD: "Daily budget (USD)", enable: "Enable project", noBinding: "No binding", redactionPolicy: "Redaction policy", tokenGuardPolicy: "Token Guard policy", rpm: "Requests per minute (RPM)", tpm: "Tokens per minute (TPM)", allowedCIDR: "Allowed CIDRs",
     basicInfo: "Basic information", basicInfoDescription: "Define the project name and the models it may access.", capacityControls: "Capacity & budget", capacityControlsDescription: "Limit request rates, concurrency, and daily spend.", securityControls: "Security & access", securityControlsDescription: "Configure project state, request protection, redaction, and network boundaries.", enableDescription: "When enabled, the project and its gateway keys can process requests.",

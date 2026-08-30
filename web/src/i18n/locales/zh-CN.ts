@@ -54,6 +54,16 @@ export const zhCN = {
     collapseDetails: "收起详情",
     loadingMore: "正在加载更多",
   },
+  // How many targets an alias actually has, said the same way wherever it is
+  // said. The project form and the route list derive this from the same rule,
+  // and used to word it differently — which is how two pages came to give
+  // contradictory answers about one alias.
+  aliasTargets: {
+    single: "单一目标 · 无回退",
+    count: "{{count}} 个目标",
+    none: "没有可用目标",
+    unknown: "目标状态读取失败",
+  },
   notifications: { region: "系统通知", dismiss: "关闭通知" },
   timeZonePicker: {
     listLabel: "时区列表",
@@ -948,13 +958,17 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存", createAndLoa
     notifyCreated: "路由已创建", notifyUpdated: "路由已保存", notifyDeleted: "路由已删除", notifyEnabled: "路由已启用", notifyDisabled: "路由已禁用",
     eyebrow: "模型网络", title: "模型路由", description: "公共模型别名只引用模型部署；模型、价格、能力和并发策略由部署独立维护。",
     create: "＋ 新建模型路由", emptyTitle: "还没有模型路由", emptyDescription: "创建路由后，OpenAI 兼容 API 才能解析公共模型别名。", list: "模型路由列表",
-    publicModel: "公共模型", deployment: "模型部署", provider: "服务商", upstreamModel: "上游模型", strategy: "策略", priority: "优先级", status: "状态",
+    routeColumn: "路由", deployment: "模型部署", provider: "服务商", upstreamModel: "上游模型", strategy: "策略", priority: "优先级", status: "状态",
     disableTitle: "禁用模型路由？", disableConfirm: "确认禁用模型路由“{{name}}”？该别名还有 {{count}} 条路由继续承接请求。", disableConfirmLast: "确认禁用模型路由“{{name}}”？这是该别名最后一条已启用路由，应用请求“{{name}}”会被拒绝。",
     healthy: "健康 · {{latency}}ms", unhealthy: "不健康", testing: "测试中", deleteConfirm: "删除模型路由“{{name}}”？", edit: "编辑模型路由", createTitle: "创建模型路由",
     deploymentRequired: "需要可用模型部署", deploymentRequiredDescription: "先在模型部署页面创建并启用一个模型部署。", openDeployments: "前往模型部署 →", publicAlias: "公共模型别名",
     enabledImpact: "应用可以用“{{alias}}”请求这个部署", disabledImpact: "应用请求这个别名会被拒绝",
     routeStrategy: "路由策略", ordered: "顺序回退", roundRobin: "轮询", enable: "启用模型路由", save: "保存并热加载", createAndLoad: "创建并热加载",
     withheld: "已扣留",
+    primaryTarget: "主",
+    primaryTargetTitle: "优先级最高的有效候选，顺序回退下每次都先试它",
+    mixedStrategy: "策略不一致",
+    mixedStrategyTitle: "同一别名下的有效候选策略不一致。引擎只读优先级最高那个目标的策略，其余的不生效。",
     withheldReasons: {
       deployment_unavailable: "该路由指向的模型部署已停用或已删除。",
       binding_unavailable: "该部署所在的服务商连接没有可用的适配器。",
@@ -978,7 +992,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存", createAndLoa
     allowedModels: "允许的模型别名", rateLimit: "速率限制", concurrency: "并发", dailyBudget: "每日预算", notAttached: "未绑定",
     credentials: "内部凭据", gatewayKeys: "网关密钥", createKey: "＋ 创建密钥", loadingKeys: "正在读取密钥", noKeys: "这个项目还没有可用密钥。",
     created: "创建于 {{date}}", keyDisableTitle: "禁用网关密钥？", keyDisableConfirm: "确认禁用网关密钥“{{name}}”？使用该密钥的新请求将立即被拒绝。", keyDeleteConfirm: "确认永久停用密钥“{{name}}”？此操作不能恢复。",
-    edit: "编辑项目", createTitle: "创建项目", name: "名称", aliases: "允许的模型别名（路由入口）", aliasesHint: "选择项目可以调用的公共模型别名。每个别名由一个或多个模型路由提供；项目不会绑定具体路由或上游模型。", loadingModels: "正在读取路由入口", unavailableAlias: "没有已启用路由", noEffectiveTarget: "没有可用目标", singleTarget: "单一目标 · 无回退", targetCount: "{{count}} 个目标", targetStateUnknown: "目标状态读取失败", noConfiguredModels: "还没有可选路由入口", noConfiguredModelsDescription: "请先在路由页面配置并启用至少一个公共模型别名。", openRoutes: "前往路由配置 →", selectedAliases: "已选择 {{count}} 个", maxConcurrency: "最大并发",
+    edit: "编辑项目", createTitle: "创建项目", name: "名称", aliases: "允许的模型别名（路由入口）", aliasesHint: "选择项目可以调用的公共模型别名。每个别名由一个或多个模型路由提供；项目不会绑定具体路由或上游模型。", loadingModels: "正在读取路由入口", unavailableAlias: "没有已启用路由", noConfiguredModels: "还没有可选路由入口", noConfiguredModelsDescription: "请先在路由页面配置并启用至少一个公共模型别名。", openRoutes: "前往路由配置 →", selectedAliases: "已选择 {{count}} 个", maxConcurrency: "最大并发",
     maxRequestKB: "单请求体上限（KB）", maxRequestKBHint: "0 表示跟随实例上限。图片以 base64 随请求发送时，体积约为原图的 1.37 倍。",
     dailyBudgetUSD: "每日预算（USD）", enable: "启用项目", noBinding: "不绑定", redactionPolicy: "脱敏策略", tokenGuardPolicy: "词元防护策略", rpm: "每分钟请求数（RPM）", tpm: "每分钟词元数（TPM）", allowedCIDR: "允许的 CIDR",
     basicInfo: "基本信息", basicInfoDescription: "定义项目名称及允许访问的模型范围。", capacityControls: "容量与预算", capacityControlsDescription: "限制请求速率、并发量和每日费用。", securityControls: "安全与访问", securityControlsDescription: "配置项目状态、请求防护、脱敏和网络边界。", enableDescription: "启用后项目及其网关密钥可以处理请求。",

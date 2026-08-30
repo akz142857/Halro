@@ -86,6 +86,38 @@ export function RoutesPage() {
     () => new Map(providers.data?.items.map((item) => [item.id, item.name]) ?? []),
     [providers.data],
   );
+  // A failed deployments read cannot be reported as "no usable target": that is
+  // a claim about the configuration, and this is a claim about one request.
+  const targetStateUnknown = deployments.isError;
+  // One alias is one group, because that is what the engine resolves against —
+  // `public_model` is the key its target map is built on. The list is stored
+  // sorted by route ID, so before this the members of an alias landed wherever
+  // their random IDs put them, with another alias in between and nothing
+  // saying the two rows were one failover chain.
+  const aliasGroups = useMemo(() => {
+    const byAlias = new Map<string, Route[]>();
+    routes.data?.items.forEach((route) => {
+      byAlias.set(route.public_model, [...(byAlias.get(route.public_model) ?? []), route]);
+    });
+    return Array.from(byAlias, ([alias, items]) => {
+      // Priority ascending, route ID as the tie-break: the registry's own
+      // ordering (`slices.SortFunc` in provider.go), so row order is the order
+      // the engine tries them in rather than the order they were created.
+      const ordered = [...items].sort((left, right) =>
+        left.priority - right.priority || left.id.localeCompare(right.id));
+      const candidates = targetStateUnknown ? [] : ordered.filter((route) => {
+        if (!route.enabled || route.withheld) return false;
+        const deployment = deploymentByID.get(route.deployment_id);
+        return !!deployment?.enabled && deployment.probe?.state !== "unhealthy";
+      });
+      // The engine reads `targets[0].Strategy` and ignores the rest, so the
+      // group states the one in force rather than requiring unanimity — and
+      // says so when the others disagree, since editing them changes nothing.
+      const strategy = candidates[0]?.strategy || "ordered";
+      const mixed = candidates.some((route) => (route.strategy || "ordered") !== strategy);
+      return { alias, ordered, candidates, strategy, mixed };
+    }).sort((left, right) => left.alias.localeCompare(right.alias));
+  }, [routes.data, deploymentByID, targetStateUnknown]);
   const pending = routes.isPending || deployments.isPending || providers.isPending;
   const error = routes.error || deployments.error || providers.error;
   return (
@@ -113,7 +145,7 @@ export function RoutesPage() {
             <caption className="visually-hidden">{t("routes.list")}</caption>
             <thead>
               <tr>
-                <th scope="col">{t("routes.publicModel")}</th>
+                <th scope="col">{t("routes.routeColumn")}</th>
                 <th scope="col">{t("routes.deployment")}</th>
                 <th scope="col">{t("routes.provider")}</th>
                 <th scope="col">{t("routes.upstreamModel")}</th>
@@ -123,8 +155,30 @@ export function RoutesPage() {
                 <th scope="col" />
               </tr>
             </thead>
-            <tbody>
-              {routes.data.items.map((route) => {
+            {aliasGroups.map((group) => {
+              const summary = targetStateUnknown
+                ? t("aliasTargets.unknown")
+                : group.candidates.length === 0
+                  ? t("aliasTargets.none")
+                  : group.candidates.length === 1
+                    ? t("aliasTargets.single")
+                    : `${t("aliasTargets.count", { count: group.candidates.length })} · ${group.strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`;
+              // Only ordered failover has a first target. Round robin rotates
+              // the starting point on every request, so marking one row primary
+              // there would name a precedence that does not exist.
+              const primaryID = !targetStateUnknown && group.candidates.length > 1 && group.strategy === "ordered"
+                ? group.candidates[0].id
+                : "";
+              return (
+            <tbody key={group.alias}>
+              <tr className="route-group-heading">
+                <th colSpan={8} scope="colgroup">
+                  <strong>{group.alias}</strong>
+                  <span>{summary}</span>
+                  {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
+                </th>
+              </tr>
+              {group.ordered.map((route) => {
                 const deployment = deploymentByID.get(route.deployment_id);
                 const providerID = deployment?.provider_id || "";
                 // What still serves the alias once THIS row is off: the row
@@ -138,8 +192,8 @@ export function RoutesPage() {
                     <td>
                       <div className="model-cell">
                         <StatusDot ok={route.enabled && !route.withheld} />
-                        <strong>{route.public_model}</strong>
                         <code>{route.id}</code>
+                        {route.id === primaryID && <span className="badge" title={t("routes.primaryTargetTitle")}>{t("routes.primaryTarget")}</span>}
                       </div>
                     </td>
                     <td>{deployment?.name || route.deployment_id}</td>
@@ -203,6 +257,8 @@ export function RoutesPage() {
                 );
               })}
             </tbody>
+              );
+            })}
           </table>
         </div>
       )}

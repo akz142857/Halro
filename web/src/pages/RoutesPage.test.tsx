@@ -24,7 +24,7 @@ describe("RoutesPage", () => {
     });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     expect(row).not.toBeNull();
     fireEvent.click(within(row!).getByRole("button", { name: "测试" }));
 
@@ -46,7 +46,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr")!;
+    const row = (await screen.findByText("route_chat")).closest("tr")!;
     expect(within(row).getByText("已扣留")).toBeVisible();
     expect(within(row).getByText("该路由指向的模型部署已停用或已删除。")).toBeVisible();
     expect(within(row).queryByText("已启用")).not.toBeInTheDocument();
@@ -66,9 +66,105 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr")!;
+    const row = (await screen.findByText("route_chat")).closest("tr")!;
     expect(within(row).getByText("已扣留")).toBeVisible();
     expect(within(row).getByText(/原因未知/)).toBeVisible();
+  });
+
+  // The list is stored sorted by route ID, so two routes on one alias landed
+  // wherever their random IDs put them — with an unrelated alias in between and
+  // nothing saying the two rows were one failover chain.
+  it("groups the rows by alias and orders them the way the engine tries them", async () => {
+    const routes = [
+      { id: "rte_aaa", public_model: "chat", deployment_id: "deployment_gpt", priority: 20, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_bbb", public_model: "zeta", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_ccc", public_model: "chat", deployment_id: "deployment_azure", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[];
+    vi.spyOn(api, "routes").mockResolvedValue({ items: routes, next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "m", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "m", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    await screen.findByText("rte_aaa");
+    // Alias order, and within the alias the engine's own order: priority
+    // ascending, so the store's route-ID order (aaa, bbb, ccc) is not it.
+    const ids = Array.from(document.querySelectorAll("tr[id^='route-']"), (row) => row.id);
+    expect(ids).toEqual(["route-rte_ccc", "route-rte_aaa", "route-rte_bbb"]);
+    // And the two chat rows are under one heading, with zeta's own heading after.
+    const headings = Array.from(document.querySelectorAll(".route-group-heading strong"), (cell) => cell.textContent);
+    expect(headings).toEqual(["chat", "zeta"]);
+    expect(screen.getByText("2 个目标 · 顺序回退")).toBeVisible();
+    expect(screen.getByText("单一目标 · 无回退")).toBeVisible();
+  });
+
+  // Priority decides which target is tried first, and nothing on the page said
+  // which one that was — an operator who typed 8 instead of 20 silently made
+  // the new route primary.
+  it("marks the primary target under ordered failover and not under round robin", async () => {
+    const ordered = [
+      { id: "rte_first", public_model: "chat", deployment_id: "deployment_gpt", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_second", public_model: "chat", deployment_id: "deployment_azure", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[];
+    vi.spyOn(api, "routes").mockResolvedValue({ items: ordered, next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "m", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "m", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    const page = renderPage();
+
+    await screen.findByText("rte_first");
+    expect(within(document.getElementById("route-rte_first")!).getByText("主")).toBeVisible();
+    expect(within(document.getElementById("route-rte_second")!).queryByText("主")).toBeNull();
+
+    // Round robin rotates the starting point every request, so no row is the
+    // one tried first and saying otherwise would name a precedence that is not
+    // there.
+    page.unmount();
+    vi.mocked(api.routes).mockResolvedValue({
+      items: ordered.map((route) => ({ ...route, strategy: "round_robin" })) as Route[], next_cursor: "",
+    });
+    renderPage();
+
+    await screen.findByText("rte_first");
+    expect(screen.queryByText("主")).toBeNull();
+  });
+
+  // The engine reads only the highest-priority target's strategy. The others
+  // are stored, editable, and have no effect — which the page has to say, or
+  // an operator changes one and waits for a behaviour that never arrives.
+  it("warns when the effective candidates disagree on strategy", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_first", public_model: "chat", deployment_id: "deployment_gpt", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_second", public_model: "chat", deployment_id: "deployment_azure", priority: 10, strategy: "round_robin", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "m", enabled: true },
+      { id: "deployment_azure", name: "Azure", provider_id: "p", provider_model: "m", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    expect(await screen.findByText("策略不一致")).toBeVisible();
+    // The heading states the one in force, which is the first target's.
+    expect(screen.getByText("2 个目标 · 顺序回退")).toBeVisible();
+  });
+
+  // The group summary derives from the deployments read, so a failed one must
+  // not be reported as "no usable target" — the same rule the project form got.
+  it("does not report a failed deployments read as a group with no target", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockRejectedValue(new ApiError(500, "request failed (500)", "", ""));
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    expect(await screen.findByText("目标状态读取失败")).toBeVisible();
+    expect(screen.queryByText("没有可用目标")).toBeNull();
   });
 
   // The confirmation counted enabled rows, and a withheld row is enabled and
@@ -160,7 +256,7 @@ describe("RoutesPage", () => {
     }));
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr")!;
+    const row = (await screen.findByText("route_chat")).closest("tr")!;
     fireEvent.click(within(row).getByRole("button", { name: "测试" }));
 
     const reason = await within(row).findByText(/上游限流/);
@@ -196,7 +292,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     fireEvent.click(within(row!).getByRole("button", { name: "编辑" }));
 
     const toggle = await screen.findByLabelText("启用模型路由");
@@ -222,7 +318,7 @@ describe("RoutesPage", () => {
     const update = vi.spyOn(api, "updateRoute").mockResolvedValue({ data: enabledRoute(), etag: "\"2\"" });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     expect(within(row!).getByText("已启用")).toHaveClass("resource-state", "enabled");
     fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
 
@@ -248,7 +344,7 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    const row = (await screen.findAllByText("chat"))[0].closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
 
     expect(await screen.findByText("确认禁用模型路由“chat”？该别名还有 1 条路由继续承接请求。")).toBeVisible();
@@ -261,7 +357,7 @@ describe("RoutesPage", () => {
     const update = vi.spyOn(api, "updateRoute").mockResolvedValue({ data: enabledRoute(), etag: "\"2\"" });
     renderPage();
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     expect(within(row!).getByText("已禁用")).toHaveClass("resource-state");
     expect(within(row!).getByText("已禁用")).not.toHaveClass("enabled");
     fireEvent.click(within(row!).getByRole("button", { name: "启用" }));
