@@ -52,7 +52,13 @@ const (
 	// Runtime because a grant is scoped to this process by design — an
 	// elevation that outlived a restart would be one the operator never gave
 	// the process now holding it.
-	runtimeFieldBudget = 70
+	// 71: routeWithheld. Raised deliberately, and by one rather than two: the
+	// lock and the map travel together. It belongs to the Runtime because it
+	// describes the live registry rather than the store — it is written where
+	// the registry is activated and read by the Admin routes endpoints, and the
+	// alternative, recomputing it per request, would answer from a load the
+	// process is not running.
+	runtimeFieldBudget = 71
 	runtimeMutexBudget = 10
 )
 

@@ -152,6 +152,7 @@ func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog
 		}
 		logCapabilityWithholdings(r.logger, report)
 		r.auditCapabilityWithholdings(ctx, report)
+		r.publishRouteWithholdings(report)
 		retired := r.providers.Replace(next)
 		if len(retired) == 0 {
 			return
@@ -306,6 +307,72 @@ func logCapabilityWithholdings(logger *slog.Logger, report loadReport) {
 			"provider", item.ProviderID, "binding", item.BindingID,
 			"reason", item.Reason)
 	}
+}
+
+// Why the Admin API says a route is not routing. The two kinds stay apart for
+// the same reason the load report keeps them apart: drift is reviewed on the
+// deployment, a dangling reference is repaired on the topology.
+const (
+	routeWithheldReference       = "reference"
+	routeWithheldCapabilityDrift = "capability_drift"
+)
+
+// routeWithholding is what the routes list says about a route that is Enabled
+// in the store and absent from the live registry. Without it the console showed
+// such a route as Enabled — the one state it is not: it is up, it is not
+// serving, and nothing in the console said so.
+//
+// Reason classes only, never the underlying error. These come from the load
+// report, which is already restricted to classes for the same reason: the
+// errors behind them carry hostnames and credential material.
+type routeWithholding struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
+// routeWithholdingState holds what the live registry refused, keyed by route ID.
+// The lock and the map travel together in one field so the Runtime gains one
+// entry rather than two.
+//
+// The map is replaced wholesale on every activation and never mutated after it
+// is published, so a reader may keep the reference it was handed.
+type routeWithholdingState struct {
+	mu    sync.RWMutex
+	items map[string]routeWithholding
+}
+
+// publishRouteWithholdings records what the registry that is now live withheld.
+// It is called where the withholdings are logged and audited, so the three
+// views cannot disagree about which registry they describe.
+func (r *Runtime) publishRouteWithholdings(report loadReport) {
+	items := make(map[string]routeWithholding, len(report.Drifted)+len(report.Dangling))
+	for _, item := range report.Drifted {
+		reason := item.Reason
+		if reason == "" {
+			// A drift with no narrower reason is still a review state, and the
+			// state is what the operator acts on.
+			reason = string(item.State)
+		}
+		items[item.RouteID] = routeWithholding{Kind: routeWithheldCapabilityDrift, Reason: reason}
+	}
+	// After drift: a route can only be withheld once per load, but if both ever
+	// named it, the reference failure is the one that has to be repaired first.
+	for _, item := range report.Dangling {
+		items[item.RouteID] = routeWithholding{Kind: routeWithheldReference, Reason: item.Reason}
+	}
+	r.routeWithheld.mu.Lock()
+	defer r.routeWithheld.mu.Unlock()
+	r.routeWithheld.items = items
+}
+
+// routeWithholdings returns the withholdings of the live registry. Describing
+// the last activated registry rather than the store is the point: the store
+// says the route is enabled, and this says whether that enablement reached
+// routing.
+func (r *Runtime) routeWithholdings() map[string]routeWithholding {
+	r.routeWithheld.mu.RLock()
+	defer r.routeWithheld.mu.RUnlock()
+	return r.routeWithheld.items
 }
 
 func loadProviderRegistry(
