@@ -958,7 +958,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存", createAndLoa
     notifyCreated: "路由已创建", notifyUpdated: "路由已保存", notifyDeleted: "路由已删除", notifyEnabled: "路由已启用", notifyDisabled: "路由已禁用",
     eyebrow: "模型网络", title: "模型路由", description: "公共模型别名只引用模型部署；模型、价格、能力和并发策略由部署独立维护。",
     create: "＋ 新建模型路由", emptyTitle: "还没有模型路由", emptyDescription: "创建路由后，OpenAI 兼容 API 才能解析公共模型别名。", list: "模型路由列表",
-    routeColumn: "路由", deployment: "模型部署", provider: "服务商", upstreamModel: "上游模型", strategy: "策略", priority: "优先级", status: "状态",
+    targetColumn: "目标", deployment: "模型部署", priority: "优先级", status: "状态",
     disableTitle: "禁用模型路由？", disableConfirm: "确认禁用模型路由“{{name}}”？该别名还有 {{count}} 条路由继续承接请求。", disableConfirmLast: "确认禁用模型路由“{{name}}”？这是该别名最后一条已启用路由，应用请求“{{name}}”会被拒绝。",
     healthy: "健康 · {{latency}}ms", unhealthy: "不健康", testing: "测试中", deleteConfirm: "删除模型路由“{{name}}”？", edit: "编辑模型路由", createTitle: "创建模型路由",
     deploymentRequired: "需要可用模型部署", deploymentRequiredDescription: "先在模型部署页面创建并启用一个模型部署。", openDeployments: "前往模型部署 →", publicAlias: "公共模型别名",

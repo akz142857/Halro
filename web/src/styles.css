@@ -1082,6 +1082,11 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .route-row-actions { width: 100%; min-width: 400px; align-items: center; }
 .route-row-actions > .inline-test-control, .route-row-actions > .inline-test-cell { margin-right: 18px; }
 .route-management-actions { margin-left: auto; justify-content: flex-end; }
+.route-target { display: grid; gap: var(--space-1); min-width: 0; }
+.route-target-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.route-target-name { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.route-target-meta { overflow: hidden; color: var(--color-text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
+.route-target-meta code { display: inline; }
 .route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
 .route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
 .route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }

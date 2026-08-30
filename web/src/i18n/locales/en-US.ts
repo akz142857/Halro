@@ -953,7 +953,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save", createAndL
     notifyCreated: "Route created", notifyUpdated: "Route saved", notifyDeleted: "Route deleted", notifyEnabled: "Route enabled", notifyDisabled: "Route disabled",
     eyebrow: "Model fabric", title: "Routes", description: "Public model aliases reference deployments only; model identity, pricing, capabilities, and concurrency policy are maintained by each deployment.",
     create: "＋ New route", emptyTitle: "No model routes", emptyDescription: "Create a route before the OpenAI-compatible API can resolve a public model alias.", list: "Model route list",
-    routeColumn: "Route", deployment: "Deployment", provider: "Provider", upstreamModel: "Upstream model", strategy: "Strategy", priority: "Priority", status: "Status",
+    targetColumn: "Target", deployment: "Deployment", priority: "Priority", status: "Status",
     disableTitle: "Disable route?", disableConfirm: "Disable route “{{name}}”? {{count}} other route(s) still serve this alias.", disableConfirmLast: "Disable route “{{name}}”? This is the last enabled route for the alias, so requests for “{{name}}” will be refused.",
     healthy: "Healthy · {{latency}}ms", unhealthy: "Unhealthy", testing: "Testing", deleteConfirm: "Delete route “{{name}}”?", edit: "Edit route", createTitle: "Create route",
     deploymentRequired: "An enabled deployment is required", deploymentRequiredDescription: "Create and enable a model deployment on the Deployments page first.", openDeployments: "Open model deployments →", publicAlias: "Public model alias",

@@ -146,11 +146,13 @@ export function RoutesPage() {
             <caption className="visually-hidden">{t("routes.list")}</caption>
             <thead>
               <tr>
-                <th scope="col">{t("routes.routeColumn")}</th>
-                <th scope="col">{t("routes.deployment")}</th>
-                <th scope="col">{t("routes.provider")}</th>
-                <th scope="col">{t("routes.upstreamModel")}</th>
-                <th scope="col">{t("routes.strategy")}</th>
+                {/* Four columns used to carry one fact between them — the
+                    route, its deployment, that deployment's provider and that
+                    provider's model — and three of the four repeated what the
+                    fourth already implied. They are one target cell now: where
+                    the request goes on the first line, which records say so on
+                    the second. */}
+                <th scope="col">{t("routes.targetColumn")}</th>
                 <th scope="col">{t("routes.priority")}</th>
                 <th scope="col">{t("routes.status")}</th>
                 <th scope="col" />
@@ -173,7 +175,7 @@ export function RoutesPage() {
               return (
             <tbody key={group.alias}>
               <tr className="route-group-heading">
-                <th colSpan={8} scope="colgroup">
+                <th colSpan={4} scope="colgroup">
                   <strong>{group.alias}</strong>
                   <span>{summary}</span>
                   {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
@@ -191,16 +193,34 @@ export function RoutesPage() {
                 return (
                   <tr id={`route-${route.id}`} key={route.id}>
                     <td>
-                      <div className="model-cell">
-                        <StatusDot ok={route.enabled && !route.withheld} />
-                        <code>{route.id}</code>
-                        {route.id === primaryID && <span className="badge" title={t("routes.primaryTargetTitle")}>{t("routes.primaryTarget")}</span>}
+                      <div className="route-target">
+                        <div className="route-target-head">
+                          <StatusDot ok={route.enabled && !route.withheld} />
+                          {/* What the request actually reaches. The deployment
+                              and route names below are how to go change it. */}
+                          {/* Joined rather than concatenated, so a provider the
+                              list has not loaded does not leave a dangling
+                              separator in front of the model. */}
+                          <span className="route-target-name">
+                            {[providerNames.get(providerID) || providerID, deployment?.provider_model]
+                              .filter(Boolean).join(" · ") || route.deployment_id}
+                          </span>
+                          {route.id === primaryID && <span className="badge" title={t("routes.primaryTargetTitle")}>{t("routes.primaryTarget")}</span>}
+                          {/* The group heading states the strategy in force, so
+                              a row only speaks up when its own disagrees —
+                              which is the case where editing it does nothing,
+                              or where enabling it would be refused. */}
+                          {(route.strategy || "ordered") !== group.strategy && (
+                            <span className="badge warning" title={t("routes.mixedStrategyTitle")}>
+                              {(route.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}
+                            </span>
+                          )}
+                        </div>
+                        <small className="route-target-meta">
+                          {deployment?.name || route.deployment_id} · <code>{route.id}</code>
+                        </small>
                       </div>
                     </td>
-                    <td>{deployment?.name || route.deployment_id}</td>
-                    <td>{providerNames.get(providerID) || providerID}</td>
-                    <td>{deployment?.provider_model}</td>
-                    <td><span className="badge">{(route.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span></td>
                     <td>{route.priority}</td>
                     <td>
                       {/* Enabled is what the operator asked for; it used to be

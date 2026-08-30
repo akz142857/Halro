@@ -167,6 +167,36 @@ describe("RoutesPage", () => {
     expect(screen.queryByText("没有可用目标")).toBeNull();
   });
 
+  // Four columns carried one fact between them, and three repeated what the
+  // fourth implied — the deployment name is usually the model, and the model
+  // came from the deployment. They are one cell now.
+  it("states a target once, and repeats the strategy only where it differs", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_first", public_model: "chat", deployment_id: "deployment_gpt", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_odd", public_model: "chat", deployment_id: "deployment_azure", priority: 10, strategy: "round_robin", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT 生产", provider_id: "provider_openai", provider_model: "gpt-5.1", enabled: true },
+      { id: "deployment_azure", name: "Azure 备用", provider_id: "provider_azure", provider_model: "gpt-5.1", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [
+      { id: "provider_openai", name: "OpenAI" }, { id: "provider_azure", name: "Azure" },
+    ] as Provider[], next_cursor: "" });
+    renderPage();
+
+    await screen.findByText("rte_first");
+    const first = document.getElementById("route-rte_first")!;
+    // Where it goes, then which records say so.
+    expect(within(first).getByText("OpenAI · gpt-5.1")).toBeVisible();
+    expect(within(first).getByText(/GPT 生产/)).toBeVisible();
+    // The heading already states the strategy in force, so the row that agrees
+    // with it says nothing.
+    expect(within(first).queryByText("顺序回退")).toBeNull();
+
+    // The one that disagrees does, because editing it changes nothing.
+    expect(within(document.getElementById("route-rte_odd")!).getByText("轮询")).toBeVisible();
+  });
+
   // The alias is the grouping key, and a bare text box made "join chat" and
   // "create a new alias" look like the same act. A typo produced a second alias
   // with one target, no error, and no way for the project that authorized the
