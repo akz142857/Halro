@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { UsagePage, billedTierLabel } from "./UsagePage";
@@ -72,6 +72,75 @@ describe("UsagePage model filter", () => {
       // "" is the all-models option; the alias only history knows about is kept.
       expect(options).toEqual(["", "chat", "embed", "retired-alias"]);
     });
+  });
+});
+
+// The model column shows the alias, which is identical on every attempt of a
+// fallback chain — so two targets of one alias on the same upstream model, the
+// safest way to configure redundancy, were indistinguishable and a fallback
+// could not be verified from the console at all.
+describe("UsagePage deployment column", () => {
+  const chain = [
+    { event_id: "e1", request_id: "req_1", attempt: 1, project_id: "p", requested_model: "chat",
+      deployment_id: "dep_primary", provider_model: "gpt-5.1", provider_input_tokens: 1, provider_output_tokens: 1,
+      latency_millis: 5, status: "error", completed_at: "2026-08-06T00:00:00Z" },
+    { event_id: "e2", request_id: "req_1", attempt: 2, project_id: "p", requested_model: "chat",
+      deployment_id: "dep_fallback", provider_model: "gpt-5.1", provider_input_tokens: 1, provider_output_tokens: 1,
+      latency_millis: 7, status: "success", completed_at: "2026-08-06T00:00:01Z" },
+  ];
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "usage").mockResolvedValue({ items: chain as never, next_cursor: "" });
+  });
+
+  function renderUsage() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+  }
+
+  it("tells the two attempts of one chain apart by their deployment", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "dep_primary", name: "Bedrock 主" }, { id: "dep_fallback", name: "Luna 备" },
+    ] as never, next_cursor: "" });
+    renderUsage();
+
+    // Same alias, same upstream model, both attempts of one request. Scoped to
+    // the table: the model filter offers "chat" as an option too.
+    await screen.findByRole("table");
+    const rows = within(screen.getByRole("table"));
+    expect(rows.getAllByText("chat")).toHaveLength(2);
+    expect(rows.getAllByText("gpt-5.1")).toHaveLength(2);
+    // The deployment is what separates them.
+    expect(screen.getByText("Bedrock 主")).toBeVisible();
+    expect(screen.getByText("Luna 备")).toBeVisible();
+    // And the ID is shown beside the name, because the ID is what the ledger
+    // and the usage partitions carry.
+    expect(screen.getByText("dep_primary")).toBeVisible();
+    expect(screen.getByText("dep_fallback")).toBeVisible();
+  });
+
+  // History outlives a deployment: the list drops tombstones, so a name is not
+  // always available and the ID has to stand on its own.
+  it("falls back to the ID when the deployment is gone", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    renderUsage();
+
+    expect(await screen.findByText("dep_primary")).toBeVisible();
+    expect(screen.getByText("dep_fallback")).toBeVisible();
+  });
+
+  it("links a deployment to the list filtered to it", async () => {
+    vi.spyOn(api, "deployments").mockResolvedValue({
+      items: [{ id: "dep_primary", name: "Bedrock 主" }] as never, next_cursor: "",
+    });
+    renderUsage();
+
+    expect(await screen.findByRole("link", { name: "Bedrock 主" }))
+      .toHaveAttribute("href", "/admin/deployments?q=dep_primary");
   });
 });
 

@@ -746,7 +746,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
   usage: {
     eyebrow: "持久化计费", title: "用量与调用", description: "记录每次服务商尝试的项目、模型、词元、成本与终态，支持多维度筛选。",
     model: "模型", status: "状态", all: "全部", success: "成功", error: "错误", records: "{{count}} 条记录", start: "起始时间", end: "结束时间", emptyTitle: "没有匹配的调用", emptyDescription: "当前筛选条件下没有记录。放宽时间范围或清除筛选后再试。",
-    request: "请求", tokens: "词元", cost: "成本", latency: "延迟", time: "时间", attempt: "尝试 {{count}}",
+    request: "请求", deployment: "模型部署", tokens: "词元", cost: "成本", latency: "延迟", time: "时间", attempt: "尝试 {{count}}",
     estimated: "估算 ", inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",
     unknownCost: "未知", costEvidence: "计价证据", formulaComponents: "输入 {{input}} + 输出 {{output}} + 固定 {{fixed}}", billedWindow: "按 {{start}}–{{end}} 时段费率计费（{{timezone}}）", billedBase: "按时段之外的费率计费（{{timezone}}）", billedZoneUnavailable: "按最高档计费：时区 {{timezone}} 无法解析",
     project: "项目", provider: "Provider", actualModel: "实际模型", currentPassword: "当前密码", totpOptional: "TOTP（启用 MFA 时必填）",
