@@ -2,6 +2,7 @@ package bedrockmantle
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"os"
@@ -65,7 +66,18 @@ func TestRealProviderSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	switch wire := os.Getenv("HALRO_SMOKE_MANTLE_PROFILE"); wire {
+	adapter := newSmokeAdapter(t, os.Getenv("HALRO_SMOKE_MANTLE_PROFILE"), endpoint, apiKey, projectID, client)
+	defer adapter.Close()
+	smokeChatBoth(ctx, t, adapter, model)
+}
+
+// newSmokeAdapter builds the adapter one wire profile runs on, exactly as the
+// composition root does. It is a helper rather than an inline switch because a
+// second test needs the same five constructions, and two copies of this is how
+// one of them ends up wired differently from the product.
+func newSmokeAdapter(t *testing.T, wire string, endpoint *url.URL, apiKey, projectID string, client *http.Client) provider.Adapter {
+	t.Helper()
+	switch wire {
 	case "chat", "openai-chat":
 		chatProfile := domain.ProfileBedrockMantleChat
 		if wire == "openai-chat" {
@@ -86,8 +98,7 @@ func TestRealProviderSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer adapter.Close()
-		smokeChatBoth(ctx, t, adapter, model)
+		return adapter
 	case "responses", "openai-responses":
 		responsesProfile := domain.ProfileBedrockMantleResponses
 		if wire == "openai-responses" {
@@ -106,8 +117,7 @@ func TestRealProviderSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer adapter.Close()
-		smokeChatBoth(ctx, t, adapter, model)
+		return adapter
 	case "messages":
 		authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "x-api-key", "", []byte(apiKey), "Authorization", "api-key")
 		if err != nil {
@@ -124,11 +134,101 @@ func TestRealProviderSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer adapter.Close()
-		smokeChatBoth(ctx, t, adapter, model)
+		return adapter
 	default:
 		t.Fatalf("HALRO_SMOKE_MANTLE_PROFILE must be chat, openai-chat, responses, openai-responses, or messages (got %q)", wire)
+		return nil
 	}
+}
+
+// TestRealProviderSendsTheBedrockProject proves that a project named on a
+// connection leaves this process. It contacts a real account and costs money;
+// it is inert unless the same variables the smoke above needs are set.
+//
+// It exists because the smoke above cannot prove this and never could. That one
+// asserts a request succeeds, and a project header the service ignores succeeds
+// too — which is exactly how Halro shipped `anthropic-workspace`, a name no
+// service reads, for as long as it did. A green smoke was consistent with the
+// defect.
+//
+// The discriminator is a project id that does not exist. A service that reads
+// the header has to reject it; a service that does not read it cannot. So the
+// test is two calls and their disagreement is the evidence:
+//
+//   - with no project, the account default, the call must succeed. Without this
+//     half a failure below could be a bad key, a bad model, or a bad endpoint.
+//   - with `proj_` and twenty z's, the call must fail. If it succeeds, the
+//     header did not reach the service, or this route does not validate it.
+//
+// Measured on 2026-08-29 against `/anthropic/v1/messages`, where the same pair
+// answered 404 and 200 through curl. The OpenAI-shaped routes carry the same
+// resource as `OpenAI-Project` and are **not** measured: a failure there is a
+// finding to record in docs/verification/provider-real-matrix.md, not a broken
+// test.
+//
+// Cost is one inference. The refused call is refused before the model runs.
+func TestRealProviderSendsTheBedrockProject(t *testing.T) {
+	if os.Getenv("HALRO_REAL_PROVIDER_SMOKE") != "1" || os.Getenv("HALRO_SMOKE_PROFILE") != "bedrock_mantle" {
+		t.Skip("set HALRO_REAL_PROVIDER_SMOKE=1 and HALRO_SMOKE_PROFILE=bedrock_mantle")
+	}
+	endpoint, err := url.Parse(os.Getenv("HALRO_SMOKE_BASE_URL"))
+	if err != nil {
+		t.Fatal("HALRO_SMOKE_BASE_URL must be a valid URL")
+	}
+	if err := ValidateEndpoint(endpoint); err != nil {
+		t.Fatalf("HALRO_SMOKE_BASE_URL is not an accepted Mantle endpoint: %v", err)
+	}
+	apiKey := os.Getenv("HALRO_SMOKE_API_KEY")
+	model := os.Getenv("HALRO_SMOKE_MODEL")
+	if apiKey == "" || model == "" {
+		t.Fatal("HALRO_SMOKE_API_KEY and HALRO_SMOKE_MODEL are required")
+	}
+	wire := os.Getenv("HALRO_SMOKE_MANTLE_PROFILE")
+	client := &http.Client{Timeout: 60 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// The id is refused by the service, not by Halro: it has to be a well formed
+	// project so it reaches the wire, which is what ValidateBedrockProjectID
+	// accepts and what this asserts before spending anything.
+	const absent = "proj_zzzzzzzzzzzzzzzzzzzz"
+	if err := domain.ValidateBedrockProjectID(absent); err != nil {
+		t.Fatalf("the control project id is not well formed, so it would never reach the service: %v", err)
+	}
+
+	baseline := newSmokeAdapter(t, wire, endpoint, apiKey, "", client)
+	defer baseline.Close()
+	if err := smokeChatOnce(ctx, baseline, model); err != nil {
+		t.Fatalf("the default project could not serve a request, so nothing below would mean anything: %v", err)
+	}
+
+	named := newSmokeAdapter(t, wire, endpoint, apiKey, absent, client)
+	defer named.Close()
+	if err := smokeChatOnce(ctx, named, model); err == nil {
+		t.Fatalf("a project that does not exist was served, so the %s header did not reach the service or this route does not validate it — record which in docs/verification/provider-real-matrix.md", wire)
+	} else {
+		// Logged, not asserted on: the wording is the service's and pinning it
+		// would make this test fail on a message change rather than on a
+		// behaviour change.
+		t.Logf("the absent project was refused, as it must be: %v", err)
+	}
+}
+
+// smokeChatOnce is one non-streaming call, returning the error instead of
+// failing, because the test above needs a call whose failure is the assertion.
+func smokeChatOnce(ctx context.Context, adapter provider.Adapter, model string) error {
+	chat, ok := adapter.(interface {
+		Chat(context.Context, provider.ChatCall) (openaiapi.ChatCompletionResponse, error)
+	})
+	if !ok {
+		return errors.New("adapter cannot serve chat")
+	}
+	request := openaiapi.ChatCompletionRequest{
+		Messages:            []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("Reply with OK.")}},
+		MaxCompletionTokens: smokePointer(int64(8)),
+	}
+	_, err := chat.Chat(ctx, provider.ChatCall{RequestID: "mantle-project-header", ProviderModel: model, Request: request})
+	return err
 }
 
 // smokeChatBoth exercises the two shapes every Mantle profile must serve. It
