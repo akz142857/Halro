@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bucket } from "./types";
 import TrendChart from "./TrendChart";
+import { hourlyTrendPoints } from "./trend";
 
 const chartMocks = vi.hoisted(() => ({
   setSize: vi.fn(),
@@ -33,7 +34,7 @@ describe("TrendChart", () => {
   });
 
   it("exposes the selected metric summary and respects a narrow container width", () => {
-    render(<TrendChart buckets={[bucket()]} metric="tokens" />);
+    render(<TrendChart points={hourlyTrendPoints([bucket()], Date.parse(bucket().hour) + 3_600_000)} metric="tokens" />);
 
     expect(screen.getByRole("img", { name: /词元用量.*18/ })).toBeVisible();
 

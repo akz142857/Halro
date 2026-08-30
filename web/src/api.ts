@@ -39,6 +39,7 @@ import type {
   TokenGuardPolicy,
   TokenGuardPreview,
   UsageAttempt,
+  UsageSummary,
   DeploymentPriceVersion,
   DeploymentPriceProposal,
   ProviderProfilesCatalog,
@@ -475,6 +476,8 @@ export const api = {
       `/routes/${encodeURIComponent(id)}/test`,
       json("POST"),
     ).then((value) => value.data),
+  usageSummary: (query = "") =>
+    request<UsageSummary>(`/usage/summary${query}`).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
   usageRequest: (requestID: string) =>

@@ -1,8 +1,7 @@
 import { useEffect, useRef } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import type { Bucket } from "./types";
-import { buildTrendSeries, summarizeTrend, type TrendMetric } from "./trend";
+import { buildTrendSeries, summarizeTrend, type TrendMetric, type TrendPoint } from "./trend";
 import { compactNumber } from "./format";
 import { useTranslation } from "react-i18next";
 import { useAppearance } from "./theme";
@@ -34,13 +33,13 @@ function seriesKeys(metric: TrendMetric) {
   return [metric];
 }
 
-export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; metric: TrendMetric }) {
+export default function TrendChart({ points, metric }: { points: TrendPoint[]; metric: TrendMetric }) {
   const { t } = useTranslation();
   const appearance = useAppearance();
   const timeZone = useAccountingTimeZone();
   const host = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
-  const summary = summarizeTrend(buckets, metric);
+  const summary = summarizeTrend(points, metric);
   const accessibleLabel = t("dashboard.trendAria", {
     metric: t(`dashboard.trendMetrics.${metric}`),
     value: formatValue(metric, summary.value),
@@ -48,7 +47,7 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
 
   useEffect(() => {
     if (!host.current) return;
-    const chartData = buildTrendSeries(buckets, metric);
+    const chartData = buildTrendSeries(points, metric);
     const tokens = readChartTokens(host.current);
     const keys = seriesKeys(metric);
     const chart = new uPlot(
@@ -99,10 +98,10 @@ export default function TrendChart({ buckets, metric }: { buckets: Bucket[]; met
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const series = buildTrendSeries(buckets, metric);
+    const series = buildTrendSeries(points, metric);
     chart.setData(series.data);
     chart.setScale("x", { min: series.range[0], max: series.range[1] });
-  }, [buckets, metric]);
+  }, [points, metric]);
 
   return <div className="trend-chart" ref={host} role="img" aria-label={accessibleLabel} />;
 }

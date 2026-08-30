@@ -1072,6 +1072,18 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 /* Fixed columns so opening a row's pricing evidence disclosure cannot resize
    the Cost column and shift every other column out from under its header —
    auto table layout resizes columns to the widest content across all rows. */
+/* The summary stacks a control bar, a metric row, a chart and a dimension
+   table; the gap is the same rhythm the rest of the console puts between
+   sections, so the tab does not read as a denser page than the log beside it. */
+.usage-summary { display: flex; flex-direction: column; gap: var(--space-4); }
+/* The granularity strip is a control like the fields beside it, so it sits on
+   their baseline instead of floating above them, and it wraps left rather than
+   right because it is the first control, not a trailing action. */
+.usage-summary-controls { flex-wrap: wrap; }
+.usage-summary-controls .dashboard-tabs { justify-content: flex-start; align-self: center; }
+/* A qualifier under a panel. It states what the figure above can and cannot
+   claim, so it is set as a note rather than as another number. */
+.panel-note { margin: var(--space-2) var(--space-3) 0; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .usage-table { table-layout: fixed; }
 .usage-table td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
 .cost-evidence { max-width: 100%; margin-top: 4px; color: var(--color-text-tertiary); font-size: var(--font-size-xs); line-height: 1.5; white-space: normal; }

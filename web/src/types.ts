@@ -131,6 +131,65 @@ export interface Bucket {
   latency_millis: number;
 }
 
+// SummaryMetrics is one accounting period's totals as the summary endpoint
+// reports them. The request-level columns are absent — not zero — on a
+// dimension with no request identity: a provider row cannot claim a share of a
+// request that may have spanned several providers.
+export interface SummaryMetrics {
+  requests?: number;
+  request_errors?: number;
+  request_latency_samples?: number;
+  request_latency_p95_millis?: number;
+  request_latency_over_max?: number;
+  attempts: number;
+  errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_input_tokens: number;
+  estimated_output_tokens: number;
+  provider_cached_input_tokens: number;
+  provider_cache_write_input_tokens: number;
+  provider_reasoning_tokens: number;
+  cost_micros_usd: number;
+  estimated_cost_micros_usd: number;
+  unknown_attempts: number;
+  latency_millis: number;
+  attempt_latency_samples: number;
+  attempt_latency_p95_millis: number;
+  attempt_latency_over_max?: number;
+  latency_approximate: boolean;
+}
+
+export interface SummaryBucket extends SummaryMetrics {
+  period: string;
+  // The absolute interval the label covers. Drill-down links are built from
+  // these instants rather than from the label, because the same local date
+  // under two generations of the accounting timezone is two different windows.
+  start: string;
+  end: string;
+}
+
+export interface SummaryGroup extends SummaryMetrics {
+  key: string;
+}
+
+export interface UsageSummary {
+  granularity: "day" | "month" | "year";
+  start: string;
+  end: string;
+  totals: SummaryMetrics;
+  buckets: SummaryBucket[];
+  group_by?: string;
+  groups?: SummaryGroup[];
+  groups_truncated?: boolean;
+  groups_other_count?: number;
+  filter?: { dimension: string; value: string };
+  timezone_changes: Array<{ period_id: string; from_version: number; to_version: number }>;
+  resource_labels?: Record<string, string>;
+  watermark_sequence: number;
+  time_context?: TimeContext;
+}
+
 export interface UsageBreakdown {
   key: string;
   calls: number;

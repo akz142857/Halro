@@ -1,13 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
+import { ErrorState, Loading, Metric, PageHeader, SegmentedTabs, StatusDot } from "../components";
 import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { navigate } from "../navigation";
 import { adoptTimeContext } from "../timezone";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
-import type { TrendMetric } from "../trend";
+import { hourlyTrendPoints, type TrendMetric } from "../trend";
 import { useTranslation } from "react-i18next";
 
 const TrendChart = lazy(() => import("../TrendChart"));
@@ -108,7 +108,7 @@ export function DashboardPage() {
             <article className="panel chart-panel">
               <header className="panel-header dashboard-panel-header">
                 <div><p className="eyebrow">{t("dashboard.trendEyebrow")}</p><h2>{t(`dashboard.trendMetrics.${trendMetric}`)}</h2></div>
-                <DashboardTabs
+                <SegmentedTabs
                   id="dashboard-trend"
                   label={t("dashboard.trendMetric")}
                   value={trendMetric}
@@ -117,7 +117,7 @@ export function DashboardPage() {
                 />
               </header>
               <div id="dashboard-trend-panel" role="tabpanel" aria-labelledby={`dashboard-trend-tab-${trendMetric}`}>
-                <Suspense fallback={<Loading label={t("dashboard.loadingTrend")} />}><TrendChart buckets={hourly} metric={trendMetric} /></Suspense>
+                <Suspense fallback={<Loading label={t("dashboard.loadingTrend")} />}><TrendChart points={hourlyTrendPoints(hourly)} metric={trendMetric} /></Suspense>
                 <div className="chart-caption">{t(`dashboard.trendDescriptions.${trendMetric}`)}</div>
               </div>
             </article>
@@ -150,7 +150,7 @@ export function DashboardPage() {
                 <div><p className="eyebrow">{t("dashboard.usageAttribution")}</p><h2>{t("dashboard.topConsumers")}</h2></div>
                 <div className="breakdown-controls">
                   <label><span className="sr-only">{t("dashboard.breakdownSort")}</span><select value={breakdownMetric} onChange={(event) => setBreakdownMetric(event.target.value as BreakdownMetric)}><option value="calls">{t("dashboard.calls")}</option><option value="cost">{t("dashboard.cost")}</option><option value="errors">{t("dashboard.errors")}</option></select></label>
-                  <DashboardTabs
+                  <SegmentedTabs
                     id="dashboard-breakdown"
                     label={t("dashboard.breakdownDimension")}
                     value={dimension}
@@ -185,10 +185,6 @@ export function DashboardPage() {
   );
 }
 
-function Metric({ label, value, detail, alert = false }: { label: string; value: string; detail: string; alert?: boolean }) {
-  return <article className={`metric ${alert ? "alert" : ""}`}><span>{label}</span><strong>{value}</strong><small title={detail}>{detail}</small></article>;
-}
-
 function AttentionPanel({ items }: { items: AttentionItem[] }) {
   const { t } = useTranslation();
   return (
@@ -201,22 +197,6 @@ function AttentionPanel({ items }: { items: AttentionItem[] }) {
       ))}</div>}
     </section>
   );
-}
-
-function DashboardTabs<T extends string>({ id, label, value, items, onChange }: { id: string; label: string; value: T; items: { key: T; label: string }[]; onChange: (value: T) => void }) {
-  const refs = useRef<Array<HTMLButtonElement | null>>([]);
-  const move = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
-    let next = index;
-    if (event.key === "ArrowRight") next = (index + 1) % items.length;
-    else if (event.key === "ArrowLeft") next = (index - 1 + items.length) % items.length;
-    else if (event.key === "Home") next = 0;
-    else if (event.key === "End") next = items.length - 1;
-    else return;
-    event.preventDefault();
-    onChange(items[next].key);
-    refs.current[next]?.focus();
-  };
-  return <div className="dashboard-tabs" role="tablist" aria-label={label}>{items.map((item, index) => <button ref={(node) => { refs.current[index] = node; }} id={`${id}-tab-${item.key}`} aria-controls={`${id}-panel`} tabIndex={value === item.key ? 0 : -1} type="button" role="tab" aria-selected={value === item.key} key={item.key} onKeyDown={(event) => move(event, index)} onClick={() => onChange(item.key)}>{item.label}</button>)}</div>;
 }
 
 function PressureSection({ title, empty, item, moneyValues = false }: { title: string; empty: string; item?: GovernancePressureItem; moneyValues?: boolean }) {
