@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { EmptyState, ErrorState, Loading, Metric, SegmentedTabs } from "../components";
+import { EmptyState, ErrorState, Loading, Metric, SegmentedChoice, SegmentedTabs } from "../components";
 import { compactNumber, money } from "../format";
 import { Link } from "../navigation";
 import { periodTrendPoints, type TrendMetric } from "../trend";
@@ -56,14 +56,22 @@ export function UsageSummaryPanel() {
 
   return (
     <section className="usage-summary" aria-label={t("usage.summary.title")}>
+      {/* The three time controls sit together because they answer one question
+          — which stretch of the ledger, at what resolution — and the grouping
+          dimension, which changes the table rather than the window, follows
+          them. */}
       <div className="filter-bar usage-summary-controls">
-        <SegmentedTabs
-          id="usage-summary-granularity"
-          label={t("usage.summary.granularity")}
-          value={granularity}
-          items={(["day", "month", "year"] as const).map((key) => ({ key, label: t(`usage.summary.granularities.${key}`) }))}
-          onChange={setGranularity}
-        />
+        <div className="filter-field">
+          <span>{t("usage.summary.granularity")}</span>
+          <SegmentedChoice
+            label={t("usage.summary.granularity")}
+            value={granularity}
+            items={(["day", "month", "year"] as const).map((key) => ({ key, label: t(`usage.summary.granularities.${key}`) }))}
+            onChange={setGranularity}
+          />
+        </div>
+        <label><span>{t("usage.start")}</span><input type="date" value={start} max={end || undefined} onChange={(event) => setStart(event.target.value)} /></label>
+        <label><span>{t("usage.end")}</span><input type="date" value={end} min={start || undefined} onChange={(event) => setEnd(event.target.value)} /></label>
         <label>
           <span>{t("usage.summary.dimension")}</span>
           <select value={dimension} onChange={(event) => setDimension(event.target.value as Dimension)}>
@@ -73,8 +81,6 @@ export function UsageSummaryPanel() {
             ))}
           </select>
         </label>
-        <label><span>{t("usage.start")}</span><input type="date" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-        <label><span>{t("usage.end")}</span><input type="date" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
         <button type="button" className="button" onClick={() => downloadSummaryCSV(report, t("usage.summary.csvName", { start: report.start, end: report.end }))}>
           {t("usage.summary.export")}
         </button>

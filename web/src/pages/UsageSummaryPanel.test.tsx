@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
@@ -127,6 +127,30 @@ describe("UsageSummaryPanel", () => {
     renderPanel();
 
     expect(await screen.findByText(/2026-08-15/)).toBeVisible();
+  });
+
+  // The granularity shows and hides nothing — it changes what the panel asks
+  // the server for. Marked up as tabs it put a second tab strip on a page that
+  // already has real ones, and promised panels that do not exist.
+  it("offers the granularity as one labelled group of choices, not a second tab strip", async () => {
+    vi.spyOn(api, "usageSummary").mockResolvedValue(summary());
+    renderPanel();
+
+    const group = await screen.findByRole("radiogroup", { name: "粒度" });
+    const choices = within(group).getAllByRole("radio");
+    expect(choices).toHaveLength(3);
+    expect(within(group).getByRole("radio", { name: "按月" })).toBeChecked();
+    expect(screen.queryByRole("tablist", { name: "粒度" })).toBeNull();
+  });
+
+  it("re-asks the server when the granularity changes", async () => {
+    const request = vi.spyOn(api, "usageSummary").mockResolvedValue(summary());
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("radio", { name: "按天" }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const query = new URLSearchParams((request.mock.calls[1][0] ?? "").slice(1));
+    expect(query.get("granularity")).toBe("day");
   });
 
   it("asks the server for the selected granularity and dimension", async () => {

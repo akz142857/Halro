@@ -1076,11 +1076,22 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
    table; the gap is the same rhythm the rest of the console puts between
    sections, so the tab does not read as a denser page than the log beside it. */
 .usage-summary { display: flex; flex-direction: column; gap: var(--space-4); }
-/* The granularity strip is a control like the fields beside it, so it sits on
-   their baseline instead of floating above them, and it wraps left rather than
-   right because it is the first control, not a trailing action. */
 .usage-summary-controls { flex-wrap: wrap; }
-.usage-summary-controls .dashboard-tabs { justify-content: flex-start; align-self: center; }
+/* Export is the only action in a bar of filters, so it sits at the far end
+   rather than in the middle of them. */
+.usage-summary-controls .button { margin-left: auto; }
+/* One control made of segments, not three loose buttons: joined, the same
+   height as the inputs beside it, and carrying its own caption like every
+   other field in the bar. */
+.segmented-choice { display: inline-flex; height: 34px; background: var(--surface); border: 1px solid var(--line); }
+.segmented-choice button {
+  height: 100%; padding: 0 var(--space-3); color: var(--muted-2); background: transparent;
+  border: 0; border-right: 1px solid var(--line); font: var(--font-size-xs) var(--mono); cursor: pointer;
+}
+.segmented-choice button:last-child { border-right: 0; }
+.segmented-choice button:hover { color: var(--text); }
+.segmented-choice button[aria-checked="true"] { color: var(--color-action-primary); background: var(--accent-tint); }
+.segmented-choice button:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -2px; }
 /* A qualifier under a panel. It states what the figure above can and cannot
    claim, so it is set as a note rather than as another number. */
 .panel-note { margin: var(--space-2) var(--space-3) 0; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
@@ -1121,7 +1132,7 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
   display: flex; align-items: flex-end; gap: 12px; margin-bottom: 15px; padding: 13px;
   background: var(--surface); border: 1px solid var(--line);
 }
-.filter-bar label span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
+.filter-bar label span, .filter-bar .filter-field > span { display: block; margin-bottom: 5px; color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 /* A height, because the min-height here never was one. The base control rule
    pads 9px above and below and the button carries a 44px floor, so every
    control in this bar was sized by its own content — text inputs and selects
