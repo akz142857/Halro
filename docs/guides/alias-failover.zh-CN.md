@@ -93,12 +93,13 @@ retry:
 连续通过：
 
 1. **路由已启用**且未删除 —— 否则根本不注册进 Registry（`internal/app/providers.go:464`）。
-2. **部署已启用**、未删除、能力校验通过 —— 否则注册时被扣留（`providers.go:473`、`:487`）。
-3. **策略与同别名的其他启用路由一致** —— 否则 Registry 拒绝注册该目标，它会被记为
-   `Dangling` 并写日志，**但控制台仍显示它是 Enabled**。
+2. **部署已启用**、未删除、能力校验通过 —— 否则注册时被扣留（`providers.go:475`、`:489`）。
+3. **策略与同别名的其他启用路由一致** —— 指 `ordered` 与 `round_robin` 不能并存；空策略
+   两侧都归一为 `ordered`（`provider.go:539-541`），不构成不一致。真正混合时 Registry
+   拒绝注册该目标，它会被记为 `Dangling` 并写日志，**但控制台仍显示它是 Enabled**。
 4. **探活未失败** —— `probed && !probe.Healthy` 的目标在候选解析阶段被剔除
-   （`internal/provider/provider.go:643`）。注意「从未探活」不会被剔除。
-5. **支持该操作** —— `filterByOperation`（`provider.go:661`），按 chat / streaming /
+   （`internal/provider/provider.go:645`）。注意「从未探活」不会被剔除。
+5. **支持该操作** —— `filterByOperation`（`provider.go:663`），按 chat / streaming /
    embeddings / images … 粒度过滤，并校验能力证据等级。
 6. **满足细粒度能力** —— 视觉、工具、结构化输出、profile 兼容性由
    `filterSemanticCapabilities`、`filterGenerateProfileCompatibility`、
@@ -148,8 +149,8 @@ if !slices.Contains(principal.Project.AllowedModels, model) { … 403 … }
 > 授权过的凭据、服务商和区域。
 
 这一点在删除方向上有护栏而创建方向上没有：`validateAliasKeepsServingProjects`
-（`internal/app/admin_providers.go:1743`）阻止删掉某个项目仍在使用的最后一条路由，而
-`validateAdminRoute`（`:1548`）在创建路由时**完全不查询项目**——它只校验部署/服务商可用、
+（`internal/app/admin_providers.go:1728`）阻止删掉某个项目仍在使用的最后一条路由，而
+`validateAdminRoute`（`:1562`）在创建路由时**完全不查询项目**——它只校验部署/服务商可用、
 profile 模型合法、同别名启用路由策略一致。
 
 实际后果：今天 `chat-aws` / `chat-deepseek` 这种一别名一服务商的配法，事实上就是按服务商
