@@ -427,12 +427,18 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       if (!route.enabled) return;
       existing.enabledCount += 1;
       // The effective candidate count, not the enabled-route count. The gateway
-      // drops a candidate whose deployment is disabled and one whose probe has
-      // actually failed — `not_probed` still routes, so it still counts here.
-      // Counting enabled routes instead would print "3 targets" for an alias
-      // whose probes left it one.
+      // drops a candidate the registry withheld, one whose deployment is
+      // disabled, and one whose probe has actually failed — `not_probed` still
+      // routes, so it still counts here. Counting enabled routes instead would
+      // print "3 targets" for an alias whose probes left it one.
+      //
+      // `withheld` carries the causes this page cannot derive on its own:
+      // capability drift, an unreadable price, a switched-off profile binding,
+      // a rejected target. Without it the picker and the route list gave
+      // contradictory answers about the same alias — one said two targets, the
+      // other said one of them was withheld.
       const deployment = deploymentByID.get(route.deployment_id);
-      if (deployment?.enabled && deployment.probe?.state !== "unhealthy") {
+      if (!route.withheld && deployment?.enabled && deployment.probe?.state !== "unhealthy") {
         existing.targetCount += 1;
         existing.strategies.add(route.strategy || "ordered");
       }
@@ -442,6 +448,13 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       .filter((option) => option.enabledCount > 0 || retained.has(option.value))
       .sort((a, b) => a.value.localeCompare(b.value));
   }, [availableRoutes.data, availableDeployments.data, current?.allowed_models]);
+  // A failed deployments read is not a fact about the configuration. Without
+  // this the picker printed "no usable target" beside every alias when the
+  // request errored — an error rendered as a verdict, and one that reads as a
+  // reason to go and repair routes that are fine. `listAll` refusing a
+  // truncated answer lands here too, which is exactly the case that must not be
+  // presented as a complete one.
+  const targetStateUnknown = availableDeployments.isError;
   const {
     register,
     handleSubmit,
@@ -523,6 +536,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
                 <span className="model-picker-selection-count">{t("projects.selectedAliases", { count: selectedRouteAliases.length })}</span>
               </div>
               <p id="project-model-help">{t("projects.aliasesHint")}</p>
+              {availableDeployments.isError && <ErrorState error={availableDeployments.error} />}
               {availableRoutes.isPending || availableDeployments.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="route-alias-picker">
                 <div className="model-option-grid">
                   {routeOptions.map((route) => {
@@ -534,18 +548,20 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
                     const failover = route.targetCount > 1 && strategy
                       ? ` · ${strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`
                       : "";
-                    const summary = route.enabledCount === 0
-                      ? t("projects.unavailableAlias")
-                      : route.targetCount === 0
-                        ? t("projects.noEffectiveTarget")
-                        : route.targetCount === 1
-                          ? t("projects.singleTarget")
-                          : t("projects.targetCount", { count: route.targetCount });
+                    const summary = targetStateUnknown
+                      ? t("projects.targetStateUnknown")
+                      : route.enabledCount === 0
+                        ? t("projects.unavailableAlias")
+                        : route.targetCount === 0
+                          ? t("projects.noEffectiveTarget")
+                          : route.targetCount === 1
+                            ? t("projects.singleTarget")
+                            : t("projects.targetCount", { count: route.targetCount });
                     return <label className="model-option" key={route.value}>
                       <input type="checkbox" value={route.value} {...register("routes")} />
                       <span>
                         <strong>{route.value}</strong>
-                        <small className={route.targetCount ? undefined : "unavailable"}>{summary}{failover}</small>
+                        <small className={targetStateUnknown || route.targetCount ? undefined : "unavailable"}>{summary}{targetStateUnknown ? "" : failover}</small>
                       </span>
                     </label>;
                   })}

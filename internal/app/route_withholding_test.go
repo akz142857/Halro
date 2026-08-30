@@ -49,6 +49,9 @@ func TestASecondEnabledRouteToTheSameDeploymentIsRefused(t *testing.T) {
 
 // The check has to be about the deployment, not about the alias: a second target
 // on a different deployment is the configuration the whole feature exists for.
+// The sibling names a different upstream model, so this is a genuine second
+// target rather than the same upstream reached through two records — which is a
+// state this rule does not catch, and the comment on the rule says so.
 func TestASecondEnabledRouteToAnotherDeploymentOnTheSameAliasIsAllowed(t *testing.T) {
 	runtime, bootstrap, session := activationTestRuntime(t)
 	route, err := runtime.store.GetRoute(context.Background(), bootstrap.RouteID)
@@ -56,6 +59,9 @@ func TestASecondEnabledRouteToAnotherDeploymentOnTheSameAliasIsAllowed(t *testin
 		t.Fatal(err)
 	}
 	sibling := cloneDeployment(t, runtime, bootstrap.DeploymentID, "dep-sibling")
+	if sibling.ProviderModel == "gpt-test" {
+		t.Fatalf("the fixture is meant to name a different upstream model: %q", sibling.ProviderModel)
+	}
 
 	recorder := createRouteRequest(t, runtime, session, map[string]any{
 		"public_model": route.PublicModel, "deployment_id": sibling.ID,
@@ -108,6 +114,12 @@ func cloneDeployment(t *testing.T, runtime *Runtime, deploymentID, cloneID strin
 	}
 	clone := deployment
 	clone.ID, clone.Name, clone.Revision = cloneID, deployment.Name+" (sibling)", 0
+	// A different upstream model, so the clone is a second target and not the
+	// same one reached twice. Copying the model verbatim made this fixture
+	// certify the gap the rule leaves open rather than the case it allows. The
+	// snapshot carries the model too and the store checks the two agree.
+	clone.ProviderModel = "gpt-test-sibling"
+	clone.ModelCapabilitySnapshot.ProviderModel = clone.ProviderModel
 	stored, err := runtime.store.PutDeployment(context.Background(), clone, 0, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -151,6 +163,31 @@ func TestARoutingRouteCarriesNoWithholding(t *testing.T) {
 	}
 	if listed[0].Withheld != nil {
 		t.Fatalf("a routing route was reported as withheld: %+v", listed[0])
+	}
+}
+
+// An aborted activation discards the candidate registry, so its withholdings
+// describe a registry that never served anything. Nothing asserted this: the
+// publish sits in a block with the log and the audit append, and moving that
+// block above the abort return — the obvious tidy-up — would leave the console
+// reporting a load this process rejected, with every existing test still green.
+func TestAnAbortedActivationPublishesNoWithholdings(t *testing.T) {
+	runtime, bootstrap, _ := activationTestRuntime(t)
+	switchOffDeploymentBinding(t, runtime, bootstrap.ProviderID, bootstrap.DeploymentID)
+
+	finalize, err := runtime.prepareProviderRegistryActivation(
+		context.Background(), runtime.effectiveModelCatalog(), runtime.modelCatalogUnavailable())
+	if err != nil {
+		t.Fatalf("preparing the candidate registry: %v", err)
+	}
+	finalize(false)
+
+	if withheld := runtime.routeWithholdings(); len(withheld) != 0 {
+		t.Fatalf("an aborted activation published its withholdings: %+v", withheld)
+	}
+	// And the abort left the live registry alone, so the route still routes.
+	if targets := runtime.providers.ResolveAll("chat"); len(targets) != 1 {
+		t.Fatalf("the aborted activation replaced the live registry: %+v", targets)
 	}
 }
 

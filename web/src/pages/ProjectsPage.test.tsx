@@ -168,6 +168,47 @@ describe("projects page", () => {
     expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标 · 顺序回退/);
   });
 
+  // The route list already showed such a route as withheld. The picker derived
+  // its own answer from the deployment alone, so the two pages contradicted
+  // each other about one alias — and the picker was the one promising a
+  // fallback that does not exist.
+  it("does not count a route the registry withheld", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_serving", public_model: "chat", deployment_id: "dep_serving", strategy: "ordered", enabled: true },
+      // Deployment enabled, probe healthy — nothing this page could derive on
+      // its own says this route is not a candidate.
+      { id: "rt_drifted", public_model: "chat", deployment_id: "dep_drifted", strategy: "ordered", enabled: true,
+        withheld: { kind: "capability_drift", reason: "profile_narrowed" } },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_serving", { probe: { state: "healthy" } }),
+      deployment("dep_drifted", { probe: { state: "healthy" } }),
+    ] } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/单一目标 · 无回退/);
+  });
+
+  // A failed read is not a fact about the configuration. This said "no usable
+  // target" beside every alias when the deployments request errored, which
+  // reads as a verdict on routes that are fine.
+  it("does not present a failed deployments read as a configuration verdict", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_only", public_model: "chat", deployment_id: "dep_only", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockRejectedValue(new ApiError(500, "request failed (500)", "", ""));
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    const alias = await screen.findByRole("checkbox", { name: /chat/ });
+    expect(alias).toHaveAccessibleName(/目标状态读取失败/);
+    expect(alias).not.toHaveAccessibleName(/没有可用目标/);
+    expect(alias).not.toHaveAccessibleName(/单一目标/);
+  });
+
   // An alias whose every enabled route points at something unusable is not
   // "no enabled routes" — the routes are there, and saying so sends the
   // operator to the wrong page.

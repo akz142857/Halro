@@ -71,6 +71,61 @@ describe("RoutesPage", () => {
     expect(within(row).getByText(/原因未知/)).toBeVisible();
   });
 
+  // The confirmation counted enabled rows, and a withheld row is enabled and
+  // serving nothing. It therefore told the operator another route would keep
+  // answering while this same page showed that route as withheld, and the alias
+  // went dark on the next request.
+  it("does not count a withheld sibling as one that keeps serving", async () => {
+    const serving = {
+      id: "route_serving", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Route;
+    const withheld = {
+      id: "route_withheld", public_model: "chat", deployment_id: "deployment_azure",
+      priority: 20, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+      withheld: { kind: "capability_drift", reason: "profile_narrowed" },
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [serving, withheld], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    await screen.findAllByText("chat");
+    const row = document.getElementById("route-route_serving")!;
+    fireEvent.click(within(row).getByRole("button", { name: "禁用" }));
+
+    expect(await screen.findByText(
+      "确认禁用模型路由“chat”？这是该别名最后一条已启用路由，应用请求“chat”会被拒绝。",
+    )).toBeVisible();
+  });
+
+  // And the arithmetic still has to be right from the withheld row's own side:
+  // disabling a route that was never serving does not take the alias down when
+  // a healthy sibling is still answering.
+  it("does not claim the alias goes dark when the withheld route is the one being disabled", async () => {
+    const serving = {
+      id: "route_serving", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+    } as Route;
+    const withheld = {
+      id: "route_withheld", public_model: "chat", deployment_id: "deployment_azure",
+      priority: 20, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+      withheld: { kind: "reference", reason: "binding_unavailable" },
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [serving, withheld], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    await screen.findAllByText("chat");
+    const row = document.getElementById("route-route_withheld")!;
+    fireEvent.click(within(row).getByRole("button", { name: "禁用" }));
+
+    expect(await screen.findByText(
+      "确认禁用模型路由“chat”？该别名还有 1 条路由继续承接请求。",
+    )).toBeVisible();
+  });
+
   it("restores a persisted route test result after loading the list", async () => {
     const route = {
       id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
@@ -196,7 +251,7 @@ describe("RoutesPage", () => {
     const row = (await screen.findAllByText("chat"))[0].closest("tr");
     fireEvent.click(within(row!).getByRole("button", { name: "禁用" }));
 
-    expect(await screen.findByText("确认禁用模型路由“chat”？该别名还有 1 条已启用路由继续承接请求。")).toBeVisible();
+    expect(await screen.findByText("确认禁用模型路由“chat”？该别名还有 1 条路由继续承接请求。")).toBeVisible();
   });
 
   it("offers a disabled route the way back on", async () => {

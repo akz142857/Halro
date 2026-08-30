@@ -67,11 +67,14 @@ export function RoutesPage() {
     // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
   // Whether an alias keeps answering after this route is switched off depends
-  // on what else still serves it, so the confirmation has to count.
-  const siblingEnabledCount = useMemo(() => {
+  // on what else still serves it, so the confirmation has to count — and a
+  // withheld sibling does not serve it. Counting `enabled` alone told the
+  // operator "1 enabled route keeps answering" about a route this very page was
+  // showing as withheld, and the alias went dark on the next request.
+  const siblingServingCount = useMemo(() => {
     const counts = new Map<string, number>();
     routes.data?.items.forEach((route) => {
-      if (route.enabled) counts.set(route.public_model, (counts.get(route.public_model) ?? 0) + 1);
+      if (route.enabled && !route.withheld) counts.set(route.public_model, (counts.get(route.public_model) ?? 0) + 1);
     });
     return counts;
   }, [routes.data]);
@@ -124,12 +127,17 @@ export function RoutesPage() {
               {routes.data.items.map((route) => {
                 const deployment = deploymentByID.get(route.deployment_id);
                 const providerID = deployment?.provider_id || "";
-                const siblings = siblingEnabledCount.get(route.public_model) ?? 0;
+                // What still serves the alias once THIS row is off: the row
+                // itself is only subtracted when it was serving, so disabling a
+                // withheld route does not report the alias as going dark when a
+                // healthy sibling is still answering.
+                const serving = siblingServingCount.get(route.public_model) ?? 0;
+                const remainingAfterDisable = serving - (route.enabled && !route.withheld ? 1 : 0);
                 return (
                   <tr id={`route-${route.id}`} key={route.id}>
                     <td>
                       <div className="model-cell">
-                        <StatusDot ok={route.enabled} />
+                        <StatusDot ok={route.enabled && !route.withheld} />
                         <strong>{route.public_model}</strong>
                         <code>{route.id}</code>
                       </div>
@@ -172,8 +180,8 @@ export function RoutesPage() {
                               className="button ghost"
                               label={t("common.disable")}
                               title={t("routes.disableTitle")}
-                              confirmLabel={siblings > 1
-                                ? t("routes.disableConfirm", { name: route.public_model, count: siblings - 1 })
+                              confirmLabel={remainingAfterDisable > 0
+                                ? t("routes.disableConfirm", { name: route.public_model, count: remainingAfterDisable })
                                 : t("routes.disableConfirmLast", { name: route.public_model })}
                               disabled={setEnabled.isPending}
                               onConfirm={() => setEnabled.mutateAsync(route)}
