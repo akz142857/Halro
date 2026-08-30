@@ -973,7 +973,7 @@ export function Combobox({
     }
   };
   return (
-    <div className={`field ${className}`.trim()}>
+    <div className={`field combobox-field ${className}`.trim()}>
       <label htmlFor={inputID}>{label}</label>
       <div className={`combobox-shell ${open ? "open" : ""}`} ref={shell}>
         <input
@@ -1068,7 +1068,6 @@ export function TimeZoneField({
   const offset = !unrecognised && value.trim() ? zoneOffsetLabel(value.trim()) : "";
   return (
     <Combobox
-      className="timezone-field"
       label={label}
       value={value}
       onChange={onChange}

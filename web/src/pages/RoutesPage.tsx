@@ -426,22 +426,28 @@ function RouteForm({ current, routes, deployments, onClose }: { current?: Route;
           </Field>
           <Field label={t("routes.priority")} hint={t("routes.priorityHint")}><input autoComplete="off" type="number" value={priority} onChange={(event) => setPriority(Number(event.target.value))} /></Field>
           {joining && (
-            <div className="route-join-notice notice">
-              <strong>{t("routes.joiningAlias", { alias: joining.alias, count: joining.siblings.length })}</strong>
+            <section className="route-join" aria-label={t("routes.joiningAliasLabel", { alias: joining.alias })}>
+              <p className="route-join-lede">{t("routes.joiningAlias", { alias: joining.alias, count: joining.siblings.length })}</p>
               {/* In the engine's order, so the priority being typed above can be
-                  placed against the ones already there rather than guessed. */}
+                  placed against the ones already there rather than guessed. The
+                  priority sits in its own column, right-aligned and tabular, so
+                  the numbers line up as a column of numbers rather than as the
+                  first word of each row. */}
               <ul className="route-join-targets">
                 {joining.siblings.map((sibling) => (
                   <li key={sibling.id}>
-                    <code>{sibling.priority}</code>
-                    <span>{deploymentNames.get(sibling.deployment_id) || sibling.deployment_id}</span>
-                    <small>{(sibling.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}{sibling.enabled ? "" : ` · ${t("common.disabled")}`}</small>
+                    <span className="route-join-priority">{sibling.priority}</span>
+                    <span className="route-join-target">{deploymentNames.get(sibling.deployment_id) || sibling.deployment_id}</span>
+                    <span className="route-join-meta">
+                      {(sibling.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}
+                      {sibling.enabled ? "" : ` · ${t("common.disabled")}`}
+                    </span>
                   </li>
                 ))}
               </ul>
-              {joining.duplicateDeployment && <span className="route-join-refusal">{t("routes.joinDuplicateDeployment")}</span>}
-              {joining.strategyConflict && <span className="route-join-refusal">{t("routes.joinStrategyConflict")}</span>}
-            </div>
+              {joining.duplicateDeployment && <p className="route-join-refusal">{t("routes.joinDuplicateDeployment")}</p>}
+              {joining.strategyConflict && <p className="route-join-refusal">{t("routes.joinStrategyConflict")}</p>}
+            </section>
           )}
           {mutation.isError && <ErrorState error={mutation.error} />}
           </div>

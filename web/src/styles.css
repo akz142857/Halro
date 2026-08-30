@@ -827,8 +827,8 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
    The offset badge sits inside the box, so an input showing one reserves the
    room; one that is empty or holds an unknown name keeps the full width to
    type in. */
-.timezone-field { position: relative; min-width: 0; }
-.timezone-field > label { display: block; margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.combobox-field { position: relative; min-width: 0; }
+.combobox-field > label { display: block; margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
 .combobox-shell { position: relative; min-width: 0; }
 .combobox-shell input { width: 100%; padding-right: var(--space-10); }
 .combobox-shell:has(> .timezone-offset) input { padding-right: 6.75rem; }
@@ -851,8 +851,8 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .combobox-options > button.active { box-shadow: inset 2px 0 var(--lime); }
 .combobox-options > button > span { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .combobox-options > button > small { flex: 0 0 auto; color: var(--muted); font: var(--font-size-xs) var(--mono); }
-.timezone-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
-.timezone-field > small.field-error { color: var(--danger); }
+.combobox-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.combobox-field > small.field-error { color: var(--danger); }
 .deployment-model-empty { padding: 14px 12px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 .deployment-model-declaration { margin-top: 0.4375rem; padding: 0.625rem 0.75rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; border-left: 0.125rem solid var(--line); }
 .deployment-model-degraded { margin-top: 0.4375rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
@@ -1085,11 +1085,14 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
 .route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
 .route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
-.route-join-notice { grid-column: 1 / -1; gap: var(--space-2); }
-.route-join-targets { display: flex; flex-direction: column; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
-.route-join-targets li { display: flex; align-items: baseline; gap: var(--space-2); }
-.route-join-targets code { min-width: 2.5em; color: var(--color-text-secondary); }
-.route-join-refusal { color: var(--color-status-warning-text); }
+.route-join { grid-column: 1 / -1; padding: var(--space-3) var(--space-4); background: var(--overlay-hover); border-radius: var(--radius-lg); }
+.route-join-lede { margin: 0 0 var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.route-join-targets { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.route-join-targets li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--space-3); }
+.route-join-priority { color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.route-join-target { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+.route-join-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.route-join-refusal { margin: var(--space-3) 0 0; padding-left: var(--space-3); color: var(--color-status-warning-text); border-left: 2px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
 .route-table th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }

@@ -425,6 +425,25 @@ describe("component styling reaches the markup", () => {
     expect(rule).toMatch(/align-content:\s*start/);
   });
 
+  // Extracting the combobox out of the timezone field moved the markup to a
+  // shared class and left the label and note rules on the old one. The alias
+  // field then rendered an unstyled label — full-size, near-black, no gap —
+  // beside every other field's small grey one. Nothing caught it: the class
+  // still had a rule (its positioning), just not these, and jsdom has no
+  // layout. Same shape as the drawer inset below.
+  it("styles the combobox's own label and note, not only its box", () => {
+    const styles = read("./styles.css");
+    const root = ruleBody(styles, ".combobox-field");
+    expect(root, ".combobox-field base rule not found").toBeDefined();
+    for (const selector of [".combobox-field > label", ".combobox-field > small"]) {
+      const rule = ruleBody(styles, selector);
+      expect(rule, `${selector} not found — a combobox needs its own label and note styling`).toBeDefined();
+      expect(rule).toMatch(/font-size:/);
+    }
+    // And the markup still asks for the class these hang off.
+    expect(read("./components.tsx")).toMatch(/combobox-field/);
+  });
+
   // Renaming the drawer's content wrapper left this rule pointing at the old
   // name, and the whole panel lost its inset: headings and facts ran into the
   // left edge while the header above them kept its own padding. Nothing else

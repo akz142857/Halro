@@ -198,7 +198,7 @@ describe("RoutesPage", () => {
     // The list is a suggestion, not a constraint: the first route on a new
     // alias has nothing to pick from.
     fireEvent.change(alias, { target: { value: "brand-new" } });
-    expect(screen.queryByText(/将加入已有别名/)).toBeNull();
+    expect(screen.queryByText(/加入别名/)).toBeNull();
     expect(screen.getByText(/没有匹配的已有别名/)).toBeVisible();
   });
 
@@ -219,8 +219,8 @@ describe("RoutesPage", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 新建模型路由" }));
     fireEvent.change(screen.getByRole("combobox", { name: "公共模型别名" }), { target: { value: "chat" } });
 
-    expect(await screen.findByText(/将加入已有别名“chat”，它当前有 2 个目标/)).toBeVisible();
-    const priorities = Array.from(document.querySelectorAll(".route-join-targets code"), (cell) => cell.textContent);
+    expect(await screen.findByText(/加入别名“chat”，它已有 2 个目标/)).toBeVisible();
+    const priorities = Array.from(document.querySelectorAll(".route-join-priority"), (cell) => cell.textContent);
     expect(priorities).toEqual(["8", "20"]);
   });
 
@@ -241,10 +241,10 @@ describe("RoutesPage", () => {
 
     // The deployment select defaults to the first enabled one, which is the one
     // the existing route already uses.
-    expect(await screen.findByText(/重复指向同一部署会被拒绝/)).toBeVisible();
+    expect(await screen.findByText(/已有目标指向这个部署/)).toBeVisible();
 
     fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
-    expect(screen.queryByText(/重复指向同一部署会被拒绝/)).toBeNull();
+    expect(screen.queryByText(/已有目标指向这个部署/)).toBeNull();
   });
 
   it("says before the save that a mixed strategy will be refused", async () => {
@@ -262,7 +262,7 @@ describe("RoutesPage", () => {
     fireEvent.change(screen.getByLabelText(/模型部署/), { target: { value: "deployment_azure" } });
 
     // The form defaults to ordered, and the alias is on round robin.
-    expect(await screen.findByText(/必须用同一个策略|保存会被拒绝/)).toBeVisible();
+    expect(await screen.findByText(/用的是另一种策略/)).toBeVisible();
   });
 
   // The confirmation counted enabled rows, and a withheld row is enabled and
