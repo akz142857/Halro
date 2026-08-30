@@ -70,7 +70,11 @@ type Runtime struct {
 	// activation records whether the live snapshots still reflect the store, so
 	// a durable mutation that failed to activate refuses traffic instead of
 	// being served from a snapshot known to be behind it.
-	activation           activationTracker
+	activation activationTracker
+	// routeWithheld is what the live registry refused. It answers a question
+	// the store cannot: a route is Enabled there whether or not it reached
+	// routing.
+	routeWithheld        routeWithholdingState
 	capabilityResolution capabilityResolutionRuntime
 	capabilityDetections capabilityDetectionRuntime
 	adminProjectMu       sync.Mutex
@@ -624,6 +628,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			rate:      adminRateState{windows: make(map[string]adminLoginWindow)},
 		},
 	}
+	// The start-up load never passes through the activation path, so without
+	// this the console would show every withheld route as Enabled until the
+	// first topology mutation happened to republish them.
+	runtime.publishRouteWithholdings(loaded)
 	if catalogManager != nil {
 		catalogManager.SetObserver(runtime.observeModelCatalogRefresh)
 		catalogManager.SetActivationPreparer(runtime.prepareModelCatalogActivation)

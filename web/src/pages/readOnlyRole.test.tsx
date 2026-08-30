@@ -159,7 +159,7 @@ describe("read-only role", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "provider_openai", name: "OpenAI" } as Provider], next_cursor: "" });
     renderAs("read_only", <RoutesPage />);
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     expect(row).not.toBeNull();
     expect(within(row!).getByRole("button", { name: "删除" })).toBeDisabled();
     expect(within(row!).getByRole("button", { name: /^编辑/ })).toBeDisabled();
@@ -264,7 +264,7 @@ describe("destructive step-up", () => {
       .mockResolvedValue(undefined as never);
     renderAs("administrator", <RoutesPage />);
 
-    const row = (await screen.findByText("chat")).closest("tr");
+    const row = (await screen.findByText("route_chat")).closest("tr");
     fireEvent.click(within(row!).getByRole("button", { name: "删除" }));
     const dialog = await screen.findByRole("alertdialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "删除" }));

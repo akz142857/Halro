@@ -750,6 +750,13 @@ export type DeploymentTargetKind =
   | "bedrock_provisioned_throughput"
   | "custom_endpoint_model";
 
+/** Why the live registry is not routing on a route the store has enabled. The
+ * reason is a class, never the underlying error. */
+export interface RouteWithholding {
+  kind: "reference" | "capability_drift";
+  reason: string;
+}
+
 export interface Route {
   id: string;
   public_model: string;
@@ -764,6 +771,10 @@ export interface Route {
   last_test_latency_millis?: number;
   last_test_error_class?: string;
   last_test_revision?: number;
+  /** Present only when the route is enabled and the live registry refused it.
+   * `enabled` alone cannot say this: it is what the operator asked for, not
+   * what the gateway is doing. */
+  withheld?: RouteWithholding;
   revision: number;
   created_at: string;
   updated_at: string;

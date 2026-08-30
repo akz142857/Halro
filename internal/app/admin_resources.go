@@ -196,19 +196,41 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 	})
 }
 
+// adminRouteView is the stored route plus whether the live registry is actually
+// routing on it. The Route is embedded, so the wire shape gains a field and
+// changes none — an update still sends back what it read.
+type adminRouteView struct {
+	domain.Route
+	// Absent when the route is routing, and when it is disabled: a disabled
+	// route is not withheld, it is switched off, and the console already says so.
+	Withheld *routeWithholding `json:"withheld,omitempty"`
+}
+
+func routeView(item domain.Route, withheld map[string]routeWithholding) adminRouteView {
+	view := adminRouteView{Route: item}
+	if !item.Enabled {
+		return view
+	}
+	if state, exists := withheld[item.ID]; exists {
+		view.Withheld = &state
+	}
+	return view
+}
+
 func (r *Runtime) listAdminRoutes(writer http.ResponseWriter, request *http.Request) {
 	items, err := r.store.ListRoutes(request.Context())
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	active := make([]domain.Route, 0, len(items))
+	withheld := r.routeWithholdings()
+	active := make([]adminRouteView, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
-			active = append(active, item)
+			active = append(active, routeView(item, withheld))
 		}
 	}
-	writeResourcePage(writer, request, active, func(item domain.Route) string { return item.ID })
+	writeResourcePage(writer, request, active, func(item adminRouteView) string { return item.ID })
 }
 
 func (r *Runtime) getAdminRoute(writer http.ResponseWriter, request *http.Request) {
@@ -218,7 +240,7 @@ func (r *Runtime) getAdminRoute(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
-	writeJSON(writer, http.StatusOK, item)
+	writeJSON(writer, http.StatusOK, routeView(item, r.routeWithholdings()))
 }
 
 func (r *Runtime) listAdminTokenGuardPolicies(writer http.ResponseWriter, request *http.Request) {

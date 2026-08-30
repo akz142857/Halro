@@ -827,32 +827,32 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
    The offset badge sits inside the box, so an input showing one reserves the
    room; one that is empty or holds an unknown name keeps the full width to
    type in. */
-.timezone-field { position: relative; min-width: 0; }
-.timezone-field > label { display: block; margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
-.timezone-input-shell { position: relative; min-width: 0; }
-.timezone-input-shell input { width: 100%; padding-right: var(--space-10); }
-.timezone-input-shell:has(> .timezone-offset) input { padding-right: 6.75rem; }
-.timezone-input-shell.open input { border-color: var(--color-focus-ring); box-shadow: var(--shadow-focus); }
+.combobox-field { position: relative; min-width: 0; }
+.combobox-field > label { display: block; margin-bottom: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-sm); font-weight: var(--font-weight-semibold); }
+.combobox-shell { position: relative; min-width: 0; }
+.combobox-shell input { width: 100%; padding-right: var(--space-10); }
+.combobox-shell:has(> .timezone-offset) input { padding-right: 6.75rem; }
+.combobox-shell.open input { border-color: var(--color-focus-ring); box-shadow: var(--shadow-focus); }
 .timezone-offset { position: absolute; top: 50%; right: 2.375rem; color: var(--muted); font: var(--font-size-xs) var(--mono); pointer-events: none; transform: translateY(-50%); }
-.timezone-input-icon { position: absolute; top: 50%; right: 15px; width: 11px; height: 11px; border: 1.5px solid var(--color-text-secondary); border-radius: 50%; pointer-events: none; transform: translateY(-58%); }
-.timezone-input-icon::after { content: ""; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.5px; background: var(--color-text-secondary); transform: rotate(45deg); transform-origin: left center; }
+.combobox-icon { position: absolute; top: 50%; right: 15px; width: 11px; height: 11px; border: 1.5px solid var(--color-text-secondary); border-radius: 50%; pointer-events: none; transform: translateY(-58%); }
+.combobox-icon::after { content: ""; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.5px; background: var(--color-text-secondary); transform: rotate(45deg); transform-origin: left center; }
 /* Position, width and height come from the component's measurement of the
    field; the stylesheet owns everything that does not depend on where the
    field happens to be. Above --z-modal because it is portalled to the body and
    has to clear the dialog it belongs to. */
-.timezone-options { position: fixed; z-index: var(--z-popover); display: grid; gap: var(--space-1); padding: var(--space-1); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--color-border-strong) var(--surface-deep); scrollbar-width: thin; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
-.timezone-options::-webkit-scrollbar { width: 8px; }
-.timezone-options::-webkit-scrollbar-track { background: var(--surface-overlay-solid); }
-.timezone-options::-webkit-scrollbar-thumb { background: var(--color-border-strong); border: 2px solid var(--surface-overlay-solid); border-radius: var(--radius-md); }
-.timezone-options-meta { padding: var(--space-2) var(--space-3); color: var(--muted); border-bottom: 1px solid var(--line); font-size: var(--font-size-xs); line-height: 1.45; }
-.timezone-options-empty { padding: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
-.timezone-options > button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: 2.125rem; padding: var(--space-2) var(--space-3); color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
-.timezone-options > button:hover, .timezone-options > button.active, .timezone-options > button[aria-selected="true"] { background: var(--overlay-hover); }
-.timezone-options > button.active { box-shadow: inset 2px 0 var(--lime); }
-.timezone-options > button > span { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.timezone-options > button > small { flex: 0 0 auto; color: var(--muted); font: var(--font-size-xs) var(--mono); }
-.timezone-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
-.timezone-field > small.field-error { color: var(--danger); }
+.combobox-options { position: fixed; z-index: var(--z-popover); display: grid; gap: var(--space-1); padding: var(--space-1); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--color-border-strong) var(--surface-deep); scrollbar-width: thin; background: var(--surface-overlay-solid); border: 1px solid var(--line-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-menu); }
+.combobox-options::-webkit-scrollbar { width: 8px; }
+.combobox-options::-webkit-scrollbar-track { background: var(--surface-overlay-solid); }
+.combobox-options::-webkit-scrollbar-thumb { background: var(--color-border-strong); border: 2px solid var(--surface-overlay-solid); border-radius: var(--radius-md); }
+.combobox-options-meta { padding: var(--space-2) var(--space-3); color: var(--muted); border-bottom: 1px solid var(--line); font-size: var(--font-size-xs); line-height: 1.45; }
+.combobox-options-empty { padding: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.combobox-options > button { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); width: 100%; min-height: 2.125rem; padding: var(--space-2) var(--space-3); color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm); text-align: left; }
+.combobox-options > button:hover, .combobox-options > button.active, .combobox-options > button[aria-selected="true"] { background: var(--overlay-hover); }
+.combobox-options > button.active { box-shadow: inset 2px 0 var(--lime); }
+.combobox-options > button > span { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.combobox-options > button > small { flex: 0 0 auto; color: var(--muted); font: var(--font-size-xs) var(--mono); }
+.combobox-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.combobox-field > small.field-error { color: var(--danger); }
 .deployment-model-empty { padding: 14px 12px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 .deployment-model-declaration { margin-top: 0.4375rem; padding: 0.625rem 0.75rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; border-left: 0.125rem solid var(--line); }
 .deployment-model-degraded { margin-top: 0.4375rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
@@ -1082,6 +1082,26 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
 .route-row-actions { width: 100%; min-width: 400px; align-items: center; }
 .route-row-actions > .inline-test-control, .route-row-actions > .inline-test-cell { margin-right: 18px; }
 .route-management-actions { margin-left: auto; justify-content: flex-end; }
+.route-target { display: grid; gap: var(--space-1); min-width: 0; }
+.route-target-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.route-target-name { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
+.route-target-meta { overflow: hidden; color: var(--color-text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
+.route-target-meta code { display: inline; }
+.route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
+.route-primary-tag::before { content: "["; }
+.route-primary-tag::after { content: "]"; }
+.route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
+.route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
+.route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.route-join { grid-column: 1 / -1; padding: var(--space-3) var(--space-4); background: var(--overlay-hover); border-radius: var(--radius-lg); }
+.route-join-lede { margin: 0 0 var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.route-join-targets { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
+.route-join-targets li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--space-3); }
+.route-join-priority { color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.route-join-target { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+.route-join-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.route-join-refusal { margin: var(--space-3) 0 0; padding-left: var(--space-3); color: var(--color-status-warning-text); border-left: 2px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
+.route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
 .route-table th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
