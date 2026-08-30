@@ -32,6 +32,45 @@ describe("RoutesPage", () => {
     expect(screen.queryByText("通过 · 42ms")?.closest(".notice")).toBeNull();
   });
 
+  // The status column read `enabled`, which is what the operator asked for
+  // rather than what the gateway is doing. A route the registry refused was
+  // shown as Enabled while it served nothing.
+  it("shows a withheld route as withheld rather than enabled, and says why", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+      withheld: { kind: "reference", reason: "deployment_unavailable" },
+    } as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr")!;
+    expect(within(row).getByText("已扣留")).toBeVisible();
+    expect(within(row).getByText("该路由指向的模型部署已停用或已删除。")).toBeVisible();
+    expect(within(row).queryByText("已启用")).not.toBeInTheDocument();
+  });
+
+  // A reason class this console has no copy for must still say the route is not
+  // routing; falling back to the raw class would be better than the old lie, and
+  // saying nothing would put the lie back.
+  it("still marks a route withheld for a reason it cannot name", async () => {
+    const route = {
+      id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",
+      priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "",
+      withheld: { kind: "reference", reason: "something_this_build_predates" },
+    } as unknown as Route;
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [route], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    renderPage();
+
+    const row = (await screen.findByText("chat")).closest("tr")!;
+    expect(within(row).getByText("已扣留")).toBeVisible();
+    expect(within(row).getByText(/原因未知/)).toBeVisible();
+  });
+
   it("restores a persisted route test result after loading the list", async () => {
     const route = {
       id: "route_chat", public_model: "chat", deployment_id: "deployment_gpt",

@@ -406,24 +406,42 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
     queryKey: ["routes"],
     queryFn: api.routes,
   });
+  // The alias picker describes what an alias can fall back to, and an enabled
+  // route whose deployment is switched off or failing its probe is not a
+  // candidate the gateway would ever reach.
+  const availableDeployments = useQuery({
+    queryKey: ["deployments"],
+    queryFn: api.deployments,
+  });
   const routeOptions = useMemo(() => {
     const retained = new Set(current?.allowed_models ?? []);
-    const options = new Map<string, { enabledCount: number; strategies: Set<string> }>();
-    retained.forEach((value) => options.set(value, { enabledCount: 0, strategies: new Set() }));
+    const deploymentByID = new Map(availableDeployments.data?.items.map((item) => [item.id, item]) ?? []);
+    const options = new Map<string, { enabledCount: number; targetCount: number; strategies: Set<string> }>();
+    retained.forEach((value) => options.set(value, { enabledCount: 0, targetCount: 0, strategies: new Set() }));
     availableRoutes.data?.items.forEach((route) => {
-      const existing = options.get(route.public_model) ?? { enabledCount: 0, strategies: new Set<string>() };
+      const existing = options.get(route.public_model)
+        ?? { enabledCount: 0, targetCount: 0, strategies: new Set<string>() };
       // Both readings come from the enabled routes only. Counting the strategy
       // of a disabled route made a retired row with a different strategy hide
       // the label entirely, beside a count that had already ignored that row.
       if (!route.enabled) return;
       existing.enabledCount += 1;
-      existing.strategies.add(route.strategy || "ordered");
+      // The effective candidate count, not the enabled-route count. The gateway
+      // drops a candidate whose deployment is disabled and one whose probe has
+      // actually failed — `not_probed` still routes, so it still counts here.
+      // Counting enabled routes instead would print "3 targets" for an alias
+      // whose probes left it one.
+      const deployment = deploymentByID.get(route.deployment_id);
+      if (deployment?.enabled && deployment.probe?.state !== "unhealthy") {
+        existing.targetCount += 1;
+        existing.strategies.add(route.strategy || "ordered");
+      }
       options.set(route.public_model, existing);
     });
     return Array.from(options, ([value, state]) => ({ value, ...state }))
       .filter((option) => option.enabledCount > 0 || retained.has(option.value))
       .sort((a, b) => a.value.localeCompare(b.value));
-  }, [availableRoutes.data, current?.allowed_models]);
+  }, [availableRoutes.data, availableDeployments.data, current?.allowed_models]);
   const {
     register,
     handleSubmit,
@@ -505,15 +523,29 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
                 <span className="model-picker-selection-count">{t("projects.selectedAliases", { count: selectedRouteAliases.length })}</span>
               </div>
               <p id="project-model-help">{t("projects.aliasesHint")}</p>
-              {availableRoutes.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="route-alias-picker">
+              {availableRoutes.isPending || availableDeployments.isPending ? <Loading label={t("projects.loadingModels")} /> : routeOptions.length ? <div className="route-alias-picker">
                 <div className="model-option-grid">
                   {routeOptions.map((route) => {
                     const strategy = route.strategies.size === 1 ? Array.from(route.strategies)[0] : "";
+                    // The strategy names a rule for choosing among candidates,
+                    // so it is only said where there is a choice. Printing it
+                    // beside a single target promised a fallback that does not
+                    // exist — the misleading label this replaces.
+                    const failover = route.targetCount > 1 && strategy
+                      ? ` · ${strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`
+                      : "";
+                    const summary = route.enabledCount === 0
+                      ? t("projects.unavailableAlias")
+                      : route.targetCount === 0
+                        ? t("projects.noEffectiveTarget")
+                        : route.targetCount === 1
+                          ? t("projects.singleTarget")
+                          : t("projects.targetCount", { count: route.targetCount });
                     return <label className="model-option" key={route.value}>
                       <input type="checkbox" value={route.value} {...register("routes")} />
                       <span>
                         <strong>{route.value}</strong>
-                        <small className={route.enabledCount ? undefined : "unavailable"}>{route.enabledCount ? t("projects.enabledRouteCount", { count: route.enabledCount }) : t("projects.unavailableAlias")}{strategy && ` · ${strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`}</small>
+                        <small className={route.targetCount ? undefined : "unavailable"}>{summary}{failover}</small>
                       </span>
                     </label>;
                   })}

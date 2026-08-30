@@ -22,6 +22,10 @@ function project(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function deployment(id: string, overrides: Record<string, unknown> = {}) {
+  return { id, name: id, provider_id: "prv_1", provider_model: "gpt-test", enabled: true, revision: 1, ...overrides };
+}
+
 function gatewayKey(overrides: Record<string, unknown> = {}) {
   return {
     id: "key_1", project_id: "prj_1", name: "service-a", enabled: true,
@@ -40,7 +44,9 @@ describe("projects page", () => {
     vi.spyOn(api, "projectsPage").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "keysPage").mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
-    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    // The alias picker counts effective candidates, so it reads the deployments
+    // an enabled route names as well as the routes themselves.
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.spyOn(api, "tokenGuardPolicies").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "redactionPolicies").mockResolvedValue({ items: [redactionPolicy], next_cursor: "" } as never);
     vi.spyOn(api, "tokenGuardPoliciesPage").mockResolvedValue({ items: [tokenGuardPolicy], next_cursor: "" } as never);
@@ -67,10 +73,13 @@ describe("projects page", () => {
 
   it("authorizes one public model alias instead of exposing each candidate route", async () => {
     vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
-      { id: "rt_openai", public_model: "chat", strategy: "ordered", enabled: true },
-      { id: "rt_azure", public_model: "chat", strategy: "ordered", enabled: true },
-      { id: "rt_disabled", public_model: "chat", strategy: "ordered", enabled: false },
-      { id: "rt_embed", public_model: "embedding", strategy: "round_robin", enabled: true },
+      { id: "rt_openai", public_model: "chat", deployment_id: "dep_openai", strategy: "ordered", enabled: true },
+      { id: "rt_azure", public_model: "chat", deployment_id: "dep_azure", strategy: "ordered", enabled: true },
+      { id: "rt_disabled", public_model: "chat", deployment_id: "dep_retired", strategy: "ordered", enabled: false },
+      { id: "rt_embed", public_model: "embedding", deployment_id: "dep_embed", strategy: "round_robin", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_openai"), deployment("dep_azure"), deployment("dep_retired"), deployment("dep_embed"),
     ] } as never);
 
     renderPage();
@@ -79,7 +88,7 @@ describe("projects page", () => {
     expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
     expect(screen.queryByRole("searchbox", { name: "搜索模型别名或路由 ID" })).not.toBeInTheDocument();
     expect(await screen.findAllByRole("checkbox", { name: /chat/ })).toHaveLength(1);
-    expect(screen.getByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 条已启用路由/);
+    expect(screen.getByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标/);
     expect(screen.queryByRole("checkbox", { name: /rt_openai/ })).not.toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /embedding/ })).toBeVisible();
   });
@@ -89,16 +98,91 @@ describe("projects page", () => {
   // describing the routes that actually serve the alias.
   it("describes the alias by its enabled routes alone", async () => {
     vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
-      { id: "rt_live", public_model: "chat", strategy: "round_robin", enabled: true },
-      { id: "rt_live_two", public_model: "chat", strategy: "round_robin", enabled: true },
-      { id: "rt_retired", public_model: "chat", strategy: "ordered", enabled: false },
+      { id: "rt_live", public_model: "chat", deployment_id: "dep_live", strategy: "round_robin", enabled: true },
+      { id: "rt_live_two", public_model: "chat", deployment_id: "dep_live_two", strategy: "round_robin", enabled: true },
+      { id: "rt_retired", public_model: "chat", deployment_id: "dep_retired", strategy: "ordered", enabled: false },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_live"), deployment("dep_live_two"), deployment("dep_retired"),
     ] } as never);
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
 
     expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
-    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 条已启用路由 · 轮询/);
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标 · 轮询/);
+  });
+
+  // The label said "1 enabled route · ordered failover" for an alias with one
+  // target, which named a fallback rule where there is nothing to fall back to.
+  it("says a single-target alias has no failover, and names no strategy", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_only", public_model: "chat", deployment_id: "dep_only", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [deployment("dep_only")] } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    const alias = await screen.findByRole("checkbox", { name: /chat/ });
+    expect(alias).toHaveAccessibleName(/单一目标 · 无回退/);
+    expect(alias).not.toHaveAccessibleName(/顺序回退/);
+  });
+
+  // The count is of candidates the gateway would reach, not of enabled routes:
+  // it drops a candidate whose deployment is off and one whose probe failed, so
+  // counting rows would promise two targets where the engine has one.
+  it("counts effective candidates rather than enabled routes", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_serving", public_model: "chat", deployment_id: "dep_serving", strategy: "ordered", enabled: true },
+      { id: "rt_probe_failed", public_model: "chat", deployment_id: "dep_unhealthy", strategy: "ordered", enabled: true },
+      { id: "rt_switched_off", public_model: "chat", deployment_id: "dep_off", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_serving"),
+      deployment("dep_unhealthy", { probe: { state: "unhealthy" } }),
+      deployment("dep_off", { enabled: false }),
+    ] } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/单一目标 · 无回退/);
+  });
+
+  // `not_probed` is not a failed probe: the gateway routes to a deployment no
+  // probe has answered for yet, so the picker has to count it too.
+  it("counts a candidate no probe has answered for yet", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_probed", public_model: "chat", deployment_id: "dep_probed", strategy: "ordered", enabled: true },
+      { id: "rt_unprobed", public_model: "chat", deployment_id: "dep_unprobed", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_probed", { probe: { state: "healthy" } }),
+      deployment("dep_unprobed", { probe: { state: "not_probed" } }),
+    ] } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标 · 顺序回退/);
+  });
+
+  // An alias whose every enabled route points at something unusable is not
+  // "no enabled routes" — the routes are there, and saying so sends the
+  // operator to the wrong page.
+  it("separates an alias with no usable target from one with no enabled route", async () => {
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_off", public_model: "chat", deployment_id: "dep_off", strategy: "ordered", enabled: true },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [
+      deployment("dep_off", { enabled: false }),
+    ] } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
+
+    expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/没有可用目标/);
   });
 
   it("places project enablement in the footer action area", async () => {

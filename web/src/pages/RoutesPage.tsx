@@ -140,9 +140,27 @@ export function RoutesPage() {
                     <td><span className="badge">{(route.strategy || "ordered") === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}</span></td>
                     <td>{route.priority}</td>
                     <td>
-                      <span className={`resource-state ${route.enabled ? "enabled" : ""}`}>
-                        {route.enabled ? t("common.enabled") : t("common.disabled")}
-                      </span>
+                      {/* Enabled is what the operator asked for; it used to be
+                          the only thing this column could say. A route the
+                          registry refused is up and serving nothing, and until
+                          the server started reporting it, only the log knew. */}
+                      {route.enabled && route.withheld ? (
+                        <div className="route-withheld-cell">
+                          <span className="badge warning">{t("routes.withheld")}</span>
+                          {/* The reason is shown rather than hidden in a
+                              tooltip: which of them it is decides whether the
+                              repair is on the deployment, the connection or
+                              this route. */}
+                          <small className="resource-state">{t(
+                            `routes.withheldReasons.${route.withheld.kind === "capability_drift" ? "capability_drift" : route.withheld.reason}`,
+                            { defaultValue: t("routes.withheldReasons.unknown") },
+                          )}</small>
+                        </div>
+                      ) : (
+                        <span className={`resource-state ${route.enabled ? "enabled" : ""}`}>
+                          {route.enabled ? t("common.enabled") : t("common.disabled")}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <div className="row-actions route-row-actions">
