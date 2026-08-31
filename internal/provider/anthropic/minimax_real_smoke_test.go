@@ -26,19 +26,22 @@ import (
 // all three faces. If it is wrong, the credential scheme splits and the three
 // profiles stop sharing one connection group.
 func TestRealMiniMaxAnthropicRouteSmoke(t *testing.T) {
-	apiKey := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_API_KEY"))
-	if apiKey == "" {
-		t.Skip("set HALRO_MINIMAX_API_KEY to run the billable MiniMax Anthropic-route smoke")
+	if os.Getenv("HALRO_REAL_PROVIDER_SMOKE") != "1" || os.Getenv("HALRO_SMOKE_PROFILE") != "minimax_anthropic" {
+		t.Skip("set HALRO_REAL_PROVIDER_SMOKE=1 and HALRO_SMOKE_PROFILE=minimax_anthropic to run the billable MiniMax Anthropic-route smoke")
 	}
-	rawEndpoint := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_BASE_URL"))
+	apiKey := strings.TrimSpace(os.Getenv("HALRO_SMOKE_API_KEY"))
+	if apiKey == "" {
+		t.Skip("HALRO_SMOKE_API_KEY is required")
+	}
+	rawEndpoint := strings.TrimSpace(os.Getenv("HALRO_SMOKE_BASE_URL"))
 	if rawEndpoint == "" {
 		rawEndpoint = "https://api.minimax.io"
 	}
 	endpoint, err := url.Parse(rawEndpoint)
 	if err != nil {
-		t.Fatalf("HALRO_MINIMAX_BASE_URL is not a URL: %v", err)
+		t.Fatalf("HALRO_SMOKE_BASE_URL is not a URL: %v", err)
 	}
-	model := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_MODEL"))
+	model := strings.TrimSpace(os.Getenv("HALRO_SMOKE_MODEL"))
 	if model == "" {
 		model = "MiniMax-M3"
 	}

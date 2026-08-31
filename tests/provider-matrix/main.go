@@ -30,7 +30,17 @@ type profile struct {
 	// the GA ones: they live in their own adapter package and take settings the
 	// GA smoke has no concept of, such as which wire protocol and which Bedrock
 	// Project the run addresses.
-	Package  string
+	Package string
+	// Test names the smoke to run when it is not the package's
+	// TestRealProviderSmoke. It exists for the same reason Package does: a
+	// platform whose smoke does not sit where the convention puts it should say
+	// so here rather than have the runner guess.
+	//
+	// MiniMax is the case. It serves three wire shapes from two adapter packages
+	// that each already have a TestRealProviderSmoke of their own, built around a
+	// different set of assertions, so folding MiniMax into them would make one
+	// function serve two unrelated purposes.
+	Test     string
 	Optional []string
 }
 
@@ -46,6 +56,27 @@ var betaProfiles = []profile{
 		Name: "bedrock_mantle", Prefix: "BEDROCK_MANTLE", Package: "./internal/provider/bedrockmantle",
 		Required: []string{"BASE_URL", "API_KEY", "MODEL", "MANTLE_PROFILE"},
 		Optional: []string{"BEDROCK_PROJECT_ID"},
+	},
+	// MiniMax is two rows on one credential, because one connection serves three
+	// wire shapes and the OpenAI-shaped two live in a different adapter package
+	// from the Anthropic one. They share a prefix so an operator configures one
+	// account, and they are separate rows because each is one package's run.
+	//
+	// The region is an axis here in a way it is not for any other profile: the
+	// same contract is served from api.minimax.io and api.minimaxi.com on keys
+	// that are not interchangeable, and Halro serves both from one profile group.
+	// A run therefore covers one region, and the other stays not measured — BASE_URL
+	// is what says which.
+	{
+		Name: "minimax", Prefix: "MINIMAX", Package: "./internal/provider/openai",
+		Test:     "TestRealMiniMaxSmoke",
+		Required: []string{"BASE_URL", "API_KEY", "MODEL"},
+		Optional: []string{"M2_MODEL"},
+	},
+	{
+		Name: "minimax_anthropic", Prefix: "MINIMAX", Package: "./internal/provider/anthropic",
+		Test:     "TestRealMiniMaxAnthropicRouteSmoke",
+		Required: []string{"BASE_URL", "API_KEY", "MODEL"},
 	},
 }
 
@@ -170,7 +201,11 @@ func executeProfile(item profile, timeout time.Duration) result {
 	if pkg == "" {
 		pkg = "./internal/provider/openai"
 	}
-	command := exec.CommandContext(ctx, "go", "test", pkg, "-run", "^TestRealProviderSmoke$", "-count=1", "-v")
+	test := item.Test
+	if test == "" {
+		test = "TestRealProviderSmoke"
+	}
+	command := exec.CommandContext(ctx, "go", "test", pkg, "-run", "^"+test+"$", "-count=1", "-v")
 	command.Env = smokeEnvironment(item, values)
 	started := time.Now()
 	output, err := command.CombinedOutput()
@@ -218,6 +253,14 @@ func profileValues(item profile) (map[string]string, []string) {
 // model entitlements. Region comes from the endpoint host, which is the only
 // place it exists on this surface.
 func describeCell(current *result, item profile, values map[string]string) {
+	if strings.HasPrefix(item.Name, "minimax") {
+		// Which of MiniMax's two regional hosts this run covered. A pass on one is
+		// not evidence for the other: the keys are not interchangeable and nothing
+		// with a credential attached has been compared across them.
+		current.Region = minimaxRegion(values["BASE_URL"])
+		current.Authentication = "bearer_static"
+		return
+	}
 	if item.Name != "bedrock_mantle" {
 		return
 	}
@@ -272,12 +315,27 @@ func smokeEnvironment(item profile, values map[string]string) []string {
 		"HALRO_SMOKE_API_KEY="+values["API_KEY"],
 		"HALRO_SMOKE_MODEL="+values["MODEL"],
 	)
-	for _, suffix := range []string{"EMBEDDING_MODEL", "API_VERSION", "MANTLE_PROFILE", "BEDROCK_PROJECT_ID"} {
+	for _, suffix := range []string{"EMBEDDING_MODEL", "API_VERSION", "MANTLE_PROFILE", "BEDROCK_PROJECT_ID", "M2_MODEL"} {
 		if value := values[suffix]; value != "" {
 			environment = append(environment, "HALRO_SMOKE_"+suffix+"="+value)
 		}
 	}
 	return environment
+}
+
+// minimaxRegion names the account region a base URL addresses. The two hosts
+// differ by one letter, which is exactly why the evidence should not leave it to
+// a reader to spot.
+func minimaxRegion(baseURL string) string {
+	host := strings.ToLower(baseURL)
+	switch {
+	case strings.Contains(host, "api.minimaxi.com"):
+		return "mainland"
+	case strings.Contains(host, "api.minimax.io"):
+		return "international"
+	default:
+		return "unrecognised"
+	}
 }
 
 func scrubOutput(output string, values map[string]string) string {

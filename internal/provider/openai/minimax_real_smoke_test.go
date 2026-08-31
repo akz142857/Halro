@@ -31,19 +31,28 @@ import (
 // and docs/prd/minimax-adaptation-plan.zh-CN.md §7 for the assumptions the
 // implementation rests on.
 func TestRealMiniMaxSmoke(t *testing.T) {
-	apiKey := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_API_KEY"))
-	if apiKey == "" {
-		t.Skip("set HALRO_MINIMAX_API_KEY to run the billable MiniMax smoke")
+	// The same environment every other profile's smoke reads. It was
+	// HALRO_MINIMAX_* until this was wired into the matrix runner, which
+	// translates HALRO_MATRIX_<PREFIX>_<SUFFIX> into HALRO_SMOKE_<SUFFIX> — so a
+	// private naming scheme meant the runner would set variables this test could
+	// not see, which is the two-lists-that-cannot-see-each-other shape this
+	// adaptation has already been bitten by twice.
+	if os.Getenv("HALRO_REAL_PROVIDER_SMOKE") != "1" || os.Getenv("HALRO_SMOKE_PROFILE") != "minimax" {
+		t.Skip("set HALRO_REAL_PROVIDER_SMOKE=1 and HALRO_SMOKE_PROFILE=minimax to run the billable MiniMax smoke")
 	}
-	rawEndpoint := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_BASE_URL"))
+	apiKey := strings.TrimSpace(os.Getenv("HALRO_SMOKE_API_KEY"))
+	if apiKey == "" {
+		t.Skip("HALRO_SMOKE_API_KEY is required")
+	}
+	rawEndpoint := strings.TrimSpace(os.Getenv("HALRO_SMOKE_BASE_URL"))
 	if rawEndpoint == "" {
 		rawEndpoint = "https://api.minimax.io"
 	}
 	endpoint, err := url.Parse(rawEndpoint)
 	if err != nil {
-		t.Fatalf("HALRO_MINIMAX_BASE_URL is not a URL: %v", err)
+		t.Fatalf("HALRO_SMOKE_BASE_URL is not a URL: %v", err)
 	}
-	model := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_MODEL"))
+	model := strings.TrimSpace(os.Getenv("HALRO_SMOKE_MODEL"))
 	if model == "" {
 		model = "MiniMax-M3"
 	}
@@ -254,7 +263,7 @@ func TestRealMiniMaxSmoke(t *testing.T) {
 	// to switch thinking off, and Halro sends the disabled switch on every request
 	// that did not ask to think. If M2.x refuses it, every M2.x request fails.
 	t.Run("M2.x accepts or refuses a disabled thinking switch", func(t *testing.T) {
-		m2 := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_M2_MODEL"))
+		m2 := strings.TrimSpace(os.Getenv("HALRO_SMOKE_M2_MODEL"))
 		if m2 == "" {
 			m2 = "MiniMax-M2.7"
 		}
