@@ -304,21 +304,15 @@ func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target dom
 //
 // Chat and streaming have no flag, because the Models API describes the models
 // of the Messages API — a target it enumerates is a Messages target by
-// construction, and that holds only while the list is an Anthropic model list.
-// It is enforced below rather than assumed: a host answering the OpenAI-shaped
-// catalogue is enumerated by this adapter too, and its entries carry an
-// identifier and an owner. Claiming chat from one of those would be a capability
-// derived from an identifier, which is a guess wearing evidence.
-//
-// The guard is on the catalogue shape and not on the provider type, though the
-// premise is thinner than that everywhere it does not hold. Bedrock Mantle's
-// Anthropic profile reaches this method for hand-entered targets it never
-// enumerated, so what it claims rests on the operator having typed the model
-// into an Anthropic-route form — an operator declaration wearing a
-// provider_metadata source. That is worth correcting and is not corrected here:
-// only one catalog entry covers that profile, so removing the claim would move
-// every other Mantle model from resolved to unknown, and nothing measured in
-// this change says anything about Mantle. They are claimed from that fact rather than from an
+// construction. That premise is about where the target came from, and this
+// method cannot see it — every field it reads looks the same on a model the
+// upstream listed and on one somebody typed. It is the caller that knows, and
+// the caller checks: resolveInvocationTargetWithCatalog passes only a descriptor
+// carrying MetadataSourceProvider, which is the sole call site of this
+// interface. Unlike the Gemini and Bedrock mappers, which build every claim out
+// of a field the provider populated, this one claims from the absence of a
+// field — so with that check removed it would credit any identifier at all with
+// chat. They are claimed from that fact rather than from an
 // absent field, and they have to be: dependencyClosure drops vision,
 // structured_outputs and reasoning from any target that does not also claim
 // chat.
@@ -339,9 +333,6 @@ func (adapter *Adapter) MapCapabilityClaims(target domain.InvocationTargetDescri
 			Source: domain.ClaimSourceProviderMetadata, Scope: scope, ObservedAt: observedAt,
 			Revision: provider.CapabilityClaimRevision(string(domain.ClaimSourceProviderMetadata), target.TargetID, evidenceKey),
 		}
-	}
-	if adapter.catalogShape == CatalogOpenAI {
-		return nil
 	}
 	claims := []domain.CapabilityClaim{claim("chat", "messages"), claim("streaming", "messages")}
 	for _, capability := range target.Metadata.SupportedOperations {

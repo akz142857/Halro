@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
+	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
 )
 
 // Halro's model catalog was seeded so an operator would not have to type an
@@ -203,4 +206,123 @@ func TestOffersFollowARefreshedCatalogRatherThanTheBuild(t *testing.T) {
 	results := runtime.fetchInvocationTargetCatalogs(context.Background(), instance, instance.Bindings, catalogAlwaysDial, catalog)
 	listed := aggregateInvocationTargetsWithCatalog(instance, results, testResolutionInstant, catalog)
 	findTarget(t, listed, "MiniMax-M9-unreleased")
+}
+
+// realAnthropicMapper builds the adapter whose mapper is the one that needs the
+// gate. A fake would only restate the gate's own rule; this is the code that
+// ships, and its chat claim comes from the endpoint rather than from any field
+// on the target — so it answers for every identifier put in front of it.
+func realAnthropicMapper(t *testing.T, providerType domain.ProviderType, profile domain.ProviderProfileID, messagesPath string) provider.ProviderMetadataMapper {
+	t.Helper()
+	endpoint, _ := url.Parse("https://provider.example.com")
+	scheme := domain.CredentialAnthropicAPIKey
+	if providerType == domain.ProviderBedrock {
+		scheme = domain.CredentialBedrockAPIKey
+	}
+	authorizer, err := provider.NewStaticHeaderAuthorizer(scheme, "x-api-key", "", []byte("key"), "Authorization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, err := anthropicprovider.New(anthropicprovider.Options{
+		Endpoint: endpoint, Authorizer: authorizer, Client: &http.Client{},
+		ProviderType: string(providerType), CredentialScheme: scheme,
+		MessagesPath: messagesPath, ProfileID: profile,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(adapter.Close)
+	return adapter
+}
+
+func resolveOneTarget(t *testing.T, providerType domain.ProviderType, profile domain.ProviderProfileID, messagesPath string, target domain.InvocationTargetDescriptor) adminInvocationTarget {
+	t.Helper()
+	binding := testBinding("binding", providerType, profile)
+	instance := domain.ProviderInstance{
+		ID: "provider", Type: providerType, Revision: 1,
+		Bindings: []domain.ProviderProfileBinding{binding},
+	}
+	return resolveInvocationTargetWithCatalog(instance, target,
+		map[string]domain.InvocationTargetDescriptor{binding.ID: target},
+		[]domain.ProviderProfileBinding{binding},
+		map[string]provider.ProviderMetadataMapper{binding.ID: realAnthropicMapper(t, providerType, profile, messagesPath)},
+		0, testResolutionInstant, modelcatalog.Builtin())
+}
+
+func handEnteredTarget(model string) domain.InvocationTargetDescriptor {
+	// The descriptor resolveDeploymentVariant builds when an operator types an
+	// identifier instead of choosing one: a real fetch time, and a metadata
+	// source saying plainly that no upstream described it.
+	return domain.InvocationTargetDescriptor{
+		TargetID: model, TargetKind: domain.TargetModelID, DisplayName: model,
+		Lifecycle: domain.TargetLifecycleUnknown, MetadataSource: domain.MetadataSourceNone,
+		Availability: domain.AvailabilityUnverified, FetchedAt: testResolutionInstant.Add(-time.Minute),
+	}
+}
+
+// A provider_metadata claim asserts the upstream said something. The Anthropic
+// mapper claims chat and streaming from the endpoint rather than from a field,
+// which is right for a model that endpoint listed and is a fabrication for one
+// nobody listed — and the mapper cannot tell the two apart, because every field
+// it reads looks identical. Only the caller knows, so the caller checks.
+//
+// Measured before the gate: an invented identifier, typed by hand and served by
+// no one, resolved as a working chat deployment. Both profiles that reach this
+// mapper did it — Bedrock Mantle's Anthropic face, where only one catalog entry
+// covers anything, and the direct Anthropic profile, which enumerates and is
+// still handed unlisted identifiers by the deployment form.
+func TestAMapperSeesOnlyTargetsAnUpstreamEnumerated(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		providerType domain.ProviderType
+		profile      domain.ProviderProfileID
+		messagesPath string
+	}{
+		{"bedrock mantle anthropic", domain.ProviderBedrock, domain.ProfileBedrockMantleAnthropicMessages, "anthropic/v1/messages"},
+		{"direct anthropic", domain.ProviderAnthropic, domain.ProfileAnthropicMessages, ""},
+		{"minimax anthropic", domain.ProviderMiniMax, domain.ProfileMiniMaxAnthropicMessages, "anthropic/v1/messages"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invented := resolveOneTarget(t, tc.providerType, tc.profile, tc.messagesPath, handEnteredTarget("model-nobody-serves-9"))
+			if len(invented.Variants) != 0 {
+				t.Errorf("an identifier no upstream listed produced %d deployable variants with capabilities %+v",
+					len(invented.Variants), invented.Variants[0].Capabilities)
+			}
+			if invented.ResolutionState != domain.ResolutionUnknown {
+				t.Errorf("resolution is %q; an unlisted, uncatalogued identifier is exactly what unknown is for — "+
+					"it routes the operator to declare or detect", invented.ResolutionState)
+			}
+		})
+	}
+}
+
+// And the mapper still answers for the target it is meant to answer for. Without
+// this, gating on MetadataSourceProvider could gate everything and the only
+// symptom would be capabilities quietly going missing.
+func TestAnEnumeratedTargetStillEarnsItsProviderClaims(t *testing.T) {
+	enumerated := handEnteredTarget("claude-sonnet-4-5")
+	enumerated.MetadataSource = domain.MetadataSourceProvider
+	enumerated.Availability = domain.AvailabilityAvailable
+	resolved := resolveOneTarget(t, domain.ProviderAnthropic, domain.ProfileAnthropicMessages, "", enumerated)
+	if len(resolved.Variants) != 1 {
+		t.Fatalf("a model Anthropic itself listed produced %d variants", len(resolved.Variants))
+	}
+	if !resolved.Variants[0].Capabilities.Chat || !resolved.Variants[0].Capabilities.Streaming {
+		t.Fatalf("an enumerated Anthropic model lost chat or streaming: %+v", resolved.Variants[0].Capabilities)
+	}
+}
+
+// A model the catalog covers keeps working when it is typed rather than chosen.
+// This is what the change is allowed to cost and what it is not: capabilities
+// stop being invented, and the ones Halro actually reviewed still apply.
+func TestACatalogCoveredModelStillResolvesWhenTyped(t *testing.T) {
+	resolved := resolveOneTarget(t, domain.ProviderBedrock, domain.ProfileBedrockMantleAnthropicMessages,
+		"anthropic/v1/messages", handEnteredTarget("anthropic.claude-haiku-4-5"))
+	if resolved.ResolutionState != domain.ResolutionResolved || len(resolved.Variants) != 1 {
+		t.Fatalf("a catalog-covered Mantle model stopped resolving: state=%q variants=%d",
+			resolved.ResolutionState, len(resolved.Variants))
+	}
+	if !resolved.Variants[0].Capabilities.Chat {
+		t.Fatalf("the catalog's own capabilities were dropped: %+v", resolved.Variants[0].Capabilities)
+	}
 }

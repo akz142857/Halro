@@ -163,7 +163,9 @@ func TestBindingConflictDoesNotDeleteAnotherValidVariant(t *testing.T) {
 	instance := domain.ProviderInstance{ID: "provider", Type: domain.ProviderOpenAI, Revision: 1}
 	first := testBinding("conflicting", domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings)
 	second := testBinding("valid", domain.ProviderOpenAI, domain.ProfileOpenAIChatEmbeddings)
-	target := domain.InvocationTargetDescriptor{TargetID: "gpt-4o", TargetKind: domain.TargetModelID, CanonicalModelRef: "gpt-4o", Availability: domain.AvailabilityAvailable}
+	// Provider-sourced, because the conflict under test is a provider-metadata
+	// conflict and a metadata mapper only sees a target the upstream described.
+	target := domain.InvocationTargetDescriptor{TargetID: "gpt-4o", TargetKind: domain.TargetModelID, CanonicalModelRef: "gpt-4o", Availability: domain.AvailabilityAvailable, MetadataSource: domain.MetadataSourceProvider}
 	item := findTarget(t, aggregateInvocationTargets(instance, []bindingTargetCatalog{
 		targetResult(first, staticMetadataMapper{claims: map[string]domain.ClaimStatus{"chat": domain.ClaimUnsupported}}, target),
 		targetResult(second, nil, target),

@@ -152,29 +152,6 @@ func TestMiniMaxEnumeratesFromTheOpenAIShapedCatalogue(t *testing.T) {
 	}
 }
 
-// The half of the old reasoning that was right, kept as a guard. Enumeration
-// says who exists; it must not say what they do. The Anthropic mapper claims
-// chat and streaming from the fact that an Anthropic Models list describes
-// Messages models, and this is not an Anthropic Models list.
-//
-// The consequence is the safe one for the case the account measured did not
-// show: were an account to list a speech model, it would arrive as a target with
-// no capability evidence — selectable, and not deployable as chat until someone
-// declares that it is.
-func TestMiniMaxTargetsCarryNoProviderMetadataClaims(t *testing.T) {
-	adapter := newMiniMaxCatalogAdapter(t, func(*http.Request) (*http.Response, error) {
-		return jsonReply(http.StatusOK, minimaxRealModelCatalog), nil
-	})
-	scope := domain.InvocationTargetScopeKey{
-		ProviderID: "provider", TargetKind: domain.TargetModelID, TargetID: "MiniMax-M3",
-		BindingID: "binding", ProfileID: domain.ProfileMiniMaxAnthropicMessages,
-	}
-	target := domain.InvocationTargetDescriptor{TargetID: "MiniMax-M3", TargetKind: domain.TargetModelID}
-	if claims := adapter.MapCapabilityClaims(target, scope, testInstant()); len(claims) != 0 {
-		t.Fatalf("an identifier from an OpenAI-shaped list produced %d capability claims: %#v", len(claims), claims)
-	}
-}
-
 // The mapper still answers for the surface its premise holds on. Without this,
 // silencing it for MiniMax could silence it everywhere and nothing would say so.
 func TestDirectAnthropicStillClaimsChatFromItsOwnCatalogue(t *testing.T) {
@@ -202,11 +179,12 @@ func TestDirectAnthropicStillClaimsChatFromItsOwnCatalogue(t *testing.T) {
 	}
 }
 
-// Bedrock Mantle's Anthropic profile reaches the same mapper and is deliberately
-// untouched: nothing measured here says anything about Mantle, and only one
-// catalog entry covers that profile, so silencing the mapper there would move
-// every other Mantle model from resolved to unknown.
-func TestBedrockMantleAnthropicKeepsItsClaims(t *testing.T) {
+// Bedrock Mantle's Anthropic profile reaches the same mapper, and the mapper
+// answers it the same way. Nothing here is provider-specific: what decides
+// whether these claims are earned is where the target came from, and only the
+// caller knows that. TestAMapperSeesOnlyTargetsAnUpstreamEnumerated in
+// internal/app is where that is held.
+func TestBedrockMantleAnthropicReachesTheSameMapper(t *testing.T) {
 	endpoint, _ := url.Parse("https://bedrock.example.com")
 	authorizer, err := provider.NewStaticHeaderAuthorizer(domain.CredentialBedrockAPIKey, "x-api-key", "", []byte("key"), "Authorization")
 	if err != nil {
@@ -228,7 +206,7 @@ func TestBedrockMantleAnthropicKeepsItsClaims(t *testing.T) {
 	}
 	target := domain.InvocationTargetDescriptor{TargetID: "anthropic.claude-sonnet-4-5", TargetKind: domain.TargetModelID}
 	if claims := adapter.MapCapabilityClaims(target, scope, testInstant()); len(claims) == 0 {
-		t.Fatal("Bedrock Mantle lost claims it had; this change was scoped to MiniMax")
+		t.Fatal("the mapper stopped answering for Bedrock Mantle; the gate belongs at the call site, not here")
 	}
 }
 

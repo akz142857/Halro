@@ -603,18 +603,31 @@ func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target
 			mergeClaims = append(mergeClaims, modelcatalog.Claim{Source: entry.Source, Supported: entry.Capabilities, Unsupported: unsupported})
 			claimsExist = true
 		}
-		// A metadata mapper reads what an upstream reported about a target it
-		// listed. An offer out of Halro's own catalog was listed by nobody, so
-		// there is nothing to map and a mapper run over one manufactures
-		// provider_metadata claims from the catalog Halro already merges a few
-		// lines above, under a source that says the account was asked.
+		// A metadata mapper turns what an upstream reported about a target into
+		// claims sourced provider_metadata. So it runs only on a target that says
+		// its metadata came from the upstream. This is the sole call site of
+		// ProviderMetadataMapper, which is why the precondition is enforced here
+		// rather than in each adapter.
 		//
-		// It cannot even produce a valid claim: an offer carries no fetch time, so
-		// every claim came out with a zero observation instant and no expiry, both
-		// of which CapabilityClaim.Validate refuses — which marked the binding
-		// conflicting and left the offer with no deployable variant, on the
-		// listing and on the save that follows it.
-		if mapper := mappers[binding.ID]; mapper != nil && bindingTarget.MetadataSource != domain.MetadataSourceModelCatalog {
+		// Three kinds of target reach this loop and only one qualifies. An offer
+		// out of Halro's own catalog was listed by nobody; it also carries no
+		// fetch time, so every claim built from it came out with a zero
+		// observation instant and no expiry — both refused by
+		// CapabilityClaim.Validate — which marked the binding conflicting and left
+		// the offer with no deployable variant, on the listing and on the save
+		// after it. A hand-entered identifier was listed by nobody either, and
+		// there the failure was the opposite and quieter: the Anthropic mapper
+		// claims chat and streaming from the endpoint rather than from a field, so
+		// a model nobody has ever served resolved as a working chat deployment on
+		// evidence labelled provider_metadata. Only a target the upstream
+		// enumerated carries MetadataSourceProvider, and only it is passed.
+		//
+		// The other mappers were already safe by accident: Gemini and Bedrock
+		// build their claims out of target.Metadata.SupportedOperations, which is
+		// empty on a target the provider never described, so they returned nothing
+		// for these cases. Claiming from a present field is the shape that does
+		// not need this guard.
+		if mapper := mappers[binding.ID]; mapper != nil && bindingTarget.MetadataSource == domain.MetadataSourceProvider {
 			metadataClaims := mapper.MapCapabilityClaims(bindingTarget, scope, bindingTarget.FetchedAt)
 			expiresAt := bindingTarget.FetchedAt.Add(invocationTargetCatalogTTL)
 			active := metadataClaims[:0]

@@ -120,6 +120,16 @@ The rule that follows:
   separate questions; answering the first from the upstream does not license
   answering the second from it. A target enumerated without capability evidence
   resolves unknown and is declared or detected — never credited by construction.
+- **Keep "who exists" and "what they do" apart, and check who is answering.** A
+  claim sourced `provider_metadata` asserts the upstream said something, so it may
+  only be built from a target the upstream actually described. The Anthropic
+  metadata mapper claimed chat and streaming from the endpoint rather than from a
+  field — correct for a model that endpoint listed, a fabrication for an
+  identifier somebody typed, and the mapper cannot tell them apart because every
+  field it reads looks identical. An invented model name resolved as a working
+  chat deployment on evidence labelled `provider_metadata`. Mappers that build
+  claims out of a field the provider populated were safe by construction;
+  claiming from the absence of a field is the shape that needs a gate.
 - **Read the real response before writing the decoder for it.** A decoder written
   against a shape inferred from documentation is a fixture of your own mental
   model. Capture the body first — the MiniMax smoke has a subtest that does
