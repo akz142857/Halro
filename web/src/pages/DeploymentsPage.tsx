@@ -1694,7 +1694,7 @@ function DeploymentForm({
   // server offers them here labelled as offers. Gating the picker on
   // can_enumerate alone hid a populated list behind a blank field.
   const hasCatalogOffers = Boolean(
-    !identityLocked && (targetCatalog.data?.items ?? []).some((target) => target.metadata_source === "builtin_catalog"),
+    !identityLocked && (targetCatalog.data?.items ?? []).some((target) => target.metadata_source === "model_catalog"),
   );
   // One flag drives every catalog affordance. Splitting the combobox from the
   // refresh button gave a provider that cannot enumerate a dropdown arrow and a
@@ -2007,12 +2007,12 @@ function DeploymentForm({
                                   onClick={() => chooseModel(model)}
                                 >
                                   <strong>{model.display_name}</strong>
-                                  {model.metadata_source === "builtin_catalog" && (
+                                  {model.metadata_source === "model_catalog" && (
                                     // An upstream listing a model says this account
                                     // reaches it. A built-in entry says only that
                                     // Halro pre-checked the identifier, so the two
                                     // must not read the same in one list.
-                                    <span className="deployment-model-offer">{t("deployments.modelFromBuiltinCatalog")}</span>
+                                    <span className="deployment-model-offer">{t("deployments.modelFromCatalog")}</span>
                                   )}
                                 </button>
                               );
@@ -2045,7 +2045,7 @@ function DeploymentForm({
               </div>
               <small>{
                 hasCatalogOffers && !modelCatalogEnumerable
-                  ? t("deployments.modelBuiltinCatalogHint")
+                  ? t("deployments.modelCatalogOfferHint")
                   : t(`deployments.targetHints.${targetKind}`)
               }</small>
             </div>

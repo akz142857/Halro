@@ -960,8 +960,8 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     targetKind: "调用目标类型", targetKindHint: "Bedrock 的调用目标可能是基础模型、Inference Profile 或预置吞吐资源。",   targetLocked: "调用目标创建后不可修改", targetLockedDescription: "如需更换服务商、能力接口、调用目标或区域，请使用“创建替代”，验证后再切换模型路由。",
     targetLabels: { model_id: "模型 ID", azure_deployment: "Azure Deployment 名称", bedrock_foundation_model: "Bedrock Model ID / ARN", bedrock_inference_profile: "Inference Profile ID / ARN", bedrock_provisioned_throughput: "Provisioned Throughput ARN", custom_endpoint_model: "模型 ID" },
     targetKinds: { model_id: "模型", azure_deployment: "Azure Deployment", bedrock_foundation_model: "Bedrock 基础模型", bedrock_inference_profile: "Bedrock 推理配置", bedrock_provisioned_throughput: "Bedrock 预置吞吐", custom_endpoint_model: "自定义端点模型" },
-    modelFromBuiltinCatalog: "内置目录",
-    modelBuiltinCatalogHint: "此服务商接口不提供模型列表；下列模型来自 Halro 内置目录，不代表该账号已开通。也可以直接输入模型 ID。",
+    modelFromCatalog: "Halro 目录",
+    modelCatalogOfferHint: "此服务商接口不提供模型列表；下列模型来自 Halro 模型目录，不代表该账号已开通。也可以直接输入模型 ID。",
     targetHints: { model_id: "从列表选择，也可以输入模型 ID", azure_deployment: "输入 Azure Deployment 名称", bedrock_foundation_model: "输入模型 ID 或 ARN", bedrock_inference_profile: "输入 Inference Profile ID 或 ARN", bedrock_provisioned_throughput: "输入 Provisioned Throughput ARN", custom_endpoint_model: "从列表选择，也可以输入模型 ID" },
 
     emptyCapabilities: {

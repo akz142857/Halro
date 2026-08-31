@@ -391,10 +391,10 @@ func TestInvocationTargetCacheRejectsOlderLateRefresh(t *testing.T) {
 	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics()}
 	firstDone := make(chan bindingTargetCatalog, 1)
 	go func() {
-		firstDone <- runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial)
+		firstDone <- runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial, modelcatalog.Builtin())
 	}()
 	<-adapter.firstStarted
-	newer := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial)
+	newer := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogAlwaysDial, modelcatalog.Builtin())
 	close(adapter.releaseFirst)
 	older := <-firstDone
 	if len(newer.items) != 1 || newer.items[0].TargetID != "newer" || len(older.items) != 1 || older.items[0].TargetID != "newer" {
@@ -411,7 +411,7 @@ func TestSaveResolutionRefreshRejectsRemovedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &Runtime{providers: registry, config: config.Default(), capabilityMetrics: newCapabilityMetrics(), now: time.Now}
-	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, catalogAlwaysDial), runtime.clockNow().UTC())
+	listed := aggregateInvocationTargets(instance, runtime.fetchInvocationTargetCatalogs(context.Background(), instance, []domain.ProviderProfileBinding{binding}, catalogAlwaysDial, modelcatalog.Builtin()), runtime.clockNow().UTC())
 	target := findTarget(t, listed, "gpt-4o")
 	if len(target.Variants) != 1 {
 		t.Fatalf("listing did not resolve one variant: %#v", target)
@@ -447,7 +447,7 @@ func TestInvocationTargetFetchIsConcurrencyBounded(t *testing.T) {
 	cfg := config.Default()
 	cfg.Gateway.AttemptResponseHeaderTimeout = config.Duration(250 * time.Millisecond)
 	runtime := &Runtime{providers: registry, config: cfg, capabilityMetrics: newCapabilityMetrics()}
-	results := runtime.fetchInvocationTargetCatalogs(context.Background(), instance, instance.Bindings, catalogAlwaysDial)
+	results := runtime.fetchInvocationTargetCatalogs(context.Background(), instance, instance.Bindings, catalogAlwaysDial, modelcatalog.Builtin())
 	if peak.Load() > int64(invocationTargetFetchConcurrency) || peak.Load() < 2 {
 		t.Fatalf("peak=%d cap=%d", peak.Load(), invocationTargetFetchConcurrency)
 	}
@@ -833,21 +833,21 @@ func TestResolutionEnumeratesAColdCatalogueWhileTheReadStillDoesNot(t *testing.T
 
 	// The read is behind a session and not a role, so a miss still ends it. This
 	// half is what the dialling half must not undo.
-	read := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogCachedOnly)
+	read := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogCachedOnly, modelcatalog.Builtin())
 	if !read.notCached || len(read.items) != 0 {
 		t.Fatalf("a cold read reached the provider: %#v", read)
 	}
 
 	// Same cold cache, and this caller has already been charged for being a
 	// mutation.
-	resolve := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss)
+	resolve := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss, modelcatalog.Builtin())
 	if resolve.notCached || len(resolve.items) != 1 || resolve.items[0].TargetID != target {
 		t.Fatalf("a cold resolution did not enumerate: %#v", resolve)
 	}
 
 	// And once warm it answers from the cache rather than dialling again —
 	// dial-on-miss is not dial-always.
-	warm := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss)
+	warm := runtime.fetchInvocationTargetCatalog(context.Background(), instance, binding, catalogDialOnMiss, modelcatalog.Builtin())
 	if !warm.cached || len(warm.items) != 1 {
 		t.Fatalf("a warm resolution dialled again: %#v", warm)
 	}

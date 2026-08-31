@@ -128,8 +128,11 @@ func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, reque
 		adminBadRequest(writer, err.Error())
 		return
 	}
-	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, listAccess)
+	// One catalog for the whole response. Read once rather than per binding, so
+	// a refresh landing mid-request cannot answer with offers from one revision
+	// and resolutions from another.
 	catalog := r.effectiveModelCatalog()
+	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, listAccess, catalog)
 	evaluatedAt := r.clockNow().UTC()
 	response := aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, catalog)
 	// The console names this ceiling before the operator presses a billable
@@ -176,7 +179,8 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	}
 	targetKind := domain.DeploymentTargetKind(strings.TrimSpace(request.URL.Query().Get("target_kind")))
 	canonicalRef := strings.TrimSpace(request.URL.Query().Get("canonical_model_ref"))
-	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, catalogDialOnMiss)
+	catalog := r.effectiveModelCatalog()
+	results := r.fetchInvocationTargetCatalogs(request.Context(), instance, bindings, catalogDialOnMiss, catalog)
 	evaluatedAt := r.clockNow().UTC()
 	if canonicalRef != "" {
 		for resultIndex := range results {
@@ -190,7 +194,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	}
 	var resolved adminInvocationTarget
 	matched := false
-	for _, item := range aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, r.effectiveModelCatalog()).Items {
+	for _, item := range aggregateInvocationTargetsWithCatalog(instance, results, evaluatedAt, catalog).Items {
 		if item.TargetID == targetID && (targetKind == "" || item.TargetKind == targetKind) {
 			resolved, matched = item, true
 			break
@@ -243,7 +247,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 			adminBadRequestCode(writer, "provider_credential_unavailable", "provider credential is unavailable")
 			return
 		}
-		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, evaluatedAt, r.effectiveModelCatalog())
+		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, evaluatedAt, catalog)
 	}
 	r.capabilityMetrics.recordResolution(instance.Type, resolved.TargetKind, resolved.ResolutionState, resolutionSource(resolved))
 	if resolved.ResolutionState == domain.ResolutionConflicting || resolved.ResolutionState == domain.ResolutionNoVariant ||
@@ -329,7 +333,7 @@ const (
 	catalogAlwaysDial
 )
 
-func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, access catalogAccess) []bindingTargetCatalog {
+func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance domain.ProviderInstance, bindings []domain.ProviderProfileBinding, access catalogAccess, catalog *modelcatalog.Catalog) []bindingTargetCatalog {
 	results := make([]bindingTargetCatalog, len(bindings))
 	slots := make(chan struct{}, invocationTargetFetchConcurrency)
 	var wait sync.WaitGroup
@@ -339,14 +343,14 @@ func (r *Runtime) fetchInvocationTargetCatalogs(ctx context.Context, instance do
 			defer wait.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			results[index] = r.fetchInvocationTargetCatalog(ctx, instance, binding, access)
+			results[index] = r.fetchInvocationTargetCatalog(ctx, instance, binding, access, catalog)
 		}()
 	}
 	wait.Wait()
 	return results
 }
 
-func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, access catalogAccess) bindingTargetCatalog {
+func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, access catalogAccess, catalog *modelcatalog.Catalog) bindingTargetCatalog {
 	result := bindingTargetCatalog{binding: binding}
 	credentialRevision := uint64(0)
 	if r.store != nil {
@@ -381,10 +385,10 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 		// profile that lists nothing they were unreachable from the create form.
 		//
 		// They are offers, not findings, and travel labelled as such: the source
-		// says builtin_catalog and availability stays unverified, because a
-		// built-in entry is evidence that Halro pre-checked an identifier, never
+		// says model_catalog and availability stays unverified, because a
+		// catalog entry is evidence that Halro pre-checked an identifier, never
 		// that this account is entitled to it.
-		result.items = builtinCatalogOffers(instance.Type, binding.ProfileID, modelcatalog.Builtin())
+		result.items = modelCatalogOffers(instance.Type, binding.ProfileID, catalog)
 		return result
 	}
 	lister, ok := invocationTargetLister(adapter)
@@ -475,19 +479,14 @@ func aggregateInvocationTargets(instance domain.ProviderInstance, results []bind
 	return aggregateInvocationTargetsWithCatalog(instance, results, at, modelcatalog.Builtin())
 }
 
-// at is the instant the resolution is evaluated at, and it decides which
-// capability claims are still live. It arrives from the caller rather than being
-// read from the global clock here: resolution has to be reproducible for a given
-// catalog, and a resolver that reads the wall clock cannot be asserted on except
-// by a test that races it.
-// builtinCatalogOffers turns the built-in catalog's entries for one profile into
+// modelCatalogOffers turns the effective catalog's entries for one profile into
 // targets the create form can present.
 //
 // Deliberately only for a profile that cannot enumerate. Where enumeration works
 // the upstream's own list is the better answer, and where enumeration failed the
 // binding is degraded — substituting offers there would replace an outage with a
 // list that looks healthy.
-func builtinCatalogOffers(providerType domain.ProviderType, profileID domain.ProviderProfileID, catalog *modelcatalog.Catalog) []domain.InvocationTargetDescriptor {
+func modelCatalogOffers(providerType domain.ProviderType, profileID domain.ProviderProfileID, catalog *modelcatalog.Catalog) []domain.InvocationTargetDescriptor {
 	if catalog == nil {
 		return nil
 	}
@@ -510,13 +509,18 @@ func builtinCatalogOffers(providerType domain.ProviderType, profileID domain.Pro
 				MaxContextTokens: entry.Capabilities.MaxContextTokens,
 				MaxOutputTokens:  entry.Capabilities.MaxOutputTokens,
 			},
-			MetadataSource: domain.MetadataSourceBuiltinCatalog,
+			MetadataSource: domain.MetadataSourceModelCatalog,
 			Availability:   domain.AvailabilityUnverified,
 		})
 	}
 	return offers
 }
 
+// at is the instant the resolution is evaluated at, and it decides which
+// capability claims are still live. It arrives from the caller rather than being
+// read from the global clock here: resolution has to be reproducible for a given
+// catalog, and a resolver that reads the wall clock cannot be asserted on except
+// by a test that races it.
 func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, results []bindingTargetCatalog, at time.Time, catalog *modelcatalog.Catalog) invocationTargetCatalogResponse {
 	response := invocationTargetCatalogResponse{
 		Items:           make([]adminInvocationTarget, 0),
@@ -599,7 +603,18 @@ func resolveInvocationTargetWithCatalog(instance domain.ProviderInstance, target
 			mergeClaims = append(mergeClaims, modelcatalog.Claim{Source: entry.Source, Supported: entry.Capabilities, Unsupported: unsupported})
 			claimsExist = true
 		}
-		if mapper := mappers[binding.ID]; mapper != nil {
+		// A metadata mapper reads what an upstream reported about a target it
+		// listed. An offer out of Halro's own catalog was listed by nobody, so
+		// there is nothing to map and a mapper run over one manufactures
+		// provider_metadata claims from the catalog Halro already merges a few
+		// lines above, under a source that says the account was asked.
+		//
+		// It cannot even produce a valid claim: an offer carries no fetch time, so
+		// every claim came out with a zero observation instant and no expiry, both
+		// of which CapabilityClaim.Validate refuses — which marked the binding
+		// conflicting and left the offer with no deployable variant, on the
+		// listing and on the save that follows it.
+		if mapper := mappers[binding.ID]; mapper != nil && bindingTarget.MetadataSource != domain.MetadataSourceModelCatalog {
 			metadataClaims := mapper.MapCapabilityClaims(bindingTarget, scope, bindingTarget.FetchedAt)
 			expiresAt := bindingTarget.FetchedAt.Add(invocationTargetCatalogTTL)
 			active := metadataClaims[:0]

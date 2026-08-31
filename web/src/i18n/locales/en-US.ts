@@ -947,8 +947,8 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     targetKind: "Invocation target type", targetKindHint: "A Bedrock target may be a foundation model, inference profile, or provisioned throughput resource.",   targetLocked: "The invocation target is immutable", targetLockedDescription: "To change the provider, capability interface, invocation target, or region, create a replacement, validate it, then switch the model route.",
     targetLabels: { model_id: "Model ID", azure_deployment: "Azure Deployment name", bedrock_foundation_model: "Bedrock Model ID / ARN", bedrock_inference_profile: "Inference Profile ID / ARN", bedrock_provisioned_throughput: "Provisioned Throughput ARN", custom_endpoint_model: "Model ID" },
     targetKinds: { model_id: "Model", azure_deployment: "Azure Deployment", bedrock_foundation_model: "Bedrock foundation model", bedrock_inference_profile: "Bedrock inference profile", bedrock_provisioned_throughput: "Bedrock provisioned throughput", custom_endpoint_model: "Custom endpoint model" },
-    modelFromBuiltinCatalog: "built-in",
-    modelBuiltinCatalogHint: "This provider interface lists no models. These come from Halro's built-in catalog and do not mean the account is entitled to them. You can also enter a model ID.",
+    modelFromCatalog: "Halro catalog",
+    modelCatalogOfferHint: "This provider interface lists no models. These come from Halro's model catalog and do not mean the account is entitled to them. You can also enter a model ID.",
     targetHints: { model_id: "Choose from the list or enter a model ID", azure_deployment: "Enter an Azure Deployment name", bedrock_foundation_model: "Enter a model ID or ARN", bedrock_inference_profile: "Enter an Inference Profile ID or ARN", bedrock_provisioned_throughput: "Enter a Provisioned Throughput ARN", custom_endpoint_model: "Choose from the list or enter a model ID" },
 
     emptyCapabilities: {
