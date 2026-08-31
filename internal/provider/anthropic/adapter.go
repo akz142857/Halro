@@ -36,6 +36,21 @@ type Options struct {
 	// many requests and nothing else will look at them.
 	ProfileID    domain.ProviderProfileID
 	MessagesPath string
+	// CatalogProbeOnly says this profile's host serves a model list its
+	// credential can read, but not one worth enumerating targets from.
+	//
+	// The two were one flag until MiniMax, and conflating them was wrong.
+	// CanEnumerate answers "can Halro build target descriptors and capability
+	// claims from this list"; the credential-only connection test asks something
+	// much smaller — "does this key reach this host at all". MiniMax serves
+	// GET /v1/models beside its Anthropic route on the same host and the same
+	// bearer key, which answers the second question completely, while the body
+	// is OpenAI-shaped and carries an identifier and nothing else. Enumerating
+	// from it would credit every listed model with chat and streaming on
+	// declared evidence, including the speech and video models that share the
+	// account — a claim derived from an identifier, which is a guess wearing
+	// evidence.
+	CatalogProbeOnly bool
 	// BedrockProjectID is empty for Anthropic's own API, which has no such
 	// concept, and for a Bedrock Mantle provider that addresses the account's
 	// default project.
@@ -49,6 +64,7 @@ type Adapter struct {
 	capabilities     provider.Capabilities
 	providerType     string
 	messagesPath     string
+	catalogProbeOnly bool
 	bedrockProjectID string
 	profileID        domain.ProviderProfileID
 }
@@ -75,6 +91,7 @@ func New(options Options) (*Adapter, error) {
 	return &Adapter{
 		endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client,
 		capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath,
+		catalogProbeOnly: options.CatalogProbeOnly,
 		bedrockProjectID: options.BedrockProjectID, profileID: profileID,
 	}, nil
 }
@@ -311,7 +328,11 @@ func (adapter *Adapter) Probe(ctx context.Context, model string) error {
 // Messages probe answers about reachability, TLS, and the credential, and asks
 // the upstream for as little as the endpoint allows.
 func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
-	if !adapter.InvocationTargetDiscovery().CanEnumerate {
+	// Reachability, not enumeration. A profile that cannot be enumerated may
+	// still have a list its credential can read, and that is all a connection
+	// test needs — refusing it made an operator bind a deployment before they
+	// could find out whether their key worked at all.
+	if !adapter.InvocationTargetDiscovery().CanEnumerate && !adapter.catalogProbeOnly {
 		return &provider.Error{Class: provider.ErrorBadRequest, Message: "this profile has no model catalog to test against; bind an enabled deployment and test that"}
 	}
 	request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(1, ""))
@@ -338,6 +359,18 @@ func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
 	}
 	if err := json.Unmarshal(payload, &catalog); err != nil {
 		return malformed("decode Anthropic model catalog response", err)
+	}
+	// A probe-only host answers on a list Halro does not read as Anthropic's, so
+	// the member name is not asserted — only that the reply is a JSON object,
+	// which is what keeps an HTML login page from reading as a healthy provider.
+	// Asserting `data` here would turn an unverified guess about someone else's
+	// response shape into a failed credential test.
+	if adapter.catalogProbeOnly {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &object); err != nil {
+			return malformed("model catalog response is not a JSON object", err)
+		}
+		return nil
 	}
 	// An empty list is a valid answer — an account can be entitled to nothing —
 	// but an absent one means this was not the Models API's reply.

@@ -24,13 +24,17 @@ import (
 const maxResponseBytes = 16 << 20
 
 type Adapter struct {
-	endpoint            *url.URL
-	authorizer          provider.Authorizer
-	client              *http.Client
-	providerType        string
-	apiVersion          string
-	azure               bool
-	deepSeek            bool
+	endpoint     *url.URL
+	authorizer   provider.Authorizer
+	client       *http.Client
+	providerType string
+	apiVersion   string
+	azure        bool
+	deepSeek     bool
+	// miniMax turns on two things this adapter does for no other upstream: the
+	// dialect body in encodeChatRequest, and the base_resp guard that catches a
+	// failure MiniMax reports inside a 200.
+	miniMax             bool
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
@@ -123,6 +127,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
+		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
@@ -140,14 +145,28 @@ func NewWithOptions(options Options) (*Adapter, error) {
 // user_id. Marshalling the OpenAI struct straight out sent five members it
 // ignores and one under a name it does not read.
 func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest) ([]byte, error) {
-	if !a.deepSeek {
+	switch {
+	case a.deepSeek:
+		body, err := compatibility.RenderDeepSeekChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	case a.miniMax:
+		// MiniMax's member list is smaller than OpenAI's in the same direction
+		// DeepSeek's is, and worse in one respect: it documents its unsupported
+		// parameters as ignored rather than refused, so a member sent here comes
+		// back 200 having done nothing. The one that costs money is the top-level
+		// reasoning_effort, which MiniMax does not read — its switch is `thinking`
+		// — so a request asking not to think would think, and bill, in silence.
+		body, err := compatibility.RenderMiniMaxChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	default:
 		return json.Marshal(request)
 	}
-	body, err := compatibility.RenderDeepSeekChatRequest(request)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(body)
 }
 
 func (a *Adapter) Type() string {
@@ -487,6 +506,14 @@ func (a *Adapter) postJSON(ctx context.Context, providerModel, operation, reques
 	if len(payload) > maxResponseBytes {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response exceeded size limit"}
 	}
+	// The guard sits here rather than at each decode site because postJSON is the
+	// one place a unary call comes back: Chat and Responses both pass through it,
+	// and a check placed after them would be two checks that can drift apart.
+	if a.miniMax {
+		if err := checkMiniMaxBaseResp(payload); err != nil {
+			return nil, err
+		}
+	}
 	return payload, nil
 }
 
@@ -627,6 +654,16 @@ func (a *Adapter) ChatStream(
 		}
 		if len(event.Data) == 0 {
 			continue
+		}
+		// A stream is the harder half of the same problem: MiniMax can send well
+		// formed chunks and then report the failure in a later one, and by then
+		// bytes are already with the caller. Nothing can be taken back, so the
+		// stream ends here and the attempt is settled as an upstream failure on
+		// whatever usage was seen — never as a success, and never refunded.
+		if a.miniMax {
+			if err := checkMiniMaxBaseResp(event.Data); err != nil {
+				return usage, err
+			}
 		}
 		var chunk openaiapi.ChatCompletionResponse
 		if err := json.Unmarshal(event.Data, &chunk); err != nil {

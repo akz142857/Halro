@@ -381,7 +381,8 @@ export type AccessSurface =
   | "anthropic-api"
   | "bedrock-runtime"
   | "bedrock-agent-runtime"
-  | "bedrock-mantle";
+  | "bedrock-mantle"
+  | "minimax-api";
 
 export type CredentialScheme =
   | "bearer.static"
@@ -401,6 +402,7 @@ export type ProviderType =
   | "deepseek"
   | "gemini"
   | "bedrock"
+  | "minimax"
   | "openai_compatible";
 
 export interface ProviderCapabilities {

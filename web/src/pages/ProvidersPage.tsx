@@ -44,7 +44,7 @@ import { useIsReadOnly } from "../session";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const providerTypes: ProviderType[] = [
-  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "openai_compatible",
+  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "openai_compatible",
 ];
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
@@ -556,7 +556,7 @@ function CredentialForm({
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
-        <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
+        <Field label={t("providers.boundURL")} hint={type === "minimax" ? t("providers.minimaxRegionHint") : t("providers.boundURLHint")}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
@@ -802,7 +802,14 @@ function ProviderForm({
               </select>
             </Field>
           )}
-          <Field label={t("providers.baseURL")} hint={credentialBaseURLMismatch ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined}>
+          <Field label={t("providers.baseURL")} hint={
+            credentialBaseURLMismatch
+              ? t("providers.baseURLBoundHint", { credential: credentialBoundURL })
+              // MiniMax splits by account region and the two addresses differ by one
+              // letter. Everything else about the contract is identical, so the
+              // wrong one fails as an authentication error and reads as a bad key.
+              : type === "minimax" ? t("providers.minimaxRegionHint") : undefined
+          }>
             <input autoComplete="off" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
           </Field>
           {type === "azure_openai" && (

@@ -21,6 +21,14 @@ const (
 	SurfaceBedrockRuntime      AccessSurface = "bedrock-runtime"
 	SurfaceBedrockMantle       AccessSurface = "bedrock-mantle"
 	SurfaceBedrockAgentRuntime AccessSurface = "bedrock-agent-runtime"
+	// One surface for all three MiniMax wire shapes, the same choice Bedrock
+	// Mantle makes. An Access Surface names the API face one credential reaches,
+	// not the wire format spoken on it: MiniMax serves Anthropic Messages,
+	// OpenAI Chat Completions and OpenAI Responses from one host on one bearer
+	// key, so splitting it into three would put the same credential in three
+	// unrelated connection groups and make an operator create three connections
+	// for one key.
+	SurfaceMiniMax AccessSurface = "minimax-api"
 )
 
 const (
@@ -49,6 +57,13 @@ const (
 	ProfileBedrockMantleOpenAIChat        ProviderProfileID = "bedrock.mantle.openai.chat.v1"
 	ProfileBedrockMantleOpenAIResponses   ProviderProfileID = "bedrock.mantle.openai.responses.v1"
 	ProfileBedrockMantleAnthropicMessages ProviderProfileID = "bedrock.mantle.anthropic.messages.v1"
+	// MiniMax serves one host through three routes, one wire shape each:
+	// /anthropic/v1/messages, /v1/chat/completions and /v1/responses. The route
+	// is fixed by the profile rather than by the request, so a deployment says
+	// which face it addresses instead of inferring it from a model identifier.
+	ProfileMiniMaxAnthropicMessages ProviderProfileID = "minimax.anthropic.messages.v1"
+	ProfileMiniMaxChat              ProviderProfileID = "minimax.chat.v1"
+	ProfileMiniMaxResponses         ProviderProfileID = "minimax.responses.v1"
 )
 
 const (

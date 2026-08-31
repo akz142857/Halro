@@ -66,32 +66,12 @@ func (m ProfileManifest) Validate() error {
 	return nil
 }
 
+// profileAllowsPrimitive answers from the one operation table. It used to hold
+// a second copy of that mapping, written out per profile, whose only job was to
+// be compared against the manifests — two hand-written lists agreeing was how
+// they were checked, and the only way they could disagree.
 func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operation, primitive Primitive) bool {
-	expected := map[domain.ProviderProfileID]map[Operation]Primitive{
-		domain.ProfileOpenAIChatEmbeddings:           {OperationChat: PrimitiveOpenAIChatCompletions, OperationChatStream: PrimitiveOpenAIChatStream, OperationEmbeddings: PrimitiveOpenAIEmbeddings},
-		domain.ProfileOpenAIResponses:                {OperationChat: PrimitiveOpenAIResponses},
-		domain.ProfileAnthropicMessages:              {OperationChat: PrimitiveAnthropicMessages, OperationChatStream: PrimitiveAnthropicMessagesStream, OperationMessages: PrimitiveAnthropicMessages, OperationMessagesStream: PrimitiveAnthropicMessagesStream, OperationFiles: PrimitiveHalroLocalFiles, OperationBatches: PrimitiveAnthropicMessageBatches},
-		domain.ProfileAzureChatEmbeddings:            {OperationChat: PrimitiveAzureChatCompletions, OperationChatStream: PrimitiveAzureChatStream, OperationEmbeddings: PrimitiveAzureEmbeddings},
-		domain.ProfileDeepSeekChat:                   {OperationChat: PrimitiveDeepSeekChat, OperationChatStream: PrimitiveDeepSeekChatStream},
-		domain.ProfileOpenAICompatible:               {OperationChat: PrimitiveCompatibleChat, OperationChatStream: PrimitiveCompatibleChatStream, OperationEmbeddings: PrimitiveCompatibleEmbeddings},
-		domain.ProfileGeminiText:                     {OperationChat: PrimitiveGeminiGenerateContent, OperationChatStream: PrimitiveGeminiStreamGenerateContent, OperationEmbeddings: PrimitiveGeminiEmbedContent},
-		domain.ProfileBedrockConverseText:            {OperationChat: PrimitiveBedrockConverse, OperationChatStream: PrimitiveBedrockConverseStream},
-		domain.ProfileBedrockInvokeTitanEmbedV2:      {OperationEmbeddings: PrimitiveBedrockInvokeTitanEmbedV2},
-		domain.ProfileOpenAIMediaResources:           {OperationModerations: PrimitiveOpenAIModerations, OperationImages: PrimitiveOpenAIImages, OperationTranscriptions: PrimitiveOpenAIAudioTranscriptions, OperationSpeech: PrimitiveOpenAIAudioSpeech, OperationFiles: PrimitiveOpenAIFiles, OperationBatches: PrimitiveOpenAIBatches},
-		domain.ProfileBedrockInvokeTitanImageV2:      {OperationImages: PrimitiveBedrockTitanImageV2},
-		domain.ProfileBedrockAgentRerankCohere35:     {OperationRerank: PrimitiveBedrockAgentRerankCohere35},
-		domain.ProfileBedrockAsyncNovaReel:           {OperationAsyncInvoke: PrimitiveBedrockAsyncNovaReel},
-		domain.ProfileBedrockMantleChat:              {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
-		domain.ProfileBedrockMantleOpenAIChat:        {OperationChat: PrimitiveBedrockMantleOpenAIChat, OperationChatStream: PrimitiveBedrockMantleOpenAIChatStream},
-		domain.ProfileBedrockMantleResponses:         {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
-		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
-		domain.ProfileBedrockMantleAnthropicMessages: {OperationChat: PrimitiveBedrockMantleAnthropicMessages, OperationChatStream: PrimitiveBedrockMantleAnthropicMessagesStream, OperationMessages: PrimitiveBedrockMantleAnthropicMessages, OperationMessagesStream: PrimitiveBedrockMantleAnthropicMessagesStream},
-	}
-	operations, ok := expected[profileID]
-	if !ok {
-		return false
-	}
-	return operations[operation] == primitive
+	return profileAllowsPrimitiveDerived(profileID, operation, primitive)
 }
 
 type OperationRegistry interface {
@@ -386,117 +366,13 @@ func (b *LegacyAdapterBridge) CountTokensNative(ctx context.Context, call Native
 	return adapter.CountTokensNative(ctx, call)
 }
 
+// BuiltinProfile assembles a profile's manifest from the operation table and
+// the domain profile table, which owns the identity half.
+//
+// The manifest used to be written out per profile, repeating the type, surface
+// and scheme that domain already holds — and that ValidateProviderProfile then
+// checked them against, which is the shape of a value that carries no
+// information. Slices are freshly built here, so callers keep getting copies.
 func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
-	manifests := map[domain.ProviderProfileID]ProfileManifest{
-		domain.ProfileOpenAIChatEmbeddings: {
-			ID: domain.ProfileOpenAIChatEmbeddings, Revision: 1, ProviderType: domain.ProviderOpenAI,
-			AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIChatCompletions}, {OperationChatStream, semantic.OperationGenerate, PrimitiveOpenAIChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveOpenAIEmbeddings}},
-		},
-		domain.ProfileOpenAIResponses: {
-			ID: domain.ProfileOpenAIResponses, Revision: 1, ProviderType: domain.ProviderOpenAI,
-			AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
-			Operations:        []Operation{OperationChat},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveOpenAIResponses}},
-		},
-		domain.ProfileAnthropicMessages: {
-			ID: domain.ProfileAnthropicMessages, Revision: 2, ProviderType: domain.ProviderAnthropic,
-			AccessSurface: domain.SurfaceAnthropic, CredentialScheme: domain.CredentialAnthropicAPIKey,
-			// Files are declared and served locally. Anthropic batches carry their
-			// requests inline and refer to no file, so the upload exists to give
-			// the caller something to name in the OpenAI-shaped batch request —
-			// Halro keeps the bytes and Anthropic is never told about them
-			// (ADR 0021). Declaring the operation is what makes the file
-			// addressable at all: CreateFile routes by operation, so without it
-			// there is no Anthropic deployment to upload to.
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream, OperationFiles, OperationBatches},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveAnthropicMessagesStream}, {OperationFiles, semantic.OperationFile, PrimitiveHalroLocalFiles}, {OperationBatches, semantic.OperationBatch, PrimitiveAnthropicMessageBatches}},
-		},
-		domain.ProfileAzureChatEmbeddings: {
-			ID: domain.ProfileAzureChatEmbeddings, Revision: 1, ProviderType: domain.ProviderAzureOpenAI,
-			AccessSurface: domain.SurfaceAzureOpenAI, CredentialScheme: domain.CredentialAzureAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveAzureChatCompletions}, {OperationChatStream, semantic.OperationGenerate, PrimitiveAzureChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveAzureEmbeddings}},
-		},
-		domain.ProfileDeepSeekChat: {
-			ID: domain.ProfileDeepSeekChat, Revision: 1, ProviderType: domain.ProviderDeepSeek,
-			AccessSurface: domain.SurfaceDeepSeek, CredentialScheme: domain.CredentialBearerStatic,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveDeepSeekChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveDeepSeekChatStream}},
-		},
-		domain.ProfileOpenAICompatible: {
-			ID: domain.ProfileOpenAICompatible, Revision: 1, ProviderType: domain.ProviderOpenAICompatible,
-			AccessSurface: domain.SurfaceOpenAICompatible, CredentialScheme: domain.CredentialBearerStatic,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveCompatibleChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveCompatibleChatStream}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveCompatibleEmbeddings}},
-		},
-		domain.ProfileGeminiText: {
-			ID: domain.ProfileGeminiText, Revision: 1, ProviderType: domain.ProviderGemini,
-			AccessSurface: domain.SurfaceGemini, CredentialScheme: domain.CredentialGoogleAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationEmbeddings},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveGeminiGenerateContent}, {OperationChatStream, semantic.OperationGenerate, PrimitiveGeminiStreamGenerateContent}, {OperationEmbeddings, semantic.OperationEmbed, PrimitiveGeminiEmbedContent}},
-		},
-		domain.ProfileBedrockConverseText: {
-			ID: domain.ProfileBedrockConverseText, Revision: 1, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockConverse}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockConverseStream}},
-		},
-		domain.ProfileBedrockInvokeTitanEmbedV2: {
-			ID: domain.ProfileBedrockInvokeTitanEmbedV2, Revision: 1, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit,
-			Operations:        []Operation{OperationEmbeddings},
-			PrimitiveBindings: []PrimitiveBinding{{OperationEmbeddings, semantic.OperationEmbed, PrimitiveBedrockInvokeTitanEmbedV2}},
-		},
-		domain.ProfileOpenAIMediaResources: {
-			ID: domain.ProfileOpenAIMediaResources, Revision: 1, ProviderType: domain.ProviderOpenAI, AccessSurface: domain.SurfaceOpenAI, CredentialScheme: domain.CredentialBearerStatic,
-			Operations:        []Operation{OperationModerations, OperationImages, OperationTranscriptions, OperationSpeech, OperationFiles, OperationBatches},
-			PrimitiveBindings: []PrimitiveBinding{{OperationModerations, semantic.OperationModerate, PrimitiveOpenAIModerations}, {OperationImages, semantic.OperationImage, PrimitiveOpenAIImages}, {OperationTranscriptions, semantic.OperationTranscribe, PrimitiveOpenAIAudioTranscriptions}, {OperationSpeech, semantic.OperationSynthesize, PrimitiveOpenAIAudioSpeech}, {OperationFiles, semantic.OperationFile, PrimitiveOpenAIFiles}, {OperationBatches, semantic.OperationBatch, PrimitiveOpenAIBatches}},
-		},
-		domain.ProfileBedrockInvokeTitanImageV2:  {ID: domain.ProfileBedrockInvokeTitanImageV2, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationImages}, PrimitiveBindings: []PrimitiveBinding{{OperationImages, semantic.OperationImage, PrimitiveBedrockTitanImageV2}}},
-		domain.ProfileBedrockAgentRerankCohere35: {ID: domain.ProfileBedrockAgentRerankCohere35, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockAgentRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationRerank}, PrimitiveBindings: []PrimitiveBinding{{OperationRerank, semantic.OperationRerank, PrimitiveBedrockAgentRerankCohere35}}},
-		domain.ProfileBedrockAsyncNovaReel:       {ID: domain.ProfileBedrockAsyncNovaReel, Revision: 1, ProviderType: domain.ProviderBedrock, AccessSurface: domain.SurfaceBedrockRuntime, CredentialScheme: domain.CredentialAWSSigV4Explicit, Operations: []Operation{OperationAsyncInvoke}, PrimitiveBindings: []PrimitiveBinding{{OperationAsyncInvoke, semantic.OperationAsyncGenerate, PrimitiveBedrockAsyncNovaReel}}},
-		domain.ProfileBedrockMantleChat: {
-			ID: domain.ProfileBedrockMantleChat, Revision: 1, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
-		},
-		// Revision 2: this profile addressed /v1 until the route split. It now
-		// addresses /openai/v1, and the models it used to carry moved to
-		// bedrock.mantle.chat.v1.
-		domain.ProfileBedrockMantleOpenAIChat: {
-			ID: domain.ProfileBedrockMantleOpenAIChat, Revision: 2, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIChatStream}},
-		},
-		domain.ProfileBedrockMantleResponses: {
-			ID: domain.ProfileBedrockMantleResponses, Revision: 1, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
-		},
-		// Revision 2: see the chat profile above — same route move.
-		domain.ProfileBedrockMantleOpenAIResponses: {
-			ID: domain.ProfileBedrockMantleOpenAIResponses, Revision: 2, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponses}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleOpenAIResponsesStream}},
-		},
-		domain.ProfileBedrockMantleAnthropicMessages: {
-			ID: domain.ProfileBedrockMantleAnthropicMessages, Revision: 1, ProviderType: domain.ProviderBedrock,
-			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
-			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
-			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}},
-		},
-	}
-	manifest, ok := manifests[id]
-	if !ok {
-		return ProfileManifest{}, false
-	}
-	manifest.Operations = slices.Clone(manifest.Operations)
-	manifest.PrimitiveBindings = slices.Clone(manifest.PrimitiveBindings)
-	return manifest, true
+	return builtinProfileDerived(id)
 }

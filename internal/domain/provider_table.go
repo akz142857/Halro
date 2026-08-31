@@ -305,6 +305,37 @@ var profileTable = []profileRow{
 		Immutable:       true,
 		Defaults:        mantleAnthropicSet, Ceiling: mantleAnthropicSet,
 	},
+	{
+		// The three MiniMax rows share one surface and one scheme, so they form a
+		// single connection group and one key binds all three. The Anthropic row
+		// leads because it is the face MiniMax itself recommends and the one whose
+		// usage reporting is complete — input, output and both cache tiers. The
+		// Chat face documents only total_tokens, which is the worse anchor for a
+		// connection whose settlement depends on the split.
+		//
+		// The endpoint prefill is the international host. Mainland accounts live
+		// on https://api.minimaxi.com with the same paths, the same headers and
+		// the same bodies; only the address differs, and keys are not
+		// interchangeable between the two. That is a base URL an operator edits,
+		// not a second profile: splitting one contract into two rows would create
+		// two truths, and one of them would go stale first.
+		ID: ProfileMiniMaxAnthropicMessages, Type: ProviderMiniMax,
+		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.minimax.io",
+		Defaults:        minimaxAnthropicSet, Ceiling: minimaxAnthropicSet,
+	},
+	{
+		ID: ProfileMiniMaxChat, Type: ProviderMiniMax,
+		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.minimax.io",
+		Defaults:        minimaxChatSet, Ceiling: minimaxChatSet,
+	},
+	{
+		ID: ProfileMiniMaxResponses, Type: ProviderMiniMax,
+		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.minimax.io",
+		Defaults:        minimaxResponsesSet, Ceiling: minimaxResponsesSet,
+	},
 }
 
 var (
@@ -342,6 +373,60 @@ var (
 	mantleAnthropicSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true,
 		Reasoning: true, StreamUsage: true,
+	}
+
+	// The MiniMax sets keep ceiling == defaults: every capability here is read
+	// from published documentation and none of it has been confirmed against a
+	// real account, so there is no opt-in an operator could reach for that Halro
+	// would be able to stand behind.
+	//
+	// Absent on purpose, and each absence is a claim about the upstream rather
+	// than an oversight:
+	//
+	//   - Embeddings. MiniMax serves POST /v1/embeddings, but in its own shape —
+	//     `texts` and `type` in, a top-level `vectors` array out, errors in
+	//     `base_resp`. Declaring it would bind the OpenAI embedding primitive to
+	//     a body that cannot parse it.
+	//   - JSONObject and StructuredOutputs. No MiniMax document lists
+	//     response_format on any of the three faces. That is documentation being
+	//     silent rather than documentation refusing, so it is treated as absent
+	//     until a real request proves otherwise.
+	//   - DeveloperRole. The OpenAI developer role appears nowhere in MiniMax's
+	//     request schemas.
+	//   - ProviderExecutedTools. MiniMax offers a server-side web search. Turning
+	//     it on accepts upstream egress that never passes through SafeTransport,
+	//     which is a contract review rather than a table edit.
+	//
+	// Vision and FetchedImage sit at the connection ceiling because only
+	// MiniMax-M3 sees an image at all; the M2.x line accepts text and tool blocks
+	// only. Which models see is a per-model fact, so it is recorded in the model
+	// catalogue and not asserted here for the whole connection — the same shape
+	// DeepSeek's row uses.
+	minimaxAnthropicSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		Reasoning: true, StreamUsage: true,
+	}
+	minimaxChatSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		Reasoning: true, StreamUsage: true,
+	}
+	// Two absences here that the other two MiniMax rows do not share, and both
+	// are inherited from the profile this one is served by rather than from
+	// MiniMax:
+	//
+	//   - No Streaming. MiniMax documents `stream` on /v1/responses, so this is a
+	//     Halro-side scope decision: the OpenAI adapter's Responses branch binds
+	//     no stream primitive, and CapabilityDependencies requires stream_usage
+	//     over streaming over chat. Reaching it means reusing the Bedrock Mantle
+	//     Responses adapter, which is welded to that host's endpoint, project
+	//     header and credential scheme.
+	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
+	//     canonical response mapper cannot preserve reasoning items, and a claim
+	//     it cannot carry is a request that fails after the budget is reserved.
+	//     MiniMax returns reasoning as output items with a summary, which is
+	//     exactly the shape that mapper drops.
+	minimaxResponsesSet = ProviderCapabilities{
+		Chat: true, Tools: true, Vision: true, FetchedImage: true,
 	}
 )
 
@@ -391,6 +476,7 @@ var providerTypeTable = []providerTypeRow{
 	// callers that start from the type alone, and TestTypeDefaultsWithinDefaultProfile
 	// only requires it to sit inside the default profile's own defaults.
 	{ProviderBedrock, ProfileBedrockMantleChat, bedrockConverseSet},
+	{ProviderMiniMax, ProfileMiniMaxAnthropicMessages, minimaxAnthropicSet},
 }
 
 var profileIndex = func() map[ProviderProfileID]profileRow {
@@ -442,6 +528,25 @@ func AllProviderProfiles() []ProviderProfileSummary {
 		})
 	}
 	return summaries
+}
+
+// IsRegisteredProviderType reports whether this build has a provider type.
+//
+// It reads the table rather than a list of its own, which is the whole point.
+// The Admin write path used to answer this from a hand-written switch, and that
+// switch was the third copy of the type list — after the profile table and
+// ProviderInstance.Validate. A third copy cannot be told when it falls behind,
+// and it did: MiniMax was registered everywhere else, offered by the console's
+// own metadata endpoint, and refused on save with "provider type is not
+// implemented". The console listed a type its server would not accept.
+//
+// Withholding is a separate question and stays separate: it scopes profiles,
+// not types, and the write path checks IsWithheldProfile on the resolved
+// profile. A type whose default profile is withheld is refused there, where the
+// reason can be stated.
+func IsRegisteredProviderType(value ProviderType) bool {
+	_, ok := providerTypeIndex[value]
+	return ok
 }
 
 // AllProviderTypes returns every provider type in table order, each with the

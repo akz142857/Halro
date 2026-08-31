@@ -272,6 +272,13 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		ProfileBedrockMantleResponses:         "https://bedrock-mantle.us-east-1.api.aws",
 		ProfileBedrockMantleOpenAIResponses:   "https://bedrock-mantle.us-east-1.api.aws",
 		ProfileBedrockMantleAnthropicMessages: "https://bedrock-mantle.us-east-1.api.aws",
+		// The international host. Mainland accounts reach the same contract at
+		// https://api.minimaxi.com, which is an operator edit rather than a second
+		// prefill: a template can only carry one, and the two are not
+		// interchangeable because the keys are not.
+		ProfileMiniMaxAnthropicMessages: "https://api.minimax.io",
+		ProfileMiniMaxChat:              "https://api.minimax.io",
+		ProfileMiniMaxResponses:         "https://api.minimax.io",
 	}
 	for _, profile := range AllProviderProfiles() {
 		expected, listed := want[profile.ID]
