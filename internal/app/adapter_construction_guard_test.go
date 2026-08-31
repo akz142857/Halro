@@ -24,6 +24,43 @@ import (
 // It does not need a real credential or a real client. It needs a plausible one
 // of each, which is what this supplies. What it proves is narrow and exactly the
 // gap: every profile an operator can reach has a branch that builds something.
+// Now that construction is a table rather than a switch, it can be enumerated,
+// and both directions are worth holding.
+//
+// A profile with no row is the defect this file was written for. An orphan row —
+// a builder for a profile the domain table does not have — is the newly visible
+// one: a switch could carry a dead case forever, because nothing could list the
+// cases. It matters because a removed profile whose construction survives reads
+// as still supported to anyone who greps for it.
+func TestAdapterBuilderTableCoversExactlyTheRegisteredProfiles(t *testing.T) {
+	registered := map[domain.ProviderProfileID]bool{}
+	for _, profile := range domain.AllProviderProfiles() {
+		registered[profile.ID] = true
+		if _, ok := adapterBuilders[profile.ID]; !ok {
+			t.Errorf("%s is in the profile table and has no adapter construction row", profile.ID)
+		}
+	}
+	for profileID := range adapterBuilders {
+		if !registered[profileID] {
+			t.Errorf("%s has an adapter construction row and is not a registered profile", profileID)
+		}
+	}
+}
+
+// Every row has to be able to run all three of its stages. A nil authorize or
+// build would panic at request time rather than fail, and a table is easy to
+// add a half-filled row to.
+func TestEveryAdapterBuilderRowIsComplete(t *testing.T) {
+	for profileID, builder := range adapterBuilders {
+		if builder.authorize == nil {
+			t.Errorf("%s has no authorize stage", profileID)
+		}
+		if builder.build == nil {
+			t.Errorf("%s has no build stage", profileID)
+		}
+	}
+}
+
 func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 	// One fake secret per credential scheme. The shapes matter only where a
 	// constructor parses them.

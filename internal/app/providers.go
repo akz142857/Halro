@@ -15,11 +15,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
-	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
 	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
-	bedrockmantleprovider "github.com/akz142857/Halro/internal/provider/bedrockmantle"
-	geminiprovider "github.com/akz142857/Halro/internal/provider/gemini"
-	openaiprovider "github.com/akz142857/Halro/internal/provider/openai"
 	"github.com/akz142857/Halro/internal/safetransport"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
@@ -746,131 +742,9 @@ func newBindingClient(cfg config.Config, binding domain.ProviderProfileBinding, 
 // the Mantle work no test could see: removing the project from all three
 // branches broke nothing.
 func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, plaintext []byte, client *http.Client) (provider.Adapter, error) {
-	var err error
-	capabilities := binding.Capabilities
-	var adapter provider.Adapter
-	var authorizer provider.Authorizer
-	switch instance.Type {
-	case domain.ProviderOpenAI, domain.ProviderOpenAICompatible, domain.ProviderDeepSeek:
-		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key")
-		if err == nil {
-			// The Responses profile is the same credential against a different
-			// endpoint, so it shares this adapter and differs by the surface it is
-			// built for. Which surface a connection addresses is the profile's to
-			// say and no request's.
-			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-				Endpoint: endpoint, Authorizer: authorizer, Client: client,
-				ProviderType: string(instance.Type), Capabilities: capabilities,
-				Responses: binding.ProfileID == domain.ProfileOpenAIResponses,
-			})
-		}
-	case domain.ProviderAnthropic:
-		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization")
-		if err == nil {
-			adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProfileID: binding.ProfileID})
-		}
-	case domain.ProviderAzureOpenAI:
-		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "api-key", "", plaintext, "Authorization")
-		if err == nil {
-			adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(instance.Type), APIVersion: instance.APIVersion, Azure: true, Capabilities: capabilities})
-		}
-	case domain.ProviderGemini:
-		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-goog-api-key", "", plaintext, "Authorization")
-		if err == nil {
-			adapter, err = geminiprovider.New(geminiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client})
-		}
-	case domain.ProviderMiniMax:
-		// One credential for all three faces. MiniMax accepts the key as a bearer
-		// token everywhere and additionally as x-api-key on the Anthropic route,
-		// with Authorization taking precedence when both are present, so the
-		// bearer form is the one that works on every profile and x-api-key is
-		// carried only as the fallback header name.
-		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "x-api-key")
-		if err == nil {
-			switch binding.ProfileID {
-			case domain.ProfileMiniMaxAnthropicMessages:
-				// The Anthropic wire form under a different path. The adapter's
-				// discovery turns enumeration off whenever MessagesPath is set,
-				// which is right here: MiniMax has no Anthropic-shaped model list,
-				// its catalogue lives on the OpenAI route, and the Chat profile
-				// beside this one reaches it.
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities,
-					ProviderType: string(domain.ProviderMiniMax), CredentialScheme: binding.CredentialScheme,
-					MessagesPath: "anthropic/v1/messages", ProfileID: binding.ProfileID,
-					// MiniMax keeps its model list on the OpenAI route of the same
-					// host, reachable with this same key. It is not an Anthropic
-					// catalogue, so nothing is enumerated from it — but it is enough
-					// to answer a credential-only connection test, which otherwise
-					// asked the operator to bind a deployment before they could find
-					// out whether their key worked.
-					CatalogProbeOnly: true,
-				})
-			case domain.ProfileMiniMaxChat, domain.ProfileMiniMaxResponses:
-				// No OperationPathPrefix: MiniMax serves /v1/chat/completions and
-				// /v1/responses directly under the base URL, which is the default
-				// join. The prefix exists for Bedrock Mantle's second route and
-				// nothing else.
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
-					Endpoint: endpoint, Authorizer: authorizer, Client: client,
-					ProviderType: string(domain.ProviderMiniMax), CredentialScheme: binding.CredentialScheme,
-					Capabilities: capabilities,
-					Responses:    binding.ProfileID == domain.ProfileMiniMaxResponses,
-				})
-			default:
-				err = errors.New("MiniMax provider profile is not implemented")
-			}
-		}
-	case domain.ProviderBedrock:
-		switch binding.ProfileID {
-		case domain.ProfileBedrockConverseText, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAsyncNovaReel, domain.ProfileBedrockAgentRerankCohere35:
-			authorizer, err = bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
-			if err == nil {
-				adapter, err = bedrockprovider.New(bedrockprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProfileID: binding.ProfileID})
-			}
-		// The two chat profiles and the two responses profiles differ only in the
-		// route they address. The prefix is a property of the profile, never of
-		// the model identifier: openai.gpt-oss-20b sits on the default route while
-		// openai.gpt-5.6-sol sits on /openai/v1, and google.gemma-3-* and
-		// google.gemma-4-* likewise split across the two.
-		case domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat:
-			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-			if err == nil {
-				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
-			}
-			if err == nil {
-				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID, OperationPathPrefix: mantleOperationPathPrefix(binding.ProfileID)})
-			}
-		case domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses:
-			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-			if err == nil {
-				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "api-key", "x-api-key")
-			}
-			if err == nil {
-				adapter, err = bedrockmantleprovider.NewResponses(bedrockmantleprovider.ResponsesOptions{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, BedrockProjectID: instance.BedrockProjectID, OperationPathPrefix: mantleOperationPathPrefix(binding.ProfileID)})
-			}
-		case domain.ProfileBedrockMantleAnthropicMessages:
-			err = bedrockmantleprovider.ValidateEndpoint(endpoint)
-			if err == nil {
-				authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "x-api-key", "", plaintext, "Authorization", "api-key")
-			}
-			if err == nil {
-				adapter, err = anthropicprovider.New(anthropicprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities, ProviderType: string(domain.ProviderBedrock), CredentialScheme: binding.CredentialScheme, MessagesPath: "anthropic/v1/messages", BedrockProjectID: instance.BedrockProjectID, ProfileID: binding.ProfileID})
-			}
-		default:
-			err = errors.New("Bedrock provider profile is not implemented")
-		}
-	default:
-		err = errors.New("provider type is not implemented")
-	}
-	if err != nil {
-		if authorizer != nil {
-			authorizer.Close()
-		}
-		client.CloseIdleConnections()
-		return nil, err
-	}
-	return adapter, nil
+	return buildProviderAdapter(adapterBuildContext{
+		Instance: instance, Binding: binding, Endpoint: endpoint, Plaintext: plaintext, Client: client,
+	})
 }
 
 // mantleOperationPathPrefix returns the route a Bedrock Mantle profile

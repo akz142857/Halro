@@ -58,20 +58,43 @@
 每一条都做了反向验证：拆掉登记、确认变红、再装回去。其中一条反向验证**没有红**，
 因此推翻了一个原本写在源码注释里的错误论断——详见 §4。
 
-## 3. 能合并的三处
+## 3. 能合并的三处（§3.1、§3.3 已完成）
 
 不动分层就能砍掉的重复：
 
-### 3.1 `profileAllowsPrimitive` 与 `ProfileManifest`
+### 3.1 `profileAllowsPrimitive` 与 `ProfileManifest` —— **已实施（2026-08-31）**
 
-`internal/provider/profile.go` 里两张表，**在同一个文件里说了两遍重叠的话**：
-前者是 `profile → operation → primitive` 的白名单，后者是同一组绑定的完整声明。
-`ProfileManifest.Validate` 拿前者校验后者。
+**上一版把它写成「两张表」，实际动手才发现是同一份真相写了四遍**，其中三遍已经被
+`Validate` 互相校验着——那也正是它们没走散的原因，以及只有一份在真正携带信息的信号：
 
-合并方向：只留 manifest，把 `profileAllowsPrimitive` 变成从 manifest 派生的一致性检查，
-或者反过来只留白名单、manifest 由它生成。**要小心的是**：两张表现在互相校验，
-合成一张就少了一层，需要用别的东西补上——比如把 manifest 变成
-`map[profileID]map[Operation]Primitive` 一张表加派生。
+1. `profileAllowsPrimitive` 的 `profile → operation → primitive` 白名单；
+2. manifest 的 `Operations`（就是绑定的操作，按声明顺序）；
+3. manifest 的 `PrimitiveBindings[].SemanticOperation`（`semanticOperationFor` 从操作算得出来，
+   而 `Validate` 本来就在拒绝不一致的值）；
+4. manifest 的 `ProviderType` / `AccessSurface` / `CredentialScheme`——**domain 表里已经有了**，
+   而 `Validate` 调的 `domain.ValidateProviderProfile` 正是拿它们去核 domain 表。
+   一个必须与别处相等、且已经被校验相等的值，是不携带信息的。
+
+合并成 `internal/provider/profile_bindings.go` 一张
+`map[ProviderProfileID]{Revision, []operationBinding}`，其余全部派生。
+`Revision` 留着，它是这里唯一推不出来的东西：它记录一个 profile 在标识符不变的情况下
+含义变过（两条 Mantle 行换过路由、Anthropic 行长出了 files 与 batches），树里没有别的地方记得。
+
+`profile.go` 少了 122 行；两个重复的 `chatPair` / `anthropicWire` 形状抽成了命名函数。
+
+**替换是证出来的，不是假设的**：新旧并存跑过一次等价性对比——全部注册 profile 的 manifest
+逐字段 `DeepEqual`，加上 12,298 组 `(profile, operation, primitive)` 交叉比对，绿了才删旧表。
+对比发现**一处差异，方向是收紧的**：旧 map 靠索引作答，未服务的操作返回零值 `Primitive`，
+拿它和空原语比就是 `true`——读作「未绑定的操作允许空绑定」。这条路 `Validate` 走不到
+（它先拒空原语），新实现答 `false`。差异写进了源码注释，没有抹平。
+
+**代价说清楚**：合并后 `Validate` 校验内置 manifest 变成拿表核自己，是同义反复；
+它对**调用方传入的** manifest 仍然有效，而那才是它当初要防的场景。
+**但没有损失保护**——旧结构只能发现两张表**互相矛盾**，一个在两处都写错的绑定当时也照样通过。
+所以合并去掉的是「矛盾的可能性」，不是一层正确性检查，这里从来没有过那层。
+
+仍然抓不到的：把两个 profile 的原语对调（两个都还绑着，没有孤儿常量）。
+已记进契约文档的「没有守卫的步骤」，并指明平台自己的 wiring 测试是补这一格的办法。
 
 ### 3.2 字段申报与端点清单的 `ProfileCoverage`
 
@@ -83,13 +106,33 @@
 更多的东西（有些端点成员根本到不了语义模型，没有规则会拒它们）——所以只能派生一部分，
 剩下的仍要手写。收益因此比看上去小。
 
-### 3.3 `app/providers.go` 的构造 switch
+### 3.3 `app/providers.go` 的构造 switch —— **已实施（2026-08-31）**
 
-可以变成随 profile 注册的构造函数：`provider` 层暴露一个
-`func(ConnectionContext) (Adapter, error)`，平台包各自注册，`app` 只做查表。
+改成了 `map[ProviderProfileID]adapterBuilder`，一 profile 一行，三个阶段：
+`validateEndpoint`（可选，只有绑定到特定 host 的 profile 有）→ `authorize` → `build`。
+原来的 127 行嵌套 switch 变成 5 行查表，实现搬到 `internal/app/provider_adapters.go`。
 
-**这一处收益最实在**，而且它正是 MiniMax 那次「六步里唯一没有测试」的那一步。
-现在它有守卫了，但守卫是「每个 profile 都得有分支」，而不是「分支自己声明自己」。
+**先纠正这份提案自己写错的一句话。** 上一版写着改完之后「漏一个平台在编译期就没法通过」。
+**做不到。** Go 没有 exhaustive switch，map 字面量也没有「必须覆盖全部 key」的编译检查。
+唯一能做到编译期强制的形态，是把构造函数放进 profile 表行里——而表在 `domain`，
+不能 import 平台包（§6 第一行）。所以这条路是封死的，不是没做。
+
+真实收益是三条，都不是正确性：
+
+1. **可枚举。** switch 的分支列不出来，map 可以。于是多了一个原来写不出来的守卫：
+   `TestAdapterBuilderTableCoversExactlyTheRegisteredProfiles` 查**两个方向**——
+   缺行，以及**孤儿行**（构造还在、profile 已经不在表里了）。后者用 switch 根本发现不了，
+   一个死分支可以留到天荒地老，而且 grep 到它的人会以为那个平台还支持。
+2. **一处读完。** 原来是「类型 switch 里套两层 profile switch」，MiniMax 和 Bedrock 各套一层，
+   凭据头名分散在三个缩进层级里。现在一 profile 一行，头名和 fallback 在同一行上。
+3. **组合根瘦了。** `providers.go` 少了 122 行。
+
+**没有做的**：让平台包自己 `init()` 注册。那要么成环（registry import 平台包，平台包 import
+registry），要么退化成 blank import + init 副作用的可变全局状态——就是 §6 第三行拒绝的那种，
+而且换来的仍然不是编译期强制。
+
+守卫两个方向都做了反向验证：删掉 `minimax.responses.v1` 一行→两条测试点名报错；
+加一条 `retired.profile.v1` 孤儿行→覆盖测试点名报错。
 
 ## 4. 一处必须记下来的教训
 
@@ -116,7 +159,18 @@ MiniMax 还没有跑过真实账号（[适配方案](minimax-adaptation-plan.zh-
 「要归因一个症状到某次改动，就把两边都构建出来跑同一个输入」那条规矩的一个直接推论：
 两个变量同时动，就没有那个「两边」了。
 
-顺序：片 1 跑通 → MiniMax 的假设收敛 → 再做 §3。
+**这条推迟理由下得太宽了，2026-08-31 订正**：对着片 1 的六条产出逐条比，只有 §3.2 真的撞上。
+片 1 会改能力集（domain 表）、字段申报（compatibility）、错误归类（provider/openai）、
+以及凭据方案（如果 Bearer 在 Anthropic 路由上不通就要拆 scheme）——**primitive 绑定和构造分支
+一条都不沾**。
+
+所以：
+
+- §3.1（primitive 绑定两张表合并）**不撞**，可以做。
+- §3.2（字段申报与 `ProfileCoverage` 派生）**撞**，等片 1。
+- §3.3（构造表）**不撞**，已完成。
+
+顺序：§3.3 ✅ → §3.1 ✅ → 片 1 跑通 → §3.2。
 
 ## 6. 明确不做的
 
