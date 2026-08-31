@@ -50,6 +50,16 @@ const (
 	PrimitiveBedrockMantleOpenAIResponsesStream   Primitive = "bedrock.mantle.openai.responses.stream"
 	PrimitiveBedrockMantleAnthropicMessages       Primitive = "bedrock.mantle.anthropic.messages"
 	PrimitiveBedrockMantleAnthropicMessagesStream Primitive = "bedrock.mantle.anthropic.messages.stream"
+	PrimitiveMiniMaxAnthropicMessages             Primitive = "minimax.anthropic.messages"
+	PrimitiveMiniMaxAnthropicMessagesStream       Primitive = "minimax.anthropic.messages.stream"
+	PrimitiveMiniMaxChat                          Primitive = "minimax.chat-completions"
+	PrimitiveMiniMaxChatStream                    Primitive = "minimax.chat-completions.stream"
+	// Five, not six. The Responses profile serves the unary operation only, so a
+	// minimax.responses.stream constant would be a name nothing binds — and
+	// ProfileManifest.Validate checks that every binding names a declared
+	// operation, not that every constant is bound. See the Responses capability
+	// set in internal/domain/provider_table.go for why streaming is absent.
+	PrimitiveMiniMaxResponses Primitive = "minimax.responses"
 
 	// PrimitiveHalroLocalFiles is a file operation with no southbound call at
 	// all: Halro stores the bytes and the upstream is never told they exist.
@@ -378,6 +388,30 @@ type SemanticGenerator interface {
 // for what a profile does.
 var semanticGenerationPrimitives = map[Primitive]bool{
 	PrimitiveOpenAIResponses: true,
+	// MiniMax's Responses profile is served by the same adapter branch.
+	//
+	// What leaving it out does, stated after checking rather than before: the
+	// request is not refused. Resolve falls back to the legacy Chat path, and
+	// that branch translates through chatViaResponses and still addresses
+	// /v1/responses. The cost is fidelity, not availability — the semantic
+	// request would pass through the OpenAI Chat intermediate representation on
+	// its way to the wire, taking that representation's losses, which this
+	// profile's field rules do not declare because on the semantic path they do
+	// not happen.
+	//
+	// That makes the omission invisible to every mechanical check there is. The
+	// opposite mistake is caught: declaring a primitive semantic whose adapter
+	// is not a SemanticGenerator fails
+	// TestEveryReachableProfileReachesTheNetworkWhenCalled by name.
+	PrimitiveMiniMaxResponses: true,
+}
+
+// IsSemanticGenerationPrimitive exposes the declaration above so a caller
+// outside this package can dispatch the way Resolve does. It exists for the
+// guard that drives one call per reachable profile: reading the declaration is
+// the point, because guessing the pairing would test the guess.
+func IsSemanticGenerationPrimitive(primitive Primitive) bool {
+	return semanticGenerationPrimitives[primitive]
 }
 
 // unwrapSemanticGenerator finds the adapter under the profile wrapper.

@@ -86,6 +86,9 @@ func profileAllowsPrimitive(profileID domain.ProviderProfileID, operation Operat
 		domain.ProfileBedrockMantleResponses:         {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
 		domain.ProfileBedrockMantleOpenAIResponses:   {OperationChat: PrimitiveBedrockMantleOpenAIResponses, OperationChatStream: PrimitiveBedrockMantleOpenAIResponsesStream},
 		domain.ProfileBedrockMantleAnthropicMessages: {OperationChat: PrimitiveBedrockMantleAnthropicMessages, OperationChatStream: PrimitiveBedrockMantleAnthropicMessagesStream, OperationMessages: PrimitiveBedrockMantleAnthropicMessages, OperationMessagesStream: PrimitiveBedrockMantleAnthropicMessagesStream},
+		domain.ProfileMiniMaxAnthropicMessages:       {OperationChat: PrimitiveMiniMaxAnthropicMessages, OperationChatStream: PrimitiveMiniMaxAnthropicMessagesStream, OperationMessages: PrimitiveMiniMaxAnthropicMessages, OperationMessagesStream: PrimitiveMiniMaxAnthropicMessagesStream},
+		domain.ProfileMiniMaxChat:                    {OperationChat: PrimitiveMiniMaxChat, OperationChatStream: PrimitiveMiniMaxChatStream},
+		domain.ProfileMiniMaxResponses:               {OperationChat: PrimitiveMiniMaxResponses},
 	}
 	operations, ok := expected[profileID]
 	if !ok {
@@ -490,6 +493,28 @@ func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 			AccessSurface: domain.SurfaceBedrockMantle, CredentialScheme: domain.CredentialBedrockAPIKey,
 			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
 			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveBedrockMantleAnthropicMessagesStream}},
+		},
+		// The Messages operations are bound alongside the chat ones so the
+		// northbound /v1/messages endpoint can land here, which is what makes the
+		// Anthropic SDK reach MiniMax at all. Same shape as the two Anthropic-wire
+		// profiles above.
+		domain.ProfileMiniMaxAnthropicMessages: {
+			ID: domain.ProfileMiniMaxAnthropicMessages, Revision: 1, ProviderType: domain.ProviderMiniMax,
+			AccessSurface: domain.SurfaceMiniMax, CredentialScheme: domain.CredentialBearerStatic,
+			Operations:        []Operation{OperationChat, OperationChatStream, OperationMessages, OperationMessagesStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveMiniMaxAnthropicMessages}, {OperationChatStream, semantic.OperationGenerate, PrimitiveMiniMaxAnthropicMessagesStream}, {OperationMessages, semantic.OperationGenerate, PrimitiveMiniMaxAnthropicMessages}, {OperationMessagesStream, semantic.OperationGenerate, PrimitiveMiniMaxAnthropicMessagesStream}},
+		},
+		domain.ProfileMiniMaxChat: {
+			ID: domain.ProfileMiniMaxChat, Revision: 1, ProviderType: domain.ProviderMiniMax,
+			AccessSurface: domain.SurfaceMiniMax, CredentialScheme: domain.CredentialBearerStatic,
+			Operations:        []Operation{OperationChat, OperationChatStream},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveMiniMaxChat}, {OperationChatStream, semantic.OperationGenerate, PrimitiveMiniMaxChatStream}},
+		},
+		domain.ProfileMiniMaxResponses: {
+			ID: domain.ProfileMiniMaxResponses, Revision: 1, ProviderType: domain.ProviderMiniMax,
+			AccessSurface: domain.SurfaceMiniMax, CredentialScheme: domain.CredentialBearerStatic,
+			Operations:        []Operation{OperationChat},
+			PrimitiveBindings: []PrimitiveBinding{{OperationChat, semantic.OperationGenerate, PrimitiveMiniMaxResponses}},
 		},
 	}
 	manifest, ok := manifests[id]

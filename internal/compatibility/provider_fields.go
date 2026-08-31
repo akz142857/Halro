@@ -195,6 +195,72 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
 	}, domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// MiniMax's Anthropic face. It starts from the direct Anthropic profile's
+		// losses because it is the same wire form, then adds what MiniMax alone
+		// cannot carry.
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasImageDetail(request), "messages[].content[].detail")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		// No JSON mode of either kind is documented on any MiniMax face. That is
+		// documentation being silent rather than refusing, so it is treated as
+		// absent — the fail-closed direction — until a real request says
+		// otherwise. Both capability halves are off, so routing has already
+		// dropped this target before the rule runs; it is still declared because
+		// the manifest coverage tests hold every unrepresentable member to a
+		// declaration, and a fact stated in only one layer is a fact the other
+		// can contradict.
+		add(request.OutputFormat != nil, "response_format")
+		// Any depth at all. A portable request that asks for one reaches
+		// output_config.effort, and MiniMax accepts no output_config — its
+		// reasoning switch is the older thinking member. A request that asks for
+		// nothing still gets thinking disabled, because the portable mapper emits
+		// {"type":"disabled"} on its own and that is MiniMax's exact spelling, so
+		// the capability is real and only the depth is unreachable.
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		add(request.EndUserRef != "", "user")
+		// MiniMax documents stop_sequences as ignored rather than refused. An
+		// ignored member is worse than a refused one: the request comes back 200,
+		// the caller pays for a completion that ran past the boundary they set,
+		// and nothing in the chain says the boundary was dropped.
+		add(len(request.Stop) > 0, "stop")
+	}, domain.ProfileMiniMaxAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// MiniMax's two OpenAI-shaped faces. They share this rule because they
+		// share the accepted set; where they differ is reasoning, which is
+		// reachable on Responses under its OpenAI name and reachable on Chat only
+		// through the dialect renderer in minimax.go.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(len(request.Stop) > 0, "stop")
+		add(request.OutputFormat != nil, "response_format")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+	}, domain.ProfileMiniMaxChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// The Responses face carries the Chat face's losses and two of its own.
+		// It is written out rather than layered on top of the rule above because
+		// register keys by profile, so a second registration for the same profile
+		// would replace the first rather than add to it — the losses would
+		// silently halve.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(len(request.Stop) > 0, "stop")
+		add(request.OutputFormat != nil, "response_format")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		// No reasoning at all. The capability ceiling already routes a thinking
+		// request away — the canonical response mapper cannot carry reasoning
+		// items — but a caller told "no route supports this" learns less than one
+		// told which field cost them the route.
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		// A Responses message item has no author name to put one in.
+		add(hasNamedMessage(request), "messages[].name")
+	}, domain.ProfileMiniMaxResponses)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Bedrock's inability to fetch an image used to be declared here, once per
 		// northbound endpoint, in each endpoint's own name for the same member.
 		// Three spellings of one fact was the evidence that it did not belong in

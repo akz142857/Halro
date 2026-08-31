@@ -779,6 +779,48 @@ func newProviderBindingAdapterWithClient(instance domain.ProviderInstance, bindi
 		if err == nil {
 			adapter, err = geminiprovider.New(geminiprovider.Options{Endpoint: endpoint, Authorizer: authorizer, Client: client})
 		}
+	case domain.ProviderMiniMax:
+		// One credential for all three faces. MiniMax accepts the key as a bearer
+		// token everywhere and additionally as x-api-key on the Anthropic route,
+		// with Authorization taking precedence when both are present, so the
+		// bearer form is the one that works on every profile and x-api-key is
+		// carried only as the fallback header name.
+		authorizer, err = provider.NewStaticHeaderAuthorizer(binding.CredentialScheme, "Authorization", "Bearer ", plaintext, "x-api-key")
+		if err == nil {
+			switch binding.ProfileID {
+			case domain.ProfileMiniMaxAnthropicMessages:
+				// The Anthropic wire form under a different path. The adapter's
+				// discovery turns enumeration off whenever MessagesPath is set,
+				// which is right here: MiniMax has no Anthropic-shaped model list,
+				// its catalogue lives on the OpenAI route, and the Chat profile
+				// beside this one reaches it.
+				adapter, err = anthropicprovider.New(anthropicprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client, Capabilities: capabilities,
+					ProviderType: string(domain.ProviderMiniMax), CredentialScheme: binding.CredentialScheme,
+					MessagesPath: "anthropic/v1/messages", ProfileID: binding.ProfileID,
+					// MiniMax keeps its model list on the OpenAI route of the same
+					// host, reachable with this same key. It is not an Anthropic
+					// catalogue, so nothing is enumerated from it — but it is enough
+					// to answer a credential-only connection test, which otherwise
+					// asked the operator to bind a deployment before they could find
+					// out whether their key worked.
+					CatalogProbeOnly: true,
+				})
+			case domain.ProfileMiniMaxChat, domain.ProfileMiniMaxResponses:
+				// No OperationPathPrefix: MiniMax serves /v1/chat/completions and
+				// /v1/responses directly under the base URL, which is the default
+				// join. The prefix exists for Bedrock Mantle's second route and
+				// nothing else.
+				adapter, err = openaiprovider.NewWithOptions(openaiprovider.Options{
+					Endpoint: endpoint, Authorizer: authorizer, Client: client,
+					ProviderType: string(domain.ProviderMiniMax), CredentialScheme: binding.CredentialScheme,
+					Capabilities: capabilities,
+					Responses:    binding.ProfileID == domain.ProfileMiniMaxResponses,
+				})
+			default:
+				err = errors.New("MiniMax provider profile is not implemented")
+			}
+		}
 	case domain.ProviderBedrock:
 		switch binding.ProfileID {
 		case domain.ProfileBedrockConverseText, domain.ProfileBedrockInvokeTitanEmbedV2, domain.ProfileBedrockInvokeTitanImageV2, domain.ProfileBedrockAsyncNovaReel, domain.ProfileBedrockAgentRerankCohere35:

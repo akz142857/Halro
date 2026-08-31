@@ -14,15 +14,65 @@ import (
 )
 
 func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
-	schemas := make([]compatibility.NativeSchema, 0, 2)
-	for _, profileID := range []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages} {
+	profiles := []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages}
+	schemas := make([]compatibility.NativeSchema, 0, len(profiles))
+	for _, profileID := range profiles {
+		validate := validateNativePayload
+		if profileID == domain.ProfileMiniMaxAnthropicMessages {
+			validate = validateMiniMaxNativePayload
+		}
 		schemas = append(schemas, compatibility.NativeSchema{
 			ProfileID: profileID, SchemaRevision: 1,
 			AllowedHeaders: []string{anthropicapi.VersionHeader, anthropicapi.BetaHeader}, MaxPayloadBytes: anthropicapi.MaxRequestBytes, MaxEventBytes: semantic.MaxEncodedEventBytes,
-			ValidatePayload: validateNativePayload, ExtractGovernance: extractNativeGovernance,
+			ValidatePayload: validate, ExtractGovernance: extractNativeGovernance,
 		})
 	}
 	return compatibility.NewNativeSchemaRegistry(schemas...)
+}
+
+// validateMiniMaxNativePayload is the Anthropic native validator plus the three
+// members MiniMax accepts and then ignores.
+//
+// Every other native profile is narrower on the portable path than on this one:
+// native forwards the caller's bytes, and what the upstream cannot represent it
+// refuses. MiniMax breaks that assumption. Its documentation says top_k and
+// stop_sequences "会被忽略" — accepted and dropped — and it has no prompt caching
+// at all, so a cache_control marker is read as nothing. Forwarding any of the
+// three returns 200 for a request that did not happen as written: a completion
+// that ran past the caller's stop boundary, sampled differently than they asked,
+// and billed at the uncached rate they thought they had avoided.
+//
+// A refusal here costs the caller one clear error. Forwarding costs them a
+// wrong answer they have no way to detect, which is the trade this repository
+// resolves the same way everywhere else.
+func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
+	if err := validateNativePayload(kind, payload); err != nil {
+		return err
+	}
+	if kind != compatibility.NativeRequest {
+		return nil
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	if request.TopK != nil {
+		return errors.New("MiniMax ignores top_k rather than honouring it, so it is refused instead of forwarded")
+	}
+	if len(request.StopSequences) > 0 {
+		return errors.New("MiniMax ignores stop_sequences rather than honouring them, so they are refused instead of forwarded")
+	}
+	// cache_control is not a member of any struct here — it rides inside content
+	// blocks, system blocks and tool definitions, which are forwarded as raw
+	// bytes. Searching the payload is therefore the only way to see it, and a
+	// false positive costs a caller one error on a request that mentions the
+	// member name in text they were sending anyway. That is the safe side: the
+	// alternative is a silent claim to a prompt-cache discount MiniMax does not
+	// offer.
+	if bytes.Contains(payload, []byte(`"cache_control"`)) {
+		return errors.New("MiniMax has no prompt caching, so cache_control is refused rather than forwarded and ignored")
+	}
+	return nil
 }
 
 func validateNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {

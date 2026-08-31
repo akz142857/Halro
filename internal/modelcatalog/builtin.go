@@ -55,6 +55,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		bedrockConverseModels(),
 		bedrockMantleModels(),
 		openAICompatibleModels(),
+		minimaxModels(),
 	)...)
 })
 
@@ -374,6 +375,80 @@ func anthropicModels() []Entry {
 		builtinEntry(provider, profile, "claude-sonnet-4-6", claude(1_000_000, 128_000)),
 		builtinEntry(provider, profile, "claude-haiku-4-5-20251001", claude(200_000, 64_000)),
 	}
+}
+
+// minimaxModels covers the eight exact identifiers MiniMax documents. The same
+// eight are served on both of MiniMax's hosts — api.minimax.io for international
+// accounts and api.minimaxi.com for mainland ones — so the entries are not
+// region-scoped; only the connection's base URL is.
+//
+// Two deliberate narrowings, both on the conservative side of what the
+// documentation says:
+//
+//   - Only MiniMax-M3 gets vision. The M2.x line is documented as accepting
+//     "text and tool-call content blocks only", so an image request routed there
+//     would be refused after the budget was reserved.
+//   - M2.x carries no output bound. The documentation records its max_tokens
+//     ceiling as 204,800, which is also its context window — that reads as a
+//     missing row rather than a model that can emit its whole window, and a
+//     wrong bound is enforced by budget and routing while a missing one only
+//     costs a layer of protection. M3's 524,288 is listed separately from its
+//     1,000,000 window, so it is recorded.
+//
+// One thing this catalogue records that no capability set can: the M2.x line
+// cannot switch thinking off. That is why reasoning is claimed for M3 alone —
+// an M2.x deployment cannot honour a request not to think, and claiming the
+// capability would let a caller ask for something the model will bill them for
+// anyway.
+//
+// Sources reviewed 2026-08-31:
+//   - https://platform.minimax.io/docs/api-reference/text-anthropic-api
+//   - https://platform.minimax.io/docs/api-reference/text-chat-anthropic
+//   - https://platform.minimax.io/docs/api-reference/text-chat-openai
+//   - https://platform.minimax.cn/docs/api-reference/text-anthropic-api
+func minimaxModels() []Entry {
+	const provider = domain.ProviderMiniMax
+	// The Anthropic face is the anchor profile, so it is the one a connection
+	// serves chat on by default. Chat and Responses carry the same models; a
+	// deployment on either declares them from this same list, which is why the
+	// entries are written per profile rather than once per model.
+	anthropicChat := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	openAIChat := anthropicChat
+	// Responses binds no stream primitive and cannot carry reasoning items, so
+	// its entries claim neither.
+	responses := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Tools: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	const m3Context, m3Output int64 = 1_000_000, 524_288
+	const m2Context int64 = 204_800
+	m2Models := []string{
+		"MiniMax-M2.7", "MiniMax-M2.7-highspeed",
+		"MiniMax-M2.5", "MiniMax-M2.5-highspeed",
+		"MiniMax-M2.1", "MiniMax-M2.1-highspeed",
+		"MiniMax-M2",
+	}
+	entries := []Entry{
+		// M3 alone sees images and alone can be asked not to think.
+		builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, "MiniMax-M3", with(anthropicChat(m3Context, m3Output), reasoning, vision)),
+		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
+		builtinEntry(provider, domain.ProfileMiniMaxResponses, "MiniMax-M3", with(responses(m3Context, m3Output), vision)),
+	}
+	for _, model := range m2Models {
+		entries = append(entries,
+			builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, model, anthropicChat(m2Context, 0)),
+			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
+			builtinEntry(provider, domain.ProfileMiniMaxResponses, model, responses(m2Context, 0)),
+		)
+	}
+	return entries
 }
 
 // geminiModels uses stable model codes only; preview, latest and experimental

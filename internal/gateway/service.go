@@ -1710,7 +1710,8 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 
 func isNativeAnthropicProfile(profileID domain.ProviderProfileID, surface domain.AccessSurface) bool {
 	return profileID == domain.ProfileAnthropicMessages && surface == domain.SurfaceAnthropic ||
-		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle
+		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle ||
+		profileID == domain.ProfileMiniMaxAnthropicMessages && surface == domain.SurfaceMiniMax
 }
 
 func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {

@@ -1840,15 +1840,11 @@ func credentialOrigin(audience string, providerType domain.ProviderType) string 
 	return strings.TrimSuffix(audience, ":"+string(providerType))
 }
 
+// implementedProviderType asks the profile table, which is the same source the
+// console's metadata endpoint enumerates. Keeping a switch here meant the two
+// could disagree, and they did.
 func implementedProviderType(value domain.ProviderType) bool {
-	switch value {
-	case domain.ProviderOpenAI, domain.ProviderAzureOpenAI,
-		domain.ProviderAnthropic, domain.ProviderDeepSeek, domain.ProviderOpenAICompatible, domain.ProviderGemini,
-		domain.ProviderBedrock:
-		return true
-	default:
-		return false
-	}
+	return domain.IsRegisteredProviderType(value)
 }
 
 func credentialViewFrom(item domain.Credential) credentialView {

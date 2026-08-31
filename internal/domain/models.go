@@ -19,6 +19,7 @@ const (
 	ProviderOpenAICompatible ProviderType = "openai_compatible"
 	ProviderBedrock          ProviderType = "bedrock"
 	ProviderGemini           ProviderType = "gemini"
+	ProviderMiniMax          ProviderType = "minimax"
 )
 
 type ProviderResourceKind string
@@ -515,7 +516,7 @@ func (p ProviderInstance) Validate() error {
 		problems = append(problems, errors.New("provider name is required"))
 	}
 	switch p.Type {
-	case ProviderOpenAI, ProviderAnthropic, ProviderAzureOpenAI, ProviderDeepSeek, ProviderOpenAICompatible, ProviderGemini, ProviderBedrock:
+	case ProviderOpenAI, ProviderAnthropic, ProviderAzureOpenAI, ProviderDeepSeek, ProviderOpenAICompatible, ProviderGemini, ProviderBedrock, ProviderMiniMax:
 	default:
 		problems = append(problems, errors.New("provider type is not implemented"))
 	}

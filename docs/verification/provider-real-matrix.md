@@ -77,9 +77,83 @@ never accepted as `unsupported`; the fake-server contract tests cover those
 negative classifications even when a real account has no stable negative
 model.
 
-Gemini and Bedrock are Beta and therefore do not satisfy or block the GA matrix,
-but each has a separate opt-in real smoke test under its adapter package. Run
-those when the corresponding Beta is included in an RC deployment.
+Gemini, Bedrock and MiniMax are Beta and therefore do not satisfy or block the
+GA matrix, but each has a separate opt-in real smoke test under its adapter
+package. Run those when the corresponding Beta is included in an RC deployment.
+
+## MiniMax: nothing has been measured with a credential yet
+
+`internal/provider/openai/minimax_real_smoke_test.go` is written and skips
+unless `HALRO_MINIMAX_API_KEY` is set. **No part of it has been run.**
+
+One thing has been measured with a real credential, and it is not this smoke: on
+2026-08-31 a connection test against `https://api.minimax.io` on the
+`minimax.anthropic.messages.v1` profile passed in 1280 ms. That establishes the
+key reaches the host and that `GET /v1/models` answers it with a JSON object. It
+establishes nothing about accounting, error shape, or the Anthropic route's own
+authentication — the probe addresses `/v1/models`, not `/anthropic/v1/messages`.
+A reachable credential and a correctly billed generation are different claims,
+and only the first has evidence.
+
+The
+MiniMax adaptation was implemented from published documentation plus one
+unauthenticated probe of the three hosts, and the plan it came from names the
+assumptions the code now rests on
+(`docs/prd/minimax-adaptation-plan.zh-CN.md`, §7).
+
+Two things make this profile different from every other Beta here, and both
+change what the smoke has to establish:
+
+- **The region is a variable, not a constant.** MiniMax splits by account
+  region — `https://api.minimax.io` for international accounts and
+  `https://api.minimaxi.com` for mainland ones — with identical paths, headers,
+  bodies and error envelopes, and keys that are not interchangeable. Halro
+  serves both with one profile group and one base URL field, which is only
+  correct if the two really are identical with a credential attached. So the
+  smoke takes the endpoint as configuration and is run **once per region**. A
+  pass on one region is not evidence for the other; record the unrun one as
+  not measured rather than as passing.
+
+  As of 2026-08-31 the mainland round is **deliberately deferred, not
+  forgotten**: the international account is being taken first. Mainland is
+  recorded as not measured until it has been run with a mainland key.
+- **A 200 can carry a failure.** `POST /v1/embeddings` was measured on
+  2026-08-31 answering an unauthenticated request with HTTP 200 and
+  `base_resp.status_code=1004`. The three chat-shaped routes answered the same
+  request with a proper 401, so whether they use the envelope for real errors is
+  unestablished — and it is the difference between a failed generation settled
+  as a failure and one settled as a success. Triggering a controlled error is
+  therefore an assertion of this smoke, not an optional extra.
+
+Configure it with:
+
+- `HALRO_MINIMAX_API_KEY` — required; the smoke skips without it
+- `HALRO_MINIMAX_BASE_URL` — defaults to `https://api.minimax.io`; set it to
+  `https://api.minimaxi.com` for the mainland run
+- `HALRO_MINIMAX_MODEL` — defaults to `MiniMax-M3`
+
+```bash
+HALRO_MINIMAX_API_KEY=... go test ./internal/provider/openai/ -run TestRealMiniMaxSmoke -count=1 -v
+```
+
+What it has to establish, in the order the plan ranks the risk:
+
+1. Whether a real error arrives as a non-2xx or as a 200 carrying `base_resp`.
+2. Whether `usage` on Chat Completions carries `prompt_tokens` and
+   `completion_tokens`, or only the `total_tokens` its schema documents. Only
+   the total means input and output cannot be settled at their own rates.
+3. Whether `Authorization: Bearer` is accepted on `/anthropic/v1/messages`. Both
+   documentation sites say it is and say it takes precedence over `x-api-key`;
+   no request has confirmed it, and the adapter sends bearer on all three faces.
+4. Whether `stream_options.include_usage` is honoured and the final chunk
+   carries usage. Without it a streamed call has no measured cost.
+5. Whether MiniMax-M2.x accepts `thinking: {"type":"disabled"}` or refuses it.
+   Halro sends the switch on every request that did not ask to think, because
+   MiniMax-M3 defaults to thinking and omitting it bills every caller for
+   reasoning they never requested. If M2.x refuses, that fails loudly and the
+   fix is a catalogue-driven distinction rather than a model-name prefix.
+6. Whether `response_format` is supported at all. No MiniMax document mentions
+   it, so no MiniMax profile claims either JSON capability today.
 
 ## DeepSeek: the two extra assertions passed on a real account (2026-08-20)
 
