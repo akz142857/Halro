@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -286,4 +288,101 @@ func TestRealMiniMaxSmoke(t *testing.T) {
 			t.Fatalf("probe: %v", err)
 		}
 	})
+
+	// What the probe above deliberately does not read. Its check is "the reply is
+	// a JSON object" and nothing more, because asserting a member name Halro only
+	// guessed would turn a wrong guess into a failed credential test. So a pass
+	// there establishes the route answers a credential — never that what it
+	// answers with is a model list.
+	//
+	// Three decisions rest on the shape and none has evidence:
+	//
+	//   - Whether MiniMax's Anthropic-faced profile can enumerate at all. It
+	//     ships a bundled list today because the Anthropic catalogue decoder
+	//     reads Anthropic's shape and this route does not serve it. If the body
+	//     is OpenAI-shaped, that profile can read it the way the Chat profile
+	//     already does, and the console gets a Refresh button that reaches the
+	//     account instead of a list frozen into the binary.
+	//   - Whether "the list would credit speech and video models with chat" is
+	//     true. It is the stated reason the Anthropic face does not enumerate,
+	//     and it was inferred from documentation, not read off a response.
+	//   - Whether the Chat profile's enumeration, which does run against this
+	//     route, is already returning those models. The same inference says it
+	//     must be, and nothing has checked.
+	//
+	// Raw rather than through the adapter: the adapter decodes into a fixed
+	// struct, so it can only ever report the members Halro already expected to
+	// find. The point here is the members it did not.
+	t.Run("what the model catalogue actually returns", func(t *testing.T) {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(endpoint.String(), "/")+"/v1/models", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+		request.Header.Set("Accept", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("raw model catalogue: %v", err)
+		}
+		defer response.Body.Close()
+		payload, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		if err != nil {
+			t.Fatalf("read model catalogue: %v", err)
+		}
+		t.Logf("status=%d content-type=%q bytes=%d",
+			response.StatusCode, response.Header.Get("Content-Type"), len(payload))
+
+		// Top-level members first, because that is the question the probe
+		// declined to ask: is there a `data` at all, or does MiniMax wrap its
+		// list under a name of its own with base_resp beside it.
+		var envelope map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			t.Fatalf("the catalogue reply is not a JSON object: %v\nbody: %s", err, truncateForLog(payload, 2000))
+		}
+		members := make([]string, 0, len(envelope))
+		for name := range envelope {
+			members = append(members, name)
+		}
+		sort.Strings(members)
+		t.Logf("top-level members: %v", members)
+
+		// Then the OpenAI shape specifically, because that is what the fix would
+		// be written against. Zero entries with a 200 is itself an answer: it
+		// would mean the route exists and lists nothing this key may reach.
+		var openAIShaped struct {
+			Object string `json:"object"`
+			Data   []struct {
+				ID      string `json:"id"`
+				Object  string `json:"object"`
+				OwnedBy string `json:"owned_by"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(payload, &openAIShaped); err != nil {
+			t.Logf("not OpenAI-shaped: %v", err)
+		} else {
+			t.Logf("object=%q data entries=%d", openAIShaped.Object, len(openAIShaped.Data))
+			for _, entry := range openAIShaped.Data {
+				t.Logf("  model | id=%q object=%q owned_by=%q", entry.ID, entry.Object, entry.OwnedBy)
+			}
+		}
+
+		// The body verbatim, bounded. Every member above was one Halro thought to
+		// look for; this is the only line that can show a member nobody predicted,
+		// which is the whole reason the subtest is here. It is a public model
+		// list, and the matrix runner scrubs the credential out of captured
+		// output either way.
+		t.Logf("body: %s", truncateForLog(payload, 8000))
+		t.Log("read this: a `data` array of `{id, object, owned_by}` means the Anthropic face can " +
+			"enumerate from this route with an OpenAI-shaped decoder; the ids present decide whether " +
+			"speech and video models really are in it, which is the claim the no-enumeration decision rests on")
+	})
+}
+
+// truncateForLog bounds a captured body without hiding that it was cut.
+func truncateForLog(payload []byte, limit int) string {
+	text := strings.TrimSpace(string(payload))
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "… (truncated, " + strconv.Itoa(len(text)) + " bytes total)"
 }
