@@ -8,7 +8,29 @@ rather than a memory aid — nothing here has to be remembered, only found.
 are actually in the tree, so a renamed or deleted guard cannot leave a step here
 citing something that no longer runs.
 
-## Why it is six places and not one
+## Read this first: the guard is the step
+
+Adding MiniMax in August 2026 produced two defects that reached an operator's
+screen. Both were registration steps that had been missed. The useful thing is
+which ones:
+
+- A hand-written provider-type list in the Admin write path, which was not in
+  this document at all and had no guard. The console offered a type its own
+  server refused.
+- A flag answering two questions at once, so turning off target enumeration also
+  turned off the credential-only connection test.
+
+Every step that *was* in this document, with a named guard, was done correctly —
+because skipping one turns a test red with the step's name in the message. The
+correlation is not "many steps, therefore mistakes". It is **unguarded steps,
+therefore mistakes**.
+
+So the shape of this document changed: each step now states its guard, and a
+step with no mechanical guard says so in those words. Do not add a step here
+without deciding what fails when it is skipped, and do not describe a step as
+covered without having removed the registration and watched the test fail.
+
+## Why it is several places and not one
 
 A single description per platform is not reachable in this codebase, and the
 reason is the dependency direction rather than an oversight:
@@ -25,10 +47,15 @@ rules is `provider`. But the profile table has to stay in `domain`: it carries
 the capability ceiling, and `ProviderProfileBinding.Validate` needs that ceiling
 to check a stored record before anything else runs. Move the table up and domain
 loses the ceiling; leave the ceiling behind and it is duplicated. Both are worse
-than six registrations, so the layering stands and the registrations are made
+than several registrations, so the layering stands and the registrations are made
 loud instead of few.
 
-Every step below fails a named test when skipped. None of them fails the
+This is the argument against collapsing the declarations into one place. It is
+not an argument against collapsing *some* of them, and there is a live proposal
+to: `docs/prd/platform-registration-consolidation.zh-CN.md`.
+
+Almost every step below fails a named test when skipped, and the two that do not
+are listed under "Steps with no mechanical guard". None of them fails the
 compiler — `go build` passes with a profile registered in the table alone — so
 the test suite is the thing that tells you what is missing.
 
@@ -99,9 +126,78 @@ naming a field the endpoint does not model, and a manifest that omits any profil
 `internal/app/providers.go` — building the adapter, its authorizer and its
 endpoint from a stored connection.
 
-This is the one step no test covers, because it needs credentials and a client.
-It fails at runtime instead, with `provider profile is not implemented`, on the
-first attempt to build a connection.
+Guarded by `TestEveryReachableProfileBuildsAnAdapter`, which walks every
+non-withheld profile in the domain table and builds one against a fake secret
+per credential scheme, and by
+`TestEveryReachableProfileReachesTheNetworkWhenCalled`, which then drives one
+generation through it and requires the call to reach the transport.
+
+This step used to be described here as the one no test covers, on the grounds
+that it needs a credential and a client. It needs a *plausible* one of each,
+which is a fixture. Adding a credential scheme without a fixture fails the first
+guard by name rather than going unchecked.
+
+### 7. Provider-type admission — nothing to do, and why
+
+There is no seventh step, and its absence is the thing to understand.
+
+`internal/app/admin_providers.go` gated both credential and connection saves on
+`implementedProviderType`, a hand-written switch over provider types. It was the
+third copy of that list — after the profile table and `ProviderInstance.Validate`
+— and it fell behind exactly the way `provider_table.go`'s own header warns a
+private list will: MiniMax was registered in all six steps above, offered by the
+console's provider-profiles endpoint, and refused on save with `provider type is
+not implemented`. No test saw it, because the new platform's coverage entered
+below this gate rather than through it.
+
+It now reads `domain.IsRegisteredProviderType`, which looks the type up in the
+same table the console enumerates.
+`TestEveryOfferedProviderTypeIsAcceptedOnSave` holds the two together, and
+`TestEveryRegisteredProviderTypePassesInstanceValidation` holds the table to the
+switch in `ProviderInstance.Validate` that is still a switch.
+
+Nothing to do for a new platform. **Do not reintroduce a list here.**
+
+### 8. Anthropic-wire platforms only
+
+A platform speaking Anthropic Messages touches three more registrations, each
+holding a different half of native mode:
+
+- `internal/compatibility/anthropic/native.go` — the schema that validates and
+  forwards the caller's bytes.
+- `internal/gateway/service.go`, `isNativeAnthropicProfile` — whether native is
+  offered for this (profile, surface) pair at all.
+- `internal/domain/provider_profile.go`, `ProfileSendsAnthropicBetas` — whether
+  an `anthropic-beta` header may be forwarded. Deliberately a subset: a platform
+  can serve native and still not accept beta headers.
+
+Guarded by `TestNativeAnthropicListsAgree`, which requires the first two to
+match exactly and the third to be a subset, and by `TestNoNativeProfileIsWithheld`.
+The dangerous direction is a profile offered as native with no schema
+registered — that is a byte-for-byte forward with nothing inspecting it.
+
+`internal/provider/capability_detection.go`, `reasoningProbeEffort`, also has to
+exclude the profile: the probe reads its answer through the portable Chat
+mapping, which refuses the signed thinking blocks an Anthropic-wire upstream
+returns, so asking pays for an answer that cannot be read. Guarded by
+`TestEveryAnthropicWireProfileIsExcludedFromTheReasoningProbe`.
+
+### Steps with no mechanical guard
+
+Two, named here so they are not mistaken for covered.
+
+**A generation primitive left out of `semanticGenerationPrimitives`**
+(`internal/provider/primitive.go`). Nothing fails. `Resolve` falls back to the
+legacy Chat path, and an adapter whose Responses branch translates will address
+the same endpoint anyway. The cost is a lossier translation — the semantic
+request passes through the OpenAI Chat intermediate representation and takes its
+losses, which the profile's field rules do not declare because on the semantic
+path they do not happen. This was checked by removing the entry and watching
+nothing break; the opposite mistake, declaring a primitive semantic whose
+adapter is not a `SemanticGenerator`, does fail by name.
+
+**The model catalogue** (`internal/modelcatalog/builtin.go`). Skipping it is
+legal, as below. Nothing enforces that a platform's models are seeded.
 
 ## After the steps
 
