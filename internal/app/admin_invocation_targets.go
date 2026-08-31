@@ -374,6 +374,17 @@ func (r *Runtime) fetchInvocationTargetCatalog(ctx context.Context, instance dom
 	result.discovery = reporter.InvocationTargetDiscovery()
 	result.mapper, _ = providerMetadataMapper(adapter)
 	if !result.discovery.CanEnumerate {
+		// A profile that cannot enumerate is not a profile with nothing to offer.
+		// Halro's own catalog may carry exact identifiers for it, and they were
+		// seeded precisely so an operator would not have to type one — but until
+		// now they only enriched a target the upstream had listed, so on a
+		// profile that lists nothing they were unreachable from the create form.
+		//
+		// They are offers, not findings, and travel labelled as such: the source
+		// says builtin_catalog and availability stays unverified, because a
+		// built-in entry is evidence that Halro pre-checked an identifier, never
+		// that this account is entitled to it.
+		result.items = builtinCatalogOffers(instance.Type, binding.ProfileID, modelcatalog.Builtin())
 		return result
 	}
 	lister, ok := invocationTargetLister(adapter)
@@ -469,6 +480,43 @@ func aggregateInvocationTargets(instance domain.ProviderInstance, results []bind
 // read from the global clock here: resolution has to be reproducible for a given
 // catalog, and a resolver that reads the wall clock cannot be asserted on except
 // by a test that races it.
+// builtinCatalogOffers turns the built-in catalog's entries for one profile into
+// targets the create form can present.
+//
+// Deliberately only for a profile that cannot enumerate. Where enumeration works
+// the upstream's own list is the better answer, and where enumeration failed the
+// binding is degraded — substituting offers there would replace an outage with a
+// list that looks healthy.
+func builtinCatalogOffers(providerType domain.ProviderType, profileID domain.ProviderProfileID, catalog *modelcatalog.Catalog) []domain.InvocationTargetDescriptor {
+	if catalog == nil {
+		return nil
+	}
+	offers := make([]domain.InvocationTargetDescriptor, 0)
+	for _, entry := range catalog.Entries() {
+		if entry.Key.ProviderType != providerType || entry.Key.Profile != profileID {
+			continue
+		}
+		model := strings.TrimSpace(entry.Key.Model)
+		if model == "" {
+			continue
+		}
+		offers = append(offers, domain.InvocationTargetDescriptor{
+			TargetID: model, TargetKind: entry.Key.TargetKind, DisplayName: model,
+			CanonicalModelRef: model, Region: entry.Key.Region,
+			// The catalog records what a model does, not whether it has been
+			// retired, so lifecycle stays unknown rather than claiming active.
+			Lifecycle: domain.TargetLifecycleUnknown,
+			Metadata: domain.NormalizedModelMetadata{
+				MaxContextTokens: entry.Capabilities.MaxContextTokens,
+				MaxOutputTokens:  entry.Capabilities.MaxOutputTokens,
+			},
+			MetadataSource: domain.MetadataSourceBuiltinCatalog,
+			Availability:   domain.AvailabilityUnverified,
+		})
+	}
+	return offers
+}
+
 func aggregateInvocationTargetsWithCatalog(instance domain.ProviderInstance, results []bindingTargetCatalog, at time.Time, catalog *modelcatalog.Catalog) invocationTargetCatalogResponse {
 	response := invocationTargetCatalogResponse{
 		Items:           make([]adminInvocationTarget, 0),

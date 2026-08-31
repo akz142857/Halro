@@ -854,6 +854,7 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .combobox-field > small { color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .combobox-field > small.field-error { color: var(--danger); }
 .deployment-model-empty { padding: 14px 12px; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+.deployment-model-offer { margin-left: var(--space-2); color: var(--muted); font-size: var(--font-size-xs); font-weight: var(--font-weight-regular); }
 .deployment-model-declaration { margin-top: 0.4375rem; padding: 0.625rem 0.75rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; border-left: 0.125rem solid var(--line); }
 .deployment-model-degraded { margin-top: 0.4375rem; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 .model-status { color: var(--muted); font-size: var(--font-size-xs); }

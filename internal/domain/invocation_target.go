@@ -32,6 +32,15 @@ type MetadataSource string
 const (
 	MetadataSourceNone     MetadataSource = "none"
 	MetadataSourceProvider MetadataSource = "provider_metadata"
+	// MetadataSourceBuiltinCatalog is a target Halro offers from its own built-in
+	// model catalog rather than one an upstream listed.
+	//
+	// It exists because the two are not the same claim and must not read as one.
+	// A provider listing a model is evidence the account reaches it. A built-in
+	// entry is evidence only that Halro was willing to pre-check the identifier —
+	// the account may not be entitled to it at all, which is why an offer of this
+	// kind is always AvailabilityUnverified.
+	MetadataSourceBuiltinCatalog MetadataSource = "builtin_catalog"
 )
 
 // NormalizedModelMetadata is the allowlisted, provider-neutral subset of an
