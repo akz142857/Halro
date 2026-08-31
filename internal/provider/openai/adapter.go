@@ -635,10 +635,32 @@ func (a *Adapter) ChatStream(
 	}
 	decoder := sse.NewDecoder(response.Body, semantic.MaxEncodedEventBytes)
 	var usage *openaiapi.Usage
+	// finished records that a chunk carried a finish_reason, which is the model
+	// saying it stopped. It is what tells a completed stream from a truncated one
+	// on an upstream that ends by closing the connection.
+	finished := false
 	for {
 		event, err := decoder.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				// MiniMax never sends the [DONE] sentinel. Measured 2026-08-31
+				// against a real account: the stream carries the content chunks, a
+				// chunk with finish_reason "stop", a final chunk with choices empty
+				// and usage populated, and then closes.
+				//
+				// Treating that as truncation cost the caller a generation the
+				// upstream had already run and billed — the attempt settled as an
+				// ambiguous provider failure, so they paid and received an error.
+				//
+				// The exemption is narrow on purpose, in two ways. It is scoped to
+				// this provider, because for every other OpenAI-family upstream a
+				// stream that stops without the sentinel is what a partial response
+				// looks like, and that check is what keeps a partial one from
+				// settling as complete. And it still requires a finish_reason: an
+				// EOF before the model said it stopped is a truncation here too.
+				if a.miniMax && finished {
+					return usage, nil
+				}
 				return usage, &provider.Error{
 					Class: provider.ErrorMalformed, Ambiguous: true,
 					Message: "provider stream ended before [DONE]",
@@ -677,6 +699,11 @@ func (a *Adapter) ChatStream(
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,
 				Message: "provider stream chunk is semantically invalid", Cause: err,
+			}
+		}
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				finished = true
 			}
 		}
 		if chunk.Usage != nil {
