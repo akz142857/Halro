@@ -35,7 +35,7 @@ func (r *Runtime) getAdminAlert(writer http.ResponseWriter, request *http.Reques
 func (r *Runtime) createAdminAlert(writer http.ResponseWriter, request *http.Request) {
 	var input alertWebhookInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	webhookID, err := id.New("whk")
@@ -81,7 +81,7 @@ func (r *Runtime) updateAdminAlert(writer http.ResponseWriter, request *http.Req
 	}
 	var input alertWebhookInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -185,7 +185,7 @@ func (r *Runtime) testAdminAlertSelection(writer http.ResponseWriter, request *h
 		ID string `json:"id"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil || strings.TrimSpace(input.ID) == "" {
-		adminBadRequest(writer, "alert id is required")
+		adminBadRequestCode(writer, "alert_id_required", "alert id is required")
 		return
 	}
 	r.testAdminAlertID(writer, request, input.ID)

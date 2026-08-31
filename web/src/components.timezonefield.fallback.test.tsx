@@ -14,8 +14,8 @@ describe("TimeZoneField without an enumerable zone database", () => {
   // accept whatever is typed. Degrading to the plain field it replaced keeps
   // that operator working; an empty menu would only look broken.
   it("degrades to a plain text field", () => {
-    render(<TimeZoneField label="供应商时区" value="" onChange={() => {}} />);
-    const input = screen.getByLabelText("供应商时区");
+    render(<TimeZoneField label="服务商时区" value="" onChange={() => {}} />);
+    const input = screen.getByLabelText("服务商时区");
     fireEvent.focus(input);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
     expect(input).not.toHaveAttribute("role", "combobox");
@@ -25,7 +25,7 @@ describe("TimeZoneField without an enumerable zone database", () => {
   });
 
   it("still validates what was typed against the engine it does have", () => {
-    render(<TimeZoneField label="供应商时区" value="Nowhere/Nowhere" onChange={() => {}} />);
+    render(<TimeZoneField label="服务商时区" value="Nowhere/Nowhere" onChange={() => {}} />);
     expect(screen.getByText("此浏览器不认识该时区名，请检查拼写。最终以服务端校验为准。")).toBeVisible();
   });
 });

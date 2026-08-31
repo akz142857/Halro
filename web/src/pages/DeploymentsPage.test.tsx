@@ -1868,7 +1868,7 @@ describe("deployment price panel", () => {
     fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
     fireEvent.click(await screen.findByRole("checkbox", { name: /分时价位/ }));
 
-    const zone = screen.getByLabelText("供应商时区");
+    const zone = screen.getByLabelText("服务商时区");
     fireEvent.change(zone, { target: { value: "berlin" } });
     fireEvent.click(screen.getByRole("option", { name: /Europe\/Berlin/ }));
     expect(zone).toHaveValue("Europe/Berlin");

@@ -73,7 +73,7 @@ type routeInput struct {
 func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *http.Request) {
 	var input credentialInput
 	if err := decodeAdminJSON(request, &input); err != nil || input.Secret == nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	credentialID, err := id.New("cred")
@@ -113,7 +113,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		stepUpMaterial
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// Replacing credential material is the same trust-boundary change as
@@ -202,7 +202,7 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.Request) {
 	var input providerInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
@@ -245,7 +245,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	}
 	var input providerInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	r.adminTopologyMu.Lock()
@@ -274,7 +274,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 		}
 		for _, deployment := range deployments {
 			if deployment.ProviderID == current.ID && deployment.DeletedAt == nil {
-				adminBadRequest(writer, "provider type and profile cannot change while deployments reference it")
+				adminBadRequestCode(writer, "provider_type_locked_by_deployments", "provider type and profile cannot change while deployments reference it")
 				return
 			}
 		}
@@ -385,7 +385,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	if !instance.Enabled {
-		adminBadRequest(writer, "provider is disabled")
+		adminBadRequestCode(writer, "provider_disabled", "provider is disabled")
 		return
 	}
 	bindingID := strings.TrimSpace(request.URL.Query().Get("binding_id"))
@@ -405,7 +405,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	if len(bindings) == 0 {
-		adminBadRequest(writer, "provider binding is unavailable")
+		adminBadRequestCode(writer, "provider_binding_unavailable", "provider binding is unavailable")
 		return
 	}
 	deployments, err := r.store.ListDeployments(request.Context())
@@ -451,7 +451,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		prober, ok := adapter.(provider.Prober)
 		if !ok {
 			r.logProbeRefusal(providerID, binding.ID, "provider does not support connection testing")
-			adminBadRequest(writer, "provider does not support connection testing")
+			adminBadRequestCode(writer, "provider_test_unsupported", "provider does not support connection testing")
 			return
 		}
 		providerModel := providerProbeModel(instance, providerID, binding.ID, deployments, routes)
@@ -788,12 +788,12 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	if !route.Enabled {
-		adminBadRequest(writer, "route is disabled")
+		adminBadRequestCode(writer, "route_disabled", "route is disabled")
 		return
 	}
 	deployment, deploymentErr := r.store.GetDeployment(request.Context(), route.DeploymentID)
 	if deploymentErr != nil || deployment.DeletedAt != nil || !deployment.Enabled {
-		adminBadRequest(writer, "route deployment is unavailable")
+		adminBadRequestCode(writer, "route_deployment_unavailable", "route deployment is unavailable")
 		return
 	}
 	providerID := deployment.ProviderID
@@ -801,17 +801,17 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 	capabilities := deployment.Capabilities
 	instance, err := r.store.GetProvider(request.Context(), providerID)
 	if err != nil || instance.DeletedAt != nil || !instance.Enabled {
-		adminBadRequest(writer, "route provider is unavailable")
+		adminBadRequestCode(writer, "route_provider_unavailable", "route provider is unavailable")
 		return
 	}
 	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
-		adminBadRequest(writer, "route provider adapter is unavailable")
+		adminBadRequestCode(writer, "route_provider_adapter_unavailable", "route provider adapter is unavailable")
 		return
 	}
 	prober, ok := adapter.(provider.Prober)
 	if !ok {
-		adminBadRequest(writer, "provider does not support connection testing")
+		adminBadRequestCode(writer, "provider_test_unsupported", "provider does not support connection testing")
 		return
 	}
 	testedRevision := route.Revision
@@ -890,7 +890,7 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 func (r *Runtime) createAdminRoute(writer http.ResponseWriter, request *http.Request) {
 	var input routeInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
@@ -937,7 +937,7 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 	}
 	var input routeInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// Topology before projects, everywhere both are held, so the two coordinators

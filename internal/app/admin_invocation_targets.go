@@ -120,7 +120,7 @@ func (r *Runtime) writeInvocationTargetCatalog(writer http.ResponseWriter, reque
 		return
 	}
 	if !instance.Enabled {
-		adminBadRequest(writer, "provider is disabled")
+		adminBadRequestCode(writer, "provider_disabled", "provider is disabled")
 		return
 	}
 	bindings, err := invocationTargetBindings(instance, strings.TrimSpace(request.URL.Query().Get("binding_id")))
@@ -166,7 +166,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 	raw := strings.TrimSuffix(chi.URLParam(request, "*"), "/resolution")
 	targetID, err := url.PathUnescape(strings.Trim(raw, "/"))
 	if err != nil || strings.TrimSpace(targetID) == "" || len(targetID) > 2048 {
-		adminBadRequest(writer, "invocation target is invalid")
+		adminBadRequestCode(writer, "invocation_target_invalid", "invocation target is invalid")
 		return
 	}
 	bindings, err := invocationTargetBindings(instance, strings.TrimSpace(request.URL.Query().Get("binding_id")))
@@ -240,7 +240,7 @@ func (r *Runtime) resolveAdminInvocationTarget(writer http.ResponseWriter, reque
 		}
 		credentialRevision, credentialErr := r.providerCredentialRevision(request.Context(), instance)
 		if credentialErr != nil {
-			adminBadRequest(writer, "provider credential is unavailable")
+			adminBadRequestCode(writer, "provider_credential_unavailable", "provider credential is unavailable")
 			return
 		}
 		resolved = resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, evaluatedAt, r.effectiveModelCatalog())

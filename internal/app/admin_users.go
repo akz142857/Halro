@@ -62,7 +62,7 @@ func (r *Runtime) createAdminUser(writer http.ResponseWriter, request *http.Requ
 		TOTPCode        string `json:"totp_code"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// []byte only where NewUser needs one; not scrubbed, see
@@ -72,7 +72,7 @@ func (r *Runtime) createAdminUser(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if !domain.ValidAdminRole(input.Role) {
-		adminBadRequest(writer, "role must be administrator or read_only")
+		adminBadRequestCode(writer, "admin_role_invalid", "role must be administrator or read_only")
 		return
 	}
 	username := strings.TrimSpace(input.Username)
@@ -114,7 +114,7 @@ func (r *Runtime) deleteAdminUser(writer http.ResponseWriter, request *http.Requ
 		TOTPCode        string `json:"totp_code"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	if !r.verifyAdminReauthentication(writer, request, admin.session.Username, input.CurrentPassword, input.TOTPCode) {

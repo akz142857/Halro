@@ -21,6 +21,7 @@ import {
 import { useInstantFormatter } from "../format";
 import type { AlertWebhook } from "../types";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
 
@@ -28,6 +29,16 @@ const PAGE_SIZE = "100";
 
 function pageQuery(cursor: string, limit = PAGE_SIZE) {
   return `?${new URLSearchParams({ limit, ...(cursor ? { cursor } : {}) })}`;
+}
+
+// The audit trail speaks the server's identifiers. Reading them is the whole
+// point of the page, so they are translated — but the record is forensic, so the
+// identifier itself never goes away: it stays as the element's title, and it is
+// what renders when this bundle has no copy for it. An action added upstream is
+// therefore printed exactly as it was before the audit copy existed.
+function auditTerm(t: TFunction, group: "actions" | "outcomes" | "targets" | "actorTypes" | "reasons", value: string) {
+  if (!value) return value;
+  return t(`audit.${group}.${value}`, { defaultValue: value });
 }
 
 // A failed action is not a neutral fact on this page: a rejected or errored event is the
@@ -122,12 +133,14 @@ export function OperationsPage() {
                 <span className="timeline-sequence">#{record.sequence}</span>
                 <span className={`timeline-mark ${outcomeTone(record.outcome)}`} />
                 <div>
-                  <strong>{record.action}</strong>
-                  <p>{record.actor_id || record.actor_type} → {record.target_type} {record.target_id}</p>
+                  <strong title={record.action}>{auditTerm(t, "actions", record.action)}</strong>
+                  <p>{record.actor_id || auditTerm(t, "actorTypes", record.actor_type)} → {auditTerm(t, "targets", record.target_type)} {record.target_id}</p>
                   <small>
                     {dateTime(record.occurred_at)} ·{" "}
-                    <span className={`audit-outcome ${outcomeTone(record.outcome)}`}>{record.outcome}</span>
-                    {record.reason_code ? ` · ${record.reason_code}` : ""}
+                    <span className={`audit-outcome ${outcomeTone(record.outcome)}`} title={record.outcome}>
+                      {auditTerm(t, "outcomes", record.outcome)}
+                    </span>
+                    {record.reason_code ? ` · ${auditTerm(t, "reasons", record.reason_code)}` : ""}
                   </small>
                 </div>
               </article>

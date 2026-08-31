@@ -57,15 +57,47 @@ describe("admin internationalization", () => {
     expect(i18n.t("navigation.label")).toBe(enUS.navigation.label);
   });
 
-  // Half-width commas inside Chinese copy render noticeably wrong next to the
-  // full-width punctuation used everywhere else, and it is the kind of thing that
-  // survives review because the string still reads correctly in a diff. Caught
-  // once already, in the write-path card, from a screenshot rather than a test.
+  // Half-width punctuation inside Chinese copy renders noticeably wrong next to
+  // the full-width punctuation used everywhere else, and it is the kind of thing
+  // that survives review because the string still reads correctly in a diff.
+  // Caught twice from screenshots rather than from a test: once as a comma in the
+  // write-path card, once as `时区:` in the top line — where the half-width colon
+  // also carries no width of its own, so the zone ran straight into the label.
   it("uses full-width punctuation in Chinese copy", () => {
     const offenders: string[] = [];
     const walk = (node: unknown, path: string) => {
       if (typeof node === "string") {
-        if (/[\u4e00-\u9fa5][,;]|[,;][\u4e00-\u9fa5]/.test(node)) offenders.push(`${path}: ${node}`);
+        if (/[\u4e00-\u9fa5][,;:?!]|[,;:?!][\u4e00-\u9fa5]/.test(node)) offenders.push(`${path}: ${node}`);
+        return;
+      }
+      if (node && typeof node === "object") {
+        for (const [key, value] of Object.entries(node)) walk(value, path ? `${path}.${key}` : key);
+      }
+    };
+    walk(zhCN, "");
+    expect(offenders).toEqual([]);
+  });
+
+  // One English noun, one Chinese rendering. The console had three words for
+  // Provider (服务商 in 110 places, 供应商 in the price-schedule block, a bare
+  // "Provider" in the concurrency and usage-dimension labels) and two for
+  // Deployment, so the same object was named differently on two cards a scroll
+  // apart. The house terms are 服务商 and 部署.
+  //
+  // "Azure Deployment" is exempt: it is Azure's own product term, not a
+  // translation of ours, and a string that mentions Azure is allowed to use it.
+  it("uses one Chinese word per English term", () => {
+    const banned: [RegExp, string][] = [
+      [/供应商/, "Provider is 服务商 here, not 供应商"],
+      [/\bProvider\b/, "Provider is 服务商 here"],
+      [/\bDeployment\b/, "Deployment is 部署 here"],
+    ];
+    const offenders: string[] = [];
+    const walk = (node: unknown, path: string) => {
+      if (typeof node === "string") {
+        for (const [pattern, why] of banned) {
+          if (pattern.test(node) && !node.includes("Azure")) offenders.push(`${path} (${why}): ${node}`);
+        }
         return;
       }
       if (node && typeof node === "object") {
@@ -143,11 +175,6 @@ describe("admin internationalization", () => {
   // made, it gets translated and reviewed, and the next person wires the wrong
   // one of two near-identical keys. This catches the leftover at the point it is
   // created rather than at the next audit.
-  //
-  // SKIPPED ON PURPOSE: the ledger below is the debt that exists today, and the
-  // policies/projects/redaction sections are being edited in parallel. Re-run
-  // this with `it` once those land, delete what the run reports, and keep the
-  // ledger only for keys with a stated reason to exist unreferenced.
   it("defines no locale key that nothing in web/src reads", () => {
     expect(unreferencedKeys()).toEqual(KNOWN_UNREFERENCED);
   });
@@ -216,144 +243,8 @@ function unreferencedKeys(): string[] {
     .sort();
 }
 
-// The keys that are defined and read by nothing. Shrinking this list is the
-// point; adding to it needs a reason written next to the entry.
-const KNOWN_UNREFERENCED = [
-    "auth.loginDescription",
-    "auth.loginTitle",
-    "common.create",
-    "common.noMatchesDescription",
-    "common.update",
-    "dashboard.accountingPeriod",
-    "dashboard.trendLegend",
-    "dashboard.trendTitle",
-    "deployments.adoptProposal",
-    "deployments.adoptProposalWarning",
-    "deployments.canonicalTarget",
-    "deployments.capacityCostSection",
-    "deployments.capacityCostSectionDescription",
-    "deployments.createAndLoad",
-    "deployments.createPriceVersion",
-    "deployments.customizeCapabilities",
-    "deployments.detectionCatalogEvidence",
-    "deployments.detectionVerifiedEvidence",
-    "deployments.fixedRequestHint",
-    "deployments.healthy",
-    "deployments.hideCapabilityEditor",
-    "deployments.importProposal",
-    "deployments.importedProposalWarning",
-    "deployments.manualTarget",
-    "deployments.modelStatus.conflicting",
-    "deployments.modelStatus.known",
-    "deployments.modelStatus.partial",
-    "deployments.modelStatus.unknown",
-    "deployments.newPriceVersion",
-    "deployments.noPendingProposals",
-    "deployments.none",
-    "deployments.notTested",
-    "deployments.notValidated",
-    "deployments.off",
-    "deployments.priceProposals",
-    "deployments.proposalExpires",
-    "deployments.proposalMatch",
-    "deployments.proposalSafety",
-    "deployments.providerDefault",
-    "deployments.rejectProposal",
-    "deployments.rejectProposalConfirm",
-    "deployments.retryDetection",
-    "deployments.reviewProposal",
-    "deployments.saveProposal",
-    "deployments.selectionSpansInterfaces",
-    "deployments.selectionSpansInterfacesDescription",
-    "deployments.sourceDigest",
-    "deployments.sourceReference",
-    "deployments.sourceURL",
-    "deployments.testing",
-    "deployments.tokenLimitSection",
-    "deployments.tokenLimitSectionDescription",
-    "deployments.unhealthy",
-    "deployments.unsupportedByInterface",
-    "deployments.upstreamModel",
-    "deployments.upstreamModelHint",
-    "deployments.validationExpired",
-    "deployments.validationFailed",
-    "deployments.validationPassed",
-    "developer.creatingDebugKey",
-    "operations.discardChanges",
-    "operations.testDelivered",
-    "providers.capabilityLimit",
-    "providers.concurrency",
-    "providers.healthy",
-    "providers.healthyStatus",
-    "providers.notTested",
-    "providers.openAIProfiles.chat",
-    "providers.openAIProfiles.media",
-    "providers.runtimeControls",
-    "providers.testConnection",
-    "providers.testing",
-    "providers.unhealthy",
-    "routes.healthy",
-    "routes.testing",
-    "routes.unhealthy",
-    "settings.acceptingTraffic",
-    "settings.accountDescription",
-    "settings.accountSection",
-    "settings.advancedDetails",
-    "settings.configFacts.admin_listen",
-    "settings.configFacts.capability_fresh_ttl",
-    "settings.configFacts.capability_global_concurrency",
-    "settings.configFacts.capability_max_provider_calls",
-    "settings.configFacts.capability_provider_concurrency",
-    "settings.configFacts.capability_refresh_cooldown",
-    "settings.configFacts.capability_retention",
-    "settings.configFacts.capability_total_timeout",
-    "settings.configFacts.data_dir",
-    "settings.configFacts.gateway_listen",
-    "settings.configFacts.master_key_mode",
-    "settings.configFacts.metadata_file",
-    "settings.configFacts.metrics_enabled",
-    "settings.configFacts.metrics_listen",
-    "settings.configFacts.metrics_require_auth",
-    "settings.configFacts.metrics_tls_enabled",
-    "settings.configFacts.private_provider_endpoints",
-    "settings.configFacts.private_webhooks",
-    "settings.configFacts.tls_certificates",
-    "settings.configFacts.tls_enabled",
-    "settings.configFacts.trust_proxy_headers",
-    "settings.configPreviewTitle",
-    "settings.configSectionDescriptions.capability_detection",
-    "settings.configSectionDescriptions.metrics",
-    "settings.configSectionDescriptions.network",
-    "settings.configSectionDescriptions.security",
-    "settings.configSectionDescriptions.storage",
-    "settings.configSectionDescriptions.transport",
-    "settings.configSectionMarks.capability_detection",
-    "settings.configSectionMarks.metrics",
-    "settings.configSectionMarks.network",
-    "settings.configSectionMarks.security",
-    "settings.configSectionMarks.storage",
-    "settings.configSectionMarks.transport",
-    "settings.configSections.capability_detection",
-    "settings.configSections.metrics",
-    "settings.configSections.network",
-    "settings.configSections.security",
-    "settings.configSections.storage",
-    "settings.configSections.transport",
-    "settings.instanceSection",
-    "settings.languageDescription",
-    "settings.languageEyebrow",
-    "settings.languageSaved",
-    "settings.languageTitle",
-    "settings.masterKeyModes.file",
-    "settings.masterKeyModes.key_slots",
-    "settings.preferencesSection",
-    "settings.readOnlyScope",
-    "settings.runtimeSection",
-    "settings.saveLanguage",
-    "settings.savePreference",
-    "settings.securityScope",
-    "settings.securitySection",
-    "settings.sessionRotation",
-    "settings.systemSection",
-    "settings.version",
-];
+// Copy that no screen reads. The list is empty and staying empty is the point:
+// an entry here needs a reason written beside it, because a key nobody reads
+// still gets translated, reviewed, and eventually wired up in place of the one
+// that was meant.
+const KNOWN_UNREFERENCED: string[] = [];
