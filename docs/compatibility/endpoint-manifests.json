@@ -281,7 +281,7 @@
           "reasoning_split is sent alongside an enabled switch so reasoning returns in its own member instead of inline in the answer",
           "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning",
           "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means",
-          "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, while the schema mode has never been sent and is rejected before provider I/O"
+          "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O"
         ]
       },
       {

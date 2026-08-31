@@ -109,14 +109,32 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	if len(request.Stop) > 0 {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions does not accept stop")
 	}
+	// responseFormat is what reaches MiniMax, which is not the same as what the
+	// caller sent: only json_object was measured, so only json_object is carried.
+	var responseFormat json.RawMessage
 	if len(request.ResponseFormat) > 0 {
 		var format struct {
 			Type string `json:"type"`
 		}
-		// json_object is measured; text is the default and means the same as
-		// omitting the member; a schema has not been established, so it is refused
-		// rather than sent and hoped for.
-		if json.Unmarshal(request.ResponseFormat, &format) != nil || (format.Type != "text" && format.Type != "json_object") {
+		if err := json.Unmarshal(request.ResponseFormat, &format); err != nil {
+			return MiniMaxChatRequest{}, fmt.Errorf("MiniMax Chat Completions cannot read response_format: %w", err)
+		}
+		switch format.Type {
+		case "json_object":
+			// Measured against a real account on 2026-08-31: sent, and answered
+			// with a valid JSON body. Re-emitted rather than forwarded verbatim,
+			// because what was measured is this exact object — the facade checks
+			// only the type member, so a caller's sibling members would otherwise
+			// ride along into a member no MiniMax document describes.
+			responseFormat = json.RawMessage(`{"type":"json_object"}`)
+		case "text":
+			// The default, and the same thing as omitting the member — so it is
+			// dropped rather than sent. Nothing is lost by dropping it, and
+			// sending it would put an undocumented member MiniMax has never been
+			// measured reading on a request that did not need it.
+		default:
+			// A schema has not been established, so it is refused rather than sent
+			// and hoped for.
 			return MiniMaxChatRequest{}, fmt.Errorf("MiniMax Chat Completions does not accept response_format type %q", format.Type)
 		}
 	}
@@ -149,7 +167,7 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	}
 	result := MiniMaxChatRequest{
 		Model: request.Model, Messages: request.Messages,
-		ResponseFormat:      request.ResponseFormat,
+		ResponseFormat:      responseFormat,
 		MaxCompletionTokens: limit,
 		Stream:              request.Stream, StreamOptions: request.StreamOptions,
 		Temperature: request.Temperature, TopP: request.TopP,

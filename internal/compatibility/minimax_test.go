@@ -68,6 +68,11 @@ func TestMiniMaxNoneReachesTheOffState(t *testing.T) {
 func TestMiniMaxBodyCarriesNoIgnoredMember(t *testing.T) {
 	request := minimaxBaseRequest()
 	request.ReasoningEffort = "high"
+	// response_format=text is the one value that is accepted and still must not
+	// reach the wire: it means what omitting the member already means, and only
+	// json_object has ever been measured. Sending it would put an undocumented
+	// member on a request that gains nothing from it.
+	request.ResponseFormat = json.RawMessage(`{"type":"text"}`)
 	body, err := RenderMiniMaxChatRequest(request)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -78,7 +83,7 @@ func TestMiniMaxBodyCarriesNoIgnoredMember(t *testing.T) {
 	}
 	// Matched as object keys. Bare `"user"` also appears as a message role, which
 	// is not what this is looking for.
-	for _, member := range []string{`"reasoning_effort":`, `"presence_penalty":`, `"frequency_penalty":`, `"logit_bias":`, `"n":`, `"seed":`, `"stop":`, `"user":`, `"max_tokens":`} {
+	for _, member := range []string{`"reasoning_effort":`, `"presence_penalty":`, `"frequency_penalty":`, `"logit_bias":`, `"n":`, `"seed":`, `"stop":`, `"response_format":`, `"user":`, `"max_tokens":`} {
 		if strings.Contains(string(encoded), member) {
 			t.Fatalf("rendered body carries %s, which MiniMax ignores: %s", member, encoded)
 		}
@@ -155,13 +160,17 @@ func TestMiniMaxOutputLimitFollowsTheThinkingSwitch(t *testing.T) {
 // about one half is not evidence about the other.
 func TestMiniMaxCarriesJSONObjectAndRefusesASchema(t *testing.T) {
 	request := minimaxBaseRequest()
-	request.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
+	// A sibling member the facade does not inspect: only response_format.type is
+	// validated there, so anything beside it would ride along into a member no
+	// MiniMax document describes. What was measured is the bare object, and that
+	// is what goes on the wire.
+	request.ResponseFormat = json.RawMessage(`{"type":"json_object","unmeasured":true}`)
 	body, err := RenderMiniMaxChatRequest(request)
 	if err != nil {
 		t.Fatalf("json_object was refused: %v", err)
 	}
-	if !strings.Contains(string(body.ResponseFormat), "json_object") {
-		t.Fatalf("json_object was not carried onto the wire: %s", body.ResponseFormat)
+	if string(body.ResponseFormat) != `{"type":"json_object"}` {
+		t.Fatalf("json_object reached the wire as %s, want the bare measured object", body.ResponseFormat)
 	}
 	request.ResponseFormat = json.RawMessage(`{"type":"json_schema","json_schema":{"name":"x","schema":{}}}`)
 	if _, err := RenderMiniMaxChatRequest(request); err == nil {

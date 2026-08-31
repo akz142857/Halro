@@ -966,7 +966,8 @@ pre-1.0.0 的处理：本方案全程「就地改对」，不留并存构造。�
    而这个 host 上「200 带错」是存在的做法。
 4. ~~**`response_format` 不支持**~~ —— **推断被推翻（2026-08-31 第二轮）**：Chat 面发
    `{"type":"json_object"}` 返回 200，内容是合法 JSON。`minimaxChatSet` 已补 `JSONObject`，
-   渲染器改为按值处理（`json_object` 携带、`json_schema` 拒绝，因为 schema 模式从未发过）。
+   渲染器改为按值处理（`json_object` 携带、`text` 丢弃因为它与省略该成员同义、`json_schema`
+   拒绝，因为 schema 模式从未发过）。
    **Responses 面没测,不跟着加** —— 拿另一条端点的结果推它，就是把当初写错 Chat 那条的猜测反过来再做一遍。
 5. ~~**`stream_options.include_usage` 被接受**~~ —— **已关闭，且缺陷已修（2026-08-31 第二轮）**：
    它是生效的，最终块带 `usage:{prompt_tokens:165, completion_tokens:2}`；失败只因为
@@ -1080,7 +1081,7 @@ ambiguous 结束——已经是 fail-closed 的方向。等片 1 证实那条路
 | 测试 | 守住什么 |
 |---|---|
 | `TestMiniMaxDisablesThinkingWhenNobodyAsked` | 没人要求推理时显式发 `disabled`，而不是让 M3 的默认「开着」去计费 |
-| `TestMiniMaxBodyCarriesNoIgnoredMember` | 渲染出的 body 里没有 `reasoning_effort` / `n` / `seed` / `stop` / `response_format` / `user` |
+| `TestMiniMaxBodyCarriesNoIgnoredMember` | 渲染出的 body 里没有 `reasoning_effort` / `n` / `seed` / `stop` / `user`，以及 `response_format` 的 `text`（唯一被接受却仍不上线的值） |
 | `TestMiniMaxOutputLimitFollowsTheThinkingSwitch` | `max_tokens` 只在思考关着时才等于 `max_completion_tokens` |
 | `TestMiniMaxGuardCatchesAFailureWearingA200` | 用 2026-08-31 实测到的那个 200 响应原文当输入 |
 | `TestMiniMaxStatusCodesReachTheRightClass` | 错误码 → `provider.Error` 类别，含 1008 绝不重试 |
