@@ -199,6 +199,18 @@ adapter is not a `SemanticGenerator`, does fail by name.
 **The model catalogue** (`internal/modelcatalog/builtin.go`). Skipping it is
 legal, as below. Nothing enforces that a platform's models are seeded.
 
+**A wrong primitive in `profileOperationTable`** that still leaves every
+primitive constant bound — swapping two profiles' primitives, say.
+`ProfileManifest.Validate` checks a builtin manifest against the table it was
+built from, which is a tautology; it stays meaningful only for a manifest a
+caller supplies. This is not a protection the merge removed: the two tables it
+replaced could only detect each other *disagreeing*, and a binding written
+wrongly in both passed then too. What does catch it is
+`TestEveryPrimitiveConstantIsBoundBySomeProfile`, where the mistake orphans a
+constant, and a platform's own wiring test, where it asserts the route the
+profile addresses. Write one for a new platform; MiniMax's is
+`TestMiniMaxWiringAddressesOneRoutePerProfile`.
+
 ## After the steps
 
 `TestProviderProfilesGoldenMatchesConsoleFixture` regenerates the console's view
