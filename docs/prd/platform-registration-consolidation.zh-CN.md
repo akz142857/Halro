@@ -48,6 +48,8 @@
 | `TestNoProviderTypeDefaultsToAWithheldProfile` | 类型的默认 profile 必须可达 |
 | `TestEveryReachableProfileBuildsAnAdapter` | 第 6 步，曾被文档标为「唯一没有测试覆盖」 |
 | `TestEveryReachableProfileReachesTheNetworkWhenCalled` | 建得出来 ≠ 调得动 |
+| `TestEveryAdapterBuilderRowIsComplete` | 构造表的每一行三个阶段都不为 nil（半填的行会在请求时 panic 而不是失败） |
+| `TestAdapterBuilderTableCoversExactlyTheRegisteredProfiles` | 构造表与 profile 表两个方向都对齐——缺行，以及孤儿行 |
 | `TestNativeAnthropicListsAgree` | native schema / 网关准入 / beta 允许三份清单 |
 | `TestNoNativeProfileIsWithheld` | native profile 不能是被 withheld 的 |
 | `TestEveryPrimitiveConstantIsBoundBySomeProfile` | 没有 profile 绑定的死常量 |
