@@ -1,8 +1,10 @@
 package openai
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -157,6 +159,114 @@ func TestRealMiniMaxSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatalf("responses: %v", err)
 		}
+	})
+
+	// The stream subtest above reports only that the adapter refused; this says
+	// why, by reading the bytes. It is a raw request rather than an adapter call
+	// because what is in question is exactly what the adapter's SSE contract
+	// rejects, and an adapter cannot report bytes it declined to accept.
+	//
+	// The MiniMax stream ended before `data: [DONE]`, which the OpenAI-family
+	// stream loop treats as a truncated response — correctly for every other
+	// upstream, because a stream that stops early is how a partial generation
+	// looks. Whether MiniMax simply never sends the sentinel, spells it
+	// differently, or stopped for its own reason decides whether the fix is
+	// scoped to this provider or is not a fix at all.
+	t.Run("diagnose how the stream terminates", func(t *testing.T) {
+		body := `{"model":"` + model + `","messages":[{"role":"user","content":"say ok"}],"stream":true,"stream_options":{"include_usage":true},"thinking":{"type":"disabled"}}`
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint.String(), "/")+"/v1/chat/completions", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+apiKey)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "text/event-stream")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("raw stream: %v", err)
+		}
+		defer response.Body.Close()
+		t.Logf("status=%d content-type=%q", response.StatusCode, response.Header.Get("Content-Type"))
+		scanner := bufio.NewScanner(io.LimitReader(response.Body, 1<<20))
+		scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		var lines []string
+		for scanner.Scan() {
+			lines = append(lines, scanner.Text())
+		}
+		if err := scanner.Err(); err != nil {
+			t.Logf("read error after %d lines: %v", len(lines), err)
+		}
+		t.Logf("total lines: %d", len(lines))
+		from := len(lines) - 8
+		if from < 0 {
+			from = 0
+		}
+		for _, line := range lines[from:] {
+			// Truncated: a content chunk can be long and only its shape matters.
+			if len(line) > 300 {
+				line = line[:300] + "…"
+			}
+			t.Logf("  tail | %s", line)
+		}
+		sawDone := false
+		for _, line := range lines {
+			if strings.Contains(line, "[DONE]") {
+				sawDone = true
+			}
+		}
+		t.Logf("carries a [DONE] sentinel anywhere: %v", sawDone)
+	})
+
+	// Not tested until now, and it was listed as an assertion of this smoke from
+	// the start — every subtest above builds the OpenAI adapter, so nothing had
+	// ever established what MiniMax does with a member no document mentions.
+	// Both JSON capabilities are declared absent on the strength of that silence.
+	t.Run("response_format is refused or supported", func(t *testing.T) {
+		encoded, err := json.Marshal(map[string]any{
+			"model": model, "messages": []map[string]string{{"role": "user", "content": "Reply with the JSON object {\"ok\":true}"}},
+			"response_format": map[string]string{"type": "json_object"},
+			"thinking":        map[string]string{"type": "disabled"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Sent raw: the renderer refuses response_format by design, so asking the
+		// adapter would only re-read Halro's own decision.
+		httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint.String(), "/")+"/v1/chat/completions", strings.NewReader(string(encoded)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpRequest.Header.Set("Authorization", "Bearer "+apiKey)
+		httpRequest.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(httpRequest)
+		if err != nil {
+			t.Fatalf("raw response_format request: %v", err)
+		}
+		defer response.Body.Close()
+		payload, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		t.Logf("status=%d body=%s", response.StatusCode, strings.TrimSpace(string(payload)))
+		t.Log("read this: a 2xx whose content is valid JSON means the capability is real and both profiles under-declare it; " +
+			"a 4xx, or a 2xx that ignored the member, means the fail-closed declaration was right")
+	})
+
+	// The loudest open risk, and the model it concerns was never the one under
+	// test: everything above ran on M3. MiniMax documents the M2.x line as unable
+	// to switch thinking off, and Halro sends the disabled switch on every request
+	// that did not ask to think. If M2.x refuses it, every M2.x request fails.
+	t.Run("M2.x accepts or refuses a disabled thinking switch", func(t *testing.T) {
+		m2 := strings.TrimSpace(os.Getenv("HALRO_MINIMAX_M2_MODEL"))
+		if m2 == "" {
+			m2 = "MiniMax-M2.7"
+		}
+		request := ask(m2)
+		request.ReasoningEffort = "none"
+		_, err := newAdapter(t, false).Chat(ctx, provider.ChatCall{RequestID: "smoke_m2", ProviderModel: m2, Request: request})
+		if err != nil {
+			t.Errorf("model %q refused an explicitly disabled thinking switch: %v\n"+
+				"this is the failure the plan predicted; the fix is a catalogue-driven distinction, not a model-name prefix", m2, err)
+			return
+		}
+		t.Logf("%q accepted a disabled thinking switch", m2)
 	})
 
 	// The catalogue route the connection test and target enumeration both read.
