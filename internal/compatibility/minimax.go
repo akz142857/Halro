@@ -71,9 +71,10 @@ type MiniMaxThinking struct {
 // openaiapi.ChatCompletionRequest must be considered here deliberately instead
 // of reaching MiniMax because nobody remembered to exclude it.
 type MiniMaxChatRequest struct {
-	Model    string              `json:"model,omitempty"`
-	Messages []openaiapi.Message `json:"messages"`
-	Thinking *MiniMaxThinking    `json:"thinking,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	Messages       []openaiapi.Message `json:"messages"`
+	ResponseFormat json.RawMessage     `json:"response_format,omitempty"`
+	Thinking       *MiniMaxThinking    `json:"thinking,omitempty"`
 	// ReasoningSplit asks MiniMax to return reasoning in its own member instead
 	// of inline in the answer. It is sent only while thinking is on: with the
 	// switch off there is nothing to split, and sending it anyway would be a
@@ -109,7 +110,15 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions does not accept stop")
 	}
 	if len(request.ResponseFormat) > 0 {
-		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions does not accept response_format")
+		var format struct {
+			Type string `json:"type"`
+		}
+		// json_object is measured; text is the default and means the same as
+		// omitting the member; a schema has not been established, so it is refused
+		// rather than sent and hoped for.
+		if json.Unmarshal(request.ResponseFormat, &format) != nil || (format.Type != "text" && format.Type != "json_object") {
+			return MiniMaxChatRequest{}, fmt.Errorf("MiniMax Chat Completions does not accept response_format type %q", format.Type)
+		}
 	}
 	if request.User != "" {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions has no end-user attribution member")
@@ -140,6 +149,7 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	}
 	result := MiniMaxChatRequest{
 		Model: request.Model, Messages: request.Messages,
+		ResponseFormat:      request.ResponseFormat,
 		MaxCompletionTokens: limit,
 		Stream:              request.Stream, StreamOptions: request.StreamOptions,
 		Temperature: request.Temperature, TopP: request.TopP,

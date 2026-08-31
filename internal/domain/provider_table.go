@@ -406,9 +406,20 @@ var (
 		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
 		Reasoning: true, StreamUsage: true,
 	}
+	// JSONObject is measured, not documented. No MiniMax page mentions
+	// response_format, which is why every profile here started without it — the
+	// fail-closed reading of silence. A real request on 2026-08-31 sent
+	// {"type":"json_object"} and came back 200 with a valid JSON body, so the
+	// capability is real on this face and withholding it was denying an operator
+	// something their account does.
+	//
+	// StructuredOutputs stays absent: the schema mode was not sent, and the same
+	// silence that turned out to be wrong about one half is no evidence about the
+	// other.
 	minimaxChatSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
-		Reasoning: true, StreamUsage: true,
+		JSONObject: true,
+		Reasoning:  true, StreamUsage: true,
 	}
 	// Two absences here that the other two MiniMax rows do not share, and both
 	// are inherited from the profile this one is served by rather than from
@@ -420,6 +431,11 @@ var (
 	//     over streaming over chat. Reaching it means reusing the Bedrock Mantle
 	//     Responses adapter, which is welded to that host's endpoint, project
 	//     header and credential scheme.
+	//   - No JSONObject, and this one is a scope decision rather than an upstream
+	//     limit. The Chat face was measured serving json_object; this face was
+	//     not, and the two are different endpoints. Declaring it here on the
+	//     strength of the other face's result would be the same guess that made
+	//     the Chat row wrong in the first place, pointed the other way.
 	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
 	//     canonical response mapper cannot preserve reasoning items, and a claim
 	//     it cannot carry is a request that fails after the budget is reserved.
