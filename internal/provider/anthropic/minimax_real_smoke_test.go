@@ -57,7 +57,7 @@ func TestRealMiniMaxAnthropicRouteSmoke(t *testing.T) {
 		Capabilities: domain.ProviderCapabilities{Chat: true, Streaming: true, Tools: true, StreamUsage: true},
 		ProviderType: string(domain.ProviderMiniMax), CredentialScheme: domain.CredentialBearerStatic,
 		MessagesPath: "anthropic/v1/messages", ProfileID: domain.ProfileMiniMaxAnthropicMessages,
-		CatalogProbeOnly: true,
+		CatalogShape: CatalogOpenAI,
 	})
 	if err != nil {
 		t.Fatal(err)

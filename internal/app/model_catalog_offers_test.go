@@ -16,10 +16,12 @@ import (
 // create form: the aggregation builds its items only from what a provider
 // enumerated, so entries could enrich a listed target and never be one.
 //
-// MiniMax's Anthropic face is the case. It deliberately does not enumerate —
-// MiniMax's model list is OpenAI-shaped and carries an identifier and an owner,
-// so building targets from it would credit every id on the account, speech and
-// video models included, with chat and streaming on declared evidence.
+// Azure is the case that remains: its target is a deployment name the account
+// chose, and no route lists them. MiniMax's Anthropic face was the case this was
+// written for and no longer is — its catalogue was read on 2026-09-01, turned
+// out to be OpenAI-shaped and readable, and that profile now enumerates. The
+// MiniMax fixtures stay because the catalog still carries those entries and they
+// exercise the projection; what they no longer assert is that MiniMax cannot ask.
 func TestModelCatalogOffersFillAProfileThatCannotEnumerate(t *testing.T) {
 	offers := modelCatalogOffers(domain.ProviderMiniMax, domain.ProfileMiniMaxAnthropicMessages, modelcatalog.Builtin())
 	if len(offers) == 0 {
@@ -74,11 +76,12 @@ func TestModelCatalogOffersAreScopedToTheProfile(t *testing.T) {
 	}
 }
 
-// nonEnumeratingMappingAdapter is the shape the real MiniMax Anthropic binding
-// has: a profile that cannot enumerate, on an adapter that also implements
-// ProviderMetadataMapper. The direct Anthropic adapter is exactly this, and it
-// claims chat and streaming from the fact that it enumerated the target — a
-// premise an offer does not satisfy.
+// nonEnumeratingMappingAdapter is a profile that cannot enumerate, on an adapter
+// that also implements ProviderMetadataMapper — the combination that produced
+// the defect. It is a fake rather than a real adapter on purpose: MiniMax's
+// Anthropic face was the live example until its catalogue was read and it began
+// enumerating, and the defect belongs to the combination, not to whichever
+// profile happens to be in it this month.
 type nonEnumeratingMappingAdapter struct{ provider.Adapter }
 
 func (nonEnumeratingMappingAdapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {

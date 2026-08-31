@@ -83,3 +83,44 @@ git add -A internal/webui/dist
 The sources themselves are ordinary text and merge ordinarily; check that they
 carry both branches' changes before rebuilding, because the rebuild will happily
 produce a bundle from a bad merge too.
+
+## An adapter's silence is not the upstream's answer
+
+Before writing a hardcoded list of anything an upstream could be asked for —
+models, regions, deployments, versions — go and check whether it serves a route
+that answers. "Halro does not enumerate this profile" is a fact about Halro. It
+is not evidence about the provider, and the two get confused because the code
+reads the same either way: an empty list, a missing Refresh button, a bundled
+catalog quietly standing in.
+
+This has already cost a release. MiniMax's Anthropic-faced profile shipped with a
+bundled model list and no Refresh control, on the stated grounds that the profile
+cannot enumerate. MiniMax serves `GET /v1/models` on the same host with the same
+bearer key, and Halro's own OpenAI-faced MiniMax profiles call it. What could not
+read it was one adapter's decoder, which expects Anthropic's response shape —
+a Halro limitation described in the code as if it were an upstream one.
+
+The second half is worse, because it looked like a reason rather than a gap. The
+code justified not enumerating by saying the list would credit the account's
+speech and video models with chat. Nobody had read the list. When it was finally
+read, it held eight entries and every one was a chat model — and the reasoning
+had the wrong subject anyway, since what turns an identifier into a capability
+claim is the metadata mapper, not enumeration. An inference stated as a finding
+survives review, because it reads exactly like one.
+
+The rule that follows:
+
+- **Where the upstream serves a list, the upstream's list is the model list.** Ask
+  it, and put the answer behind a control the operator can press. A bundled
+  catalog is the answer only for a provider that genuinely has no route to ask,
+  and "genuinely" means somebody looked.
+- **The bundled catalog still supplies capabilities, and only capabilities.** An
+  OpenAI-shaped list carries an identifier and an owner, so it says who exists
+  and nothing about what they do. Enumeration and capability evidence are
+  separate questions; answering the first from the upstream does not license
+  answering the second from it. A target enumerated without capability evidence
+  resolves unknown and is declared or detected — never credited by construction.
+- **Read the real response before writing the decoder for it.** A decoder written
+  against a shape inferred from documentation is a fixture of your own mental
+  model. Capture the body first — the MiniMax smoke has a subtest that does
+  exactly this and nothing else — and write against what came back.

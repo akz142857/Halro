@@ -255,16 +255,10 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	if len(payload) > maxResponseBytes {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "model catalog response is too large"}
 	}
-	var catalog struct {
-		Data []struct {
-			ID      string `json:"id"`
-			OwnedBy string `json:"owned_by"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(payload, &catalog); err != nil {
+	catalog, _, err := provider.DecodeOpenAIShapedModelCatalog(payload)
+	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode model catalog response", Cause: err}
 	}
-	now := time.Now().UTC()
 	kind := domain.TargetModelID
 	canonicalModelRef := func(id string) string { return id }
 	if a.providerType == string(domain.ProviderOpenAICompatible) {
@@ -275,17 +269,10 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 		// capability mapping therefore remains an explicit operator action.
 		canonicalModelRef = func(string) string { return "" }
 	}
-	models := make([]domain.InvocationTargetDescriptor, 0, len(catalog.Data))
-	for _, model := range catalog.Data {
-		id := strings.TrimSpace(model.ID)
-		if id == "" || len(id) > 512 {
-			continue
-		}
-		models = append(models, domain.InvocationTargetDescriptor{
-			TargetID: id, TargetKind: kind, DisplayName: id, OwnedBy: strings.TrimSpace(model.OwnedBy),
-			CanonicalModelRef: canonicalModelRef(id), Lifecycle: domain.TargetLifecycleUnknown,
-			MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityAvailable, FetchedAt: now,
-		})
+	models := catalog.InvocationTargets(kind, canonicalModelRef)
+	now := time.Now().UTC()
+	for index := range models {
+		models[index].FetchedAt = now
 	}
 	return models, nil
 }

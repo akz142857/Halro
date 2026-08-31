@@ -189,6 +189,13 @@ commit. This is not a style preference; it is where the expensive mistakes come 
   whose search string went stale (gofmt re-aligning a struct literal, say) silently
   changes nothing, and the test then "passes in the defect state" because the defect was
   never restored. Run it with `go test -count=1`; a cached `ok` proves nothing either.
+- **An adapter's silence is not the upstream's answer.** Before hardcoding a list of
+  anything an upstream could be asked for — models, regions, deployments, versions —
+  check whether it serves a route that answers, and prefer that route. "Halro does not
+  enumerate this profile" is a fact about Halro; MiniMax's Anthropic face shipped a
+  bundled model list on those grounds while MiniMax served `GET /v1/models` all along.
+  Enumeration and capability evidence stay separate questions: the upstream's list says
+  who exists, the catalog says what they do. `AGENTS.md` carries the full rule.
 - When verification is genuinely impossible, say so — do not present the assumption as
   a finding.
 
