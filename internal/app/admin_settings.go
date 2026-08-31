@@ -28,7 +28,7 @@ func (r *Runtime) updateAdminSettings(writer http.ResponseWriter, request *http.
 	}
 	var input settingsInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	settings := domain.RuntimeSettings{

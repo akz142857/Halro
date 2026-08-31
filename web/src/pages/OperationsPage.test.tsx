@@ -43,9 +43,28 @@ describe("operations page", () => {
 
     renderPage();
 
-    expect(await screen.findByText("alert_webhook.delete")).toBeVisible();
-    expect(screen.getByText(/admin → alert_webhook whk_1/)).toBeVisible();
-    expect(screen.getByText("failure")).toHaveClass("danger");
+    // Read in the operator's language, with the server's identifier kept on the
+    // element: the record is forensic, so the wire name has to stay reachable.
+    expect(await screen.findByText("删除告警回调")).toHaveAttribute("title", "alert_webhook.delete");
+    expect(screen.getByText(/admin → 告警回调 whk_1/)).toBeVisible();
+    expect(screen.getByText("失败")).toHaveClass("danger");
+    expect(screen.getByText("失败")).toHaveAttribute("title", "failure");
+    // transport_error has no copy in either bundle. An action, outcome or reason
+    // added upstream has to degrade to what this page printed before the audit
+    // vocabulary existed — never to a raw i18next key.
+    expect(screen.getByText(/transport_error/)).toBeVisible();
+  });
+
+  it("prints an untranslated action as the server's own identifier", async () => {
+    vi.mocked(api.audit).mockResolvedValue({
+      items: [auditRecord({ action: "future_resource.invented", target_type: "future_resource" })],
+      next_cursor: "",
+    } as never);
+
+    renderPage();
+
+    expect(await screen.findByText("future_resource.invented")).toBeVisible();
+    expect(screen.getByText(/admin → future_resource whk_1/)).toBeVisible();
   });
 
   it("binds the chain badge to whether the audit replay actually succeeded", async () => {

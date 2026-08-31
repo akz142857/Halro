@@ -113,6 +113,47 @@ export function localizedError(t: TFunction, error: unknown) {
     route_idempotency_replay: "errors.routeIdempotencyReplay",
     project_idempotency_replay: "errors.projectIdempotencyReplay",
     gateway_key_idempotency_replay: "errors.gatewayKeyIdempotencyReplay",
+    // The refusals the Admin API states itself. Each one arrives as a code with
+    // the server's English sentence beside it; without the code the console had
+    // nothing to translate and printed that sentence to every reader, in every
+    // language. Adding a refusal upstream without a code here is not a break —
+    // it falls back to the generic headline plus the server's reason, which is
+    // what every one of these did before.
+    invalid_request: "errors.badRequest",
+    alert_id_required: "errors.alertIDRequired",
+    deployment_provider_unavailable: "errors.deploymentProviderUnavailable",
+    deployment_provider_adapter_unavailable: "errors.deploymentProviderAdapterUnavailable",
+    provider_test_unsupported: "errors.providerTestUnsupported",
+    provider_disabled: "errors.providerDisabled",
+    invocation_target_invalid: "errors.invocationTargetInvalid",
+    provider_credential_unavailable: "errors.providerCredentialUnavailable",
+    capability_detection_target_invalid: "errors.capabilityDetectionTargetInvalid",
+    provider_type_locked_by_deployments: "errors.providerTypeLockedByDeployments",
+    provider_binding_unavailable: "errors.providerBindingUnavailable",
+    route_disabled: "errors.routeDisabled",
+    route_deployment_unavailable: "errors.routeDeploymentUnavailable",
+    route_provider_unavailable: "errors.routeProviderUnavailable",
+    route_provider_adapter_unavailable: "errors.routeProviderAdapterUnavailable",
+    preview_values_negative: "errors.previewValuesNegative",
+    admin_role_invalid: "errors.adminRoleInvalid",
+    idempotency_key_required: "errors.idempotencyKeyRequired",
+    invalid_preferences: "errors.invalidPreferences",
+    invalid_locale_preference: "errors.invalidLocalePreference",
+    invalid_appearance_preference: "errors.invalidAppearancePreference",
+    mfa_setup_required: "errors.mfaSetupRequired",
+    reauth_rate_limited: "errors.reauthRateLimited",
+    recent_reauth_required: "errors.recentReauthRequired",
+    model_capability_changed: "errors.modelCapabilityChanged",
+    model_capabilities_unknown: "errors.modelCapabilitiesUnknown",
+    model_capabilities_exceed_catalog: "errors.modelCapabilitiesExceedCatalog",
+    operation_bindings_unavailable: "errors.operationBindingsUnavailable",
+    resolution_changed: "errors.resolutionChanged",
+    // The console already words this one on every disabled control; a second
+    // sentence for the server enforcing the same rule would be the same fact
+    // maintained twice.
+    read_only_role: "navigation.readOnlyAction",
+    cannot_delete_self: "adminUsers.cannotDeleteSelf",
+    last_administrator: "adminUsers.cannotDeleteLastAdministrator",
   };
   if (error.code && codeMessages[error.code]) return t(codeMessages[error.code]);
   if (error.status === 400 || error.status === 422) return t("errors.badRequest");
@@ -133,6 +174,38 @@ export function errorDetail(error: unknown) {
   // field. Repeating the server's English sentinel under the translated
   // instruction makes the UI look like an internal validation failure.
   const localizedWorkflowCodes = [
+    "invalid_request",
+    "alert_id_required",
+    "deployment_provider_unavailable",
+    "deployment_provider_adapter_unavailable",
+    "provider_test_unsupported",
+    "provider_disabled",
+    "invocation_target_invalid",
+    "provider_credential_unavailable",
+    "capability_detection_target_invalid",
+    "provider_type_locked_by_deployments",
+    "provider_binding_unavailable",
+    "route_disabled",
+    "route_deployment_unavailable",
+    "route_provider_unavailable",
+    "route_provider_adapter_unavailable",
+    "preview_values_negative",
+    "admin_role_invalid",
+    "idempotency_key_required",
+    "invalid_preferences",
+    "invalid_locale_preference",
+    "invalid_appearance_preference",
+    "mfa_setup_required",
+    "reauth_rate_limited",
+    "recent_reauth_required",
+    "model_capability_changed",
+    "model_capabilities_unknown",
+    "model_capabilities_exceed_catalog",
+    "operation_bindings_unavailable",
+    "resolution_changed",
+    "read_only_role",
+    "cannot_delete_self",
+    "last_administrator",
     "ambiguous_capability_binding",
     "deployment_price_unavailable",
     "price_effective_from_conflict",

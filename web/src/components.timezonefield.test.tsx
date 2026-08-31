@@ -18,13 +18,13 @@ const { TimeZoneField } = await import("./components");
 function Harness({ initial = "", onPick }: { initial?: string; onPick?: (value: string) => void }) {
   const [value, setValue] = useState(initial);
   return <TimeZoneField
-    label="供应商时区"
+    label="服务商时区"
     value={value}
     onChange={(next) => { setValue(next); onPick?.(next); }}
   />;
 }
 
-const zoneField = () => screen.getByLabelText("供应商时区");
+const zoneField = () => screen.getByLabelText("服务商时区");
 
 // The offset beside each name is the one in force *now*, so a real clock would
 // make the expected values flip at every DST transition. Pinned to a January
@@ -218,8 +218,8 @@ describe("TimeZoneField", () => {
   });
 
   it("reports a validation error from the caller ahead of its own hint", () => {
-    render(<TimeZoneField label="供应商时区" hint="填 IANA 名称" error="请填写供应商时区" value="" onChange={() => {}} />);
-    expect(screen.getByText("请填写供应商时区")).toBeVisible();
+    render(<TimeZoneField label="服务商时区" hint="填 IANA 名称" error="请填写服务商时区" value="" onChange={() => {}} />);
+    expect(screen.getByText("请填写服务商时区")).toBeVisible();
     expect(screen.queryByText("填 IANA 名称")).not.toBeInTheDocument();
     expect(zoneField()).toHaveAttribute("aria-invalid", "true");
   });

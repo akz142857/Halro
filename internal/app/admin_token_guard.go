@@ -89,7 +89,7 @@ func (r *Runtime) getAdminTokenGuardPolicy(writer http.ResponseWriter, request *
 func (r *Runtime) createAdminTokenGuardPolicy(writer http.ResponseWriter, request *http.Request) {
 	var input tokenGuardInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	policyID, err := id.New("tgp")
@@ -131,7 +131,7 @@ func (r *Runtime) updateAdminTokenGuardPolicy(writer http.ResponseWriter, reques
 		stepUpMaterial
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	// A Token Guard policy edited to unlimited stops enforcing without being
@@ -230,11 +230,11 @@ func (r *Runtime) testAdminTokenGuardPolicy(writer http.ResponseWriter, request 
 	}
 	var input tokenGuardPreviewInput
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	if input.EstimatedTokens < 0 || input.EstimatedCostMicrosUSD < 0 || input.Concurrency < 0 {
-		adminBadRequest(writer, "preview values cannot be negative")
+		adminBadRequestCode(writer, "preview_values_negative", "preview values cannot be negative")
 		return
 	}
 	var source [32]byte

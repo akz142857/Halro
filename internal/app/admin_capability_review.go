@@ -148,7 +148,7 @@ func (r *Runtime) preflightAdminDeploymentCapabilities(writer http.ResponseWrite
 		Capabilities domain.ProviderCapabilities `json:"capabilities"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	current, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))

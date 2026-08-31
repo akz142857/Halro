@@ -12,8 +12,8 @@ export function LanguageSelect({ compact = false }: { compact?: boolean }) {
         value={value}
         onChange={(event) => void applyLocale(event.target.value as SupportedLocale)}
       >
-        <option value="zh-CN">简体中文</option>
-        <option value="en-US">English</option>
+        <option value="zh-CN">{t("common.localeZhCN")}</option>
+        <option value="en-US">{t("common.localeEnUS")}</option>
       </select>
     </label>
   );

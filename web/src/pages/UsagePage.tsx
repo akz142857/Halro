@@ -156,7 +156,7 @@ export function UsagePage() {
       {tab === "attempts" && (
       <section role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
       <div className="filter-bar">
-        <label><span>Request ID</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
+        <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label>
           <span>{t("usage.project")}</span>
           <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>

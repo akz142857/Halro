@@ -45,7 +45,7 @@ func (r *Runtime) updateAdminUISettings(writer http.ResponseWriter, request *htt
 		DefaultLocale string `json:"default_locale"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
-		adminBadRequest(writer, "invalid request")
+		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
 	settings := domain.InstanceUISettings{DefaultLocale: input.DefaultLocale, UpdatedAt: time.Now().UTC()}
