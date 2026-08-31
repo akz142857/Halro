@@ -1169,7 +1169,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
   providers: {
     notifyCreated: "服务商已创建并热加载", notifyUpdated: "服务商已保存", notifyDeleted: "服务商已删除", notifyEnabled: "服务商已启用", notifyDisabled: "服务商已禁用",
     notifyCredentialSaved: "凭据已加密保存", notifyCredentialRotated: "凭据已轮换", notifyCredentialDeleted: "凭据已删除",
-    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini（测试版）", bedrock: "AWS Bedrock（测试版）", minimax: "MiniMax（测试版）", openai_compatible: "OpenAI 兼容服务" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", openai_compatible: "OpenAI 兼容服务" },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     connectionSection: "连接与能力", connectionSectionDescription: "服务商类型决定 API 家族、认证方式和推荐能力；你可以选择这个连接实际开放的能力。", capacitySection: "凭据与容量", capacitySectionDescription: "绑定加密凭据并限制服务商级并发。", enableDescription: "启用后，模型部署可以使用这个上游连接。", disabledImpact: "模型部署无法使用这个上游连接", capabilitySectionDescription: "选择此连接开放的适用能力；具体模型只能再从中选择子集。", fixedCapabilityDescription: "该能力实现使用固定协议，无需额外配置。", capabilitySummary: "已选能力", advancedCapabilities: "适用能力", advancedCapabilitiesHint: "服务商类型提供推荐预设；未实现或不适用的能力不可选择。", selectedCapabilities: "已启用 {{count}} 项",
     addCredential: "＋ 凭据", addProvider: "＋ 服务商",
