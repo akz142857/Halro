@@ -3,6 +3,7 @@ package compatibility
 import (
 	"encoding/json"
 	"slices"
+	"unicode/utf8"
 
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/domain"
@@ -374,12 +375,28 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// per-model gap recorded against the endpoints that cannot carry a
 		// reasoning answer.
 		add(request.VisibleOutputTokenLimit != nil &&
-			(request.ReasoningEffort != "" || request.CompletionTokenLimit != nil),
+			(KimiEffortAsksForDepth(request.ReasoningEffort) || request.CompletionTokenLimit != nil),
 			"max_tokens")
-		// `stop` is deliberately absent: Kimi documents it as honoured, so it is
-		// carried. Its published bounds — five sequences, 32 bytes each — are
-		// enforced by the renderer, which is where a length is checkable.
+		// `stop` is carried — Kimi documents it as honoured — but not at every
+		// value, and the bounds are declared here rather than left to the
+		// renderer. The first version left them there and said this layer could
+		// not check a length, which was simply untrue: Stop is a []string on the
+		// request this closure is handed. Leaving them there meant an over-long
+		// stop sequence was admitted, reserved for, and then refused while the
+		// body was being encoded — the one shape this file exists to avoid.
+		add(len(request.Stop) > kimiMaxStopSequences ||
+			slices.ContainsFunc(request.Stop, func(value string) bool {
+				return len(value) > kimiMaxStopBytes || !utf8.ValidString(value)
+			}), "stop")
 		add(request.ReasoningEffort != "" && !slices.Contains(KimiPortableEfforts, request.ReasoningEffort), "reasoning_effort")
+		// A forced tool call and a depth cannot be asked for together on any Kimi
+		// model: the upstream answers `tool_choice 'required' is incompatible
+		// with thinking enabled`, and the Anthropic face says the same of a named
+		// function. The half that depends on the model — whether reasoning ends up
+		// on for a request that asked for no depth — stays in the renderer, which
+		// is the only layer holding the model. This half does not, so it is routed
+		// away before the reservation instead.
+		add(KimiEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceForces(request.ToolChoice), "tool_choice")
 	}, domain.ProfileKimiChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.
@@ -401,7 +418,7 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// answer-only bound when the Responses body is rendered, and that one is
 		// the same tokens only while nothing is thinking.
 		add(request.VisibleOutputTokenLimit != nil &&
-			(request.ReasoningEffort != "" || request.CompletionTokenLimit != nil),
+			(KimiEffortAsksForDepth(request.ReasoningEffort) || request.CompletionTokenLimit != nil),
 			"max_tokens")
 		// The schema-less half is not declared here, and the omission is the
 		// considered answer rather than a gap. Kimi's Responses face models

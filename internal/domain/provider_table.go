@@ -367,9 +367,47 @@ var profileTable = []profileRow{
 		Defaults:        kimiAnthropicSet, Ceiling: kimiAnthropicSet,
 	},
 	{
+		// Withheld, and the first row withheld out of the middle of an offered
+		// connection group rather than as a whole group of its own. What it
+		// scopes is narrow on purpose: a Kimi connection still carries Chat and
+		// Anthropic Messages, so no northbound endpoint loses Kimi and no public
+		// alias changes meaning. Only this one upstream face is unreachable.
+		//
+		// The reason is a pairing rather than a missing feature, and it is the
+		// shape docs/contracts/adding-a-northbound-endpoint.md names as the third
+		// step with no mechanical guard: what this face returns unasked, the
+		// mapper that reads it cannot represent.
+		//
+		//	Kimi's /v1/responses reasons by default — its reasoning.effort ladder
+		//	is low/high/max with no off value — and the portable renderer sends
+		//	no reasoning member at all, because this profile's field rules refuse
+		//	reasoning_effort at every value. Kimi therefore reasons on every
+		//	request, returns a `reasoning` output item, and
+		//	compatibility/openai.DecodeProviderResponse has no case for one: it
+		//	returns an error, the attempt ends 502, and the upstream has already
+		//	been paid.
+		//
+		// Note what that corrects. The comment on kimiResponsesSet used to say
+		// the canonical mapper "drops" a reasoning item; it does not, it refuses
+		// one, and the whole argument for serving this face rested on the wrong
+		// verb. The house rule the Chat renderer and the portable Anthropic
+		// mapper both follow — unspecified means off — is the fix, and it cannot
+		// be applied here yet: whether this face accepts an off switch at all
+		// (reasoning.effort=none, or the undocumented `thinking` member that
+		// turned out to work on the Messages face) has not been measured, and
+		// guessing a member costs the same 400 after the same reservation.
+		//
+		// To offer it again: measure whether /v1/responses accepts an off
+		// switch. If it does, give the OpenAI adapter's Responses branch a Kimi
+		// dialect that sends it on a request that asked for no depth — the same
+		// shape encodeChatRequest already has — and drop this field. If it does
+		// not, the profile stays withheld until the endpoint can carry a
+		// reasoning answer, and the note in docs/prd/kimi-adaptation-plan.zh-CN.md
+		// §12 records that outcome rather than this row.
 		ID: ProfileKimiResponses, Type: ProviderKimi,
 		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.moonshot.ai",
+		Withheld:        true,
 		Defaults:        kimiResponsesSet, Ceiling: kimiResponsesSet,
 	},
 }
@@ -488,8 +526,10 @@ var (
 
 	// The Kimi sets keep ceiling == defaults, for the same reason MiniMax's do:
 	// there is no opt-in an operator could reach for that Halro would be able to
-	// stand behind. Everything here is read from Kimi's published OpenAPI
-	// document; nothing has been measured against a real account.
+	// stand behind. These sets started from Kimi's published OpenAPI document and
+	// were then corrected against a real mainland account on 2026-09-01 — the
+	// rows below say which claim came from which, because on this platform the
+	// two disagreed more than once.
 	//
 	// Absent from all three, each absence a claim about the upstream:
 	//

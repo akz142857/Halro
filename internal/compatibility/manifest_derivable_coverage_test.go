@@ -2,6 +2,7 @@ package compatibility
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -238,6 +239,32 @@ func coverageProbes(northbound string) []semantic.GenerateRequest {
 	probes = append(probes,
 		with(func(r *semantic.GenerateRequest) { r.Temperature = &sampling }),
 		with(func(r *semantic.GenerateRequest) { r.TopP = &sampling }))
+	// The stop axis, at a value rather than only at presence. The battery sent
+	// one short sequence and nothing else, so an upstream that carries stop
+	// within published bounds and refuses it outside them looked identical to one
+	// that carries it always — and Kimi's bounds were enforced in the renderer,
+	// after the reservation, precisely because nothing here could see them.
+	probes = append(probes,
+		with(func(r *semantic.GenerateRequest) { r.Stop = []string{"a", "b", "c", "d", "e", "f"} }),
+		with(func(r *semantic.GenerateRequest) {
+			r.Stop = []string{strings.Repeat("x", 64)}
+		}))
+	// A forced tool call together with a depth. Each half was already driven
+	// alone, and alone neither is refused anywhere; the pair is refused by an
+	// upstream whose reasoning switch and tool_choice cannot both be set, which
+	// no single-member probe can reach.
+	for _, mode := range []semantic.ToolChoiceMode{semantic.ToolChoiceRequired, semantic.ToolChoiceNamed} {
+		choice := semantic.ToolChoice{Mode: mode}
+		if mode == semantic.ToolChoiceNamed {
+			choice.Name = "f"
+		}
+		forced := choice
+		probes = append(probes, with(func(r *semantic.GenerateRequest) {
+			r.Tools = []semantic.Tool{{Name: "f"}}
+			r.ToolChoice = &forced
+			r.ReasoningEffort = "high"
+		}))
+	}
 	return probes
 }
 

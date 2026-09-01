@@ -130,25 +130,51 @@ func TestKimiChatWritesTheReasoningSpellingTheModelReads(t *testing.T) {
 	}
 }
 
-// tool_choice=required is a per-model limit too, and it goes the other way from
-// the reasoning switch: kimi-k3 accepts it and the K2.x line refuses it.
-func TestKimiChatAllowsRequiredToolChoiceOnlyWhereItIsAccepted(t *testing.T) {
-	for model, allowed := range map[string]bool{
-		"kimi-k3":                  true,
-		"kimi-k2.7-code":           false,
-		"kimi-k2.7-code-highspeed": false,
-		"kimi-k2.6":                false,
-		"kimi-k9-unreleased":       false,
+// A forced tool call is refused while the model is reasoning, and accepted
+// while it is not. Kimi's parameter reference says the limit belongs to the
+// model — kimi-k3 accepts required, the K2.x line does not — and the upstream's
+// own error says otherwise: `tool_choice 'required' is incompatible with
+// thinking enabled`. This pins the measured contract, and it is written as a
+// grid because the model-keyed version passed a one-model test.
+func TestKimiChatRefusesAForcedToolCallOnlyWhileTheModelReasons(t *testing.T) {
+	for _, choice := range []json.RawMessage{
+		json.RawMessage(`"required"`),
+		json.RawMessage(`{"type":"function","function":{"name":"f"}}`),
 	} {
-		request := kimiBaseRequest()
-		request.Model = model
-		request.ToolChoice = json.RawMessage(`"required"`)
-		_, err := RenderKimiChatRequest(request)
-		if allowed && err != nil {
-			t.Errorf("%s refused tool_choice=required and it accepts it: %v", model, err)
-		}
-		if !allowed && err == nil {
-			t.Errorf("%s accepted tool_choice=required and it does not", model)
+		for _, test := range []struct {
+			model, effort string
+			refused       bool
+		}{
+			// Nothing asked, and the model has an off switch: this renderer sends
+			// it, so nothing is thinking and the choice stands. kimi-k2.6 is the
+			// row the model-keyed version got wrong — it refused the ordinary
+			// portable request.
+			{model: "kimi-k3", refused: false},
+			{model: "kimi-k2.6", refused: false},
+			// A depth was asked for, so thinking is on and the pair conflicts.
+			// kimi-k3 is the other row the model-keyed version got wrong — it sent
+			// this to Kimi, which answered 400 after the reservation.
+			{model: "kimi-k3", effort: "high", refused: true},
+			{model: "kimi-k2.6", effort: "low", refused: true},
+			// Explicitly no depth is the same as nothing asked.
+			{model: "kimi-k3", effort: "none", refused: false},
+			// No off switch at all, so these reason whatever the request says.
+			{model: "kimi-k2.7-code", refused: true},
+			{model: "kimi-k2.7-code-highspeed", refused: true},
+			// An identifier this build does not know gets no off switch sent, so
+			// Kimi's default stands and the conservative reading is that it thinks.
+			{model: "kimi-k9-unreleased", refused: true},
+		} {
+			request := kimiBaseRequest()
+			request.Model, request.ReasoningEffort = test.model, test.effort
+			request.ToolChoice = choice
+			_, err := RenderKimiChatRequest(request)
+			if test.refused && err == nil {
+				t.Errorf("%s with effort %q accepted tool_choice %s while reasoning", test.model, test.effort, choice)
+			}
+			if !test.refused && err != nil {
+				t.Errorf("%s with effort %q refused tool_choice %s and nothing was reasoning: %v", test.model, test.effort, choice, err)
+			}
 		}
 	}
 }
@@ -304,6 +330,91 @@ func TestKimiChatFieldRulesAgreeWithTheRenderer(t *testing.T) {
 		wire.ReasoningEffort = effort
 		if _, err := RenderKimiChatRequest(wire); err != nil {
 			t.Errorf("effort %q is on both ladders and the renderer refuses it: %v", effort, err)
+		}
+	}
+
+	// The crossed axes, which is where every disagreement this test was written
+	// to catch actually lived. The single-member cases above vary one thing at a
+	// time on one model, and the two layers see different halves of a request:
+	// the field rules hold the members and the renderer holds the model. A
+	// disagreement is a request the router admits and the renderer then refuses,
+	// after the budget is reserved.
+	//
+	// The known residue is stated rather than hidden: on a model that cannot be
+	// switched off, or one this build does not know, the renderer refuses things
+	// no profile-scoped rule can see. Those rows carry residue=true, and the
+	// assertion is that the set of them does not grow.
+	limit := int64(16)
+	for _, test := range []struct {
+		name    string
+		model   string
+		mutate  func(*semantic.GenerateRequest, *openaiapi.ChatCompletionRequest)
+		residue bool
+	}{
+		{name: "answer bound with an explicit no-depth", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "none", "none"
+				c.VisibleOutputTokenLimit, w.MaxTokens = &limit, &limit
+			}},
+		{name: "answer bound with a depth", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
+				c.VisibleOutputTokenLimit, w.MaxTokens = &limit, &limit
+			}},
+		{name: "too many stop sequences", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.Stop = []string{"1", "2", "3", "4", "5", "6"}
+				w.Stop = json.RawMessage(`["1","2","3","4","5","6"]`)
+			}},
+		{name: "an over-long stop sequence", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				long := strings.Repeat("x", 64)
+				c.Stop = []string{long}
+				w.Stop = json.RawMessage(`["` + long + `"]`)
+			}},
+		{name: "a forced tool call with a depth", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
+				c.Tools = []semantic.Tool{{Name: "f"}}
+				c.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceRequired}
+				w.ToolChoice = json.RawMessage(`"required"`)
+			}},
+		{name: "a forced tool call with nothing asked", model: "kimi-k2.6",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.Tools = []semantic.Tool{{Name: "f"}}
+				c.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceRequired}
+				w.ToolChoice = json.RawMessage(`"required"`)
+			}},
+		// The residue. Both are per-model facts a rule keyed by profile cannot
+		// reach, and both are declared in the endpoint manifest's transforms.
+		{name: "an answer bound on a model that always reasons", model: "kimi-k2.7-code",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.VisibleOutputTokenLimit, w.MaxTokens = &limit, &limit
+			}, residue: true},
+		{name: "an answer bound on a model this build does not know", model: "kimi-k9-unreleased",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.VisibleOutputTokenLimit, w.MaxTokens = &limit, &limit
+			}, residue: true},
+		{name: "a depth on a model this build does not know", model: "kimi-k9-unreleased",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
+			}, residue: true},
+	} {
+		canonical := base()
+		wire := kimiBaseRequest()
+		wire.Model = test.model
+		test.mutate(&canonical, &wire)
+		routedAway := len(UnsupportedGenerateFields(domain.ProfileKimiChat, canonical)) > 0
+		_, err := RenderKimiChatRequest(wire)
+		switch {
+		case test.residue:
+			if routedAway || err == nil {
+				t.Errorf("%s on %s: this was the known per-model residue and is no longer (routed away = %v, renderer refuses = %v)",
+					test.name, test.model, routedAway, err != nil)
+			}
+		case routedAway != (err != nil):
+			t.Errorf("%s on %s: the field rules route away = %v but the renderer refuses = %v",
+				test.name, test.model, routedAway, err)
 		}
 	}
 }

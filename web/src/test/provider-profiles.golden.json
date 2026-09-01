@@ -2479,8 +2479,7 @@
             "vision": true
           },
           "combines_with": [
-            "kimi.anthropic.messages.v1",
-            "kimi.responses.v1"
+            "kimi.anthropic.messages.v1"
           ],
           "connection_ceiling": {
             "async_generate": false,
@@ -2568,8 +2567,8 @@
                 "the reasoning member itself depends on the model named: kimi-k3 reads a top-level reasoning_effort while the K2.x line reads thinking, and the renderer follows Kimi's own OpenAPI discriminator over exact model identifiers rather than inferring a family from a name",
                 "K2.x has one on state and no depth ladder, so an effort routed to those models is honoured as on rather than preserved",
                 "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
-                "stop is carried rather than rejected — Kimi documents it as honoured — and its published bounds of five sequences of at most 32 bytes are enforced before provider I/O",
-                "tool_choice=required is accepted only on kimi-k3; the K2.x line answers that it is incompatible with thinking enabled, and that is a per-model limit this profile-scoped declaration cannot express"
+                "stop is value-dependent: Kimi documents it as honoured and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
+                "tool_choice is value-dependent, and the limit belongs to the reasoning switch rather than to the model: Kimi answers that a forced tool call is incompatible with thinking enabled, so a request that names a depth and also forces a tool — required, or one specific function — is routed away before provider I/O. A request that asks for no depth is sent with reasoning switched off and may force a tool freely. The residue this profile-scoped declaration cannot express is the model that cannot be switched off, where the same pair is refused after the reservation"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -2581,12 +2580,15 @@
                 "parallel_tool_calls",
                 "user",
                 "max_tokens",
-                "reasoning_effort"
+                "reasoning_effort",
+                "stop",
+                "tool_choice"
               ]
             },
             {
               "declared_transforms": [
                 "Responses items are mapped through the Kimi Chat ProviderPrimitive",
+                "tool_choice is value-dependent: Kimi refuses a forced tool call while the model is reasoning, so a request that both names a depth and forces a tool is routed away before provider I/O",
                 "Kimi does not model temperature or top_p as request members and pins each to one value per model, so they are rejected before provider I/O rather than sent or silently replaced",
                 "max_output_tokens is carried as Kimi's max_completion_tokens, which Kimi documents as the same bound",
                 "parallel_tool_calls is value-dependent: true is what omitting the member already means",
@@ -2598,7 +2600,8 @@
                 "temperature",
                 "top_p",
                 "parallel_tool_calls",
-                "user"
+                "user",
+                "tool_choice"
               ]
             },
             {
@@ -2607,7 +2610,9 @@
                 "temperature and top_p are this endpoint's own members and Kimi models neither: they are absent from its request schema and pinned per model, so a Messages request naming either is routed away before provider I/O",
                 "output_config.effort is this endpoint's spelling of reasoning_effort and is value-dependent: low and high reach Kimi's switch, while medium, xhigh, Anthropic's max and a request for no reasoning at all have no Kimi rung on this profile",
                 "output_config.format is carried: it is always a schema on this endpoint, and the Kimi Chat face documents the json_schema response format",
-                "max_tokens is carried as max_completion_tokens, which Kimi documents as the same bound under a newer name, so unlike MiniMax there is no reasoning-counting difference that would make the two quantities disagree; it is declared because a request carrying two different output bounds is routed away rather than having this layer choose between them"
+                "max_tokens is carried as max_completion_tokens, which Kimi documents as the same bound under a newer name — but the two are the same quantity only while nothing is thinking, because Kimi's single output bound counts reasoning, measured 2026-09-01. This endpoint requires max_tokens and means the answer alone, so a request that also asks for a depth is routed away rather than having this layer decide which of the two quantities the caller meant",
+                "stop_sequences is carried and was measured honoured, within Kimi's published bounds of five sequences of at most 32 bytes each; a request outside them is routed away before provider I/O",
+                "tool_choice is value-dependent: Kimi refuses a forced tool call while the model is reasoning, so a Messages request naming a depth and forcing a tool is routed away before provider I/O"
               ],
               "endpoint_id": "anthropic.messages.2023-06-01",
               "path": "/v1/messages",
@@ -2616,8 +2621,10 @@
                 "metadata",
                 "output_config.effort",
                 "service_tier",
+                "stop_sequences",
                 "temperature",
                 "thinking",
+                "tool_choice",
                 "top_k",
                 "top_p"
               ]
@@ -2651,8 +2658,7 @@
             "vision": true
           },
           "combines_with": [
-            "kimi.chat.v1",
-            "kimi.responses.v1"
+            "kimi.chat.v1"
           ],
           "connection_ceiling": {
             "async_generate": false,
@@ -2787,178 +2793,6 @@
                 "metadata",
                 "output_config.effort",
                 "service_tier",
-                "temperature",
-                "thinking",
-                "top_k",
-                "top_p"
-              ]
-            }
-          ]
-        },
-        {
-          "access_surface": "kimi-api",
-          "ceiling": {
-            "async_generate": false,
-            "batches": false,
-            "chat": true,
-            "developer_role": false,
-            "embeddings": false,
-            "fetched_image": false,
-            "files": false,
-            "images": false,
-            "json_object": false,
-            "max_context_tokens": 0,
-            "max_output_tokens": 0,
-            "moderations": false,
-            "provider_executed_tools": false,
-            "reasoning": false,
-            "rerank": false,
-            "speech": false,
-            "stream_usage": false,
-            "streaming": false,
-            "structured_outputs": true,
-            "tools": true,
-            "transcriptions": false,
-            "vision": true
-          },
-          "combines_with": [
-            "kimi.chat.v1",
-            "kimi.anthropic.messages.v1"
-          ],
-          "connection_ceiling": {
-            "async_generate": false,
-            "batches": false,
-            "chat": true,
-            "developer_role": false,
-            "embeddings": false,
-            "fetched_image": false,
-            "files": false,
-            "images": false,
-            "json_object": false,
-            "max_context_tokens": 0,
-            "max_output_tokens": 0,
-            "moderations": false,
-            "provider_executed_tools": false,
-            "reasoning": false,
-            "rerank": false,
-            "speech": false,
-            "stream_usage": false,
-            "streaming": false,
-            "structured_outputs": true,
-            "tools": true,
-            "transcriptions": false,
-            "vision": true
-          },
-          "connection_defaults": {
-            "async_generate": false,
-            "batches": false,
-            "chat": true,
-            "developer_role": false,
-            "embeddings": false,
-            "fetched_image": false,
-            "files": false,
-            "images": false,
-            "json_object": false,
-            "max_context_tokens": 0,
-            "max_output_tokens": 0,
-            "moderations": false,
-            "provider_executed_tools": false,
-            "reasoning": false,
-            "rerank": false,
-            "speech": false,
-            "stream_usage": false,
-            "streaming": false,
-            "structured_outputs": true,
-            "tools": true,
-            "transcriptions": false,
-            "vision": true
-          },
-          "credential_scheme": "bearer.static",
-          "default_base_url": "https://api.moonshot.ai",
-          "defaults": {
-            "async_generate": false,
-            "batches": false,
-            "chat": true,
-            "developer_role": false,
-            "embeddings": false,
-            "fetched_image": false,
-            "files": false,
-            "images": false,
-            "json_object": false,
-            "max_context_tokens": 0,
-            "max_output_tokens": 0,
-            "moderations": false,
-            "provider_executed_tools": false,
-            "reasoning": false,
-            "rerank": false,
-            "speech": false,
-            "stream_usage": false,
-            "streaming": false,
-            "structured_outputs": true,
-            "tools": true,
-            "transcriptions": false,
-            "vision": true
-          },
-          "id": "kimi.responses.v1",
-          "immutable": false,
-          "request_constraints": [
-            {
-              "declared_transforms": [
-                "Chat messages are mapped to stateless Responses input items",
-                "Kimi does not model the sampling parameters on this face either, so temperature and top_p are rejected before provider I/O",
-                "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — Kimi itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
-                "the schema-less json_object mode is unavailable here and available on the Kimi Chat profile: this endpoint models structured output as text.format and accepts the json_schema type alone, so a json_object request is routed away by the absent json_object capability rather than by field",
-                "reasoning is unsupported here and supported on the Kimi Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
-                "this endpoint serves kimi-k3 alone, which the model catalogue records per model rather than this profile-scoped declaration"
-              ],
-              "endpoint_id": "openai.chat-completions.v1",
-              "path": "/v1/chat/completions",
-              "unsupported_request_fields": [
-                "temperature",
-                "top_p",
-                "messages[].name",
-                "n",
-                "seed",
-                "stop",
-                "max_tokens",
-                "parallel_tool_calls",
-                "reasoning_effort",
-                "user"
-              ]
-            },
-            {
-              "declared_transforms": [
-                "stateless Responses are sent directly",
-                "Kimi does not model temperature or top_p as request members on this face either",
-                "reasoning is rejected before provider I/O because the canonical response mapper cannot preserve the reasoning items Kimi returns",
-                "text.format carries a schema; the schema-less json_object mode is routed away by the absent json_object capability rather than by field, because Kimi's Responses face accepts the json_schema type alone",
-                "this endpoint serves kimi-k3 alone, which the model catalogue records per model"
-              ],
-              "endpoint_id": "openai.responses.stateless.v1",
-              "path": "/v1/responses",
-              "unsupported_request_fields": [
-                "temperature",
-                "top_p",
-                "parallel_tool_calls",
-                "user"
-              ]
-            },
-            {
-              "declared_transforms": [
-                "portable Messages content is mapped through stateless Kimi Responses",
-                "this profile binds no stream primitive, so a streaming Messages request is routed away rather than refused by field",
-                "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry",
-                "temperature and top_p are rejected for the same reason as on the Kimi Chat profile: Kimi models neither member",
-                "output_config.format is carried: it is always a schema on this endpoint, and a schema is exactly what Kimi's Responses face accepts"
-              ],
-              "endpoint_id": "anthropic.messages.2023-06-01",
-              "path": "/v1/messages",
-              "unsupported_request_fields": [
-                "max_tokens",
-                "metadata",
-                "output_config.effort",
-                "service_tier",
-                "stop_sequences",
                 "temperature",
                 "thinking",
                 "top_k",

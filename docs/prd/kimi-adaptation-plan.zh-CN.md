@@ -1540,3 +1540,87 @@ kimi-k2.6 with nothing asked sent thinking "", want "{\"type\":\"disabled\"}"
 在那之前，运营者要知道的是：**`kimi-k2.7-code` 与 `kimi-k2.7-code-highspeed` 在
 Responses 与 Messages 北向上仍可能出现「上游成功但渲染失败」的 502**，其余两个模型
 不会。
+
+> **§14 更正**：上面这句「其余两个模型不会」只对 Chat 与 Anthropic 两条 provider
+> profile 成立。`kimi.responses.v1` 上它对**所有**模型都不成立，而且是每次调用都
+> 发生；该 profile 已因此收起，见 §14。
+
+## 14. §13 漏掉的第三面：`kimi.responses.v1` 被收起（2026-09-02）
+
+§12 与 §13 修的是 Chat 面与 Anthropic 面。多角色评审复查这条分支时发现，同一条链
+在 **Responses 面上一次都没有修过**，而且它在那里不是「某些模型会」，是每一次调用
+都必然发生。
+
+### 14.1 链路
+
+三段逻辑相乘，每一段单独看都合理：
+
+1. `provider_fields.go` 对 `ProfileKimiResponses` 全值拒 `reasoning_effort` ——
+   理由是 canonical response mapper 保不住 reasoning item，写在 §3.3。
+2. `RenderProviderResponseRequest` 只在 `ReasoningEffort != ""` 时才写 `reasoning`
+   成员。上一条保证它永远是空，所以请求体**永远不带关闭开关**。
+3. Kimi 的 `/v1/responses` 默认 `reasoning.effort = max`（§1.6），于是每次都推理，
+   返回 `type:"reasoning"` 输出项；`DecodeProviderResponse` 的 `switch` 没有这个
+   case，落到 `default:` **返回错误**。
+
+结果是 `ErrorMalformed, Ambiguous: true` → 502 → 按估算值保守结算。也就是 §12 那次
+生产事故的同一形状，在第三个面上。
+
+### 14.2 前提里的那个动词
+
+`provider_table.go` 与本文 §3.3、§10.4 都写着 canonical mapper 会把 reasoning item
+「丢弃 / drops」。**它不丢弃，它报错。** 「该 profile 不声明 Reasoning 就安全」这个
+结论，整个建立在这个错误的动词上。§10.4 把「Responses 面返回 reasoning 输出项」记为
+「确认无误、未动代码的部分」，实际上那一行正是缺陷的证据。
+
+### 14.3 为什么这次不是「让上游不产出」
+
+`docs/contracts/adding-a-northbound-endpoint.md` 的推论 2 说：优先让上游不产出，而
+不是拒绝路由。Chat 面与 Anthropic 面都是这么修的（送 `thinking:{"type":"disabled"}`）。
+
+Responses 面暂时做不到：它的 `reasoning.effort` 阶梯是 `low`/`high`/`max`，**没有
+关闭档**（§1.6）。Chat 面能关靠的是 `thinking`，Messages 面能关靠的是文档里没有、
+§13.1 实测出来的 `thinking` —— 这一面有没有对应的未文档化开关，**没有测过**。
+猜一个成员发出去，代价是同一笔预留后的 400。
+
+### 14.4 处置：`Withheld: true`
+
+用仓库现成的机制收起这条 profile：实现保留、走 profile 表的不变量测试照跑、服务矩阵
+不列、所有写路径拒绝。
+
+代价是有界的，这是选它而不是选别的原因：**没有任何北向端点因此失去 Kimi**。Chat 面
+服务全部四个模型，Anthropic 面服务两个，`/v1/chat/completions`、`/v1/responses`、
+`/v1/messages` 三个北向端点都仍然可以路由到 Kimi。别名可重指的承诺没有被动到 ——
+§12.3 走错的那一步正是动了它。
+
+这也是第一次从一个**已开放的连接组中间**收起单条 profile（Bedrock 那五条是整组收起）。
+两处因此要跟着改，都在这次一并做了：`summaryOf` 原本没有复制 `Withheld`，所以连接组
+里读到的永远是 false；控制台的 `combines_with` 原本会宣称一个 Kimi 凭据也覆盖这条
+profile，而保存时会被拒 —— 正是这个端点存在的目的所要防的那种「表单比服务端宽」。
+
+### 14.5 解除条件
+
+测一件事：Kimi 的 `/v1/responses` 是否接受关闭推理的写法 ——
+`reasoning:{"effort":"none"}`，或 Messages 面上那个未文档化的 `thinking` 成员。
+
+- **接受**：给 OpenAI 适配器的 Responses 分支加 Kimi 方言，在没有要求深度的请求上
+  送出关闭开关（`encodeChatRequest` 已经是这个形状），然后删掉 `Withheld` 一行。
+- **不接受**：这条 profile 保持收起，直到北向端点能承载 reasoning 答案为止 ——
+  那要等 §13.6 说的「这个目标总是推理」能力位，届时一并处理。
+
+### 14.6 这一轮同时修掉的
+
+- `applyKimiToolChoice` 原本按模型判断（k3 可以 required、K2.x 不行），与 §10.3 自己
+  记的实测相反 —— 真实冲突是「forced tool call vs thinking enabled」。双向都错：
+  k3 带深度 + required 被放行到上游 400，k2.6 不带深度的普通请求被误拒。改为按
+  `kimiThinkingWillBeOn` 判断。
+- 能力探测对 Kimi 发 `reasoning_effort:"minimal"`，不在 Kimi 阶梯上，探测在进程内
+  必然失败、Reasoning 永远拿不到验证证据 —— DeepSeek 当初的同一个坑。补了 case，并把
+  那个硬编码四 profile 的回归测试改成走 profile 表，下一个短阶梯平台会被指名。
+- `stop` 的上界（≤5 条、≤32 字节）原本只在渲染器里查，即预留之后。搬到字段规则；
+  「这一层查不了长度」的旧理由不成立，`Stop` 就是 `[]string`。
+- `max_tokens` 规则把 `reasoning_effort:"none"` 当成「要思考」，于是把最省钱的组合
+  （显式不推理 + 答案预算）路由绕开。改用与渲染器共享的 `KimiEffortAsksForDepth`。
+- 四处与代码矛盾的注释（`kimi.go` 两处、`builtin.go`、`provider_table.go`）以及
+  manifest 里那句「unlike MiniMax there is no reasoning-counting difference」——
+  最后这句会原样发布进 `docs/compatibility/endpoint-manifests.json`。

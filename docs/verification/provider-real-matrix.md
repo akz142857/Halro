@@ -231,6 +231,18 @@ One assumption remains open: what the
 Anthropic face answers on 503. It cannot be arranged deliberately and is recorded
 as unmeasured rather than inferred.
 
+One assumption was closed the wrong way and is recorded here because the
+measurement above is what makes the correction readable. Responses usage was
+measured and the Responses *output* was not read back through Halro's own mapper:
+Kimi's `/v1/responses` reasons by default and its effort ladder has no off value,
+so every call returns a `reasoning` output item, and the canonical mapper refuses
+one rather than dropping it — the verb three separate documents got wrong. That
+made `kimi.responses.v1` fail every request after the upstream had been paid, and
+the profile is withheld until an off switch is found on that face. No northbound
+endpoint lost Kimi: the Chat and Anthropic profiles still serve all three. See
+`docs/prd/kimi-adaptation-plan.zh-CN.md` §14, which also carries the measurement
+that would lift the withholding.
+
 `docs/prd/kimi-adaptation-plan.zh-CN.md` §10.2 carries the closed list item by
 item, §10.3 the four places Kimi's own documentation was wrong, and §11 the
 international round.

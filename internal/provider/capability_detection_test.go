@@ -516,27 +516,40 @@ func capabilitiesFromDomain(declared domain.ProviderCapabilities) Capabilities {
 // it. This one renders through each profile's own wire mapping, because that is
 // the step that used to fail.
 func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
-	for name, test := range map[string]struct {
-		profile domain.ProviderProfileID
-		ladder  []string
-	}{
-		"openai":      {domain.ProfileOpenAIChatEmbeddings, openaiapi.ReasoningEffortLevels},
-		"azure":       {domain.ProfileAzureChatEmbeddings, openaiapi.ReasoningEffortLevels},
-		"mantle chat": {domain.ProfileBedrockMantleOpenAIChat, openaiapi.ReasoningEffortLevels},
-		"deepseek":    {domain.ProfileDeepSeekChat, compatibility.DeepSeekEffortLevels},
-	} {
-		t.Run(name, func(t *testing.T) {
-			effort, askable := reasoningProbeEffort(test.profile)
-			if !askable {
-				t.Fatalf("%s no longer asks about reasoning at all", test.profile)
-			}
-			if !slices.Contains(test.ladder, effort) {
-				t.Fatalf("effort %q is not on %s's ladder %v", effort, test.profile, test.ladder)
-			}
-			if effort == "none" {
-				t.Fatal("the probe asked the model not to think, which cannot verify that it can")
-			}
-		})
+	// Keyed by profile rather than by a name, and checked for completeness
+	// below, because the hand-written version of this table is what let the
+	// second short ladder through. Kimi arrived with low/high/max, fell to the
+	// default OpenAI ladder, and asked every Kimi deployment for "minimal" —
+	// DeepSeek's failure again, invisible because this table did not have to
+	// mention it.
+	ladders := map[domain.ProviderProfileID][]string{
+		domain.ProfileOpenAIChatEmbeddings:    openaiapi.ReasoningEffortLevels,
+		domain.ProfileAzureChatEmbeddings:     openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleChat:       openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleOpenAIChat: openaiapi.ReasoningEffortLevels,
+		domain.ProfileMiniMaxChat:             openaiapi.ReasoningEffortLevels,
+		domain.ProfileDeepSeekChat:            compatibility.DeepSeekEffortLevels,
+		domain.ProfileKimiChat:                compatibility.KimiEffortLevels,
+	}
+	// Every profile that both declares reasoning and plans a probe has to be in
+	// the table. A platform added without a case in reasoningProbeEffort fails
+	// here by name, instead of paying for an inconclusive probe on every run
+	// until someone reads the detection results.
+	for _, profile := range domain.AllProviderProfiles() {
+		effort, askable := reasoningProbeEffort(profile.ID)
+		if !askable || !domain.MaxProviderCapabilitiesForProfile(profile.Type, profile.ID).Reasoning {
+			continue
+		}
+		ladder, listed := ladders[profile.ID]
+		if !listed {
+			t.Fatalf("%s plans a reasoning probe asking for %q and this test does not say which ladder that has to be on; add it here and give reasoningProbeEffort a case if the profile's wire format is not OpenAI's", profile.ID, effort)
+		}
+		if !slices.Contains(ladder, effort) {
+			t.Fatalf("effort %q is not on %s's ladder %v", effort, profile.ID, ladder)
+		}
+		if effort == "none" {
+			t.Fatalf("%s asked the model not to think, which cannot verify that it can", profile.ID)
+		}
 	}
 
 	// DeepSeek is the case that refused at render time. Rendering it is the
@@ -553,6 +566,23 @@ func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
 	}
 	if rendered.Thinking == nil || rendered.Thinking.Type != "enabled" {
 		t.Fatalf("the probe did not turn thinking on: %#v", rendered.Thinking)
+	}
+
+	// Kimi is the second one, and it refused at render time for the same reason.
+	// Its shallowest rung reaches a different member — kimi-k3 reads a top-level
+	// reasoning_effort — so the assertion is that the switch is set at all, in
+	// whichever spelling the named model reads.
+	kimiEffort, _ := reasoningProbeEffort(domain.ProfileKimiChat)
+	kimiRendered, err := compatibility.RenderKimiChatRequest(openaiapi.ChatCompletionRequest{
+		Model:           "kimi-k3",
+		Messages:        []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("Reply briefly.")}},
+		ReasoningEffort: kimiEffort,
+	})
+	if err != nil {
+		t.Fatalf("the Kimi probe request does not render: %v", err)
+	}
+	if kimiRendered.ReasoningEffort != kimiEffort {
+		t.Fatalf("the probe did not turn reasoning on: %#v", kimiRendered)
 	}
 }
 

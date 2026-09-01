@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // Kimi speaks the OpenAI Chat Completions wire format and accepts a smaller
@@ -76,11 +77,13 @@ var KimiEffortLevels = []string{"low", "high", "max"}
 //     which is why it is added rather than intersected: Kimi spells "off" as a
 //     type, not as a rung.
 //
-// The one model it is not reachable on is kimi-k2.7-code, which answers
-// `invalid thinking: only type=enabled is allowed for this model`. A field rule
-// is keyed by profile and cannot tell the models apart, so that request is
-// admitted here and refused by the renderer — after the budget is reserved,
-// which is the shape this repository normally refuses to accept. It is taken
+// It is not reachable on every model. The kimi-k2.7-code pair answers `invalid
+// thinking: only type=enabled is allowed for this model`, and an identifier this
+// build does not know is refused as well, because there is no spelling to send
+// it in. A field rule is keyed by profile and cannot tell the models apart, so
+// those requests are admitted here and refused by the renderer — after the
+// budget is reserved, which is the shape this repository normally refuses to
+// accept. It is taken
 // here because the alternative was worse in a way an operator feels: declaring
 // `none` unsupported for the whole profile meant a caller explicitly asking for
 // no reasoning was routed away, while a caller who said nothing got exactly
@@ -109,9 +112,11 @@ type kimiReasoning struct {
 	// accepted only as {"type":"enabled","keep":"all"}, and any other
 	// configuration is refused by the upstream.
 	ThinkingKeepAll bool
-	// CanDisable is false for every model that always reasons. kimi-k3 and
-	// kimi-k2.7-code both do; only kimi-k2.6 can be switched off, measured
-	// 2026-09-01.
+	// CanDisable is false for every model that always reasons, which on
+	// 2026-09-01 was the kimi-k2.7-code pair alone. kimi-k3 and kimi-k2.6 both
+	// take an off switch — for kimi-k3 that was measured against its own
+	// documentation and against its /v1/models metadata, both of which say it
+	// always reasons and are both wrong. See the map below.
 	CanDisable bool
 }
 
@@ -136,6 +141,20 @@ var kimiReasoningSpelling = map[string]kimiReasoning{
 	"kimi-k2.7-code-highspeed": {ThinkingKeepAll: true},
 }
 
+// KimiEffortAsksForDepth reports whether a caller asked this request to reason.
+//
+// It is the half of kimiThinkingWillBeOn that does not need a model, and it
+// exists because the field rules are keyed by profile and have no target in
+// hand while the renderer does. Both layers reading one definition is the point:
+// the first version of the max_tokens rule spelled it `ReasoningEffort != ""`,
+// which counts "none" as a request to think and routed away the one request that
+// is cheapest to serve — an explicit ask for no reasoning, with a budget for the
+// answer. MiniMax's equivalent rule already excluded "none"; this is the same
+// predicate, named once.
+func KimiEffortAsksForDepth(effort string) bool {
+	return effort != "" && effort != kimiThinkingOff
+}
+
 // kimiThinkingWillBeOn reports whether the rendered body leaves the model
 // reasoning. It is what tells the two output limits apart — with nothing
 // thinking, a budget for the whole completion and a budget for the answer bound
@@ -147,7 +166,7 @@ var kimiReasoningSpelling = map[string]kimiReasoning{
 // fail-closed direction: an unknown identifier gets no off switch sent, so
 // whatever Kimi's default is stands.
 func kimiThinkingWillBeOn(model, effort string) bool {
-	if effort != "" && effort != kimiThinkingOff {
+	if KimiEffortAsksForDepth(effort) {
 		return true
 	}
 	spelling, known := kimiReasoningSpelling[model]
@@ -276,7 +295,7 @@ func RenderKimiChatRequest(request openaiapi.ChatCompletionRequest) (KimiChatReq
 		Stream:              request.Stream, StreamOptions: request.StreamOptions,
 		Tools: request.Tools, ToolChoice: request.ToolChoice,
 	}
-	if err := applyKimiToolChoice(&result, request); err != nil {
+	if err := applyKimiToolChoice(request); err != nil {
 		return KimiChatRequest{}, err
 	}
 	if err := applyKimiReasoning(&result, request.Model, request.ReasoningEffort); err != nil {
@@ -359,28 +378,80 @@ func renderKimiResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
 	}
 }
 
-// applyKimiToolChoice enforces the one tool_choice constraint that varies by
-// model: kimi-k3 accepts auto, none, required and a named function, while the
-// K2.x line refuses required.
+// applyKimiToolChoice enforces the one tool_choice constraint Kimi has, and it
+// is keyed on whether the model will be reasoning rather than on which model was
+// named.
 //
-// This is reachable in the running gateway, unlike most refusals in this file,
-// because tool_choice is a member every Kimi profile accepts — the limit belongs
-// to the model, and the field rules are keyed by profile. A caller asking a K2.x
-// deployment to force a tool call gets a bad-request rather than a silently
-// downgraded choice.
-func applyKimiToolChoice(result *KimiChatRequest, request openaiapi.ChatCompletionRequest) error {
-	if len(request.ToolChoice) == 0 {
+// The first version of this function keyed on the model, because Kimi's
+// parameter reference says the K2.x line does not support `required`. The
+// measurement on 2026-09-01 refuted that in the upstream's own words:
+//
+//	tool_choice 'required' is incompatible with thinking enabled
+//
+// and the Anthropic face says the same thing about a named function
+// (`tool_choice 'specified' is incompatible with thinking enabled`), while with
+// thinking switched off a named tool call answered normally with a tool_use
+// block. The conflict belongs to the reasoning switch — which this renderer sets
+// — and not to the identifier.
+//
+// Keying it on the model was wrong in both directions, which is why this is a
+// fix rather than a tidy-up:
+//
+//   - {kimi-k3, reasoning_effort: high, tool_choice: required} was rendered and
+//     sent, and Kimi answered 400 after the budget was reserved.
+//   - {kimi-k2.6, tool_choice: required} was refused here, though it is the
+//     ordinary portable request: nothing asked for depth, so this renderer sends
+//     thinking disabled and Kimi accepts the choice.
+//
+// The named-function half is the inferred one and is marked as such: it was
+// measured on the Anthropic face, not on this one. It is refused while reasoning
+// because the two faces are one upstream answering with one error family, and
+// because the cost of being wrong is asymmetric — a caller who both asks for a
+// depth and forces one specific tool gets a clear refusal instead of a 400
+// charged against a reservation.
+//
+// Still reachable in the running gateway: whether reasoning ends up on depends
+// on the model, and the field rules are keyed by profile with no target in hand.
+// What the field rules can see — a request that names a depth and forces a tool,
+// which fails on every Kimi model — is declared there and routed away first.
+func applyKimiToolChoice(request openaiapi.ChatCompletionRequest) error {
+	if len(request.ToolChoice) == 0 || !kimiForcesAToolCall(request.ToolChoice) {
 		return nil
 	}
+	if !kimiThinkingWillBeOn(request.Model, request.ReasoningEffort) {
+		return nil
+	}
+	return fmt.Errorf("Kimi refuses a forced tool call while model %q is reasoning", request.Model)
+}
+
+// kimiToolChoiceForces is the same question as kimiForcesAToolCall asked one
+// layer earlier, where the request is still semantic and the field rules live.
+// The two spellings exist because the two layers hold different representations
+// of the same choice, and they are kept adjacent so neither can be changed
+// alone: a disagreement between them is a request the router admits and the
+// renderer then refuses, after the budget is reserved.
+func kimiToolChoiceForces(choice *semantic.ToolChoice) bool {
+	return choice != nil &&
+		(choice.Mode == semantic.ToolChoiceRequired || choice.Mode == semantic.ToolChoiceNamed)
+}
+
+// kimiForcesAToolCall reports whether this tool_choice obliges the model to call
+// a tool. `auto` and `none` do not and are never in question.
+//
+// The two shapes are the only two the facade admits: decodeToolChoice accepts
+// the strings auto, none and required, or a {"type":"function"} object naming
+// one, and renderToolChoice re-emits exactly those. A shape neither branch
+// recognises is treated as forcing nothing, because it cannot have come from a
+// caller.
+func kimiForcesAToolCall(raw json.RawMessage) bool {
 	var mode string
-	if json.Unmarshal(request.ToolChoice, &mode) != nil || mode != "required" {
-		return nil
+	if json.Unmarshal(raw, &mode) == nil {
+		return mode == "required"
 	}
-	spelling, known := kimiReasoningSpelling[request.Model]
-	if known && spelling.TopLevelEffort {
-		return nil
+	var named struct {
+		Type string `json:"type"`
 	}
-	return fmt.Errorf("Kimi model %q does not accept tool_choice=required", request.Model)
+	return json.Unmarshal(raw, &named) == nil && named.Type == "function"
 }
 
 // applyKimiReasoning writes whichever reasoning member the named model reads.

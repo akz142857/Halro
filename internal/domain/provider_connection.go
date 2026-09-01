@@ -79,6 +79,24 @@ type ConnectionAssignment struct {
 // An unregistered anchor, or one that does not belong to this provider type,
 // carries nothing: the caller has already failed profile resolution and should
 // not be handed a group to fall back on.
+//
+// Withholding is not applied here, and that is deliberate rather than an
+// oversight. This function answers what the table says a group is, and the
+// invariant tests that walk withheld profiles depend on getting the whole group
+// — Bedrock's Runtime rows are four withheld profiles whose spread across one
+// connection is still asserted, so that offering them again restores the
+// coverage with no edit. Whoever presents or binds the group applies the
+// withholding: buildProviderProfilesView drops withheld peers from what the
+// console offers, and the provider write path refuses to bind one.
+//
+// What makes that safe rather than merely conventional is homeForCapability: the
+// anchor wins every capability it can serve, so a withheld peer can only be
+// assigned a capability no other profile in the group has. kimi.responses.v1,
+// the first profile withheld out of the middle of an offered group, declares a
+// strict subset of the Kimi Chat and Anthropic sets and is therefore never a
+// home. A future withheld peer holding a capability of its own would be, and
+// would be refused on save — which is the fail-closed direction, and the reason
+// this note is here rather than in a commit message.
 func ConnectionProfiles(providerType ProviderType, anchor ProviderProfileID) []ProviderProfileSummary {
 	row, ok := profileIndex[anchor]
 	if !ok || row.Type != providerType {
@@ -281,7 +299,8 @@ func summaryOf(row profileRow) ProviderProfileSummary {
 	return ProviderProfileSummary{
 		ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
 		CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
-		Immutable: row.Immutable, Defaults: row.Defaults, Ceiling: row.Ceiling,
+		Immutable: row.Immutable, Withheld: row.Withheld,
+		Defaults: row.Defaults, Ceiling: row.Ceiling,
 	}
 }
 

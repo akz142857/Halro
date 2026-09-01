@@ -467,12 +467,14 @@ func minimaxModels() []Entry {
 //     was measured, not what was published — kimi-k3 and kimi-k2.6 on all three
 //     faces, and the two k2.7-code identifiers on Chat alone, which is the only
 //     face they have been driven on.
-//   - Which models can be told not to reason. Only kimi-k2.6 can. kimi-k3 and
-//     the k2.7-code pair always reason with Preserved Thinking on, and no
-//     capability bit says "reasons, but not optionally". It stays in this
-//     comment and in the endpoint manifest's declared transforms, which is
-//     honest about the gap rather than hiding it behind a bit that means
-//     something else.
+//   - Which models can be told not to reason. kimi-k3 and kimi-k2.6 can; the
+//     k2.7-code pair cannot, and always reasons with Preserved Thinking on.
+//     kimi-k3's off switch was measured after both its documentation and its own
+//     /v1/models metadata said it had none — this list follows the measurement.
+//     No capability bit says "reasons, but not optionally", so the pair that
+//     cannot be switched off is recorded in this comment and in the endpoint
+//     manifest's declared transforms, which is honest about the gap rather than
+//     hiding it behind a bit that means something else.
 //
 // Two deliberate narrowings:
 //
