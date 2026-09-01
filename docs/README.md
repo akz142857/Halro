@@ -113,6 +113,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
+| [请求失败诊断与错误专用日志](todo/request-failure-diagnostics-plan.zh-CN.md) | 最终失败下钻、错误分类展示、请求级结构化 ERROR 与独立轮转错误文件 | 提案待评审 |
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
 | [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
