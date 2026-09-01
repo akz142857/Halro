@@ -260,6 +260,55 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 
 	}, domain.ProfileMiniMaxChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Kimi's Anthropic face. It starts from the direct Anthropic profile's
+		// losses because it is the same wire form, then adds what Kimi alone
+		// cannot carry.
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasImageDetail(request), "messages[].content[].detail")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.EndUserRef != "", "user")
+		// The sampling parameters, refused here for the same reason as on the
+		// Chat face. Measured 2026-09-01: this face answers 200 to
+		// temperature: 1.0, and the Chat face answers
+		// `invalid temperature: only 1 is allowed for this model` to anything
+		// else. Whether this face refuses the other values too was not measured,
+		// and the fail-closed reading of that gap is the one that does not send a
+		// value the upstream may reject after the budget is reserved.
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+		// Any depth at all, and this is the rule the whole profile depends on.
+		//
+		// A portable request that names no depth reaches Kimi with
+		// {"type":"disabled"}, which the portable mapper emits on its own, and
+		// Kimi answers it with a body carrying no thinking block — measured, and
+		// the reason this profile exists at all. A request that does name a depth
+		// reaches output_config.effort instead, Kimi reasons, and the response
+		// carries a thinking block that DecodeResult refuses outright. That
+		// failure would land after the budget is reserved on a request that
+		// succeeded upstream, so it is routed away by field instead.
+		//
+		// The capability stays true because native mode forwards the caller's own
+		// bytes and reads the answer back the same way. This is the same shape
+		// MiniMax's Anthropic row has.
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		// The schema-less half, and a schema this endpoint would not enforce.
+		// Kimi's output_config.format takes a json_schema type and nothing else,
+		// and it enforces what it is given — measured returning a body matching
+		// the schema.
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONObject, "response_format")
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema && !request.OutputFormat.Strict, "response_format")
+		// stop_sequences is deliberately absent: measured honoured on this face —
+		// a request naming STOPHERE came back cut at it — unlike MiniMax, which
+		// documents the member as ignored and therefore has it refused.
+		//
+		// max_tokens is deliberately absent too. Kimi's single output bound counts
+		// reasoning, but every request that reaches this profile has reasoning
+		// switched off by the rule above, so the answer-only bound this endpoint
+		// requires and the bound Kimi applies are the same tokens.
+	}, domain.ProfileKimiAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.
 		// It is written out rather than layered on top of the rule above because
 		// register keys by profile, so a second registration for the same profile
@@ -280,6 +329,97 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// A Responses message item has no author name to put one in.
 		add(hasNamedMessage(request), "messages[].name")
 	}, domain.ProfileMiniMaxResponses)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Kimi's Chat face. It speaks this wire format and accepts a member list
+		// that is smaller than OpenAI's in one way no other upstream here is:
+		// the sampling parameters are not request members at all. Kimi pins each
+		// to one value per model and answers any other with an error, so the
+		// honest declaration is that the member cannot be carried — substituting
+		// the pinned value would serve the caller something else, and dropping it
+		// silently would do the same without saying so.
+		//
+		// A value-dependent rule — carry the pinned value, refuse the rest —
+		// cannot be written here: the pinned value varies by model (1.0 on k3 and
+		// k2.7-code, 0.6 on a non-thinking kimi-k2.6) and this rule is keyed by
+		// profile with no target in hand. That is the layering
+		// docs/contracts/adding-a-platform.md draws in step 4 — a property of the
+		// target is a capability, not a field declaration — and reaching it means
+		// a new capability and a target-level filter, which is a change to the
+		// capability model rather than a platform's own registration.
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		// Kimi has one output bound and it counts reasoning. Measured 2026-09-01:
+		// max_completion_tokens=48 on kimi-k3 produced 48 completion tokens of
+		// which 45 were reasoning, an empty answer, and finish_reason=length.
+		// max_tokens behaves identically — Kimi documents it as the deprecated
+		// spelling of the same member, and the measurement agrees.
+		//
+		// Value-dependent, and the value is another field: the answer-only bound
+		// and the completion budget are the same tokens exactly while nothing is
+		// thinking. The renderer switches reasoning off on a request that asks for
+		// none, so that is the common case and an ordinary Chat client sending
+		// max_tokens reaches Kimi. A request that does ask for depth, or that
+		// carries both members, is routed away here rather than refused after the
+		// budget is reserved.
+		//
+		// What this rule cannot see is the model: kimi-k2.7-code cannot be
+		// switched off, so on that one the two bounds differ even with nothing
+		// asked. The renderer refuses that combination, which is a refusal after
+		// the reservation — the only one this profile has, and it is the same
+		// per-model gap recorded against the endpoints that cannot carry a
+		// reasoning answer.
+		add(request.VisibleOutputTokenLimit != nil &&
+			(request.ReasoningEffort != "" || request.CompletionTokenLimit != nil),
+			"max_tokens")
+		// `stop` is deliberately absent: Kimi documents it as honoured, so it is
+		// carried. Its published bounds — five sequences, 32 bytes each — are
+		// enforced by the renderer, which is where a length is checkable.
+		add(request.ReasoningEffort != "" && !slices.Contains(KimiPortableEfforts, request.ReasoningEffort), "reasoning_effort")
+	}, domain.ProfileKimiChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// The Responses face carries the Chat face's losses and two of its own.
+		// It is written out rather than layered on top of the rule above because
+		// register keys by profile, so a second registration for the same profile
+		// would replace the first rather than add to it.
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		add(len(request.Stop) > 0, "stop")
+		// The same single reasoning-counting bound as the Chat face, reached by a
+		// different route. This endpoint's own max_output_tokens decodes into the
+		// completion budget, which is the same quantity Kimi applies; but a
+		// Chat-shaped request carrying only max_tokens falls back to the
+		// answer-only bound when the Responses body is rendered, and that one is
+		// the same tokens only while nothing is thinking.
+		add(request.VisibleOutputTokenLimit != nil &&
+			(request.ReasoningEffort != "" || request.CompletionTokenLimit != nil),
+			"max_tokens")
+		// The schema-less half is not declared here, and the omission is the
+		// considered answer rather than a gap. Kimi's Responses face models
+		// structured output as text.format and accepts the json_schema type
+		// alone, so a json_object request cannot be served — but that is already
+		// what the absent json_object capability says, and the capability filter
+		// drops this target before any field rule runs. Declaring it as well
+		// would make the profile refuse a member whose only reachable value on
+		// two of the three northbound endpoints is the schema it does serve, and
+		// the manifest would then have to claim the schema is unsupported there.
+		// No reasoning at all. The capability ceiling already routes a thinking
+		// request away — the canonical response mapper cannot carry reasoning
+		// items — but a caller told "no route supports this" learns less than one
+		// told which field cost them the route.
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		// A Responses message item has no author name to put one in.
+		add(hasNamedMessage(request), "messages[].name")
+	}, domain.ProfileKimiResponses)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Bedrock's inability to fetch an image used to be declared here, once per
 		// northbound endpoint, in each endpoint's own name for the same member.

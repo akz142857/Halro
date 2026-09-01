@@ -1711,7 +1711,8 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 func isNativeAnthropicProfile(profileID domain.ProviderProfileID, surface domain.AccessSurface) bool {
 	return profileID == domain.ProfileAnthropicMessages && surface == domain.SurfaceAnthropic ||
 		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle ||
-		profileID == domain.ProfileMiniMaxAnthropicMessages && surface == domain.SurfaceMiniMax
+		profileID == domain.ProfileMiniMaxAnthropicMessages && surface == domain.SurfaceMiniMax ||
+		profileID == domain.ProfileKimiAnthropicMessages && surface == domain.SurfaceKimi
 }
 
 func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {
@@ -2770,7 +2771,7 @@ func nativeAnthropicUsage(usage anthropicapi.Usage) semantic.Usage {
 		CachedInputTokens:     usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
 		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ThinkingTokens,
+		ReasoningTokens:       usage.ReasoningTokens(),
 		TotalTokens:           promptTokens + usage.OutputTokens,
 		Source:                semantic.UsageProviderReported,
 	}

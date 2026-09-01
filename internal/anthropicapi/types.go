@@ -721,6 +721,31 @@ type Usage struct {
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
 	ThinkingTokens           int64 `json:"thinking_tokens,omitempty"`
+	// OutputTokensDetails is where Kimi's Anthropic-shaped face puts the same
+	// number, and it is a second place to look rather than a second meaning.
+	// Measured against a real Kimi account on 2026-09-01: a Messages response
+	// carries `"output_tokens_details":{"thinking_tokens":42}` and no top-level
+	// thinking_tokens, so a decoder reading the flat member alone reports every
+	// Kimi reasoning span as zero. Anthropic itself sends neither shape on most
+	// responses, so this member is simply absent there.
+	OutputTokensDetails *OutputTokenDetails `json:"output_tokens_details,omitempty"`
+}
+
+type OutputTokenDetails struct {
+	ThinkingTokens int64 `json:"thinking_tokens,omitempty"`
+}
+
+// ReasoningTokens reports the thinking span from whichever of the two spellings
+// carried it. The flat member wins when both are present, because it is the one
+// this struct renders; no upstream has been seen sending both.
+func (u Usage) ReasoningTokens() int64 {
+	if u.ThinkingTokens != 0 {
+		return u.ThinkingTokens
+	}
+	if u.OutputTokensDetails != nil {
+		return u.OutputTokensDetails.ThinkingTokens
+	}
+	return 0
 }
 
 // PromptTokens is every prompt token the request consumed. Anthropic reports

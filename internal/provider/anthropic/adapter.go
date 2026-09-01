@@ -537,7 +537,7 @@ func portableUsage(usage anthropicapi.Usage) *openaiapi.Usage {
 		CacheWriteTokens: usage.CacheCreationInputTokens,
 	}
 	portable.SetCachedPromptTokens(usage.CacheReadInputTokens)
-	portable.SetReasoningTokens(usage.ThinkingTokens)
+	portable.SetReasoningTokens(usage.ReasoningTokens())
 	return portable
 }
 
@@ -550,7 +550,7 @@ func semanticUsage(usage anthropicapi.Usage) *semantic.Usage {
 		CachedInputTokens:     usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
 		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ThinkingTokens,
+		ReasoningTokens:       usage.ReasoningTokens(),
 		TotalTokens:           prompt + usage.OutputTokens,
 		Source:                semantic.UsageProviderReported,
 	}
@@ -887,7 +887,12 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 				current.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
 			}
 			current.OutputTokens = value.Usage.OutputTokens
+			// Both spellings of the thinking span are carried forward, because
+			// which one an upstream uses is a property of the upstream and this
+			// accumulator serves several. Reading only the flat member reported
+			// every Kimi reasoning span as zero.
 			current.ThinkingTokens = value.Usage.ThinkingTokens
+			current.OutputTokensDetails = value.Usage.OutputTokensDetails
 		}
 	}
 	return current

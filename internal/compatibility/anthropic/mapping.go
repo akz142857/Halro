@@ -574,7 +574,7 @@ func DecodeResult(message anthropicapi.Message) (semantic.GenerateResult, error)
 		CachedInputTokens:     message.Usage.CacheReadInputTokens,
 		CacheWriteInputTokens: message.Usage.CacheCreationInputTokens,
 		OutputTokens:          message.Usage.OutputTokens,
-		ReasoningTokens:       message.Usage.ThinkingTokens,
+		ReasoningTokens:       message.Usage.ReasoningTokens(),
 		TotalTokens:           promptTokens + message.Usage.OutputTokens,
 		Source:                semantic.UsageProviderReported,
 	}

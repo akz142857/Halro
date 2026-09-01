@@ -162,6 +162,41 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 		build:     miniMaxOpenAIAdapter(true),
 	},
 
+	// Kimi (Moonshot AI): one host, one bearer key, three wire shapes.
+	//
+	// Bearer only. Kimi's authentication section names Authorization: Bearer and
+	// nothing else, on every face including the Anthropic-shaped one, so no
+	// alternative header is accepted here — unlike MiniMax, whose Anthropic route
+	// additionally takes x-api-key.
+	domain.ProfileKimiAnthropicMessages: {
+		authorize: staticHeader("Authorization", "Bearer "),
+		build: func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+			return anthropicprovider.New(anthropicprovider.Options{
+				Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+				Capabilities: ctx.Binding.Capabilities,
+				ProviderType: string(domain.ProviderKimi), CredentialScheme: ctx.Binding.CredentialScheme,
+				MessagesPath: "anthropic/v1/messages", ProfileID: ctx.Binding.ProfileID,
+				// Kimi keeps its model list on the OpenAI route of the same host,
+				// reachable with this same key, and answers it in OpenAI's shape.
+				// Measured against a real mainland account on 2026-09-01:
+				// object=list, four entries, each carrying id, owned_by,
+				// context_length and capability flags. So this profile enumerates
+				// from it rather than offering a list compiled into the binary.
+				CatalogShape: anthropicprovider.CatalogOpenAI,
+			})
+		},
+	},
+	// No OperationPathPrefix on the two OpenAI-shaped rows: Kimi serves
+	// /v1/chat/completions and /v1/responses directly under the base URL.
+	domain.ProfileKimiChat: {
+		authorize: staticHeader("Authorization", "Bearer "),
+		build:     kimiOpenAIAdapter(false),
+	},
+	domain.ProfileKimiResponses: {
+		authorize: staticHeader("Authorization", "Bearer "),
+		build:     kimiOpenAIAdapter(true),
+	},
+
 	// Bedrock Runtime and Agent Runtime. Withheld from every write path today,
 	// so no connection can be created on them; the rows stay because the
 	// profiles are still implemented and withholding scopes what an operator may
@@ -224,6 +259,16 @@ func miniMaxOpenAIAdapter(responses bool) func(adapterBuildContext, provider.Aut
 		return openaiprovider.NewWithOptions(openaiprovider.Options{
 			Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
 			ProviderType: string(domain.ProviderMiniMax), CredentialScheme: ctx.Binding.CredentialScheme,
+			Capabilities: ctx.Binding.Capabilities, Responses: responses,
+		})
+	}
+}
+
+func kimiOpenAIAdapter(responses bool) func(adapterBuildContext, provider.Authorizer) (provider.Adapter, error) {
+	return func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+		return openaiprovider.NewWithOptions(openaiprovider.Options{
+			Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+			ProviderType: string(domain.ProviderKimi), CredentialScheme: ctx.Binding.CredentialScheme,
 			Capabilities: ctx.Binding.Capabilities, Responses: responses,
 		})
 	}

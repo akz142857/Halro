@@ -79,7 +79,10 @@
       "bedrock.mantle.anthropic.messages.v1",
       "minimax.anthropic.messages.v1",
       "minimax.chat.v1",
-      "minimax.responses.v1"
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
     ],
     "profile_coverage": [
       {
@@ -304,6 +307,78 @@
           "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — MiniMax itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
           "reasoning is unsupported here and supported on the MiniMax Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns"
         ]
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "n",
+          "seed",
+          "parallel_tool_calls",
+          "user",
+          "max_tokens",
+          "reasoning_effort"
+        ],
+        "declared_transforms": [
+          "Kimi speaks this wire format but does not model the sampling parameters at all: temperature, top_p and n are absent from its request schema, and its parameter reference pins each to one value per model and answers any other with an error, so they are rejected before provider I/O rather than sent or silently replaced with the pinned value",
+          "temperature and top_p are rejected at any value rather than only at the wrong one, because the pinned value varies by model and a field rule is keyed by profile with no target in hand; carrying the pinned value is a capability-model change rather than a platform registration",
+          "max_tokens is value-dependent: Kimi has one output bound and it counts reasoning, so an answer-only bound is the same tokens exactly while nothing is thinking — which is the ordinary case, because a request that names no depth is sent with reasoning switched off. A request that does ask for depth, or that carries both output members, is routed away before provider I/O",
+          "reasoning_effort is value-dependent: none, low and high are carried, and minimal, medium, xhigh and Kimi's own max are routed away because the portable ladder and Kimi's do not share those rungs",
+          "the reasoning member itself depends on the model named: kimi-k3 reads a top-level reasoning_effort while the K2.x line reads thinking, and the renderer follows Kimi's own OpenAPI discriminator over exact model identifiers rather than inferring a family from a name",
+          "K2.x has one on state and no depth ladder, so an effort routed to those models is honoured as on rather than preserved",
+          "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
+          "stop is carried rather than rejected — Kimi documents it as honoured — and its published bounds of five sequences of at most 32 bytes are enforced before provider I/O",
+          "tool_choice=required is accepted only on kimi-k3; the K2.x line answers that it is incompatible with thinking enabled, and that is a per-model limit this profile-scoped declaration cannot express"
+        ]
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "messages[].name",
+          "n",
+          "seed",
+          "response_format",
+          "reasoning_effort",
+          "user",
+          "messages[].content[].detail"
+        ],
+        "declared_transforms": [
+          "portable Chat content is mapped to Kimi's Anthropic Messages blocks",
+          "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+          "reasoning_effort is unsupported at any value on this face, and that is what makes the face usable at all: a request naming no depth reaches Kimi with thinking disabled and comes back with no thinking block, which the portable decoder can read, while a request naming a depth comes back with one, which it refuses outright after the upstream has already been paid",
+          "temperature and top_p are rejected because Kimi pins each per model and answers any other value with an error",
+          "response_format is value-dependent: output_config.format takes a json_schema and enforces it, and there is no schema-less mode",
+          "stop is carried: measured honoured on this face, unlike MiniMax's, which documents the member as ignored"
+        ]
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "messages[].name",
+          "n",
+          "seed",
+          "stop",
+          "max_tokens",
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "user"
+        ],
+        "declared_transforms": [
+          "Chat messages are mapped to stateless Responses input items",
+          "Kimi does not model the sampling parameters on this face either, so temperature and top_p are rejected before provider I/O",
+          "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — Kimi itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
+          "the schema-less json_object mode is unavailable here and available on the Kimi Chat profile: this endpoint models structured output as text.format and accepts the json_schema type alone, so a json_object request is routed away by the absent json_object capability rather than by field",
+          "reasoning is unsupported here and supported on the Kimi Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
+          "this endpoint serves kimi-k3 alone, which the model catalogue records per model rather than this profile-scoped declaration"
+        ]
       }
     ]
   },
@@ -420,6 +495,7 @@
       "input[].content[].text",
       "input[].content[].detail",
       "instructions",
+      "reasoning",
       "stream",
       "store",
       "temperature",
@@ -561,7 +637,10 @@
       "bedrock.mantle.anthropic.messages.v1",
       "minimax.anthropic.messages.v1",
       "minimax.chat.v1",
-      "minimax.responses.v1"
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
     ],
     "profile_coverage": [
       {
@@ -736,6 +815,57 @@
           "stateless Responses are sent directly with store=false",
           "reasoning is rejected before provider I/O because the canonical response mapper cannot preserve the reasoning items MiniMax returns"
         ]
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "parallel_tool_calls",
+          "user"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through the Kimi Chat ProviderPrimitive",
+          "Kimi does not model temperature or top_p as request members and pins each to one value per model, so they are rejected before provider I/O rather than sent or silently replaced",
+          "max_output_tokens is carried as Kimi's max_completion_tokens, which Kimi documents as the same bound",
+          "parallel_tool_calls is value-dependent: true is what omitting the member already means",
+          "text.format is carried: the Kimi Chat face documents the json_schema response format alongside json_object"
+        ]
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "text.format",
+          "user",
+          "input[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through Kimi's Anthropic Messages ProviderPrimitive",
+          "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
+          "temperature and top_p are rejected because Kimi pins each per model",
+          "text.format is value-dependent: this face takes a schema through output_config.format and enforces it, so a schema-less request is routed away"
+        ]
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "parallel_tool_calls",
+          "user"
+        ],
+        "declared_transforms": [
+          "stateless Responses are sent directly",
+          "Kimi does not model temperature or top_p as request members on this face either",
+          "reasoning is rejected before provider I/O because the canonical response mapper cannot preserve the reasoning items Kimi returns",
+          "text.format carries a schema; the schema-less json_object mode is routed away by the absent json_object capability rather than by field, because Kimi's Responses face accepts the json_schema type alone",
+          "this endpoint serves kimi-k3 alone, which the model catalogue records per model"
+        ]
       }
     ]
   },
@@ -852,7 +982,10 @@
       "bedrock.mantle.anthropic.messages.v1",
       "minimax.anthropic.messages.v1",
       "minimax.chat.v1",
-      "minimax.responses.v1"
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
     ],
     "profile_coverage": [
       {
@@ -1096,6 +1229,71 @@
           "portable Messages content is mapped through stateless MiniMax Responses",
           "this profile binds no stream primitive, so a streaming Messages request is routed away rather than refused by field",
           "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry"
+        ]
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "metadata",
+          "output_config.effort",
+          "service_tier",
+          "temperature",
+          "thinking",
+          "top_k",
+          "top_p"
+        ],
+        "declared_transforms": [
+          "native mode preserves validated Anthropic content blocks, thinking signatures, and events",
+          "output_config.effort is unsupported in portable mode only: a portable request naming a depth comes back carrying a thinking block, which the portable decoder refuses after the upstream has been paid, while native mode forwards the member and reads the block back verbatim",
+          "output_config.format is carried: this endpoint always names a schema, and Kimi takes a json_schema through the same member and enforces it",
+          "temperature and top_p are rejected on both paths because Kimi pins each per model and answers any other value with an error",
+          "top_k and cache_control are rejected on the native path as well as the portable one: Kimi's Messages schema has neither member, top_k answers 200 without anything establishing what it did, and prompt caching is automatic with no handle to mark",
+          "anthropic-beta is never forwarded: Kimi documents no beta headers",
+          "stop_sequences is carried and was measured honoured, so it is not refused the way MiniMax's is"
+        ]
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.effort",
+          "service_tier",
+          "temperature",
+          "thinking",
+          "top_k",
+          "top_p"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through Kimi Chat Completions",
+          "temperature and top_p are this endpoint's own members and Kimi models neither: they are absent from its request schema and pinned per model, so a Messages request naming either is routed away before provider I/O",
+          "output_config.effort is this endpoint's spelling of reasoning_effort and is value-dependent: low and high reach Kimi's switch, while medium, xhigh, Anthropic's max and a request for no reasoning at all have no Kimi rung on this profile",
+          "output_config.format is carried: it is always a schema on this endpoint, and the Kimi Chat face documents the json_schema response format",
+          "max_tokens is carried as max_completion_tokens, which Kimi documents as the same bound under a newer name, so unlike MiniMax there is no reasoning-counting difference that would make the two quantities disagree; it is declared because a request carrying two different output bounds is routed away rather than having this layer choose between them"
+        ]
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "compatible",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.effort",
+          "service_tier",
+          "stop_sequences",
+          "temperature",
+          "thinking",
+          "top_k",
+          "top_p"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through stateless Kimi Responses",
+          "this profile binds no stream primitive, so a streaming Messages request is routed away rather than refused by field",
+          "output_config.effort is this endpoint's spelling of reasoning_effort, which the stateless Responses primitive does not carry",
+          "temperature and top_p are rejected for the same reason as on the Kimi Chat profile: Kimi models neither member",
+          "output_config.format is carried: it is always a schema on this endpoint, and a schema is exactly what Kimi's Responses face accepts"
         ]
       }
     ]

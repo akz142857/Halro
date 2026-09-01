@@ -14,12 +14,15 @@ import (
 )
 
 func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
-	profiles := []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages}
+	profiles := []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages}
 	schemas := make([]compatibility.NativeSchema, 0, len(profiles))
 	for _, profileID := range profiles {
 		validate := validateNativePayload
-		if profileID == domain.ProfileMiniMaxAnthropicMessages {
+		switch profileID {
+		case domain.ProfileMiniMaxAnthropicMessages:
 			validate = validateMiniMaxNativePayload
+		case domain.ProfileKimiAnthropicMessages:
+			validate = validateKimiNativePayload
 		}
 		schemas = append(schemas, compatibility.NativeSchema{
 			ProfileID: profileID, SchemaRevision: 1,
@@ -78,6 +81,53 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 	// nothing acts on.
 	if bytes.Contains(payload, []byte(`"cache_control"`)) {
 		return errors.New("MiniMax does not document cache_control, so it is refused rather than forwarded and ignored")
+	}
+	return nil
+}
+
+// validateKimiNativePayload is the Anthropic native validator plus the members
+// Kimi's Messages schema does not carry.
+//
+// It is shorter than MiniMax's, and each difference was measured against a real
+// mainland account on 2026-09-01 rather than read:
+//
+//   - stop_sequences is honoured. A request naming STOPHERE came back cut at it,
+//     so it is forwarded rather than refused. MiniMax documents the same member
+//     as ignored, which is why its validator refuses it and this one does not.
+//   - top_k answers 200 and Kimi's schema has no such member, so nothing
+//     establishes what it did. Forwarding a sampling constraint the upstream may
+//     be discarding lets a caller believe it applied; refusing costs them one
+//     clear error.
+//   - temperature and top_p are pinned per model. The Chat face answers
+//     `invalid temperature: only 1 is allowed for this model` to anything else,
+//     and this face was measured accepting the pinned value alone. Native mode
+//     forwards bytes, so a caller sending their usual value would be refused
+//     upstream after the request was admitted; refusing here says which member.
+//   - cache_control is refused for the same reason as on MiniMax: Kimi's caching
+//     is automatic and it publishes no member for a caller to steer it, so the
+//     marker would claim a breakpoint nothing acts on.
+func validateKimiNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
+	if err := validateNativePayload(kind, payload); err != nil {
+		return err
+	}
+	if kind != compatibility.NativeRequest {
+		return nil
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	if request.TopK != nil {
+		return errors.New("Kimi has no top_k member and nothing establishes what it does with one, so it is refused instead of forwarded")
+	}
+	if request.Temperature != nil {
+		return errors.New("Kimi pins temperature per model and refuses any other value, so it is refused instead of forwarded")
+	}
+	if request.TopP != nil {
+		return errors.New("Kimi pins top_p at 0.95 and refuses any other value, so it is refused instead of forwarded")
+	}
+	if bytes.Contains(payload, []byte(`"cache_control"`)) {
+		return errors.New("Kimi manages its prompt cache itself and publishes no member to steer it, so cache_control is refused rather than forwarded and ignored")
 	}
 	return nil
 }

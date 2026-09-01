@@ -150,6 +150,91 @@ agree, the rate limits, and whether `base_resp` behaves the same way.
 `docs/prd/minimax-adaptation-plan.zh-CN.md` §7 carries the assumptions that are
 still open, each with the assertion that would close it.
 
+## Kimi: measured on a mainland account (2026-09-01)
+
+Kimi (Moonshot AI) was adapted from its published OpenAPI documents and then
+measured against a real `platform.kimi.com` account. **This is adaptation
+evidence, not GA matrix evidence**: Kimi is Beta on the same terms as Gemini,
+Bedrock and MiniMax, so it never gates a release, and there is no row in the
+runner yet.
+
+Three findings changed code, and all three are recorded with their measurements
+in `docs/prd/kimi-adaptation-plan.zh-CN.md` §10:
+
+- The Anthropic Messages face is usable through the portable path. It had been
+  dropped on the strength of Kimi's OpenAPI, which lists no `thinking` member;
+  the member is accepted, and a request carrying `{"type":"disabled"}` comes back
+  with no thinking block. The profile was restored.
+- Kimi's single output bound counts reasoning: `max_completion_tokens: 48` on
+  kimi-k3 spent 45 on reasoning and returned an empty answer. An answer-only
+  bound is now routed away rather than renamed into it.
+- The Anthropic face reports its thinking span under `output_tokens_details`,
+  which the decoder did not read. Every Kimi reasoning span was recorded as zero.
+
+**Any Kimi smoke has to pace itself.** A first pass firing 26 probes back to back
+lost 20 of them to `rate_limit_reached_error`. The passes that produced the
+evidence ran serially at one request every 22 seconds. The limit does send
+`retry-after: 1` (and Kimi's own `x-retry-after`), which an earlier version of
+this section got wrong: the mainland 429s all landed in the pass that captured no
+response headers, and "not captured" was written up as "not sent".
+
+**The international host is measured too** (2026-09-01, its own key — the two
+platforms do not share credentials). `GET /v1/models` returns the same four model
+ids with every capability field identical, and Chat usage, the pinned-temperature
+refusal, the Anthropic face with thinking disabled, and Responses usage all match
+the mainland shapes field for field. The "one contract, two hosts" conclusion is
+now established at runtime and not only by comparing the two OpenAPI documents.
+
+The Anthropic route's 429 was measured by deliberately tripping the organisation
+limit, with the operator's consent: it answers in the **OpenAI** envelope, so that
+endpoint uses Anthropic's shape for 400 and OpenAI's for 401 and 429. Its 503 is
+still unmeasured and cannot be arranged; what stands in for it is
+`TestAnthropicErrorDecodingToleratesShapesItHasNotSeen`, which pins Halro's own
+tolerance — classify by status, never fail on an unparseable body, never carry
+provider response bytes into the error — and is named so it is not mistaken for
+evidence about Kimi.
+
+What *was* established without a credential, and it is worth separating from the
+guesses:
+
+- Both hosts exist, both authenticate with a bearer token, and all three routes
+  answer 401 with `{"error":{"message":"Incorrect API key provided","type":
+  "incorrect_api_key_error"}}` — `GET /v1/models`, `POST /v1/chat/completions`
+  and `POST /anthropic/v1/messages`, on `api.moonshot.cn` and `api.moonshot.ai`
+  alike.
+- The two regions serve one contract. The published `openapi.json` documents were
+  compared structurally: identical path sets, identical schema name sets,
+  identical request property sets on the chat, responses and messages request
+  schemas, and one differing `servers[0].url`. Prices and currencies differ; the
+  contract does not.
+- The Anthropic-shaped route answers 401 in the *OpenAI* error shape, and its
+  OpenAPI declares the Anthropic shape for 400 and 500. Error decoding on that
+  face has to tolerate both.
+
+The three assumptions that moved money are all closed. Chat's `prompt_tokens`
+includes `cached_tokens` and Kimi also sends the standard
+`prompt_tokens_details.cached_tokens`; a stream reports usage with and without
+`stream_options`, and the option Halro already sends produces the standard
+top-level shape; and `max_completion_tokens` counts reasoning, which is the
+finding that changed the routing rule. That question was asked and answered. Kimi's Chat face accepts
+`thinking:{"type":"disabled"}` on kimi-k3 and kimi-k2.6, and both then stop
+reasoning — so kimi-k3's documentation and its own `/v1/models` metadata
+(`supports_thinking_type: "only"`) are both wrong about it, the fifth place
+Kimi's documentation did not survive contact. The renderer now follows the house
+rule the DeepSeek and MiniMax renderers already follow — unspecified means off —
+and the routing rules that had taken Kimi off two northbound endpoints are gone.
+kimi-k2.7-code really cannot be switched off (`invalid thinking: only
+type=enabled is allowed for this model`) and keeps two after-reservation
+refusals of its own. See `docs/prd/kimi-adaptation-plan.zh-CN.md` §13.
+
+One assumption remains open: what the
+Anthropic face answers on 503. It cannot be arranged deliberately and is recorded
+as unmeasured rather than inferred.
+
+`docs/prd/kimi-adaptation-plan.zh-CN.md` §10.2 carries the closed list item by
+item, §10.3 the four places Kimi's own documentation was wrong, and §11 the
+international round.
+
 ## DeepSeek: the two extra assertions passed on a real account (2026-08-20)
 
 Run on `13d55ff` against `https://api.deepseek.com` with `deepseek-v4-flash`,

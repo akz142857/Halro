@@ -204,7 +204,7 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 // same treatment as every other capability no probe reaches.
 func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 	switch profile {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
 		return "", false
 	case domain.ProfileDeepSeekChat:
 		return shallowestEffort(compatibility.DeepSeekEffortLevels), true

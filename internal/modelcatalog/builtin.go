@@ -56,6 +56,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		bedrockMantleModels(),
 		openAICompatibleModels(),
 		minimaxModels(),
+		kimiModels(),
 	)...)
 })
 
@@ -447,6 +448,90 @@ func minimaxModels() []Entry {
 			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
 			builtinEntry(provider, domain.ProfileMiniMaxResponses, model, responses(m2Context, 0)),
 		)
+	}
+	return entries
+}
+
+// kimiModels covers the four exact identifiers Kimi publishes as in-service on
+// 2026-09-01. The same four are served on both of Kimi's hosts —
+// api.moonshot.ai for international accounts and api.moonshot.cn for mainland
+// ones — so the entries are not region-scoped; only the connection's base URL
+// and the price list are.
+//
+// Two things this catalogue records that no capability set can, and they are the
+// reason the entries are written per model rather than once per profile:
+//
+//   - Which models each face serves. Kimi's published OpenAPI pins `model` to
+//     kimi-k3 on /v1/responses and /anthropic/v1/messages, and the measurement
+//     contradicts it: kimi-k2.6 answers 200 on both. So the entries follow what
+//     was measured, not what was published — kimi-k3 and kimi-k2.6 on all three
+//     faces, and the two k2.7-code identifiers on Chat alone, which is the only
+//     face they have been driven on.
+//   - Which models can be told not to reason. Only kimi-k2.6 can. kimi-k3 and
+//     the k2.7-code pair always reason with Preserved Thinking on, and no
+//     capability bit says "reasons, but not optionally". It stays in this
+//     comment and in the endpoint manifest's declared transforms, which is
+//     honest about the gap rather than hiding it behind a bit that means
+//     something else.
+//
+// Two deliberate narrowings:
+//
+//   - No output ceiling on the K2.x line. Kimi documents an output default and
+//     maximum for kimi-k3 and gives none for the others, and a wrong bound is
+//     enforced by budget and routing while a missing one only costs a layer of
+//     protection.
+//   - No fetched_image anywhere. Kimi's image members accept a data URL or an
+//     ms://<file_id> reference and nothing else, so vision here is the inline
+//     half alone — the same shape Bedrock's entries use.
+//
+// Sources reviewed 2026-09-01 (the .cn and .ai documents were compared and are
+// the same contract):
+//   - https://platform.kimi.com/docs/models.md
+//   - https://platform.kimi.com/docs/api/models-overview.md
+//   - https://platform.kimi.com/docs/openapi.json
+func kimiModels() []Entry {
+	const provider = domain.ProviderKimi
+	// Kimi's Chat face documents both JSON halves, so chat() plus
+	// structuredOutputs is the right shared shape here.
+	kimiChat := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return with(chat(contextTokens, outputTokens), structuredOutputs, visionInline, reasoning)
+	}
+	// Responses binds no stream primitive and cannot carry reasoning items, so
+	// its entries claim neither. It also has no schema-less JSON mode.
+	kimiResponses := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Tools: true, Vision: true, StructuredOutputs: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	// The Anthropic face carries no schema-less JSON mode either, and its
+	// reasoning is reachable in native mode alone — the profile's field rules
+	// route every portable request that asks for depth away, so an entry claiming
+	// reasoning here is claiming what native mode can do.
+	kimiAnthropic := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+			Vision: true, StructuredOutputs: true, Reasoning: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	const k3Context, k3Output int64 = 1_048_576, 1_048_576
+	const k2Context int64 = 262_144
+	entries := []Entry{
+		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3", kimiChat(k3Context, k3Output)),
+		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k3", kimiAnthropic(k3Context, k3Output)),
+		builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output)),
+		// Measured answering on all three faces on 2026-09-01, which is what the
+		// published schemas say does not happen.
+		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k2.6", kimiChat(k2Context, 0)),
+		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k2.6", kimiAnthropic(k2Context, 0)),
+		builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k2.6", kimiResponses(k2Context, 0)),
+	}
+	// Driven on Chat alone. Nothing establishes what the other two faces do with
+	// them, and an entry that guesses costs an operator a deployment that fails
+	// every call.
+	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
+		entries = append(entries, builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0)))
 	}
 	return entries
 }

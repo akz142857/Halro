@@ -29,6 +29,15 @@ const (
 	// unrelated connection groups and make an operator create three connections
 	// for one key.
 	SurfaceMiniMax AccessSurface = "minimax-api"
+	// Kimi (Moonshot AI) is the same shape as MiniMax and takes the same
+	// decision: one bearer key opens /v1/chat/completions, /v1/responses and
+	// /anthropic/v1/messages on one host, so one surface holds all three. The
+	// two hosts — api.moonshot.cn for mainland accounts, api.moonshot.ai for
+	// international ones — serve one contract and differ only in address, which
+	// was established by comparing the two published OpenAPI documents rather
+	// than by reading prose: identical path sets, identical schema name sets,
+	// identical request property sets, one differing servers[0].url.
+	SurfaceKimi AccessSurface = "kimi-api"
 )
 
 const (
@@ -64,6 +73,33 @@ const (
 	ProfileMiniMaxAnthropicMessages ProviderProfileID = "minimax.anthropic.messages.v1"
 	ProfileMiniMaxChat              ProviderProfileID = "minimax.chat.v1"
 	ProfileMiniMaxResponses         ProviderProfileID = "minimax.responses.v1"
+	// Kimi serves one host through three routes, one wire shape each:
+	// /v1/chat/completions, /v1/responses and /anthropic/v1/messages.
+	//
+	// Chat leads, which is the opposite of MiniMax's ordering, because the routes
+	// do not all carry the same models: kimi-k3 and kimi-k2.6 were both measured
+	// answering on all three, while the two k2.7-code identifiers have only been
+	// measured on Chat, which is also the face Kimi's own schema documents as
+	// carrying every published model.
+	//
+	// The Anthropic row was removed during implementation and put back by
+	// measurement, which is the whole reason this comment is long. The removal
+	// reasoned from Kimi's OpenAPI: it lists no `thinking` member on
+	// MessagesRequest, kimi-k3 is documented as always reasoning, and the portable
+	// Anthropic decoder refuses a thinking block outright — so the face looked
+	// native-only, and a native-only profile is not something this codebase can
+	// express. Measured against a real mainland account on 2026-09-01, both legs
+	// of that are false:
+	//
+	//	POST /anthropic/v1/messages {"thinking":{"type":"disabled"}, ...}
+	//	  -> 200, content [{"type":"text"}] with no thinking block at all
+	//
+	// which is exactly the body Halro's portable mapper emits and exactly the
+	// response it can decode. The undocumented member is the one that makes the
+	// face portable. Documentation being silent is not the upstream refusing.
+	ProfileKimiChat              ProviderProfileID = "kimi.chat.v1"
+	ProfileKimiAnthropicMessages ProviderProfileID = "kimi.anthropic.messages.v1"
+	ProfileKimiResponses         ProviderProfileID = "kimi.responses.v1"
 )
 
 const (
