@@ -115,7 +115,7 @@ func TestNativeRequirementsDeclareProviderExecutedTools(t *testing.T) {
 
 // AnthropicPortableOnlyFields is a list in the parent package and a set of
 // struct-field checks here. They have to name the same members: the list is what
-// fourteen endpoint coverage rows are built from, and this is what actually
+// thirteen endpoint coverage rows are built from, and this is what actually
 // refuses a request. A member added to the decoder and not the list would be
 // refused without being declared.
 func TestPortableOnlyFieldsAreTheOnesTheDecoderRejects(t *testing.T) {

@@ -312,7 +312,7 @@ func run(arguments []string, logger *slog.Logger) error {
 		flags := flag.NewFlagSet("bootstrap", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
 		providerName := flags.String("provider-name", "OpenAI", "provider display name")
-		providerType := flags.String("provider-type", string(domain.ProviderOpenAI), "openai, azure_openai, deepseek, openai_compatible, gemini, or bedrock")
+		providerType := flags.String("provider-type", string(domain.ProviderOpenAI), "provider type: "+registeredProviderTypeList())
 		providerBaseURL := flags.String("provider-base-url", "https://api.openai.com", "provider base URL")
 		providerAPIVersion := flags.String("provider-api-version", "", "provider API version (required for azure_openai)")
 		providerModel := flags.String("provider-model", "", "provider model name")
@@ -1055,6 +1055,23 @@ func runHealthcheckWithClient(rawURL string, timeout time.Duration, client *http
 // statedPrice turns a bootstrap price flag into "stated" or "not stated". The
 // flag's negative default is the only way a command line can say nothing about a
 // price; zero is a real rate and must never stand in for silence.
+// registeredProviderTypeList renders the accepted provider types for the
+// bootstrap flag's help text.
+//
+// It reads the profile table rather than repeating it. A hand-written list here
+// was the fourth copy of the same fact, and it did what a copy that cannot be
+// told it has fallen behind always does: it went stale silently, offering six
+// types while the table had eight. Nothing failed, because help text is the one
+// copy no test reads.
+func registeredProviderTypeList() string {
+	types := domain.AllProviderTypes()
+	names := make([]string, 0, len(types))
+	for _, providerType := range types {
+		names = append(names, string(providerType))
+	}
+	return strings.Join(names, ", ")
+}
+
 func statedPrice(value int64) *int64 {
 	if value < 0 {
 		return nil
