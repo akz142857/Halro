@@ -902,12 +902,25 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 				current.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
 			}
 			current.OutputTokens = value.Usage.OutputTokens
-			// Both spellings of the thinking span are carried forward, because
-			// which one an upstream uses is a property of the upstream and this
+			// The thinking span, in whichever of the two spellings the upstream
+			// uses — which one it is is a property of the upstream, and this
 			// accumulator serves several. Reading only the flat member reported
 			// every Kimi reasoning span as zero.
-			current.ThinkingTokens = value.Usage.ThinkingTokens
-			current.OutputTokensDetails = value.Usage.OutputTokensDetails
+			//
+			// Guarded like the cache tiers above, and for the same reason rather
+			// than for symmetry: message_start copies the whole usage struct, so
+			// an upstream that reports the span there and omits it from the delta
+			// had it overwritten with zero by the very lines that were meant to
+			// carry it. The comment that stood here said the spellings were
+			// carried forward; the code replaced them.
+			//
+			// Both members move together so the two spellings can never come from
+			// different events, which would leave a usage record no upstream ever
+			// sent.
+			if value.Usage.ReasoningTokens() != 0 {
+				current.ThinkingTokens = value.Usage.ThinkingTokens
+				current.OutputTokensDetails = value.Usage.OutputTokensDetails
+			}
 		}
 	}
 	return current

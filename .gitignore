@@ -35,5 +35,6 @@ __pycache__/
 /dist/*
 /.agents/
 /.augment/
+/.claude/
 skills-lock.json
 .vscode/*
