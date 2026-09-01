@@ -6,6 +6,165 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-01
+
+### Added
+
+- **MiniMax is served, across all three of its wire shapes.** One host and one
+  bearer key sit behind three protocols — Anthropic Messages at
+  `/anthropic/v1/messages`, OpenAI Chat Completions at `/v1/chat/completions`,
+  and OpenAI Responses at `/v1/responses` — so they are registered the way
+  Bedrock Mantle is: one access surface, one credential scheme, three profiles in
+  one connection group, with the route fixed by the profile rather than inferred
+  from a request. The endpoint prefill is the international host
+  `https://api.minimax.io`; mainland accounts serve the same paths, headers and
+  bodies at `https://api.minimaxi.com`, which is a base URL you edit rather than a
+  second profile. Keys are not interchangeable between the two.
+
+  MiniMax documents its unsupported parameters as *ignored* rather than refused,
+  so a member sent there returns 200 having done nothing. The expensive one is
+  `reasoning_effort`, which MiniMax does not read — its switch is `thinking` — so
+  a request asking a model *not* to think would have thought, and billed, in
+  silence. The request renderer translates it instead of forwarding it.
+
+  The model list comes from the account, not from a list compiled into the
+  binary: MiniMax answers `GET /v1/models` on the same host with the same key, so
+  the connection offers a Refresh control that reaches the upstream. The built-in
+  catalogue supplies capability evidence for the eight documented identifiers,
+  which is a separate question from who exists.
+
+  MiniMax is Beta. It does not gate a release, and two things are recorded as
+  **not measured**: the Responses profile, and the mainland host.
+
+- **Usage summary by day, month and year.** The console could answer "is the
+  gateway healthy now" and "what happened on this one call", but not "what did
+  this month cost" — there was no aggregated read path in the backend at all.
+  There is one now: a per-accounting-day rollup written in the same transaction
+  as the usage checkpoint, and `GET /admin/api/v1/usage/summary` over it, with
+  granularity, grouping, sorting and one-dimension filtering.
+
+  The rollup is a derivative, never a second ledger. It stores marginal
+  aggregates with no cross terms, so grouping and filtering are mutually
+  exclusive rather than answering a question no stored row can answer. Each
+  accounting day bounds how many distinct values it keeps per dimension and folds
+  the rest into one `__other__` row, chosen by ledger order so that a day written
+  in a hundred increments admits the same values as the same day rebuilt in one
+  pass. Latency is stored as a histogram, and the response says so: a percentile
+  read off it is the bucket's upper bound, not an exact figure.
+
+- **The usage list says which deployment served each attempt.** The model column
+  renders the alias, and the alias is identical on every attempt of a fallback
+  chain — so two targets of one alias on the same upstream model, the safest way
+  to configure redundancy, were indistinguishable, and a fallback could not be
+  verified from the console at all. A deployment column now carries the name with
+  the ID beneath it, and the ID alone once the deployment is gone: history
+  outlives the resource it names, and the ID is what the ledger and the usage
+  partitions carry.
+
+### Changed
+
+- **Two enabled routes on one alias may no longer point at the same
+  deployment.** They read as a fallback pair while being one failure domain — one
+  credential, one endpoint, one upstream quota, and a circuit breaker keyed on
+  the route ID that therefore does not merge them. A disabled duplicate is still
+  savable, because that is a maintenance state; enabling it later runs the same
+  check.
+
+- **The route list says what the gateway is actually routing on.** `enabled` is
+  what you asked for, not what the registry did. A route the registry withheld
+  read as Enabled while it served nothing and only the log knew. The read paths
+  now carry a read-only `withheld` field naming the kind — reference or
+  capability drift — and the reason class. The list is also grouped by public
+  model alias, so the routes that compete for one alias are read together.
+
+- **The accounting day a usage figure belongs to is the day the request was
+  admitted on**, taken from the period stamped at admission rather than
+  re-derived from a completion timestamp. A request admitted at 23:59 and settled
+  at 00:02 is charged to the day it was admitted on, and the summary, the
+  dashboard and the ledger now agree about which day that is.
+
+### Fixed
+
+- **The Bedrock Workspaces header was misspelled, and a project-scoped
+  connection was billed to the account default in silence.** AWS documents the
+  header as `anthropic-workspace-id`; Halro sent `anthropic-workspace`, which no
+  service reads, and deleted the documented name in the belief that it belonged
+  to Claude Platform on AWS. Both halves were wrong: the two products spell the
+  header identically and are separated by host and identifier prefix. The
+  superseded spelling stays on the scrub list so a stale value cannot ride along.
+
+- **A MiniMax stream no longer fails at the end of a complete generation.**
+  MiniMax ends a stream with a `finish_reason` chunk, then a usage chunk, then
+  closes — it never sends the `[DONE]` sentinel. For every other OpenAI-family
+  upstream that is what a truncated generation looks like, and the check is what
+  stops a partial response settling as a complete one, so the exemption is scoped
+  to this provider and still requires a `finish_reason` first. Before the fix a
+  streaming caller paid for a generation the upstream ran and received
+  `malformed_response`.
+
+- **`halro backup create` no longer refuses a data directory written by the
+  previous release.** The usage checkpoint payload carries its own structure
+  version and this release moved it, so the first backup after swapping the
+  binary met a perfectly valid envelope around a payload it could not read — and
+  called it corruption. Because opening the directory had already migrated the
+  metadata schema past what the previous release will open, neither binary could
+  then produce a backup. An unreadable checkpoint is a position the archive
+  cannot name, not a reason to refuse the archive; it is recorded as no
+  checkpoint position, and the restored copy rebuilds from the Ledger exactly as
+  the source directory would.
+
+- **Chinese console copy an operator actually reads.** Half-width punctuation
+  after a label rendered as `时区:Asia/Shanghai` with nothing separating the two;
+  the full-width punctuation guard now covers `:`, `?` and `!` as well as `,`
+  and `;`. "Provider" had three Chinese renderings and "Deployment" two, so one
+  object was named differently on two cards a scroll apart — a guard now pins one
+  word per term, exempting strings about Azure, whose product term really is
+  "Deployment".
+
+- **The provider row gives its name the space it needs.** The name column
+  truncated at `AWS Default Completio…` while the capabilities column held space
+  it never used.
+
+### Operator impact
+
+- **Storage schema 33 upgrades in place on the first start; no
+  re-initialisation.** Verified by starting this release against a data directory
+  a v0.4.0 binary created, with real accounting events in its WAL. The usage
+  checkpoint and the daily rollup are both rebuilt from the Ledger on that first
+  start — the log says so, naming the reason:
+
+  ```
+  usage derivatives rebuilt from the ledger
+    reason="usage checkpoint rejected: usage checkpoint version 7 is not supported"
+  ```
+
+  The rebuilt figures were compared row by row against a full offline rebuild and
+  are identical. As in earlier releases, `halro doctor` does not migrate: run
+  against that directory before the first start it reports `metadata: fail —
+  metadata schema version 32 does not match required version 33`, which means
+  "not started yet", not "damaged".
+
+- **The upgrade has an order, and it is not the obvious one.** Take the backup
+  **with the old binary, before you swap it**. After the swap, the first thing you
+  run against the data directory must be `halro start`. Both `halro backup
+  create` and `halro ledger verify` open the metadata store for writing and
+  therefore migrate it to schema 33 as a side effect — after which the v0.4.0
+  binary refuses the directory with `metadata schema version 33 is newer than
+  this build supports (32)`. That refusal is clean and the data is intact, but
+  the rollback path is gone.
+
+- **Downgrade is not supported.** Once this release has opened a data directory,
+  the v0.4.0 binary refuses it. Restoring a backup taken with the old binary is
+  the only way back.
+
+- **The first start after the upgrade replays the whole WAL**, because the
+  checkpoint it would have resumed from is from the previous release. Startup
+  time and peak memory for that one start grow with the length of the WAL.
+
+- **Enter a cache-read price for MiniMax connections.** MiniMax reports a
+  cache-read tier; without a price for it those tokens settle at the input rate,
+  which is more than they cost.
+
 ## [0.4.0] - 2026-08-28
 
 ### Changed
