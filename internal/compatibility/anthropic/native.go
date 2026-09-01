@@ -66,11 +66,18 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 	// blocks, system blocks and tool definitions, which are forwarded as raw
 	// bytes. Searching the payload is therefore the only way to see it, and a
 	// false positive costs a caller one error on a request that mentions the
-	// member name in text they were sending anyway. That is the safe side: the
-	// alternative is a silent claim to a prompt-cache discount MiniMax does not
-	// offer.
+	// member name in text they were sending anyway.
+	//
+	// The reason is not that MiniMax has no cache. It was written that way from
+	// the documentation, and a real account contradicted it on 2026-08-31: both
+	// the Chat and the Anthropic routes reported 128 cache-read tokens on a
+	// repeated prefix. What MiniMax has is caching it manages itself, with no
+	// documented member for a caller to steer it. So cache_control is refused
+	// because it is a directive this upstream never agreed to read — forwarding
+	// it would let a caller believe they had placed a cache breakpoint that
+	// nothing acts on.
 	if bytes.Contains(payload, []byte(`"cache_control"`)) {
-		return errors.New("MiniMax has no prompt caching, so cache_control is refused rather than forwarded and ignored")
+		return errors.New("MiniMax does not document cache_control, so it is refused rather than forwarded and ignored")
 	}
 	return nil
 }

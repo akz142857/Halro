@@ -1689,13 +1689,29 @@ function DeploymentForm({
   const targetLabel = t(`deployments.targetLabels.${targetKind}`);
   const modelCatalogEnumerable = Boolean(!identityLocked && targetCatalog.data?.discovery.can_enumerate);
   const modelCatalogLoading = targetCatalog.isPending || refreshTargetCatalog.isPending;
+  // A provider that cannot enumerate can still have something to choose from:
+  // Halro's own catalog carries exact identifiers for some profiles, and the
+  // server offers them here labelled as offers. Gating the picker on
+  // can_enumerate alone hid a populated list behind a blank field.
+  const hasCatalogOffers = Boolean(
+    !identityLocked && (targetCatalog.data?.items ?? []).some((target) => target.metadata_source === "model_catalog"),
+  );
   // One flag drives every catalog affordance. Splitting the combobox from the
   // refresh button gave a provider that cannot enumerate a dropdown arrow and a
   // refresh control while the catalog was loading or had failed, and both led
-  // nowhere. A provider whose discovery says it cannot enumerate gets neither.
+  // nowhere. A provider whose discovery says it cannot enumerate, and for which
+  // Halro knows no models either, still gets neither.
   const showModelCatalogControls = Boolean(
     !identityLocked
     && providerID
+    && (modelCatalogEnumerable || hasCatalogOffers || targetCatalog.isPending || targetCatalog.isError || refreshTargetCatalog.isPending || refreshTargetCatalog.isError),
+  );
+  // Refreshing means asking the provider again, so it belongs wherever a
+  // provider listing is in play — including before the first one has arrived,
+  // when whether this provider enumerates is not yet known. It does not belong
+  // on a list that came from Halro's own catalog, where there is nothing to ask.
+  const showModelCatalogRefresh = Boolean(
+    showModelCatalogControls
     && (modelCatalogEnumerable || targetCatalog.isPending || targetCatalog.isError || refreshTargetCatalog.isPending || refreshTargetCatalog.isError),
   );
   const capabilityModelSupported = Boolean(!identityLocked && targetCatalog.data?.discovery.requires_canonical_model_mapping);
@@ -1991,6 +2007,13 @@ function DeploymentForm({
                                   onClick={() => chooseModel(model)}
                                 >
                                   <strong>{model.display_name}</strong>
+                                  {model.metadata_source === "model_catalog" && (
+                                    // An upstream listing a model says this account
+                                    // reaches it. A built-in entry says only that
+                                    // Halro pre-checked the identifier, so the two
+                                    // must not read the same in one list.
+                                    <span className="deployment-model-offer">{t("deployments.modelFromCatalog")}</span>
+                                  )}
                                 </button>
                               );
                             })}
@@ -2009,7 +2032,7 @@ function DeploymentForm({
                     </div>
                   )}
                 </div>
-                {showModelCatalogControls && <button
+                {showModelCatalogRefresh && <button
                   className="button secondary deployment-model-refresh"
                   type="button"
                   disabled={modelCatalogLoading}
@@ -2020,7 +2043,11 @@ function DeploymentForm({
                   <span>{modelCatalogLoading ? t("deployments.refreshingModels") : t("deployments.refreshModels")}</span>
                 </button>}
               </div>
-              <small>{t(`deployments.targetHints.${targetKind}`)}</small>
+              <small>{
+                hasCatalogOffers && !modelCatalogEnumerable
+                  ? t("deployments.modelCatalogOfferHint")
+                  : t(`deployments.targetHints.${targetKind}`)
+              }</small>
             </div>
             {!identityLocked && providerModel.trim() !== "" && modelResolutionMessage && (
               <div className="deployment-model-declaration" role="status">

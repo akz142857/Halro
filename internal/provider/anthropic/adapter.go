@@ -24,6 +24,19 @@ import (
 
 const maxResponseBytes = 16 << 20
 
+// CatalogShape names the wire form of a host's GET /v1/models reply. It is a
+// property of the host, not of the generation protocol: an upstream can speak
+// Anthropic's Messages API and still answer its catalogue in OpenAI's shape, and
+// MiniMax does.
+type CatalogShape string
+
+const (
+	// CatalogAnthropic is the zero value, so a profile that says nothing gets the
+	// shape this package was written for.
+	CatalogAnthropic CatalogShape = ""
+	CatalogOpenAI    CatalogShape = "openai"
+)
+
 type Options struct {
 	Endpoint         *url.URL
 	Authorizer       provider.Authorizer
@@ -36,21 +49,24 @@ type Options struct {
 	// many requests and nothing else will look at them.
 	ProfileID    domain.ProviderProfileID
 	MessagesPath string
-	// CatalogProbeOnly says this profile's host serves a model list its
-	// credential can read, but not one worth enumerating targets from.
+	// CatalogShape is the wire form this profile's host answers GET /v1/models
+	// with. An Anthropic-wire generation route does not imply an Anthropic-wire
+	// model list: MiniMax serves the Messages shape for generation and OpenAI's
+	// shape for its catalogue, on the same host and the same bearer key.
 	//
-	// The two were one flag until MiniMax, and conflating them was wrong.
-	// CanEnumerate answers "can Halro build target descriptors and capability
-	// claims from this list"; the credential-only connection test asks something
-	// much smaller — "does this key reach this host at all". MiniMax serves
-	// GET /v1/models beside its Anthropic route on the same host and the same
-	// bearer key, which answers the second question completely, while the body
-	// is OpenAI-shaped and carries an identifier and nothing else. Enumerating
-	// from it would credit every listed model with chat and streaming on
-	// declared evidence, including the speech and video models that share the
-	// account — a claim derived from an identifier, which is a guess wearing
-	// evidence.
-	CatalogProbeOnly bool
+	// This was a CatalogProbeOnly bool, on the reasoning that MiniMax's list
+	// carried an identifier and nothing else, so enumerating from it would credit
+	// every id on the account — speech and video models included — with chat and
+	// streaming on declared evidence. The list was read against a real account on
+	// 2026-09-01 and that is not what it holds: eight entries, every one a chat
+	// model, owned_by "minimax". The reasoning also had the wrong subject. What
+	// makes an identifier into a capability claim is MapCapabilityClaims, not
+	// enumeration, and that method now answers only for Anthropic's own surface —
+	// so a target enumerated here arrives with availability and no capability
+	// evidence, which is what it is. Were an account to list a speech model, it
+	// would appear as a target nothing can be deployed on until someone declares
+	// what it does.
+	CatalogShape CatalogShape
 	// BedrockProjectID is empty for Anthropic's own API, which has no such
 	// concept, and for a Bedrock Mantle provider that addresses the account's
 	// default project.
@@ -64,7 +80,7 @@ type Adapter struct {
 	capabilities     provider.Capabilities
 	providerType     string
 	messagesPath     string
-	catalogProbeOnly bool
+	catalogShape     CatalogShape
 	bedrockProjectID string
 	profileID        domain.ProviderProfileID
 }
@@ -91,7 +107,7 @@ func New(options Options) (*Adapter, error) {
 	return &Adapter{
 		endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client,
 		capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath,
-		catalogProbeOnly: options.CatalogProbeOnly,
+		catalogShape:     options.CatalogShape,
 		bedrockProjectID: options.BedrockProjectID, profileID: profileID,
 	}, nil
 }
@@ -101,7 +117,12 @@ func (adapter *Adapter) Capabilities() provider.Capabilities { return adapter.ca
 func (adapter *Adapter) Close()                              { adapter.authorizer.Close(); adapter.client.CloseIdleConnections() }
 
 func (adapter *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCapabilities {
-	canEnumerate := adapter.messagesPath == "" && adapter.providerType == string(domain.ProviderAnthropic)
+	// Two ways to reach a readable list. Anthropic's own surface serves the
+	// Messages-shaped catalogue this package was written for; a profile declaring
+	// the OpenAI shape serves the other one, which provider.DecodeOpenAIShaped-
+	// ModelCatalog reads for both adapter packages.
+	canEnumerate := adapter.catalogShape == CatalogOpenAI ||
+		(adapter.messagesPath == "" && adapter.providerType == string(domain.ProviderAnthropic))
 	return domain.InvocationTargetDiscoveryCapabilities{
 		TargetKinds:  []domain.DeploymentTargetKind{domain.TargetModelID},
 		CanEnumerate: canEnumerate, CanDescribe: canEnumerate, CanVerify: true,
@@ -128,12 +149,16 @@ func (adapter *Adapter) modelCatalogURL(limit int, afterID string) url.URL {
 		endpoint.Path += "/v1"
 	}
 	endpoint.Path += "/models"
-	values := endpoint.Query()
-	values.Set("limit", strconv.Itoa(limit))
-	if afterID != "" {
-		values.Set("after_id", afterID)
+	// limit and after_id are Anthropic's pagination. A zero limit asks for the
+	// bare route, which is what a host defining neither parameter should be sent.
+	if limit > 0 {
+		values := endpoint.Query()
+		values.Set("limit", strconv.Itoa(limit))
+		if afterID != "" {
+			values.Set("after_id", afterID)
+		}
+		endpoint.RawQuery = values.Encode()
 	}
-	endpoint.RawQuery = values.Encode()
 	return endpoint
 }
 
@@ -154,6 +179,9 @@ func (adapter *Adapter) newModelCatalogRequest(ctx context.Context, endpoint url
 func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.TargetQuery) ([]domain.InvocationTargetDescriptor, error) {
 	if !adapter.InvocationTargetDiscovery().CanEnumerate {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "this Anthropic-compatible profile has no model catalog"}
+	}
+	if adapter.catalogShape == CatalogOpenAI {
+		return adapter.listOpenAIShapedTargets(ctx)
 	}
 	var targets []domain.InvocationTargetDescriptor
 	afterID := ""
@@ -216,6 +244,48 @@ func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.
 	return nil, malformed("Anthropic model catalog exceeded page limit", nil)
 }
 
+// listOpenAIShapedTargets reads a host that speaks Anthropic for generation and
+// OpenAI for its catalogue.
+//
+// One request, no pagination. The Anthropic reader loops on has_more/last_id;
+// this shape has neither, and sending Anthropic's limit and after_id to a host
+// that does not define them would be asking a question in the wrong language and
+// reading whatever came back as an answer.
+func (adapter *Adapter) listOpenAIShapedTargets(ctx context.Context) ([]domain.InvocationTargetDescriptor, error) {
+	request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(0, ""))
+	if err != nil {
+		return nil, err
+	}
+	response, err := adapter.client.Do(request)
+	if err != nil {
+		return nil, transportError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, decodeHTTPError(response)
+	}
+	payload, err := readLimited(response.Body, maxResponseBytes)
+	if err != nil {
+		return nil, malformed("read model catalog response", err)
+	}
+	catalog, listed, err := provider.DecodeOpenAIShapedModelCatalog(payload)
+	if err != nil {
+		return nil, malformed("decode model catalog response", err)
+	}
+	// An empty account lists nothing; a reply with no list at all did not come
+	// from a models endpoint, and returning it as "no models" would report an
+	// answering proxy as an account entitled to nothing.
+	if !listed {
+		return nil, malformed("model catalog response omitted its model list", nil)
+	}
+	targets := catalog.InvocationTargets(domain.TargetModelID, func(id string) string { return id })
+	now := time.Now().UTC()
+	for index := range targets {
+		targets[index].FetchedAt = now
+	}
+	return targets, nil
+}
+
 func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target domain.InvocationTargetDescriptor) (domain.InvocationTargetDescriptor, error) {
 	items, err := adapter.ListInvocationTargets(ctx, domain.TargetQuery{TargetKind: target.TargetKind})
 	if err != nil {
@@ -234,8 +304,15 @@ func (adapter *Adapter) DescribeInvocationTarget(ctx context.Context, target dom
 //
 // Chat and streaming have no flag, because the Models API describes the models
 // of the Messages API — a target it enumerates is a Messages target by
-// construction, and this profile only enumerates when it is talking to
-// Anthropic's own surface. They are claimed from that fact rather than from an
+// construction. That premise is about where the target came from, and this
+// method cannot see it — every field it reads looks the same on a model the
+// upstream listed and on one somebody typed. It is the caller that knows, and
+// the caller checks: resolveInvocationTargetWithCatalog passes only a descriptor
+// carrying MetadataSourceProvider, which is the sole call site of this
+// interface. Unlike the Gemini and Bedrock mappers, which build every claim out
+// of a field the provider populated, this one claims from the absence of a
+// field — so with that check removed it would credit any identifier at all with
+// chat. They are claimed from that fact rather than from an
 // absent field, and they have to be: dependencyClosure drops vision,
 // structured_outputs and reasoning from any target that does not also claim
 // chat.
@@ -332,10 +409,18 @@ func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
 	// still have a list its credential can read, and that is all a connection
 	// test needs — refusing it made an operator bind a deployment before they
 	// could find out whether their key worked at all.
-	if !adapter.InvocationTargetDiscovery().CanEnumerate && !adapter.catalogProbeOnly {
+	if !adapter.InvocationTargetDiscovery().CanEnumerate {
 		return &provider.Error{Class: provider.ErrorBadRequest, Message: "this profile has no model catalog to test against; bind an enabled deployment and test that"}
 	}
-	request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(1, ""))
+	// One model is all a reachability check needs, and Anthropic's limit says so.
+	// A host answering the OpenAI shape defines no such parameter, so it gets the
+	// bare route — the same request the enumeration makes, which is the one that
+	// was measured.
+	limit := 1
+	if adapter.catalogShape == CatalogOpenAI {
+		limit = 0
+	}
+	request, err := adapter.newModelCatalogRequest(ctx, adapter.modelCatalogURL(limit, ""))
 	if err != nil {
 		return err
 	}
@@ -360,15 +445,18 @@ func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
 	if err := json.Unmarshal(payload, &catalog); err != nil {
 		return malformed("decode Anthropic model catalog response", err)
 	}
-	// A probe-only host answers on a list Halro does not read as Anthropic's, so
-	// the member name is not asserted — only that the reply is a JSON object,
-	// which is what keeps an HTML login page from reading as a healthy provider.
-	// Asserting `data` here would turn an unverified guess about someone else's
-	// response shape into a failed credential test.
-	if adapter.catalogProbeOnly {
-		var object map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &object); err != nil {
-			return malformed("model catalog response is not a JSON object", err)
+	// Both shapes name their list `data`, so both are asserted. This used to fall
+	// back to "the reply is a JSON object" for a host whose shape Halro had only
+	// inferred, on the grounds that asserting a guessed member name would turn a
+	// wrong guess into a failed credential test. The guess is no longer a guess —
+	// MiniMax's reply was read on 2026-09-01 and carries `data` — so the check
+	// that keeps an HTML login page from reading as a healthy provider runs at
+	// full strength for it too.
+	if adapter.catalogShape == CatalogOpenAI {
+		if _, listed, err := provider.DecodeOpenAIShapedModelCatalog(payload); err != nil {
+			return malformed("decode model catalog response", err)
+		} else if !listed {
+			return malformed("model catalog response omitted its model list", nil)
 		}
 		return nil
 	}

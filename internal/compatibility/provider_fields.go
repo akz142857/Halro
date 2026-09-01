@@ -235,7 +235,11 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.Candidates != nil && *request.Candidates > 1, "n")
 		add(request.Seed != nil, "seed")
 		add(len(request.Stop) > 0, "stop")
-		add(request.OutputFormat != nil, "response_format")
+		// Value-dependent now that it has been measured: json_object is served
+		// and a schema has not been established. The schema-less half was declared
+		// unsupported on both because no MiniMax document names the member; a real
+		// request answered one half of that and left the other where it was.
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema, "response_format")
 		add(request.EndUserRef != "", "user")
 		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
 	}, domain.ProfileMiniMaxChat)

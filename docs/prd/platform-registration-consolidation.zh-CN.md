@@ -60,7 +60,7 @@
 每一条都做了反向验证：拆掉登记、确认变红、再装回去。其中一条反向验证**没有红**，
 因此推翻了一个原本写在源码注释里的错误论断——详见 §4。
 
-## 3. 能合并的三处（§3.1、§3.3 已完成）
+## 3. 能合并的三处（全部完成）
 
 不动分层就能砍掉的重复：
 
@@ -98,15 +98,46 @@
 仍然抓不到的：把两个 profile 的原语对调（两个都还绑着，没有孤儿常量）。
 已记进契约文档的「没有守卫的步骤」，并指明平台自己的 wiring 测试是补这一格的办法。
 
-### 3.2 字段申报与端点清单的 `ProfileCoverage`
+### 3.2 字段申报与端点清单的 `ProfileCoverage` —— **已实施（2026-08-31）**
 
-`internal/compatibility/provider_fields.go` 说「这个 profile carry 不了什么」，
-`manifest.go` 的 `ProfileCoverage.UnsupportedRequestFields` 说同一件事的另一种写法。
-两者现在靠 `TestTheManifestDeclaresEverythingTheRulesRefuse` 绑在一起。
+**先量再改。** 上一版只写了「做不到完全派生」，没说是多少。实测：186 条声明里
+**127 条可由规则派生（68%）**，其余 59 条手写。而那 59 条不是零散的——
+是 `anthropic.messages` 端点上的 `top_k` / `thinking` / `metadata` / `service_tier`
+**在 14 个 profile 行里重复了 14 遍**。
 
-合并方向：让 coverage 从字段规则派生。**做不到完全派生**，因为 manifest 允许声明比规则
-更多的东西（有些端点成员根本到不了语义模型，没有规则会拒它们）——所以只能派生一部分，
-剩下的仍要手写。收益因此比看上去小。
+顺着查下去发现两件事：
+
+1. **那一组根本不是 profile 级事实。** `DecodePortable`
+   （`compatibility/anthropic/mapping.go:23`）对**每一个** portable 请求都拒它们——
+   它们描述的是「请求原样是什么」，而 portable 路径要重写请求体。所以它是
+   **端点 × portable 路径**的属性，被抄了 14 份。
+2. **`endpointSpelling` 漏了 `stop` → `stop_sequences`。** 规则明明拒了 `stop` 的 profile
+   只能手写 `stop_sequences`，而守卫连不上这两个名字，等于看不见。补上后派生率 68% → **72%**。
+
+做法（没有走「完全生成」，理由在末尾）：
+
+- 提出 `AnthropicPortableOnlyFields` 一处声明，14 行改为 `withAnthropicPortableLosses(自己的)`。
+- 新增 `TestPortableOnlyFieldsAreTheOnesTheDecoderRejects`，把这份清单钉到**真正执行拒绝的解码器**上：
+  清单里有而解码器不拒、或解码器拒而清单没有，两个方向都报错。
+- **把 `TestTheManifestDeclaresEverythingTheRulesRefuse` 从单向升级成精确相等。**
+  它原来只查「规则拒的都声明了」，另一半没人管——一条没有任何规则产生的声明会被直接相信。
+  这正是 14 行重复能长出来、而其中一行状态不同也没人发现的原因。
+
+**过程中犯了一个错，是新守卫抓住的，值得记下来。** 精确守卫刚打开时报
+`bedrock.mantle.anthropic.messages.v1` 缺那四条，我一度以为 MiniMax 那行也「漏了」并加了三条。
+查下去是反的：**能服务 native 的三个 Anthropic wire profile 本来就不带端点级 portable 损失**
+（native 模式把它们原样送上去），三行一直是一致的，只是 `servedNatively()` 只点了其中一个名字，
+另外两个就看起来像漂移。改法是把 `servedNatively` 补成三个，并把我那三条加回去的声明撤掉。
+**发布的兼容契约最终语义变化为零**——`docs/compatibility/endpoint-manifests.json` 的 coverage
+逐行比对，0 行内容改变，只有排序和来源变了。纯重构该有的样子。
+
+三个方向都反向验证过:漏声明规则拒的字段、多声明没人拒的字段、端点级那组被某行漏掉——
+各造一次，全部点名报错。
+
+**没有做「完全生成」**（让 `BuiltinEndpointManifests` 直接从规则算出 coverage、删光 186 条手写）。
+那要把 `coverageProbes` 这套测试夹具搬进生产代码，于是**发布的契约会取决于一组合成探针**：
+探针缺一个，契约就静默收窄，而今天是人写下他想声明的东西。精确守卫已经把手写项从
+「被信任」变成「被校验」，拿到了大部分收益而不用付这个代价。要不要再走一步是独立决定。
 
 ### 3.3 `app/providers.go` 的构造 switch —— **已实施（2026-08-31）**
 
@@ -172,7 +203,10 @@ MiniMax 还没有跑过真实账号（[适配方案](minimax-adaptation-plan.zh-
 - §3.2（字段申报与 `ProfileCoverage` 派生）**撞**，等片 1。
 - §3.3（构造表）**不撞**，已完成。
 
-顺序：§3.3 ✅ → §3.1 ✅ → 片 1 跑通 → §3.2。
+顺序：§3.3 ✅ → §3.1 ✅ → §3.2 ✅（**2026-08-31 再次订正**：它其实也不必等片 1。
+片 1 会改字段规则的**内容**，而 §3.2 改的是 coverage 的**产生方式**；等价性测试对着今天的内容
+证一次即可，片 1 之后规则变了，coverage 会跟着变而不是需要重做。
+两次把推迟理由下宽，同一个毛病：把「相关」当成了「相撞」。）
 
 ## 6. 明确不做的
 

@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -109,5 +110,45 @@ func TestNativeRequirementsDeclareProviderExecutedTools(t *testing.T) {
 	}
 	if !NativeRequirements(request).ProviderExecutedTools {
 		t.Fatal("a provider-executed tool did not declare the requirement")
+	}
+}
+
+// AnthropicPortableOnlyFields is a list in the parent package and a set of
+// struct-field checks here. They have to name the same members: the list is what
+// fourteen endpoint coverage rows are built from, and this is what actually
+// refuses a request. A member added to the decoder and not the list would be
+// refused without being declared.
+func TestPortableOnlyFieldsAreTheOnesTheDecoderRejects(t *testing.T) {
+	base := func() anthropicapi.MessageRequest {
+		return anthropicapi.MessageRequest{
+			Model: "m", MaxTokens: 8,
+			Messages: []anthropicapi.MessageParam{{Role: "user", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "hi"}}}},
+		}
+	}
+	if _, err := DecodePortable(base()); err != nil {
+		t.Fatalf("a plain portable request was rejected: %v", err)
+	}
+	topK := int64(40)
+	carry := map[string]func(*anthropicapi.MessageRequest){
+		"top_k":        func(r *anthropicapi.MessageRequest) { r.TopK = &topK },
+		"thinking":     func(r *anthropicapi.MessageRequest) { r.Thinking = json.RawMessage(`{"type":"disabled"}`) },
+		"metadata":     func(r *anthropicapi.MessageRequest) { r.Metadata = json.RawMessage(`{"user_id":"u"}`) },
+		"service_tier": func(r *anthropicapi.MessageRequest) { r.ServiceTier = "standard" },
+	}
+	for _, field := range compatibility.AnthropicPortableOnlyFields {
+		set, ok := carry[field]
+		if !ok {
+			t.Errorf("%q is declared portable-only and this test cannot set it; the two lists have diverged", field)
+			continue
+		}
+		request := base()
+		set(&request)
+		if _, err := DecodePortable(request); err == nil {
+			t.Errorf("%q is declared portable-only and DecodePortable accepted it", field)
+		}
+		delete(carry, field)
+	}
+	for field := range carry {
+		t.Errorf("DecodePortable rejects %q and it is not declared in AnthropicPortableOnlyFields", field)
 	}
 }

@@ -68,6 +68,11 @@ func TestMiniMaxNoneReachesTheOffState(t *testing.T) {
 func TestMiniMaxBodyCarriesNoIgnoredMember(t *testing.T) {
 	request := minimaxBaseRequest()
 	request.ReasoningEffort = "high"
+	// response_format=text is the one value that is accepted and still must not
+	// reach the wire: it means what omitting the member already means, and only
+	// json_object has ever been measured. Sending it would put an undocumented
+	// member on a request that gains nothing from it.
+	request.ResponseFormat = json.RawMessage(`{"type":"text"}`)
 	body, err := RenderMiniMaxChatRequest(request)
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -93,10 +98,12 @@ func TestMiniMaxRefusesMembersItCannotCarry(t *testing.T) {
 	no := false
 	seed := int64(7)
 	cases := map[string]func(*openaiapi.ChatCompletionRequest){
-		"n":                   func(r *openaiapi.ChatCompletionRequest) { r.N = &two },
-		"seed":                func(r *openaiapi.ChatCompletionRequest) { r.Seed = &seed },
-		"stop":                func(r *openaiapi.ChatCompletionRequest) { r.Stop = json.RawMessage(`["END"]`) },
-		"response_format":     func(r *openaiapi.ChatCompletionRequest) { r.ResponseFormat = json.RawMessage(`{"type":"json_object"}`) },
+		"n":    func(r *openaiapi.ChatCompletionRequest) { r.N = &two },
+		"seed": func(r *openaiapi.ChatCompletionRequest) { r.Seed = &seed },
+		"stop": func(r *openaiapi.ChatCompletionRequest) { r.Stop = json.RawMessage(`["END"]`) },
+		"response_format json_schema": func(r *openaiapi.ChatCompletionRequest) {
+			r.ResponseFormat = json.RawMessage(`{"type":"json_schema","json_schema":{"name":"x","schema":{}}}`)
+		},
 		"user":                func(r *openaiapi.ChatCompletionRequest) { r.User = "someone" },
 		"parallel_tool_calls": func(r *openaiapi.ChatCompletionRequest) { r.ParallelToolCalls = &no },
 	}
@@ -145,5 +152,28 @@ func TestMiniMaxOutputLimitFollowsTheThinkingSwitch(t *testing.T) {
 	request.MaxCompletionTokens = &limit
 	if _, err := RenderMiniMaxChatRequest(request); err == nil {
 		t.Fatal("two output limits were accepted where MiniMax has one member")
+	}
+}
+
+// json_object was refused until a real account served it. The schema mode was
+// never sent, so it stays refused — the silence that turned out to be wrong
+// about one half is not evidence about the other.
+func TestMiniMaxCarriesJSONObjectAndRefusesASchema(t *testing.T) {
+	request := minimaxBaseRequest()
+	// A sibling member the facade does not inspect: only response_format.type is
+	// validated there, so anything beside it would ride along into a member no
+	// MiniMax document describes. What was measured is the bare object, and that
+	// is what goes on the wire.
+	request.ResponseFormat = json.RawMessage(`{"type":"json_object","unmeasured":true}`)
+	body, err := RenderMiniMaxChatRequest(request)
+	if err != nil {
+		t.Fatalf("json_object was refused: %v", err)
+	}
+	if string(body.ResponseFormat) != `{"type":"json_object"}` {
+		t.Fatalf("json_object reached the wire as %s, want the bare measured object", body.ResponseFormat)
+	}
+	request.ResponseFormat = json.RawMessage(`{"type":"json_schema","json_schema":{"name":"x","schema":{}}}`)
+	if _, err := RenderMiniMaxChatRequest(request); err == nil {
+		t.Fatal("a schema was sent to a face that has never been shown to enforce one")
 	}
 }

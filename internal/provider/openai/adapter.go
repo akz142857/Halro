@@ -255,16 +255,10 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	if len(payload) > maxResponseBytes {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "model catalog response is too large"}
 	}
-	var catalog struct {
-		Data []struct {
-			ID      string `json:"id"`
-			OwnedBy string `json:"owned_by"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(payload, &catalog); err != nil {
+	catalog, _, err := provider.DecodeOpenAIShapedModelCatalog(payload)
+	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "decode model catalog response", Cause: err}
 	}
-	now := time.Now().UTC()
 	kind := domain.TargetModelID
 	canonicalModelRef := func(id string) string { return id }
 	if a.providerType == string(domain.ProviderOpenAICompatible) {
@@ -275,17 +269,10 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 		// capability mapping therefore remains an explicit operator action.
 		canonicalModelRef = func(string) string { return "" }
 	}
-	models := make([]domain.InvocationTargetDescriptor, 0, len(catalog.Data))
-	for _, model := range catalog.Data {
-		id := strings.TrimSpace(model.ID)
-		if id == "" || len(id) > 512 {
-			continue
-		}
-		models = append(models, domain.InvocationTargetDescriptor{
-			TargetID: id, TargetKind: kind, DisplayName: id, OwnedBy: strings.TrimSpace(model.OwnedBy),
-			CanonicalModelRef: canonicalModelRef(id), Lifecycle: domain.TargetLifecycleUnknown,
-			MetadataSource: domain.MetadataSourceNone, Availability: domain.AvailabilityAvailable, FetchedAt: now,
-		})
+	models := catalog.InvocationTargets(kind, canonicalModelRef)
+	now := time.Now().UTC()
+	for index := range models {
+		models[index].FetchedAt = now
 	}
 	return models, nil
 }
@@ -635,10 +622,32 @@ func (a *Adapter) ChatStream(
 	}
 	decoder := sse.NewDecoder(response.Body, semantic.MaxEncodedEventBytes)
 	var usage *openaiapi.Usage
+	// finished records that a chunk carried a finish_reason, which is the model
+	// saying it stopped. It is what tells a completed stream from a truncated one
+	// on an upstream that ends by closing the connection.
+	finished := false
 	for {
 		event, err := decoder.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				// MiniMax never sends the [DONE] sentinel. Measured 2026-08-31
+				// against a real account: the stream carries the content chunks, a
+				// chunk with finish_reason "stop", a final chunk with choices empty
+				// and usage populated, and then closes.
+				//
+				// Treating that as truncation cost the caller a generation the
+				// upstream had already run and billed — the attempt settled as an
+				// ambiguous provider failure, so they paid and received an error.
+				//
+				// The exemption is narrow on purpose, in two ways. It is scoped to
+				// this provider, because for every other OpenAI-family upstream a
+				// stream that stops without the sentinel is what a partial response
+				// looks like, and that check is what keeps a partial one from
+				// settling as complete. And it still requires a finish_reason: an
+				// EOF before the model said it stopped is a truncation here too.
+				if a.miniMax && finished {
+					return usage, nil
+				}
 				return usage, &provider.Error{
 					Class: provider.ErrorMalformed, Ambiguous: true,
 					Message: "provider stream ended before [DONE]",
@@ -677,6 +686,11 @@ func (a *Adapter) ChatStream(
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,
 				Message: "provider stream chunk is semantically invalid", Cause: err,
+			}
+		}
+		for _, choice := range chunk.Choices {
+			if choice.FinishReason != nil && *choice.FinishReason != "" {
+				finished = true
 			}
 		}
 		if chunk.Usage != nil {

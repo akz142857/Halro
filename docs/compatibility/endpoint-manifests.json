@@ -260,7 +260,7 @@
           "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
           "reasoning_effort is unsupported at any value because MiniMax's reasoning switch is the thinking member and it accepts no output_config; a request that asks for no depth still reaches MiniMax with thinking disabled, because the portable mapper emits that member on its own and MiniMax spells it the same way",
           "stop is rejected before provider I/O rather than sent: MiniMax documents stop_sequences as ignored, so sending it would return 200 for a completion that ran past a boundary the caller set and paid for",
-          "no MiniMax face documents response_format, so neither JSON mode is claimed until a real request establishes one"
+          "response_format has no counterpart on this face at all: MiniMax accepts no output_config, and its Chat face was later measured serving json_object while this one was not"
         ]
       },
       {
@@ -280,7 +280,8 @@
           "a request that asks for no reasoning is sent with thinking explicitly disabled rather than left to MiniMax's own default, which is on",
           "reasoning_split is sent alongside an enabled switch so reasoning returns in its own member instead of inline in the answer",
           "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning",
-          "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means"
+          "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means",
+          "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O"
         ]
       },
       {
@@ -857,10 +858,10 @@
         "profile_id": "openai.chat-embeddings.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through OpenAI Chat Completions"
@@ -870,12 +871,12 @@
         "profile_id": "openai.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
+          "metadata",
+          "output_config.effort",
+          "service_tier",
           "stop_sequences",
           "thinking",
-          "metadata",
-          "service_tier",
-          "output_config.effort"
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through the OpenAI Responses endpoint",
@@ -893,10 +894,10 @@
         "profile_id": "azure-openai.chat-embeddings.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through Azure Chat Completions"
@@ -906,12 +907,12 @@
         "profile_id": "deepseek.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier",
           "output_config.effort",
-          "output_config.format"
+          "output_config.format",
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through DeepSeek Chat Completions",
@@ -923,10 +924,10 @@
         "profile_id": "openai-compatible.chat-embeddings.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through an OpenAI-compatible primitive"
@@ -936,14 +937,14 @@
         "profile_id": "gemini.generate-content.text.v1beta",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "tools",
-          "tool_choice",
-          "thinking",
           "metadata",
-          "service_tier",
           "output_config.effort",
-          "output_config.format"
+          "output_config.format",
+          "service_tier",
+          "thinking",
+          "tool_choice",
+          "tools",
+          "top_k"
         ],
         "declared_transforms": [
           "portable text Messages content is mapped through Gemini generateContent",
@@ -954,14 +955,14 @@
         "profile_id": "bedrock.runtime.converse.text.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "tools",
-          "tool_choice",
-          "thinking",
           "metadata",
-          "service_tier",
           "output_config.effort",
-          "output_config.format"
+          "output_config.format",
+          "service_tier",
+          "thinking",
+          "tool_choice",
+          "tools",
+          "top_k"
         ],
         "declared_transforms": [
           "portable text Messages content is mapped through Bedrock Converse",
@@ -972,10 +973,10 @@
         "profile_id": "bedrock.mantle.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through Bedrock Mantle Chat Completions"
@@ -985,10 +986,10 @@
         "profile_id": "bedrock.mantle.openai.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
-          "thinking",
           "metadata",
-          "service_tier"
+          "service_tier",
+          "thinking",
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through Bedrock Mantle Chat Completions"
@@ -998,13 +999,13 @@
         "profile_id": "bedrock.mantle.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
+          "metadata",
+          "output_config.effort",
+          "service_tier",
           "stop_sequences",
-          "top_k",
           "thinking",
           "tools",
-          "metadata",
-          "service_tier",
-          "output_config.effort"
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through stateless Bedrock Mantle Responses",
@@ -1016,13 +1017,13 @@
         "profile_id": "bedrock.mantle.openai.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
+          "metadata",
+          "output_config.effort",
+          "service_tier",
           "stop_sequences",
-          "top_k",
           "thinking",
           "tools",
-          "metadata",
-          "service_tier",
-          "output_config.effort"
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through stateless Bedrock Mantle Responses",
@@ -1064,12 +1065,12 @@
         "profile_id": "minimax.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
+          "metadata",
+          "output_config.format",
+          "service_tier",
           "stop_sequences",
           "thinking",
-          "metadata",
-          "service_tier",
-          "output_config.format"
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through MiniMax Chat Completions",
@@ -1080,13 +1081,13 @@
         "profile_id": "minimax.responses.v1",
         "status": "compatible",
         "unsupported_request_fields": [
-          "top_k",
+          "metadata",
+          "output_config.effort",
+          "output_config.format",
+          "service_tier",
           "stop_sequences",
           "thinking",
-          "metadata",
-          "service_tier",
-          "output_config.effort",
-          "output_config.format"
+          "top_k"
         ],
         "declared_transforms": [
           "portable Messages content is mapped through stateless MiniMax Responses",

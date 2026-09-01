@@ -71,9 +71,10 @@ type MiniMaxThinking struct {
 // openaiapi.ChatCompletionRequest must be considered here deliberately instead
 // of reaching MiniMax because nobody remembered to exclude it.
 type MiniMaxChatRequest struct {
-	Model    string              `json:"model,omitempty"`
-	Messages []openaiapi.Message `json:"messages"`
-	Thinking *MiniMaxThinking    `json:"thinking,omitempty"`
+	Model          string              `json:"model,omitempty"`
+	Messages       []openaiapi.Message `json:"messages"`
+	ResponseFormat json.RawMessage     `json:"response_format,omitempty"`
+	Thinking       *MiniMaxThinking    `json:"thinking,omitempty"`
 	// ReasoningSplit asks MiniMax to return reasoning in its own member instead
 	// of inline in the answer. It is sent only while thinking is on: with the
 	// switch off there is nothing to split, and sending it anyway would be a
@@ -108,8 +109,34 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	if len(request.Stop) > 0 {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions does not accept stop")
 	}
+	// responseFormat is what reaches MiniMax, which is not the same as what the
+	// caller sent: only json_object was measured, so only json_object is carried.
+	var responseFormat json.RawMessage
 	if len(request.ResponseFormat) > 0 {
-		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions does not accept response_format")
+		var format struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(request.ResponseFormat, &format); err != nil {
+			return MiniMaxChatRequest{}, fmt.Errorf("MiniMax Chat Completions cannot read response_format: %w", err)
+		}
+		switch format.Type {
+		case "json_object":
+			// Measured against a real account on 2026-08-31: sent, and answered
+			// with a valid JSON body. Re-emitted rather than forwarded verbatim,
+			// because what was measured is this exact object — the facade checks
+			// only the type member, so a caller's sibling members would otherwise
+			// ride along into a member no MiniMax document describes.
+			responseFormat = json.RawMessage(`{"type":"json_object"}`)
+		case "text":
+			// The default, and the same thing as omitting the member — so it is
+			// dropped rather than sent. Nothing is lost by dropping it, and
+			// sending it would put an undocumented member MiniMax has never been
+			// measured reading on a request that did not need it.
+		default:
+			// A schema has not been established, so it is refused rather than sent
+			// and hoped for.
+			return MiniMaxChatRequest{}, fmt.Errorf("MiniMax Chat Completions does not accept response_format type %q", format.Type)
+		}
 	}
 	if request.User != "" {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions has no end-user attribution member")
@@ -140,6 +167,7 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	}
 	result := MiniMaxChatRequest{
 		Model: request.Model, Messages: request.Messages,
+		ResponseFormat:      responseFormat,
 		MaxCompletionTokens: limit,
 		Stream:              request.Stream, StreamOptions: request.StreamOptions,
 		Temperature: request.Temperature, TopP: request.TopP,

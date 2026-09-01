@@ -140,11 +140,13 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 				ProviderType: string(domain.ProviderMiniMax), CredentialScheme: ctx.Binding.CredentialScheme,
 				MessagesPath: "anthropic/v1/messages", ProfileID: ctx.Binding.ProfileID,
 				// MiniMax keeps its model list on the OpenAI route of the same host,
-				// reachable with this same key. It is not an Anthropic catalogue, so
-				// nothing is enumerated from it — but it answers a credential-only
-				// connection test, which otherwise asked the operator to bind a
-				// deployment before they could find out whether their key worked.
-				CatalogProbeOnly: true,
+				// reachable with this same key, and answers it in OpenAI's shape.
+				// Measured against a real account on 2026-09-01: object=list, eight
+				// entries of {id, object, created, owned_by}, every one a chat model.
+				// So this profile enumerates from it rather than offering a list
+				// compiled into the binary, and the operator gets a Refresh control
+				// that reaches the account.
+				CatalogShape: anthropicprovider.CatalogOpenAI,
 			})
 		},
 	},

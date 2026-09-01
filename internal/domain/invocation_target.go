@@ -32,6 +32,23 @@ type MetadataSource string
 const (
 	MetadataSourceNone     MetadataSource = "none"
 	MetadataSourceProvider MetadataSource = "provider_metadata"
+	// MetadataSourceModelCatalog is a target Halro offers from its own model
+	// catalog rather than one an upstream listed.
+	//
+	// It exists because the two are not the same claim and must not read as one.
+	// A provider listing a model is evidence the account reaches it. A catalog
+	// entry is evidence only that Halro was willing to pre-check the identifier —
+	// the account may not be entitled to it at all, which is why an offer of this
+	// kind is always AvailabilityUnverified.
+	//
+	// Deliberately not spelled builtin_catalog. That string is already a
+	// ClaimSource, where it means the bundled catalog as opposed to the signed
+	// one; an offer can come from either, because the signed snapshot merges into
+	// the same catalog and exists precisely so a model published after this
+	// release can be offered without a new binary. One string meaning two
+	// different things across two enums is how a reader concludes an offer was
+	// frozen at build time when it was not.
+	MetadataSourceModelCatalog MetadataSource = "model_catalog"
 )
 
 // NormalizedModelMetadata is the allowlisted, provider-neutral subset of an

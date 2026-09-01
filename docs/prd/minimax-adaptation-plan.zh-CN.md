@@ -955,12 +955,23 @@ pre-1.0.0 的处理：本方案全程「就地改对」，不留并存构造。�
 
 写在这里是为了**不让它们被当成已知**。每一条都在片 1 里有对应的实测动作。
 
-1. **Anthropic 路径接受 `Authorization: Bearer`** —— 两站文档互相印证（大陆站明写 Bearer 为推荐、
-   且与 `x-api-key` 同时出现时优先），但仍**没有真实密钥打通过**。会改变 §2.1 的凭据方案与 §2.2 的分组。
-2. **Chat Completions 真实响应带 `prompt_tokens` / `completion_tokens`** —— 只有文档示例，schema 未定义。会改变结算方式（§3.2）。
-3. **Chat / Responses 的真实错误走非 2xx** —— §1.3 只证了鉴权失败那一种。会改变 §3.1 守卫的形状与位置。
-4. **`response_format` 不支持** —— 三份文档都没提。这是「没写」不是「写了不支持」，按 fail-closed 处理，但它是推断。
-5. **`stream_options.include_usage` 被接受** —— 文档列了，未实测。决定流式调用有没有账。
+1. ~~**Anthropic 路径接受 `Authorization: Bearer`**~~ —— **已关闭（2026-08-31 第二轮）**：
+   `TestRealMiniMaxAnthropicRouteSmoke` 打通 `/anthropic/v1/messages`，
+   `usage: prompt=170 completion=2`。§2.1 的凭据方案与 §2.2 的三 profile 共用一个连接组成立。
+2. ~~**Chat Completions 真实响应带 `prompt_tokens` / `completion_tokens`**~~ —— **已关闭（2026-08-31 真实账号）**：
+   `prompt=170 completion=2 total=172`，两档都在。§3.2 的「只有 total 就按输出价兜底」不需要了。
+3. ~~**Chat / Responses 的真实错误走非 2xx**~~ —— **已关闭（2026-08-31）**：一个不存在的模型
+   返回 **HTTP 400**，归类为 `bad_request` / 不重试 / 不模糊。§3.1 的 `base_resp` 守卫在这三条
+   路由上因此是冗余保险而不是主路径——**保留**，因为 `/v1/embeddings` 已实测会用 200 带错，
+   而这个 host 上「200 带错」是存在的做法。
+4. ~~**`response_format` 不支持**~~ —— **推断被推翻（2026-08-31 第二轮）**：Chat 面发
+   `{"type":"json_object"}` 返回 200，内容是合法 JSON。`minimaxChatSet` 已补 `JSONObject`，
+   渲染器改为按值处理（`json_object` 携带、`text` 丢弃因为它与省略该成员同义、`json_schema`
+   拒绝，因为 schema 模式从未发过）。
+   **Responses 面没测,不跟着加** —— 拿另一条端点的结果推它，就是把当初写错 Chat 那条的猜测反过来再做一遍。
+5. ~~**`stream_options.include_usage` 被接受**~~ —— **已关闭，且缺陷已修（2026-08-31 第二轮）**：
+   它是生效的，最终块带 `usage:{prompt_tokens:165, completion_tokens:2}`；失败只因为
+   **MiniMax 从不发 `data: [DONE]`**，流在 usage 块之后直接 EOF。修法见 §8.11。
 6. **M2.x 的真实输出上限** —— 文档记的 204,800 等于上下文窗口，疑为缺项（§3.12）。
 7. **`reasoning_effort` 在 Chat / Anthropic 两条上只有开关语义** —— 由「文档没有档位字段」推出，
    未实测各档是否真的无差别。**同一条的另一半更要紧**：顶层 `reasoning_effort` 是被上游忽略
@@ -968,7 +979,9 @@ pre-1.0.0 的处理：本方案全程「就地改对」，不留并存构造。�
    但严重度差一个数量级。
 8. **529 的真实重试语义** —— 文档标为可重试，但上游多久恢复、会不会带 `Retry-After`，没有实测。
    （「Halro 这边把它归到哪一类」已经不是未验证项了——那是设计决定，见 §3.15。）
-9. **不发 `thinking` 时 M3 的默认行为** —— 文档说默认 `adaptive`（思考开着）。DeepSeek 在这一点上
+9. ~~**M2.x 能否关闭思考**~~ —— **已关闭（2026-08-31 第二轮）**：`MiniMax-M2.7` **接受**
+   `thinking:{"type":"disabled"}`。全方案最响亮的那条风险不成立，「未指定即关」在两条模型线上都安全。
+   仍未测量的原条目——**不发 `thinking` 时 M3 的默认行为** —— 文档说默认 `adaptive`（思考开着）。DeepSeek 在这一点上
    栽过，所以 §3.13 按「未指定即关」处理并显式发 `disabled`。这条规则本身是仓库口径，
    但「MiniMax 的默认确实是开」这句是文档转述，未实测。
 10. **`input_sensitive` / `output_sensitive` 的触发条件与后果** —— 四个成员都只是从响应示例里读到的。
@@ -976,9 +989,17 @@ pre-1.0.0 的处理：本方案全程「就地改对」，不留并存构造。�
 11. **`checkNativeInboundRedaction` 对未知内容块的既有行为** —— 这一条不是关于 MiniMax 的，
     是关于 Halro 自己的：它下钻还是跳过，决定 `mid_conv_system` 是拒是收（§3.8）。
     **这条不需要密钥，片 3 一开始读代码就能定论**，是本清单里唯一现在就能关掉的。
-12. **MiniMax `/v1/models` 带凭据时的真实返回体** —— **一半已关闭**：2026-08-31 一次真实的
-    连接测试通过（§8.8），所以它带凭据时返回的是一个 JSON 对象。**「它确实是一份模型列表」
-    仍然没有证据**——probe-only 的校验不读成员名，所以通过不代表形状对上了。
+12. ~~**MiniMax `/v1/models` 带凭据时的真实返回体**~~ —— **已关闭，且推断被推翻
+    （2026-09-01）**：`{"object":"list","data":[{id, object, created, owned_by}]}`，标准
+    OpenAI 形状，8 条，**全部是 chat 模型**（M3 / M2.7 / M2.5 / M2.1 及三个 highspeed
+    变体，`owned_by` 都是 `minimax`）。**没有语音、没有视频。**「从这份列表枚举会把语音、
+    视频模型 credited 成 chat」——这条不枚举的理由不成立，它是从文档推的，从没读过响应。
+    而且它的主语也错了：把标识符变成能力声明的是 `MapCapabilityClaims`，不是枚举本身。
+    修法见 §8.12：这个 profile 改为从这条路由枚举，`MapCapabilityClaims` 对 OpenAI 形状
+    的目录保持沉默，于是目标带着 availability 到达、不带任何能力证据。就算某个账号真的
+    列出语音模型，它也只是「可选但能力未知」，没人声明就部署不了。
+    **边界**：一个国际账号，一次。换个账号（尤其是开通了语音/视频产品的）会不会列出别的，
+    没有证据。设计对那种情况是安全的，但那是设计安全，不是测过。
 13. **两个 host 在带凭据之后仍然同构** —— §1.3 的逐格相同是**无凭据**测出来的，只覆盖到路由与
    错误信封。模型清单是否一致、限流额度、`thinking` 的默认档、乃至 §3.1 那条 `base_resp`
    在两边是否同样表现，都要各用一把当地密钥才知道。片 6 的真实 smoke **两个地区各跑一遍**，
@@ -1068,7 +1089,7 @@ ambiguous 结束——已经是 fail-closed 的方向。等片 1 证实那条路
 | 测试 | 守住什么 |
 |---|---|
 | `TestMiniMaxDisablesThinkingWhenNobodyAsked` | 没人要求推理时显式发 `disabled`，而不是让 M3 的默认「开着」去计费 |
-| `TestMiniMaxBodyCarriesNoIgnoredMember` | 渲染出的 body 里没有 `reasoning_effort` / `n` / `seed` / `stop` / `response_format` / `user` |
+| `TestMiniMaxBodyCarriesNoIgnoredMember` | 渲染出的 body 里没有 `reasoning_effort` / `n` / `seed` / `stop` / `user`，以及 `response_format` 的 `text`（唯一被接受却仍不上线的值） |
 | `TestMiniMaxOutputLimitFollowsTheThinkingSwitch` | `max_tokens` 只在思考关着时才等于 `max_completion_tokens` |
 | `TestMiniMaxGuardCatchesAFailureWearingA200` | 用 2026-08-31 实测到的那个 200 响应原文当输入 |
 | `TestMiniMaxStatusCodesReachTheRightClass` | 错误码 → `provider.Error` 类别，含 1008 绝不重试 |
@@ -1214,7 +1235,97 @@ OpenAI 形状的假响应。这条进 §7。
 - 如果大陆那一轮发现了差异，**第一反应不是加第二个 profile**——那会把一份契约拆成两份真相
   （§3.10 的反面提醒）。先定位差异是地址级、账号级还是契约级。
 
-### 8.10 现在的状态
+### 8.10 片 1 第一轮（2026-08-31）：四条关闭，一条抓到生产缺陷，三条根本没跑
+
+跑的是 `TestRealMiniMaxSmoke`，六个子测试，五过一败。
+
+**关闭**：usage 拆分（§7 第 2 条）、真实错误走 400（第 3 条）、M3 接受 disabled 开关（第 9 条一半）、
+`/v1/models` 可读（第 12 条）。Responses 面的一元生成也通了。
+
+**抓到的缺陷：MiniMax 流式在生产里是坏的。** 错误是
+`provider stream ended before [DONE]`——适配器要求 SSE 以 `data: [DONE]` 收尾，MiniMax 到 EOF
+都没给。后果不是测试问题：调用方流式调用会在**上游已经跑完并计费之后**拿到 `malformed_response`，
+按模糊结果保守计账——付了钱、拿到错误。
+
+**修法不能猜。** 放宽成「EOF 即正常结束」会削弱**所有** OpenAI 系供应商的保护：今天一个被截断的
+流会被判为 malformed，那正是保护账目的机制。所以先加了一个原始流诊断子测试，读末尾几行、
+并报告整条流里有没有出现过 `[DONE]`。拿到结果再决定修在哪一层。
+
+**这一轮还暴露了 smoke 自己的三个洞**，都是我写的时候漏的，而且我曾把它们算作片 1 的产出：
+
+| 没跑的断言 | 为什么 | 已补 |
+|---|---|---|
+| Bearer 在 `/anthropic/v1/messages` 上可用（§7 第 1 条） | 六个子测试**全部**走 openai 适配器，Anthropic 路由一次都没打过 | `internal/provider/anthropic/minimax_real_smoke_test.go` |
+| `response_format` 支不支持（第 4 条） | 根本没写这个子测试 | 原始请求发一次，读状态码与响应体 |
+| M2.x 能否关闭思考（第 9 条另一半） | 模型默认 M3，而风险在 M2.x | `HALRO_SMOKE_M2_MODEL`，默认 `MiniMax-M2.7` |
+
+第一条尤其要紧：它的结论会改动**凭据方案与 profile 分组**，是 §2.1 那条一直挂着的前置。
+一次没打过那条路由，就等于这个方案最核心的形状假设至今没有证据。
+
+### 8.11 片 1 第二轮（2026-08-31）：四条关闭，两条推翻我的假设，一个生产缺陷已修
+
+补齐洞之后再跑一次，九个子测试八过一败，而那一败正是要诊断的东西。
+
+**流式缺陷:根因拿到了,修法可以做得很准。** 原始流末尾是:
+
+```
+data: {... "delta":{"content":"OK"} ...}
+data: {... "choices":[{"finish_reason":"stop", ...}] ...}
+data: {... "choices":[], "usage":{"prompt_tokens":165,"completion_tokens":2} ...}
+<连接关闭>
+```
+
+`carries a [DONE] sentinel anywhere: false`。所以 `stream_options.include_usage`
+**是生效的**——最终块带着完整 usage——失败只因为 MiniMax 从不发 `[DONE]`。
+
+修法**两处收窄**，缺一不可:只对 MiniMax 生效（对其它 OpenAI 系上游，没有 sentinel 的流
+就是部分响应的样子，那条检查正是防止部分响应被结算成完整的）；**并且要求先见过
+`finish_reason`**——模型还没说自己停下就 EOF，在这里仍然是截断。三条回归测试用抓到的真实流
+逐字节钉住:完整流通过、`finish_reason` 之前截断仍然失败、豁免不泄漏到别的供应商。
+
+**两条推翻了我的假设,都是「文档没写」这类推断:**
+
+1. **`response_format` 其实支持。** Chat 面发 `{"type":"json_object"}` 返回 200、内容合法 JSON。
+   之前两个 profile 都不声明，依据只是「三份文档都没提」。已补 `JSONObject` 到 `minimaxChatSet`，
+   渲染器改为按值处理。**Responses 面不跟着加**：它是另一条端点、没测过，拿 Chat 的结果推它
+   就是把当初写错的那个猜测反过来再做一遍。
+2. **MiniMax 有 prompt caching，文档说没有。** 两条路由都报了 `cached_tokens: 128`
+   （Chat 的 `prompt_tokens_details`、Anthropic 面的 cache read）。我在 native 守卫里写的理由
+   ——「MiniMax 没有 prompt caching，所以 cache_control 会宣称一个不存在的折扣」——**是错的**。
+   拒绝本身仍然对，但真实理由不同:MiniMax 的缓存是它自己管的，没有任何文档化的成员让调用方
+   去指挥它，所以 `cache_control` 是一条这个上游从未同意读取的指令，转发它会让调用方以为
+   自己放了一个缓存断点而实际没有任何东西在响应。注释已订正。
+
+   **给 operator 的一条实际影响**:MiniMax 会报缓存读取档，所以录价时**应该给 cache-read 单独定价**，
+   否则那部分会按输入价结算——比实际贵。
+
+**关闭的四条**（§7 第 1、4、5、9 条）:Bearer 在 Anthropic 路由可用（这是 §2.1 一直挂着的前置，
+也是三 profile 共用一个连接组的依据）、`response_format` 支持、流式 usage 生效、
+**M2.7 接受 disabled 开关**——全方案最响亮的那条风险不成立。
+
+### 8.12 片 6：接进正式的 matrix runner（2026-08-31）
+
+两个 smoke 之前是独立跑的，用的是我自造的 `HALRO_MINIMAX_*` 环境变量。接进
+`tests/provider-matrix` 时发现**那就是第二套命名**：运行器把
+`HALRO_MATRIX_<PREFIX>_<SUFFIX>` 翻译成 `HALRO_SMOKE_<SUFFIX>`，所以它会设置一批
+这两个测试根本看不见的变量——**又是「两份清单互相看不见」那个形状**，这次在它造成
+损失之前就撞上了。已统一到仓库既有的 `HALRO_SMOKE_*` 约定。
+
+运行器加了一个可选的 `Test` 字段。它与已有的 `Package` 同一性质：MiniMax 的 smoke
+不在约定的位置上（三条 wire 面分在两个适配器包里，而那两个包各自已经有一个
+`TestRealProviderSmoke`，围绕完全不同的断言构建），把它塞进去会让一个函数服务两件
+不相干的事。两行 Beta 条目共用 `MINIMAX` 前缀——一个账号配一次，两行是因为那是两个包的运行。
+
+**地区被显式记进证据**：`describeCell` 现在给 MiniMax 的行填 `Region`，由 base URL 判定
+（`international` / `mainland` / `unrecognised`）。两个 host 只差一个字母，不该留给读者去数。
+
+`docs/verification/provider-real-matrix.md` 的 MiniMax 一节已按两轮实测重写，
+删掉了过期的「No part of it has been run」，并写明这是**适配证据而非 GA matrix 证据**
+（Beta 不参与发布门禁、两轮都没有 `-commit` 绑定、没有归档证据文件）。
+
+**大陆一轮仍然记为 not measured**，不是通过。
+
+### 8.13 现在的状态
 
 **能编译、能通过全部测试、能建连接、能路由。没有一个字节到过真实的 MiniMax。**
 

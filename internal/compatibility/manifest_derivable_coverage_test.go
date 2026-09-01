@@ -48,12 +48,34 @@ func TestTheManifestDeclaresEverythingTheRulesRefuse(t *testing.T) {
 					}
 				}
 			}
+			// Exact, not one-directional. It used to check only that everything
+			// refused was declared, which left the other side unverified: a
+			// declaration no rule produces was simply believed. That is how
+			// fourteen rows came to repeat one endpoint-level fact and one of
+			// them came to state it incompletely — nothing could see the
+			// difference.
+			expected := make(map[string]struct{}, len(refused))
 			for name := range refused {
-				if slices.Contains(coverage.UnsupportedRequestFields, name) {
-					continue
+				expected[name] = struct{}{}
+			}
+			if !servedNatively(manifest, coverage.ProfileID) && manifest.ID == "anthropic.messages.2023-06-01" {
+				// Refused a layer above the rules: DecodePortable rejects these
+				// outright rather than projecting them, so no field rule sees them.
+				for _, name := range AnthropicPortableOnlyFields {
+					expected[name] = struct{}{}
 				}
-				t.Errorf("%s: %s refuses %q and the manifest does not declare it",
-					manifest.ID, coverage.ProfileID, name)
+			}
+			for name := range expected {
+				if !slices.Contains(coverage.UnsupportedRequestFields, name) {
+					t.Errorf("%s: %s refuses %q and the manifest does not declare it",
+						manifest.ID, coverage.ProfileID, name)
+				}
+			}
+			for _, name := range coverage.UnsupportedRequestFields {
+				if _, ok := expected[name]; !ok {
+					t.Errorf("%s: %s declares %q unsupported and nothing refuses it",
+						manifest.ID, coverage.ProfileID, name)
+				}
 			}
 		}
 	}
@@ -63,7 +85,21 @@ func TestTheManifestDeclaresEverythingTheRulesRefuse(t *testing.T) {
 // unprojected: an Anthropic-shaped endpoint answered by the Anthropic Messages
 // profile.
 func servedNatively(manifest EndpointCompatibilityManifest, profileID domain.ProviderProfileID) bool {
-	return manifest.Protocol == "anthropic" && profileID == domain.ProfileAnthropicMessages
+	if manifest.Protocol != "anthropic" {
+		return false
+	}
+	// Every profile that can serve this endpoint natively, not just the first
+	// one. A profile reachable in native mode carries the members the portable
+	// decoder rejects, so the endpoint-level portable losses are not its losses —
+	// which is why all three of these rows declare only what is theirs.
+	//
+	// Naming one of the three left the other two looking like drift, and the
+	// exact check below reported them as such the moment it was turned on.
+	switch profileID {
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages:
+		return true
+	}
+	return false
 }
 
 // endpointSpelling maps the chat-shaped name a rule returns to the name the
@@ -86,6 +122,12 @@ func endpointSpelling(endpointID, field string) string {
 			return "output_config.format"
 		case "reasoning_effort":
 			return "output_config.effort"
+		case "stop":
+			// The same list under this endpoint's name for it. Missing, this
+			// helper could not connect a profile's refusal of stop to the
+			// stop_sequences its coverage declares, so every such profile had to
+			// hand-write the entry and the guard could not check it.
+			return "stop_sequences"
 		}
 	}
 	return field

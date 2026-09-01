@@ -607,7 +607,7 @@ export interface InvocationTargetDescriptor {
     max_context_tokens?: number;
     max_output_tokens?: number;
   };
-  metadata_source: "none" | "provider_metadata";
+  metadata_source: "none" | "provider_metadata" | "model_catalog";
   availability: AvailabilityState;
   fetched_at: string;
 }

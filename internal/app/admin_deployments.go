@@ -883,7 +883,10 @@ func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.
 	if credentialErr != nil {
 		return deploymentResolution{}, errors.New("deployment provider credential is unavailable")
 	}
-	results := r.fetchInvocationTargetCatalogs(ctx, instance, bindings, catalogAlwaysDial)
+	// Read once and used for both halves below: the offers this fetch may build
+	// and the resolution that judges them have to come from one catalog revision.
+	catalog := r.effectiveModelCatalog()
+	results := r.fetchInvocationTargetCatalogs(ctx, instance, bindings, catalogAlwaysDial, catalog)
 	for index, binding := range bindings {
 		result := results[index]
 		var bindingTarget domain.InvocationTargetDescriptor
@@ -927,7 +930,7 @@ func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.
 	if input.CapabilityModel != "" {
 		target.CanonicalModelRef = strings.TrimSpace(input.CapabilityModel)
 	}
-	current := resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.clockNow().UTC(), r.effectiveModelCatalog())
+	current := resolveInvocationTargetWithCatalog(instance, target, bindingTargets, bindings, mappers, credentialRevision, r.clockNow().UTC(), catalog)
 	var selected *domain.DeploymentVariant
 	for index := range current.Variants {
 		if current.Variants[index].BindingID == input.BindingID {

@@ -960,6 +960,8 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     targetKind: "调用目标类型", targetKindHint: "Bedrock 的调用目标可能是基础模型、Inference Profile 或预置吞吐资源。",   targetLocked: "调用目标创建后不可修改", targetLockedDescription: "如需更换服务商、能力接口、调用目标或区域，请使用“创建替代”，验证后再切换模型路由。",
     targetLabels: { model_id: "模型 ID", azure_deployment: "Azure Deployment 名称", bedrock_foundation_model: "Bedrock Model ID / ARN", bedrock_inference_profile: "Inference Profile ID / ARN", bedrock_provisioned_throughput: "Provisioned Throughput ARN", custom_endpoint_model: "模型 ID" },
     targetKinds: { model_id: "模型", azure_deployment: "Azure Deployment", bedrock_foundation_model: "Bedrock 基础模型", bedrock_inference_profile: "Bedrock 推理配置", bedrock_provisioned_throughput: "Bedrock 预置吞吐", custom_endpoint_model: "自定义端点模型" },
+    modelFromCatalog: "Halro 目录",
+    modelCatalogOfferHint: "此服务商接口不提供模型列表；下列模型来自 Halro 模型目录，不代表该账号已开通。也可以直接输入模型 ID。",
     targetHints: { model_id: "从列表选择，也可以输入模型 ID", azure_deployment: "输入 Azure Deployment 名称", bedrock_foundation_model: "输入模型 ID 或 ARN", bedrock_inference_profile: "输入 Inference Profile ID 或 ARN", bedrock_provisioned_throughput: "输入 Provisioned Throughput ARN", custom_endpoint_model: "从列表选择，也可以输入模型 ID" },
 
     emptyCapabilities: {
@@ -1169,7 +1171,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
   providers: {
     notifyCreated: "服务商已创建并热加载", notifyUpdated: "服务商已保存", notifyDeleted: "服务商已删除", notifyEnabled: "服务商已启用", notifyDisabled: "服务商已禁用",
     notifyCredentialSaved: "凭据已加密保存", notifyCredentialRotated: "凭据已轮换", notifyCredentialDeleted: "凭据已删除",
-    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini（测试版）", bedrock: "AWS Bedrock（测试版）", minimax: "MiniMax（测试版）", openai_compatible: "OpenAI 兼容服务" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", openai_compatible: "OpenAI 兼容服务" },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     connectionSection: "连接与能力", connectionSectionDescription: "服务商类型决定 API 家族、认证方式和推荐能力；你可以选择这个连接实际开放的能力。", capacitySection: "凭据与容量", capacitySectionDescription: "绑定加密凭据并限制服务商级并发。", enableDescription: "启用后，模型部署可以使用这个上游连接。", disabledImpact: "模型部署无法使用这个上游连接", capabilitySectionDescription: "选择此连接开放的适用能力；具体模型只能再从中选择子集。", fixedCapabilityDescription: "该能力实现使用固定协议，无需额外配置。", capabilitySummary: "已选能力", advancedCapabilities: "适用能力", advancedCapabilitiesHint: "服务商类型提供推荐预设；未实现或不适用的能力不可选择。", selectedCapabilities: "已启用 {{count}} 项",
     addCredential: "＋ 凭据", addProvider: "＋ 服务商",
