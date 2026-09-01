@@ -630,11 +630,19 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 		// what an operator can act on. Logging status without it says a request
 		// was refused without saying for what, and leaves them bisecting a body
 		// they did not write.
-		if classified.ProviderCode != "" {
-			attributes = append(attributes, "provider_code", classified.ProviderCode)
+		// Both are narrowed here as well as at the adapters that narrow them,
+		// which is not belt and braces: this is the line the invariant binds to.
+		// An adapter is where the value is understood, but the rule — no provider
+		// response bytes in a log, an error, a metric or an audit record — is
+		// about where it is written, and an adapter added later that forgets to
+		// narrow must not be able to widen this. Narrowing an already-narrowed
+		// identifier returns it unchanged, so the adapters that do it keep their
+		// meaning; one that does not loses a value that was never an identifier.
+		if code := provider.SafeProviderIdentifier(classified.ProviderCode); code != "" {
+			attributes = append(attributes, "provider_code", code)
 		}
-		if classified.ProviderRequestID != "" {
-			attributes = append(attributes, "provider_request_id", classified.ProviderRequestID)
+		if requestID := provider.SafeProviderIdentifier(classified.ProviderRequestID); requestID != "" {
+			attributes = append(attributes, "provider_request_id", requestID)
 		}
 		if classified.StatusCode == 0 {
 			attributes = append(attributes, "reason", providerFailureReason(classified))

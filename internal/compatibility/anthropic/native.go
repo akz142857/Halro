@@ -49,14 +49,8 @@ func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
 // wrong answer they have no way to detect, which is the trade this repository
 // resolves the same way everywhere else.
 func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
-	if err := validateNativePayload(kind, payload); err != nil {
-		return err
-	}
-	if kind != compatibility.NativeRequest {
-		return nil
-	}
-	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(payload))
-	if err != nil {
+	request, isRequest, err := decodeNativeRequestOnce(kind, payload)
+	if err != nil || !isRequest {
 		return err
 	}
 	if request.TopK != nil {
@@ -79,7 +73,11 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 	// because it is a directive this upstream never agreed to read — forwarding
 	// it would let a caller believe they had placed a cache breakpoint that
 	// nothing acts on.
-	if bytes.Contains(payload, []byte(`"cache_control"`)) {
+	marked, err := carriesJSONMember(payload, "cache_control")
+	if err != nil {
+		return err
+	}
+	if marked {
 		return errors.New("MiniMax does not document cache_control, so it is refused rather than forwarded and ignored")
 	}
 	return nil
@@ -107,14 +105,8 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 //     is automatic and it publishes no member for a caller to steer it, so the
 //     marker would claim a breakpoint nothing acts on.
 func validateKimiNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {
-	if err := validateNativePayload(kind, payload); err != nil {
-		return err
-	}
-	if kind != compatibility.NativeRequest {
-		return nil
-	}
-	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(payload))
-	if err != nil {
+	request, isRequest, err := decodeNativeRequestOnce(kind, payload)
+	if err != nil || !isRequest {
 		return err
 	}
 	if request.TopK != nil {
@@ -126,10 +118,68 @@ func validateKimiNativePayload(kind compatibility.NativePayloadKind, payload jso
 	if request.TopP != nil {
 		return errors.New("Kimi pins top_p at 0.95 and refuses any other value, so it is refused instead of forwarded")
 	}
-	if bytes.Contains(payload, []byte(`"cache_control"`)) {
+	marked, err := carriesJSONMember(payload, "cache_control")
+	if err != nil {
+		return err
+	}
+	if marked {
 		return errors.New("Kimi manages its prompt cache itself and publishes no member to steer it, so cache_control is refused rather than forwarded and ignored")
 	}
 	return nil
+}
+
+// carriesJSONMember reports whether any object anywhere in the payload has this
+// member, and it walks the decoded document rather than the bytes.
+//
+// Both validators above used bytes.Contains, which was wrong in both directions
+// and only one of them was acknowledged. It missed `"cache\u005fcontrol"`, which
+// Go's decoder and the upstream's both read as the same member — the same gap
+// rejectDuplicateMembers exists to close, that the document Halro inspects and
+// the document the provider receives must not differ. And it matched the literal
+// wherever it appeared, including inside a caller's own text, so a message that
+// merely discussed the member was refused.
+//
+// A member is a key. A value that spells one is not, which is the distinction a
+// byte scan cannot make and a walk makes for free.
+func carriesJSONMember(payload json.RawMessage, member string) (bool, error) {
+	var document any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return false, err
+	}
+	return walkForMember(document, member), nil
+}
+
+func walkForMember(node any, member string) bool {
+	switch value := node.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == member || walkForMember(child, member) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range value {
+			if walkForMember(child, member) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// decodeNativeRequestOnce runs the shared validation and hands back the decoded
+// request, so a provider validator that has its own rules does not decode the
+// payload a second time. isRequest is false for a response or an event, where
+// the shared validation is the whole answer and there is nothing to inspect.
+func decodeNativeRequestOnce(kind compatibility.NativePayloadKind, payload json.RawMessage) (anthropicapi.MessageRequest, bool, error) {
+	if kind != compatibility.NativeRequest {
+		return anthropicapi.MessageRequest{}, false, validateNativePayload(kind, payload)
+	}
+	request, err := anthropicapi.DecodeMessageRequest(bytes.NewReader(payload))
+	if err != nil {
+		return anthropicapi.MessageRequest{}, false, err
+	}
+	return request, true, nil
 }
 
 func validateNativePayload(kind compatibility.NativePayloadKind, payload json.RawMessage) error {

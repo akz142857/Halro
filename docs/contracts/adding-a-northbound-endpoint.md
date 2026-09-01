@@ -206,7 +206,11 @@ its protocol, so it inherits the stale-snapshot refusal, the limiter and the
 guard middleware. **Do not register it outside that group**: those middlewares
 are what turn an unauthenticated caller away before its body is read.
 
-**This step has no guard. See below.**
+Guarded by `TestEveryGatewayRouteIsADeclaredNorthboundMethod` and
+`TestEveryGatewayRouteSitsInsideItsGuardedGroup`, both in
+`internal/app/gateway_contract_test.go`. The second is what holds this
+paragraph's warning: it counts the middlewares on each northbound route, so a
+route registered beside a guarded group instead of inside one fails by name.
 
 ### 7. The handler
 
@@ -235,35 +239,64 @@ here, and adding it here does not make it served.
 
 ## Steps with no mechanical guard
 
-Three, named so they are not mistaken for covered.
+One left, and two that were written after this document named them. They are
+kept here rather than deleted because what a guard does *not* cover is the part
+worth reading.
 
-**The route table (step 6).** Nothing walks the gateway router against
-`BuiltinNorthboundProfile`'s method lists. A route can be served with no profile
-and no manifest — invisible to every compatibility guard, and to the published
-contract. A method can be declared with no route — the manifest promises an
-endpoint that 404s. `BuiltinNorthboundProfile` is read by
-`EndpointCompatibilityManifest.Validate` and by nothing else.
+**The wire type against the manifest (steps 2 and 4) — still uncovered.**
+`RequestFields` is hand-written. A member the decoder accepts but the manifest
+omits cannot be declared unsupported by any profile, so a real refusal is
+silently dropped by `Validate`'s "unknown request field" filter rather than
+reported. Found by accident during the Kimi work, on `reasoning`.
 
-This is the same shape as the seventh registration in
-`adding-a-platform.md`: a list that had to agree with another list, with nothing
-holding them together, found only when an operator hit it. The admin router has
-exactly this guard already — `chi.Walk` over `adminRouter()` in
-`internal/app/admin_contract_test.go` — and the gateway router does not.
-**Writing it is the highest-value thing anyone adding an endpoint could leave
-behind.**
+**The route table (step 6) — guarded.** `TestEveryGatewayRouteIsADeclaredNorthboundMethod`
+in `internal/app/gateway_contract_test.go` walks the gateway router against the
+northbound profiles in both directions: a route with no profile is a face the
+published contract does not describe, a declared method with no route is a
+manifest promising a 404. `TestEveryGatewayRouteSitsInsideItsGuardedGroup`
+covers step 6's warning as well, by counting middlewares — a northbound route
+registered on the bare router carries the two the router itself has, and one
+inside a guarded group carries five.
 
-**The wire type against the manifest (steps 2 and 4).** `RequestFields` is
-hand-written. A member the decoder accepts but the manifest omits cannot be
-declared unsupported by any profile, so a real refusal is silently dropped by
-`Validate`'s "unknown request field" filter rather than reported. Found by
-accident during the Kimi work, on `reasoning`.
+Writing it needed `compatibility.AllNorthboundProfiles`. The table had been a
+map built inside `BuiltinNorthboundProfile`, which is to say a list nothing could
+walk — the same shape the provider profile table was fixed out of.
 
-**Whether the renderer can carry what providers produce (step 3).** No test
-pairs "content kinds this endpoint cannot render" with "content kinds each
-upstream produces unasked". Both production incidents named at the top of this
-file are this gap. A guard would need each provider profile to state what it
-produces without being asked — which is a capability the model does not have
-yet, and which two separate pieces of work have now asked for.
+**Whether the renderer can carry what providers produce (step 3) — guarded at
+build time, with a named residue.**
+`TestNoEndpointIsServedByATargetThatReasonsUnasked` in
+`internal/app/northbound_reasoning_contract_test.go` pairs the two halves this
+document says nothing paired.
+
+The endpoint's half is derived by execution rather than declared: the real
+northbound renderer is handed a result carrying a reasoning part and one
+carrying only text, and the endpoint is intolerant when it refuses the first and
+accepts the second. The control matters — without it the guard reports the Chat
+face, the one face that does carry reasoning, as unable to.
+
+The provider's half is `modelcatalog.Entry.ReasonsUnasked`. It is deliberately
+**not** in `ProviderCapabilities`: every member of that struct answers "may this
+be turned on", is offered to an operator as a checkbox, and is bounded by a
+connection ceiling that has to contain it. "What arrives whether or not anyone
+asked" is none of those, and adding it there would invert the containment.
+
+Two limits, both deliberate:
+
+- It does not reach the router. Acting on it means threading the fact through
+  the deployment capability snapshot, which is durable state and a separate
+  piece of work. So this catches a new pairing at build time; it does not yet
+  route an existing one away.
+- The pairings that are already wrong are listed in the test as residue, with
+  the measurement for each, and the guard fails if that list grows *or* if an
+  entry in it stops being true. Today it is `kimi-k2.7-code` and
+  `kimi-k2.7-code-highspeed` on `/v1/responses` and `/v1/messages`: neither model
+  has an off switch (`invalid thinking: only type=enabled is allowed for this
+  model`), so each such call is billed upstream and answered 502.
+
+A withheld profile is skipped, which is what attaches a withholding to its
+reason. `kimi.responses.v1` is withheld because that face reasons on every model
+and its ladder has no off value; un-withholding it without finding an off switch
+fails this guard rather than reaching an operator.
 
 ## After the steps
 

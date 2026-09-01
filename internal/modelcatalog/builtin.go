@@ -519,21 +519,39 @@ func kimiModels() []Entry {
 	}
 	const k3Context, k3Output int64 = 1_048_576, 1_048_576
 	const k2Context int64 = 262_144
+	// The Responses face reasons on every model it serves and has no off value
+	// on its ladder, so every entry on it is marked. That is why the profile is
+	// withheld (see internal/domain/provider_table.go), and marking the entries
+	// is what keeps the two facts attached: offering the profile again without
+	// finding an off switch fails
+	// TestNoEndpointIsServedByATargetThatReasonsUnasked rather than reaching an
+	// operator.
+	reasonsUnasked := func(entry Entry) Entry {
+		entry.ReasonsUnasked = true
+		return entry
+	}
 	entries := []Entry{
 		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3", kimiChat(k3Context, k3Output)),
 		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k3", kimiAnthropic(k3Context, k3Output)),
-		builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output))),
 		// Measured answering on all three faces on 2026-09-01, which is what the
 		// published schemas say does not happen.
 		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k2.6", kimiChat(k2Context, 0)),
 		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k2.6", kimiAnthropic(k2Context, 0)),
-		builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k2.6", kimiResponses(k2Context, 0)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k2.6", kimiResponses(k2Context, 0))),
 	}
 	// Driven on Chat alone. Nothing establishes what the other two faces do with
 	// them, and an entry that guesses costs an operator a deployment that fails
 	// every call.
+	//
+	// Both reason unasked wherever they are served: `invalid thinking: only
+	// type=enabled is allowed for this model`, so the renderer sends no off
+	// switch because there is none to send. On the Chat northbound face the
+	// answer comes back as reasoning_content and is rendered; on the Responses
+	// and Messages faces it cannot be, and that pair is the residue the guard
+	// names.
 	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
-		entries = append(entries, builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0)))
+		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}
 	return entries
 }

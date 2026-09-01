@@ -1624,3 +1624,73 @@ profile，而保存时会被拒 —— 正是这个端点存在的目的所要�
 - 四处与代码矛盾的注释（`kimi.go` 两处、`builtin.go`、`provider_table.go`）以及
   manifest 里那句「unlike MiniMax there is no reasoning-counting difference」——
   最后这句会原样发布进 `docs/compatibility/endpoint-manifests.json`。
+
+## 15. 评审 P2：把三处「没有守卫」补上两处（2026-09-02）
+
+§14 处理的是缺陷本身。这一轮处理的是「为什么它三次都没被测试拦下」，对象是
+`docs/contracts/adding-a-northbound-endpoint.md` 自己点名的三处无守卫。该文档的
+「Steps with no mechanical guard」一节已按结果改写，这里只记与 Kimi 相关的部分。
+
+### 15.1 端点渲染不了什么 × 上游不问自答什么
+
+`TestNoEndpointIsServedByATargetThatReasonsUnasked`（`internal/app/`）。这是
+DeepSeek 2026-08-18、Kimi §12、以及 §14 三次事故的共同形状，此前没有任何测试把两半
+配起来。
+
+- **端点这一半由执行得出**，不是手写清单：把一个带 reasoning part 的结果交给端点真正
+  的渲染器，再交一个只带 text 的作对照。第一版没有对照组，于是把唯一能渲染 reasoning
+  的 Chat 面也报成不能——那不是端点的答案，是我的 fixture 无效。
+- **上游这一半是 `modelcatalog.Entry.ReasonsUnasked`**，**刻意不放进
+  `ProviderCapabilities`**：那个结构里每个成员回答的都是「这项能不能开」，对运营者是
+  复选框，还要被连接 ceiling 包含。「不管谁问都会来」不属于这三者中的任何一个，放进去
+  会把包含关系反过来，并多出一个语义与其余全部相反的复选框。它是 per (profile, model)
+  的，因为这条事实同时依赖两者：Kimi 的 Responses 面对所有模型都成立，Chat 面只对
+  k2.7-code 那条线成立。
+
+两条明确的限制：它**还没有进路由**（要进路由得把这条事实穿过 deployment 能力快照，那是
+durable state，另立一件事）；已经错了的配对以 residue 列在测试里、附各自的实测依据，
+守卫在这个清单**变长**或其中一条**不再成立**时都会失败。今天的 residue 是
+`kimi-k2.7-code` 与 `kimi-k2.7-code-highspeed` 在 `/v1/responses` 与 `/v1/messages`
+上——两者都没有关闭开关，每次调用都是上游计费 + 502。
+
+**withheld 的 profile 被跳过**，这正是把「收起」和「收起的原因」绑在一起的那根线：
+不找到关闭开关就把 `kimi.responses.v1` 放出来，会在这个守卫上失败，而不是走到运营者
+面前。反向验证确认了这一点（第一次没确认改动是否真的落到文件上，测试因此假绿——正是
+CLAUDE.md 警告的那种失效搜索串）。
+
+### 15.2 网关路由表
+
+`TestEveryGatewayRouteIsADeclaredNorthboundMethod` 与
+`TestEveryGatewayRouteSitsInsideItsGuardedGroup`。admin 路由早就有这个守卫，网关路由
+没有。第二个测试用中间件计数守住 step 6 那句警告：注册在裸 router 上的北向路由只带 2 层
+中间件，注册在守卫组内的带 5 层。
+
+写它需要 `compatibility.AllNorthboundProfiles` —— 那张表此前是
+`BuiltinNorthboundProfile` 函数体里的私有 map，也就是一份没人能走的清单，正是 provider
+profile 表当初被修掉的同一个形状。
+
+### 15.3 native 校验器
+
+`cache_control` 原本是对原始字节做 `bytes.Contains`。`"cache_control"` 能绕过它
+——Go 的解码器和 Kimi 的解码器都把它读成同一个成员，而字节扫描两个都看不见，于是标记
+会随一个 Halro 声明为「干净」的请求发到上游。这与 `rejectDuplicateMembers` 存在的理由
+是同一条：Halro 检查的文档和 provider 收到的文档不能不同。改为遍历解码后的文档找
+**键**；值里出现同名字符串不算成员。MiniMax 的校验器共用同一个实现。
+
+Kimi 的 native 校验器此前零测试（MiniMax 有 4 个），现在补了，包括一条专门守住
+「registry 的 switch 里 case 写错、Kimi 拿到别人的校验器」——三个 profile 的区别在于
+各自**拒绝什么**，所以断言的就是那个。顺带把重复解码去掉：provider 校验器不再把 payload
+解第二遍。
+
+### 15.4 `ProviderCode` 收敛
+
+`internal/provider/anthropic/adapter.go` 是五个适配器里唯一把上游选定的标识符原样带进
+`provider.Error.ProviderCode` 的，而 `logProviderFailure` 会把它写成结构化日志属性。它
+恰好又是服务 Kimi 那条「400 用 Anthropic 信封、401/429 用 OpenAI 信封」路由的适配器。
+两处都改了：适配器源头（与另外四个一致），以及日志写入点（不变量真正绑定的地方，一次
+覆盖所有适配器，包括以后新增的）。收敛发生在判定 refusal **之前**——一个 type 是长篇
+散文的 400 不是上游在指认拒绝原因。
+
+`kimi_error_tolerance_test.go` 原来的泄漏断言是空转的：`provider.Error.Error()` 只返回
+`Message`，看不到 `ProviderCode`，而两条带 `leaked` 的用例解出的 `ProviderCode` 恰好都
+是空。现在按字段名断言。

@@ -37,7 +37,15 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 		wantRetryable bool
 		wantAmbiguous bool
 		wantMessage   string
-		// leaked is a fragment of the body that must not appear in the error.
+		// wantCode is the narrowed provider identifier. Empty means the upstream
+		// sent nothing an identifier could be read from — including sending
+		// something that is not one.
+		wantCode string
+		// wantNoRefusal pins that a refusal verdict was not manufactured from a
+		// value the error refused to carry.
+		wantNoRefusal bool
+		// leaked is a fragment of the body that must not appear in the error, in
+		// its identifier fields, or in anything else that reaches a log.
 		leaked string
 	}{
 		{
@@ -58,6 +66,22 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 			leaked:      "abc",
 		},
 		{
+			// An upstream answering with something that is not an identifier in
+			// the field an identifier is read from. Anthropic's schema says this
+			// is a short type name; nothing makes an upstream honour it, and this
+			// adapter now serves three profiles whose upstreams demonstrably do
+			// not follow the schema. The verdict must not be manufactured from it
+			// either: a 400 whose type is prose is not the upstream naming a
+			// refusal.
+			name:   "a 400 whose error type is a wall of prose",
+			status: http.StatusBadRequest,
+			body: `{"type":"error","error":{"type":"the request you sent was not acceptable to this service for reasons we will now explain at length",` +
+				`"message":"bad request"}}`,
+			wantClass: provider.ErrorBadRequest, wantMessage: "bad request",
+			wantCode: "", wantNoRefusal: true,
+			leaked: "at length",
+		},
+		{
 			name:   "an empty body",
 			status: http.StatusTooManyRequests, body: "",
 			wantClass: provider.ErrorRateLimit, wantRetryable: true,
@@ -72,6 +96,7 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 			body:      `{"error":{"message":"Organization Rate limit exceeded, please try again after 1 seconds","type":"rate_limit_reached_error"}}`,
 			wantClass: provider.ErrorRateLimit, wantRetryable: true,
 			wantMessage: "Organization Rate limit exceeded, please try again after 1 seconds",
+			wantCode:    "rate_limit_reached_error",
 		},
 		{
 			// Measured on Kimi's Anthropic route: the OpenAI envelope on a 401.
@@ -82,6 +107,7 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 			body:        `{"error":{"message":"Incorrect API key provided","type":"incorrect_api_key_error"}}`,
 			wantClass:   provider.ErrorAuthentication,
 			wantMessage: "Incorrect API key provided",
+			wantCode:    "incorrect_api_key_error",
 		},
 		{
 			// Measured on the same route: Anthropic's own envelope on a 400.
@@ -90,6 +116,7 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 			body:        `{"type":"error","error":{"type":"invalid_request_error","message":"tool_choice 'specified' is incompatible with thinking enabled"},"request_id":"3f84e9cd"}`,
 			wantClass:   provider.ErrorBadRequest,
 			wantMessage: "tool_choice 'specified' is incompatible with thinking enabled",
+			wantCode:    "invalid_request_error",
 		},
 	} {
 		response := &http.Response{
@@ -117,8 +144,28 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 		if providerErr.StatusCode != test.status {
 			t.Errorf("%s: status %d, want %d", test.name, providerErr.StatusCode, test.status)
 		}
+		if providerErr.ProviderCode != test.wantCode {
+			t.Errorf("%s: provider_code %q, want %q", test.name, providerErr.ProviderCode, test.wantCode)
+		}
+		if test.wantNoRefusal && providerErr.Refusal != "" {
+			t.Errorf("%s: a refusal verdict was taken from a value that is not an identifier: %q", test.name, providerErr.Refusal)
+		}
 		if test.leaked != "" && strings.Contains(err.Error(), test.leaked) {
 			t.Errorf("%s: the error carries provider response bytes: %q", test.name, err.Error())
+		}
+		// err.Error() returns Message and nothing else, so the check above cannot
+		// see the two fields that actually reach a log line. Asserting them by
+		// name is the difference between this test proving the invariant and
+		// merely appearing to: both cases carrying a `leaked` fragment decode to
+		// an empty ProviderCode, so the assertion above would pass unchanged if
+		// the whole HTML page were carried in it.
+		if test.leaked != "" {
+			if strings.Contains(providerErr.ProviderCode, test.leaked) {
+				t.Errorf("%s: provider_code carries provider response bytes: %q", test.name, providerErr.ProviderCode)
+			}
+			if strings.Contains(providerErr.ProviderRequestID, test.leaked) {
+				t.Errorf("%s: provider_request_id carries provider response bytes: %q", test.name, providerErr.ProviderRequestID)
+			}
 		}
 	}
 }
