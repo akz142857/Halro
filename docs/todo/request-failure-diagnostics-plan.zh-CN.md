@@ -51,6 +51,7 @@
 | 日志配置 | `internal/config/config.go` 的 `Logging` 支持 level / format / output / file / max size / max files | 文件、JSON、轮转已经具备，不需重写 |
 | 日志输出 | `internal/logging/logger.go` 通过一个 LevelVar 和同一 Handler 写 stderr / file | 当前不能让普通日志和错误专用文件使用不同级别 |
 | 脱敏 | `internal/safelog` 在 Handler 前统一处理消息和属性 | 所有新增日志必须继续经过这一层 |
+| 写入成本 | 实测（Apple M4）：16 字段 ERROR 经 safelog + JSON 写单个轮转文件约 7µs / 6 次分配，分流到第二个文件约 8.4µs；低于门槛的记录约 4ns、零分配 | 按失败计数可忽略；但 `Sink.Write` 持进程级锁且每条一次 `write(2)`，故不得放到成功路径（D2） |
 | Provider 失败 | `internal/gateway/service.go:logProviderFailure` 记录 request / deployment / provider / binding / class / status / code | 信息基本够用，但事件级别是 `WARN` |
 | Provider 原文 | 上述路径刻意不记录上游响应正文 | 正确的安全边界，方案不得推翻 |
 | 尝试历史 | `internal/usage/aggregate.go:AttemptEvent` 已有 `ErrorClass`、`HTTPStatus`、重试和回退计数 | 第一阶段可以无迁移直接展示 |
@@ -186,6 +187,17 @@ ERROR。
 
 代价是错误文件条数与控制台最终失败数不再相等。这个代价是接受的：一个只收系统异常的错误文件是有价值
 的，一个和 Usage 报表数字对得上但被 429 淹没的错误文件没有。差值必须被文档解释，不能被当作缺陷修掉。
+
+**这条界线也有成本上的理由，不只是语义上的。** 在 Apple M4 上实测本方案 7.1 节那条 16 字段记录，
+经 `safelog` 脱敏后写入一个轮转文件约 7µs、6 次分配；再分流到第二个错误文件约 8.4µs。对一个已经花掉
+一次上游往返（LLM 常见 100ms 起）的失败请求，这是 0.01% 量级，完全不必权衡 —— 前提是它**按失败计数**。
+按非 success 计数就不同了：限流和熔断的产出速率与客户端重试速率同阶，那时付出这份成本的不再是每秒
+几条失败，而是每秒上万条拒绝。
+
+同一组实测还给出一条更硬的约束：`logging.Sink.Write` 持进程级互斥锁，且每条记录一次 `write(2)`，没有
+缓冲。低于门槛的记录几乎免费（约 4ns、零分配，因为 `safelog` 的 `Enabled` 直接委托下游、在 `Handle`
+之前短路），但**写出来的每一条都会串行化**。这就是本方案不在成功路径上放任何日志的理由：不是记录本身
+贵，而是它贵在一个所有请求共享的锁上。
 
 ### D3 · 是否记录 Provider 原始错误正文
 
