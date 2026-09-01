@@ -789,3 +789,59 @@ func TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges(t *testing.T) {
 		t.Fatalf("captured MFA challenge survived restore: %v", err)
 	}
 }
+
+// TestBackupSucceedsWhenTheStoredUsageCheckpointPredatesThisBuild pins the
+// upgrade path a released instance actually walks.
+//
+// The Usage checkpoint payload carries its own structure version, and v0.5.0
+// moved it 7 -> 8. So the first `backup create` an operator runs after swapping
+// the binary meets a checkpoint envelope that is perfectly valid and a payload
+// this build cannot read. Refusing there left the directory with no binary that
+// could archive it: Open has already migrated the metadata schema past what the
+// previous release will open.
+//
+// A payload no reader understands means the archive cannot name a checkpoint
+// position, which is what a zero watermark says. It does not mean the data
+// directory is unfit to copy.
+func TestBackupSucceedsWhenTheStoredUsageCheckpointPredatesThisBuild(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Stale checkpoint", BillingMode: domain.BillingModeFree,
+	}, []byte("provider-secret")); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Shaped like the previous release wrote it: a valid envelope around a
+	// payload whose version this build refuses.
+	stale := []byte(`{"version":7,"watermark":{"generation":1,"sequence":1,"offset":1}}`)
+	putErr := store.PutUsageCheckpoint(
+		ledger.Watermark{Generation: 1, Sequence: 1, Offset: 1}, stale, domain.RollupVersion, nil)
+	if err := errors.Join(putErr, store.Close()); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "stale-checkpoint.hmbk")
+	key := bytes.Repeat([]byte{0x3c}, 32)
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, output, key)
+	if err != nil {
+		t.Fatalf("backup refused a data directory carrying a previous release's usage checkpoint: %v", err)
+	}
+	if manifest.CheckpointWatermark != (ledger.Watermark{}) {
+		t.Fatalf("unreadable checkpoint was recorded as a position: %#v", manifest.CheckpointWatermark)
+	}
+	if _, err := VerifyBackup(output, key); err != nil {
+		t.Fatal(err)
+	}
+}

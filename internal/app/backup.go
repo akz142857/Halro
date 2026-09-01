@@ -591,6 +591,25 @@ func createBackupSnapshotWithLedger(
 	if err := metadata.ValidateDeploymentPriceReferences(ledgerState); err != nil {
 		return backup.Manifest{}, fmt.Errorf("validate pricing references before backup: %w", err)
 	}
+	// A stored checkpoint this build cannot read is a position the archive
+	// cannot name, not a reason to refuse the archive. The Usage checkpoint is
+	// a rebuildable derivative of the Ledger, and startup already answers this
+	// exact question that way: restoreUsageAggregate clears both derivatives
+	// and replays the WAL, whatever the reason. Answering it differently here
+	// gave one data directory two verdicts.
+	//
+	// It also made the previous release's own data directory unbackupable at
+	// the moment a backup matters most. The checkpoint payload version moved
+	// 7 -> 8 in v0.5.0, so a v0.4.0 directory reaches this branch on the first
+	// `backup create` after the upgrade — and by then Open has already migrated
+	// the metadata schema past what the v0.4.0 binary will open, so neither
+	// binary could produce a backup. Recording no checkpoint position costs
+	// nothing: metadata.db is archived byte for byte, so a restored copy rebuilds
+	// exactly as the source directory would on its next start.
+	//
+	// A store-level failure stays fatal. That is a broken database rather than
+	// an unreadable derivative, and it is not a state a previous release
+	// legitimately produces.
 	checkpoint, checkpointPayload, err := metadata.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		checkpoint = ledger.Watermark{}
@@ -599,7 +618,7 @@ func createBackupSnapshotWithLedger(
 	} else {
 		checkpointAggregate, restoreErr := usage.RestoreCheckpoint(checkpointPayload)
 		if restoreErr != nil || checkpointAggregate.Snapshot().Watermark != checkpoint {
-			return backup.Manifest{}, errors.New("usage checkpoint payload does not match its watermark")
+			checkpoint = ledger.Watermark{}
 		}
 	}
 	if checkpoint.Sequence > ledgerWatermark.Sequence ||
