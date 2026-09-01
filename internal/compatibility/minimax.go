@@ -40,8 +40,10 @@ import (
 // The Responses face needs none either: MiniMax accepts reasoning.effort under
 // its OpenAI name.
 //
-// Everything here is read from published documentation and has not been
-// confirmed against a live account. See docs/prd/minimax-adaptation-plan.zh-CN.md.
+// Most of this is read from published documentation. What was measured against a
+// live account on 2026-08-31 is marked where it applies — json_object on this
+// face is the one member that moved on evidence rather than on documentation.
+// See docs/prd/minimax-adaptation-plan.zh-CN.md.
 
 // MiniMaxThinkingOn is MiniMax's single "think" state. The switch has two
 // values and no depth ladder, so every portable effort that is not "none"
@@ -55,6 +57,16 @@ const MiniMaxThinkingOff = "disabled"
 
 // minimaxThinkingOffEffort is the portable name for the same request.
 const minimaxThinkingOffEffort = "none"
+
+// minimaxThinkingIsOn reports whether an effort reaches MiniMax's thinking
+// switch. The renderer and the profile's field rules both have to agree about
+// it: the rules decide whether a request may reach this profile at all, and the
+// renderer decides what goes on the wire once it has. Written twice they would
+// eventually disagree, and the disagreement's shape is a request the router
+// admits and the renderer then refuses — after the budget is reserved.
+func minimaxThinkingIsOn(effort string) bool {
+	return effort != "" && effort != minimaxThinkingOffEffort
+}
 
 // MiniMaxThinking is MiniMax's reasoning switch.
 //
@@ -148,7 +160,7 @@ func RenderMiniMaxChatRequest(request openaiapi.ChatCompletionRequest) (MiniMaxC
 	if request.ParallelToolCalls != nil && !*request.ParallelToolCalls {
 		return MiniMaxChatRequest{}, errors.New("MiniMax Chat Completions cannot disable parallel tool calls")
 	}
-	thinkingOn := request.ReasoningEffort != "" && request.ReasoningEffort != minimaxThinkingOffEffort
+	thinkingOn := minimaxThinkingIsOn(request.ReasoningEffort)
 	// MiniMax has one output bound and it counts reasoning. max_completion_tokens
 	// means the same thing and is carried as itself; max_tokens bounds the answer
 	// alone, so it is the same quantity only while nothing is thinking. Renaming

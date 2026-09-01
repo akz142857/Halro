@@ -375,10 +375,11 @@ var (
 		Reasoning: true, StreamUsage: true,
 	}
 
-	// The MiniMax sets keep ceiling == defaults: every capability here is read
-	// from published documentation and none of it has been confirmed against a
-	// real account, so there is no opt-in an operator could reach for that Halro
-	// would be able to stand behind.
+	// The MiniMax sets keep ceiling == defaults: there is no opt-in an operator
+	// could reach for that Halro would be able to stand behind. Most of what is
+	// here is read from published documentation; one capability — json_object on
+	// the Chat face — was measured against a real account on 2026-08-31 and moved
+	// on that evidence, which is what the note above minimaxChatSet records.
 	//
 	// Absent on purpose, and each absence is a claim about the upstream rather
 	// than an oversight:
@@ -387,10 +388,14 @@ var (
 	//     `texts` and `type` in, a top-level `vectors` array out, errors in
 	//     `base_resp`. Declaring it would bind the OpenAI embedding primitive to
 	//     a body that cannot parse it.
-	//   - JSONObject and StructuredOutputs. No MiniMax document lists
-	//     response_format on any of the three faces. That is documentation being
-	//     silent rather than documentation refusing, so it is treated as absent
-	//     until a real request proves otherwise.
+	//   - StructuredOutputs, and JSONObject on two of the three faces. No MiniMax
+	//     document lists response_format anywhere, which is documentation being
+	//     silent rather than documentation refusing, so it stays absent until a
+	//     real request proves otherwise. One did, for one half on one face: the
+	//     Chat face was measured serving json_object and now declares it. The
+	//     schema mode was never sent, and the other two faces are different
+	//     endpoints — the same silence that turned out to be wrong about one half
+	//     is no evidence about the rest.
 	//   - DeveloperRole. The OpenAI developer role appears nowhere in MiniMax's
 	//     request schemas.
 	//   - ProviderExecutedTools. MiniMax offers a server-side web search. Turning

@@ -81,8 +81,8 @@ profiles allowed to differ and what each gap is allowed to contain.
 
 ### 3. Operation → primitive bindings
 
-`internal/provider/profile.go` — which operations the profile serves and the
-southbound primitive each one maps to.
+`internal/provider/profile_bindings.go` — which operations the profile serves
+and the southbound primitive each one maps to.
 
 Guarded by `TestCeilingWithinProfileManifestOperations`, which walks the domain
 table and refuses a profile whose ceiling claims an operation no primitive is
@@ -123,8 +123,8 @@ naming a field the endpoint does not model, and a manifest that omits any profil
 
 ### 6. Adapter construction
 
-`internal/app/providers.go` — building the adapter, its authorizer and its
-endpoint from a stored connection.
+`internal/app/provider_adapters.go` — building the adapter, its authorizer and
+its endpoint from a stored connection.
 
 Guarded by `TestEveryReachableProfileBuildsAnAdapter`, which walks every
 non-withheld profile in the domain table and builds one against a fake secret
@@ -184,7 +184,7 @@ returns, so asking pays for an answer that cannot be read. Guarded by
 
 ### Steps with no mechanical guard
 
-Two, named here so they are not mistaken for covered.
+Three, named here so they are not mistaken for covered.
 
 **A generation primitive left out of `semanticGenerationPrimitives`**
 (`internal/provider/primitive.go`). Nothing fails. `Resolve` falls back to the
@@ -205,11 +205,30 @@ primitive constant bound — swapping two profiles' primitives, say.
 built from, which is a tautology; it stays meaningful only for a manifest a
 caller supplies. This is not a protection the merge removed: the two tables it
 replaced could only detect each other *disagreeing*, and a binding written
-wrongly in both passed then too. What does catch it is
-`TestEveryPrimitiveConstantIsBoundBySomeProfile`, where the mistake orphans a
-constant, and a platform's own wiring test, where it asserts the route the
-profile addresses. Write one for a new platform; MiniMax's is
-`TestMiniMaxWiringAddressesOneRoutePerProfile`.
+wrongly in both passed then too.
+
+**Nothing catches it.** This entry used to name two guards, and the v0.5.0 review
+measured both by making the mistake on purpose and running the tree:
+
+- Swapping the chat and stream primitives of `ProfileOpenAIChatEmbeddings` and
+  `ProfileDeepSeekChat` — every constant still bound — leaves the whole of
+  `internal/` green.
+- `TestEveryPrimitiveConstantIsBoundBySomeProfile` only notices a mistake that
+  *orphans* a constant, which a swap does not.
+- A platform's own wiring test does not read this table at all.
+  `TestMiniMaxWiringAddressesOneRoutePerProfile` builds the adapter through
+  `adapterBuilders` and asserts the route it addresses; swapping the MiniMax Chat
+  and Responses primitives leaves it passing. The route is a property of the
+  adapter builder, not of this table, so no route assertion can validate a
+  binding.
+
+Write the wiring test anyway — it is what catches step 6 — but do not count it
+here. What a guard would have to assert is the link nothing currently expresses:
+that the primitive named for `(profile, operation)` is the one the adapter for
+that profile actually executes for that operation. Until something asserts it, a
+binding written wrongly is caught by review or not at all, and the cost is a
+wrong primitive on the attempt records and in `filterPrimitiveTargets` — an
+error that never turns a test red.
 
 ## After the steps
 

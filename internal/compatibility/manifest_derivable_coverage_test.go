@@ -8,7 +8,7 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
-// The published coverage is 65 hand-written rows, and nothing held them to the
+// The published coverage is 77 hand-written rows, and nothing held them to the
 // code that does the refusing. A field rule added without its manifest entry
 // left a profile refusing a member the contract said it carried — which is what
 // this test found on the two Mantle Responses profiles, for messages[].name and
@@ -51,9 +51,8 @@ func TestTheManifestDeclaresEverythingTheRulesRefuse(t *testing.T) {
 			// Exact, not one-directional. It used to check only that everything
 			// refused was declared, which left the other side unverified: a
 			// declaration no rule produces was simply believed. That is how
-			// fourteen rows came to repeat one endpoint-level fact and one of
-			// them came to state it incompletely — nothing could see the
-			// difference.
+			// thirteen rows came to repeat one endpoint-level fact with nothing
+			// able to see that they were one fact.
 			expected := make(map[string]struct{}, len(refused))
 			for name := range refused {
 				expected[name] = struct{}{}
@@ -201,6 +200,24 @@ func coverageProbes() []semantic.GenerateRequest {
 			r.ReasoningEffort = "high"
 		}))
 	}
+	// The other output bound, on its own axis. Only DeepSeek's member was probed
+	// before, and DeepSeek is the profile whose single bound is that one — so
+	// the axis MiniMax refuses was never driven, and a rule missing on it was
+	// invisible in both directions at once: nothing refused the field, and
+	// nothing declared it.
+	for _, effort := range []string{"", "high"} {
+		level := effort
+		probes = append(probes, with(func(r *semantic.GenerateRequest) {
+			visible := int64(1)
+			r.VisibleOutputTokenLimit = &visible
+			r.ReasoningEffort = level
+		}))
+	}
+	probes = append(probes, with(func(r *semantic.GenerateRequest) {
+		visible, completion := int64(1), int64(2)
+		r.VisibleOutputTokenLimit = &visible
+		r.CompletionTokenLimit = &completion
+	}))
 	return probes
 }
 
