@@ -242,6 +242,22 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema, "response_format")
 		add(request.EndUserRef != "", "user")
 		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		// MiniMax has one output bound and it counts reasoning, so max_tokens —
+		// which bounds the answer alone — is the same quantity only while nothing
+		// is thinking. The renderer refuses the other two shapes; without this
+		// rule the router admitted them and the refusal landed after the budget
+		// was reserved, on a request that could not fall back because a bad
+		// request is not retryable.
+		//
+		// The portable Messages path makes this the common case rather than an
+		// edge: Anthropic Messages requires max_tokens, so the mapper always
+		// produces this limit, and every effort-bearing request routed here was
+		// refused. DeepSeek carries the mirror image of this rule, over the other
+		// member, because its single bound is the other one.
+		add(request.VisibleOutputTokenLimit != nil &&
+			(minimaxThinkingIsOn(request.ReasoningEffort) || request.CompletionTokenLimit != nil),
+			"max_tokens")
+
 	}, domain.ProfileMiniMaxChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.

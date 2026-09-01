@@ -272,14 +272,15 @@
           "stop",
           "response_format",
           "parallel_tool_calls",
-          "user"
+          "user",
+          "max_tokens"
         ],
         "declared_transforms": [
           "MiniMax speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored — this upstream documents its unsupported parameters as ignored, not refused",
           "reasoning_effort is carried as MiniMax's thinking member: none reaches thinking.type=disabled and every other rung reaches thinking.type=adaptive, because MiniMax's switch has one on state and no depth ladder, so depth is not preserved",
           "a request that asks for no reasoning is sent with thinking explicitly disabled rather than left to MiniMax's own default, which is on",
           "reasoning_split is sent alongside an enabled switch so reasoning returns in its own member instead of inline in the answer",
-          "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning",
+          "max_completion_tokens is carried as itself and max_tokens is carried into it only while thinking is off, because MiniMax's single output bound counts reasoning; max_tokens is value-dependent for that reason — a request that also thinks, or that carries both members, is routed away by field before provider I/O rather than refused after the budget is reserved",
           "n and parallel_tool_calls are value-dependent: n=1 and parallel_tool_calls=true are what omitting the member already means",
           "response_format is value-dependent: json_object was measured against a real account on 2026-08-31 and is carried, text is dropped because it means what omitting the member already means, and the schema mode has never been sent and is rejected before provider I/O"
         ]
@@ -1065,6 +1066,7 @@
         "profile_id": "minimax.chat.v1",
         "status": "compatible",
         "unsupported_request_fields": [
+          "max_tokens",
           "metadata",
           "output_config.format",
           "service_tier",
@@ -1074,7 +1076,8 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through MiniMax Chat Completions",
-          "output_config.effort reaches MiniMax's thinking switch, which has one on state and no depth ladder, so a depth is honoured as on rather than preserved"
+          "output_config.effort reaches MiniMax's thinking switch, which has one on state and no depth ladder, so a depth is honoured as on rather than preserved — but only on a request that does not also bound the answer, and this endpoint requires max_tokens, so an effort-bearing Messages request is routed away from this profile by field rather than translated",
+          "max_tokens is why: MiniMax has one output bound and it counts reasoning, so the answer-only bound this endpoint requires is the same quantity only while nothing is thinking"
         ]
       },
       {
