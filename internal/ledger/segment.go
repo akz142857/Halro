@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // Sealing: how a write-ahead log that is the accounting authority stops growing
@@ -158,22 +160,7 @@ func saveSegmentManifest(directory string, manifest segmentManifest) error {
 		os.Remove(temporary)
 		return fmt.Errorf("commit ledger segment manifest: %w", err)
 	}
-	return syncDirectory(directory)
-}
-
-// syncDirectory makes a rename durable. Without it the file contents survive a
-// power loss but the name they were promoted to may not, which is the one
-// failure that would leave a rolled generation nameless.
-func syncDirectory(directory string) error {
-	handle, err := os.Open(directory)
-	if err != nil {
-		return fmt.Errorf("open ledger directory: %w", err)
-	}
-	defer handle.Close()
-	if err := handle.Sync(); err != nil {
-		return fmt.Errorf("sync ledger directory: %w", err)
-	}
-	return nil
+	return durable.SyncDirectory(directory)
 }
 
 // digestFilePrefix hashes the first length bytes of a file and returns the
@@ -367,7 +354,7 @@ func compressSegmentFile(source, destination string, expectedChecksum string, ex
 		os.Remove(temporary)
 		return "", 0, err
 	}
-	if err := syncDirectory(filepath.Dir(destination)); err != nil {
+	if err := durable.SyncDirectory(filepath.Dir(destination)); err != nil {
 		return "", 0, err
 	}
 	checksum, storedLength, err := hashFile(destination)

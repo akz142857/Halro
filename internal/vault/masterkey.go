@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 const MasterKeySize = 32
@@ -61,7 +63,7 @@ func InitMasterKey(path string) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close master key: %w", err)
 	}
-	if err := syncDirectory(filepath.Dir(path)); err != nil {
+	if err := durable.SyncDirectory(filepath.Dir(path)); err != nil {
 		return err
 	}
 	ok = true
@@ -143,21 +145,9 @@ func ReplaceMasterKey(path string, key []byte) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return fmt.Errorf("publish replacement master key: %w", err)
 	}
-	if err := syncDirectory(directory); err != nil {
+	if err := durable.SyncDirectory(directory); err != nil {
 		return err
 	}
 	published = true
-	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open directory for sync: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync directory: %w", err)
-	}
 	return nil
 }
