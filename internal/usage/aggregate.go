@@ -21,7 +21,12 @@ import (
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
 
-// Version 10 carries the upstream's own identifiers for a failed attempt — the
+// Version 11 records the console window's floor: the lowest ledger sequence the
+// aggregate still holds after being pruned. Without it a restart would restore
+// a windowed aggregate that claims to hold everything, and reconciliation would
+// refuse — every archived-and-trimmed record read as missing.
+//
+// Version 10 carried the upstream's own identifiers for a failed attempt — the
 // provider code, the provider request ID, and the phase the failure happened in
 // — so a support ticket raised days after the fact can still name the request
 // the upstream saw. Version 9 stamped each request summary with the ledger
@@ -35,7 +40,7 @@ const maxTrackedEventIDs = 4096
 // the dedup window; version 6 dropped the duplicate cost columns. A checkpoint
 // written before this is refused rather than migrated: it is a derivative, and
 // rebuilding it from the Ledger is cheap.
-const checkpointVersion = 10
+const checkpointVersion = 11
 
 const latencyBucketCount = 12
 
@@ -153,10 +158,13 @@ type Bucket struct {
 
 type Snapshot struct {
 	Watermark ledger.Watermark `json:"watermark"`
-	Totals    Bucket           `json:"totals"`
-	Hourly    []Bucket         `json:"hourly"`
-	Attempts  []AttemptEvent   `json:"attempts"`
-	Requests  []RequestSummary `json:"requests"`
+	// Floor is the console window's lower edge: below it this aggregate no
+	// longer holds anything, so reconciliation has nothing to compare there.
+	Floor    uint64           `json:"floor,omitempty"`
+	Totals   Bucket           `json:"totals"`
+	Hourly   []Bucket         `json:"hourly"`
+	Attempts []AttemptEvent   `json:"attempts"`
+	Requests []RequestSummary `json:"requests"`
 }
 
 type Metrics struct {
@@ -181,8 +189,12 @@ type requestAccumulator struct {
 }
 
 type checkpoint struct {
-	Version   int                       `json:"version"`
-	Watermark ledger.Watermark          `json:"watermark"`
+	Version   int              `json:"version"`
+	Watermark ledger.Watermark `json:"watermark"`
+	// Floor is the console window's lower edge — see PruneBefore. Absent on a
+	// checkpoint that was never pruned, which reads correctly as "holds
+	// everything".
+	Floor     uint64                    `json:"floor,omitempty"`
 	Started   map[string]time.Time      `json:"started"`
 	Active    map[string]RequestSummary `json:"active_requests"`
 	Attempts  []AttemptEvent            `json:"attempts"`
@@ -215,8 +227,16 @@ type Aggregate struct {
 	rollupDelta  map[domain.RollupKey]*domain.DailyRollup
 	attemptIndex map[string]int
 	summaryIndex map[string]int
-	totals       Bucket
-	metrics      Metrics
+	// floor is the lowest ledger sequence still held. Zero means nothing has
+	// been pruned and the aggregate claims everything.
+	floor uint64
+	// trimmed counts what this process has removed. Process-local on purpose:
+	// it is a rate signal for "is the window working", not an accounting
+	// figure, and a counter that survived restarts would need a home in the
+	// checkpoint for no benefit.
+	trimmed uint64
+	totals  Bucket
+	metrics Metrics
 }
 
 func NewAggregate() *Aggregate {
@@ -247,6 +267,7 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	}
 	aggregate := NewAggregate()
 	aggregate.watermark = saved.Watermark
+	aggregate.floor = saved.Floor
 	aggregate.started = cloneStarted(saved.Started)
 	aggregate.attempts = append([]AttemptEvent(nil), saved.Attempts...)
 	aggregate.summaries = append([]RequestSummary(nil), saved.Summaries...)
@@ -283,7 +304,7 @@ func (a *Aggregate) TakeCheckpoint() (CheckpointSnapshot, error) {
 		active[requestID] = accumulator.summary
 	}
 	saved := checkpoint{
-		Version: checkpointVersion, Watermark: a.watermark,
+		Version: checkpointVersion, Watermark: a.watermark, Floor: a.floor,
 		Started: cloneStarted(a.started), Active: active,
 		Attempts:  append([]AttemptEvent(nil), a.attempts...),
 		Summaries: append([]RequestSummary(nil), a.summaries...),
@@ -594,7 +615,7 @@ func (a *Aggregate) Snapshot() Snapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	result := Snapshot{
-		Watermark: a.watermark, Totals: a.totals,
+		Watermark: a.watermark, Floor: a.floor, Totals: a.totals,
 		Attempts: append([]AttemptEvent(nil), a.attempts...),
 		Requests: append([]RequestSummary(nil), a.summaries...),
 		Hourly:   make([]Bucket, 0, len(a.hourly)),

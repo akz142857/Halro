@@ -212,9 +212,14 @@ usage:
   parquet_interval: "1h"
   # @title.zh-CN 用量保留天数
   # @title.en-US Usage retention days
-  # @description.zh-CN 本地分析用量数据保留的天数。
-  # @description.en-US Days local analytical usage data is retained.
+  # @description.zh-CN 归档保留天数，管的是磁盘上的 Parquet 分区，不是控制台能翻多久。
+  # @description.en-US How long the Parquet archive on disk is kept. This is not how far the console can page back.
   retention_days: 90
+  # @title.zh-CN 控制台可见天数
+  # @title.en-US Console window in days
+  # @description.zh-CN 控制台「调用明细」与「最终失败」能往回翻多久。与 retention_days 分开设置：那个管磁盘上的归档，这个管内存里的聚合——后者每次 checkpoint 都会被整体重新序列化，所以它的长度同时是时间成本。至少 7 天（运行总览要读这么多天），且不超过 retention_days。
+  # @description.en-US How far back the console's attempt log and failed-request list can page. Separate from retention_days: that bounds the archive on disk, this bounds the in-memory aggregate the screens are served from, which is re-serialized whole on every checkpoint and so costs time as well as space. At least 7 days (the overview reads that many) and no more than retention_days.
+  console_window_days: 30
   # parquet (default) or ndjson (ADR 0017, docs/adr/0017-usage-export-format.md).
   # @title.zh-CN 用量导出格式
   # @title.en-US Usage export format

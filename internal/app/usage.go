@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -168,4 +170,40 @@ func openUsageOffline(
 		return nil, nil, nil, err
 	}
 	return aggregate, exporter, closeResources, nil
+}
+
+// pruneUsageWindow trims the console's aggregate back to its window.
+//
+// Two things decide what goes: the cutoff, and how far the export has actually
+// got. The second is not a refinement — export selects attempts above the
+// Parquet manifest's watermark, so anything trimmed below it is archived and
+// anything trimmed above it is destroyed. Passing the watermark through means
+// a stalled or disabled export stops the trimming with it: an aggregate that
+// grows is a problem, an aggregate that quietly discards unarchived history is
+// a defect.
+//
+// It runs after the export, on the same tick, for the same reason.
+func (r *Runtime) pruneUsageWindow() {
+	window := r.config.Usage.ConsoleWindowDays
+	if window < 1 {
+		return
+	}
+	manifest, err := r.usageExporter.LoadManifest()
+	if err != nil {
+		// No manifest is the ordinary state of an instance that has not
+		// exported yet, and any other read failure is the export being unwell.
+		// Either way the watermark is unknown, so nothing is trimmed.
+		if !errors.Is(err, os.ErrNotExist) {
+			r.logger.Warn("usage window not trimmed: the export manifest could not be read", "error", err)
+		}
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -window)
+	result := r.usage.PruneBefore(cutoff, manifest.LastSequence)
+	if result.Attempts == 0 && result.Summaries == 0 {
+		return
+	}
+	r.logger.Info("usage window trimmed",
+		"attempts", result.Attempts, "requests", result.Summaries,
+		"window_days", window, "floor", result.Floor)
 }

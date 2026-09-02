@@ -64,6 +64,7 @@ func Default() Config {
 			CheckpointInterval:     Duration(time.Minute),
 			ParquetInterval:        Duration(time.Hour),
 			RetentionDays:          90,
+			ConsoleWindowDays:      DefaultConsoleWindowDays,
 			ExportFormat:           UsageExportFormatParquet,
 		},
 		Gateway: Gateway{

@@ -226,3 +226,127 @@ func TestTheCheckpointCostsAKnownAmountPerAttempt(t *testing.T) {
 		t.Fatalf("the checkpoint payload is not the JSON this measurement assumes: %v", err)
 	}
 }
+
+// The window itself. Trimming keeps the two conditions that make it safe: old
+// enough, and already exported.
+func TestPruningKeepsWhatIsNotYetExported(t *testing.T) {
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := retentionEvents(t, 10, day)
+	before, err := aggregate.QueryAttempts(AttemptQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Attempts) != 10 {
+		t.Fatalf("fixture holds %d attempts", len(before.Attempts))
+	}
+
+	// Nothing exported: nothing is trimmed, however old. An aggregate that
+	// grows is a problem; one that discards unarchived history is a defect.
+	if result := aggregate.PruneBefore(day.Add(time.Hour), 0); result.Attempts != 0 || result.Summaries != 0 {
+		t.Fatalf("pruning ran with no export watermark: %#v", result)
+	}
+
+	// Exported through the fifth-oldest request's settlement. QueryAttempts
+	// answers newest-first, so the fifth oldest of ten is five from the end.
+	// The sixth and everything after it stays, even though the cutoff covers
+	// them.
+	exportedThrough := before.Attempts[len(before.Attempts)-5].Sequence
+	result := aggregate.PruneBefore(day.Add(24*time.Hour), exportedThrough)
+	if result.Attempts != 5 {
+		t.Fatalf("trimmed %d attempts, want 5: %#v", result.Attempts, result)
+	}
+	if result.Floor != exportedThrough+1 {
+		t.Fatalf("floor = %d, want %d", result.Floor, exportedThrough+1)
+	}
+	after, err := aggregate.QueryAttempts(AttemptQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Attempts) != 5 {
+		t.Fatalf("%d attempts survived, want 5", len(after.Attempts))
+	}
+	for _, attempt := range after.Attempts {
+		if attempt.Sequence <= exportedThrough {
+			t.Fatalf("attempt %d is below the export watermark and was kept", attempt.Sequence)
+		}
+	}
+	// The indexes follow, or a request detail lookup would read the wrong row.
+	detail, exists := aggregate.RequestDetail(after.Attempts[0].RequestID)
+	if !exists || len(detail.Attempts) != 1 ||
+		detail.Attempts[0].AttemptID != after.Attempts[0].AttemptID {
+		t.Fatalf("the attempt index did not survive the prune: %#v", detail)
+	}
+}
+
+// Age alone does not trim, and neither does the watermark alone.
+func TestPruningKeepsWhatIsInsideTheWindow(t *testing.T) {
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := retentionEvents(t, 6, day)
+	everything := aggregate.Snapshot().Watermark.Sequence
+	// Everything exported, but the cutoff is before all of it.
+	if result := aggregate.PruneBefore(day.Add(-time.Hour), everything); result.Attempts != 0 {
+		t.Fatalf("a cutoff before the whole window trimmed %d attempts", result.Attempts)
+	}
+	if aggregate.Floor() != 0 {
+		t.Fatalf("floor moved without anything being trimmed: %d", aggregate.Floor())
+	}
+}
+
+// The floor has to survive a restart, or reconciliation forgets the window and
+// refuses again on the next start.
+func TestTheWindowFloorSurvivesACheckpoint(t *testing.T) {
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := retentionEvents(t, 8, day)
+	everything := aggregate.Snapshot().Watermark.Sequence
+	result := aggregate.PruneBefore(day.Add(24*time.Hour), everything)
+	if result.Floor == 0 {
+		t.Fatal("nothing was trimmed, so this test proves nothing")
+	}
+	snapshot, err := aggregate.TakeCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := RestoreCheckpoint(snapshot.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Floor() != result.Floor {
+		t.Fatalf("floor = %d after restore, want %d", restored.Floor(), result.Floor)
+	}
+}
+
+// The flip side of TestReconcileComparesOnlyWhatParquetStillHolds: an aggregate
+// that says where its window starts reconciles, where one that does not is
+// refused. This is the precondition trimming could not ship without.
+func TestAWindowedAggregateStillReconciles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := retentionEvents(t, 6, day)
+	manifest, err := exporter.Export(aggregate.Snapshot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := exporter.Reconcile(aggregate.Snapshot()); err != nil {
+		t.Fatalf("a full aggregate does not reconcile: %v", err)
+	}
+
+	result := aggregate.PruneBefore(day.Add(24*time.Hour), manifest.LastSequence)
+	if result.Attempts == 0 {
+		t.Fatal("nothing was trimmed, so this test proves nothing")
+	}
+	if _, err := exporter.Reconcile(aggregate.Snapshot()); err != nil {
+		t.Fatalf("a windowed aggregate was refused: %v", err)
+	}
+	// And a snapshot that lost records without declaring a floor is still
+	// refused — the fix is that the aggregate says where its window starts,
+	// not that reconciliation stopped checking.
+	lying := aggregate.Snapshot()
+	lying.Floor = 0
+	if _, err := exporter.Reconcile(lying); err == nil {
+		t.Fatal("an aggregate that hid its window reconciled anyway")
+	}
+}

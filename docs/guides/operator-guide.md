@@ -435,6 +435,30 @@ everything refused before admission — an invalid Gateway Key, an unrouted mode
 an RPM/TPM refusal — because those return before a ledger request exists at all;
 the HTTP metrics and the audit log account for those.
 
+#### How far back the console pages
+
+`usage.console_window_days` (default 30) bounds the attempt log and the
+failed-request list. It is a different setting from `usage.retention_days`
+(default 90), and the difference is worth knowing before either is changed:
+
+| Setting | Bounds | Cost of a long value |
+| --- | --- | --- |
+| `usage.console_window_days` | The in-memory aggregate the two console tabs read | Memory, and checkpoint time — the aggregate is re-serialized whole on every checkpoint, about 1149 bytes per attempt |
+| `usage.retention_days` | The Parquet archive on disk | Disk only; partitions are columnar and one day is measured in kilobytes |
+
+So a long archive is cheap and a long console window is not. Binding them to one
+value would make an operator who needs ninety days of archive pay for it in
+memory and in checkpoint duration; they are separate for that reason. The
+console window must be at least 7 days, because the overview's chart reads seven
+days out of the same aggregate, and no longer than the archive, because the
+screen should not promise history the archive no longer holds.
+
+The window is trimmed on the Parquet export tick, and only up to what that
+export has actually written. If the export stalls, the trimming stalls with it
+and the aggregate grows — deliberately: an aggregate that grows is a problem,
+one that discards history the archive never received is a defect. Nothing is
+lost to the trim that is not already in a partition.
+
 #### Capturing what a failed call carried
 
 `gateway.failure_capture.enabled` keeps the request a failed call sent upstream

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/usage"
 )
@@ -140,5 +141,74 @@ func TestTheSummarySurvivesAnEmptiedAttemptList(t *testing.T) {
 	if after != before {
 		t.Fatalf("the summary changed when the attempt list was emptied:\nbefore %#v\nafter  %#v",
 			before, after)
+	}
+}
+
+// The window, end to end, and the condition that bounds it.
+func TestTheConsoleWindowTrimsOnlyWhatWasExported(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Usage.ConsoleWindowDays = 7
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	// Old enough to be outside any window this test uses.
+	seedRetentionUsage(t, runtime, 12, time.Now().UTC().AddDate(0, 0, -60))
+
+	// Nothing exported yet: the watermark is unknown, so nothing is trimmed
+	// however old it is. This is the whole safety property.
+	runtime.pruneUsageWindow()
+	page, err := runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Attempts) != 12 {
+		t.Fatalf("%d attempts survived an unexported prune, want all 12", len(page.Attempts))
+	}
+	if runtime.usage.Floor() != 0 {
+		t.Fatalf("the window moved with nothing exported: floor=%d", runtime.usage.Floor())
+	}
+
+	// Export, then trim. Now the same records are archived and may go.
+	runtime.exportUsageParquet()
+	runtime.pruneUsageWindow()
+	page, err = runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Attempts) != 0 {
+		t.Fatalf("%d attempts survived an exported prune, want none", len(page.Attempts))
+	}
+	if runtime.usage.Floor() == 0 {
+		t.Fatal("records were trimmed without recording where the window now starts")
+	}
+
+	// And the archive still reconciles against the windowed aggregate, which
+	// is what keeps doctor and `usage verify` green.
+	if _, err := runtime.usageExporter.Reconcile(runtime.usage.Snapshot()); err != nil {
+		t.Fatalf("a trimmed aggregate no longer reconciles: %v", err)
+	}
+
+	// A window shorter than seven days is refused, because the overview reads
+	// seven days out of this same aggregate.
+	narrow := testConfig(t)
+	narrow.Usage.ConsoleWindowDays = 6
+	if err := narrow.Validate(config.LoadOptions{}); err == nil {
+		t.Fatal("a six-day console window was accepted; the overview reads seven")
+	}
+	// And one longer than the archive, because the screen would be promising
+	// history the archive no longer holds.
+	wide := testConfig(t)
+	wide.Usage.ConsoleWindowDays = wide.Usage.RetentionDays + 1
+	if err := wide.Validate(config.LoadOptions{}); err == nil {
+		t.Fatal("a console window longer than the archive was accepted")
 	}
 }

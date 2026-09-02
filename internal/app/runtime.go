@@ -924,6 +924,10 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			}
 		case <-parquetTicker.C:
 			r.exportUsageParquet()
+			// After the export, never before: the trim is bounded by how far
+			// the export has got, and reading that watermark before writing it
+			// would hold the window one tick behind for no reason.
+			r.pruneUsageWindow()
 			// Retention is swept on the same tick rather than on a timer of its
 			// own: this store's promise is that captured caller material is
 			// gone after the window, and a promise kept by a goroutine nobody
