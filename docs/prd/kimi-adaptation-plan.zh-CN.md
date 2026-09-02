@@ -1598,15 +1598,65 @@ Responses 面暂时做不到：它的 `reasoning.effort` 阶梯是 `low`/`high`/
 里读到的永远是 false；控制台的 `combines_with` 原本会宣称一个 Kimi 凭据也覆盖这条
 profile，而保存时会被拒 —— 正是这个端点存在的目的所要防的那种「表单比服务端宽」。
 
-### 14.5 解除条件
+### 14.5 解除条件：已测，答案是没有（2026-09-02，大陆站真实账号）
 
-测一件事：Kimi 的 `/v1/responses` 是否接受关闭推理的写法 ——
-`reasoning:{"effort":"none"}`，或 Messages 面上那个未文档化的 `thinking` 成员。
+这一节原本写的是一个待测的条件。已经测了，三条都跑在 `kimi-k3` 上。
 
-- **接受**：给 OpenAI 适配器的 Responses 分支加 Kimi 方言，在没有要求深度的请求上
-  送出关闭开关（`encodeChatRequest` 已经是这个形状），然后删掉 `Withheld` 一行。
-- **不接受**：这条 profile 保持收起，直到北向端点能承载 reasoning 答案为止 ——
-  那要等 §13.6 说的「这个目标总是推理」能力位，届时一并处理。
+**对照组**，不带任何推理成员：
+
+```
+{"model":"kimi-k3","input":"Reply with OK.","max_output_tokens":64}
+  -> 200, status "incomplete", incomplete_details.reason "max_output_tokens"
+     output: [ {"type":"reasoning", summary:[...]} ]        ← 只有这一项
+     usage: output_tokens 64, output_tokens_details.reasoning_tokens 61
+```
+
+**没有任何 message 项**。64 个输出 token 里 61 个花在推理上，调用方一个字答案都没
+拿到。§12 的原始形状在这一面上直接复现——而且比 Chat 面更彻底，因为这里连一段可以
+渲染的文本都没有。
+
+**写法一**，OpenAI 阶梯上的 `none`：
+
+```
+{"...","reasoning":{"effort":"none"}}
+  -> 400 invalid_request_error: reasoning.effort value "none" is not supported
+```
+
+文档这次是对的：阶梯就是 `low`/`high`/`max`，没有关闭档。
+
+**写法二**，Messages 面上那个未文档化、实测有效的 `thinking` 成员：
+
+```
+{"...","thinking":{"type":"disabled"}}
+  -> 200, output 里仍是 reasoning 项, reasoning_tokens 61
+```
+
+**被接受了，并且被忽略了。** 这是三种结果里最坏的一种，也是这次非测不可的原因：
+同一个 key、同一个模型、同一家上游，`thinking` 在 Messages 面上真的关掉了推理，在
+Responses 面上收下之后当没看见。要是按 §13.1 的经验直接外推把它加上去，得到的会是
+一个 200、一份账单、和一个以为自己关掉了推理的调用方——比被拒绝贵得多。
+
+**结论：`kimi.responses.v1` 保持收起，而且理由从「没测过所以保守」变成了「测过，
+这一面关不掉」。** 重新开放需要下面任一件事发生，两件都不在 Halro 这边：
+
+- Kimi 给 `/v1/responses` 加一个真正生效的关闭写法；
+- 或者 §13.6 那个「这个目标总是推理」的能力位落地并进入路由，让北向端点在预留之前
+  就把这类目标绕开——那时这条 profile 可以带着「不可关闭」的标记重新开放，而不是靠
+  关掉推理。
+
+`TestNoEndpointIsServedByATargetThatReasonsUnasked` 跳过 withheld 的 profile，所以
+在那之前谁把 `Withheld` 删掉，都会在那个守卫上失败。
+
+### 14.5.1 顺带落实的两件事
+
+- **Responses 面不拒绝未知成员。** `thinking` 不在它的 schema 里，它回了 200。这答掉
+  了评审里悬着的一条：`RenderProviderResponseRequest` 无条件发 `store:false`，而 Kimi
+  的 Responses schema 没有 `store` 成员——如果它严格拒绝未知成员，那每次调用都会是预留
+  之后的 400。它不严格拒绝。（响应体里也回显了 `"store":false`。）
+- **采样值与缓存口径确认。** 响应回显 `temperature:1, top_p:0.95, presence_penalty:0,
+  frequency_penalty:0`，与「每个模型钉死一组值」一致；`input_tokens:89` 且
+  `input_tokens_details.cached_tokens:89`，证实这一面的 `input_tokens` **含**缓存，
+  与 §10.4 记的 Messages 面（不含）相反。
 
 ### 14.6 这一轮同时修掉的
 

@@ -519,13 +519,14 @@ func kimiModels() []Entry {
 	}
 	const k3Context, k3Output int64 = 1_048_576, 1_048_576
 	const k2Context int64 = 262_144
-	// The Responses face reasons on every model it serves and has no off value
-	// on its ladder, so every entry on it is marked. That is why the profile is
-	// withheld (see internal/domain/provider_table.go), and marking the entries
-	// is what keeps the two facts attached: offering the profile again without
-	// finding an off switch fails
-	// TestNoEndpointIsServedByATargetThatReasonsUnasked rather than reaching an
-	// operator.
+	// The Responses face reasons on every model it serves and cannot be told not
+	// to — measured 2026-09-02, both spellings: reasoning.effort="none" is
+	// refused outright and the `thinking` member that works on the Messages face
+	// is accepted and ignored here. So every entry on it is marked. That is why
+	// the profile is withheld (see internal/domain/provider_table.go), and
+	// marking the entries is what keeps the two facts attached: deleting the
+	// Withheld field fails TestNoEndpointIsServedByATargetThatReasonsUnasked
+	// rather than reaching an operator.
 	reasonsUnasked := func(entry Entry) Entry {
 		entry.ReasonsUnasked = true
 		return entry

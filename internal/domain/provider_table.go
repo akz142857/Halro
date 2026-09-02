@@ -390,20 +390,31 @@ var profileTable = []profileRow{
 		// Note what that corrects. The comment on kimiResponsesSet used to say
 		// the canonical mapper "drops" a reasoning item; it does not, it refuses
 		// one, and the whole argument for serving this face rested on the wrong
-		// verb. The house rule the Chat renderer and the portable Anthropic
-		// mapper both follow — unspecified means off — is the fix, and it cannot
-		// be applied here yet: whether this face accepts an off switch at all
-		// (reasoning.effort=none, or the undocumented `thinking` member that
-		// turned out to work on the Messages face) has not been measured, and
-		// guessing a member costs the same 400 after the same reservation.
+		// verb.
 		//
-		// To offer it again: measure whether /v1/responses accepts an off
-		// switch. If it does, give the OpenAI adapter's Responses branch a Kimi
-		// dialect that sends it on a request that asked for no depth — the same
-		// shape encodeChatRequest already has — and drop this field. If it does
-		// not, the profile stays withheld until the endpoint can carry a
-		// reasoning answer, and the note in docs/prd/kimi-adaptation-plan.zh-CN.md
-		// §12 records that outcome rather than this row.
+		// The house rule the Chat renderer and the portable Anthropic mapper both
+		// follow — unspecified means off — would be the fix, and it cannot be
+		// applied here. That is measured, not assumed. Both spellings were tried
+		// against a real mainland account on 2026-09-02:
+		//
+		//	reasoning:{"effort":"none"}   -> 400, `reasoning.effort value "none"
+		//	                                 is not supported`
+		//	thinking:{"type":"disabled"}  -> 200, and it reasoned anyway
+		//
+		// The second is the one worth remembering. That exact member does switch
+		// reasoning off on Kimi's Messages face — undocumented, measured, and the
+		// reason this platform's Anthropic row exists at all. Here the same
+		// upstream takes it and ignores it. Extrapolating from the other face
+		// would have shipped a 200, a bill, and a caller who believed they had
+		// turned reasoning off.
+		//
+		// So this row is not "unmeasured, therefore withheld". It is "measured,
+		// and this face cannot be told to stop". Offering it again needs one of
+		// two things, neither of them here: Kimi adding an off switch that works,
+		// or the "this target always reasons" fact reaching the router, at which
+		// point the profile can be offered carrying that mark rather than
+		// pretending it can be switched off. See
+		// docs/prd/kimi-adaptation-plan.zh-CN.md §14.5.
 		ID: ProfileKimiResponses, Type: ProviderKimi,
 		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.moonshot.ai",
@@ -518,8 +529,18 @@ var (
 	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
 	//     canonical response mapper cannot preserve reasoning items, and a claim
 	//     it cannot carry is a request that fails after the budget is reserved.
-	//     MiniMax returns reasoning as output items with a summary, which is
-	//     exactly the shape that mapper drops.
+	//     MiniMax returns reasoning as output items with a summary, and the
+	//     mapper **refuses** one rather than dropping it — the same wrong verb
+	//     that was carried on the Kimi row until its face was measured.
+	//
+	//     Whether this row has Kimi's problem as well is unestablished and is
+	//     recorded that way rather than assumed either direction. The chain is
+	//     identical on paper: this profile refuses reasoning_effort at every
+	//     value, so nothing ever sends MiniMax an off switch, and MiniMax-M3's
+	//     documented default is thinking on. What is missing is a measurement of
+	//     what /v1/responses actually returns on an unasked request. Kimi's
+	//     equivalent turned out to reason on every call; it took a real account
+	//     to know that, and no MiniMax Responses call has been made.
 	minimaxResponsesSet = ProviderCapabilities{
 		Chat: true, Tools: true, Vision: true, FetchedImage: true,
 	}
@@ -588,8 +609,12 @@ var (
 	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
 	//     canonical response mapper cannot preserve reasoning items, and a claim
 	//     it cannot carry is a request that fails after the budget is reserved.
-	//     Kimi returns reasoning as an output item, which is exactly the shape
-	//     that mapper drops.
+	//     Kimi returns reasoning as an output item, and the mapper **refuses**
+	//     one — it does not drop it. The verb is the whole difference and this
+	//     line had it wrong: not declaring the capability keeps a caller from
+	//     asking for reasoning, and it does nothing at all about reasoning that
+	//     arrives unasked, which on this face is every single response. That is
+	//     why the profile row above is withheld rather than merely unadorned.
 	kimiResponsesSet = ProviderCapabilities{
 		Chat: true, Tools: true, Vision: true,
 		StructuredOutputs: true,

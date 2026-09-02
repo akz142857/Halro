@@ -150,6 +150,21 @@ agree, the rate limits, and whether `base_resp` behaves the same way.
 `docs/prd/minimax-adaptation-plan.zh-CN.md` §7 carries the assumptions that are
 still open, each with the assertion that would close it.
 
+### One more open question, raised by Kimi rather than by MiniMax
+
+`minimax.responses.v1` may have the defect that got `kimi.responses.v1` withheld,
+and nothing here establishes whether it does. The chain is identical on paper:
+the profile refuses `reasoning_effort` at every value, so the portable renderer
+never sends MiniMax an off switch, and MiniMax-M3's documented thinking default
+is on. If that face returns reasoning output items the way Kimi's does, every
+call through it ends `malformed_response` with the upstream already paid.
+
+Neither MiniMax smoke drives `/v1/responses` and reads the *output* back through
+Halro's mapper — the same blind spot that let Kimi's row ship. One unasked call
+against that endpoint settles it: an `output` array containing a `reasoning` item
+is the failure, an array of message items alone is not. Recorded as unmeasured
+rather than inferred in either direction.
+
 ## Kimi: measured on a mainland account (2026-09-01)
 
 Kimi (Moonshot AI) was adapted from its published OpenAPI documents and then
@@ -238,10 +253,28 @@ Kimi's `/v1/responses` reasons by default and its effort ladder has no off value
 so every call returns a `reasoning` output item, and the canonical mapper refuses
 one rather than dropping it — the verb three separate documents got wrong. That
 made `kimi.responses.v1` fail every request after the upstream had been paid, and
-the profile is withheld until an off switch is found on that face. No northbound
-endpoint lost Kimi: the Chat and Anthropic profiles still serve all three. See
-`docs/prd/kimi-adaptation-plan.zh-CN.md` §14, which also carries the measurement
-that would lift the withholding.
+the profile is withheld.
+
+**Both off switches were then tried on that face (2026-09-02) and neither works.**
+`reasoning.effort="none"` is refused — `reasoning.effort value "none" is not
+supported` — and `thinking:{"type":"disabled"}`, the undocumented member that does
+switch reasoning off on Kimi's *Messages* face, is accepted here and ignored: 200,
+with the reasoning item still returned. One upstream, one key, one model, two
+routes, opposite behaviour for the same member. Extrapolating from the other face
+would have shipped a 200, a bill, and a caller who believed reasoning was off, so
+the withholding is now a measured conclusion rather than a precaution. The control
+run is worth recording on its own: a 64-token budget came back as 61 reasoning
+tokens, one `reasoning` output item, and no message item at all.
+
+Two smaller things fell out of the same run. Kimi's Responses face does **not**
+reject unknown members — `thinking` is absent from its schema and still answered
+200 — which closes the open question of whether the unconditional `store:false`
+this renderer emits would have been a 400 on every call. And its `input_tokens`
+**includes** the cached span (89 of 89 cached on the probe), the opposite of the
+Messages face.
+
+No northbound endpoint lost Kimi: the Chat and Anthropic profiles still serve all
+three. See `docs/prd/kimi-adaptation-plan.zh-CN.md` §14.5.
 
 `docs/prd/kimi-adaptation-plan.zh-CN.md` §10.2 carries the closed list item by
 item, §10.3 the four places Kimi's own documentation was wrong, and §11 the
