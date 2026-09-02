@@ -278,8 +278,7 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
 		manifest.Metadata.SchemaVersion == 0 ||
 		manifest.Metadata.TxID == 0 ||
-		manifest.CheckpointWatermark.Sequence > manifest.LedgerWatermark.Sequence ||
-		manifest.CheckpointWatermark.Offset > manifest.LedgerWatermark.Offset ||
+		manifest.CheckpointWatermark.After(manifest.LedgerWatermark) ||
 		!validFingerprint(manifest.MasterKeyFingerprint) {
 		return Manifest{}, errors.New("backup manifest is invalid")
 	}

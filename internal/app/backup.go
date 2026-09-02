@@ -632,8 +632,7 @@ func createBackupSnapshotWithLedger(
 			checkpoint = ledger.Watermark{}
 		}
 	}
-	if checkpoint.Sequence > ledgerWatermark.Sequence ||
-		checkpoint.Offset > ledgerWatermark.Offset {
+	if checkpoint.After(ledgerWatermark) {
 		return backup.Manifest{}, errors.New("usage checkpoint is ahead of the Ledger")
 	}
 	usageManifestVersion := 0

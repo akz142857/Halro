@@ -795,6 +795,19 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("initialize usage settings: %w", err))
 	}
 	runtime.usageSettings.Store(&usageSettings)
+	// The window is stored, the archive's retention is in the file, and the two
+	// can be edited independently — so the invariant they are validated against
+	// at write time can be broken afterwards by lowering retention alone. Say
+	// so rather than letting the console quietly page further back than the
+	// archive can rebuild. Not fatal: the records the console is showing are
+	// real, and refusing to start over a screen would be a worse trade than
+	// naming the discrepancy and letting the operator close it.
+	if retention := cfg.Usage.RetentionDays; retention >= 1 && usageSettings.ConsoleWindowDays > retention {
+		logger.Warn("the console window is longer than the archive it is bounded by",
+			"console_window_days", usageSettings.ConsoleWindowDays, "retention_days", retention,
+			"consequence", "the console can page back further than the archive can rebuild after a restart",
+			"remedy", "shorten the window under Settings -> Instance, or raise usage.retention_days")
+	}
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
@@ -899,7 +912,7 @@ func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.
 	if aggregate.Snapshot().Watermark != watermark {
 		return nil, ledger.Watermark{}, "usage checkpoint envelope does not match its payload"
 	}
-	if watermark.Sequence > head.Sequence || watermark.Offset > head.Offset {
+	if watermark.After(head) {
 		return nil, ledger.Watermark{}, "usage checkpoint is ahead of the ledger head"
 	}
 	rollup, err := store.UsageRollupState()
@@ -994,6 +1007,13 @@ func (r *Runtime) saveUsageCheckpoint() {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
+		return
+	}
+	// An empty round means nothing has happened since the last one — no new
+	// records, no increment, nothing the window has trimmed past. Writing it
+	// anyway would fsync byte-identical bytes every interval for the life of an
+	// idle instance.
+	if len(snapshot.Head) == 0 {
 		return
 	}
 	// TakeCheckpoint drained the rollup increment, so every path from here that
