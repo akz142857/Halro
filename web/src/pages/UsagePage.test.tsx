@@ -300,6 +300,57 @@ describe("UsagePage failure detail", () => {
     expect(await screen.findByText(/第 2 个目标 · 第 1 次重试/)).toBeInTheDocument();
   });
 
+  // What a support desk asks for. These reach the console through the ledger
+  // now, so a ticket raised a week after the failure can still name the request
+  // the upstream saw.
+  it("shows the upstream's own code and request ID", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({
+        error_class: "bad_request", http_status: 400, failure_phase: "provider",
+        provider_code: "invalid_image_url:messages[0].content[1].image_url",
+        provider_request_id: "upstream-req-42",
+      })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/invalid_image_url:messages\[0\]\.content\[1\]\.image_url/)).toBeInTheDocument();
+    expect(screen.getByText(/upstream-req-42/)).toBeInTheDocument();
+  });
+
+  // A record written before those fields were kept says so. A blank there and a
+  // blank on a record that had none are different answers, and one rendering
+  // for both talks the operator out of chasing a code that does exist upstream.
+  it("says a record predates the fields rather than showing an empty code", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      // No failure_phase: every failure classified since these fields were
+      // added carries one, so its absence dates the record.
+      items: [failedAttempt({ error_class: "bad_request", http_status: 400 })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/未保存服务商错误码与请求标识/)).toBeInTheDocument();
+    expect(screen.queryByText(/未知/)).not.toBeInTheDocument();
+  });
+
+  // An upstream that named no code on a record that would have kept one gets
+  // neither the code nor the "not recorded" notice: nothing is missing.
+  it("says nothing when the upstream named no code", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ error_class: "timeout", failure_phase: "provider" })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText("上游响应超时")).toBeVisible();
+    expect(screen.queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/服务商错误码：/)).not.toBeInTheDocument();
+  });
+
   // A successful row must not grow a disclosure promising an explanation of a
   // failure that did not happen.
   it("leaves a successful attempt alone", async () => {

@@ -13,7 +13,8 @@ const providerFailure: RequestFailure = {
   last_failure: {
     attempt_id: "att_2", attempt: 2, error_class: "authentication", provider_status: 401,
     provider_id: "provider_b", deployment_id: "dep_b", provider_model: "gpt-4o",
-    completed_at: "2026-08-21T10:01:02Z",
+    provider_code: "invalid_api_key", provider_request_id: "upstream-req-77",
+    failure_phase: "provider", completed_at: "2026-08-21T10:01:02Z",
   },
 };
 
@@ -64,6 +65,39 @@ describe("UsageFailuresPanel", () => {
     expect(screen.getByText(/未选定目标/)).toBeVisible();
     expect(screen.getByText(/从未调用上游/)).toBeInTheDocument();
     expect(screen.queryByText("HTTP 401")).not.toBeInTheDocument();
+  });
+
+  // The two identifiers a support desk asks for, kept in the ledger so they
+  // outlive the process log that used to be their only home.
+  it("carries the upstream's own code and request ID into the row", async () => {
+    renderPanel([providerFailure]);
+
+    expect(await screen.findByText(/invalid_api_key/)).toBeInTheDocument();
+    expect(screen.getByText(/upstream-req-77/)).toBeInTheDocument();
+  });
+
+  // A row from before those fields were kept says so, rather than showing a
+  // blank that reads as "the upstream named none".
+  it("says a row predates the identifiers rather than showing them empty", async () => {
+    renderPanel([{
+      ...providerFailure,
+      last_failure: {
+        attempt_id: "att_2", attempt: 2, error_class: "authentication",
+        provider_status: 401, deployment_id: "dep_b",
+        completed_at: "2026-08-21T10:01:02Z",
+      },
+    }]);
+
+    expect(await screen.findByText(/未保存服务商错误码与请求标识/)).toBeInTheDocument();
+  });
+
+  // A policy refusal has no upstream, so it gets neither the identifiers nor a
+  // notice that they were not recorded — nothing was ever asked for.
+  it("offers no identifier notice on a policy refusal", async () => {
+    renderPanel([policyRejection]);
+
+    await screen.findByText(/策略拒绝：预算、熔断或并发上限/);
+    expect(screen.queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
   });
 
   // Both misreadings of this list are on the page, not in a runbook: one makes

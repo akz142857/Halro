@@ -56,3 +56,21 @@ export function attemptFailureLabel(t: Translate, attempt: { error_class?: strin
   if (attempt.http_status) return `HTTP ${attempt.http_status}`;
   return t("usage.error");
 }
+
+// Whether a failure record predates the fields that carry the upstream's own
+// identifiers.
+//
+// The distinction matters and cannot be read off the identifiers themselves: an
+// empty provider_code means "the upstream named none" on a record written after
+// they were kept, and "nobody asked" on one written before — and showing the
+// same blank for both tells an operator to stop looking for a code that exists
+// upstream and is simply not here.
+//
+// failure_phase is what separates them. Every failed attempt classified since
+// these fields were added carries one, unconditionally, because the phase is
+// derived rather than reported. Its absence therefore dates the record.
+export function predatesProviderIdentifiers(
+  failure: { failure_phase?: string } | undefined,
+): boolean {
+  return !failure?.failure_phase;
+}

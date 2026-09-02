@@ -318,3 +318,78 @@ func TestAnAccountingFailureIsReportedAndSaysTheLedgerDidNotTakeIt(t *testing.T)
 		t.Fatalf("the record claimed the ledger took it: %v", records[0])
 	}
 }
+
+// The identifiers an operator takes to the upstream do not survive a restart in
+// the process log — that file rotates, and it is not the record. They now reach
+// the ledger with the attempt, so the console can still name the request the
+// upstream saw days later.
+//
+// This also pins the ledger and the log agreeing about the class. They used to
+// classify separately, and had already drifted: the settlement wrote `canceled`
+// where the log wrote a literal `client_disconnected_or_timed_out`, so one
+// attempt gave two answers depending on which record was read.
+func TestTheUpstreamsIdentifiersReachTheLedgerWithTheAttempt(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorBadRequest, Retryable: false, StatusCode: 400,
+		ProviderCode:      "invalid_image_url:messages[0].content[1].image_url",
+		ProviderRequestID: "upstream-req-42",
+		Message:           "provider error (400): Error while downloading https://example.test/photo.png",
+	}
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+
+	var settled ledger.Event
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventAttemptSettled {
+			settled = record.Event
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if settled.ProviderCode != "invalid_image_url:messages[0].content[1].image_url" ||
+		settled.ProviderRequestID != "upstream-req-42" ||
+		settled.FailurePhase != "provider" || settled.ErrorClass != "bad_request" {
+		t.Fatalf("the ledger did not keep the upstream's identifiers: %+v", settled)
+	}
+	// The sentence beside them is still a response body, wherever it is written.
+	encoded, err := json.Marshal(settled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "Error while downloading") {
+		t.Fatalf("an upstream response body became durable state: %s", encoded)
+	}
+}
+
+// A cancellation classifies the same way in both records now, and lands in the
+// client phase rather than being attributed to the upstream.
+func TestACancellationIsClassifiedTheSameWayInTheLedgerAndTheLog(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	logs := captureLogs(t, &f)
+	f.adapter.err = context.Canceled
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the failure did not reach the caller")
+	}
+	var settled ledger.Event
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventAttemptSettled {
+			settled = record.Event
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if settled.ErrorClass != string(provider.ErrorCanceled) || settled.FailurePhase != "client" {
+		t.Fatalf("ledger classification = %q / %q", settled.ErrorClass, settled.FailurePhase)
+	}
+	records := finalFailureRecords(t, logs)
+	if len(records) != 1 || records[0]["error_class"] != settled.ErrorClass {
+		t.Fatalf("the log and the ledger disagree: %v vs %q", records, settled.ErrorClass)
+	}
+}

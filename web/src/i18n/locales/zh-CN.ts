@@ -735,6 +735,10 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       unknown: "用 Request ID 查日志，并检查适配器的分类缺口。",
     },
     httpStatus: "HTTP {{status}}",
+    providerCode: "服务商错误码：{{code}}",
+    providerRequestID: "服务商请求标识：{{id}}",
+    // 不写「未知」：空白与「没保存过」是两回事，前者会让人放弃去上游查一个确实存在的标识。
+    identifiersNotRecorded: "该记录写于这些字段加入之前，未保存服务商错误码与请求标识。",
     attemptChain: "第 {{fallback}} 个目标 · 第 {{retry}} 次重试",
     attemptFirstTry: "首选目标，首次尝试",
     attemptDetails: "失败详情",

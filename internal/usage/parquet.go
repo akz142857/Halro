@@ -17,11 +17,18 @@ import (
 	"github.com/parquet-go/parquet-go"
 )
 
-// Schema 4 adds the provider token tiers: the cache-read, cache-write, and
+// Schema 5 adds the upstream's own identifiers for a failed attempt — the
+// provider code, the provider request ID, and the phase the failure happened in
+// — so history keeps what a support ticket to the upstream is built out of.
+// Rows written under schema 4 decode with those columns empty, which reads as
+// "not recorded", and the console says exactly that rather than showing an
+// "unknown" nobody can act on.
+//
+// Schema 4 added the provider token tiers: the cache-read, cache-write, and
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 4
+const parquetSchemaVersion = 5
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -77,6 +84,9 @@ type parquetAttempt struct {
 	Status                        string `parquet:"status,dict" json:"status"`
 	ErrorClass                    string `parquet:"error_class,dict" json:"error_class"`
 	HTTPStatus                    int32  `parquet:"http_status" json:"http_status"`
+	ProviderCode                  string `parquet:"provider_code,dict" json:"provider_code"`
+	ProviderRequestID             string `parquet:"provider_request_id" json:"provider_request_id"`
+	FailurePhase                  string `parquet:"failure_phase,dict" json:"failure_phase"`
 	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
 	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
 	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`
@@ -608,6 +618,12 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 5 {
+		// Schema 5 introduced the upstream's own failure identifiers.
+		row.ProviderCode = ""
+		row.ProviderRequestID = ""
+		row.FailurePhase = ""
+	}
 	if version < 4 {
 		// Schema 4 introduced the provider token tiers.
 		row.ProviderCachedInputTokens = 0
@@ -701,8 +717,12 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		StartedAtMicros:   attempt.StartedAt.UTC().UnixMicro(),
 		CompletedAtMicros: attempt.CompletedAt.UTC().UnixMicro(),
 		Status:            attempt.Status, ErrorClass: attempt.ErrorClass,
-		HTTPStatus: int32(attempt.HTTPStatus), LatencyMillis: attempt.LatencyMillis,
-		RetryCount: int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
+		HTTPStatus:        int32(attempt.HTTPStatus),
+		ProviderCode:      attempt.ProviderCode,
+		ProviderRequestID: attempt.ProviderRequestID,
+		FailurePhase:      attempt.FailurePhase,
+		LatencyMillis:     attempt.LatencyMillis,
+		RetryCount:        int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
 	}
 }
 

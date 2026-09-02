@@ -6,7 +6,7 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import { UsageFailuresPanel } from "./UsageFailuresPanel";
+import { ProviderIdentifiers, UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
@@ -301,6 +301,7 @@ function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
         <small>
           {advice && <>{advice}<br /></>}
           {chain}
+          <ProviderIdentifiers failure={attempt} />
         </small>
       </details>
     </>

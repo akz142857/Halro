@@ -881,6 +881,13 @@ export interface UsageAttempt {
   // answer from "the upstream returned nothing", so it is left undefined
   // rather than shown as 0.
   http_status?: number;
+  // What a support ticket to the upstream is built out of, and where along the
+  // request the failure happened. Absent on attempts recorded before these were
+  // kept, which is a different answer from "the upstream named none" — the
+  // console says which, rather than filling either with a placeholder.
+  provider_code?: string;
+  provider_request_id?: string;
+  failure_phase?: string;
   latency_millis: number;
   // Which rung of the retry/fallback chain this attempt is: retry_count counts
   // re-tries against the same target, fallback_count counts targets already
@@ -919,6 +926,9 @@ export interface RequestFailure {
     provider_id?: string;
     deployment_id?: string;
     provider_model?: string;
+    provider_code?: string;
+    provider_request_id?: string;
+    failure_phase?: string;
     completed_at: string;
   };
 }

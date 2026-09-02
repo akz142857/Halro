@@ -48,11 +48,18 @@ type FailureContext struct {
 	// it. The attempt row calls the same value http_status; here it is
 	// qualified because a failed request also has a status of its own that the
 	// caller saw, and the two are not the same number.
-	ProviderStatus int       `json:"provider_status,omitempty"`
-	ProviderID     string    `json:"provider_id,omitempty"`
-	DeploymentID   string    `json:"deployment_id,omitempty"`
-	ProviderModel  string    `json:"provider_model,omitempty"`
-	CompletedAt    time.Time `json:"completed_at"`
+	ProviderStatus int    `json:"provider_status,omitempty"`
+	ProviderID     string `json:"provider_id,omitempty"`
+	DeploymentID   string `json:"deployment_id,omitempty"`
+	ProviderModel  string `json:"provider_model,omitempty"`
+	// What goes on a ticket to the upstream. Absent on an attempt recorded
+	// before these were kept, and absent when the upstream named none — the
+	// console distinguishes the two by the attempt's own age rather than by
+	// filling either with a placeholder.
+	ProviderCode      string    `json:"provider_code,omitempty"`
+	ProviderRequestID string    `json:"provider_request_id,omitempty"`
+	FailurePhase      string    `json:"failure_phase,omitempty"`
+	CompletedAt       time.Time `json:"completed_at"`
 }
 
 type RequestFailure struct {
@@ -162,7 +169,9 @@ func (a *Aggregate) lastFailure(indexes []int) *FailureContext {
 			AttemptID: attempt.AttemptID, AttemptNumber: attempt.AttemptNumber,
 			ErrorClass: attempt.ErrorClass, ProviderStatus: attempt.HTTPStatus,
 			ProviderID: attempt.ProviderID, DeploymentID: attempt.DeploymentID,
-			ProviderModel: attempt.ProviderModel, CompletedAt: attempt.CompletedAt,
+			ProviderModel: attempt.ProviderModel,
+			ProviderCode:  attempt.ProviderCode, ProviderRequestID: attempt.ProviderRequestID,
+			FailurePhase: attempt.FailurePhase, CompletedAt: attempt.CompletedAt,
 		}
 	}
 	return nil

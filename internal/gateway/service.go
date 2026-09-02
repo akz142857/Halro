@@ -2841,6 +2841,15 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 	result.CommittedMicrosUSD = cost + target.FixedRequestMicrosUSD
 }
 
+// enrichSettlement records on the settlement what the failure was, so the
+// ledger's account of an attempt and the log's agree.
+//
+// The classification comes from describeProviderFailure rather than being
+// repeated here. It was repeated here, and the two copies had already drifted:
+// this one mapped a cancellation to `canceled` while the log wrote a literal
+// `client_disconnected_or_timed_out`, so one attempt produced two different
+// answers to "what class of failure was this" depending on which record you
+// read.
 func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, completedAt time.Time) {
 	if completedAt.After(startedAt) {
 		result.LatencyMillis = completedAt.Sub(startedAt).Milliseconds()
@@ -2849,20 +2858,15 @@ func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, c
 		result.HTTPStatus = http.StatusOK
 		return
 	}
-	var classified *provider.Error
-	if errors.As(providerErr, &classified) {
-		result.ErrorClass = string(classified.Class)
-		result.HTTPStatus = classified.StatusCode
-		return
-	}
-	switch {
-	case errors.Is(providerErr, context.DeadlineExceeded):
-		result.ErrorClass = string(provider.ErrorTimeout)
-	case errors.Is(providerErr, context.Canceled):
-		result.ErrorClass = string(provider.ErrorCanceled)
-	default:
-		result.ErrorClass = string(provider.ErrorUnknown)
-	}
+	// The target is not needed for the fields the settlement keeps — it already
+	// carries route, deployment and provider of its own — so this asks only for
+	// the classification.
+	descriptor := describeProviderFailure(providerErr, provider.Target{})
+	result.ErrorClass = string(descriptor.Class)
+	result.HTTPStatus = descriptor.ProviderStatus
+	result.ProviderCode = descriptor.ProviderCode
+	result.ProviderRequestID = descriptor.ProviderRequestID
+	result.FailurePhase = descriptor.Phase
 }
 
 func embeddingSettlement(

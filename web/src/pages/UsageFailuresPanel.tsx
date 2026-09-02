@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, StatusDot } from "../components";
-import { errorClassAdvice, errorClassLabel } from "../failure";
+import { errorClassAdvice, errorClassLabel, predatesProviderIdentifiers } from "../failure";
 import { useInstantFormatter, type InstantStyle } from "../format";
 import { Link } from "../navigation";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
@@ -168,6 +168,7 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
               ? t("usage.failures.policyRejectedDetail")
               : errorClassAdvice(t, last?.error_class) || t("usage.failures.noAdvice")}
             {last && <><br />{t("usage.failures.decidedBy", { attempt: last.attempt })}</>}
+            {last && !policy && <ProviderIdentifiers failure={last} />}
           </small>
         </details>
       </td>
@@ -191,5 +192,29 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
       </td>
       <td>{formatInstant(failure.completed_at, "dateTimeYear")}</td>
     </tr>
+  );
+}
+
+// The upstream's own identifiers, which are what a support desk asks for and
+// what an operator cannot reconstruct from anything else on the page.
+//
+// A record written before they were kept says so in words. A blank there and a
+// blank on a record that simply had none are different answers, and showing one
+// rendering for both talks the operator out of chasing an identifier that does
+// exist upstream. It lives here rather than beside the attempt table because
+// the attempt table already imports this panel; the other direction would be a
+// cycle.
+export function ProviderIdentifiers({ failure }: {
+  failure: { provider_code?: string; provider_request_id?: string; failure_phase?: string };
+}) {
+  const { t } = useTranslation();
+  if (predatesProviderIdentifiers(failure)) {
+    return <><br />{t("usage.identifiersNotRecorded")}</>;
+  }
+  return (
+    <>
+      {failure.provider_code && <><br />{t("usage.providerCode", { code: failure.provider_code })}</>}
+      {failure.provider_request_id && <><br />{t("usage.providerRequestID", { id: failure.provider_request_id })}</>}
+    </>
   );
 }

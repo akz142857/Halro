@@ -730,6 +730,12 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       unknown: "Search the log by Request ID and look for the adapter's classification gap.",
     },
     httpStatus: "HTTP {{status}}",
+    providerCode: "Provider code: {{code}}",
+    providerRequestID: "Provider request ID: {{id}}",
+    // Never "unknown": a blank and "never recorded" are different answers, and
+    // the first talks an operator out of chasing an identifier that does exist
+    // upstream.
+    identifiersNotRecorded: "This record was written before these fields were kept, so it has no provider code or request ID.",
     attemptChain: "Target {{fallback}} · retry {{retry}}",
     attemptFirstTry: "First target, first try",
     attemptDetails: "Failure detail",

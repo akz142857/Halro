@@ -96,7 +96,14 @@ type Settlement struct {
 	Outcome                       string
 	ErrorClass                    string
 	HTTPStatus                    int
-	LatencyMillis                 int64
+	// The upstream's own identifiers for this failure, and the phase it
+	// happened in. They are carried through to the ledger so a support ticket
+	// raised days later can still name the request the upstream saw; the
+	// gateway narrows them before they get here.
+	ProviderCode      string
+	ProviderRequestID string
+	FailurePhase      string
+	LatencyMillis     int64
 	// OccurredAt is reserved for deterministic recovery events. Normal
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
@@ -677,6 +684,9 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		Outcome:                       settlement.Outcome,
 		ErrorClass:                    settlement.ErrorClass,
 		HTTPStatus:                    settlement.HTTPStatus,
+		ProviderCode:                  settlement.ProviderCode,
+		ProviderRequestID:             settlement.ProviderRequestID,
+		FailurePhase:                  settlement.FailurePhase,
 		LatencyMillis:                 settlement.LatencyMillis,
 	}
 	attempt.Period.Stamp(&settled)

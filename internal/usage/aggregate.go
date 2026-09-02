@@ -21,18 +21,21 @@ import (
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
 
-// Version 9 stamps each request summary with the ledger sequence that finalized
-// it, so the failed-request list can page the way the attempt list does. A
-// cursor over a slice position would not survive a restart, and one over the
-// completion instant cannot separate two requests that finished in the same
-// millisecond. Version 8 recorded the accounting period on attempts and request
+// Version 10 carries the upstream's own identifiers for a failed attempt — the
+// provider code, the provider request ID, and the phase the failure happened in
+// — so a support ticket raised days after the fact can still name the request
+// the upstream saw. Version 9 stamped each request summary with the ledger
+// sequence that finalized it, so the failed-request list can page the way the
+// attempt list does: a cursor over a slice position would not survive a
+// restart, and one over the completion instant cannot separate two requests
+// that finished in the same millisecond. Version 8 recorded the accounting period on attempts and request
 // summaries — without it the aggregate could say when a call finished but not
 // which accounting day it was charged to, and the daily rollup, which keys on
 // the period stamped at admission, had nothing to key on. Version 7 persisted
 // the dedup window; version 6 dropped the duplicate cost columns. A checkpoint
 // written before this is refused rather than migrated: it is a derivative, and
 // rebuilding it from the Ledger is cheap.
-const checkpointVersion = 9
+const checkpointVersion = 10
 
 const latencyBucketCount = 12
 
@@ -84,9 +87,17 @@ type AttemptEvent struct {
 	Status                        string                     `json:"status"`
 	ErrorClass                    string                     `json:"error_class,omitempty"`
 	HTTPStatus                    int                        `json:"http_status,omitempty"`
-	LatencyMillis                 int64                      `json:"latency_millis"`
-	RetryCount                    int                        `json:"retry_count"`
-	FallbackCount                 int                        `json:"fallback_count"`
+	// The upstream's own identifiers for this failure, and where along the
+	// request it happened. Absent on every attempt recorded before they were
+	// carried, which the console renders as "this record predates the field"
+	// rather than as an invented "unknown" — a value nobody could act on
+	// looks exactly like an upstream that named none.
+	ProviderCode      string `json:"provider_code,omitempty"`
+	ProviderRequestID string `json:"provider_request_id,omitempty"`
+	FailurePhase      string `json:"failure_phase,omitempty"`
+	LatencyMillis     int64  `json:"latency_millis"`
+	RetryCount        int    `json:"retry_count"`
+	FallbackCount     int    `json:"fallback_count"`
 }
 
 func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
@@ -359,6 +370,8 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			TokenUsageSource: event.TokenUsageSource,
 			StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
 			ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
+			ProviderCode: event.ProviderCode, ProviderRequestID: event.ProviderRequestID,
+			FailurePhase:  event.FailurePhase,
 			LatencyMillis: event.LatencyMillis, RetryCount: event.RetryCount,
 			FallbackCount: event.FallbackCount,
 		}
