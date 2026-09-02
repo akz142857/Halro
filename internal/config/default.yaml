@@ -114,6 +114,10 @@ usage:
   # which is re-serialized whole on every checkpoint and so costs time as well
   # as space. At least 7 (the overview reads that many days) and no more than
   # retention_days.
+  #
+  # This file seeds it on first start and has no say afterwards: the value lives
+  # in the metadata store and is changed under Settings -> Instance, where it is
+  # versioned, audited, and confirmed — shortening it discards attempt history.
   console_window_days: 30
   # parquet (default) or ndjson (ADR 0017). Usage is a rebuildable derivative
   # of the Ledger, never a source of truth, so this only controls what new

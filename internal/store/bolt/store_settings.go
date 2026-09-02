@@ -94,6 +94,83 @@ func (s *Store) PutInstanceUISettings(settings domain.InstanceUISettings, expect
 	return settings, err
 }
 
+func (s *Store) InstanceUsageSettings() (domain.InstanceUsageSettings, error) {
+	var settings domain.InstanceUsageSettings
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyInstanceUsageSettings)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return fmt.Errorf("decode instance usage settings: %w", err)
+		}
+		return settings.Validate()
+	})
+	return settings, err
+}
+
+func (s *Store) PutInstanceUsageSettings(settings domain.InstanceUsageSettings, expectedRevision uint64) (domain.InstanceUsageSettings, error) {
+	if err := settings.Validate(); err != nil {
+		return domain.InstanceUsageSettings{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMeta)
+		currentRevision := uint64(0)
+		if raw := bucket.Get(keyInstanceUsageSettings); raw != nil {
+			var current domain.InstanceUsageSettings
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode instance usage settings: %w", err)
+			}
+			currentRevision = current.Revision
+		}
+		if currentRevision != expectedRevision {
+			return ErrRevisionConflict
+		}
+		settings.Revision = currentRevision + 1
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyInstanceUsageSettings, encoded)
+	})
+	return settings, err
+}
+
+// SeedInstanceUsageSettings writes the configured console window the first time
+// an instance starts and never again.
+//
+// Same discipline as the accounting timezone: config.yaml is a starting point,
+// not a standing instruction. Once an operator has shortened the window through
+// the console — a change that destroys history and leaves an audit record — a
+// later edit of the file must not silently move it back.
+func (s *Store) SeedInstanceUsageSettings(consoleWindowDays int, now time.Time) (domain.InstanceUsageSettings, error) {
+	settings := domain.InstanceUsageSettings{ConsoleWindowDays: consoleWindowDays, UpdatedAt: now.UTC()}
+	if err := settings.Validate(); err != nil {
+		return domain.InstanceUsageSettings{}, err
+	}
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketMeta)
+		if raw := bucket.Get(keyInstanceUsageSettings); raw != nil {
+			var current domain.InstanceUsageSettings
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode instance usage settings: %w", err)
+			}
+			if err := current.Validate(); err != nil {
+				return err
+			}
+			settings = current
+			return nil
+		}
+		settings.Revision = 1
+		encoded, err := json.Marshal(settings)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyInstanceUsageSettings, encoded)
+	})
+	return settings, err
+}
+
 func (s *Store) InstanceAccountingSettings() (domain.InstanceAccountingSettings, error) {
 	var settings domain.InstanceAccountingSettings
 	err := s.db.View(func(tx *bbolt.Tx) error {

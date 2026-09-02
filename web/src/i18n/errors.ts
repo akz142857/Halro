@@ -120,6 +120,9 @@ export function localizedError(t: TFunction, error: unknown) {
     // it falls back to the generic headline plus the server's reason, which is
     // what every one of these did before.
     invalid_request: "errors.badRequest",
+    invalid_console_window: "errors.invalidConsoleWindow",
+    console_window_exceeds_retention: "errors.consoleWindowExceedsRetention",
+    console_window_trim_unacknowledged: "errors.consoleWindowTrimUnacknowledged",
     alert_id_required: "errors.alertIDRequired",
     deployment_provider_unavailable: "errors.deploymentProviderUnavailable",
     deployment_provider_adapter_unavailable: "errors.deploymentProviderAdapterUnavailable",

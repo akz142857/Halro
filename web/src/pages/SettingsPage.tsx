@@ -15,6 +15,7 @@ import { InstanceLanguageForm, PersonalLanguageForm } from "./LanguageSettingsFo
 import { MFASettings } from "./MFASettings";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
+import { UsageWindowForm } from "./UsageWindowForm";
 // One list, in the order the nav renders them. The routing used to repeat the
 // names in a chain of comparisons and the nav in its own array, so a pane could
 // be reachable by URL and absent from the menu, or the reverse.
@@ -53,9 +54,10 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
   });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings, enabled: !mfaSetupRequired && pane === "instance" });
   const accounting = useQuery({ queryKey: ["accounting-settings"], queryFn: api.accountingSettings, enabled: !mfaSetupRequired && pane === "instance" });
+  const usageSettings = useQuery({ queryKey: ["usage-settings"], queryFn: api.usageSettings, enabled: !mfaSetupRequired && pane === "instance" });
   const uiSettings = useQuery({ queryKey: ["ui-settings"], queryFn: api.uiSettings, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
   const preferences = useQuery({ queryKey: ["preferences"], queryFn: api.preferences, enabled: !mfaSetupRequired && (pane === "general" || pane === "instance") });
-  const queries = pane === "diagnostics" ? [status] : pane === "config" ? [config, modelCatalog] : pane === "instance" ? [settings, uiSettings, preferences, accounting] : pane === "general" ? [uiSettings, preferences] : [];
+  const queries = pane === "diagnostics" ? [status] : pane === "config" ? [config, modelCatalog] : pane === "instance" ? [settings, uiSettings, preferences, accounting, usageSettings] : pane === "general" ? [uiSettings, preferences] : [];
   const pending = queries.some((query) => query.isPending);
   const error = queries.find((query) => query.error)?.error;
   const accountingLabels = [t("settings.healthy"), t("settings.degraded"), t("settings.unavailable"), t("settings.recoveryRequired")];
@@ -88,7 +90,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {!pending && !error && pane === "general" && uiSettings.data && preferences.data && <section aria-labelledby="general-title"><SettingsGroupHeader title={t("settings.panes.general")} description={t("settings.generalDescription")} id="general-title" /><AppearanceForm preferences={preferences.data.data} /><PersonalLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} /></section>}
             {pane === "security" && <section aria-labelledby="security-title"><SettingsGroupHeader title={t("settings.panes.security")} description={t("settings.securityDescription")} id="security-title" /><PasswordChangeForm username={session?.username} /><MFASettings username={session?.username} /></section>}
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
-            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
+            {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>

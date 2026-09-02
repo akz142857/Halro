@@ -129,6 +129,7 @@ type Runtime struct {
 	draining         atomic.Bool
 	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
 	uiSettings       atomic.Pointer[domain.InstanceUISettings]
+	usageSettings    atomic.Pointer[domain.InstanceUsageSettings]
 	instanceID       string
 	anchorAuthorizer *bearercred.Authorizer
 	anchorAuthFailed atomic.Uint64
@@ -779,6 +780,21 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("initialize UI settings: %w", err))
 	}
 	runtime.uiSettings.Store(&uiSettings)
+	// config.yaml seeds the console window once and has no say afterwards.
+	// Shortening it destroys the attempt history it trims, so the value that
+	// decides it is versioned and audited rather than whatever the file happened
+	// to say at the last restart.
+	usageSettings, err := metadata.SeedInstanceUsageSettings(cfg.Usage.ConsoleWindowDays, time.Now())
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("initialize usage settings: %w", err))
+	}
+	runtime.usageSettings.Store(&usageSettings)
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
@@ -1542,6 +1558,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/ui", r.updateAdminUISettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/settings/usage", r.getAdminUsageSettings)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/usage", r.updateAdminUsageSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/accounting", r.getAdminAccountingSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/accounting", r.updateAdminAccountingSettings)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/settings/accounting/pending", r.cancelAdminAccountingTimezoneChange)

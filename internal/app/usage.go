@@ -184,7 +184,7 @@ func openUsageOffline(
 //
 // It runs after the export, on the same tick, for the same reason.
 func (r *Runtime) pruneUsageWindow() {
-	window := r.config.Usage.ConsoleWindowDays
+	window := r.consoleWindowDays()
 	if window < 1 {
 		return
 	}

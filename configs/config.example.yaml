@@ -217,8 +217,8 @@ usage:
   retention_days: 90
   # @title.zh-CN 控制台可见天数
   # @title.en-US Console window in days
-  # @description.zh-CN 控制台「调用明细」与「最终失败」能往回翻多久。与 retention_days 分开设置：那个管磁盘上的归档，这个管内存里的聚合——后者每次 checkpoint 都会被整体重新序列化，所以它的长度同时是时间成本。至少 7 天（运行总览要读这么多天），且不超过 retention_days。
-  # @description.en-US How far back the console's attempt log and failed-request list can page. Separate from retention_days: that bounds the archive on disk, this bounds the in-memory aggregate the screens are served from, which is re-serialized whole on every checkpoint and so costs time as well as space. At least 7 days (the overview reads that many) and no more than retention_days.
+  # @description.zh-CN 控制台「调用明细」与「最终失败」能往回翻多久。**本文件只在首次启动时作为初值**，此后由「设置 → 实例」中的运行时设置决定（有版本、有审计、缩短时需确认）。与 retention_days 分开设置：那个管磁盘上的归档，这个管内存里的聚合——后者每次 checkpoint 都会被整体重新序列化，所以它的长度同时是时间成本。至少 7 天（运行总览要读这么多天），且不超过 retention_days。
+  # @description.en-US How far back the console's attempt log and failed-request list can page. **This file only seeds it on first start**; afterwards the runtime setting under Settings -> Instance decides, where the change is versioned, audited, and confirmed when it shortens the window. Separate from retention_days: that bounds the archive on disk, this bounds the in-memory aggregate the screens are served from, which is re-serialized whole on every checkpoint and so costs time as well as space. At least 7 days (the overview reads that many) and no more than retention_days.
   console_window_days: 30
   # parquet (default) or ndjson (ADR 0017, docs/adr/0017-usage-export-format.md).
   # @title.zh-CN 用量导出格式

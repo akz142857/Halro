@@ -23,6 +23,7 @@ import type {
   UIBootstrap,
   InstanceUISettings,
   AccountingSettings,
+  UsageSettings,
   AdminPreferences,
   LocalePreference,
   Appearance,
@@ -265,6 +266,12 @@ export const api = {
   uiSettings: () => request<InstanceUISettings>("/settings/ui"),
   updateUISettings: (defaultLocale: SupportedLocale, revision: number) =>
     request<InstanceUISettings>("/settings/ui", json("PUT", { default_locale: defaultLocale }), `"${revision}"`),
+  usageSettings: () => request<UsageSettings>("/settings/usage"),
+  // acknowledge is the operator stating they know a shorter window discards
+  // history. The server requires it only when the window shrinks, so the
+  // console asks at the moment the answer matters rather than every time.
+  updateUsageSettings: (days: number, acknowledge: boolean, revision: number) =>
+    request<UsageSettings>("/settings/usage", json("PUT", { console_window_days: days, acknowledge_trim: acknowledge }), `"${revision}"`),
   accountingSettings: () => request<AccountingSettings>("/settings/accounting"),
   // The reset window after a switch is a server judgement: the client must
   // never derive a period boundary of its own.

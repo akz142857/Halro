@@ -30,6 +30,21 @@ export interface TimeContext {
  * in progress, because moving the boundary of a day that is already
  * accumulating would redefine what budgets already enforced against it meant.
  */
+export interface UsageSettings {
+  /** How far back the attempt log and the failed-request list can page. */
+  console_window_days: number;
+  /** What the console offers; any value between min and max is accepted. */
+  presets: number[];
+  min_days: number;
+  /** The archive's retention — the console must not promise more history. */
+  max_days: number;
+  /** What config.yaml says, and whether it is still what takes effect. */
+  config_file_days: number;
+  config_file_in_effect: boolean;
+  updated_at: string;
+  revision: number;
+}
+
 export interface AccountingSettings {
   timezone: string;
   timezone_version: number;

@@ -103,6 +103,7 @@ var (
 	keyMasterKeyRotationAuditIntent  = []byte("master_key_rotation_audit_intent")
 	keyRuntimeSettings               = []byte("runtime_settings")
 	keyInstanceUISettings            = []byte("instance_ui_settings")
+	keyInstanceUsageSettings         = []byte("instance_usage_settings")
 	keyInstanceAccountingSettings    = []byte("instance_accounting_settings")
 	keyInstanceID                    = []byte("instance_id")
 	keyMinimumLedgerReaderVersion    = []byte("minimum_ledger_reader_version")

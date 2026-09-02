@@ -438,8 +438,14 @@ the HTTP metrics and the audit log account for those.
 #### How far back the console pages
 
 `usage.console_window_days` (default 30) bounds the attempt log and the
-failed-request list. It is a different setting from `usage.retention_days`
-(default 90), and the difference is worth knowing before either is changed:
+failed-request list. **The file seeds it once and has no say afterwards**: the
+value lives in the metadata store and is changed under Settings → Instance,
+where it is versioned, audited, and — because shortening it discards history —
+confirmed. An operator who edits the file on a running install and restarts will
+find the console still showing what they set in the console, which is the point.
+
+It is a different setting from `usage.retention_days` (default 90), and the
+difference is worth knowing before either is changed:
 
 | Setting | Bounds | Cost of a long value |
 | --- | --- | --- |
@@ -470,6 +476,13 @@ makes it worse, adding about another minute to a tick that already takes
 forty-five seconds. Shorten the window until the encoding time is a small share
 of `usage.checkpoint_interval`; the archive keeps the history either way, and
 `halro usage` can export it.
+
+Shortening the window is the one destructive change in that screen. What falls
+outside it is trimmed out of memory on the next export tick and the two tabs can
+no longer reach it; the records themselves stay in the Parquet archive, and
+`halro usage` can still export them, but lengthening the window again does not
+bring them back — that takes a rebuild by replaying the ledger. The console asks
+for an explicit confirmation on the way down and none on the way up.
 
 The window is trimmed on the Parquet export tick, and only up to what that
 export has actually written. If the export stalls, the trimming stalls with it
@@ -657,6 +670,14 @@ through `/admin/api/v1/preferences`; the instance default uses
 `If-Match` revision, are audited, and never affect Gateway protocol payloads.
 Existing databases are initialized with `zh-CN`; older administrator records
 without a locale are interpreted as `system`.
+
+The console window is metadata in the same sense. `GET`/`PUT
+/admin/api/v1/settings/usage` read and change how far back the attempt log and
+the failed-request list can page, with the same CSRF, `If-Match` and audit
+discipline. A `PUT` that shortens the window is refused with
+`console_window_trim_unacknowledged` unless it carries `acknowledge_trim`,
+because the trim discards attempt history the moment the next export tick runs;
+lengthening it needs no acknowledgement, because nothing is lost by it.
 
 ### Time zones
 

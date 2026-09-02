@@ -348,7 +348,27 @@ ledger:
 
 ### 第四阶段 · 设置中心
 
-**S8** 见 D8，独立评审。
+**S8 · 把窗口交给设置中心** —— 已完成（2026-09-02）。
+
+`console_window_days` 从 `config.yaml` 提升为 bbolt 中的运行时设置，走与记账时区
+同一套机制：`SeedInstanceUsageSettings` 在首次启动时以配置值为初值写入，此后配置
+文件不再有发言权；修改经 `PUT /admin/api/v1/settings/usage`，带 revision 校验、
+`settings.usage.update` 审计记录与热更新，裁剪读的是存储值而不是配置值。
+
+**确认语义只在缩短时出现。** 加长不丢任何东西，问一次只会训练操作者习惯性点确定；
+缩短会在下一个导出周期把窗口外的调用记录裁出内存，所以服务端要求
+`acknowledge_trim`，否则返回 `console_window_trim_unacknowledged`，控制台据此弹出
+说明后果的确认框：记录本身仍在 Parquet 归档里、可用 halro usage 导出，但把窗口改
+回来不会把它们找回来——那需要从账本重放重建。
+
+另外两条边界仍在服务端：低于 7 天被拒（运行总览读 7 天），超过
+`usage.retention_days` 被拒（界面不该承诺归档已经没有的历史）——后者同时决定下拉
+框里显示哪些预设，一个只会被服务端拒绝的选项不如不给。
+
+**测试**：`internal/app/admin_usage_settings_test.go` 覆盖未确认的缩短被拒、超出
+归档被拒、低于下限被拒、revision 冲突、审计落盘，以及「改完重启后配置文件不会把
+它改回去」；`web/src/pages/UsageWindowForm.test.tsx` 覆盖缩短弹确认、加长直接保存、
+不提供超出归档的预设、配置文件失效提示。
 
 ## 七、验证计划
 
@@ -368,6 +388,7 @@ ledger:
 5. `halro doctor` 与 `halro usage verify` 在裁剪后通过；
 6. Parquet 裁剪不再需要停机；
 7. 文档不再声称可见窗口等于 `retention_days`；
+   ✅ 且不再声称它由 `config.yaml` 决定——第四阶段之后配置文件只是初值；
 8. （第三阶段）封存后账务可从「封存段 + 活动 WAL」完整重建，结果与未封存时逐条一致；
    ✅ 已在真实数据目录副本上验证（重放重建出的 manifest 逐字节相同）；
 9. （第三阶段）**活动** WAL 不再随运行时间单调上升，归档缩小到约 1/5.4 且可外移；
