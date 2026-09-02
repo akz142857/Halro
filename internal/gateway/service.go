@@ -163,6 +163,16 @@ type requestRun struct {
 	providerFailed              bool
 	finalized                   bool
 	tokenGuardPricingViewDigest string
+	// What the terminal failure record reports, accumulated as the request
+	// runs. failure is the last attempt failure seen — the one that decided the
+	// outcome, since a request cannot end badly on an attempt that succeeded —
+	// and lastTarget is where the last attempt ran, which is the only context a
+	// render failure has to offer.
+	acceptedAt    time.Time
+	failure       FailureDescriptor
+	lastTarget    provider.Target
+	attemptCount  int
+	fallbackCount int
 }
 
 // finalize closes out the request's accounting exactly once. Every exit path
@@ -174,7 +184,13 @@ func (run *requestRun) finalize(outcome string) error {
 		return nil
 	}
 	run.finalized = true
-	return run.service.finalizeRequest(run.requestLease, outcome)
+	err := run.service.finalizeRequest(run.requestLease, outcome)
+	// One record per request, on the same once-only boundary the settlement
+	// uses, so a request cannot be reported as having failed twice — and a
+	// request that fell back and succeeded cannot be reported as having failed
+	// at all, however many attempt warnings it left behind.
+	run.logFinalFailure(outcome, err == nil)
+	return err
 }
 
 type activeAttempt struct {
@@ -293,6 +309,7 @@ func (s *Service) beginRequestRun(
 	return &requestRun{
 		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
 		requestLease: requestLease, requestID: requestID, tokenGuardPricingViewDigest: pricingViewDigest,
+		acceptedAt: s.now(),
 	}, nil
 }
 
@@ -513,6 +530,15 @@ func (s *Service) startAttempt(
 			errors.Join(err, cleanupErr, finalizeErr),
 		)
 	}
+	// What the terminal failure record reports about the chain. Recorded here
+	// rather than at the call sites because this is the one place every
+	// protocol face opens an attempt through, and the counts have to survive a
+	// path that returns without another line remembering to update them.
+	run.attemptCount = attemptNumber
+	if targetIndex > run.fallbackCount {
+		run.fallbackCount = targetIndex
+	}
+	run.lastTarget = pricedTarget
 	return &activeAttempt{
 		service: s, run: run, accounting: attempt, breaker: breakerLease,
 		concurrency: providerLease, startedAt: s.now(), pricingTarget: pricedTarget,
@@ -583,7 +609,9 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	return nil
 }
 
-// logProviderFailure records an attempt the upstream did not complete.
+// logProviderFailure records an attempt the upstream did not complete, and
+// keeps what it learned on the run so the terminal record does not have to
+// classify the same error a second time.
 //
 // What the caller is told and what the operator is told are different answers on
 // purpose. The response carries a fixed sentence and no upstream detail, because
@@ -592,81 +620,31 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 // is what decides whether the attempt was retried, whether the breaker counted
 // it, and whether a fallback target was tried.
 //
-// The upstream's own sentence is not written. It is a provider response body,
-// and the one thing an upstream is most likely to quote back is the credential
-// it just refused; a pattern denylist only knows the formats it was told about.
-// A refusal Halro produced itself — a transport policy rejection, a response it
-// would not decode — carries no provider body and is the case an operator most
-// needs, so that text is logged, on the same rule the connection tests use: an
-// error with no upstream status is one Halro wrote.
+// The upstream's own sentence is not written; describeProviderFailure holds the
+// reasoning for that, and for why an unclassified error is logged by Go type
+// rather than by text. One exception stays here: a refusal Halro produced itself
+// — a transport policy rejection, a response it would not decode — carries no
+// provider body and is the case an operator most needs, so that text is logged,
+// on the same rule the connection tests use. An error with no upstream status is
+// one Halro wrote.
 //
-// That rule needs a classified error to stand on. An unclassified one gets its
-// type logged and its text withheld, because nothing has established which side
-// of the boundary wrote it.
+// This stays at WARN. The attempt is not the request: promoting it would report
+// a request that fell back and succeeded as a failure, which is the one
+// distinction this whole design exists to keep.
 func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	if providerErr == nil {
 		return
 	}
-	target := attempt.pricingTarget
-	attributes := []any{
-		"request_id", attempt.run.requestID,
-		"public_model", target.PublicModel,
-		"deployment_id", target.DeploymentID,
-		"provider_id", target.ProviderID,
-		"binding_id", target.BindingID,
+	descriptor := describeProviderFailure(providerErr, attempt.pricingTarget)
+	attempt.run.failure = descriptor
+	attributes := append([]any{"request_id", attempt.run.requestID}, descriptor.attributes()...)
+	attributes = append(attributes, "retryable", descriptor.Retryable)
+	if descriptor.Ambiguous {
+		attributes = append(attributes, "ambiguous", true)
 	}
 	var classified *provider.Error
-	if errors.As(providerErr, &classified) {
-		attributes = append(attributes, "error_class", string(classified.Class), "retryable", classified.Retryable)
-		if classified.Ambiguous {
-			attributes = append(attributes, "ambiguous", true)
-		}
-		if classified.StatusCode > 0 {
-			attributes = append(attributes, "provider_status", classified.StatusCode)
-		}
-		// The adapter separates the upstream's identifier from its prose for
-		// exactly this line: the sentence is a response body and stays inside the
-		// error, while `code` — and the parameter it refused, joined to it — is
-		// what an operator can act on. Logging status without it says a request
-		// was refused without saying for what, and leaves them bisecting a body
-		// they did not write.
-		// Both are narrowed here as well as at the adapters that narrow them,
-		// which is not belt and braces: this is the line the invariant binds to.
-		// An adapter is where the value is understood, but the rule — no provider
-		// response bytes in a log, an error, a metric or an audit record — is
-		// about where it is written, and an adapter added later that forgets to
-		// narrow must not be able to widen this. Narrowing an already-narrowed
-		// identifier returns it unchanged, so the adapters that do it keep their
-		// meaning; one that does not loses a value that was never an identifier.
-		if code := provider.SafeProviderIdentifier(classified.ProviderCode); code != "" {
-			attributes = append(attributes, "provider_code", code)
-		}
-		if requestID := provider.SafeProviderIdentifier(classified.ProviderRequestID); requestID != "" {
-			attributes = append(attributes, "provider_request_id", requestID)
-		}
-		if classified.StatusCode == 0 {
-			attributes = append(attributes, "reason", providerFailureReason(classified))
-		}
-	} else if errors.Is(providerErr, context.Canceled) || errors.Is(providerErr, context.DeadlineExceeded) {
-		attributes = append(attributes, "error_class", "client_disconnected_or_timed_out")
-	} else {
-		// The rule above reads an absent upstream status as "Halro wrote this",
-		// and here that inference is not available: an error that is not a
-		// *provider.Error never went through the classification that decides
-		// what may be said about it. The adapter contract delivers provider
-		// failures classified, so anything arriving unclassified is either
-		// Halro's own internal error or an adapter that did not honour the
-		// contract — and from this line the two are indistinguishable. One of
-		// them can be holding a response body.
-		//
-		// So the text stays out and the Go type goes in. A type name is an
-		// identifier, produced by the code rather than by an upstream, and it
-		// answers the question this branch is actually asked: which component
-		// produced a failure nothing classified. Redacting the sentence instead
-		// would be the pattern denylist the comment above already refuses to
-		// rely on.
-		attributes = append(attributes, "error_class", string(provider.ErrorUnknown),
-			"error_type", fmt.Sprintf("%T", providerErr))
+	if errors.As(providerErr, &classified) && classified.StatusCode == 0 {
+		attributes = append(attributes, "reason", providerFailureReason(classified))
 	}
 	attempt.service.logger.Warn("provider attempt failed", attributes...)
 }

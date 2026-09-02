@@ -136,7 +136,7 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1},
+			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1, finalFailureErrors: 1},
 		},
 		{
 			// The contract this whole file exists for: a request that fell back
@@ -178,7 +178,7 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 3},
+			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 3, finalFailureErrors: 1},
 		},
 		{
 			// The upstream answered; the answer could not be put on the
@@ -197,7 +197,7 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1},
+			want: failureCounts{outcome: "provider_error", requestErrors: 1, finalFailureErrors: 1},
 		},
 		{
 			// The caller went away. It is a failed request in the ledger, but
@@ -211,7 +211,7 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1},
+			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1, finalFailureErrors: 1},
 		},
 		{
 			// Admitted into the ledger, then refused before any upstream call:
