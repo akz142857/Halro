@@ -61,6 +61,26 @@ func TestNoEndpointIsServedByATargetThatReasonsUnasked(t *testing.T) {
 		t.Fatal("no catalogue entry reasons unasked, so this guard asserts nothing — the two incidents it is written from were both this")
 	}
 
+	// The provider side is asked first, and it is a separate question from the
+	// endpoint's. A profile whose own result decoder refuses a reasoning part
+	// fails before any northbound renderer is reached, so every endpoint is
+	// affected rather than only the intolerant ones.
+	//
+	// The first version of this guard did not model that half, and a measurement
+	// found the hole: MiniMax-M2.1 on minimax.responses.v1 returns a reasoning
+	// output item that compatibility/openai.DecodeProviderResponse refuses, and
+	// this walk would have reported /v1/chat/completions as fine because that
+	// endpoint can render reasoning. It never gets the chance.
+	for profileID := range unasked {
+		if domain.IsWithheldProfile(profileID) || profileDecodesReasoning(t, profileID) {
+			continue
+		}
+		for _, model := range unasked[profileID] {
+			t.Errorf("%s/%s: this target reasons whatever the request says and the profile's own result decoder refuses a reasoning part, so every northbound endpoint answers 502 with the upstream already paid. A catalogue entry for it offers a deployment that fails every call.",
+				profileID, model)
+		}
+	}
+
 	seen := map[string]struct{}{}
 	for _, manifest := range compatibility.BuiltinEndpointManifests() {
 		if manifest.SemanticOperation != semantic.OperationGenerate {
@@ -95,6 +115,53 @@ func TestNoEndpointIsServedByATargetThatReasonsUnasked(t *testing.T) {
 			t.Errorf("%q is tolerated as residue and no longer exists: delete the entry so the list stays the truth about what is uncovered", pair)
 		}
 	}
+}
+
+// profileDecodesReasoning asks whether this provider profile can turn an
+// upstream reasoning part into semantic content at all, which is the question
+// that comes before "can the endpoint render it".
+//
+// Keyed by profile and checked for completeness rather than defaulted, for the
+// reason the reasoning-probe ladder is: a default here is a guess, and the
+// guessing direction that hides an incident is "it decodes fine". Only profiles
+// carrying a target that reasons unasked need an entry, so the table stays as
+// short as the problem is.
+func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) bool {
+	t.Helper()
+	switch profileID {
+	case domain.ProfileKimiChat, domain.ProfileMiniMaxChat, domain.ProfileDeepSeekChat,
+		domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings:
+		// The Chat wire carries reasoning in its own member, and the decoder maps
+		// it to a reasoning content part.
+		finish := "stop"
+		_, err := openaiwire.DecodeGenerateResult(openaiapi.ChatCompletionResponse{
+			ID: "chatcmpl_1", Object: "chat.completion", Created: 1, Model: "m",
+			Choices: []openaiapi.Choice{{
+				Index: 0, FinishReason: &finish,
+				Message: &openaiapi.Message{
+					Role: "assistant", Content: openaiapi.TextContent("the answer"),
+					ReasoningContent: "thinking out loud",
+				},
+			}},
+		})
+		return err == nil
+	case domain.ProfileMiniMaxResponses, domain.ProfileKimiResponses,
+		domain.ProfileOpenAIResponses, domain.ProfileBedrockMantleResponses,
+		domain.ProfileBedrockMantleOpenAIResponses:
+		// The Responses wire carries reasoning as an output item, and the
+		// canonical mapper has no case for one. It refuses; it does not drop.
+		_, err := openaiwire.DecodeProviderResponse(openaiapi.Response{
+			ID: "resp_1", Model: "m", Status: "completed",
+			Output: []openaiapi.ResponseOutputItem{
+				{ID: "rs_1", Type: "reasoning", Status: "completed"},
+				{ID: "msg_1", Type: "message", Status: "completed", Role: "assistant",
+					Content: []openaiapi.ResponseOutputContent{{Type: "output_text", Text: "the answer"}}},
+			},
+		})
+		return err == nil
+	}
+	t.Fatalf("a catalogue entry on %s reasons unasked and this guard does not know whether that profile's decoder can carry a reasoning part; add it to profileDecodesReasoning", profileID)
+	return false
 }
 
 // endpointRendersReasoning asks the endpoint's own renderer, rather than a table

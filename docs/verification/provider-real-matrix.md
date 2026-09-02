@@ -150,20 +150,54 @@ agree, the rate limits, and whether `base_resp` behaves the same way.
 `docs/prd/minimax-adaptation-plan.zh-CN.md` §7 carries the assumptions that are
 still open, each with the assertion that would close it.
 
-### One more open question, raised by Kimi rather than by MiniMax
+### `/v1/responses` measured, and the M2 line does have Kimi's defect (2026-09-02)
 
-`minimax.responses.v1` may have the defect that got `kimi.responses.v1` withheld,
-and nothing here establishes whether it does. The chain is identical on paper:
-the profile refuses `reasoning_effort` at every value, so the portable renderer
-never sends MiniMax an off switch, and MiniMax-M3's documented thinking default
-is on. If that face returns reasoning output items the way Kimi's does, every
-call through it ends `malformed_response` with the upstream already paid.
+Raised by the Kimi work rather than by MiniMax: `minimax.responses.v1` might have
+the pairing that got `kimi.responses.v1` withheld, and neither MiniMax smoke had
+ever driven that endpoint and read the *output* back through Halro's own mapper —
+the same blind spot that let Kimi's row ship. Five calls on the international
+host settled it, and the answer splits by model.
 
-Neither MiniMax smoke drives `/v1/responses` and reads the *output* back through
-Halro's mapper — the same blind spot that let Kimi's row ship. One unasked call
-against that endpoint settles it: an `output` array containing a `reasoning` item
-is the failure, an array of message items alone is not. Recorded as unmeasured
-rather than inferred in either direction.
+| request | `reasoning` output item | output tokens |
+|---|---|---|
+| `MiniMax-M3`, nothing asked | no | 2 |
+| `MiniMax-M3` + `reasoning.effort=none` | no (echoed back as `"none"`) | 3 |
+| `MiniMax-M3`, a multi-step word problem | **no** — the working is inside the text | 112 |
+| `MiniMax-M2.1`, nothing asked | **yes** | 44 |
+| `MiniMax-M2.1` + `reasoning.effort=none` | **yes**, unchanged | 52 |
+
+The M2 rows are the third instance this month of one shape: a documented switch
+**accepted, echoed back, and ignored**. MiniMax documents `none` on this face's
+effort ladder; the upstream returns it in the response and reasons anyway. Kimi's
+Responses face does the same with `thinking`.
+
+The consequence is worse than Kimi's k2.7-code gap and was verified by running
+the captured bodies through the real decoder, not by reading:
+
+```
+M3 nothing asked      decodes cleanly
+M2.1 nothing asked    DecodeProviderResponse -> provider Responses output item is unsupported
+M2.1 effort none      DecodeProviderResponse -> provider Responses output item is unsupported
+```
+
+That refusal is in the **provider-side** decoder, upstream of every northbound
+renderer, so all three faces answer 502 with the call already paid — not just the
+two that cannot render a reasoning part. The seven M2 identifiers are therefore
+gone from the Responses profile in the model catalogue; they keep their Chat and
+Anthropic entries, and `MiniMax-M3` keeps all three. An operator who wants one
+anyway still has `operator_declared`.
+
+Two honest limits on that. Only `MiniMax-M2.1` was driven; the other six are the
+same line under MiniMax's own documented constraint that M2.x cannot be told to
+stop thinking, and are removed on the fail-closed reading rather than on
+evidence of their own. And M3's switch is `adaptive`, so two negative probes —
+one of them built to provoke multi-step work — are evidence, not proof.
+
+The guard this exposed a hole in is
+`TestNoEndpointIsServedByATargetThatReasonsUnasked`. It asked only whether the
+*endpoint* could render reasoning, and would have called `/v1/chat/completions`
+safe here; that endpoint can render it and never gets the chance. It now asks the
+provider profile's own decoder first.
 
 ## Kimi: measured on a mainland account (2026-09-01)
 

@@ -442,11 +442,35 @@ func minimaxModels() []Entry {
 		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxResponses, "MiniMax-M3", with(responses(m3Context, m3Output), vision)),
 	}
+	// The M2 line is absent from the Responses profile, and the absence is a
+	// measurement rather than a gap. Measured on an international account
+	// 2026-09-02, MiniMax-M2.1 on /v1/responses:
+	//
+	//	{"model":"MiniMax-M2.1","input":"Reply with OK.","max_output_tokens":256}
+	//	  -> 200, output[0] {"type":"reasoning", content:[{"type":"reasoning_text"}]}
+	//	  and the same again with reasoning:{"effort":"none"}, which is echoed
+	//	  back as "none" and changed nothing.
+	//
+	// That reasoning item is refused by compatibility/openai.DecodeProviderResponse
+	// — `provider Responses output item is unsupported` — which is upstream of
+	// every northbound renderer, so all three faces answer 502 with the upstream
+	// already paid. An entry here would have offered an operator a deployment
+	// that fails every single call.
+	//
+	// MiniMax's own documentation already said the M2 line cannot be told to stop
+	// thinking; what nobody had done was join that to what this profile's decoder
+	// accepts. M2.1 is the one driven; the other two are the same line under the
+	// same documented constraint, and are left out on the fail-closed reading.
+	//
+	// M3 stays, and that is also measured: two probes, one trivial and one built
+	// to provoke multi-step work, both came back with a message item alone and
+	// the working shown inside the text. Its switch is `adaptive`, so this is
+	// evidence rather than proof — TestNoEndpointIsServedByATargetThatReasonsUnasked
+	// is what would catch it if a later measurement says otherwise.
 	for _, model := range m2Models {
 		entries = append(entries,
 			builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, model, anthropicChat(m2Context, 0)),
 			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
-			builtinEntry(provider, domain.ProfileMiniMaxResponses, model, responses(m2Context, 0)),
 		)
 	}
 	return entries
