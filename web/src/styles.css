@@ -188,6 +188,13 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
    reassemble in their head. Still a clamp, so a narrow window gets the whole
    width and a wide one does not hand over the entire screen. */
 .modal.drawer:has(> .failure-detail-body) { width: min(clamp(46rem, 58vw, 72rem), 100%); }
+/* Left, not right. A form's actions end on the right because that is where a
+   left-to-right reader finishes the last field; this drawer ends in a payload
+   pane that can be any height, so the way out belongs under the start of the
+   text rather than trailing off the far edge of an empty row. */
+/* Both classes, because .form-actions declares flex-end at equal specificity
+   and further down the file, where source order would decide it. */
+.form-actions.failure-detail-actions { justify-content: flex-start; }
 
 /* The facts of one failure, laid out as cells so the dialog reads as a record
    rather than as a long column of label/value pairs. */

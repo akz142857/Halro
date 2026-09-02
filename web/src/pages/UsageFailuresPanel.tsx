@@ -303,7 +303,7 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
           here because scrolling to the end of a payload and finding nothing to
           click reads as an unfinished panel, and because the way out of a long
           read should be where the read ends. */}
-      <div className="form-actions">
+      <div className="form-actions failure-detail-actions">
         {/* No data-modal-initial: without it the Modal focuses its own
             container, so the first thing announced is the dialog's title
             rather than the way out of it. */}
