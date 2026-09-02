@@ -129,10 +129,12 @@ func RebuildUsageSummary(ctx context.Context, cfg config.Config) (SummaryRebuild
 		return report, nil
 	}
 	if err := store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
+		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
 	); err != nil {
 		return SummaryRebuildReport{}, fmt.Errorf("write usage derivatives: %w", err)
 	}
+	aggregate.CommitCheckpoint(snapshot)
 	return report, nil
 }
 

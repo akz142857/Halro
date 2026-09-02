@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 34
+const schemaVersion uint64 = 35
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -88,6 +88,7 @@ var (
 	bucketCapabilityDetectionIdem    = []byte("model_capability_detection_idempotency")
 	bucketCapabilityDetectionIndex   = []byte("model_capability_detection_fingerprint_index")
 	bucketUsageDailyRollup           = []byte("usage_daily_rollup")
+	bucketUsageCheckpointSegments    = []byte("usage_checkpoint_segments")
 	keySchemaVersion                 = []byte("schema_version")
 	keyVaultCheck                    = []byte("vault_key_check")
 	keyUsageCheckpoint               = []byte("usage_checkpoint")
@@ -940,6 +941,43 @@ var migrations = []migration{
 			}
 		}
 		return migrationStep(step, "after_ledger_chain_checkpoint_generation")
+	}},
+	// The usage checkpoint stopped being one blob rewritten in full every tick
+	// and became a head plus immutable record segments, so a tick writes only
+	// what changed. The stored blob is version 11 and the reader accepts only
+	// 12, so it would be refused on the next start anyway — but a refused
+	// checkpoint is not a deleted one, and leaving it would keep a copy of the
+	// whole window on disk that nothing will ever read again. Both Usage
+	// derivatives are cleared together, which is the state a full replay
+	// rebuilds correctly: clearing only the checkpoint would leave a complete
+	// rollup while the next start replays the WAL from zero, and every row
+	// would be counted twice.
+	{version: 35, name: "usage_checkpoint_segments", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_usage_checkpoint_segments"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if err := meta.Delete(keyUsageCheckpoint); err != nil {
+			return err
+		}
+		if err := meta.Delete(keyUsageRollupState); err != nil {
+			return err
+		}
+		if tx.Bucket(bucketUsageDailyRollup) != nil {
+			if err := tx.DeleteBucket(bucketUsageDailyRollup); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageDailyRollup); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_usage_checkpoint_segments")
 	}},
 }
 

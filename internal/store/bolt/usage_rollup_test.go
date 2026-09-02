@@ -36,12 +36,12 @@ func TestUsageRollupIncrementsAccumulate(t *testing.T) {
 	key := totalRollupKey().Encode()
 
 	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
-	if err := store.PutUsageCheckpoint(first, []byte(`{"version":8}`), domain.RollupVersion,
+	if err := store.PutUsageCheckpoint(first, []byte(`{"version":8}`), nil, nil, domain.RollupVersion,
 		map[string]domain.DailyRollup{key: rollupIncrement(1, 90)}); err != nil {
 		t.Fatal(err)
 	}
 	second := ledger.Watermark{Generation: 1, Offset: 200, Sequence: 4}
-	if err := store.PutUsageCheckpoint(second, []byte(`{"version":8}`), domain.RollupVersion,
+	if err := store.PutUsageCheckpoint(second, []byte(`{"version":8}`), nil, nil, domain.RollupVersion,
 		map[string]domain.DailyRollup{key: rollupIncrement(2, 40)}); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestUsageRollupRejectsRowsThatContradictTheirKey(t *testing.T) {
 	mismatched.PeriodID = "2026-08-31"
 	err = store.PutUsageCheckpoint(
 		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), domain.RollupVersion,
+		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
 		map[string]domain.DailyRollup{totalRollupKey().Encode(): mismatched},
 	)
 	if err == nil {
@@ -97,7 +97,7 @@ func TestResetUsageDerivativesClearsBothViews(t *testing.T) {
 	defer store.Close()
 	if err := store.PutUsageCheckpoint(
 		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), domain.RollupVersion,
+		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
 		map[string]domain.DailyRollup{totalRollupKey().Encode(): rollupIncrement(1, 90)},
 	); err != nil {
 		t.Fatal(err)
@@ -144,7 +144,7 @@ func TestUsageRollupKeysSurviveSlashesInDimensionValues(t *testing.T) {
 	otherRow.Identity("2026-08-31", 2, "Asia/Shanghai", 1, 2)
 	if err := store.PutUsageCheckpoint(
 		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), domain.RollupVersion,
+		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
 		map[string]domain.DailyRollup{
 			slashed.Encode(): rollupIncrement(1, 90),
 			other.Encode():   otherRow,
@@ -212,7 +212,7 @@ func TestUsageRollupBoundsKeysPerDimension(t *testing.T) {
 	}
 	if err := store.PutUsageCheckpoint(
 		ledger.Watermark{Generation: 1, Offset: 100, Sequence: uint64(overflow)},
-		[]byte(`{"version":8}`), domain.RollupVersion, delta,
+		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion, delta,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestUsageRollupCapIsIndependentOfIncrementBatching(t *testing.T) {
 			}
 			if err := store.PutUsageCheckpoint(
 				ledger.Watermark{Generation: 1, Offset: int64(sequence) * 10, Sequence: sequence},
-				[]byte(`{"version":8}`), domain.RollupVersion, batch,
+				[]byte(`{"version":8}`), nil, nil, domain.RollupVersion, batch,
 			); err != nil {
 				t.Fatal(err)
 			}

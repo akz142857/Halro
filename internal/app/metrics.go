@@ -160,6 +160,21 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_usage_window_trimmed_total", "counter",
 		"Attempts removed from the usage aggregate by the console window.")
 	fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
+	// What the stored checkpoint costs, which is a different question from what
+	// the window holds. The bytes gauge is the whole checkpoint; the last-write
+	// gauge is what one tick actually rewrote. The gap between them is the
+	// point of the segmented format, and the two converging would mean it has
+	// stopped working — a tick rewriting the window again.
+	checkpointed := r.usage.Checkpointed()
+	metricHeader(output, "halro_usage_checkpoint_segments", "gauge",
+		"Segments holding the stored usage checkpoint.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_segments %d\n", checkpointed.Segments)
+	metricHeader(output, "halro_usage_checkpoint_bytes", "gauge",
+		"Bytes the stored usage checkpoint occupies across all its segments.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_bytes %d\n", checkpointed.Bytes)
+	metricHeader(output, "halro_usage_checkpoint_open_segment_bytes", "gauge",
+		"Bytes in the one segment a checkpoint tick rewrites.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_open_segment_bytes %d\n", checkpointed.OpenSegmentBytes)
 	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
 	// what it moved out of the way and is still keeping. Read together they say
 	// whether the growth an operator is watching is in the file being written

@@ -91,11 +91,7 @@ func TestProviderIdentifiersMatchAfterCheckpointAndRebuild(t *testing.T) {
 
 	incremental := NewAggregate()
 	applyEvents(t, incremental, events)
-	snapshot, err := incremental.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	restored, err := restoreOneRound(incremental)
 	if err != nil {
 		t.Fatal(err)
 	}

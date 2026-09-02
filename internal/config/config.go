@@ -258,10 +258,10 @@ type Usage struct {
 	// It is a separate setting from RetentionDays because the two answer
 	// different questions — how far back the screen goes, and how long the
 	// archive is kept — and binding them would make an operator who needs a
-	// long archive pay for it in memory and in checkpoint time. The aggregate
-	// costs about 1149 bytes per attempt and is re-serialized whole on every
-	// checkpoint, so its length is a running cost in a way the archive's is
-	// not.
+	// long archive pay for it in memory. An attempt costs about a kilobyte
+	// resident and about the same again in the checkpoint that holds it, so
+	// this setting is a standing memory cost in a way the archive's length is
+	// not; see the operator guide's sizing table.
 	ConsoleWindowDays int `yaml:"console_window_days"`
 	// ExportFormat selects the container new Usage partitions are written in
 	// (ADR 0017): "parquet" (default) or "ndjson". Existing partitions are

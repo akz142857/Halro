@@ -35,11 +35,8 @@ func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testin
 			}
 			recovered := NewAggregate()
 			if checkpointEnd > 0 {
-				snapshot, err := prefix.TakeCheckpoint()
-				if err != nil {
-					t.Fatal(err)
-				}
-				recovered, err = RestoreCheckpoint(snapshot.Payload)
+				var err error
+				recovered, err = restoreOneRound(prefix)
 				if err != nil {
 					t.Fatalf("kill=%d committed=%t restore: %v", killPoint, checkpointCommitted, err)
 				}
@@ -231,12 +228,8 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	watermark := snapshot.Watermark
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	watermark := aggregate.Snapshot().Watermark
+	restored, err := restoreOneRound(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,11 +280,7 @@ func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
 	}
 	before := aggregate.Snapshot().Totals
 
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	restored, err := restoreOneRound(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

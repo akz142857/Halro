@@ -885,14 +885,14 @@ func restoreUsageAggregate(
 // be trusted. Every rejection path names itself so the log says which one fired
 // rather than only that something was ignored.
 func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.Aggregate, ledger.Watermark, string) {
-	watermark, payload, err := store.UsageCheckpoint()
+	watermark, headPayload, err := store.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		return nil, ledger.Watermark{}, "no usage checkpoint"
 	}
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint unreadable: %v", err)
 	}
-	aggregate, err := usage.RestoreCheckpoint(payload)
+	aggregate, err := usage.RestoreCheckpoint(headPayload, store.UsageCheckpointSegmentPayload)
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint rejected: %v", err)
 	}
@@ -1004,13 +1004,32 @@ func (r *Runtime) saveUsageCheckpoint() {
 		return
 	}
 	if err := r.store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
+		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
 	); err != nil {
 		r.logger.Warn("usage checkpoint save failed", "error", err)
 		r.returnUsageCheckpoint(snapshot)
 		return
 	}
+	// Only now does the aggregate treat those segments as stored. A write that
+	// failed above leaves it proposing the same round again on the next tick,
+	// which is why nothing has to be unwound but the increment.
+	r.usage.CommitCheckpoint(snapshot)
 	r.advanceLedgerChainCheckpoint()
+}
+
+// usageCheckpointSegments hands the round's segments to the store in its own
+// terms. The two types are deliberately separate: the store persists opaque
+// payloads addressed by id and has no business knowing what a segment holds.
+func usageCheckpointSegments(snapshot usage.CheckpointSnapshot) []boltstore.UsageCheckpointSegment {
+	if len(snapshot.Segments) == 0 {
+		return nil
+	}
+	segments := make([]boltstore.UsageCheckpointSegment, 0, len(snapshot.Segments))
+	for _, segment := range snapshot.Segments {
+		segments = append(segments, boltstore.UsageCheckpointSegment{ID: segment.ID, Payload: segment.Payload})
+	}
+	return segments
 }
 
 func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {

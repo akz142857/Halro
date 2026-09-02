@@ -229,11 +229,7 @@ func TestFailedRequestPagingAndFilters(t *testing.T) {
 // slice position would not.
 func TestFailedRequestPagingSurvivesACheckpointRestore(t *testing.T) {
 	aggregate := failureFixture(t)
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	restored, err := restoreOneRound(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}

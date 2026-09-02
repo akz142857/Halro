@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"reflect"
@@ -103,7 +104,17 @@ func TestCheckpointWatermarkRejectsAlreadyAggregatedLedgerPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	watermark := snapshot.Watermark
-	restored, err := usage.RestoreCheckpoint(snapshot.Payload)
+	segments := map[uint64][]byte{}
+	for _, segment := range snapshot.Segments {
+		segments[segment.ID] = segment.Payload
+	}
+	restored, err := usage.RestoreCheckpoint(snapshot.Head, func(id uint64) ([]byte, error) {
+		payload, ok := segments[id]
+		if !ok {
+			return nil, fmt.Errorf("segment %d is missing", id)
+		}
+		return payload, nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -110,10 +110,10 @@ usage:
   retention_days: 90
   # How far back the console's attempt log and failed-request list can page.
   # Separate from retention_days on purpose: that one bounds the archive on
-  # disk, this one bounds the in-memory aggregate the screens are served from,
-  # which is re-serialized whole on every checkpoint and so costs time as well
-  # as space. At least 7 (the overview reads that many days) and no more than
-  # retention_days.
+  # disk, this one bounds the in-memory aggregate the screens are served from —
+  # about a kilobyte of memory per attempt, held for as long as the process
+  # runs. At least 7 (the overview reads that many days) and no more than
+  # retention_days. The operator guide has a sizing table by throughput.
   #
   # This file seeds it on first start and has no say afterwards: the value lives
   # in the metadata store and is changed under Settings -> Instance, where it is

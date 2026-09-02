@@ -193,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 34 ||
+	if len(history) != 35 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -227,7 +227,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[30] != (MigrationRecord{Version: 31, Name: "fetched_image_capability"}) ||
 		history[31] != (MigrationRecord{Version: 32, Name: "structured_output_capability_split"}) ||
 		history[32] != (MigrationRecord{Version: 33, Name: "usage_daily_rollup"}) ||
-		history[33] != (MigrationRecord{Version: 34, Name: "ledger_chain_checkpoint_generation"}) {
+		history[33] != (MigrationRecord{Version: 34, Name: "ledger_chain_checkpoint_generation"}) ||
+		history[34] != (MigrationRecord{Version: 35, Name: "usage_checkpoint_segments"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -807,7 +808,7 @@ func TestUsageCheckpointPersistenceAndMonotonicity(t *testing.T) {
 	}
 	defer store.Close()
 	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
-	if err := store.PutUsageCheckpoint(first, []byte(`{"version":1}`), domain.RollupVersion, nil); err != nil {
+	if err := store.PutUsageCheckpoint(first, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, payload, err := store.UsageCheckpoint()
@@ -818,7 +819,7 @@ func TestUsageCheckpointPersistenceAndMonotonicity(t *testing.T) {
 		t.Fatalf("watermark=%#v payload=%s", got, payload)
 	}
 	older := ledger.Watermark{Generation: 1, Offset: 50, Sequence: 1}
-	if err := store.PutUsageCheckpoint(older, []byte(`{"version":1}`), domain.RollupVersion, nil); err == nil {
+	if err := store.PutUsageCheckpoint(older, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err == nil {
 		t.Fatal("expected a backwards checkpoint to be rejected")
 	}
 }

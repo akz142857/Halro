@@ -823,7 +823,7 @@ func TestBackupSucceedsWhenTheStoredUsageCheckpointPredatesThisBuild(t *testing.
 	// payload whose version this build refuses.
 	stale := []byte(`{"version":7,"watermark":{"generation":1,"sequence":1,"offset":1}}`)
 	putErr := store.PutUsageCheckpoint(
-		ledger.Watermark{Generation: 1, Sequence: 1, Offset: 1}, stale, domain.RollupVersion, nil)
+		ledger.Watermark{Generation: 1, Sequence: 1, Offset: 1}, stale, nil, nil, domain.RollupVersion, nil)
 	if err := errors.Join(putErr, store.Close()); err != nil {
 		t.Fatal(err)
 	}

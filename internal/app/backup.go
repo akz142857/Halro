@@ -620,13 +620,14 @@ func createBackupSnapshotWithLedger(
 	// A store-level failure stays fatal. That is a broken database rather than
 	// an unreadable derivative, and it is not a state a previous release
 	// legitimately produces.
-	checkpoint, checkpointPayload, err := metadata.UsageCheckpoint()
+	checkpoint, checkpointHead, err := metadata.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		checkpoint = ledger.Watermark{}
 	} else if err != nil {
 		return backup.Manifest{}, err
 	} else {
-		checkpointAggregate, restoreErr := usage.RestoreCheckpoint(checkpointPayload)
+		checkpointAggregate, restoreErr := usage.RestoreCheckpoint(
+			checkpointHead, metadata.UsageCheckpointSegmentPayload)
 		if restoreErr != nil || checkpointAggregate.Snapshot().Watermark != checkpoint {
 			checkpoint = ledger.Watermark{}
 		}

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/akz142857/Halro/internal/ledger"
 )
@@ -202,9 +204,13 @@ func TestTheCheckpointCostsAKnownAmountPerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	perAttempt := len(snapshot.Payload) / attempts
+	// Head plus every segment: what one round writes for a window it has never
+	// checkpointed before is the whole window, and that total is what the
+	// sizing table is derived from. What a *later* round writes is a different
+	// question, and TestCheckpointWritesOnlyTheRecordsSinceTheLastOne asks it.
+	perAttempt := checkpointBytes(snapshot) / attempts
 	t.Logf("checkpoint: %d bytes for %d attempts (%d bytes each)",
-		len(snapshot.Payload), attempts, perAttempt)
+		checkpointBytes(snapshot), attempts, perAttempt)
 	// Wide enough that ordinary field changes do not trip it, narrow enough
 	// that a structural bloat does. The measured figure for a settled attempt
 	// with a price snapshot is about 1150 bytes; these fixtures carry no
@@ -219,14 +225,69 @@ func TestTheCheckpointCostsAKnownAmountPerAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ratio := float64(len(snapshot.Payload)) / float64(len(halfSnapshot.Payload))
+	ratio := float64(checkpointBytes(snapshot)) / float64(checkpointBytes(halfSnapshot))
 	if ratio < 1.7 || ratio > 2.3 {
 		t.Fatalf("checkpoint size is not linear in attempt count: %.2fx for twice the attempts", ratio)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(snapshot.Payload, &decoded); err != nil {
-		t.Fatalf("the checkpoint payload is not the JSON this measurement assumes: %v", err)
+	if err := json.Unmarshal(snapshot.Head, &decoded); err != nil {
+		t.Fatalf("the checkpoint head is not the JSON this measurement assumes: %v", err)
 	}
+}
+
+// The other half of what a window costs, and since S9 the half that binds
+// first: the aggregate is held in memory, so the window's length is a resident
+// footprint whether or not a checkpoint is running. The disk figure above and
+// this one answer different questions and an operator sizing an instance needs
+// both — the guide's table carries them side by side.
+func TestTheWindowCostsAKnownAmountOfMemoryPerAttempt(t *testing.T) {
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	const attempts = 20000
+
+	// The part that does not depend on measuring anything: the two records are
+	// held in slices, so their struct sizes alone fix a floor that no amount of
+	// shortening identifiers gets under. This is the number the operator
+	// guide's sizing table is anchored to.
+	perAttemptFloor := int(unsafe.Sizeof(AttemptEvent{})) + int(unsafe.Sizeof(RequestSummary{}))
+	if perAttemptFloor < 512 || perAttemptFloor > 1200 {
+		t.Fatalf("an attempt and its summary occupy %d bytes of struct; the guide says about a kilobyte per attempt", perAttemptFloor)
+	}
+
+	// And the measured figure on top of it — strings, maps, the indexes. Twice,
+	// because a single collection can leave objects that became unreachable
+	// during the cycle still counted, which reads as a smaller aggregate than
+	// there is.
+	runtime.GC()
+	runtime.GC()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
+	aggregate := retentionEvents(t, attempts, day)
+	runtime.GC()
+	runtime.GC()
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
+	perAttempt := int(after.HeapAlloc-before.HeapAlloc) / attempts
+	t.Logf("resident: %d bytes for %d attempts (%d bytes each, struct floor %d)",
+		after.HeapAlloc-before.HeapAlloc, attempts, perAttempt, perAttemptFloor)
+
+	// Only the ceiling is asserted. A baseline taken while another test's
+	// garbage is still counted makes the delta *smaller*, never larger, so a
+	// low reading is a noisy measurement rather than a leaner aggregate — the
+	// floor above is what pins that direction. A high reading cannot be noise
+	// in the same way: it means a per-record allocation appeared.
+	if perAttempt > 3000 {
+		t.Fatalf("a resident attempt is %d bytes; the window's memory is this times its length", perAttempt)
+	}
+	runtime.KeepAlive(aggregate)
+}
+
+// checkpointBytes is everything one round hands the store.
+func checkpointBytes(snapshot CheckpointSnapshot) int {
+	total := len(snapshot.Head)
+	for _, segment := range snapshot.Segments {
+		total += len(segment.Payload)
+	}
+	return total
 }
 
 // The window itself. Trimming keeps the two conditions that make it safe: old
@@ -304,11 +365,7 @@ func TestTheWindowFloorSurvivesACheckpoint(t *testing.T) {
 	if result.Floor == 0 {
 		t.Fatal("nothing was trimmed, so this test proves nothing")
 	}
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	restored, err := restoreOneRound(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
