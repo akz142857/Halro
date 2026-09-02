@@ -178,10 +178,16 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .failure-detail summary { color: var(--muted); cursor: pointer; font-size: var(--font-size-xs); }
 .failure-detail small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); white-space: normal; }
 
-/* The inset the modal gives a <form> child and nothing else. This dialog's body
-   is a list and two sections, so it has to ask for the same one by name or it
-   sits flush against all four borders. */
-.failure-detail-body { margin: var(--space-6); }
+/* The dialog scrolls its body, not itself. A captured payload runs to two panes
+   of JSON and the modal's own overflow takes the title and the close button off
+   the top of the screen with it — which is the one control a reader wants while
+   scrolling through somebody's request body. Same shape .redaction-form uses.
+   Qualified by the modal so the inset below outranks `.modal > form`. */
+.modal:has(> .failure-detail-body) { display: grid; grid-template-rows: auto minmax(0, 1fr); max-height: calc(100dvh - 2.5rem); overflow: hidden; }
+/* Padding rather than the margin the modal gives a form: a margin on a scroll
+   container leaves the content starting under the header's border rather than
+   below it, and the last row scrolls to an edge with nothing under it. */
+.modal > .failure-detail-body { min-height: 0; margin: 0; padding: var(--space-6); overflow-y: auto; overscroll-behavior: contain; }
 
 /* The facts of one failure, laid out as cells so the dialog reads as a record
    rather than as a long column of label/value pairs. */
@@ -220,7 +226,10 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .payload-panel h4 { margin: var(--space-3) 0 var(--space-1); font-size: var(--font-size-xs); }
 .payload-note { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--font-size-xs); }
 .payload-truncated { margin: 0 0 var(--space-1); color: var(--color-status-warning-text); font-size: var(--font-size-xs); }
-.payload-body { max-height: 24rem; margin: 0; overflow: auto; padding: var(--space-2); font-size: var(--font-size-xs); background: var(--surface-inset); border: .0625rem solid var(--line); white-space: pre-wrap; word-break: break-word; }
+/* Bounded so the request and the response are both reachable without scrolling
+   the length of one to find the other. The store already caps a payload at
+   64KB; pretty-printed, that is more than anyone reads top to bottom. */
+.payload-body { max-height: 18rem; margin: 0; overflow: auto; padding: var(--space-2); font-size: var(--font-size-xs); background: var(--surface-inset); border: .0625rem solid var(--line); white-space: pre-wrap; word-break: break-word; }
 
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, .8fr); gap: 18px; margin-top: 18px; }
 .dashboard-grid > *, .governance-lower-grid > * { min-width: 0; }
