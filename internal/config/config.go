@@ -862,7 +862,14 @@ func (c *Config) Normalize() error {
 		c.Usage.RetentionDays = 90
 	}
 	if c.Usage.ConsoleWindowDays == 0 {
+		// Defaulted against the archive, not to a constant. A file that set a
+		// short retention and never mentioned the console window was valid
+		// before this setting existed, and filling in a flat thirty days would
+		// make Validate refuse to start over a key the operator never wrote.
 		c.Usage.ConsoleWindowDays = DefaultConsoleWindowDays
+		if c.Usage.RetentionDays >= MinConsoleWindowDays && c.Usage.RetentionDays < DefaultConsoleWindowDays {
+			c.Usage.ConsoleWindowDays = c.Usage.RetentionDays
+		}
 	}
 	if c.Usage.ExportFormat == "" {
 		c.Usage.ExportFormat = UsageExportFormatParquet
@@ -1185,8 +1192,14 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Usage.ParquetInterval <= 0 {
 		problems = append(problems, errors.New("usage.parquet_interval must be positive"))
 	}
-	if c.Usage.RetentionDays < 1 {
-		problems = append(problems, errors.New("usage.retention_days must be at least 1"))
+	// The archive's floor is the console's floor, because the window may not
+	// exceed the archive and the window may not go below seven days. Allowing a
+	// shorter retention left the two constraints with no value that satisfies
+	// both — a config that could be written but never started.
+	if c.Usage.RetentionDays < MinConsoleWindowDays {
+		problems = append(problems, fmt.Errorf(
+			"usage.retention_days must be at least %d, because usage.console_window_days may not go below that and may not exceed it",
+			MinConsoleWindowDays))
 	}
 	// Seven is the floor because the overview's own chart reads seven days of
 	// hourly buckets and request summaries out of the same aggregate; a shorter
@@ -1199,7 +1212,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	// And it cannot exceed the archive: the console would be promising a
 	// history the archive no longer holds, and the window is only safe to trim
 	// down to what has been exported.
-	if c.Usage.RetentionDays >= 1 && c.Usage.ConsoleWindowDays > c.Usage.RetentionDays {
+	if c.Usage.RetentionDays >= MinConsoleWindowDays && c.Usage.ConsoleWindowDays > c.Usage.RetentionDays {
 		problems = append(problems, errors.New(
 			"usage.console_window_days cannot exceed usage.retention_days"))
 	}

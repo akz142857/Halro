@@ -71,6 +71,26 @@ describe("UsageWindowForm", () => {
     expect(options).toEqual(["30 天", "60 天"]);
   });
 
+  // A refused save has to be visible. The error renders in the form and the
+  // confirmation is a portal on top of it, so a dialog left open would hide the
+  // one thing the operator needs — and clicking confirm again would look like
+  // the button had stopped working.
+  it("closes the confirmation when the save is refused, so the reason is visible", async () => {
+    const save = vi.spyOn(api, "updateUsageSettings").mockRejectedValue(
+      new Error("revision conflict"),
+    );
+    renderWithClient(<UsageWindowForm settings={settings()} />);
+
+    fireEvent.change(screen.getByLabelText(/窗口长度/), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存窗口" }));
+    fireEvent.click(await screen.findByRole("button", { name: "缩短窗口" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByText("缩短窗口会丢弃调用历史")).not.toBeInTheDocument(),
+    );
+  });
+
   // config.yaml seeds this once. Without the notice, an operator edits the file,
   // restarts, and reads the unchanged screen as a bug.
   it("says so when the configuration file is no longer what decides", () => {

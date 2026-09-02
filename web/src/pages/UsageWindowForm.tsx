@@ -30,10 +30,15 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
   const save = useMutation({
     mutationFn: (acknowledge: boolean) => api.updateUsageSettings(days, acknowledge, settings.revision),
     onSuccess: () => {
-      setConfirming(false);
       notify({ tone: "success", title: t("settings.notifyUsageWindowSaved"), description: String(days) });
       return queryClient.invalidateQueries({ queryKey: ["usage-settings"] });
     },
+    // Closed on failure too, not only on success. The error renders inside the
+    // form, and the modal is a full-page portal on top of it — so a save that
+    // was refused (a revision conflict with another admin, most likely) used to
+    // leave the operator looking at an unchanged dialog with the reason hidden
+    // behind it, and pressing confirm again appearing to do nothing.
+    onSettled: () => setConfirming(false),
   });
   // Presets the archive cannot back are dropped rather than shown disabled: an
   // option that exists only to be refused is a worse answer than not offering

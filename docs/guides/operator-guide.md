@@ -452,6 +452,12 @@ difference is worth knowing before either is changed:
 | `usage.console_window_days` | The in-memory aggregate the two console tabs read | Memory, about 1 KB per attempt, plus the same again for the checkpoint on disk |
 | `usage.retention_days` | The Parquet archive on disk | Disk only; partitions are columnar and one day is measured in kilobytes |
 
+Both have a floor of 7 days, and it is the same floor: the console window may
+not go below seven days, and it may not exceed the archive, so an archive
+shorter than that leaves the pair with no value that satisfies both. A file that
+sets a short retention and never mentions the window gets a window equal to the
+retention rather than the usual thirty days.
+
 So a long archive is cheap and a long console window is not. Binding them to one
 value would make an operator who needs ninety days of archive pay for it in
 memory; they are separate for that reason. The console window must be at least 7

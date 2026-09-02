@@ -95,19 +95,28 @@ func (r *Runtime) updateAdminUsageSettings(writer http.ResponseWriter, request *
 		adminBadRequestCode(writer, "invalid_console_window", err.Error())
 		return
 	}
-	// The archive's retention is the ceiling. It lives in config.yaml rather
-	// than here because it governs files on disk rather than a screen, and a
-	// window longer than it would page into partitions that have been pruned.
-	if retention := r.config.Usage.RetentionDays; retention >= 1 && settings.ConsoleWindowDays > retention {
-		adminBadRequestCode(writer, "console_window_exceeds_retention",
-			"console window cannot exceed the archive's retention")
-		return
-	}
 	r.adminSettingsMu.Lock()
 	defer r.adminSettingsMu.Unlock()
 	current := r.usageSettings.Load()
 	if current == nil {
 		adminStoreError(writer)
+		return
+	}
+	// The archive's retention is the ceiling. It lives in config.yaml rather
+	// than here because it governs files on disk rather than a screen, and a
+	// window longer than it would page into partitions that have been pruned.
+	//
+	// A stored window can nonetheless sit above it: retention is edited in the
+	// file and can be lowered under a window that was already saved. Refusing
+	// every value above the ceiling then leaves the operator wedged — the value
+	// they have is illegal, and so is every step toward legality but the last
+	// one. So a move that shortens the window is always allowed, even while it
+	// is still above the ceiling: it is the direction that fixes the state.
+	if retention := r.config.Usage.RetentionDays; retention >= 1 &&
+		settings.ConsoleWindowDays > retention &&
+		settings.ConsoleWindowDays >= current.ConsoleWindowDays {
+		adminBadRequestCode(writer, "console_window_exceeds_retention",
+			"console window cannot exceed the archive's retention")
 		return
 	}
 	if settings.ConsoleWindowDays < current.ConsoleWindowDays && !input.AcknowledgeTrim {
