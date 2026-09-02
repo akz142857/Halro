@@ -129,15 +129,16 @@ describe("UsageFailuresPanel", () => {
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
   });
 
-  // The dialog closes, and closing gives the operator back the list they were
-  // reading rather than a page that reflowed while a row was expanded — which
-  // is the reason this stopped being an inline disclosure.
-  it("opens and closes without disturbing the list", async () => {
+  // A drawer, not a centred dialog: what is read here is a captured request
+  // body, which is tall, and the drawer is the console's full-height surface.
+  // Asserted because the choice is the whole reason the payload has room.
+  it("opens as a full-height drawer and closes without disturbing the list", async () => {
     renderPanel([providerFailure]);
     await screen.findByText("服务商认证或权限被拒");
 
     const dialog = await openFailureDetail();
     expect(within(dialog).getByRole("heading", { name: "失败详情" })).toBeVisible();
+    expect(dialog).toHaveClass("drawer");
 
     // The header × and the footer button share the name, which is what a
     // reader hears twice and what a test has to disambiguate; the footer one is

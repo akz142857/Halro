@@ -235,7 +235,13 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
     ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
     : errorClassLabel(t, last?.error_class) || t("usage.error");
   return (
-    <Modal wide title={t("usage.failures.dialogTitle")} onClose={onClose}>
+    // A drawer, not a centred dialog. What is read here is a captured request
+    // body — tall, not wide — and the drawer is the console's full-height
+    // surface, with a sticky header so the way out stays put however far the
+    // JSON runs. It also leaves the failed-request list visible behind it,
+    // which is what makes working down a list of failures one motion instead
+    // of open-read-close-repeat.
+    <Modal drawer title={t("usage.failures.dialogTitle")} onClose={onClose}>
       {/* The modal insets a <form> child and nothing else, so a body built out
           of a list and a couple of sections would otherwise run flush against
           all four borders. */}

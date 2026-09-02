@@ -481,8 +481,8 @@ your own compliance position before enabling it:
 - **Audited on read.** `GET /admin/api/v1/usage/failures/{requestID}/payload`
   is the only admin GET that writes an audit record —
   `usage.failure_payload.read` — because it is the only one that returns a
-  prompt. In the console it is inside the failure-detail dialog, behind its own
-  Show button, and nothing is cached: opening the dialog does not read a
+  prompt. In the console it is inside the failure-detail drawer, behind its own
+  Show button, and nothing is cached: opening the drawer does not read a
   payload, so browsing failures files no audit records.
 - **Best-effort.** A capture that cannot be written is dropped. It never changes
   what the caller is told, and never fails a request that has already failed.
