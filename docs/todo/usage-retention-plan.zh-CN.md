@@ -30,13 +30,33 @@
 
 `QueryAttempts` 与 `QueryFailedRequests` 还是从切片尾部**线性倒扫**过滤（`internal/usage/query.go`、`internal/usage/failures.go`）。游标分页在前，但筛选命中率低时会扫过整个切片。
 
-### 1.2 已有的 `usage.retention_days` 管不到它
+### 1.2 压缩解决不了这件事，而且会让它更糟
+
+checkpoint 今天是**裸 JSON 存进 bbolt，没有任何压缩**（`internal/app/runtime.go` 的 `PutUsageCheckpoint`，值就是 `json.Marshal` 的输出）。这个数据极度可压缩——结构完全重复，只有 ID 和时间戳在变。实测一天（10 次/秒，864000 条）：
+
+| | 大小 | 耗时 |
+| --- | --- | --- |
+| `json.Marshal` 原始输出 | 942.5 MB | 1.48 s |
+| gzip 最快档 | 23.6 MB（**39.9 倍**） | +0.77 s |
+| gzip 默认档 | 17.1 MB（55 倍） | +1.53 s |
+
+40 倍不是小数目，磁盘问题确实能压下去。但压缩**不触及真正的成本**，还会加重它：
+
+1. **CPU 是主要瓶颈，压缩只会往上加。** 序列化耗时随历史线性增长：一天的历史每次 checkpoint 花 1.48 s，30 天就是 **约 44 秒**——而 checkpoint 间隔是 **60 秒**。再叠加压缩，30 天规模上一次 checkpoint 要花掉一分钟里的大半，90 天就根本追不上自己的节拍。即便只有 1 次/秒，90 天也意味着每分钟拿约 13 秒 CPU 反复序列化同一段历史。
+2. **内存完全不受益。** attempts 是内存里的 Go 结构体，压缩的是写出去的那一份。940 MB/天的 JSON 对应的常驻内存是同一量级，压不掉。
+3. **bbolt 单事务里塞一个几百 MB 到几十 GB 的值**，本身就是页面翻搅问题，与压缩无关。
+
+所以压缩的定位是：**窗口裁剪之后的锦上添花，不是它的替代**。窗口把历史压到 30 天以内之后，checkpoint 只有几十到几百 MB，那时再压缩是把一个已经可接受的数字变得更好；而在没有窗口的前提下压缩，只是把「磁盘爆掉」换成「CPU 追不上」。
+
+顺带一提，Parquet 侧用的是 `parquet.NewGenericWriter` 的默认设置，没有显式指定压缩编码——那是独立于本方案的一个可优化点，但 Parquet 是列式存储且本来就有归档窗口，优先级远低于此处。
+
+### 1.3 已有的 `usage.retention_days` 管不到它
 
 `internal/config/config.go` 有 `usage.retention_days`，默认 90。但它**只**被 `halro usage prune` 使用，而那是一个手动、离线（要停机取数据目录锁）的 CLI 命令，只裁剪 **Parquet 分区**——控制台不读 Parquet。
 
 所以现状是：设置里的 90 天，和界面上看到的记录，是两回事。
 
-### 1.3 一处必须订正的文档
+### 1.4 一处必须订正的文档
 
 `docs/guides/operator-guide.md` 与最终失败列表页面说「可见窗口等于 Usage 保留窗口」。**这句话是错的**：可见窗口是无限的，`retention_days` 与之无关。本方案实施前应先订正，或与第一阶段同时订正。
 
@@ -76,9 +96,9 @@
 
 1. **Ledger WAL 是账务权威**，本方案不删它的任何一条记录。裁剪只作用于派生数据。
 2. **裁剪的上界是已导出水位**：`min(cutoff, manifest.LastSequence)`。未导出的 attempt 永远不裁。
-3. **汇总数字不因裁剪而改变**：它来自 rollup，rollup 有自己的窗口（见 D3）。
+3. **汇总数字不因裁剪而改变**：它来自 rollup，rollup 有自己的窗口（见 D4）。
 4. **控制台窗口 ≥ 7 天**：Dashboard 的近 7 天曲线读 `hourly` 与 `summaries`，更短的窗口会打断它。
-5. **裁剪后 `halro doctor` 仍然通过**：对账口径要么随之调整，要么裁剪与 Parquet 保持同步（见 D4）。
+5. **裁剪后 `halro doctor` 仍然通过**：对账口径要么随之调整，要么裁剪与 Parquet 保持同步（见 D5）。
 
 ## 四、目标与非目标
 
@@ -115,7 +135,15 @@
 
 推论：**如果 Parquet 导出坏了或被关掉，裁剪必须停下来**，而不是继续裁。宁可让 Aggregate 涨，也不能静默丢历史。这一点必须有告警或至少一条 WARN。
 
-### D3 · rollup 与 Parquet 的窗口
+### D3 · 压缩
+
+**第一阶段不做，但在窗口落地后单独评估。**
+
+理由见 1.2：压缩把 checkpoint 缩小约 40 倍，却让本已是瓶颈的序列化成本进一步上升，且对常驻内存毫无帮助。先有窗口，checkpoint 才小到「压缩是优化」而不是「压缩是续命」。
+
+窗口落地后若仍要压缩，正确形状是 gzip 最快档（40 倍中的 39.9 倍已经拿到，多花一倍 CPU 只多换 1.4 倍），并且要同时处理 `RestoreCheckpoint` 的解压与「旧的未压缩 checkpoint 仍能读」——按 pre-1.0.0 规则，这里是就地改格式并提升版本号，让旧 checkpoint 被拒绝并重建，而不是留两条读路径。
+
+### D4 · rollup 与 Parquet 的窗口
 
 第一阶段**不动**这两者：
 
@@ -124,7 +152,7 @@
 
 但要在文档里说清楚：**`usage.retention_days` 管的是归档，不是界面**。
 
-### D4 · 对账口径
+### D5 · 对账口径
 
 `Reconcile` 目前用 Aggregate 的 attempts 与 Parquet 比对。Aggregate 一旦有更短的窗口，两者必然对不上，而 `halro doctor` 会因此报错——这是必须先解决的，不能等到实施后发现。
 
@@ -135,7 +163,7 @@
 
 **倾向 A**，因为对账的目的是「导出没有丢/没有重复」，而不是「Aggregate 完整」；Aggregate 本来就是可重建的派生物。B 更正确但应作为独立议题。
 
-### D5 · 配置形状（第一阶段）
+### D6 · 配置形状（第一阶段）
 
 ```yaml
 usage:
@@ -147,7 +175,7 @@ usage:
 
 分成两个键，而不是复用一个——正是 3.1 的理由。校验：`console_window_days` 至少 7（不变量 4），至多 `retention_days`（界面不该承诺归档都没有的东西）。
 
-### D6 · 第二阶段：设置中心
+### D7 · 第二阶段：设置中心
 
 `console_window_days` 从 `config.yaml` 提升为存储在 bbolt 的运行时设置，走与账期时区同一套机制：revision 校验、审计记录、热更新、控制台下拉选择 30 / 60 / 90 / 180。
 
@@ -177,7 +205,7 @@ usage:
 
 ### S3 · 对账口径
 
-- 按 D4-A 让 `Reconcile` 知道 Aggregate 的下界；
+- 按 D5-A 让 `Reconcile` 知道 Aggregate 的下界；
 - `halro doctor` 的 parquet 检查随之调整；
 - 断言裁剪后 doctor 仍然通过。
 
@@ -188,7 +216,7 @@ usage:
 
 ### S5 · 设置中心（独立评审）
 
-见 D6。
+见 D7。
 
 ## 七、验证计划
 
