@@ -17,8 +17,17 @@ import (
 // Nothing here deletes anything. A sealed generation is the accounting archive
 // — the balances replay out of it on every start — so the growth this bounds is
 // the growth of the *active* file and the size of what is kept, not the length
-// of the history. An operator who needs the disk back moves old generations off
-// the box; the manifest tells them exactly which bytes those are.
+// of the history.
+//
+// Nor can an operator take a generation away yet, whatever the size of the
+// archive. The sealed history has to read as an unbroken run from generation
+// one, because every check that says the archive is whole is defined against
+// what the manifest lists: a manifest edited to forget its oldest generations
+// is still ordered, still present, still verifies — and a full replay would
+// rebuild balances from a suffix of the history and report nothing wrong.
+// Removing one safely needs a durable record of what was removed and of the
+// balances it carried, and there is not one. Compression is the lever that
+// exists today; it takes the archive to roughly a fifth.
 
 // sealLedgerGeneration rolls the active WAL once it passes the configured size.
 func (r *Runtime) sealLedgerGeneration() {
@@ -45,9 +54,18 @@ func (r *Runtime) sealLedgerGeneration() {
 	// that cannot re-authenticate is the one failure this feature could
 	// introduce into the accounting authority, and it has to be discovered now
 	// — while the operator can still act — rather than at the next start.
+	//
+	// Logging it was not enough. A detected failure in the accounting authority
+	// that leaves the process serving is a fail-open: the run would go on
+	// settling requests, and would later compress and back up the generation it
+	// had already found unreadable. The status latches instead, which stops
+	// traffic and says so, and the operator's next step is
+	// `halro ledger verify` on a stopped instance.
 	if _, err := r.ledger.VerifySealed(result.Sealed.Generation); err != nil {
-		r.logger.Error("a sealed ledger generation does not verify",
-			"generation", result.Sealed.Generation, "error", err)
+		r.logger.Error("a sealed ledger generation does not verify; accounting requires recovery",
+			"generation", result.Sealed.Generation, "error", err,
+			"remedy", "stop the instance and run `halro ledger verify`")
+		r.status.RequireRecovery()
 	}
 }
 
