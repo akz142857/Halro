@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/compress/zstd"
 )
 
 // Schema 5 adds the upstream's own identifiers for a failed attempt — the
@@ -610,7 +611,13 @@ func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
 	if err = temp.Chmod(0o600); err != nil {
 		return err
 	}
-	writer := parquet.NewGenericWriter[parquetAttempt](temp)
+	// Explicit rather than the library's default, and zstd rather than snappy:
+	// these columns are identifiers, enumerations and timestamps, which
+	// dictionary-encode well and then compress well again, and a partition is
+	// written once and read rarely. Existing partitions are never rewritten, so
+	// this only changes what is written from here on — a reader handles both,
+	// because the codec is recorded per column chunk in the file itself.
+	writer := parquet.NewGenericWriter[parquetAttempt](temp, parquet.Compression(&zstd.Codec{}))
 	if _, err = writer.Write(rows); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write usage parquet: %w", err)

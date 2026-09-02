@@ -928,6 +928,10 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// the export has got, and reading that watermark before writing it
 			// would hold the window one tick behind for no reason.
 			r.pruneUsageWindow()
+			// And the archive last, so a partition is only ever removed after
+			// the console window that might still have been reading it has
+			// already moved past.
+			r.pruneUsageArchive()
 			// Retention is swept on the same tick rather than on a timer of its
 			// own: this store's promise is that captured caller material is
 			// gone after the window, and a promise kept by a goroutine nobody

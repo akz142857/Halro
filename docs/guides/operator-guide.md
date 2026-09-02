@@ -453,6 +453,24 @@ console window must be at least 7 days, because the overview's chart reads seven
 days out of the same aggregate, and no longer than the archive, because the
 screen should not promise history the archive no longer holds.
 
+**Size it against your throughput, not against how much history you would like.**
+The aggregate is re-serialized whole on every checkpoint, so the window's length
+is a per-minute CPU cost:
+
+| Throughput | 30-day checkpoint | Encoding time per checkpoint | Share of the 60s interval |
+| --- | --- | --- | --- |
+| 0.1/s | 0.28 GB | ~0.5 s | 1% |
+| 1/s | 2.8 GB | ~4.5 s | 7% |
+| 10/s | 27.1 GB | ~45 s | 75% |
+| 100/s | 271 GB | ~450 s | cannot keep up |
+
+Above roughly one request per second the default of thirty days is too long, and
+the lever is the window rather than anything else — compression was measured and
+makes it worse, adding about another minute to a tick that already takes
+forty-five seconds. Shorten the window until the encoding time is a small share
+of `usage.checkpoint_interval`; the archive keeps the history either way, and
+`halro usage` can export it.
+
 The window is trimmed on the Parquet export tick, and only up to what that
 export has actually written. If the export stalls, the trimming stalls with it
 and the aggregate grows — deliberately: an aggregate that grows is a problem,

@@ -207,3 +207,34 @@ func (r *Runtime) pruneUsageWindow() {
 		"attempts", result.Attempts, "requests", result.Summaries,
 		"window_days", window, "floor", result.Floor)
 }
+
+// pruneUsageArchive removes exported partitions past the archive's retention.
+//
+// The same sweep `halro usage prune` performs, moved onto the maintenance tick.
+// It was a manual, offline command — it takes the data directory lock, so it
+// required stopping the gateway — which meant the setting shipped since the
+// beginning did nothing on an instance nobody remembered to stop. A retention
+// value that only takes effect when someone runs a command is a retention value
+// an auditor cannot be shown.
+//
+// The cutoff keeps one extra day on purpose (see usageRetentionCutoff's twin in
+// the CLI): partitions are dated in UTC, so an instance in any other zone would
+// otherwise lose a day it was promised.
+func (r *Runtime) pruneUsageArchive() {
+	days := r.config.Usage.RetentionDays
+	if days < 1 {
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -(days + 1))
+	report, err := r.usageExporter.PruneBefore(cutoff)
+	if err != nil {
+		r.logger.Warn("usage archive not pruned", "error", err)
+		return
+	}
+	if report.FilesRemoved == 0 {
+		return
+	}
+	r.logger.Info("usage archive pruned",
+		"files", report.FilesRemoved, "rows", report.RowsRemoved,
+		"cutoff", report.Cutoff, "retention_days", days)
+}
