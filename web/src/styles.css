@@ -178,6 +178,11 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .failure-detail summary { color: var(--muted); cursor: pointer; font-size: var(--font-size-xs); }
 .failure-detail small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); white-space: normal; }
 
+/* The inset the modal gives a <form> child and nothing else. This dialog's body
+   is a list and two sections, so it has to ask for the same one by name or it
+   sits flush against all four borders. */
+.failure-detail-body { margin: var(--space-6); }
+
 /* The facts of one failure, laid out as cells so the dialog reads as a record
    rather than as a long column of label/value pairs. */
 .failure-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1px; margin: 0 0 var(--space-4); }

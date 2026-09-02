@@ -227,6 +227,10 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
     : errorClassLabel(t, last?.error_class) || t("usage.error");
   return (
     <Modal wide title={t("usage.failures.dialogTitle")} onClose={onClose}>
+      {/* The modal insets a <form> child and nothing else, so a body built out
+          of a list and a couple of sections would otherwise run flush against
+          all four borders. */}
+      <div className="failure-detail-body">
       <dl className="failure-facts">
         <FailureFact label={t("usage.failures.cause")} value={cause} emphasis />
         <FailureFact label={t("usage.time")} value={formatInstant(failure.completed_at, "full")} />
@@ -289,6 +293,7 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
         <button type="button" className="button ghost" data-modal-close>
           {t("common.close")}
         </button>
+      </div>
       </div>
     </Modal>
   );
