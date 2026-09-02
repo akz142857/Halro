@@ -262,8 +262,8 @@ Writing it needed `compatibility.AllNorthboundProfiles`. The table had been a
 map built inside `BuiltinNorthboundProfile`, which is to say a list nothing could
 walk — the same shape the provider profile table was fixed out of.
 
-**Whether the renderer can carry what providers produce (step 3) — guarded at
-build time, with a named residue.**
+**Whether the renderer can carry what providers produce (step 3) — guarded, and
+enforced at routing time.**
 `TestNoEndpointIsServedByATargetThatReasonsUnasked` in
 `internal/app/northbound_reasoning_contract_test.go` pairs the two halves this
 document says nothing paired.
@@ -280,18 +280,25 @@ be turned on", is offered to an operator as a checkbox, and is bounded by a
 connection ceiling that has to contain it. "What arrives whether or not anyone
 asked" is none of those, and adding it there would invert the containment.
 
-Two limits, both deliberate:
+**It reaches the router.** `compatibility.ReasoningAnswerSurvives` pairs the two
+halves, `filterUnrenderableReasoning` in the gateway drops a marked target from
+an endpoint that cannot carry its answer, and the refusal names
+`target_reasons_unasked` so an operator is not left bisecting a request that
+asked for nothing unusual. It happens before the budget reservation, so where a
+route has another deployment the request is simply served by it, and where it
+does not the caller is told rather than charged.
 
-- It does not reach the router. Acting on it means threading the fact through
-  the deployment capability snapshot, which is durable state and a separate
-  piece of work. So this catches a new pairing at build time; it does not yet
-  route an existing one away.
-- The pairings that are already wrong are listed in the test as residue, with
-  the measurement for each, and the guard fails if that list grows *or* if an
-  entry in it stops being true. Today it is `kimi-k2.7-code` and
-  `kimi-k2.7-code-highspeed` on `/v1/responses` and `/v1/messages`: neither model
-  has an off switch (`invalid thinking: only type=enabled is allowed for this
-  model`), so each such call is billed upstream and answered 502.
+The fact does **not** go through the deployment capability snapshot. It is read
+from the catalogue when the registry is built, because it is neither a capability
+nor an operator declaration: the snapshot exists to pin what an operator agreed
+to, and a fact that can only ever remove a route should not wait for every
+deployment to be re-saved before it applies. No durable schema changed, and a
+model the catalogue does not cover answers false — routing away everything
+unknown would refuse every operator-declared deployment.
+
+The chain is three links and each has its own test, which is not ceremony: the
+two ends were covered first and backing the middle one out changed nothing that
+failed. `TestTheRegistryReadsReasonsUnaskedFromTheCatalogue` is that link.
 
 A withheld profile is skipped, which is what attaches a withholding to its
 reason. `kimi.responses.v1` is withheld because that face reasons on every model

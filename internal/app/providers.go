@@ -136,6 +136,34 @@ func (r *Runtime) reconcileProviderRegistryWithCatalogState(ctx context.Context)
 	return r.reloadProviderRegistry(ctx)
 }
 
+// reasonsUnasked asks the catalogue whether this target returns reasoning on a
+// request that never asked for it.
+//
+// Read here rather than taken from the deployment's stored capability snapshot,
+// because it is neither a capability nor an operator declaration: it is what the
+// upstream does, the snapshot exists to pin what an operator agreed to, and a
+// fact that can only remove a route should not wait for every deployment to be
+// re-saved before it applies.
+//
+// A model the catalogue does not cover answers false. That is the only workable
+// direction — routing away everything unknown would refuse every
+// operator-declared deployment — and it is why the guard that pairs this with
+// what each endpoint can render is a build-time one over the catalogue rather
+// than a runtime assertion.
+func reasonsUnasked(catalog *modelcatalog.Catalog, instance domain.ProviderInstance, deployment domain.Deployment) bool {
+	if catalog == nil {
+		return false
+	}
+	entry, _ := catalog.Lookup(modelcatalog.Key{
+		ProviderType: instance.Type,
+		Profile:      deployment.ProfileID,
+		TargetKind:   deployment.TargetKind,
+		Model:        deployment.ProviderModel,
+		Region:       deployment.Region,
+	})
+	return entry.ReasonsUnasked
+}
+
 func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog *modelcatalog.Catalog, unavailable bool) (func(bool), error) {
 	next, report, err := loadProviderRegistryWithCatalog(ctx, r.config, r.store, r.vault, catalog, unavailable)
 	if err != nil {
@@ -681,6 +709,7 @@ func loadProviderRegistryWithCatalog(
 			Strategy:                    route.Strategy,
 			Capabilities:                capabilities,
 			CapabilityEvidence:          deploymentByID[deploymentID].CapabilityEvidence.Clone(),
+			ReasonsUnasked:              reasonsUnasked(catalog, instanceByID[providerID], deploymentByID[deploymentID]),
 			AllowedAnthropicBetas:       append([]string(nil), instanceByID[providerID].AllowedAnthropicBetas...),
 			MaxConcurrency:              providerLimits[providerID],
 			DeploymentConcurrency:       deploymentLimit,

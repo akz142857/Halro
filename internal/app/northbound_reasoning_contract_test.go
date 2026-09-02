@@ -1,7 +1,6 @@
 package app
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/compatibility"
@@ -27,105 +26,135 @@ import (
 //   - Kimi, 2026-09-01. The same chain on /v1/responses and /v1/messages, then
 //     503 once enough failures marked the deployment unhealthy.
 //
-// Neither half is wrong on its own and nothing in the request says so, which is
-// why both were found in production. The pairing is what this walks.
-//
-// Two things make it more than a restatement of a list. The endpoint's side is
-// derived by execution — the actual northbound renderer is handed a result
-// carrying a reasoning part, and whether it refuses is the answer — so an
-// endpoint that gains or loses the ability is reclassified without anyone
-// editing this file. And the provider's side is the model catalogue, which is
-// keyed by profile and model together, the only granularity at which the fact is
-// true.
-func TestNoEndpointIsServedByATargetThatReasonsUnasked(t *testing.T) {
-	// The residue, and the reason it is a list rather than a skip: each entry is
-	// a request that reaches an upstream, is billed, and comes back as a 502.
-	// Routing it away needs ReasonsUnasked to reach provider.Target, which means
-	// threading it through the deployment capability snapshot — durable state, and
-	// a separate piece of work. Until then this names exactly what is uncovered,
-	// and the assertion is that the set does not grow.
-	residue := map[string]string{
-		"openai.responses.stateless.v1/kimi.chat.v1/kimi-k2.7-code":           "kimi-k2.7-code has no off switch at all: `invalid thinking: only type=enabled is allowed for this model`",
-		"openai.responses.stateless.v1/kimi.chat.v1/kimi-k2.7-code-highspeed": "the same line, same measurement",
-		"anthropic.messages.2023-06-01/kimi.chat.v1/kimi-k2.7-code":           "kimi-k2.7-code has no off switch at all",
-		"anthropic.messages.2023-06-01/kimi.chat.v1/kimi-k2.7-code-highspeed": "the same line, same measurement",
-	}
-
-	unasked := map[domain.ProviderProfileID][]string{}
-	for _, entry := range modelcatalog.Builtin().Entries() {
-		if entry.ReasonsUnasked {
-			unasked[entry.Key.Profile] = append(unasked[entry.Key.Profile], entry.Key.Model)
-		}
-	}
-	if len(unasked) == 0 {
-		t.Fatal("no catalogue entry reasons unasked, so this guard asserts nothing — the two incidents it is written from were both this")
-	}
-
-	// The provider side is asked first, and it is a separate question from the
-	// endpoint's. A profile whose own result decoder refuses a reasoning part
-	// fails before any northbound renderer is reached, so every endpoint is
-	// affected rather than only the intolerant ones.
-	//
-	// The first version of this guard did not model that half, and a measurement
-	// found the hole: MiniMax-M2.1 on minimax.responses.v1 returns a reasoning
-	// output item that compatibility/openai.DecodeProviderResponse refuses, and
-	// this walk would have reported /v1/chat/completions as fine because that
-	// endpoint can render reasoning. It never gets the chance.
-	for profileID := range unasked {
-		if domain.IsWithheldProfile(profileID) || profileDecodesReasoning(t, profileID) {
-			continue
-		}
-		for _, model := range unasked[profileID] {
-			t.Errorf("%s/%s: this target reasons whatever the request says and the profile's own result decoder refuses a reasoning part, so every northbound endpoint answers 502 with the upstream already paid. A catalogue entry for it offers a deployment that fails every call.",
-				profileID, model)
-		}
-	}
-
-	seen := map[string]struct{}{}
+// The router now refuses such a pairing before the reservation, reading
+// compatibility.ReasoningAnswerSurvives. That is what makes these tests load
+// bearing rather than documentary: the first proves the declared tables say what
+// the real decoders and renderers do, and the second proves every target the
+// catalogue marks is covered by them.
+func TestReasoningReachabilityTablesMatchTheRealDecodersAndRenderers(t *testing.T) {
+	// The endpoint half, derived by execution rather than restated: the real
+	// northbound renderer is handed a result carrying a reasoning part and one
+	// carrying only text, and the endpoint is intolerant when it refuses the
+	// first and accepts the second.
+	endpoints := 0
 	for _, manifest := range compatibility.BuiltinEndpointManifests() {
-		if manifest.SemanticOperation != semantic.OperationGenerate {
+		if manifest.SemanticOperation != semantic.OperationGenerate || !endpointReturnsContent(manifest.ID) {
 			continue
 		}
+		northbound := compatibility.NorthboundProfileID(manifest.NorthboundProfile)
 		renders := endpointRendersReasoning(t, manifest.ID)
-		for _, coverage := range manifest.ProfileCoverage {
-			// A profile this build does not offer cannot be reached, so it cannot
-			// fail this way. Skipping it is also what ties a withholding to its
-			// reason: offering kimi.responses.v1 again without finding an off
-			// switch on that face brings its entries back into this walk and fails
-			// here, rather than reaching an operator.
-			if domain.IsWithheldProfile(coverage.ProfileID) {
-				continue
-			}
-			for _, model := range unasked[coverage.ProfileID] {
-				pair := fmt.Sprintf("%s/%s/%s", manifest.ID, coverage.ProfileID, model)
-				seen[pair] = struct{}{}
-				_, tolerated := residue[pair]
-				switch {
-				case renders && tolerated:
-					t.Errorf("%s is listed as residue and this endpoint renders reasoning: remove it from the list", pair)
-				case !renders && !tolerated:
-					t.Errorf("%s: %s reasons whatever the request says and %s cannot render a reasoning part, so every call is billed upstream and answered 502. Either the target must be able to stop reasoning, or this endpoint must not be served by it.",
-						pair, model, manifest.ID)
-				}
-			}
+		// Asked with a provider profile that loses nothing of its own, so the
+		// endpoint half is what is under test.
+		declared := compatibility.ReasoningAnswerSurvives(northbound, domain.ProfileOpenAIChatEmbeddings)
+		if renders != declared {
+			t.Errorf("%s renders a reasoning part = %v and ReasoningAnswerSurvives says %v: routing reads the table in internal/compatibility/reasoning_reachability.go, so the table is the half that is wrong",
+				manifest.ID, renders, declared)
 		}
+		endpoints++
 	}
-	for pair := range residue {
-		if _, ok := seen[pair]; !ok {
-			t.Errorf("%q is tolerated as residue and no longer exists: delete the entry so the list stays the truth about what is uncovered", pair)
+	if endpoints == 0 {
+		t.Fatal("no generate endpoint was checked, so this test asserts nothing")
+	}
+
+	// The provider half, the same way. Only profiles carrying a target the
+	// catalogue marks need an entry, so the table stays as short as the problem
+	// is; profileDecodesReasoning fails by name for one it does not know.
+	for profileID := range unaskedReasoningEntries(t) {
+		decodes := profileDecodesReasoning(t, profileID)
+		// Asked on an endpoint that renders reasoning, so the provider half is
+		// what is under test.
+		declared := compatibility.ReasoningAnswerSurvives(compatibility.ProfileOpenAIChatCompletions, profileID)
+		if decodes != declared {
+			t.Errorf("%s decodes a reasoning part = %v and ReasoningAnswerSurvives says %v", profileID, decodes, declared)
 		}
 	}
 }
 
-// profileDecodesReasoning asks whether this provider profile can turn an
-// upstream reasoning part into semantic content at all, which is the question
-// that comes before "can the endpoint render it".
+// Every target the catalogue marks, against every endpoint that could serve it.
+// A pairing that cannot carry the answer has to be declared unable, because that
+// declaration is what the router acts on; one that can must not be, or a working
+// deployment is routed away for nothing.
+func TestEveryTargetThatReasonsUnaskedIsPairedWithEveryEndpoint(t *testing.T) {
+	unasked := unaskedReasoningEntries(t)
+	if len(unasked) == 0 {
+		t.Fatal("no catalogue entry reasons unasked, so this guard asserts nothing — the two incidents it is written from were both this")
+	}
+	checked := 0
+	for _, manifest := range compatibility.BuiltinEndpointManifests() {
+		if manifest.SemanticOperation != semantic.OperationGenerate || !endpointReturnsContent(manifest.ID) {
+			continue
+		}
+		northbound := compatibility.NorthboundProfileID(manifest.NorthboundProfile)
+		renders := endpointRendersReasoning(t, manifest.ID)
+		for _, coverage := range manifest.ProfileCoverage {
+			models := unasked[coverage.ProfileID]
+			if len(models) == 0 {
+				continue
+			}
+			want := profileDecodesReasoning(t, coverage.ProfileID) && renders
+			survives := compatibility.ReasoningAnswerSurvives(northbound, coverage.ProfileID)
+			for _, model := range models {
+				if survives != want {
+					t.Errorf("%s/%s/%s: the answer survives = %v by execution and the routing tables say %v",
+						manifest.ID, coverage.ProfileID, model, want, survives)
+				}
+				checked++
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no pairing was reached: every marked profile is absent from every endpoint's coverage, which cannot be right")
+	}
+}
+
+// A withheld profile is skipped by the two walks above, and this is what keeps
+// that from being a hole. kimi.responses.v1 is withheld because that face reasons
+// on every model it serves and its own decoder refuses the answer; if it were
+// offered again, every request through it would be routed away, and a connection
+// that can never answer anything is not one an operator should be able to create.
+func TestAWithheldProfileThatReasonsUnaskedStaysUnservable(t *testing.T) {
+	found := false
+	for _, entry := range modelcatalog.Builtin().Entries() {
+		if !entry.ReasonsUnasked || !domain.IsWithheldProfile(entry.Key.Profile) {
+			continue
+		}
+		found = true
+		for _, northbound := range []compatibility.NorthboundProfileID{
+			compatibility.ProfileOpenAIChatCompletions,
+			compatibility.ProfileOpenAIResponses,
+			compatibility.ProfileAnthropicMessages,
+		} {
+			if compatibility.ReasoningAnswerSurvives(northbound, entry.Key.Profile) {
+				t.Errorf("%s/%s is withheld and would be servable on %s if offered again, so the withholding is carrying weight the tables should carry",
+					entry.Key.Profile, entry.Key.Model, northbound)
+			}
+		}
+	}
+	if !found {
+		t.Skip("no withheld profile carries a target that reasons unasked")
+	}
+}
+
+func unaskedReasoningEntries(t *testing.T) map[domain.ProviderProfileID][]string {
+	t.Helper()
+	unasked := map[domain.ProviderProfileID][]string{}
+	for _, entry := range modelcatalog.Builtin().Entries() {
+		// A profile this build does not offer cannot be reached, so it cannot
+		// fail this way.
+		if entry.ReasonsUnasked && !domain.IsWithheldProfile(entry.Key.Profile) {
+			unasked[entry.Key.Profile] = append(unasked[entry.Key.Profile], entry.Key.Model)
+		}
+	}
+	return unasked
+}
+
+// profileDecodesReasoning asks whether this provider profile can turn an upstream
+// reasoning part into semantic content at all, which is the question that comes
+// before "can the endpoint render it".
 //
 // Keyed by profile and checked for completeness rather than defaulted, for the
 // reason the reasoning-probe ladder is: a default here is a guess, and the
-// guessing direction that hides an incident is "it decodes fine". Only profiles
-// carrying a target that reasons unasked need an entry, so the table stays as
-// short as the problem is.
+// guessing direction that hides an incident is "it decodes fine".
 func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) bool {
 	t.Helper()
 	switch profileID {
@@ -164,10 +193,21 @@ func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) b
 	return false
 }
 
+// endpointReturnsContent reports whether this endpoint's response carries model
+// content at all.
+//
+// Token counting does not — it answers a number — so "which content kinds
+// survive" does not arise for it, and it must not be allowed to answer the
+// question either: it shares a northbound profile with /v1/messages, which does
+// return content, and one profile can hold only one answer. Letting the counting
+// endpoint reply "everything survives" would have overwritten the one that
+// matters.
+func endpointReturnsContent(endpointID string) bool {
+	return endpointID != "anthropic.messages.count-tokens.2023-06-01"
+}
+
 // endpointRendersReasoning asks the endpoint's own renderer, rather than a table
-// in this file. A result carrying one reasoning part and one text part goes
-// through the same function the gateway calls; refusing it is the endpoint
-// saying it cannot carry the kind.
+// in this file.
 func endpointRendersReasoning(t *testing.T, endpointID string) bool {
 	t.Helper()
 	// Rendered twice, with the reasoning part and without it. Without the
@@ -209,12 +249,6 @@ func renderThroughEndpoint(t *testing.T, endpointID string, content []semantic.C
 	case "anthropic.messages.2023-06-01":
 		_, err := anthropicwire.RenderResult(result, "public")
 		return err
-	case "anthropic.messages.count-tokens.2023-06-01":
-		// Counting returns a token total and renders no content at all, so the
-		// question does not arise. Named rather than defaulted: a generate-shaped
-		// endpoint this function does not know must fail loudly, because guessing
-		// "it renders" is the direction that hides the incident.
-		return nil
 	}
 	t.Fatalf("endpoint %q renders generate results and this guard does not know how to ask it whether reasoning survives; add it to renderThroughEndpoint", endpointID)
 	return nil

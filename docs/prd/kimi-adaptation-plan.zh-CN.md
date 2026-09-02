@@ -1744,3 +1744,57 @@ Kimi 的 native 校验器此前零测试（MiniMax 有 4 个），现在补了�
 `kimi_error_tolerance_test.go` 原来的泄漏断言是空转的：`provider.Error.Error()` 只返回
 `Message`，看不到 `ProviderCode`，而两条带 `leaked` 的用例解出的 `ProviderCode` 恰好都
 是空。现在按字段名断言。
+
+## 16. 「总是推理」进路由（2026-09-02）
+
+§13.6 提出、§14/§15 反复提到的那个能力位接上了。`kimi-k2.7-code` 与
+`kimi-k2.7-code-highspeed` 在 `/v1/responses` 与 `/v1/messages` 上不再是「上游计费 +
+502」，而是在**预留之前**被路由绕开。
+
+### 16.1 它没有走 durable 状态，这是最省的一处
+
+上一轮估计要把这条事实穿过 deployment 的能力快照——那是 bbolt 里的持久状态，要动格式
+版本、要说明需不需要重新初始化。实际不用：注册表构建时**目录已经在手边**
+（`prepareProviderRegistryActivation` 本来就收 `*modelcatalog.Catalog`），而
+`Catalog.Lookup` 自己会补默认 TargetKind 并做 region 回退。所以 `provider.Target` 上加
+一个字段、构建时查一次目录就够了，**没有任何 durable schema 变化，不需要重新初始化**。
+
+而且这样更对：快照存在的意义是钉住「运营者当初同意了什么」，而这条是「上游会怎么做」。
+一条只会**减少**路由、从不放宽路由的事实，不该等到每个 deployment 被重新保存一遍才生效
+——升级 Halro 学到的新事实应当立刻起作用。
+
+目录未覆盖的模型答 false。这是唯一可行的方向：把未知的一律绕开会拒掉每一个
+`operator_declared` 部署。
+
+### 16.2 两处丢失，不是一处
+
+`compatibility.ReasoningAnswerSurvives` 把两个半边配起来，而它们不可互换：
+
+- **上游 profile 自己的解码器拒绝**（Responses 形状的五个 profile）——根本到不了北向
+  渲染器，所以**每个端点都完**；
+- **北向端点的渲染器承载不了**（`/v1/responses` 与 `/v1/messages`）——只有那个端点完，
+  同一个目标在别处照常服务。
+
+这个区分是 §15 测 MiniMax 时才浮出来的：守卫第一版只建模了后者，会说
+`/v1/chat/completions` 在 `minimax.responses.v1` 上没事——那个端点确实渲染得了
+reasoning，但根本轮不到它。
+
+两张表都**只列丢失的**，没列的读作「能承载」——那是猜错方向的一侧，所以不留给猜：
+`TestReasoningReachabilityTablesMatchTheRealDecodersAndRenderers` 驱动真实的解码器和真实
+的渲染器，要求两张表与它们的实际行为一致。
+
+### 16.3 residue 清单没了
+
+那份「已知还坏着」的清单是上一轮的产物：当时只能记录、不能修。现在那些组合在预留之前
+就被绕开，清单随之消失。守卫的问题也从「还有哪些坏的」变成「每个被标记的目标 × 每个端点，
+声明是否与真实行为一致」。
+
+`kimi.responses.v1` 仍然收起。它那一面的解码器对所有模型都拒绝，就算放出来也会每个请求
+都被绕开——一个永远答不出东西的连接不该让运营者建得出来。
+`TestAWithheldProfileThatReasonsUnaskedStaysUnservable` 钉住这一点。
+
+### 16.4 三段链路，三个测试
+
+反向验证时发现中间那一段没人守：把注册表读目录那一步断掉，两端的测试全绿。
+`TestTheRegistryReadsReasonsUnaskedFromTheCatalogue` 补的就是它——这正是本轮反复遇到的
+同一种形状，只不过这次是在我自己刚写的代码上。
