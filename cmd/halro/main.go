@@ -904,6 +904,15 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 		logAttributes = append(logAttributes,
 			"file", cfg.LogFilePath(), "max_size_mb", cfg.Logging.MaxSizeMB, "max_files", cfg.Logging.MaxFiles)
 	}
+	if cfg.Logging.ErrorFile.Enabled {
+		// Named on startup so an operator can see where the errors-only copy
+		// landed without deriving the default path, and so a wrong path is
+		// discovered now rather than during the incident it was turned on for.
+		logAttributes = append(logAttributes,
+			"error_file", cfg.ErrorLogFilePath(),
+			"error_file_max_size_mb", cfg.Logging.ErrorFile.SizeLimitMB(),
+			"error_file_max_files", cfg.Logging.ErrorFile.FileLimit())
+	}
 	logger.Info("logging configured", logAttributes...)
 	hardening, err := hardenRuntimeCommand()
 	if err != nil {

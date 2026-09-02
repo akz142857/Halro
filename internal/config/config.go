@@ -64,6 +64,65 @@ type Logging struct {
 	MaxSizeMB int `yaml:"max_size_mb"`
 	// MaxFiles counts every generation kept, including the file being written.
 	MaxFiles int `yaml:"max_files"`
+	// ErrorFile is a second, ERROR-only copy of the log.
+	ErrorFile ErrorFile `yaml:"error_file"`
+}
+
+// ErrorFile is the errors-only log, written beside the ordinary one rather than
+// instead of it.
+//
+// Setting `level: error` gets an error-only main log and loses everything that
+// made the ordinary one worth keeping: a certificate nearing expiry, a probe
+// that failed, an attempt that was retried before the request succeeded. This
+// is the other half of that trade — stderr stays at info or warn, and a bounded
+// file collects the ERRORs alone, which is what an incident starts from and
+// what a support ticket is built out of.
+//
+// Its own level is fixed at ERROR and its own encoding is fixed at JSON. Both
+// are the point of the file: a threshold that could be lowered would make it a
+// second copy of the main log, and a text encoding would make the one file that
+// exists to be searched by machine the harder of the two to search.
+type ErrorFile struct {
+	Enabled bool `yaml:"enabled"`
+	// File is where it is written. Empty means logs/halro-error.log inside the
+	// data directory, beside the ordinary log.
+	File string `yaml:"file"`
+	// MaxSizeMB and MaxFiles bound it the way they bound the ordinary log. They
+	// matter more here: this file is the one an operator reads after an
+	// incident, and a generation limit spent on noise is history they wanted.
+	//
+	// Zero means "not set", not "zero", and resolves to the built-in default.
+	// The ordinary log's limits have no such rule because every config file
+	// ever written carries them; this block did not exist until now, so an
+	// install upgrading into it has them absent. Refusing to start over an
+	// absent limit for a file that is switched off would brick every existing
+	// data directory — a fail-closed check is only worth having when the thing
+	// it closes on is a real ambiguity.
+	MaxSizeMB int `yaml:"max_size_mb"`
+	MaxFiles  int `yaml:"max_files"`
+}
+
+// DefaultErrorFileMaxSizeMB and DefaultErrorFileMaxFiles are what an unset
+// limit resolves to. Smaller and deeper than the ordinary log's: this file
+// takes far fewer records, and the generations are what an operator reads back
+// through after an incident.
+const (
+	DefaultErrorFileMaxSizeMB = 32
+	DefaultErrorFileMaxFiles  = 10
+)
+
+func (e ErrorFile) SizeLimitMB() int {
+	if e.MaxSizeMB == 0 {
+		return DefaultErrorFileMaxSizeMB
+	}
+	return e.MaxSizeMB
+}
+
+func (e ErrorFile) FileLimit() int {
+	if e.MaxFiles == 0 {
+		return DefaultErrorFileMaxFiles
+	}
+	return e.MaxFiles
 }
 
 const (
@@ -107,6 +166,15 @@ func (c Config) LogFilePath() string {
 		return path
 	}
 	return filepath.Join(c.Storage.DataDir, "logs", "halro.log")
+}
+
+// ErrorLogFilePath resolves the errors-only file, on the same rule as the
+// ordinary one.
+func (c Config) ErrorLogFilePath() string {
+	if path := strings.TrimSpace(c.Logging.ErrorFile.File); path != "" {
+		return path
+	}
+	return filepath.Join(c.Storage.DataDir, "logs", "halro-error.log")
 }
 
 type Server struct {
@@ -1084,6 +1152,37 @@ func validateLogging(logging Logging) []error {
 	// the whole thing as a directory and then fail to open a file inside itself.
 	if file := strings.TrimSpace(logging.File); file != "" && strings.HasSuffix(file, string(os.PathSeparator)) {
 		problems = append(problems, errors.New("logging.file must name a file, not a directory"))
+	}
+	problems = append(problems, validateErrorFile(logging)...)
+	return problems
+}
+
+// validateErrorFile refuses an errors-only file that cannot be honoured. Its
+// limits are checked whether or not it is enabled, for the same reason the
+// ordinary log's are: a value that only becomes invalid on the day it is
+// switched on is a trap set for the day it is most wanted.
+func validateErrorFile(logging Logging) []error {
+	var problems []error
+	errorFile := logging.ErrorFile
+	// Zero is absence and takes the default; anything else is a decision and is
+	// held to the same range as the ordinary log's, switched on or not.
+	if errorFile.MaxSizeMB != 0 && (errorFile.MaxSizeMB < 1 || errorFile.MaxSizeMB > 4096) {
+		problems = append(problems, errors.New("logging.error_file.max_size_mb must be between 1 and 4096"))
+	}
+	if errorFile.MaxFiles != 0 && (errorFile.MaxFiles < 1 || errorFile.MaxFiles > 100) {
+		problems = append(problems, errors.New("logging.error_file.max_files must be between 1 and 100"))
+	}
+	file := strings.TrimSpace(errorFile.File)
+	if file != "" && strings.HasSuffix(file, string(os.PathSeparator)) {
+		problems = append(problems, errors.New("logging.error_file.file must name a file, not a directory"))
+	}
+	// Two sinks on one path is not a stricter log, it is a corrupted one: each
+	// holds its own offset and rotates on its own count, so they overwrite each
+	// other's records and rotate mid-file. Both paths default to a name inside
+	// the data directory, and those two defaults differ — so this can only be
+	// reached by an operator naming one of them, and naming it wrong.
+	if file != "" && file == strings.TrimSpace(logging.File) {
+		problems = append(problems, errors.New("logging.error_file.file must not be the same path as logging.file"))
 	}
 	return problems
 }

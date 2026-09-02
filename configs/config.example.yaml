@@ -550,3 +550,24 @@ logging:
   # @description.zh-CN 含正在写入的文件在内的总代数；1 表示不保留历史。
   # @description.en-US Total generations kept, including the file being written; 1 keeps no history.
   max_files: 5
+  error_file:
+    # @title.zh-CN 启用错误专用日志文件
+    # @title.en-US Enable the errors-only log file
+    # @description.zh-CN 在普通日志之外另写一份只含 ERROR 的文件。把 level 设为 error 也能得到只含错误的日志，代价是丢掉证书临期、探针失败、回退前的尝试失败这些值得保留的 WARN；这个选项两者都留。它记录的条数少于控制台报告的最终失败数：预算、熔断、并发、Token Guard、能力不支持与脱敏拒绝属于策略生效，不写入这里。
+    # @description.en-US Writes a second copy of the log holding ERROR records alone, beside the ordinary log. Setting level to error would get the same file by discarding the WARNs worth keeping — an expiring certificate, a failed probe, an attempt retried before its request succeeded. It holds fewer records than the console reports as failed requests: budget, breaker, concurrency, Token Guard, capability and redaction refusals are policy working, and are not written here.
+    enabled: false
+    # @title.zh-CN 错误日志文件路径
+    # @title.en-US Error log file path
+    # @description.zh-CN 留空表示数据目录下的 logs/halro-error.log。不得与 logging.file 指向同一路径。
+    # @description.en-US Empty means logs/halro-error.log inside the data directory. It must not name the same path as logging.file.
+    file: ""
+    # @title.zh-CN 单个错误日志文件上限（MB）
+    # @title.en-US Error log file size limit (MB)
+    # @description.zh-CN 写入将超过该大小时轮转当前文件。
+    # @description.en-US Rotates the current file once a record would carry it past this size.
+    max_size_mb: 32
+    # @title.zh-CN 保留的错误日志文件数
+    # @title.en-US Retained error log files
+    # @description.zh-CN 含正在写入的文件在内的总代数；这些代数就是事故后可以往回读的范围。
+    # @description.en-US Total generations kept, including the file being written; these generations are how far back an operator can read after an incident.
+    max_files: 10

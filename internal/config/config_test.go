@@ -610,3 +610,88 @@ func TestTLSCertificatePathsAreMadeAbsolute(t *testing.T) {
 		t.Fatalf("relative certificate paths survived normalization: %+v", entry)
 	}
 }
+
+// The errors-only file is new, so a config file written before it existed
+// carries no block for it at all. Refusing to start over an absent limit for a
+// destination that is switched off would brick every existing data directory —
+// which is what a fail-closed check costs when the thing it closes on is
+// absence rather than ambiguity.
+func TestAnAbsentErrorFileBlockIsAcceptedAndDefaulted(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Logging.ErrorFile.Enabled {
+		t.Fatal("a config with no error_file block enabled one")
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("a config predating the error file was refused: %v", err)
+	}
+	if cfg.Logging.ErrorFile.SizeLimitMB() != DefaultErrorFileMaxSizeMB ||
+		cfg.Logging.ErrorFile.FileLimit() != DefaultErrorFileMaxFiles {
+		t.Fatalf("unset limits did not resolve to the defaults: %#v", cfg.Logging.ErrorFile)
+	}
+}
+
+// A limit an operator actually wrote is a decision, and is held to the same
+// range as the ordinary log's whether or not the file is switched on — so a
+// value that only becomes invalid on the day it is wanted is caught now.
+func TestExplicitErrorFileLimitsAreRangeChecked(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		errorFile ErrorFile
+	}{
+		{"size above the ceiling", ErrorFile{MaxSizeMB: 8192}},
+		{"negative size", ErrorFile{MaxSizeMB: -1}},
+		{"generations above the ceiling", ErrorFile{MaxFiles: 500}},
+		{"a path naming a directory", ErrorFile{File: "/var/log/halro/"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg, err := Decode(strings.NewReader(validConfig))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cfg.Normalize(); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Logging.ErrorFile = testCase.errorFile
+			if err := cfg.Validate(LoadOptions{}); err == nil {
+				t.Fatalf("%#v was accepted", testCase.errorFile)
+			}
+		})
+	}
+}
+
+// Two sinks on one path is not a stricter log, it is a corrupted one: each
+// holds its own offset and rotates on its own count, so they overwrite each
+// other's records and rotate mid-file.
+func TestTheErrorFileCannotShareThePlainLogsPath(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Logging.Output = LogOutputBoth
+	cfg.Logging.File = "/var/log/halro/halro.log"
+	cfg.Logging.ErrorFile = ErrorFile{Enabled: true, File: "/var/log/halro/halro.log"}
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("both sinks were pointed at one path")
+	}
+	cfg.Logging.ErrorFile.File = "/var/log/halro/halro-error.log"
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("two distinct paths were refused: %v", err)
+	}
+	// The two defaults differ, so leaving both unset can never collide.
+	cfg.Logging.File, cfg.Logging.ErrorFile.File = "", ""
+	if cfg.LogFilePath() == cfg.ErrorLogFilePath() {
+		t.Fatal("the default paths collide")
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("the defaults were refused: %v", err)
+	}
+}

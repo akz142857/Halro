@@ -131,6 +131,10 @@ func Default() Config {
 		Logging: Logging{
 			Level: "info", Format: LogFormatJSON, Output: LogOutputStderr,
 			MaxSizeMB: 64, MaxFiles: 5,
+			// Off by default, with its limits already set: switching it on is
+			// one boolean rather than a block an operator has to compose
+			// during the incident that made them want it.
+			ErrorFile: ErrorFile{Enabled: false, MaxSizeMB: 32, MaxFiles: 10},
 		},
 	}
 }
