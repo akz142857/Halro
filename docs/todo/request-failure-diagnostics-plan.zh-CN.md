@@ -1,7 +1,8 @@
 # 请求失败诊断与错误专用日志：设计与实施方案
 
 - 状态：提案已评审，尚未实施
-- 日期：2026-09-01（2026-09-02 依代码核对修订：补入 `rejected` 终态、准入前失败盲区与历史深度限定）
+- 日期：2026-09-01（2026-09-02 依代码核对修订：补入 `rejected` 终态、准入前失败盲区与历史深度限定；
+  实施 S0 时再次核对，把非 success 终态从「两种」订正为实际的六种，见 3.2）
 - 文档语言：中文
 - 适用范围：Gateway 请求生命周期、Usage 派生数据、Admin API、控制台「用量与调用」、进程日志
 - 数据迁移：第一阶段不需要；后续若持久化 Provider 错误标识，需要升级 Ledger / Usage 派生结构
@@ -29,9 +30,9 @@
 
 评审补充的三点（详见第三章与 D1）：
 
-- **「最终失败」不是一个同质的集合。** 非 success 终态今天有两种，`provider_error` 和 `rejected`，
-  后者由 `requestRun.close()` 的兜底路径写入，覆盖预算耗尽 / 熔断打开 / 并发已满，没有任何上游调用
-  可以解释它。任何按「Provider 失败」形状设计的产出都会在这类行上落空。
+- **「最终失败」不是一个同质的集合。** 非 success 终态今天有六种（3.2 逐一列出），其中四种没有任何
+  上游调用可以解释它 —— `rejected` 由 `requestRun.close()` 的兜底路径写入，覆盖预算耗尽 / 熔断打开 /
+  并发已满。任何按「Provider 失败」形状设计的产出都会在这类行上落空。
 - **认证失败、路由未找到、限流拒绝根本不在这套口径里。** 它们在 `beginRequestRun` 之前返回，没有
   Ledger 请求。这是刻意的边界，但必须说出来 —— 否则「最终失败」会被读成「全部失败」。
 - **失败历史的深度等于 Usage Aggregate 的保留窗口**，不等于 Parquet 的长期历史：Parquet 只导出
@@ -41,8 +42,8 @@
 
 - **控制台错误详情以 Ledger → Usage 派生数据为事实来源**，在 Aggregate 保留窗口内能分页、筛选、回看，
   并与汇总数字使用同一口径；
-- **错误专用文件以结构化进程日志为运维出口**，只收 `provider_error` 终态和系统级 `ERROR`，不让控制台
-  反向读取主机日志文件。
+- **错误专用文件以结构化进程日志为运维出口**，只收 `provider_error` / `accounting_error` 终态和系统级
+  `ERROR`，不让控制台反向读取主机日志文件。
 
 ## 二、当前实现证据
 
@@ -80,23 +81,34 @@
 `RequestFinalized.outcome != success`。它与 Usage 汇总里的 `request_errors` 使用同一事实，截图中的
 「2 条最终失败」指的就是这个口径。
 
-它不是一个同质的集合。今天写入 Ledger 的非 success 终态有两种，本方案的每一处产出都必须分别回答：
+它不是一个同质的集合。**评审时说它只有两种终态，那是错的** —— 按 `internal/gateway` 里所有
+`run.finalize(...)` 与 `attempt.abort(...)` 的实参逐一读出，今天能写进 Ledger 的非 success 终态有六种，
+本方案的每一处产出都必须分别回答：
 
-- `provider_error` —— 至少调用过一次上游，有 Provider、Deployment、错误分类和上游状态；
-- `rejected` —— 请求已经受理并写入 Ledger，但从未产生一个能解释它的上游结果。
-  `internal/gateway/service.go` 的 `requestRun.close()` 对任何未 finalize 的运行兜底写入这个终态，
-  按该处注释它覆盖预算耗尽、熔断打开、目标并发已满这类「从未到达 Provider 的拒绝」。
+| outcome | 含义 | 是否调用过上游 |
+| --- | --- | --- |
+| `provider_error` | 上游失败，或上游答复无法安全呈现给调用方 | 是 |
+| `policy_rejected` | 脱敏策略拒绝了上游输出，或改写后的输出无法表示 | 是 |
+| `unsupported_feature` | 已开尝试，但目标不支持请求形状，`abort` 回滚 | 否 |
+| `token_guard_rejected` | `RecheckCost` 用真实定价复核后超限 | 否 |
+| `accounting_error` | 定价、预留、价格钉或 MarkStarted 失败 | 否 |
+| `rejected` | `requestRun.close()` 的兜底：预算耗尽、熔断打开、目标并发已满 | 否 |
 
-### 3.3 准入后拒绝（rejected）
+分界线不是「上游是否失败」，而是**它是不是一次值得看的系统异常**（见 D2 与 3.3）。
 
-它属于 3.2，计入 `request_errors`，但**没有一次失败的上游调用**：没有 Provider Request ID，通常也没有
-Deployment，`FailureDescriptor.phase` 只能是 `pre_provider`。所以它不能默认套用 Provider 失败的形状，
-需要两条显式规则：
+### 3.3 准入后拒绝 —— 不产生 ERROR 的那四种终态
 
-1. **`rejected` 不写 `request failed` ERROR。** 它是策略正常生效的结果，不是系统异常；一个跑飞的客户端
+`rejected`、`token_guard_rejected`、`unsupported_feature`、`policy_rejected` 都属于 3.2，都计入
+`request_errors`，但都**没有一次失败的上游调用可以解释它们**（`policy_rejected` 调用过上游，但上游是
+成功的，失败的是本地策略）。它们没有 Provider Request ID，`FailureDescriptor.phase` 只能是
+`pre_provider` 或 `response_render`。所以它们不能默认套用 Provider 失败的形状，需要两条显式规则：
+
+1. **这四种终态不写 `request failed` ERROR。** 它们是策略正常生效的结果，不是系统异常；一个跑飞的客户端
    可以在几秒内产生上万条，写进错误文件会直接击穿第九章的容量边界，并让错误文件不再等于「值得看的
    失败」。这类拒绝由既有的限流 / 熔断指标和 Usage 报表负责解释。
-2. **最终失败列表必须收录它，并标注为「策略拒绝」**，`last_failure` 允许缺失。列表不收录它，列表数量
+   `accounting_error` 是例外，它写 ERROR：那是 3.5 意义上的系统错误（Ledger 或定价不可用），既不由客户端
+   驱动、也无法用速率放大，正是错误文件该留下的东西。
+2. **最终失败列表必须收录它们，并标注为「策略拒绝」**，`last_failure` 允许缺失。列表不收录它们，列表数量
    就会与汇总卡片的数字对不上，而那正是第十二章第一条验收标准要守的东西。
 
 由此得到一个必须写进文档和 Operator Guide 的推论：**ERROR 条数 ⊆ 最终失败数，两者不相等**，不能互相
@@ -124,9 +136,9 @@ ERROR。
 
 ### 3.6 必须保持的不变量
 
-1. `最终失败数 = 终态为非 success 的请求数`，其中同时包含 `provider_error` 与 `rejected`；不能拿失败
-   尝试数代替，也不能只算 Provider 失败。
-2. 一个请求最多产生一条 `request failed` 终态日志，且只有 `provider_error` 会产生它。
+1. `最终失败数 = 终态为非 success 的请求数`，其中包含 3.2 表里全部六种；不能拿失败尝试数代替，也不能
+   只算 Provider 失败。
+2. 一个请求最多产生一条 `request failed` 终态日志，且只有 `provider_error` 与 `accounting_error` 会产生它。
 3. 回退后成功的请求可以保留 `WARN` 尝试记录，但不得产生终态 `ERROR`。
 4. `request failed` 的条数少于或等于最终失败数；两者不得被当作可互相校验的同一口径。
 5. 准入前失败不进入任何以 `RequestFinalized` 为来源的计数或列表。
@@ -153,7 +165,7 @@ ERROR。
 - 不承诺仅凭错误分类就能解释每个 Provider 的全部业务语义；
 - 不在本方案中增加告警通知，错误告警仍归现有 Alerts 体系；
 - 不把准入前失败（认证、路由未找到、限流、Token Guard 拒绝）纳入最终失败列表或错误日志，见 3.4；
-- 不为 `rejected` 终态产生 `ERROR` 日志，见 3.3；
+- 不为 3.3 那四种策略终态产生 `ERROR` 日志；
 - 不为最终失败提供超出 Usage Aggregate 保留窗口的长期归档，见 D1。
 
 ## 五、设计决策
@@ -176,12 +188,13 @@ ERROR。
 
 ### D2 · `ERROR` 代表什么
 
-**采用：仅在请求以 `provider_error` 终结时写请求级 `ERROR`；每次 Provider 尝试失败继续写 `WARN`；
-`rejected` 终结的请求不写 `ERROR`。**
+**采用：仅在请求以 `provider_error` 或 `accounting_error` 终结时写请求级 `ERROR`；每次 Provider 尝试失败
+继续写 `WARN`；`rejected` / `token_guard_rejected` / `unsupported_feature` / `policy_rejected` 终结的请求
+不写 `ERROR`。**
 
 不能把 `logProviderFailure` 直接从 `Warn` 改成 `Error`，否则回退成功也会污染错误日志。
 
-也不能反过来把「非 success 就写 ERROR」当作等价说法。非 success 包含 `rejected`（3.3），那是策略正常
+也不能反过来把「非 success 就写 ERROR」当作等价说法。非 success 包含 3.3 那四种策略终态，它们是策略正常
 生效的结果，可以在几秒内成千上万条。两种写法在成功路径上完全一致，差别只有在一个跑飞的客户端出现时
 才暴露 —— 那时错误文件已经被写满了。
 
@@ -271,8 +284,9 @@ ambiguous             上游是否可能已经接受请求
       → 成功：请求可能最终成功
   → RequestFinalized
       → success：不写 request failed
-      → provider_error：恰好写一条 ERROR request failed
-      → rejected：不写 ERROR，只进入最终失败列表并标注为策略拒绝（见 3.3）
+      → provider_error / accounting_error：恰好写一条 ERROR request failed
+      → rejected / token_guard_rejected / unsupported_feature / policy_rejected：
+        不写 ERROR，只进入最终失败列表并标注为策略拒绝（见 3.3）
 ```
 
 必须让所有出口汇入同一终态函数，包括 Provider 全部失败、响应转换失败、计费结算失败、准入后的本地错误、
@@ -413,7 +427,7 @@ GET /admin/api/v1/usage/failures
 该接口从 `RequestSummary.Outcome != success` 选请求，再按 Request ID 关联它的 Attempts。详情继续复用
 `GET /admin/api/v1/usage/requests/{requestID}`，避免列表重复返回完整失败链。
 
-`outcome` 为 `rejected` 的行**没有 `last_failure`**（见 3.3）：它没有失败的上游调用，因此没有
+`outcome` 属于 3.3 那四种策略终态的行**没有 `last_failure`**（见 3.3）：它没有失败的上游调用，因此没有
 `error_class`、`provider_status` 或 Provider 上下文可以填。接口必须省略该字段，界面按策略拒绝渲染，
 不得为了列对齐而伪造一个空的 Provider 上下文 —— 那会把「没有调用上游」误报成「上游没有回答」。
 
@@ -481,7 +495,7 @@ S3 应当顺手把这个分支归一到枚举里 —— 取消归 `canceled`、�
 
 - 错误文件必须按大小轮转并限制代数；
 - 一次请求最多一条终态错误；
-- `rejected` 终态不写 ERROR（3.3）。这是本章最重要的一条容量控制：限流和熔断在事故中的产出速率与
+- 3.3 的四种策略终态不写 ERROR。这是本章最重要的一条容量控制：限流和熔断在事故中的产出速率与
   客户端重试速率同阶，把它写进错误文件会让轮转在几分钟内吃掉全部代数，事故真正的第一条错误因此被
   挤出文件 —— 恰好在最需要它的时刻；
 - 不把完整尝试链序列化到终态日志，链条通过 Request ID 在 Usage 查看；
@@ -512,7 +526,7 @@ S3 应当顺手把这个分支归一到枚举里 —— 取消归 `canceled`、�
 - 新增 Usage 最终失败查询及 Admin API；
 - 汇总卡片准确跳转最终失败列表；
 - 列表按 Request ID 聚合，详情展示尝试链；
-- 列表同时收录 `provider_error` 与 `rejected`，后者标注为策略拒绝且不带 `last_failure`；
+- 列表收录全部六种非 success 终态，3.3 那四种标注为策略拒绝且不带 `last_failure`；
 - 断言列表数量与同范围 `request_errors` 相等 —— 这条断言只有在收录 `rejected` 时才成立，它就是
   3.3 那条规则的回归测试；
 - 页面注明可见窗口等于 Usage 保留窗口（D1），不暗示这是全量历史。
@@ -520,12 +534,13 @@ S3 应当顺手把这个分支归一到枚举里 —— 取消归 `canceled`、�
 ### S3 · 请求级终态 ERROR
 
 - 引入安全 `FailureDescriptor`；
-- 在统一终态边界写一次 `request failed`，且**按 outcome 分支**：只有 `provider_error` 写 ERROR；
+- 在统一终态边界写一次 `request failed`，且**按 outcome 分支**：只有 `provider_error` 与
+  `accounting_error` 写 ERROR；
 - 保持尝试失败为 WARN；
 - 把 `client_disconnected_or_timed_out` 归一到 `canceled` / `timeout`，并断言日志里的 `error_class`
   一定是 `provider.ErrorClass` 的成员；
 - 覆盖 Provider 前、本地转换、Provider、计费和客户端取消路径；
-- 断言熔断打开 / 预算耗尽的 `rejected` 请求产生零条 ERROR；
+- 断言 3.3 那四种策略终态产生零条 ERROR；
 - 增加秘密 canary、Provider 正文和未分类错误文本不泄漏测试。
 
 ### S4 · 独立错误文件
@@ -600,7 +615,7 @@ S1、S2、S3 是解决当前问题的主体；S4 在确实需要单独主机文�
 8. 错误文件达到大小上限后按配置轮转，写失败时 stderr 有且仅有一次退化通知；
 9. 旧数据目录能够直接升级，第一阶段无需重建；实施 S5 时重放与增量结果一致；
 10. 文档明确说明「最终失败」与「失败尝试」不是同一个数字；
-11. `rejected` 请求出现在最终失败列表中并标注为策略拒绝，但产生零条 `request failed` ERROR，
+11. 3.3 的四种策略终态出现在最终失败列表中并标注为策略拒绝，但产生零条 `request failed` ERROR，
     因此错误文件的行数少于列表行数，且这一差值在文档中被解释而不是被当作缺陷；
 12. 界面与文档说明准入前失败（认证、路由未找到、限流、Token Guard 拒绝）不在这套口径内，
     并指出应去哪里查它们；
