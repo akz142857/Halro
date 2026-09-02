@@ -2,8 +2,9 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { EmptyState, ErrorState, Loading, LoadMore, Modal, StatusDot } from "../components";
-import { errorClassAdvice, errorClassLabel, predatesProviderIdentifiers } from "../failure";
+import { EmptyState, ErrorState, Loading, LoadMore, StatusDot } from "../components";
+import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
+import { errorClassAdvice, errorClassLabel } from "../failure";
 import { useInstantFormatter, type InstantStyle } from "../format";
 import { Link } from "../navigation";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
@@ -200,7 +201,7 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
             component placed directly under <tr> would be invalid markup the
             day it stops portalling. */}
         {open && (
-          <FailureDetailDialog
+          <FailureDetailDrawerFor
             failure={failure}
             projectName={projectName}
             deploymentName={deploymentName}
@@ -213,15 +214,10 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
   );
 }
 
-// Everything known about one failed request, in one place.
-//
-// It is a dialog rather than an expanding row because of what is in it: a
-// request body is not a table cell, and growing the row to hold one moves every
-// row below it while the operator is reading. The dialog also gives the
-// captured payload — the one thing here that holds material a caller wrote —
-// somewhere it is unmistakably separate from the summary above it, instead of
-// running on as more small grey text in the same cell.
-function FailureDetailDialog({ failure, projectName, deploymentName, formatInstant, onClose }: {
+// The facts of one failed request, as the shared drawer renders them. Kept as a
+// builder rather than a component so the failed-request row and the attempt row
+// assemble their own list and share everything else.
+function FailureDetailDrawerFor({ failure, projectName, deploymentName, formatInstant, onClose }: {
   failure: RequestFailure;
   projectName?: string;
   deploymentName?: string;
@@ -231,195 +227,51 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
   const { t } = useTranslation();
   const policy = policyOutcomes.has(failure.outcome);
   const last = failure.last_failure;
+  const identifiers = policy
+    ? { facts: [], unrecorded: false }
+    : providerIdentifierFacts(t, last);
   const cause = policy
     ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
     : errorClassLabel(t, last?.error_class) || t("usage.error");
   return (
-    // A drawer, not a centred dialog. What is read here is a captured request
-    // body — tall, not wide — and the drawer is the console's full-height
-    // surface, with a sticky header so the way out stays put however far the
-    // JSON runs. It also leaves the failed-request list visible behind it,
-    // which is what makes working down a list of failures one motion instead
-    // of open-read-close-repeat.
-    <Modal drawer title={t("usage.failures.dialogTitle")} onClose={onClose}>
-      {/* The modal insets a <form> child and nothing else, so a body built out
-          of a list and a couple of sections would otherwise run flush against
-          all four borders. */}
-      <div className="failure-detail-body">
-      <dl className="failure-facts">
-        <FailureFact label={t("usage.failures.cause")} value={cause} emphasis />
-        <FailureFact label={t("usage.time")} value={formatInstant(failure.completed_at, "full")} />
-        <FailureFact label={t("usage.requestID")} value={failure.request_id} code />
-        <FailureFact label={t("usage.project")} value={projectName || failure.project_id} />
-        <FailureFact label={t("usage.model")} value={failure.requested_model} />
-        <FailureFact
-          label={t("usage.deployment")}
-          value={last?.deployment_id ? deploymentName || last.deployment_id : t("usage.failures.noTarget")}
-        />
-        <FailureFact label={t("usage.actualModel")} value={last?.provider_model} />
-        <FailureFact
-          label={t("usage.status")}
-          value={last?.provider_status ? t("usage.httpStatus", { status: last.provider_status }) : undefined}
-        />
-        <FailureFact label={t("usage.failures.providerCodeLabel")} value={last?.provider_code} code />
-        <FailureFact label={t("usage.failures.providerRequestLabel")} value={last?.provider_request_id} code />
-        <FailureFact
-          label={t("usage.failures.attempts")}
-          value={t("usage.failures.attemptCount", { count: failure.attempts })}
-        />
-        {/* Which attempt decided the outcome. Without it a two-attempt request
-            reads as if either could have produced the class above. */}
-        <FailureFact
-          label={t("usage.failures.decidedByLabel")}
-          value={last ? t("usage.failures.decidedBy", { attempt: last.attempt }) : undefined}
-        />
-        <FailureFact
-          label={t("usage.failures.fallbacks")}
-          value={failure.fallbacks > 0 ? String(failure.fallbacks) : undefined}
-        />
-      </dl>
-
-      {/* What to do next, kept apart from the facts: one is a record, the other
-          is advice, and running them together makes the advice read as
-          something the ledger said. */}
-      <p className="failure-advice">
-        {policy
-          ? t("usage.failures.policyRejectedDetail")
-          : errorClassAdvice(t, last?.error_class) || t("usage.failures.noAdvice")}
-      </p>
-      {last && !policy && predatesProviderIdentifiers(last) && (
-        <p className="failure-advice muted">{t("usage.identifiersNotRecorded")}</p>
-      )}
-
-      <p className="failure-links">
+    <FailureDetailDrawer
+      title={t("usage.failures.dialogTitle")}
+      onClose={onClose}
+      advice={policy
+        ? t("usage.failures.policyRejectedDetail")
+        : errorClassAdvice(t, last?.error_class) || t("usage.failures.noAdvice")}
+      identifiersUnrecorded={identifiers.unrecorded}
+      // A policy refusal never reached an upstream, so there is nothing to show
+      // and no reason to offer an audited read.
+      requestID={policy ? undefined : failure.request_id}
+      links={
         <Link href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(failure.request_id)}`}>
           {t("usage.failures.viewAttemptChain")} →
         </Link>
-      </p>
-
-      {!policy && <CapturedPayload requestID={failure.request_id} />}
-      </div>
-
-      {/* A sibling of the body, not the last thing inside it: the drawer pins
-          this to its bottom edge, so the way out is in the same place whether
-          the record is four facts or a payload that scrolls for a minute. */}
-      <div className="form-actions failure-detail-actions">
-        {/* No data-modal-initial: without it the Modal focuses its own
-            container, so the first thing announced is the dialog's title
-            rather than the way out of it. */}
-        <button type="button" className="button ghost" data-modal-close>
-          {t("common.close")}
-        </button>
-      </div>
-    </Modal>
-  );
-}
-
-// One fact, or nothing. A label with an em dash under it is a row of furniture
-// that tells the reader the field exists and says nothing; leaving it out says
-// the same thing in no space at all.
-function FailureFact({ label, value, code = false, emphasis = false }: {
-  label: string; value?: string; code?: boolean; emphasis?: boolean;
-}) {
-  if (!value) return null;
-  return (
-    <div className={`failure-fact${emphasis ? " emphasis" : ""}`}>
-      <dt>{label}</dt>
-      <dd>{code ? <code>{value}</code> : value}</dd>
-    </div>
-  );
-}
-
-// The upstream's own identifiers, which are what a support desk asks for and
-// what an operator cannot reconstruct from anything else on the page.
-//
-// A record written before they were kept says so in words. A blank there and a
-// blank on a record that simply had none are different answers, and showing one
-// rendering for both talks the operator out of chasing an identifier that does
-// exist upstream. It lives here rather than beside the attempt table because
-// the attempt table already imports this panel; the other direction would be a
-// cycle.
-export function ProviderIdentifiers({ failure }: {
-  failure: { provider_code?: string; provider_request_id?: string; failure_phase?: string };
-}) {
-  const { t } = useTranslation();
-  if (predatesProviderIdentifiers(failure)) {
-    return <><br />{t("usage.identifiersNotRecorded")}</>;
-  }
-  return (
-    <>
-      {failure.provider_code && <><br />{t("usage.providerCode", { code: failure.provider_code })}</>}
-      {failure.provider_request_id && <><br />{t("usage.providerRequestID", { id: failure.provider_request_id })}</>}
-    </>
-  );
-}
-
-// What the failed call carried, fetched only when an operator asks for it.
-//
-// It is behind a click rather than loaded with the dialog for three reasons
-// that point the same way: it is the only thing here holding material a caller
-// wrote, the server audits every read of it, and loading it on open would file
-// an audit record for every failure an operator merely looked at.
-//
-// Nothing is cached — leaving a prompt in a query cache is the browser-side
-// version of the storage decision this feature was careful about.
-function CapturedPayload({ requestID }: { requestID: string }) {
-  const { t } = useTranslation();
-  const [requested, setRequested] = useState(false);
-  const payload = useQuery({
-    queryKey: ["usage-failure-payload", requestID],
-    queryFn: () => api.usageFailurePayload(requestID),
-    enabled: requested,
-    gcTime: 0,
-    staleTime: 0,
-    retry: false,
-  });
-
-  return (
-    <section className="payload-panel">
-      <h3>{t("usage.failures.payloadHeading")}</h3>
-      {!requested && (
-        <>
-          <p className="payload-note">{t("usage.failures.payloadWarning")}</p>
-          <button type="button" className="button secondary" onClick={() => setRequested(true)}>
-            {t("usage.failures.revealPayload")}
-          </button>
-        </>
-      )}
-      {requested && payload.isPending && <Loading />}
-      {/* A miss here is the ordinary case, not a fault — capture may be off,
-          the failure may predate it, or the record may have aged out — so it
-          gets one short line and the reasons live in the Operator Guide. */}
-      {requested && payload.isError && <p className="payload-note">{t("usage.failures.noPayload")}</p>}
-      {requested && payload.data && (
-        <>
-          <PayloadSection
-            label={t("usage.failures.payloadRequest")}
-            value={payload.data.request}
-            truncated={payload.data.request_truncated}
-          />
-          <PayloadSection
-            label={t("usage.failures.payloadResponse")}
-            value={payload.data.response}
-            truncated={payload.data.response_truncated}
-          />
-        </>
-      )}
-    </section>
-  );
-}
-
-function PayloadSection({ label, value, truncated }: { label: string; value: unknown; truncated?: boolean }) {
-  const { t } = useTranslation();
-  if (value === undefined || value === null) return null;
-  return (
-    <>
-      <h4>{label}</h4>
-      {/* Truncation is stated rather than left to be inferred: a reader who
-          diagnoses a malformed body that is only an incomplete one goes looking
-          for a bug the upstream does not have. */}
-      {truncated && <p className="payload-truncated">{t("usage.failures.payloadTruncated")}</p>}
-      <pre className="payload-body">{JSON.stringify(value, null, 2)}</pre>
-    </>
+      }
+      facts={[
+        { label: t("usage.failures.cause"), value: cause, emphasis: true },
+        { label: t("usage.time"), value: formatInstant(failure.completed_at, "full") },
+        { label: t("usage.requestID"), value: failure.request_id, code: true },
+        { label: t("usage.project"), value: projectName || failure.project_id },
+        { label: t("usage.model"), value: failure.requested_model },
+        {
+          label: t("usage.deployment"),
+          value: last?.deployment_id ? deploymentName || last.deployment_id : t("usage.failures.noTarget"),
+        },
+        { label: t("usage.actualModel"), value: last?.provider_model },
+        {
+          label: t("usage.status"),
+          value: last?.provider_status ? t("usage.httpStatus", { status: last.provider_status }) : undefined,
+        },
+        ...identifiers.facts,
+        { label: t("usage.failures.attempts"), value: t("usage.failures.attemptCount", { count: failure.attempts }) },
+        { label: t("usage.failures.fallbacks"), value: failure.fallbacks > 0 ? String(failure.fallbacks) : undefined },
+        {
+          label: t("usage.failures.decidedByLabel"),
+          value: last ? t("usage.failures.decidedBy", { attempt: last.attempt }) : undefined,
+        },
+      ]}
+    />
   );
 }

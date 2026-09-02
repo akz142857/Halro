@@ -736,13 +736,12 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
     },
     httpStatus: "HTTP {{status}}",
     providerFilter: "仅看服务商 {{provider}}（点击清除）",
-    providerCode: "服务商错误码：{{code}}",
-    providerRequestID: "服务商请求标识：{{id}}",
     // 不写「未知」：空白与「没保存过」是两回事，前者会让人放弃去上游查一个确实存在的标识。
     identifiersNotRecorded: "该记录写于这些字段加入之前，未保存服务商错误码与请求标识。",
     attemptChain: "第 {{fallback}} 个目标 · 第 {{retry}} 次重试",
     attemptFirstTry: "首选目标，首次尝试",
     attemptDetails: "失败详情",
+    attemptDetailsTitle: "第 {{count}} 次尝试的失败详情",
     tabs: { summary: "汇总", failures: "最终失败", attempts: "调用明细" },
     // 「最终失败」= Ledger 终态非 success 的请求数，与汇总卡片同源。
     // 它不等于「失败尝试」，也不包含准入前失败 —— 这两点必须写在页面上，
@@ -771,6 +770,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       dialogTitle: "失败详情",
       fallbacks: "回退",
       decidedByLabel: "决定终态的尝试",
+      chainLabel: "链路位置",
       providerCodeLabel: "服务商错误码",
       providerRequestLabel: "服务商请求标识",
       viewAttemptChain: "查看该请求的完整尝试链",

@@ -171,13 +171,6 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .metric.alert strong { color: var(--danger); }
 .metric-link { display: inline-block; margin-top: var(--space-2); font-size: var(--font-size-xs); }
 .filter-chip { align-self: center; padding: var(--space-1) var(--space-2); color: var(--muted); font-size: var(--font-size-xs); background: var(--surface-sidebar); border: .0625rem solid var(--line); border-radius: .25rem; cursor: pointer; }
-/* The attempt table keeps its inline disclosure: those rows explain one call
-   each and have nothing large to show. The failed-request rows moved to a
-   dialog because a request body is not a table cell. */
-.failure-detail { margin-top: var(--space-1); }
-.failure-detail summary { color: var(--muted); cursor: pointer; font-size: var(--font-size-xs); }
-.failure-detail small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); white-space: normal; }
-
 /* The inset the modal gives a <form> child and nothing else, matching the
    drawer's own body padding. Qualified by the modal so it outranks
    `.modal > form`. The drawer supplies the full height and the sticky header;

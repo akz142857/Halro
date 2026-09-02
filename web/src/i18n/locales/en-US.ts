@@ -731,8 +731,6 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     },
     httpStatus: "HTTP {{status}}",
     providerFilter: "Provider {{provider}} only (click to clear)",
-    providerCode: "Provider code: {{code}}",
-    providerRequestID: "Provider request ID: {{id}}",
     // Never "unknown": a blank and "never recorded" are different answers, and
     // the first talks an operator out of chasing an identifier that does exist
     // upstream.
@@ -740,6 +738,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     attemptChain: "Target {{fallback}} · retry {{retry}}",
     attemptFirstTry: "First target, first try",
     attemptDetails: "Failure detail",
+    attemptDetailsTitle: "Attempt {{count}} failure detail",
     tabs: { summary: "Summary", failures: "Failed requests", attempts: "Attempt log" },
     // "Failed requests" is RequestFinalized with a non-success outcome, the same
     // fact the summary card counts. It is not the same as a failed attempt, and
@@ -769,6 +768,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       dialogTitle: "Failure detail",
       fallbacks: "Fallbacks",
       decidedByLabel: "Deciding attempt",
+      chainLabel: "Position in the chain",
       providerCodeLabel: "Provider code",
       providerRequestLabel: "Provider request ID",
       viewAttemptChain: "See this request's full attempt chain",

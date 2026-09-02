@@ -290,6 +290,13 @@ describe("UsagePage failure detail", () => {
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
   });
 
+  // The row shows the class and the status; everything else is one click away
+  // in the same drawer the failed-request list opens.
+  async function openAttemptDetail() {
+    fireEvent.click(screen.getByRole("button", { name: "失败详情" }));
+    return screen.findByRole("dialog");
+  }
+
   const failedAttempt = (overrides: Record<string, unknown>) => ({
     event_id: "e1", request_id: "req_1", attempt_id: "att_1", attempt: 1, project_id: "p",
     requested_model: "chat", provider_model: "gpt-4o", provider_input_tokens: 1,
@@ -309,8 +316,9 @@ describe("UsagePage failure detail", () => {
     // The number is kept apart from the class because it is the part an
     // operator quotes to a provider's support desk.
     expect(screen.getByText("HTTP 401")).toBeVisible();
-    // What to check next, behind the disclosure so a wide table stays readable.
-    expect(screen.getByText(/检查凭据状态/)).toBeInTheDocument();
+    // What to check next, in the drawer, so a wide table stays readable.
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getByText(/检查凭据状态/)).toBeVisible();
   });
 
   // A class the server starts sending before this bundle knows about it must
@@ -338,7 +346,9 @@ describe("UsagePage failure detail", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
-    expect(await screen.findByText(/第 2 个目标 · 第 1 次重试/)).toBeInTheDocument();
+    await screen.findByText("上游响应超时");
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getByText(/第 2 个目标 · 第 1 次重试/)).toBeVisible();
   });
 
   // What a support desk asks for. These reach the console through the ledger
@@ -356,8 +366,10 @@ describe("UsagePage failure detail", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
-    expect(await screen.findByText(/invalid_image_url:messages\[0\]\.content\[1\]\.image_url/)).toBeInTheDocument();
-    expect(screen.getByText(/upstream-req-42/)).toBeInTheDocument();
+    await screen.findByText("上游拒绝了请求形状或参数");
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getByText("invalid_image_url:messages[0].content[1].image_url")).toBeVisible();
+    expect(within(dialog).getByText("upstream-req-42")).toBeVisible();
   });
 
   // A record written before those fields were kept says so. A blank there and a
@@ -373,8 +385,10 @@ describe("UsagePage failure detail", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
-    expect(await screen.findByText(/未保存服务商错误码与请求标识/)).toBeInTheDocument();
-    expect(screen.queryByText(/未知/)).not.toBeInTheDocument();
+    await screen.findByText("上游拒绝了请求形状或参数");
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getByText(/未保存服务商错误码与请求标识/)).toBeVisible();
+    expect(within(dialog).queryByText(/未知/)).not.toBeInTheDocument();
   });
 
   // An upstream that named no code on a record that would have kept one gets
@@ -403,7 +417,7 @@ describe("UsagePage failure detail", () => {
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
     expect(await screen.findByText("成功")).toBeVisible();
-    expect(screen.queryByText("失败详情")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "失败详情" })).not.toBeInTheDocument();
   });
 });
 

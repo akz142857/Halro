@@ -6,7 +6,8 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import { ProviderIdentifiers, UsageFailuresPanel } from "./UsageFailuresPanel";
+import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
+import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
@@ -223,12 +224,15 @@ export function UsagePage() {
       {usage.data && attempts.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
+            {/* Latency is one short fixed-shape value and was sized the same as
+                the status beside it, which holds a classified failure and was
+                wrapping to three lines to make room for "638 ms". */}
             <colgroup>
-              <col style={{ width: "14%" }} /><col style={{ width: "9%" }} /><col style={{ width: "10%" }} /><col style={{ width: "13%" }} />
-              <col style={{ width: "12%" }} /><col style={{ width: "18%" }} /><col style={{ width: "6%" }} /><col style={{ width: "6%" }} />
-              <col style={{ width: "12%" }} />
+              <col style={{ width: "13%" }} /><col style={{ width: "8%" }} /><col style={{ width: "9%" }} /><col style={{ width: "12%" }} />
+              <col style={{ width: "10%" }} /><col style={{ width: "14%" }} /><col style={{ width: "5%" }} /><col style={{ width: "12%" }} />
+              <col style={{ width: "10%" }} /><col style={{ width: "7%" }} />
             </colgroup>
-            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th></tr></thead>
+            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th>{/* The action column carries no heading, like the failed-request list's. Its button names itself. */}<th /></tr></thead>
             <tbody>
               {attempts.map((attempt) => (
                 <tr key={attempt.event_id}>
@@ -265,6 +269,7 @@ export function UsagePage() {
                   <td>{attempt.latency_millis} ms</td>
                   <td><AttemptStatusCell attempt={attempt} /></td>
                   <td>{dateTime(attempt.completed_at, "dateTimeYear")}</td>
+                  <td><AttemptDetailCell attempt={attempt} projectName={projectNames[attempt.project_id]} deploymentName={attempt.deployment_id ? deploymentNames[attempt.deployment_id] : undefined} /></td>
                 </tr>
               ))}
             </tbody>
@@ -297,10 +302,6 @@ function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
   if (attempt.status === "success") {
     return <span className="inline-status"><StatusDot ok label={t("usage.success")} />{t("usage.success")}</span>;
   }
-  const advice = errorClassAdvice(t, attempt.error_class);
-  const chain = attempt.retry_count > 0 || attempt.fallback_count > 0
-    ? t("usage.attemptChain", { fallback: attempt.fallback_count + 1, retry: attempt.retry_count })
-    : t("usage.attemptFirstTry");
   return (
     <>
       <span className="inline-status"><StatusDot ok={false} label={t("usage.error")} />{attemptFailureLabel(t, attempt)}</span>
@@ -308,14 +309,60 @@ function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
           string: an operator taking a 429 to a provider's support desk quotes
           the number, and a class alone cannot be quoted. */}
       {attempt.http_status ? <small>{t("usage.httpStatus", { status: attempt.http_status })}</small> : null}
-      <details className="failure-detail">
-        <summary>{t("usage.attemptDetails")}</summary>
-        <small>
-          {advice && <>{advice}<br /></>}
-          {chain}
-          <ProviderIdentifiers failure={attempt} />
-        </small>
-      </details>
+    </>
+  );
+}
+
+// The same drawer the failed-request list opens, on the row that explains one
+// call rather than one request. The detail used to expand inside the status
+// cell, which grew the row under the operator's pointer and put a request body
+// in a column five of whose cells are one line tall.
+function AttemptDetailCell({ attempt, projectName, deploymentName }: {
+  attempt: UsageAttempt; projectName?: string; deploymentName?: string;
+}) {
+  const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
+  const [open, setOpen] = useState(false);
+  if (attempt.status === "success") return null;
+  const identifiers = providerIdentifierFacts(t, attempt);
+  const chain = attempt.retry_count > 0 || attempt.fallback_count > 0
+    ? t("usage.attemptChain", { fallback: attempt.fallback_count + 1, retry: attempt.retry_count })
+    : t("usage.attemptFirstTry");
+  return (
+    <>
+      <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
+        {t("usage.attemptDetails")}
+      </button>
+      {open && (
+        <FailureDetailDrawer
+          title={t("usage.attemptDetailsTitle", { count: attempt.attempt })}
+          onClose={() => setOpen(false)}
+          advice={errorClassAdvice(t, attempt.error_class) || t("usage.failures.noAdvice")}
+          identifiersUnrecorded={identifiers.unrecorded}
+          // Keyed by the request, because that is what a payload belongs to. An
+          // attempt of a request that went on to succeed has none, and the
+          // panel says so rather than implying capture failed.
+          requestID={attempt.request_id}
+          links={
+            <Link href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(attempt.request_id)}`}>
+              {t("usage.failures.viewAttemptChain")} →
+            </Link>
+          }
+          facts={[
+            { label: t("usage.failures.cause"), value: attemptFailureLabel(t, attempt), emphasis: true },
+            { label: t("usage.time"), value: dateTime(attempt.completed_at, "full") },
+            { label: t("usage.requestID"), value: attempt.request_id, code: true },
+            { label: t("usage.project"), value: projectName || attempt.project_id },
+            { label: t("usage.model"), value: attempt.requested_model },
+            { label: t("usage.deployment"), value: attempt.deployment_id ? deploymentName || attempt.deployment_id : undefined },
+            { label: t("usage.actualModel"), value: attempt.provider_model },
+            { label: t("usage.status"), value: attempt.http_status ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
+            ...identifiers.facts,
+            { label: t("usage.latency"), value: `${attempt.latency_millis} ms` },
+            { label: t("usage.failures.chainLabel"), value: chain },
+          ]}
+        />
+      )}
     </>
   );
 }
