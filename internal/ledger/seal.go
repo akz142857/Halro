@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -90,17 +92,21 @@ func (l *Log) Roll() (SealResult, error) {
 		return SealResult{}, fmt.Errorf("sync ledger before sealing: %w", err)
 	}
 
-	checksum, length, err := hashFile(l.path)
-	if err != nil {
-		return SealResult{}, fmt.Errorf("checksum ledger before sealing: %w", err)
-	}
 	// The committed prefix is what gets sealed. A file longer than the log's
 	// own offset means bytes this process did not commit, which recovery — not
-	// sealing — is allowed to touch.
-	if length != l.offset {
-		return SealResult{}, fmt.Errorf("ledger is %d bytes but %d are committed; sealing needs a clean tail",
-			length, l.offset)
+	// sealing — is allowed to touch. Stat rather than a full read: the
+	// checksum below comes from the digest the writer has been maintaining as
+	// it appended, so the only thing left to establish here is that nothing
+	// else has grown the file behind us.
+	info, err := os.Stat(l.path)
+	if err != nil {
+		return SealResult{}, fmt.Errorf("stat ledger before sealing: %w", err)
 	}
+	if info.Size() != l.offset {
+		return SealResult{}, fmt.Errorf("ledger is %d bytes but %d are committed; sealing needs a clean tail",
+			info.Size(), l.offset)
+	}
+	checksum := hex.EncodeToString(l.plainDigest.Sum(nil))
 
 	pending := Segment{
 		Generation:     l.generation,
@@ -131,12 +137,17 @@ func (l *Log) Roll() (SealResult, error) {
 	if err := os.Rename(l.path, rolled); err != nil {
 		return SealResult{}, fmt.Errorf("seal ledger generation: %w", err)
 	}
-	if err := syncDirectory(l.directory); err != nil {
-		return SealResult{}, err
-	}
 	// Past the rename the roll is committed; a failure from here leaves the
 	// pending intent for the next open to finish, so the status is marked
-	// unavailable rather than pretending the log is still writable.
+	// unavailable rather than pretending the log is still writable. That
+	// includes this directory sync: l.file still holds the renamed inode, so a
+	// log left healthy here would append committed accounting frames into a
+	// generation the manifest has already recorded a fixed length for, and the
+	// next open would refuse to start with those frames stranded inside it.
+	if err := syncDirectory(l.directory); err != nil {
+		l.status.MarkUnavailable()
+		return SealResult{}, err
+	}
 	successor, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0o600)
 	if err != nil {
 		l.status.MarkUnavailable()
@@ -172,6 +183,8 @@ func (l *Log) Roll() (SealResult, error) {
 	l.chainAnchor = l.chainHash
 	l.offset = 0
 	l.chainOffset = 0
+	// The successor starts empty, so its running checksum does too.
+	l.plainDigest = sha256.New()
 	return SealResult{
 		Sealed: pending, Rolled: true, Active: l.generation,
 		Bytes: pending.Length, Records: pending.LastSequence - pending.FirstSequence + 1,
@@ -187,30 +200,50 @@ func (l *Log) Roll() (SealResult, error) {
 // the files themselves.
 func (l *Log) Compact(generation uint64) (Segment, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	index := -1
-	for position, segment := range l.segments {
-		if segment.Generation == generation {
-			index = position
-			break
-		}
-	}
+	segment, index := findSegment(l.segments, generation)
+	directory := l.directory
+	l.mu.Unlock()
 	if index < 0 {
 		return Segment{}, fmt.Errorf("ledger generation %d is not sealed", generation)
 	}
-	segment := l.segments[index]
 	if segment.Compressed {
 		return segment, nil
 	}
-	source := filepath.Join(l.directory, segment.File)
+
+	source := filepath.Join(directory, segment.File)
 	compressedName := fmt.Sprintf("ledger-%d.seg.gz", generation)
-	destination := filepath.Join(l.directory, compressedName)
+	destination := filepath.Join(directory, compressedName)
+	// Compressing happens with the writer released. It reads a file nothing
+	// will ever append to, so nothing about it needs the lock — and holding the
+	// lock across a read, a gzip and a decompress-verify of up to
+	// ledger.seal.max_active_bytes stalled every Append for the duration, which
+	// is every budget reservation and therefore the gateway itself.
 	stored, storedLength, err := compressSegmentFile(source, destination, segment.PlainChecksum, segment.Length)
 	if err != nil {
 		return Segment{}, fmt.Errorf("compress ledger generation %d: %w", generation, err)
 	}
 
-	updated := segment
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// Re-read the history rather than trusting what was captured above: a roll
+	// may have sealed another generation while this ran. The generation being
+	// compacted is immutable either way, so only its position can have moved.
+	current, index := findSegment(l.segments, generation)
+	switch {
+	case l.file == nil:
+		os.Remove(destination)
+		return Segment{}, errors.New("ledger is closed")
+	case index < 0:
+		os.Remove(destination)
+		return Segment{}, fmt.Errorf("ledger generation %d is not sealed", generation)
+	case current.Compressed:
+		// Somebody else got there first. The copy just written is an orphan the
+		// manifest never named, so removing it costs nothing.
+		os.Remove(destination)
+		return current, nil
+	}
+
+	updated := current
 	updated.File = compressedName
 	updated.Compressed = true
 	updated.StoredChecksum = stored
@@ -221,17 +254,29 @@ func (l *Log) Compact(generation uint64) (Segment, error) {
 	// still what the log reads and the compressed copy is an orphan; after it
 	// the reverse, and removing the plain file is cleanup that may fail without
 	// costing anything but disk.
-	if err := saveSegmentManifest(l.directory, segmentManifest{Segments: segments}); err != nil {
+	if err := saveSegmentManifest(directory, segmentManifest{Segments: segments}); err != nil {
+		os.Remove(destination)
 		return Segment{}, err
 	}
 	l.segments = segments
 	if err := os.Remove(source); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return updated, fmt.Errorf("remove compacted ledger generation %d: %w", generation, err)
 	}
-	if err := syncDirectory(l.directory); err != nil {
+	if err := syncDirectory(directory); err != nil {
 		return updated, err
 	}
 	return updated, nil
+}
+
+// findSegment locates a sealed generation, returning a copy of it and its
+// position, or -1.
+func findSegment(segments []Segment, generation uint64) (Segment, int) {
+	for position, segment := range segments {
+		if segment.Generation == generation {
+			return segment, position
+		}
+	}
+	return Segment{}, -1
 }
 
 // VerifySegments authenticates sealed generations end to end, from `since`

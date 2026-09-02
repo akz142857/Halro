@@ -26,9 +26,10 @@ type SealReport struct {
 //
 // The maintenance tick does this by size when sealing is enabled, which is the
 // path an unattended instance uses. This is the other half an operator needs:
-// they are about to move a generation off the box, or copy the data directory,
-// or hand an auditor an archive, and they want the boundary drawn now rather
-// than whenever the file next crosses a threshold. It is offline — it takes the
+// they are about to copy the data directory, or hand an auditor an archive, and
+// they want the boundary drawn now rather than whenever the file next crosses a
+// threshold. Copying, not moving — the sealed history has to stay whole, and a
+// generation taken out of it is refused at the next open. It is offline — it takes the
 // data directory lock — because it rewrites which file the log appends to, and
 // running it against a live instance would race the process that owns it.
 func SealLedger(ctx context.Context, cfg config.Config, compress bool) (SealReport, error) {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,12 +102,28 @@ func loadSegmentManifest(directory string) (segmentManifest, error) {
 	if manifest.Version < 1 || manifest.Version > segmentManifestVersion {
 		return segmentManifest{}, fmt.Errorf("%w: ledger segment manifest version %d", ErrUnsupportedVersion, manifest.Version)
 	}
-	previous := uint64(0)
-	for _, segment := range manifest.Segments {
-		if segment.Generation <= previous {
-			return segmentManifest{}, fmt.Errorf("%w: ledger segments are out of order at generation %d", ErrCorrupt, segment.Generation)
+	// Generations are numbered from one and never skipped, so the manifest has
+	// to read as an unbroken run. Ordering alone was not enough: a manifest
+	// edited to drop its oldest generations is still ordered, and every later
+	// check — the presence check, the chain anchor, `ledger verify` — is
+	// defined relative to what the manifest claims exists. A full replay would
+	// then rebuild balances from a suffix of the history and report nothing
+	// wrong, which is the one failure the accounting authority must not have.
+	//
+	// This is why moving old generations off the box is not yet a supported
+	// operation, only a described one; taking them away needs a record of what
+	// was taken, and there is not one.
+	for position, segment := range manifest.Segments {
+		if segment.Generation != uint64(position)+1 {
+			return segmentManifest{}, fmt.Errorf(
+				"%w: ledger segment %d is generation %d; the sealed history must run from 1 without gaps",
+				ErrCorrupt, position, segment.Generation)
 		}
-		previous = segment.Generation
+	}
+	if manifest.Pending != nil && manifest.Pending.Generation != uint64(len(manifest.Segments))+1 {
+		return segmentManifest{}, fmt.Errorf(
+			"%w: ledger roll intent names generation %d after %d sealed generations",
+			ErrCorrupt, manifest.Pending.Generation, len(manifest.Segments))
 	}
 	return manifest, nil
 }
@@ -157,6 +174,30 @@ func syncDirectory(directory string) error {
 		return fmt.Errorf("sync ledger directory: %w", err)
 	}
 	return nil
+}
+
+// digestFilePrefix hashes the first length bytes of a file and returns the
+// digest still open, so appends can continue into it. A file shorter than the
+// prefix is a file the caller's own record disagrees with, which is corruption
+// rather than something to hash around.
+func digestFilePrefix(path string, length int64) (hash.Hash, error) {
+	digest := sha256.New()
+	if length == 0 {
+		return digest, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	copied, err := io.Copy(digest, io.LimitReader(file, length))
+	if err != nil {
+		return nil, err
+	}
+	if copied != length {
+		return nil, fmt.Errorf("%w: ledger is %d bytes but %d are committed", ErrCorrupt, copied, length)
+	}
+	return digest, nil
 }
 
 func hashFile(path string) (string, int64, error) {

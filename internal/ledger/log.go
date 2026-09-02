@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"os"
@@ -146,6 +147,19 @@ type Log struct {
 	segments      []Segment
 	chainAnchor   [32]byte
 	startSequence uint64
+	// plainDigest is the SHA-256 of the active generation's committed prefix,
+	// carried forward as frames are appended rather than recomputed when a roll
+	// needs it.
+	//
+	// A roll has to record the checksum of what it seals, and it has to do that
+	// while holding the writer — the committed prefix is only well defined
+	// under the lock. Reading the whole file there meant every append in the
+	// process waited out a full pass over up to ledger.seal.max_active_bytes,
+	// and since a budget reservation must be durable before any upstream call,
+	// that wait is the gateway's. Hashing each batch as it commits costs the
+	// same bytes spread across the writes that produced them, and leaves the
+	// roll with nothing to read.
+	plainDigest hash.Hash
 }
 
 type Options struct {
@@ -428,6 +442,16 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		file.Close()
 		return nil, fmt.Errorf("seek ledger end: %w", err)
 	}
+	// Seed the rolling checksum from what is already on disk. This is the one
+	// full pass over the active generation, and it happens on a path that has
+	// just read every one of those bytes anyway; every roll afterwards reads
+	// none of them.
+	plainDigest, err := digestFilePrefix(path, last.Offset)
+	if err != nil {
+		file.Close()
+		status.RequireRecovery()
+		return nil, err
+	}
 	log := &Log{
 		file:           file,
 		durability:     file,
@@ -449,6 +473,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		segments:       segments,
 		chainAnchor:    anchor,
 		startSequence:  sealedSequence,
+		plainDigest:    plainDigest,
 	}
 	if options.WrapDurability != nil {
 		log.durability = options.WrapDurability(file)
@@ -551,7 +576,20 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 		if err != nil {
 			return fail(err)
 		}
-		head, partial, err := scan(reader, segment.Generation, offset, sequence, visit, nil)
+		// Authenticate what is being replayed, not just its CRCs. Open checks
+		// sealed generations for presence and size only — deliberately, since
+		// re-reading them every start is the cost sealing exists to remove —
+		// so this is the moment those bytes are examined, and it is also the
+		// only moment they can affect a balance. A frame edited in a sealed
+		// file, with its CRC recomputed, would otherwise replay into
+		// accounting with nothing to object.
+		//
+		// It costs the MAC over bytes already being read. The verifier is
+		// seeded from the manifest's recorded chain head for the generation,
+		// and the scan's own end state is checked against it below, so a
+		// manifest edited to match a tampered file fails on the frames.
+		verifier := l.sealedVerifier(segment, offset)
+		head, partial, err := scan(reader, segment.Generation, offset, sequence, visit, verifier)
 		closeErr := reader.Close()
 		if err != nil {
 			return fail(err)
@@ -565,6 +603,16 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 			return fail(fmt.Errorf("%w: sealed generation %d ends at %d/%d, manifest says %d/%d",
 				ErrCorrupt, segment.Generation, head.Offset, head.Sequence,
 				segment.Length, segment.LastSequence))
+		}
+		if verifier.verify() {
+			end, err := decodeChainHash(segment.EndHash)
+			if err != nil {
+				return fail(err)
+			}
+			if verifier.hash != end {
+				return fail(fmt.Errorf("%w: sealed generation %d does not end at its recorded chain head",
+					ErrTampered, segment.Generation))
+			}
 		}
 		sequence = head.Sequence
 	}
@@ -583,6 +631,27 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 		return Watermark{}, errors.New("ledger has a partial tail while open")
 	}
 	return head, nil
+}
+
+// sealedVerifier is the chain verifier for one sealed generation, or nil when
+// the frames cannot be authenticated from where the scan starts.
+//
+// Two cases return nil. Without a chain key the log is a read-only reader —
+// offline tooling — and has nothing to verify with. Resuming inside a
+// generation means the chain state at that offset is not recoverable from the
+// manifest, which records the generation's ends and not its middle; the frames
+// before the resume point were authenticated when whatever wrote the watermark
+// replayed them, and every later generation is entered at zero and verified in
+// full.
+func (l *Log) sealedVerifier(segment Segment, offset int64) *chainVerifier {
+	if len(l.chainKey) != 32 || offset != 0 {
+		return nil
+	}
+	start, err := decodeChainHash(segment.StartHash)
+	if err != nil {
+		return nil
+	}
+	return &chainVerifier{key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1}
 }
 
 // Snapshot copies exactly the committed prefix while holding the writer lock.
@@ -777,6 +846,10 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", syncErr))
 		return
 	}
+	// Past the barrier: these bytes are committed, so they join the generation's
+	// running checksum here and nowhere else. Hashing before the sync would
+	// fold in a write that may not have survived.
+	l.plainDigest.Write(encoded.Bytes())
 	l.sequence = sequence
 	l.offset = offset
 	l.chainHash = previousHash
