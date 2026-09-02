@@ -872,10 +872,84 @@ export interface UsageAttempt {
   token_usage_source?: "provider_reported" | "gateway_estimated" | "none";
   cost_estimated: boolean;
   tokens_estimated: boolean;
+  started_at: string;
   completed_at: string;
   status: string;
   error_class?: string;
+  // The upstream's own status. Absent when the failure never got one — a
+  // refused dial, a response that would not decode — which is a different
+  // answer from "the upstream returned nothing", so it is left undefined
+  // rather than shown as 0.
+  http_status?: number;
+  // What a support ticket to the upstream is built out of, and where along the
+  // request the failure happened. Absent on attempts recorded before these were
+  // kept, which is a different answer from "the upstream named none" — the
+  // console says which, rather than filling either with a placeholder.
+  provider_code?: string;
+  provider_request_id?: string;
+  failure_phase?: string;
   latency_millis: number;
+  // Which rung of the retry/fallback chain this attempt is: retry_count counts
+  // re-tries against the same target, fallback_count counts targets already
+  // given up on. Both are on every attempt, including successful ones — that
+  // is how a fallback that worked can be told apart from a first try.
+  retry_count: number;
+  fallback_count: number;
+}
+
+// What a failed call carried, when the operator has switched capture on. This
+// is the only payload in the console that holds material a caller wrote, which
+// is why fetching it is an audited action on the server and why nothing here is
+// cached or persisted in the browser.
+export interface FailurePayload {
+  request_id: string;
+  project_id: string;
+  outcome: string;
+  captured_at: string;
+  // The operation as it went upstream — already through the project's redaction
+  // policy, because capture happens after that policy has run.
+  request?: unknown;
+  request_truncated?: boolean;
+  // The upstream's own answer, or the answer Halro could not put on the
+  // caller's wire. Absent when the failure produced nothing to record.
+  response?: unknown;
+  response_truncated?: boolean;
+}
+
+// One failed request, as the failed-request list serves it. It is not a failed
+// attempt: a request that failed one target and succeeded on the next is not
+// here at all, and a request refused before any upstream call is, with no
+// last_failure to show for it.
+export interface RequestFailure {
+  request_id: string;
+  project_id: string;
+  key_id?: string;
+  requested_model?: string;
+  // The ledger's own terminal state. Which of these read as a policy rejection
+  // is the console's judgement, not the record's.
+  outcome: string;
+  sequence: number;
+  accepted_at: string;
+  completed_at: string;
+  attempts: number;
+  fallbacks: number;
+  // Absent when nothing upstream failed — a budget refusal, an open circuit, a
+  // target at its concurrency limit. Absent, not blank: an empty provider
+  // context would report that an upstream did not answer a request that never
+  // asked one.
+  last_failure?: {
+    attempt_id: string;
+    attempt: number;
+    error_class?: string;
+    provider_status?: number;
+    provider_id?: string;
+    deployment_id?: string;
+    provider_model?: string;
+    provider_code?: string;
+    provider_request_id?: string;
+    failure_phase?: string;
+    completed_at: string;
+  };
 }
 
 export interface PriceSnapshot {

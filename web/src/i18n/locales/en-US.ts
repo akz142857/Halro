@@ -699,9 +699,93 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     request: "Request", deployment: "Deployment", tokens: "Tokens", cost: "Cost", latency: "Latency", time: "Time", attempt: "Attempt {{count}}",
     estimated: "EST. ", inputOutput: "{{input}} in / {{output}} out", conservative: "Conservative upper bound", reported: "Provider reported",
     unknownCost: "Unknown", costEvidence: "Pricing evidence", formulaComponents: "Input {{input}} + output {{output}} + fixed {{fixed}}", billedWindow: "Billed at the {{start}}–{{end}} rate ({{timezone}})", billedBase: "Billed at the rate outside every window ({{timezone}})", billedZoneUnavailable: "Billed at the dearest rate: timezone {{timezone}} could not be resolved",
-    requestID: "Request ID", project: "Project", provider: "Provider", actualModel: "Actual model", currentPassword: "Current password", totpOptional: "TOTP (required when MFA is enabled)",
+    requestID: "Request ID", project: "Project", actualModel: "Actual model", currentPassword: "Current password", totpOptional: "TOTP (required when MFA is enabled)",
     views: "Usage views",
-    tabs: { summary: "Summary", attempts: "Attempt log" },
+    // Explaining a class is a sentence for a reader, not an accounting fact, so
+    // it lives here rather than in the ledger. A missing entry falls back to the
+    // identifier the server sent: an English enum is a worse answer than a
+    // translated one and a far better answer than a broken key.
+    errorClasses: {
+      authentication: "Provider refused the credential or the permission",
+      rate_limit: "Provider rate limit or capacity shortfall",
+      timeout: "Upstream did not answer in time",
+      connect: "No secure connection could be established",
+      provider_5xx: "Provider server-side failure",
+      bad_request: "Upstream refused the request shape or a parameter",
+      malformed_response: "Response does not meet the adapter contract",
+      canceled: "Caller cancelled or the connection dropped",
+      client_disconnected_or_timed_out: "Caller dropped or timed out, and the error was never classified",
+      unknown: "Could not be classified safely",
+    },
+    errorAdvice: {
+      authentication: "Check the credential's state, the account's permissions, and which region or project it belongs to.",
+      rate_limit: "Check quota, concurrency, Retry-After, and whether a fallback target is configured.",
+      timeout: "Check the timeout settings, the provider's status page, and network latency.",
+      connect: "Check DNS, TLS, proxy, egress rules, and the endpoint allowlist.",
+      provider_5xx: "Take the Provider Request ID upstream, and check whether it keeps happening.",
+      bad_request: "Read the field the Provider Code names, and the model's capability matrix.",
+      malformed_response: "Check the provider's compatibility surface and whether model and protocol profile agree.",
+      canceled: "Confirm whether the client timed itself out; do not attribute this to the provider.",
+      client_disconnected_or_timed_out: "As for a cancellation; seeing it at all means an adapter left a classification gap.",
+      unknown: "Search the log by Request ID and look for the adapter's classification gap.",
+    },
+    httpStatus: "HTTP {{status}}",
+    providerFilter: "Provider {{provider}} only (click to clear)",
+    // Never "unknown": a blank and "never recorded" are different answers, and
+    // the first talks an operator out of chasing an identifier that does exist
+    // upstream.
+    identifiersNotRecorded: "This record was written before these fields were kept, so it has no provider code or request ID.",
+    attemptChain: "Target {{fallback}} · retry {{retry}}",
+    attemptFirstTry: "First target, first try",
+    attemptDetails: "Failure detail",
+    attemptDetailsTitle: "Attempt {{count}} failure detail",
+    tabs: { summary: "Summary", failures: "Failed requests", attempts: "Attempt log" },
+    // "Failed requests" is RequestFinalized with a non-success outcome, the same
+    // fact the summary card counts. It is not the same as a failed attempt, and
+    // it excludes everything refused before admission — both have to be on the
+    // page, or the figure reads as "every failure".
+    outcomes: {
+      rejected: "Policy refusal: budget, circuit breaker, or concurrency limit",
+      token_guard_rejected: "Policy refusal: Token Guard cost limit",
+      unsupported_feature: "Policy refusal: the target cannot serve this request shape",
+      policy_rejected: "Policy refusal: redaction rejected the upstream output",
+      provider_error: "Provider failure",
+      accounting_error: "Accounting unavailable",
+    },
+    failures: {
+      records_one: "{{count}} failed request",
+      records_other: "{{count}} failed requests",
+      cause: "Cause",
+      attempts: "Attempts",
+      attemptCount_one: "{{count}} attempt",
+      attemptCount_other: "{{count}} attempts",
+      fallbackCount_one: "{{count}} fallback",
+      fallbackCount_other: "{{count}} fallbacks",
+      emptyTitle: "No request failed outright in this range",
+      emptyDescription: "A request that fell back and then succeeded is not counted here. Widen the range or clear a filter.",
+      policyRejected: "Policy refusal",
+      policyRejectedDetail: "This request was admitted but never reached an upstream, so it has no provider error class. The rate-limit, circuit and budget figures explain it.",
+      noAdvice: "This record carries no error class; search the log by Request ID.",
+      noTarget: "No target chosen",
+      decidedBy: "Decided by attempt {{attempt}}",
+      dialogTitle: "Failure detail",
+      fallbacks: "Fallbacks",
+      decidedByLabel: "Deciding attempt",
+      chainLabel: "Position in the chain",
+      providerCodeLabel: "Provider code",
+      providerRequestLabel: "Provider request ID",
+      viewAttemptChain: "See this request's full attempt chain",
+      payloadHeading: "Request and response",
+      revealPayload: "Show",
+      // The server audits every read. This line is what tells the operator they
+      // are looking at material a caller wrote rather than at Halro's own
+      // metadata.
+      payloadWarning: "What the caller sent upstream and what came back. Every viewing is written to the audit log.",
+      payloadRequest: "Request sent upstream",
+      payloadResponse: "Upstream answer",
+      payloadTruncated: "This side was cut at the storage ceiling. It is not an incomplete upstream answer.",
+      noPayload: "Nothing was captured for this request.",
+    },
     summary: {
       title: "Usage summary",
       granularity: "Granularity",
@@ -718,6 +802,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       attemptSuccessRate: "Attempt success rate",
       unknownAttempts: "{{count}} unpriced",
       viewAttempts: "View attempts",
+      viewFailedRequests: "View failed requests",
       others: "Everything else",
       othersFolded: "{{count}} more folded in",
       emptyTitle: "No calls in this range",
@@ -838,6 +923,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       "invocation_target.resolution.covered_elsewhere": "Invocation target is covered elsewhere",
       "invocation_target.resolution.partial_conflict": "Invocation target is partly conflicting",
       "developer.execute": "Developer test call",
+      "usage.failure_payload.read": "Read a failed request's captured payload",
       "backup.create": "Backup created",
       "backup.restore": "Backup restored",
       "security.kms.call": "KMS call",

@@ -6,10 +6,13 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
+import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
+import { attemptFailureLabel, errorClassAdvice, upstreamStatus } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
 
-const usageTabs = ["summary", "attempts"] as const;
+const usageTabs = ["summary", "failures", "attempts"] as const;
 type UsageTab = (typeof usageTabs)[number];
 
 // Which filters a drill-down link can carry. A link that names one of them is
@@ -23,7 +26,7 @@ const attemptFilterParams = [
 function usageTabFromURL(): UsageTab {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("tab");
-  if (requested === "summary" || requested === "attempts") return requested;
+  if (usageTabs.includes(requested as UsageTab)) return requested as UsageTab;
   return attemptFilterParams.some((name) => params.get(name)) ? "attempts" : "summary";
 }
 
@@ -59,6 +62,13 @@ export function UsagePage() {
   const [status, setStatus] = useState("");
   const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
   const [providerModel, setProviderModel] = useState(() => new URLSearchParams(window.location.search).get("provider_model") ?? "");
+  // No control of its own. It was a free-text box wanting an opaque
+  // `provider_...` ID, which nobody has to hand — the deployment select beside
+  // it answers the same question by name and identifies the target more
+  // precisely, since one provider serves several. The filter still applies when
+  // the summary's provider row links here, and then it is shown as something
+  // that can be cleared: a filter with no visible control is how a table comes
+  // to look empty for no reason.
   const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
@@ -153,6 +163,11 @@ export function UsagePage() {
           <UsageSummaryPanel />
         </section>
       )}
+      {tab === "failures" && (
+        <section role="tabpanel" id={usagePanelID("failures")} aria-labelledby={usageTabID("failures")}>
+          <UsageFailuresPanel />
+        </section>
+      )}
       {tab === "attempts" && (
       <section role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
       <div className="filter-bar">
@@ -171,7 +186,6 @@ export function UsagePage() {
             {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
           </select>
         </label>
-        <label><span>{t("usage.provider")}</span><input autoComplete="off" value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
         <label>
           <span>{t("usage.deployment")}</span>
           <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
@@ -191,6 +205,12 @@ export function UsagePage() {
         </label>
         <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        {providerID && (
+          <button type="button" className="filter-chip" onClick={() => setProviderID("")}>
+            {t("usage.providerFilter", { provider: providerID })}
+            <span aria-hidden="true"> ×</span>
+          </button>
+        )}
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}
@@ -204,12 +224,18 @@ export function UsagePage() {
       {usage.data && attempts.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
+            {/* Sized to the longest thing each column actually holds. Three of
+                them carry a 24-character identifier under their name — the
+                request, the project and the deployment — and those, not the
+                headings, are what decides the width. Cost had the widest share
+                and the narrowest content: a money value, a badge and a
+                disclosure, none of which grow. */}
             <colgroup>
-              <col style={{ width: "14%" }} /><col style={{ width: "9%" }} /><col style={{ width: "10%" }} /><col style={{ width: "13%" }} />
-              <col style={{ width: "12%" }} /><col style={{ width: "18%" }} /><col style={{ width: "6%" }} /><col style={{ width: "6%" }} />
-              <col style={{ width: "12%" }} />
+              <col style={{ width: "14%" }} /><col style={{ width: "13%" }} /><col style={{ width: "9%" }} /><col style={{ width: "14%" }} />
+              <col style={{ width: "10%" }} /><col style={{ width: "8%" }} /><col style={{ width: "6%" }} /><col style={{ width: "11%" }} />
+              <col style={{ width: "9%" }} /><col style={{ width: "6%" }} />
             </colgroup>
-            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th></tr></thead>
+            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th>{/* The action column carries no heading, like the failed-request list's. Its button names itself. */}<th /></tr></thead>
             <tbody>
               {attempts.map((attempt) => (
                 <tr key={attempt.event_id}>
@@ -244,8 +270,9 @@ export function UsagePage() {
                   <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
                   <td><CostCell attempt={attempt} /></td>
                   <td>{attempt.latency_millis} ms</td>
-                  <td><span className="inline-status"><StatusDot ok={attempt.status === "success"} />{attempt.status === "success" ? t("usage.success") : t("usage.error")}</span></td>
+                  <td><AttemptStatusCell attempt={attempt} /></td>
                   <td>{dateTime(attempt.completed_at, "dateTimeYear")}</td>
+                  <td><AttemptDetailCell attempt={attempt} projectName={projectNames[attempt.project_id]} deploymentName={attempt.deployment_id ? deploymentNames[attempt.deployment_id] : undefined} /></td>
                 </tr>
               ))}
             </tbody>
@@ -258,6 +285,86 @@ export function UsagePage() {
         </div>
       )}
       </section>
+      )}
+    </>
+  );
+}
+
+// What a failed attempt actually says. Every field here was already in the
+// response and none of it was shown: the cell read "error" and the operator was
+// left to guess whether a credential, a quota, a timeout or a malformed payload
+// produced it — which is the whole reason the ledger classifies failures at all.
+//
+// The class and the upstream status are the headline because they are what
+// separates "go look at the provider" from "go look at the request". Everything
+// that needs a second to read — what to check, which rung of the retry chain
+// this was — goes behind the disclosure, so a table of successful calls does
+// not grow a column of prose.
+function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
+  const { t } = useTranslation();
+  if (attempt.status === "success") {
+    return <span className="inline-status"><StatusDot ok label={t("usage.success")} />{t("usage.success")}</span>;
+  }
+  return (
+    <>
+      <span className="inline-status"><StatusDot ok={false} label={t("usage.error")} />{attemptFailureLabel(t, attempt)}</span>
+      {/* The status is kept apart from the class rather than folded into one
+          string: an operator taking a 429 to a provider's support desk quotes
+          the number, and a class alone cannot be quoted. */}
+      {upstreamStatus(attempt.http_status) ? <small>{t("usage.httpStatus", { status: attempt.http_status })}</small> : null}
+    </>
+  );
+}
+
+// The same drawer the failed-request list opens, on the row that explains one
+// call rather than one request. The detail used to expand inside the status
+// cell, which grew the row under the operator's pointer and put a request body
+// in a column five of whose cells are one line tall.
+function AttemptDetailCell({ attempt, projectName, deploymentName }: {
+  attempt: UsageAttempt; projectName?: string; deploymentName?: string;
+}) {
+  const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
+  const [open, setOpen] = useState(false);
+  if (attempt.status === "success") return null;
+  const identifiers = providerIdentifierFacts(t, attempt);
+  const chain = attempt.retry_count > 0 || attempt.fallback_count > 0
+    ? t("usage.attemptChain", { fallback: attempt.fallback_count + 1, retry: attempt.retry_count })
+    : t("usage.attemptFirstTry");
+  return (
+    <>
+      <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
+        {t("usage.attemptDetails")}
+      </button>
+      {open && (
+        <FailureDetailDrawer
+          title={t("usage.attemptDetailsTitle", { count: attempt.attempt })}
+          onClose={() => setOpen(false)}
+          advice={errorClassAdvice(t, attempt.error_class) || t("usage.failures.noAdvice")}
+          identifiersUnrecorded={identifiers.unrecorded}
+          // Keyed by the request, because that is what a payload belongs to. An
+          // attempt of a request that went on to succeed has none, and the
+          // panel says so rather than implying capture failed.
+          requestID={attempt.request_id}
+          links={
+            <Link href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(attempt.request_id)}`}>
+              {t("usage.failures.viewAttemptChain")} →
+            </Link>
+          }
+          facts={[
+            { label: t("usage.failures.cause"), value: attemptFailureLabel(t, attempt), emphasis: true },
+            { label: t("usage.time"), value: dateTime(attempt.completed_at, "full") },
+            { label: t("usage.requestID"), value: attempt.request_id, code: true },
+            { label: t("usage.project"), value: projectName || attempt.project_id },
+            { label: t("usage.model"), value: attempt.requested_model },
+            { label: t("usage.deployment"), value: attempt.deployment_id ? deploymentName || attempt.deployment_id : undefined },
+            { label: t("usage.actualModel"), value: attempt.provider_model },
+            { label: t("usage.status"), value: upstreamStatus(attempt.http_status) ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
+            ...identifiers.facts,
+            { label: t("usage.latency"), value: `${attempt.latency_millis} ms` },
+            { label: t("usage.failures.chainLabel"), value: chain },
+          ]}
+        />
       )}
     </>
   );

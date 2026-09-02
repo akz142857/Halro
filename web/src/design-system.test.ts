@@ -184,7 +184,12 @@ describe("design system themes", () => {
   // values and stayed green. A ceiling only ratchets if someone remembers to
   // lower it; an exact count makes every change to it deliberate, in both
   // directions.
-  const bareSizeValueBaseline = 698;
+  // 699: the failed-request fact grid's `gap: 1px`. Raised deliberately. It is
+  // the hairline-separator idiom .metric-grid and .provider-technical-details
+  // already use — a one-pixel gap over a border-coloured background draws the
+  // rules between cells — and there is no spacing token for a hairline, because
+  // it is a border expressed as a gap rather than a spacing decision.
+  const bareSizeValueBaseline = 699;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");

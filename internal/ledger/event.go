@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 type EventKind uint8
@@ -91,7 +92,21 @@ type Event struct {
 	Outcome                       string           `json:"outcome,omitempty"`
 	ErrorClass                    string           `json:"error_class,omitempty"`
 	HTTPStatus                    int              `json:"http_status,omitempty"`
-	LatencyMillis                 int64            `json:"latency_millis,omitempty"`
+	// What an operator takes to the upstream's support desk, and where along
+	// the request the failure happened. The class and the status say what kind
+	// of failure it was; these say which one, in the upstream's own vocabulary,
+	// and they are the only fields here an upstream chose — so they are bounded
+	// and character-set narrowed by provider.SafeProviderIdentifier before they
+	// reach this struct, and bounded again on the way into the WAL. A provider
+	// response body must not become durable state.
+	//
+	// Absent on every event written before they existed, which reads correctly
+	// as "not recorded" rather than as "the upstream named none". The console
+	// says so in those words rather than showing an invented "unknown".
+	ProviderCode      string `json:"provider_code,omitempty"`
+	ProviderRequestID string `json:"provider_request_id,omitempty"`
+	FailurePhase      string `json:"failure_phase,omitempty"`
+	LatencyMillis     int64  `json:"latency_millis,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -124,6 +139,24 @@ func (e Event) Validate() error {
 	if e.AttemptNumber < 0 || e.RetryCount < 0 || e.FallbackCount < 0 ||
 		e.HTTPStatus < 0 || e.LatencyMillis < 0 {
 		problems = append(problems, errors.New("attempt counters, HTTP status, and latency cannot be negative"))
+	}
+	// The bound is enforced again here, at the durable boundary, rather than
+	// trusted from the gateway that already narrowed it. The gateway is one
+	// caller; the ledger is the record, and an event assembled by a recovery
+	// path or a caller added later must not be able to widen what becomes
+	// permanent. Rejected rather than truncated: a shortened identifier is a
+	// different identifier, and one that would be quoted to an upstream that
+	// never issued it.
+	// Narrowed, not merely measured. The comment above claims the bound is
+	// enforced again here so a caller added later cannot widen what becomes
+	// permanent, and a length check alone did not deliver that: 128 bytes of
+	// arbitrary text — spaces, newlines, a sentence out of a response body —
+	// passed. SafeProviderIdentifier returns the value unchanged when it is
+	// already an identifier, so comparing against it rejects exactly the values
+	// the gateway would have dropped.
+	if e.ProviderCode != provider.SafeProviderIdentifier(e.ProviderCode) ||
+		e.ProviderRequestID != provider.SafeProviderIdentifier(e.ProviderRequestID) {
+		problems = append(problems, errors.New("provider identifiers must be bounded identifiers"))
 	}
 	if e.PriceSnapshot != nil {
 		if err := e.PriceSnapshot.Validate(); err != nil {

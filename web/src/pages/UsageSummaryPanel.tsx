@@ -139,11 +139,18 @@ export function UsageSummaryPanel() {
           value={compactNumber(requests)}
           detail={t("dashboard.attempts", { count: totals.attempts })}
         />
+        {/* The figure is a question, so it links — to the list built from the
+            same RequestFinalized events this rate counts, in the same interval.
+            It deliberately does not go to the attempt list: that one holds the
+            failed attempts of requests that then succeeded, so its length would
+            not match the number the operator just clicked. */}
         <Metric
           label={t("dashboard.requestSuccessRate")}
           value={`${(successRate * 100).toFixed(1)}%`}
           detail={t("dashboard.failedRequests", { count: totals.request_errors ?? 0 })}
           alert={(totals.request_errors ?? 0) > 0}
+          href={failedRequestsHref(rangeInstants(report))}
+          hrefLabel={t("usage.summary.viewFailedRequests")}
         />
         <Metric
           label={t("dashboard.reportedTokens")}
@@ -316,6 +323,18 @@ function detailHref(dimension: Exclude<Dimension, "">, key: string, range: { sta
     end: range.end,
   });
   return `/admin/usage?${params}`;
+}
+
+// Absolute instants for the same reason detailHref carries them: the list
+// filters on RFC3339, and a range rebuilt from a date label would have to guess
+// which generation of the accounting timezone produced it. A report with no
+// buckets has no interval to carry, and then the link is left off entirely
+// rather than opening an unfiltered list.
+function failedRequestsHref(range: { start: string; end: string } | null) {
+  if (!range) return undefined;
+  return `/admin/usage?${new URLSearchParams({
+    tab: "failures", start: range.start, end: range.end,
+  })}`;
 }
 
 function summaryCostDetail(t: (key: string, options?: Record<string, unknown>) => string, totals: SummaryMetrics) {

@@ -287,6 +287,27 @@ gateway:
     # @description.zh-CN 独立跟踪限流状态的来源地址数量上限。
     # @description.en-US Maximum source addresses tracked with independent rate-limit state.
     max_tracked_sources: 16384
+  failure_capture:
+    # @title.zh-CN 保存失败请求的原始载荷
+    # @title.en-US Capture failed request payloads
+    # @description.zh-CN 保存失败请求发往上游的内容与上游返回的内容，便于复现；成功的调用不保存。这是 Halro 唯一保存调用方所写内容的地方，开启会改变本数据目录的数据分级：记录用主密钥加密、绑定到所属请求与项目、按 max_bytes 截断、按 max_records_per_day 封顶、到 retain 后删除，且只能通过写审计的管理员操作读取。脱敏在保存之前完成，存下的是发往上游的形态而不是调用方原文。
+    # @description.en-US Keeps what a failed call sent upstream and what came back, so the failure can be reproduced; successful calls are never stored. This is the only place Halro stores material a caller wrote, and enabling it changes what this data directory contains: records are encrypted under the master key, bound to the request and project they belong to, truncated at max_bytes, capped at max_records_per_day, deleted after retain, and readable only through an audited admin action. Redaction runs before capture, so what is stored is what went upstream rather than what the caller sent.
+    enabled: false
+    # @title.zh-CN 单条载荷上限（字节）
+    # @title.en-US Payload size ceiling (bytes)
+    # @description.zh-CN 请求与响应分别截断到该长度（允许范围 1024–1048576）；被截断的一侧会在记录里标注。
+    # @description.en-US The request and the response are truncated to this length separately (allowed range 1024 to 1048576); a truncated side is flagged in the record.
+    max_bytes: 65536
+    # @title.zh-CN 每日保存条数上限
+    # @title.en-US Daily record ceiling
+    # @description.zh-CN 上游大面积失败时的封顶（允许范围 1–1000000）；超过后当日停止保存并记录一次。
+    # @description.en-US The ceiling for a day in which an upstream is failing everything (allowed range 1 to 1000000); past it capture stops for the day and says so once.
+    max_records_per_day: 1000
+    # @title.zh-CN 保留时长
+    # @title.en-US Retention window
+    # @description.zh-CN 单条载荷保留多久后自动删除，逐条按写入时刻判定。这是「调用方内容保存多久」的答案，由清理任务强制执行；即使 enabled 改回 false，已保存的记录仍会被继续清理。允许范围 1h–720h。
+    # @description.en-US How long a single capture lives before it is deleted, decided per record from when it was written. This is the answer to "how long is caller content kept", enforced by a sweep rather than promised — and the sweep keeps running after enabled is set back to false, so turning capture off does not strand what it collected. Allowed range is 1h to 720h.
+    retain: 24h
 
 retry:
   # @title.zh-CN 单目标最大尝试次数
@@ -550,3 +571,24 @@ logging:
   # @description.zh-CN 含正在写入的文件在内的总代数；1 表示不保留历史。
   # @description.en-US Total generations kept, including the file being written; 1 keeps no history.
   max_files: 5
+  error_file:
+    # @title.zh-CN 启用错误专用日志文件
+    # @title.en-US Enable the errors-only log file
+    # @description.zh-CN 在普通日志之外另写一份只含 ERROR 的文件。把 level 设为 error 也能得到只含错误的日志，代价是丢掉证书临期、探针失败、回退前的尝试失败这些值得保留的 WARN；这个选项两者都留。它记录的条数少于控制台报告的最终失败数：预算、熔断、并发、Token Guard、能力不支持与脱敏拒绝属于策略生效，不写入这里。
+    # @description.en-US Writes a second copy of the log holding ERROR records alone, beside the ordinary log. Setting level to error would get the same file by discarding the WARNs worth keeping — an expiring certificate, a failed probe, an attempt retried before its request succeeded. It holds fewer records than the console reports as failed requests: budget, breaker, concurrency, Token Guard, capability and redaction refusals are policy working, and are not written here.
+    enabled: false
+    # @title.zh-CN 错误日志文件路径
+    # @title.en-US Error log file path
+    # @description.zh-CN 留空表示数据目录下的 logs/halro-error.log。不得与 logging.file 指向同一路径。
+    # @description.en-US Empty means logs/halro-error.log inside the data directory. It must not name the same path as logging.file.
+    file: ""
+    # @title.zh-CN 单个错误日志文件上限（MB）
+    # @title.en-US Error log file size limit (MB)
+    # @description.zh-CN 写入将超过该大小时轮转当前文件。
+    # @description.en-US Rotates the current file once a record would carry it past this size.
+    max_size_mb: 32
+    # @title.zh-CN 保留的错误日志文件数
+    # @title.en-US Retained error log files
+    # @description.zh-CN 含正在写入的文件在内的总代数；这些代数就是事故后可以往回读的范围。
+    # @description.en-US Total generations kept, including the file being written; these generations are how far back an operator can read after an incident.
+    max_files: 10

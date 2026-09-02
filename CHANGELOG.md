@@ -6,6 +6,86 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Failure diagnostics: why a call failed, and which calls actually failed.**
+  The console could report that two requests failed in a range and nothing else.
+  The attempt table rendered the word "error" while the class, the upstream
+  status and the retry/fallback position sat unread in the same payload, and
+  clicking the count led to the attempt log — which counts something different,
+  because a request that failed one target and succeeded on the next leaves a
+  failed attempt behind and is not a failed request.
+
+  The attempt table now names the class in the reader's language and keeps the
+  upstream status beside it, with what to check next behind a disclosure.
+  `GET /admin/api/v1/usage/failures` — filterable by Request ID, project,
+  deployment and interval — serves one row per failed request, derived
+  from the same `RequestFinalized` events the summary card counts, so the number
+  and the list cannot drift; the card links there. Each row carries the last
+  failed attempt as the thing that decided the outcome, and omits that context
+  entirely for a request that never called an upstream — an empty provider
+  context would report that an upstream did not answer a request that never
+  asked one. Those rows are named for what they are: a policy refusal by budget,
+  circuit breaker, concurrency, Token Guard, capability or redaction.
+
+  A request that ends badly is now logged once, at `ERROR`, as `request failed`,
+  on the same once-only boundary the settlement crosses. It carries the request
+  ID, outcome, phase, class, upstream status and identifiers, target, attempt and
+  fallback counts, latency, and whether the ledger took the terminal record.
+  Attempt failures stay at `WARN`.
+
+  The upstream's own error code and request ID — what a support ticket is built
+  out of — now reach the ledger with the attempt, so they outlive the process log
+  that used to be their only home. A record written before they were kept says so
+  in words rather than showing a blank that reads as "the upstream named none".
+
+- **`gateway.failure_capture`**: keeps the request a failed call sent upstream
+  and the answer that came back, so a failure can be reproduced rather than
+  guessed at. Off by default; turning it on is a decision about what the data
+  directory contains, because this is the only store that holds material a
+  caller wrote — the rule that prompts and response bodies never reach a log, a
+  metric or an audit record is unchanged.
+
+  Only failures, and only the two outcomes a payload explains
+  (`provider_error`, `unsupported_feature`). A successful call is never stored;
+  neither is a redaction refusal, because storing the content a policy just
+  refused would make the capture the leak the policy prevents; neither are the
+  refusals that never reached an upstream, which a runaway client produces at
+  its own rate. Records are sealed under the master key and bound to their
+  request and project, truncated at `max_bytes`, capped at
+  `max_records_per_day`, deleted once older than `retain` — swept whether or not
+  capture is still enabled, so turning it off does not strand what it collected
+  — and readable only through
+  `GET /admin/api/v1/usage/failures/{requestID}/payload` — the only admin GET
+  that writes an audit record, because it is the only one that returns a prompt.
+  See the Operator Guide before enabling it.
+
+- **`logging.error_file`**: an optional second log file holding `ERROR` records
+  alone, beside the ordinary log rather than instead of it. `logging.level:
+  error` already produced an error-only log by discarding the warnings worth
+  keeping — an expiring certificate, a failed probe, an attempt retried before
+  its request succeeded. This keeps both. Its level is fixed at `ERROR` and its
+  encoding at JSON; one `SIGHUP` reopens both files. It holds fewer records than
+  the console reports as failed requests, on purpose: the four policy-refusal
+  outcomes are not written, because a client in a retry loop produces them at its
+  own rate and would fill a bounded file in minutes. Off by default; see the
+  Operator Guide.
+
+### Changed
+
+- A cancelled or timed-out attempt is no longer logged as
+  `client_disconnected_or_timed_out`, a literal that was not a member of
+  `provider.ErrorClass`. It resolves to `canceled` or `timeout`, so every
+  `error_class` in the log and the ledger is a value the console can translate
+  and an alert rule can group by. Records written before this keep the old value;
+  the console still translates it.
+
+- The usage checkpoint moves to version 10 and is refused and rebuilt from the
+  ledger on first start. The Parquet export format moves to schema 5, which is
+  a range the reader already accepts: existing partitions are neither refused
+  nor rewritten and stay readable at their own version. No data directory
+  re-initialisation is required.
+
 ## [0.5.0] - 2026-09-01
 
 ### Added

@@ -6,6 +6,7 @@ import { FirstRunChecklist } from "./FirstRunChecklist";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { navigate } from "../navigation";
 import { adoptTimeContext } from "../timezone";
+import { errorClassLabel } from "../failure";
 import type { GovernancePressureItem, UsageAnomaly, UsageBreakdown } from "../types";
 import { hourlyTrendPoints, type TrendMetric } from "../trend";
 import { useTranslation } from "react-i18next";
@@ -230,7 +231,10 @@ function AnomalyList({ items, labels, empty }: { items: UsageAnomaly[]; labels: 
   const dateTime = useInstantFormatter();
   if (!items.length) return <div className="dashboard-empty">{empty}</div>;
   return <div className="anomaly-list">{items.map((item, index) => {
-    const title = item.status !== "success" ? item.error_class || `${t("dashboard.httpError")} ${item.http_status || "—"}` : item.fallback_count > 0 ? t("dashboard.routeFallback") : t("dashboard.requestRetry");
+    // The class is named in the reader's language here for the same reason it
+    // is in the attempt table: it is the same identifier, and a console that
+    // translates it on one screen and not the other reads as two products.
+    const title = item.status !== "success" ? errorClassLabel(t, item.error_class) || `${t("dashboard.httpError")} ${item.http_status || "—"}` : item.fallback_count > 0 ? t("dashboard.routeFallback") : t("dashboard.requestRetry");
     const context = [labels[item.project_id] || item.project_id, labels[item.provider_id || ""] || item.provider_id, item.provider_model || item.requested_model].filter(Boolean).join(" · ");
     return <button type="button" className="anomaly-row" key={item.request_id || `${item.completed_at}-${index}`} onClick={() => navigate(`/admin/usage?request_id=${encodeURIComponent(item.request_id)}`)}><StatusDot ok={false} /><span><strong>{title}</strong><small>{context || t("dashboard.unknownContext")}</small></span><time>{dateTime(item.completed_at)}</time></button>;
   })}</div>;

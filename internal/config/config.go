@@ -64,6 +64,65 @@ type Logging struct {
 	MaxSizeMB int `yaml:"max_size_mb"`
 	// MaxFiles counts every generation kept, including the file being written.
 	MaxFiles int `yaml:"max_files"`
+	// ErrorFile is a second, ERROR-only copy of the log.
+	ErrorFile ErrorFile `yaml:"error_file"`
+}
+
+// ErrorFile is the errors-only log, written beside the ordinary one rather than
+// instead of it.
+//
+// Setting `level: error` gets an error-only main log and loses everything that
+// made the ordinary one worth keeping: a certificate nearing expiry, a probe
+// that failed, an attempt that was retried before the request succeeded. This
+// is the other half of that trade — stderr stays at info or warn, and a bounded
+// file collects the ERRORs alone, which is what an incident starts from and
+// what a support ticket is built out of.
+//
+// Its own level is fixed at ERROR and its own encoding is fixed at JSON. Both
+// are the point of the file: a threshold that could be lowered would make it a
+// second copy of the main log, and a text encoding would make the one file that
+// exists to be searched by machine the harder of the two to search.
+type ErrorFile struct {
+	Enabled bool `yaml:"enabled"`
+	// File is where it is written. Empty means logs/halro-error.log inside the
+	// data directory, beside the ordinary log.
+	File string `yaml:"file"`
+	// MaxSizeMB and MaxFiles bound it the way they bound the ordinary log. They
+	// matter more here: this file is the one an operator reads after an
+	// incident, and a generation limit spent on noise is history they wanted.
+	//
+	// Zero means "not set", not "zero", and resolves to the built-in default.
+	// The ordinary log's limits have no such rule because every config file
+	// ever written carries them; this block did not exist until now, so an
+	// install upgrading into it has them absent. Refusing to start over an
+	// absent limit for a file that is switched off would brick every existing
+	// data directory — a fail-closed check is only worth having when the thing
+	// it closes on is a real ambiguity.
+	MaxSizeMB int `yaml:"max_size_mb"`
+	MaxFiles  int `yaml:"max_files"`
+}
+
+// DefaultErrorFileMaxSizeMB and DefaultErrorFileMaxFiles are what an unset
+// limit resolves to. Smaller and deeper than the ordinary log's: this file
+// takes far fewer records, and the generations are what an operator reads back
+// through after an incident.
+const (
+	DefaultErrorFileMaxSizeMB = 32
+	DefaultErrorFileMaxFiles  = 10
+)
+
+func (e ErrorFile) SizeLimitMB() int {
+	if e.MaxSizeMB == 0 {
+		return DefaultErrorFileMaxSizeMB
+	}
+	return e.MaxSizeMB
+}
+
+func (e ErrorFile) FileLimit() int {
+	if e.MaxFiles == 0 {
+		return DefaultErrorFileMaxFiles
+	}
+	return e.MaxFiles
 }
 
 const (
@@ -107,6 +166,15 @@ func (c Config) LogFilePath() string {
 		return path
 	}
 	return filepath.Join(c.Storage.DataDir, "logs", "halro.log")
+}
+
+// ErrorLogFilePath resolves the errors-only file, on the same rule as the
+// ordinary one.
+func (c Config) ErrorLogFilePath() string {
+	if path := strings.TrimSpace(c.Logging.ErrorFile.File); path != "" {
+		return path
+	}
+	return filepath.Join(c.Storage.DataDir, "logs", "halro-error.log")
 }
 
 type Server struct {
@@ -315,6 +383,68 @@ type Gateway struct {
 	PricingClockForwardTolerance  Duration        `yaml:"pricing_clock_forward_tolerance"`
 	PricingUnknownPolicy          string          `yaml:"pricing_unknown_policy"`
 	SourceRateLimit               SourceRateLimit `yaml:"source_rate_limit"`
+	FailureCapture                FailureCapture  `yaml:"failure_capture"`
+}
+
+// FailureCapture keeps the request a failed call carried and the answer the
+// upstream gave it, so a failure can be reproduced rather than guessed at.
+//
+// It is off by default, and turning it on is a decision about what this
+// instance's data directory contains rather than a verbosity setting. Nothing
+// else Halro stores is material a caller wrote: prompts, tool arguments and
+// response bodies are kept out of every log, metric and audit record, and that
+// rule is unchanged. This is a separate, narrower act — encrypted under the
+// master key, bound to the request and project it belongs to, bounded in size
+// and count, expiring on a clock, and readable only through an audited admin
+// action.
+//
+// Only failures are captured. A successful call is never stored, which is what
+// keeps this a small tail of traffic rather than a copy of it.
+type FailureCapture struct {
+	Enabled bool `yaml:"enabled"`
+	// MaxBytes bounds each captured side. The request and the response are
+	// bounded separately: a large answer must not cost the request that
+	// explains it.
+	MaxBytes int `yaml:"max_bytes"`
+	// MaxRecordsPerDay bounds the store against an upstream that is failing
+	// everything. Past it capture stops for the day and says so once, rather
+	// than competing with the ledger for the same disk.
+	MaxRecordsPerDay int `yaml:"max_records_per_day"`
+	// Retain is how long a capture lives. This is the answer to "how long do we
+	// keep customer prompts", enforced by a sweep rather than promised in a
+	// runbook, so it is bounded at both ends: long enough to be useful after a
+	// weekend, short enough that it is not an archive.
+	Retain Duration `yaml:"retain"`
+}
+
+// Defaults an omitted key takes. They are deliberately conservative: a capture
+// large enough to hold a whole conversation, a day's worth bounded well below
+// what the ledger writes, and a window measured in hours rather than months.
+const (
+	DefaultFailureCaptureMaxBytes         = 64 << 10
+	DefaultFailureCaptureMaxRecordsPerDay = 1000
+	DefaultFailureCaptureRetain           = 24 * time.Hour
+)
+
+func (f FailureCapture) ByteLimit() int {
+	if f.MaxBytes == 0 {
+		return DefaultFailureCaptureMaxBytes
+	}
+	return f.MaxBytes
+}
+
+func (f FailureCapture) DailyRecordLimit() int {
+	if f.MaxRecordsPerDay == 0 {
+		return DefaultFailureCaptureMaxRecordsPerDay
+	}
+	return f.MaxRecordsPerDay
+}
+
+func (f FailureCapture) RetentionWindow() time.Duration {
+	if f.Retain == 0 {
+		return DefaultFailureCaptureRetain
+	}
+	return f.Retain.Value()
 }
 
 // defaultSourceRequestsPerMinute is the budget an absent
@@ -955,6 +1085,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Gateway.SourceRateLimit.MaxTrackedSources < 0 {
 		problems = append(problems, errors.New("gateway.source_rate_limit.max_tracked_sources cannot be negative"))
 	}
+	problems = append(problems, validateFailureCapture(c.Gateway.FailureCapture)...)
 	if c.Retry.MaxAttemptsPerTarget < 1 {
 		problems = append(problems, errors.New("retry.max_attempts_per_target must be at least 1"))
 	}
@@ -1084,6 +1215,68 @@ func validateLogging(logging Logging) []error {
 	// the whole thing as a directory and then fail to open a file inside itself.
 	if file := strings.TrimSpace(logging.File); file != "" && strings.HasSuffix(file, string(os.PathSeparator)) {
 		problems = append(problems, errors.New("logging.file must name a file, not a directory"))
+	}
+	problems = append(problems, validateErrorFile(logging)...)
+	return problems
+}
+
+// validateErrorFile refuses an errors-only file that cannot be honoured. Its
+// limits are checked whether or not it is enabled, for the same reason the
+// ordinary log's are: a value that only becomes invalid on the day it is
+// switched on is a trap set for the day it is most wanted.
+func validateErrorFile(logging Logging) []error {
+	var problems []error
+	errorFile := logging.ErrorFile
+	// Zero is absence and takes the default; anything else is a decision and is
+	// held to the same range as the ordinary log's, switched on or not.
+	if errorFile.MaxSizeMB != 0 && (errorFile.MaxSizeMB < 1 || errorFile.MaxSizeMB > 4096) {
+		problems = append(problems, errors.New("logging.error_file.max_size_mb must be between 1 and 4096"))
+	}
+	if errorFile.MaxFiles != 0 && (errorFile.MaxFiles < 1 || errorFile.MaxFiles > 100) {
+		problems = append(problems, errors.New("logging.error_file.max_files must be between 1 and 100"))
+	}
+	file := strings.TrimSpace(errorFile.File)
+	if file != "" && strings.HasSuffix(file, string(os.PathSeparator)) {
+		problems = append(problems, errors.New("logging.error_file.file must name a file, not a directory"))
+	}
+	// Two sinks on one path is not a stricter log, it is a corrupted one: each
+	// holds its own offset and rotates on its own count, so they overwrite each
+	// other's records and rotate mid-file. Both paths default to a name inside
+	// the data directory, and those two defaults differ — so this can only be
+	// reached by an operator naming one of them, and naming it wrong.
+	if file != "" && file == strings.TrimSpace(logging.File) {
+		problems = append(problems, errors.New("logging.error_file.file must not be the same path as logging.file"))
+	}
+	return problems
+}
+
+// validateFailureCapture holds the one store that keeps caller-written material
+// to bounds it cannot be configured out of.
+//
+// Zero is absence and takes the default, the same rule the errors-only log file
+// uses: this block did not exist until now, so every configuration written
+// before it has none, and refusing to start over an absent limit for a feature
+// that is switched off would brick an existing data directory. A value an
+// operator actually wrote is a decision and is range-checked whether or not
+// capture is on, so a limit that only becomes invalid on the day it is switched
+// on is caught now.
+//
+// The retention ceiling is not a performance bound. This is the only store that
+// holds prompts, and an instance that keeps them for a year has quietly become
+// a different product than the one whose threat model was reviewed.
+func validateFailureCapture(capture FailureCapture) []error {
+	var problems []error
+	if capture.MaxBytes != 0 && (capture.MaxBytes < 1024 || capture.MaxBytes > 1<<20) {
+		problems = append(problems, errors.New("gateway.failure_capture.max_bytes must be between 1024 and 1048576"))
+	}
+	if capture.MaxRecordsPerDay != 0 && (capture.MaxRecordsPerDay < 1 || capture.MaxRecordsPerDay > 1_000_000) {
+		problems = append(problems, errors.New("gateway.failure_capture.max_records_per_day must be between 1 and 1000000"))
+	}
+	if capture.Retain != 0 {
+		retain := capture.Retain.Value()
+		if retain < time.Hour || retain > 30*24*time.Hour {
+			problems = append(problems, errors.New("gateway.failure_capture.retain must be between 1h and 720h"))
+		}
 	}
 	return problems
 }

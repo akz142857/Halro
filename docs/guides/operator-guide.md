@@ -390,14 +390,166 @@ what is allowed into a record. If the log file cannot be written — a full disk
 a revoked permission — records go to stderr with one notice explaining why,
 rather than being dropped silently.
 
-A failed Provider attempt is logged as `provider attempt failed`, carrying the
-request ID, public model, deployment, provider and binding IDs, and the error
-class that decided whether it was retried. The upstream's own sentence is not
-written: it is a response body, and the one thing an upstream is most likely to
-quote back is the credential it just refused. A refusal Halro produced itself —
-a transport policy rejection, a response it would not decode — carries no
-Provider body and is logged with its cause, which is the case where an operator
-most needs it.
+A failed Provider attempt is logged at `WARN` as `provider attempt failed`,
+carrying the request ID, public model, deployment, provider and binding IDs, and
+the error class that decided whether it was retried. The upstream's own sentence
+is not written: it is a response body, and the one thing an upstream is most
+likely to quote back is the credential it just refused. A refusal Halro produced
+itself — a transport policy rejection, a response it would not decode — carries
+no Provider body and is logged with its cause, which is the case where an
+operator most needs it.
+
+A request that ends badly is logged once, at `ERROR`, as `request failed`. That
+is a different event from the line above, and the difference is the point: a
+request that failed one target and succeeded on the next leaves a
+`provider attempt failed` behind and is not a failed request. The terminal
+record carries `request_id`, the ledger `outcome`, the `phase` the failure
+happened in, the error class, the upstream status, the Provider error code and
+Provider request ID where the upstream supplied them, the deployment and
+provider, how many attempts and fallbacks the request spent, its latency, and
+`accounting_recorded` — which is `false` when the ledger could not take the
+terminal record, and therefore when this log line is the only account of the
+request that exists anywhere.
+
+**`request failed` is written for two of the six non-success outcomes**,
+`provider_error` and `accounting_error` — with one exclusion inside the first:
+a request the caller cancelled writes none. A client hanging up is driven
+entirely from outside Halro, and a frontend deploy or a gateway restart cancels
+every request in flight at once, which is the same flood the four policy
+outcomes are excluded to prevent. A deadline that expired is not this, and does
+write a record. The other four — `rejected` (budget,
+circuit breaker, target concurrency), `token_guard_rejected`,
+`unsupported_feature` and `policy_rejected` — are a policy working as
+configured. A client in a retry loop produces them at its own rate rather than
+at the rate things break, so writing them would fill a bounded error file in
+minutes and push the incident's first real error out of it. They are still
+failed requests: they count toward `request_errors`, they appear in the
+console's failed-request list, and the rate-limit and breaker figures explain
+them.
+
+The consequence is worth stating plainly, because two numbers that nearly match
+invite being used to check each other: **the count of `request failed` records
+is a subset of the failed-request count the console reports, never equal to it.**
+Neither number is evidence about the other. Note also that both exclude
+everything refused before admission — an invalid Gateway Key, an unrouted model,
+an RPM/TPM refusal — because those return before a ledger request exists at all;
+the HTTP metrics and the audit log account for those.
+
+#### Capturing what a failed call carried
+
+`gateway.failure_capture.enabled` keeps the request a failed call sent upstream
+and the answer that came back, so a failure can be reproduced rather than
+guessed at. It is off by default, and turning it on is a decision about what
+this instance's data directory contains rather than a verbosity setting.
+
+Everything else Halro persists is metadata it produced itself — identifiers,
+counts, classes, costs. This is the only store that holds material a caller
+wrote, and the rule that prompts and response bodies never reach a log, a
+metric or an audit record is unchanged: this is a separate, narrower act.
+
+```yaml
+gateway:
+  failure_capture:
+    enabled: true
+    max_bytes: 65536          # each side truncated separately
+    max_records_per_day: 1000
+    retain: 24h               # 1h to 720h
+```
+
+What is captured, and what is not:
+
+| Outcome | Captured | Why |
+| --- | --- | --- |
+| `provider_error` | yes | The request and the upstream's reply are the diagnosis. Except when the caller cancelled: nobody hung up on Halro's account, and one frontend deploy cancels every request in flight at once. |
+| `unsupported_feature` | yes | Which field the target could not serve is only visible in the request. |
+| `policy_rejected` | **no** | Storing the content redaction just refused would make the capture the leak the policy prevents. |
+| `rejected`, `token_guard_rejected` | no | Never reached an upstream; nothing to reproduce, and a runaway client produces them at its own rate. |
+| `accounting_error` | no | The payload says nothing about the ledger being unavailable. |
+| success | no | This is what keeps the store a small tail of traffic rather than a copy of it. |
+
+The guarantees the store is built on, each of which is worth checking against
+your own compliance position before enabling it:
+
+- **Encrypted and bound.** Every record is sealed under the master key with the
+  request ID and project ID as associated data, so a record cannot be renamed
+  onto another request, opened under another project, or lifted into another
+  install's directory.
+- **Post-redaction.** Capture happens after the project's redaction policy has
+  run, so what is stored is what went upstream and not what the caller sent.
+- **Bounded.** Each side is truncated at `max_bytes` and flagged as truncated;
+  each day is capped at `max_records_per_day`, past which capture stops for the
+  day and logs one line.
+- **Expiring.** Each record is removed once it is older than `retain`, swept on
+  the Parquet export tick and again at shutdown. This is the answer to "how long
+  is caller content kept", enforced rather than promised — so the sweep runs
+  whether or not capture is currently enabled. Switching it off stops new
+  writes; it does not strand what is already there.
+- **Audited on read.** `GET /admin/api/v1/usage/failures/{requestID}/payload`
+  is the only admin GET that writes an audit record —
+  `usage.failure_payload.read` — because it is the only one that returns a
+  prompt. In the console it is inside the failure-detail drawer, behind its own
+  Show button, and nothing is cached: opening the drawer does not read a
+  payload, so browsing failures files no audit records.
+- **Best-effort.** A capture that cannot be written is dropped. It never changes
+  what the caller is told, and never fails a request that has already failed.
+
+Files are created 0600 in a 0700 directory. `halro backup` stages the metadata
+database and the Ledger WAL by name rather than copying the data directory, so
+captures are **not** in an archive — a restore comes back with no captured
+payloads, which is the right default for material with an expiry on it. Note
+that a restore renames the previous data directory aside rather than deleting
+it, so the captures it held sit in `.halro-pre-restore-*` until you remove it;
+nothing sweeps a directory Halro no longer owns.
+
+Two more things worth knowing before you turn it on:
+
+- **Enabling or disabling it needs a restart.** `SIGHUP` reloads certificate
+  bytes and the log level and nothing else, so a reload will report success and
+  change nothing here. The same is true of `logging.error_file`.
+- **Rotating the master key makes existing captures unreadable.** Each record is
+  sealed under the key in force when it was written, and key rotation rewraps
+  the credential store, not this one. Every "Show" then answers "nothing was
+  captured for this request" until the pre-rotation records age out of `retain`.
+
+Sizing: the worst case is `max_records_per_day` × `max_bytes` × 2 sides × the
+number of days in `retain`. At the defaults that is about 250 MB; at the
+configuration maxima it is far more than the ledger this shares a disk with, so
+raise them deliberately.
+
+#### Errors-only file
+
+`logging.error_file.enabled` writes a second copy of the log holding `ERROR`
+records alone, beside the ordinary log rather than instead of it. Setting
+`logging.level: error` would get the same file by throwing away everything that
+made the ordinary log worth keeping — an expiring certificate, a failed probe,
+an attempt retried before its request succeeded. This keeps both: stderr stays
+at `info` or `warn`, and the second file collects the errors.
+
+```yaml
+logging:
+  level: info
+  output: stderr
+  error_file:
+    enabled: true
+    file: ""          # default: <data_dir>/logs/halro-error.log
+    max_size_mb: 32
+    max_files: 10
+```
+
+Its level is fixed at `ERROR` and its encoding at JSON. Neither follows
+`logging.level` or `logging.format`: a threshold that could be lowered would
+make it a second copy of the main log, and the one destination that exists to
+be grepped and pasted into a ticket should not be the harder of the two to
+parse. `logging.error_file.file` must not name the same path as `logging.file`
+— two sinks on one path each hold their own offset and rotate on their own
+count, so they would overwrite each other's records — and startup refuses that
+configuration. Both files are created 0600 in a 0700 directory, both fall back
+to stderr with one notice if they cannot be written, and one `SIGHUP` reopens
+both, so a logrotate rule that moves the pair aside is answered by a single
+signal.
+
+Because of the rule above, this file holds fewer records than the console
+reports as failed requests. That difference is the design working, not a gap.
 
 Unknown YAML fields and invalid durations are rejected. Listener, storage,
 egress, proxy, and Metrics-auth changes require restart, as do the certificate

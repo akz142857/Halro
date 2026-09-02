@@ -99,6 +99,15 @@ type Service struct {
 	pricingClockForwardTolerance  time.Duration
 	pricingUnknownPolicy          string
 	logger                        *slog.Logger
+	// failureCapture stores what a failed request carried. Nil disables it, and
+	// nil is the default: this is the only store that holds material a caller
+	// wrote, so it is something an operator turns on rather than something a
+	// gateway does unless told otherwise.
+	failureCapture FailureCapture
+	// captureDegraded reports the store's first write failure and nothing
+	// after it. A disk that cannot take a capture cannot take the next one
+	// either, and the operator needs to be told once.
+	captureDegraded atomic.Bool
 }
 
 type PriceSelector interface {
@@ -135,6 +144,9 @@ type ServiceOptions struct {
 	PricingClockRollbackTolerance time.Duration
 	PricingClockForwardTolerance  time.Duration
 	PricingUnknownPolicy          string
+	// FailureCapture stores the payload of a failed request. Nil, the default,
+	// captures nothing.
+	FailureCapture FailureCapture
 
 	// Logger records provider attempts that failed. A gateway answers its caller
 	// with a deliberately opaque envelope — no upstream status, code or sentence,
@@ -163,6 +175,25 @@ type requestRun struct {
 	providerFailed              bool
 	finalized                   bool
 	tokenGuardPricingViewDigest string
+	// What the terminal failure record reports, accumulated as the request
+	// runs. failure is the last attempt failure seen — the one that decided the
+	// outcome, since a request cannot end badly on an attempt that succeeded —
+	// and lastTarget is where the last attempt ran, which is the only context a
+	// render failure has to offer.
+	acceptedAt    time.Time
+	failure       FailureDescriptor
+	lastTarget    provider.Target
+	attemptCount  int
+	fallbackCount int
+	// What a failed request carried, held as references and serialized only if
+	// the request actually fails. Nil whenever capture is switched off, so the
+	// successful path pays nothing for a feature it does not use.
+	capturedRequest  any
+	capturedResponse any
+	// captureOutcome is what finalize decided, carried to close() so the write
+	// happens outside the lease window. Empty means nothing was finalized, and
+	// close() finalizes before it reads this.
+	captureOutcome string
 }
 
 // finalize closes out the request's accounting exactly once. Every exit path
@@ -174,7 +205,20 @@ func (run *requestRun) finalize(outcome string) error {
 		return nil
 	}
 	run.finalized = true
-	return run.service.finalizeRequest(run.requestLease, outcome)
+	err := run.service.finalizeRequest(run.requestLease, outcome)
+	// One record per request, on the same once-only boundary the settlement
+	// uses, so a request cannot be reported as having failed twice — and a
+	// request that fell back and succeeded cannot be reported as having failed
+	// at all, however many attempt warnings it left behind.
+	run.logFinalFailure(outcome, err == nil)
+	// The payload capture is decided here and written in close(), after the
+	// leases are back. Writing it here would have held the project's
+	// concurrency slot and its Token Guard lease across a file write with no
+	// deadline, so a stalled data directory would have turned a diagnostic into
+	// a data-plane concurrency stall — and delayed the caller's answer by the
+	// write on top of it.
+	run.captureOutcome = outcome
+	return err
 }
 
 type activeAttempt struct {
@@ -257,12 +301,21 @@ func (s *Service) resolveRequest(
 	return principal, targets, nil
 }
 
+// beginRequestRun opens the accounting for a request.
+//
+// payload is the operation as it will go upstream, taken here rather than at
+// each protocol face so no path can be added that forgets it. It is only ever
+// held as a reference: nothing is serialized unless the request fails and
+// capture is switched on, so a successful call pays one pointer assignment for
+// a feature it does not use — and an install with capture off pays nothing at
+// all, because the run drops the reference immediately.
 func (s *Service) beginRequestRun(
 	ctx context.Context,
 	principal auth.AuthResult,
 	model string,
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
+	payload any,
 ) (*requestRun, error) {
 	tokenGuardLease, pricingViewDigest, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
@@ -290,10 +343,13 @@ func (s *Service) beginRequestRun(
 		tokenGuardLease.Release()
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
-	return &requestRun{
+	run := &requestRun{
 		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
 		requestLease: requestLease, requestID: requestID, tokenGuardPricingViewDigest: pricingViewDigest,
-	}, nil
+		acceptedAt: s.now(),
+	}
+	run.captureRequest(payload)
+	return run, nil
 }
 
 func (run *requestRun) close() {
@@ -320,6 +376,10 @@ func (run *requestRun) close() {
 			run.providerFailed,
 		)
 	}
+	// Last, and only now: every lease this request held is back, and the caller
+	// already has their answer, so a slow or stuck write costs this goroutine
+	// and nothing else.
+	run.writeCapture(run.captureOutcome)
 }
 
 func (run *requestRun) recordProviderResult(providerErr error, settlement budget.Settlement) {
@@ -513,6 +573,15 @@ func (s *Service) startAttempt(
 			errors.Join(err, cleanupErr, finalizeErr),
 		)
 	}
+	// What the terminal failure record reports about the chain. Recorded here
+	// rather than at the call sites because this is the one place every
+	// protocol face opens an attempt through, and the counts have to survive a
+	// path that returns without another line remembering to update them.
+	run.attemptCount = attemptNumber
+	if targetIndex > run.fallbackCount {
+		run.fallbackCount = targetIndex
+	}
+	run.lastTarget = pricedTarget
 	return &activeAttempt{
 		service: s, run: run, accounting: attempt, breaker: breakerLease,
 		concurrency: providerLease, startedAt: s.now(), pricingTarget: pricedTarget,
@@ -564,6 +633,21 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 
 func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
 	attempt.logProviderFailure(providerErr)
+	// The upstream's own answer, kept for the capture store and nowhere else.
+	// The log deliberately refuses it — a provider body is the one place a
+	// refused credential is most likely to be quoted back — and the store is
+	// where that material can be held under encryption, a clock and an audit.
+	attempt.run.captureProviderFailure(providerErr)
+	if providerErr == nil {
+		// This attempt answered, so whatever an earlier one failed with is
+		// history rather than the reason this request ends. Without clearing
+		// it, a request that fell back, succeeded, and then could not have its
+		// answer rendered reported the *first* target's status, provider code
+		// and upstream request ID — sending an operator to an upstream with
+		// the identifier of a call that worked.
+		attempt.run.failure = FailureDescriptor{}
+		attempt.run.capturedResponse = nil
+	}
 	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
 		settlement.CommittedMicrosUSD = 0
 		settlement.CostEstimated = false
@@ -583,7 +667,9 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	return nil
 }
 
-// logProviderFailure records an attempt the upstream did not complete.
+// logProviderFailure records an attempt the upstream did not complete, and
+// keeps what it learned on the run so the terminal record does not have to
+// classify the same error a second time.
 //
 // What the caller is told and what the operator is told are different answers on
 // purpose. The response carries a fixed sentence and no upstream detail, because
@@ -592,81 +678,31 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 // is what decides whether the attempt was retried, whether the breaker counted
 // it, and whether a fallback target was tried.
 //
-// The upstream's own sentence is not written. It is a provider response body,
-// and the one thing an upstream is most likely to quote back is the credential
-// it just refused; a pattern denylist only knows the formats it was told about.
-// A refusal Halro produced itself — a transport policy rejection, a response it
-// would not decode — carries no provider body and is the case an operator most
-// needs, so that text is logged, on the same rule the connection tests use: an
-// error with no upstream status is one Halro wrote.
+// The upstream's own sentence is not written; describeProviderFailure holds the
+// reasoning for that, and for why an unclassified error is logged by Go type
+// rather than by text. One exception stays here: a refusal Halro produced itself
+// — a transport policy rejection, a response it would not decode — carries no
+// provider body and is the case an operator most needs, so that text is logged,
+// on the same rule the connection tests use. An error with no upstream status is
+// one Halro wrote.
 //
-// That rule needs a classified error to stand on. An unclassified one gets its
-// type logged and its text withheld, because nothing has established which side
-// of the boundary wrote it.
+// This stays at WARN. The attempt is not the request: promoting it would report
+// a request that fell back and succeeded as a failure, which is the one
+// distinction this whole design exists to keep.
 func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	if providerErr == nil {
 		return
 	}
-	target := attempt.pricingTarget
-	attributes := []any{
-		"request_id", attempt.run.requestID,
-		"public_model", target.PublicModel,
-		"deployment_id", target.DeploymentID,
-		"provider_id", target.ProviderID,
-		"binding_id", target.BindingID,
+	descriptor := describeProviderFailure(providerErr, attempt.pricingTarget)
+	attempt.run.failure = descriptor
+	attributes := append([]any{"request_id", attempt.run.requestID}, descriptor.attributes()...)
+	attributes = append(attributes, "retryable", descriptor.Retryable)
+	if descriptor.Ambiguous {
+		attributes = append(attributes, "ambiguous", true)
 	}
 	var classified *provider.Error
-	if errors.As(providerErr, &classified) {
-		attributes = append(attributes, "error_class", string(classified.Class), "retryable", classified.Retryable)
-		if classified.Ambiguous {
-			attributes = append(attributes, "ambiguous", true)
-		}
-		if classified.StatusCode > 0 {
-			attributes = append(attributes, "provider_status", classified.StatusCode)
-		}
-		// The adapter separates the upstream's identifier from its prose for
-		// exactly this line: the sentence is a response body and stays inside the
-		// error, while `code` — and the parameter it refused, joined to it — is
-		// what an operator can act on. Logging status without it says a request
-		// was refused without saying for what, and leaves them bisecting a body
-		// they did not write.
-		// Both are narrowed here as well as at the adapters that narrow them,
-		// which is not belt and braces: this is the line the invariant binds to.
-		// An adapter is where the value is understood, but the rule — no provider
-		// response bytes in a log, an error, a metric or an audit record — is
-		// about where it is written, and an adapter added later that forgets to
-		// narrow must not be able to widen this. Narrowing an already-narrowed
-		// identifier returns it unchanged, so the adapters that do it keep their
-		// meaning; one that does not loses a value that was never an identifier.
-		if code := provider.SafeProviderIdentifier(classified.ProviderCode); code != "" {
-			attributes = append(attributes, "provider_code", code)
-		}
-		if requestID := provider.SafeProviderIdentifier(classified.ProviderRequestID); requestID != "" {
-			attributes = append(attributes, "provider_request_id", requestID)
-		}
-		if classified.StatusCode == 0 {
-			attributes = append(attributes, "reason", providerFailureReason(classified))
-		}
-	} else if errors.Is(providerErr, context.Canceled) || errors.Is(providerErr, context.DeadlineExceeded) {
-		attributes = append(attributes, "error_class", "client_disconnected_or_timed_out")
-	} else {
-		// The rule above reads an absent upstream status as "Halro wrote this",
-		// and here that inference is not available: an error that is not a
-		// *provider.Error never went through the classification that decides
-		// what may be said about it. The adapter contract delivers provider
-		// failures classified, so anything arriving unclassified is either
-		// Halro's own internal error or an adapter that did not honour the
-		// contract — and from this line the two are indistinguishable. One of
-		// them can be holding a response body.
-		//
-		// So the text stays out and the Go type goes in. A type name is an
-		// identifier, produced by the code rather than by an upstream, and it
-		// answers the question this branch is actually asked: which component
-		// produced a failure nothing classified. Redacting the sentence instead
-		// would be the pattern denylist the comment above already refuses to
-		// rely on.
-		attributes = append(attributes, "error_class", string(provider.ErrorUnknown),
-			"error_type", fmt.Sprintf("%T", providerErr))
+	if errors.As(providerErr, &classified) && classified.StatusCode == 0 {
+		attributes = append(attributes, "reason", providerFailureReason(classified))
 	}
 	attempt.service.logger.Warn("provider attempt failed", attributes...)
 }
@@ -696,7 +732,13 @@ func providerFailureReason(classified *provider.Error) string {
 func (attempt *activeAttempt) abort(outcome string) error {
 	attempt.concurrency.Release()
 	attempt.breaker.Abandon()
-	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{Outcome: outcome})
+	// phasePreProvider, because that is what abort is for: the attempt exists
+	// and the upstream was never called. Leaving it blank made the record
+	// indistinguishable from one written before the field existed, which the
+	// console reads as "this predates the field" and says so in words.
+	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{
+		Outcome: outcome, FailurePhase: phasePreProvider,
+	})
 	finalizeErr := attempt.run.finalize(outcome)
 	return errors.Join(cleanupErr, finalizeErr)
 }
@@ -839,6 +881,7 @@ func NewServiceWithOptions(
 	}
 	return &Service{
 		logger:                        logger,
+		failureCapture:                options.FailureCapture,
 		auth:                          authSnapshot,
 		registry:                      registry,
 		accounting:                    accounting,
@@ -1028,7 +1071,7 @@ func (s *Service) generate(
 	if len(targets) == 0 {
 		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
@@ -1116,6 +1159,11 @@ func (s *Service) generate(
 						)
 					} else if renderErr := render(semanticResponse); renderErr != nil {
 						outcome = "provider_error"
+						// The upstream succeeded and its answer is the whole
+						// diagnosis: the capture keeps the answer that could
+						// not be put on the wire, not an upstream error, and
+						// this is the only path where those differ.
+						run.captureResponse(semanticResponse)
 						failure = gatewayError(
 							"provider_error", "provider response cannot be rendered safely", 502, renderErr,
 						)
@@ -1360,7 +1408,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
@@ -1465,7 +1513,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0, request)
 	if err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
@@ -1556,7 +1604,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
 	if err != nil {
 		return err
 	}
@@ -2031,7 +2079,7 @@ func (s *Service) generateStream(
 	if len(targets) == 0 {
 		return gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
 	if err != nil {
 		return err
 	}
@@ -2208,7 +2256,7 @@ func (s *Service) Embeddings(
 	if len(targets) == 0 {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0, request)
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}
@@ -2863,28 +2911,41 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 	result.CommittedMicrosUSD = cost + target.FixedRequestMicrosUSD
 }
 
+// enrichSettlement records on the settlement what the failure was, so the
+// ledger's account of an attempt and the log's agree.
+//
+// The classification comes from describeProviderFailure rather than being
+// repeated here. It was repeated here, and the two copies had already drifted:
+// this one mapped a cancellation to `canceled` while the log wrote a literal
+// `client_disconnected_or_timed_out`, so one attempt produced two different
+// answers to "what class of failure was this" depending on which record you
+// read.
 func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, completedAt time.Time) {
 	if completedAt.After(startedAt) {
 		result.LatencyMillis = completedAt.Sub(startedAt).Milliseconds()
 	}
 	if providerErr == nil {
-		result.HTTPStatus = http.StatusOK
+		if result.Outcome == outcomeSuccess {
+			result.HTTPStatus = http.StatusOK
+			return
+		}
+		// The upstream answered and this side refused the answer — a redaction
+		// policy, or a rewrite that could not be represented. Recording 200
+		// here was wrong twice over: the console rendered a red dot beside
+		// "HTTP 200", and a blank phase made a record written today look like
+		// one written before the field existed.
+		result.FailurePhase = phaseResponseRender
 		return
 	}
-	var classified *provider.Error
-	if errors.As(providerErr, &classified) {
-		result.ErrorClass = string(classified.Class)
-		result.HTTPStatus = classified.StatusCode
-		return
-	}
-	switch {
-	case errors.Is(providerErr, context.DeadlineExceeded):
-		result.ErrorClass = string(provider.ErrorTimeout)
-	case errors.Is(providerErr, context.Canceled):
-		result.ErrorClass = string(provider.ErrorCanceled)
-	default:
-		result.ErrorClass = string(provider.ErrorUnknown)
-	}
+	// The target is not needed for the fields the settlement keeps — it already
+	// carries route, deployment and provider of its own — so this asks only for
+	// the classification.
+	descriptor := describeProviderFailure(providerErr, provider.Target{})
+	result.ErrorClass = string(descriptor.Class)
+	result.HTTPStatus = descriptor.ProviderStatus
+	result.ProviderCode = descriptor.ProviderCode
+	result.ProviderRequestID = descriptor.ProviderRequestID
+	result.FailurePhase = descriptor.Phase
 }
 
 func embeddingSettlement(

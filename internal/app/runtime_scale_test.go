@@ -58,7 +58,13 @@ const (
 	// the registry is activated and read by the Admin routes endpoints, and the
 	// alternative, recomputing it per request, would answer from a load the
 	// process is not running.
-	runtimeFieldBudget = 71
+	// 72: failureCapture. Raised deliberately. It belongs to the Runtime for
+	// the same reason the ledger and the audit log do: it is a durable store
+	// with a lifetime tied to the process, opened once with the master key that
+	// seals it, read by the Admin payload endpoint and swept by the usage
+	// maintenance loop. It is nil on every install that has not switched
+	// capture on, so the field is one pointer rather than a subsystem.
+	runtimeFieldBudget = 72
 	runtimeMutexBudget = 10
 )
 
