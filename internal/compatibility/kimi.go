@@ -428,49 +428,72 @@ func renderKimiResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
 // fails cannot be routed away without also routing away the kimi-k3 request that
 // works — which the measurement above says would be the more expensive mistake.
 func applyKimiToolChoice(request openaiapi.ChatCompletionRequest) error {
-	if len(request.ToolChoice) == 0 || !kimiForcesAToolCall(request.ToolChoice) {
+	forced := kimiForcedToolCall(request.ToolChoice)
+	if forced == "" || !kimiThinkingWillBeOn(request.Model, request.ReasoningEffort) {
 		return nil
 	}
-	if !kimiThinkingWillBeOn(request.Model, request.ReasoningEffort) {
-		return nil
+	// kimi-k3 is exempt from the `required` conflict and not from the named one.
+	// Measured on the same model with the same depth: `required` answers 200 with
+	// a tool call and a reasoning span together, and a named function answers
+	// `tool_choice 'specified' is incompatible with thinking enabled`.
+	if forced == kimiForcedRequired {
+		if spelling, known := kimiReasoningSpelling[request.Model]; known && spelling.TopLevelEffort {
+			return nil
+		}
 	}
-	// kimi-k3 reasons and forces a tool in the same request without complaint,
-	// measured. So the conflict is not "thinking is on" either — it is the K2.x
-	// line with thinking on, and the two conditions have to be met together.
-	if spelling, known := kimiReasoningSpelling[request.Model]; known && spelling.TopLevelEffort {
-		return nil
-	}
-	return fmt.Errorf("Kimi model %q does not accept a forced tool call while it is reasoning", request.Model)
+	return fmt.Errorf("Kimi model %q does not accept tool_choice %s while it is reasoning", request.Model, forced)
 }
 
-// kimiToolChoiceForces is the same question as kimiForcesAToolCall asked one
-// layer earlier, where the request is still semantic and the field rules live.
-// The two spellings exist because the two layers hold different representations
-// of the same choice, and they are kept adjacent so neither can be changed
-// alone: a disagreement between them is a request the router admits and the
-// renderer then refuses, after the budget is reserved.
-func kimiToolChoiceForces(choice *semantic.ToolChoice) bool {
-	return choice != nil &&
-		(choice.Mode == semantic.ToolChoiceRequired || choice.Mode == semantic.ToolChoiceNamed)
+// kimiToolChoiceNamesAFunction is the half of kimiForcedToolCall the field rules
+// can act on, asked one layer earlier where the request is still semantic.
+//
+// Only the named half, because only it is a property of the profile: a named
+// function conflicts with reasoning on every Kimi model measured, while
+// `required` conflicts on the K2.x line and not on kimi-k3, and a rule keyed by
+// profile cannot tell those apart. The two spellings are kept adjacent so
+// neither can be changed alone — a disagreement between them is a request the
+// router admits and the renderer then refuses, after the budget is reserved.
+func kimiToolChoiceNamesAFunction(choice *semantic.ToolChoice) bool {
+	return choice != nil && choice.Mode == semantic.ToolChoiceNamed
 }
 
-// kimiForcesAToolCall reports whether this tool_choice obliges the model to call
-// a tool. `auto` and `none` do not and are never in question.
+// The two ways a request can oblige the model to call a tool, named as the
+// upstream names them in its errors rather than as the wire format spells them.
+// They are separate constants because Kimi treats them differently and the
+// difference is not visible in the wire shape: one is a string and the other an
+// object, but what decides the outcome is which of the two the upstream calls
+// them.
+const (
+	kimiForcedRequired  = "'required'"
+	kimiForcedSpecified = "'specified'"
+)
+
+// kimiForcedToolCall reports which kind of forced tool call this tool_choice is,
+// or "" for one that forces nothing. `auto` and `none` force nothing and are
+// never in question.
 //
 // The two shapes are the only two the facade admits: decodeToolChoice accepts
 // the strings auto, none and required, or a {"type":"function"} object naming
 // one, and renderToolChoice re-emits exactly those. A shape neither branch
-// recognises is treated as forcing nothing, because it cannot have come from a
-// caller.
-func kimiForcesAToolCall(raw json.RawMessage) bool {
+// recognises forces nothing, because it cannot have come from a caller.
+func kimiForcedToolCall(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
 	var mode string
 	if json.Unmarshal(raw, &mode) == nil {
-		return mode == "required"
+		if mode == "required" {
+			return kimiForcedRequired
+		}
+		return ""
 	}
 	var named struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(raw, &named) == nil && named.Type == "function"
+	if json.Unmarshal(raw, &named) == nil && named.Type == "function" {
+		return kimiForcedSpecified
+	}
+	return ""
 }
 
 // applyKimiReasoning writes whichever reasoning member the named model reads.

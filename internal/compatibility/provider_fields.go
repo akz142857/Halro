@@ -389,15 +389,20 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 				return len(value) > kimiMaxStopBytes || !utf8.ValidString(value)
 			}), "stop")
 		add(request.ReasoningEffort != "" && !slices.Contains(KimiPortableEfforts, request.ReasoningEffort), "reasoning_effort")
-		// tool_choice is deliberately absent, and the first version of this rule
-		// had it. A forced tool call conflicts with reasoning on the K2.x line and
-		// not on kimi-k3, measured — k3 answers 200 with tool_calls and a
-		// reasoning_content in the same response. A rule keyed by profile cannot
-		// tell them apart, so declaring it would route away the request that works
-		// in order to spare the one that does not, and the one that works is the
-		// flagship model. The renderer refuses the failing pair instead, after the
-		// reservation, which is the same per-model residue already recorded
-		// against the output bound and the reasoning spelling.
+		// A named function together with a depth, and only that: measured refused
+		// on kimi-k3 and on kimi-k2.6 alike, so it is a property of the profile
+		// and belongs here rather than after the reservation.
+		//
+		// `required` is deliberately not covered, and the difference is the whole
+		// reason this rule is half of what it first was. That form conflicts on
+		// the K2.x line and not on kimi-k3, which answers 200 with a tool call and
+		// a reasoning span in one response. A rule keyed by profile cannot tell
+		// them apart, so covering it would route away the request that works in
+		// order to spare the one that does not — and the one that works is the
+		// flagship model. The renderer refuses that pair instead, which is the
+		// same per-model residue already carried for the output bound and the
+		// reasoning spelling.
+		add(KimiEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceNamesAFunction(request.ToolChoice), "tool_choice")
 	}, domain.ProfileKimiChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.

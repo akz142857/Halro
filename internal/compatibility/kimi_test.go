@@ -141,9 +141,15 @@ func TestKimiChatWritesTheReasoningSpellingTheModelReads(t *testing.T) {
 // test, and the thinking-keyed version passed a grid that had no kimi-k3 row
 // with a depth on it.
 func TestKimiChatRefusesAForcedToolCallOnlyOnTheK2LineWhileItReasons(t *testing.T) {
-	for _, choice := range []json.RawMessage{
-		json.RawMessage(`"required"`),
-		json.RawMessage(`{"type":"function","function":{"name":"f"}}`),
+	for _, choice := range []struct {
+		raw json.RawMessage
+		// exemptsK3 is the difference the fourth version of this rule exists for.
+		// kimi-k3 with a depth accepts `required` and refuses a named function,
+		// which no reading of the model or of the reasoning switch alone predicts.
+		exemptsK3 bool
+	}{
+		{raw: json.RawMessage(`"required"`), exemptsK3: true},
+		{raw: json.RawMessage(`{"type":"function","function":{"name":"f"}}`)},
 	} {
 		for _, test := range []struct {
 			model, effort string
@@ -155,9 +161,11 @@ func TestKimiChatRefusesAForcedToolCallOnlyOnTheK2LineWhileItReasons(t *testing.
 			// portable request.
 			{model: "kimi-k3", refused: false},
 			{model: "kimi-k2.6", refused: false},
-			// A depth was asked for. On kimi-k3 that is fine and measured:
-			// 200, tool_calls, reasoning_content non-empty, all in one response.
-			// This is the row the thinking-keyed version got wrong.
+			// A depth was asked for. On kimi-k3 `required` is fine and measured —
+			// 200, tool_calls, reasoning_content non-empty, one response — while a
+			// named function on the same model with the same depth answers
+			// `tool_choice 'specified' is incompatible with thinking enabled`.
+			// exemptsK3 carries that split; refused here is the `required` answer.
 			{model: "kimi-k3", effort: "high", refused: false},
 			{model: "kimi-k3", effort: "max", refused: false},
 			// The K2.x line with thinking on is the pair that actually conflicts.
@@ -173,13 +181,20 @@ func TestKimiChatRefusesAForcedToolCallOnlyOnTheK2LineWhileItReasons(t *testing.
 		} {
 			request := kimiBaseRequest()
 			request.Model, request.ReasoningEffort = test.model, test.effort
-			request.ToolChoice = choice
-			_, err := RenderKimiChatRequest(request)
-			if test.refused && err == nil {
-				t.Errorf("%s with effort %q accepted tool_choice %s while reasoning", test.model, test.effort, choice)
+			request.ToolChoice = choice.raw
+			// A row marked not-refused is the `required` answer. A named function
+			// is refused there too unless nothing is reasoning at all, which is
+			// what exemptsK3 distinguishes.
+			refused := test.refused
+			if !refused && !choice.exemptsK3 && KimiEffortAsksForDepth(test.effort) {
+				refused = true
 			}
-			if !test.refused && err != nil {
-				t.Errorf("%s with effort %q refused tool_choice %s and nothing was reasoning: %v", test.model, test.effort, choice, err)
+			_, err := RenderKimiChatRequest(request)
+			if refused && err == nil {
+				t.Errorf("%s with effort %q accepted tool_choice %s while reasoning", test.model, test.effort, choice.raw)
+			}
+			if !refused && err != nil {
+				t.Errorf("%s with effort %q refused tool_choice %s and it is accepted there: %v", test.model, test.effort, choice.raw, err)
 			}
 		}
 	}
@@ -378,7 +393,14 @@ func TestKimiChatFieldRulesAgreeWithTheRenderer(t *testing.T) {
 				c.Stop = []string{long}
 				w.Stop = json.RawMessage(`["` + long + `"]`)
 			}},
-		{name: "a forced tool call with a depth on the model that allows it", model: "kimi-k3",
+		{name: "a named function with a depth, refused by every model and routed away", model: "kimi-k3",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
+				c.Tools = []semantic.Tool{{Name: "f"}}
+				c.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceNamed, Name: "f"}
+				w.ToolChoice = json.RawMessage(`{"type":"function","function":{"name":"f"}}`)
+			}},
+		{name: "required with a depth on the model that allows it", model: "kimi-k3",
 			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
 				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
 				c.Tools = []semantic.Tool{{Name: "f"}}
@@ -388,7 +410,7 @@ func TestKimiChatFieldRulesAgreeWithTheRenderer(t *testing.T) {
 		// Residue, and the trade behind it is the point: a rule keyed by profile
 		// would have to refuse the kimi-k3 row above to route this one away, and
 		// kimi-k3 with a depth and a forced tool is measured working.
-		{name: "a forced tool call with a depth on the line that refuses it", model: "kimi-k2.6",
+		{name: "required with a depth on the line that refuses it", model: "kimi-k2.6",
 			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
 				c.ReasoningEffort, w.ReasoningEffort = "low", "low"
 				c.Tools = []semantic.Tool{{Name: "f"}}

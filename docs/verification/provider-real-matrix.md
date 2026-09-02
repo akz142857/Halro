@@ -245,15 +245,24 @@ opposite rows:
 | model | thinking | tool_choice | result |
 |---|---|---|---|
 | kimi-k3 | on | `required` | 200, tool call **and** reasoning span together |
+| kimi-k3 | on | named function | 400, `'specified' is incompatible with thinking enabled` |
 | kimi-k2.6 | off | `required` | 200, tool call |
 | kimi-k2.6 | on | `required` | 400, `'required' is incompatible with thinking enabled` |
 | kimi-k2.6 | on | named function | 400, `'specified' is incompatible with thinking enabled` |
 
-It is the conjunction: the K2.x line **and** thinking on. kimi-k3 is exempt
-entirely, which no reading of either the documentation or the error message would
-have given. The named-function half had been inferred from the Anthropic face and
-is first-hand on Chat now. One cell of the allowing side stays inference —
-kimi-k3 with thinking on and a *named* function was not driven, only `required`.
+The two forms are two rules, which is the part nothing predicted. `required`
+conflicts with reasoning on the K2.x line and not on kimi-k3; a **named function**
+conflicts with reasoning on every model, kimi-k3 included. Same model, same depth,
+one request answers 200 and the other 400.
+
+That split is also what let half of it move before the reservation: a named
+function is a property of the profile, so it is routed away by field rule, while
+`required` stays a per-model refusal in the renderer because expressing it by
+profile would cost kimi-k3 the request it serves.
+
+One cell of the allowing side stays inference, and a low-risk one: a named
+function with thinking **off** was not driven. The upstream's error names thinking
+as the condition, and `required` with thinking off is measured at 200.
 
 The Anthropic route's 429 was measured by deliberately tripping the organisation
 limit, with the operator's consent: it answers in the **OpenAI** envelope, so that

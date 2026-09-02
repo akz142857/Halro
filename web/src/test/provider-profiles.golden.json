@@ -2568,7 +2568,7 @@
                 "K2.x has one on state and no depth ladder, so an effort routed to those models is honoured as on rather than preserved",
                 "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
                 "stop is value-dependent: Kimi documents it as honoured and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
-                "a forced tool call — required, or one specific function — is refused by the K2.x line while it is reasoning, and accepted by kimi-k3, which answers with both a tool call and a reasoning span. Both conditions have to hold, so neither the model nor the reasoning switch alone decides it, and a rule keyed by profile can express neither: the pair is refused after the reservation rather than routed away together with the kimi-k3 request that works"
+                "tool_choice is value-dependent, and the two ways of forcing a tool call are not the same value: a named function together with a depth is refused by every Kimi model measured and is routed away before provider I/O, while required together with a depth is refused by the K2.x line and accepted by kimi-k3, which answers with a tool call and a reasoning span in one response. That second half is a per-model limit this profile-scoped declaration cannot express, so it is refused after the reservation rather than routed away with the kimi-k3 request that works"
               ],
               "endpoint_id": "openai.chat-completions.v1",
               "path": "/v1/chat/completions",
@@ -2581,12 +2581,14 @@
                 "user",
                 "max_tokens",
                 "reasoning_effort",
-                "stop"
+                "stop",
+                "tool_choice"
               ]
             },
             {
               "declared_transforms": [
                 "Responses items are mapped through the Kimi Chat ProviderPrimitive",
+                "tool_choice is value-dependent: a named function together with a reasoning depth is refused by every Kimi model and is routed away before provider I/O",
                 "Kimi does not model temperature or top_p as request members and pins each to one value per model, so they are rejected before provider I/O rather than sent or silently replaced",
                 "max_output_tokens is carried as Kimi's max_completion_tokens, which Kimi documents as the same bound",
                 "parallel_tool_calls is value-dependent: true is what omitting the member already means",
@@ -2598,7 +2600,8 @@
                 "temperature",
                 "top_p",
                 "parallel_tool_calls",
-                "user"
+                "user",
+                "tool_choice"
               ]
             },
             {
@@ -2609,7 +2612,7 @@
                 "output_config.format is carried: it is always a schema on this endpoint, and the Kimi Chat face documents the json_schema response format",
                 "max_tokens is carried as max_completion_tokens, which Kimi documents as the same bound under a newer name — but the two are the same quantity only while nothing is thinking, because Kimi's single output bound counts reasoning, measured 2026-09-01. This endpoint requires max_tokens and means the answer alone, so a request that also asks for a depth is routed away rather than having this layer decide which of the two quantities the caller meant",
                 "stop_sequences is carried and was measured honoured, within Kimi's published bounds of five sequences of at most 32 bytes each; a request outside them is routed away before provider I/O",
-                "a forced tool call is refused by the K2.x line while it is reasoning and accepted by kimi-k3, which answers with both a tool call and a reasoning span; that is a per-model limit this profile-scoped declaration cannot express, so the pair is refused after the reservation rather than routed away with the kimi-k3 request that works"
+                "tool_choice is value-dependent: a named function together with a depth is refused by every Kimi model and routed away before provider I/O, while required together with a depth is refused by the K2.x line alone — a per-model limit this declaration cannot express, refused after the reservation rather than costing kimi-k3 the request it serves"
               ],
               "endpoint_id": "anthropic.messages.2023-06-01",
               "path": "/v1/messages",
@@ -2621,6 +2624,7 @@
                 "stop_sequences",
                 "temperature",
                 "thinking",
+                "tool_choice",
                 "top_k",
                 "top_p"
               ]
