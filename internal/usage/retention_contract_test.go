@@ -327,6 +327,71 @@ func TestASweepDoesNotCopyTheWholeWindow(t *testing.T) {
 	}
 }
 
+// The floor is read by two things that must agree with memory: reconciliation,
+// which compares the window against the archive, and restore, which discards
+// everything below it. So a floor above a record the aggregate still holds is
+// not a rounding error — it is a record the console serves today and cannot
+// find after a restart, with nothing logged either side of it.
+//
+// The two runs are scanned independently and each stops at its own first
+// keeper, so they can disagree about where the surviving history starts. This
+// builds exactly that: an attempt recent enough to keep, whose own request was
+// finalized long enough ago to drop.
+func TestTheFloorNeverRisesAboveARecordStillHeld(t *testing.T) {
+	old := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := NewAggregate()
+	events := []ledger.Event{
+		{
+			EventID: "accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_1",
+			ProjectID: "project", PeriodID: "2026-08-01", RequestedModel: "chat", OccurredAt: old,
+		},
+		{
+			EventID: "settled", Kind: ledger.EventAttemptSettled, RequestID: "req_1",
+			AttemptID: "req_1:1", AttemptNumber: 1, ProjectID: "project", PeriodID: "2026-08-01",
+			ProviderID: "provider_1", RequestedModel: "chat", ProviderModel: "gpt-4o",
+			// Settled recently: this attempt is inside the window and must stay.
+			OccurredAt: recent, Outcome: "success", CommittedMicrosUSD: ledger.MicrosUSD(1),
+		},
+		{
+			EventID: "final", Kind: ledger.EventRequestFinalized, RequestID: "req_1",
+			ProjectID: "project", PeriodID: "2026-08-01", RequestedModel: "chat",
+			// Finalized long ago, at a higher sequence: the summary run drops
+			// past the sequence at which the attempt run stopped.
+			OccurredAt: old, Outcome: "success",
+		},
+	}
+	for index, event := range events {
+		sequence := uint64(index + 1)
+		if err := aggregate.Apply(ledger.Record{
+			Generation: 1, Sequence: sequence, Offset: int64(sequence) * 100, Event: event,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result := aggregate.PruneBefore(recent.Add(-time.Hour), 3)
+	if result.Summaries == 0 {
+		t.Fatal("no summary was dropped, so the two runs never disagreed and this test proves nothing")
+	}
+	snapshot := aggregate.Snapshot()
+	if len(snapshot.Attempts) != 1 {
+		t.Fatalf("the attempt inside the window was dropped: %d held", len(snapshot.Attempts))
+	}
+	if held := snapshot.Attempts[0].Sequence; result.Floor > held {
+		t.Fatalf("floor %d is above attempt %d, which the aggregate still holds", result.Floor, held)
+	}
+
+	// And the record survives the round trip the floor governs.
+	restored, err := restoreOneRound(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(restored.Snapshot().Attempts); got != 1 {
+		t.Fatalf("a restart dropped a held attempt: %d restored, want 1", got)
+	}
+}
+
 // checkpointBytes is everything one round hands the store.
 func checkpointBytes(snapshot CheckpointSnapshot) int {
 	total := len(snapshot.Head)

@@ -15,6 +15,23 @@ import "time"
 // has not already been archived, which is the whole reason PruneBefore takes a
 // watermark as well as a cutoff.
 
+// RetentionCutoff is the oldest partition date a prune of the archive may keep.
+//
+// Partitions are dated in UTC while a retention promise is read in the
+// operator's own day. An instance east of UTC reaches its local "N days ago"
+// while the UTC partition for that day is still current, so pruning at exactly
+// N would delete a day the operator was told they still had. retention_days is
+// therefore a floor — at least N days — bought with one extra partition of
+// storage.
+//
+// It lives here rather than at either call site because there are two: the
+// maintenance tick and the offline `usage prune` command. They have to agree on
+// what "kept for N days" means, and when the rule was written out twice they
+// agreed only by inspection.
+func RetentionCutoff(now time.Time, retentionDays int) time.Time {
+	return now.UTC().AddDate(0, 0, -(retentionDays + 1))
+}
+
 // PruneResult is what one sweep removed, and the floor it left behind.
 type PruneResult struct {
 	Attempts  int
@@ -64,16 +81,40 @@ func (a *Aggregate) PruneBefore(cutoff time.Time, exportedThrough uint64) PruneR
 		return PruneResult{Floor: a.floor}
 	}
 
-	// The floor is the highest sequence that is no longer held, plus one. Taken
-	// from both slices, because a request summary and its attempts are separate
-	// records and either may be the last one dropped.
-	for _, dropped := range []uint64{
-		lastSequence(a.attempts[:attempts]),
-		lastSummarySequence(a.summaries[:summaries]),
-	} {
-		if dropped >= a.floor {
-			a.floor = dropped + 1
+	// The floor is the lowest sequence still held, which is what its name says
+	// and what reconciliation and restore both read it as.
+	//
+	// It used to be derived from the other end — the highest sequence dropped,
+	// plus one, taken across both slices. Those are not the same number.
+	// Attempts and request summaries are two separate runs, scanned
+	// independently, and each stops at its own first record worth keeping; a
+	// summary dropped at a higher sequence than the first attempt kept puts the
+	// floor above a record the aggregate is still holding. Nothing complains at
+	// the time — the console goes on serving it — and then the next restart
+	// drops it, because restore discards everything below the stored floor.
+	// A record visible before a restart and gone after it, with no error
+	// anywhere, is the worst shape this could take.
+	//
+	// Taken from what is kept, the two runs cannot disagree: whichever of them
+	// holds the lowest surviving record decides.
+	floor := uint64(0)
+	if attempts < len(a.attempts) {
+		floor = a.attempts[attempts].Sequence
+	}
+	if summaries < len(a.summaries) {
+		if first := a.summaries[summaries].Sequence; floor == 0 || first < floor {
+			floor = first
 		}
+	}
+	if floor == 0 {
+		// Nothing survived, so there is no lowest held record to name and the
+		// floor is one past everything that went.
+		floor = max(lastSequence(a.attempts[:attempts]), lastSummarySequence(a.summaries[:summaries])) + 1
+	}
+	// Monotonic: a window that has already disclaimed a range does not reclaim
+	// it because a later sweep happened to keep something older.
+	if floor > a.floor {
+		a.floor = floor
 	}
 
 	// Dropping the prefix costs what was dropped, not what is kept.
