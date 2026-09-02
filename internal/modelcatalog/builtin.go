@@ -56,6 +56,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		bedrockMantleModels(),
 		openAICompatibleModels(),
 		minimaxModels(),
+		kimiModels(),
 	)...)
 })
 
@@ -441,12 +442,152 @@ func minimaxModels() []Entry {
 		builtinEntry(provider, domain.ProfileMiniMaxChat, "MiniMax-M3", with(openAIChat(m3Context, m3Output), reasoning, vision)),
 		builtinEntry(provider, domain.ProfileMiniMaxResponses, "MiniMax-M3", with(responses(m3Context, m3Output), vision)),
 	}
+	// The M2 line is absent from the Responses profile, and the absence is a
+	// measurement rather than a gap. Measured on an international account
+	// 2026-09-02, MiniMax-M2.1 on /v1/responses:
+	//
+	//	{"model":"MiniMax-M2.1","input":"Reply with OK.","max_output_tokens":256}
+	//	  -> 200, output[0] {"type":"reasoning", content:[{"type":"reasoning_text"}]}
+	//	  and the same again with reasoning:{"effort":"none"}, which is echoed
+	//	  back as "none" and changed nothing.
+	//
+	// That reasoning item is refused by compatibility/openai.DecodeProviderResponse
+	// — `provider Responses output item is unsupported` — which is upstream of
+	// every northbound renderer, so all three faces answer 502 with the upstream
+	// already paid. An entry here would have offered an operator a deployment
+	// that fails every single call.
+	//
+	// MiniMax's own documentation already said the M2 line cannot be told to stop
+	// thinking; what nobody had done was join that to what this profile's decoder
+	// accepts. M2.1 is the one driven; the other two are the same line under the
+	// same documented constraint, and are left out on the fail-closed reading.
+	//
+	// M3 stays, and that is also measured: two probes, one trivial and one built
+	// to provoke multi-step work, both came back with a message item alone and
+	// the working shown inside the text. Its switch is `adaptive`, so this is
+	// evidence rather than proof — TestNoEndpointIsServedByATargetThatReasonsUnasked
+	// is what would catch it if a later measurement says otherwise.
 	for _, model := range m2Models {
 		entries = append(entries,
 			builtinEntry(provider, domain.ProfileMiniMaxAnthropicMessages, model, anthropicChat(m2Context, 0)),
 			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
-			builtinEntry(provider, domain.ProfileMiniMaxResponses, model, responses(m2Context, 0)),
 		)
+	}
+	return entries
+}
+
+// kimiModels covers the four exact identifiers Kimi publishes as in-service on
+// 2026-09-01. The same four are served on both of Kimi's hosts —
+// api.moonshot.ai for international accounts and api.moonshot.cn for mainland
+// ones — so the entries are not region-scoped; only the connection's base URL
+// and the price list are.
+//
+// Two things this catalogue records that no capability set can, and they are the
+// reason the entries are written per model rather than once per profile:
+//
+//   - Which models each face serves. Kimi's published OpenAPI pins `model` to
+//     kimi-k3 on /v1/responses and /anthropic/v1/messages, and the measurement
+//     contradicts it: kimi-k2.6 answers 200 on both. So the entries follow what
+//     was measured, not what was published — kimi-k3 and kimi-k2.6 on all three
+//     faces, and the two k2.7-code identifiers on Chat alone, which is the only
+//     face they have been driven on.
+//   - Which models can be told not to reason. kimi-k3 and kimi-k2.6 can; the
+//     k2.7-code pair cannot, and always reasons with Preserved Thinking on.
+//     kimi-k3's off switch was measured after both its documentation and its own
+//     /v1/models metadata said it had none — this list follows the measurement.
+//     No capability bit says "reasons, but not optionally", so the pair that
+//     cannot be switched off is recorded in this comment and in the endpoint
+//     manifest's declared transforms, which is honest about the gap rather than
+//     hiding it behind a bit that means something else.
+//
+// Two deliberate narrowings:
+//
+//   - No output ceiling on the K2.x line. Kimi documents an output default and
+//     maximum for kimi-k3 and gives none for the others, and a wrong bound is
+//     enforced by budget and routing while a missing one only costs a layer of
+//     protection.
+//   - No fetched_image anywhere. Kimi's image members accept a data URL or an
+//     ms://<file_id> reference and nothing else, so vision here is the inline
+//     half alone — the same shape Bedrock's entries use.
+//
+// Sources reviewed 2026-09-01 (the .cn and .ai documents were compared and are
+// the same contract):
+//   - https://platform.kimi.com/docs/models.md
+//   - https://platform.kimi.com/docs/api/models-overview.md
+//   - https://platform.kimi.com/docs/openapi.json
+func kimiModels() []Entry {
+	const provider = domain.ProviderKimi
+	// Kimi's Chat face documents both JSON halves, so chat() plus
+	// structuredOutputs is the right shared shape here.
+	kimiChat := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return with(chat(contextTokens, outputTokens), structuredOutputs, visionInline, reasoning)
+	}
+	// Responses binds no stream primitive and cannot carry reasoning items, so
+	// its entries claim neither. It also has no schema-less JSON mode.
+	kimiResponses := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Tools: true, Vision: true, StructuredOutputs: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	// The Anthropic face carries no schema-less JSON mode either, and its
+	// reasoning is reachable in native mode alone — the profile's field rules
+	// route every portable request that asks for depth away, so an entry claiming
+	// reasoning here is claiming what native mode can do.
+	kimiAnthropic := func(contextTokens, outputTokens int64) domain.ProviderCapabilities {
+		return domain.ProviderCapabilities{
+			Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+			Vision: true, StructuredOutputs: true, Reasoning: true,
+			MaxContextTokens: contextTokens, MaxOutputTokens: outputTokens,
+		}
+	}
+	const k3Context, k3Output int64 = 1_048_576, 1_048_576
+	const k2Context int64 = 262_144
+	// The Responses face reasons on every model it serves and cannot be told not
+	// to — measured 2026-09-02, both spellings: reasoning.effort="none" is
+	// refused outright and the `thinking` member that works on the Messages face
+	// is accepted and ignored here. So every entry on it is marked. That is why
+	// the profile is withheld (see internal/domain/provider_table.go), and
+	// marking the entries is what keeps the two facts attached: deleting the
+	// Withheld field fails TestNoEndpointIsServedByATargetThatReasonsUnasked
+	// rather than reaching an operator.
+	reasonsUnasked := func(entry Entry) Entry {
+		entry.ReasonsUnasked = true
+		return entry
+	}
+	entries := []Entry{
+		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k3", kimiChat(k3Context, k3Output)),
+		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k3", kimiAnthropic(k3Context, k3Output)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k3", kimiResponses(k3Context, k3Output))),
+		// Measured answering on all three faces on 2026-09-01, which is what the
+		// published schemas say does not happen.
+		builtinEntry(provider, domain.ProfileKimiChat, "kimi-k2.6", kimiChat(k2Context, 0)),
+		builtinEntry(provider, domain.ProfileKimiAnthropicMessages, "kimi-k2.6", kimiAnthropic(k2Context, 0)),
+		reasonsUnasked(builtinEntry(provider, domain.ProfileKimiResponses, "kimi-k2.6", kimiResponses(k2Context, 0))),
+	}
+	// Driven on Chat alone. Nothing establishes what the other two faces do with
+	// them, and an entry that guesses costs an operator a deployment that fails
+	// every call.
+	//
+	// Both reason unasked, and that is measured on each of them rather than
+	// inferred from the refusal they share. 2026-09-02, a plain request with no
+	// thinking member on either identifier:
+	//
+	//	kimi-k2.7-code            reasoning_content non-empty, reasoning_tokens 26
+	//	kimi-k2.7-code-highspeed  reasoning_content non-empty, reasoning_tokens 28
+	//
+	// The distinction matters because the mark drives routing now. What was known
+	// before was only that they refuse `thinking:{"type":"disabled"}` — `invalid
+	// thinking: only type=enabled is allowed for this model` — and "cannot be
+	// switched off" is not the same claim as "reasons on a request that asked for
+	// nothing". MiniMax-M3 had just demonstrated the gap between those two by
+	// documenting an adaptive switch and then returning no reasoning at all.
+	//
+	// On the Chat northbound face the answer comes back as reasoning_content and
+	// is rendered; on the Responses and Messages faces it cannot be, and the
+	// router drops these targets there before the reservation.
+	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
+		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}
 	return entries
 }

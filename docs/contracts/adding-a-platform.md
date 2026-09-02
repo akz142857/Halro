@@ -1,5 +1,10 @@
 # Adding a provider platform
 
+Its sibling is `adding-a-northbound-endpoint.md`, for an API face Halro serves
+rather than one it calls. The same word means opposite things in the two: a
+**provider profile** is a face Halro speaks to, a **northbound profile** is a
+face Halro speaks for.
+
 Normative checklist for adding a Provider Profile. Every step names the file it
 belongs in and the test that fails if it is skipped, so this document is a map
 rather than a memory aid — nothing here has to be remembered, only found.

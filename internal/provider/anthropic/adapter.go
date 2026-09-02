@@ -537,7 +537,7 @@ func portableUsage(usage anthropicapi.Usage) *openaiapi.Usage {
 		CacheWriteTokens: usage.CacheCreationInputTokens,
 	}
 	portable.SetCachedPromptTokens(usage.CacheReadInputTokens)
-	portable.SetReasoningTokens(usage.ThinkingTokens)
+	portable.SetReasoningTokens(usage.ReasoningTokens())
 	return portable
 }
 
@@ -550,7 +550,7 @@ func semanticUsage(usage anthropicapi.Usage) *semantic.Usage {
 		CachedInputTokens:     usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
 		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ThinkingTokens,
+		ReasoningTokens:       usage.ReasoningTokens(),
 		TotalTokens:           prompt + usage.OutputTokens,
 		Source:                semantic.UsageProviderReported,
 	}
@@ -811,12 +811,27 @@ func decodeHTTPError(response *http.Response) error {
 	// 404, a 409 and a 413 all land on it looking like a refused body. And a
 	// missing type is what an HTML error page from something in front of the API
 	// decodes to, which is not Anthropic saying anything at all.
+	//
+	// The type is narrowed before either use. This adapter was the last one
+	// carrying an upstream-chosen identifier through unbounded — the OpenAI,
+	// Gemini and both Bedrock adapters all narrow theirs — and it is the one
+	// serving profiles whose upstreams do not honour Anthropic's error schema:
+	// Kimi's Anthropic route answers 400 in Anthropic's envelope and 401 and 429
+	// in OpenAI's. An identifier is short and made of the characters identifiers
+	// are made of; a value that is neither is not an identifier, and it reaches a
+	// structured log attribute.
+	//
+	// Narrowing before the verdict rather than after matters: a 400 whose type is
+	// a wall of text is not the upstream naming a refusal, and reading the raw
+	// value here would have manufactured RefusalInvalid from bytes the error then
+	// refused to carry.
+	code := provider.SafeProviderIdentifier(envelope.Error.Type)
 	var refusal provider.RefusalKind
 	if status := response.StatusCode; (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) &&
-		strings.TrimSpace(envelope.Error.Type) != "" {
+		code != "" {
 		refusal = provider.RefusalInvalid
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: envelope.Error.Type, Refusal: refusal, RetryAfter: parseRetryAfter(response.Header)}
+	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: code, Refusal: refusal, RetryAfter: parseRetryAfter(response.Header)}
 }
 
 func upstreamRequestID(header http.Header) string {
@@ -887,7 +902,25 @@ func updateUsage(current *anthropicapi.Usage, event anthropicapi.RawStreamEvent)
 				current.CacheCreationInputTokens = value.Usage.CacheCreationInputTokens
 			}
 			current.OutputTokens = value.Usage.OutputTokens
-			current.ThinkingTokens = value.Usage.ThinkingTokens
+			// The thinking span, in whichever of the two spellings the upstream
+			// uses — which one it is is a property of the upstream, and this
+			// accumulator serves several. Reading only the flat member reported
+			// every Kimi reasoning span as zero.
+			//
+			// Guarded like the cache tiers above, and for the same reason rather
+			// than for symmetry: message_start copies the whole usage struct, so
+			// an upstream that reports the span there and omits it from the delta
+			// had it overwritten with zero by the very lines that were meant to
+			// carry it. The comment that stood here said the spellings were
+			// carried forward; the code replaced them.
+			//
+			// Both members move together so the two spellings can never come from
+			// different events, which would leave a usage record no upstream ever
+			// sent.
+			if value.Usage.ReasoningTokens() != 0 {
+				current.ThinkingTokens = value.Usage.ThinkingTokens
+				current.OutputTokensDetails = value.Usage.OutputTokensDetails
+			}
 		}
 	}
 	return current

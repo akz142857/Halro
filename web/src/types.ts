@@ -382,7 +382,8 @@ export type AccessSurface =
   | "bedrock-runtime"
   | "bedrock-agent-runtime"
   | "bedrock-mantle"
-  | "minimax-api";
+  | "minimax-api"
+  | "kimi-api";
 
 export type CredentialScheme =
   | "bearer.static"
@@ -403,6 +404,7 @@ export type ProviderType =
   | "gemini"
   | "bedrock"
   | "minimax"
+  | "kimi"
   | "openai_compatible";
 
 export interface ProviderCapabilities {

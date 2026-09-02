@@ -1333,3 +1333,64 @@ data: {... "choices":[], "usage":{"prompt_tokens":165,"completion_tokens":2} ...
 未证实的能力一律不声明，未证实的行为一律按最坏假设处理。这意味着**拿到密钥之后，
 片 1 的结果只会让这套实现变宽，不会让它变错**——除非第 5 条（M2.x 拒绝 `disabled`）成立，
 那一条会让 M2.x 的每个请求都失败，而且是响亮地失败。这是方案里选定的那一侧。
+
+## Responses 面实测：M2 线每次调用都是 502（2026-09-02，国际站真实账号）
+
+这条不是 MiniMax 适配自己发现的，是 Kimi 那边的同型缺陷倒查过来的。Kimi 的
+`kimi.responses.v1` 因为「上游不问自答推理、解码器承载不了」被收起（见
+`docs/prd/kimi-adaptation-plan.zh-CN.md` §14）。MiniMax 的 Responses 面在纸面上是同一条链，
+而两个 MiniMax 冒烟测试从来没有驱动过 `/v1/responses` 并把**输出**回读过 Halro 的 mapper
+—— 正是让 Kimi 那条 profile 发出去的同一个盲区。
+
+### 测了什么
+
+| 请求 | 有 `reasoning` 输出项吗 | output tokens |
+|---|---|---|
+| `MiniMax-M3`，不带推理成员 | 无 | 2 |
+| `MiniMax-M3` + `reasoning.effort=none` | 无（回显 `"none"`） | 3 |
+| `MiniMax-M3`，多步应用题 | **无** —— 推导过程直接写在正文里 | 112 |
+| `MiniMax-M2.1`，不带推理成员 | **有** | 44 |
+| `MiniMax-M2.1` + `reasoning.effort=none` | **有**，毫无变化 | 52 |
+
+M2 那两行是本月第三次遇到同一个形态：**成员被接受、被回显、被忽略**。MiniMax 在这一面的
+效力阶梯里文档化了 `none`，上游把它原样回显然后照样推理。Kimi 的 Responses 面对 `thinking`
+是一模一样的做法。
+
+### 后果比 Kimi 的 k2.7-code 更重
+
+把抓到的响应体喂给真正的解码器，不是推断：
+
+```
+M3 nothing asked      decodes cleanly
+M2.1 nothing asked    DecodeProviderResponse -> provider Responses output item is unsupported
+M2.1 effort none      DecodeProviderResponse -> provider Responses output item is unsupported
+```
+
+这个拒绝发生在**上游侧**解码器里，在任何北向渲染器之前，所以三个北向面全部 502 且上游已
+计费 —— 不像 Kimi 的 k2.7-code 只影响渲染不了 reasoning 的那两个端点。
+
+### 改了什么
+
+七个 M2 标识符从模型目录的 Responses profile 上移除：`MiniMax-M2.7`、
+`MiniMax-M2.7-highspeed`、`MiniMax-M2.5`、`MiniMax-M2.5-highspeed`、`MiniMax-M2.1`、
+`MiniMax-M2.1-highspeed`、`MiniMax-M2`。它们的 Chat 与 Anthropic 条目不动，`MiniMax-M3`
+三条面全留。想要的运营者仍可以走 `operator_declared`。
+
+**没有收起整条 profile**，因为 M3 在这一面上是好的 —— 这正是「事实属于 (profile, model)
+而不是 profile」的那个粒度，`modelcatalog.Entry.ReasonsUnasked` 就是为它加的。
+
+### 两条老实话
+
+- **只驱动了 `MiniMax-M2.1`。** 其余六个是同一条线，落在 MiniMax 自己文档写明的
+  「M2.x 无法关闭思考」（§见本文档 M2 能力一节）之下，按 fail-closed 一并移除，而不是各自
+  有证据。要缩回来的话，每个模型一条不带推理成员的调用就能确认。
+- **M3 的开关是 `adaptive`**，两次阴性探测（其中一次专门用多步应用题去逼它）是证据，不是
+  证明。如果哪天它在别的输入上返回了 reasoning 项，
+  `TestNoEndpointIsServedByATargetThatReasonsUnasked` 会接住。
+
+### 顺带补上的守卫缺口
+
+那个守卫是 Kimi 那一轮刚写的，这次测量暴露了它的建模缺口：它只问「**北向端点**能不能渲染
+reasoning」，不问「**上游 profile 的解码器**能不能承载它」。按原来的写法，它会说
+`/v1/chat/completions` 在这里没事 —— 那个端点确实渲染得了 reasoning，但它根本轮不到。
+现在先问上游解码器，任何一个「解码器拒绝 + 目标不问自答」的组合都会被指名，且不区分端点。

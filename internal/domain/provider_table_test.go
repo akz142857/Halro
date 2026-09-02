@@ -279,6 +279,13 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		ProfileMiniMaxAnthropicMessages: "https://api.minimax.io",
 		ProfileMiniMaxChat:              "https://api.minimax.io",
 		ProfileMiniMaxResponses:         "https://api.minimax.io",
+		// Same shape, same reason: api.moonshot.ai is the international host and
+		// mainland accounts reach the identical contract at api.moonshot.cn.
+		// Kimi's own error documentation says a key from one platform answers 401
+		// on the other, so the two are not interchangeable either.
+		ProfileKimiChat:              "https://api.moonshot.ai",
+		ProfileKimiAnthropicMessages: "https://api.moonshot.ai",
+		ProfileKimiResponses:         "https://api.moonshot.ai",
 	}
 	for _, profile := range AllProviderProfiles() {
 		expected, listed := want[profile.ID]

@@ -216,6 +216,26 @@ type Usage struct {
 	// through prompt_tokens_details.cached_tokens alone.
 	PromptCacheHitTokens  int64 `json:"prompt_cache_hit_tokens,omitempty"`
 	PromptCacheMissTokens int64 `json:"prompt_cache_miss_tokens,omitempty"`
+	// KimiCachedTokens is Kimi's second spelling of the cache-read tier: a
+	// sibling of prompt_tokens rather than a member of prompt_tokens_details.
+	// Kimi's published usage schema names only this one, which is why it is
+	// decoded at all.
+	//
+	// Measured against a real mainland account on 2026-09-01, and the measurement
+	// is why this stays a fallback rather than a second source: a repeated
+	// 1384-token prefix came back reporting `"cached_tokens":1280` *and*
+	// `"prompt_tokens_details":{"cached_tokens":1280}`, with prompt_tokens
+	// unchanged at 1384. So the tier is inclusive of the prompt the way OpenAI's
+	// is, and the standard nesting is present on the unary path — where both
+	// appear, CachedPromptTokens takes the details object and this field is never
+	// consulted.
+	//
+	// It is kept because the streaming path has not been measured with a cache
+	// hit: the stream probes ran on prompts below Kimi's 256-token caching
+	// threshold, so which spelling a cached stream chunk carries is unestablished.
+	// Reading a hit as zero settles the hit span at the miss rate, and on
+	// kimi-k3's mainland table those rates differ by a factor of ten.
+	KimiCachedTokens int64 `json:"cached_tokens,omitempty"`
 }
 
 type PromptTokenDetails struct {
@@ -229,15 +249,20 @@ type CompletionTokenDetails struct {
 }
 
 // CachedPromptTokens reports the cache-read tier without the nil dance, from
-// whichever of the two spellings this wire format carries it in. OpenAI's
-// details object wins when both are present, because it is the one this struct
-// also renders; DeepSeek's counter is the fallback rather than an alternative,
-// so no upstream can report the tier twice and have it counted twice.
+// whichever of the three spellings this wire format carries it in. OpenAI's
+// details object wins when several are present, because it is the one this
+// struct also renders; DeepSeek's and Kimi's counters are fallbacks rather than
+// alternatives, so no upstream can report the tier twice and have it counted
+// twice. The order among the fallbacks does not matter — no upstream sets more
+// than one — but having one is what keeps the tier from being summed.
 func (u Usage) CachedPromptTokens() int64 {
 	if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens != 0 {
 		return u.PromptTokensDetails.CachedTokens
 	}
-	return u.PromptCacheHitTokens
+	if u.PromptCacheHitTokens != 0 {
+		return u.PromptCacheHitTokens
+	}
+	return u.KimiCachedTokens
 }
 
 // ReasoningTokens reports the reasoning span of the completion, which providers

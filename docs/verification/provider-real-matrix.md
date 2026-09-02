@@ -150,6 +150,200 @@ agree, the rate limits, and whether `base_resp` behaves the same way.
 `docs/prd/minimax-adaptation-plan.zh-CN.md` §7 carries the assumptions that are
 still open, each with the assertion that would close it.
 
+### `/v1/responses` measured, and the M2 line does have Kimi's defect (2026-09-02)
+
+Raised by the Kimi work rather than by MiniMax: `minimax.responses.v1` might have
+the pairing that got `kimi.responses.v1` withheld, and neither MiniMax smoke had
+ever driven that endpoint and read the *output* back through Halro's own mapper —
+the same blind spot that let Kimi's row ship. Five calls on the international
+host settled it, and the answer splits by model.
+
+| request | `reasoning` output item | output tokens |
+|---|---|---|
+| `MiniMax-M3`, nothing asked | no | 2 |
+| `MiniMax-M3` + `reasoning.effort=none` | no (echoed back as `"none"`) | 3 |
+| `MiniMax-M3`, a multi-step word problem | **no** — the working is inside the text | 112 |
+| `MiniMax-M2.1`, nothing asked | **yes** | 44 |
+| `MiniMax-M2.1` + `reasoning.effort=none` | **yes**, unchanged | 52 |
+
+The M2 rows are the third instance this month of one shape: a documented switch
+**accepted, echoed back, and ignored**. MiniMax documents `none` on this face's
+effort ladder; the upstream returns it in the response and reasons anyway. Kimi's
+Responses face does the same with `thinking`.
+
+The consequence is worse than Kimi's k2.7-code gap and was verified by running
+the captured bodies through the real decoder, not by reading:
+
+```
+M3 nothing asked      decodes cleanly
+M2.1 nothing asked    DecodeProviderResponse -> provider Responses output item is unsupported
+M2.1 effort none      DecodeProviderResponse -> provider Responses output item is unsupported
+```
+
+That refusal is in the **provider-side** decoder, upstream of every northbound
+renderer, so all three faces answer 502 with the call already paid — not just the
+two that cannot render a reasoning part. The seven M2 identifiers are therefore
+gone from the Responses profile in the model catalogue; they keep their Chat and
+Anthropic entries, and `MiniMax-M3` keeps all three. An operator who wants one
+anyway still has `operator_declared`.
+
+Two honest limits on that. Only `MiniMax-M2.1` was driven; the other six are the
+same line under MiniMax's own documented constraint that M2.x cannot be told to
+stop thinking, and are removed on the fail-closed reading rather than on
+evidence of their own. And M3's switch is `adaptive`, so two negative probes —
+one of them built to provoke multi-step work — are evidence, not proof.
+
+The guard this exposed a hole in is
+`TestNoEndpointIsServedByATargetThatReasonsUnasked`. It asked only whether the
+*endpoint* could render reasoning, and would have called `/v1/chat/completions`
+safe here; that endpoint can render it and never gets the chance. It now asks the
+provider profile's own decoder first.
+
+## Kimi: measured on a mainland account (2026-09-01)
+
+Kimi (Moonshot AI) was adapted from its published OpenAPI documents and then
+measured against a real `platform.kimi.com` account. **This is adaptation
+evidence, not GA matrix evidence**: Kimi is Beta on the same terms as Gemini,
+Bedrock and MiniMax, so it never gates a release, and there is no row in the
+runner yet.
+
+Three findings changed code, and all three are recorded with their measurements
+in `docs/prd/kimi-adaptation-plan.zh-CN.md` §10:
+
+- The Anthropic Messages face is usable through the portable path. It had been
+  dropped on the strength of Kimi's OpenAPI, which lists no `thinking` member;
+  the member is accepted, and a request carrying `{"type":"disabled"}` comes back
+  with no thinking block. The profile was restored.
+- Kimi's single output bound counts reasoning: `max_completion_tokens: 48` on
+  kimi-k3 spent 45 on reasoning and returned an empty answer. An answer-only
+  bound is now routed away rather than renamed into it.
+- The Anthropic face reports its thinking span under `output_tokens_details`,
+  which the decoder did not read. Every Kimi reasoning span was recorded as zero.
+
+**Any Kimi smoke has to pace itself.** A first pass firing 26 probes back to back
+lost 20 of them to `rate_limit_reached_error`. The passes that produced the
+evidence ran serially at one request every 22 seconds. The limit does send
+`retry-after: 1` (and Kimi's own `x-retry-after`), which an earlier version of
+this section got wrong: the mainland 429s all landed in the pass that captured no
+response headers, and "not captured" was written up as "not sent".
+
+**The international host is measured too** (2026-09-01, its own key — the two
+platforms do not share credentials). `GET /v1/models` returns the same four model
+ids with every capability field identical, and Chat usage, the pinned-temperature
+refusal, the Anthropic face with thinking disabled, and Responses usage all match
+the mainland shapes field for field. The "one contract, two hosts" conclusion is
+now established at runtime and not only by comparing the two OpenAPI documents.
+
+**tool_choice took three versions and six probes** (2026-09-01 and 2026-09-02),
+and it is the clearest case here of documentation, an error message, and the
+truth being three different things. Kimi's parameter reference says the K2.x line
+does not support `required`, so the first version keyed on the model. The
+upstream's own error says `tool_choice 'required' is incompatible with thinking
+enabled`, so the second keyed on the reasoning switch. Both were wrong, in
+opposite rows:
+
+| model | thinking | tool_choice | result |
+|---|---|---|---|
+| kimi-k3 | on | `required` | 200, tool call **and** reasoning span together |
+| kimi-k3 | on | named function | 400, `'specified' is incompatible with thinking enabled` |
+| kimi-k2.6 | off | `required` | 200, tool call |
+| kimi-k2.6 | on | `required` | 400, `'required' is incompatible with thinking enabled` |
+| kimi-k2.6 | on | named function | 400, `'specified' is incompatible with thinking enabled` |
+
+The two forms are two rules, which is the part nothing predicted. `required`
+conflicts with reasoning on the K2.x line and not on kimi-k3; a **named function**
+conflicts with reasoning on every model, kimi-k3 included. Same model, same depth,
+one request answers 200 and the other 400.
+
+That split is also what let half of it move before the reservation: a named
+function is a property of the profile, so it is routed away by field rule, while
+`required` stays a per-model refusal in the renderer because expressing it by
+profile would cost kimi-k3 the request it serves.
+
+One cell of the allowing side stays inference, and a low-risk one: a named
+function with thinking **off** was not driven. The upstream's error names thinking
+as the condition, and `required` with thinking off is measured at 200.
+
+The Anthropic route's 429 was measured by deliberately tripping the organisation
+limit, with the operator's consent: it answers in the **OpenAI** envelope, so that
+endpoint uses Anthropic's shape for 400 and OpenAI's for 401 and 429. Its 503 is
+still unmeasured and cannot be arranged; what stands in for it is
+`TestAnthropicErrorDecodingToleratesShapesItHasNotSeen`, which pins Halro's own
+tolerance — classify by status, never fail on an unparseable body, never carry
+provider response bytes into the error — and is named so it is not mistaken for
+evidence about Kimi.
+
+What *was* established without a credential, and it is worth separating from the
+guesses:
+
+- Both hosts exist, both authenticate with a bearer token, and all three routes
+  answer 401 with `{"error":{"message":"Incorrect API key provided","type":
+  "incorrect_api_key_error"}}` — `GET /v1/models`, `POST /v1/chat/completions`
+  and `POST /anthropic/v1/messages`, on `api.moonshot.cn` and `api.moonshot.ai`
+  alike.
+- The two regions serve one contract. The published `openapi.json` documents were
+  compared structurally: identical path sets, identical schema name sets,
+  identical request property sets on the chat, responses and messages request
+  schemas, and one differing `servers[0].url`. Prices and currencies differ; the
+  contract does not.
+- The Anthropic-shaped route answers 401 in the *OpenAI* error shape, and its
+  OpenAPI declares the Anthropic shape for 400 and 500. Error decoding on that
+  face has to tolerate both.
+
+The three assumptions that moved money are all closed. Chat's `prompt_tokens`
+includes `cached_tokens` and Kimi also sends the standard
+`prompt_tokens_details.cached_tokens`; a stream reports usage with and without
+`stream_options`, and the option Halro already sends produces the standard
+top-level shape; and `max_completion_tokens` counts reasoning, which is the
+finding that changed the routing rule. That question was asked and answered. Kimi's Chat face accepts
+`thinking:{"type":"disabled"}` on kimi-k3 and kimi-k2.6, and both then stop
+reasoning — so kimi-k3's documentation and its own `/v1/models` metadata
+(`supports_thinking_type: "only"`) are both wrong about it, the fifth place
+Kimi's documentation did not survive contact. The renderer now follows the house
+rule the DeepSeek and MiniMax renderers already follow — unspecified means off —
+and the routing rules that had taken Kimi off two northbound endpoints are gone.
+kimi-k2.7-code really cannot be switched off (`invalid thinking: only
+type=enabled is allowed for this model`) and keeps two after-reservation
+refusals of its own. See `docs/prd/kimi-adaptation-plan.zh-CN.md` §13.
+
+One assumption remains open: what the
+Anthropic face answers on 503. It cannot be arranged deliberately and is recorded
+as unmeasured rather than inferred.
+
+One assumption was closed the wrong way and is recorded here because the
+measurement above is what makes the correction readable. Responses usage was
+measured and the Responses *output* was not read back through Halro's own mapper:
+Kimi's `/v1/responses` reasons by default and its effort ladder has no off value,
+so every call returns a `reasoning` output item, and the canonical mapper refuses
+one rather than dropping it — the verb three separate documents got wrong. That
+made `kimi.responses.v1` fail every request after the upstream had been paid, and
+the profile is withheld.
+
+**Both off switches were then tried on that face (2026-09-02) and neither works.**
+`reasoning.effort="none"` is refused — `reasoning.effort value "none" is not
+supported` — and `thinking:{"type":"disabled"}`, the undocumented member that does
+switch reasoning off on Kimi's *Messages* face, is accepted here and ignored: 200,
+with the reasoning item still returned. One upstream, one key, one model, two
+routes, opposite behaviour for the same member. Extrapolating from the other face
+would have shipped a 200, a bill, and a caller who believed reasoning was off, so
+the withholding is now a measured conclusion rather than a precaution. The control
+run is worth recording on its own: a 64-token budget came back as 61 reasoning
+tokens, one `reasoning` output item, and no message item at all.
+
+Two smaller things fell out of the same run. Kimi's Responses face does **not**
+reject unknown members — `thinking` is absent from its schema and still answered
+200 — which closes the open question of whether the unconditional `store:false`
+this renderer emits would have been a 400 on every call. And its `input_tokens`
+**includes** the cached span (89 of 89 cached on the probe), the opposite of the
+Messages face.
+
+No northbound endpoint lost Kimi: the Chat and Anthropic profiles still serve all
+three. See `docs/prd/kimi-adaptation-plan.zh-CN.md` §14.5.
+
+`docs/prd/kimi-adaptation-plan.zh-CN.md` §10.2 carries the closed list item by
+item, §10.3 the four places Kimi's own documentation was wrong, and §11 the
+international round.
+
 ## DeepSeek: the two extra assertions passed on a real account (2026-08-20)
 
 Run on `13d55ff` against `https://api.deepseek.com` with `deepseek-v4-flash`,

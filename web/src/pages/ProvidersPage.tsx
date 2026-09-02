@@ -44,8 +44,23 @@ import { useIsReadOnly } from "../session";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const providerTypes: ProviderType[] = [
-  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "openai_compatible",
+  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "openai_compatible",
 ];
+
+// regionHintKey names the warning a provider type needs on its endpoint field.
+// Two platforms serve one contract from two regional hosts whose keys are not
+// interchangeable, so the endpoint is the field an operator gets wrong and the
+// failure it produces looks like a credential problem.
+function regionHintKey(type: ProviderType): string | null {
+  switch (type) {
+    case "minimax":
+      return "providers.minimaxRegionHint";
+    case "kimi":
+      return "providers.kimiRegionHint";
+    default:
+      return null;
+  }
+}
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
@@ -556,7 +571,7 @@ function CredentialForm({
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
-        <Field label={t("providers.boundURL")} hint={type === "minimax" ? t("providers.minimaxRegionHint") : t("providers.boundURLHint")}>
+        <Field label={t("providers.boundURL")} hint={regionHintKey(type) ? t(regionHintKey(type)!) : t("providers.boundURLHint")}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
         <Field
@@ -805,10 +820,11 @@ function ProviderForm({
           <Field label={t("providers.baseURL")} hint={
             credentialBaseURLMismatch
               ? t("providers.baseURLBoundHint", { credential: credentialBoundURL })
-              // MiniMax splits by account region and the two addresses differ by one
-              // letter. Everything else about the contract is identical, so the
-              // wrong one fails as an authentication error and reads as a bad key.
-              : type === "minimax" ? t("providers.minimaxRegionHint") : undefined
+              // MiniMax and Kimi both split by account region, and in both cases the
+              // two addresses differ by a couple of letters while the contract is
+              // identical. The wrong one fails as an authentication error, which
+              // reads as a bad key rather than as a wrong host.
+              : regionHintKey(type) ? t(regionHintKey(type)!) : undefined
           }>
             <input autoComplete="off" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
           </Field>

@@ -163,7 +163,9 @@ and why a merge conflict in it is resolved by rebuilding rather than by hand.
 
 Full detail: `.github/copilot-instructions.md` (review checklist used for this repo),
 `docs/architecture/threat-model.md`, `docs/contracts/gateway-correctness.md`,
-`docs/contracts/audit-integrity.md`.
+`docs/contracts/audit-integrity.md`. Two normative checklists sit beside them and
+are siblings: `docs/contracts/adding-a-platform.md` for an upstream Halro calls,
+`docs/contracts/adding-a-northbound-endpoint.md` for an API face Halro serves.
 
 ## Verify, never assume
 

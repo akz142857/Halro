@@ -238,6 +238,33 @@ type Entry struct {
 	// Conflicts lists capability names sources disagreed about. Each is forced
 	// off in Capabilities.
 	Conflicts []string
+	// ReasonsUnasked says this target produces reasoning on a request that never
+	// asked for it, and cannot be told not to.
+	//
+	// It is not a capability and deliberately not in ProviderCapabilities. Every
+	// member of that struct answers "may this be turned on", is offered to an
+	// operator as a checkbox, and is bounded by a connection ceiling that has to
+	// contain it. This answers "what arrives whether or not anyone asked", which
+	// an operator cannot grant and a ceiling cannot bound — putting it there
+	// would invert the containment and add a checkbox meaning the opposite of
+	// every other one.
+	//
+	// It is per entry rather than per profile because it is both: Kimi's
+	// Responses face reasons on every model it serves, and on its Chat face only
+	// the k2.7-code line does. An entry is the one place keyed by both.
+	//
+	// What it is for is the pairing named in
+	// docs/contracts/adding-a-northbound-endpoint.md as the third step with no
+	// mechanical guard: an endpoint that cannot render a content kind must not be
+	// served by a target that produces it unasked. That pairing caused both
+	// production incidents this repository has had — DeepSeek 2026-08-18 and Kimi
+	// 2026-09-01 — and each time it surfaced as a 502 with the upstream already
+	// paid. TestNoEndpointIsServedByATargetThatReasonsUnasked holds it.
+	//
+	// It does not yet reach the router: doing that means threading it through the
+	// deployment capability snapshot, which is durable state. Until then the
+	// guard is a build-time one, and the residue it tolerates is named in it.
+	ReasonsUnasked bool
 }
 
 // Unknown returns the fail-closed entry for a model no source covers: zero

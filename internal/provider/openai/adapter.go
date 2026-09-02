@@ -34,7 +34,16 @@ type Adapter struct {
 	// miniMax turns on two things this adapter does for no other upstream: the
 	// dialect body in encodeChatRequest, and the base_resp guard that catches a
 	// failure MiniMax reports inside a 200.
-	miniMax             bool
+	miniMax bool
+	// kimi turns on the dialect body in encodeChatRequest and nothing else. It
+	// deliberately does not turn on a 200-with-an-error guard the way miniMax
+	// does: no Kimi document describes that behaviour, and three credential-free
+	// probes against both hosts on 2026-09-01 answered a proper 401 on
+	// /v1/models, /v1/chat/completions and /anthropic/v1/messages. Adding a guard
+	// for a practice nothing establishes would be guessing in the expensive
+	// direction — see the verification plan in
+	// docs/prd/kimi-adaptation-plan.zh-CN.md for the check that would settle it.
+	kimi                bool
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
@@ -128,6 +137,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
 		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
+		kimi:                options.ProviderType == string(domain.ProviderKimi),
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
@@ -148,6 +158,23 @@ func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest) ([]
 	switch {
 	case a.deepSeek:
 		body, err := compatibility.RenderDeepSeekChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	case a.kimi:
+		// Kimi's member list is smaller than OpenAI's in a direction no other
+		// upstream here takes: temperature, top_p and n are not request members
+		// at all, and its parameter reference pins each to one value per model
+		// and answers any other with an error. Marshalling the OpenAI struct
+		// straight out sends three members that fail the request.
+		//
+		// The reasoning switch is the other half, and it is per model rather than
+		// per connection: kimi-k3 reads a top-level reasoning_effort, the K2.x
+		// line reads `thinking`, and sending one spelling to a model that reads
+		// the other is how a request that asked for a depth gets billed for
+		// Kimi's default instead.
+		body, err := compatibility.RenderKimiChatRequest(request)
 		if err != nil {
 			return nil, err
 		}

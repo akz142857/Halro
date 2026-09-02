@@ -204,10 +204,17 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 // same treatment as every other capability no probe reaches.
 func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 	switch profile {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
 		return "", false
 	case domain.ProfileDeepSeekChat:
 		return shallowestEffort(compatibility.DeepSeekEffortLevels), true
+	case domain.ProfileKimiChat:
+		// Kimi's ladder is low/high/max, so the OpenAI default of "minimal" was
+		// refused while the request was still being rendered — the same failure
+		// DeepSeek had, on the second platform to arrive with a shorter ladder.
+		// The case above was not enough on its own, which is why the test beside
+		// this function now walks the profile table instead of naming profiles.
+		return shallowestEffort(compatibility.KimiEffortLevels), true
 	default:
 		return shallowestEffort(openaiapi.ReasoningEffortLevels), true
 	}

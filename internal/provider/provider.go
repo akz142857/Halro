@@ -408,6 +408,19 @@ type Target struct {
 	Strategy                    string
 	Capabilities                Capabilities
 	CapabilityEvidence          domain.CapabilityEvidenceSet
+	// ReasonsUnasked says this target returns reasoning on a request that never
+	// asked for it and cannot be told not to. It is read from the model
+	// catalogue when the registry is built, not stored on the deployment: it is
+	// a fact about the upstream model that a Halro upgrade can learn, and it can
+	// only ever remove a route, never widen one, so pinning it at save time
+	// would mean an operator had to re-save every deployment to be protected by
+	// something they never declared.
+	//
+	// It is not a member of Capabilities, and that is the point of it being
+	// here. Everything in that struct answers "may this be turned on", is a
+	// checkbox an operator ticks, and is bounded by a connection ceiling that has
+	// to contain it. This answers "what arrives whether or not anyone asked".
+	ReasonsUnasked bool
 	// AllowedAnthropicBetas is the set of anthropic-beta tokens this connection
 	// may forward. Routing checks a request's tokens against it before any
 	// provider work, so an unaccepted beta fails closed rather than reaching the

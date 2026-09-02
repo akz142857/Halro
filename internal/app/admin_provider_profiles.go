@@ -108,8 +108,18 @@ func buildProviderProfilesView(region string) providerProfilesView {
 		if profile.Withheld {
 			continue
 		}
+		// A withheld peer is dropped for the same reason the withheld profile
+		// itself is: this list tells an operator which other implementations one
+		// credential opens, and the write path refuses to bind a withheld one. A
+		// group whose members are all offered is unaffected; kimi.responses.v1 is
+		// the first profile withheld out of the middle of an offered group, and
+		// listing it here would have promised a Kimi credential coverage the save
+		// then rejects.
 		combines := make([]domain.ProviderProfileID, 0)
 		for _, peer := range domain.ConnectionProfiles(profile.Type, profile.ID)[1:] {
+			if peer.Withheld {
+				continue
+			}
 			combines = append(combines, peer.ID)
 		}
 		profilesByType[profile.Type] = append(profilesByType[profile.Type], providerProfileView{

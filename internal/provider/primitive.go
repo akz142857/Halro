@@ -60,6 +60,14 @@ const (
 	// operation, not that every constant is bound. See the Responses capability
 	// set in internal/domain/provider_table.go for why streaming is absent.
 	PrimitiveMiniMaxResponses Primitive = "minimax.responses"
+	// Kimi's five, the same five shapes as MiniMax's and for the same reason: the
+	// Responses profile serves the unary operation only, so there is no
+	// kimi.responses.stream constant to bind.
+	PrimitiveKimiChat                    Primitive = "kimi.chat-completions"
+	PrimitiveKimiChatStream              Primitive = "kimi.chat-completions.stream"
+	PrimitiveKimiAnthropicMessages       Primitive = "kimi.anthropic.messages"
+	PrimitiveKimiAnthropicMessagesStream Primitive = "kimi.anthropic.messages.stream"
+	PrimitiveKimiResponses               Primitive = "kimi.responses"
 
 	// PrimitiveHalroLocalFiles is a file operation with no southbound call at
 	// all: Halro stores the bytes and the upstream is never told they exist.
@@ -404,6 +412,12 @@ var semanticGenerationPrimitives = map[Primitive]bool{
 	// is not a SemanticGenerator fails
 	// TestEveryReachableProfileReachesTheNetworkWhenCalled by name.
 	PrimitiveMiniMaxResponses: true,
+	// Kimi's Responses profile is served by the same adapter branch as the two
+	// above, and is declared here for the same reason. This is one of the three
+	// steps docs/contracts/adding-a-platform.md names as having no mechanical
+	// guard: leaving it out is silent, and the cost is a lossier translation
+	// that the profile's field rules do not declare.
+	PrimitiveKimiResponses: true,
 }
 
 // IsSemanticGenerationPrimitive exposes the declaration above so a caller

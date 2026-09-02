@@ -114,9 +114,24 @@ func TestAdminProviderProfilesServesTheConnectionLevelSets(t *testing.T) {
 			if len(assignment.Unservable) != 0 || len(assignment.Ambiguous) != 0 {
 				t.Errorf("%s offers capabilities the save refuses: %+v", profile.ID, assignment)
 			}
-			peers := domain.ConnectionProfiles(providerType.Type, profile.ID)
-			if len(profile.CombinesWith) != len(peers)-1 {
-				t.Errorf("%s combines with %d profiles, the table says %d", profile.ID, len(profile.CombinesWith), len(peers)-1)
+			// The peers this credential also opens, which is the table's answer
+			// minus the ones this build does not offer. Compared by identity
+			// rather than by count, because a withheld peer dropped and an
+			// offered peer forgotten are the same number and opposite mistakes.
+			offered := make([]domain.ProviderProfileID, 0)
+			for _, peer := range domain.ConnectionProfiles(providerType.Type, profile.ID)[1:] {
+				if peer.Withheld {
+					continue
+				}
+				offered = append(offered, peer.ID)
+			}
+			if !slices.Equal(profile.CombinesWith, offered) {
+				t.Errorf("%s combines with %v, the offered part of the table says %v", profile.ID, profile.CombinesWith, offered)
+			}
+			for _, peer := range profile.CombinesWith {
+				if domain.IsWithheldProfile(peer) {
+					t.Errorf("%s offers a credential that claims to cover %s, which every write path refuses", profile.ID, peer)
+				}
 			}
 		}
 	}

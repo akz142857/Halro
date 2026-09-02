@@ -336,6 +336,91 @@ var profileTable = []profileRow{
 		BaseURLTemplate: "https://api.minimax.io",
 		Defaults:        minimaxResponsesSet, Ceiling: minimaxResponsesSet,
 	},
+	{
+		// The three Kimi rows share one surface and one scheme, so they form a
+		// single connection group and one key binds all three.
+		//
+		// The Chat row leads, which is the opposite of MiniMax's choice and for a
+		// reason MiniMax did not have: Kimi's Responses and Messages schemas pin
+		// `model` to kimi-k3 alone, so a connection defaulting to either of them
+		// reaches one of the four published models. Chat is the only face that
+		// reaches all four. The cost is real and is recorded here rather than
+		// hidden — Chat is also the only face that reports neither a cache-write
+		// tier nor reasoning tokens, so the default connection is the least
+		// observable one. Neither gap moves money: Kimi publishes no cache-write
+		// rate, and reasoning tokens are a display split of output tokens.
+		//
+		// The endpoint prefill is the international host. Mainland accounts live
+		// on https://api.moonshot.cn with the same paths, the same headers and
+		// the same bodies; only the address differs, and keys are not
+		// interchangeable between the two — Kimi's own error page says a mixed
+		// pair answers 401.
+		ID: ProfileKimiChat, Type: ProviderKimi,
+		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.moonshot.ai",
+		Defaults:        kimiChatSet, Ceiling: kimiChatSet,
+	},
+	{
+		ID: ProfileKimiAnthropicMessages, Type: ProviderKimi,
+		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.moonshot.ai",
+		Defaults:        kimiAnthropicSet, Ceiling: kimiAnthropicSet,
+	},
+	{
+		// Withheld, and the first row withheld out of the middle of an offered
+		// connection group rather than as a whole group of its own. What it
+		// scopes is narrow on purpose: a Kimi connection still carries Chat and
+		// Anthropic Messages, so no northbound endpoint loses Kimi and no public
+		// alias changes meaning. Only this one upstream face is unreachable.
+		//
+		// The reason is a pairing rather than a missing feature, and it is the
+		// shape docs/contracts/adding-a-northbound-endpoint.md names as the third
+		// step with no mechanical guard: what this face returns unasked, the
+		// mapper that reads it cannot represent.
+		//
+		//	Kimi's /v1/responses reasons by default — its reasoning.effort ladder
+		//	is low/high/max with no off value — and the portable renderer sends
+		//	no reasoning member at all, because this profile's field rules refuse
+		//	reasoning_effort at every value. Kimi therefore reasons on every
+		//	request, returns a `reasoning` output item, and
+		//	compatibility/openai.DecodeProviderResponse has no case for one: it
+		//	returns an error, the attempt ends 502, and the upstream has already
+		//	been paid.
+		//
+		// Note what that corrects. The comment on kimiResponsesSet used to say
+		// the canonical mapper "drops" a reasoning item; it does not, it refuses
+		// one, and the whole argument for serving this face rested on the wrong
+		// verb.
+		//
+		// The house rule the Chat renderer and the portable Anthropic mapper both
+		// follow — unspecified means off — would be the fix, and it cannot be
+		// applied here. That is measured, not assumed. Both spellings were tried
+		// against a real mainland account on 2026-09-02:
+		//
+		//	reasoning:{"effort":"none"}   -> 400, `reasoning.effort value "none"
+		//	                                 is not supported`
+		//	thinking:{"type":"disabled"}  -> 200, and it reasoned anyway
+		//
+		// The second is the one worth remembering. That exact member does switch
+		// reasoning off on Kimi's Messages face — undocumented, measured, and the
+		// reason this platform's Anthropic row exists at all. Here the same
+		// upstream takes it and ignores it. Extrapolating from the other face
+		// would have shipped a 200, a bill, and a caller who believed they had
+		// turned reasoning off.
+		//
+		// So this row is not "unmeasured, therefore withheld". It is "measured,
+		// and this face cannot be told to stop". Offering it again needs one of
+		// two things, neither of them here: Kimi adding an off switch that works,
+		// or the "this target always reasons" fact reaching the router, at which
+		// point the profile can be offered carrying that mark rather than
+		// pretending it can be switched off. See
+		// docs/prd/kimi-adaptation-plan.zh-CN.md §14.5.
+		ID: ProfileKimiResponses, Type: ProviderKimi,
+		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		BaseURLTemplate: "https://api.moonshot.ai",
+		Withheld:        true,
+		Defaults:        kimiResponsesSet, Ceiling: kimiResponsesSet,
+	},
 }
 
 var (
@@ -444,10 +529,95 @@ var (
 	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
 	//     canonical response mapper cannot preserve reasoning items, and a claim
 	//     it cannot carry is a request that fails after the budget is reserved.
-	//     MiniMax returns reasoning as output items with a summary, which is
-	//     exactly the shape that mapper drops.
+	//     MiniMax returns reasoning as output items with a summary, and the
+	//     mapper **refuses** one rather than dropping it — the same wrong verb
+	//     that was carried on the Kimi row until its face was measured.
+	//
+	//     Whether this row has Kimi's problem as well is unestablished and is
+	//     recorded that way rather than assumed either direction. The chain is
+	//     identical on paper: this profile refuses reasoning_effort at every
+	//     value, so nothing ever sends MiniMax an off switch, and MiniMax-M3's
+	//     documented default is thinking on. What is missing is a measurement of
+	//     what /v1/responses actually returns on an unasked request. Kimi's
+	//     equivalent turned out to reason on every call; it took a real account
+	//     to know that, and no MiniMax Responses call has been made.
 	minimaxResponsesSet = ProviderCapabilities{
 		Chat: true, Tools: true, Vision: true, FetchedImage: true,
+	}
+
+	// The Kimi sets keep ceiling == defaults, for the same reason MiniMax's do:
+	// there is no opt-in an operator could reach for that Halro would be able to
+	// stand behind. These sets started from Kimi's published OpenAPI document and
+	// were then corrected against a real mainland account on 2026-09-01 — the
+	// rows below say which claim came from which, because on this platform the
+	// two disagreed more than once.
+	//
+	// Absent from all three, each absence a claim about the upstream:
+	//
+	//   - Embeddings. Kimi publishes no embedding endpoint at all.
+	//   - FetchedImage. Every image member on every face accepts exactly two
+	//     forms, a data: URL or ms://<file_id>. There is no http address to
+	//     fetch, and Halro must not close that gap by retrieving one itself —
+	//     that is the request forgery SafeTransport's allowlists exist to
+	//     prevent.
+	//   - DeveloperRole. The OpenAI developer role appears in no Kimi schema.
+	//   - ProviderExecutedTools. Kimi offers an official web search tool.
+	//     Turning it on accepts upstream egress that never passes through
+	//     SafeTransport, which is a contract review rather than a table edit.
+	//
+	// MaxContextTokens and MaxOutputTokens are absent here on purpose: the four
+	// models differ (1M against 256K), so the bound is a per-model fact and lives
+	// in the model catalogue, the same shape DeepSeek's row uses.
+	//
+	// Vision sits at the connection ceiling because all four published models
+	// accept images; which ones also accept video is a per-model fact Halro does
+	// not model at all, since the semantic content model has no video block.
+	kimiChatSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true,
+		JSONObject: true, StructuredOutputs: true,
+		Reasoning: true, StreamUsage: true,
+	}
+	// The Anthropic face. StructuredOutputs because output_config.format takes a
+	// json_schema and nothing else; no JSONObject for the same reason the direct
+	// Anthropic profile has none.
+	//
+	// Reasoning is claimed and is reachable only in native mode, which is the
+	// same shape MiniMax's Anthropic row has and for a related reason. Measured
+	// 2026-09-01: a request carrying output_config.effort answers 200 and returns
+	// a thinking block, and the portable decoder refuses a thinking block. So the
+	// portable path must never ask for depth — the field rules declare
+	// reasoning_effort unsupported at every value — while the capability stays
+	// true, because native mode forwards the caller's own bytes and reads the
+	// answer back the same way.
+	kimiAnthropicSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true,
+		StructuredOutputs: true,
+		Reasoning:         true, StreamUsage: true,
+	}
+	// JSONObject is absent here and that is a difference in the upstream rather
+	// than a difference in confidence: the Responses face models structured
+	// output as text.format, which accepts the json_schema type alone. There is
+	// no schema-less JSON mode to declare.
+	//
+	// Two further absences are inherited from the profile this one is served by
+	// rather than from Kimi:
+	//
+	//   - No Streaming. Kimi documents `stream` on /v1/responses, so this is a
+	//     Halro-side scope decision: the OpenAI adapter's Responses branch binds
+	//     no stream primitive, and CapabilityDependencies requires stream_usage
+	//     over streaming over chat.
+	//   - No Reasoning, for the same reason ProfileOpenAIResponses has none: the
+	//     canonical response mapper cannot preserve reasoning items, and a claim
+	//     it cannot carry is a request that fails after the budget is reserved.
+	//     Kimi returns reasoning as an output item, and the mapper **refuses**
+	//     one — it does not drop it. The verb is the whole difference and this
+	//     line had it wrong: not declaring the capability keeps a caller from
+	//     asking for reasoning, and it does nothing at all about reasoning that
+	//     arrives unasked, which on this face is every single response. That is
+	//     why the profile row above is withheld rather than merely unadorned.
+	kimiResponsesSet = ProviderCapabilities{
+		Chat: true, Tools: true, Vision: true,
+		StructuredOutputs: true,
 	}
 )
 
@@ -498,6 +668,12 @@ var providerTypeTable = []providerTypeRow{
 	// only requires it to sit inside the default profile's own defaults.
 	{ProviderBedrock, ProfileBedrockMantleChat, bedrockConverseSet},
 	{ProviderMiniMax, ProfileMiniMaxAnthropicMessages, minimaxAnthropicSet},
+	// LegacyDefaults equals the default profile's own defaults. The two callers
+	// that start from the type alone get exactly what a new Kimi connection
+	// gets, which is the simplest way to satisfy
+	// TestTypeDefaultsWithinDefaultProfile — that test only requires the
+	// type-level set to be no wider.
+	{ProviderKimi, ProfileKimiChat, kimiChatSet},
 }
 
 var profileIndex = func() map[ProviderProfileID]profileRow {

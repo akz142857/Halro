@@ -30,16 +30,38 @@ func (profile NorthboundProfile) Validate() error {
 	return nil
 }
 
+// builtinNorthboundProfiles is the table of API faces Halro serves, in the order
+// they are served. It is a package-level list rather than a map built inside the
+// lookup because a caller has to be able to walk it: the gateway route table is
+// held to it, and a private list is one nothing can be told about — the same
+// shape the provider profile table was fixed into.
+var builtinNorthboundProfiles = []NorthboundProfile{
+	{ID: ProfileOpenAIChatCompletions, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/chat/completions"}},
+	{ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
+	{ID: ProfileOpenAIResponses, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/responses"}},
+	{ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
+	{ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
+	{ID: ProfileHalroInferenceResources, Revision: 1, Protocol: "halro", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
+}
+
 func BuiltinNorthboundProfile(id NorthboundProfileID) (NorthboundProfile, bool) {
-	profiles := map[NorthboundProfileID]NorthboundProfile{
-		ProfileOpenAIChatCompletions:   {ID: ProfileOpenAIChatCompletions, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/chat/completions"}},
-		ProfileOpenAIEmbeddings:        {ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
-		ProfileOpenAIResponses:         {ID: ProfileOpenAIResponses, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/responses"}},
-		ProfileAnthropicMessages:       {ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
-		ProfileOpenAIMediaResources:    {ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
-		ProfileHalroInferenceResources: {ID: ProfileHalroInferenceResources, Revision: 1, Protocol: "halro", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
+	for _, profile := range builtinNorthboundProfiles {
+		if profile.ID == id {
+			profile.Methods = slices.Clone(profile.Methods)
+			return profile, true
+		}
 	}
-	profile, ok := profiles[id]
-	profile.Methods = slices.Clone(profile.Methods)
-	return profile, ok
+	return NorthboundProfile{}, false
+}
+
+// AllNorthboundProfiles returns every API face this build serves, in table
+// order. Callers that build something per endpoint — an invariant test, a route
+// audit — walk this rather than keeping a list of their own.
+func AllNorthboundProfiles() []NorthboundProfile {
+	profiles := make([]NorthboundProfile, 0, len(builtinNorthboundProfiles))
+	for _, profile := range builtinNorthboundProfiles {
+		profile.Methods = slices.Clone(profile.Methods)
+		profiles = append(profiles, profile)
+	}
+	return profiles
 }

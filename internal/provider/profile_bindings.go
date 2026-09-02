@@ -132,6 +132,14 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 	// stream primitive.
 	domain.ProfileMiniMaxResponses: {Revision: 1, Bindings: []operationBinding{
 		{OperationChat, PrimitiveMiniMaxResponses}}},
+	domain.ProfileKimiChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveKimiChat, PrimitiveKimiChatStream)},
+	domain.ProfileKimiAnthropicMessages: {Revision: 1, Bindings: anthropicWire(
+		PrimitiveKimiAnthropicMessages, PrimitiveKimiAnthropicMessagesStream)},
+	// One operation, the same as MiniMax's Responses row: this profile serves
+	// the unary Responses call and binds no stream primitive.
+	domain.ProfileKimiResponses: {Revision: 1, Bindings: []operationBinding{
+		{OperationChat, PrimitiveKimiResponses}}},
 }
 
 // builtinProfileDerived assembles a manifest from the table above plus the

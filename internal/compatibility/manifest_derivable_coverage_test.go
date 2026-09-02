@@ -2,6 +2,7 @@ package compatibility
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -38,7 +39,7 @@ func TestTheManifestDeclaresEverythingTheRulesRefuse(t *testing.T) {
 				continue
 			}
 			refused := map[string]struct{}{}
-			for _, probe := range coverageProbes() {
+			for _, probe := range coverageProbes(manifest.ID) {
 				for _, field := range UnsupportedGenerateFields(coverage.ProfileID, probe) {
 					name := endpointSpelling(manifest.ID, field)
 					// A field this endpoint does not model has nowhere to be
@@ -92,10 +93,10 @@ func servedNatively(manifest EndpointCompatibilityManifest, profileID domain.Pro
 	// decoder rejects, so the endpoint-level portable losses are not its losses —
 	// which is why all three of these rows declare only what is theirs.
 	//
-	// Naming one of the three left the other two looking like drift, and the
-	// exact check below reported them as such the moment it was turned on.
+	// Naming one of them left the rest looking like drift, and the exact check
+	// below reported them as such the moment it was turned on.
 	switch profileID {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
 		return true
 	}
 	return false
@@ -137,14 +138,24 @@ func endpointSpelling(endpointID, field string) string {
 // that carries reasoning_effort at "high" and refuses it at "minimal" declares
 // the field, and a probe that only ever sends "high" would call that a clean
 // carry.
-func coverageProbes() []semantic.GenerateRequest {
+// northbound is the endpoint the probes claim to have come from. It matters
+// because a rule may key on it: a provider profile can be perfectly able to
+// serve one northbound endpoint and unable to serve another, which is what
+// happens when the upstream returns content one endpoint models and another
+// cannot represent. A battery that left Source empty could not see such a rule
+// at all — the refusal and its declaration would both be invisible, which is the
+// exact blindness this file exists to remove.
+func coverageProbes(northbound string) []semantic.GenerateRequest {
 	seed := int64(1)
 	two := 2
 	noParallel := false
 	base := func() semantic.GenerateRequest {
-		return semantic.GenerateRequest{Messages: []semantic.Message{{
-			Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "x"}},
-		}}}
+		return semantic.GenerateRequest{
+			Source: semantic.Source{ProfileID: northbound, ProfileRevision: 1},
+			Messages: []semantic.Message{{
+				Role: semantic.RoleUser, Content: []semantic.Content{{Kind: semantic.ContentText, Text: "x"}},
+			}},
+		}
 	}
 	with := func(mutate func(*semantic.GenerateRequest)) semantic.GenerateRequest {
 		request := base()
@@ -218,6 +229,42 @@ func coverageProbes() []semantic.GenerateRequest {
 		r.VisibleOutputTokenLimit = &visible
 		r.CompletionTokenLimit = &completion
 	}))
+	// The sampling axis, driven here for the first time. Every upstream before
+	// Kimi accepted temperature and top_p, so no rule refused them and this
+	// battery never sent them — which is the same blindness the output-bound axis
+	// above was added to fix. Kimi does not model either member: they are absent
+	// from its request schema, and its parameter reference pins each to one value
+	// per model and answers any other with an error.
+	sampling := 0.5
+	probes = append(probes,
+		with(func(r *semantic.GenerateRequest) { r.Temperature = &sampling }),
+		with(func(r *semantic.GenerateRequest) { r.TopP = &sampling }))
+	// The stop axis, at a value rather than only at presence. The battery sent
+	// one short sequence and nothing else, so an upstream that carries stop
+	// within published bounds and refuses it outside them looked identical to one
+	// that carries it always — and Kimi's bounds were enforced in the renderer,
+	// after the reservation, precisely because nothing here could see them.
+	probes = append(probes,
+		with(func(r *semantic.GenerateRequest) { r.Stop = []string{"a", "b", "c", "d", "e", "f"} }),
+		with(func(r *semantic.GenerateRequest) {
+			r.Stop = []string{strings.Repeat("x", 64)}
+		}))
+	// A forced tool call together with a depth. Each half was already driven
+	// alone, and alone neither is refused anywhere; the pair is refused by an
+	// upstream whose reasoning switch and tool_choice cannot both be set, which
+	// no single-member probe can reach.
+	for _, mode := range []semantic.ToolChoiceMode{semantic.ToolChoiceRequired, semantic.ToolChoiceNamed} {
+		choice := semantic.ToolChoice{Mode: mode}
+		if mode == semantic.ToolChoiceNamed {
+			choice.Name = "f"
+		}
+		forced := choice
+		probes = append(probes, with(func(r *semantic.GenerateRequest) {
+			r.Tools = []semantic.Tool{{Name: "f"}}
+			r.ToolChoice = &forced
+			r.ReasoningEffort = "high"
+		}))
+	}
 	return probes
 }
 
@@ -226,7 +273,7 @@ func coverageProbes() []semantic.GenerateRequest {
 // manifest said.
 func TestTheProbesTripTheRulesTheyAreMeantTo(t *testing.T) {
 	tripped := map[string]struct{}{}
-	for _, probe := range coverageProbes() {
+	for _, probe := range coverageProbes(string(ProfileOpenAIChatCompletions)) {
 		for _, field := range UnsupportedGenerateFields(domain.ProfileGeminiText, probe) {
 			tripped[field] = struct{}{}
 		}

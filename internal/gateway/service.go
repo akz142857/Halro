@@ -630,11 +630,19 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 		// what an operator can act on. Logging status without it says a request
 		// was refused without saying for what, and leaves them bisecting a body
 		// they did not write.
-		if classified.ProviderCode != "" {
-			attributes = append(attributes, "provider_code", classified.ProviderCode)
+		// Both are narrowed here as well as at the adapters that narrow them,
+		// which is not belt and braces: this is the line the invariant binds to.
+		// An adapter is where the value is understood, but the rule — no provider
+		// response bytes in a log, an error, a metric or an audit record — is
+		// about where it is written, and an adapter added later that forgets to
+		// narrow must not be able to widen this. Narrowing an already-narrowed
+		// identifier returns it unchanged, so the adapters that do it keep their
+		// meaning; one that does not loses a value that was never an identifier.
+		if code := provider.SafeProviderIdentifier(classified.ProviderCode); code != "" {
+			attributes = append(attributes, "provider_code", code)
 		}
-		if classified.ProviderRequestID != "" {
-			attributes = append(attributes, "provider_request_id", classified.ProviderRequestID)
+		if requestID := provider.SafeProviderIdentifier(classified.ProviderRequestID); requestID != "" {
+			attributes = append(attributes, "provider_request_id", requestID)
 		}
 		if classified.StatusCode == 0 {
 			attributes = append(attributes, "reason", providerFailureReason(classified))
@@ -989,6 +997,7 @@ func (s *Service) generate(
 	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
+	targets = filterUnrenderableReasoning(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChat)
 	if len(targets) == 0 {
 		return semantic.GenerateResult{}, s.unservableError(
@@ -1711,7 +1720,8 @@ func (s *Service) prepareNativeMessages(ctx context.Context, plaintextKey, versi
 func isNativeAnthropicProfile(profileID domain.ProviderProfileID, surface domain.AccessSurface) bool {
 	return profileID == domain.ProfileAnthropicMessages && surface == domain.SurfaceAnthropic ||
 		profileID == domain.ProfileBedrockMantleAnthropicMessages && surface == domain.SurfaceBedrockMantle ||
-		profileID == domain.ProfileMiniMaxAnthropicMessages && surface == domain.SurfaceMiniMax
+		profileID == domain.ProfileMiniMaxAnthropicMessages && surface == domain.SurfaceMiniMax ||
+		profileID == domain.ProfileKimiAnthropicMessages && surface == domain.SurfaceKimi
 }
 
 func nativeIdentity(principal auth.AuthResult, target provider.Target, model string) compatibility.NativeIdentity {
@@ -1983,6 +1993,7 @@ func (s *Service) generateStream(
 	candidates := targets
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
+	targets = filterUnrenderableReasoning(targets, canonical)
 	targets = filterPrimitiveTargets(targets, provider.OperationChatStream)
 	if len(targets) == 0 {
 		return s.unservableError(
@@ -2547,6 +2558,14 @@ func unservableReasons(candidates []provider.Target, request semantic.GenerateRe
 	for _, target := range candidates {
 		reasons.addAll(missingCapabilities([]provider.Target{target}, request.Requirements))
 		reasons.addAll(compatibility.UnsupportedGenerateFields(target.ProfileID, request))
+		if targetReasoningIsUnrenderable(target, request) {
+			// Not a capability key and not a request field, because it is neither:
+			// the request asked for nothing and the target is not lacking
+			// anything. It is safe to return for the same reason the others are —
+			// it names a property of the deployment and the endpoint, never
+			// caller data.
+			reasons.add("target_reasons_unasked")
+		}
 		if _, ok := target.ResolveOperation(operation); !ok {
 			reasons.add(string(operation))
 		}
@@ -2635,6 +2654,31 @@ func filterGenerateProfileCompatibility(targets []provider.Target, request seman
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
 		return len(compatibility.UnsupportedGenerateFields(target.ProfileID, request)) > 0
 	})
+}
+
+// filterUnrenderableReasoning drops a target that reasons whether or not the
+// request asked, on an endpoint that cannot return what it produces.
+//
+// It is the only filter here keyed on something the request does not contain.
+// The others ask whether a target can serve what was asked for; this one asks
+// what arrives anyway. That distinction is the whole reason it exists: both
+// production incidents this repository has had were requests that asked for
+// nothing unusual, succeeded upstream, and could not be rendered back — the
+// caller paid for reasoning they had no way to request and received a 502.
+//
+// Routing away is the mild outcome and it happens before the reservation. Where
+// a route has another deployment the request is simply served by it; where it
+// does not, the caller is told which capability the route could not meet instead
+// of being charged for an answer they never see.
+func filterUnrenderableReasoning(targets []provider.Target, request semantic.GenerateRequest) []provider.Target {
+	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
+		return targetReasoningIsUnrenderable(target, request)
+	})
+}
+
+func targetReasoningIsUnrenderable(target provider.Target, request semantic.GenerateRequest) bool {
+	return target.ReasonsUnasked && !compatibility.ReasoningAnswerSurvives(
+		compatibility.NorthboundProfileID(request.Source.ProfileID), target.ProfileID)
 }
 
 func filterEmbeddingProfileCompatibility(targets []provider.Target, request semantic.EmbeddingRequest) []provider.Target {
@@ -2770,7 +2814,7 @@ func nativeAnthropicUsage(usage anthropicapi.Usage) semantic.Usage {
 		CachedInputTokens:     usage.CacheReadInputTokens,
 		CacheWriteInputTokens: usage.CacheCreationInputTokens,
 		OutputTokens:          usage.OutputTokens,
-		ReasoningTokens:       usage.ThinkingTokens,
+		ReasoningTokens:       usage.ReasoningTokens(),
 		TotalTokens:           promptTokens + usage.OutputTokens,
 		Source:                semantic.UsageProviderReported,
 	}
