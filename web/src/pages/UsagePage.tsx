@@ -224,13 +224,16 @@ export function UsagePage() {
       {usage.data && attempts.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
-            {/* Latency is one short fixed-shape value and was sized the same as
-                the status beside it, which holds a classified failure and was
-                wrapping to three lines to make room for "638 ms". */}
+            {/* Sized to the longest thing each column actually holds. Three of
+                them carry a 24-character identifier under their name — the
+                request, the project and the deployment — and those, not the
+                headings, are what decides the width. Cost had the widest share
+                and the narrowest content: a money value, a badge and a
+                disclosure, none of which grow. */}
             <colgroup>
-              <col style={{ width: "13%" }} /><col style={{ width: "8%" }} /><col style={{ width: "9%" }} /><col style={{ width: "12%" }} />
-              <col style={{ width: "10%" }} /><col style={{ width: "14%" }} /><col style={{ width: "5%" }} /><col style={{ width: "12%" }} />
-              <col style={{ width: "10%" }} /><col style={{ width: "7%" }} />
+              <col style={{ width: "14%" }} /><col style={{ width: "13%" }} /><col style={{ width: "9%" }} /><col style={{ width: "14%" }} />
+              <col style={{ width: "10%" }} /><col style={{ width: "8%" }} /><col style={{ width: "6%" }} /><col style={{ width: "11%" }} />
+              <col style={{ width: "9%" }} /><col style={{ width: "6%" }} />
             </colgroup>
             <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th>{/* The action column carries no heading, like the failed-request list's. Its button names itself. */}<th /></tr></thead>
             <tbody>
