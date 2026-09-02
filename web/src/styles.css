@@ -178,11 +178,25 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .failure-detail summary { color: var(--muted); cursor: pointer; font-size: var(--font-size-xs); }
 .failure-detail small { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); white-space: normal; }
 
-/* The facts of one failure, two to a row so the dialog reads as a record
+/* The facts of one failure, laid out as cells so the dialog reads as a record
    rather than as a long column of label/value pairs. */
-.failure-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: var(--space-3); margin: 0 0 var(--space-4); }
-.failure-fact dt { margin: 0 0 var(--space-1); color: var(--muted-2); font: var(--font-size-xs) var(--mono); letter-spacing: .08em; }
-.failure-fact dd { margin: 0; overflow-wrap: anywhere; }
+.failure-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 1px; margin: 0 0 var(--space-4); }
+/* The label sits above its value, and the row draws no separator of its own.
+   Both have to be said explicitly: the bare `dl div` rule below lays every row
+   out as a flex line with the value pushed to the right edge and a top border
+   under it, which is right for a two-column detail list and wrong for a grid of
+   cells — it put each label and value on one line with a rule between them. */
+/* The hairline is the cell's own shadow rather than the container's background,
+   so a row that does not fill its tracks leaves the remainder blank instead of
+   painting an empty cell in border colour. Same idiom as
+   .provider-technical-details. */
+.failure-fact { display: grid; align-content: start; gap: var(--space-1); min-width: 0; padding: var(--space-3); background: var(--surface-inset); border: 0; box-shadow: 0 0 0 1px var(--line); justify-content: stretch; text-align: left; }
+.failure-fact dt { margin: 0; color: var(--muted-2); font: var(--font-size-xs)/1.3 var(--mono); letter-spacing: .03em; text-align: left; }
+/* text-align because the bare `dd` rule below right-aligns every value for the
+   two-column detail lists it was written for; min-width: 0 so a Request ID
+   wraps inside its cell instead of widening the column past the dialog. */
+.failure-fact dd { min-width: 0; margin: 0; font-family: inherit; font-size: var(--font-size-sm); line-height: var(--line-height-normal); text-align: left; overflow-wrap: anywhere; }
+.failure-fact dd code { font: var(--font-size-xs)/1.5 var(--mono); white-space: normal; word-break: break-all; }
 .failure-fact.emphasis dd { font-weight: var(--font-weight-medium); }
 .failure-advice { margin: 0 0 var(--space-2); color: var(--muted); font-size: var(--font-size-sm); }
 .failure-advice.muted { font-size: var(--font-size-xs); }
