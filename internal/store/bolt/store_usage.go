@@ -3,6 +3,7 @@ package bolt
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,22 +37,39 @@ type UsageRollupState struct {
 // watermark and the events in between would be counted nowhere. The increment
 // is applied as a read-modify-write per row: every column is additive, which
 // is what lets the incremental path and a full rebuild reach the same numbers.
+// UsageCheckpointSegment is one record segment of the aggregate checkpoint:
+// an immutable run of attempts and request summaries, addressed by the id the
+// head carries. The payload is stored as it arrives — a segment is the large
+// part of a checkpoint, and wrapping it in a JSON envelope would base64 it and
+// cost a third again in bytes and two more full copies in memory.
+type UsageCheckpointSegment struct {
+	ID      uint64
+	Payload []byte
+}
+
 func (s *Store) PutUsageCheckpoint(
 	watermark ledger.Watermark,
-	payload []byte,
+	head []byte,
+	segments []UsageCheckpointSegment,
+	removedSegments []uint64,
 	rollupVersion int,
 	rollup map[string]domain.DailyRollup,
 ) error {
-	if watermark.Sequence == 0 || watermark.Offset <= 0 || watermark.Generation != 1 {
+	if watermark.Sequence == 0 || watermark.Offset <= 0 || watermark.Generation == 0 {
 		return errors.New("usage checkpoint watermark is invalid")
 	}
-	if len(payload) == 0 {
-		return errors.New("usage checkpoint payload cannot be empty")
+	if len(head) == 0 {
+		return errors.New("usage checkpoint head cannot be empty")
 	}
 	if rollupVersion <= 0 {
 		return errors.New("usage rollup version is required")
 	}
-	encoded, err := json.Marshal(usageCheckpoint{Watermark: watermark, Payload: bytes.Clone(payload)})
+	for _, segment := range segments {
+		if len(segment.Payload) == 0 {
+			return fmt.Errorf("usage checkpoint segment %d is empty", segment.ID)
+		}
+	}
+	encoded, err := json.Marshal(usageCheckpoint{Watermark: watermark, Payload: bytes.Clone(head)})
 	if err != nil {
 		return fmt.Errorf("encode usage checkpoint envelope: %w", err)
 	}
@@ -59,6 +77,11 @@ func (s *Store) PutUsageCheckpoint(
 	if err != nil {
 		return fmt.Errorf("encode usage rollup state: %w", err)
 	}
+	// One transaction for the head, the segments it names, the segments it no
+	// longer names, and the rollup increment. A head that committed without its
+	// segments would name records nobody can read, and a checkpoint that
+	// advanced without its increment would leave the rollup describing a prefix
+	// of the WAL nobody can name.
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if current := meta.Get(keyUsageCheckpoint); current != nil {
@@ -70,6 +93,23 @@ func (s *Store) PutUsageCheckpoint(
 				return errors.New("usage checkpoint watermark cannot move backwards")
 			}
 		}
+		bucket := tx.Bucket(bucketUsageCheckpointSegments)
+		if bucket == nil {
+			return errors.New("usage checkpoint segment bucket is missing")
+		}
+		for _, segment := range segments {
+			if err := bucket.Put(usageSegmentKey(segment.ID), segment.Payload); err != nil {
+				return err
+			}
+		}
+		// Deletions come after the writes so a segment that is both rewritten
+		// and dropped in the same round — which cannot happen today, but would
+		// be silent if it ever did — ends up dropped rather than half-present.
+		for _, id := range removedSegments {
+			if err := bucket.Delete(usageSegmentKey(id)); err != nil {
+				return err
+			}
+		}
 		if err := applyUsageRollupDelta(tx, rollup); err != nil {
 			return err
 		}
@@ -78,6 +118,37 @@ func (s *Store) PutUsageCheckpoint(
 		}
 		return meta.Put(keyUsageCheckpoint, encoded)
 	})
+}
+
+// UsageCheckpointSegmentPayload reads one segment. Restore reads them one at a
+// time rather than all at once, so no more than a single segment is held
+// encoded in memory while the aggregate is rebuilt.
+func (s *Store) UsageCheckpointSegmentPayload(id uint64) ([]byte, error) {
+	var payload []byte
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(bucketUsageCheckpointSegments)
+		if bucket == nil {
+			return ErrNotFound
+		}
+		raw := bucket.Get(usageSegmentKey(id))
+		if raw == nil {
+			return ErrNotFound
+		}
+		payload = bytes.Clone(raw)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// usageSegmentKey orders segments by id, which is ledger order: ids are handed
+// out as segments are opened, and records only ever move forward.
+func usageSegmentKey(id uint64) []byte {
+	key := make([]byte, 8)
+	binary.BigEndian.PutUint64(key, id)
+	return key
 }
 
 // applyUsageRollupDelta folds one increment into the stored rows, keeping each
@@ -205,7 +276,7 @@ func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
 		return ledger.Watermark{}, nil, err
 	}
 	if saved.Watermark.Sequence == 0 || saved.Watermark.Offset <= 0 ||
-		saved.Watermark.Generation != 1 || len(saved.Payload) == 0 {
+		saved.Watermark.Generation == 0 || len(saved.Payload) == 0 {
 		return ledger.Watermark{}, nil, errors.New("usage checkpoint is invalid")
 	}
 	return saved.Watermark, bytes.Clone(saved.Payload), nil
@@ -228,7 +299,8 @@ func (s *Store) UsageRollupState() (UsageRollupState, error) {
 }
 
 // ResetUsageDerivatives discards both rebuildable Usage views together: the
-// aggregate checkpoint and every rollup row.
+// aggregate checkpoint — its head and every record segment — and every rollup
+// row.
 //
 // They are dropped in one transaction on purpose. Clearing only the checkpoint
 // would leave a complete rollup on disk while the next start replays the whole
@@ -243,13 +315,17 @@ func (s *Store) ResetUsageDerivatives() error {
 		if err := meta.Delete(keyUsageRollupState); err != nil {
 			return err
 		}
-		if tx.Bucket(bucketUsageDailyRollup) != nil {
-			if err := tx.DeleteBucket(bucketUsageDailyRollup); err != nil {
+		for _, name := range [][]byte{bucketUsageDailyRollup, bucketUsageCheckpointSegments} {
+			if tx.Bucket(name) != nil {
+				if err := tx.DeleteBucket(name); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
 		}
-		_, err := tx.CreateBucketIfNotExists(bucketUsageDailyRollup)
-		return err
+		return nil
 	})
 }
 

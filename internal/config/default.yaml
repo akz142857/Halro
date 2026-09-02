@@ -106,14 +106,44 @@ usage:
   parquet_interval: 1h0m0s
   # Analytics retention, a floor rather than an exact age: partitions are dated
   # in UTC, so pruning keeps one extra day and no timezone loses a day it was
-  # promised. The accounting ledger itself is not trimmed by this.
+  # promised. The accounting ledger itself is not trimmed by this. At least 7,
+  # because console_window_days may not go below that and may not exceed this.
   retention_days: 90
+  # How far back the console's attempt log and failed-request list can page.
+  # Separate from retention_days on purpose: that one bounds the archive on
+  # disk, this one bounds the in-memory aggregate the screens are served from —
+  # about a kilobyte of memory per attempt, held for as long as the process
+  # runs. At least 7 (the overview reads that many days) and no more than
+  # retention_days. The operator guide has a sizing table by throughput.
+  #
+  # This file seeds it on first start and has no say afterwards: the value lives
+  # in the metadata store and is changed under Settings -> Instance, where it is
+  # versioned, audited, and confirmed — shortening it discards attempt history.
+  console_window_days: 30
   # parquet (default) or ndjson (ADR 0017). Usage is a rebuildable derivative
   # of the Ledger, never a source of truth, so this only controls what new
   # partitions are written as — existing ones are never rewritten. ndjson adds
   # no dependency beyond the standard library, at the cost of larger files and
   # no columnar compression.
   export_format: parquet
+
+ledger:
+  # Sealing keeps the accounting write-ahead log from being one file that only
+  # grows. When the active generation passes max_active_bytes it is rolled off
+  # whole — renamed aside, recorded in a manifest, replaced by an empty
+  # successor whose first frame continues the same hash chain. Nothing is
+  # deleted: replay reads the sealed generations first and then the active one,
+  # so the balances still rebuild from the whole history. What changes is that
+  # the file being written stays bounded, and the sealed ones can be compressed
+  # (about 5.6x on real frames) or moved off the box.
+  #
+  # Off by default. This is the only mechanism that lets the accounting
+  # authority's bytes move, and turning it on should be a decision about a
+  # specific disk.
+  seal:
+    enabled: false
+    max_active_bytes: 8589934592
+    compress: true
 
 gateway:
   # The whole request, across retries and fallbacks.

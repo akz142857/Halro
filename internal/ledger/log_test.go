@@ -487,7 +487,7 @@ func TestTenThousandRandomCrashInjectionsRecoverCompleteRecordsWithoutDuplicateE
 		cut := random.Intn(len(source) + 1)
 		state := NewState()
 		seen := make(map[string]struct{})
-		watermark, partial, err := scan(bytes.NewReader(source[:cut]), 0, 0, func(record Record) error {
+		watermark, partial, err := scan(bytes.NewReader(source[:cut]), 1, 0, 0, func(record Record) error {
 			if _, duplicate := seen[record.Event.EventID]; duplicate {
 				return fmt.Errorf("duplicate EventID %q", record.Event.EventID)
 			}

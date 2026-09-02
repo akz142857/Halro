@@ -812,9 +812,10 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 		return ledger.Record{}, err
 	}
 	record := ledger.Record{
-		Sequence: watermark.Sequence,
-		Offset:   watermark.Offset,
-		Event:    event,
+		Generation: watermark.Generation,
+		Sequence:   watermark.Sequence,
+		Offset:     watermark.Offset,
+		Event:      event,
 	}
 	m.applyMu.Lock()
 	for m.applyErr == nil && m.state.Watermark().Sequence+1 < record.Sequence {

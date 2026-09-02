@@ -31,6 +31,36 @@ the schema version, exported Ledger sequence, per-file SHA-256, row count,
 token totals, and cost totals. A crash before manifest commit can leave an
 orphan file; the next compaction validates and adopts an identical orphan.
 
+## The console checkpoint
+
+The aggregate the console reads is checkpointed into `metadata.db` so a restart
+replays only the tail of the WAL rather than all of it. It is stored as a head
+plus a series of immutable record segments:
+
+- the **head** (`meta/usage_checkpoint`) carries the watermark, the window's
+  floor, the totals and histograms, the requests still in flight, the dedup
+  window, and an index of the segments — nothing in it grows with the number of
+  records held;
+- each **segment** (`usage_checkpoint_segments`, keyed by a big-endian id) holds
+  a contiguous run of attempts and request summaries in ledger order, and is
+  never rewritten once sealed.
+
+A checkpoint round writes the head, the segments it adds or replaces, the
+segments the window has trimmed past, and the daily-rollup increment **in one
+bbolt transaction**. A head that committed without its segments would name
+records nobody can read, and a checkpoint that advanced without its increment
+would leave the rollup describing a prefix of the WAL nobody can name.
+
+A round rewrites the head and at most one open segment, so its cost follows what
+arrived since the previous round rather than what the window holds. Restore
+reads segments one at a time, refuses any checkpoint it cannot fully read — a
+missing segment, a segment that disagrees with the head, records out of ledger
+order — and drops records below the stored floor, which is what lets a partially
+trimmed segment stay untouched until it can be deleted whole.
+
+Both derivatives are cleared together whenever either is unusable; the Ledger
+rebuilds them.
+
 ## Operations
 
 Run these while the server is stopped. The commands acquire the same exclusive

@@ -237,16 +237,46 @@ func (e Event) Validate() error {
 }
 
 type Record struct {
-	Sequence uint64
-	Offset   int64
-	Epoch    uint8
-	Event    Event
+	// Generation names the WAL file this record was read from. It is 1 for
+	// every log that has never been sealed, and it is what makes a stored
+	// watermark resolvable after sealing — a sequence says which record, the
+	// generation and offset say where it sits.
+	Generation uint64
+	Sequence   uint64
+	Offset     int64
+	Epoch      uint8
+	Event      Event
 }
 
 type Watermark struct {
 	Generation uint64 `json:"generation"`
 	Offset     int64  `json:"offset"`
 	Sequence   uint64 `json:"sequence"`
+}
+
+// After reports whether this watermark names a position past head.
+//
+// It exists because the obvious comparison is wrong once the log has more than
+// one generation. An offset only means anything inside the generation it was
+// taken in: a roll leaves the sequence where it was and restarts the offset at
+// zero in a fresh file, so a watermark held against the generation before the
+// roll has a legitimately larger offset than the head does. Comparing the two
+// numbers directly reads that as "ahead of the ledger" and condemns a position
+// that is simply older — which, wherever such a check gates a rebuild, throws
+// away a checkpoint and replays the whole WAL for exactly as long as it takes
+// the new generation to grow past the old offset.
+//
+// Sequence is the total order and is compared first; generation breaks ties,
+// because a roll keeps the sequence and moves to the next file; the offset is
+// consulted only within one generation.
+func (w Watermark) After(head Watermark) bool {
+	if w.Sequence != head.Sequence {
+		return w.Sequence > head.Sequence
+	}
+	if w.Generation != head.Generation {
+		return w.Generation > head.Generation
+	}
+	return w.Offset > head.Offset
 }
 
 // BalanceKey identifies the balance a charge accumulates into.
@@ -335,7 +365,7 @@ func (s *State) Apply(record Record) error {
 		// appended more than once. Its effects are already reflected in the
 		// read model, but replay must still consume the later physical record.
 		if record.Sequence > s.watermark.Sequence {
-			s.watermark = Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
+			s.watermark = Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 		}
 		return nil
 	}
@@ -432,7 +462,7 @@ func (s *State) Apply(record Record) error {
 	s.balances[key] = balance
 	s.eventDigests[event.EventID] = digest
 	s.watermark = Watermark{
-		Generation: 1,
+		Generation: record.Generation,
 		Offset:     record.Offset,
 		Sequence:   record.Sequence,
 	}

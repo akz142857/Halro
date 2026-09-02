@@ -180,6 +180,11 @@ ERROR。
 原因：错误详情需要历史查询、分页、时间范围和资源筛选，而这些能力已经属于 Usage。读取主机日志会引入
 文件权限、多实例、轮转边界、容器无本地盘和非结构化解析问题，并让日志文件错误地成为产品数据源。
 
+> **2026-09-02 订正**：本节说「可见窗口等于 Aggregate 保留窗口」，当时的隐含前提是 Aggregate
+> 有一个保留窗口。它没有——`attempts` 与 `summaries` 只 append、从不裁剪，可见窗口实际上是无限的，
+> 而 `usage.retention_days` 只管 Parquet。窗口是 `docs/todo/data-retention-plan.zh-CN.md` 加上去的
+> （`usage.console_window_days`）。下面这段在那之后才成立。
+
 **但要限定「历史」有多长。** `RequestSummary` 今天只存在于内存 Aggregate（`internal/usage/aggregate.go`）
 中，随 Usage checkpoint 一起持久化；Parquet 导出只写 Attempt 分区（`internal/usage/parquet.go` 的
 `publishPartition` 只接收 attempts，没有请求级行）。因此最终失败列表能回看的窗口等于 Aggregate 保留的

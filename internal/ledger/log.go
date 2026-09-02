@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"hash/crc32"
 	"io"
 	"os"
@@ -135,6 +136,30 @@ type Log struct {
 	chainSequence  uint64
 	chainOffset    int64
 	chainSawFrames bool
+
+	// directory, generation, segments and the two anchors describe sealing.
+	// generation is what the active file is writing; segments is the sealed
+	// history in ascending order; chainAnchor and startSequence are where this
+	// generation began, which a roll needs in order to record what it sealed
+	// and which the next generation inherits.
+	directory     string
+	generation    uint64
+	segments      []Segment
+	chainAnchor   [32]byte
+	startSequence uint64
+	// plainDigest is the SHA-256 of the active generation's committed prefix,
+	// carried forward as frames are appended rather than recomputed when a roll
+	// needs it.
+	//
+	// A roll has to record the checksum of what it seals, and it has to do that
+	// while holding the writer — the committed prefix is only well defined
+	// under the lock. Reading the whole file there meant every append in the
+	// process waited out a full pass over up to ledger.seal.max_active_bytes,
+	// and since a budget reservation must be durable before any upstream call,
+	// that wait is the gateway's. Hashing each batch as it commits costs the
+	// same bytes spread across the writes that produced them, and leaves the
+	// roll with nothing to read.
+	plainDigest hash.Hash
 }
 
 type Options struct {
@@ -156,10 +181,11 @@ type Options struct {
 // Append (or, immediately after OpenWithOptions, as of the last frame seen
 // during the initial tail scan). ok is false when no epoch-4 frame has ever
 // been observed — a brand new log, or one that predates this build.
-func (l *Log) ChainHead() (sequence uint64, offset int64, hash [32]byte, ok bool) {
+func (l *Log) ChainHead() (head Watermark, hash [32]byte, ok bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.chainSequence, l.chainOffset, l.chainHash, l.chainSawFrames
+	return Watermark{Generation: l.generation, Offset: l.chainOffset, Sequence: l.chainSequence},
+		l.chainHash, l.chainSawFrames
 }
 
 type DurabilityWriter interface {
@@ -226,23 +252,52 @@ func Open(path string, status *Status) (*Log, error) {
 // Inspect verifies the existing committed WAL prefix without creating,
 // truncating, syncing, or otherwise repairing the file.
 func Inspect(path string) (Watermark, bool, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return Watermark{}, false, err
-	}
-	defer file.Close()
-	return scan(file, 0, 0, nil, nil)
+	return InspectReplay(path, nil)
 }
 
 // InspectReplay verifies and visits the committed WAL prefix without opening
 // it for writes or repairing a partial tail.
+//
+// "The WAL" is every generation, not the file currently being appended to. The
+// offline commands built on this — doctor's state rebuild, `usage export`'s
+// aggregate — reconstruct accounting from what they read, so reading only the
+// active generation would not report an error; it would report a smaller
+// ledger, which is the shape of failure that gets believed.
 func InspectReplay(path string, visit func(Record) error) (Watermark, bool, error) {
+	directory := filepath.Dir(path)
+	segments, _, err := resolveSegments(directory)
+	if err != nil {
+		return Watermark{}, false, err
+	}
+	if err := checkSegmentsPresent(directory, segments); err != nil {
+		return Watermark{}, false, err
+	}
+	var sequence uint64
+	for _, segment := range segments {
+		reader, err := openSegment(directory, segment)
+		if err != nil {
+			return Watermark{}, false, err
+		}
+		head, partial, err := scan(reader, segment.Generation, 0, sequence, visit, nil)
+		closeErr := reader.Close()
+		if err := errors.Join(err, closeErr); err != nil {
+			return Watermark{}, false, err
+		}
+		// A sealed generation is immutable, so a short read is damage rather
+		// than a torn tail an open would repair.
+		if partial || head.Offset != segment.Length || head.Sequence != segment.LastSequence {
+			return Watermark{}, false, fmt.Errorf("%w: sealed generation %d ends at %d/%d, manifest says %d/%d",
+				ErrCorrupt, segment.Generation, head.Offset, head.Sequence,
+				segment.Length, segment.LastSequence)
+		}
+		sequence = head.Sequence
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return Watermark{}, false, err
 	}
 	defer file.Close()
-	return scan(file, 0, 0, visit, nil)
+	return scan(file, activeGeneration(segments), 0, sequence, visit, nil)
 }
 
 // ChainReport summarizes epoch-4 MAC/chain verification of the committed WAL
@@ -253,11 +308,17 @@ func InspectReplay(path string, visit func(Record) error) (Watermark, bool, erro
 type ChainReport struct {
 	Authenticated uint64
 	ChecksumOnly  uint64
-	Head          Watermark
-	ChainSequence uint64
-	ChainOffset   int64
-	ChainHash     [32]byte
-	ChainVerified bool
+	// SealedGenerations and SealedAuthenticated describe the history that no
+	// longer lives in the active file. Reporting only the active file would let
+	// this command answer a smaller question after every roll while still
+	// printing a pass.
+	SealedGenerations   uint64 `json:",omitempty"`
+	SealedAuthenticated uint64 `json:",omitempty"`
+	Head                Watermark
+	ChainSequence       uint64
+	ChainOffset         int64
+	ChainHash           [32]byte
+	ChainVerified       bool
 }
 
 // VerifyChain walks the entire committed WAL prefix and authenticates every
@@ -266,14 +327,28 @@ type ChainReport struct {
 // for offline tooling — the verify CLI/doctor path — that wants a dedicated,
 // on-demand deep check.
 func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
+	segments, _, err := resolveSegments(filepath.Dir(path))
+	if err != nil {
+		return ChainReport{}, false, err
+	}
+	anchor, sealedSequence, err := sealedTail(segments)
+	if err != nil {
+		return ChainReport{}, false, err
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return ChainReport{}, false, err
 	}
 	defer file.Close()
-	verifier := &chainVerifier{key: key}
+	// The active file's first frame links to the last sealed generation's chain
+	// head, not to the zero hash. Verifying it against zero would report
+	// tampering on every sealed instance, which is the failure mode a chain
+	// check must not have.
+	verifier := &chainVerifier{
+		key: key, hash: anchor, sequence: sealedSequence, sawFrames: len(segments) > 0,
+	}
 	var report ChainReport
-	watermark, partial, err := scan(file, 0, 0, func(record Record) error {
+	watermark, partial, err := scan(file, activeGeneration(segments), 0, sealedSequence, func(record Record) error {
 		if record.Epoch == frameVersionLedgerIntegrity && verifier.verify() {
 			report.Authenticated++
 		} else {
@@ -312,13 +387,40 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create ledger directory: %w", err)
 	}
+	directory := filepath.Dir(path)
+	// Before the file is read: finish or abandon a roll that a crash caught
+	// mid-flight, so the chain the scan below verifies is the one the manifest
+	// claims. Doing it after would verify the active file against the wrong
+	// anchor and report tampering.
+	segments, err := repairSegments(directory)
+	if err != nil {
+		status.RequireRecovery()
+		return nil, err
+	}
+	// Fail-closed on a history that is no longer all there. Starting with a
+	// shorter archive than the manifest claims would rebuild balances from part
+	// of the ledger and report nothing wrong.
+	if err := checkSegmentsPresent(directory, segments); err != nil {
+		status.RequireRecovery()
+		return nil, err
+	}
+	anchor, sealedSequence, err := sealedTail(segments)
+	if err != nil {
+		status.RequireRecovery()
+		return nil, err
+	}
+	generation := activeGeneration(segments)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		status.MarkUnavailable()
 		return nil, fmt.Errorf("open ledger: %w", err)
 	}
-	verifier := &chainVerifier{key: options.ChainKey}
-	last, partial, err := scan(file, 0, 0, nil, verifier)
+	// The active file's first frame links to the chain head of the last sealed
+	// generation, so the verifier is seeded there rather than at zero. A
+	// directory that has never been sealed seeds at zero, which is what every
+	// log did before sealing existed.
+	verifier := &chainVerifier{key: options.ChainKey, hash: anchor, sequence: sealedSequence}
+	last, partial, err := scan(file, generation, 0, sealedSequence, nil, verifier)
 	if err != nil {
 		file.Close()
 		status.RequireRecovery()
@@ -340,6 +442,16 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		file.Close()
 		return nil, fmt.Errorf("seek ledger end: %w", err)
 	}
+	// Seed the rolling checksum from what is already on disk. This is the one
+	// full pass over the active generation, and it happens on a path that has
+	// just read every one of those bytes anyway; every roll afterwards reads
+	// none of them.
+	plainDigest, err := digestFilePrefix(path, last.Offset)
+	if err != nil {
+		file.Close()
+		status.RequireRecovery()
+		return nil, err
+	}
 	log := &Log{
 		file:           file,
 		durability:     file,
@@ -355,7 +467,13 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		chainHash:      verifier.hash,
 		chainSequence:  verifier.sequence,
 		chainOffset:    verifier.offset,
-		chainSawFrames: verifier.sawFrames,
+		chainSawFrames: verifier.sawFrames || len(segments) > 0,
+		directory:      directory,
+		generation:     generation,
+		segments:       segments,
+		chainAnchor:    anchor,
+		startSequence:  sealedSequence,
+		plainDigest:    plainDigest,
 	}
 	if options.WrapDurability != nil {
 		log.durability = options.WrapDurability(file)
@@ -418,11 +536,16 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 	if l.file == nil {
 		return Watermark{}, errors.New("ledger is closed")
 	}
-	if from.Generation != 0 && from.Generation != 1 {
+	if from.Generation > l.generation {
 		return Watermark{}, fmt.Errorf("unsupported ledger generation %d", from.Generation)
 	}
-	last, partial, err := scan(l.file, from.Offset, from.Sequence, visit, nil)
-	if err != nil {
+	// A replay is one walk over several files. Sealed generations are read in
+	// order and then the active one, and because a roll never moves a live byte
+	// each generation's offsets still mean what they meant when the watermark
+	// that names them was written.
+	sequence := from.Sequence
+	started := from.Generation == 0
+	fail := func(err error) (Watermark, error) {
 		// Only the log's own integrity condemns the log. visit is a caller
 		// callback replaying into a derived read model, and its failures —
 		// above all a canceled request context — say nothing about the WAL.
@@ -434,10 +557,101 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 		}
 		return Watermark{}, err
 	}
+	for _, segment := range l.segments {
+		if !started {
+			if segment.Generation != from.Generation {
+				continue
+			}
+			started = true
+		}
+		offset := int64(0)
+		if segment.Generation == from.Generation {
+			offset = from.Offset
+		}
+		if offset >= segment.Length {
+			sequence = max(sequence, segment.LastSequence)
+			continue
+		}
+		reader, err := openSegment(l.directory, segment)
+		if err != nil {
+			return fail(err)
+		}
+		// Authenticate what is being replayed, not just its CRCs. Open checks
+		// sealed generations for presence and size only — deliberately, since
+		// re-reading them every start is the cost sealing exists to remove —
+		// so this is the moment those bytes are examined, and it is also the
+		// only moment they can affect a balance. A frame edited in a sealed
+		// file, with its CRC recomputed, would otherwise replay into
+		// accounting with nothing to object.
+		//
+		// It costs the MAC over bytes already being read. The verifier is
+		// seeded from the manifest's recorded chain head for the generation,
+		// and the scan's own end state is checked against it below, so a
+		// manifest edited to match a tampered file fails on the frames.
+		verifier := l.sealedVerifier(segment, offset)
+		head, partial, err := scan(reader, segment.Generation, offset, sequence, visit, verifier)
+		closeErr := reader.Close()
+		if err != nil {
+			return fail(err)
+		}
+		if closeErr != nil {
+			return fail(closeErr)
+		}
+		// A sealed generation is immutable, so a short read is damage rather
+		// than the torn tail of an in-flight append.
+		if partial || head.Offset != segment.Length || head.Sequence != segment.LastSequence {
+			return fail(fmt.Errorf("%w: sealed generation %d ends at %d/%d, manifest says %d/%d",
+				ErrCorrupt, segment.Generation, head.Offset, head.Sequence,
+				segment.Length, segment.LastSequence))
+		}
+		if verifier.verify() {
+			end, err := decodeChainHash(segment.EndHash)
+			if err != nil {
+				return fail(err)
+			}
+			if verifier.hash != end {
+				return fail(fmt.Errorf("%w: sealed generation %d does not end at its recorded chain head",
+					ErrTampered, segment.Generation))
+			}
+		}
+		sequence = head.Sequence
+	}
+	if !started && from.Generation != l.generation {
+		return Watermark{}, fmt.Errorf("unknown ledger generation %d", from.Generation)
+	}
+	offset := int64(0)
+	if from.Generation == l.generation {
+		offset = from.Offset
+	}
+	head, partial, err := scan(l.file, l.generation, offset, sequence, visit, nil)
+	if err != nil {
+		return fail(err)
+	}
 	if partial {
 		return Watermark{}, errors.New("ledger has a partial tail while open")
 	}
-	return last, nil
+	return head, nil
+}
+
+// sealedVerifier is the chain verifier for one sealed generation, or nil when
+// the frames cannot be authenticated from where the scan starts.
+//
+// Two cases return nil. Without a chain key the log is a read-only reader —
+// offline tooling — and has nothing to verify with. Resuming inside a
+// generation means the chain state at that offset is not recoverable from the
+// manifest, which records the generation's ends and not its middle; the frames
+// before the resume point were authenticated when whatever wrote the watermark
+// replayed them, and every later generation is entered at zero and verified in
+// full.
+func (l *Log) sealedVerifier(segment Segment, offset int64) *chainVerifier {
+	if len(l.chainKey) != 32 || offset != 0 {
+		return nil
+	}
+	start, err := decodeChainHash(segment.StartHash)
+	if err != nil {
+		return nil
+	}
+	return &chainVerifier{key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1}
 }
 
 // Snapshot copies exactly the committed prefix while holding the writer lock.
@@ -473,7 +687,7 @@ func (l *Log) Snapshot(path string) (Watermark, error) {
 		return Watermark{}, fmt.Errorf("close ledger snapshot: %w", err)
 	}
 	complete = true
-	return Watermark{Generation: 1, Offset: l.offset, Sequence: l.sequence}, nil
+	return Watermark{Generation: l.generation, Offset: l.offset, Sequence: l.sequence}, nil
 }
 
 func (l *Log) Close() error {
@@ -600,7 +814,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		}
 		offset += int64(len(frame))
 		previousHash = nextHash
-		watermarks[index] = Watermark{Generation: 1, Offset: offset, Sequence: sequence}
+		watermarks[index] = Watermark{Generation: l.generation, Offset: offset, Sequence: sequence}
 	}
 	// Position the write at the committed tail the log tracks, never at
 	// wherever the shared descriptor's cursor happens to sit. Replay scans
@@ -632,6 +846,10 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", syncErr))
 		return
 	}
+	// Past the barrier: these bytes are committed, so they join the generation's
+	// running checksum here and nowhere else. Hashing before the sync would
+	// fold in a write that may not have survived.
+	l.plainDigest.Write(encoded.Bytes())
 	l.sequence = sequence
 	l.offset = offset
 	l.chainHash = previousHash
@@ -712,7 +930,7 @@ func encodeChainFrame(key []byte, sequence uint64, kind EventKind, payload []byt
 	return frame, sha256.Sum256(sum)
 }
 
-func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
+func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
 	if fromOffset < 0 {
 		return Watermark{}, false, errors.New("ledger offset cannot be negative")
 	}
@@ -741,10 +959,10 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)
 		if errors.Is(err, io.EOF) && n == 0 {
-			return Watermark{Generation: 1, Offset: offset, Sequence: lastSequence}, false, nil
+			return Watermark{Generation: generation, Offset: offset, Sequence: lastSequence}, false, nil
 		}
 		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-			return Watermark{Generation: 1, Offset: offset, Sequence: lastSequence}, true, nil
+			return Watermark{Generation: generation, Offset: offset, Sequence: lastSequence}, true, nil
 		}
 		if err != nil {
 			return Watermark{}, false, err
@@ -784,7 +1002,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 			chainTail := make([]byte, chainPreviousHashSize+chainMACSize)
 			if _, err := io.ReadFull(file, chainTail); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					return Watermark{Generation: 1, Offset: offset, Sequence: lastSequence}, true, nil
+					return Watermark{Generation: generation, Offset: offset, Sequence: lastSequence}, true, nil
 				}
 				return Watermark{}, false, err
 			}
@@ -794,7 +1012,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 		payload := make([]byte, payloadLength)
 		if _, err := io.ReadFull(file, payload); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return Watermark{Generation: 1, Offset: offset, Sequence: lastSequence}, true, nil
+				return Watermark{Generation: generation, Offset: offset, Sequence: lastSequence}, true, nil
 			}
 			return Watermark{}, false, err
 		}
@@ -844,7 +1062,7 @@ func scan(file io.ReadSeeker, fromOffset int64, initialSequence uint64, visit fu
 			verifier.offset = nextOffset
 		}
 		if visit != nil {
-			if err := visit(Record{Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
+			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
 				return Watermark{}, false, visitError{err}
 			}
 		}

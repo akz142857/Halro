@@ -1,9 +1,7 @@
 package usage
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -20,22 +18,6 @@ import (
 // retaining every ID ever seen would grow with the lifetime of the process and
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
-
-// Version 10 carries the upstream's own identifiers for a failed attempt — the
-// provider code, the provider request ID, and the phase the failure happened in
-// — so a support ticket raised days after the fact can still name the request
-// the upstream saw. Version 9 stamped each request summary with the ledger
-// sequence that finalized it, so the failed-request list can page the way the
-// attempt list does: a cursor over a slice position would not survive a
-// restart, and one over the completion instant cannot separate two requests
-// that finished in the same millisecond. Version 8 recorded the accounting period on attempts and request
-// summaries — without it the aggregate could say when a call finished but not
-// which accounting day it was charged to, and the daily rollup, which keys on
-// the period stamped at admission, had nothing to key on. Version 7 persisted
-// the dedup window; version 6 dropped the duplicate cost columns. A checkpoint
-// written before this is refused rather than migrated: it is a derivative, and
-// rebuilding it from the Ledger is cheap.
-const checkpointVersion = 10
 
 const latencyBucketCount = 12
 
@@ -153,10 +135,13 @@ type Bucket struct {
 
 type Snapshot struct {
 	Watermark ledger.Watermark `json:"watermark"`
-	Totals    Bucket           `json:"totals"`
-	Hourly    []Bucket         `json:"hourly"`
-	Attempts  []AttemptEvent   `json:"attempts"`
-	Requests  []RequestSummary `json:"requests"`
+	// Floor is the console window's lower edge: below it this aggregate no
+	// longer holds anything, so reconciliation has nothing to compare there.
+	Floor    uint64           `json:"floor,omitempty"`
+	Totals   Bucket           `json:"totals"`
+	Hourly   []Bucket         `json:"hourly"`
+	Attempts []AttemptEvent   `json:"attempts"`
+	Requests []RequestSummary `json:"requests"`
 }
 
 type Metrics struct {
@@ -180,23 +165,6 @@ type requestAccumulator struct {
 	summary RequestSummary
 }
 
-type checkpoint struct {
-	Version   int                       `json:"version"`
-	Watermark ledger.Watermark          `json:"watermark"`
-	Started   map[string]time.Time      `json:"started"`
-	Active    map[string]RequestSummary `json:"active_requests"`
-	Attempts  []AttemptEvent            `json:"attempts"`
-	Summaries []RequestSummary          `json:"request_summaries"`
-	Hourly    map[int64]Bucket          `json:"hourly"`
-	Totals    Bucket                    `json:"totals"`
-	Metrics   Metrics                   `json:"metrics"`
-	// EventIDs is the dedup window. Without it a checkpoint taken between the
-	// two physical frames of a re-emitted event resumed with an empty index and
-	// counted the second copy again — the aggregate then disagreed with a full
-	// replay of the same WAL.
-	EventIDs []string `json:"event_ids,omitempty"`
-}
-
 type Aggregate struct {
 	mu           sync.RWMutex
 	watermark    ledger.Watermark
@@ -212,89 +180,38 @@ type Aggregate struct {
 	// is the only place that knows an event was neither a duplicate nor a
 	// replay — the Collector cannot tell, and startup replay and CatchUp both
 	// bypass it entirely.
-	rollupDelta  map[domain.RollupKey]*domain.DailyRollup
-	attemptIndex map[string]int
-	summaryIndex map[string]int
-	totals       Bucket
-	metrics      Metrics
+	rollupDelta map[domain.RollupKey]*domain.DailyRollup
+	// attemptsDropped and summariesDropped count records trimmed off the front
+	// of each slice whose array slot has not been reclaimed yet. They are what
+	// decides when a sweep pays for a compaction; see PruneBefore.
+	attemptsDropped  int
+	summariesDropped int
+	// floor is the lowest ledger sequence still held. Zero means nothing has
+	// been pruned and the aggregate claims everything.
+	floor uint64
+	// segments, nextSegmentID and persistedThrough are what the aggregate
+	// knows about its own stored checkpoint: which segments hold the records
+	// already on disk, what the next segment will be called, and the ledger
+	// sequence those segments cover. They move only when the store has accepted
+	// a write — see CommitCheckpoint.
+	segments         []CheckpointSegmentRef
+	nextSegmentID    uint64
+	persistedThrough uint64
+	// trimmed counts what this process has removed. Process-local on purpose:
+	// it is a rate signal for "is the window working", not an accounting
+	// figure, and a counter that survived restarts would need a home in the
+	// checkpoint for no benefit.
+	trimmed uint64
+	totals  Bucket
+	metrics Metrics
 }
 
 func NewAggregate() *Aggregate {
 	return &Aggregate{
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
 		requests: make(map[string]*requestAccumulator), hourly: make(map[int64]Bucket),
-		rollupDelta:  make(map[domain.RollupKey]*domain.DailyRollup),
-		attemptIndex: make(map[string]int), summaryIndex: make(map[string]int),
+		rollupDelta: make(map[domain.RollupKey]*domain.DailyRollup),
 	}
-}
-
-func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
-	if len(payload) == 0 {
-		return nil, errors.New("usage checkpoint is empty")
-	}
-	var saved checkpoint
-	if err := json.Unmarshal(payload, &saved); err != nil {
-		return nil, fmt.Errorf("decode usage checkpoint: %w", err)
-	}
-	if saved.Version != checkpointVersion {
-		return nil, fmt.Errorf("usage checkpoint version %d is not supported", saved.Version)
-	}
-	if saved.Watermark.Sequence == 0 && (saved.Watermark.Offset != 0 || saved.Watermark.Generation != 0) {
-		return nil, errors.New("usage checkpoint has an invalid empty watermark")
-	}
-	if saved.Watermark.Sequence > 0 && (saved.Watermark.Offset <= 0 || saved.Watermark.Generation != 1) {
-		return nil, errors.New("usage checkpoint has an invalid watermark")
-	}
-	aggregate := NewAggregate()
-	aggregate.watermark = saved.Watermark
-	aggregate.started = cloneStarted(saved.Started)
-	aggregate.attempts = append([]AttemptEvent(nil), saved.Attempts...)
-	aggregate.summaries = append([]RequestSummary(nil), saved.Summaries...)
-	aggregate.hourly = cloneHourly(saved.Hourly)
-	aggregate.totals = saved.Totals
-	aggregate.metrics = saved.Metrics
-	for index, attempt := range aggregate.attempts {
-		aggregate.attemptIndex[attempt.AttemptID] = index
-	}
-	for index, summary := range aggregate.summaries {
-		aggregate.summaryIndex[summary.RequestID] = index
-	}
-	for _, eventID := range saved.EventIDs {
-		aggregate.rememberEventID(eventID)
-	}
-	for requestID, summary := range saved.Active {
-		if requestID == "" || summary.RequestID != requestID {
-			return nil, errors.New("usage checkpoint has an invalid active request")
-		}
-		aggregate.requests[requestID] = &requestAccumulator{summary: summary}
-	}
-	return aggregate, nil
-}
-
-// TakeCheckpoint captures the aggregate's state and drains the pending rollup
-// increment in one critical section, so the two describe exactly the same
-// prefix of the Ledger. The caller writes both in a single transaction and, if
-// that write fails, must hand the increment back with ReturnCheckpoint.
-func (a *Aggregate) TakeCheckpoint() (CheckpointSnapshot, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	active := make(map[string]RequestSummary, len(a.requests))
-	for requestID, accumulator := range a.requests {
-		active[requestID] = accumulator.summary
-	}
-	saved := checkpoint{
-		Version: checkpointVersion, Watermark: a.watermark,
-		Started: cloneStarted(a.started), Active: active,
-		Attempts:  append([]AttemptEvent(nil), a.attempts...),
-		Summaries: append([]RequestSummary(nil), a.summaries...),
-		Hourly:    cloneHourly(a.hourly), Totals: a.totals, Metrics: a.metrics,
-		EventIDs: append([]string(nil), a.eventIDOrder...),
-	}
-	payload, err := json.Marshal(saved)
-	if err != nil {
-		return CheckpointSnapshot{}, fmt.Errorf("encode usage checkpoint: %w", err)
-	}
-	return CheckpointSnapshot{Watermark: a.watermark, Payload: payload, Rollup: a.takeRollupDelta()}, nil
 }
 
 func (a *Aggregate) Apply(record ledger.Record) error {
@@ -376,7 +293,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			FallbackCount: event.FallbackCount,
 		}
 		a.attempts = append(a.attempts, attempt)
-		a.attemptIndex[event.AttemptID] = len(a.attempts) - 1
 		if err := addInt64(&accumulator.summary.Attempts, 1); err != nil {
 			return err
 		}
@@ -477,7 +393,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		accumulator.summary.CompletedAt = event.OccurredAt
 		accumulator.summary.Sequence = record.Sequence
 		a.summaries = append(a.summaries, accumulator.summary)
-		a.summaryIndex[event.RequestID] = len(a.summaries) - 1
 		delete(a.requests, event.RequestID)
 		hour := event.OccurredAt.UTC().Truncate(time.Hour)
 		bucket := a.hourly[hour.Unix()]
@@ -514,7 +429,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		}
 	}
 	a.rememberEventID(event.EventID)
-	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
+	a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
 }
 
@@ -594,7 +509,7 @@ func (a *Aggregate) Snapshot() Snapshot {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	result := Snapshot{
-		Watermark: a.watermark, Totals: a.totals,
+		Watermark: a.watermark, Floor: a.floor, Totals: a.totals,
 		Attempts: append([]AttemptEvent(nil), a.attempts...),
 		Requests: append([]RequestSummary(nil), a.summaries...),
 		Hourly:   make([]Bucket, 0, len(a.hourly)),

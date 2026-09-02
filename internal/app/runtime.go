@@ -129,6 +129,7 @@ type Runtime struct {
 	draining         atomic.Bool
 	runtimeSettings  atomic.Pointer[domain.RuntimeSettings]
 	uiSettings       atomic.Pointer[domain.InstanceUISettings]
+	usageSettings    atomic.Pointer[domain.InstanceUsageSettings]
 	instanceID       string
 	anchorAuthorizer *bearercred.Authorizer
 	anchorAuthFailed atomic.Uint64
@@ -779,6 +780,34 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		return fail(fmt.Errorf("initialize UI settings: %w", err))
 	}
 	runtime.uiSettings.Store(&uiSettings)
+	// config.yaml seeds the console window once and has no say afterwards.
+	// Shortening it destroys the attempt history it trims, so the value that
+	// decides it is versioned and audited rather than whatever the file happened
+	// to say at the last restart.
+	usageSettings, err := metadata.SeedInstanceUsageSettings(cfg.Usage.ConsoleWindowDays, time.Now())
+	if err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("initialize usage settings: %w", err))
+	}
+	runtime.usageSettings.Store(&usageSettings)
+	// The window is stored, the archive's retention is in the file, and the two
+	// can be edited independently — so the invariant they are validated against
+	// at write time can be broken afterwards by lowering retention alone. Say
+	// so rather than letting the console quietly page further back than the
+	// archive can rebuild. Not fatal: the records the console is showing are
+	// real, and refusing to start over a screen would be a worse trade than
+	// naming the discrepancy and letting the operator close it.
+	if retention := cfg.Usage.RetentionDays; retention >= 1 && usageSettings.ConsoleWindowDays > retention {
+		logger.Warn("the console window is longer than the archive it is bounded by",
+			"console_window_days", usageSettings.ConsoleWindowDays, "retention_days", retention,
+			"consequence", "the console can page back further than the archive can rebuild after a restart",
+			"remedy", "shorten the window under Settings -> Instance, or raise usage.retention_days")
+	}
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
@@ -869,21 +898,21 @@ func restoreUsageAggregate(
 // be trusted. Every rejection path names itself so the log says which one fired
 // rather than only that something was ignored.
 func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.Aggregate, ledger.Watermark, string) {
-	watermark, payload, err := store.UsageCheckpoint()
+	watermark, headPayload, err := store.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		return nil, ledger.Watermark{}, "no usage checkpoint"
 	}
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint unreadable: %v", err)
 	}
-	aggregate, err := usage.RestoreCheckpoint(payload)
+	aggregate, err := usage.RestoreCheckpoint(headPayload, store.UsageCheckpointSegmentPayload)
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint rejected: %v", err)
 	}
 	if aggregate.Snapshot().Watermark != watermark {
 		return nil, ledger.Watermark{}, "usage checkpoint envelope does not match its payload"
 	}
-	if watermark.Sequence > head.Sequence || watermark.Offset > head.Offset {
+	if watermark.After(head) {
 		return nil, ledger.Watermark{}, "usage checkpoint is ahead of the ledger head"
 	}
 	rollup, err := store.UsageRollupState()
@@ -924,11 +953,26 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			}
 		case <-parquetTicker.C:
 			r.exportUsageParquet()
+			// After the export, never before: the trim is bounded by how far
+			// the export has got, and reading that watermark before writing it
+			// would hold the window one tick behind for no reason.
+			r.pruneUsageWindow()
+			// And the archive last, so a partition is only ever removed after
+			// the console window that might still have been reading it has
+			// already moved past.
+			r.pruneUsageArchive()
 			// Retention is swept on the same tick rather than on a timer of its
 			// own: this store's promise is that captured caller material is
 			// gone after the window, and a promise kept by a goroutine nobody
 			// notices stopping is not one.
 			r.purgeFailureCaptures()
+			// Sealing rides the same tick and comes last, after both
+			// derivatives have advanced: the roll is bounded by size alone, but
+			// compaction is bounded by how far the export and the checkpoint
+			// have got, and reading those before advancing them would hold a
+			// generation uncompressed for an extra interval for no reason.
+			r.sealLedgerGeneration()
+			r.compactLedgerSegments()
 		case <-ctx.Done():
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
@@ -965,6 +1009,13 @@ func (r *Runtime) saveUsageCheckpoint() {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
 		return
 	}
+	// An empty round means nothing has happened since the last one — no new
+	// records, no increment, nothing the window has trimmed past. Writing it
+	// anyway would fsync byte-identical bytes every interval for the life of an
+	// idle instance.
+	if len(snapshot.Head) == 0 {
+		return
+	}
 	// TakeCheckpoint drained the rollup increment, so every path from here that
 	// does not persist it has to hand it back. Dropping it would leave those
 	// events counted in no stored row and in no later increment.
@@ -973,13 +1024,32 @@ func (r *Runtime) saveUsageCheckpoint() {
 		return
 	}
 	if err := r.store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
+		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
 	); err != nil {
 		r.logger.Warn("usage checkpoint save failed", "error", err)
 		r.returnUsageCheckpoint(snapshot)
 		return
 	}
+	// Only now does the aggregate treat those segments as stored. A write that
+	// failed above leaves it proposing the same round again on the next tick,
+	// which is why nothing has to be unwound but the increment.
+	r.usage.CommitCheckpoint(snapshot)
 	r.advanceLedgerChainCheckpoint()
+}
+
+// usageCheckpointSegments hands the round's segments to the store in its own
+// terms. The two types are deliberately separate: the store persists opaque
+// payloads addressed by id and has no business knowing what a segment holds.
+func usageCheckpointSegments(snapshot usage.CheckpointSnapshot) []boltstore.UsageCheckpointSegment {
+	if len(snapshot.Segments) == 0 {
+		return nil
+	}
+	segments := make([]boltstore.UsageCheckpointSegment, 0, len(snapshot.Segments))
+	for _, segment := range snapshot.Segments {
+		segments = append(segments, boltstore.UsageCheckpointSegment{ID: segment.ID, Payload: segment.Payload})
+	}
+	return segments
 }
 
 func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
@@ -996,7 +1066,7 @@ func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
 // usage checkpoint's ticker bounds that window to one interval and costs a
 // small bbolt write on a path that already does a larger one.
 func (r *Runtime) advanceLedgerChainCheckpoint() {
-	sequence, offset, hash, ok := r.ledger.ChainHead()
+	head, hash, ok := r.ledger.ChainHead()
 	if !ok {
 		return
 	}
@@ -1005,11 +1075,12 @@ func (r *Runtime) advanceLedgerChainCheckpoint() {
 		r.logger.Warn("ledger chain checkpoint load failed", "error", err)
 		return
 	}
-	if checkpoint.Sequence >= sequence {
+	if checkpoint.Sequence > head.Sequence ||
+		(checkpoint.Sequence == head.Sequence && checkpoint.Generation >= head.Generation) {
 		return
 	}
 	if err := r.store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
-		Sequence: sequence, Offset: offset, Hash: hash,
+		Generation: head.Generation, Sequence: head.Sequence, Offset: head.Offset, Hash: hash,
 	}); err != nil {
 		r.logger.Warn("ledger chain checkpoint save failed", "error", err)
 	}
@@ -1334,7 +1405,7 @@ func reconcileAuditCheckpoint(store *boltstore.Store, summary audit.Summary) err
 // there is, not a fresh install. Returning early on ok == false read that
 // case as brand new and let a wiped WAL start clean.
 func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Log) error {
-	sequence, offset, hash, ok := ledgerLog.ChainHead()
+	head, hash, ok := ledgerLog.ChainHead()
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {
 		return fmt.Errorf("load ledger chain checkpoint: %w", err)
@@ -1345,13 +1416,22 @@ func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Lo
 		}
 		return nil
 	}
-	if checkpoint.Sequence > sequence ||
-		(checkpoint.Sequence == sequence && (checkpoint.Offset != offset || checkpoint.Hash != hash)) {
+	if checkpoint.Sequence > head.Sequence || checkpoint.Generation > head.Generation {
 		return errors.New("ledger chain does not match its trusted checkpoint")
 	}
-	if checkpoint.Sequence < sequence {
+	if checkpoint.Sequence == head.Sequence {
+		// The offset is only comparable inside one generation. A roll leaves
+		// the sequence and the chain head exactly where they were and moves the
+		// head into a fresh file at offset zero, which is the one case where a
+		// changed offset is not a changed history.
+		if checkpoint.Hash != hash ||
+			(checkpoint.Generation == head.Generation && checkpoint.Offset != head.Offset) {
+			return errors.New("ledger chain does not match its trusted checkpoint")
+		}
+	}
+	if checkpoint.Sequence < head.Sequence || checkpoint.Generation < head.Generation {
 		if err := store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
-			Sequence: sequence, Offset: offset, Hash: hash,
+			Generation: head.Generation, Sequence: head.Sequence, Offset: head.Offset, Hash: hash,
 		}); err != nil {
 			return fmt.Errorf("checkpoint ledger chain: %w", err)
 		}
@@ -1517,6 +1597,8 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings", r.updateAdminSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/ui", r.getAdminUISettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/ui", r.updateAdminUISettings)
+	router.With(r.requireAdmin).Get("/admin/api/v1/settings/usage", r.getAdminUsageSettings)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/usage", r.updateAdminUsageSettings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/settings/accounting", r.getAdminAccountingSettings)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/settings/accounting", r.updateAdminAccountingSettings)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/settings/accounting/pending", r.cancelAdminAccountingTimezoneChange)

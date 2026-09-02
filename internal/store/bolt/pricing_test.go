@@ -401,7 +401,7 @@ func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T)
 		t.Fatal(err)
 	}
 	state := ledger.NewState()
-	if err := state.Apply(ledger.Record{Sequence: 1, Offset: 100, Event: ledger.Event{
+	if err := state.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Event: ledger.Event{
 		EventID: "evt_lease", Kind: ledger.EventReservationCreated, RequestID: "req_pin", AttemptID: durablePin.AttemptID,
 		ProjectID: "prj_pin", PeriodID: "2026-08-04", OccurredAt: now, ReservationMicrosUSD: ledger.MicrosUSD(1),
 		LeaseMode: ledger.LeaseModeMetered, PriceSnapshot: &snapshot,

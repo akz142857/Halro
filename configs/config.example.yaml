@@ -212,15 +212,38 @@ usage:
   parquet_interval: "1h"
   # @title.zh-CN 用量保留天数
   # @title.en-US Usage retention days
-  # @description.zh-CN 本地分析用量数据保留的天数。
-  # @description.en-US Days local analytical usage data is retained.
+  # @description.zh-CN 归档保留天数，管的是磁盘上的 Parquet 分区，不是控制台能翻多久。
+  # @description.en-US How long the Parquet archive on disk is kept. This is not how far the console can page back.
   retention_days: 90
+  # @title.zh-CN 控制台可见天数
+  # @title.en-US Console window in days
+  # @description.zh-CN 控制台「调用明细」与「最终失败」能往回翻多久。**本文件只在首次启动时作为初值**，此后由「设置 → 实例」中的运行时设置决定（有版本、有审计、缩短时需确认）。与 retention_days 分开设置：那个管磁盘上的归档，这个管内存里的聚合——后者每次 checkpoint 都会被整体重新序列化，所以它的长度同时是时间成本。至少 7 天（运行总览要读这么多天），且不超过 retention_days。
+  # @description.en-US How far back the console's attempt log and failed-request list can page. **This file only seeds it on first start**; afterwards the runtime setting under Settings -> Instance decides, where the change is versioned, audited, and confirmed when it shortens the window. Separate from retention_days: that bounds the archive on disk, this bounds the in-memory aggregate the screens are served from, which is re-serialized whole on every checkpoint and so costs time as well as space. At least 7 days (the overview reads that many) and no more than retention_days.
+  console_window_days: 30
   # parquet (default) or ndjson (ADR 0017, docs/adr/0017-usage-export-format.md).
   # @title.zh-CN 用量导出格式
   # @title.en-US Usage export format
   # @description.zh-CN 新用量分区采用的容器格式，不重写已有分区。
   # @description.en-US Container format for new usage partitions; existing partitions are not rewritten.
   export_format: "parquet"
+
+ledger:
+  seal:
+    # @title.zh-CN 启用 WAL 封存
+    # @title.en-US Enable WAL sealing
+    # @description.zh-CN 开启后，活动 WAL 超过 max_active_bytes 就整代封存：改名归档、写入段清单、换一个空文件继续，新文件的第一帧接着上一代的哈希链。不删除任何东西——重放先读封存段再读活动文件，账务仍从完整历史重建。默认关闭：这是唯一会让账务权威的字节挪位置的机制，开启应当是一次针对具体磁盘的决定。
+    # @description.en-US When on, the active WAL is sealed whole once it passes max_active_bytes: renamed aside, recorded in a segment manifest, replaced by an empty successor whose first frame continues the same hash chain. Nothing is deleted — replay reads the sealed generations and then the active file, so balances still rebuild from the whole history. Off by default: this is the only mechanism that moves the accounting authority's bytes, and enabling it should be a decision about a specific disk.
+    enabled: false
+    # @title.zh-CN 活动 WAL 封存阈值（字节）
+    # @title.en-US Active WAL seal threshold in bytes
+    # @description.zh-CN 活动代超过这个字节数就封存。按字节而非按天：耗尽的是磁盘，而一天的历史在每台机器上都是不同的字节数。最小 16 MiB。
+    # @description.en-US Size the active generation may reach before it is rolled off. Bytes rather than days: what runs out is disk, and a day of history is a different number of bytes on every install. Minimum 16 MiB.
+    max_active_bytes: 8589934592
+    # @title.zh-CN 压缩封存段
+    # @title.en-US Compress sealed generations
+    # @description.zh-CN 在之后的维护周期把已封存的代替换成 gzip 副本，压缩前后的明文校验和与长度都会核对。只在该代已完全导出到归档并越过用量 checkpoint 之后进行。
+    # @description.en-US Replaces a sealed generation with a gzip copy on a later maintenance tick, after reading it back and checking its plaintext length and checksum. Only done once the generation has fully reached the archive and the usage checkpoint.
+    compress: true
 
 gateway:
   # @title.zh-CN 路由总超时

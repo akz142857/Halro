@@ -93,7 +93,8 @@ func mixedTraffic(t *testing.T, aggregate *Aggregate) time.Time {
 	}
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
 		}); err != nil {
 			t.Fatalf("event %s: %v", event.EventID, err)
 		}
@@ -227,7 +228,7 @@ func TestRollupRefusesDuplicateEventIDs(t *testing.T) {
 		PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
 		OccurredAt: time.Date(2026, 8, 30, 13, 0, 0, 0, time.UTC), ProviderInputTokens: 100,
 		ProviderOutputTokens: 20, CommittedMicrosUSD: ledger.MicrosUSD(120), Outcome: "success"}
-	if err := aggregate.Apply(ledger.Record{Sequence: 99, Offset: 9900, Event: replay}); err != nil {
+	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 99, Offset: 9900, Event: replay}); err != nil {
 		t.Fatal(err)
 	}
 	after := rollupRows(t, aggregate)
@@ -249,7 +250,7 @@ func TestRollupCountsLatencyAboveTheLastBucket(t *testing.T) {
 		OccurredAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
 		// Above LatencyBucketsMillis' last bound of 120s.
 		LatencyMillis: 200_000, CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"}
-	if err := aggregate.Apply(ledger.Record{Sequence: 1, Offset: 100, Event: slow}); err != nil {
+	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Event: slow}); err != nil {
 		t.Fatal(err)
 	}
 	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
@@ -277,7 +278,7 @@ func TestReturnCheckpointMergesTheUnwrittenIncrement(t *testing.T) {
 		AttemptID: "att_late", ProjectID: "prj_a", PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
 		OccurredAt: now.Add(time.Hour), ProviderInputTokens: 1, LatencyMillis: 10,
 		CommittedMicrosUSD: ledger.MicrosUSD(5), Outcome: "success"}
-	if err := aggregate.Apply(ledger.Record{Sequence: 500, Offset: 50000, Event: later}); err != nil {
+	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 500, Offset: 50000, Event: later}); err != nil {
 		t.Fatal(err)
 	}
 	if err := aggregate.ReturnCheckpoint(snapshot); err != nil {
@@ -317,7 +318,8 @@ func TestRollupFilesLateSettlementUnderTheAdmittedDay(t *testing.T) {
 	}
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -350,7 +352,8 @@ func TestRollupHasNoRowForADateThatNeverExisted(t *testing.T) {
 			CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success",
 		}
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64(index+1) * 100, Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}

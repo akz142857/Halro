@@ -142,6 +142,63 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	fmt.Fprintf(output, "halro_activation_stale_seconds %.6f\n", staleSeconds)
 	metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
 	fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
+	// The console window's working set and its lower edge. Together they answer
+	// the question the window exists for: is the in-memory history bounded, or
+	// is it still growing? A resident count that keeps climbing while the floor
+	// stays put means the trim is not running — which is what a stalled export
+	// looks like from the outside, since the trim is bounded by it.
+	windowed := r.usage.Windowed()
+	metricHeader(output, "halro_usage_window_attempts", "gauge",
+		"Attempts resident in the usage aggregate the console reads.")
+	fmt.Fprintf(output, "halro_usage_window_attempts %d\n", windowed.Attempts)
+	metricHeader(output, "halro_usage_window_requests", "gauge",
+		"Request summaries resident in the usage aggregate the console reads.")
+	fmt.Fprintf(output, "halro_usage_window_requests %d\n", windowed.Summaries)
+	metricHeader(output, "halro_usage_window_floor_sequence", "gauge",
+		"Lowest ledger sequence the usage aggregate still holds; 0 when it has never been trimmed.")
+	fmt.Fprintf(output, "halro_usage_window_floor_sequence %d\n", windowed.Floor)
+	metricHeader(output, "halro_usage_window_trimmed_total", "counter",
+		"Attempts removed from the usage aggregate by the console window.")
+	fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
+	// What the stored checkpoint costs, which is a different question from what
+	// the window holds. The bytes gauge is the whole checkpoint; the last-write
+	// gauge is what one tick actually rewrote. The gap between them is the
+	// point of the segmented format, and the two converging would mean it has
+	// stopped working — a tick rewriting the window again.
+	checkpointed := r.usage.Checkpointed()
+	metricHeader(output, "halro_usage_checkpoint_segments", "gauge",
+		"Segments holding the stored usage checkpoint.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_segments %d\n", checkpointed.Segments)
+	metricHeader(output, "halro_usage_checkpoint_bytes", "gauge",
+		"Bytes the stored usage checkpoint occupies across all its segments.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_bytes %d\n", checkpointed.Bytes)
+	metricHeader(output, "halro_usage_checkpoint_open_segment_bytes", "gauge",
+		"Bytes in the one segment a checkpoint tick rewrites.")
+	fmt.Fprintf(output, "halro_usage_checkpoint_open_segment_bytes %d\n", checkpointed.OpenSegmentBytes)
+	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
+	// what it moved out of the way and is still keeping. Read together they say
+	// whether the growth an operator is watching is in the file being written
+	// or in the archive behind it — two very different problems, and before
+	// sealing there was no way to tell them apart because there was only one
+	// number.
+	sealed := r.ledger.Segments()
+	var sealedBytes, sealedStored int64
+	for _, segment := range sealed {
+		sealedBytes += segment.Length
+		sealedStored += segment.StoredLength
+	}
+	metricHeader(output, "halro_ledger_active_bytes", "gauge",
+		"Bytes in the ledger generation currently being appended to.")
+	fmt.Fprintf(output, "halro_ledger_active_bytes %d\n", r.ledger.ActiveBytes())
+	metricHeader(output, "halro_ledger_sealed_generations", "gauge",
+		"Sealed ledger generations this data directory holds.")
+	fmt.Fprintf(output, "halro_ledger_sealed_generations %d\n", len(sealed))
+	metricHeader(output, "halro_ledger_sealed_bytes", "gauge",
+		"Frame bytes held in sealed ledger generations, before compression.")
+	fmt.Fprintf(output, "halro_ledger_sealed_bytes %d\n", sealedBytes)
+	metricHeader(output, "halro_ledger_sealed_stored_bytes", "gauge",
+		"Disk bytes the sealed ledger generations occupy, after compression.")
+	fmt.Fprintf(output, "halro_ledger_sealed_stored_bytes %d\n", sealedStored)
 	// Deliberately unlabelled: the interesting dimension here is the source
 	// address, and that is exactly the label that would make this series
 	// unbounded — and would publish caller addresses through the metrics port.

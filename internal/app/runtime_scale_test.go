@@ -64,7 +64,12 @@ const (
 	// seals it, read by the Admin payload endpoint and swept by the usage
 	// maintenance loop. It is nil on every install that has not switched
 	// capture on, so the field is one pointer rather than a subsystem.
-	runtimeFieldBudget = 72
+	// 73: usageSettings. Raised deliberately, and it replaces rather than adds:
+	// the console window used to be read straight off r.config, and moving it
+	// into a versioned, audited store is what makes shortening it — a
+	// destructive change — leave a record. It sits beside uiSettings for the
+	// same reason and in the same shape, an atomic pointer to a small struct.
+	runtimeFieldBudget = 73
 	runtimeMutexBudget = 10
 )
 

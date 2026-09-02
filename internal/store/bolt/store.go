@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 33
+const schemaVersion uint64 = 35
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -88,6 +88,7 @@ var (
 	bucketCapabilityDetectionIdem    = []byte("model_capability_detection_idempotency")
 	bucketCapabilityDetectionIndex   = []byte("model_capability_detection_fingerprint_index")
 	bucketUsageDailyRollup           = []byte("usage_daily_rollup")
+	bucketUsageCheckpointSegments    = []byte("usage_checkpoint_segments")
 	keySchemaVersion                 = []byte("schema_version")
 	keyVaultCheck                    = []byte("vault_key_check")
 	keyUsageCheckpoint               = []byte("usage_checkpoint")
@@ -103,6 +104,7 @@ var (
 	keyMasterKeyRotationAuditIntent  = []byte("master_key_rotation_audit_intent")
 	keyRuntimeSettings               = []byte("runtime_settings")
 	keyInstanceUISettings            = []byte("instance_ui_settings")
+	keyInstanceUsageSettings         = []byte("instance_usage_settings")
 	keyInstanceAccountingSettings    = []byte("instance_accounting_settings")
 	keyInstanceID                    = []byte("instance_id")
 	keyMinimumLedgerReaderVersion    = []byte("minimum_ledger_reader_version")
@@ -907,6 +909,76 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_create_usage_daily_rollup")
 	}},
+	// Sealing gave the Ledger more than one file, so the trusted chain head has
+	// to name which one it sits in: after a roll the sequence is unchanged, the
+	// hash is unchanged, and the offset legitimately restarts at zero. Without
+	// a generation the startup check reads that as a chain that moved and
+	// refuses to start. Every checkpoint written before sealing existed
+	// describes generation 1, which is what this stamps.
+	{version: 34, name: "ledger_chain_checkpoint_generation", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_ledger_chain_checkpoint_generation"); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		raw := meta.Get(keyLedgerChainCheckpoint)
+		if raw != nil {
+			var checkpoint LedgerChainCheckpoint
+			if err := json.Unmarshal(raw, &checkpoint); err != nil {
+				return fmt.Errorf("decode ledger chain checkpoint: %w", err)
+			}
+			if checkpoint.Sequence > 0 && checkpoint.Generation == 0 {
+				checkpoint.Generation = 1
+				encoded, err := json.Marshal(checkpoint)
+				if err != nil {
+					return err
+				}
+				if err := meta.Put(keyLedgerChainCheckpoint, encoded); err != nil {
+					return err
+				}
+			}
+		}
+		return migrationStep(step, "after_ledger_chain_checkpoint_generation")
+	}},
+	// The usage checkpoint stopped being one blob rewritten in full every tick
+	// and became a head plus immutable record segments, so a tick writes only
+	// what changed. The stored blob is version 11 and the reader accepts only
+	// 12, so it would be refused on the next start anyway — but a refused
+	// checkpoint is not a deleted one, and leaving it would keep a copy of the
+	// whole window on disk that nothing will ever read again. Both Usage
+	// derivatives are cleared together, which is the state a full replay
+	// rebuilds correctly: clearing only the checkpoint would leave a complete
+	// rollup while the next start replays the WAL from zero, and every row
+	// would be counted twice.
+	{version: 35, name: "usage_checkpoint_segments", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_create_usage_checkpoint_segments"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if err := meta.Delete(keyUsageCheckpoint); err != nil {
+			return err
+		}
+		if err := meta.Delete(keyUsageRollupState); err != nil {
+			return err
+		}
+		if tx.Bucket(bucketUsageDailyRollup) != nil {
+			if err := tx.DeleteBucket(bucketUsageDailyRollup); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageDailyRollup); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_create_usage_checkpoint_segments")
+	}},
 }
 
 // splitJSONModeCapabilities replaces a stored capability set's json_mode member
@@ -1165,9 +1237,13 @@ type AuditCheckpoint struct {
 // that has gone backwards or diverged at the same sequence means the WAL was
 // truncated or rewritten since this checkpoint was recorded.
 type LedgerChainCheckpoint struct {
-	Sequence uint64   `json:"sequence"`
-	Offset   int64    `json:"offset"`
-	Hash     [32]byte `json:"hash"`
+	// Generation names the WAL file the head sits in. A roll advances it and
+	// resets Offset, which is the one way the offset may move without the
+	// sequence moving.
+	Generation uint64   `json:"generation"`
+	Sequence   uint64   `json:"sequence"`
+	Offset     int64    `json:"offset"`
+	Hash       [32]byte `json:"hash"`
 }
 
 // MetadataWriteStats describes the metadata store's durable write path.
@@ -1483,8 +1559,14 @@ type VaultRewrite struct {
 // observed — both are refused rather than silently overwritten.
 func (s *Store) PutLedgerChainCheckpoint(checkpoint LedgerChainCheckpoint) error {
 	if checkpoint.Offset < 0 || (checkpoint.Sequence == 0 && (checkpoint.Offset != 0 ||
-		checkpoint.Hash != [32]byte{})) ||
-		(checkpoint.Sequence > 0 && (checkpoint.Offset == 0 || checkpoint.Hash == [32]byte{})) {
+		checkpoint.Hash != [32]byte{} || checkpoint.Generation != 0)) ||
+		(checkpoint.Sequence > 0 && (checkpoint.Generation == 0 || checkpoint.Hash == [32]byte{})) {
+		return errors.New("ledger chain checkpoint is invalid")
+	}
+	// A sealed generation's successor starts empty, so a head at offset zero is
+	// a real position from the second generation on — but never in the first,
+	// where offset zero means no frame has been written at all.
+	if checkpoint.Sequence > 0 && checkpoint.Offset == 0 && checkpoint.Generation == 1 {
 		return errors.New("ledger chain checkpoint is invalid")
 	}
 	encoded, err := json.Marshal(checkpoint)
@@ -1501,8 +1583,16 @@ func (s *Store) PutLedgerChainCheckpoint(checkpoint LedgerChainCheckpoint) error
 			if checkpoint.Sequence < current.Sequence {
 				return errors.New("ledger chain checkpoint cannot move backwards")
 			}
+			// At an unchanged sequence the only legitimate movement is a roll:
+			// same records, same chain head, a later generation. Anything else
+			// is the chain disagreeing with itself about history it already
+			// recorded.
 			if checkpoint.Sequence == current.Sequence && checkpoint != current {
-				return errors.New("ledger chain checkpoint conflicts at the same sequence")
+				rolled := checkpoint.Generation > current.Generation &&
+					checkpoint.Hash == current.Hash && checkpoint.Offset == 0
+				if !rolled {
+					return errors.New("ledger chain checkpoint conflicts at the same sequence")
+				}
 			}
 		}
 		return meta.Put(keyLedgerChainCheckpoint, encoded)

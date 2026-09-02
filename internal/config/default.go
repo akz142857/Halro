@@ -64,7 +64,17 @@ func Default() Config {
 			CheckpointInterval:     Duration(time.Minute),
 			ParquetInterval:        Duration(time.Hour),
 			RetentionDays:          90,
+			ConsoleWindowDays:      DefaultConsoleWindowDays,
 			ExportFormat:           UsageExportFormatParquet,
+		},
+		Ledger: Ledger{
+			Seal: LedgerSeal{
+				MaxActiveBytes: DefaultLedgerSealMaxActiveBytes,
+				// Off, but pre-answered: an operator who turns sealing on in
+				// the shipped template gets the compression that is the point
+				// of sealing, rather than a second switch to discover.
+				Compress: true,
+			},
 		},
 		Gateway: Gateway{
 			RouteTotalTimeout:             Duration(2 * time.Minute),

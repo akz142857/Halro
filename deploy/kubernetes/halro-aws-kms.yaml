@@ -62,6 +62,14 @@ spec:
           # and a Recreate strategy, an OOMKill still takes the gateway with it;
           # size this above the observed baseline plus that 128 MiB bound rather
           # than by steady-state usage alone.
+          #
+          # The other term, and the one that scales: the console window is held
+          # in memory at roughly a kilobyte per attempt, so a thirty-day window
+          # is about 0.27 GB at 0.1 requests a second and about 27 GB at ten.
+          # The limit below fits a small install — well under one request a
+          # second at the default window. Raise it, or shorten
+          # usage.console_window_days, before running anything busier; the
+          # operator guide has the table.
           resources:
             requests: {cpu: 100m, memory: 128Mi}
             limits: {memory: 1Gi}

@@ -18,9 +18,22 @@ var _ = [domain.RollupLatencyBuckets]uint64([latencyBucketCount]uint64{})
 // rollup that describes a prefix of the WAL nobody can name.
 type CheckpointSnapshot struct {
 	Watermark ledger.Watermark
-	Payload   []byte
+	// Head is the small, always-rewritten part of the checkpoint; Segments are
+	// the record segments this round adds or replaces, and RemovedSegments the
+	// ones the window has trimmed past. All of them, and the increment below,
+	// are written in one transaction.
+	Head            []byte
+	Segments        []CheckpointSegment
+	RemovedSegments []uint64
 	// Rollup maps an encoded domain.RollupKey to the increment for that row.
 	Rollup map[string]domain.DailyRollup
+
+	// segments and nextSegmentID are what the aggregate adopts once the store
+	// has accepted the write — see CommitCheckpoint. They are not the caller's
+	// business, which is why a failed write needs no unwinding beyond handing
+	// the increment back.
+	segments      []CheckpointSegmentRef
+	nextSegmentID uint64
 }
 
 // rollupRow returns the pending increment for key, creating it stamped with

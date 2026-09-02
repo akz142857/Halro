@@ -45,7 +45,8 @@ func applyEvents(t *testing.T, aggregate *Aggregate, events []ledger.Event) {
 	t.Helper()
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -90,11 +91,7 @@ func TestProviderIdentifiersMatchAfterCheckpointAndRebuild(t *testing.T) {
 
 	incremental := NewAggregate()
 	applyEvents(t, incremental, events)
-	snapshot, err := incremental.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	restored, err := RestoreCheckpoint(snapshot.Payload)
+	restored, err := restoreOneRound(incremental)
 	if err != nil {
 		t.Fatal(err)
 	}

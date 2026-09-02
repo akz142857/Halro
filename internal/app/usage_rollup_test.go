@@ -155,7 +155,7 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 		store.Close()
 		t.Fatal(err)
 	}
-	if err := store.PutUsageCheckpoint(watermark, []byte(`{"version":1}`), domain.RollupVersion, nil); err != nil {
+	if err := store.PutUsageCheckpoint(watermark, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err != nil {
 		store.Close()
 		t.Fatal(err)
 	}

@@ -106,13 +106,16 @@ The offline data lock is the backup barrier. Inside it Halro:
 
 1. verifies the Audit checkpoint and records `backup.create`;
 2. creates a transactionally consistent bbolt snapshot;
-3. takes an fsynced committed-prefix Ledger snapshot while holding the Ledger
+3. stages every sealed Ledger generation and its manifest beside the snapshot,
+   so a sealed instance is archived with the whole of its accounting history
+   rather than with the file it happens to be appending to;
+4. takes an fsynced committed-prefix Ledger snapshot while holding the Ledger
    writer lock and records its exact generation/offset/sequence;
-4. validates the Usage checkpoint against its embedded watermark;
-5. verifies the committed Parquet manifest against the Ledger aggregate;
-6. includes only Parquet files pinned by that manifest;
-7. writes the encrypted archive to a same-directory temporary file;
-8. `fsync`s it, atomically publishes it without overwriting an existing name,
+5. validates the Usage checkpoint against its embedded watermark;
+6. verifies the committed Parquet manifest against the Ledger aggregate;
+7. includes only Parquet files pinned by that manifest;
+8. writes the encrypted archive to a same-directory temporary file;
+9. `fsync`s it, atomically publishes it without overwriting an existing name,
    and `fsync`s the output directory.
 
 The manifest stores only the Master Key SHA-256 fingerprint so a future restore

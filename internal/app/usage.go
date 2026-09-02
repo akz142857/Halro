@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -127,10 +129,12 @@ func RebuildUsageSummary(ctx context.Context, cfg config.Config) (SummaryRebuild
 		return report, nil
 	}
 	if err := store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Payload, domain.RollupVersion, snapshot.Rollup,
+		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
+		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
 	); err != nil {
 		return SummaryRebuildReport{}, fmt.Errorf("write usage derivatives: %w", err)
 	}
+	aggregate.CommitCheckpoint(snapshot)
 	return report, nil
 }
 
@@ -168,4 +172,71 @@ func openUsageOffline(
 		return nil, nil, nil, err
 	}
 	return aggregate, exporter, closeResources, nil
+}
+
+// pruneUsageWindow trims the console's aggregate back to its window.
+//
+// Two things decide what goes: the cutoff, and how far the export has actually
+// got. The second is not a refinement — export selects attempts above the
+// Parquet manifest's watermark, so anything trimmed below it is archived and
+// anything trimmed above it is destroyed. Passing the watermark through means
+// a stalled or disabled export stops the trimming with it: an aggregate that
+// grows is a problem, an aggregate that quietly discards unarchived history is
+// a defect.
+//
+// It runs after the export, on the same tick, for the same reason.
+func (r *Runtime) pruneUsageWindow() {
+	window := r.consoleWindowDays()
+	if window < 1 {
+		return
+	}
+	manifest, err := r.usageExporter.LoadManifest()
+	if err != nil {
+		// No manifest is the ordinary state of an instance that has not
+		// exported yet, and any other read failure is the export being unwell.
+		// Either way the watermark is unknown, so nothing is trimmed.
+		if !errors.Is(err, os.ErrNotExist) {
+			r.logger.Warn("usage window not trimmed: the export manifest could not be read", "error", err)
+		}
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -window)
+	result := r.usage.PruneBefore(cutoff, manifest.LastSequence)
+	if result.Attempts == 0 && result.Summaries == 0 {
+		return
+	}
+	r.logger.Info("usage window trimmed",
+		"attempts", result.Attempts, "requests", result.Summaries,
+		"window_days", window, "floor", result.Floor)
+}
+
+// pruneUsageArchive removes exported partitions past the archive's retention.
+//
+// The same sweep `halro usage prune` performs, moved onto the maintenance tick.
+// It was a manual, offline command — it takes the data directory lock, so it
+// required stopping the gateway — which meant the setting shipped since the
+// beginning did nothing on an instance nobody remembered to stop. A retention
+// value that only takes effect when someone runs a command is a retention value
+// an auditor cannot be shown.
+//
+// The cutoff keeps one extra day on purpose (see usageRetentionCutoff's twin in
+// the CLI): partitions are dated in UTC, so an instance in any other zone would
+// otherwise lose a day it was promised.
+func (r *Runtime) pruneUsageArchive() {
+	days := r.config.Usage.RetentionDays
+	if days < 1 {
+		return
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -(days + 1))
+	report, err := r.usageExporter.PruneBefore(cutoff)
+	if err != nil {
+		r.logger.Warn("usage archive not pruned", "error", err)
+		return
+	}
+	if report.FilesRemoved == 0 {
+		return
+	}
+	r.logger.Info("usage archive pruned",
+		"files", report.FilesRemoved, "rows", report.RowsRemoved,
+		"cutoff", report.Cutoff, "retention_days", days)
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/compress/zstd"
 )
 
 // Schema 5 adds the upstream's own identifiers for a failed attempt — the
@@ -289,9 +290,28 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		return errors.New("usage manifest last sequence does not match its files")
 	}
 	if snapshot != nil {
+		// The window's lower edge. Below it the aggregate has been pruned, so
+		// there is nothing on this side to compare — and the rows on the
+		// Parquet side come out of the comparison with it, by row rather than
+		// by file, because one partition covers a whole day and a floor almost
+		// always falls inside a file rather than between two.
+		//
+		// This narrows the comparison; it does not relax it. Everything at or
+		// above the floor is still matched one for one, by count and by
+		// content. A snapshot that dropped records without declaring a floor is
+		// still refused, which is what keeps this from becoming a way to hide
+		// a lossy export.
+		floor := max(firstRetainedSequence, snapshot.Floor)
+		if snapshot.Floor > 0 {
+			for eventID, row := range canonicalRows {
+				if uint64(row.Sequence) < floor {
+					delete(seen, eventID)
+				}
+			}
+		}
 		expected := make(map[string]AttemptEvent)
 		for _, attempt := range snapshot.Attempts {
-			if firstRetainedSequence > 0 && attempt.Sequence >= firstRetainedSequence &&
+			if firstRetainedSequence > 0 && attempt.Sequence >= floor &&
 				attempt.Sequence <= manifest.LastSequence {
 				expected[attempt.EventID] = attempt
 			}
@@ -332,12 +352,66 @@ func (e *Exporter) Reconcile(snapshot Snapshot) (ReconciliationReport, error) {
 			firstRetained = entry.MinSequence
 		}
 	}
+	// The comparison runs over the range both sides still claim to hold, which
+	// is not the same as the range Parquet holds. The aggregate serves a
+	// console window and is pruned behind it, so below its floor there is
+	// nothing left to compare — counting those as missing would report the
+	// window working as a reconciliation failure, and doctor would refuse.
+	//
+	// Parquet's rows below the floor come off the same way, and by row rather
+	// than by file: one partition covers a whole day, so a floor almost always
+	// falls inside a file rather than between two. Subtracting whole files
+	// either kept rows the aggregate no longer has or discarded rows it does.
+	floor := max(firstRetained, snapshot.Floor)
+	if snapshot.Floor > 0 {
+		below, err := e.rowsBelow(manifest, floor)
+		if err != nil {
+			return report, err
+		}
+		if err := addInt64(&report.ParquetRecords, -below); err != nil {
+			return report, err
+		}
+	}
 	for _, attempt := range snapshot.Attempts {
-		if firstRetained > 0 && attempt.Sequence >= firstRetained && attempt.Sequence <= manifest.LastSequence {
+		if firstRetained > 0 && attempt.Sequence >= floor && attempt.Sequence <= manifest.LastSequence {
 			report.LedgerRecords++
 		}
 	}
 	return report, nil
+}
+
+// rowsBelow counts the exported rows the aggregate's window no longer covers.
+//
+// Only the partitions that straddle or precede the floor are read; the ones
+// entirely above it are answered from the manifest, which is what keeps a long
+// archive from being re-read on every reconciliation.
+func (e *Exporter) rowsBelow(manifest Manifest, floor uint64) (int64, error) {
+	var below int64
+	for _, entry := range manifest.Files {
+		if entry.MinSequence >= floor {
+			continue
+		}
+		if entry.MaxSequence < floor {
+			if err := addInt64(&below, entry.Records); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		path, err := e.safeManifestPath(entry.Path)
+		if err != nil {
+			return 0, err
+		}
+		rows, err := readAttemptRows(path, entry.format())
+		if err != nil {
+			return 0, err
+		}
+		for _, row := range rows {
+			if uint64(row.Sequence) < floor {
+				below++
+			}
+		}
+	}
+	return below, nil
 }
 
 func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
@@ -537,7 +611,13 @@ func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
 	if err = temp.Chmod(0o600); err != nil {
 		return err
 	}
-	writer := parquet.NewGenericWriter[parquetAttempt](temp)
+	// Explicit rather than the library's default, and zstd rather than snappy:
+	// these columns are identifiers, enumerations and timestamps, which
+	// dictionary-encode well and then compress well again, and a partition is
+	// written once and read rarely. Existing partitions are never rewritten, so
+	// this only changes what is written from here on — a reader handles both,
+	// because the codec is recorded per column chunk in the file itself.
+	writer := parquet.NewGenericWriter[parquetAttempt](temp, parquet.Compression(&zstd.Codec{}))
 	if _, err = writer.Write(rows); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write usage parquet: %w", err)
