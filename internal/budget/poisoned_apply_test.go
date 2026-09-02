@@ -15,7 +15,8 @@ import (
 func poisonState(t *testing.T, state *ledger.State) {
 	t.Helper()
 	err := state.Apply(ledger.Record{
-		Sequence: 1_000_000,
+		Generation: 1,
+		Sequence:   1_000_000,
 		Event: ledger.Event{
 			EventID:    "evt_poison",
 			Kind:       ledger.EventRequestAccepted,

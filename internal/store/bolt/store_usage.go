@@ -42,7 +42,7 @@ func (s *Store) PutUsageCheckpoint(
 	rollupVersion int,
 	rollup map[string]domain.DailyRollup,
 ) error {
-	if watermark.Sequence == 0 || watermark.Offset <= 0 || watermark.Generation != 1 {
+	if watermark.Sequence == 0 || watermark.Offset <= 0 || watermark.Generation == 0 {
 		return errors.New("usage checkpoint watermark is invalid")
 	}
 	if len(payload) == 0 {
@@ -205,7 +205,7 @@ func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
 		return ledger.Watermark{}, nil, err
 	}
 	if saved.Watermark.Sequence == 0 || saved.Watermark.Offset <= 0 ||
-		saved.Watermark.Generation != 1 || len(saved.Payload) == 0 {
+		saved.Watermark.Generation == 0 || len(saved.Payload) == 0 {
 		return ledger.Watermark{}, nil, errors.New("usage checkpoint is invalid")
 	}
 	return saved.Watermark, bytes.Clone(saved.Payload), nil

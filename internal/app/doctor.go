@@ -511,9 +511,21 @@ func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, master
 		return "unverified", "ledger chain key is unavailable: " + err.Error()
 	}
 	defer clear(ledgerKey)
+	// Sealed generations first. Verifying only the active file would report a
+	// clean chain after every roll while checking almost none of the ledger —
+	// and right after a roll, none of it at all.
+	sealed, err := ledger.VerifySegments(filepath.Dir(path), ledgerKey, 0)
+	if err != nil {
+		return "fail", "ledger chain verification failed: " + err.Error()
+	}
 	report, partial, err := ledger.VerifyChain(path, ledgerKey)
 	if err != nil {
 		return "fail", "ledger chain verification failed: " + err.Error()
+	}
+	for _, segment := range sealed {
+		report.SealedGenerations++
+		report.SealedAuthenticated += segment.Authenticated
+		report.ChecksumOnly += segment.ChecksumOnly
 	}
 	if partial {
 		return "unverified", "ledger has a partial tail; start Halro to repair it before verifying"
@@ -522,9 +534,15 @@ func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, master
 	if err != nil {
 		return "unverified", "ledger chain checkpoint is unavailable: " + err.Error()
 	}
-	if checkpoint.Sequence > report.ChainSequence ||
-		(checkpoint.Sequence == report.ChainSequence &&
-			(checkpoint.Offset != report.ChainOffset || checkpoint.Hash != report.ChainHash)) {
+	// The offset is only comparable inside one generation: a roll leaves the
+	// sequence and the chain head where they were and moves the head into a
+	// fresh file at offset zero.
+	if checkpoint.Sequence > report.ChainSequence || checkpoint.Generation > report.Head.Generation {
+		return "fail", "ledger chain does not match its trusted checkpoint"
+	}
+	if checkpoint.Sequence == report.ChainSequence &&
+		(checkpoint.Hash != report.ChainHash ||
+			(checkpoint.Generation == report.Head.Generation && checkpoint.Offset != report.ChainOffset)) {
 		return "fail", "ledger chain does not match its trusted checkpoint"
 	}
 	if !report.ChainVerified {
@@ -532,6 +550,11 @@ func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, master
 			return "fail", "ledger chain does not match its trusted checkpoint"
 		}
 		return "unverified", fmt.Sprintf("no authenticated frames yet (%d checksum-only)", report.ChecksumOnly)
+	}
+	if report.SealedGenerations > 0 {
+		return "pass", fmt.Sprintf("chain authenticated (%d frames across %d sealed generations, %d in the active one, %d checksum-only)",
+			report.SealedAuthenticated+report.Authenticated, report.SealedGenerations,
+			report.Authenticated, report.ChecksumOnly)
 	}
 	return "pass", fmt.Sprintf("chain authenticated (%d frames, %d checksum-only)", report.Authenticated, report.ChecksumOnly)
 }

@@ -160,6 +160,30 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_usage_window_trimmed_total", "counter",
 		"Attempts removed from the usage aggregate by the console window.")
 	fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
+	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
+	// what it moved out of the way and is still keeping. Read together they say
+	// whether the growth an operator is watching is in the file being written
+	// or in the archive behind it — two very different problems, and before
+	// sealing there was no way to tell them apart because there was only one
+	// number.
+	sealed := r.ledger.Segments()
+	var sealedBytes, sealedStored int64
+	for _, segment := range sealed {
+		sealedBytes += segment.Length
+		sealedStored += segment.StoredLength
+	}
+	metricHeader(output, "halro_ledger_active_bytes", "gauge",
+		"Bytes in the ledger generation currently being appended to.")
+	fmt.Fprintf(output, "halro_ledger_active_bytes %d\n", r.ledger.ActiveBytes())
+	metricHeader(output, "halro_ledger_sealed_generations", "gauge",
+		"Sealed ledger generations this data directory holds.")
+	fmt.Fprintf(output, "halro_ledger_sealed_generations %d\n", len(sealed))
+	metricHeader(output, "halro_ledger_sealed_bytes", "gauge",
+		"Frame bytes held in sealed ledger generations, before compression.")
+	fmt.Fprintf(output, "halro_ledger_sealed_bytes %d\n", sealedBytes)
+	metricHeader(output, "halro_ledger_sealed_stored_bytes", "gauge",
+		"Disk bytes the sealed ledger generations occupy, after compression.")
+	fmt.Fprintf(output, "halro_ledger_sealed_stored_bytes %d\n", sealedStored)
 	// Deliberately unlabelled: the interesting dimension here is the source
 	// address, and that is exactly the label that would make this series
 	// unbounded — and would publish caller addresses through the metrics port.

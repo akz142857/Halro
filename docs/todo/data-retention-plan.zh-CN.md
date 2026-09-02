@@ -4,7 +4,9 @@
 - 日期：2026-09-02
 - 文档语言：中文
 - 适用范围：Ledger WAL、Usage Aggregate 与 checkpoint、Parquet 导出、日 rollup、控制台「用量与调用」、设置中心
-- 数据迁移：第一、二阶段不需要重新初始化；WAL 封存（第三阶段）需要新的段格式与 generation 语义，届时单独说明
+- 数据迁移：第一、二阶段不需要重新初始化。第三阶段同样不需要：段清单在第一次滚动
+  时才出现，未开启封存的目录一个字节都不变；bbolt 迁移 34 给链 checkpoint 补上
+  `generation: 1`（封存前的每一条 checkpoint 描述的都正是第 1 代）
 
 ## 一、问题
 
@@ -296,10 +298,53 @@ ledger:
 
 ### 第三阶段 · 封住「越跑越满」
 
-**S7 · WAL 封存与截断**
-- 按 D6 的骨架实施，默认关闭；
-- 四个必答问题各自要有测试：跨代链续接、跨代 verify、跨代备份恢复、跨代重放确定性；
-- 对真实数据目录副本做一次完整的「封存 → verify → 重放重建 → 比对」。
+**S7 · WAL 封存与截断** —— 已完成（2026-09-02）。
+
+**与 D6 骨架的一处偏离，以及为什么。** D6 写的是「把前缀密封成只读段，活动 WAL
+从 generation+1 重新开始」。真按前缀切，切点之后剩下的帧就要被搬进新文件、偏移
+量整体前移——而 usage checkpoint 存的正是 `{generation, offset, sequence}` 这种
+水位。偏移一旦重编号，一个封存前写下的水位就会指向另一条记录，而且没有任何东西
+会报错。改成**整代滚动**：整个活动文件成段，新文件从空开始，任何一帧的偏移终生
+不变，跨代重放因此是平凡正确的。代价是封存点只能落在滚动那一刻，而不是操作者指
+定的任意位置——这个代价换的是「不需要证明偏移重编号是安全的」。
+
+**不删除任何东西。** 第三章表格里封存段的保留策略本来就是「长期 / 可外移」：账
+务要能从完整历史重建，所以段是永久归档，只是小 5.4 倍且可以被搬走。因此 D6 的三
+条封存前置条件不再是滚动的前置条件（滚动不丢任何东西），而是**压缩**的前置条件
+——一个已经完全进入 Parquet 归档并越过 usage checkpoint 的代，才是操作者可以安全
+搬离本机的代，让「已压缩」和「可搬走」是同一件事。
+
+**四个必答问题的答案**（`internal/ledger/seal_test.go` 各一节，
+`internal/app/ledger_seal_contract_test.go` 覆盖备份与 verify 命令）：
+
+1. **跨代链续接**——新代第一帧的 previous-hash 就是上一代的链头，记在段清单的
+   `end_hash` 里；打开时用它作为校验器的锚点。把活动文件首帧的 previous-hash 改
+   成全零（即「把新代从历史上摘下来」）会被 `ErrTampered` 拒绝。
+2. **跨代 verify**——`VerifySegments` 沿段清单逐代校验：锚点必须接得上前一代的
+   链头、存储校验和必须匹配、扫描必须停在清单声称的长度与序号上。段被改一个
+   字节会被发现，段被删除返回 `ErrSegmentMissing`。
+3. **跨代备份恢复**——`Snapshot` 之外新增 `StageSegments`，把每个段与段清单一起
+   放进 `.hmbk`；恢复后逐条重放与源实例完全一致，`ledger verify` 报出
+   `sealed_generations` 与其中的帧数。
+4. **跨代重放确定性**——封存前后、压缩前后，`Replay(Watermark{})` 与
+   「从一个封存前取得的水位续放」都返回逐条相同的结果。
+
+**顺带查出并修掉的真实缺陷。** `halro doctor` 与 `halro usage export` 都通过
+`ledger.InspectReplay` 重建状态，而它只读活动文件——封存之后 doctor 把真实数据目
+录报成 `committed sequence 0 at offset 0; chain authenticated (0 frames)`，即一个
+空账本，且状态仍是 `pass`。这是「校验范围随封存缩小到零、却仍然报通过」的那类
+失败。`Inspect`/`InspectReplay` 已改为跨代，doctor 的链校验也改为先校验封存段。
+
+**真实数据目录副本上的完整验证**（155 帧、157,304 字节的 `ledger.wal`）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| `ledger seal` | 157,304 → 28,949 字节，**5.43×**（方案预估 5.6×） |
+| `ledger verify` | 155 帧全部认证，链头哈希与封存前逐字节相同 |
+| `doctor` | healthy，`committed sequence 155`，「155 frames across 1 sealed generations」 |
+| `usage compact` 重放重建 | 生成的 manifest 与未封存副本**逐字节相同** |
+| `usage verify` | ledger 31 / parquet 31，无缺失、无重复 |
+| `halro start` | 在已封存目录上正常启动并绑定监听 |
 
 ### 第四阶段 · 设置中心
 
@@ -309,7 +354,8 @@ ledger:
 
 - `internal/usage`：裁剪边界、索引一致性、checkpoint round-trip、裁剪后重放重建结果一致；
 - `internal/app`：导出失败时不裁；doctor 在裁剪后通过；
-- `internal/ledger`（第三阶段）：跨代链续接、跨代 verify、跨代 `Replay` 确定性；
+- `internal/ledger`（第三阶段）：跨代链续接、跨代 verify、跨代 `Replay` 确定性、
+  滚动中途崩溃在改名两侧各自的恢复方向；
 - 对真实数据目录副本跑完整启动 + 裁剪 + `doctor` + `usage verify`；
 - **改造前后各测一次 checkpoint 耗时与大小、WAL 日增与封存后占用**，作为方案有效性的证据，而不是断言。
 
@@ -323,5 +369,7 @@ ledger:
 6. Parquet 裁剪不再需要停机；
 7. 文档不再声称可见窗口等于 `retention_days`；
 8. （第三阶段）封存后账务可从「封存段 + 活动 WAL」完整重建，结果与未封存时逐条一致；
-9. （第三阶段）WAL 磁盘占用不再随运行时间单调上升；
+   ✅ 已在真实数据目录副本上验证（重放重建出的 manifest 逐字节相同）；
+9. （第三阶段）**活动** WAL 不再随运行时间单调上升，归档缩小到约 1/5.4 且可外移；
+   历史本身仍然全量保留，因为账务必须能从它重建；
 10. 现有数据目录直接升级，前两阶段无需重新初始化。

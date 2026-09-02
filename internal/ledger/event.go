@@ -237,10 +237,15 @@ func (e Event) Validate() error {
 }
 
 type Record struct {
-	Sequence uint64
-	Offset   int64
-	Epoch    uint8
-	Event    Event
+	// Generation names the WAL file this record was read from. It is 1 for
+	// every log that has never been sealed, and it is what makes a stored
+	// watermark resolvable after sealing — a sequence says which record, the
+	// generation and offset say where it sits.
+	Generation uint64
+	Sequence   uint64
+	Offset     int64
+	Epoch      uint8
+	Event      Event
 }
 
 type Watermark struct {
@@ -335,7 +340,7 @@ func (s *State) Apply(record Record) error {
 		// appended more than once. Its effects are already reflected in the
 		// read model, but replay must still consume the later physical record.
 		if record.Sequence > s.watermark.Sequence {
-			s.watermark = Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
+			s.watermark = Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 		}
 		return nil
 	}
@@ -432,7 +437,7 @@ func (s *State) Apply(record Record) error {
 	s.balances[key] = balance
 	s.eventDigests[event.EventID] = digest
 	s.watermark = Watermark{
-		Generation: 1,
+		Generation: record.Generation,
 		Offset:     record.Offset,
 		Sequence:   record.Sequence,
 	}

@@ -937,6 +937,13 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// gone after the window, and a promise kept by a goroutine nobody
 			// notices stopping is not one.
 			r.purgeFailureCaptures()
+			// Sealing rides the same tick and comes last, after both
+			// derivatives have advanced: the roll is bounded by size alone, but
+			// compaction is bounded by how far the export and the checkpoint
+			// have got, and reading those before advancing them would hold a
+			// generation uncompressed for an extra interval for no reason.
+			r.sealLedgerGeneration()
+			r.compactLedgerSegments()
 		case <-ctx.Done():
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
@@ -1004,7 +1011,7 @@ func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
 // usage checkpoint's ticker bounds that window to one interval and costs a
 // small bbolt write on a path that already does a larger one.
 func (r *Runtime) advanceLedgerChainCheckpoint() {
-	sequence, offset, hash, ok := r.ledger.ChainHead()
+	head, hash, ok := r.ledger.ChainHead()
 	if !ok {
 		return
 	}
@@ -1013,11 +1020,12 @@ func (r *Runtime) advanceLedgerChainCheckpoint() {
 		r.logger.Warn("ledger chain checkpoint load failed", "error", err)
 		return
 	}
-	if checkpoint.Sequence >= sequence {
+	if checkpoint.Sequence > head.Sequence ||
+		(checkpoint.Sequence == head.Sequence && checkpoint.Generation >= head.Generation) {
 		return
 	}
 	if err := r.store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
-		Sequence: sequence, Offset: offset, Hash: hash,
+		Generation: head.Generation, Sequence: head.Sequence, Offset: head.Offset, Hash: hash,
 	}); err != nil {
 		r.logger.Warn("ledger chain checkpoint save failed", "error", err)
 	}
@@ -1342,7 +1350,7 @@ func reconcileAuditCheckpoint(store *boltstore.Store, summary audit.Summary) err
 // there is, not a fresh install. Returning early on ok == false read that
 // case as brand new and let a wiped WAL start clean.
 func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Log) error {
-	sequence, offset, hash, ok := ledgerLog.ChainHead()
+	head, hash, ok := ledgerLog.ChainHead()
 	checkpoint, err := store.LedgerChainCheckpoint()
 	if err != nil {
 		return fmt.Errorf("load ledger chain checkpoint: %w", err)
@@ -1353,13 +1361,22 @@ func reconcileLedgerChainCheckpoint(store *boltstore.Store, ledgerLog *ledger.Lo
 		}
 		return nil
 	}
-	if checkpoint.Sequence > sequence ||
-		(checkpoint.Sequence == sequence && (checkpoint.Offset != offset || checkpoint.Hash != hash)) {
+	if checkpoint.Sequence > head.Sequence || checkpoint.Generation > head.Generation {
 		return errors.New("ledger chain does not match its trusted checkpoint")
 	}
-	if checkpoint.Sequence < sequence {
+	if checkpoint.Sequence == head.Sequence {
+		// The offset is only comparable inside one generation. A roll leaves
+		// the sequence and the chain head exactly where they were and moves the
+		// head into a fresh file at offset zero, which is the one case where a
+		// changed offset is not a changed history.
+		if checkpoint.Hash != hash ||
+			(checkpoint.Generation == head.Generation && checkpoint.Offset != head.Offset) {
+			return errors.New("ledger chain does not match its trusted checkpoint")
+		}
+	}
+	if checkpoint.Sequence < head.Sequence || checkpoint.Generation < head.Generation {
 		if err := store.PutLedgerChainCheckpoint(boltstore.LedgerChainCheckpoint{
-			Sequence: sequence, Offset: offset, Hash: hash,
+			Generation: head.Generation, Sequence: head.Sequence, Offset: head.Offset, Hash: hash,
 		}); err != nil {
 			return fmt.Errorf("checkpoint ledger chain: %w", err)
 		}

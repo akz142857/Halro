@@ -51,7 +51,8 @@ func retentionEvents(t *testing.T, count int, at time.Time) *Aggregate {
 		} {
 			sequence++
 			if err := aggregate.Apply(ledger.Record{
-				Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+				Generation: 1,
+				Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +172,8 @@ func TestTheDashboardNeedsSevenDaysOfHistory(t *testing.T) {
 		} {
 			sequence++
 			if err := aggregate.Apply(ledger.Record{
-				Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+				Generation: 1,
+				Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
 			}); err != nil {
 				t.Fatal(err)
 			}

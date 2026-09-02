@@ -262,7 +262,11 @@ func RestoreCheckpoint(payload []byte) (*Aggregate, error) {
 	if saved.Watermark.Sequence == 0 && (saved.Watermark.Offset != 0 || saved.Watermark.Generation != 0) {
 		return nil, errors.New("usage checkpoint has an invalid empty watermark")
 	}
-	if saved.Watermark.Sequence > 0 && (saved.Watermark.Offset <= 0 || saved.Watermark.Generation != 1) {
+	// Any generation from the first on. Pinning this to 1 would refuse to
+	// restore an aggregate the moment the Ledger sealed a generation, and the
+	// checkpoint would be rebuilt from a full replay every start — correct, but
+	// silently paying the cost sealing exists to avoid.
+	if saved.Watermark.Sequence > 0 && (saved.Watermark.Offset <= 0 || saved.Watermark.Generation == 0) {
 		return nil, errors.New("usage checkpoint has an invalid watermark")
 	}
 	aggregate := NewAggregate()
@@ -535,7 +539,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		}
 	}
 	a.rememberEventID(event.EventID)
-	a.watermark = ledger.Watermark{Generation: 1, Offset: record.Offset, Sequence: record.Sequence}
+	a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
 }
 

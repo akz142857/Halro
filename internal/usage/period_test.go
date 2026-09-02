@@ -29,7 +29,8 @@ func settledAt(t *testing.T, aggregate *Aggregate, sequence uint64, instant time
 			ProviderInputTokens: 1, CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"},
 	} {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: sequence*10 + uint64(offset), Offset: int64(sequence) * 100, Event: event,
+			Generation: 1,
+			Sequence:   sequence*10 + uint64(offset), Offset: int64(sequence) * 100, Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}

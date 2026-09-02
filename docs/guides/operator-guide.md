@@ -477,6 +477,46 @@ and the aggregate grows — deliberately: an aggregate that grows is a problem,
 one that discards history the archive never received is a defect. Nothing is
 lost to the trim that is not already in a partition.
 
+#### Keeping the ledger from being one file that only grows
+
+The accounting write-ahead log is replayed from byte zero on every start, so
+nothing in it can be deleted. Until sealing, that meant one file that grew for
+the life of the instance — about 5 KB per request, or roughly 4 GB a day at ten
+requests per second, forever.
+
+`ledger.seal.enabled` (off by default) changes the shape of that. Once the
+active generation passes `ledger.seal.max_active_bytes` (default 8 GiB) it is
+rolled off whole: renamed to `ledger-<N>.wal`, recorded in
+`<data_dir>/ledger/segments.json`, and replaced by an empty successor whose
+first frame continues the same hash chain. On a later maintenance tick, once
+everything in that generation has reached both the Parquet archive and the
+durable usage checkpoint, `ledger.seal.compress` replaces it with
+`ledger-<N>.seg.gz` — measured at 5.4x on a real `ledger.wal`, with the
+plaintext length and checksum verified before anything points at the compressed
+copy.
+
+Nothing is deleted. Replay reads the sealed generations in order and then the
+active file, so balances still rebuild from the whole history, and
+`halro ledger verify` and `halro doctor` authenticate every generation rather
+than only the one being written. What sealing gives you is a bounded active
+file, a 5x smaller archive, and — because a sealed generation is immutable and
+named — the ability to move old generations onto cheaper storage yourself.
+
+`halro ledger seal` draws the boundary on demand. It takes the data directory
+lock, so it is an offline command: use it before copying a data directory or
+handing an auditor an archive, when you want the cut made now rather than
+whenever the file next crosses the threshold.
+
+Three things follow from a sealed data directory, and all three are enforced:
+
+- **A generation that goes missing is refused, not skipped.** Deleting
+  `ledger-1.seg.gz` because it looked like a leftover makes the instance fail to
+  start rather than start with a shorter history.
+- **A backup carries every generation.** `.hmbk` archives stage the segment
+  files and the manifest beside the active WAL; a restore puts them back.
+- **A roll is interruptible.** The rename is the commit point, and an open that
+  finds a half-finished roll decides from the files which side it is on.
+
 #### Capturing what a failed call carried
 
 `gateway.failure_capture.enabled` keeps the request a failed call sent upstream

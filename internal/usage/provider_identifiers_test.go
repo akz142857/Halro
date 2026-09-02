@@ -45,7 +45,8 @@ func applyEvents(t *testing.T, aggregate *Aggregate, events []ledger.Event) {
 	t.Helper()
 	for index, event := range events {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}

@@ -27,6 +27,7 @@ type Config struct {
 	Storage        Storage        `yaml:"storage"`
 	Admin          Admin          `yaml:"admin"`
 	Usage          Usage          `yaml:"usage"`
+	Ledger         Ledger         `yaml:"ledger"`
 	Gateway        Gateway        `yaml:"gateway"`
 	Retry          Retry          `yaml:"retry"`
 	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
@@ -279,6 +280,40 @@ const (
 const (
 	UsageExportFormatParquet = "parquet"
 	UsageExportFormatNDJSON  = "ndjson"
+)
+
+// Ledger configures the accounting write-ahead log itself.
+//
+// It is separate from Usage because Usage settings govern a derivative — an
+// aggregate, an archive, a rollup, all rebuildable — and these govern the
+// authority they are derived from.
+type Ledger struct {
+	Seal LedgerSeal `yaml:"seal"`
+}
+
+// LedgerSeal controls whether the WAL is allowed to stop being one file.
+//
+// Default off. Sealing is the only mechanism in this system that lets the
+// accounting authority's bytes move, and turning it on should be a decision an
+// operator makes about their disk, not something a default does to them.
+type LedgerSeal struct {
+	Enabled bool `yaml:"enabled"`
+	// MaxActiveBytes is the size the active generation may reach before it is
+	// rolled off. Bytes rather than days: what runs out is disk, and a day of
+	// history is a different number of bytes on every install.
+	MaxActiveBytes int64 `yaml:"max_active_bytes"`
+	// Compress replaces a sealed generation's plain bytes with a gzip copy on a
+	// later maintenance tick. Measured at 5.6x on a real ledger.wal, paid once
+	// per generation, off the request path entirely.
+	Compress bool `yaml:"compress"`
+}
+
+// Sealing bounds. The floor is not a style preference: a generation smaller
+// than this rolls often enough that the manifest, not the frames, becomes the
+// bulk of the directory, and every roll is a full fsync of a renamed file.
+const (
+	DefaultLedgerSealMaxActiveBytes = int64(8) << 30
+	MinLedgerSealMaxActiveBytes     = int64(16) << 20
 )
 
 type Admin struct {
@@ -832,6 +867,9 @@ func (c *Config) Normalize() error {
 	if c.Usage.ExportFormat == "" {
 		c.Usage.ExportFormat = UsageExportFormatParquet
 	}
+	if c.Ledger.Seal.MaxActiveBytes == 0 {
+		c.Ledger.Seal.MaxActiveBytes = DefaultLedgerSealMaxActiveBytes
+	}
 	if c.Admin.SessionTTL == 0 {
 		c.Admin.SessionTTL = Duration(8 * time.Hour)
 	}
@@ -1167,6 +1205,12 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Usage.ExportFormat != UsageExportFormatParquet && c.Usage.ExportFormat != UsageExportFormatNDJSON {
 		problems = append(problems, errors.New("usage.export_format must be parquet or ndjson"))
+	}
+	// Only checked when sealing is on: an operator who leaves it off should not
+	// have to hold an opinion about a threshold that governs nothing.
+	if c.Ledger.Seal.Enabled && c.Ledger.Seal.MaxActiveBytes < MinLedgerSealMaxActiveBytes {
+		problems = append(problems, fmt.Errorf(
+			"ledger.seal.max_active_bytes must be at least %d bytes", MinLedgerSealMaxActiveBytes))
 	}
 	if c.Admin.SessionTTL <= 0 || c.Admin.IdleTimeout <= 0 ||
 		c.Admin.IdleTimeout > c.Admin.SessionTTL || c.Admin.LoginRPM < 1 {

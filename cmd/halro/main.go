@@ -748,17 +748,25 @@ func run(arguments []string, logger *slog.Logger) error {
 			return errors.New("usage: halro audit verify|verify-anchor --config <path> [--anchors <path>]")
 		}
 	case "ledger":
-		if len(arguments) < 2 || arguments[1] != "verify" {
-			return errors.New("usage: halro ledger verify --config <path>")
+		if len(arguments) < 2 || (arguments[1] != "verify" && arguments[1] != "seal") {
+			return errors.New("usage: halro ledger verify|seal --config <path>")
 		}
-		flags := flag.NewFlagSet("ledger verify", flag.ContinueOnError)
+		flags := flag.NewFlagSet("ledger "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
+		compress := flags.Bool("compress", true, "compress the sealed generation (seal only)")
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
+		}
+		if arguments[1] == "seal" {
+			report, err := app.SealLedger(context.Background(), cfg, *compress)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
 		}
 		report, err := app.VerifyLedger(context.Background(), cfg)
 		if err != nil {

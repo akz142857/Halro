@@ -55,7 +55,8 @@ func seedRetentionUsage(t *testing.T, runtime *Runtime, requests int, at time.Ti
 		} {
 			sequence++
 			if err := runtime.usage.Apply(ledger.Record{
-				Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+				Generation: 1,
+				Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
 			}); err != nil {
 				t.Fatal(err)
 			}

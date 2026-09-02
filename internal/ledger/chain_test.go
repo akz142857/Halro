@@ -141,7 +141,8 @@ func TestMasterKeyRotationPreservesVerificationOfPriorFrames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sequence, _, _, ok := reopened.ChainHead()
+	head, _, ok := reopened.ChainHead()
+	sequence := head.Sequence
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}

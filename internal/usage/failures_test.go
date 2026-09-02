@@ -26,7 +26,8 @@ func failureFixture(t *testing.T) *Aggregate {
 		t.Helper()
 		sequence++
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+			Generation: 1,
+			Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}

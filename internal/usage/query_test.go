@@ -34,7 +34,8 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 		} {
 			sequence++
 			if err := aggregate.Apply(ledger.Record{
-				Sequence: sequence, Offset: int64(sequence * 100), Event: event,
+				Generation: 1,
+				Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +98,8 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 			Outcome: "success"},
 	} {
 		if err := aggregate.Apply(ledger.Record{
-			Sequence: uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
+			Generation: 1,
+			Sequence:   uint64(index + 1), Offset: int64((index + 1) * 100), Event: event,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +135,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 			CommittedMicrosUSD: ledger.MicrosUSD(1_000), Outcome: "success", FallbackCount: 1},
 	}
 	for index, event := range events {
-		if err := aggregate.Apply(ledger.Record{Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
+		if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: uint64(index + 1), Offset: int64(index + 1), Event: event}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -192,7 +194,7 @@ func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
 			{EventID: request.id + "_final", Kind: ledger.EventRequestFinalized, RequestID: request.id, ProjectID: "project", PeriodID: "period", OccurredAt: base.Add(request.latency), Outcome: request.outcome},
 		} {
 			sequence++
-			if err := aggregate.Apply(ledger.Record{Sequence: sequence, Offset: int64(sequence), Event: event}); err != nil {
+			if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: sequence, Offset: int64(sequence), Event: event}); err != nil {
 				t.Fatal(err)
 			}
 		}

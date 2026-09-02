@@ -400,7 +400,8 @@ func validateRestoreStage(
 	if err != nil {
 		return fmt.Errorf("open staged Ledger: %w", err)
 	}
-	chainSequence, chainOffset, chainHash, chainVerified := ledgerLog.ChainHead()
+	chainHead, chainHash, chainVerified := ledgerLog.ChainHead()
+	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
 	aggregate := usage.NewAggregate()
 	stagedLedgerState := ledger.NewState()
 	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
@@ -568,11 +569,20 @@ func createBackupSnapshotWithLedger(
 	if err != nil {
 		return backup.Manifest{}, err
 	}
+	// The sealed generations go with it. A backup of the active file alone
+	// verifies perfectly and restores an installation whose balances begin at
+	// whatever the last roll left behind — the worst shape a backup defect can
+	// take, because nothing about the restored instance looks wrong.
+	stagedSegments, err := ledgerLog.StageSegments(staging)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
 	snapshotLog, err := ledger.OpenWithOptions(ledgerSnapshot, ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	chainSequence, chainOffset, chainHash, chainVerified := snapshotLog.ChainHead()
+	chainHead, chainHash, chainVerified := snapshotLog.ChainHead()
+	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
 	ledgerAggregate := usage.NewAggregate()
 	ledgerState := ledger.NewState()
 	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
@@ -661,6 +671,11 @@ func createBackupSnapshotWithLedger(
 		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
+	}
+	for _, name := range stagedSegments {
+		files = append(files, backup.SourceFile{
+			ArchivePath: "data/ledger/" + name, LocalPath: filepath.Join(staging, name),
+		})
 	}
 	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest)
 	if err != nil {

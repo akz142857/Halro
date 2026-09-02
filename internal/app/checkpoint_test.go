@@ -135,5 +135,5 @@ func checkpointRecord(sequence uint64, offset int64, kind ledger.EventKind) ledg
 	if kind == ledger.EventRequestFinalized {
 		event.Outcome = "success"
 	}
-	return ledger.Record{Sequence: sequence, Offset: offset, Event: event}
+	return ledger.Record{Generation: 1, Sequence: sequence, Offset: offset, Event: event}
 }
