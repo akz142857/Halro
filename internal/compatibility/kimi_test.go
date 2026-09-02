@@ -130,13 +130,17 @@ func TestKimiChatWritesTheReasoningSpellingTheModelReads(t *testing.T) {
 	}
 }
 
-// A forced tool call is refused while the model is reasoning, and accepted
-// while it is not. Kimi's parameter reference says the limit belongs to the
-// model — kimi-k3 accepts required, the K2.x line does not — and the upstream's
-// own error says otherwise: `tool_choice 'required' is incompatible with
-// thinking enabled`. This pins the measured contract, and it is written as a
-// grid because the model-keyed version passed a one-model test.
-func TestKimiChatRefusesAForcedToolCallOnlyWhileTheModelReasons(t *testing.T) {
+// A forced tool call is refused on the K2.x line while it is reasoning, and
+// nowhere else. Both conditions have to hold, and each was arrived at by
+// overturning a version that had only one of them: Kimi's parameter reference
+// says the limit is the model, its own error message says the limit is thinking
+// enabled, and the four measured points say it is the conjunction — kimi-k3
+// answers 200 with a tool call and a reasoning span in the same response.
+//
+// Written as a grid for that reason. The model-keyed version passed a one-model
+// test, and the thinking-keyed version passed a grid that had no kimi-k3 row
+// with a depth on it.
+func TestKimiChatRefusesAForcedToolCallOnlyOnTheK2LineWhileItReasons(t *testing.T) {
 	for _, choice := range []json.RawMessage{
 		json.RawMessage(`"required"`),
 		json.RawMessage(`{"type":"function","function":{"name":"f"}}`),
@@ -151,10 +155,12 @@ func TestKimiChatRefusesAForcedToolCallOnlyWhileTheModelReasons(t *testing.T) {
 			// portable request.
 			{model: "kimi-k3", refused: false},
 			{model: "kimi-k2.6", refused: false},
-			// A depth was asked for, so thinking is on and the pair conflicts.
-			// kimi-k3 is the other row the model-keyed version got wrong — it sent
-			// this to Kimi, which answered 400 after the reservation.
-			{model: "kimi-k3", effort: "high", refused: true},
+			// A depth was asked for. On kimi-k3 that is fine and measured:
+			// 200, tool_calls, reasoning_content non-empty, all in one response.
+			// This is the row the thinking-keyed version got wrong.
+			{model: "kimi-k3", effort: "high", refused: false},
+			{model: "kimi-k3", effort: "max", refused: false},
+			// The K2.x line with thinking on is the pair that actually conflicts.
 			{model: "kimi-k2.6", effort: "low", refused: true},
 			// Explicitly no depth is the same as nothing asked.
 			{model: "kimi-k3", effort: "none", refused: false},
@@ -372,13 +378,23 @@ func TestKimiChatFieldRulesAgreeWithTheRenderer(t *testing.T) {
 				c.Stop = []string{long}
 				w.Stop = json.RawMessage(`["` + long + `"]`)
 			}},
-		{name: "a forced tool call with a depth", model: "kimi-k3",
+		{name: "a forced tool call with a depth on the model that allows it", model: "kimi-k3",
 			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
 				c.ReasoningEffort, w.ReasoningEffort = "high", "high"
 				c.Tools = []semantic.Tool{{Name: "f"}}
 				c.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceRequired}
 				w.ToolChoice = json.RawMessage(`"required"`)
 			}},
+		// Residue, and the trade behind it is the point: a rule keyed by profile
+		// would have to refuse the kimi-k3 row above to route this one away, and
+		// kimi-k3 with a depth and a forced tool is measured working.
+		{name: "a forced tool call with a depth on the line that refuses it", model: "kimi-k2.6",
+			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
+				c.ReasoningEffort, w.ReasoningEffort = "low", "low"
+				c.Tools = []semantic.Tool{{Name: "f"}}
+				c.ToolChoice = &semantic.ToolChoice{Mode: semantic.ToolChoiceRequired}
+				w.ToolChoice = json.RawMessage(`"required"`)
+			}, residue: true},
 		{name: "a forced tool call with nothing asked", model: "kimi-k2.6",
 			mutate: func(c *semantic.GenerateRequest, w *openaiapi.ChatCompletionRequest) {
 				c.Tools = []semantic.Tool{{Name: "f"}}

@@ -389,14 +389,15 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 				return len(value) > kimiMaxStopBytes || !utf8.ValidString(value)
 			}), "stop")
 		add(request.ReasoningEffort != "" && !slices.Contains(KimiPortableEfforts, request.ReasoningEffort), "reasoning_effort")
-		// A forced tool call and a depth cannot be asked for together on any Kimi
-		// model: the upstream answers `tool_choice 'required' is incompatible
-		// with thinking enabled`, and the Anthropic face says the same of a named
-		// function. The half that depends on the model — whether reasoning ends up
-		// on for a request that asked for no depth — stays in the renderer, which
-		// is the only layer holding the model. This half does not, so it is routed
-		// away before the reservation instead.
-		add(KimiEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceForces(request.ToolChoice), "tool_choice")
+		// tool_choice is deliberately absent, and the first version of this rule
+		// had it. A forced tool call conflicts with reasoning on the K2.x line and
+		// not on kimi-k3, measured — k3 answers 200 with tool_calls and a
+		// reasoning_content in the same response. A rule keyed by profile cannot
+		// tell them apart, so declaring it would route away the request that works
+		// in order to spare the one that does not, and the one that works is the
+		// flagship model. The renderer refuses the failing pair instead, after the
+		// reservation, which is the same per-model residue already recorded
+		// against the output bound and the reasoning spelling.
 	}, domain.ProfileKimiChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.

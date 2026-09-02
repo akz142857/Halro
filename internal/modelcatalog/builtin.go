@@ -569,12 +569,23 @@ func kimiModels() []Entry {
 	// them, and an entry that guesses costs an operator a deployment that fails
 	// every call.
 	//
-	// Both reason unasked wherever they are served: `invalid thinking: only
-	// type=enabled is allowed for this model`, so the renderer sends no off
-	// switch because there is none to send. On the Chat northbound face the
-	// answer comes back as reasoning_content and is rendered; on the Responses
-	// and Messages faces it cannot be, and that pair is the residue the guard
-	// names.
+	// Both reason unasked, and that is measured on each of them rather than
+	// inferred from the refusal they share. 2026-09-02, a plain request with no
+	// thinking member on either identifier:
+	//
+	//	kimi-k2.7-code            reasoning_content non-empty, reasoning_tokens 26
+	//	kimi-k2.7-code-highspeed  reasoning_content non-empty, reasoning_tokens 28
+	//
+	// The distinction matters because the mark drives routing now. What was known
+	// before was only that they refuse `thinking:{"type":"disabled"}` — `invalid
+	// thinking: only type=enabled is allowed for this model` — and "cannot be
+	// switched off" is not the same claim as "reasons on a request that asked for
+	// nothing". MiniMax-M3 had just demonstrated the gap between those two by
+	// documenting an adaptive switch and then returning no reasoning at all.
+	//
+	// On the Chat northbound face the answer comes back as reasoning_content and
+	// is rendered; on the Responses and Messages faces it cannot be, and the
+	// router drops these targets there before the reservation.
 	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
 		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}

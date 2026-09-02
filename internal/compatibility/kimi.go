@@ -378,42 +378,42 @@ func renderKimiResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
 	}
 }
 
-// applyKimiToolChoice enforces the one tool_choice constraint Kimi has, and it
-// is keyed on whether the model will be reasoning rather than on which model was
-// named.
+// applyKimiToolChoice enforces the one tool_choice constraint Kimi has: the K2.x
+// line will not force a tool call while it is reasoning.
 //
-// The first version of this function keyed on the model, because Kimi's
-// parameter reference says the K2.x line does not support `required`. The
-// measurement on 2026-09-01 refuted that in the upstream's own words:
+// It took three versions and four measurements to land on that, and the wrong
+// two are worth keeping because each was defensible from the evidence it had.
 //
-//	tool_choice 'required' is incompatible with thinking enabled
+// **Keyed on the model.** Kimi's parameter reference says the K2.x line does not
+// support `required`, so `required` was refused on everything but kimi-k3. The
+// measurement on 2026-09-01 gave the upstream's own words — `tool_choice
+// 'required' is incompatible with thinking enabled` — which is not a statement
+// about a model at all.
 //
-// and the Anthropic face says the same thing about a named function
-// (`tool_choice 'specified' is incompatible with thinking enabled`), while with
-// thinking switched off a named tool call answered normally with a tool_use
-// block. The conflict belongs to the reasoning switch — which this renderer sets
-// — and not to the identifier.
+// **Keyed on the reasoning switch.** So the next version refused a forced tool
+// call whenever thinking would be on, whatever the model. Measured 2026-09-02:
 //
-// Keying it on the model was wrong in both directions, which is why this is a
-// fix rather than a tidy-up:
+//	{"model":"kimi-k3","reasoning_effort":"high","tool_choice":"required", ...}
+//	  -> 200, tool_calls, and reasoning_content non-empty
 //
-//   - {kimi-k3, reasoning_effort: high, tool_choice: required} was rendered and
-//     sent, and Kimi answered 400 after the budget was reserved.
-//   - {kimi-k2.6, tool_choice: required} was refused here, though it is the
-//     ordinary portable request: nothing asked for depth, so this renderer sends
-//     thinking disabled and Kimi accepts the choice.
+// kimi-k3 reasons and forces a tool in the same request. That version traded one
+// false refusal for another: the first refused {kimi-k2.6, nothing asked}, the
+// ordinary portable request, and the second refused a kimi-k3 request that works.
 //
-// The named-function half is the inferred one and is marked as such: it was
-// measured on the Anthropic face, not on this one. It is refused while reasoning
-// because the two faces are one upstream answering with one error family, and
-// because the cost of being wrong is asymmetric — a caller who both asks for a
-// depth and forces one specific tool gets a clear refusal instead of a 400
-// charged against a reservation.
+// **Both conditions, together**, which is what the four measured points actually
+// say: k3 with thinking on and a forced tool works; k2.6 with thinking off and a
+// forced tool works; the K2.x line with thinking on is the one that answers the
+// error. An identifier this build does not know is refused, because its family is
+// exactly what is unknown.
 //
-// Still reachable in the running gateway: whether reasoning ends up on depends
-// on the model, and the field rules are keyed by profile with no target in hand.
-// What the field rules can see — a request that names a depth and forces a tool,
-// which fails on every Kimi model — is declared there and routed away first.
+// The named-function half stays inferred and is marked as such: it was measured
+// on the Anthropic face, not on this one, where the same upstream answers
+// `tool_choice 'specified' is incompatible with thinking enabled`.
+//
+// This refusal is reachable in the running gateway, and deliberately so. It
+// depends on the model and the field rules are keyed by profile, so the pair that
+// fails cannot be routed away without also routing away the kimi-k3 request that
+// works — which the measurement above says would be the more expensive mistake.
 func applyKimiToolChoice(request openaiapi.ChatCompletionRequest) error {
 	if len(request.ToolChoice) == 0 || !kimiForcesAToolCall(request.ToolChoice) {
 		return nil
@@ -421,7 +421,13 @@ func applyKimiToolChoice(request openaiapi.ChatCompletionRequest) error {
 	if !kimiThinkingWillBeOn(request.Model, request.ReasoningEffort) {
 		return nil
 	}
-	return fmt.Errorf("Kimi refuses a forced tool call while model %q is reasoning", request.Model)
+	// kimi-k3 reasons and forces a tool in the same request without complaint,
+	// measured. So the conflict is not "thinking is on" either — it is the K2.x
+	// line with thinking on, and the two conditions have to be met together.
+	if spelling, known := kimiReasoningSpelling[request.Model]; known && spelling.TopLevelEffort {
+		return nil
+	}
+	return fmt.Errorf("Kimi model %q does not accept a forced tool call while it is reasoning", request.Model)
 }
 
 // kimiToolChoiceForces is the same question as kimiForcesAToolCall asked one
