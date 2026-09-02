@@ -92,7 +92,7 @@ export function UsageFailuresPanel() {
                 timestamp — so they take what they need and give the rest to
                 the two columns that carry variable-length text. */}
             <colgroup>
-              <col style={{ width: "20%" }} /><col style={{ width: "12%" }} /><col style={{ width: "26%" }} />
+              <col style={{ width: "20%" }} /><col style={{ width: "17%" }} /><col style={{ width: "21%" }} />
               <col style={{ width: "18%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} />
               <col style={{ width: "6%" }} />
             </colgroup>
