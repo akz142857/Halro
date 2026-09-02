@@ -449,33 +449,52 @@ difference is worth knowing before either is changed:
 
 | Setting | Bounds | Cost of a long value |
 | --- | --- | --- |
-| `usage.console_window_days` | The in-memory aggregate the two console tabs read | Memory, and checkpoint time — the aggregate is re-serialized whole on every checkpoint, about 1149 bytes per attempt |
+| `usage.console_window_days` | The in-memory aggregate the two console tabs read | Memory, about 1 KB per attempt, plus the same again for the checkpoint on disk |
 | `usage.retention_days` | The Parquet archive on disk | Disk only; partitions are columnar and one day is measured in kilobytes |
 
 So a long archive is cheap and a long console window is not. Binding them to one
 value would make an operator who needs ninety days of archive pay for it in
-memory and in checkpoint duration; they are separate for that reason. The
-console window must be at least 7 days, because the overview's chart reads seven
-days out of the same aggregate, and no longer than the archive, because the
-screen should not promise history the archive no longer holds.
+memory; they are separate for that reason. The console window must be at least 7
+days, because the overview's chart reads seven days out of the same aggregate,
+and no longer than the archive, because the screen should not promise history the
+archive no longer holds.
 
 **Size it against your throughput, not against how much history you would like.**
-The aggregate is re-serialized whole on every checkpoint, so the window's length
-is a per-minute CPU cost:
+An attempt costs about a kilobyte twice over — once resident, because the
+console reads the aggregate out of memory, and once on disk, because the
+checkpoint holds the same records so a restart does not have to replay the whole
+WAL to get them back:
 
-| Throughput | 30-day checkpoint | Encoding time per checkpoint | Share of the 60s interval |
+| Throughput | Attempts in a 30-day window | Resident memory | Checkpoint on disk |
 | --- | --- | --- | --- |
-| 0.1/s | 0.28 GB | ~0.5 s | 1% |
-| 1/s | 2.8 GB | ~4.5 s | 7% |
-| 10/s | 27.1 GB | ~45 s | 75% |
-| 100/s | 271 GB | ~450 s | cannot keep up |
+| 0.1/s | 260 thousand | ~0.27 GB | 0.28 GB |
+| 1/s | 2.6 million | ~2.7 GB | 2.8 GB |
+| 10/s | 26 million | ~27 GB | 27.1 GB |
+| 100/s | 260 million | ~272 GB | 271 GB |
 
-Above roughly one request per second the default of thirty days is too long, and
-the lever is the window rather than anything else — compression was measured and
-makes it worse, adding about another minute to a tick that already takes
-forty-five seconds. Shorten the window until the encoding time is a small share
-of `usage.checkpoint_interval`; the archive keeps the history either way, and
-`halro usage` can export it.
+**Memory is the binding constraint, and it is a floor rather than a spike.** The
+aggregate is resident for as long as the process runs, so an instance at ten
+requests a second wants tens of gigabytes of RAM for a thirty-day window whether
+or not anything is being written. Size the container against the resident column
+and shorten the window until it fits; the archive keeps the history either way,
+and `halro usage` can export it. The shipped Kubernetes manifests set a memory
+limit for a small install — raise it deliberately rather than discovering the
+ceiling as an OOM kill.
+
+What a checkpoint *tick* costs is no longer part of that decision. The
+checkpoint is a head plus a series of immutable record segments, and a tick
+rewrites the head and the one open segment — bounded at four mebibytes, whatever
+the window's length — so its cost follows what arrived since the last tick, not
+what the window holds. Three metrics say whether that is still true:
+`halro_usage_checkpoint_bytes` is the whole checkpoint,
+`halro_usage_checkpoint_open_segment_bytes` is what a tick rewrites, and
+`halro_usage_checkpoint_segments` is how many segments hold it. The first two
+converging would mean a tick is writing the window again.
+
+The one exception is the first checkpoint after a cold start with no usable
+checkpoint — an upgrade that changed the format, a rebuild, a `halro usage
+rebuild-summary`. That one pass encodes the whole window, in segments, and every
+tick after it is incremental again.
 
 Shortening the window is the one destructive change in that screen. What falls
 outside it is trimmed out of memory on the next export tick and the two tabs can

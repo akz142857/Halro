@@ -539,7 +539,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     usageWindowArchiveHint: "The archive is on disk and outlives the window; the halro usage command can still export history the console cannot reach.",
     usageWindowUpdated: "Last changed",
     usageWindowLabel: "Window length",
-    usageWindowHint: "Bounds how far back the attempt log and the failed-request list can page. A longer window makes every checkpoint larger and slower — it is re-serialized whole each time.",
+    usageWindowHint: "Bounds how far back the attempt log and the failed-request list can page. The window is held in memory, at roughly a kilobyte per attempt, for as long as this instance runs.",
     usageWindowSave: "Save window",
     usageWindowConfigIgnoredTitle: "The configuration file no longer applies",
     usageWindowConfigIgnored: "config.yaml says {{days}} days. It seeded this on first start and has no say now; the setting here decides.",

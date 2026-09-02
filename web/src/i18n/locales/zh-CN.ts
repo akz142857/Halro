@@ -547,7 +547,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
     usageWindowArchiveHint: "归档在磁盘上，比窗口长；halro usage 仍可导出窗口之外的历史。",
     usageWindowUpdated: "最近修改",
     usageWindowLabel: "窗口长度",
-    usageWindowHint: "决定「调用明细」与「最终失败」能往回翻多久。窗口越长，checkpoint 越大也越慢——它每次都会被整体重新序列化。",
+    usageWindowHint: "决定「调用明细」与「最终失败」能往回翻多久。这段历史常驻内存，每条尝试约 1 KB，只要实例在跑就一直占着。",
     usageWindowSave: "保存窗口",
     usageWindowConfigIgnoredTitle: "配置文件已不再生效",
     usageWindowConfigIgnored: "config.yaml 写的是 {{days}} 天，只在首次启动时作为初值；此后由这里的设置决定。",
