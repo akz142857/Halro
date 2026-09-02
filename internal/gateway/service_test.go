@@ -1767,7 +1767,7 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := targets[0]
-	run, err := f.service.beginRequestRun(ctx, principal, "chat", targets, 15, 10, 5)
+	run, err := f.service.beginRequestRun(ctx, principal, "chat", targets, 15, 10, 5, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
@@ -24,6 +24,15 @@ const policyRejection: RequestFailure = {
   accepted_at: "2026-08-21T10:02:00Z", completed_at: "2026-08-21T10:02:00Z",
   attempts: 0, fallbacks: 0,
 };
+
+// jsdom honours a closed <details>, so its contents are correctly reported as
+// not visible until it is opened — which is the same thing an operator has to
+// do, and the reason it is asserted here rather than worked around.
+function openFailureDetail() {
+  const details = document.querySelector("details.failure-detail");
+  if (!details) throw new Error("no failure detail to open");
+  details.setAttribute("open", "");
+}
 
 function renderPanel(items: RequestFailure[]) {
   vi.spyOn(api, "usageFailures").mockResolvedValue({ items, next_cursor: "" });
@@ -112,6 +121,52 @@ describe("UsageFailuresPanel", () => {
     await waitFor(() => expect(api.usageFailures).toHaveBeenCalled());
     const query = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
+  });
+
+  // The payload is behind a click. A row that fetched it on render would file
+  // an audit record for every failure an operator merely scrolled past — the
+  // server audits every read, because this is the only thing on the page that
+  // holds material a caller wrote.
+  it("does not fetch the captured payload until it is asked for", async () => {
+    const payload = vi.spyOn(api, "usageFailurePayload").mockResolvedValue({
+      request_id: "req_failed", project_id: "project_a", outcome: "provider_error",
+      captured_at: "2026-08-21T10:01:02Z",
+      request: { model: "chat", messages: [{ role: "user", content: "hello" }] },
+      response: { provider_status: 401, body: "invalid api key" },
+    });
+    renderPanel([providerFailure]);
+
+    await screen.findByText("服务商认证或权限被拒");
+    expect(payload).not.toHaveBeenCalled();
+
+    // Two deliberate steps: the failure detail opens, and only then is there a
+    // control that files an audit record.
+    openFailureDetail();
+    fireEvent.click(screen.getByRole("button", { name: "查看原始请求与响应" }));
+    await waitFor(() => expect(payload).toHaveBeenCalledWith("req_failed"));
+    expect(await screen.findByText(/每次查看都会记入审计日志/)).toBeVisible();
+    expect(screen.getByText(/invalid api key/)).toBeInTheDocument();
+  });
+
+  // Not captured is the ordinary case, not a fault: capture may be off, the
+  // failure may predate it, or the record may have aged out.
+  it("says nothing was captured rather than reporting a fault", async () => {
+    vi.spyOn(api, "usageFailurePayload").mockRejectedValue(new Error("not found"));
+    renderPanel([providerFailure]);
+
+    await screen.findByText("服务商认证或权限被拒");
+    openFailureDetail();
+    fireEvent.click(screen.getByRole("button", { name: "查看原始请求与响应" }));
+    expect(await screen.findByText(/没有可查看的原始内容/)).toBeVisible();
+  });
+
+  // A policy refusal never reached an upstream, so there is nothing to show and
+  // no reason to offer an audited read.
+  it("offers no payload on a policy refusal", async () => {
+    renderPanel([policyRejection]);
+
+    await screen.findByText(/策略拒绝：预算、熔断或并发上限/);
+    expect(screen.queryByRole("button", { name: "查看原始请求与响应" })).not.toBeInTheDocument();
   });
 
   // The summary card links here with the interval it covered; dropping it would

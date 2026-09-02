@@ -706,7 +706,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
     request: "请求", deployment: "模型部署", tokens: "词元", cost: "成本", latency: "延迟", time: "时间", attempt: "尝试 {{count}}",
     estimated: "估算 ", inputOutput: "{{input}} 输入 / {{output}} 输出", conservative: "保守上限", reported: "服务商报告",
     unknownCost: "未知", costEvidence: "计价证据", formulaComponents: "输入 {{input}} + 输出 {{output}} + 固定 {{fixed}}", billedWindow: "按 {{start}}–{{end}} 时段费率计费（{{timezone}}）", billedBase: "按时段之外的费率计费（{{timezone}}）", billedZoneUnavailable: "按最高档计费：时区 {{timezone}} 无法解析",
-    requestID: "Request ID", project: "项目", provider: "服务商", actualModel: "实际模型", currentPassword: "当前密码", totpOptional: "TOTP（启用 MFA 时必填）",
+    requestID: "Request ID", project: "项目", actualModel: "实际模型", currentPassword: "当前密码", totpOptional: "TOTP（启用 MFA 时必填）",
     views: "用量视图",
     // 错误分类的解释留在前端：它是给读者看的一句话，不是账务事实。字典缺项时回退到
     // 服务端发来的原始标识，宁可显示英文枚举，也不显示一个坏掉的 key。
@@ -735,6 +735,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       unknown: "用 Request ID 查日志，并检查适配器的分类缺口。",
     },
     httpStatus: "HTTP {{status}}",
+    providerFilter: "仅看服务商 {{provider}}（点击清除）",
     providerCode: "服务商错误码：{{code}}",
     providerRequestID: "服务商请求标识：{{id}}",
     // 不写「未知」：空白与「没保存过」是两回事，前者会让人放弃去上游查一个确实存在的标识。
@@ -767,6 +768,14 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       noAdvice: "该记录没有可用的错误分类；用 Request ID 查日志。",
       noTarget: "未选定目标",
       decidedBy: "由第 {{attempt}} 次尝试决定",
+      revealPayload: "查看原始请求与响应",
+      // 服务端每次读取都写审计；这句话是让操作者知道自己正在看调用方写的内容，
+      // 而不是 Halro 自己产生的元数据。
+      payloadWarning: "以下是调用方发往上游的内容与上游的返回内容。每次查看都会记入审计日志。",
+      payloadRequest: "发往上游的请求",
+      payloadResponse: "上游返回",
+      payloadTruncated: "该侧超过保存上限已被截断，不是上游返回不完整。",
+      noPayload: "没有可查看的原始内容：可能未开启失败载荷保存、该失败发生在开启之前，或记录已过保留期。",
     },
     summary: {
       title: "用量汇总",
@@ -911,6 +920,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       "invocation_target.resolution.covered_elsewhere": "调用目标已由其他连接承载",
       "invocation_target.resolution.partial_conflict": "调用目标部分冲突",
       "developer.execute": "开发者调试调用",
+      "usage.failure_payload.read": "查看失败请求原始载荷",
       "backup.create": "创建备份",
       "backup.restore": "恢复备份",
       "security.kms.call": "调用 KMS",

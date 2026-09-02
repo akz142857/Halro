@@ -97,6 +97,22 @@ func (v *Vault) DecryptAdminMFA(authenticatorID, username string, envelope []byt
 	return v.decryptScoped("admin-mfa", authenticatorID, username, envelope)
 }
 
+// EncryptFailurePayload seals the request and upstream answer captured for one
+// failed request.
+//
+// This is the only material Halro stores that a caller wrote — a prompt, tool
+// arguments, an upstream error body — so it is bound to both the request it
+// belongs to and the project that paid for it. A record lifted out of one
+// install's directory and dropped into another's, or renamed onto a different
+// request ID, fails to open rather than opening as somebody else's traffic.
+func (v *Vault) EncryptFailurePayload(requestID, projectID string, plaintext []byte) ([]byte, error) {
+	return v.encryptScoped("failure-payload", requestID, projectID, plaintext)
+}
+
+func (v *Vault) DecryptFailurePayload(requestID, projectID string, envelope []byte) ([]byte, error) {
+	return v.decryptScoped("failure-payload", requestID, projectID, envelope)
+}
+
 func (v *Vault) encryptScoped(kind, id, audience string, plaintext []byte) ([]byte, error) {
 	aead, aad, err := v.scopedAEAD(kind, id, audience)
 	if err != nil {

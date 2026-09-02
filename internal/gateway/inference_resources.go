@@ -29,7 +29,10 @@ func (s *Service) accountedInferenceResources(ctx context.Context, principal aut
 	if inputUnits < 1 {
 		inputUnits = 1
 	}
-	run, err := s.beginRequestRun(ctx, principal, model, []provider.Target{target}, inputUnits, inputUnits, 0)
+	// These operations invoke through a closure the caller built, so there is no
+	// canonical request object to hold here. The capture keeps what it can: the
+	// model and the target, plus whatever the upstream answers with.
+	run, err := s.beginRequestRun(ctx, principal, model, []provider.Target{target}, inputUnits, inputUnits, 0, nil)
 	if err != nil {
 		return err
 	}

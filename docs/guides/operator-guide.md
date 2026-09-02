@@ -430,6 +430,66 @@ everything refused before admission — an invalid Gateway Key, an unrouted mode
 an RPM/TPM refusal — because those return before a ledger request exists at all;
 the HTTP metrics and the audit log account for those.
 
+#### Capturing what a failed call carried
+
+`gateway.failure_capture.enabled` keeps the request a failed call sent upstream
+and the answer that came back, so a failure can be reproduced rather than
+guessed at. It is off by default, and turning it on is a decision about what
+this instance's data directory contains rather than a verbosity setting.
+
+Everything else Halro persists is metadata it produced itself — identifiers,
+counts, classes, costs. This is the only store that holds material a caller
+wrote, and the rule that prompts and response bodies never reach a log, a
+metric or an audit record is unchanged: this is a separate, narrower act.
+
+```yaml
+gateway:
+  failure_capture:
+    enabled: true
+    max_bytes: 65536          # each side truncated separately
+    max_records_per_day: 1000
+    retain: 24h               # 1h to 720h
+```
+
+What is captured, and what is not:
+
+| Outcome | Captured | Why |
+| --- | --- | --- |
+| `provider_error` | yes | The request and the upstream's reply are the diagnosis. |
+| `unsupported_feature` | yes | Which field the target could not serve is only visible in the request. |
+| `policy_rejected` | **no** | Storing the content redaction just refused would make the capture the leak the policy prevents. |
+| `rejected`, `token_guard_rejected` | no | Never reached an upstream; nothing to reproduce, and a runaway client produces them at its own rate. |
+| `accounting_error` | no | The payload says nothing about the ledger being unavailable. |
+| success | no | This is what keeps the store a small tail of traffic rather than a copy of it. |
+
+The guarantees the store is built on, each of which is worth checking against
+your own compliance position before enabling it:
+
+- **Encrypted and bound.** Every record is sealed under the master key with the
+  request ID and project ID as associated data, so a record cannot be renamed
+  onto another request, opened under another project, or lifted into another
+  install's directory.
+- **Post-redaction.** Capture happens after the project's redaction policy has
+  run, so what is stored is what went upstream and not what the caller sent.
+- **Bounded.** Each side is truncated at `max_bytes` and flagged as truncated;
+  each day is capped at `max_records_per_day`, past which capture stops for the
+  day and logs one line.
+- **Expiring.** Records live in day directories under `<data_dir>/failures/` and
+  whole days are removed once past `retain`, swept on the Parquet export tick.
+  This is the answer to "how long is caller content kept", enforced rather than
+  promised.
+- **Audited on read.** `GET /admin/api/v1/usage/failures/{requestID}/payload`
+  is the only admin GET that writes an audit record —
+  `usage.failure_payload.read` — because it is the only one that returns a
+  prompt. The console puts it behind two deliberate clicks and caches nothing.
+- **Best-effort.** A capture that cannot be written is dropped. It never changes
+  what the caller is told, and never fails a request that has already failed.
+
+Files are created 0600 in a 0700 directory. `halro backup` stages the metadata
+database and the Ledger WAL by name rather than copying the data directory, so
+captures are **not** in an archive — a restore comes back with no captured
+payloads, which is the right default for material with an expiry on it.
+
 #### Errors-only file
 
 `logging.error_file.enabled` writes a second copy of the log holding `ERROR`

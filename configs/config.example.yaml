@@ -287,6 +287,27 @@ gateway:
     # @description.zh-CN 独立跟踪限流状态的来源地址数量上限。
     # @description.en-US Maximum source addresses tracked with independent rate-limit state.
     max_tracked_sources: 16384
+  failure_capture:
+    # @title.zh-CN 保存失败请求的原始载荷
+    # @title.en-US Capture failed request payloads
+    # @description.zh-CN 保存失败请求发往上游的内容与上游返回的内容，便于复现；成功的调用不保存。这是 Halro 唯一保存调用方所写内容的地方，开启会改变本数据目录的数据分级：记录用主密钥加密、绑定到所属请求与项目、按 max_bytes 截断、按 max_records_per_day 封顶、到 retain 后删除，且只能通过写审计的管理员操作读取。脱敏在保存之前完成，存下的是发往上游的形态而不是调用方原文。
+    # @description.en-US Keeps what a failed call sent upstream and what came back, so the failure can be reproduced; successful calls are never stored. This is the only place Halro stores material a caller wrote, and enabling it changes what this data directory contains: records are encrypted under the master key, bound to the request and project they belong to, truncated at max_bytes, capped at max_records_per_day, deleted after retain, and readable only through an audited admin action. Redaction runs before capture, so what is stored is what went upstream rather than what the caller sent.
+    enabled: false
+    # @title.zh-CN 单条载荷上限（字节）
+    # @title.en-US Payload size ceiling (bytes)
+    # @description.zh-CN 请求与响应分别截断到该长度；被截断的一侧会在记录里标注。
+    # @description.en-US The request and the response are truncated to this length separately; a truncated side is flagged in the record.
+    max_bytes: 65536
+    # @title.zh-CN 每日保存条数上限
+    # @title.en-US Daily record ceiling
+    # @description.zh-CN 上游大面积失败时的封顶；超过后当日停止保存并记录一次。
+    # @description.en-US The ceiling for a day in which an upstream is failing everything; past it capture stops for the day and says so once.
+    max_records_per_day: 1000
+    # @title.zh-CN 保留时长
+    # @title.en-US Retention window
+    # @description.zh-CN 载荷保留多久后自动删除。这是「调用方内容保存多久」的答案，由清理任务强制执行，允许范围 1h–720h。
+    # @description.en-US How long a capture lives before it is deleted. This is the answer to "how long is caller content kept", enforced by a sweep rather than promised; allowed range is 1h to 720h.
+    retain: 24h
 
 retry:
   # @title.zh-CN 单目标最大尝试次数

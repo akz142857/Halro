@@ -86,6 +86,17 @@ func Default() Config {
 				RequestsPerMinute: intPointer(defaultSourceRequestsPerMinute),
 				MaxTrackedSources: 16384,
 			},
+			// Off, with its bounds already set. Turning it on is a decision
+			// about what this instance's data directory holds — it is the only
+			// store that keeps material a caller wrote — and that decision
+			// should be one boolean, not a block composed during the incident
+			// that made someone want it.
+			FailureCapture: FailureCapture{
+				Enabled:          false,
+				MaxBytes:         DefaultFailureCaptureMaxBytes,
+				MaxRecordsPerDay: DefaultFailureCaptureMaxRecordsPerDay,
+				Retain:           Duration(DefaultFailureCaptureRetain),
+			},
 		},
 		Retry: Retry{
 			MaxAttemptsPerTarget: 2,

@@ -61,6 +61,13 @@ export function UsagePage() {
   const [status, setStatus] = useState("");
   const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
   const [providerModel, setProviderModel] = useState(() => new URLSearchParams(window.location.search).get("provider_model") ?? "");
+  // No control of its own. It was a free-text box wanting an opaque
+  // `provider_...` ID, which nobody has to hand — the deployment select beside
+  // it answers the same question by name and identifies the target more
+  // precisely, since one provider serves several. The filter still applies when
+  // the summary's provider row links here, and then it is shown as something
+  // that can be cleared: a filter with no visible control is how a table comes
+  // to look empty for no reason.
   const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
@@ -178,7 +185,6 @@ export function UsagePage() {
             {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
           </select>
         </label>
-        <label><span>{t("usage.provider")}</span><input autoComplete="off" value={providerID} onChange={(event) => setProviderID(event.target.value)} placeholder="provider_…" /></label>
         <label>
           <span>{t("usage.deployment")}</span>
           <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
@@ -198,6 +204,12 @@ export function UsagePage() {
         </label>
         <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        {providerID && (
+          <button type="button" className="filter-chip" onClick={() => setProviderID("")}>
+            {t("usage.providerFilter", { provider: providerID })}
+            <span aria-hidden="true"> ×</span>
+          </button>
+        )}
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}

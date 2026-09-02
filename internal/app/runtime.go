@@ -25,6 +25,7 @@ import (
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/gatewayapi"
 	"github.com/akz142857/Halro/internal/id"
@@ -43,14 +44,18 @@ import (
 )
 
 type Runtime struct {
-	config              config.Config
-	logger              *slog.Logger
-	lock                *lock.Lock
-	store               *boltstore.Store
-	ledger              *ledger.Log
-	state               *ledger.State
-	status              *ledger.Status
-	vault               *vault.Vault
+	config config.Config
+	logger *slog.Logger
+	lock   *lock.Lock
+	store  *boltstore.Store
+	ledger *ledger.Log
+	state  *ledger.State
+	status *ledger.Status
+	vault  *vault.Vault
+	// failureCapture holds the payloads of failed requests. Nil when the
+	// operator has not switched it on, which is the default; every read path
+	// treats nil as "the feature is off" rather than as an error.
+	failureCapture      *failurecapture.Store
 	auth                *auth.Snapshot
 	providers           *provider.Registry
 	accounting          *budget.Manager
@@ -427,6 +432,26 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(err)
 	}
+	// The failure capture store, when the operator has asked for one. It is
+	// opened before the gateway because the gateway holds it: an install with
+	// capture off gets a nil here and a gateway that never touches it.
+	var captureStore *failurecapture.Store
+	if cfg.Gateway.FailureCapture.Enabled {
+		captureStore, err = failurecapture.Open(secretVault, failurecapture.Options{
+			Root:             filepath.Join(cfg.Storage.DataDir, "failures"),
+			MaxBytes:         cfg.Gateway.FailureCapture.ByteLimit(),
+			MaxRecordsPerDay: cfg.Gateway.FailureCapture.DailyRecordLimit(),
+			Retain:           cfg.Gateway.FailureCapture.RetentionWindow(),
+		})
+		if err != nil {
+			alertDispatcher.Close()
+			ledgerLog.Close()
+			metadata.Close()
+			providerRegistry.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("open failure capture store: %w", err))
+		}
+	}
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
 		providerRegistry,
@@ -448,6 +473,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
 			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),
 			PricingUnknownPolicy:          cfg.Gateway.PricingUnknownPolicy,
+			FailureCapture:                captureFor(captureStore),
 			Logger:                        logger,
 		},
 	)
@@ -597,6 +623,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		state:               ledgerState,
 		status:              accountingStatus,
 		vault:               secretVault,
+		failureCapture:      captureStore,
 		auth:                authSnapshot,
 		providers:           providerRegistry,
 		accounting:          accounting,
@@ -898,6 +925,11 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			}
 		case <-parquetTicker.C:
 			r.exportUsageParquet()
+			// Retention is swept on the same tick rather than on a timer of its
+			// own: this store's promise is that captured caller material is
+			// gone after the window, and a promise kept by a goroutine nobody
+			// notices stopping is not one.
+			r.purgeFailureCaptures()
 		case <-ctx.Done():
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
@@ -1472,6 +1504,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/summary", r.adminUsageSummary)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/failures", r.adminUsageFailures)
+	router.With(r.requireAdmin).Get("/admin/api/v1/usage/failures/{requestID}/payload", r.adminUsageFailurePayload)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/config", r.adminSystemConfig)

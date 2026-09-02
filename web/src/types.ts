@@ -897,6 +897,25 @@ export interface UsageAttempt {
   fallback_count: number;
 }
 
+// What a failed call carried, when the operator has switched capture on. This
+// is the only payload in the console that holds material a caller wrote, which
+// is why fetching it is an audited action on the server and why nothing here is
+// cached or persisted in the browser.
+export interface FailurePayload {
+  request_id: string;
+  project_id: string;
+  outcome: string;
+  captured_at: string;
+  // The operation as it went upstream — already through the project's redaction
+  // policy, because capture happens after that policy has run.
+  request?: unknown;
+  request_truncated?: boolean;
+  // The upstream's own answer, or the answer Halro could not put on the
+  // caller's wire. Absent when the failure produced nothing to record.
+  response?: unknown;
+  response_truncated?: boolean;
+}
+
 // One failed request, as the failed-request list serves it. It is not a failed
 // attempt: a request that failed one target and succeeded on the next is not
 // here at all, and a request refused before any upstream call is, with no

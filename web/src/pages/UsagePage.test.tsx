@@ -75,6 +75,47 @@ describe("UsagePage model filter", () => {
   });
 });
 
+// The provider filter was a free-text box wanting an opaque `provider_...` ID
+// that nobody has to hand. It is gone; the summary's provider row still links
+// here with one, and an applied filter with no control to clear it is how a
+// table comes to look empty for no reason.
+describe("UsagePage provider filter", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(api, "usage").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  it("offers no provider box", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+    expect(screen.queryByPlaceholderText("provider_…")).not.toBeInTheDocument();
+  });
+
+  it("still applies a linked provider filter, and shows it as clearable", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts&provider_id=provider_a");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+    const query = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
+    expect(new URLSearchParams(query.slice(1)).get("provider_id")).toBe("provider_a");
+
+    const chip = await screen.findByRole("button", { name: /provider_a/ });
+    fireEvent.click(chip);
+    await waitFor(() => {
+      const calls = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls;
+      const latest = calls[calls.length - 1][0] ?? "";
+      expect(new URLSearchParams(latest.slice(1)).get("provider_id")).toBeNull();
+    });
+  });
+});
+
 // The model column shows the alias, which is identical on every attempt of a
 // fallback chain — so two targets of one alias on the same upstream model, the
 // safest way to configure redundancy, were indistinguishable and a fallback

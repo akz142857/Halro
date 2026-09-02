@@ -168,6 +168,7 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
             {last && <><br />{t("usage.failures.decidedBy", { attempt: last.attempt })}</>}
             {last && !policy && <ProviderIdentifiers failure={last} />}
           </small>
+          {!policy && <CapturedPayload requestID={failure.request_id} />}
         </details>
       </td>
       <td>
@@ -213,6 +214,69 @@ export function ProviderIdentifiers({ failure }: {
     <>
       {failure.provider_code && <><br />{t("usage.providerCode", { code: failure.provider_code })}</>}
       {failure.provider_request_id && <><br />{t("usage.providerRequestID", { id: failure.provider_request_id })}</>}
+    </>
+  );
+}
+
+// What the failed call carried, fetched only when an operator asks for it.
+//
+// It is behind a click rather than rendered with the row for three reasons that
+// all point the same way: it is the only thing on this page holding material a
+// caller wrote, the server audits every read of it, and a row that fetched it
+// automatically would file an audit record for every failure an operator merely
+// scrolled past. Nothing is cached — leaving a prompt in a query cache is the
+// browser-side version of the storage decision this feature was careful about.
+function CapturedPayload({ requestID }: { requestID: string }) {
+  const { t } = useTranslation();
+  const [requested, setRequested] = useState(false);
+  const payload = useQuery({
+    queryKey: ["usage-failure-payload", requestID],
+    queryFn: () => api.usageFailurePayload(requestID),
+    enabled: requested,
+    gcTime: 0,
+    staleTime: 0,
+    retry: false,
+  });
+
+  if (!requested) {
+    return (
+      <button type="button" className="button secondary payload-reveal" onClick={() => setRequested(true)}>
+        {t("usage.failures.revealPayload")}
+      </button>
+    );
+  }
+  if (payload.isPending) return <Loading />;
+  // A 404 here is the ordinary case, not a fault: capture may be off, or this
+  // failure may predate it, or the record may have aged out of its window.
+  if (payload.isError) return <p className="payload-absent">{t("usage.failures.noPayload")}</p>;
+  return (
+    <div className="payload-view">
+      <p className="payload-warning" role="note">{t("usage.failures.payloadWarning")}</p>
+      <PayloadSection
+        label={t("usage.failures.payloadRequest")}
+        value={payload.data.request}
+        truncated={payload.data.request_truncated}
+      />
+      <PayloadSection
+        label={t("usage.failures.payloadResponse")}
+        value={payload.data.response}
+        truncated={payload.data.response_truncated}
+      />
+    </div>
+  );
+}
+
+function PayloadSection({ label, value, truncated }: { label: string; value: unknown; truncated?: boolean }) {
+  const { t } = useTranslation();
+  if (value === undefined || value === null) return null;
+  return (
+    <>
+      <h4>{label}</h4>
+      {/* Truncation is stated rather than left to be inferred: a reader who
+          diagnoses a malformed body that is only an incomplete one goes looking
+          for a bug the upstream does not have. */}
+      {truncated && <p className="payload-truncated">{t("usage.failures.payloadTruncated")}</p>}
+      <pre className="payload-body">{JSON.stringify(value, null, 2)}</pre>
     </>
   );
 }

@@ -699,7 +699,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     request: "Request", deployment: "Deployment", tokens: "Tokens", cost: "Cost", latency: "Latency", time: "Time", attempt: "Attempt {{count}}",
     estimated: "EST. ", inputOutput: "{{input}} in / {{output}} out", conservative: "Conservative upper bound", reported: "Provider reported",
     unknownCost: "Unknown", costEvidence: "Pricing evidence", formulaComponents: "Input {{input}} + output {{output}} + fixed {{fixed}}", billedWindow: "Billed at the {{start}}–{{end}} rate ({{timezone}})", billedBase: "Billed at the rate outside every window ({{timezone}})", billedZoneUnavailable: "Billed at the dearest rate: timezone {{timezone}} could not be resolved",
-    requestID: "Request ID", project: "Project", provider: "Provider", actualModel: "Actual model", currentPassword: "Current password", totpOptional: "TOTP (required when MFA is enabled)",
+    requestID: "Request ID", project: "Project", actualModel: "Actual model", currentPassword: "Current password", totpOptional: "TOTP (required when MFA is enabled)",
     views: "Usage views",
     // Explaining a class is a sentence for a reader, not an accounting fact, so
     // it lives here rather than in the ledger. A missing entry falls back to the
@@ -730,6 +730,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       unknown: "Search the log by Request ID and look for the adapter's classification gap.",
     },
     httpStatus: "HTTP {{status}}",
+    providerFilter: "Provider {{provider}} only (click to clear)",
     providerCode: "Provider code: {{code}}",
     providerRequestID: "Provider request ID: {{id}}",
     // Never "unknown": a blank and "never recorded" are different answers, and
@@ -765,6 +766,15 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       noAdvice: "This record carries no error class; search the log by Request ID.",
       noTarget: "No target chosen",
       decidedBy: "Decided by attempt {{attempt}}",
+      revealPayload: "Show the request and the response",
+      // The server audits every read. This line is what tells the operator they
+      // are looking at material a caller wrote rather than at Halro's own
+      // metadata.
+      payloadWarning: "Below is what the caller sent upstream and what came back. Every viewing is written to the audit log.",
+      payloadRequest: "Request sent upstream",
+      payloadResponse: "Upstream answer",
+      payloadTruncated: "This side was cut at the storage ceiling. It is not an incomplete upstream answer.",
+      noPayload: "Nothing captured for this request: capture may be off, this failure may predate it, or the record may have aged out of its retention window.",
     },
     summary: {
       title: "Usage summary",
@@ -903,6 +913,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       "invocation_target.resolution.covered_elsewhere": "Invocation target is covered elsewhere",
       "invocation_target.resolution.partial_conflict": "Invocation target is partly conflicting",
       "developer.execute": "Developer test call",
+      "usage.failure_payload.read": "Read a failed request's captured payload",
       "backup.create": "Backup created",
       "backup.restore": "Backup restored",
       "security.kms.call": "KMS call",

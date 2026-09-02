@@ -18,7 +18,8 @@ semantic versioning.
 
   The attempt table now names the class in the reader's language and keeps the
   upstream status beside it, with what to check next behind a disclosure.
-  `GET /admin/api/v1/usage/failures` serves one row per failed request, derived
+  `GET /admin/api/v1/usage/failures` — filterable by Request ID, project,
+  deployment and interval — serves one row per failed request, derived
   from the same `RequestFinalized` events the summary card counts, so the number
   and the list cannot drift; the card links there. Each row carries the last
   failed attempt as the thing that decided the outcome, and omits that context
@@ -37,6 +38,25 @@ semantic versioning.
   out of — now reach the ledger with the attempt, so they outlive the process log
   that used to be their only home. A record written before they were kept says so
   in words rather than showing a blank that reads as "the upstream named none".
+
+- **`gateway.failure_capture`**: keeps the request a failed call sent upstream
+  and the answer that came back, so a failure can be reproduced rather than
+  guessed at. Off by default; turning it on is a decision about what the data
+  directory contains, because this is the only store that holds material a
+  caller wrote — the rule that prompts and response bodies never reach a log, a
+  metric or an audit record is unchanged.
+
+  Only failures, and only the two outcomes a payload explains
+  (`provider_error`, `unsupported_feature`). A successful call is never stored;
+  neither is a redaction refusal, because storing the content a policy just
+  refused would make the capture the leak the policy prevents; neither are the
+  refusals that never reached an upstream, which a runaway client produces at
+  its own rate. Records are sealed under the master key and bound to their
+  request and project, truncated at `max_bytes`, capped at
+  `max_records_per_day`, deleted after `retain`, and readable only through
+  `GET /admin/api/v1/usage/failures/{requestID}/payload` — the only admin GET
+  that writes an audit record, because it is the only one that returns a prompt.
+  See the Operator Guide before enabling it.
 
 - **`logging.error_file`**: an optional second log file holding `ERROR` records
   alone, beside the ordinary log rather than instead of it. `logging.level:

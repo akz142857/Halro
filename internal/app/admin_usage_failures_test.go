@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/ledger"
 )
 
@@ -183,5 +185,85 @@ func TestUsageFailuresRequiresAnAdminSession(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d, want 401", response.Code)
+	}
+}
+
+// The payload endpoint is off unless the operator turned capture on, and off is
+// an answer rather than an error: an operator told "not found" with no reason
+// concludes the capture failed when it was never asked for.
+func TestUsageFailurePayloadSaysWhenCaptureIsDisabled(t *testing.T) {
+	runtime, cookie := openSeededRuntime(t)
+	response := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/usage/failures/req_failed/payload")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d, want 404", response.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "failure_capture_disabled" {
+		t.Fatalf("a disabled feature was reported as a missing record: %v", body)
+	}
+}
+
+// It reads material a caller wrote, which is why it is the only admin GET that
+// audits. Every other one is a view of Halro's own metadata; this one hands
+// back a prompt, and that should be answerable afterwards.
+func TestReadingACapturedPayloadIsAudited(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Gateway.FailureCapture.Enabled = true
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	seedFailures(t, runtime)
+	if runtime.failureCapture == nil {
+		t.Fatal("capture was enabled and no store was opened")
+	}
+	if _, err := runtime.failureCapture.Put(failurecapture.Record{
+		RequestID: "req_failed", ProjectID: "project_1", Outcome: "provider_error",
+		Request: json.RawMessage(`{"model":"chat"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := loginAdminForTest(t, runtime)
+
+	response := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/usage/failures/req_failed/payload")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"model":"chat"`) {
+		t.Fatalf("the captured request was not returned: %s", response.Body.String())
+	}
+
+	read := false
+	if _, err := runtime.audit.Replay(func(entry audit.Record) error {
+		if entry.Event.Action == "usage.failure_payload.read" && entry.Event.TargetID == "req_failed" {
+			read = true
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !read {
+		t.Fatal("a prompt was read and the audit log does not say so")
+	}
+
+	// A request with no capture is a plain miss, and a request that does not
+	// exist in usage at all never reaches the store.
+	for _, path := range []string{
+		"/admin/api/v1/usage/failures/req_ok/payload",
+		"/admin/api/v1/usage/failures/req_not_a_request/payload",
+	} {
+		if got := authenticatedAdminGet(t, runtime, cookie, path); got.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404", path, got.Code)
+		}
 	}
 }

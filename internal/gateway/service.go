@@ -99,6 +99,11 @@ type Service struct {
 	pricingClockForwardTolerance  time.Duration
 	pricingUnknownPolicy          string
 	logger                        *slog.Logger
+	// failureCapture stores what a failed request carried. Nil disables it, and
+	// nil is the default: this is the only store that holds material a caller
+	// wrote, so it is something an operator turns on rather than something a
+	// gateway does unless told otherwise.
+	failureCapture FailureCapture
 }
 
 type PriceSelector interface {
@@ -135,6 +140,9 @@ type ServiceOptions struct {
 	PricingClockRollbackTolerance time.Duration
 	PricingClockForwardTolerance  time.Duration
 	PricingUnknownPolicy          string
+	// FailureCapture stores the payload of a failed request. Nil, the default,
+	// captures nothing.
+	FailureCapture FailureCapture
 
 	// Logger records provider attempts that failed. A gateway answers its caller
 	// with a deliberately opaque envelope — no upstream status, code or sentence,
@@ -173,6 +181,11 @@ type requestRun struct {
 	lastTarget    provider.Target
 	attemptCount  int
 	fallbackCount int
+	// What a failed request carried, held as references and serialized only if
+	// the request actually fails. Nil whenever capture is switched off, so the
+	// successful path pays nothing for a feature it does not use.
+	capturedRequest  any
+	capturedResponse any
 }
 
 // finalize closes out the request's accounting exactly once. Every exit path
@@ -188,8 +201,10 @@ func (run *requestRun) finalize(outcome string) error {
 	// One record per request, on the same once-only boundary the settlement
 	// uses, so a request cannot be reported as having failed twice — and a
 	// request that fell back and succeeded cannot be reported as having failed
-	// at all, however many attempt warnings it left behind.
+	// at all, however many attempt warnings it left behind. The payload capture
+	// hangs off the same boundary for the same reason.
 	run.logFinalFailure(outcome, err == nil)
+	run.writeCapture(outcome)
 	return err
 }
 
@@ -273,12 +288,21 @@ func (s *Service) resolveRequest(
 	return principal, targets, nil
 }
 
+// beginRequestRun opens the accounting for a request.
+//
+// payload is the operation as it will go upstream, taken here rather than at
+// each protocol face so no path can be added that forgets it. It is only ever
+// held as a reference: nothing is serialized unless the request fails and
+// capture is switched on, so a successful call pays one pointer assignment for
+// a feature it does not use — and an install with capture off pays nothing at
+// all, because the run drops the reference immediately.
 func (s *Service) beginRequestRun(
 	ctx context.Context,
 	principal auth.AuthResult,
 	model string,
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
+	payload any,
 ) (*requestRun, error) {
 	tokenGuardLease, pricingViewDigest, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
@@ -306,11 +330,13 @@ func (s *Service) beginRequestRun(
 		tokenGuardLease.Release()
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
-	return &requestRun{
+	run := &requestRun{
 		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
 		requestLease: requestLease, requestID: requestID, tokenGuardPricingViewDigest: pricingViewDigest,
 		acceptedAt: s.now(),
-	}, nil
+	}
+	run.captureRequest(payload)
+	return run, nil
 }
 
 func (run *requestRun) close() {
@@ -590,6 +616,11 @@ func (s *Service) prepareAccountingLease(ctx context.Context, target provider.Ta
 
 func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settlement) error {
 	attempt.logProviderFailure(providerErr)
+	// The upstream's own answer, kept for the capture store and nowhere else.
+	// The log deliberately refuses it — a provider body is the one place a
+	// refused credential is most likely to be quoted back — and the store is
+	// where that material can be held under encryption, a clock and an audit.
+	attempt.run.captureProviderFailure(providerErr)
 	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
 		settlement.CommittedMicrosUSD = 0
 		settlement.CostEstimated = false
@@ -817,6 +848,7 @@ func NewServiceWithOptions(
 	}
 	return &Service{
 		logger:                        logger,
+		failureCapture:                options.FailureCapture,
 		auth:                          authSnapshot,
 		registry:                      registry,
 		accounting:                    accounting,
@@ -1006,7 +1038,7 @@ func (s *Service) generate(
 	if len(targets) == 0 {
 		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
@@ -1094,6 +1126,11 @@ func (s *Service) generate(
 						)
 					} else if renderErr := render(semanticResponse); renderErr != nil {
 						outcome = "provider_error"
+						// The upstream succeeded and its answer is the whole
+						// diagnosis: the capture keeps the answer that could
+						// not be put on the wire, not an upstream error, and
+						// this is the only path where those differ.
+						run.captureResponse(semanticResponse)
 						failure = gatewayError(
 							"provider_error", "provider response cannot be rendered safely", 502, renderErr,
 						)
@@ -1338,7 +1375,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
@@ -1443,7 +1480,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0, request)
 	if err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
@@ -1534,7 +1571,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
 	if err != nil {
 		return err
 	}
@@ -2009,7 +2046,7 @@ func (s *Service) generateStream(
 	if len(targets) == 0 {
 		return gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
 	if err != nil {
 		return err
 	}
@@ -2186,7 +2223,7 @@ func (s *Service) Embeddings(
 	if len(targets) == 0 {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0, request)
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}

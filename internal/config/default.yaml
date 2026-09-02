@@ -145,6 +145,22 @@ gateway:
   source_rate_limit:
     requests_per_minute: 600
     max_tracked_sources: 16384
+  # Keeps the request a failed call carried and the answer the upstream gave it,
+  # so a failure can be reproduced rather than guessed at. Only failures — a
+  # successful call is never stored.
+  #
+  # This is the only store that holds material a caller wrote, so turning it on
+  # changes what this data directory contains. Records are encrypted under the
+  # master key, bound to the request and project they belong to, truncated at
+  # max_bytes, capped at max_records_per_day, deleted after `retain`, and
+  # readable only through an audited admin action. Redaction runs before
+  # capture, so what is stored is what went upstream and not what the caller
+  # sent.
+  failure_capture:
+    enabled: false
+    max_bytes: 65536
+    max_records_per_day: 1000
+    retain: 24h
 
 retry:
   max_attempts_per_target: 2
