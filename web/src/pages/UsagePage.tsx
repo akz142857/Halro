@@ -6,11 +6,12 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
+import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
 
-const usageTabs = ["summary", "attempts"] as const;
+const usageTabs = ["summary", "failures", "attempts"] as const;
 type UsageTab = (typeof usageTabs)[number];
 
 // Which filters a drill-down link can carry. A link that names one of them is
@@ -24,7 +25,7 @@ const attemptFilterParams = [
 function usageTabFromURL(): UsageTab {
   const params = new URLSearchParams(window.location.search);
   const requested = params.get("tab");
-  if (requested === "summary" || requested === "attempts") return requested;
+  if (usageTabs.includes(requested as UsageTab)) return requested as UsageTab;
   return attemptFilterParams.some((name) => params.get(name)) ? "attempts" : "summary";
 }
 
@@ -152,6 +153,11 @@ export function UsagePage() {
       {tab === "summary" && (
         <section role="tabpanel" id={usagePanelID("summary")} aria-labelledby={usageTabID("summary")}>
           <UsageSummaryPanel />
+        </section>
+      )}
+      {tab === "failures" && (
+        <section role="tabpanel" id={usagePanelID("failures")} aria-labelledby={usageTabID("failures")}>
+          <UsageFailuresPanel />
         </section>
       )}
       {tab === "attempts" && (

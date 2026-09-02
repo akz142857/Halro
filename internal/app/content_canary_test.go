@@ -218,6 +218,7 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 	cookie, _ := loginAdminForTest(t, runtime)
 	for _, route := range []string{
 		"/admin/api/v1/dashboard", "/admin/api/v1/usage", "/admin/api/v1/usage/summary",
+		"/admin/api/v1/usage/failures",
 		"/admin/api/v1/audit", "/admin/api/v1/projects", "/admin/api/v1/routes",
 		"/admin/api/v1/system/status",
 	} {

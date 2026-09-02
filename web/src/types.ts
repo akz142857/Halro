@@ -890,6 +890,39 @@ export interface UsageAttempt {
   fallback_count: number;
 }
 
+// One failed request, as the failed-request list serves it. It is not a failed
+// attempt: a request that failed one target and succeeded on the next is not
+// here at all, and a request refused before any upstream call is, with no
+// last_failure to show for it.
+export interface RequestFailure {
+  request_id: string;
+  project_id: string;
+  key_id?: string;
+  requested_model?: string;
+  // The ledger's own terminal state. Which of these read as a policy rejection
+  // is the console's judgement, not the record's.
+  outcome: string;
+  sequence: number;
+  accepted_at: string;
+  completed_at: string;
+  attempts: number;
+  fallbacks: number;
+  // Absent when nothing upstream failed — a budget refusal, an open circuit, a
+  // target at its concurrency limit. Absent, not blank: an empty provider
+  // context would report that an upstream did not answer a request that never
+  // asked one.
+  last_failure?: {
+    attempt_id: string;
+    attempt: number;
+    error_class?: string;
+    provider_status?: number;
+    provider_id?: string;
+    deployment_id?: string;
+    provider_model?: string;
+    completed_at: string;
+  };
+}
+
 export interface PriceSnapshot {
   pricing_selected_at: string;
   price_evidence_status: "versioned" | "unknown";

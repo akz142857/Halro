@@ -38,6 +38,7 @@ import type {
   ModelCatalogInfo,
   TokenGuardPolicy,
   TokenGuardPreview,
+  RequestFailure,
   UsageAttempt,
   UsageSummary,
   DeploymentPriceVersion,
@@ -480,6 +481,8 @@ export const api = {
     request<UsageSummary>(`/usage/summary${query}`).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  usageFailures: (query = "") =>
+    request<Page<RequestFailure>>(`/usage/failures${query}`).then((value) => value.data),
   usageRequest: (requestID: string) =>
     request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),

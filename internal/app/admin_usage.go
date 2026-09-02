@@ -447,6 +447,77 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	})
 }
 
+// adminUsageFailures serves the requests that ended badly, one row per request.
+//
+// It is a separate endpoint from the attempt list rather than a filter on it,
+// because the two count different things and a shared shape would let a caller
+// ask for "status=error" and receive whichever the handler happened to mean.
+// This one is derived from the same RequestFinalized events the summary card's
+// request_errors comes from, so the list and the figure that links to it cannot
+// disagree.
+func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.Request) {
+	if !r.syncUsageAdmin(writer, request) {
+		return
+	}
+	allowed := map[string]struct{}{
+		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {},
+		"deployment_id": {}, "model": {}, "provider_model": {}, "start": {}, "end": {},
+	}
+	for name := range request.URL.Query() {
+		if _, exists := allowed[name]; !exists {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "unsupported usage filter"})
+			return
+		}
+	}
+	cursor, err := usage.DecodeCursor(request.URL.Query().Get("cursor"))
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid page limit"})
+			return
+		}
+	}
+	query := usage.FailureQuery{
+		BeforeSequence: cursor, Limit: limit,
+		ProjectID:      request.URL.Query().Get("project_id"),
+		ProviderID:     request.URL.Query().Get("provider_id"),
+		DeploymentID:   request.URL.Query().Get("deployment_id"),
+		RequestedModel: request.URL.Query().Get("model"),
+		ProviderModel:  request.URL.Query().Get("provider_model"),
+	}
+	if raw := request.URL.Query().Get("start"); raw != "" {
+		query.Start, err = time.Parse(time.RFC3339, raw)
+		if err != nil {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid start timestamp"})
+			return
+		}
+	}
+	if raw := request.URL.Query().Get("end"); raw != "" {
+		query.End, err = time.Parse(time.RFC3339, raw)
+		if err != nil || !query.Start.IsZero() && !query.End.After(query.Start) {
+			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid end timestamp"})
+			return
+		}
+	}
+	timing, ok := r.writeTimeContext(writer, time.Now())
+	if !ok {
+		return
+	}
+	page, err := r.usage.QueryFailedRequests(query)
+	if err != nil {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"items": page.Failures, "next_cursor": page.NextCursor, "time_context": timing,
+	})
+}
+
 func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Request) {
 	if !r.syncUsageAdmin(writer, request) {
 		return

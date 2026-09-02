@@ -45,6 +45,7 @@ func TestUsageResponsesCarryTimeContext(t *testing.T) {
 		"/admin/api/v1/dashboard",
 		"/admin/api/v1/usage",
 		"/admin/api/v1/usage/summary",
+		"/admin/api/v1/usage/failures",
 		"/admin/api/v1/system/status",
 	} {
 		t.Run(path, func(t *testing.T) {

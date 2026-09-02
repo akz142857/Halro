@@ -733,7 +733,35 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     attemptChain: "Target {{fallback}} · retry {{retry}}",
     attemptFirstTry: "First target, first try",
     attemptDetails: "Failure detail",
-    tabs: { summary: "Summary", attempts: "Attempt log" },
+    tabs: { summary: "Summary", failures: "Failed requests", attempts: "Attempt log" },
+    // "Failed requests" is RequestFinalized with a non-success outcome, the same
+    // fact the summary card counts. It is not the same as a failed attempt, and
+    // it excludes everything refused before admission — both have to be on the
+    // page, or the figure reads as "every failure".
+    outcomes: {
+      rejected: "Policy refusal: budget, circuit breaker, or concurrency limit",
+      token_guard_rejected: "Policy refusal: Token Guard cost limit",
+      unsupported_feature: "Policy refusal: the target cannot serve this request shape",
+      policy_rejected: "Policy refusal: redaction rejected the upstream output",
+      provider_error: "Provider failure",
+      accounting_error: "Accounting unavailable",
+    },
+    failures: {
+      records: "{{count}} failed requests",
+      cause: "Cause",
+      attempts: "Attempts",
+      attemptCount: "{{count}} attempts",
+      fallbackCount: "{{count}} fallbacks",
+      emptyTitle: "No request failed outright in this range",
+      emptyDescription: "A request that fell back and then succeeded is not counted here. Widen the range or clear a filter.",
+      policyRejected: "Policy refusal",
+      policyRejectedDetail: "This request was admitted but never reached an upstream, so it has no provider error class. The rate-limit, circuit and budget figures explain it.",
+      noAdvice: "This record carries no error class; search the log by Request ID.",
+      noTarget: "No target chosen",
+      decidedBy: "Decided by attempt {{attempt}}",
+      scopeAdmitted: "This list holds only requests admitted into the ledger. Authentication failures, unrouted models, rate-limit and Token Guard refusals return before admission and are not here — the HTTP metrics and the audit log account for those.",
+      scopeWindow: "The visible window equals the usage retention window, not a long-term archive: older failures have rolled out of the aggregate with it.",
+    },
     summary: {
       title: "Usage summary",
       granularity: "Granularity",
@@ -750,7 +778,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       attemptSuccessRate: "Attempt success rate",
       unknownAttempts: "{{count}} unpriced",
       viewAttempts: "View attempts",
-      viewFailedAttempts: "View failed attempts",
+      viewFailedRequests: "View failed requests",
       others: "Everything else",
       othersFolded: "{{count}} more folded in",
       emptyTitle: "No calls in this range",

@@ -149,7 +149,8 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 	cookie, _ := loginAdminForTest(t, runtime)
 	for _, route := range []string{
 		"/admin/", "/admin/api/v1/dashboard", "/admin/api/v1/usage",
-		"/admin/api/v1/usage/summary", "/admin/api/v1/audit", "/admin/api/v1/credentials",
+		"/admin/api/v1/usage/summary", "/admin/api/v1/usage/failures",
+		"/admin/api/v1/audit", "/admin/api/v1/credentials",
 		"/admin/api/v1/providers", "/admin/api/v1/routes",
 		"/admin/api/v1/projects", "/admin/api/v1/system/status", "/admin/api/v1/settings",
 	} {

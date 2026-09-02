@@ -1471,6 +1471,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/runbooks/file-master-key-rotation", r.adminFileMasterKeyRotationRunbook)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage", r.adminUsage)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/summary", r.adminUsageSummary)
+	router.With(r.requireAdmin).Get("/admin/api/v1/usage/failures", r.adminUsageFailures)
 	router.With(r.requireAdmin).Get("/admin/api/v1/usage/requests/{requestID}", r.adminUsageRequest)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/status", r.adminSystemStatus)
 	router.With(r.requireAdmin).Get("/admin/api/v1/system/config", r.adminSystemConfig)

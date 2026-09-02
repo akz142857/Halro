@@ -65,18 +65,20 @@ describe("UsageSummaryPanel", () => {
 
   // "1 条最终失败" is where an investigation starts, and it was a dead end: the
   // number sat on the card with no way to reach the calls behind it. The link
-  // carries the same absolute interval the group links do, and says it opens
-  // failed *attempts* — which is a wider set than the failed requests the rate
-  // counts, because a request that fell back and succeeded left one behind.
-  it("links the failure count to the failed attempts in the same interval", async () => {
+  // opens the failed-request list, not the attempt list — the two count
+  // different things, and a link to the wrong one lands on a page whose row
+  // count contradicts the number just clicked.
+  it("links the failure count to the failed requests in the same interval", async () => {
     vi.spyOn(api, "usageSummary").mockResolvedValue(summary());
     renderPanel();
 
-    const link = await screen.findByRole("link", { name: /查看失败尝试/ });
+    const link = await screen.findByRole("link", { name: /查看最终失败/ });
     const url = new URL(link.getAttribute("href") ?? "", "https://console.test");
     expect(url.pathname).toBe("/admin/usage");
-    expect(url.searchParams.get("tab")).toBe("attempts");
-    expect(url.searchParams.get("status")).toBe("error");
+    expect(url.searchParams.get("tab")).toBe("failures");
+    // Not the attempt list's status filter: that view answers a different
+    // question and would not agree with the count.
+    expect(url.searchParams.get("status")).toBeNull();
     expect(url.searchParams.get("start")).toBe("2026-08-01T00:00:00Z");
     expect(url.searchParams.get("end")).toBe("2026-09-01T00:00:00Z");
   });
@@ -88,7 +90,7 @@ describe("UsageSummaryPanel", () => {
     renderPanel();
 
     await screen.findByText("该区间没有调用");
-    expect(screen.queryByRole("link", { name: /查看失败尝试/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /查看最终失败/ })).not.toBeInTheDocument();
   });
 
   // A drill-down has to carry the interval the row covered. A date label cannot
