@@ -298,11 +298,11 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
       </p>
 
       {!policy && <CapturedPayload requestID={failure.request_id} />}
+      </div>
 
-      {/* The drawer's header stays put, so this is not the only way out. It is
-          here because scrolling to the end of a payload and finding nothing to
-          click reads as an unfinished panel, and because the way out of a long
-          read should be where the read ends. */}
+      {/* A sibling of the body, not the last thing inside it: the drawer pins
+          this to its bottom edge, so the way out is in the same place whether
+          the record is four facts or a payload that scrolls for a minute. */}
       <div className="form-actions failure-detail-actions">
         {/* No data-modal-initial: without it the Modal focuses its own
             container, so the first thing announced is the dialog's title
@@ -310,7 +310,6 @@ function FailureDetailDialog({ failure, projectName, deploymentName, formatInsta
         <button type="button" className="button ghost" data-modal-close>
           {t("common.close")}
         </button>
-      </div>
       </div>
     </Modal>
   );

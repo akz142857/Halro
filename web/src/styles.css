@@ -186,15 +186,19 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 /* Wider than the drawer's default. That default is sized for prose and forms;
    this one holds JSON, where a wrapped line is a line an operator has to
    reassemble in their head. Still a clamp, so a narrow window gets the whole
-   width and a wide one does not hand over the entire screen. */
-.modal.drawer:has(> .failure-detail-body) { width: min(clamp(46rem, 58vw, 72rem), 100%); }
-/* Left, not right. A form's actions end on the right because that is where a
-   left-to-right reader finishes the last field; this drawer ends in a payload
-   pane that can be any height, so the way out belongs under the start of the
-   text rather than trailing off the far edge of an empty row. */
-/* Both classes, because .form-actions declares flex-end at equal specificity
-   and further down the file, where source order would decide it. */
-.form-actions.failure-detail-actions { justify-content: flex-start; }
+   width and a wide one does not hand over the entire screen.
+   
+   Three rows: the header the Modal draws, the body, and a footer pinned to the
+   bottom edge. The body scrolls rather than the drawer, so both the title and
+   the way out stay where they were put however far the payload runs. */
+.modal.drawer:has(> .failure-detail-body) { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(clamp(46rem, 58vw, 72rem), 100%); overflow: hidden; }
+.modal.drawer > .failure-detail-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+/* Bottom left. A form's actions end on the right because that is where a
+   left-to-right reader finishes the last field; a drawer's footer is a fixed
+   bar rather than the end of a form, and the way out of one sits at the corner
+   the eye returns to. Both class names because .form-actions declares flex-end
+   at equal specificity and further down the file, where source order decides. */
+.form-actions.failure-detail-actions { justify-content: flex-start; padding: var(--space-4) var(--space-6); background: var(--surface-overlay-solid); border-top: .0625rem solid var(--line); }
 
 /* The facts of one failure, laid out as cells so the dialog reads as a record
    rather than as a long column of label/value pairs. */
