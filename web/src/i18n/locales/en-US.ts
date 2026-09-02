@@ -766,15 +766,22 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       noAdvice: "This record carries no error class; search the log by Request ID.",
       noTarget: "No target chosen",
       decidedBy: "Decided by attempt {{attempt}}",
-      revealPayload: "Show the request and the response",
+      dialogTitle: "Failure detail",
+      fallbacks: "Fallbacks",
+      decidedByLabel: "Deciding attempt",
+      providerCodeLabel: "Provider code",
+      providerRequestLabel: "Provider request ID",
+      viewAttemptChain: "See this request's full attempt chain",
+      payloadHeading: "Request and response",
+      revealPayload: "Show",
       // The server audits every read. This line is what tells the operator they
       // are looking at material a caller wrote rather than at Halro's own
       // metadata.
-      payloadWarning: "Below is what the caller sent upstream and what came back. Every viewing is written to the audit log.",
+      payloadWarning: "What the caller sent upstream and what came back. Every viewing is written to the audit log.",
       payloadRequest: "Request sent upstream",
       payloadResponse: "Upstream answer",
       payloadTruncated: "This side was cut at the storage ceiling. It is not an incomplete upstream answer.",
-      noPayload: "Nothing captured for this request: capture may be off, this failure may predate it, or the record may have aged out of its retention window.",
+      noPayload: "Nothing was captured for this request.",
     },
     summary: {
       title: "Usage summary",

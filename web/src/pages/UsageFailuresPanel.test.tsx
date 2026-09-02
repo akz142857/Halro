@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
@@ -25,13 +25,10 @@ const policyRejection: RequestFailure = {
   attempts: 0, fallbacks: 0,
 };
 
-// jsdom honours a closed <details>, so its contents are correctly reported as
-// not visible until it is opened — which is the same thing an operator has to
-// do, and the reason it is asserted here rather than worked around.
-function openFailureDetail() {
-  const details = document.querySelector("details.failure-detail");
-  if (!details) throw new Error("no failure detail to open");
-  details.setAttribute("open", "");
+// The row shows a summary; everything else is one click away in a dialog.
+async function openFailureDetail() {
+  fireEvent.click(screen.getByRole("button", { name: "失败详情" }));
+  return screen.findByRole("dialog");
 }
 
 function renderPanel(items: RequestFailure[]) {
@@ -56,7 +53,6 @@ describe("UsageFailuresPanel", () => {
     // The deployment that actually failed, by name, so the operator can go
     // straight to it rather than reading an ID off a chain elsewhere.
     expect(screen.getByRole("link", { name: "Backup" })).toBeVisible();
-    expect(screen.getByText(/由第 2 次尝试决定/)).toBeInTheDocument();
     // The Request ID opens the attempt list already filtered to it, where the
     // whole chain lives — rather than a second renderer of the same record.
     const request = screen.getByRole("link", { name: /req_failed/ });
@@ -72,17 +68,24 @@ describe("UsageFailuresPanel", () => {
 
     expect(await screen.findByText(/策略拒绝：预算、熔断或并发上限/)).toBeVisible();
     expect(screen.getByText(/未选定目标/)).toBeVisible();
-    expect(screen.getByText(/从未调用上游/)).toBeInTheDocument();
     expect(screen.queryByText("HTTP 401")).not.toBeInTheDocument();
+    // And the detail explains why there is nothing upstream to name.
+    const dialog = await openFailureDetail();
+    expect(within(dialog).getByText(/从未调用上游/)).toBeVisible();
   });
 
   // The two identifiers a support desk asks for, kept in the ledger so they
   // outlive the process log that used to be their only home.
-  it("carries the upstream's own code and request ID into the row", async () => {
+  it("carries the upstream's own code and request ID into the detail", async () => {
     renderPanel([providerFailure]);
+    await screen.findByText("服务商认证或权限被拒");
+    const dialog = await openFailureDetail();
 
-    expect(await screen.findByText(/invalid_api_key/)).toBeInTheDocument();
-    expect(screen.getByText(/upstream-req-77/)).toBeInTheDocument();
+    expect(within(dialog).getByText("invalid_api_key")).toBeVisible();
+    expect(within(dialog).getByText("upstream-req-77")).toBeVisible();
+    // Which attempt produced the class the row shows. Without it a two-attempt
+    // request reads as if either could have.
+    expect(within(dialog).getByText(/由第 2 次尝试决定/)).toBeVisible();
   });
 
   // A row from before those fields were kept says so, rather than showing a
@@ -96,17 +99,20 @@ describe("UsageFailuresPanel", () => {
         completed_at: "2026-08-21T10:01:02Z",
       },
     }]);
+    await screen.findByText("服务商认证或权限被拒");
+    const dialog = await openFailureDetail();
 
-    expect(await screen.findByText(/未保存服务商错误码与请求标识/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/未保存服务商错误码与请求标识/)).toBeVisible();
   });
 
   // A policy refusal has no upstream, so it gets neither the identifiers nor a
   // notice that they were not recorded — nothing was ever asked for.
   it("offers no identifier notice on a policy refusal", async () => {
     renderPanel([policyRejection]);
-
     await screen.findByText(/策略拒绝：预算、熔断或并发上限/);
-    expect(screen.queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
+    const dialog = await openFailureDetail();
+
+    expect(within(dialog).queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
   });
 
   // The filter this list is most often opened with: a caller reports an ID from
@@ -121,6 +127,25 @@ describe("UsageFailuresPanel", () => {
     await waitFor(() => expect(api.usageFailures).toHaveBeenCalled());
     const query = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
+  });
+
+  // The dialog closes, and closing gives the operator back the list they were
+  // reading rather than a page that reflowed while a row was expanded — which
+  // is the reason this stopped being an inline disclosure.
+  it("opens and closes without disturbing the list", async () => {
+    renderPanel([providerFailure]);
+    await screen.findByText("服务商认证或权限被拒");
+
+    const dialog = await openFailureDetail();
+    expect(within(dialog).getByRole("heading", { name: "失败详情" })).toBeVisible();
+
+    // The header × and the footer button share the name, which is what a
+    // reader hears twice and what a test has to disambiguate; the footer one is
+    // the one an operator reaches at the end of a long dialog.
+    const closers = within(dialog).getAllByRole("button", { name: "关闭" });
+    fireEvent.click(closers[closers.length - 1]);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByText("服务商认证或权限被拒")).toBeVisible();
   });
 
   // The payload is behind a click. A row that fetched it on render would file
@@ -139,13 +164,17 @@ describe("UsageFailuresPanel", () => {
     await screen.findByText("服务商认证或权限被拒");
     expect(payload).not.toHaveBeenCalled();
 
-    // Two deliberate steps: the failure detail opens, and only then is there a
-    // control that files an audit record.
-    openFailureDetail();
-    fireEvent.click(screen.getByRole("button", { name: "查看原始请求与响应" }));
+    // Two deliberate steps: the detail opens, and only then is there a control
+    // that files an audit record.
+    const dialog = await openFailureDetail();
+    expect(payload).not.toHaveBeenCalled();
+    // The warning is on screen before the control, not after the prompt is
+    // already rendered.
+    expect(within(dialog).getByText(/每次查看都会记入审计日志/)).toBeVisible();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看" }));
     await waitFor(() => expect(payload).toHaveBeenCalledWith("req_failed"));
-    expect(await screen.findByText(/每次查看都会记入审计日志/)).toBeVisible();
-    expect(screen.getByText(/invalid api key/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/invalid api key/)).toBeVisible();
   });
 
   // Not captured is the ordinary case, not a fault: capture may be off, the
@@ -155,18 +184,20 @@ describe("UsageFailuresPanel", () => {
     renderPanel([providerFailure]);
 
     await screen.findByText("服务商认证或权限被拒");
-    openFailureDetail();
-    fireEvent.click(screen.getByRole("button", { name: "查看原始请求与响应" }));
-    expect(await screen.findByText(/没有可查看的原始内容/)).toBeVisible();
+    const dialog = await openFailureDetail();
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看" }));
+    expect(await within(dialog).findByText("没有保存该请求的原始内容。")).toBeVisible();
   });
 
   // A policy refusal never reached an upstream, so there is nothing to show and
   // no reason to offer an audited read.
   it("offers no payload on a policy refusal", async () => {
     renderPanel([policyRejection]);
-
     await screen.findByText(/策略拒绝：预算、熔断或并发上限/);
-    expect(screen.queryByRole("button", { name: "查看原始请求与响应" })).not.toBeInTheDocument();
+    const dialog = await openFailureDetail();
+
+    expect(within(dialog).queryByText("原始请求与响应")).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "查看" })).not.toBeInTheDocument();
   });
 
   // The summary card links here with the interval it covered; dropping it would

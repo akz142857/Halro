@@ -2,7 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
-import { EmptyState, ErrorState, Loading, LoadMore, StatusDot } from "../components";
+import { EmptyState, ErrorState, Loading, LoadMore, Modal, StatusDot } from "../components";
 import { errorClassAdvice, errorClassLabel, predatesProviderIdentifiers } from "../failure";
 import { useInstantFormatter, type InstantStyle } from "../format";
 import { Link } from "../navigation";
@@ -129,6 +129,7 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
   formatInstant: (instant: string, style?: InstantStyle) => string;
 }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   const policy = policyOutcomes.has(failure.outcome);
   const last = failure.last_failure;
   return (
@@ -159,17 +160,26 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
             : errorClassLabel(t, last?.error_class) || t("usage.error")}
         </span>
         {!policy && last?.provider_status ? <small>{t("usage.httpStatus", { status: last.provider_status })}</small> : null}
-        <details className="failure-detail">
-          <summary>{t("usage.attemptDetails")}</summary>
-          <small>
-            {policy
-              ? t("usage.failures.policyRejectedDetail")
-              : errorClassAdvice(t, last?.error_class) || t("usage.failures.noAdvice")}
-            {last && <><br />{t("usage.failures.decidedBy", { attempt: last.attempt })}</>}
-            {last && !policy && <ProviderIdentifiers failure={last} />}
-          </small>
-          {!policy && <CapturedPayload requestID={failure.request_id} />}
-        </details>
+        {/* One control, opening one place. The detail used to expand inside the
+            cell, which grew the row under the operator's pointer and reflowed
+            every row below it — and a request body has no business being laid
+            out in a table column six of whose cells are one line tall. */}
+        <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
+          {t("usage.attemptDetails")}
+        </button>
+        {/* Rendered inside the cell rather than beside the row: the dialog
+            portals to the document body and leaves nothing here, and a
+            component placed directly under <tr> would be invalid markup the
+            day it stops portalling. */}
+        {open && (
+          <FailureDetailDialog
+            failure={failure}
+            projectName={projectName}
+            deploymentName={deploymentName}
+            formatInstant={formatInstant}
+            onClose={() => setOpen(false)}
+          />
+        )}
       </td>
       <td>
         {last?.deployment_id ? (
@@ -191,6 +201,111 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
       </td>
       <td>{formatInstant(failure.completed_at, "dateTimeYear")}</td>
     </tr>
+  );
+}
+
+// Everything known about one failed request, in one place.
+//
+// It is a dialog rather than an expanding row because of what is in it: a
+// request body is not a table cell, and growing the row to hold one moves every
+// row below it while the operator is reading. The dialog also gives the
+// captured payload — the one thing here that holds material a caller wrote —
+// somewhere it is unmistakably separate from the summary above it, instead of
+// running on as more small grey text in the same cell.
+function FailureDetailDialog({ failure, projectName, deploymentName, formatInstant, onClose }: {
+  failure: RequestFailure;
+  projectName?: string;
+  deploymentName?: string;
+  formatInstant: (instant: string, style?: InstantStyle) => string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const policy = policyOutcomes.has(failure.outcome);
+  const last = failure.last_failure;
+  const cause = policy
+    ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
+    : errorClassLabel(t, last?.error_class) || t("usage.error");
+  return (
+    <Modal wide title={t("usage.failures.dialogTitle")} onClose={onClose}>
+      <dl className="failure-facts">
+        <FailureFact label={t("usage.failures.cause")} value={cause} emphasis />
+        <FailureFact label={t("usage.time")} value={formatInstant(failure.completed_at, "full")} />
+        <FailureFact label={t("usage.requestID")} value={failure.request_id} code />
+        <FailureFact label={t("usage.project")} value={projectName || failure.project_id} />
+        <FailureFact label={t("usage.model")} value={failure.requested_model} />
+        <FailureFact
+          label={t("usage.deployment")}
+          value={last?.deployment_id ? deploymentName || last.deployment_id : t("usage.failures.noTarget")}
+        />
+        <FailureFact label={t("usage.actualModel")} value={last?.provider_model} />
+        <FailureFact
+          label={t("usage.status")}
+          value={last?.provider_status ? t("usage.httpStatus", { status: last.provider_status }) : undefined}
+        />
+        <FailureFact label={t("usage.failures.providerCodeLabel")} value={last?.provider_code} code />
+        <FailureFact label={t("usage.failures.providerRequestLabel")} value={last?.provider_request_id} code />
+        <FailureFact
+          label={t("usage.failures.attempts")}
+          value={t("usage.failures.attemptCount", { count: failure.attempts })}
+        />
+        {/* Which attempt decided the outcome. Without it a two-attempt request
+            reads as if either could have produced the class above. */}
+        <FailureFact
+          label={t("usage.failures.decidedByLabel")}
+          value={last ? t("usage.failures.decidedBy", { attempt: last.attempt }) : undefined}
+        />
+        <FailureFact
+          label={t("usage.failures.fallbacks")}
+          value={failure.fallbacks > 0 ? String(failure.fallbacks) : undefined}
+        />
+      </dl>
+
+      {/* What to do next, kept apart from the facts: one is a record, the other
+          is advice, and running them together makes the advice read as
+          something the ledger said. */}
+      <p className="failure-advice">
+        {policy
+          ? t("usage.failures.policyRejectedDetail")
+          : errorClassAdvice(t, last?.error_class) || t("usage.failures.noAdvice")}
+      </p>
+      {last && !policy && predatesProviderIdentifiers(last) && (
+        <p className="failure-advice muted">{t("usage.identifiersNotRecorded")}</p>
+      )}
+
+      <p className="failure-links">
+        <Link href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(failure.request_id)}`}>
+          {t("usage.failures.viewAttemptChain")} →
+        </Link>
+      </p>
+
+      {!policy && <CapturedPayload requestID={failure.request_id} />}
+
+      {/* The header × is the only other way out, and this dialog can be long
+          enough to have scrolled it off the top. */}
+      <div className="form-actions">
+        {/* No data-modal-initial: without it the Modal focuses its own
+            container, so the first thing announced is the dialog's title
+            rather than the way out of it. */}
+        <button type="button" className="button ghost" data-modal-close>
+          {t("common.close")}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// One fact, or nothing. A label with an em dash under it is a row of furniture
+// that tells the reader the field exists and says nothing; leaving it out says
+// the same thing in no space at all.
+function FailureFact({ label, value, code = false, emphasis = false }: {
+  label: string; value?: string; code?: boolean; emphasis?: boolean;
+}) {
+  if (!value) return null;
+  return (
+    <div className={`failure-fact${emphasis ? " emphasis" : ""}`}>
+      <dt>{label}</dt>
+      <dd>{code ? <code>{value}</code> : value}</dd>
+    </div>
   );
 }
 
@@ -220,12 +335,13 @@ export function ProviderIdentifiers({ failure }: {
 
 // What the failed call carried, fetched only when an operator asks for it.
 //
-// It is behind a click rather than rendered with the row for three reasons that
-// all point the same way: it is the only thing on this page holding material a
-// caller wrote, the server audits every read of it, and a row that fetched it
-// automatically would file an audit record for every failure an operator merely
-// scrolled past. Nothing is cached — leaving a prompt in a query cache is the
-// browser-side version of the storage decision this feature was careful about.
+// It is behind a click rather than loaded with the dialog for three reasons
+// that point the same way: it is the only thing here holding material a caller
+// wrote, the server audits every read of it, and loading it on open would file
+// an audit record for every failure an operator merely looked at.
+//
+// Nothing is cached — leaving a prompt in a query cache is the browser-side
+// version of the storage decision this feature was careful about.
 function CapturedPayload({ requestID }: { requestID: string }) {
   const { t } = useTranslation();
   const [requested, setRequested] = useState(false);
@@ -238,31 +354,37 @@ function CapturedPayload({ requestID }: { requestID: string }) {
     retry: false,
   });
 
-  if (!requested) {
-    return (
-      <button type="button" className="button secondary payload-reveal" onClick={() => setRequested(true)}>
-        {t("usage.failures.revealPayload")}
-      </button>
-    );
-  }
-  if (payload.isPending) return <Loading />;
-  // A 404 here is the ordinary case, not a fault: capture may be off, or this
-  // failure may predate it, or the record may have aged out of its window.
-  if (payload.isError) return <p className="payload-absent">{t("usage.failures.noPayload")}</p>;
   return (
-    <div className="payload-view">
-      <p className="payload-warning" role="note">{t("usage.failures.payloadWarning")}</p>
-      <PayloadSection
-        label={t("usage.failures.payloadRequest")}
-        value={payload.data.request}
-        truncated={payload.data.request_truncated}
-      />
-      <PayloadSection
-        label={t("usage.failures.payloadResponse")}
-        value={payload.data.response}
-        truncated={payload.data.response_truncated}
-      />
-    </div>
+    <section className="payload-panel">
+      <h3>{t("usage.failures.payloadHeading")}</h3>
+      {!requested && (
+        <>
+          <p className="payload-note">{t("usage.failures.payloadWarning")}</p>
+          <button type="button" className="button secondary" onClick={() => setRequested(true)}>
+            {t("usage.failures.revealPayload")}
+          </button>
+        </>
+      )}
+      {requested && payload.isPending && <Loading />}
+      {/* A miss here is the ordinary case, not a fault — capture may be off,
+          the failure may predate it, or the record may have aged out — so it
+          gets one short line and the reasons live in the Operator Guide. */}
+      {requested && payload.isError && <p className="payload-note">{t("usage.failures.noPayload")}</p>}
+      {requested && payload.data && (
+        <>
+          <PayloadSection
+            label={t("usage.failures.payloadRequest")}
+            value={payload.data.request}
+            truncated={payload.data.request_truncated}
+          />
+          <PayloadSection
+            label={t("usage.failures.payloadResponse")}
+            value={payload.data.response}
+            truncated={payload.data.response_truncated}
+          />
+        </>
+      )}
+    </section>
   );
 }
 
