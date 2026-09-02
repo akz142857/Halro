@@ -16,6 +16,8 @@ import (
 
 	"github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/compress/zstd"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // Schema 5 adds the upstream's own identifiers for a failed attempt — the
@@ -453,7 +455,7 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 			return report, fmt.Errorf("remove expired usage parquet: %w", err)
 		}
 		partition := filepath.Dir(path)
-		if err := syncDirectory(partition); err != nil {
+		if err := durable.SyncDirectory(partition); err != nil {
 			return report, err
 		}
 		if err := os.Remove(partition); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -463,7 +465,7 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 			}
 		}
 	}
-	if err := syncDirectory(e.root); err != nil {
+	if err := durable.SyncDirectory(e.root); err != nil {
 		return report, err
 	}
 	return report, nil
@@ -575,7 +577,7 @@ func writeNDJSONAtomic[T any](path string, rows []T) (err error) {
 	if err = os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("publish usage ndjson: %w", err)
 	}
-	return syncDirectory(filepath.Dir(path))
+	return durable.SyncDirectory(filepath.Dir(path))
 }
 
 func readNDJSONFile[T any](path string) ([]T, error) {
@@ -634,7 +636,7 @@ func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
 	if err = os.Rename(tempPath, path); err != nil {
 		return fmt.Errorf("publish usage parquet: %w", err)
 	}
-	return syncDirectory(filepath.Dir(path))
+	return durable.SyncDirectory(filepath.Dir(path))
 }
 
 func (e *Exporter) commitManifest(manifest Manifest) (err error) {
@@ -669,7 +671,7 @@ func (e *Exporter) commitManifest(manifest Manifest) (err error) {
 	if err = os.Rename(tempPath, filepath.Join(e.root, "manifest.json")); err != nil {
 		return err
 	}
-	return syncDirectory(e.root)
+	return durable.SyncDirectory(e.root)
 }
 
 func (e *Exporter) safeManifestPath(relative string) (string, error) {
@@ -829,15 +831,6 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
 
 func isDirectoryNotEmpty(err error) bool {

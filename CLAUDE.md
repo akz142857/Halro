@@ -123,6 +123,9 @@ Key `internal/` packages and what owns what:
 - `deadman` (+ `cmd/halro-deadman`) — an independently deployed watchdog: checks
   Halro/Prometheus/Alertmanager readiness and sample freshness, sends heartbeat and
   down/up events to a separate receiver. Deliberately outside Halro's own failure domain.
+- `durable` — the one directory-fsync used by every atomic-rename sequence here
+  (Ledger segments, Usage partitions, backups, master key, metadata publish). It
+  exists because there were five copies of it; do not write a sixth.
 - `backup` — offline encrypted backup/restore; `.hmbk` archives plus a dedicated backup
   key, independent from `master.key`.
 

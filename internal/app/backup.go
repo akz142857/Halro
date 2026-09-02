@@ -16,6 +16,7 @@ import (
 	"github.com/akz142857/Halro/internal/backup"
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
@@ -265,7 +266,7 @@ func restoreBackupWithFactory(
 		rollbackErr := os.Rename(previousDataDir, cfg.Storage.DataDir)
 		return RestoreResult{}, errors.Join(fmt.Errorf("publish restored data directory: %w", err), rollbackErr)
 	}
-	if err := syncDirectoryPath(dataParent); err != nil {
+	if err := durable.SyncDirectory(dataParent); err != nil {
 		publicationErr := fmt.Errorf("sync restored data directory publication: %w", err)
 		removeCandidateErr := os.Rename(cfg.Storage.DataDir, stageData)
 		if removeCandidateErr != nil {
@@ -284,7 +285,7 @@ func restoreBackupWithFactory(
 				republishContext,
 			)
 		}
-		rollbackSyncErr := syncDirectoryPath(dataParent)
+		rollbackSyncErr := durable.SyncDirectory(dataParent)
 		return RestoreResult{}, errors.Join(publicationErr, rollbackSyncErr)
 	}
 	return RestoreResult{
@@ -499,15 +500,6 @@ func reservePreviousDataPath(parent string) (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-func syncDirectoryPath(path string) error {
-	handle, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer handle.Close()
-	return handle.Sync()
 }
 
 func createBackupSnapshot(

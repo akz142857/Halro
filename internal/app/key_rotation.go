@@ -13,6 +13,7 @@ import (
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/masterkey"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -538,7 +539,7 @@ func publishMetadata(stagePath, livePath string) error {
 	if err := os.Rename(stagePath, livePath); err != nil {
 		return fmt.Errorf("publish rotated metadata: %w", err)
 	}
-	return syncDirectoryPath(filepath.Dir(livePath))
+	return durable.SyncDirectory(filepath.Dir(livePath))
 }
 
 func callRotationHook(hook func(string) error, point string) error {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // SealResult describes one roll.
@@ -144,7 +146,7 @@ func (l *Log) Roll() (SealResult, error) {
 	// log left healthy here would append committed accounting frames into a
 	// generation the manifest has already recorded a fixed length for, and the
 	// next open would refuse to start with those frames stranded inside it.
-	if err := syncDirectory(l.directory); err != nil {
+	if err := durable.SyncDirectory(l.directory); err != nil {
 		l.status.MarkUnavailable()
 		return SealResult{}, err
 	}
@@ -158,7 +160,7 @@ func (l *Log) Roll() (SealResult, error) {
 		l.status.MarkUnavailable()
 		return SealResult{}, fmt.Errorf("sync successor ledger generation: %w", err)
 	}
-	if err := syncDirectory(l.directory); err != nil {
+	if err := durable.SyncDirectory(l.directory); err != nil {
 		successor.Close()
 		l.status.MarkUnavailable()
 		return SealResult{}, err
@@ -262,7 +264,7 @@ func (l *Log) Compact(generation uint64) (Segment, error) {
 	if err := os.Remove(source); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return updated, fmt.Errorf("remove compacted ledger generation %d: %w", generation, err)
 	}
-	if err := syncDirectory(directory); err != nil {
+	if err := durable.SyncDirectory(directory); err != nil {
 		return updated, err
 	}
 	return updated, nil

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/buildinfo"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/ledger"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
@@ -202,9 +203,9 @@ func Create(options CreateOptions) (Manifest, error) {
 	if err := os.Remove(tempPath); err != nil {
 		return Manifest{}, err
 	}
-	if err := syncDirectory(filepath.Dir(options.OutputPath)); err != nil {
+	if err := durable.SyncDirectory(filepath.Dir(options.OutputPath)); err != nil {
 		removeErr := os.Remove(options.OutputPath)
-		cleanupSyncErr := syncDirectory(filepath.Dir(options.OutputPath))
+		cleanupSyncErr := durable.SyncDirectory(filepath.Dir(options.OutputPath))
 		return Manifest{}, errors.Join(err, removeErr, cleanupSyncErr)
 	}
 	return manifest, nil
@@ -416,7 +417,7 @@ func Extract(archivePath string, backupKey []byte, destination string) (Manifest
 	if len(extracted) != len(manifest.Files) {
 		return Manifest{}, errors.New("extracted backup file set does not match manifest")
 	}
-	return manifest, syncDirectory(destination)
+	return manifest, durable.SyncDirectory(destination)
 }
 
 func validFingerprint(value string) bool {
@@ -488,13 +489,4 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return "bkp_" + hex.EncodeToString(random[:]), nil
-}
-
-func syncDirectory(directory string) error {
-	handle, err := os.Open(directory)
-	if err != nil {
-		return err
-	}
-	defer handle.Close()
-	return handle.Sync()
 }

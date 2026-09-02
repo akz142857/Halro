@@ -13,6 +13,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/id"
 	corekms "github.com/akz142857/Halro/internal/kms"
 	"github.com/akz142857/Halro/internal/kms/awskms"
@@ -603,7 +604,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 		return err
 	}
 	for _, directory := range []string{filepath.Dir(stageConfig.LedgerPath()), filepath.Dir(stageConfig.AuditPath()), stageRoot} {
-		if err := syncDirectoryPath(directory); err != nil {
+		if err := durable.SyncDirectory(directory); err != nil {
 			return err
 		}
 	}
@@ -630,7 +631,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	if err := os.Rename(stageRoot, cfg.Storage.DataDir); err != nil {
 		return fmt.Errorf("publish initialized KMS data directory: %w", err)
 	}
-	if err := syncDirectoryPath(parent); err != nil {
+	if err := durable.SyncDirectory(parent); err != nil {
 		rollbackErr := os.Rename(cfg.Storage.DataDir, stageRoot)
 		return errors.Join(fmt.Errorf("sync KMS initialization publication: %w", err), rollbackErr)
 	}
