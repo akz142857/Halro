@@ -914,6 +914,17 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 			"error_file_max_files", cfg.Logging.ErrorFile.FileLimit())
 	}
 	logger.Info("logging configured", logAttributes...)
+	if cfg.Gateway.FailureCapture.Enabled {
+		// The one feature that begins persisting material a caller wrote is the
+		// one that should not be discoverable only by reading config.yaml or
+		// listing the data directory. Named at startup, with the bounds, the
+		// way the log file is.
+		logger.Warn("failure capture is enabled; requests that fail will have their payloads stored",
+			"root", filepath.Join(cfg.Storage.DataDir, "failures"),
+			"max_bytes", cfg.Gateway.FailureCapture.ByteLimit(),
+			"max_records_per_day", cfg.Gateway.FailureCapture.DailyRecordLimit(),
+			"retain", cfg.Gateway.FailureCapture.RetentionWindow().String())
+	}
 	hardening, err := hardenRuntimeCommand()
 	if err != nil {
 		return fmt.Errorf("apply runtime host hardening before Master Key unlock: %w", err)

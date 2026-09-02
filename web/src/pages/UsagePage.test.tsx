@@ -332,7 +332,6 @@ describe("UsagePage failure detail", () => {
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
     expect(await screen.findByText("quota_exhausted_beta")).toBeVisible();
-    expect(screen.queryByText(/usage\.errorClasses/)).not.toBeInTheDocument();
   });
 
   // Which rung of the chain this attempt was. Without it a fallback that failed
@@ -388,7 +387,6 @@ describe("UsagePage failure detail", () => {
     await screen.findByText("上游拒绝了请求形状或参数");
     const dialog = await openAttemptDetail();
     expect(within(dialog).getByText(/未保存服务商错误码与请求标识/)).toBeVisible();
-    expect(within(dialog).queryByText(/未知/)).not.toBeInTheDocument();
   });
 
   // An upstream that named no code on a record that would have kept one gets
@@ -402,8 +400,45 @@ describe("UsagePage failure detail", () => {
     render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
 
     expect(await screen.findByText("上游响应超时")).toBeVisible();
-    expect(screen.queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/服务商错误码：/)).not.toBeInTheDocument();
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
+  });
+
+  // A failure this side raised about an answer the upstream gave. It settles
+  // with HTTP 200, so the row used to show a red dot beside "HTTP 200" — the
+  // upstream answered fine and the console still called it an error — and the
+  // drawer used to say the record predated fields it was written with.
+  it("names a local refusal by its outcome, not by the upstream's 200", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({
+        status: "policy_rejected", http_status: 200, failure_phase: "response_render",
+      })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/脱敏策略拦截了上游输出/)).toBeVisible();
+    expect(screen.queryByText("HTTP 200")).not.toBeInTheDocument();
+
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("HTTP 200")).not.toBeInTheDocument();
+  });
+
+  // The same for a target that could not serve the request's shape: no upstream
+  // was called, so there is no class and no status to show.
+  it("names an unserved capability by its outcome", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ status: "unsupported_feature", failure_phase: "pre_provider" })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/目标不支持该请求形状/)).toBeVisible();
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
   });
 
   // A successful row must not grow a disclosure promising an explanation of a

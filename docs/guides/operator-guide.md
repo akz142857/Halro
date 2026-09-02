@@ -412,7 +412,12 @@ terminal record, and therefore when this log line is the only account of the
 request that exists anywhere.
 
 **`request failed` is written for two of the six non-success outcomes**,
-`provider_error` and `accounting_error`. The other four — `rejected` (budget,
+`provider_error` and `accounting_error` — with one exclusion inside the first:
+a request the caller cancelled writes none. A client hanging up is driven
+entirely from outside Halro, and a frontend deploy or a gateway restart cancels
+every request in flight at once, which is the same flood the four policy
+outcomes are excluded to prevent. A deadline that expired is not this, and does
+write a record. The other four — `rejected` (budget,
 circuit breaker, target concurrency), `token_guard_rejected`,
 `unsupported_feature` and `policy_rejected` — are a policy working as
 configured. A client in a retry loop produces them at its own rate rather than
@@ -455,7 +460,7 @@ What is captured, and what is not:
 
 | Outcome | Captured | Why |
 | --- | --- | --- |
-| `provider_error` | yes | The request and the upstream's reply are the diagnosis. |
+| `provider_error` | yes | The request and the upstream's reply are the diagnosis. Except when the caller cancelled: nobody hung up on Halro's account, and one frontend deploy cancels every request in flight at once. |
 | `unsupported_feature` | yes | Which field the target could not serve is only visible in the request. |
 | `policy_rejected` | **no** | Storing the content redaction just refused would make the capture the leak the policy prevents. |
 | `rejected`, `token_guard_rejected` | no | Never reached an upstream; nothing to reproduce, and a runaway client produces them at its own rate. |
@@ -474,10 +479,11 @@ your own compliance position before enabling it:
 - **Bounded.** Each side is truncated at `max_bytes` and flagged as truncated;
   each day is capped at `max_records_per_day`, past which capture stops for the
   day and logs one line.
-- **Expiring.** Records live in day directories under `<data_dir>/failures/` and
-  whole days are removed once past `retain`, swept on the Parquet export tick.
-  This is the answer to "how long is caller content kept", enforced rather than
-  promised.
+- **Expiring.** Each record is removed once it is older than `retain`, swept on
+  the Parquet export tick and again at shutdown. This is the answer to "how long
+  is caller content kept", enforced rather than promised — so the sweep runs
+  whether or not capture is currently enabled. Switching it off stops new
+  writes; it does not strand what is already there.
 - **Audited on read.** `GET /admin/api/v1/usage/failures/{requestID}/payload`
   is the only admin GET that writes an audit record —
   `usage.failure_payload.read` — because it is the only one that returns a

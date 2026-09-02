@@ -171,11 +171,14 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .metric.alert strong { color: var(--danger); }
 .metric-link { display: inline-block; margin-top: var(--space-2); font-size: var(--font-size-xs); }
 .filter-chip { align-self: center; padding: var(--space-1) var(--space-2); color: var(--muted); font-size: var(--font-size-xs); background: var(--surface-sidebar); border: .0625rem solid var(--line); border-radius: .25rem; cursor: pointer; }
-/* The inset the modal gives a <form> child and nothing else, matching the
-   drawer's own body padding. Qualified by the modal so it outranks
-   `.modal > form`. The drawer supplies the full height and the sticky header;
+/* The drawer's own body padding. Qualified by the modal for symmetry with the
+   grid rule above rather than to outrank anything: `.modal > form` never
+   matched a div. The drawer supplies the full height and the sticky header;
    nothing here has to reimplement either. */
-.modal > .failure-detail-body { margin: 0; padding: var(--space-5) var(--space-6); }
+.modal > .failure-detail-body { padding: var(--space-5) var(--space-6); }
+/* Without a floor the fixed layout squeezes every column to a ribbon on a
+   narrow window and the shell's own overflow-x never engages. */
+.usage-table { min-width: 60rem; }
 /* Wider than the drawer's default. That default is sized for prose and forms;
    this one holds JSON, where a wrapped line is a line an operator has to
    reassemble in their head. Still a clamp, so a narrow window gets the whole
@@ -232,9 +235,12 @@ h3 { margin-bottom: 0; font-size: var(--font-size-lg); }
 .payload-truncated { margin: 0 0 var(--space-1); color: var(--color-status-warning-text); font-size: var(--font-size-xs); }
 /* Bounded so the request and the response are both reachable without scrolling
    the length of one to find the other — the store caps a payload at 64KB, which
-   pretty-printed is more than anyone reads top to bottom — and resizable,
-   because how much of one matters is a judgement only the reader can make. */
-.payload-body { max-height: 24rem; resize: vertical; margin: 0; overflow: auto; padding: var(--space-2); font-size: var(--font-size-xs); background: var(--surface-inset); border: .0625rem solid var(--line); white-space: pre-wrap; word-break: break-word; }
+   pretty-printed is more than anyone reads top to bottom. No `resize`: an
+   inline height set by dragging is still clamped by max-height, so it could
+   only ever shrink the pane, which is not what a reader wanting more of a
+   request body is reaching for. The drawer's own height is what gives them
+   room. */
+.payload-body { max-height: 24rem; margin: 0; overflow: auto; padding: var(--space-2); font-size: var(--font-size-xs); background: var(--surface-inset); border: .0625rem solid var(--line); white-space: pre-wrap; word-break: break-word; }
 
 .dashboard-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, .8fr); gap: 18px; margin-top: 18px; }
 .dashboard-grid > *, .governance-lower-grid > * { min-width: 0; }

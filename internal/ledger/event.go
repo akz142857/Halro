@@ -147,9 +147,16 @@ func (e Event) Validate() error {
 	// permanent. Rejected rather than truncated: a shortened identifier is a
 	// different identifier, and one that would be quoted to an upstream that
 	// never issued it.
-	if len(e.ProviderCode) > provider.MaxProviderIdentifierLength ||
-		len(e.ProviderRequestID) > provider.MaxProviderIdentifierLength {
-		problems = append(problems, errors.New("provider identifiers exceed the identifier length bound"))
+	// Narrowed, not merely measured. The comment above claims the bound is
+	// enforced again here so a caller added later cannot widen what becomes
+	// permanent, and a length check alone did not deliver that: 128 bytes of
+	// arbitrary text — spaces, newlines, a sentence out of a response body —
+	// passed. SafeProviderIdentifier returns the value unchanged when it is
+	// already an identifier, so comparing against it rejects exactly the values
+	// the gateway would have dropped.
+	if e.ProviderCode != provider.SafeProviderIdentifier(e.ProviderCode) ||
+		e.ProviderRequestID != provider.SafeProviderIdentifier(e.ProviderRequestID) {
+		problems = append(problems, errors.New("provider identifiers must be bounded identifiers"))
 	}
 	if e.PriceSnapshot != nil {
 		if err := e.PriceSnapshot.Validate(); err != nil {

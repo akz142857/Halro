@@ -165,7 +165,8 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
               audit a provider that was never called. */}
           {policy
             ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
-            : errorClassLabel(t, last?.error_class) || t("usage.error")}
+            : errorClassLabel(t, last?.error_class)
+              || t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.error") })}
         </span>
         {!policy && last?.provider_status ? <small>{t("usage.httpStatus", { status: last.provider_status })}</small> : null}
       </td>
@@ -232,7 +233,10 @@ function FailureDetailDrawerFor({ failure, projectName, deploymentName, formatIn
     : providerIdentifierFacts(t, last);
   const cause = policy
     ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
-    : errorClassLabel(t, last?.error_class) || t("usage.error");
+    // An accounting failure has no upstream class; naming the outcome is more
+    // use than the bare word "error", and the copy for it already exists.
+    : errorClassLabel(t, last?.error_class)
+      || t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.error") });
   return (
     <FailureDetailDrawer
       title={t("usage.failures.dialogTitle")}

@@ -104,6 +104,10 @@ type Service struct {
 	// wrote, so it is something an operator turns on rather than something a
 	// gateway does unless told otherwise.
 	failureCapture FailureCapture
+	// captureDegraded reports the store's first write failure and nothing
+	// after it. A disk that cannot take a capture cannot take the next one
+	// either, and the operator needs to be told once.
+	captureDegraded atomic.Bool
 }
 
 type PriceSelector interface {
@@ -621,6 +625,16 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	// refused credential is most likely to be quoted back — and the store is
 	// where that material can be held under encryption, a clock and an audit.
 	attempt.run.captureProviderFailure(providerErr)
+	if providerErr == nil {
+		// This attempt answered, so whatever an earlier one failed with is
+		// history rather than the reason this request ends. Without clearing
+		// it, a request that fell back, succeeded, and then could not have its
+		// answer rendered reported the *first* target's status, provider code
+		// and upstream request ID — sending an operator to an upstream with
+		// the identifier of a call that worked.
+		attempt.run.failure = FailureDescriptor{}
+		attempt.run.capturedResponse = nil
+	}
 	if attempt.accounting.LeaseMode == ledger.LeaseModeUnknownAllowed {
 		settlement.CommittedMicrosUSD = 0
 		settlement.CostEstimated = false
@@ -705,7 +719,13 @@ func providerFailureReason(classified *provider.Error) string {
 func (attempt *activeAttempt) abort(outcome string) error {
 	attempt.concurrency.Release()
 	attempt.breaker.Abandon()
-	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{Outcome: outcome})
+	// phasePreProvider, because that is what abort is for: the attempt exists
+	// and the upstream was never called. Leaving it blank made the record
+	// indistinguishable from one written before the field existed, which the
+	// console reads as "this predates the field" and says so in words.
+	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{
+		Outcome: outcome, FailurePhase: phasePreProvider,
+	})
 	finalizeErr := attempt.run.finalize(outcome)
 	return errors.Join(cleanupErr, finalizeErr)
 }
@@ -2892,7 +2912,16 @@ func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, c
 		result.LatencyMillis = completedAt.Sub(startedAt).Milliseconds()
 	}
 	if providerErr == nil {
-		result.HTTPStatus = http.StatusOK
+		if result.Outcome == outcomeSuccess {
+			result.HTTPStatus = http.StatusOK
+			return
+		}
+		// The upstream answered and this side refused the answer — a redaction
+		// policy, or a rewrite that could not be represented. Recording 200
+		// here was wrong twice over: the console rendered a red dot beside
+		// "HTTP 200", and a blank phase made a record written today look like
+		// one written before the field existed.
+		result.FailurePhase = phaseResponseRender
 		return
 	}
 	// The target is not needed for the fields the settlement keeps — it already

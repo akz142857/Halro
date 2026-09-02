@@ -9,7 +9,7 @@ import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputT
 import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
-import { attemptFailureLabel, errorClassAdvice } from "../failure";
+import { attemptFailureLabel, errorClassAdvice, upstreamStatus } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
 
 const usageTabs = ["summary", "failures", "attempts"] as const;
@@ -308,7 +308,7 @@ function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
       {/* The status is kept apart from the class rather than folded into one
           string: an operator taking a 429 to a provider's support desk quotes
           the number, and a class alone cannot be quoted. */}
-      {attempt.http_status ? <small>{t("usage.httpStatus", { status: attempt.http_status })}</small> : null}
+      {upstreamStatus(attempt.http_status) ? <small>{t("usage.httpStatus", { status: attempt.http_status })}</small> : null}
     </>
   );
 }
@@ -356,7 +356,7 @@ function AttemptDetailCell({ attempt, projectName, deploymentName }: {
             { label: t("usage.model"), value: attempt.requested_model },
             { label: t("usage.deployment"), value: attempt.deployment_id ? deploymentName || attempt.deployment_id : undefined },
             { label: t("usage.actualModel"), value: attempt.provider_model },
-            { label: t("usage.status"), value: attempt.http_status ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
+            { label: t("usage.status"), value: upstreamStatus(attempt.http_status) ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
             ...identifiers.facts,
             { label: t("usage.latency"), value: `${attempt.latency_millis} ms` },
             { label: t("usage.failures.chainLabel"), value: chain },

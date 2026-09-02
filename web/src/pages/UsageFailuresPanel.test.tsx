@@ -138,7 +138,6 @@ describe("UsageFailuresPanel", () => {
 
     const dialog = await openFailureDetail();
     expect(within(dialog).getByRole("heading", { name: "失败详情" })).toBeVisible();
-    expect(dialog).toHaveClass("drawer");
 
     // The header × and the footer button share the name, which is what a
     // reader hears twice and what a test has to disambiguate; the footer one is

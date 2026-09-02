@@ -295,18 +295,18 @@ gateway:
     enabled: false
     # @title.zh-CN 单条载荷上限（字节）
     # @title.en-US Payload size ceiling (bytes)
-    # @description.zh-CN 请求与响应分别截断到该长度；被截断的一侧会在记录里标注。
-    # @description.en-US The request and the response are truncated to this length separately; a truncated side is flagged in the record.
+    # @description.zh-CN 请求与响应分别截断到该长度（允许范围 1024–1048576）；被截断的一侧会在记录里标注。
+    # @description.en-US The request and the response are truncated to this length separately (allowed range 1024 to 1048576); a truncated side is flagged in the record.
     max_bytes: 65536
     # @title.zh-CN 每日保存条数上限
     # @title.en-US Daily record ceiling
-    # @description.zh-CN 上游大面积失败时的封顶；超过后当日停止保存并记录一次。
-    # @description.en-US The ceiling for a day in which an upstream is failing everything; past it capture stops for the day and says so once.
+    # @description.zh-CN 上游大面积失败时的封顶（允许范围 1–1000000）；超过后当日停止保存并记录一次。
+    # @description.en-US The ceiling for a day in which an upstream is failing everything (allowed range 1 to 1000000); past it capture stops for the day and says so once.
     max_records_per_day: 1000
     # @title.zh-CN 保留时长
     # @title.en-US Retention window
-    # @description.zh-CN 载荷保留多久后自动删除。这是「调用方内容保存多久」的答案，由清理任务强制执行，允许范围 1h–720h。
-    # @description.en-US How long a capture lives before it is deleted. This is the answer to "how long is caller content kept", enforced by a sweep rather than promised; allowed range is 1h to 720h.
+    # @description.zh-CN 单条载荷保留多久后自动删除，逐条按写入时刻判定。这是「调用方内容保存多久」的答案，由清理任务强制执行；即使 enabled 改回 false，已保存的记录仍会被继续清理。允许范围 1h–720h。
+    # @description.en-US How long a single capture lives before it is deleted, decided per record from when it was written. This is the answer to "how long is caller content kept", enforced by a sweep rather than promised — and the sweep keeps running after enabled is set back to false, so turning capture off does not strand what it collected. Allowed range is 1h to 720h.
     retain: 24h
 
 retry:

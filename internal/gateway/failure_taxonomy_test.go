@@ -201,7 +201,10 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 		},
 		{
 			// The caller went away. It is a failed request in the ledger, but
-			// nothing upstream faltered.
+			// nothing upstream faltered — and it writes no terminal ERROR, for
+			// the same reason the policy refusals do not: one frontend deploy
+			// cancels every request in flight at once, and a bounded error file
+			// would lose the incident's first real error to the wave.
 			name:        "client cancellation",
 			dailyBudget: 1_000_000,
 			scenario: func(_ *testing.T, f *fixture) func() error {
@@ -211,7 +214,7 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1, finalFailureErrors: 1},
+			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 1},
 		},
 		{
 			// Admitted into the ledger, then refused before any upstream call:

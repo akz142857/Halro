@@ -112,7 +112,10 @@ type upstreamFailureBody struct {
 // that has already failed.
 func (run *requestRun) writeCapture(outcome string) {
 	store := run.service.failureCapture
-	if store == nil || !capturesPayload(outcome) {
+	// Same exclusion as the terminal record, and for the same reason: a wave of
+	// client disconnects would otherwise store one prompt per cancelled request
+	// and burn the day's ceiling before the real incident starts.
+	if store == nil || !capturesPayload(outcome) || run.callerAbandoned() {
 		return
 	}
 	if run.capturedRequest == nil && run.capturedResponse == nil {
@@ -127,9 +130,12 @@ func (run *requestRun) writeCapture(outcome string) {
 	}
 	written, err := store.Put(record)
 	switch {
-	case err != nil:
-		// Named without the payload: the thing that failed to be written must
-		// not be written into the log instead.
+	case err != nil && run.service.captureDegraded.CompareAndSwap(false, true):
+		// Once, not once per failed request. A provider outage and a full disk
+		// arrive together, and a line per failure is the same flood this
+		// feature is careful about everywhere else, one level down. Named
+		// without the payload: the thing that failed to be written must not be
+		// written into the log instead.
 		run.service.logger.Warn("failure capture was not stored",
 			"request_id", run.requestID, "error", err)
 	case !written && store.Saturated():

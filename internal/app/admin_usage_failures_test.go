@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/ledger"
 )
@@ -265,5 +266,56 @@ func TestReadingACapturedPayloadIsAudited(t *testing.T) {
 		if got := authenticatedAdminGet(t, runtime, cookie, path); got.Code != http.StatusNotFound {
 			t.Fatalf("%s status=%d, want 404", path, got.Code)
 		}
+	}
+}
+
+// Turning capture off has to stop new writes without stopping the expiry of
+// what is already there. It used to do the opposite: the store was opened only
+// when enabled, so the retention sweep returned immediately and every prompt
+// collected while it was on stayed on disk forever. An operator who switches it
+// off after an incident is taking the security-conscious action, and it must
+// not be the one that makes the data permanent.
+func TestDisablingCaptureStillExpiresWhatWasAlreadyWritten(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Gateway.FailureCapture.Enabled = true
+	cfg.Gateway.FailureCapture.Retain = config.Duration(time.Hour)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enabled.failureCapture.Put(failurecapture.Record{
+		RequestID: "req_failed", ProjectID: "project_1", Outcome: "provider_error",
+		Request: json.RawMessage(`{"model":"chat"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	enabled.Close()
+
+	// The same data directory, with capture switched off.
+	cfg.Gateway.FailureCapture.Enabled = false
+	disabled, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer disabled.Close()
+	if disabled.failureCapture == nil {
+		t.Fatal("a directory holding captures was left with nothing to expire it")
+	}
+	// The gateway is still not allowed to write into it.
+	if captureFor(cfg.Gateway.FailureCapture.Enabled, disabled.failureCapture) != nil {
+		t.Fatal("a disabled instance handed the gateway a store to write to")
+	}
+	if _, found, _ := disabled.failureCapture.Get("req_failed", "project_1"); !found {
+		t.Fatal("the record vanished before its window elapsed")
+	}
+	disabled.purgeFailureCaptures()
+	if _, found, _ := disabled.failureCapture.Get("req_failed", "project_1"); !found {
+		t.Fatal("a record inside its window was swept")
 	}
 }

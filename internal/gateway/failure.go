@@ -13,6 +13,12 @@ import (
 // worst — a 502 is written by the provider path, by a render that could not
 // carry the answer, and by an accounting refusal, and each sends them somewhere
 // different.
+// outcomeSuccess is the one terminal state that is not a failure. It is named
+// rather than spelled out at each comparison because three separate decisions
+// now turn on it — whether an attempt records an HTTP 200, whether a request
+// earns a terminal ERROR, and whether its payload is kept.
+const outcomeSuccess = "success"
+
 const (
 	// phasePreProvider covers everything after admission and before an upstream
 	// call: a target refused for capability, a Token Guard recheck, a budget or
@@ -156,6 +162,25 @@ func (d FailureDescriptor) attributes() []any {
 // The consequence has to be stated wherever the two numbers are read together:
 // the ERROR count is a subset of the failed-request count, never equal to it,
 // and neither can be used to check the other.
+// callerAbandoned reports that the caller hung up rather than that anything
+// broke.
+//
+// A cancelled request finalizes as provider_error, because that is what the
+// ledger has to record for an attempt that was cut short. But the rule the two
+// ERROR-writing outcomes are chosen by is "nothing outside Halro can drive
+// this", and a client hanging up is driven entirely from outside: a frontend
+// deploy or a gateway restart cancels every request in flight at once. Writing
+// those would fill a bounded error file in seconds and push the incident's
+// first real error out of it — the exact failure mode the four policy outcomes
+// are excluded to prevent. reportBreaker already refuses to judge a target on
+// this signal, for the same reason.
+//
+// A deadline that expired is not this: nobody hung up, something was too slow,
+// and that is worth a record.
+func (run *requestRun) callerAbandoned() bool {
+	return run.failure.Class == provider.ErrorCanceled
+}
+
 func writesFailureError(outcome string) bool {
 	switch outcome {
 	case "provider_error", "accounting_error":
@@ -179,26 +204,11 @@ func writesFailureError(outcome string) bool {
 // either be a guess or would move the mapping earlier to satisfy a log. The
 // Request ID is what joins this record to the response the caller saw.
 func (run *requestRun) logFinalFailure(outcome string, accountingRecorded bool) {
-	if !writesFailureError(outcome) {
+	if !writesFailureError(outcome) || run.callerAbandoned() {
 		return
 	}
 	attributes := []any{"request_id", run.requestID, "outcome", outcome}
-	descriptor := run.failure
-	if descriptor.Class == "" {
-		// Nothing upstream failed, and the request still ended badly: a render
-		// that could not carry the answer, or an accounting refusal. Naming a
-		// phase without inventing an error class is the honest record — the
-		// alternative, borrowing `unknown`, would report an unclassified
-		// upstream failure for a request whose upstream may have succeeded.
-		descriptor = FailureDescriptor{Phase: phaseFor(outcome), Class: provider.ErrorUnknown}
-		if run.lastTarget.DeploymentID != "" {
-			descriptor.PublicModel = run.lastTarget.PublicModel
-			descriptor.DeploymentID = run.lastTarget.DeploymentID
-			descriptor.ProviderID = run.lastTarget.ProviderID
-			descriptor.BindingID = run.lastTarget.BindingID
-		}
-	}
-	attributes = append(attributes, descriptor.attributes()...)
+	attributes = append(attributes, run.terminalDescriptor(outcome).attributes()...)
 	attributes = append(attributes,
 		"attempts", run.attemptCount,
 		"fallbacks", run.fallbackCount,
@@ -210,6 +220,33 @@ func (run *requestRun) logFinalFailure(outcome string, accountingRecorded bool) 
 		"accounting_recorded", accountingRecorded,
 	)
 	run.service.logger.Error("request failed", attributes...)
+}
+
+// terminalDescriptor picks what the terminal record reports.
+//
+// The last unresolved attempt failure explains a provider_error, and only that.
+// Selecting on "is there a descriptor" instead was wrong in two directions at
+// once: nothing cleared the descriptor when a later attempt succeeded, so a
+// render failure after a fallback reported the earlier target's status and
+// upstream request ID; and an accounting failure that happened to follow a
+// failed attempt was written into the errors-only file as a provider 5xx,
+// sending an operator upstream over a disk that could not be written.
+func (run *requestRun) terminalDescriptor(outcome string) FailureDescriptor {
+	if outcome == "provider_error" && run.failure.Class != "" {
+		return run.failure
+	}
+	// No upstream failure explains this one. Naming a phase without inventing
+	// an error class is the honest record — borrowing `unknown` would report an
+	// unclassified upstream failure for a request whose upstream may have
+	// answered perfectly well.
+	descriptor := FailureDescriptor{Phase: phaseFor(outcome), Class: provider.ErrorUnknown}
+	if run.lastTarget.DeploymentID != "" {
+		descriptor.PublicModel = run.lastTarget.PublicModel
+		descriptor.DeploymentID = run.lastTarget.DeploymentID
+		descriptor.ProviderID = run.lastTarget.ProviderID
+		descriptor.BindingID = run.lastTarget.BindingID
+	}
+	return descriptor
 }
 
 // phaseFor names where a failure with no attempt of its own happened. A

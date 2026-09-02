@@ -10,7 +10,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
@@ -208,10 +210,14 @@ func TestEveryLoggedErrorClassIsAMemberOfTheEnum(t *testing.T) {
 		name  string
 		err   error
 		class string
+		// A caller who hung up gets no terminal record — see
+		// TestACallerHangingUpWritesNoTerminalFailure — so this case is
+		// asserted on the attempt record alone.
+		terminal bool
 	}{
-		{"caller cancelled", context.Canceled, "canceled"},
-		{"deadline passed", context.DeadlineExceeded, "timeout"},
-		{"nothing classified it", errors.New("adapter ignored the error contract"), "unknown"},
+		{"deadline passed", context.DeadlineExceeded, "timeout", true},
+		{"nothing classified it", errors.New("adapter ignored the error contract"), "unknown", true},
+		{"caller cancelled", context.Canceled, "canceled", false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			f := newFixture(t, 1_000_000)
@@ -223,20 +229,28 @@ func TestEveryLoggedErrorClassIsAMemberOfTheEnum(t *testing.T) {
 				t.Fatal("the failure did not reach the caller")
 			}
 			records := finalFailureRecords(t, logs)
-			if len(records) != 1 {
-				t.Fatalf("got %d terminal records, want 1", len(records))
+			if testCase.terminal {
+				if len(records) != 1 {
+					t.Fatalf("got %d terminal records, want 1", len(records))
+				}
+				class, _ := records[0]["error_class"].(string)
+				if _, member := known[class]; !member {
+					t.Fatalf("error_class %q is not a member of provider.ErrorClass", class)
+				}
+				if class != testCase.class {
+					t.Fatalf("error_class = %q, want %q", class, testCase.class)
+				}
+			} else if len(records) != 0 {
+				t.Fatalf("a caller who hung up produced %d terminal records", len(records))
 			}
-			class, _ := records[0]["error_class"].(string)
-			if _, member := known[class]; !member {
-				t.Fatalf("error_class %q is not a member of provider.ErrorClass", class)
-			}
-			if class != testCase.class {
-				t.Fatalf("error_class = %q, want %q", class, testCase.class)
-			}
-			// The same value on the attempt record beside it: two records about
-			// one failure that classify it differently cannot both be right.
+			// The attempt record classifies it either way, and with a value the
+			// console can translate: two records about one failure that
+			// classify it differently cannot both be right.
 			if !strings.Contains(logs.String(), `"error_class":"`+testCase.class+`"`) {
-				t.Fatalf("the attempt record disagreed with the terminal one: %s", logs.String())
+				t.Fatalf("the attempt record did not classify the failure: %s", logs.String())
+			}
+			if _, member := known[testCase.class]; !member {
+				t.Fatalf("error_class %q is not a member of provider.ErrorClass", testCase.class)
 			}
 		})
 	}
@@ -388,8 +402,172 @@ func TestACancellationIsClassifiedTheSameWayInTheLedgerAndTheLog(t *testing.T) {
 	if settled.ErrorClass != string(provider.ErrorCanceled) || settled.FailurePhase != "client" {
 		t.Fatalf("ledger classification = %q / %q", settled.ErrorClass, settled.FailurePhase)
 	}
+	if records := finalFailureRecords(t, logs); len(records) != 0 {
+		t.Fatalf("a caller who hung up produced %d terminal records", len(records))
+	}
+	// The attempt record still carries the ledger's classification, so the two
+	// accounts of the same attempt agree.
+	if !strings.Contains(logs.String(), `"error_class":"`+settled.ErrorClass+`"`) {
+		t.Fatalf("the attempt log disagreed with the ledger: %s", logs.String())
+	}
+}
+
+// The defect a review found, and the reason terminalDescriptor exists: nothing
+// cleared the last attempt failure when a later attempt answered, so a request
+// that fell back, succeeded, and then could not have its answer rendered was
+// reported with the *first* target's status, provider code and upstream request
+// ID. An operator took that identifier to the upstream and was asking about a
+// call that had worked.
+func TestARenderFailureAfterAFallbackDoesNotReportTheEarlierAttempt(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	logs := captureLogs(t, &f)
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorProvider5xx, Retryable: true, StatusCode: 503,
+		ProviderCode: "srv_overload", ProviderRequestID: "upstream-req-first",
+		Message: "provider error (503): overloaded",
+	}
+	registerFallback(t, &f, &fakeAdapter{response: f.adapter.response})
+
+	_, err := f.service.generate(
+		context.Background(), f.plaintext, "chat", chatCanonical(t),
+		func(semantic.GenerateResult) error { return errors.New("wire form cannot carry this content kind") },
+	)
+	if err == nil {
+		t.Fatal("a render that failed answered the caller successfully")
+	}
 	records := finalFailureRecords(t, logs)
-	if len(records) != 1 || records[0]["error_class"] != settled.ErrorClass {
-		t.Fatalf("the log and the ledger disagree: %v vs %q", records, settled.ErrorClass)
+	if len(records) != 1 {
+		t.Fatalf("got %d terminal records, want 1", len(records))
+	}
+	record := records[0]
+	if record["phase"] != "response_render" {
+		t.Fatalf("phase = %v, want response_render", record["phase"])
+	}
+	// The target that actually served the answer, not the one that failed.
+	if record["deployment_id"] != "dep_target_2" {
+		t.Fatalf("the record names the wrong target: %v", record["deployment_id"])
+	}
+	for _, field := range []string{"provider_status", "provider_code", "provider_request_id"} {
+		if value, present := record[field]; present {
+			t.Fatalf("%s = %v on a request whose upstream succeeded", field, value)
+		}
+	}
+	// The attempt that did fail still has its own record; this is about which
+	// one explains the request.
+	if !strings.Contains(logs.String(), "upstream-req-first") {
+		t.Fatal("the failed attempt's own record lost the upstream identifier")
+	}
+}
+
+// The same defect with a worse consequence: the record whose whole purpose is
+// to say "the ledger could not take this" was written as a provider 5xx,
+// sending an operator upstream over a disk that could not be written.
+func TestAnAccountingFailureIsNotReportedAsAnEarlierProviderFailure(t *testing.T) {
+	f := newFixtureWithLedgerOptions(t, 1_000_000, ledger.Options{
+		MaxBatch: 1,
+		WrapDurability: func(file *os.File) ledger.DurabilityWriter {
+			// Enough writes for the request to be accepted and one attempt to
+			// fail and settle; the next attempt's reservation cannot be taken.
+			return &deferredFaultDurability{file: file, healthy: 4}
+		},
+	})
+	defer f.close()
+	logs := captureLogs(t, &f)
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorProvider5xx, Retryable: true, StatusCode: 503,
+		ProviderCode: "srv_overload", ProviderRequestID: "upstream-req-first",
+		Message: "provider error (503): overloaded",
+	}
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("a request was served while accounting was unavailable")
+	}
+	for _, record := range finalFailureRecords(t, logs) {
+		if record["outcome"] != "accounting_error" {
+			continue
+		}
+		if record["phase"] != "accounting" {
+			t.Fatalf("phase = %v, want accounting", record["phase"])
+		}
+		if record["error_class"] == "provider_5xx" || record["provider_request_id"] != nil {
+			t.Fatalf("an accounting failure was reported as an upstream one: %v", record)
+		}
+		return
+	}
+	t.Fatalf("no accounting_error record was written: %s", logs.String())
+}
+
+// A caller hanging up is driven entirely from outside Halro, and one frontend
+// deploy cancels every request in flight at once. Writing those would fill a
+// bounded error file in seconds and push the incident's first real error out of
+// it — the failure mode the four policy outcomes are excluded to prevent.
+func TestACallerHangingUpWritesNoTerminalFailure(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	logs := captureLogs(t, &f)
+	capture := withCapture(t, &f)
+	f.adapter.err = context.Canceled
+
+	for range 10 {
+		if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+			t.Fatal("a cancelled request answered successfully")
+		}
+	}
+	if records := finalFailureRecords(t, logs); len(records) != 0 {
+		t.Fatalf("%d client disconnects were written as incidents", len(records))
+	}
+	// Nor is a prompt kept for each of them.
+	if len(capture.records) != 0 {
+		t.Fatalf("%d cancelled requests were captured", len(capture.records))
+	}
+	// A deadline that expired is not this: nobody hung up, something was slow.
+	f.adapter.err = context.DeadlineExceeded
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("a timed-out request answered successfully")
+	}
+	if records := finalFailureRecords(t, logs); len(records) != 1 {
+		t.Fatalf("a timeout produced %d terminal records, want 1", len(records))
+	}
+}
+
+// A failure this side raised about an answer the upstream gave is not an
+// upstream failure. Recording HTTP 200 for it made the console render a red dot
+// beside "HTTP 200", and a blank phase made a record written today look like
+// one written before the field existed.
+func TestALocalRefusalIsNotSettledAsAnUpstreamSuccess(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		outcome  string
+		expected string
+	}{
+		{"redaction refused the answer", "policy_rejected", phaseResponseRender},
+		{"the target could not serve the shape", "unsupported_feature", phasePreProvider},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			settlement := budget.Settlement{Outcome: testCase.outcome}
+			if testCase.outcome == "policy_rejected" {
+				enrichSettlement(&settlement, nil, time.Now(), time.Now())
+			} else {
+				// abort's settlement, which never reaches enrichSettlement.
+				settlement.FailurePhase = phasePreProvider
+			}
+			if settlement.HTTPStatus != 0 {
+				t.Fatalf("http_status = %d on a failure the upstream did not cause", settlement.HTTPStatus)
+			}
+			if settlement.FailurePhase != testCase.expected {
+				t.Fatalf("phase = %q, want %q", settlement.FailurePhase, testCase.expected)
+			}
+			if settlement.ErrorClass != "" {
+				t.Fatalf("error_class = %q; no upstream class applies here", settlement.ErrorClass)
+			}
+		})
+	}
+	// The successful case still records 200, or the assertion above is
+	// satisfied by a build that records nothing.
+	success := budget.Settlement{Outcome: "success"}
+	enrichSettlement(&success, nil, time.Now(), time.Now())
+	if success.HTTPStatus != 200 || success.FailurePhase != "" {
+		t.Fatalf("a successful attempt = %#v", success)
 	}
 }

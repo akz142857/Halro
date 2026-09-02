@@ -435,22 +435,21 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	// The failure capture store, when the operator has asked for one. It is
 	// opened before the gateway because the gateway holds it: an install with
 	// capture off gets a nil here and a gateway that never touches it.
-	var captureStore *failurecapture.Store
-	if cfg.Gateway.FailureCapture.Enabled {
-		captureStore, err = failurecapture.Open(secretVault, failurecapture.Options{
-			Root:             filepath.Join(cfg.Storage.DataDir, "failures"),
-			MaxBytes:         cfg.Gateway.FailureCapture.ByteLimit(),
-			MaxRecordsPerDay: cfg.Gateway.FailureCapture.DailyRecordLimit(),
-			Retain:           cfg.Gateway.FailureCapture.RetentionWindow(),
-		})
-		if err != nil {
-			alertDispatcher.Close()
-			ledgerLog.Close()
-			metadata.Close()
-			providerRegistry.Close()
-			secretVault.Close()
-			return fail(fmt.Errorf("open failure capture store: %w", err))
-		}
+	// Opened whenever the directory exists, not only when capture is enabled.
+	// Switching the feature off is the security-conscious action, and it used
+	// to stop the retention sweep — so an operator who turned it off after an
+	// incident stopped *deleting* the prompts they had collected rather than
+	// stopping their collection, and nothing would ever have removed them.
+	// What `enabled` decides is whether the gateway writes; expiring what is
+	// already on disk is not optional.
+	captureStore, err := openFailureCapture(cfg, secretVault)
+	if err != nil {
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(err)
 	}
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
@@ -473,7 +472,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
 			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),
 			PricingUnknownPolicy:          cfg.Gateway.PricingUnknownPolicy,
-			FailureCapture:                captureFor(captureStore),
+			FailureCapture:                captureFor(cfg.Gateway.FailureCapture.Enabled, captureStore),
 			Logger:                        logger,
 		},
 	)
@@ -934,6 +933,10 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
 			r.exportUsageParquet()
+			// A process whose uptime never reaches one export interval — a
+			// crash loop, a restart per config change, a long interval — would
+			// otherwise never sweep at all.
+			r.purgeFailureCaptures()
 			return
 		}
 	}

@@ -45,7 +45,9 @@ export function FailureDetailDrawer({ title, facts, advice, identifiersUnrecorde
           all four borders. */}
       <div className="failure-detail-body">
         <dl className="failure-facts">
-          {facts.map((fact) => <Fact key={fact.label} {...fact} />)}
+          {/* Keyed by position: the list is assembled fresh on every render in a
+              fixed order, and a label is a translated string. */}
+          {facts.map((fact, index) => <Fact key={index} {...fact} />)}
         </dl>
 
         {/* What to do next, kept apart from the facts: one is a record, the
@@ -115,8 +117,10 @@ export function providerIdentifierFacts(
 // wrote, the server audits every read of it, and loading it on open would file
 // an audit record for every failure an operator merely looked at.
 //
-// Nothing is cached — leaving a prompt in a query cache is the browser-side
-// version of the storage decision this feature was careful about.
+// It is not retained — `gcTime: 0` evicts it as soon as the drawer unmounts,
+// which is the browser-side version of the storage decision this feature was
+// careful about. It does live in the query cache while the drawer is open;
+// there is nowhere else for it to be.
 function CapturedPayload({ requestID }: { requestID: string }) {
   const { t } = useTranslation();
   const [requested, setRequested] = useState(false);

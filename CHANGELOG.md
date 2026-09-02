@@ -53,7 +53,9 @@ semantic versioning.
   refusals that never reached an upstream, which a runaway client produces at
   its own rate. Records are sealed under the master key and bound to their
   request and project, truncated at `max_bytes`, capped at
-  `max_records_per_day`, deleted after `retain`, and readable only through
+  `max_records_per_day`, deleted once older than `retain` — swept whether or not
+  capture is still enabled, so turning it off does not strand what it collected
+  — and readable only through
   `GET /admin/api/v1/usage/failures/{requestID}/payload` — the only admin GET
   that writes an audit record, because it is the only one that returns a prompt.
   See the Operator Guide before enabling it.
@@ -78,10 +80,11 @@ semantic versioning.
   and an alert rule can group by. Records written before this keep the old value;
   the console still translates it.
 
-- Usage derivatives are refused and rebuilt from the ledger on first start: the
-  usage checkpoint moves to version 10 and the Parquet export format to schema 5.
-  Existing partitions are not rewritten and stay readable at their own version.
-  No data directory re-initialisation is required.
+- The usage checkpoint moves to version 10 and is refused and rebuilt from the
+  ledger on first start. The Parquet export format moves to schema 5, which is
+  a range the reader already accepts: existing partitions are neither refused
+  nor rewritten and stay readable at their own version. No data directory
+  re-initialisation is required.
 
 ## [0.5.0] - 2026-09-01
 

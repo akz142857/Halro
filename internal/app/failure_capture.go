@@ -1,23 +1,58 @@
 package app
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/akz142857/Halro/internal/config"
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/go-chi/chi/v5"
 )
 
-// captureFor hands the gateway a store, or a genuinely nil interface when there
-// is none.
+// openFailureCapture opens the store when there is one to open — which is
+// whenever capture is enabled, or the directory already holds records from a
+// time when it was.
+//
+// The second half is the point. Turning capture off has to stop new writes
+// without stopping the expiry of what is already there; a feature whose "off"
+// switch makes captured prompts permanent is worse than one with no switch.
+func openFailureCapture(cfg config.Config, sealer failurecapture.Sealer) (*failurecapture.Store, error) {
+	root := filepath.Join(cfg.Storage.DataDir, "failures")
+	if !cfg.Gateway.FailureCapture.Enabled {
+		if _, err := os.Stat(root); err != nil {
+			return nil, nil
+		}
+	}
+	store, err := failurecapture.Open(sealer, failurecapture.Options{
+		Root:             root,
+		MaxBytes:         cfg.Gateway.FailureCapture.ByteLimit(),
+		MaxRecordsPerDay: cfg.Gateway.FailureCapture.DailyRecordLimit(),
+		Retain:           cfg.Gateway.FailureCapture.RetentionWindow(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open failure capture store: %w", err)
+	}
+	return store, nil
+}
+
+// captureFor hands the gateway a store, or a genuinely nil interface when the
+// gateway must not write.
 //
 // A typed nil pointer assigned to an interface is not nil, and the gateway
 // tests capture with `== nil`. Passing the pointer straight through would give
 // every install with capture switched off a non-nil interface holding nil, and
 // the first failed request would dereference it. This is the reason the
 // conversion has a function of its own rather than being inline at the call.
-func captureFor(store *failurecapture.Store) gatewaycore.FailureCapture {
-	if store == nil {
+//
+// `enabled` is separate from "a store exists" because a disabled install still
+// opens the store to expire what an earlier enabled one wrote. The gateway
+// must not write into that.
+func captureFor(enabled bool, store *failurecapture.Store) gatewaycore.FailureCapture {
+	if !enabled || store == nil {
 		return nil
 	}
 	return store

@@ -47,14 +47,32 @@ export function errorClassAdvice(t: Translate, errorClass: string | undefined): 
   return t(`usage.errorAdvice.${errorClass}`, { defaultValue: "" });
 }
 
-// A failed attempt's headline: the class if it was classified, the upstream
-// status if that is all there is, and a plain "failed" when neither survived.
-// Falling through to the raw status alone matters — an operator reading
-// "HTTP 429" learns more than one reading "error".
-export function attemptFailureLabel(t: Translate, attempt: { error_class?: string; http_status?: number }): string {
+// A failed attempt's headline.
+//
+// The class first, because that is what the ledger classified. Then the
+// attempt's own terminal state — a redaction refusal or an unserved capability
+// has no upstream class and is not an upstream failure, and naming it is more
+// use than the word "error". The upstream status is a fallback only when it is
+// a refusal: a local failure settles with HTTP 200, and showing that beside a
+// red dot said the upstream had answered fine and still called it an error.
+export function attemptFailureLabel(
+  t: Translate,
+  attempt: { status?: string; error_class?: string; http_status?: number },
+): string {
   if (attempt.error_class) return errorClassLabel(t, attempt.error_class);
-  if (attempt.http_status) return `HTTP ${attempt.http_status}`;
+  if (attempt.status) {
+    const key = `usage.outcomes.${attempt.status}`;
+    const outcome = t(key, { defaultValue: "" });
+    if (outcome) return outcome;
+  }
+  if (attempt.http_status && attempt.http_status >= 400) return `HTTP ${attempt.http_status}`;
   return t("usage.error");
+}
+
+// upstreamStatus is the status worth showing beside the headline: an actual
+// refusal, not the 200 a locally-refused attempt settles with.
+export function upstreamStatus(status?: number): number | undefined {
+  return status && status >= 400 ? status : undefined;
 }
 
 // Whether a failure record predates the fields that carry the upstream's own
@@ -66,11 +84,15 @@ export function attemptFailureLabel(t: Translate, attempt: { error_class?: strin
 // same blank for both tells an operator to stop looking for a code that exists
 // upstream and is simply not here.
 //
-// failure_phase is what separates them. Every failed attempt classified since
-// these fields were added carries one, unconditionally, because the phase is
-// derived rather than reported. Its absence therefore dates the record.
+// Both halves of the predicate are load-bearing. A classified upstream failure
+// written by a build that keeps these fields always carries a phase, so a
+// record with a class and no phase is an older one. Requiring the class is what
+// keeps the notice off the failures that never had an upstream to name — a
+// redaction refusal, a target that could not serve the shape — which carry no
+// class either and were being told, wrongly, that they were written before the
+// fields existed.
 export function predatesProviderIdentifiers(
-  failure: { failure_phase?: string } | undefined,
+  failure: { error_class?: string; failure_phase?: string } | undefined,
 ): boolean {
-  return !failure?.failure_phase;
+  return Boolean(failure?.error_class) && !failure?.failure_phase;
 }

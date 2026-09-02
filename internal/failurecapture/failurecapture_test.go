@@ -174,26 +174,29 @@ func TestCaptureStopsAtTheDailyCeilingAndSaysSoOnce(t *testing.T) {
 	}
 }
 
-// Retention is the answer to "how long is caller content kept", so it has to be
-// enforced rather than promised. A day expires once its last possible instant
-// is past the cutoff, so a record written at 23:59 still gets its full window.
-func TestRetentionRemovesExpiredDaysAndKeepsTheWindow(t *testing.T) {
+// Retention is the answer an operator gives their own compliance people, so the
+// configured value has to be the number that is true. Expiry is per record: day
+// granularity made `retain` a floor rather than a ceiling, keeping a record
+// configured for an hour the better part of a day.
+func TestRetentionExpiresEachRecordOnTheConfiguredWindow(t *testing.T) {
 	now := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
 	clock := now
 	store, root := newStore(t, func(options *Options) {
-		options.Retain = 48 * time.Hour
+		options.Retain = time.Hour
 		options.Now = func() time.Time { return clock }
 	})
-	for _, day := range []struct {
+	// All three land in the same day directory, and only the window decides.
+	// Under day granularity every one of these survived.
+	for _, written := range []struct {
 		at        time.Time
 		requestID string
 	}{
-		{now.AddDate(0, 0, -5), "req_old"},
-		{now.AddDate(0, 0, -1), "req_recent"},
-		{now, "req_today"},
+		{now.Add(-90 * time.Minute), "req_expired"},
+		{now.Add(-30 * time.Minute), "req_recent"},
+		{now, "req_now"},
 	} {
-		clock = day.at
-		if _, err := store.Put(record(day.requestID)); err != nil {
+		clock = written.at
+		if _, err := store.Put(record(written.requestID)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -201,14 +204,27 @@ func TestRetentionRemovesExpiredDaysAndKeepsTheWindow(t *testing.T) {
 	if err := store.Purge(); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, _ := store.Get("req_old", "project_1"); found {
+	if _, found, _ := store.Get("req_expired", "project_1"); found {
 		t.Fatal("a capture past the retention window survived the sweep")
 	}
-	for _, requestID := range []string{"req_recent", "req_today"} {
+	for _, requestID := range []string{"req_recent", "req_now"} {
 		if _, found, _ := store.Get(requestID, "project_1"); !found {
 			t.Fatalf("%s was swept while still inside the window", requestID)
 		}
 	}
+	// A day whose every record has expired leaves no directory behind.
+	clock = now.Add(2 * time.Hour)
+	if err := store.Purge(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("an emptied day directory was left behind: %v", entries)
+	}
+	clock = now
 	// A directory the sweep does not recognise is left alone rather than
 	// removed: this store deletes on a clock, and deleting what it cannot date
 	// is how a retention pass becomes a data loss incident.
@@ -239,7 +255,19 @@ func TestCapturesAreAsPrivateAsTheDataDirectory(t *testing.T) {
 	if directory.Mode().Perm() != DirPerm {
 		t.Fatalf("directory mode = %v, want %v", directory.Mode().Perm(), DirPerm)
 	}
-	file, err := os.Stat(filepath.Join(day, "req_1"+fileExtension))
+	entries, err := os.ReadDir(day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("day = %v", entries)
+	}
+	// The name carries the capture instant as well as the request, which is
+	// what lets the sweep date a record without opening it.
+	if name, _, ours := capturedRequestID(entries[0].Name()); !ours || name != "req_1" {
+		t.Fatalf("file name = %q", entries[0].Name())
+	}
+	file, err := os.Stat(filepath.Join(day, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +276,7 @@ func TestCapturesAreAsPrivateAsTheDataDirectory(t *testing.T) {
 	}
 	// And the material really is sealed on disk, rather than sitting in the
 	// clear behind a file mode.
-	raw, err := os.ReadFile(filepath.Join(day, "req_1"+fileExtension))
+	raw, err := os.ReadFile(filepath.Join(day, entries[0].Name()))
 	if err != nil {
 		t.Fatal(err)
 	}

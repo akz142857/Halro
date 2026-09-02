@@ -85,8 +85,17 @@ func TestAnOversizedProviderIdentifierIsRefusedAtTheDurableBoundary(t *testing.T
 	}
 
 	for name, mutate := range map[string]func(*Event){
-		"provider code":       func(e *Event) { e.ProviderCode = atBound + "a" },
-		"provider request ID": func(e *Event) { e.ProviderRequestID = atBound + "a" },
+		"provider code over the bound":       func(e *Event) { e.ProviderCode = atBound + "a" },
+		"provider request ID over the bound": func(e *Event) { e.ProviderRequestID = atBound + "a" },
+		// Length was the only check, so a sentence out of a response body fit
+		// inside it — which is the thing the bound exists to keep out of a
+		// durable record, not merely a long one.
+		"a sentence rather than an identifier": func(e *Event) {
+			e.ProviderCode = "capacity exceeded for key sk-live-not-a-real-key"
+		},
+		"a newline smuggled into an identifier": func(e *Event) {
+			e.ProviderRequestID = "req_1\nsecond line"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			event := base
