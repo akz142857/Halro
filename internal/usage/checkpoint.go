@@ -144,6 +144,17 @@ type checkpointSegmentPayload struct {
 // again.
 func (a *Aggregate) TakeCheckpoint() (CheckpointSnapshot, error) {
 	a.mu.Lock()
+	// Nothing has happened since the last round, so there is nothing to write.
+	// Without this an idle instance re-encodes and re-fsyncs the open segment
+	// and the head every interval for as long as it runs — byte-identical work,
+	// forever, which is the same shape of waste this format exists to remove,
+	// just at a smaller scale. The rollup increment is checked too: a round
+	// that drained it without writing would lose it.
+	if a.watermark.Sequence == a.persistedThrough && a.persistedThrough > 0 &&
+		len(a.rollupDelta) == 0 && !a.checkpointNeedsTrim() {
+		a.mu.Unlock()
+		return CheckpointSnapshot{}, nil
+	}
 	head := checkpointHead{
 		Version: checkpointVersion, Watermark: a.watermark, Floor: a.floor,
 		Started: cloneStarted(a.started), Hourly: cloneHourly(a.hourly),
@@ -273,6 +284,23 @@ func splitCheckpointRecords(
 	chunkAttempts, chunkSummaries := (*attempts)[:takenAttempts], (*summaries)[:takenSummaries]
 	*attempts, *summaries = (*attempts)[takenAttempts:], (*summaries)[takenSummaries:]
 	return chunkAttempts, chunkSummaries
+}
+
+// checkpointNeedsTrim reports whether the window has moved past a segment the
+// stored checkpoint still holds. Called with the lock held.
+//
+// A quiet instance still trims — the window is measured in days, not in
+// requests — so "no new records" is not on its own a reason to skip a round.
+func (a *Aggregate) checkpointNeedsTrim() bool {
+	if a.floor == 0 {
+		return false
+	}
+	for _, ref := range a.segments {
+		if ref.LastSequence < a.floor {
+			return true
+		}
+	}
+	return false
 }
 
 // returnOnEncodeFailure hands the drained increment back before reporting an
@@ -428,12 +456,6 @@ func RestoreCheckpoint(head []byte, readSegment func(id uint64) ([]byte, error))
 		return nil, errors.New("usage checkpoint holds a request summary past its watermark")
 	}
 
-	for index, attempt := range aggregate.attempts {
-		aggregate.attemptIndex[attempt.AttemptID] = index
-	}
-	for index, summary := range aggregate.summaries {
-		aggregate.summaryIndex[summary.RequestID] = index
-	}
 	for _, eventID := range saved.EventIDs {
 		aggregate.rememberEventID(eventID)
 	}

@@ -336,6 +336,39 @@ func TestCheckpointSurvivesManyRoundsWithTrimming(t *testing.T) {
 	}
 }
 
+// TestAnIdleTickWritesNothing: the format's whole claim is that a round costs
+// what arrived. When nothing arrived, that is zero — not "the open segment
+// again", which is what an instance serving no traffic would otherwise rewrite
+// and re-fsync every minute for as long as it runs.
+func TestAnIdleTickWritesNothing(t *testing.T) {
+	aggregate := NewAggregate()
+	applyRecords(t, aggregate, checkpointKillPointRecords(50))
+	store := newCheckpointStore()
+	if written := store.round(t, aggregate); written == 0 {
+		t.Fatal("the first round wrote nothing, so the second proves nothing")
+	}
+
+	idle, err := aggregate.TakeCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(idle.Head) != 0 || len(idle.Segments) != 0 || len(idle.RemovedSegments) != 0 {
+		t.Fatalf("an idle tick proposed head=%d segments=%d removals=%d",
+			len(idle.Head), len(idle.Segments), len(idle.RemovedSegments))
+	}
+	if len(idle.Rollup) != 0 {
+		t.Fatal("an idle tick drained a rollup increment it is not going to write")
+	}
+
+	// One more record and the round is live again, so the skip is about having
+	// nothing to say rather than about having stopped.
+	applyRecords(t, aggregate, checkpointRecordsFrom(aggregate, 1))
+	if written := store.round(t, aggregate); written == 0 {
+		t.Fatal("a round after new records wrote nothing")
+	}
+	assertSameWindow(t, aggregate, store.restore(t))
+}
+
 func assertSameWindow(t *testing.T, want, got *Aggregate) {
 	t.Helper()
 	wantSnapshot, gotSnapshot := want.Snapshot(), got.Snapshot()

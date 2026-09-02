@@ -180,9 +180,12 @@ type Aggregate struct {
 	// is the only place that knows an event was neither a duplicate nor a
 	// replay — the Collector cannot tell, and startup replay and CatchUp both
 	// bypass it entirely.
-	rollupDelta  map[domain.RollupKey]*domain.DailyRollup
-	attemptIndex map[string]int
-	summaryIndex map[string]int
+	rollupDelta map[domain.RollupKey]*domain.DailyRollup
+	// attemptsDropped and summariesDropped count records trimmed off the front
+	// of each slice whose array slot has not been reclaimed yet. They are what
+	// decides when a sweep pays for a compaction; see PruneBefore.
+	attemptsDropped  int
+	summariesDropped int
 	// floor is the lowest ledger sequence still held. Zero means nothing has
 	// been pruned and the aggregate claims everything.
 	floor uint64
@@ -207,8 +210,7 @@ func NewAggregate() *Aggregate {
 	return &Aggregate{
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
 		requests: make(map[string]*requestAccumulator), hourly: make(map[int64]Bucket),
-		rollupDelta:  make(map[domain.RollupKey]*domain.DailyRollup),
-		attemptIndex: make(map[string]int), summaryIndex: make(map[string]int),
+		rollupDelta: make(map[domain.RollupKey]*domain.DailyRollup),
 	}
 }
 
@@ -291,7 +293,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			FallbackCount: event.FallbackCount,
 		}
 		a.attempts = append(a.attempts, attempt)
-		a.attemptIndex[event.AttemptID] = len(a.attempts) - 1
 		if err := addInt64(&accumulator.summary.Attempts, 1); err != nil {
 			return err
 		}
@@ -392,7 +393,6 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		accumulator.summary.CompletedAt = event.OccurredAt
 		accumulator.summary.Sequence = record.Sequence
 		a.summaries = append(a.summaries, accumulator.summary)
-		a.summaryIndex[event.RequestID] = len(a.summaries) - 1
 		delete(a.requests, event.RequestID)
 		hour := event.OccurredAt.UTC().Truncate(time.Hour)
 		bucket := a.hourly[hour.Unix()]

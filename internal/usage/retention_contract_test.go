@@ -281,6 +281,52 @@ func TestTheWindowCostsAKnownAmountOfMemoryPerAttempt(t *testing.T) {
 	runtime.KeepAlive(aggregate)
 }
 
+// A sweep has to cost what it drops. The window is trimmed on a timer while the
+// process serves traffic, and it holds the aggregate's write lock to do it, so
+// a sweep whose cost followed the resident set would stall the collector and
+// every console read for longer the longer the window is — worst exactly where
+// the window matters most.
+//
+// The observable form of that promise is the backing array: dropping a prefix
+// leaves dead slots behind, and they are reclaimed on a schedule that keeps the
+// waste bounded rather than by copying the whole window every time.
+func TestASweepDoesNotCopyTheWholeWindow(t *testing.T) {
+	day := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	aggregate := retentionEvents(t, 4000, day)
+	resident := len(aggregate.Snapshot().Attempts)
+	if resident < 4000 {
+		t.Fatalf("fixture holds %d attempts, too few to say anything", resident)
+	}
+
+	// Sweep repeatedly, the way the export tick does, each time taking a little
+	// more of the window.
+	swept := 0
+	for hour := 1; hour <= 20; hour++ {
+		result := aggregate.PruneBefore(day.Add(time.Duration(hour)*time.Hour), ^uint64(0))
+		swept += result.Attempts
+		live := len(aggregate.attempts)
+		if capacity := cap(aggregate.attempts); live > 0 && capacity > 2*live+16 {
+			t.Fatalf("after %d sweeps the backing array is %d slots for %d live records",
+				hour, capacity, live)
+		}
+	}
+	if swept == 0 {
+		t.Fatal("nothing was swept, so this test proves nothing")
+	}
+	// And what is left is still exactly the records above the floor, in order.
+	floor := aggregate.Floor()
+	previous := uint64(0)
+	for _, attempt := range aggregate.Snapshot().Attempts {
+		if attempt.Sequence < floor {
+			t.Fatalf("attempt %d survives below the floor %d", attempt.Sequence, floor)
+		}
+		if attempt.Sequence <= previous {
+			t.Fatalf("attempts are out of order at %d after %d", attempt.Sequence, previous)
+		}
+		previous = attempt.Sequence
+	}
+}
+
 // checkpointBytes is everything one round hands the store.
 func checkpointBytes(snapshot CheckpointSnapshot) int {
 	total := len(snapshot.Head)

@@ -5,16 +5,15 @@ import "time"
 // The console's window over the aggregate.
 //
 // The attempt list and the failed-request list are served from memory, and
-// until now that memory only ever grew: every attempt this data directory has
-// ever seen stayed resident and was re-serialized into the checkpoint on every
-// tick. The cost of a checkpoint therefore rose with the instance's lifetime
-// rather than with its load — measured at roughly 1119 bytes per attempt and a
-// second and a half of encoding per day of history, which at thirty days is
-// most of a sixty-second checkpoint interval.
+// until this window existed that memory only ever grew: every attempt this data
+// directory had ever seen stayed resident, so what the console cost rose with
+// the instance's uptime rather than with its load, and never came back down.
 //
-// A window fixes the shape of that curve. What it must not do is lose anything
-// that has not already been archived, which is the whole reason PruneBefore
-// takes a watermark as well as a cutoff.
+// A window fixes the shape of that curve — resident cost becomes throughput
+// times window length, about a kilobyte per attempt, rather than a function of
+// how long the process has been up. What it must not do is lose anything that
+// has not already been archived, which is the whole reason PruneBefore takes a
+// watermark as well as a cutoff.
 
 // PruneResult is what one sweep removed, and the floor it left behind.
 type PruneResult struct {
@@ -77,18 +76,35 @@ func (a *Aggregate) PruneBefore(cutoff time.Time, exportedThrough uint64) PruneR
 		}
 	}
 
-	// Re-sliced onto fresh backing arrays rather than re-sliced in place: a
-	// prefix drop on a shared array keeps the whole array alive, so the memory
-	// this exists to release would not be.
-	a.attempts = append([]AttemptEvent(nil), a.attempts[attempts:]...)
-	a.summaries = append([]RequestSummary(nil), a.summaries[summaries:]...)
-	a.attemptIndex = make(map[string]int, len(a.attempts))
-	for index, attempt := range a.attempts {
-		a.attemptIndex[attempt.AttemptID] = index
+	// Dropping the prefix costs what was dropped, not what is kept.
+	//
+	// It used to copy both slices onto fresh arrays every sweep, because a
+	// prefix re-slice leaves the whole backing array alive and the memory this
+	// exists to release would not be. That is true of the array — but the array
+	// is the small part. What a record actually costs is the strings and the
+	// price snapshot hanging off it, and clearing the dropped entries releases
+	// all of that immediately, in time proportional to how many were dropped.
+	// The array itself is compacted only once the dead prefix outgrows what is
+	// live, which bounds the waste at a factor of two and makes the copy
+	// amortized rather than hourly.
+	//
+	// The difference is not academic: at ten requests a second and a thirty-day
+	// window the old sweep copied twenty-six million records — seconds of the
+	// aggregate's write lock, blocking the collector and every console read,
+	// once an hour, to drop one hour's worth.
+	clear(a.attempts[:attempts])
+	clear(a.summaries[:summaries])
+	a.attempts = a.attempts[attempts:]
+	a.summaries = a.summaries[summaries:]
+	a.attemptsDropped += attempts
+	a.summariesDropped += summaries
+	if a.attemptsDropped > len(a.attempts) {
+		a.attempts = append([]AttemptEvent(nil), a.attempts...)
+		a.attemptsDropped = 0
 	}
-	a.summaryIndex = make(map[string]int, len(a.summaries))
-	for index, summary := range a.summaries {
-		a.summaryIndex[summary.RequestID] = index
+	if a.summariesDropped > len(a.summaries) {
+		a.summaries = append([]RequestSummary(nil), a.summaries...)
+		a.summariesDropped = 0
 	}
 	a.trimmed += uint64(attempts)
 	return PruneResult{Attempts: attempts, Summaries: summaries, Floor: a.floor}
