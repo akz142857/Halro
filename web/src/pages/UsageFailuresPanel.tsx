@@ -87,9 +87,13 @@ export function UsageFailuresPanel() {
       {failures.data && rows.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
+            {/* Attempts and time are fixed-shape values — "1 次尝试", a
+                timestamp — so they take what they need and give the rest to
+                the two columns that carry variable-length text. */}
             <colgroup>
-              <col style={{ width: "20%" }} /><col style={{ width: "14%" }} /><col style={{ width: "24%" }} />
-              <col style={{ width: "16%" }} /><col style={{ width: "12%" }} /><col style={{ width: "14%" }} />
+              <col style={{ width: "20%" }} /><col style={{ width: "12%" }} /><col style={{ width: "26%" }} />
+              <col style={{ width: "18%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} />
+              <col style={{ width: "6%" }} />
             </colgroup>
             <thead>
               <tr>
@@ -99,6 +103,9 @@ export function UsageFailuresPanel() {
                 <th>{t("usage.deployment")}</th>
                 <th>{t("usage.failures.attempts")}</th>
                 <th>{t("usage.time")}</th>
+                {/* The action column carries no heading, like the summary
+                    table's. Its button names itself. */}
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -160,26 +167,6 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
             : errorClassLabel(t, last?.error_class) || t("usage.error")}
         </span>
         {!policy && last?.provider_status ? <small>{t("usage.httpStatus", { status: last.provider_status })}</small> : null}
-        {/* One control, opening one place. The detail used to expand inside the
-            cell, which grew the row under the operator's pointer and reflowed
-            every row below it — and a request body has no business being laid
-            out in a table column six of whose cells are one line tall. */}
-        <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
-          {t("usage.attemptDetails")}
-        </button>
-        {/* Rendered inside the cell rather than beside the row: the dialog
-            portals to the document body and leaves nothing here, and a
-            component placed directly under <tr> would be invalid markup the
-            day it stops portalling. */}
-        {open && (
-          <FailureDetailDialog
-            failure={failure}
-            projectName={projectName}
-            deploymentName={deploymentName}
-            formatInstant={formatInstant}
-            onClose={() => setOpen(false)}
-          />
-        )}
       </td>
       <td>
         {last?.deployment_id ? (
@@ -200,6 +187,28 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
         {failure.fallbacks > 0 && <small>{t("usage.failures.fallbackCount", { count: failure.fallbacks })}</small>}
       </td>
       <td>{formatInstant(failure.completed_at, "dateTimeYear")}</td>
+      <td>
+        {/* Its own column. Sharing the cause cell put a control immediately
+            after a status word with nothing between them — "错误失败详情" read
+            as one phrase — and made the row's one action the hardest thing on
+            it to find. */}
+        <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
+          {t("usage.attemptDetails")}
+        </button>
+        {/* Rendered inside a cell rather than beside the row: the dialog
+            portals to the document body and leaves nothing here, and a
+            component placed directly under <tr> would be invalid markup the
+            day it stops portalling. */}
+        {open && (
+          <FailureDetailDialog
+            failure={failure}
+            projectName={projectName}
+            deploymentName={deploymentName}
+            formatInstant={formatInstant}
+            onClose={() => setOpen(false)}
+          />
+        )}
+      </td>
     </tr>
   );
 }
