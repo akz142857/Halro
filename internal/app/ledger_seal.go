@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"os"
+
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // Sealing on the maintenance tick.
@@ -124,6 +126,13 @@ func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
 	}
 	watermark, _, err := r.store.UsageCheckpoint()
 	if err != nil {
+		// A missing checkpoint is the ordinary state of an instance that has
+		// not written one yet and says nothing. Anything else is the metadata
+		// store failing, which silently stops compaction from ever running —
+		// the same reasoning, and the same treatment, as the manifest above.
+		if !errors.Is(err, boltstore.ErrNotFound) {
+			r.logger.Warn("ledger segments not compacted: the usage checkpoint could not be read", "error", err)
+		}
 		return 0, false
 	}
 	return min(manifest.LastSequence, watermark.Sequence), true

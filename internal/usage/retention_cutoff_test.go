@@ -1,4 +1,4 @@
-package main
+package usage
 
 import (
 	"testing"
@@ -16,7 +16,7 @@ func TestUsageRetentionCutoffKeepsAtLeastTheRetainedDays(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
 	const retentionDays = 90
 
-	cutoff := usageRetentionCutoff(now, retentionDays)
+	cutoff := RetentionCutoff(now, retentionDays)
 	if got := now.Sub(cutoff); got != time.Duration(retentionDays+1)*24*time.Hour {
 		t.Fatalf("cutoff is %s before now, want %d days", got, retentionDays+1)
 	}
@@ -47,7 +47,7 @@ func TestUsageRetentionCutoffKeepsExactlyOneExtraDay(t *testing.T) {
 	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
 	for _, days := range []int{1, 7, 90, 365} {
 		exact := now.UTC().AddDate(0, 0, -days)
-		cutoff := usageRetentionCutoff(now, days)
+		cutoff := RetentionCutoff(now, days)
 		if got := exact.Sub(cutoff); got != 24*time.Hour {
 			t.Fatalf("retention %d days keeps %s beyond the exact age, want 24h", days, got)
 		}

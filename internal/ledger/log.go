@@ -321,11 +321,17 @@ type ChainReport struct {
 	ChainVerified       bool
 }
 
-// VerifyChain walks the entire committed WAL prefix and authenticates every
-// epoch-4 frame against key. Unlike Inspect/InspectReplay (used on the hot
-// startup path without redoing work OpenWithOptions already did), this is
-// for offline tooling — the verify CLI/doctor path — that wants a dedicated,
-// on-demand deep check.
+// VerifyChain walks the active generation and authenticates every epoch-4 frame
+// in it against key. Unlike Inspect/InspectReplay (used on the hot startup path
+// without redoing work OpenWithOptions already did), this is for offline
+// tooling — the verify CLI/doctor path — that wants a dedicated, on-demand deep
+// check.
+//
+// The active generation, not the whole history: once a log has sealed anything,
+// the frames before the last roll live in files this does not open, and it
+// seeds itself from the manifest's record of where they left the chain.
+// VerifySegments is the other half, and a caller that means "verify the ledger"
+// needs both — which is why the report has somewhere to put the sealed counts.
 func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
 	segments, _, err := resolveSegments(filepath.Dir(path))
 	if err != nil {

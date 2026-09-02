@@ -219,15 +219,14 @@ func (r *Runtime) pruneUsageWindow() {
 // value that only takes effect when someone runs a command is a retention value
 // an auditor cannot be shown.
 //
-// The cutoff keeps one extra day on purpose (see usageRetentionCutoff's twin in
-// the CLI): partitions are dated in UTC, so an instance in any other zone would
-// otherwise lose a day it was promised.
+// The cutoff keeps one extra day on purpose; usage.RetentionCutoff says why,
+// and is the same rule the offline `usage prune` command applies.
 func (r *Runtime) pruneUsageArchive() {
 	days := r.config.Usage.RetentionDays
 	if days < 1 {
 		return
 	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -(days + 1))
+	cutoff := usage.RetentionCutoff(time.Now(), days)
 	report, err := r.usageExporter.PruneBefore(cutoff)
 	if err != nil {
 		r.logger.Warn("usage archive not pruned", "error", err)
