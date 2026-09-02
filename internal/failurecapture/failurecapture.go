@@ -406,14 +406,33 @@ func (s *Store) days() ([]string, error) {
 // rather than being cut mid-structure: a truncated JSON document does not parse,
 // and a reader handed one cannot tell "the upstream sent this" from "we cut it
 // here". The companion flag says which happened.
+//
+// The bound is applied to what is *stored*, not to the prefix taken before
+// escaping. Cutting the raw bytes first and marshalling afterwards let a
+// control-character payload out at roughly six times the configured size —
+// every byte becoming `\u00XX` — which is not a ceiling an operator can size a
+// disk against.
 func truncateJSON(payload json.RawMessage, maxBytes int) (json.RawMessage, bool) {
 	if len(payload) <= maxBytes {
 		return payload, false
 	}
-	prefix := string(payload[:maxBytes])
-	encoded, err := json.Marshal(prefix)
-	if err != nil {
-		return nil, true
+	// Escaping can only grow a string, never shrink it, so shrinking the prefix
+	// until the encoded form fits terminates: each pass cuts by at least the
+	// overshoot, and the loop is bounded by the payload's length.
+	prefix := payload[:maxBytes]
+	for {
+		encoded, err := json.Marshal(string(prefix))
+		if err != nil {
+			return nil, true
+		}
+		if len(encoded) <= maxBytes || len(prefix) == 0 {
+			return encoded, true
+		}
+		overshoot := len(encoded) - maxBytes
+		if overshoot >= len(prefix) {
+			prefix = prefix[:0]
+			continue
+		}
+		prefix = prefix[:len(prefix)-overshoot]
 	}
-	return encoded, true
 }

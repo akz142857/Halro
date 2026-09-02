@@ -190,6 +190,10 @@ type requestRun struct {
 	// successful path pays nothing for a feature it does not use.
 	capturedRequest  any
 	capturedResponse any
+	// captureOutcome is what finalize decided, carried to close() so the write
+	// happens outside the lease window. Empty means nothing was finalized, and
+	// close() finalizes before it reads this.
+	captureOutcome string
 }
 
 // finalize closes out the request's accounting exactly once. Every exit path
@@ -205,10 +209,15 @@ func (run *requestRun) finalize(outcome string) error {
 	// One record per request, on the same once-only boundary the settlement
 	// uses, so a request cannot be reported as having failed twice — and a
 	// request that fell back and succeeded cannot be reported as having failed
-	// at all, however many attempt warnings it left behind. The payload capture
-	// hangs off the same boundary for the same reason.
+	// at all, however many attempt warnings it left behind.
 	run.logFinalFailure(outcome, err == nil)
-	run.writeCapture(outcome)
+	// The payload capture is decided here and written in close(), after the
+	// leases are back. Writing it here would have held the project's
+	// concurrency slot and its Token Guard lease across a file write with no
+	// deadline, so a stalled data directory would have turned a diagnostic into
+	// a data-plane concurrency stall — and delayed the caller's answer by the
+	// write on top of it.
+	run.captureOutcome = outcome
 	return err
 }
 
@@ -367,6 +376,10 @@ func (run *requestRun) close() {
 			run.providerFailed,
 		)
 	}
+	// Last, and only now: every lease this request held is back, and the caller
+	// already has their answer, so a slow or stuck write costs this goroutine
+	// and nothing else.
+	run.writeCapture(run.captureOutcome)
 }
 
 func (run *requestRun) recordProviderResult(providerErr error, settlement budget.Settlement) {

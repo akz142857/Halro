@@ -26,17 +26,27 @@ type FailureCapture interface {
 //   - unsupported_feature: the target could not serve the shape of the request.
 //     Which field, and what was in it, is the only way to see why.
 //
-// Everything else is excluded on purpose:
+// The rule is not "it reached an upstream" — unsupported_feature never does.
+// It is that a payload explains the failure *and* a client cannot produce it at
+// will. Everything else is excluded because it fails one half or the other:
 //
 //   - policy_rejected is redaction refusing an answer. Storing the content a
 //     policy just refused is the one thing this store must never do — it would
 //     make the capture the leak the policy exists to prevent.
-//   - rejected and token_guard_rejected never reached an upstream. There is
-//     nothing to reproduce, and they are produced at a runaway client's own
-//     rate, which is how a bounded store fills in minutes.
+//   - rejected and token_guard_rejected are budget, breaker, concurrency and
+//     cost ceilings. There is nothing to reproduce, and a client in a retry
+//     loop produces them at its own rate, which is how a bounded store fills in
+//     minutes.
 //   - accounting_error is the ledger being unavailable. The payload says nothing
 //     about that, and keeping caller material to explain a disk problem is a
 //     trade nobody would make deliberately.
+//
+// unsupported_feature is the one that has to be argued rather than read off the
+// rule. It is reached only by abort, after the capability filters have already
+// passed the target — so it is an internal disagreement between routing and
+// dispatch rather than something a caller can ask for, and the request is
+// exactly what shows which field was refused. If a route is ever found that
+// lets a client drive it, it belongs with the two above.
 var capturedOutcomes = map[string]struct{}{
 	"provider_error":      {},
 	"unsupported_feature": {},

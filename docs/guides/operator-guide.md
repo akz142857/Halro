@@ -496,7 +496,25 @@ your own compliance position before enabling it:
 Files are created 0600 in a 0700 directory. `halro backup` stages the metadata
 database and the Ledger WAL by name rather than copying the data directory, so
 captures are **not** in an archive — a restore comes back with no captured
-payloads, which is the right default for material with an expiry on it.
+payloads, which is the right default for material with an expiry on it. Note
+that a restore renames the previous data directory aside rather than deleting
+it, so the captures it held sit in `.halro-pre-restore-*` until you remove it;
+nothing sweeps a directory Halro no longer owns.
+
+Two more things worth knowing before you turn it on:
+
+- **Enabling or disabling it needs a restart.** `SIGHUP` reloads certificate
+  bytes and the log level and nothing else, so a reload will report success and
+  change nothing here. The same is true of `logging.error_file`.
+- **Rotating the master key makes existing captures unreadable.** Each record is
+  sealed under the key in force when it was written, and key rotation rewraps
+  the credential store, not this one. Every "Show" then answers "nothing was
+  captured for this request" until the pre-rotation records age out of `retain`.
+
+Sizing: the worst case is `max_records_per_day` × `max_bytes` × 2 sides × the
+number of days in `retain`. At the defaults that is about 250 MB; at the
+configuration maxima it is far more than the ledger this shares a disk with, so
+raise them deliberately.
 
 #### Errors-only file
 

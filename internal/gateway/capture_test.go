@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/provider"
@@ -212,5 +213,60 @@ func TestAStoreThatCannotBeWrittenDoesNotChangeTheAnswer(t *testing.T) {
 	// instead.
 	if strings.Contains(logs.String(), "hello") {
 		t.Fatalf("a dropped capture's payload reached the log: %s", logs.String())
+	}
+}
+
+// blockingCapture holds the write open until it is released, which is what a
+// stalled data directory does.
+type blockingCapture struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingCapture) Put(failurecapture.Record) (bool, error) {
+	close(c.entered)
+	<-c.release
+	return true, nil
+}
+
+func (c *blockingCapture) Saturated() bool { return false }
+
+// A capture that cannot complete must cost this goroutine and nothing else.
+// Written inside finalize, it held the project's concurrency slot and the Token
+// Guard lease across a file write with no deadline, so a stalled data directory
+// turned a diagnostic into a data-plane concurrency stall — and delayed the
+// caller's answer by the write on top of it.
+func TestASlowCaptureDoesNotHoldTheRequestsLeases(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	blocking := &blockingCapture{entered: make(chan struct{}), release: make(chan struct{})}
+	f.service.failureCapture = blocking
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorBadRequest, StatusCode: 400, Message: "provider error (400): refused",
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+			t.Error("the provider failure did not reach the caller")
+		}
+	}()
+
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the capture was never attempted")
+	}
+	// The ledger is closed out before the write begins, so the request is no
+	// longer in flight while the store is stuck.
+	if active := activeRequestsAfterReplay(t, f.log); active != 0 {
+		t.Fatalf("%d requests are still in flight while a capture is stuck", active)
+	}
+	close(blocking.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request never returned")
 	}
 }

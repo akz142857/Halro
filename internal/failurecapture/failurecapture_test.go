@@ -307,3 +307,36 @@ func TestOpenRefusesAStoreWithoutItsBounds(t *testing.T) {
 		t.Fatal("a store was opened with nothing to seal with")
 	}
 }
+
+// The ceiling has to bound what is stored, not the prefix taken before
+// escaping. Cutting raw bytes and marshalling afterwards let a
+// control-character payload out at roughly six times the configured size —
+// every byte becoming \u00XX — which is not a ceiling an operator can size a
+// disk against.
+func TestTheCeilingBoundsWhatIsStoredNotWhatWasCut(t *testing.T) {
+	const ceiling = 256
+	store, _ := newStore(t, func(options *Options) { options.MaxBytes = ceiling })
+	hostile := record("req_1")
+	// Every byte escapes to six.
+	hostile.Request = json.RawMessage(`"` + strings.Repeat("\x01", 4096) + `"`)
+	hostile.Response = json.RawMessage(`"` + strings.Repeat("\x02", 4096) + `"`)
+	if _, err := store.Put(hostile); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := store.Get("req_1", "project_1")
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	for name, side := range map[string]json.RawMessage{"request": got.Request, "response": got.Response} {
+		if len(side) > ceiling {
+			t.Fatalf("%s stored %d bytes against a ceiling of %d", name, len(side), ceiling)
+		}
+		var decoded any
+		if err := json.Unmarshal(side, &decoded); err != nil {
+			t.Fatalf("%s is no longer decodable: %v", name, err)
+		}
+	}
+	if !got.RequestTruncated || !got.ResponseTruncated {
+		t.Fatal("a cut side was stored without saying it was cut")
+	}
+}
