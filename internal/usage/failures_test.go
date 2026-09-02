@@ -160,6 +160,28 @@ func TestFailedRequestPagingAndFilters(t *testing.T) {
 		t.Fatalf("second page = %#v", second)
 	}
 
+	// The filter an operator reaches for first: a caller reports an ID and wants
+	// that request, not a population to narrow. Exact, so a truncated ID returns
+	// nothing rather than a plausible neighbour — and it reaches the rejections
+	// too, which have no attempts for an attempt-scoped filter to match.
+	byRequest, err := aggregate.QueryFailedRequests(FailureQuery{Limit: 100, RequestID: "req_rejected"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRequest.Failures) != 1 || byRequest.Failures[0].RequestID != "req_rejected" {
+		t.Fatalf("request filtered = %#v", byRequest.Failures)
+	}
+	// A request that succeeded is not findable here by ID, because it did not
+	// fail. Answering with an empty list is the correct answer to "what went
+	// wrong with this one".
+	bySucceeded, err := aggregate.QueryFailedRequests(FailureQuery{Limit: 100, RequestID: "req_fallback"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bySucceeded.Failures) != 0 {
+		t.Fatalf("a successful request was returned as a failure: %#v", bySucceeded.Failures)
+	}
+
 	// A deployment filter is answered from the attempts, so it necessarily
 	// drops the rejection: that request never chose a deployment, and
 	// pretending otherwise would attribute a budget refusal to an upstream.

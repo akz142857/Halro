@@ -100,15 +100,18 @@ describe("UsageFailuresPanel", () => {
     expect(screen.queryByText(/未保存服务商错误码/)).not.toBeInTheDocument();
   });
 
-  // Both misreadings of this list are on the page, not in a runbook: one makes
-  // a gateway answering 401s look healthy, the other makes an aged-out failure
-  // look like it never happened.
-  it("states what the list cannot contain and how far back it reaches", async () => {
+  // The filter this list is most often opened with: a caller reports an ID from
+  // a failed call, and the operator needs that one request rather than a
+  // population to narrow. Matched exactly by the server, so the box is only
+  // useful if what is typed reaches it verbatim.
+  it("filters by Request ID and carries one it was linked with", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=failures&request_id=req_failed");
     renderPanel([providerFailure]);
 
-    await screen.findByText("服务商认证或权限被拒");
-    expect(screen.getByText(/认证失败、路由未找到、限流与 Token Guard 拒绝发生在受理之前/)).toBeVisible();
-    expect(screen.getByText(/可见窗口等于 Usage 保留窗口/)).toBeVisible();
+    expect(await screen.findByRole("textbox", { name: "Request ID" })).toHaveValue("req_failed");
+    await waitFor(() => expect(api.usageFailures).toHaveBeenCalled());
+    const query = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
+    expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
   });
 
   // The summary card links here with the interval it covered; dropping it would

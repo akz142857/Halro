@@ -28,16 +28,22 @@ export function UsageFailuresPanel() {
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const parameter = (name: string) => new URLSearchParams(window.location.search).get(name) ?? "";
+  // The filter this list is most often opened with: a caller reports an ID from
+  // a failed call and wants to know what happened to it. It leads the bar for
+  // that reason — the other filters narrow a population, this one answers a
+  // question that already has an answer.
+  const [requestID, setRequestID] = useState(() => parameter("request_id"));
   const [projectID, setProjectID] = useState(() => parameter("project_id"));
   const [deploymentID, setDeploymentID] = useState(() => parameter("deployment_id"));
   const [start, setStart] = useState(() => isoToZonedInput(parameter("start") || undefined, accountingTimeZone()));
   const [end, setEnd] = useState(() => isoToZonedInput(parameter("end") || undefined, accountingTimeZone()));
 
   const failures = useInfiniteQuery({
-    queryKey: ["usage-failures", projectID, deploymentID, start, end, timeZone],
+    queryKey: ["usage-failures", requestID, projectID, deploymentID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usageFailures(`?${new URLSearchParams({
       limit: "100",
+      ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
       ...(deploymentID ? { deployment_id: deploymentID } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
@@ -52,16 +58,8 @@ export function UsageFailuresPanel() {
 
   return (
     <>
-      {/* The two things this list is most often misread as. Neither is a
-          footnote: an operator who reads it as "every failure" will conclude
-          the gateway is healthy while their callers are getting 401s, and one
-          who reads it as the full history will conclude a failure never
-          happened because it has aged out. */}
-      <div className="notice info" role="note">
-        <p>{t("usage.failures.scopeAdmitted")}</p>
-        <p>{t("usage.failures.scopeWindow")}</p>
-      </div>
       <div className="filter-bar">
+        <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label>
           <span>{t("usage.project")}</span>
           <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>

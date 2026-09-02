@@ -22,6 +22,11 @@ type FailureQuery struct {
 	BeforeSequence uint64
 	Limit          int
 	ProjectID      string
+	// RequestID answers the question this list is most often opened with: a
+	// caller reports an ID from a failed call and wants to know what happened
+	// to it. Matched exactly, like the attempt list's, so a truncated or
+	// mistyped ID returns nothing rather than a plausible neighbour.
+	RequestID string
 	// ProviderID, DeploymentID and ProviderModel describe an attempt, not a
 	// request. A request matches when any of its attempts does — which
 	// necessarily excludes every request that failed before reaching an
@@ -111,6 +116,7 @@ func (a *Aggregate) QueryFailedRequests(query FailureQuery) (FailurePage, error)
 			continue
 		}
 		if query.ProjectID != "" && summary.ProjectID != query.ProjectID ||
+			query.RequestID != "" && summary.RequestID != query.RequestID ||
 			query.RequestedModel != "" && summary.RequestedModel != query.RequestedModel ||
 			!query.Start.IsZero() && summary.CompletedAt.Before(query.Start) ||
 			!query.End.IsZero() && !summary.CompletedAt.Before(query.End) {

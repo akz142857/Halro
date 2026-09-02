@@ -460,7 +460,7 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 		return
 	}
 	allowed := map[string]struct{}{
-		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {},
+		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
 		"deployment_id": {}, "model": {}, "provider_model": {}, "start": {}, "end": {},
 	}
 	for name := range request.URL.Query() {
@@ -468,6 +468,12 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 			writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "unsupported usage filter"})
 			return
 		}
+	}
+	// The same bound the attempt list applies. An ID is short; a long one is
+	// not a mistyped ID, it is something else being tried against the filter.
+	if len(request.URL.Query().Get("request_id")) > 128 {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
+		return
 	}
 	cursor, err := usage.DecodeCursor(request.URL.Query().Get("cursor"))
 	if err != nil {
@@ -486,6 +492,7 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 		BeforeSequence: cursor, Limit: limit,
 		ProjectID:      request.URL.Query().Get("project_id"),
 		ProviderID:     request.URL.Query().Get("provider_id"),
+		RequestID:      request.URL.Query().Get("request_id"),
 		DeploymentID:   request.URL.Query().Get("deployment_id"),
 		RequestedModel: request.URL.Query().Get("model"),
 		ProviderModel:  request.URL.Query().Get("provider_model"),

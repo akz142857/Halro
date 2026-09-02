@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,10 @@ func TestUsageFailuresFiltersAndRefusesUnknownParameters(t *testing.T) {
 	if len(byDeployment.Items) != 1 || byDeployment.Items[0].RequestID != "req_failed" {
 		t.Fatalf("deployment filter=%#v", byDeployment.Items)
 	}
+	byRequest := readFailures(t, runtime, cookie, "/admin/api/v1/usage/failures?request_id=req_rejected")
+	if len(byRequest.Items) != 1 || byRequest.Items[0].RequestID != "req_rejected" {
+		t.Fatalf("request ID filter=%#v", byRequest.Items)
+	}
 	paged := readFailures(t, runtime, cookie, "/admin/api/v1/usage/failures?limit=1")
 	if len(paged.Items) != 1 || paged.NextCursor == "" {
 		t.Fatalf("first page=%#v", paged)
@@ -157,6 +162,7 @@ func TestUsageFailuresFiltersAndRefusesUnknownParameters(t *testing.T) {
 		"/admin/api/v1/usage/failures?limit=101",
 		"/admin/api/v1/usage/failures?cursor=not-a-cursor",
 		"/admin/api/v1/usage/failures?start=yesterday",
+		"/admin/api/v1/usage/failures?request_id=" + strings.Repeat("r", 129),
 	} {
 		response := authenticatedAdminGet(t, runtime, cookie, path)
 		if response.Code != http.StatusBadRequest {

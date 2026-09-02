@@ -767,8 +767,6 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       noAdvice: "该记录没有可用的错误分类；用 Request ID 查日志。",
       noTarget: "未选定目标",
       decidedBy: "由第 {{attempt}} 次尝试决定",
-      scopeAdmitted: "此列表只包含已受理进入 Ledger 的请求。认证失败、路由未找到、限流与 Token Guard 拒绝发生在受理之前，不在这里 —— 它们由 HTTP 指标与审计日志负责。",
-      scopeWindow: "可见窗口等于 Usage 保留窗口，不是长期归档：更早的失败已随聚合数据滚出。",
     },
     summary: {
       title: "用量汇总",

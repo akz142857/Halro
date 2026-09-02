@@ -765,8 +765,6 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       noAdvice: "This record carries no error class; search the log by Request ID.",
       noTarget: "No target chosen",
       decidedBy: "Decided by attempt {{attempt}}",
-      scopeAdmitted: "This list holds only requests admitted into the ledger. Authentication failures, unrouted models, rate-limit and Token Guard refusals return before admission and are not here — the HTTP metrics and the audit log account for those.",
-      scopeWindow: "The visible window equals the usage retention window, not a long-term archive: older failures have rolled out of the aggregate with it.",
     },
     summary: {
       title: "Usage summary",
