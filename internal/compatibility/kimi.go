@@ -400,15 +400,28 @@ func renderKimiResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
 // false refusal for another: the first refused {kimi-k2.6, nothing asked}, the
 // ordinary portable request, and the second refused a kimi-k3 request that works.
 //
-// **Both conditions, together**, which is what the four measured points actually
-// say: k3 with thinking on and a forced tool works; k2.6 with thinking off and a
-// forced tool works; the K2.x line with thinking on is the one that answers the
-// error. An identifier this build does not know is refused, because its family is
+// **Both conditions, together**, which is what the measured points say and no
+// single one of them does:
+//
+//	kimi-k3   thinking on   required   -> 200, tool_calls + reasoning_content
+//	kimi-k2.6 thinking off  required   -> 200, tool_calls
+//	kimi-k2.6 thinking on   required   -> 400, tool_choice 'required' is
+//	                                     incompatible with thinking enabled
+//	kimi-k2.6 thinking on   specified  -> 400, tool_choice 'specified' is
+//	                                     incompatible with thinking enabled
+//
+// An identifier this build does not know is refused, because its family is
 // exactly what is unknown.
 //
-// The named-function half stays inferred and is marked as such: it was measured
-// on the Anthropic face, not on this one, where the same upstream answers
-// `tool_choice 'specified' is incompatible with thinking enabled`.
+// The last row is why kimiForcesAToolCall treats a named function the same as
+// `required`. That half used to be inferred from the Anthropic face; it is
+// first-hand on this one now, and the upstream says `specified` where the wire
+// format says an object.
+//
+// One cell of the allowing side is still inference: kimi-k3 with thinking on and
+// a *named* function has not been driven, only `required` has. If it turns out to
+// conflict, this refuses too little and that request 400s after the reservation —
+// a narrow case, and named here rather than left to be rediscovered.
 //
 // This refusal is reachable in the running gateway, and deliberately so. It
 // depends on the model and the field rules are keyed by profile, so the pair that

@@ -1862,5 +1862,21 @@ kimi-k3   + reasoning_effort:"high"      + tool_choice:"required"
 三个版本，每一版都是从当时手上的证据能得出的合理结论：文档说是模型 → 上游报错说是思考
 开关 → 四个实测点说是两者的合取。**每一步都是被一次新测量推翻的，没有一步是被推理推翻的。**
 
-`kimi-k2.6` + 思考开启 + `required` 这一格仍未直接驱动（依据是 §10.3 那条记录）。它是
-现在这条拒绝唯一依赖的未一手验证的格子。
+### 17.5 补齐（同日）
+
+那一格驱动了，连同一直标着"推断"的具名函数那一半：
+
+```
+kimi-k2.6 + thinking:{"type":"enabled"} + tool_choice:"required"
+  -> 400  tool_choice 'required' is incompatible with thinking enabled
+kimi-k2.6 + thinking:{"type":"enabled"} + tool_choice:{具名函数}
+  -> 400  tool_choice 'specified' is incompatible with thinking enabled
+```
+
+措辞与 Anthropic 面记录的完全一致。合取判据的**拒绝**侧现在每一格都是一手证据，
+`kimiForcesAToolCall` 把具名函数与 `required` 同等对待也不再是从另一条 face 外推。
+行为没有变化——变的是它不再建立在任何推断上。
+
+仍有一格属于推断，在**放行**侧：`kimi-k3` + 思考开启 + **具名函数**没有被驱动过，只驱动过
+`required`。若它其实冲突，这条判据就拒得太少，那个请求会在预留之后 400。范围很窄，
+记在这里而不是等着被重新发现。

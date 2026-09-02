@@ -234,6 +234,27 @@ refusal, the Anthropic face with thinking disabled, and Responses usage all matc
 the mainland shapes field for field. The "one contract, two hosts" conclusion is
 now established at runtime and not only by comparing the two OpenAPI documents.
 
+**tool_choice took three versions and six probes** (2026-09-01 and 2026-09-02),
+and it is the clearest case here of documentation, an error message, and the
+truth being three different things. Kimi's parameter reference says the K2.x line
+does not support `required`, so the first version keyed on the model. The
+upstream's own error says `tool_choice 'required' is incompatible with thinking
+enabled`, so the second keyed on the reasoning switch. Both were wrong, in
+opposite rows:
+
+| model | thinking | tool_choice | result |
+|---|---|---|---|
+| kimi-k3 | on | `required` | 200, tool call **and** reasoning span together |
+| kimi-k2.6 | off | `required` | 200, tool call |
+| kimi-k2.6 | on | `required` | 400, `'required' is incompatible with thinking enabled` |
+| kimi-k2.6 | on | named function | 400, `'specified' is incompatible with thinking enabled` |
+
+It is the conjunction: the K2.x line **and** thinking on. kimi-k3 is exempt
+entirely, which no reading of either the documentation or the error message would
+have given. The named-function half had been inferred from the Anthropic face and
+is first-hand on Chat now. One cell of the allowing side stays inference —
+kimi-k3 with thinking on and a *named* function was not driven, only `required`.
+
 The Anthropic route's 429 was measured by deliberately tripping the organisation
 limit, with the operator's consent: it answers in the **OpenAI** envelope, so that
 endpoint uses Anthropic's shape for 400 and OpenAI's for 401 and 429. Its 503 is
