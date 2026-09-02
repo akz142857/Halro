@@ -4,6 +4,7 @@ import { ApiError } from "./api";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly, useSession } from "./session";
 import { errorDetail, localizedError } from "./i18n/errors";
+import { Link } from "./navigation";
 import { isSupportedTimeZone, supportedTimeZones, zoneOffsetLabel } from "./timezone";
 
 export function PageHeader({
@@ -123,8 +124,21 @@ export function useWebhookTestFailureReason(error: unknown) {
 // Metric is one figure with its label and the sentence that qualifies it. The
 // qualifier is not decoration: a cost with no note about estimated or unpriced
 // work reads as exact when it is not.
-export function Metric({ label, value, detail, alert = false }: { label: string; value: string; detail: string; alert?: boolean }) {
-  return <article className={`metric ${alert ? "alert" : ""}`}><span>{label}</span><strong>{value}</strong><small title={detail}>{detail}</small></article>;
+// A metric may carry one link, for the case where the number is a question the
+// reader is expected to follow: "N failed" is not an answer, it is the start of
+// one, and leaving them to rebuild the same filter by hand in another tab is
+// how a summary stops being used.
+export function Metric({ label, value, detail, alert = false, href, hrefLabel }: {
+  label: string; value: string; detail: string; alert?: boolean; href?: string; hrefLabel?: string;
+}) {
+  return (
+    <article className={`metric ${alert ? "alert" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small title={detail}>{detail}</small>
+      {href && hrefLabel && <Link className="metric-link" href={href}>{hrefLabel} →</Link>}
+    </article>
+  );
 }
 
 // SegmentedChoice picks one value out of a few. It is a radio group, not a tab

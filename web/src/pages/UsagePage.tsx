@@ -7,6 +7,7 @@ import { Link } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
+import { attemptFailureLabel, errorClassAdvice } from "../failure";
 import type { PriceScheduleTier, UsageAttempt } from "../types";
 
 const usageTabs = ["summary", "attempts"] as const;
@@ -244,7 +245,7 @@ export function UsagePage() {
                   <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
                   <td><CostCell attempt={attempt} /></td>
                   <td>{attempt.latency_millis} ms</td>
-                  <td><span className="inline-status"><StatusDot ok={attempt.status === "success"} />{attempt.status === "success" ? t("usage.success") : t("usage.error")}</span></td>
+                  <td><AttemptStatusCell attempt={attempt} /></td>
                   <td>{dateTime(attempt.completed_at, "dateTimeYear")}</td>
                 </tr>
               ))}
@@ -259,6 +260,43 @@ export function UsagePage() {
       )}
       </section>
       )}
+    </>
+  );
+}
+
+// What a failed attempt actually says. Every field here was already in the
+// response and none of it was shown: the cell read "error" and the operator was
+// left to guess whether a credential, a quota, a timeout or a malformed payload
+// produced it — which is the whole reason the ledger classifies failures at all.
+//
+// The class and the upstream status are the headline because they are what
+// separates "go look at the provider" from "go look at the request". Everything
+// that needs a second to read — what to check, which rung of the retry chain
+// this was — goes behind the disclosure, so a table of successful calls does
+// not grow a column of prose.
+function AttemptStatusCell({ attempt }: { attempt: UsageAttempt }) {
+  const { t } = useTranslation();
+  if (attempt.status === "success") {
+    return <span className="inline-status"><StatusDot ok label={t("usage.success")} />{t("usage.success")}</span>;
+  }
+  const advice = errorClassAdvice(t, attempt.error_class);
+  const chain = attempt.retry_count > 0 || attempt.fallback_count > 0
+    ? t("usage.attemptChain", { fallback: attempt.fallback_count + 1, retry: attempt.retry_count })
+    : t("usage.attemptFirstTry");
+  return (
+    <>
+      <span className="inline-status"><StatusDot ok={false} label={t("usage.error")} />{attemptFailureLabel(t, attempt)}</span>
+      {/* The status is kept apart from the class rather than folded into one
+          string: an operator taking a 429 to a provider's support desk quotes
+          the number, and a class alone cannot be quoted. */}
+      {attempt.http_status ? <small>{t("usage.httpStatus", { status: attempt.http_status })}</small> : null}
+      <details className="failure-detail">
+        <summary>{t("usage.attemptDetails")}</summary>
+        <small>
+          {advice && <>{advice}<br /></>}
+          {chain}
+        </small>
+      </details>
     </>
   );
 }

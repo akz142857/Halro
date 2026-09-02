@@ -872,10 +872,22 @@ export interface UsageAttempt {
   token_usage_source?: "provider_reported" | "gateway_estimated" | "none";
   cost_estimated: boolean;
   tokens_estimated: boolean;
+  started_at: string;
   completed_at: string;
   status: string;
   error_class?: string;
+  // The upstream's own status. Absent when the failure never got one — a
+  // refused dial, a response that would not decode — which is a different
+  // answer from "the upstream returned nothing", so it is left undefined
+  // rather than shown as 0.
+  http_status?: number;
   latency_millis: number;
+  // Which rung of the retry/fallback chain this attempt is: retry_count counts
+  // re-tries against the same target, fallback_count counts targets already
+  // given up on. Both are on every attempt, including successful ones — that
+  // is how a fallback that worked can be told apart from a first try.
+  retry_count: number;
+  fallback_count: number;
 }
 
 export interface PriceSnapshot {

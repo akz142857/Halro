@@ -701,6 +701,38 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
     unknownCost: "Unknown", costEvidence: "Pricing evidence", formulaComponents: "Input {{input}} + output {{output}} + fixed {{fixed}}", billedWindow: "Billed at the {{start}}–{{end}} rate ({{timezone}})", billedBase: "Billed at the rate outside every window ({{timezone}})", billedZoneUnavailable: "Billed at the dearest rate: timezone {{timezone}} could not be resolved",
     requestID: "Request ID", project: "Project", provider: "Provider", actualModel: "Actual model", currentPassword: "Current password", totpOptional: "TOTP (required when MFA is enabled)",
     views: "Usage views",
+    // Explaining a class is a sentence for a reader, not an accounting fact, so
+    // it lives here rather than in the ledger. A missing entry falls back to the
+    // identifier the server sent: an English enum is a worse answer than a
+    // translated one and a far better answer than a broken key.
+    errorClasses: {
+      authentication: "Provider refused the credential or the permission",
+      rate_limit: "Provider rate limit or capacity shortfall",
+      timeout: "Upstream did not answer in time",
+      connect: "No secure connection could be established",
+      provider_5xx: "Provider server-side failure",
+      bad_request: "Upstream refused the request shape or a parameter",
+      malformed_response: "Response does not meet the adapter contract",
+      canceled: "Caller cancelled or the connection dropped",
+      client_disconnected_or_timed_out: "Caller dropped or timed out, and the error was never classified",
+      unknown: "Could not be classified safely",
+    },
+    errorAdvice: {
+      authentication: "Check the credential's state, the account's permissions, and which region or project it belongs to.",
+      rate_limit: "Check quota, concurrency, Retry-After, and whether a fallback target is configured.",
+      timeout: "Check the timeout settings, the provider's status page, and network latency.",
+      connect: "Check DNS, TLS, proxy, egress rules, and the endpoint allowlist.",
+      provider_5xx: "Take the Provider Request ID upstream, and check whether it keeps happening.",
+      bad_request: "Read the field the Provider Code names, and the model's capability matrix.",
+      malformed_response: "Check the provider's compatibility surface and whether model and protocol profile agree.",
+      canceled: "Confirm whether the client timed itself out; do not attribute this to the provider.",
+      client_disconnected_or_timed_out: "As for a cancellation; seeing it at all means an adapter left a classification gap.",
+      unknown: "Search the log by Request ID and look for the adapter's classification gap.",
+    },
+    httpStatus: "HTTP {{status}}",
+    attemptChain: "Target {{fallback}} · retry {{retry}}",
+    attemptFirstTry: "First target, first try",
+    attemptDetails: "Failure detail",
     tabs: { summary: "Summary", attempts: "Attempt log" },
     summary: {
       title: "Usage summary",
@@ -718,6 +750,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       attemptSuccessRate: "Attempt success rate",
       unknownAttempts: "{{count}} unpriced",
       viewAttempts: "View attempts",
+      viewFailedAttempts: "View failed attempts",
       others: "Everything else",
       othersFolded: "{{count}} more folded in",
       emptyTitle: "No calls in this range",

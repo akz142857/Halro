@@ -236,6 +236,85 @@ describe("UsagePage view selection", () => {
   });
 });
 
+// The console held every field needed to say why a call failed — the class, the
+// upstream status, which rung of the retry chain it was — and rendered the word
+// "错误". An operator could see that something broke and had to go to the host's
+// log to learn what, which is the gap this whole design exists to close.
+describe("UsagePage failure detail", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  const failedAttempt = (overrides: Record<string, unknown>) => ({
+    event_id: "e1", request_id: "req_1", attempt_id: "att_1", attempt: 1, project_id: "p",
+    requested_model: "chat", provider_model: "gpt-4o", provider_input_tokens: 1,
+    provider_output_tokens: 0, cost_micros_usd: 0, latency_millis: 5, status: "provider_error",
+    completed_at: "2026-08-06T00:00:00Z", retry_count: 0, fallback_count: 0, ...overrides,
+  });
+
+  it("names the class and the upstream status instead of the word error", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ error_class: "authentication", http_status: 401 })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText("服务商认证或权限被拒")).toBeVisible();
+    // The number is kept apart from the class because it is the part an
+    // operator quotes to a provider's support desk.
+    expect(screen.getByText("HTTP 401")).toBeVisible();
+    // What to check next, behind the disclosure so a wide table stays readable.
+    expect(screen.getByText(/检查凭据状态/)).toBeInTheDocument();
+  });
+
+  // A class the server starts sending before this bundle knows about it must
+  // degrade to the identifier, never to a broken key.
+  it("falls back to the identifier the server sent for an unknown class", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ error_class: "quota_exhausted_beta" })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText("quota_exhausted_beta")).toBeVisible();
+    expect(screen.queryByText(/usage\.errorClasses/)).not.toBeInTheDocument();
+  });
+
+  // Which rung of the chain this attempt was. Without it a fallback that failed
+  // and a first try that failed read identically, and the retry/fallback counts
+  // were in the payload all along.
+  it("says which target and which retry produced the failure", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ error_class: "timeout", retry_count: 1, fallback_count: 1 })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText(/第 2 个目标 · 第 1 次重试/)).toBeInTheDocument();
+  });
+
+  // A successful row must not grow a disclosure promising an explanation of a
+  // failure that did not happen.
+  it("leaves a successful attempt alone", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ status: "success" })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    expect(await screen.findByText("成功")).toBeVisible();
+    expect(screen.queryByText("失败详情")).not.toBeInTheDocument();
+  });
+});
+
 function emptySummaryMetrics() {
   return {
     attempts: 0, errors: 0, input_tokens: 0, output_tokens: 0,
