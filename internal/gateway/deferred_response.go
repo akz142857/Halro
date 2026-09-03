@@ -136,6 +136,54 @@ func (s *Service) RunDeferredResponses(ctx context.Context) {
 	}
 }
 
+// interleaveByProject takes one submission from each Project in turn, keeping
+// each Project's own submissions in the order they arrived.
+//
+// The store returns the queue ordered by submission time across the whole
+// instance, and the ceiling that bounds it is per Project while the workers
+// draining it are process-wide. Serving that global order means one Project can
+// fill its own queue — up to MaxDeferredQueueCeiling — and every other Project's
+// submissions wait behind all of it. At the default ceiling and the default
+// execution timeout that wait exceeds the 24-hour TTL, so those submissions do
+// not merely run late: they expire without ever having been tried, and an
+// expiry writes no ledger event, appears in no failed-request list, and has its
+// record reaped an hour later. The operator's only signal is a complaint.
+//
+// Round-robin makes the ceiling mean what it says — a bound on one Project's
+// backlog rather than on everyone's — without giving any Project a reservation
+// it did not have before: a Project with nothing queued takes no turn.
+func interleaveByProject(pending []domain.ProviderResource) []domain.ProviderResource {
+	if len(pending) < 2 {
+		return pending
+	}
+	order := make([]string, 0, 8)
+	byProject := make(map[string][]domain.ProviderResource, 8)
+	for _, record := range pending {
+		if _, seen := byProject[record.ProjectID]; !seen {
+			order = append(order, record.ProjectID)
+		}
+		byProject[record.ProjectID] = append(byProject[record.ProjectID], record)
+	}
+	if len(order) == 1 {
+		return pending
+	}
+	// Projects take their turn in the order their oldest waiting submission
+	// arrived, so the global ordering still decides who goes first; it just no
+	// longer decides who goes at all.
+	interleaved := make([]domain.ProviderResource, 0, len(pending))
+	for len(interleaved) < len(pending) {
+		for _, projectID := range order {
+			queue := byProject[projectID]
+			if len(queue) == 0 {
+				continue
+			}
+			interleaved = append(interleaved, queue[0])
+			byProject[projectID] = queue[1:]
+		}
+	}
+	return interleaved
+}
+
 // dispatch starts what it can and reports whether anything was left waiting.
 func (e *deferredEngine) dispatch(ctx context.Context) bool {
 	pending, err := e.service.resources.PendingDeferredResponses(ctx, "")
@@ -145,7 +193,7 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 		}
 		return false
 	}
-	for _, record := range pending {
+	for _, record := range interleaveByProject(pending) {
 		if ctx.Err() != nil {
 			return false
 		}

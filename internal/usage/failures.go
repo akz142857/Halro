@@ -162,10 +162,24 @@ func (a *Aggregate) attemptsMatch(indexes []int, query FailureQuery) bool {
 }
 
 // lastFailure is the final unsuccessful attempt of the request, which is the
-// one that decided the outcome. The successful attempts of a chain are not
-// candidates: a request can only end unsuccessfully on a failure or on no
-// attempt at all.
+// one that decided the outcome — when there is one.
+//
+// A request can fail after its last attempt succeeded: the upstream answered,
+// and the answer could not be put on the wire (outbound redaction refused it,
+// or the renderer could not carry it). The attempt is settled as success before
+// that verdict is reached, so the chain ends in a success while the request is
+// finalized as provider_error.
+//
+// Nothing on the chain explains that request. Walking back to an earlier failed
+// attempt hands the operator the provider_request_id of a call that worked, and
+// they take it to the upstream and ask about a successful request — which is the
+// same defect the terminal ERROR log was fixed for, on the other side of the
+// same event stream. So a chain that ends in success carries no provider
+// context at all, exactly like a request that never reached an upstream.
 func (a *Aggregate) lastFailure(indexes []int) *FailureContext {
+	if len(indexes) > 0 && a.attempts[indexes[len(indexes)-1]].Status == "success" {
+		return nil
+	}
 	for position := len(indexes) - 1; position >= 0; position-- {
 		attempt := a.attempts[indexes[position]]
 		if attempt.Status == "success" {

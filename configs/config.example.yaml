@@ -291,6 +291,19 @@ gateway:
   # @description.zh-CN 一次请求跨路由目标允许的尝试总数。
   # @description.en-US Total attempts allowed across route targets for one request.
   max_total_attempts: 3
+  # @title.zh-CN 延迟取回工作线程数
+  # @title.en-US Deferred response workers
+  # @description.zh-CN 同时执行延迟提交的工作线程数,整个实例共用。队列上限是按项目的,
+  # @description.zh-CN 消费能力是全局的:调高它会增加延迟层能同时压在上游的并发量,每个
+  # @description.zh-CN 线程最长占用一次 route_total_timeout。出队顺序按项目轮转,所以
+  # @description.zh-CN 一个项目灌满自己的队列不会挡住其他项目。
+  # @description.en-US How many deferred submissions execute at once, shared by the whole
+  # @description.en-US instance. The queue ceiling is per Project and this is global: raising it
+  # @description.en-US raises how much concurrent upstream work the deferred tier may add, each
+  # @description.en-US worker holding one call for up to route_total_timeout. Dequeuing takes one
+  # @description.en-US submission from each Project in turn, so a Project that fills its own queue
+  # @description.en-US does not hold up the others.
+  deferred_response_workers: 4
   # @title.zh-CN 健康探测间隔
   # @title.en-US Health probe interval
   # @description.zh-CN 后台探测部署健康状态的时间间隔。

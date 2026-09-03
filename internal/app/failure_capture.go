@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -119,21 +120,32 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 		return
 	}
 	// Audited before the body is written, so a read that the client abandons
-	// mid-response is still on the record.
-	r.auditFailurePayloadRead(request, requestID, detail.Summary.ProjectID)
+	// mid-response is still on the record — and refused when that record cannot
+	// be written. This is the one admin GET that hands back what a caller wrote,
+	// and the audit entry is the whole reason it is allowed to: an unaudited
+	// read of a prompt is the thing the audit trail exists to make impossible.
+	// Fail closed, like every other unavailable-state path here.
+	if err := r.auditFailurePayloadRead(request, requestID, detail.Summary.ProjectID); err != nil {
+		r.logger.Error("failure payload read refused: audit unavailable", "error", err)
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+			"error": "the audit record for this read could not be written; the payload is withheld",
+			"code":  "audit_unavailable",
+		})
+		return
+	}
 	writeJSON(writer, http.StatusOK, record)
 }
 
-func (r *Runtime) auditFailurePayloadRead(request *http.Request, requestID, projectID string) {
+func (r *Runtime) auditFailurePayloadRead(request *http.Request, requestID, projectID string) error {
 	admin, ok := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	if !ok {
-		return
+		// Unreachable behind requireAdmin, and treated as a refusal rather than
+		// a silent pass: without a session there is no actor to record.
+		return errors.New("no admin session to attribute this read to")
 	}
-	if err := r.appendAdminAuditWithMetadata(
+	return r.appendAdminAuditWithMetadata(
 		"admin_user", admin.session.Username, "usage.failure_payload.read",
 		"usage_request", requestID, "success", "",
 		map[string]any{"project_id": projectID},
-	); err != nil {
-		r.logger.Warn("failure payload read audit failed", "error", err)
-	}
+	)
 }

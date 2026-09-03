@@ -83,6 +83,7 @@ func Default() Config {
 			DownstreamWriteTimeout:        Duration(15 * time.Second),
 			StreamMaxDuration:             Duration(10 * time.Minute),
 			MaxTotalAttempts:              3,
+			DeferredResponseWorkers:       4,
 			HealthProbeInterval:           Duration(30 * time.Second),
 			PricingClockRollbackTolerance: Duration(DefaultPricingClockRollbackTolerance),
 			PricingClockForwardTolerance:  Duration(DefaultPricingClockForwardTolerance),

@@ -155,6 +155,9 @@ gateway:
   downstream_write_timeout: 15s
   stream_max_duration: 10m0s
   max_total_attempts: 3
+  # Shared by the whole instance, while the queue ceiling is per Project.
+  # Dequeuing takes one submission from each Project in turn.
+  deferred_response_workers: 4
   health_probe_interval: 30s
   # How far the wall clock may disagree with a Deployment's pricing high-water
   # mark before the Deployment is quarantined. The rollback tolerance has a 1s
