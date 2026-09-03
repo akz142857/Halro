@@ -237,7 +237,7 @@ type RunGovernanceConfig struct {
 - 启用时默认预算必须大于零且不超过最大预算；
 - 所有以美元表示的 Run 预算要求调用目标具有有效价格；
 - Project 日预算为零表示没有日金额上限，但 Run 上限仍正常生效；
-- 首版候选限制：默认 TTL 24 小时、最大 TTL 30 天、每 Project 最多 1,000 个 active Runs 和 1,000 个 open Work Units；S0 必须用容量测量确认或下调，不能把候选值直接当容量承诺。
+- S0 冻结限制：默认 TTL 24 小时、最大 TTL 30 天、每 Project 最多 1,000 个 active Runs 和 1,000 个 open Work Units。依据与证据见 [S0 容量与契约验证](../verification/performance/2026-09-04-run-governance-s0/README.md)；这些是首版 hard limits，不是生产吞吐承诺。
 
 ### 7.2 Gateway Key scopes
 
@@ -348,7 +348,7 @@ active ── expires_at reached ──▶ expired
 - `evidence_sha256` 可省略；提供时必须是调用方对外部证据规范字节计算的 SHA-256；
 - 不接收自由文本 comment、评价 reasoning 或原始产物；
 - Work Unit 仍为 open 时允许先写 Outcome，但查询将其标为 `provisional`；Work Unit matured 后同一 current head 才参与成功率和单位结果成本；
-- 同一 Work Unit/Definition 每次最多保留 20 次修订，超过后拒绝并要求关闭错误上报源；候选上限须在 S0 验证。
+- 同一 Work Unit/Definition 最多保留 20 次修订，超过后拒绝；Work Unit close 后最多继续上报或修订 30 天，随后只读历史。两项均为 S0 冻结 hard limits。
 
 ## 八、HTTP 契约
 
@@ -370,10 +370,10 @@ active ── expires_at reached ──▶ expired
 
 - Bearer Gateway Key 必须启用、未过期、Project 可用且来源 IP 符合 Project CIDR；
 - 强制 `Idempotency-Key`，长度、字符集、摘要与请求 fingerprint 沿用已有受控异步资源规则；其作用域固定为 `(Project, operation, key_hash)`；
-- `Content-Type: application/json`，请求体上限候选 16 KiB；未知字段拒绝；
+- `Content-Type: application/json`，请求体 hard max 16 KiB；未知字段拒绝；
 - 返回 `Cache-Control: no-store` 和 `X-Request-ID`；
 - 成功创建返回 201；同一幂等请求重放返回同一对象和 200；
-- 控制面设置单独的 Key/Project 速率上限，不能靠无限创建 Run 消耗本地存储或绕开 Run cap。
+- 控制面设置独立写桶：每 Key 120 RPM、每 Project 1,000 RPM；读桶为每 Key 600 RPM、每 Project 5,000 RPM，Summary 另限每 Project 60 RPM。管理员可下调，不能配置超过 hard max；不能靠无限创建 Run 消耗本地存储或绕开 Run cap。
 
 创建/上报事件必须携带 operation、Idempotency-Key hash 和规范请求 fingerprint。bbolt 只保存可重建查找索引；索引丢失后必须从相应受认证日志恢复，不能因为索引缺失而把重试当成新创建。索引至少与其权威事件保留同样长，首版不做会改变重复提交语义的 TTL 淘汰。
 
@@ -1066,17 +1066,18 @@ S0 结束后至少补充两份 ADR：
 - 数据量使启动恢复或备份超过 S0 确定的运行边界；
 - 结果覆盖率不足以支持所展示的单位结果指标。
 
-## 二十二、实施前必须完成的裁决
+## 二十二、S0 裁决
 
-S0 结束前仍需用测量或真实需求确定：
+2026-09-04 的 S0 已冻结以下实现输入，详细测量、限制和证据边界见
+[S0 容量与契约验证](../verification/performance/2026-09-04-run-governance-s0/README.md)：
 
-1. Project active Runs/open Work Units、TTL、Outcome revisions 的硬上限；
-2. 控制面 Key/Project RPM 与请求体上限；
-3. Accounting 投影是否并入下一版 Usage checkpoint，以及 Governance 投影采用何种独立 checkpoint；
-4. Governance export 使用多 Parquet/NDJSON 数据集还是统一 NDJSON；
-5. Unit summary 的最大 cohort 范围与可接受查询延迟；
-6. Work Unit close 后 Outcome 修订的最长允许窗口；
-7. 首个真实试点的 Work Unit 定义、Outcome Definition、验收方和决策用途；
-8. Governance Journal 的 segment、chain key rotation、RTO/RPO 与损坏隔离门槛。
+1. 每 Project 1,000 active Runs、1,000 open Work Units；默认/最大 TTL 24 小时/30 天；每个 Outcome head 最多 20 revisions；
+2. 控制面写入 Key/Project 为 120/1,000 RPM，读取为 600/5,000 RPM，Summary 为 60 RPM/Project；JSON body hard max 16 KiB；
+3. Accounting 沿用 4 MiB immutable-segment Usage checkpoint 并增加 nullable 归属字段；Governance 使用独立的 4 MiB segmented checkpoint；两个 checkpoint 不共享 transaction；
+4. Governance export 使用规范化的 `work_units`、`runs`、`outcomes`、`outcome_definitions` 四个 NDJSON 数据集，统一 manifest 记录双 watermarks；
+5. 内置 Unit Summary 最多 90 天且最多 100,000 Work Units，服务端延迟门槛 2 秒；超限使用 export；
+6. Work Unit close 后 Outcome 上报/修订窗口为 30 天，之后只读；
+7. Governance Journal 采用独立 domain-derived chain key、4 MiB segments；换 key 时开启新 generation 并把上代 terminal digest 写入新 header；acknowledged local writes 的目标 RPO 为 0，1m events 冷恢复门槛为 30 秒；任意 header/chain/revision 失败使 Governance not ready，但不影响 Accounting readiness；
+8. 首个真实业务试点不是持久格式输入。S1/S2 可按冻结契约实施；进入 S3 前必须由业务负责人提供 Work Unit、Definition、验收方、观察窗口和决策用途，并在数据副本上验收。没有试点不得发布 Outcome 产品能力。
 
-这些未决项不影响本 PRD 对责任、信任、预算一致性和结果口径的约束。它们必须在写格式迁移和 UI 之前裁决，不能由实现过程中出现的默认值替代产品决策。
+本次 S0 只增加 test-only probes 和文档，没有修改生产格式或增加用户可见开关。

@@ -1,0 +1,13 @@
+=== RUN   TestS0AccountingStateCapacityProfile
+=== RUN   TestS0AccountingStateCapacityProfile/records=10000
+    run_governance_s0_test.go:54: records=10000 apply=19.684875ms apply_records_s=508004.24 heap_alloc_delta=1115480 bytes_per_event=111.55
+=== RUN   TestS0AccountingStateCapacityProfile/records=100000
+    run_governance_s0_test.go:54: records=100000 apply=101.659958ms apply_records_s=983671.47 heap_alloc_delta=8956992 bytes_per_event=89.57
+=== RUN   TestS0AccountingStateCapacityProfile/records=1000000
+    run_governance_s0_test.go:54: records=1000000 apply=1.016112375s apply_records_s=984143.12 heap_alloc_delta=133359048 bytes_per_event=133.36
+--- PASS: TestS0AccountingStateCapacityProfile (1.15s)
+    --- PASS: TestS0AccountingStateCapacityProfile/records=10000 (0.02s)
+    --- PASS: TestS0AccountingStateCapacityProfile/records=100000 (0.10s)
+    --- PASS: TestS0AccountingStateCapacityProfile/records=1000000 (1.03s)
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.512s

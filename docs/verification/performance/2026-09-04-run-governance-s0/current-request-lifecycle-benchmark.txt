@@ -1,0 +1,33 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-10         	      48	  25381209 ns/op	       197.0 events/s	        39.40 lifecycles/s	  240687 B/op	     171 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=1-10         	      46	  24445900 ns/op	       204.5 events/s	        40.91 lifecycles/s	  240782 B/op	     171 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=1-10         	      50	  25531734 ns/op	       195.8 events/s	        39.17 lifecycles/s	  240859 B/op	     171 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=8-10         	     180	   6480583 ns/op	       771.5 events/s	       154.3 lifecycles/s	   97078 B/op	     168 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=8-10         	     176	   6469304 ns/op	       772.9 events/s	       154.6 lifecycles/s	   94833 B/op	     167 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=8-10         	     189	   7897511 ns/op	       633.1 events/s	       126.6 lifecycles/s	   95066 B/op	     168 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=64-10        	    1399	    799469 ns/op	      6254 events/s	      1251 lifecycles/s	   50376 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=64-10        	    1411	    835695 ns/op	      5983 events/s	      1197 lifecycles/s	   50787 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=1/workers=64-10        	    1380	    831335 ns/op	      6014 events/s	      1203 lifecycles/s	   50236 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=1-10         	      50	  23209676 ns/op	       215.4 events/s	        43.09 lifecycles/s	  240880 B/op	     172 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=1-10         	      51	  36166493 ns/op	       138.2 events/s	        27.65 lifecycles/s	  240847 B/op	     172 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=1-10         	      46	  24745152 ns/op	       202.1 events/s	        40.41 lifecycles/s	  241071 B/op	     172 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=8-10         	     162	   6828078 ns/op	       732.3 events/s	       146.5 lifecycles/s	   95801 B/op	     168 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=8-10         	     163	   6850509 ns/op	       729.9 events/s	       146.0 lifecycles/s	   94892 B/op	     169 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=8-10         	     180	   6712757 ns/op	       744.9 events/s	       149.0 lifecycles/s	   94297 B/op	     168 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=64-10        	    1363	    865866 ns/op	      5775 events/s	      1155 lifecycles/s	   50155 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=64-10        	    1360	    868629 ns/op	      5756 events/s	      1151 lifecycles/s	   49803 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=8/workers=64-10        	    1480	    830907 ns/op	      6018 events/s	      1204 lifecycles/s	   50429 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=1-10        	      48	  25373977 ns/op	       197.1 events/s	        39.41 lifecycles/s	  241642 B/op	     177 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=1-10        	      48	  24917129 ns/op	       200.7 events/s	        40.13 lifecycles/s	  241652 B/op	     177 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=1-10        	      49	  24140645 ns/op	       207.1 events/s	        41.42 lifecycles/s	  241720 B/op	     177 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=8-10        	     180	   6407239 ns/op	       780.4 events/s	       156.1 lifecycles/s	   94872 B/op	     170 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=8-10        	     184	   9483358 ns/op	       527.2 events/s	       105.4 lifecycles/s	   94615 B/op	     171 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=8-10        	     170	   6948603 ns/op	       719.6 events/s	       143.9 lifecycles/s	   92918 B/op	     170 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=64-10       	    1371	    866744 ns/op	      5769 events/s	      1154 lifecycles/s	   49564 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=64-10       	    1279	    871042 ns/op	      5740 events/s	      1148 lifecycles/s	   49755 B/op	     162 allocs/op
+BenchmarkRequestLifecycle/projects=64/workers=64-10       	    1374	    850510 ns/op	      5879 events/s	      1176 lifecycles/s	   50992 B/op	     162 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/budget	47.723s

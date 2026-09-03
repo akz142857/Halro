@@ -176,9 +176,9 @@ Run 生命周期只保留 `active / closed / expired`。预算另返回实时 `b
 - cost per success 包含成熟失败工作的浪费成本，同时排除尚未成熟工作；
 - 完整 TCO、收入和任意多维分析继续由外部数据系统承担。
 
-## 6. 仍需 S0 用测量裁决的事项
+## 6. S0 测量裁决（2026-09-04）
 
-以下不是评审遗漏，不能靠评审主观给出数值：
+以下事项已由 [S0 容量与契约验证](../verification/performance/2026-09-04-run-governance-s0/README.md) 裁决：
 
 1. active Runs、open Work Units、Outcome revisions 和 TTL 硬上限；
 2. 控制面 RPM、body size、最大 cohort 范围与查询延迟；
@@ -188,7 +188,13 @@ Run 生命周期只保留 `active / closed / expired`。预算另返回实时 `b
 6. Outcome 修订窗口；
 7. 首个真实业务试点定义、验收方和决策用途。
 
-在这些数据出来前，文档中的 1,000 active Runs、30 天 TTL 等数字只能叫候选限制，不能成为产品容量承诺。
+冻结结果为 1,000 active Runs/open Work Units、30 天最大 TTL、20 revisions、
+16 KiB body、90 天/100,000 Work Units cohort、4 MiB 独立 checkpoint segments 和
+四个规范化 NDJSON governance datasets。1m 紧凑日志重放约 0.68 秒，但只是设计
+下界；生产 RTO 门为 30 秒，所有值仍须在最终实现上复测。
+
+首个真实业务试点作为 S3 发布前置条件保留，由业务负责人提供定义、验收方、观察
+窗口和决策用途；它不再参与 S1/S2 的持久格式设计。
 
 ## 7. 最终判断
 

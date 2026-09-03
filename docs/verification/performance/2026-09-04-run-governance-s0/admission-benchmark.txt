@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkS0AdmissionPrototype/current-project-only/workers=1-10         	 4650753	       261.8 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=1-10         	 4707025	       256.2 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=1-10         	 4699774	       257.0 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=1-10     	26668492	        45.70 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=1-10     	27096573	        45.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=1-10     	26071888	        45.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=8-10         	 2730692	       436.0 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=8-10         	 2713298	       462.7 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=8-10         	 2740178	       438.2 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=8-10     	 5347351	       224.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=8-10     	 5365352	       221.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=8-10     	 5347146	       222.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=64-10        	 2324782	       512.4 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=64-10        	 2280996	       562.5 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/current-project-only/workers=64-10        	 2209051	       538.6 ns/op	      96 B/op	       2 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=64-10    	 5689760	       210.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=64-10    	 5964592	       208.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkS0AdmissionPrototype/proposed-project-and-run/workers=64-10    	 5689443	       208.5 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/budget	27.399s

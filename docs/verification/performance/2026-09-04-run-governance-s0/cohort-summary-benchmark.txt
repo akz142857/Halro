@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/governance
+cpu: Apple M4
+BenchmarkS0CohortSummary/work_units=10000-10         	  358584	      3335 ns/op	2998.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkS0CohortSummary/work_units=10000-10         	  358263	      3324 ns/op	3008.35 MB/s	       0 B/op	       0 allocs/op
+BenchmarkS0CohortSummary/work_units=10000-10         	  356972	      3412 ns/op	2930.41 MB/s	       0 B/op	       0 allocs/op
+BenchmarkS0CohortSummary/work_units=100000-10        	   36423	     33108 ns/op	3020.46 MB/s	       0 B/op	       0 allocs/op
+BenchmarkS0CohortSummary/work_units=100000-10        	   33225	     33054 ns/op	3025.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkS0CohortSummary/work_units=100000-10        	   36344	     32948 ns/op	3035.11 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/governance	9.975s
