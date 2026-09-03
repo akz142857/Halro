@@ -240,8 +240,15 @@ func (s *Service) SubmitDeferredResponse(
 	if !request.Background {
 		return openaiapi.Response{}, gatewayError("invalid_request_error", "background must be true", 400, nil)
 	}
-	if err := idempotency.ValidateKey(idempotencyKey); err != nil {
-		return openaiapi.Response{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)
+	// Optional, unlike the resource endpoints. Those mint an upstream object that
+	// must never be created twice, so they require a key. A deferred submission
+	// is the same generation the synchronous path takes without one, and
+	// requiring a header here that /v1/responses has never required would be a
+	// divergence the caller pays for with a 400.
+	if idempotencyKey != "" {
+		if err := idempotency.ValidateKey(idempotencyKey); err != nil {
+			return openaiapi.Response{}, gatewayError("invalid_idempotency_key", err.Error(), 400, err)
+		}
 	}
 	principal, targets, err := s.resolveRequest(
 		ctx, plaintextKey, request.Model, provider.OperationChat,

@@ -111,6 +111,33 @@ func TestSubmissionReachesNoProviderAndNoLedger(t *testing.T) {
 	}
 }
 
+// The synchronous path has never required an Idempotency-Key, and a deferred
+// submission is the same generation. Requiring one would be a 400 the caller
+// pays for a header they had no reason to send. Found by running the real
+// binary: every submission without the header was refused.
+func TestSubmissionDoesNotRequireAnIdempotencyKey(t *testing.T) {
+	f := newDeferredFixture(t)
+	response, err := f.service.SubmitDeferredResponse(context.Background(), f.plaintext, "",
+		openaiapi.ResponseRequest{Model: "chat", Input: json.RawMessage(`"hello"`), Background: true})
+	if err != nil {
+		t.Fatalf("a submission with no idempotency key was refused: %v", err)
+	}
+	if response.Status != domain.DeferredQueued {
+		t.Fatalf("response=%#v", response)
+	}
+	f.runOnce(t)
+	if record := f.record(t, response.ID); record.Status != domain.DeferredCompleted {
+		t.Fatalf("record=%#v", record)
+	}
+	// A malformed key is still refused; the header is optional, not ignored.
+	_, err = f.service.SubmitDeferredResponse(context.Background(), f.plaintext, strings.Repeat("k", 200),
+		openaiapi.ResponseRequest{Model: "chat", Input: json.RawMessage(`"hello"`), Background: true})
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "invalid_idempotency_key" {
+		t.Fatalf("a malformed idempotency key was accepted: %v", err)
+	}
+}
+
 // The request the caller wrote is on disk between submission and execution, and
 // it is not readable there. It is the same class of material failure capture has
 // always sealed.
