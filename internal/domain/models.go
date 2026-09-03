@@ -29,21 +29,51 @@ const (
 	ResourceFile        ProviderResourceKind = "file"
 	ResourceBatch       ProviderResourceKind = "batch"
 	ResourceAsyncInvoke ProviderResourceKind = "async_invoke"
+	// ResourceDeferredResponse is one generation that was submitted on one
+	// connection and collected on another. Unlike the three above it has no
+	// upstream twin at all (ADR 0021): the upstream sees an ordinary
+	// synchronous call and never learns Halro answered it later.
+	ResourceDeferredResponse ProviderResourceKind = "deferred_response"
 )
 
+// The statuses a deferred response moves through. Everything outside the
+// terminal three is work Halro still owes the caller.
+const (
+	DeferredQueued     = "queued"
+	DeferredInProgress = "in_progress"
+	DeferredCompleted  = "completed"
+	DeferredFailed     = "failed"
+	DeferredCancelled  = "cancelled"
+)
+
+// DeferredTerminal reports whether a deferred response has an answer to give.
+func DeferredTerminal(status string) bool {
+	switch status {
+	case DeferredCompleted, DeferredFailed, DeferredCancelled:
+		return true
+	}
+	return false
+}
+
 type ProviderResource struct {
-	ID                 string               `json:"id"`
-	Kind               ProviderResourceKind `json:"kind"`
-	ProjectID          string               `json:"project_id"`
-	ProviderID         string               `json:"provider_id"`
-	DeploymentID       string               `json:"deployment_id"`
-	PublicModel        string               `json:"public_model"`
-	ProfileID          ProviderProfileID    `json:"profile_id"`
-	Region             string               `json:"region"`
-	UpstreamID         string               `json:"upstream_id"`
-	IdempotencyKeyHash [32]byte             `json:"idempotency_key_hash"`
-	RequestFingerprint [32]byte             `json:"request_fingerprint"`
-	CreationStatus     string               `json:"creation_status"`
+	ID           string               `json:"id"`
+	Kind         ProviderResourceKind `json:"kind"`
+	ProjectID    string               `json:"project_id"`
+	ProviderID   string               `json:"provider_id"`
+	DeploymentID string               `json:"deployment_id"`
+	PublicModel  string               `json:"public_model"`
+	ProfileID    ProviderProfileID    `json:"profile_id"`
+	Region       string               `json:"region"`
+	UpstreamID   string               `json:"upstream_id"`
+	// KeyID names the Gateway Key that submitted the work. A deferred response
+	// runs on a connection the key never touched, so the identifier is how the
+	// worker asks whether that key is still one this instance accepts. The key
+	// itself is never stored: keeping a Gateway Key to replay it later would be
+	// worse than anything replaying it enables.
+	KeyID              string   `json:"key_id,omitempty"`
+	IdempotencyKeyHash [32]byte `json:"idempotency_key_hash"`
+	RequestFingerprint [32]byte `json:"request_fingerprint"`
+	CreationStatus     string   `json:"creation_status"`
 	// ReservedBy names the process that wrote the reservation. A reservation
 	// still held by a process that is gone can never complete on its own, and
 	// the data directory is exclusive, so a value other than the running
@@ -75,9 +105,31 @@ type ProviderResource struct {
 	// registering the result files is a write, and a batch is polled: without
 	// somewhere to remember the answer, every poll would mint a new identifier
 	// for the same upstream file.
-	InputFileID  string    `json:"input_file_id,omitempty"`
-	OutputFileID string    `json:"output_file_id,omitempty"`
-	ErrorFileID  string    `json:"error_file_id,omitempty"`
+	InputFileID  string `json:"input_file_id,omitempty"`
+	OutputFileID string `json:"output_file_id,omitempty"`
+	ErrorFileID  string `json:"error_file_id,omitempty"`
+	// InputObjectPath is the sealed request a deferred response has not made
+	// yet. It exists only while the upstream still has to be asked: once the
+	// answer is in hand, keeping the caller's prompt would be storing a copy of
+	// their traffic for no remaining purpose, so it is erased.
+	InputObjectPath string `json:"input_object_path,omitempty"`
+	// SubmittedAt, StartedAt and CompletedAt are the deferred state machine's
+	// timestamps, distinct from CreatedAt/UpdatedAt because Retry-After is
+	// computed from how long the caller has actually been waiting.
+	SubmittedAt time.Time `json:"submitted_at,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
+	// RetrievedAt starts the cool-off window. A terminal answer is not reaped
+	// the instant it is served, because an HTTP 200 leaving Halro is not proof
+	// the caller received it.
+	RetrievedAt time.Time `json:"retrieved_at,omitempty"`
+	// AttemptID ties the record to the ledger attempt that paid for it, so an
+	// audit or a usage question can be answered in both directions.
+	AttemptID string `json:"attempt_id,omitempty"`
+	// ErrorCode and ErrorMessage explain a terminal failure. Neither ever
+	// carries material the caller wrote or the model produced.
+	ErrorCode    string    `json:"error_code,omitempty"`
+	ErrorMessage string    `json:"error_message,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	ExpiresAt    time.Time `json:"expires_at"`
@@ -91,8 +143,20 @@ func (r ProviderResource) Validate() error {
 	if r.ID == "" || r.ProjectID == "" || r.ProviderID == "" || r.DeploymentID == "" || r.ProfileID == "" || r.PublicModel == "" {
 		problems = append(problems, errors.New("resource identity and owner are required"))
 	}
-	if r.Kind != ResourceFile && r.Kind != ResourceBatch && r.Kind != ResourceAsyncInvoke {
+	switch r.Kind {
+	case ResourceFile, ResourceBatch, ResourceAsyncInvoke, ResourceDeferredResponse:
+	default:
 		problems = append(problems, errors.New("resource kind is invalid"))
+	}
+	if r.Kind == ResourceDeferredResponse {
+		switch r.Status {
+		case DeferredQueued, DeferredInProgress, DeferredCompleted, DeferredFailed, DeferredCancelled:
+		default:
+			problems = append(problems, errors.New("deferred response status is invalid"))
+		}
+		if r.SubmittedAt.IsZero() {
+			problems = append(problems, errors.New("deferred response submission time is required"))
+		}
 	}
 	if r.CreationStatus == "" || r.Status == "" || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || r.ExpiresAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) {
 		problems = append(problems, errors.New("resource lifecycle is invalid"))
@@ -179,25 +243,35 @@ func (c Credential) Validate() error {
 }
 
 type Project struct {
-	ID                   string         `json:"id"`
-	Name                 string         `json:"name"`
-	Enabled              bool           `json:"enabled"`
-	AllowedModels        []string       `json:"allowed_models"`
-	RPM                  int64          `json:"rpm"`
-	TPM                  int64          `json:"tpm"`
-	MaxConcurrency       int64          `json:"max_concurrency"`
-	DailyBudgetMicrosUSD int64          `json:"daily_budget_micros_usd"`
-	MaxInputTokens       int64          `json:"max_input_tokens"`
-	MaxOutputTokens      int64          `json:"max_output_tokens"`
-	MaxRequestBytes      int64          `json:"max_request_bytes"`
-	MaxStreamDuration    time.Duration  `json:"max_stream_duration"`
-	AllowedCIDRs         []netip.Prefix `json:"allowed_cidrs"`
-	RedactionPolicyID    string         `json:"redaction_policy_id"`
-	TokenGuardPolicyID   string         `json:"token_guard_policy_id"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
-	Revision             uint64         `json:"revision"`
-	DeletedAt            *time.Time     `json:"deleted_at,omitempty"`
+	ID                   string        `json:"id"`
+	Name                 string        `json:"name"`
+	Enabled              bool          `json:"enabled"`
+	AllowedModels        []string      `json:"allowed_models"`
+	RPM                  int64         `json:"rpm"`
+	TPM                  int64         `json:"tpm"`
+	MaxConcurrency       int64         `json:"max_concurrency"`
+	DailyBudgetMicrosUSD int64         `json:"daily_budget_micros_usd"`
+	MaxInputTokens       int64         `json:"max_input_tokens"`
+	MaxOutputTokens      int64         `json:"max_output_tokens"`
+	MaxRequestBytes      int64         `json:"max_request_bytes"`
+	MaxStreamDuration    time.Duration `json:"max_stream_duration"`
+	// DeferredResponses turns on `background: true` for this Project. It is off
+	// unless an operator says otherwise, because turning it on changes what the
+	// instance's data directory holds: the output of successful requests starts
+	// being written to disk, where until now only captured failures were.
+	DeferredResponses bool `json:"deferred_responses"`
+	// MaxDeferredQueue bounds how many submissions may be waiting at once. Zero
+	// means the instance default. An unbounded queue is fail-open exactly when
+	// it matters — an upstream slows down, the queue grows silently, and every
+	// entry is a promise of an answer.
+	MaxDeferredQueue   int64          `json:"max_deferred_queue"`
+	AllowedCIDRs       []netip.Prefix `json:"allowed_cidrs"`
+	RedactionPolicyID  string         `json:"redaction_policy_id"`
+	TokenGuardPolicyID string         `json:"token_guard_policy_id"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
+	Revision           uint64         `json:"revision"`
+	DeletedAt          *time.Time     `json:"deleted_at,omitempty"`
 }
 
 func (p *Project) GetRevision() uint64      { return p.Revision }
@@ -213,6 +287,18 @@ const MaxProjectNameLength = 128
 // topology: an instance with more aliases than this has more public models than
 // the console can meaningfully present.
 const MaxProjectAllowedModels = 256
+
+// MaxDeferredQueueCeiling bounds what an operator may set a Project's deferred
+// queue to. Every queued submission holds a sealed copy of the caller's request
+// on disk and a record in bbolt until it runs, so the ceiling is what stops an
+// Admin write from turning a slow upstream into an unbounded local store.
+const MaxDeferredQueueCeiling = 10_000
+
+// DefaultMaxDeferredQueue is the depth a Project gets when it names none. It is
+// deliberately small: a queue this size already absorbs a minute of a busy
+// Project's submissions, and a caller told 429 immediately learns more than one
+// whose request waits an hour.
+const DefaultMaxDeferredQueue = 100
 
 func (p Project) Validate() error {
 	var problems []error
@@ -258,10 +344,14 @@ func (p Project) Validate() error {
 		"max_input_tokens":        p.MaxInputTokens,
 		"max_output_tokens":       p.MaxOutputTokens,
 		"max_request_bytes":       p.MaxRequestBytes,
+		"max_deferred_queue":      p.MaxDeferredQueue,
 	} {
 		if value < 0 {
 			problems = append(problems, errors.New(name+" cannot be negative"))
 		}
+	}
+	if p.MaxDeferredQueue > MaxDeferredQueueCeiling {
+		problems = append(problems, errors.New("max_deferred_queue is above the ceiling"))
 	}
 	return errors.Join(problems...)
 }

@@ -11,20 +11,25 @@ import (
 // ResponseRequest is the deliberately small, stateless Responses API surface
 // implemented by Halro. Unknown fields are rejected by DecodeResponseRequest.
 type ResponseRequest struct {
-	Model             string              `json:"model"`
-	Input             json.RawMessage     `json:"input"`
-	Instructions      string              `json:"instructions,omitempty"`
-	MaxOutputTokens   *int64              `json:"max_output_tokens,omitempty"`
-	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
-	Stream            bool                `json:"stream,omitempty"`
-	Store             *bool               `json:"store,omitempty"`
-	Temperature       *float64            `json:"temperature,omitempty"`
-	TopP              *float64            `json:"top_p,omitempty"`
-	Tools             []ResponseTool      `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage     `json:"tool_choice,omitempty"`
-	Text              *ResponseTextConfig `json:"text,omitempty"`
-	Reasoning         *ResponseReasoning  `json:"reasoning,omitempty"`
-	User              string              `json:"user,omitempty"`
+	Model             string          `json:"model"`
+	Input             json.RawMessage `json:"input"`
+	Instructions      string          `json:"instructions,omitempty"`
+	MaxOutputTokens   *int64          `json:"max_output_tokens,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	Stream            bool            `json:"stream,omitempty"`
+	// Background asks for the deferred tier: the answer is collected on a later
+	// connection by id rather than on this one. It is distinct from Store, which
+	// stays rejected — Store says the provider keeps the Response, and Halro's
+	// upstream keeps nothing.
+	Background  bool                `json:"background,omitempty"`
+	Store       *bool               `json:"store,omitempty"`
+	Temperature *float64            `json:"temperature,omitempty"`
+	TopP        *float64            `json:"top_p,omitempty"`
+	Tools       []ResponseTool      `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage     `json:"tool_choice,omitempty"`
+	Text        *ResponseTextConfig `json:"text,omitempty"`
+	Reasoning   *ResponseReasoning  `json:"reasoning,omitempty"`
+	User        string              `json:"user,omitempty"`
 }
 
 // ProviderExecutedToolWebSearch is the wire type of the one tool this endpoint
@@ -104,7 +109,13 @@ func (r ResponseRequest) Validate() error {
 		problems = append(problems, errors.New("input must be valid, non-null JSON"))
 	}
 	if r.Store != nil && *r.Store {
-		problems = append(problems, errors.New("store=true is unavailable on the stateless endpoint"))
+		problems = append(problems, errors.New("store=true is unavailable on this endpoint"))
+	}
+	if r.Background && r.Stream {
+		// Collecting an answer later means storing the answer. Replaying the
+		// event sequence would mean storing every event instead, which is a
+		// different and much larger promise than this tier makes.
+		problems = append(problems, errors.New("background=true cannot be combined with stream=true"))
 	}
 	if r.MaxOutputTokens != nil && *r.MaxOutputTokens < 0 {
 		problems = append(problems, errors.New("max_output_tokens cannot be negative"))
@@ -168,6 +179,14 @@ func (r ResponseRequest) Validate() error {
 
 func (r ResponseRequest) EstimatedInputBytes() int64 {
 	return int64(len(r.Input) + len(r.Instructions) + len(r.ToolChoice) + len(r.User))
+}
+
+// ResponseDeleted is what DELETE /v1/responses/{id} answers with, the same
+// shape OpenAI uses for a deleted resource.
+type ResponseDeleted struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Deleted bool   `json:"deleted"`
 }
 
 type Response struct {

@@ -18,7 +18,7 @@ const project: Project = {
   max_input_tokens: 0,
   max_output_tokens: 0,
   max_request_bytes: 0,
-  max_stream_duration: 0,
+  max_stream_duration: 0, deferred_responses: false, max_deferred_queue: 0,
   allowed_cidrs: null,
   redaction_policy_id: "",
   token_guard_policy_id: "",

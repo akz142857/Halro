@@ -351,6 +351,8 @@ export interface Project {
   max_output_tokens: number;
   max_request_bytes: number;
   max_stream_duration: number;
+  deferred_responses: boolean;
+  max_deferred_queue: number;
   allowed_cidrs: string[] | null;
   redaction_policy_id: string;
   token_guard_policy_id: string;

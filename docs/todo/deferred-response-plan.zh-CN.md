@@ -1,6 +1,7 @@
 # 异步提交与延迟取回（Deferred Response）：设计与实施方案
 
-- 状态：提案，未实施
+- 状态：**已实施**（2026-09-03）。切片 S0–S9 全部落地，见文末「实施记录」；下面正文保留提案时
+  的判断，与实现不一致之处在实施记录里逐条订正
 - 日期：2026-09-02
 - 文档语言：中文
 - 适用范围：`POST /v1/responses` 北向面、`internal/gateway` 请求执行、`domain.ProviderResource`、
@@ -9,8 +10,9 @@
   才能开工**；ADR 0005 自己写明了这一点（"A future stored tier requires a new ADR defining
   provider/deployment/profile/region binding, lifecycle, encryption, deletion, and failover
   behavior"）
-- 数据迁移：需要一次 bbolt 迁移（新增记录字段与状态）与一次对象目录格式变更（明文改为密封）。
-  实测本仓库 `data/provider-objects/` 为空目录，因此格式变更今天的迁移代价为零；见第七节
+- 数据迁移：**实测不需要 bbolt 迁移**（订正，见实施记录 §1）；对象目录格式变更（明文改为密封）
+  确实需要，由启动回收完成。实测本仓库 `data/provider-objects/` 为空目录，因此格式变更今天的
+  迁移代价为零；见第七节
 
 ## 〇、决策摘要
 
@@ -314,9 +316,11 @@ ledger。
 第 3 点是因为提示词只在「还没发出去」的窗口里有存在的必要。上游答复之后再留着它，就是白白多存一份
 调用方写的内容。
 
-**迁移。** bbolt 迁移取 main 上的下一个未占用编号（当前最新为 33，
-`internal/store/bolt/store.go:903`；注意 `feat/usage-retention` 分支已占用 34）。对象目录：识别不
-出密封信封魔数的旧对象连同其记录一并回收，并在启动日志里报一次数量。
+**迁移。** ~~bbolt 迁移取 main 上的下一个未占用编号（当前最新为 33）~~ ——
+订正：写这份方案时 main 的最新迁移已经是 35（`schemaVersion = 35`），而且**根本不需要迁移**：
+新增字段全部是 `omitempty` 的可选字段，旧记录解出来就是零值，零值正是「关闭」。对象目录：识别
+不出密封信封魔数的旧对象连同其记录一并回收，并在启动日志里报一次数量——这就是「stale state
+被拒绝并重建」，不需要用 schema 版本号再表达一次。
 
 ### D8：短 TTL、取回后冷却回收、显式删除
 
@@ -487,3 +491,99 @@ S1 与 S2 是独立的前置改动，可以先合入而不依赖本方案其余�
    `docs/todo/request-failure-diagnostics-plan.zh-CN.md` 的口径统一。
 5. **是否顺带修正 `GetBatch` 的轮询账务。** 2.3 节指出的问题在 batch 上是既有行为。它是否算 bug、
    要不要在本方案内一并修，需要单独判断——改动会影响既有的用量读数。
+
+
+---
+
+## 实施记录（2026-09-03）
+
+S0–S9 全部实施。以下是实现与上面正文不一致的地方，每一条都是核查真实代码之后的订正。
+
+### 1. 不需要 bbolt 迁移
+
+正文说需要一次迁移并给了编号 34。两处都错：写方案时 main 的 `schemaVersion` 已经是 35，
+而且新增的记录字段（`InputObjectPath`、四个时间戳、`AttemptID`、`ErrorCode`/`ErrorMessage`、
+`KeyID`、`ObjectBytes`）与 `Project` 的两个新字段全部带 `omitempty`，旧记录解码出零值，
+零值就是「这条记录不是延迟取回」和「这个项目没开延迟取回」。`ResourceDeferredResponse` 是新增
+的 kind，没有任何地方穷举 kind 后会因为它而误判。
+
+真正变了格式的是磁盘对象，而它由启动回收处理：认不出密封信封的对象连同记录一起删掉，并且
+顺带清掉没有任何记录指向的明文孤儿文件（一次「写了字节但记录没写成」留下的东西）。加一条空
+迁移只是把「已经处理好的事」再声明一遍。
+
+### 2. 北向 profile 改名为 `openai.responses.deferrable.v1`，不是 `openai.responses.v1`
+
+正文建议改成 `openai.responses.v1`。这个字符串已经被**服务商** profile 占用了
+（`domain.ProfileOpenAIResponses = "openai.responses.v1"`，`internal/domain/provider_profile.go:45`），
+而两个命名空间会出现在同一份 `endpoint-manifests.json` 里（`northbound_profile` 与
+`provider_profiles` 相邻）。同名会让读者无法分辨，正是这个仓库一贯要避免的「一个名字两个真相」。
+`stateless` 确实必须去掉——这个面现在会把答案写到磁盘；`deferrable` 说清楚它多了哪一层，又
+没有声称请求本身变成有状态的。
+
+清单条目同时改了 id：`openai.responses.stateless.v1` → `openai.responses.create.v1`，
+另加 `openai.responses.get.v1` / `cancel.v1` / `delete.v1` 三条，profile revision 1 → 2。
+
+### 3. 三条新端点不申报 SDK 黑盒证据
+
+正文 D1 把「用钉住版本的官方 SDK 对拍」列为待核验项。这项**还没做**，所以三条新清单条目
+不带 `SDKMatrix`、`Evidence` 只有 `EvidenceGatewayContract`、`Status` 为
+`experimental`。`internal/compatibility` 的不变量测试会在证据与矩阵不一致时直接失败——第一版
+写上了 SDK 矩阵，测试立刻指出「声明了黑盒证据但没有」。这条仍然是未完成项。
+
+### 4. 对象的密封绑定了「角色」，不只是记录 id
+
+正文 D7 说绑定 `(resource_id, project_id)`。实现多绑一层角色（`content` / `input`），因为一条
+延迟记录同时持有两个对象——还没发出去的请求，和拿到之后的答案。只绑记录 id 的话，把 input
+文件改名盖到 content 上，两个都能解开，于是提示词会被当成回答返回。角色进了文件名，也进了
+AEAD 的 scope。
+
+### 5. 执行时会重新检查 Gateway Key 是否仍然有效
+
+正文没写这件事。实现在出队时用 `auth.Snapshot.AuthorizeKeyID(record.KeyID, now)` 重新判定：
+明文 key 从来没有被存过（存下来以便重放，比重放本身能造成的任何后果都糟），但 key 的 id 足够
+问出「这个实例现在还认不认它」。吊销一个 key 必须停掉它已经授权的工作，而不只是它还没提交的
+工作。项目的别名许可、策略快照覆盖、以及项目是否仍然开着延迟取回，同样在出队时重查。
+
+### 6. 排队记录过期由调度器处理，不是 reaper
+
+`ProviderResource.ExpiryReapable()` 对非终态记录返回 false——这是对的，排队中的请求仍然是
+Halro 欠调用方的——所以一条排到过 TTL 都没跑的记录，reaper 永远不会碰它。调度器每一轮先看
+`ExpiresAt`，过期的直接置 `failed`（`deferred_response_expired`）。
+
+### 7. 冷却期通过提前 `ExpiresAt` 交给现有 reaper，但 404 由取回路径当场判定
+
+正文说「冷却期后 404」。reaper 一小时才跑一次，如果只靠它，「冷却期」实际长度会取决于 reaper
+上次什么时候跑。实现是两段：首次取回时把 `ExpiresAt` 提前到 `RetrievedAt + 15min`（这样清理
+仍然由那个已经存在的 reaper 做，不新增循环），同时取回路径自己判定——已取回过且已过期的记录
+一律 404，不等 reaper。
+
+### 8. 文件对象的 `bytes` 改从记录读，不再 stat
+
+密封后的文件比调用方上传的字节长，所以 `os.Stat` 回答的是另一个问题。`ProviderResource` 新增
+`ObjectBytes`，写入时记下明文长度。这是密封 `writeResourceObject` 的连带影响，正文没有预见到。
+
+### 9. `CleanupExpiredProviderResource` 需要为新 kind 开一条分支
+
+原来的逻辑是「不是 file 就只删记录」。延迟记录持有自己的对象，走那条分支会把密封的答案留在
+磁盘上，而已经没有任何记录能指向它。
+
+### 10. 开放问题的处置
+
+- **默认开还是默认关**：按正文建议，默认关闭，per-project 开启（`Project.DeferredResponses`）。
+- **worker 池大小**：`ServiceOptions.DeferredResponseWorkers`，默认 4。仍未按
+  `standalone-capacity-baseline.md` 的实测数据校准——这条**未完成**。
+- **`Retry-After` 取值**：1 秒起，按已等待时长的 1/8 递增，上限 10 秒。未用真实推理模型分布
+  校准——这条**未完成**。
+- **用量页如何区分排队与执行时长**：**未做**。记录里有 `SubmittedAt`/`StartedAt`/`CompletedAt`
+  三个时间点，数据在，展示没做。
+- **是否顺带修 `GetBatch` 的轮询账务**：**没有改**。它对上游的每一次轮询都是一次真实的
+  provider 调用，走完整账务是对的；本方案要避开的是把这个形状抄到一个不打上游的路径上，而
+  这一点由「取回路径产生 0 条 ledger 事件」的测试盯着。
+
+### 未完成项汇总
+
+1. SDK 对拍（D1 的待核验项）——三条新端点因此是 `experimental`。
+2. worker 池全局上限的默认值未按容量基线校准。
+3. `Retry-After` 策略未用真实数据校准。
+4. 用量页不区分排队与执行时长。
+5. 第十二节的第二阶段（完成通知）未开始，也不在本次范围内。

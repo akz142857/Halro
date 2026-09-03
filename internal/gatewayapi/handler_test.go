@@ -356,7 +356,9 @@ func TestResponsesRejectsStateBeforeServiceInvocation(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"chat","input":"hello","store":true}`,
 		`{"model":"chat","input":"hello","previous_response_id":"resp_1"}`,
-		`{"model":"chat","input":"hello","background":true}`,
+		// background asks for the deferred tier, not for state: combined with
+		// stream it asks for an event replay this tier does not promise.
+		`{"model":"chat","input":"hello","background":true,"stream":true}`,
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer gw_test")
@@ -368,6 +370,21 @@ func TestResponsesRejectsStateBeforeServiceInvocation(t *testing.T) {
 	}
 	if service.calls != 0 {
 		t.Fatalf("unsafe requests reached service: calls=%d", service.calls)
+	}
+	// A background submission is not refused here — it is routed to the deferred
+	// tier, which a service that does not implement it answers as unavailable
+	// rather than as a bad request. The distinction matters to a caller: one
+	// says fix your request, the other says this instance does not serve it.
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"chat","input":"hello","background":true}`))
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	handler.Responses(response, request)
+	if response.Code != http.StatusNotImplemented {
+		t.Fatalf("background submission status=%d response=%s", response.Code, response.Body.String())
+	}
+	if service.calls != 0 {
+		t.Fatalf("a background submission reached the synchronous path: calls=%d", service.calls)
 	}
 }
 

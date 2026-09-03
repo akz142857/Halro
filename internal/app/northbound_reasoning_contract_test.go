@@ -203,7 +203,18 @@ func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) b
 // endpoint reply "everything survives" would have overwritten the one that
 // matters.
 func endpointReturnsContent(endpointID string) bool {
-	return endpointID != "anthropic.messages.count-tokens.2023-06-01"
+	switch endpointID {
+	case "anthropic.messages.count-tokens.2023-06-01":
+		return false
+	// The deferred lifecycle endpoints run no renderer. Retrieval replays bytes
+	// that openai.responses.create.v1 rendered and sealed, so whether reasoning
+	// survives was decided there; cancel and delete answer a status and carry no
+	// model content at all. Asking them the question would be asking the create
+	// endpoint the same question three more times under other names.
+	case "openai.responses.get.v1", "openai.responses.cancel.v1", "openai.responses.delete.v1":
+		return false
+	}
+	return true
 }
 
 // endpointRendersReasoning asks the endpoint's own renderer, rather than a table
@@ -243,7 +254,7 @@ func renderThroughEndpoint(t *testing.T, endpointID string, content []semantic.C
 	case "openai.chat-completions.v1":
 		_, err := openaiwire.RenderGenerateResult(result)
 		return err
-	case "openai.responses.stateless.v1":
+	case "openai.responses.create.v1":
 		_, err := openaiwire.RenderResponseResult(result, openaiapi.ResponseRequest{Model: "m"})
 		return err
 	case "anthropic.messages.2023-06-01":

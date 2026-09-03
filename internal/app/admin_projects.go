@@ -28,9 +28,13 @@ type projectInput struct {
 	MaxOutputTokens          int64    `json:"max_output_tokens"`
 	MaxRequestBytes          int64    `json:"max_request_bytes"`
 	MaxStreamDurationSeconds int64    `json:"max_stream_duration_seconds"`
-	AllowedCIDRs             []string `json:"allowed_cidrs"`
-	RedactionPolicyID        string   `json:"redaction_policy_id"`
-	TokenGuardPolicyID       string   `json:"token_guard_policy_id"`
+	// DeferredResponses turns on background: true for this project. Off unless
+	// an operator says otherwise: it changes what the data directory holds.
+	DeferredResponses  bool     `json:"deferred_responses"`
+	MaxDeferredQueue   int64    `json:"max_deferred_queue"`
+	AllowedCIDRs       []string `json:"allowed_cidrs"`
+	RedactionPolicyID  string   `json:"redaction_policy_id"`
+	TokenGuardPolicyID string   `json:"token_guard_policy_id"`
 }
 
 type gatewayKeyInput struct {
@@ -423,7 +427,8 @@ func (input projectInput) project(id string, createdAt, updatedAt time.Time) (do
 		MaxInputTokens: input.MaxInputTokens, MaxOutputTokens: input.MaxOutputTokens,
 		MaxRequestBytes:   input.MaxRequestBytes,
 		MaxStreamDuration: time.Duration(input.MaxStreamDurationSeconds) * time.Second,
-		AllowedCIDRs:      cidrs, RedactionPolicyID: input.RedactionPolicyID,
+		DeferredResponses: input.DeferredResponses, MaxDeferredQueue: input.MaxDeferredQueue,
+		AllowedCIDRs: cidrs, RedactionPolicyID: input.RedactionPolicyID,
 		TokenGuardPolicyID: input.TokenGuardPolicyID, CreatedAt: createdAt, UpdatedAt: updatedAt,
 	}
 	return project, project.Validate()

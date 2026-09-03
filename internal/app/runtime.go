@@ -815,7 +815,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(9)
+	runtime.backgroundWait.Add(10)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
@@ -846,6 +846,10 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.runProviderResourceMaintenance(backgroundContext)
+	}()
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.gatewayService.RunDeferredResponses(backgroundContext)
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()
@@ -1515,6 +1519,9 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Use(r.gateway.GuardOpenAI)
 		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
 		guarded.Post("/v1/responses", r.gateway.Responses)
+		guarded.Get("/v1/responses/{responseID}", r.gateway.GetDeferredResponse)
+		guarded.Post("/v1/responses/{responseID}/cancel", r.gateway.CancelDeferredResponse)
+		guarded.Delete("/v1/responses/{responseID}", r.gateway.DeleteDeferredResponse)
 		guarded.Post("/v1/embeddings", r.gateway.Embeddings)
 		guarded.Post("/v1/moderations", r.gateway.Moderations)
 		guarded.Post("/v1/images/generations", r.gateway.Images)

@@ -476,9 +476,9 @@
     ]
   },
   {
-    "id": "openai.responses.stateless.v1",
-    "northbound_profile": "openai.responses.stateless.v1",
-    "profile_revision": 1,
+    "id": "openai.responses.create.v1",
+    "northbound_profile": "openai.responses.deferrable.v1",
+    "profile_revision": 2,
     "protocol": "openai",
     "method": "POST",
     "path": "/v1/responses",
@@ -523,7 +523,7 @@
       "store=true",
       "previous_response_id",
       "conversation",
-      "background",
+      "background=true with stream=true",
       "prompt",
       "metadata",
       "include",
@@ -602,7 +602,7 @@
       "response.incomplete",
       "error"
     ],
-    "state_semantics": "stateless; omitted store is treated as false; stateful fields are rejected before provider I/O",
+    "state_semantics": "stateless by default; background=true defers one generation to a project-owned record with a 24 hour TTL and a 15 minute cool-off after first retrieval; the remaining stateful fields are rejected before provider I/O",
     "sdk_matrix": [
       "openai-go",
       "openai-node",
@@ -615,8 +615,9 @@
     ],
     "status": "compatible",
     "documented_deviations": [
-      "only POST create is available; retrieval, deletion, cancellation, input_items, Conversations, background mode, and webhooks are unavailable",
-      "store defaults to false and store=true is rejected",
+      "input_items, Conversations, and webhooks are unavailable; retrieval, cancellation and deletion serve deferred submissions alone",
+      "store defaults to false and store=true is rejected even alongside background=true, because store asserts that the provider retains the Response and Halro's upstream retains nothing (ADR 0021)",
+      "a background submission does not survive a gateway restart: a deferred response has no upstream handle, so a request in flight when the process dies is failed and settled conservatively",
       "strict function tools, reasoning output, and streaming tools are rejected",
       "tools[].type=web_search is the one hosted tool accepted; it is routed against the provider_executed_tools capability and served only by the OpenAI Responses profile, and code_interpreter and file_search stay rejected because both are provider-side state",
       "request instructions, tool definitions, tool choice, and structured schema bodies are returned as conservative null, empty, or default response metadata because the original Responses object has not passed through outbound redaction",
@@ -1367,6 +1368,409 @@
         "declared_transforms": [
           "only the model identifier is substituted; every other member is forwarded unchanged"
         ]
+      }
+    ]
+  },
+  {
+    "id": "openai.responses.get.v1",
+    "northbound_profile": "openai.responses.deferrable.v1",
+    "profile_revision": 2,
+    "protocol": "openai",
+    "method": "GET",
+    "path": "/v1/responses/{id}",
+    "semantic_operation": "generate",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "created_at",
+      "completed_at",
+      "status",
+      "background",
+      "error",
+      "model",
+      "output",
+      "usage"
+    ],
+    "state_semantics": "project-owned deferred record; polling is authoritative and writes no accounting events",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "only a submission made with background=true is retrievable; a synchronous response is never stored",
+      "the polling cadence is carried in the Retry-After header rather than as a non-standard member of the Response object",
+      "retrieval makes no upstream call and writes no ledger events",
+      "the record is reaped 15 minutes after its first successful retrieval, or at its 24 hour TTL, whichever comes first"
+    ],
+    "provider_profiles": [
+      "openai.chat-embeddings.v1",
+      "openai.responses.v1",
+      "anthropic.messages.2023-06-01",
+      "azure-openai.chat-embeddings.v1",
+      "deepseek.chat.v1",
+      "openai-compatible.chat-embeddings.v1",
+      "gemini.generate-content.text.v1beta",
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1",
+      "minimax.anthropic.messages.v1",
+      "minimax.chat.v1",
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "experimental"
+      }
+    ]
+  },
+  {
+    "id": "openai.responses.cancel.v1",
+    "northbound_profile": "openai.responses.deferrable.v1",
+    "profile_revision": 2,
+    "protocol": "openai",
+    "method": "POST",
+    "path": "/v1/responses/{id}/cancel",
+    "semantic_operation": "generate",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "created_at",
+      "completed_at",
+      "status",
+      "background",
+      "error",
+      "model",
+      "output",
+      "usage"
+    ],
+    "state_semantics": "project-owned deferred record",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "cancelling a queued submission is determinate; cancelling one already running is best-effort and is settled conservatively, so the record says plainly that it may have been billed upstream",
+      "a request that has already finished answers 409 rather than pretending to cancel"
+    ],
+    "provider_profiles": [
+      "openai.chat-embeddings.v1",
+      "openai.responses.v1",
+      "anthropic.messages.2023-06-01",
+      "azure-openai.chat-embeddings.v1",
+      "deepseek.chat.v1",
+      "openai-compatible.chat-embeddings.v1",
+      "gemini.generate-content.text.v1beta",
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1",
+      "minimax.anthropic.messages.v1",
+      "minimax.chat.v1",
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "experimental"
+      }
+    ]
+  },
+  {
+    "id": "openai.responses.delete.v1",
+    "northbound_profile": "openai.responses.deferrable.v1",
+    "profile_revision": 2,
+    "protocol": "openai",
+    "method": "DELETE",
+    "path": "/v1/responses/{id}",
+    "semantic_operation": "generate",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization"
+    ],
+    "response_fields": [
+      "id",
+      "object",
+      "deleted"
+    ],
+    "state_semantics": "project-owned deferred record",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "deletion removes the record and both of its sealed objects; it does not undo accounting for work that already happened",
+      "a submission still owed an answer answers 409: cancel it first"
+    ],
+    "provider_profiles": [
+      "openai.chat-embeddings.v1",
+      "openai.responses.v1",
+      "anthropic.messages.2023-06-01",
+      "azure-openai.chat-embeddings.v1",
+      "deepseek.chat.v1",
+      "openai-compatible.chat-embeddings.v1",
+      "gemini.generate-content.text.v1beta",
+      "bedrock.runtime.converse.text.v1",
+      "bedrock.mantle.chat.v1",
+      "bedrock.mantle.openai.chat.v1",
+      "bedrock.mantle.responses.v1",
+      "bedrock.mantle.openai.responses.v1",
+      "bedrock.mantle.anthropic.messages.v1",
+      "minimax.anthropic.messages.v1",
+      "minimax.chat.v1",
+      "minimax.responses.v1",
+      "kimi.chat.v1",
+      "kimi.anthropic.messages.v1",
+      "kimi.responses.v1"
+    ],
+    "profile_coverage": [
+      {
+        "profile_id": "openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "anthropic.messages.2023-06-01",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "azure-openai.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "openai-compatible.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "gemini.generate-content.text.v1beta",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.runtime.converse.text.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.openai.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bedrock.mantle.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.responses.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.anthropic.messages.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.responses.v1",
+        "status": "experimental"
       }
     ]
   },

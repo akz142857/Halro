@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,28 @@ func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.
 		}
 	}
 	return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
+}
+
+func (s *inferenceResourcesMemoryStore) PendingDeferredResponses(_ context.Context, projectID string) ([]domain.ProviderResource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pending []domain.ProviderResource
+	for _, resource := range s.resources {
+		if resource.Kind != domain.ResourceDeferredResponse {
+			continue
+		}
+		if projectID != "" && resource.ProjectID != projectID {
+			continue
+		}
+		if domain.DeferredTerminal(resource.Status) {
+			continue
+		}
+		pending = append(pending, resource)
+	}
+	slices.SortFunc(pending, func(a, b domain.ProviderResource) int {
+		return a.SubmittedAt.Compare(b.SubmittedAt)
+	})
+	return pending, nil
 }
 
 type inferenceResourcesAdapter struct {
@@ -731,7 +754,7 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 	now := time.Now()
 
 	contents := []byte("{\"custom_id\":\"a\"}\n")
-	objectPath, err := f.service.writeResourceObject("file-local", f.project.ID, contents)
+	objectPath, err := f.service.writeResourceObject("file-local", f.project.ID, objectRoleContent, contents)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -791,7 +814,7 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 	// against an object that is actually there. Left as it was, the interactive
 	// delete above would have removed it and the assertion below would pass
 	// against nothing.
-	if _, err := f.service.writeResourceObject("file-local", f.project.ID, []byte("{\"custom_id\":\"a\"}\n")); err != nil {
+	if _, err := f.service.writeResourceObject("file-local", f.project.ID, objectRoleContent, []byte("{\"custom_id\":\"a\"}\n")); err != nil {
 		t.Fatal(err)
 	}
 	f.store.resources[local.ID] = local

@@ -28,6 +28,7 @@ type InferenceResourcesResourceStore interface {
 	ProviderResource(context.Context, string, string) (domain.ProviderResource, error)
 	DeleteProviderResource(context.Context, string, string) error
 	ProviderResourceByIdempotency(context.Context, string, domain.ProviderResourceKind, [32]byte) (domain.ProviderResource, error)
+	PendingDeferredResponses(context.Context, string) ([]domain.ProviderResource, error)
 }
 
 // Creation states for a resource whose upstream twin is created once and must
@@ -125,15 +126,26 @@ type ResourceObjectSealer interface {
 	DecryptResourceObject(resourceID, projectID string, envelope []byte) ([]byte, error)
 }
 
-// writeResourceObject seals the bytes and writes the envelope. Both callers
-// hand it the record that will carry the resulting path, which is what the seal
-// is bound to: an object is readable only through the record that names it, and
+// Object roles. A record may hold more than one object — a deferred response
+// holds the request it has not made yet as well as the answer once it has one —
+// so the role is part of both the file name and the seal's scope. Binding it
+// means the request cannot be renamed over the answer and served as one.
+const (
+	objectRoleContent = "content"
+	objectRoleInput   = "input"
+)
+
+func objectScope(resourceID, role string) string { return resourceID + ":" + role }
+
+// writeResourceObject seals the bytes and writes the envelope. Callers hand it
+// the record that will carry the resulting path, which is what the seal is bound
+// to: an object is readable only through the record and role that name it, and
 // only inside the install whose master key derived the scope.
-func (s *Service) writeResourceObject(resourceID, projectID string, data []byte) (string, error) {
+func (s *Service) writeResourceObject(resourceID, projectID, role string, data []byte) (string, error) {
 	if s.resourceObjectDir == "" || s.resourceObjectSealer == nil {
 		return "", errors.New("resource object directory is unavailable")
 	}
-	sealed, err := s.resourceObjectSealer.EncryptResourceObject(resourceID, projectID, data)
+	sealed, err := s.resourceObjectSealer.EncryptResourceObject(objectScope(resourceID, role), projectID, data)
 	if err != nil {
 		return "", err
 	}
@@ -159,7 +171,7 @@ func (s *Service) writeResourceObject(resourceID, projectID string, data []byte)
 	if err := temporary.Close(); err != nil {
 		return "", err
 	}
-	name := resourceID + ".object"
+	name := resourceID + "." + role
 	if err := os.Rename(temporaryName, filepath.Join(s.resourceObjectDir, name)); err != nil {
 		return "", err
 	}
@@ -169,12 +181,20 @@ func (s *Service) writeResourceObject(resourceID, projectID string, data []byte)
 	return name, nil
 }
 
-// readResourceObject opens what writeResourceObject sealed. A record whose
-// object predates sealing reads as a distinct error rather than as corruption,
-// because the two call for different answers: the first is reclaimed at startup,
-// the second is a key or integrity problem nobody should paper over.
+// readResourceObject opens the content object writeResourceObject sealed.
 func (s *Service) readResourceObject(resource domain.ProviderResource) ([]byte, error) {
-	path, err := s.resourceObjectPath(resource.ObjectPath)
+	return s.openResourceObject(resource, resource.ObjectPath, objectRoleContent)
+}
+
+// readResourceInputObject opens the request a deferred response has not made
+// yet. It is a separate object rather than a field on the record because the
+// record is read on every poll and the request is read exactly once.
+func (s *Service) readResourceInputObject(resource domain.ProviderResource) ([]byte, error) {
+	return s.openResourceObject(resource, resource.InputObjectPath, objectRoleInput)
+}
+
+func (s *Service) openResourceObject(resource domain.ProviderResource, name, role string) ([]byte, error) {
+	path, err := s.resourceObjectPath(name)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +205,22 @@ func (s *Service) readResourceObject(resource domain.ProviderResource) ([]byte, 
 	if s.resourceObjectSealer == nil {
 		return nil, errors.New("resource object sealer is unavailable")
 	}
-	return s.resourceObjectSealer.DecryptResourceObject(resource.ID, resource.ProjectID, sealed)
+	return s.resourceObjectSealer.DecryptResourceObject(objectScope(resource.ID, role), resource.ProjectID, sealed)
+}
+
+// removeResourceObject erases one of a record's objects. A deferred response
+// uses it the moment the upstream answers: from then on the caller's prompt has
+// no remaining purpose here, and keeping it would be storing a copy of their
+// traffic rather than the tail this project has always limited itself to.
+func (s *Service) removeResourceObject(name string) error {
+	path, err := s.resourceObjectPath(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return durable.SyncDirectory(s.resourceObjectDir)
 }
 
 func (s *Service) resourceObjectPath(name string) (string, error) {
@@ -354,7 +389,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, err
 	}
 	record.UpstreamID = upstream.ID
-	objectPath, objectErr := s.writeResourceObject(record.ID, record.ProjectID, call.Data)
+	objectPath, objectErr := s.writeResourceObject(record.ID, record.ProjectID, objectRoleContent, call.Data)
 	if objectErr != nil {
 		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
@@ -646,6 +681,13 @@ func (s *Service) CleanupExpiredProviderResource(ctx context.Context, resource d
 	if !resource.ExpiryReapable() || resource.ExpiresAt.After(s.now()) {
 		return errors.New("provider resource is not eligible for expiry cleanup")
 	}
+	// A deferred response holds its own objects and never had an upstream twin,
+	// so reaping it is exactly forgetting what Halro wrote. Falling through to
+	// the record-only delete below would strand a sealed answer on disk with
+	// nothing left to name it.
+	if resource.Kind == domain.ResourceDeferredResponse {
+		return s.forgetDeferred(ctx, resource)
+	}
 	if resource.Kind != domain.ResourceFile {
 		return s.resources.DeleteProviderResource(ctx, resource.ProjectID, resource.ID)
 	}
@@ -927,7 +969,7 @@ func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderRe
 	if err != nil {
 		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
 	}
-	objectPath, err := s.writeResourceObject(externalID, batch.ProjectID, data)
+	objectPath, err := s.writeResourceObject(externalID, batch.ProjectID, objectRoleContent, data)
 	if err != nil {
 		return "", gatewayError("resource_store_unavailable", "batch results could not be stored", 503, err)
 	}

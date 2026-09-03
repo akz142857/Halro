@@ -17,7 +17,7 @@ function project(overrides: Record<string, unknown> = {}) {
   return {
     id: "prj_1", name: "Inference", enabled: true, allowed_models: ["chat"], rpm: 60, tpm: 1000,
     max_concurrency: 8, daily_budget_micros_usd: 0, max_input_tokens: 0, max_output_tokens: 0,
-    max_request_bytes: 0, max_stream_duration: 0, allowed_cidrs: [], redaction_policy_id: "",
+    max_request_bytes: 0, max_stream_duration: 0, deferred_responses: false, max_deferred_queue: 0, allowed_cidrs: [], redaction_policy_id: "",
     token_guard_policy_id: "", revision: 1, created_at: "", updated_at: "", ...overrides,
   };
 }
@@ -287,6 +287,7 @@ describe("projects page", () => {
       max_output_tokens: 16_384,
       max_request_bytes: 1_048_576,
       max_stream_duration: 600_000_000_000,
+      deferred_responses: false, max_deferred_queue: 0,
       redaction_policy_id: "rp_1",
       token_guard_policy_id: "tgp_1",
     });
@@ -315,10 +316,45 @@ describe("projects page", () => {
       max_output_tokens: 16_384,
       max_request_bytes: 1_048_576,
       max_stream_duration_seconds: 600,
+      // Carried through, not defaulted: a toggle on one field must not silently
+      // switch deferred responses off.
+      deferred_responses: false,
+      max_deferred_queue: 0,
       allowed_cidrs: ["10.0.0.0/8"],
       redaction_policy_id: "rp_1",
       token_guard_policy_id: "tgp_1",
     }, '"1"'));
+  });
+
+  // A project that had deferred responses turned on must still have them turned
+  // on after an unrelated toggle. The update body carries the whole project, so
+  // a field left out of it is a field set back to zero — which for this one
+  // means silently switching the feature off.
+  it("keeps deferred responses on when the status is toggled", async () => {
+    const current = project({
+      enabled: true,
+      allowed_cidrs: ["10.0.0.0/8"],
+      max_input_tokens: 128_000,
+      max_output_tokens: 16_384,
+      max_request_bytes: 1_048_576,
+      max_stream_duration: 600_000_000_000,
+      deferred_responses: true, max_deferred_queue: 250,
+      redaction_policy_id: "rp_1",
+      token_guard_policy_id: "tgp_1",
+    });
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [current], next_cursor: "" } as never);
+    const update = vi.spyOn(api, "updateProject").mockResolvedValue({ ...current, enabled: false } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "禁用" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "禁用" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(
+      "prj_1",
+      expect.objectContaining({ deferred_responses: true, max_deferred_queue: 250 }),
+      '"1"',
+    ));
   });
 
   it("states how many gateway keys a project disable takes down", async () => {
