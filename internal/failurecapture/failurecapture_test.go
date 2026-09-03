@@ -262,9 +262,11 @@ func TestCapturesAreAsPrivateAsTheDataDirectory(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("day = %v", entries)
 	}
-	// The name carries the capture instant as well as the request, which is
-	// what lets the sweep date a record without opening it.
-	if name, _, ours := capturedRequestID(entries[0].Name()); !ours || name != "req_1" {
+	// The name carries the capture instant and the project as well as the
+	// request: the instant lets the sweep date a record without opening it, and
+	// the project lets a reader open one without already knowing which project
+	// sealed it.
+	if name, project, _, ours := capturedIdentity(entries[0].Name()); !ours || name != "req_1" || project != "project_1" {
 		t.Fatalf("file name = %q", entries[0].Name())
 	}
 	file, err := os.Stat(filepath.Join(day, entries[0].Name()))
@@ -375,5 +377,43 @@ func TestACaptureIsPublishedWholeAndLeavesNoTemporaryFile(t *testing.T) {
 	}
 	if _, found, err := store.Get("req_atomic", "project_1"); err != nil || !found {
 		t.Fatalf("the published capture could not be read back: found=%v err=%v", found, err)
+	}
+}
+
+// A reader has to know the project before it can open an envelope, and until
+// this existed that answer came from the usage aggregate's bounded console
+// window. A capture whose retention outlived that window was on disk, inside its
+// promised life, and unopenable — reported as a missing usage request, which is
+// not what had happened.
+func TestACaptureNamesTheProjectThatSealedIt(t *testing.T) {
+	store, _ := newStore(t, nil)
+	if written, err := store.Put(record("req_locate")); err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	projectID, found, err := store.ProjectOf("req_locate")
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if projectID != "project_1" {
+		t.Fatalf("project = %q, want project_1", projectID)
+	}
+	if _, found, err := store.ProjectOf("req_absent"); err != nil || found {
+		t.Fatalf("an absent capture was located: found=%v err=%v", found, err)
+	}
+}
+
+// The separator is part of the name format, so an identifier carrying one would
+// be read back as a different pair and the vault would be asked to open an
+// envelope sealed against something else.
+func TestACaptureRefusesIdentifiersCarryingTheNameSeparator(t *testing.T) {
+	store, _ := newStore(t, nil)
+	hyphenated := record("req-with-hyphen")
+	if _, err := store.Put(hyphenated); err == nil {
+		t.Fatal("a request ID carrying the separator was accepted")
+	}
+	project := record("req_ok_2")
+	project.ProjectID = "project-1"
+	if _, err := store.Put(project); err == nil {
+		t.Fatal("a project ID carrying the separator was accepted")
 	}
 }

@@ -846,11 +846,18 @@ func (s *Service) deferredOwner(ctx context.Context, plaintextKey, resourceID st
 		return auth.AuthResult{}, domain.ProviderResource{}, err
 	}
 	record, err := s.resources.ProviderResource(ctx, principal.Project.ID, resourceID)
-	// A record past its cool-off is gone as far as a caller is concerned, even
-	// in the window before the hourly reaper removes it. Answering from it would
+	// A record past its expiry is gone as far as a caller is concerned, even in
+	// the window before the hourly reaper removes it. Answering from it would
 	// make the retention promise depend on when the reaper last ran.
+	//
+	// This used to apply to retrieved records alone, which left the case the
+	// promise is actually about: a submission nobody ever collected reached its
+	// TTL and stayed readable for up to another hour. Failure capture expires
+	// record by record against the clock, and ADR 0024 gives the deferred tier
+	// the same 24 hours on the stated grounds that it is the same class of
+	// material — so it gets the same treatment rather than a weaker one.
 	if err == nil && record.Kind == domain.ResourceDeferredResponse &&
-		!record.RetrievedAt.IsZero() && !record.ExpiresAt.After(s.now()) {
+		!record.ExpiresAt.After(s.now()) {
 		return auth.AuthResult{}, domain.ProviderResource{}, gatewayError(
 			"response_not_found", "response was not found", 404, nil,
 		)

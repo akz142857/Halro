@@ -270,6 +270,15 @@ semantic versioning.
   Batches content stored by v0.5.0 and earlier. If those objects matter, retrieve
   them before upgrading.
 
+- **Captured failure payloads written before this release are unreadable.** The
+  capture file name now carries the project as well as the request, because the
+  project is what opens the envelope and it used to be looked up in the console's
+  usage window — so a capture whose retention outlived that window sat on disk,
+  inside its promised life, and could not be opened. Files written under the old
+  name are not read and are removed by the ordinary retention sweep. This only
+  affects an instance that had `gateway.failure_capture` switched on, which is
+  off by default.
+
 - **A configuration that sets `usage.retention_days` between 1 and 6 will not
   start.** The floor moved to 7. Change it before swapping the binary. Everything
   else new — `usage.console_window_days`, `ledger.seal.*`,
