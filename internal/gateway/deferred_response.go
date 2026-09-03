@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/auth"
@@ -48,12 +49,20 @@ const (
 // tracks what is executing right now, which is what cancellation needs to reach
 // and what stops a second worker picking up a record already in flight.
 type deferredEngine struct {
-	service  *Service
-	signal   chan struct{}
-	slots    chan struct{}
-	running  sync.Map
-	wait     sync.WaitGroup
-	stopOnce sync.Once
+	service *Service
+	signal  chan struct{}
+	slots   chan struct{}
+	running sync.Map
+	wait    sync.WaitGroup
+	// runCtx is the context the whole engine lives under, so a worker can tell
+	// the two cancellations apart. A caller cancelling one request and the
+	// process shutting down both arrive as a cancelled worker context, and they
+	// owe the caller different answers.
+	runCtx context.Context
+	// blocked says a worker handed its record back to the queue because the
+	// Project was at a limit. It is what stops the dispatcher from spinning: the
+	// record really is ready to run, and nothing but time will change that.
+	blocked atomic.Bool
 }
 
 func newDeferredEngine(service *Service, workers int) *deferredEngine {
@@ -85,6 +94,7 @@ func (s *Service) RunDeferredResponses(ctx context.Context) {
 	if engine == nil {
 		return
 	}
+	engine.runCtx = ctx
 	engine.recover(ctx)
 	backoff := deferredRetryFloor
 	timer := time.NewTimer(backoff)
@@ -107,7 +117,11 @@ func (s *Service) RunDeferredResponses(ctx context.Context) {
 		// Project is at its TPM or concurrency limit. Backing off keeps the
 		// dispatcher from scanning bbolt in a tight loop for as long as that
 		// lasts; a fresh submission still wakes it immediately through nudge.
-		if engine.dispatch(ctx) {
+		left := engine.dispatch(ctx)
+		if engine.blocked.Swap(false) {
+			left = true
+		}
+		if left {
 			backoff = min(backoff*2, deferredRetryCeiling)
 		} else {
 			backoff = deferredRetryFloor
@@ -161,7 +175,15 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 				cancel()
 				<-e.slots
 			}()
-			e.service.runDeferredResponse(workerCtx, record)
+			if e.service.runDeferredResponse(workerCtx, record) {
+				// Handed back to the queue because a limit was full. Waking the
+				// dispatcher now would pick the same record up again
+				// immediately and be refused again — a hot loop against bbolt
+				// and the limiter for as long as the Project stays at its
+				// ceiling. The timer retries instead, and backs off.
+				e.blocked.Store(true)
+				return
+			}
 			// A freed slot is only useful if something notices. Waking the
 			// dispatcher here is what turns the worker count into a moving
 			// pipeline rather than a batch that drains and then waits out the
@@ -380,32 +402,35 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 // redaction authority. That identity is deliberate — a deferred request's ledger
 // events must be indistinguishable from the same request made synchronously,
 // and the only way to guarantee that is to run the same code.
-func (s *Service) runDeferredResponse(ctx context.Context, record domain.ProviderResource) {
+// It reports whether the record was handed back to the queue rather than
+// finished, which happens when the Project is at a limit the queue exists to
+// wait out.
+func (s *Service) runDeferredResponse(ctx context.Context, record domain.ProviderResource) bool {
 	principal, target, err := s.resolveDeferredRequest(record)
 	if err != nil {
 		s.abandonDeferred(ctx, record, err)
-		return
+		return false
 	}
 	payload, err := s.readResourceInputObject(record)
 	if err != nil {
 		s.abandonDeferred(ctx, record, gatewayError(
 			"deferred_response_unreadable", "the stored request could not be read", 500, err,
 		))
-		return
+		return false
 	}
 	var request openaiapi.ResponseRequest
 	if err := json.Unmarshal(payload, &request); err != nil {
 		s.abandonDeferred(ctx, record, gatewayError(
 			"deferred_response_unreadable", "the stored request could not be decoded", 500, err,
 		))
-		return
+		return false
 	}
 	canonical, err := openai.DecodeResponseGenerate(request)
 	if err != nil {
 		s.abandonDeferred(ctx, record, gatewayError(
 			"invalid_request_error", "request cannot be represented safely", 400, err,
 		))
-		return
+		return false
 	}
 	// in_progress is written before the upstream is called, not after, and it is
 	// what a restart reads as "may have been billed". Erring in this direction
@@ -418,7 +443,7 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 	started, err := s.saveDeferred(ctx, record)
 	if err != nil {
 		s.logger.Error("a deferred response could not be marked in progress", "resource_id", record.ID, "error", err)
-		return
+		return false
 	}
 	record = started
 
@@ -438,17 +463,38 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 		if errors.As(execErr, &failure) {
 			code, message = failure.Code, failure.Message
 		}
+		// A Project at its TPM or concurrency ceiling is the condition the queue
+		// exists for. Failing here would make the deferred tier answer "no" to
+		// exactly the pressure it was built to absorb, and would throw away a
+		// request that has not been sent anywhere. Nothing reached an upstream —
+		// beginRequestRun refuses before the reservation — so the record goes
+		// back to queued with its stored request intact.
+		if deferredAdmissionRefusal(execErr) && ctx.Err() == nil {
+			if err := s.requeueDeferred(ctx, record); err != nil {
+				s.logger.Error("a deferred response could not be returned to the queue", "resource_id", record.ID, "error", err)
+				return false
+			}
+			return true
+		}
 		if ctx.Err() != nil {
-			// A cancelled attempt has already been settled conservatively by the
-			// attempt machinery. What the caller is owed here is the fact that
-			// it may still have cost them money upstream.
-			status, code = domain.DeferredCancelled, "deferred_response_cancelled"
-			message = "the request was cancelled after it reached the upstream and may have been billed"
+			// Two different cancellations arrive here as one. A caller who
+			// cancelled is owed "cancelled"; a caller whose request was running
+			// when the process began shutting down cancelled nothing, and
+			// telling them they did would be a lie about their own traffic.
+			// Either way the attempt has already been settled conservatively, and
+			// either way the upstream may have been paid.
+			if s.deferred != nil && s.deferred.runCtx != nil && s.deferred.runCtx.Err() != nil {
+				code = "deferred_response_interrupted"
+				message = "the gateway shut down while this request was running; it may have been billed upstream and its answer cannot be retrieved"
+			} else {
+				status, code = domain.DeferredCancelled, "deferred_response_cancelled"
+				message = "the request was cancelled after it reached the upstream and may have been billed"
+			}
 		}
 		if err := s.finishDeferred(ctx, record, status, code, message, nil); err != nil {
 			s.logger.Error("a failed deferred response could not be recorded", "resource_id", record.ID, "error", err)
 		}
-		return
+		return false
 	}
 	// The identifier the caller was given at submission is the identifier the
 	// answer carries. Anything else would hand them a second name for one thing.
@@ -460,18 +506,48 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 			"the answer could not be stored", nil); err != nil {
 			s.logger.Error("an unstorable deferred response could not be recorded", "resource_id", record.ID, "error", err)
 		}
-		return
+		return false
 	}
 	if len(answer) > deferredMaxOutputBytes {
+		// The upstream has already answered and already been paid — the ceiling
+		// cannot be checked before the work happens, only before it is stored.
+		// So the message says so: this is not a request the caller can shrink
+		// and retry for free.
 		if err := s.finishDeferred(ctx, record, domain.DeferredFailed, "deferred_response_too_large",
-			"the answer exceeds the size a deferred response may hold", nil); err != nil {
+			"the answer exceeds the size a deferred response may hold; the request reached the upstream and was billed", nil); err != nil {
 			s.logger.Error("an oversized deferred response could not be recorded", "resource_id", record.ID, "error", err)
 		}
-		return
+		return false
 	}
 	if err := s.finishDeferred(ctx, record, domain.DeferredCompleted, "", "", answer); err != nil {
 		s.logger.Error("a completed deferred response could not be recorded", "resource_id", record.ID, "error", err)
 	}
+	return false
+}
+
+// deferredAdmissionRefusal reports whether execution was refused by a limit that
+// time alone clears. A budget refusal is deliberately not one of these: it does
+// not clear until the accounting day does, which is longer than the record
+// lives, so retrying it until the TTL would only delay the same answer.
+func deferredAdmissionRefusal(err error) bool {
+	var failure *Error
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.Code {
+	case "concurrency_limit_exceeded", "token_rate_limit_exceeded", "rate_limit_exceeded":
+		return true
+	}
+	return false
+}
+
+// requeueDeferred puts a record back where dispatch will find it, keeping the
+// stored request: nothing has been sent, so nothing has been decided.
+func (s *Service) requeueDeferred(ctx context.Context, record domain.ProviderResource) error {
+	record.Status = domain.DeferredQueued
+	record.StartedAt = time.Time{}
+	_, err := s.saveDeferred(ctx, record)
+	return err
 }
 
 // resolveDeferredRequest re-derives the principal and the pinned deployment

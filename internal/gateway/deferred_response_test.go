@@ -24,6 +24,10 @@ type deferredFixture struct {
 }
 
 func newDeferredFixture(t *testing.T) deferredFixture {
+	return newDeferredFixtureWith(t, nil)
+}
+
+func newDeferredFixtureWith(t *testing.T, shape func(*domain.Project)) deferredFixture {
 	t.Helper()
 	store := newInferenceResourcesMemoryStore()
 	objectDir := filepath.Join(t.TempDir(), "objects")
@@ -33,7 +37,13 @@ func newDeferredFixture(t *testing.T) deferredFixture {
 	}
 	t.Cleanup(sealer.Close)
 	f := newFixtureShaped(t, 1_000_000, ledger.Options{}, nil,
-		func(project *domain.Project) { project.DeferredResponses = true; project.MaxOutputTokens = 0 },
+		func(project *domain.Project) {
+			project.DeferredResponses = true
+			project.MaxOutputTokens = 0
+			if shape != nil {
+				shape(project)
+			}
+		},
 		func(options *ServiceOptions) {
 			options.Resources = store
 			options.ResourceObjectDir = objectDir
@@ -377,6 +387,71 @@ func TestQueuedRequestIsReclaimedAfterARestart(t *testing.T) {
 	f.runOnce(t)
 	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
 		t.Fatalf("the reclaimed request did not run: %#v", final)
+	}
+}
+
+// A Project at its concurrency or TPM ceiling is the exact pressure a queue
+// exists to absorb. Failing the request there would answer "no" to the one
+// condition the deferred tier was built for, and would throw away a request
+// that never reached an upstream — beginRequestRun refuses before the
+// reservation, so nothing has been decided and nothing has been paid.
+func TestALimitAtDequeueReturnsTheRequestToTheQueue(t *testing.T) {
+	f := newDeferredFixtureWith(t, func(project *domain.Project) { project.MaxConcurrency = 1 })
+	submitted := f.submit(t, "")
+	calls := f.adapter.calls
+
+	held, err := f.service.limiter.AcquireExecutionSlot(f.project, 1, f.service.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := f.record(t, submitted.ID)
+	if requeued := f.service.runDeferredResponse(context.Background(), record); !requeued {
+		t.Fatal("a refusal at the concurrency ceiling did not report itself as a requeue")
+	}
+	blocked := f.record(t, submitted.ID)
+	if blocked.Status != domain.DeferredQueued {
+		t.Fatalf("the request was not returned to the queue: status=%q code=%q", blocked.Status, blocked.ErrorCode)
+	}
+	if blocked.InputObjectPath == "" {
+		t.Fatal("the stored request was erased for a request that was never sent")
+	}
+	if !blocked.StartedAt.IsZero() {
+		t.Fatal("the record still claims it started")
+	}
+	if f.adapter.calls != calls {
+		t.Fatal("a request refused admission reached an upstream anyway")
+	}
+
+	// Once the slot frees, the same record runs to completion.
+	held.Release()
+	f.runOnce(t)
+	if final := f.record(t, submitted.ID); final.Status != domain.DeferredCompleted {
+		t.Fatalf("the requeued request did not run once the ceiling cleared: %#v", final)
+	}
+}
+
+// A caller who cancelled is owed "cancelled". A caller whose request happened to
+// be running when the process began shutting down cancelled nothing, and both
+// arrive at the worker as one cancelled context.
+func TestShutdownDoesNotTellTheCallerTheyCancelled(t *testing.T) {
+	f := newDeferredFixture(t)
+	submitted := f.submit(t, "")
+	record := f.record(t, submitted.ID)
+
+	shutdown, stop := context.WithCancel(context.Background())
+	f.service.deferred.runCtx = shutdown
+	stop()
+	f.service.runDeferredResponse(shutdown, record)
+
+	after := f.record(t, submitted.ID)
+	if after.Status != domain.DeferredFailed {
+		t.Fatalf("a shutdown reported %q, want failed", after.Status)
+	}
+	if after.ErrorCode != "deferred_response_interrupted" {
+		t.Fatalf("error code %q blames the caller for a shutdown", after.ErrorCode)
+	}
+	if !strings.Contains(after.ErrorMessage, "billed") {
+		t.Fatalf("the failure does not warn that it may have cost money: %q", after.ErrorMessage)
 	}
 }
 
