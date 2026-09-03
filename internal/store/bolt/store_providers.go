@@ -486,6 +486,67 @@ func (s *Store) ListProviderResources(ctx context.Context) ([]domain.ProviderRes
 // and startup, to decide what to do with work the previous process was holding.
 // It scans, like the idempotency lookup beside it, because the population it
 // walks is bounded by the queue ceiling and the TTL rather than by traffic.
+// deferredSelector is the part of a stored resource that decides whether the
+// full record is worth decoding.
+//
+// The bucket holds files, batches, async invocations and deferred responses
+// together, and most of what a long-lived instance accumulates is not a queued
+// deferred response. Decoding every record in full to discard almost all of
+// them made the cost of reading the queue a function of the data directory's
+// age rather than of the queue's depth — and this read happens on every
+// submission and on every dispatch tick.
+//
+// This is a narrowing, not an index. A secondary bucket keyed by project and
+// submission time would make the cost proportional to the queue itself; that is
+// a schema change and is recorded as follow-up work rather than folded in here.
+type deferredSelector struct {
+	Kind      domain.ProviderResourceKind `json:"kind"`
+	ProjectID string                      `json:"project_id"`
+	Status    string                      `json:"status"`
+}
+
+// selectsDeferredPending reports whether a stored record is a queued or running
+// deferred response for this project, reading only the three members that
+// decide it.
+func selectsDeferredPending(raw []byte, projectID string) (bool, error) {
+	var selector deferredSelector
+	if err := json.Unmarshal(raw, &selector); err != nil {
+		return false, err
+	}
+	if selector.Kind != domain.ResourceDeferredResponse {
+		return false, nil
+	}
+	if projectID != "" && selector.ProjectID != projectID {
+		return false, nil
+	}
+	return !domain.DeferredTerminal(selector.Status), nil
+}
+
+// CountPendingDeferredResponses answers how deep one project's queue is without
+// decoding the records in it. Admission needs the number and nothing else.
+func (s *Store) CountPendingDeferredResponses(ctx context.Context, projectID string) (int64, error) {
+	var depth int64
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			pending, err := selectsDeferredPending(raw, projectID)
+			if err != nil {
+				return err
+			}
+			if pending {
+				depth++
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return 0, err
+	}
+	return depth, nil
+}
+
 func (s *Store) PendingDeferredResponses(ctx context.Context, projectID string) ([]domain.ProviderResource, error) {
 	var pending []domain.ProviderResource
 	err := s.db.View(func(tx *bbolt.Tx) error {
@@ -493,18 +554,16 @@ func (s *Store) PendingDeferredResponses(ctx context.Context, projectID string) 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			wanted, err := selectsDeferredPending(raw, projectID)
+			if err != nil {
+				return err
+			}
+			if !wanted {
+				return nil
+			}
 			var resource domain.ProviderResource
 			if err := json.Unmarshal(raw, &resource); err != nil {
 				return err
-			}
-			if resource.Kind != domain.ResourceDeferredResponse {
-				return nil
-			}
-			if projectID != "" && resource.ProjectID != projectID {
-				return nil
-			}
-			if domain.DeferredTerminal(resource.Status) {
-				return nil
 			}
 			pending = append(pending, resource)
 			return nil

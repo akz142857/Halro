@@ -478,7 +478,9 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 	if depth <= 0 {
 		depth = domain.DefaultMaxDeferredQueue
 	}
-	pending, err := s.resources.PendingDeferredResponses(ctx, project.ID)
+	// Admission needs the depth, not the queue: reading the records to count
+	// them made every submission pay for decoding every stored resource.
+	depthNow, err := s.resources.CountPendingDeferredResponses(ctx, project.ID)
 	if err != nil {
 		return gatewayError("resource_store_unavailable", "the deferred queue could not be read", 503, err)
 	}
@@ -487,7 +489,7 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 	// bound is the ceiling plus the number of simultaneous submitters — which
 	// RPM already bounds. A lock here would buy exactness on a number that
 	// exists to stop unbounded growth, not to be a quota.
-	if int64(len(pending)) >= depth {
+	if depthNow >= depth {
 		// A bounded queue refuses in the caller's face at the moment the
 		// pressure exists. An unbounded one grows silently while every entry is
 		// a promise of an answer.

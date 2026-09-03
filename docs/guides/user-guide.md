@@ -463,6 +463,49 @@ One client request can produce several provider attempts — a retry, or a
 fallback. Requests and attempts differing is normal; cost, tokens, and error
 rates are recorded per attempt.
 
+### 7.1 Failed requests
+
+The Usage page's failure count links to a list of the requests that ended
+badly — one row per **request**, not per attempt, so the number in the card and
+the length of the list cannot disagree. A request that failed one target and
+succeeded on the next is not a failed request, even though it left a failed
+attempt behind.
+
+Each row names the failure class in your language and keeps the upstream status
+beside it, with what to check next behind a disclosure. A row carries no
+provider context in two cases, and they mean different things:
+
+- **the request never reached an upstream** — it was refused by budget, the
+  circuit breaker, concurrency, Token Guard, capability filtering or redaction,
+  and the row says which;
+- **the upstream answered and the request failed afterwards** — the answer could
+  not be rendered or outbound redaction refused it. There is no upstream failure
+  to point at, so none is shown.
+
+A row may also say the record predates the fields it would otherwise show, which
+is not the same as an upstream that gave none.
+
+If `gateway.failure_capture` is switched on, a failed request whose payload was
+captured offers the request and the upstream reply. Opening it writes an audit
+record: it is the only place in the console that shows what a caller wrote.
+
+### 7.2 The console's window
+
+Settings → Instance sets how far back the request and failure lists reach. It
+starts from `usage.console_window_days` and is a runtime setting after that;
+Parquet archives keep their own, longer retention, so shortening this changes
+what the console can show and not what has been kept. Shortening it asks for
+confirmation, because the records outside the new window are dropped from memory
+at the next maintenance pass.
+
+### 7.3 Deferred responses
+
+Where a Project allows it, a caller can submit `POST /v1/responses` with
+`background: true`, receive an identifier straight away, and collect the answer
+later. The switch is on the Project page. Answers are held for at most 24 hours,
+sealed on disk, and for 15 minutes after the first collection — see the Operator
+Guide for what that means for this instance's data directory.
+
 On an instance that has never served a request, the Dashboard leads with the
 six-step configuration chain instead of empty charts, and ends at the developer
 workbench, where a real request proves the chain end to end.

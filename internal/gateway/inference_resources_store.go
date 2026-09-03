@@ -29,6 +29,9 @@ type InferenceResourcesResourceStore interface {
 	DeleteProviderResource(context.Context, string, string) error
 	ProviderResourceByIdempotency(context.Context, string, domain.ProviderResourceKind, [32]byte) (domain.ProviderResource, error)
 	PendingDeferredResponses(context.Context, string) ([]domain.ProviderResource, error)
+	// CountPendingDeferredResponses answers admission's only question without
+	// decoding the queue it is counting.
+	CountPendingDeferredResponses(context.Context, string) (int64, error)
 }
 
 // Creation states for a resource whose upstream twin is created once and must

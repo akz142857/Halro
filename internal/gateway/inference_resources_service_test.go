@@ -111,6 +111,16 @@ func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.
 	return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
 }
 
+// Counting through the listing keeps the fake honest about the two answers
+// agreeing, which is the property the production store splits apart for cost.
+func (s *inferenceResourcesMemoryStore) CountPendingDeferredResponses(ctx context.Context, projectID string) (int64, error) {
+	pending, err := s.PendingDeferredResponses(ctx, projectID)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(pending)), nil
+}
+
 func (s *inferenceResourcesMemoryStore) PendingDeferredResponses(_ context.Context, projectID string) ([]domain.ProviderResource, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

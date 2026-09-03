@@ -63,3 +63,27 @@ func TestEveryChatProfileAppearsInAnEndpointManifest(t *testing.T) {
 		t.Errorf("%s is in the profile table and reachable through no endpoint manifest", profile.ID)
 	}
 }
+
+// A mapping stamps every semantic operation with the northbound profile that
+// produced it, at a revision. Those revisions were written at each mapping as
+// literals, and one of them stayed at 1 through a bump to 2 — silently, because
+// no rule reads the revision yet. A rule that did would have branched on a
+// number that was true of a different version of the endpoint.
+func TestEveryMappingStampsTheRevisionTheRegistryCarries(t *testing.T) {
+	for _, profile := range AllNorthboundProfiles() {
+		source := SourceOf(profile.ID)
+		if source.ProfileID != string(profile.ID) {
+			t.Errorf("%s: source names %q", profile.ID, source.ProfileID)
+		}
+		if source.ProfileRevision != profile.Revision {
+			t.Errorf("%s: source carries revision %d, registry says %d",
+				profile.ID, source.ProfileRevision, profile.Revision)
+		}
+	}
+	// An identifier the registry does not know still produces a usable source
+	// rather than a zero one, because semantic.Source requires a non-zero
+	// revision and a mapping that reached this line has already been built.
+	if unknown := SourceOf("not.a.profile.v1"); unknown.ProfileRevision == 0 {
+		t.Fatal("an unknown profile produced a source with no revision")
+	}
+}
