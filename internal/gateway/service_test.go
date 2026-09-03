@@ -297,7 +297,7 @@ type adapterOnly struct{ provider.Adapter }
 
 func (a *fakeAdapter) Close() {}
 
-func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+func (a *fakeAdapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	a.mu.Lock()
 	a.calls++
 	a.lastChatRequest = call.Request
@@ -306,7 +306,15 @@ func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi
 		a.started <- struct{}{}
 	}
 	if a.release != nil {
-		<-a.release
+		// A real adapter abandons the call when its context ends. Blocking on
+		// release alone would make this fake the one thing in the process that
+		// cannot be timed out, which is the opposite of what a test about
+		// deadlines needs from it.
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return openaiapi.ChatCompletionResponse{}, ctx.Err()
+		}
 	}
 	if call.ProviderModel != "provider-model" {
 		return openaiapi.ChatCompletionResponse{}, errors.New("provider model was not mapped")

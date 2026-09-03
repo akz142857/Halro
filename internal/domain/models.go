@@ -123,8 +123,10 @@ type ProviderResource struct {
 	// the instant it is served, because an HTTP 200 leaving Halro is not proof
 	// the caller received it.
 	RetrievedAt time.Time `json:"retrieved_at,omitempty"`
-	// AttemptID ties the record to the ledger attempt that paid for it, so an
-	// audit or a usage question can be answered in both directions.
+	// AttemptID is the request identifier the ledger recorded for this record's
+	// execution, so an audit or a usage question can be answered in both
+	// directions. It is written on failure as well as success: a failed deferred
+	// request is exactly the one an operator has to be able to look up.
 	AttemptID string `json:"attempt_id,omitempty"`
 	// ErrorCode and ErrorMessage explain a terminal failure. Neither ever
 	// carries material the caller wrote or the model produced.

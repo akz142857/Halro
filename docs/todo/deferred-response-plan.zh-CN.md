@@ -605,6 +605,35 @@ context。修法是把引擎的 run context 存下来，两者据此分辨：关
 
 两条都按 CLAUDE.md 的反向验证要求确认过：把修复分别短路掉，新增的测试确实会失败。
 
+### 13. review 的第二轮：又三条
+
+**（c）备份漏掉了延迟请求的输入对象。** `backupProviderObjectFiles` 只遍历 `ObjectPath`。一条
+延迟记录同时持有 `ObjectPath` 与 `InputObjectPath`，于是在有排队请求时做的备份，恢复之后每一条
+排队记录都指向一个不在归档里的请求对象，只能失败。已改为两个都收。反向验证时先用错了
+`-run` 前缀导致「注入后仍然通过」——按 CLAUDE.md 的要求追查而不是接受，换成正确的测试名之后
+确实失败。
+
+**（d）延迟执行没有任何时间上限。** 同步请求受 `route_total_timeout` 约束；worker 用的是引擎的
+context，没有 deadline。SafeTransport 只约束建连与响应头，一个逐字节返回的响应体不受约束，会
+一直占住 4 个 worker 之一。已加 `ServiceOptions.DeferredExecutionTimeout`，由
+`cfg.Gateway.RouteTotalTimeout` 注入，超时终态为 `deferred_response_timeout` 并说明可能已计费。
+测试的反向验证会挂到 Go 自己的 test timeout ——正是这条缺陷的形状。顺带把 `fakeAdapter.Chat`
+改成响应 context，它此前是进程里唯一无法被超时打断的东西。
+
+**（e）无 idempotency key 的记录被盖上 `sha256("")`。** 这是个索引字段，给每条无 key 的记录写
+同一个值，等于留了一个「这些是同一次提交」的错误答案在一次查询之外。改为留零值。
+
+另外一条不改、只记录：队列深度检查在并发下是近似的——两次并发提交可能都读到低于上限的深度而
+都被放行，真实上界是「上限 + 同时提交数」，而后者已被 RPM 约束。为一个用来阻止无界增长、而不是
+用来做配额的数字加锁不划算。代码里写了注释，免得被误当成精确值。
+
+### 14. review 的第三轮：`AttemptID` 从未被写入
+
+第七节的字段表把 `AttemptID` 写成「关联 ledger，供审计与用量页反查」，`domain` 里的注释也这么
+写——但实现从来没有给它赋过值。一个注释承诺了、代码不做的字段，比没有这个字段更坏。
+`executeGenerate` 现在把 ledger 的 request id 回传出来，成功与失败都记（失败的那条恰恰是运维
+最需要反查的）。
+
 ### 未完成项汇总
 
 1. SDK 对拍（D1 的待核验项）——三条新端点因此是 `experimental`。
@@ -612,3 +641,6 @@ context。修法是把引擎的 run context 存下来，两者据此分辨：关
 3. `Retry-After` 策略未用真实数据校准。
 4. 用量页不区分排队与执行时长。
 5. 第十二节的第二阶段（完成通知）未开始，也不在本次范围内。
+6. **延迟队列没有任何可观测性。** 队列深度、在跑数量、按原因分类的失败数都没有进 Prometheus，
+   运维看不到「某个项目的队列一直是满的」。`Service` 已有 `RejectionMetrics` 与
+   `ActiveProviderRequests` 的形状可以照抄，但这是新功能而不是缺陷修复，留在这里。

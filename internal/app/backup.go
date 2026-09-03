@@ -700,29 +700,34 @@ func backupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, r
 	seen := make(map[string]struct{}, len(resources))
 	files := make([]backup.SourceFile, 0, len(resources))
 	for _, resource := range resources {
-		if resource.ObjectPath == "" {
-			continue
+		// Both of them. A deferred response holds the request it has not made
+		// yet as well as the answer once it has one, and a backup that took only
+		// the answer would restore an install full of queued records naming a
+		// request that is not in the archive — every one of which can only fail.
+		for _, name := range []string{resource.ObjectPath, resource.InputObjectPath} {
+			if name == "" {
+				continue
+			}
+			if filepath.IsAbs(name) || filepath.Base(name) != name || filepath.Clean(name) != name {
+				return nil, fmt.Errorf("provider resource %q has an unsafe object path", resource.ID)
+			}
+			if _, exists := seen[name]; exists {
+				continue
+			}
+			localPath := filepath.Join(root, name)
+			info, err := os.Lstat(localPath)
+			if err != nil {
+				return nil, fmt.Errorf("inspect provider resource object %q: %w", resource.ID, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("provider resource object %q is not a regular file", resource.ID)
+			}
+			seen[name] = struct{}{}
+			files = append(files, backup.SourceFile{
+				ArchivePath: "data/provider-objects/" + filepath.ToSlash(name),
+				LocalPath:   localPath,
+			})
 		}
-		if filepath.IsAbs(resource.ObjectPath) || filepath.Base(resource.ObjectPath) != resource.ObjectPath ||
-			filepath.Clean(resource.ObjectPath) != resource.ObjectPath {
-			return nil, fmt.Errorf("provider resource %q has an unsafe object path", resource.ID)
-		}
-		if _, exists := seen[resource.ObjectPath]; exists {
-			continue
-		}
-		localPath := filepath.Join(root, resource.ObjectPath)
-		info, err := os.Lstat(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("inspect provider resource object %q: %w", resource.ID, err)
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("provider resource object %q is not a regular file", resource.ID)
-		}
-		seen[resource.ObjectPath] = struct{}{}
-		files = append(files, backup.SourceFile{
-			ArchivePath: "data/provider-objects/" + filepath.ToSlash(resource.ObjectPath),
-			LocalPath:   localPath,
-		})
 	}
 	return files, nil
 }

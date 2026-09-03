@@ -620,6 +620,7 @@
       "a background submission does not survive a gateway restart: a deferred response has no upstream handle, so a request in flight when the process dies is failed and settled conservatively",
       "a deferred answer larger than 1 MiB is failed rather than stored, and the request was still billed: the ceiling is on what may be kept, and nothing can measure an answer before the upstream produces it",
       "a background submission whose Project is at its TPM or concurrency ceiling waits in the queue rather than being refused; only the queue depth and the 24 hour TTL bound that wait",
+      "one deferred attempt is bounded by the same route_total_timeout a synchronous attempt runs under; exceeding it fails the request, which was still billed",
       "strict function tools, reasoning output, and streaming tools are rejected",
       "tools[].type=web_search is the one hosted tool accepted; it is routed against the provider_executed_tools capability and served only by the OpenAI Responses profile, and code_interpreter and file_search stay rejected because both are provider-side state",
       "request instructions, tool definitions, tool choice, and structured schema bodies are returned as conservative null, empty, or default response metadata because the original Responses object has not passed through outbound redaction",

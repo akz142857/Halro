@@ -95,6 +95,7 @@ type Service struct {
 	resourceObjectDir             string
 	resourceObjectSealer          ResourceObjectSealer
 	deferred                      *deferredEngine
+	deferredExecutionTimeout      time.Duration
 	contentScanner                contentscan.Scanner
 	pricing                       PriceSelector
 	pricingClockRollbackTolerance time.Duration
@@ -145,7 +146,12 @@ type ServiceOptions struct {
 	// DeferredResponseWorkers bounds how many deferred submissions this
 	// instance executes at once, above and beyond each Project's own
 	// concurrency limit. Zero takes the default.
-	DeferredResponseWorkers       int
+	DeferredResponseWorkers int
+	// DeferredExecutionTimeout bounds one deferred attempt the way
+	// route_total_timeout bounds a synchronous one. SafeTransport caps the
+	// connect and the response header; a body arriving one byte at a time is
+	// capped by nothing. Zero takes the default.
+	DeferredExecutionTimeout      time.Duration
 	ContentScanner                contentscan.Scanner
 	Pricing                       PriceSelector
 	PricingClockRollbackTolerance time.Duration
@@ -941,6 +947,10 @@ func NewServiceWithOptions(
 		pricingClockForwardTolerance:  options.PricingClockForwardTolerance,
 		pricingUnknownPolicy:          options.PricingUnknownPolicy,
 	}
+	if options.DeferredExecutionTimeout <= 0 {
+		options.DeferredExecutionTimeout = defaultDeferredExecutionTimeout
+	}
+	service.deferredExecutionTimeout = options.DeferredExecutionTimeout
 	if service.resources != nil && service.resourceObjectDir != "" {
 		service.deferred = newDeferredEngine(service, options.DeferredResponseWorkers)
 	}
@@ -1075,7 +1085,7 @@ func (s *Service) generate(
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
-	return s.executeGenerate(ctx, principal, targets, publicModel, canonical, render, admitFullRequest)
+	return s.executeGenerate(ctx, principal, targets, publicModel, canonical, render, admitFullRequest, nil)
 }
 
 // executeGenerate runs a resolved request: capability filtering, redaction,
@@ -1097,6 +1107,7 @@ func (s *Service) executeGenerate(
 	canonical semantic.GenerateRequest,
 	render func(semantic.GenerateResult) error,
 	admission admissionMode,
+	requestIDOut *string,
 ) (semantic.GenerateResult, error) {
 	candidates := targets
 	var err error
@@ -1139,6 +1150,12 @@ func (s *Service) executeGenerate(
 	}
 	defer run.close()
 	requestID := run.requestID
+	// Handed back before the first attempt, not after the last: a caller that
+	// records which request paid for its work needs the identifier even when
+	// the work then fails.
+	if requestIDOut != nil {
+		*requestIDOut = requestID
+	}
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {

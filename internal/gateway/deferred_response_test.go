@@ -594,3 +594,82 @@ func TestDeferredSubmissionIsRefusedWhenTheProjectHasNotEnabledIt(t *testing.T) 
 		t.Fatalf("a project that never enabled deferred responses got %v", err)
 	}
 }
+
+// Two submissions with no idempotency key are two submissions. Hashing the
+// empty string would give them one shared key hash, and that field is a lookup
+// index: one call away from answering "these are the same request".
+func TestKeylessSubmissionsDoNotShareAnIdempotencyHash(t *testing.T) {
+	f := newDeferredFixture(t)
+	first := f.submit(t, "")
+	second := f.submit(t, "")
+	if first.ID == second.ID {
+		t.Fatal("two keyless submissions collapsed into one record")
+	}
+	var zero [32]byte
+	for _, id := range []string{first.ID, second.ID} {
+		if hash := f.record(t, id).IdempotencyKeyHash; hash != zero {
+			t.Fatalf("%s carries an idempotency hash for a key that was never sent: %x", id, hash[:4])
+		}
+	}
+	// A key that was sent still deduplicates.
+	keyed := f.submit(t, "same-key")
+	again := f.submit(t, "same-key")
+	if keyed.ID != again.ID {
+		t.Fatalf("a repeated idempotency key created a second record: %s then %s", keyed.ID, again.ID)
+	}
+}
+
+// A synchronous attempt is bounded by route_total_timeout. SafeTransport caps
+// the connect and the response header, so a body that arrives one byte at a
+// time is bounded by nothing — and on the deferred path it would hold one of a
+// small number of workers while it did.
+func TestADeferredAttemptIsBoundedLikeASynchronousOne(t *testing.T) {
+	f := newDeferredFixture(t)
+	f.service.deferredExecutionTimeout = 20 * time.Millisecond
+	released := make(chan struct{})
+	t.Cleanup(func() { close(released) })
+	f.adapter.release = released
+	submitted := f.submit(t, "")
+	f.runOnce(t)
+
+	record := f.record(t, submitted.ID)
+	if record.Status != domain.DeferredFailed {
+		t.Fatalf("an attempt past its deadline reported %q", record.Status)
+	}
+	if record.ErrorCode != "deferred_response_timeout" {
+		t.Fatalf("error code %q does not name the deadline", record.ErrorCode)
+	}
+	if !strings.Contains(record.ErrorMessage, "billed") {
+		t.Fatalf("the failure does not warn that it may have cost money: %q", record.ErrorMessage)
+	}
+}
+
+// The record claims to name the ledger request that paid for it. It has to
+// actually do so, on failure as much as on success — a failed deferred request
+// is the one an operator most needs to look up.
+func TestTheRecordNamesTheLedgerRequestThatPaidForIt(t *testing.T) {
+	f := newDeferredFixture(t)
+	submitted := f.submit(t, "")
+	f.runOnce(t)
+	completed := f.record(t, submitted.ID)
+	if completed.Status != domain.DeferredCompleted {
+		t.Fatalf("record=%#v", completed)
+	}
+	if !strings.HasPrefix(completed.AttemptID, "req_") {
+		t.Fatalf("a completed record does not name its ledger request: %q", completed.AttemptID)
+	}
+
+	f.adapter.err = errors.New("upstream refused")
+	failedSubmit := f.submit(t, "")
+	f.runOnce(t)
+	failed := f.record(t, failedSubmit.ID)
+	if failed.Status != domain.DeferredFailed {
+		t.Fatalf("record=%#v", failed)
+	}
+	if !strings.HasPrefix(failed.AttemptID, "req_") {
+		t.Fatalf("a failed record does not name its ledger request: %q", failed.AttemptID)
+	}
+	if failed.AttemptID == completed.AttemptID {
+		t.Fatal("two requests share one ledger identifier")
+	}
+}

@@ -43,6 +43,12 @@ const (
 	deferredMinRetryAfter  = time.Second
 	deferredMaxRetryAfter  = 10 * time.Second
 	deferredDefaultWorkers = 4
+
+	// defaultDeferredExecutionTimeout matches the default route_total_timeout a
+	// synchronous request runs under. An operator who raises one should raise
+	// the other; leaving this unbounded would make "the deferred path is the
+	// synchronous path" false in the one way that matters under load.
+	defaultDeferredExecutionTimeout = 2 * time.Minute
 )
 
 // deferredEngine dispatches queued work. It holds no queue of its own: running
@@ -307,9 +313,13 @@ func (s *Service) SubmitDeferredResponse(
 	if err != nil {
 		return openaiapi.Response{}, err
 	}
-	keyHash := sha256.Sum256([]byte(idempotencyKey))
+	// Left zero when the caller sent no key. Hashing the empty string would
+	// stamp every keyless record with the same value, and that value is an index
+	// — one lookup away from answering "these are all the same submission".
+	var keyHash [32]byte
 	fingerprint := sha256.Sum256(payload)
 	if idempotencyKey != "" {
+		keyHash = sha256.Sum256([]byte(idempotencyKey))
 		existing, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceDeferredResponse, keyHash, fingerprint)
 		if err != nil {
 			return openaiapi.Response{}, err
@@ -383,6 +393,11 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 	if err != nil {
 		return gatewayError("resource_store_unavailable", "the deferred queue could not be read", 503, err)
 	}
+	// Approximate under concurrency, deliberately. Two submissions racing can
+	// both read a depth one below the ceiling and both be admitted, so the real
+	// bound is the ceiling plus the number of simultaneous submitters — which
+	// RPM already bounds. A lock here would buy exactness on a number that
+	// exists to stop unbounded growth, not to be a quota.
 	if int64(len(pending)) >= depth {
 		// A bounded queue refuses in the caller's face at the moment the
 		// pressure exists. An unbounded one grows silently while every entry is
@@ -447,8 +462,14 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 	}
 	record = started
 
+	// Bounded like a synchronous attempt. SafeTransport caps the connect and the
+	// response header; a body arriving one byte at a time is capped by nothing,
+	// and it would hold one of a small number of workers while it did.
+	attemptCtx, releaseAttempt := context.WithTimeout(ctx, s.deferredExecutionTimeout)
+	defer releaseAttempt()
 	var rendered openaiapi.Response
-	_, execErr := s.executeGenerate(ctx, principal, []provider.Target{target}, record.PublicModel, canonical,
+	requestID := ""
+	_, execErr := s.executeGenerate(attemptCtx, principal, []provider.Target{target}, record.PublicModel, canonical,
 		func(generated semantic.GenerateResult) error {
 			response, renderErr := openai.RenderResponseResult(generated, request)
 			if renderErr != nil {
@@ -456,7 +477,11 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 			}
 			rendered = response
 			return nil
-		}, admitExecutionOnly)
+		}, admitExecutionOnly, &requestID)
+	// Recorded on both outcomes. A failed deferred request is exactly the one an
+	// operator has to be able to look up in the ledger, and until now this field
+	// promised that link in a comment and never wrote it.
+	record.AttemptID = requestID
 	if execErr != nil {
 		status, code, message := domain.DeferredFailed, "provider_error", "the request could not be completed"
 		var failure *Error
@@ -476,7 +501,13 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 			}
 			return true
 		}
-		if ctx.Err() != nil {
+		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			// The attempt outlived its own deadline, which is neither a
+			// cancellation nor a shutdown. It reached the upstream, so it may
+			// have been paid for, and the attempt has already been settled.
+			code = "deferred_response_timeout"
+			message = "the request exceeded the time one attempt is allowed and may have been billed"
+		} else if ctx.Err() != nil {
 			// Two different cancellations arrive here as one. A caller who
 			// cancelled is owed "cancelled"; a caller whose request was running
 			// when the process began shutting down cancelled nothing, and

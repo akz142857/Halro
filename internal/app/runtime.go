@@ -470,6 +470,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			Resources:                     metadata,
 			ResourceObjectDir:             filepath.Join(cfg.Storage.DataDir, "provider-objects"),
 			ResourceObjectSealer:          secretVault,
+			DeferredExecutionTimeout:      cfg.Gateway.RouteTotalTimeout.Value(),
 			Pricing:                       metadata,
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
 			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),
