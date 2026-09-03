@@ -4,7 +4,7 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
-## [0.6.0] - 2026-09-03
+## [0.6.0] - 2026-09-04
 
 ### Added
 
