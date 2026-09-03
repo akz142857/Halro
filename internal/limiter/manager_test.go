@@ -170,3 +170,67 @@ func TestTPMReconcileRefundsUnusedCapacityAndChargesOverageDebt(t *testing.T) {
 		lease.Release()
 	})
 }
+
+// The deferred tier charges RPM when a submission arrives and TPM plus
+// concurrency when a worker is about to call the upstream. These assert the two
+// halves are actually separate: a submission must not hold a concurrency slot
+// (or the queue would be capped at MaxConcurrency), and it must consume RPM (or
+// deferred submission would be a way around the per-minute ceiling).
+func TestRequestSlotChargesRPMWithoutHoldingConcurrency(t *testing.T) {
+	manager := New()
+	project := domain.Project{ID: "p", RPM: 2, TPM: 1000, MaxConcurrency: 1}
+	now := time.Now()
+	for range 2 {
+		if err := manager.AcquireRequestSlot(project, now); err != nil {
+			t.Fatalf("submission refused while RPM remained: %v", err)
+		}
+	}
+	err := manager.AcquireRequestSlot(project, now)
+	if !errors.Is(err, ErrRPM) {
+		t.Fatalf("third submission error = %v, want ErrRPM", err)
+	}
+	// Two submissions are queued against MaxConcurrency 1. If submission held a
+	// concurrency slot, this execution admission would be refused.
+	lease, err := manager.AcquireExecutionSlot(project, 10, now)
+	if err != nil {
+		t.Fatalf("execution refused after submissions queued: %v", err)
+	}
+	defer lease.Release()
+	if _, err := manager.AcquireExecutionSlot(project, 10, now); !errors.Is(err, ErrConcurrency) {
+		t.Fatalf("second execution error = %v, want ErrConcurrency", err)
+	}
+}
+
+func TestExecutionSlotDoesNotChargeRPM(t *testing.T) {
+	manager := New()
+	project := domain.Project{ID: "p", RPM: 1, TPM: 1000, MaxConcurrency: 4}
+	now := time.Now()
+	if err := manager.AcquireRequestSlot(project, now); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := manager.AcquireExecutionSlot(project, 10, now)
+	if err != nil {
+		t.Fatalf("execution admission consumed the RPM slot its submission already paid: %v", err)
+	}
+	lease.Release()
+	if err := manager.AcquireRequestSlot(project, now); !errors.Is(err, ErrRPM) {
+		t.Fatalf("RPM was refunded or never charged: %v", err)
+	}
+}
+
+// Acquire is still one decision. A composed pair would take the lock twice and
+// leave a window where the RPM token is spent and the concurrency slot is not
+// yet held; worse, a refused TPM check would have already consumed RPM.
+func TestAcquireDoesNotConsumeRPMWhenTPMRefuses(t *testing.T) {
+	manager := New()
+	project := domain.Project{ID: "p", RPM: 1, TPM: 10, MaxConcurrency: 4}
+	now := time.Now()
+	if _, err := manager.Acquire(project, 100, now); !errors.Is(err, ErrTPM) {
+		t.Fatalf("error = %v, want ErrTPM", err)
+	}
+	lease, err := manager.Acquire(project, 1, now)
+	if err != nil {
+		t.Fatalf("the refused admission consumed the RPM token anyway: %v", err)
+	}
+	lease.Release()
+}

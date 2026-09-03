@@ -59,6 +59,11 @@ type ProviderResource struct {
 	// pointer to somewhere the truth lives.
 	ObjectFilename string `json:"object_filename,omitempty"`
 	ObjectPurpose  string `json:"object_purpose,omitempty"`
+	// ObjectBytes is the size of the object before it was sealed. The sealed
+	// file on disk is longer than what the caller uploaded, so stat'ing it would
+	// answer a question nobody asked; the size a file object reports has to be
+	// the size of the bytes, and only the writer still knows it.
+	ObjectBytes int64 `json:"object_bytes,omitempty"`
 	// InputFileID, OutputFileID and ErrorFileID are the Halro identifiers of the
 	// files a batch refers to, recorded so the batch can name them without
 	// echoing the upstream's own identifiers back to the caller. A batch that

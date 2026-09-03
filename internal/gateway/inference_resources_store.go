@@ -16,6 +16,7 @@ import (
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/contentscan"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/idempotency"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -115,10 +116,28 @@ func (s *Service) updateResourceStatus(ctx context.Context, resource domain.Prov
 	return nil
 }
 
-func (s *Service) writeResourceObject(idValue string, data []byte) (string, error) {
-	if s.resourceObjectDir == "" {
+// ResourceObjectSealer seals and opens the bytes Halro keeps for a provider
+// resource. The gateway names the interface rather than importing the vault so
+// that the object directory stays the gateway's business and the key material
+// stays the vault's.
+type ResourceObjectSealer interface {
+	EncryptResourceObject(resourceID, projectID string, plaintext []byte) ([]byte, error)
+	DecryptResourceObject(resourceID, projectID string, envelope []byte) ([]byte, error)
+}
+
+// writeResourceObject seals the bytes and writes the envelope. Both callers
+// hand it the record that will carry the resulting path, which is what the seal
+// is bound to: an object is readable only through the record that names it, and
+// only inside the install whose master key derived the scope.
+func (s *Service) writeResourceObject(resourceID, projectID string, data []byte) (string, error) {
+	if s.resourceObjectDir == "" || s.resourceObjectSealer == nil {
 		return "", errors.New("resource object directory is unavailable")
 	}
+	sealed, err := s.resourceObjectSealer.EncryptResourceObject(resourceID, projectID, data)
+	if err != nil {
+		return "", err
+	}
+	data = sealed
 	temporary, err := os.CreateTemp(s.resourceObjectDir, ".resource-*")
 	if err != nil {
 		return "", err
@@ -140,11 +159,33 @@ func (s *Service) writeResourceObject(idValue string, data []byte) (string, erro
 	if err := temporary.Close(); err != nil {
 		return "", err
 	}
-	name := idValue + ".object"
+	name := resourceID + ".object"
 	if err := os.Rename(temporaryName, filepath.Join(s.resourceObjectDir, name)); err != nil {
 		return "", err
 	}
+	if err := durable.SyncDirectory(s.resourceObjectDir); err != nil {
+		return "", err
+	}
 	return name, nil
+}
+
+// readResourceObject opens what writeResourceObject sealed. A record whose
+// object predates sealing reads as a distinct error rather than as corruption,
+// because the two call for different answers: the first is reclaimed at startup,
+// the second is a key or integrity problem nobody should paper over.
+func (s *Service) readResourceObject(resource domain.ProviderResource) ([]byte, error) {
+	path, err := s.resourceObjectPath(resource.ObjectPath)
+	if err != nil {
+		return nil, err
+	}
+	sealed, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if s.resourceObjectSealer == nil {
+		return nil, errors.New("resource object sealer is unavailable")
+	}
+	return s.resourceObjectSealer.DecryptResourceObject(resource.ID, resource.ProjectID, sealed)
 }
 
 func (s *Service) resourceObjectPath(name string) (string, error) {
@@ -313,7 +354,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, err
 	}
 	record.UpstreamID = upstream.ID
-	objectPath, objectErr := s.writeResourceObject(record.ID, call.Data)
+	objectPath, objectErr := s.writeResourceObject(record.ID, record.ProjectID, call.Data)
 	if objectErr != nil {
 		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
@@ -321,6 +362,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, gatewayError("resource_store_unavailable", "file content could not be stored", 503, objectErr)
 	}
 	record.ObjectPath = objectPath
+	record.ObjectBytes = int64(len(call.Data))
 	record.ObjectContentType = call.ContentType
 	record.ObjectFilename = call.Filename
 	record.ObjectPurpose = call.Purpose
@@ -376,14 +418,8 @@ func (s *Service) fileOwner(ctx context.Context, key, idValue string) (auth.Auth
 // poll without limit and without leaving a trace, which is a strange privilege
 // for the operation that happens to need no provider call.
 func (s *Service) localFileObject(ctx context.Context, principal auth.AuthResult, resource domain.ProviderResource) (provider.FileObject, error) {
-	size := int64(0)
-	if path, err := s.resourceObjectPath(resource.ObjectPath); err == nil {
-		if info, statErr := os.Stat(path); statErr == nil {
-			size = info.Size()
-		}
-	}
 	result := provider.FileObject{
-		ID: resource.ID, Object: "file", Bytes: size,
+		ID: resource.ID, Object: "file", Bytes: resource.ObjectBytes,
 		CreatedAt: resource.CreatedAt.Unix(), Filename: resource.ObjectFilename,
 		Purpose: resource.ObjectPurpose, Status: resource.Status,
 	}
@@ -471,17 +507,13 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	if resource.ObjectPath == "" {
 		return s.downloadUpstreamFile(ctx, principal, resource)
 	}
-	path, err := s.resourceObjectPath(resource.ObjectPath)
-	if err != nil {
-		return provider.FileContent{}, gatewayError("resource_store_unavailable", "file content is unavailable", 503, err)
-	}
 	target, _ := s.ownedTarget(resource)
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var data []byte
 	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
 		var readErr error
-		data, readErr = os.ReadFile(path)
+		data, readErr = s.readResourceObject(resource)
 		return readErr
 	})
 	if err != nil {
@@ -700,11 +732,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	// no idea where Halro puts its bytes, and should not learn.
 	if file.UpstreamID == "" {
 		call.ProviderModel = batchTarget.ProviderModel
-		path, pathErr := s.resourceObjectPath(file.ObjectPath)
-		if pathErr != nil {
-			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input is unavailable", 503, pathErr)
-		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := s.readResourceObject(file)
 		if readErr != nil {
 			return provider.BatchObject{}, gatewayError("resource_store_unavailable", "batch input could not be read", 503, readErr)
 		}
@@ -899,7 +927,7 @@ func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderRe
 	if err != nil {
 		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
 	}
-	objectPath, err := s.writeResourceObject(externalID, data)
+	objectPath, err := s.writeResourceObject(externalID, batch.ProjectID, data)
 	if err != nil {
 		return "", gatewayError("resource_store_unavailable", "batch results could not be stored", 503, err)
 	}
@@ -908,7 +936,7 @@ func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderRe
 		ID: externalID, Kind: domain.ResourceFile, ProjectID: batch.ProjectID,
 		ProviderID: batch.ProviderID, DeploymentID: batch.DeploymentID, PublicModel: batch.PublicModel,
 		ProfileID: batch.ProfileID, Region: batch.Region,
-		ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		ObjectPath: objectPath, ObjectBytes: int64(len(data)), ObjectContentType: "application/jsonl",
 		ObjectFilename: externalID + ".jsonl", ObjectPurpose: "batch_output",
 		CreationStatus: creationCompleted, Status: "uploaded",
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: batch.ExpiresAt,

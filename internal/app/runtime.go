@@ -469,6 +469,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			Redactor:                      redactor,
 			Resources:                     metadata,
 			ResourceObjectDir:             filepath.Join(cfg.Storage.DataDir, "provider-objects"),
+			ResourceObjectSealer:          secretVault,
 			Pricing:                       metadata,
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
 			PricingClockForwardTolerance:  cfg.Gateway.PricingClockForwardTolerance.Value(),

@@ -93,6 +93,7 @@ type Service struct {
 	now                           func() time.Time
 	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
+	resourceObjectSealer          ResourceObjectSealer
 	contentScanner                contentscan.Scanner
 	pricing                       PriceSelector
 	pricingClockRollbackTolerance time.Duration
@@ -139,6 +140,7 @@ type ServiceOptions struct {
 	Redactor                      *redaction.Engine
 	Resources                     InferenceResourcesResourceStore
 	ResourceObjectDir             string
+	ResourceObjectSealer          ResourceObjectSealer
 	ContentScanner                contentscan.Scanner
 	Pricing                       PriceSelector
 	PricingClockRollbackTolerance time.Duration
@@ -852,6 +854,13 @@ func NewServiceWithOptions(
 		options.ContentScanner = contentscan.Builtin{}
 	}
 	if options.ResourceObjectDir != "" {
+		// An object directory without a sealer would write caller-written
+		// prompts and model output in the clear. There is no degraded mode
+		// worth having here: refuse to build rather than start an instance
+		// whose object directory is quietly a plaintext copy of its traffic.
+		if options.ResourceObjectSealer == nil {
+			return nil, errors.New("resource object directory requires a sealer")
+		}
 		options.ResourceObjectDir = filepath.Clean(options.ResourceObjectDir)
 		if !filepath.IsAbs(options.ResourceObjectDir) {
 			return nil, errors.New("resource object directory must be absolute")
@@ -901,6 +910,7 @@ func NewServiceWithOptions(
 		now:                           clock,
 		resources:                     options.Resources,
 		resourceObjectDir:             options.ResourceObjectDir,
+		resourceObjectSealer:          options.ResourceObjectSealer,
 		contentScanner:                options.ContentScanner,
 		pricing:                       options.Pricing,
 		pricingClockRollbackTolerance: options.PricingClockRollbackTolerance,

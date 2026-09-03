@@ -50,10 +50,47 @@ func New() *Manager {
 	return &Manager{}
 }
 
+// gates names which admission decisions a call is making. The synchronous path
+// makes all of them at once; a deferred submission charges the request slot when
+// the caller asks, and the worker charges the execution slots when it is about
+// to call the upstream. They are flags on one locked decision rather than two
+// public calls composed by the caller, because composing them would take the
+// lock twice and charge RPM twice.
+type gates struct {
+	request   bool
+	execution bool
+}
+
 // Acquire atomically applies RPM, TPM, and concurrency admission. Zero limits
 // are unlimited. Rate tokens are consumed on admission; concurrency is released
 // exactly once through the returned lease.
 func (m *Manager) Acquire(project domain.Project, estimatedTokens int64, now time.Time) (*Lease, error) {
+	return m.admit(project, estimatedTokens, now, gates{request: true, execution: true})
+}
+
+// AcquireRequestSlot charges one RPM slot and nothing else.
+//
+// A deferred submission is a request — it arrived, it was authenticated, it was
+// answered — so it consumes the per-minute request allowance the way any other
+// request does; leaving it uncharged would make deferred submission a way around
+// a Project's RPM ceiling. It deliberately takes no concurrency slot: that limit
+// counts upstream calls in flight, and a queued request is not one. Charging it
+// here would cap the queue at MaxConcurrency, so a Project allowing five
+// concurrent calls could not queue a sixth, which is the opposite of what a
+// queue is for.
+func (m *Manager) AcquireRequestSlot(project domain.Project, now time.Time) error {
+	_, err := m.admit(project, 0, now, gates{request: true})
+	return err
+}
+
+// AcquireExecutionSlot charges TPM and a concurrency slot for work that is about
+// to reach the upstream, for a request whose RPM slot was charged earlier. The
+// lease behaves exactly as Acquire's: released once, reconciled once.
+func (m *Manager) AcquireExecutionSlot(project domain.Project, estimatedTokens int64, now time.Time) (*Lease, error) {
+	return m.admit(project, estimatedTokens, now, gates{execution: true})
+}
+
+func (m *Manager) admit(project domain.Project, estimatedTokens int64, now time.Time, want gates) (*Lease, error) {
 	if estimatedTokens < 0 {
 		return nil, errors.New("estimated tokens cannot be negative")
 	}
@@ -61,17 +98,21 @@ func (m *Manager) Acquire(project domain.Project, estimatedTokens int64, now tim
 	state := value.(*projectState)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	refill(&state.rpm, project.RPM, now)
-	refill(&state.tpm, project.TPM, now)
-	if project.MaxConcurrency > 0 && state.concurrency >= project.MaxConcurrency {
-		return nil, &Error{Kind: ErrConcurrency, RetryAfter: time.Second}
+	if want.request {
+		refill(&state.rpm, project.RPM, now)
 	}
-	if project.RPM > 0 && state.rpm.tokens < 1 {
+	if want.execution {
+		refill(&state.tpm, project.TPM, now)
+		if project.MaxConcurrency > 0 && state.concurrency >= project.MaxConcurrency {
+			return nil, &Error{Kind: ErrConcurrency, RetryAfter: time.Second}
+		}
+	}
+	if want.request && project.RPM > 0 && state.rpm.tokens < 1 {
 		return nil, &Error{
 			Kind: ErrRPM, RetryAfter: refillWait(1-state.rpm.tokens, project.RPM),
 		}
 	}
-	if project.TPM > 0 && state.tpm.tokens < float64(estimatedTokens) {
+	if want.execution && project.TPM > 0 && state.tpm.tokens < float64(estimatedTokens) {
 		return nil, &Error{
 			Kind: ErrTPM,
 			RetryAfter: refillWait(
@@ -79,8 +120,11 @@ func (m *Manager) Acquire(project domain.Project, estimatedTokens int64, now tim
 			),
 		}
 	}
-	if project.RPM > 0 {
+	if want.request && project.RPM > 0 {
 		state.rpm.tokens--
+	}
+	if !want.execution {
+		return nil, nil
 	}
 	if project.TPM > 0 {
 		state.tpm.tokens -= float64(estimatedTokens)
