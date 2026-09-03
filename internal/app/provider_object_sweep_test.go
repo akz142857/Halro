@@ -22,25 +22,21 @@ func TestAnOrphanedSealedObjectIsSweptOnceItCannotBeALiveWrite(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer runtime.Close()
 
-	// Real envelopes, because the startup reclamation that clears plaintext left
-	// by releases before sealing runs on this same directory and removes
-	// anything that is not one. That scan is why an orphan needs this sweep at
-	// all: it walks the directory and skips every sealed file, deliberately,
-	// since at that point it cannot tell a live write from an abandoned one.
+	// Placed before the runtime starts, so this races nothing: the startup
+	// reclamation that clears plaintext left by releases before sealing runs on
+	// this same directory, and it removes anything that is not a sealed
+	// envelope. These carry the envelope header for that reason — the sweep
+	// itself reads names and timestamps, never contents.
+	//
+	// That reclamation is also why an orphan needs this sweep at all: it walks
+	// the directory and skips every sealed file, deliberately, since at that
+	// point it cannot tell a live write from an abandoned one.
 	directory := filepath.Join(cfg.Storage.DataDir, "provider-objects")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := runtime.vault.EncryptResourceObject("resp_orphan:content", "project_1", []byte(`{"answer":"SECRET"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	sealed := append([]byte("HVLT"), 1, 0)
 	write := func(name string, age time.Duration) string {
 		t.Helper()
 		path := filepath.Join(directory, name)
@@ -58,6 +54,11 @@ func TestAnOrphanedSealedObjectIsSweptOnceItCannotBeALiveWrite(t *testing.T) {
 	// and its record. The sweep must not touch it.
 	fresh := write("resp_fresh.content", 0)
 
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
 	runtime.sweepOrphanedProviderObjects(context.Background())
 
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {

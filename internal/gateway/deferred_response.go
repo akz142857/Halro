@@ -69,6 +69,43 @@ type deferredEngine struct {
 	// Project was at a limit. It is what stops the dispatcher from spinning: the
 	// record really is ready to run, and nothing but time will change that.
 	blocked atomic.Bool
+	// Counters for the two outcomes an operator cannot otherwise see. An expiry
+	// writes no ledger event and its record is reaped within the hour, so
+	// without this the only trace of a submission that waited out its TTL is a
+	// complaint; an interruption is the restart case, which is the one that may
+	// already have been billed upstream.
+	expired     atomic.Int64
+	interrupted atomic.Int64
+	submitted   atomic.Int64
+}
+
+// DeferredMetrics is what the deferred tier looks like from outside: how much
+// work is in flight, and how much has ended in the two ways that leave nothing
+// else behind to look at.
+type DeferredMetrics struct {
+	Running     int64
+	Submitted   int64
+	Expired     int64
+	Interrupted int64
+}
+
+// DeferredMetrics reports the deferred tier's counters. It reads process-local
+// state rather than the store, so it is cheap enough for a scrape.
+func (s *Service) DeferredMetrics() DeferredMetrics {
+	if s == nil || s.deferred == nil {
+		return DeferredMetrics{}
+	}
+	running := int64(0)
+	s.deferred.running.Range(func(any, any) bool {
+		running++
+		return true
+	})
+	return DeferredMetrics{
+		Running:     running,
+		Submitted:   s.deferred.submitted.Load(),
+		Expired:     s.deferred.expired.Load(),
+		Interrupted: s.deferred.interrupted.Load(),
+	}
 }
 
 func newDeferredEngine(service *Service, workers int) *deferredEngine {
@@ -205,6 +242,7 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 		// terminal — correctly, since a queued record is still work Halro owes —
 		// so nothing else would ever clear it.
 		if !record.ExpiresAt.After(e.service.now()) {
+			e.expired.Add(1)
 			if err := e.service.finishDeferred(ctx, record, domain.DeferredFailed, "deferred_response_expired",
 				"the request expired before it could be run", nil); err != nil {
 				e.service.logger.Error("an expired deferred response could not be failed", "resource_id", record.ID, "error", err)
@@ -279,6 +317,7 @@ func (e *deferredEngine) recover(ctx context.Context) {
 			}
 			requeued++
 		case domain.DeferredInProgress:
+			e.interrupted.Add(1)
 			if err := e.service.finishDeferred(ctx, record, domain.DeferredFailed,
 				"deferred_response_interrupted",
 				"the gateway restarted while this request was running; it may have been billed upstream and its answer cannot be retrieved",
@@ -410,6 +449,7 @@ func (s *Service) SubmitDeferredResponse(
 		_ = s.removeResourceObject(inputPath)
 		return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the submission could not be recorded", 503, err)
 	}
+	s.deferred.submitted.Add(1)
 	s.deferred.nudge()
 	return s.renderDeferred(stored)
 }
@@ -609,6 +649,21 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 // time alone clears. A budget refusal is deliberately not one of these: it does
 // not clear until the accounting day does, which is longer than the record
 // lives, so retrying it until the TTL would only delay the same answer.
+//
+// The three codes here are the Project's own limiters, and they are the ones
+// that can be requeued because of *where* they are refused: they are checked
+// before beginRequestRun, so nothing has been written to the Ledger and putting
+// the record back leaves no trace of the attempt that did not happen.
+//
+// Deployment and provider concurrency are the same kind of limit — time clears
+// both — and are deliberately not here. They are refused inside startAttempt,
+// after RequestAccepted is already in the WAL, so requeuing at that point would
+// leave one submission spread across several Ledger requests. Making them
+// requeueable means either probing the target's concurrency before opening the
+// run, or accepting that a submission may account as more than one request;
+// the second is an accounting-contract change and not a switch to flip here.
+// Until then such a submission fails, and says so in words the caller can act
+// on rather than leaving them to read a concurrency code as permanent.
 func deferredAdmissionRefusal(err error) bool {
 	var failure *Error
 	if !errors.As(err, &failure) {
@@ -616,6 +671,18 @@ func deferredAdmissionRefusal(err error) bool {
 	}
 	switch failure.Code {
 	case "concurrency_limit_exceeded", "token_rate_limit_exceeded", "rate_limit_exceeded":
+		return true
+	}
+	return false
+}
+
+// deferredRetryableFailure marks the failures a caller can do something about by
+// submitting again. The queue could not absorb them — see
+// deferredAdmissionRefusal — so the least Halro owes the caller is to say that
+// the refusal was a busy target rather than a rejected request.
+func deferredRetryableFailure(code string) bool {
+	switch code {
+	case "deployment_concurrency_limit_exceeded", "provider_concurrency_limit_exceeded", "provider_unavailable":
 		return true
 	}
 	return false
@@ -676,6 +743,12 @@ func (s *Service) abandonDeferred(ctx context.Context, record domain.ProviderRes
 	var failure *Error
 	if errors.As(cause, &failure) {
 		code, message = failure.Code, failure.Message
+	}
+	// A busy deployment or provider is a transient condition the queue could not
+	// absorb, and a bare concurrency code reads as a rejected request. Say which
+	// it is, so the caller resubmits instead of investigating their payload.
+	if deferredRetryableFailure(code) {
+		message += "; this is a transient capacity refusal and the same request may be submitted again"
 	}
 	if err := s.finishDeferred(ctx, record, domain.DeferredFailed, code, message, nil); err != nil {
 		s.logger.Error("an abandoned deferred response could not be recorded", "resource_id", record.ID, "error", err)

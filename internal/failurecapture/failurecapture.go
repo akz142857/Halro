@@ -301,6 +301,31 @@ func writeSealedCapture(directory, path string, sealed []byte) error {
 // reserve takes one slot from the day's budget, reporting false once the day is
 // full. It also answers whether this is the first refusal of the day, which is
 // what the caller turns into a single degradation notice.
+// Saturation is what the day's budget looks like from outside: how much of it
+// has been spent, what it is, and whether it has already been hit. The last is
+// the one worth alerting on — past it, real failures stop being captured, and
+// the process log says so exactly once.
+type Saturation struct {
+	Day       string
+	Captured  int
+	DayLimit  int
+	Saturated bool
+}
+
+// Saturation reports the day's capture budget so it can be watched rather than
+// discovered afterwards in a log line.
+func (s *Store) Saturation() Saturation {
+	if s == nil {
+		return Saturation{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return Saturation{
+		Day: s.countedDay, Captured: s.dayCount,
+		DayLimit: s.maxRecordsPerDay, Saturated: s.dropped,
+	}
+}
+
 func (s *Store) reserve(day string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

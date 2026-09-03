@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -107,5 +108,30 @@ func TestAChainThatEndsInFailureStillExplainsTheRequest(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("req_failed is missing from the failed-request list")
+	}
+}
+
+// A page's cost has to be proportional to a page. Indexing the whole window
+// built a map with an entry per request held — tens of millions on a busy
+// instance — allocated per call, under the read lock the usage collector needs,
+// in order to return at most a hundred rows.
+func TestTheFailureIndexIsBuiltForThePageNotTheWindow(t *testing.T) {
+	aggregate := NewAggregate()
+	for index := range 500 {
+		aggregate.attempts = append(aggregate.attempts, AttemptEvent{
+			RequestID: "req_" + strconv.Itoa(index), AttemptID: "att", Status: "provider_error",
+		})
+	}
+	candidates := []RequestSummary{{RequestID: "req_1"}, {RequestID: "req_2"}}
+
+	indexed := aggregate.indexAttempts(candidates, false)
+	if len(indexed) != len(candidates) {
+		t.Fatalf("indexed %d requests for a %d-row page", len(indexed), len(candidates))
+	}
+
+	// The advanced filter still needs every request's attempts to decide which
+	// rows qualify, and says so by asking for them.
+	if all := aggregate.indexAttempts(candidates, true); len(all) != 500 {
+		t.Fatalf("an attempt-filtered query indexed %d requests, want the window", len(all))
 	}
 }
