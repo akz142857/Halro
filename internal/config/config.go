@@ -435,6 +435,7 @@ type Gateway struct {
 	DownstreamWriteTimeout        Duration        `yaml:"downstream_write_timeout"`
 	StreamMaxDuration             Duration        `yaml:"stream_max_duration"`
 	MaxTotalAttempts              int             `yaml:"max_total_attempts"`
+	DeferredResponseWorkers       int             `yaml:"deferred_response_workers"`
 	HealthProbeInterval           Duration        `yaml:"health_probe_interval"`
 	PricingClockRollbackTolerance Duration        `yaml:"pricing_clock_rollback_tolerance"`
 	PricingClockForwardTolerance  Duration        `yaml:"pricing_clock_forward_tolerance"`
@@ -524,6 +525,13 @@ const defaultReauthElevationWindow = 10 * time.Minute
 // gateway.source_rate_limit is. Kept in step with Default() and default.yaml by
 // TestDefaultTemplateMatchesDefault.
 const (
+	// DefaultDeferredResponseWorkers is what the deferred tier ran with when the
+	// count was a constant nobody could reach. MaxDeferredResponseWorkers bounds
+	// it because each worker can hold one upstream call open for
+	// route_total_timeout, so this is concurrent upstream work, not just threads.
+	DefaultDeferredResponseWorkers = 4
+	MaxDeferredResponseWorkers     = 256
+
 	DefaultPricingClockRollbackTolerance = 2 * time.Second
 	DefaultPricingClockForwardTolerance  = 30 * time.Second
 )
@@ -701,6 +709,12 @@ func (c *Config) Normalize() error {
 	if c.Gateway.SourceRateLimit.RequestsPerMinute == nil {
 		budget := defaultSourceRequestsPerMinute
 		c.Gateway.SourceRateLimit.RequestsPerMinute = &budget
+	}
+	// Absent means the default rather than zero, so a configuration written
+	// before this key existed keeps working: the deferred tier had a fixed four
+	// workers and no way to say otherwise.
+	if c.Gateway.DeferredResponseWorkers == 0 {
+		c.Gateway.DeferredResponseWorkers = DefaultDeferredResponseWorkers
 	}
 	if c.Gateway.PricingClockRollbackTolerance == 0 {
 		c.Gateway.PricingClockRollbackTolerance = Duration(DefaultPricingClockRollbackTolerance)
@@ -1148,6 +1162,12 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Gateway.MaxTotalAttempts < 1 {
 		problems = append(problems, errors.New("gateway.max_total_attempts must be at least 1"))
+	}
+	// The ceiling is deliberate rather than arbitrary: every worker can hold one
+	// upstream call open for route_total_timeout, so this is how much concurrent
+	// upstream work the deferred tier may add on top of the synchronous path.
+	if c.Gateway.DeferredResponseWorkers < 0 || c.Gateway.DeferredResponseWorkers > MaxDeferredResponseWorkers {
+		problems = append(problems, fmt.Errorf("gateway.deferred_response_workers must be between 1 and %d", MaxDeferredResponseWorkers))
 	}
 	if c.Gateway.SourceRateLimit.RequestsPerMinute != nil && *c.Gateway.SourceRateLimit.RequestsPerMinute < 0 {
 		problems = append(problems, errors.New("gateway.source_rate_limit.requests_per_minute cannot be negative"))

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -100,12 +101,24 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
-	detail, exists := r.usage.RequestDetail(requestID)
-	if !exists {
-		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "usage request not found"})
+	// The project comes from the capture itself rather than from the usage
+	// aggregate. The aggregate holds a bounded console window, and a capture's
+	// retention is configured separately and may be longer, so taking the
+	// project from there made a capture that was still on disk and still inside
+	// its promised life unopenable — and reported it as a missing usage request,
+	// which is not what happened. The envelope is still sealed against
+	// (request, project); this only makes the capture findable.
+	projectID, located, err := r.failureCapture.ProjectOf(requestID)
+	if err != nil {
+		r.logger.Warn("failure capture could not be located", "request_id", requestID, "error", err)
+		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "no captured payload for this request"})
 		return
 	}
-	record, found, err := r.failureCapture.Get(requestID, detail.Summary.ProjectID)
+	if !located {
+		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "no captured payload for this request"})
+		return
+	}
+	record, found, err := r.failureCapture.Get(requestID, projectID)
 	if err != nil {
 		// The error is not returned to the caller: it distinguishes "tampered
 		// with" from "belongs to another project", and neither is something the
@@ -119,21 +132,32 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 		return
 	}
 	// Audited before the body is written, so a read that the client abandons
-	// mid-response is still on the record.
-	r.auditFailurePayloadRead(request, requestID, detail.Summary.ProjectID)
+	// mid-response is still on the record — and refused when that record cannot
+	// be written. This is the one admin GET that hands back what a caller wrote,
+	// and the audit entry is the whole reason it is allowed to: an unaudited
+	// read of a prompt is the thing the audit trail exists to make impossible.
+	// Fail closed, like every other unavailable-state path here.
+	if err := r.auditFailurePayloadRead(request, requestID, projectID); err != nil {
+		r.logger.Error("failure payload read refused: audit unavailable", "error", err)
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+			"error": "the audit record for this read could not be written; the payload is withheld",
+			"code":  "audit_unavailable",
+		})
+		return
+	}
 	writeJSON(writer, http.StatusOK, record)
 }
 
-func (r *Runtime) auditFailurePayloadRead(request *http.Request, requestID, projectID string) {
+func (r *Runtime) auditFailurePayloadRead(request *http.Request, requestID, projectID string) error {
 	admin, ok := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	if !ok {
-		return
+		// Unreachable behind requireAdmin, and treated as a refusal rather than
+		// a silent pass: without a session there is no actor to record.
+		return errors.New("no admin session to attribute this read to")
 	}
-	if err := r.appendAdminAuditWithMetadata(
+	return r.appendAdminAuditWithMetadata(
 		"admin_user", admin.session.Username, "usage.failure_payload.read",
 		"usage_request", requestID, "success", "",
 		map[string]any{"project_id": projectID},
-	); err != nil {
-		r.logger.Warn("failure payload read audit failed", "error", err)
-	}
+	)
 }

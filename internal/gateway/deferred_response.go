@@ -69,6 +69,43 @@ type deferredEngine struct {
 	// Project was at a limit. It is what stops the dispatcher from spinning: the
 	// record really is ready to run, and nothing but time will change that.
 	blocked atomic.Bool
+	// Counters for the two outcomes an operator cannot otherwise see. An expiry
+	// writes no ledger event and its record is reaped within the hour, so
+	// without this the only trace of a submission that waited out its TTL is a
+	// complaint; an interruption is the restart case, which is the one that may
+	// already have been billed upstream.
+	expired     atomic.Int64
+	interrupted atomic.Int64
+	submitted   atomic.Int64
+}
+
+// DeferredMetrics is what the deferred tier looks like from outside: how much
+// work is in flight, and how much has ended in the two ways that leave nothing
+// else behind to look at.
+type DeferredMetrics struct {
+	Running     int64
+	Submitted   int64
+	Expired     int64
+	Interrupted int64
+}
+
+// DeferredMetrics reports the deferred tier's counters. It reads process-local
+// state rather than the store, so it is cheap enough for a scrape.
+func (s *Service) DeferredMetrics() DeferredMetrics {
+	if s == nil || s.deferred == nil {
+		return DeferredMetrics{}
+	}
+	running := int64(0)
+	s.deferred.running.Range(func(any, any) bool {
+		running++
+		return true
+	})
+	return DeferredMetrics{
+		Running:     running,
+		Submitted:   s.deferred.submitted.Load(),
+		Expired:     s.deferred.expired.Load(),
+		Interrupted: s.deferred.interrupted.Load(),
+	}
 }
 
 func newDeferredEngine(service *Service, workers int) *deferredEngine {
@@ -136,6 +173,54 @@ func (s *Service) RunDeferredResponses(ctx context.Context) {
 	}
 }
 
+// interleaveByProject takes one submission from each Project in turn, keeping
+// each Project's own submissions in the order they arrived.
+//
+// The store returns the queue ordered by submission time across the whole
+// instance, and the ceiling that bounds it is per Project while the workers
+// draining it are process-wide. Serving that global order means one Project can
+// fill its own queue — up to MaxDeferredQueueCeiling — and every other Project's
+// submissions wait behind all of it. At the default ceiling and the default
+// execution timeout that wait exceeds the 24-hour TTL, so those submissions do
+// not merely run late: they expire without ever having been tried, and an
+// expiry writes no ledger event, appears in no failed-request list, and has its
+// record reaped an hour later. The operator's only signal is a complaint.
+//
+// Round-robin makes the ceiling mean what it says — a bound on one Project's
+// backlog rather than on everyone's — without giving any Project a reservation
+// it did not have before: a Project with nothing queued takes no turn.
+func interleaveByProject(pending []domain.ProviderResource) []domain.ProviderResource {
+	if len(pending) < 2 {
+		return pending
+	}
+	order := make([]string, 0, 8)
+	byProject := make(map[string][]domain.ProviderResource, 8)
+	for _, record := range pending {
+		if _, seen := byProject[record.ProjectID]; !seen {
+			order = append(order, record.ProjectID)
+		}
+		byProject[record.ProjectID] = append(byProject[record.ProjectID], record)
+	}
+	if len(order) == 1 {
+		return pending
+	}
+	// Projects take their turn in the order their oldest waiting submission
+	// arrived, so the global ordering still decides who goes first; it just no
+	// longer decides who goes at all.
+	interleaved := make([]domain.ProviderResource, 0, len(pending))
+	for len(interleaved) < len(pending) {
+		for _, projectID := range order {
+			queue := byProject[projectID]
+			if len(queue) == 0 {
+				continue
+			}
+			interleaved = append(interleaved, queue[0])
+			byProject[projectID] = queue[1:]
+		}
+	}
+	return interleaved
+}
+
 // dispatch starts what it can and reports whether anything was left waiting.
 func (e *deferredEngine) dispatch(ctx context.Context) bool {
 	pending, err := e.service.resources.PendingDeferredResponses(ctx, "")
@@ -145,7 +230,7 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 		}
 		return false
 	}
-	for _, record := range pending {
+	for _, record := range interleaveByProject(pending) {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -157,6 +242,7 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 		// terminal — correctly, since a queued record is still work Halro owes —
 		// so nothing else would ever clear it.
 		if !record.ExpiresAt.After(e.service.now()) {
+			e.expired.Add(1)
 			if err := e.service.finishDeferred(ctx, record, domain.DeferredFailed, "deferred_response_expired",
 				"the request expired before it could be run", nil); err != nil {
 				e.service.logger.Error("an expired deferred response could not be failed", "resource_id", record.ID, "error", err)
@@ -231,6 +317,7 @@ func (e *deferredEngine) recover(ctx context.Context) {
 			}
 			requeued++
 		case domain.DeferredInProgress:
+			e.interrupted.Add(1)
 			if err := e.service.finishDeferred(ctx, record, domain.DeferredFailed,
 				"deferred_response_interrupted",
 				"the gateway restarted while this request was running; it may have been billed upstream and its answer cannot be retrieved",
@@ -349,8 +436,9 @@ func (s *Service) SubmitDeferredResponse(
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(deferredDefaultTTL),
 	}
 	// The request goes to disk before the record does. A sealed object nothing
-	// names is swept at startup; a record naming an object that was never
-	// written is a queued request the worker can only fail.
+	// names is swept once it is old enough that no write could still be holding
+	// it; a record naming an object that was never written is a queued request
+	// the worker can only fail.
 	inputPath, err := s.writeResourceObject(record.ID, record.ProjectID, objectRoleInput, payload)
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the request could not be stored", 503, err)
@@ -361,6 +449,7 @@ func (s *Service) SubmitDeferredResponse(
 		_ = s.removeResourceObject(inputPath)
 		return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the submission could not be recorded", 503, err)
 	}
+	s.deferred.submitted.Add(1)
 	s.deferred.nudge()
 	return s.renderDeferred(stored)
 }
@@ -389,7 +478,9 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 	if depth <= 0 {
 		depth = domain.DefaultMaxDeferredQueue
 	}
-	pending, err := s.resources.PendingDeferredResponses(ctx, project.ID)
+	// Admission needs the depth, not the queue: reading the records to count
+	// them made every submission pay for decoding every stored resource.
+	depthNow, err := s.resources.CountPendingDeferredResponses(ctx, project.ID)
 	if err != nil {
 		return gatewayError("resource_store_unavailable", "the deferred queue could not be read", 503, err)
 	}
@@ -398,7 +489,7 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 	// bound is the ceiling plus the number of simultaneous submitters — which
 	// RPM already bounds. A lock here would buy exactness on a number that
 	// exists to stop unbounded growth, not to be a quota.
-	if int64(len(pending)) >= depth {
+	if depthNow >= depth {
 		// A bounded queue refuses in the caller's face at the moment the
 		// pressure exists. An unbounded one grows silently while every entry is
 		// a promise of an answer.
@@ -560,6 +651,21 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 // time alone clears. A budget refusal is deliberately not one of these: it does
 // not clear until the accounting day does, which is longer than the record
 // lives, so retrying it until the TTL would only delay the same answer.
+//
+// The three codes here are the Project's own limiters, and they are the ones
+// that can be requeued because of *where* they are refused: they are checked
+// before beginRequestRun, so nothing has been written to the Ledger and putting
+// the record back leaves no trace of the attempt that did not happen.
+//
+// Deployment and provider concurrency are the same kind of limit — time clears
+// both — and are deliberately not here. They are refused inside startAttempt,
+// after RequestAccepted is already in the WAL, so requeuing at that point would
+// leave one submission spread across several Ledger requests. Making them
+// requeueable means either probing the target's concurrency before opening the
+// run, or accepting that a submission may account as more than one request;
+// the second is an accounting-contract change and not a switch to flip here.
+// Until then such a submission fails, and says so in words the caller can act
+// on rather than leaving them to read a concurrency code as permanent.
 func deferredAdmissionRefusal(err error) bool {
 	var failure *Error
 	if !errors.As(err, &failure) {
@@ -567,6 +673,18 @@ func deferredAdmissionRefusal(err error) bool {
 	}
 	switch failure.Code {
 	case "concurrency_limit_exceeded", "token_rate_limit_exceeded", "rate_limit_exceeded":
+		return true
+	}
+	return false
+}
+
+// deferredRetryableFailure marks the failures a caller can do something about by
+// submitting again. The queue could not absorb them — see
+// deferredAdmissionRefusal — so the least Halro owes the caller is to say that
+// the refusal was a busy target rather than a rejected request.
+func deferredRetryableFailure(code string) bool {
+	switch code {
+	case "deployment_concurrency_limit_exceeded", "provider_concurrency_limit_exceeded", "provider_unavailable":
 		return true
 	}
 	return false
@@ -628,6 +746,12 @@ func (s *Service) abandonDeferred(ctx context.Context, record domain.ProviderRes
 	if errors.As(cause, &failure) {
 		code, message = failure.Code, failure.Message
 	}
+	// A busy deployment or provider is a transient condition the queue could not
+	// absorb, and a bare concurrency code reads as a rejected request. Say which
+	// it is, so the caller resubmits instead of investigating their payload.
+	if deferredRetryableFailure(code) {
+		message += "; this is a transient capacity refusal and the same request may be submitted again"
+	}
 	if err := s.finishDeferred(ctx, record, domain.DeferredFailed, code, message, nil); err != nil {
 		s.logger.Error("an abandoned deferred response could not be recorded", "resource_id", record.ID, "error", err)
 	}
@@ -665,9 +789,10 @@ func (s *Service) finishDeferred(
 	}
 	if input != "" {
 		if err := s.removeResourceObject(input); err != nil {
-			// The record no longer names it, so a sweep at startup reclaims it.
-			// Failing the settlement over it would be worse: the answer is
-			// already stored and the caller is owed it.
+			// The record no longer names it, so the hourly orphan sweep reclaims
+			// it once it is old enough to be one. Failing the settlement over it
+			// would be worse: the answer is already stored and the caller is
+			// owed it.
 			s.logger.Error("a stored deferred request could not be erased", "resource_id", record.ID, "error", err)
 		}
 	}
@@ -796,11 +921,18 @@ func (s *Service) deferredOwner(ctx context.Context, plaintextKey, resourceID st
 		return auth.AuthResult{}, domain.ProviderResource{}, err
 	}
 	record, err := s.resources.ProviderResource(ctx, principal.Project.ID, resourceID)
-	// A record past its cool-off is gone as far as a caller is concerned, even
-	// in the window before the hourly reaper removes it. Answering from it would
+	// A record past its expiry is gone as far as a caller is concerned, even in
+	// the window before the hourly reaper removes it. Answering from it would
 	// make the retention promise depend on when the reaper last ran.
+	//
+	// This used to apply to retrieved records alone, which left the case the
+	// promise is actually about: a submission nobody ever collected reached its
+	// TTL and stayed readable for up to another hour. Failure capture expires
+	// record by record against the clock, and ADR 0024 gives the deferred tier
+	// the same 24 hours on the stated grounds that it is the same class of
+	// material — so it gets the same treatment rather than a weaker one.
 	if err == nil && record.Kind == domain.ResourceDeferredResponse &&
-		!record.RetrievedAt.IsZero() && !record.ExpiresAt.After(s.now()) {
+		!record.ExpiresAt.After(s.now()) {
 		return auth.AuthResult{}, domain.ProviderResource{}, gatewayError(
 			"response_not_found", "response was not found", 404, nil,
 		)

@@ -4,7 +4,7 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-04
 
 ### Added
 
@@ -60,6 +60,67 @@ semantic versioning.
   that writes an audit record, because it is the only one that returns a prompt.
   See the Operator Guide before enabling it.
 
+- **Deferred responses: submit on one connection, collect on another.**
+  `POST /v1/responses` accepts `background: true` and returns a `queued`
+  Response object immediately, so the caller may drop the connection and
+  retrieve the answer later by the same id through `GET /v1/responses/{id}`,
+  `POST /v1/responses/{id}/cancel` and `DELETE /v1/responses/{id}`. The upstream
+  still sees one ordinary synchronous generation; it does not know Halro held
+  the answer back. Contract in ADR 0024, guide in
+  `docs/guides/deferred-responses.zh-CN.md`.
+
+  Off by default, enabled per Project, because turning it on changes what the
+  data directory holds: the **answer to a successful request** is written to
+  disk, sealed under the master key and bound to (record id, project id), for at
+  most 24 hours. Until now the only store of caller-written material was failure
+  capture, which is also off by default.
+
+  Three behaviours an operator has to know before enabling it. Submission
+  consumes an RPM slot but not a concurrency slot; the queue is bounded per
+  Project (default 100, `429` with `Retry-After` when full) while the workers
+  draining it are process-wide. `background: true` and `stream: true` are
+  mutually exclusive, and `store: true` is still refused. **A request that is
+  `in_progress` when the process restarts fails with
+  `deferred_response_interrupted` and may already have been billed upstream** —
+  there is no upstream handle to resume, so the conservative settlement of
+  ADR 0011 applies and the answer cannot be retrieved.
+
+- **Kimi is served, across the two faces that can be.** One key binds the
+  connection group: Chat, which is the only face reaching all four published
+  models, and Anthropic Messages. The endpoint prefill is the international host;
+  mainland accounts live on `https://api.moonshot.cn` with the same paths,
+  headers and bodies — one base URL an operator edits, not a second profile —
+  and the keys are not interchangeable between the two.
+
+  `kimi.responses.v1` is **withheld**, and the reason is measured rather than
+  missing: that face reasons on every request and cannot be told to stop.
+  Both spellings were tried against a real account on 2026-09-02 —
+  `reasoning.effort: "none"` is refused outright, and the `thinking` member that
+  does switch reasoning off on the Messages face is accepted and ignored here.
+  Serving it would have shipped a 200, a bill, and a caller who believed they had
+  turned reasoning off. No northbound endpoint loses Kimi and no public alias
+  changes meaning; only that one upstream face is unreachable.
+
+- **`usage.console_window_days`**: the console's request and failure detail now
+  has a bounded window and is trimmed to it. Before this the aggregate only ever
+  grew — measured at roughly 1 GB of checkpoint per day at 10 rps — so the cost
+  of a checkpoint grew with the age of the instance rather than with the window
+  anyone reads. Defaults to 30 days, floors at 7, and may not exceed
+  `usage.retention_days`. It seeds the runtime setting on first start; after that
+  it is owned by **Settings → Instance** (`GET`/`PUT
+  /admin/api/v1/settings/usage`, revision-checked and audited, with an explicit
+  acknowledgement required to shorten it).
+
+- **Generational Ledger sealing** (`ledger.seal.*`, off by default) and the
+  offline `halro ledger seal` command: the active WAL is rolled into a numbered,
+  compressed segment and a manifest records what was sealed. Nothing is deleted —
+  replay runs through every generation into the active file, a manifest with a
+  gap refuses to start, and an interrupted roll is settled by the files
+  themselves rather than by a flag. Backups carry every generation.
+
+- Eleven metrics covering the retention window, checkpoint segments and sealing,
+  all listed in `docs/contracts/metrics-reference.md`.
+
 - **`logging.error_file`**: an optional second log file holding `ERROR` records
   alone, beside the ordinary log rather than instead of it. `logging.level:
   error` already produced an error-only log by discarding the warnings worth
@@ -97,6 +158,25 @@ semantic versioning.
   can still be switched off, because what the check protects is traffic and a
   disabled deployment carries none.
 
+### Fixed
+
+- **The console window's lower bound was taken from the wrong end.** It came
+  from "the highest sequence discarded, plus one" rather than "the lowest
+  sequence still held", so records that were visible before a restart could be
+  absent after it, with neither side reporting anything wrong.
+
+- **`ledgerArchivedThrough` swallowed a checkpoint read error**, which made
+  compaction stop permanently and silently — the log said nothing about it.
+
+- **The retention grace day was written twice**, once in the maintenance tick
+  and once in the offline prune, and stayed consistent only by eye.
+
+- **Kimi's Anthropic face reported its thinking span under
+  `output_tokens_details`, and the decoder did not read it** — so every Kimi
+  reasoning span was recorded as zero. The `/v1/responses` 502-that-should-be-503
+  is fixed with it: a partially unrenderable reasoning payload used to surface as
+  a gateway error after the upstream call had already succeeded and been billed.
+
 ### Changed
 
 - A cancelled or timed-out attempt is no longer logged as
@@ -106,11 +186,135 @@ semantic versioning.
   and an alert rule can group by. Records written before this keep the old value;
   the console still translates it.
 
-- The usage checkpoint moves to version 10 and is refused and rebuilt from the
-  ledger on first start. The Parquet export format moves to schema 5, which is
-  a range the reader already accepts: existing partitions are neither refused
-  nor rewritten and stay readable at their own version. No data directory
-  re-initialisation is required.
+- The usage checkpoint moves to version 12 (v0.5.0 shipped 8) and is refused and
+  rebuilt from the ledger on first start. The Parquet export format moves to
+  schema 5, which is a range the reader already accepts: existing partitions are
+  neither refused nor rewritten and stay readable at their own version. No data
+  directory re-initialisation is required — see **Operator impact** for what the
+  first start after the upgrade actually does.
+
+- **`/v1/rerank` and Async Invoke are not served by this build.** The only
+  Profiles backing them — Cohere Rerank 3.5 on Bedrock Agent Runtime and Nova
+  Reel Async on Bedrock Runtime — are withheld, so no Deployment can be created
+  for either. v0.5.0's documentation described them as Experimental, which read
+  as available. Bedrock as a whole is offered through Mantle alone.
+
+- **`usage.retention_days` now has a floor of 7 days**, raised from 1, because
+  `usage.console_window_days` may not go below that and may not exceed it. A
+  configuration written with 1–6 is refused at startup — see **Operator impact**.
+
+- Read-only diagnostics no longer migrate the data directory as a side effect.
+  `halro ledger verify`, `halro audit verify` and `halro audit verify-anchor`
+  now refuse a directory written by an older release and say what to run
+  instead, rather than opening it for writing, migrating the schema, and then
+  reporting a result. The migration is one-way, so a command an operator runs
+  *before* deciding to upgrade must not perform it. `halro start`, `halro backup
+  create`, `halro admin *` and `halro key *` still migrate: they are commands
+  that already intend to write.
+
+- Offline `usage compact`, `verify`, `prune` and `rebuild-summary` now unlock
+  the Ledger key and authenticate epoch-4 frames across the active WAL and all
+  sealed generations, including compressed history. They check the resulting
+  chain against the trusted checkpoint before exporting, pruning or replacing
+  derivatives. Missing or wrong keys, tampering, checkpoint rollback and a
+  partial tail are refused without changing the Ledger or existing derivatives.
+  Legacy epoch-1–3 frames retain their checksum-only compatibility.
+
+### Operator impact
+
+- **Storage schema 33 → 35 upgrades in place on the first start; no
+  re-initialisation.** Verified by starting this release against a data directory
+  a real v0.5.0 binary created. The Ledger WAL, balances and the audit chain are
+  untouched. Migration 34 records a generation on the existing Ledger chain
+  checkpoint; migration 35 creates the checkpoint-segment bucket and **deletes
+  the stored usage checkpoint, the rollup state and the daily rollup rows** —
+  rebuildable derivatives, rebuilt from the Ledger on that same start.
+
+  `halro doctor` does not migrate, so run against that directory *before* the
+  first start it reports `metadata: fail — metadata schema version 33 does not
+  match required version 35`, `healthy: false`, and seven metadata-dependent
+  checks disappear from its output. That means "not upgraded yet", not "damaged".
+
+- **The upgrade has an order, and it is not the obvious one.** Take the backup
+  **with the old binary, before you swap it**:
+
+  1. stop the instance;
+  2. with the **v0.5.0** binary: `halro backup create`, `halro ledger verify`,
+     `halro usage verify`;
+  3. swap the binary and run `halro start`.
+
+  Offline usage commands now require the master key (or access to the configured
+  primary KMS slot) and current metadata schema for authentication. Use the old
+  binary for pre-upgrade checks. The new usage commands refuse an older schema
+  instead of migrating it, including `rebuild-summary`; take the backup first,
+  then use `halro start` to perform the upgrade. A partial WAL tail must also be
+  recovered by startup before offline usage commands can proceed.
+
+  After the swap, `halro backup create`, `halro admin *` and `halro key *` open
+  the metadata store for writing and therefore migrate it to schema 35 as a side
+  effect, after which the v0.5.0 binary refuses the directory with
+  `metadata schema version 35 is newer than this build supports (33)`. The data
+  is intact and the refusal is clean, but the rollback path is gone.
+
+  This release narrows that trap: `halro ledger verify`, `halro audit verify`
+  and `halro audit verify-anchor` now refuse an older directory instead of
+  migrating it, so the three commands most likely to be run *before* deciding to
+  upgrade no longer close the door. `halro doctor` never migrated and still
+  does not.
+
+- **The first start after the upgrade replays the whole Ledger, twice.** The
+  usage checkpoint is discarded by migration 35, so both the accounting state and
+  the console aggregate are rebuilt from sequence zero rather than from a
+  watermark. Reference figure from `docs/verification/crash-recovery-matrix.md`:
+  a 10 GiB WAL replays in 68.578 s per pass on the reference machine. Plan a
+  maintenance window for a long-lived instance.
+
+  For the first usage-maintenance interval (`usage.parquet_interval`, default 1
+  hour) the console aggregate holds **every attempt in the instance's history**,
+  not `console_window_days` — window trimming does not begin until one successful
+  export has run. Budget roughly 1 KB per historical attempt for that first hour;
+  the steady state afterwards is the window, and is smaller than v0.5.0's, which
+  had no window at all.
+
+- **Provider objects written before sealing are deleted on the first start,
+  together with their records.** Objects under `data/provider-objects` used to be
+  stored in plaintext; they are now sealed under the master key and bound to
+  (resource id, project id). Any object the current key cannot read is reclaimed
+  at startup and its record removed — the log says so, counting them
+  (`reclaimed provider objects written before sealing`). This affects Files and
+  Batches content stored by v0.5.0 and earlier. If those objects matter, retrieve
+  them before upgrading.
+
+- **Captured failure payloads written before this release are unreadable.** The
+  capture file name now carries the project as well as the request, because the
+  project is what opens the envelope and it used to be looked up in the console's
+  usage window — so a capture whose retention outlived that window sat on disk,
+  inside its promised life, and could not be opened. Files written under the old
+  name are not read and are removed by the ordinary retention sweep. This only
+  affects an instance that had `gateway.failure_capture` switched on, which is
+  off by default.
+
+- **A configuration that sets `usage.retention_days` between 1 and 6 will not
+  start.** The floor moved to 7. Change it before swapping the binary. Everything
+  else new — `usage.console_window_days`, `ledger.seal.*`,
+  `gateway.failure_capture.*`, `logging.error_file.*` — defaults to a safe value
+  and a v0.5.0 `config.yaml` is otherwise accepted unchanged, with
+  `failure_capture` and `ledger.seal` off.
+
+- **Rolling back to v0.5.0 also means editing the configuration.** The old binary
+  rejects unknown keys one by one, so `gateway.failure_capture` and
+  `logging.error_file` have to be removed from `config.yaml` as well as restoring
+  the data directory from the backup taken in step 2 above.
+
+- **One existing deployment shape becomes uneditable while enabled.** On a
+  route-partitioned Profile (Bedrock Mantle), a Deployment whose model the
+  catalogue places on a sibling Profile is now refused on save with
+  `model_not_served_by_profile`, and both its connection test and the background
+  probe report the reason instead of passing. Startup is unaffected and stored
+  traffic is not refused retroactively. To fix one: disable it (a disabled
+  deployment is not checked), create a replacement on the Profile the error
+  names, repoint the Route, then delete the old one — a Deployment's target
+  identity is immutable, so the Profile cannot be edited in place.
 
 ## [0.5.0] - 2026-09-01
 
@@ -1222,7 +1426,8 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Halro/compare/v0.4.0...main
+[0.6.0]: https://github.com/akz142857/Halro/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/akz142857/Halro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/akz142857/Halro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/akz142857/Halro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akz142857/Halro/compare/v0.1.0...v0.2.0

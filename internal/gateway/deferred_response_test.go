@@ -673,3 +673,31 @@ func TestTheRecordNamesTheLedgerRequestThatPaidForIt(t *testing.T) {
 		t.Fatal("two requests share one ledger identifier")
 	}
 }
+
+// The TTL is the promise, and the reaper is how the record eventually leaves
+// disk — not how the promise is kept. A submission nobody ever collected used
+// to stay readable past its 24 hours until the hourly reaper happened to run,
+// so how long a caller's answer lived depended on where in that hour it expired.
+// ADR 0024 gives the deferred tier the same 24 hours as failure capture on the
+// grounds that it is the same class of material, and failure capture expires
+// record by record against the clock.
+func TestAnUncollectedAnswerStopsBeingReadableAtItsTTLNotAtTheNextSweep(t *testing.T) {
+	f := newDeferredFixture(t)
+	submitted := f.submit(t, "uncollected-key")
+	f.runOnce(t)
+
+	record := f.record(t, submitted.ID)
+	if !record.RetrievedAt.IsZero() {
+		t.Fatal("the fixture collected the answer; this case is about one nobody collected")
+	}
+	record.ExpiresAt = time.Now().UTC().Add(-time.Minute)
+	if _, err := f.store.PutProviderResource(context.Background(), record, record.Revision); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := f.service.DeferredResponse(context.Background(), f.plaintext, submitted.ID)
+	var failure *Error
+	if !errors.As(err, &failure) || failure.HTTPStatus != 404 {
+		t.Fatalf("an expired answer nobody had collected answered %v", err)
+	}
+}

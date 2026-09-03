@@ -1,5 +1,47 @@
 # Performance Baseline
 
+Release comparisons use the previous tag and the candidate on the **same host
+and toolchain**, with identical benchmark fixtures. The current paired evidence
+is in [2026-09-03 v0.6.0](performance/2026-09-03-v0.6.0/README.md), including
+raw samples, exact source hashes, commands and benchstat output.
+
+## Current comparison, 2026-09-03
+
+Apple M4 / macOS 26.7 / 24 GiB / Go 1.26.6 / `GOMAXPROCS=4`.
+Eight samples per version, `-benchtime=1s`, serial alternating version order.
+Baseline: v0.5.0 (`556f1d7`); candidate: `cc14e18` plus the P10/P14 follow-up,
+identified by the source hashes in the linked evidence.
+
+| Benchmark | v0.5.0 median | Candidate median | benchstat time comparison |
+|---|---:|---:|---|
+| Route candidate resolution, 8 targets | 5.198 µs | 5.233 µs | no significant difference, p=0.505 |
+| Strict response redaction | 74.29 µs | 80.19 µs | no significant difference, p=0.065 |
+| Bounded streaming redaction | 17.80 µs | 17.42 µs | no significant difference, p=0.798 |
+| Token Guard admit, fixed | 172.0 ns | 179.9 ns | +4.59%, p=0.021 |
+| Token Guard admit, EWMA | 189.9 ns | 185.5 ns | no significant difference, p=0.574 |
+| Token Guard acquire/release, contended | 331.1 ns | 342.2 ns | no significant difference, p=0.279 |
+| Project admission/reconcile/release, unlimited | 100.8 ns | 110.8 ns | +9.82%, p=0.004 |
+| Project admission/reconcile/release, limited | 130.9 ns | 139.2 ns | +6.30%, p=0.007 |
+| Project admission/reconcile/release, contended | 288.4 ns | 282.6 ns | no significant difference, p=0.505 |
+| Open and replay 100,000 WAL records | 562.3 ms | 551.7 ms | no significant difference, p=0.574 |
+
+No measured median time increase exceeds the release procedure's 10% threshold.
+That is not a claim that every path is unchanged: unlimited project admission
+is statistically slower and close to the threshold (candidate interval ±13%).
+The redaction intervals are also wide; retain the raw data and uncertainty.
+
+Route resolution remains **15,888 B / 41 allocations**, Token Guard admit
+**64 B / 2 allocations**, and project admission **200 B / 5 allocations** on
+both sides. WAL open/replay allocates **220.1 → 232.4 MiB per operation (+5.58%)**,
+with roughly 3 million allocations on both sides. This is cumulative allocation,
+not retained heap or peak RSS. Exact medians and counts are in `medians.json`.
+
+## Historical microbenchmarks, 2026-07-31 — superseded
+
+These figures have no recorded source revision and must not be used to judge a
+current release. The route and WAL drift was confirmed on both v0.4.0 and its
+successor in review 260901/P14; it was already present before that release.
+
 Date: 2026-07-31  
 Host: Apple M4 Pro, darwin/arm64, Go 1.24  
 Command: `go test ... -bench ... -benchmem -benchtime=1s`
@@ -13,13 +55,19 @@ Command: `go test ... -bench ... -benchmem -benchtime=1s`
 | Token Guard admit, fixed thresholds | 154.5 ns/op | 64 B/op, 2 allocs |
 | Token Guard admit, EWMA enabled (no boundary crossing) | 165.8 ns/op | 64 B/op, 2 allocs |
 
-These numbers are a regression baseline, not cross-machine release promises. Provider network latency dominates ordinary requests; routing overhead is sub-microsecond. Redaction throughput is adequate for token streams but allocation reduction is a useful post-RC optimization. WAL replay restores 100,000 records in under half a second on the reference host, while its allocation volume should be watched during multi-million-record recovery tests.
+These are historical measurements, not cross-machine release promises. In
+particular, the 405 ns routing figure does not describe current routing. Use the
+paired measurements above for release regression decisions and measure the
+retained WAL distribution before estimating recovery capacity.
 
 The experimental EWMA check adds about 11.3 ns (7.3%) to an ordinary Token
 Guard admission on this host and no additional allocation. Completed-window
 evaluation is deliberately off the per-request steady-state path.
 
 ## 10 GiB WAL recovery bound
+
+Historical workload measurement; the 2026-09-03 comparison does not remeasure
+this experiment or turn it into a bound for a different host or frame mix.
 
 Date: 2026-07-31  
 Host: Apple M4 Pro, darwin/arm64, Go 1.24  
@@ -114,7 +162,7 @@ artifact is a separate gate and is still unarchived (see below).
 Release benchmark policy:
 
 - compare on the same host/toolchain;
-- fail investigation if route resolution or redaction latency regresses by more than 20%;
+- investigate any hot-path latency regression above 10%, matching `release-assessment.md`;
 - profile before optimizing allocations;
 - run load/soak with the race detector disabled and production build flags;
 - keep correctness, bounded memory, and secret safety ahead of synthetic throughput.

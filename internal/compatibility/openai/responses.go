@@ -18,7 +18,7 @@ func DecodeResponseGenerate(request openaiapi.ResponseRequest) (semantic.Generat
 	}
 	result := semantic.GenerateRequest{
 		Operation: semantic.OperationGenerate,
-		Source:    semantic.Source{ProfileID: string(compatibility.ProfileOpenAIResponses), ProfileRevision: 1},
+		Source:    compatibility.SourceOf(compatibility.ProfileOpenAIResponses),
 		Mode:      semantic.ModePortable, RequestedModel: request.Model,
 		Temperature: cloneFloat(request.Temperature), TopP: cloneFloat(request.TopP),
 		CompletionTokenLimit: cloneInt64(request.MaxOutputTokens),

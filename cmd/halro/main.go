@@ -128,7 +128,7 @@ const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and 
 
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
+		return errors.New("usage: halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|ledger|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
 	}
 	switch arguments[0] {
 	case "pricing":

@@ -1,0 +1,13 @@
+Commands and observed results (2026-09-03)
+
+go test -count=1 ./internal/ledger ./internal/app ./internal/limiter
+ok  	github.com/akz142857/Halro/internal/ledger	27.203s
+ok  	github.com/akz142857/Halro/internal/app	184.902s
+ok  	github.com/akz142857/Halro/internal/limiter	0.414s
+
+go test -count=1 ./internal/app -run TestOfflineUsageAuthenticatesWithKMSAndRefusesUnavailableKey
+ok  	github.com/akz142857/Halro/internal/app	1.885s
+
+Regression proof: original usage.go from cc14e1865754387d7c45ca073c161048e59d54bc, substituted using Go -overlay.
+go test -overlay=<overlay.json> -count=1 ./internal/app -run TestOfflineUsageRejectsUntrustedHistoryWithoutWriting/(active_mac|sealed_mac)/rebuild-summary$
+Observed exit 1: both active_mac/rebuild-summary and sealed_mac/rebuild-summary failed with "untrusted history accepted".

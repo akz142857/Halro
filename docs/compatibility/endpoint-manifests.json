@@ -517,7 +517,8 @@
       "text.format.description",
       "text.format.schema",
       "text.format.strict",
-      "user"
+      "user",
+      "background"
     ],
     "rejected_request_fields": [
       "store=true",
@@ -546,7 +547,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type"
+      "Content-Type",
+      "Idempotency-Key when submitting with background=true"
     ],
     "response_fields": [
       "id",
@@ -617,6 +619,8 @@
     "documented_deviations": [
       "input_items, Conversations, and webhooks are unavailable; retrieval, cancellation and deletion serve deferred submissions alone",
       "store defaults to false and store=true is rejected even alongside background=true, because store asserts that the provider retains the Response and Halro's upstream retains nothing (ADR 0021)",
+      "background=true is enabled per Project and refused with unsupported_feature where the Project has not enabled it, because a deferred answer is written to disk and that is a decision about what the data directory holds",
+      "a background submission carries at most 256 KiB of request body, which is below the gateway's own request ceiling: the same body sent synchronously is accepted and sent with background=true is refused, because the deferred body is stored rather than forwarded",
       "a background submission does not survive a gateway restart: a deferred response has no upstream handle, so a request in flight when the process dies is failed and settled conservatively",
       "a deferred answer larger than 1 MiB is failed rather than stored, and the request was still billed: the ceiling is on what may be kept, and nothing can measure an answer before the upstream produces it",
       "a background submission whose Project is at its TPM or concurrency ceiling waits in the queue rather than being refused; only the queue depth and the 24 hour TTL bound that wait",

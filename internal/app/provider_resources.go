@@ -18,6 +18,7 @@ const providerResourceReapInterval = time.Hour
 func (r *Runtime) runProviderResourceMaintenance(ctx context.Context) {
 	r.reclaimUnsealedProviderObjects(ctx)
 	r.reapProviderResources(ctx)
+	r.sweepOrphanedProviderObjects(ctx)
 	ticker := time.NewTicker(providerResourceReapInterval)
 	defer ticker.Stop()
 	for {
@@ -26,7 +27,108 @@ func (r *Runtime) runProviderResourceMaintenance(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.reapProviderResources(ctx)
+			r.sweepOrphanedProviderObjects(ctx)
 		}
+	}
+}
+
+// orphanSettlingPeriod is how long a sealed object nothing names is left alone
+// before it is treated as an orphan.
+//
+// The sweep cannot ask the directory whether a file is in use: an object is
+// written, fsynced and renamed into place before its record is stored, so for a
+// moment every legitimate write looks exactly like an orphan. Age is what
+// separates them. No write stays in that window for a day; a file that has been
+// unnamed for one is a file whose record was never written, or was written and
+// then removed without its object.
+const orphanSettlingPeriod = 24 * time.Hour
+
+// sweepableObjects is the decision the sweep makes, separated from the removal
+// so it can be stated as a test rather than as a data directory.
+//
+// Two conditions, and both are needed. A file a record still names belongs to
+// that record's TTL however old it is. A file nothing names may still be a live
+// write: an object is renamed into place before its record is stored, so for a
+// moment every legitimate write is indistinguishable from an orphan, and only
+// age separates them.
+//
+// Dot-prefixed entries are the temporary name a write holds before its rename,
+// and are swept on the same rule: one that old is a write that died between
+// create and rename.
+func sweepableObjects(entries []os.DirEntry, named map[string]struct{}, cutoff time.Time) []string {
+	var sweepable []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if _, stillNamed := named[name]; stillNamed {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().UTC().After(cutoff) {
+			continue
+		}
+		sweepable = append(sweepable, name)
+	}
+	return sweepable
+}
+
+// sweepOrphanedProviderObjects deletes sealed objects no record names.
+//
+// Two paths produce them, and neither is exotic. A submission writes its object
+// and then fails to store the record — the compensating delete is best effort
+// and can itself fail. A settlement writes the answer and then fails to save
+// the record, in which case there is no compensation at all. Both leave a
+// sealed prompt or a sealed answer on disk with nothing pointing at it.
+//
+// Until this existed nothing removed them. The startup reclamation walks the
+// records, so it cannot see a file with no record, and the one scan that does
+// walk the directory removes unsealed objects only — it is the migration that
+// cleared plaintext left by releases before sealing, and it skips sealed files
+// deliberately, because at that point in startup it cannot tell a live write
+// from an orphan. So the material outlived every TTL the resource model
+// promises, invisible to doctor, to backup and to the reaper.
+//
+// The bound this restores is the one ADR 0024 states: material a caller wrote
+// has a life measured in hours, not in the lifetime of the installation.
+func (r *Runtime) sweepOrphanedProviderObjects(ctx context.Context) {
+	directory := filepath.Join(r.config.Storage.DataDir, "provider-objects")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			r.logger.Error("provider object directory could not be listed", "error", err)
+		}
+		return
+	}
+	resources, err := r.store.ListProviderResources(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			r.logger.Error("provider object sweep could not read the resource records", "error", err)
+		}
+		return
+	}
+	named := make(map[string]struct{}, 2*len(resources))
+	for _, resource := range resources {
+		if resource.ObjectPath != "" {
+			named[resource.ObjectPath] = struct{}{}
+		}
+		if resource.InputObjectPath != "" {
+			named[resource.InputObjectPath] = struct{}{}
+		}
+	}
+	swept := 0
+	for _, name := range sweepableObjects(entries, named, time.Now().UTC().Add(-orphanSettlingPeriod)) {
+		if err := os.Remove(filepath.Join(directory, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			r.logger.Error("an orphaned provider object could not be removed", "error", err)
+			continue
+		}
+		swept++
+	}
+	if swept > 0 {
+		// Warn rather than info: every one of these is a write whose record did
+		// not survive, so the count is also a defect signal.
+		r.logger.Warn("swept provider objects no record names", "count", swept)
 	}
 }
 

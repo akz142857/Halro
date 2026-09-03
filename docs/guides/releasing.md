@@ -1,5 +1,42 @@
 # Release Process
 
+> **Status.** Two things are described here, and until now the document did not
+> separate them. The **v0.x line** is what `.github/workflows/release.yml`
+> actually does today: nine jobs — `prepare`, `quality`, `sdk-compatibility`,
+> `stress`, `web`, `binaries`, `container`, `provenance`, `publish` — with the
+> only publication precondition being `prepare`'s CHANGELOG section check and a
+> `v*` tag. There is no environment approval, no `release-governance` preflight,
+> no signed-tag requirement, and no M11 evidence verification in that workflow.
+>
+> The **1.0.0 governance gates** — the `v1-release` environment with required
+> reviewers, the `release-governance` preflight, the annotated-signature
+> requirement, and `M11_RELEASE_EVIDENCE_JSON` verification — are a target, not
+> the current pipeline. They were retired for the v0.x line by owner decision on
+> 2026-08-16, recorded in `docs/verification/release-assessment.md`: the v0.x
+> line has no release candidates and no CI-enforced release gates, and the
+> go/no-go is the owner's, made against a filled assessment record.
+>
+> Sections describing the 1.0.0 gates are marked **[1.0.0 target]**. Do not
+> follow them when tagging a v0.x release: the approval they tell you to wait
+> for will not appear, and the evidence bundle they tell you to prepare is not
+> read by anything.
+
+## What the v0.x pipeline does
+
+Pushing a `v*` tag runs the full matrix and publishes if `prepare` passes. The
+gates that genuinely hold are the ones inside those jobs: `go test`,
+`go test -race`, `go vet`, `govulncheck`, the fuzz targets, the official-SDK
+compatibility suite, the SSE stress run, the frontend suite and bundle-drift
+check, Trivy on the container, reproducible packaging, dual SBOMs, cosign
+signatures, and `gh attestation verify` before publication. `prepare` refuses to
+start the matrix unless `CHANGELOG.md` carries a section for the version being
+tagged.
+
+What is **not** enforced anywhere: that the CHANGELOG section is complete, that
+the pre-release assessment in `docs/verification/assessments/` has been filled
+in, or that anyone other than the tagger has looked at the release. Those are
+procedure, and the procedure is `docs/verification/release-assessment.md`.
+
 The release workflow builds the embedded React UI once and cross-compiles
 static Halro binaries for Linux and macOS on amd64 and arm64. Windows is not
 a v1 target because the exclusive data-directory lock currently uses Unix
@@ -23,7 +60,7 @@ Every release run produces:
   with `gh attestation verify` before publication;
 - workflow artifacts; and, for a signed `v*` tag, an immutable GitHub Release.
 
-Configure the GitHub `v1-release` environment with required reviewers. Its
+**[1.0.0 target — not in `release.yml` today.]** Configure the GitHub `v1-release` environment with required reviewers. Its
 approval is the explicit boundary where reviewers verify the exact-commit GA
 Provider matrix, 24-hour soak artifacts, RC checklist, and release description.
 Enable Prevent self-review and keep `M11_RELEASE_EVIDENCE_JSON` exclusively as
@@ -40,7 +77,7 @@ object reports a valid GPG, SSH, or S/MIME signature; a lightweight or
 unverified tag cannot publish assets. RC tags are marked prerelease, while the
 reviewed `docs/milestones/release-notes-v1.0.0.md` is used only for the final tag.
 
-## Where the M11 evidence bundle comes from
+## Where the M11 evidence bundle comes from **[1.0.0 target]**
 
 `publish` verifies `M11_RELEASE_EVIDENCE_JSON` against the artifacts the same run
 produced: `tools/m11/release-evidence/verify.py` requires a SHA-256 for each of
@@ -78,10 +115,14 @@ to every `v*` tag, and the bundle it verifies covers the full M11 production
 evidence — the 14 real-AWS KMS scenarios, the recovery drill, and four-role
 sign-off. An RC cannot publish on supply-chain evidence alone.
 
-This sequence follows from the workflow definition and the verifier's inputs. It
-has not been exercised: no release workflow run exists yet.
+This sequence was derived from a workflow definition that no longer contains it.
+`publish` declares no `environment:`, and neither `release-governance` nor
+`tools/m11/release-evidence/verify.py` is referenced anywhere in
+`.github/workflows/`. The tools still exist and their unit tests run in CI; the
+workflow does not call them. Restoring this sequence means adding those steps
+back, not just creating the environment.
 
-Before creating an RC tag:
+Before creating an RC tag **[1.0.0 target — the v0.x line has no release candidates]**:
 
 1. run all CI, race, fuzz, SDK compatibility, recovery, and benchmark gates;
 2. build from a clean tree and verify embedded UI has no diff;

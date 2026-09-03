@@ -32,7 +32,8 @@ go vet ./...
 cd web && npm ci --ignore-scripts && npm run typecheck && npm test -- --run && npm run build && cd ..
 git diff --exit-code -- internal/webui/dist   # fails if the embedded bundle is stale after web/ changes
 ```
-Or run the full local gate: `make check` (test, race, vet, frontend-test, observability-check).
+Or run the full local gate: `make check` (fmt-check, test, race, vet, frontend-test,
+observability-check).
 
 The race detector is conditional, not part of every gate — run it for changes that
 touch concurrency, goroutines, shared state or lifecycle, and for the package that

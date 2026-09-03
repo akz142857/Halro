@@ -1,0 +1,112 @@
+{
+  "v0.5.0": {
+    "BenchmarkRegistryResolveCandidates-4": {
+      "ns/op": 5197.5,
+      "B/op": 15888.0,
+      "allocs/op": 41.0
+    },
+    "BenchmarkStandardRedaction-4": {
+      "ns/op": 74294.0,
+      "MB/s": 12.395,
+      "B/op": 13671.0,
+      "allocs/op": 32.0
+    },
+    "BenchmarkRollingRedaction-4": {
+      "ns/op": 17800.5,
+      "MB/s": 13.71,
+      "B/op": 17828.5,
+      "allocs/op": 79.0
+    },
+    "BenchmarkAdmit/fixed-4": {
+      "ns/op": 172.0,
+      "B/op": 64.0,
+      "allocs/op": 2.0
+    },
+    "BenchmarkAdmit/ewma-4": {
+      "ns/op": 189.95,
+      "B/op": 64.0,
+      "allocs/op": 2.0
+    },
+    "BenchmarkAcquireReleaseContended-4": {
+      "ns/op": 331.15,
+      "B/op": 128.0,
+      "allocs/op": 3.0
+    },
+    "BenchmarkProjectAdmission/unlimited-4": {
+      "ns/op": 100.85,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkProjectAdmission/limited-4": {
+      "ns/op": 130.89999999999998,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkProjectAdmissionContended-4": {
+      "ns/op": 288.4,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkReplayLargeWAL-4": {
+      "ns/op": 562285656.5,
+      "MB/s": 54.915,
+      "B/op": 230775232.0,
+      "allocs/op": 3000018.5
+    }
+  },
+  "candidate": {
+    "BenchmarkRegistryResolveCandidates-4": {
+      "ns/op": 5232.5,
+      "B/op": 15888.0,
+      "allocs/op": 41.0
+    },
+    "BenchmarkStandardRedaction-4": {
+      "ns/op": 80194.5,
+      "MB/s": 11.49,
+      "B/op": 13694.0,
+      "allocs/op": 32.0
+    },
+    "BenchmarkRollingRedaction-4": {
+      "ns/op": 17424.5,
+      "MB/s": 14.005,
+      "B/op": 17800.5,
+      "allocs/op": 79.0
+    },
+    "BenchmarkAdmit/fixed-4": {
+      "ns/op": 179.9,
+      "B/op": 64.0,
+      "allocs/op": 2.0
+    },
+    "BenchmarkAdmit/ewma-4": {
+      "ns/op": 185.5,
+      "B/op": 64.0,
+      "allocs/op": 2.0
+    },
+    "BenchmarkAcquireReleaseContended-4": {
+      "ns/op": 342.25,
+      "B/op": 128.0,
+      "allocs/op": 3.0
+    },
+    "BenchmarkProjectAdmission/unlimited-4": {
+      "ns/op": 110.75,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkProjectAdmission/limited-4": {
+      "ns/op": 139.15,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkProjectAdmissionContended-4": {
+      "ns/op": 282.65,
+      "B/op": 200.0,
+      "allocs/op": 5.0
+    },
+    "BenchmarkReplayLargeWAL-4": {
+      "ns/op": 551686062.0,
+      "MB/s": 55.97,
+      "B/op": 243657532.0,
+      "allocs/op": 3000025.5
+    }
+  }
+}

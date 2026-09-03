@@ -87,13 +87,17 @@ out. Important groups are:
 - `tls`: certificate and private-key paths shared by enabled listeners;
 - `storage`: data directory, bbolt filename, and Master Key path;
 - `admin`: session/idle limits, login rate, and external origin;
-- `usage`: timezone, WAL batching, checkpoint/Parquet cadence, retention;
-- `gateway`: route/attempt/stream deadlines and active probe interval;
+- `usage`: timezone, WAL batching, checkpoint/Parquet cadence, retention, and the
+  console window's initial length (`console_window_days`, owned by Settings →
+  Instance after the first start);
+- `gateway`: route/attempt/stream deadlines, active probe interval, deferred
+  response workers, and failure capture;
 - `retry` and `circuit_breaker`: bounded attempt and failure policy;
 - `alerts`: queue, worker, timeout, retry, and dedup bounds;
 - `security`: private egress and trusted proxy policy;
 - `metrics`: exporter enablement and authentication requirement;
-- `logging`: level, encoding, and whether a bounded local file is kept.
+- `logging`: level, encoding, whether a bounded local file is kept, and an
+  optional errors-only second file (`error_file`).
 
 Metrics also supports `credential_file`, bounded scrapes/write timeout, and a
 dedicated mutual-TLS listener. The legacy Master-Key-derived token is suitable
@@ -554,6 +558,51 @@ Three things follow from a sealed data directory, and all three are enforced:
   files and the manifest beside the active WAL; a restore puts them back.
 - **A roll is interruptible.** The rename is the commit point, and an open that
   finds a half-finished roll decides from the files which side it is on.
+
+#### Deferred responses: answers held for later collection
+
+A Project may allow callers to submit `POST /v1/responses` with
+`background: true`, get an identifier back immediately, drop the connection, and
+collect the answer later with `GET /v1/responses/{id}`. The upstream sees an
+ordinary synchronous call; it does not know Halro held the answer back.
+
+This is the second of the two stores that hold material a caller wrote, and the
+only one that holds a **successful** answer. Failure capture keeps the request
+and reply of a call that failed; this keeps the answer of a call that worked.
+Both are sealed under the Master Key and bound to the record and Project they
+belong to, and both are off unless someone turns them on — this one per Project,
+in the console under Project → Deferred responses.
+
+What to know before enabling it:
+
+- **The answer goes to disk**, sealed, for at most 24 hours or 15 minutes after
+  the first collection, whichever comes first. Past that it is refused even if
+  the hourly sweep has not yet removed the file.
+- **The queue is bounded per Project** (`max_deferred_queue`, default 100, up to
+  10,000) and returns `429` with `Retry-After` when full. The workers draining it
+  are shared by the whole instance (`gateway.deferred_response_workers`, default
+  4), and dequeuing takes one submission from each Project in turn so a Project
+  that fills its own queue does not hold up the others. Raising the worker count
+  raises how much concurrent upstream work the deferred tier may add, since each
+  worker can hold one call open for `route_total_timeout`.
+- **A restart fails whatever was running.** There is no upstream handle to
+  resume, so a submission in flight when the process dies is failed with
+  `deferred_response_interrupted` and **may already have been billed** — that is
+  ADR 0011's conservative settlement, not a bug. Watch
+  `halro_deferred_responses_interrupted_total`.
+- **A submission that waits out its TTL fails without ever running**
+  (`deferred_response_expired`). It writes no ledger event and its record is
+  reaped within the hour, so `halro_deferred_responses_expired_total` is the
+  thing to alert on; a rising count means submissions are arriving faster than
+  the workers drain them.
+- **Cancelling a queued submission is definite; cancelling one in flight is best
+  effort** and settles conservatively.
+- Submission consumes an RPM slot but not a concurrency slot, and carries at most
+  256 KiB of request body — below the gateway's own request ceiling, because this
+  body is stored rather than forwarded.
+
+Turning the switch off stops new submissions. Records already queued or held are
+still executed, collected and expired on their own clock.
 
 #### Capturing what a failed call carried
 

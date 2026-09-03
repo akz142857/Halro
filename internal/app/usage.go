@@ -13,6 +13,7 @@ import (
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/usage"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 func CompactUsage(ctx context.Context, cfg config.Config) (usage.Manifest, error) {
@@ -145,24 +146,13 @@ func openUsageOffline(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, nil, err
 	}
-	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// InspectReplay rather than Open: these commands read a derived view and
-	// have no business holding a write handle on the accounting authority.
-	// Open repairs a partial tail by truncating it, so `usage export` on a WAL
-	// with a torn last frame would rewrite the Ledger as a side effect of
-	// producing a report — with no key, no chain verification, and no
-	// checkpoint reconciliation to catch it having done so.
 	closeResources := func() error { return dataLock.Close() }
 	aggregate := usage.NewAggregate()
-	if _, _, err := ledger.InspectReplay(cfg.LedgerPath(), func(record ledger.Record) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return aggregate.Apply(record)
-	}); err != nil {
+	if err := replayUsageLedger(ctx, cfg, aggregate); err != nil {
 		closeResources()
 		return nil, nil, nil, fmt.Errorf("replay usage ledger: %w", err)
 	}
@@ -172,6 +162,55 @@ func openUsageOffline(
 		return nil, nil, nil, err
 	}
 	return aggregate, exporter, closeResources, nil
+}
+
+// Authenticate before opening an exporter or a writable metadata handle. A
+// failed replay must leave both the authority and its existing derivatives
+// alone; even a partial tail is refused rather than repaired or published.
+func replayUsageLedger(ctx context.Context, cfg config.Config, aggregate *usage.Aggregate) error {
+	store, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	if err != nil {
+		if errors.Is(err, boltstore.ErrSchemaVersionMismatch) {
+			return fmt.Errorf("%w; usage commands do not migrate metadata. Take a backup with the old binary before running `halro start` to upgrade, or use the binary that wrote this directory", err)
+		}
+		return fmt.Errorf("open metadata for ledger authentication: %w", err)
+	}
+	defer store.Close()
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
+	if err != nil {
+		return err
+	}
+	defer clear(masterKey)
+	secretVault, err := vault.New(masterKey)
+	if err != nil {
+		return err
+	}
+	defer secretVault.Close()
+	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
+		return err
+	}
+	ledgerKey, err := loadLedgerHMACKey(store, secretVault, masterKey)
+	if err != nil {
+		return err
+	}
+	defer clear(ledgerKey)
+	report, partial, err := ledger.InspectReplayAuthenticated(cfg.LedgerPath(), ledgerKey, func(record ledger.Record) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return aggregate.Apply(record)
+	})
+	if err != nil {
+		return err
+	}
+	if partial {
+		return errors.New("ledger has a partial tail; start Halro to repair it before running usage commands")
+	}
+	checkpoint, err := store.LedgerChainCheckpoint()
+	if err != nil {
+		return fmt.Errorf("load ledger chain checkpoint: %w", err)
+	}
+	return verifyLedgerCheckpoint(report, checkpoint)
 }
 
 // pruneUsageWindow trims the console's aggregate back to its window.

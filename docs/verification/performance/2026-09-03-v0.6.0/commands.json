@@ -1,0 +1,1282 @@
+[
+  {
+    "sample": 1,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.033,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.57,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.714,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.834,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.754,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 5.861,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.385,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 5.637,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 2.402,
+    "exit_code": 0
+  },
+  {
+    "sample": 1,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 2.418,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.501,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.402,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.387,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.417,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.265,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.45,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.143,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.144,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.905,
+    "exit_code": 0
+  },
+  {
+    "sample": 2,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.864,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.275,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.264,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.454,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.312,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.185,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.555,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.263,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.189,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.975,
+    "exit_code": 0
+  },
+  {
+    "sample": 3,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.883,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.276,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.29,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.574,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.368,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.528,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 5.034,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.206,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.431,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.947,
+    "exit_code": 0
+  },
+  {
+    "sample": 4,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.861,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.288,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.356,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.463,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.252,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.287,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.372,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.199,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.224,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.912,
+    "exit_code": 0
+  },
+  {
+    "sample": 5,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.967,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.261,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.255,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.321,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.575,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.336,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 6.089,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.162,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.199,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.976,
+    "exit_code": 0
+  },
+  {
+    "sample": 6,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 2.047,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.219,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.295,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.297,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.39,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.231,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.749,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.12,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.009,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.919,
+    "exit_code": 0
+  },
+  {
+    "sample": 7,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.993,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "candidate",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.271,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "v0.5.0",
+    "package": "provider",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-provider.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkRegistryResolveCandidates$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.317,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "candidate",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.355,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "v0.5.0",
+    "package": "redaction",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-redaction.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(StandardRedaction|RollingRedaction)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 3.388,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "candidate",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.489,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "v0.5.0",
+    "package": "tokenguard",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-tokenguard.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(Admit|AcquireReleaseContended)$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.396,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "candidate",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.674,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "v0.5.0",
+    "package": "limiter",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-limiter.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkProjectAdmission(Contended)?$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 4.245,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "candidate",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/candidate-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.934,
+    "exit_code": 0
+  },
+  {
+    "sample": 8,
+    "version": "v0.5.0",
+    "package": "ledger",
+    "command": [
+      "/tmp/halro-v060-perf/v0.5.0-ledger.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkReplayLargeWAL$",
+      "-test.benchmem",
+      "-test.benchtime=1s",
+      "-test.count=1",
+      "-test.cpu=4"
+    ],
+    "elapsed_seconds": 1.953,
+    "exit_code": 0
+  }
+]

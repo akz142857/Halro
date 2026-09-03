@@ -25,7 +25,7 @@ func DecodePortable(request anthropicapi.MessageRequest) (semantic.GenerateReque
 	}
 	result := semantic.GenerateRequest{
 		Operation: semantic.OperationGenerate,
-		Source:    semantic.Source{ProfileID: string(compatibility.ProfileAnthropicMessages), ProfileRevision: 1},
+		Source:    compatibility.SourceOf(compatibility.ProfileAnthropicMessages),
 		Mode:      semantic.ModePortable, RequestedModel: request.Model, Stream: request.Stream,
 		Temperature: request.Temperature, TopP: request.TopP, Stop: append([]string(nil), request.StopSequences...),
 		VisibleOutputTokenLimit: cloneInt64(&request.MaxTokens), IncludeUsage: request.Stream,

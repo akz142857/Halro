@@ -70,11 +70,11 @@
 | P7 | 前端：后端 400 时整个筛选栏随面板卸载，操作员无法把范围调回来 | `260901.md` §5.3 | 待处置 |
 | P8 | 前端：P95 越界按精确值画，中文文案承诺了界面上不存在的 `> 120s` | 同上 | 待处置 |
 | P9 | 双向覆盖校验对三个 native Anthropic 行整体跳过（假声明可通过六个测试） | `260901.md` §5.2 | 待处置 |
-| P10 | `usage rebuild-summary` 用未经认证的 WAL 重放并 durably 写两个派生物 | 同上 | 待处置 |
+| P10 | `usage rebuild-summary` 用未经认证的 WAL 重放并 durably 写两个派生物 | 同上 | **已于 260903 后续整改关闭**:离线 usage 逐帧认证全部世代并校验可信 checkpoint,失败时保留已有派生物;见 `../260903/progress.md` |
 | P11 | `providers.types.*` i18n 无守卫，而 golden fixture 已带 `provider_types`，只差十行 | `260901.md` §4 | 待处置 |
 | P12 | 汇总遍历不接 context、admin server 无 `WriteTimeout`；一年满负荷 = 2.01 s 读事务 | `adversarial-verdicts.md` V5-C | 待处置 |
 | ~~P13~~ | 文档漂移 | `260901.md` §5.4 | **已修**：`provider_table.go` 与 `minimax.go` 的伞形注释与实测对齐；`adding-a-platform.md` 两处路径与计数；`manifest.go` / 两个测试的 "fourteen"→13、"65"→77；`--provider-type` 帮助文本改为**读表推导**（它是类型清单的第四份副本，offered 六个而表里有八个） |
-| P14 | `performance-baseline.md` 对路由解析差 12 倍（两个版本同时复核，漂移早于 v0.4.0），已不能作回归判据 | `runtime-evidence.md` R4 | 待处置。下一轮评审会把它误报成新回归 |
+| P14 | `performance-baseline.md` 对路由解析差 12 倍（两个版本同时复核，漂移早于 v0.4.0），已不能作回归判据 | `runtime-evidence.md` R4 | **已于 260903 后续整改关闭**:旧表明确退役为历史数据,以同机双版本 8 组样本和可复核原始结果替代;见 `../../verification/assessments/v0.6.0-followup.md` |
 | P15 | `ledger verify` 在零帧实例上把"没有"说成"不能认证"（v0.3.0 记过，第三次观测） | `runtime-evidence.md` R3 | 待处置 |
 | P16 | `ledger verify` 会静默把数据目录单向迁移（与 P1 同源，但改它是命令契约变更） | `runtime-evidence.md` R2-a | **未修**，改为在发布说明写死操作顺序 |
 | P17 | `bootstrap` 用 `DefaultProviderCapabilities(type)` 而非默认 profile 的 Defaults，Bedrock 连接开箱少声明五项能力 | `260901.md` §5.4 | 待处置 |

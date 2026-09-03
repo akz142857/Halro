@@ -2,6 +2,7 @@ package compatibility
 
 import (
 	"errors"
+	"github.com/akz142857/Halro/internal/semantic"
 	"slices"
 )
 
@@ -47,6 +48,22 @@ var builtinNorthboundProfiles = []NorthboundProfile{
 	{ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
 	{ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
 	{ID: ProfileHalroInferenceResources, Revision: 1, Protocol: "halro", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
+}
+
+// SourceOf stamps a semantic operation with the northbound profile that
+// produced it, at the revision the registry currently carries.
+//
+// The revision used to be written at each mapping as a literal, and one of them
+// stayed at 1 through a bump to 2 — nothing failed, because no rule reads the
+// revision yet. A rule that did would have branched on a number that was true
+// of a different version of the endpoint. Reading it from the registry means
+// the next bump cannot leave a mapping behind.
+func SourceOf(id NorthboundProfileID) semantic.Source {
+	source := semantic.Source{ProfileID: string(id), ProfileRevision: 1}
+	if profile, found := BuiltinNorthboundProfile(id); found {
+		source.ProfileRevision = profile.Revision
+	}
+	return source
 }
 
 func BuiltinNorthboundProfile(id NorthboundProfileID) (NorthboundProfile, bool) {

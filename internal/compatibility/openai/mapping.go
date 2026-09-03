@@ -17,7 +17,7 @@ const MappingRevision uint64 = 1
 func DecodeGenerate(request openaiapi.ChatCompletionRequest) (semantic.GenerateRequest, error) {
 	result := semantic.GenerateRequest{
 		Operation: semantic.OperationGenerate,
-		Source:    semantic.Source{ProfileID: string(compatibility.ProfileOpenAIChatCompletions), ProfileRevision: 1},
+		Source:    compatibility.SourceOf(compatibility.ProfileOpenAIChatCompletions),
 		Mode:      semantic.ModePortable, RequestedModel: request.Model,
 		Temperature: request.Temperature, TopP: request.TopP, Candidates: request.N,
 		Seed: request.Seed, ReasoningEffort: request.ReasoningEffort, EndUserRef: request.User,

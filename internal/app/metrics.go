@@ -147,6 +147,38 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	// is it still growing? A resident count that keeps climbing while the floor
 	// stays put means the trim is not running — which is what a stalled export
 	// looks like from the outside, since the trim is bounded by it.
+	// The deferred tier, which is otherwise invisible between its two visible
+	// ends. An expiry writes no ledger event and its record is reaped within the
+	// hour, so a submission that waited out its TTL leaves nothing to look at;
+	// an interruption is the restart case, which may already have been billed.
+	// Both are counters an alert can watch instead of a log an operator has to
+	// think to read.
+	deferred := r.gatewayService.DeferredMetrics()
+	metricHeader(output, "halro_deferred_responses_running", "gauge",
+		"Deferred submissions this process is executing right now.")
+	fmt.Fprintf(output, "halro_deferred_responses_running %d\n", deferred.Running)
+	metricHeader(output, "halro_deferred_responses_submitted_total", "counter",
+		"Deferred submissions accepted since start.")
+	fmt.Fprintf(output, "halro_deferred_responses_submitted_total %d\n", deferred.Submitted)
+	metricHeader(output, "halro_deferred_responses_expired_total", "counter",
+		"Deferred submissions that reached their TTL without being executed.")
+	fmt.Fprintf(output, "halro_deferred_responses_expired_total %d\n", deferred.Expired)
+	metricHeader(output, "halro_deferred_responses_interrupted_total", "counter",
+		"Deferred submissions failed at startup because the process died while they were running.")
+	fmt.Fprintf(output, "halro_deferred_responses_interrupted_total %d\n", deferred.Interrupted)
+	// The capture day's budget. Past the ceiling, real failures stop being
+	// captured and the process log says so exactly once — which is the wrong
+	// shape for something an operator needs to notice while it is happening.
+	capture := r.failureCapture.Saturation()
+	metricHeader(output, "halro_failure_captures_today", "gauge",
+		"Failure payloads captured so far in the current day.")
+	fmt.Fprintf(output, "halro_failure_captures_today %d\n", capture.Captured)
+	metricHeader(output, "halro_failure_capture_day_limit", "gauge",
+		"Failure payloads the current day may hold; 0 when capture is disabled.")
+	fmt.Fprintf(output, "halro_failure_capture_day_limit %d\n", capture.DayLimit)
+	metricHeader(output, "halro_failure_capture_saturated", "gauge",
+		"1 when the current day's capture budget has been reached and failures are no longer captured.")
+	fmt.Fprintf(output, "halro_failure_capture_saturated %d\n", boolMetric(capture.Saturated))
 	windowed := r.usage.Windowed()
 	metricHeader(output, "halro_usage_window_attempts", "gauge",
 		"Attempts resident in the usage aggregate the console reads.")
@@ -565,6 +597,15 @@ func (r *Runtime) writeKMSMetrics(output *bufio.Writer) {
 	} else {
 		fmt.Fprintln(output, "halro_kms_recovery_ready 0")
 	}
+}
+
+// boolMetric renders a condition the way Prometheus expects one: a gauge that is
+// 1 or 0, so an alert can be written against it without a recording rule.
+func boolMetric(condition bool) int {
+	if condition {
+		return 1
+	}
+	return 0
 }
 
 func metricHeader(output *bufio.Writer, name, metricType, help string) {

@@ -35,7 +35,7 @@ func intersectSorted(left, right []string) []string {
 // to the domain table and forgotten here fell to the legacy branch, which is
 // fail-closed and therefore silent — the platform would run, serve plain text,
 // and refuse tools, images and structured output with nothing to say why. A
-// registry makes the omission enumerable, and TestEveryProfileIsRegistered
+// registry makes the omission enumerable, and TestEveryProfileRegistersItsOwnFieldRules
 // names the profile and this file when one is missing.
 var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink, request semantic.GenerateRequest) {
 	rules := map[domain.ProviderProfileID]func(add fieldSink, request semantic.GenerateRequest){}

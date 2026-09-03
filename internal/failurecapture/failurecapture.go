@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // DirPerm and FilePerm match the log sink's and the data directory's. The
@@ -61,25 +63,40 @@ const fileExtension = ".hfc"
 // mtime is not governed by this store's clock, so the guarantee could not be
 // tested; and a `cp -R` of a data directory resets every mtime forward, which
 // would extend a retention window rather than shorten it.
-func captureName(capturedAt time.Time, requestID string) string {
-	return fmt.Sprintf("%d-%s%s", capturedAt.UnixMilli(), requestID, fileExtension)
+// captureName carries the project as well as the request, and the project is
+// there for a reason worth stating: the envelope is sealed against
+// (request, project), so a reader has to know the project before it can open
+// anything. That used to be answered by the usage aggregate, which holds a
+// bounded console window — so a capture whose retention outlived that window
+// was still on disk, still within its promised life, and no longer openable,
+// and the endpoint reported it as a missing usage request. Kept but unreadable
+// is the worst side of a retention promise to land on.
+//
+// Neither identifier may contain the separator, which is checked on the way in;
+// both are Halro-minted and use an alphabet that has none.
+func captureName(capturedAt time.Time, requestID, projectID string) string {
+	return fmt.Sprintf("%d-%s-%s%s", capturedAt.UnixMilli(), requestID, projectID, fileExtension)
 }
 
-// capturedRequestID reads back what captureName wrote, or reports that the
-// entry is not one of ours.
-func capturedRequestID(name string) (string, time.Time, bool) {
+// capturedIdentity reads back what captureName wrote, or reports that the entry
+// is not one of ours.
+func capturedIdentity(name string) (requestID, projectID string, capturedAt time.Time, ok bool) {
 	if filepath.Ext(name) != fileExtension {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
-	millis, requestID, found := strings.Cut(strings.TrimSuffix(name, fileExtension), "-")
+	millis, rest, found := strings.Cut(strings.TrimSuffix(name, fileExtension), "-")
 	if !found {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
+	}
+	request, project, found := strings.Cut(rest, "-")
+	if !found || request == "" || project == "" {
+		return "", "", time.Time{}, false
 	}
 	stamp, err := strconv.ParseInt(millis, 10, 64)
 	if err != nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
-	return requestID, time.UnixMilli(stamp).UTC(), true
+	return request, project, time.UnixMilli(stamp).UTC(), true
 }
 
 // Record is what a capture holds. Every field is either produced by Halro or is
@@ -192,6 +209,16 @@ func (s *Store) Put(record Record) (bool, error) {
 	if record.RequestID == "" || record.ProjectID == "" {
 		return false, errors.New("a capture must name its request and project")
 	}
+	// The separator is part of the name format now, so neither identifier may
+	// contain one: a project called "a-b" would be read back as a request that
+	// ends in "a" and a project that starts at "b", and the reader would ask the
+	// vault to open an envelope sealed against a different pair.
+	if strings.Contains(record.RequestID, "-") || strings.Contains(record.ProjectID, "-") {
+		return false, errors.New("request and project IDs may not contain the capture name separator")
+	}
+	if strings.ContainsAny(record.ProjectID, `/\.`) {
+		return false, errors.New("project ID is not a safe file name")
+	}
 	if strings.ContainsAny(record.RequestID, `/\.`) {
 		// The request ID becomes a filename. Every ID the gateway holds today
 		// is one it minted itself — gatewayapi generates it and never reads a
@@ -223,16 +250,82 @@ func (s *Store) Put(record Record) (bool, error) {
 	if err := os.MkdirAll(directory, DirPerm); err != nil {
 		return false, fmt.Errorf("create failure capture day: %w", err)
 	}
-	path := filepath.Join(directory, captureName(record.CapturedAt, record.RequestID))
-	if err := os.WriteFile(path, sealed, FilePerm); err != nil {
+	path := filepath.Join(directory, captureName(record.CapturedAt, record.RequestID, record.ProjectID))
+	if err := writeSealedCapture(directory, path, sealed); err != nil {
 		return false, fmt.Errorf("write failure capture: %w", err)
 	}
 	return true, nil
 }
 
+// writeSealedCapture puts the envelope on disk whole or not at all.
+//
+// A plain write can be interrupted, and the moment it is most likely to be is
+// exactly when captures are densest — an upstream failing under load is also
+// when a process is most likely to be killed. What that leaves is a truncated
+// GCM envelope, and every reader of it fails authentication: the admin endpoint
+// reports "no captured payload", so the operator is told nothing was captured
+// while the file sits there until its retention expires. Told nothing was kept
+// is worse than told the capture is damaged.
+//
+// This is the same temp-write-fsync-rename-fsync sequence every other durable
+// write here uses; internal/durable exists so that there is one of them rather
+// than six, and this was the one place that had grown its own.
+func writeSealedCapture(directory, path string, sealed []byte) error {
+	temporary, err := os.CreateTemp(directory, ".capture-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(FilePerm); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(sealed); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return err
+	}
+	return durable.SyncDirectory(directory)
+}
+
 // reserve takes one slot from the day's budget, reporting false once the day is
 // full. It also answers whether this is the first refusal of the day, which is
 // what the caller turns into a single degradation notice.
+// Saturation is what the day's budget looks like from outside: how much of it
+// has been spent, what it is, and whether it has already been hit. The last is
+// the one worth alerting on — past it, real failures stop being captured, and
+// the process log says so exactly once.
+type Saturation struct {
+	Day       string
+	Captured  int
+	DayLimit  int
+	Saturated bool
+}
+
+// Saturation reports the day's capture budget so it can be watched rather than
+// discovered afterwards in a log line.
+func (s *Store) Saturation() Saturation {
+	if s == nil {
+		return Saturation{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return Saturation{
+		Day: s.countedDay, Captured: s.dayCount,
+		DayLimit: s.maxRecordsPerDay, Saturated: s.dropped,
+	}
+}
+
 func (s *Store) reserve(day string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -263,6 +356,34 @@ func (s *Store) Saturated() bool {
 // Get opens one capture. projectID is not a filter but part of the key: the
 // envelope is bound to it, so a record cannot be read under the wrong project
 // even by a caller that knows the request ID.
+// ProjectOf answers which project a capture was sealed against, so a reader can
+// open it without already knowing.
+//
+// The endpoint used to take the project from the usage aggregate, which holds a
+// bounded console window: past it a capture that was still on disk and still
+// inside its retention became unopenable, and the caller was told the usage
+// request did not exist. The project comes from the name now, and the envelope
+// is still sealed against it — this makes the capture findable, not readable.
+func (s *Store) ProjectOf(requestID string) (string, bool, error) {
+	if requestID == "" || strings.ContainsAny(requestID, `/\.`) {
+		return "", false, nil
+	}
+	days, err := s.days()
+	if err != nil {
+		return "", false, err
+	}
+	for _, day := range days {
+		_, projectID, found, err := s.locate(day, requestID)
+		if err != nil {
+			return "", false, err
+		}
+		if found {
+			return projectID, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 	if requestID == "" || projectID == "" || strings.ContainsAny(requestID, `/\.`) {
 		return Record{}, false, nil
@@ -276,7 +397,7 @@ func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 		// found by listing the day rather than by composing a path. A day holds
 		// at most MaxRecordsPerDay entries and this is an audited admin read,
 		// not a hot path.
-		path, found, err := s.locate(day, requestID)
+		path, _, found, err := s.locate(day, requestID)
 		if err != nil {
 			return Record{}, false, err
 		}
@@ -332,7 +453,7 @@ func (s *Store) Purge() error {
 		}
 		remaining := 0
 		for _, entry := range entries {
-			_, capturedAt, ours := capturedRequestID(entry.Name())
+			_, _, capturedAt, ours := capturedIdentity(entry.Name())
 			if entry.IsDir() || !ours || capturedAt.After(cutoff) {
 				remaining++
 				continue
@@ -360,24 +481,24 @@ func (s *Store) Purge() error {
 }
 
 // locate finds the capture for one request inside a day directory.
-func (s *Store) locate(day, requestID string) (string, bool, error) {
+func (s *Store) locate(day, requestID string) (string, string, bool, error) {
 	directory := filepath.Join(s.root, day)
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
+		return "", "", false, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("list failure captures: %w", err)
+		return "", "", false, fmt.Errorf("list failure captures: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if name, _, ours := capturedRequestID(entry.Name()); ours && name == requestID {
-			return filepath.Join(directory, entry.Name()), true, nil
+		if name, project, _, ours := capturedIdentity(entry.Name()); ours && name == requestID {
+			return filepath.Join(directory, entry.Name()), project, true, nil
 		}
 	}
-	return "", false, nil
+	return "", "", false, nil
 }
 
 func (s *Store) days() ([]string, error) {

@@ -13,6 +13,14 @@ import (
 	chi "github.com/go-chi/chi/v5"
 )
 
+// The handler discovers deferred support with a comma-ok type assertion, exactly
+// as it does for Messages, so a signature drift silently leaves
+// h.deferredResponses nil and all four deferred endpoints answer 501 instead of
+// failing the build. The Messages half has carried this assertion since the
+// mistake was made there; this one did not, and the endpoints it guards are the
+// newest in the facade.
+var _ DeferredResponsesService = (*gateway.Service)(nil)
+
 // DeferredResponsesService is the deferred half of the Responses facade: submit
 // on one connection, collect on another.
 type DeferredResponsesService interface {
