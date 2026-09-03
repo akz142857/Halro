@@ -423,7 +423,7 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 	record = started
 
 	var rendered openaiapi.Response
-	result, execErr := s.executeGenerate(ctx, principal, []provider.Target{target}, record.PublicModel, canonical,
+	_, execErr := s.executeGenerate(ctx, principal, []provider.Target{target}, record.PublicModel, canonical,
 		func(generated semantic.GenerateResult) error {
 			response, renderErr := openai.RenderResponseResult(generated, request)
 			if renderErr != nil {
@@ -432,7 +432,6 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 			rendered = response
 			return nil
 		}, admitExecutionOnly)
-	_ = result
 	if execErr != nil {
 		status, code, message := domain.DeferredFailed, "provider_error", "the request could not be completed"
 		var failure *Error
@@ -583,7 +582,7 @@ func (s *Service) saveDeferred(ctx context.Context, record domain.ProviderResour
 // events describing no work — at two seconds a poll, some eighteen hundred of
 // them an hour.
 func (s *Service) DeferredResponse(ctx context.Context, plaintextKey, resourceID string) (openaiapi.Response, time.Duration, error) {
-	principal, record, err := s.deferredOwner(ctx, plaintextKey, resourceID)
+	_, record, err := s.deferredOwner(ctx, plaintextKey, resourceID)
 	if err != nil {
 		return openaiapi.Response{}, 0, err
 	}
@@ -610,7 +609,6 @@ func (s *Service) DeferredResponse(ctx context.Context, plaintextKey, resourceID
 			s.logger.Error("the retrieval time of a deferred response could not be recorded", "resource_id", record.ID, "error", err)
 		}
 	}
-	_ = principal
 	return response, 0, nil
 }
 
