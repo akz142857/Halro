@@ -3,66 +3,68 @@
 [260903.md](260903.md) 按日期归档、不再改动;这份是活的对照表 —— 哪些做了、哪些没做,
 以及实现过程中对原结论的修正。
 
-评审完成于 2026-09-03,基线 `ff12842`。下面全部为**待处置**,尚未开始整改。
+评审完成于 2026-09-03,基线 `ff12842`。整改在 `fix/v060-release-blockers` 上分五个提交
+完成:四条 P0、六条 P1、十四条 P2 中的十三条、四条「说法与实现不符」,以及若干 P3。
+**未完成的三项在最后一节单列**,每一项都写明为什么不是一次编辑能安全完成的。
 
 ## 阻断 v0.6.0 发布
 
 | # | 事项 | 出处 | 状态 |
 |---|---|---|---|
-| A1 | 发布管线与 `releasing.md` 二选一并落地 | 260903.md §四 | 待处置。**需要人做决策,不是编辑**:接回门禁,还是把手册改成描述真实管线 |
-| A2 | CHANGELOG 补 #253 / #258 / #257 全部,#255 / #259 各半 | 同上 | 待处置 |
-| A3 | CHANGELOG 新建 `Operator impact` 段(schema 33→35、重述升级顺序、provider-objects 升级即删、首次启动全量 replay) | 同上 | 待处置。不补则 260901 P16 的缓解措施断掉 |
-| A4 | `ledger verify` 等只读语义命令改用 `OpenReadOnly`,或至少在迁移时打一行 stderr | `internal/app/ledger_verify.go:31` | 待处置 |
-| — | `CHANGELOG.md:109` 的 checkpoint 版本号 10 → **12**(v0.5.0 是 8) | 主持方核实 | 待处置。一处数字,顺手改 |
-| — | `## [Unreleased]` 改名为 `## [0.6.0] - <日期>` | `release.yml:78-81` | 待处置。不改则 `prepare` 阶段直接失败 |
+| A1 | 发布管线与 `releasing.md` 二选一并落地 | 260903.md §四 | **已修**。无需决策:owner 已于 2026-08-16 决定 v0.x 线不设 CI 强制门禁(记在 `release-assessment.md`),手册只是从未说明。现按「今天的管线」与「1.0.0 目标」分述,目标段落逐个标注 |
+| A2 | CHANGELOG 补 #253 / #258 / #257 全部,#255 / #259 各半 | 同上 | **已修** |
+| A3 | CHANGELOG 新建 `Operator impact` 段(schema 33→35、重述升级顺序、provider-objects 升级即删、首次启动全量 replay) | 同上 | **已修**,新建 `Operator impact` 段 |
+| A4 | `ledger verify` 等只读语义命令改用 `OpenReadOnly`,或至少在迁移时打一行 stderr | `internal/app/ledger_verify.go:31` | **已修**,并在真 v0.5.0 数据目录上实测:命令拒绝,目录仍是 v33 |
+| — | `CHANGELOG.md:109` 的 checkpoint 版本号 10 → **12**(v0.5.0 是 8) | 主持方核实 | **已修** |
+| — | `## [Unreleased]` 改名为 `## [0.6.0] - <日期>` | `release.yml:78-81` | **未做** —— 这一步属于打 tag 的动作本身,由发版者在决定版本号时执行 |
 
 ## P1
 
 | # | 事项 | 出处 | 状态 |
 |---|---|---|---|
-| B1 | 失败列表指向成功那次尝试的 `provider_request_id` | V1 CONFIRMED | 待处置。修法不能照抄日志侧:那边改的是进程内内存,读侧从 ledger 重建,需要 ledger 侧有能区分两种 `provider_error` 的标记 |
-| B2 | worker 数可配 + 队列按项目轮转 | V5 CONFIRMED | 待处置 |
-| B3 | `retention_days` 下限 1→7 写进发布说明 | 实测 | 待处置 |
-| B4 | 首次启动全量 replay 的耗时与内存写进发布说明 | 数据迁移 P1-a | 待处置 |
-| B5 | 审计写失败时不再返回 prompt(fail-open → fail-closed) | V3 附带发现 | 待处置。触及 CLAUDE.md 的核心不变量 |
-| B6 | `/v1/responses` 端点族 HTTP 测试 + `var _ DeferredResponsesService` 编译期钉子 | 测试盲区 P0-2 | 待处置 |
+| B1 | 失败列表指向成功那次尝试的 `provider_request_id` | V1 CONFIRMED | **已修**。不需要 ledger 侧改动:链上最后一次尝试成功,就说明失败发生在上游之后,此时不带服务商上下文 |
+| B2 | worker 数可配 + 队列按项目轮转 | V5 CONFIRMED | **已修**。`gateway.deferred_response_workers`(缺省即旧默认值),出队按项目轮转 |
+| B3 | `retention_days` 下限 1→7 写进发布说明 | 实测 | **已修** |
+| B4 | 首次启动全量 replay 的耗时与内存写进发布说明 | 数据迁移 P1-a | **已修** |
+| B5 | 审计写失败时不再返回 prompt(fail-open → fail-closed) | V3 附带发现 | **已修**,改为 503 `audit_unavailable` |
+| B6 | `/v1/responses` 端点族 HTTP 测试 + `var _ DeferredResponsesService` 编译期钉子 | 测试盲区 P0-2 | **已修**,五个 HTTP 层测试 + 钉子 |
 
 ## P2
 
 | # | 事项 | 状态 |
 |---|---|---|
-| C1 | 密封孤儿:要么实现清扫,要么把两处注释改成实话 | 待处置。注意 `provider_resources_test.go:64-66` 把「密封孤儿存活」锁成了契约,改行为要连测试一起改 |
-| C2 | `read_only` 与返回调用方内容的 GET:要么给该端点加角色门,要么修订 `domain/admin.go` 的角色定义 | 待处置。这是策略决定,两个方向都没有断言 |
-| C3 | Admin 冻结路由清单补 5 条并改成双向(260901 P4) | 待处置。本轮已给 gateway router 写了双向守卫,admin router 照抄 |
-| C4 | 删掉 `openai-compatibility.md:51-58` 的过期段落与小节标题 | 待处置 |
-| C5 | manifest 补 `background`、`Idempotency-Key`、256 KiB 输入上限、Project 开关 | 待处置 |
-| C6 | `QueryFailedRequests` 的整表索引与读锁 | 待处置 |
-| C7 | 延迟层的全桶扫描 | 待处置 |
-| C8 | 未取回记录的 TTL 与 reaper 周期解耦 | 待处置 |
-| C9 | requeue 条件补 deployment / provider 并发与熔断 | 待处置。**不能只把错误码加进 switch**:`errDeploymentConcurrency` 发生在 `beginRequestRun` 之后,`RequestAccepted` 已写进 WAL,重排队会让一次提交对应多个 ledger request |
-| C10 | `failurecapture.Put` 走 `internal/durable` 的原子重命名序列 | 待处置 |
-| C11 | 失败载荷可读期与 `retain` 解耦 | 待处置 |
-| C12 | 延迟取回与失败捕获补指标并登记进 metrics-reference | 待处置 |
-| C13 | 延迟取回补 en-US 文档,operator-guide 补一节 | 待处置 |
-| C14 | 使用手册补四块新界面 | 待处置 |
+| C1 | 密封孤儿 | **已修**。按年龄区分在途写入与孤儿:没有写入会持续一天。决策抽成纯函数,那条把「密封孤儿存活」锁成契约的断言改为「明文遗留清扫不碰密封文件」,孤儿由新的按小时清扫处理 |
+| C2 | `read_only` 与返回调用方内容的 GET | **未做**,见最后一节。这是产品策略决定,不是缺陷修复 |
+| C3 | Admin 冻结路由清单双向化(260901 P4) | **已修**。双向一开就发现落后的不是 5 条而是 **32 条**,全部补入并冻结 |
+| C4 | `openai-compatibility.md` 自相矛盾 | **已修** |
+| C5 | manifest 补 `background`、`Idempotency-Key`、输入上限、Project 开关 | **已修**,golden 已重新生成 |
+| C6 | `QueryFailedRequests` 的整表索引与读锁 | **已修**。索引只为这一页的行建;带 attempt 过滤的查询仍需窗口,那是高级筛选而非默认视图 |
+| C7 | 延迟层的全桶扫描 | **部分修复**。先按三个成员窄化判定再完整解码,准入改为只要计数;真正的二级索引是 schema 变更,见最后一节 |
+| C8 | 未取回记录的 TTL 与 reaper 周期解耦 | **已修** |
+| C9 | requeue 条件补 deployment / provider 并发 | **部分修复**。边界写进代码注释,失败消息改为「这是暂时的容量拒绝,可以重新提交」;真正的 requeue 是记账契约变更,见最后一节 |
+| C10 | `failurecapture.Put` 原子写 | **已修** |
+| C11 | 失败载荷可读期与 `retain` 解耦 | **已修**。project 编进捕获文件名,不再向 usage 窗口要;旧文件名下的捕获读不到,已写进 CHANGELOG |
+| C12 | 延迟取回与失败捕获补指标 | **已修**,七个指标,已登记 |
+| C13 | operator-guide 补延迟取回一节 | **已修**,并订正了配置概览的三行 |
+| C14 | 使用手册补新界面 | **已修**,中英两份 |
 
 ## 说法与实现不符
 
 | # | 事项 | 状态 |
 |---|---|---|
-| D1 | `deferred_response.go:351,668` 的「启动时清扫密封孤儿」 | 待处置,与 C1 同源 |
-| D2 | 四处注释 + 三处文档点名的 `TestNoEndpointIsServedByATargetThatReasonsUnasked` 不存在 | 待处置。要么建这个测试,要么把七处引用改指向真正生效的守卫(`admin_provider_profiles_golden_test.go` + 写路径 `IsWithheldProfile`) |
-| D3 | `internal/compatibility/provider_fields.go:38` 点名 `TestEveryProfileIsRegistered`,真实函数是 `TestEveryProfileRegistersItsOwnFieldRules` | 待处置。名字漂移,一次改名 |
-| D4 | `internal/redaction/engine.go:478` 点名 `TestStreamMatchesUnaryRedaction`,最近似的是 `TestRollingStreamMasksMatchSplitAcrossEveryChunkAndFlushesBeforeFinish` | 待处置。需先确认是否同一守卫 |
-| D5 | `failures.go:164-167` 的「请求只能以失败结束」 | 待处置,与 B1 同源 |
-| D6 | 把「注释点名的测试必须存在」做成 CI 检查 | 待处置。主持方已跑过一次,见 260903.md §六 |
+| D1 | 「启动时清扫密封孤儿」 | **已修**,注释现在描述真实运行的东西 |
+| D2 | 被七处引用的守卫不存在 | **已修**:建了这个测试,而不是改指别处。翻转验证——删掉 `Withheld` 后它按名点出两个模型并失败 |
+| D3 | `provider_fields.go:38` 的名字漂移 | **已修** |
+| D4 | `redaction/engine.go:478` 的名字漂移 | **已修**,改指真正做这项比较的 `FuzzBoundedStreamMatchesNonStream` |
+| D5 | 「请求只能以失败结束」 | **已修**,与 B1 同源 |
+| D6 | 「注释点名的测试必须存在」做成检查 | **已修**。`TestEveryTestNamedInACommentExists` 走全树,反向验证过 |
 
 ## 从 260901 结转、本轮再次确认的
 
 | 上轮编号 | 事项 | 本轮状态 |
 |---|---|---|
-| P4 | 新增 Admin 端点不入冻结清单 | **扩大**:1 条 → 5 条,且守卫仍是单向的。四个角色独立指向 |
-| P16 | `ledger verify` 静默单向迁移数据目录 | **原样复发且后果加重**:本轮迁移 35 会删除 usage checkpoint 与 rollup。主持方实测复现 |
+| P4 | 新增 Admin 端点不入冻结清单 | **已关闭**。双向化后实际发现 32 条,全部冻结 |
+| P16 | `ledger verify` 静默单向迁移数据目录 | **已关闭**。三个只读诊断命令改为拒绝而非迁移,真数据目录实测 |
 | P15 | `ledger verify` 在零帧实例上把「没有」说成「不能认证」 | **第四次观测**(v0.3.0、260901、本轮实测两处命令)。同一实例上 `usage verify` 有同样的毛病 |
 | P14 | `performance-baseline.md` 对路由解析差 12 倍 | 未处置。直接后果:本轮无法给出任何性能结论,见 runtime-evidence.md「未能取得的证据」 |
 | P5 | 汇总端点两段读竞态 | 未复查(本轮 `checkpoint.go` 是新代码,核心逻辑角色确认 checkpoint 与 rollup 同事务同前缀) |
@@ -78,3 +80,27 @@
   证实的发现被下调并改写性质(V2)。没有这一步,前者会作为漏洞进入发布评估。
 - **「注释声称的守卫」需要机械检查。** 本轮出现两次同形问题,其中一次是守卫从未存在。
   见 D6。
+
+## 未完成的三项,以及为什么
+
+**C2 · `read_only` 能读到调用方 prompt。** 对抗验证把它的性质从「绕过」改写成「设计
+含义漂移」:`domain/admin.go` 明确记录了「两个角色、无 per-endpoint 例外」是评估后
+否决 per-endpoint 权限矩阵的结果,其隐含前提是所有 admin GET 只返回 Halro 自己的元
+数据 —— 而 #254 打破了这个前提。两个修法都成立:给这一个端点加角色门(等于开始那份
+被否决过的清单),或者修订角色定义(等于承认 `read_only` 现在能看到调用方内容)。
+选哪个是产品决定,不是缺陷修复。默认关闭 + 24h 保留 + 每次读写审计把风险压在中等,
+本轮把 fail-open 那一半修了(B5)。
+
+**C7 后半 · 延迟队列的二级索引。** 已做的窄化把每条记录的解码成本降到三个成员,准入
+改为只要计数,但遍历的仍是整个资源桶。让成本与队列深度成正比需要一个按项目与提交
+时间键控的索引桶 —— 那是 schema 变更,而本轮已经带着 33→35 的迁移和一条「首次启动
+全量 replay」的发布说明,再叠一次不划算。
+
+**C9 后半 · 让 deployment / provider 并发拒绝重新排队。** 这两类拒绝发生在
+`startAttempt`,那时 `RequestAccepted` 已经在 WAL 里,重排队会让一次提交对应多个
+ledger request。要么在开 run 之前探测目标并发,要么接受这个记账口径 —— 后者是记账
+契约变更。本轮把边界写进代码,并让失败消息说清它是暂时的容量拒绝而非请求被拒。
+
+另有两条从 260901 结转、本轮未处置:**P14**(性能基线差 12 倍,直接后果是本轮给不出
+任何性能结论)与 **P10**(`InspectReplay` 读封存段不做 MAC 认证,仅在 `ledger.seal`
+打开后活跃)。
