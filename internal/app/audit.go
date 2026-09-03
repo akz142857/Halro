@@ -21,6 +21,9 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 		return audit.Summary{}, err
 	}
 	defer dataLock.Close()
+	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+		return audit.Summary{}, err
+	}
 	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return audit.Summary{}, err

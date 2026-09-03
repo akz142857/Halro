@@ -1373,6 +1373,13 @@ func Open(path string) (*Store, error) {
 	return openWithMigrationHooks(path, nil, nil)
 }
 
+// ErrSchemaVersionMismatch says the stored schema is not the one this build
+// requires. It is a sentinel rather than a bare error because the caller's
+// choice depends on it: a diagnostic command must refuse, since running the
+// migration is a one-way act nobody asked it to perform, while a command that
+// already intends to write is right to migrate.
+var ErrSchemaVersionMismatch = errors.New("metadata schema version mismatch")
+
 // OpenReadOnly opens existing metadata without creating files or running
 // migrations. It is intended for diagnostics that must never mutate state.
 func OpenReadOnly(path string) (*Store, error) {
@@ -1388,7 +1395,8 @@ func OpenReadOnly(path string) (*Store, error) {
 	}
 	if version != schemaVersion {
 		db.Close()
-		return nil, fmt.Errorf("metadata schema version %d does not match required version %d", version, schemaVersion)
+		return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
+			ErrSchemaVersionMismatch, version, schemaVersion)
 	}
 	return store, nil
 }

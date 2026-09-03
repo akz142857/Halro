@@ -116,6 +116,9 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, err
 	}
 	defer dataLock.Close()
+	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+		return nil, err
+	}
 	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return nil, err

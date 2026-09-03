@@ -28,6 +28,9 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 		return ledger.ChainReport{}, err
 	}
 	defer dataLock.Close()
+	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+		return ledger.ChainReport{}, err
+	}
 	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return ledger.ChainReport{}, err
