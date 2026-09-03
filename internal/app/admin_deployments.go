@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"slices"
@@ -118,6 +119,10 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, request 
 	case errors.Is(err, errModelCapabilitiesExceedCatalog):
 		writeJSON(writer, http.StatusBadRequest, map[string]string{
 			"error": err.Error(), "code": "model_capabilities_exceed_catalog",
+		})
+	case errors.Is(err, errModelNotServedByProfile):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{
+			"error": err.Error(), "code": "model_not_served_by_profile",
 		})
 	case errors.Is(err, errCapabilityDetectionStale):
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error(), "code": "capability_detection_stale"})
@@ -408,6 +413,21 @@ func (r *Runtime) deleteAdminDeployment(writer http.ResponseWriter, request *htt
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// deploymentRouteRefusal is modelNotServedByProfile in the shape a probe result
+// is recorded in: classified, so the console renders it beside every other
+// failed test rather than as a special case.
+func deploymentRouteRefusal(catalog *modelcatalog.Catalog, instance domain.ProviderInstance, deployment domain.Deployment) error {
+	targetKind, err := deploymentTargetKind(instance.Type, deployment.AccessSurface, deployment.ProfileID, deployment.TargetKind)
+	if err != nil {
+		return nil
+	}
+	refusal := modelNotServedByProfile(catalog, instance.Type, deployment.ProfileID, targetKind, deployment.ProviderModel)
+	if refusal == nil {
+		return nil
+	}
+	return &provider.Error{Class: provider.ErrorBadRequest, Message: refusal.Error()}
+}
+
 func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.Request) {
 	deployment, err := r.store.GetDeployment(request.Context(), chi.URLParam(request, "id"))
 	if err != nil || deployment.DeletedAt != nil {
@@ -437,7 +457,15 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 	ctx, cancel := context.WithTimeout(request.Context(), timeout)
 	defer cancel()
 	started := time.Now()
-	probeErr := prober.Probe(ctx, deployment.ProviderModel)
+	// Asked before the wire, because the wire cannot answer it. A Mantle model
+	// list is not route-scoped — it enumerates the account, so it answers 200 for
+	// a model this route refuses — and a test that dials it reports healthy for a
+	// deployment whose every request will be refused. That green tick is the
+	// thing this check exists to stop.
+	probeErr := deploymentRouteRefusal(r.effectiveModelCatalog(), instance, deployment)
+	if probeErr == nil {
+		probeErr = prober.Probe(ctx, deployment.ProviderModel)
+	}
 	testedAt := time.Now().UTC()
 	latencyMS := time.Since(started).Milliseconds()
 	errorClass := provider.ErrorUnknown
@@ -833,6 +861,35 @@ var errModelCapabilitiesUnknown = errors.New("model capabilities are unknown; de
 // then records the operator as the source rather than the catalog.
 var errModelCapabilitiesExceedCatalog = errors.New("deployment capabilities exceed what the catalog establishes for this model; declare them explicitly with mode=operator_declared to override")
 
+// errModelNotServedByProfile is the refusal for a route-partitioned profile
+// asked for a model the catalogue places on a sibling of it. It is deliberately
+// not the "declare it yourself" path the two errors above offer: those exist
+// because an uncovered model means nobody established what it does, and the
+// operator may know better. Here absence is evidence — see
+// domain.IsRoutePartitionedProfile — and declaring capabilities cannot make an
+// upstream serve a model on a route it refuses it on. The message names the
+// profile that does serve it, because that is the edit.
+var errModelNotServedByProfile = errors.New("provider profile does not serve this model")
+
+// modelNotServedByProfile returns that refusal, or nil where the question does
+// not apply: a profile whose absence is only a gap, a model no profile covers,
+// or a model this very profile covers.
+func modelNotServedByProfile(catalog *modelcatalog.Catalog, providerType domain.ProviderType, profileID domain.ProviderProfileID, targetKind domain.DeploymentTargetKind, model string) error {
+	if !domain.IsRoutePartitionedProfile(profileID) {
+		return nil
+	}
+	covering := catalog.ProfilesCovering(providerType, targetKind, model)
+	if len(covering) == 0 || slices.Contains(covering, profileID) {
+		return nil
+	}
+	names := make([]string, 0, len(covering))
+	for _, id := range covering {
+		names = append(names, string(id))
+	}
+	return fmt.Errorf("%w: %s is served by %s, not by %s", errModelNotServedByProfile,
+		model, strings.Join(names, " and "), profileID)
+}
+
 // A mapped capability model is optional. Once supplied, however, it is the
 // bound the operator chose for this alias; widening past it while keeping the
 // mapping would produce a snapshot narrower than the deployment. Clear the
@@ -1052,10 +1109,29 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 		retained = &prior.Capabilities
 	}
 	var known, unknown []deploymentResolution
+	var notServed error
 	for _, binding := range candidates {
 		targetKind, kindErr := deploymentTargetKind(instance.Type, binding.AccessSurface, binding.ProfileID, input.TargetKind)
 		if kindErr != nil {
 			return deploymentResolution{}, kindErr
+		}
+		// Before capabilities, like the pinned-model exclusion above and for the
+		// same reason: a binding whose upstream refuses this model is not a
+		// candidate for it, and automatic selection must not settle on one while
+		// a sibling binding serves the model.
+		//
+		// Only while the deployment is in service. What this gate protects is
+		// traffic, and a disabled row carries none — refusing the edit that
+		// switches one off would leave an operator holding a deployment they can
+		// neither fix in one step nor take out of service, which is the trap
+		// withholding avoids by not being a read gate.
+		if input.Enabled {
+			if err := modelNotServedByProfile(catalog, instance.Type, binding.ProfileID, targetKind, model); err != nil {
+				if notServed == nil {
+					notServed = err
+				}
+				continue
+			}
 		}
 		key := modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: targetKind, Model: model, Region: region}
 		entry, found := catalog.Lookup(key)
@@ -1073,6 +1149,9 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 			continue
 		}
 		unknown = append(unknown, resolution)
+	}
+	if len(known) == 0 && len(unknown) == 0 && notServed != nil {
+		return deploymentResolution{}, notServed
 	}
 
 	// A known model narrows to what the catalog established for it.

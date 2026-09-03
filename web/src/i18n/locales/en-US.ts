@@ -149,6 +149,7 @@ export const enUS = {
     modelCapabilityChanged: "This model's capabilities changed after you read them. Refresh and confirm again.",
     modelCapabilitiesUnknown: "The capabilities of this model are not known here. Declare them by hand instead.",
     modelCapabilitiesExceedCatalog: "The selection exceeds what the catalog establishes for this model. Declare the capabilities by hand instead.",
+    modelNotServedByProfile: "This provider serves this model on a different interface. Declaring capabilities cannot change that — pick the interface named below.",
     operationBindingsUnavailable: "A deployment carries one model's capabilities through one capability interface. To serve several capabilities under one public model, create one deployment per interface and point a route at each from the same public model.",
     resolutionChanged: "The upstream invocation target resolved differently. Review the updated capability summary before saving.",
   },

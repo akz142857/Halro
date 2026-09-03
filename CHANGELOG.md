@@ -71,6 +71,32 @@ semantic versioning.
   own rate and would fill a bounded file in minutes. Off by default; see the
   Operator Guide.
 
+- **A model addressed on a route that refuses it is now refused before it is
+  saved, instead of at every request.** Bedrock Mantle serves each model from
+  exactly one of `/v1`, `/openai/v1` and `/anthropic/v1`, and those routes are
+  separate profiles (ADR 0007). Nothing stopped a deployment naming
+  `openai.gpt-5.6-sol` — an `/openai/v1` model — on `bedrock.mantle.chat.v1`,
+  and every request it served came back `400 validation_error` from the
+  upstream. Creating or enabling that deployment now fails with
+  `model_not_served_by_profile`, naming the profile that does serve the model.
+
+  Both of its probes were the other half of the silence, and both passing.
+  Mantle's model list enumerates the account rather than the route — `GET
+  /v1/models` answers for models `/openai/v1` serves and the reverse 404s — so
+  the probe was asking a question that cannot distinguish the two and reporting
+  healthy. The manual connection test and the unattended probe loop now answer
+  from the catalogue before dialling, so a deployment created before this check
+  existed stops claiming to work in either place.
+
+  This reads absence from the catalogue as a refusal, which everywhere else it
+  is not: an uncovered model ordinarily means nobody established what it does,
+  and the operator declares it. So it applies only to profiles whose row marks
+  the route as partitioned — the five Mantle profiles today — and only when the
+  catalogue places the model on a sibling profile. A model no profile covers
+  stays the operator's to declare, and a deployment already on the wrong route
+  can still be switched off, because what the check protects is traffic and a
+  disabled deployment carries none.
+
 ### Changed
 
 - A cancelled or timed-out attempt is no longer logged as

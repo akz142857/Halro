@@ -149,6 +149,7 @@ export function localizedError(t: TFunction, error: unknown) {
     model_capability_changed: "errors.modelCapabilityChanged",
     model_capabilities_unknown: "errors.modelCapabilitiesUnknown",
     model_capabilities_exceed_catalog: "errors.modelCapabilitiesExceedCatalog",
+    model_not_served_by_profile: "errors.modelNotServedByProfile",
     operation_bindings_unavailable: "errors.operationBindingsUnavailable",
     resolution_changed: "errors.resolutionChanged",
     // The console already words this one on every disabled control; a second
