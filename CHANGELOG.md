@@ -4,7 +4,7 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
-## [Unreleased]
+## [0.6.0] - 2026-09-03
 
 ### Added
 
@@ -1426,7 +1426,8 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
-[Unreleased]: https://github.com/akz142857/Halro/compare/v0.4.0...main
+[0.6.0]: https://github.com/akz142857/Halro/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/akz142857/Halro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/akz142857/Halro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/akz142857/Halro/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/akz142857/Halro/compare/v0.1.0...v0.2.0

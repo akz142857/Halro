@@ -116,14 +116,14 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `2111333dc9b3a5dfaf7539366263147d62e382ae`
 - `go.sum`: `83ad5b798f68cc7bbc8524310f1f3f6ea49be605`
-- `web/package.json`: `1c8f96555ae4a622815f5c1a101298c191f05a68`
-- `web/package-lock.json`: `0287c600dc8ff26080762287811b89285397414c`
+- `web/package.json`: `b3fc788a018b7488844eddc3dfc495b28c6139e9`
+- `web/package-lock.json`: `e3b353565b858c1e8691db605c54edaad084b4cb`
 
 The Go hashes moved for the six-module bump recorded above. The two web hashes
 moved for the nine-package Admin UI bump recorded above, and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
-for `v0.5.0`, each of which bumped the `version` field in both files and changed
-nothing else.
+for `v0.5.0`, and again for `v0.6.0`, each of which bumped the `version` field in
+both files and changed nothing else.
 Nothing in any of it added, removed, or relicensed a dependency, so the
 inventory above still describes the reviewed tree. The gate hashes whole files
 rather than dependency sections, which is the right trade: it cannot be talked
