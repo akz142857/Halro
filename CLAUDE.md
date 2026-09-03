@@ -5,8 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Halro: single-binary, security-first LLM gateway (Go). One governed API for multiple
-model providers (OpenAI, Anthropic, Azure OpenAI, DeepSeek, Gemini Beta, AWS Bedrock
-Mantle Beta), with credentials, budgets, routing, redaction, audit, and usage
+model providers (OpenAI Chat/Responses, Anthropic Messages, Azure OpenAI, DeepSeek,
+MiniMax, Kimi, a generic OpenAI-compatible profile, Gemini Beta, AWS Bedrock Mantle
+Beta), with credentials, budgets, routing, redaction, audit, and usage
 accounting all owned locally — no external DB, cache, CDN, or browser-side secret
 storage. Ships with an embedded React Admin console (`web/`) built into
 `internal/webui/dist` and compiled into the Go binary.
@@ -62,8 +63,40 @@ make observability-check   # validates deploy/observability/ Prometheus/Alertman
 make reset CONFIRM=RESET   # destroys data dir + master key, then reinits — destructive, confirm before ever running
 ```
 
+`tests/` holds harnesses whose real work `go test ./...` skips or never reaches — they are
+`main` packages in the root module, so the ordinary suite only runs their unit tests:
+```bash
+HALRO_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
+go run ./tests/soak ...                    # against a running instance; docs/verification/soak-testing.md
+go run ./tests/provider-matrix ...         # billable real-provider evidence; docs/verification/provider-real-matrix.md
+go -C tests/compatibility/go test ./...    # official-SDK compatibility, separate go.mod, outside `./...`
+python tests/compatibility/python/test_sdk.py && npm test --prefix tests/compatibility/node
+go test ./internal/sse -run xxx -fuzz FuzzDecoderNeverPanics -fuzztime=30s
+```
+Fuzz targets are enumerated by name in `.github/workflows/ci.yml`; a renamed or added
+target that is not listed there is silently not fuzzed (`go test -fuzz` exits 0 when its
+pattern matches nothing). Update the list in the same change.
+
+CI runs more than the local gate: `go test -race ./...`, `govulncheck`, `npm audit`,
+the repository-hygiene check (no `data/`, `master.key`, `config.yaml`, `.hmbk`, binaries
+tracked), the `tools/` python unittests, and `sh -n` over the `tools/m11` smoke scripts.
+
 Real-Provider smoke tests are opt-in, billable, and never enabled in ordinary CI/dev
 runs (see `docs/verification/provider-real-matrix.md`).
+
+The binary is the diagnostic tool. The `verify`/`check`/`doctor` subcommands are read-only
+and safe against a real data directory; their siblings (`ledger seal`, `usage compact|prune`,
+`backup restore`) mutate and are not:
+```bash
+./bin/halro doctor --config config.yaml
+./bin/halro ledger verify --config config.yaml      # also: ledger seal
+./bin/halro audit verify --config config.yaml       # also: audit verify-anchor
+./bin/halro usage verify --config config.yaml       # also: usage compact|prune|rebuild-summary
+./bin/halro config check --config config.yaml
+./bin/halro backup verify ...                       # also: backup create|restore
+./bin/halro stats                                   # reads the metrics endpoint of a running instance
+```
+Full surface: `halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>`.
 
 ## Architecture
 
@@ -81,7 +114,7 @@ Key `internal/` packages and what owns what:
   Chat/Embeddings/Responses, Anthropic-compatible Messages. Each translates its wire
   protocol into a semantic operation before anything provider-specific happens.
 - `semantic` — the provider-agnostic operation model everything routes through.
-- `provider/*` — one package per upstream, each bound to an immutable, versioned
+- `provider/*` — one package per wire shape, each bound to an immutable, versioned
   Provider Profile that fixes its Access Surface, credential scheme, and capability
   evidence. Capability filtering happens before Provider I/O; unsupported fields are
   rejected, never silently dropped.
@@ -93,6 +126,11 @@ Key `internal/` packages and what owns what:
   install holding a withheld connection still starts and can delete it. Tests whose
   subject is a withheld profile guard on `domain.IsWithheldProfile` rather than being
   deleted, so offering one again restores its coverage with no edit.
+  A vendor does not automatically earn a package: upstreams speaking an existing wire
+  shape are variants inside that adapter (`provider/openai/minimax.go`, Kimi's Anthropic
+  face in `provider/anthropic/adapter.go`), with per-vendor request-field rules in
+  `internal/compatibility` (`minimax.go`, `kimi.go`, `provider_fields.go`). Only a
+  genuinely different protocol or credential scheme earns a new package.
 - `safetransport` — the only path to the network for provider/webhook calls: HTTPS-only,
   explicit host allowlists, DNS/IP validation, pinned dialing, no redirects, no env
   proxies. Never bypass this for outbound calls.
@@ -109,6 +147,18 @@ Key `internal/` packages and what owns what:
   atomically releases the reservation and commits cost/tokens; ambiguous Provider
   outcomes are conservatively accounted, never silently refunded.
 - `audit` — append-only, integrity-checked audit trail (see `docs/contracts/audit-integrity.md`).
+- `masterkey`, `kms`, `vault` — key material and its lifecycle: the master key and its Slot
+  transitions, a cloud-neutral KMS boundary that owns no SDK, credentials or persistence,
+  and HKDF derivation of subsystem keys. Driven by `halro key`
+  (`create|disable|rotate|rewrap|recover`, `key slot status|revoke`).
+- `modelcatalog` (+ `catalog/`, `tools/modelcatalog`) — model capability catalog: a built-in
+  table plus an optional signed dynamic snapshot, off by default. The production artifact is
+  produced only by the protected `.github/workflows/model-catalog-publish.yml`; see
+  `docs/runbooks/model-catalog-publishing.md` and ADR 0020.
+- `failurecapture` — the one place Halro stores what a caller wrote (see the invariant below).
+- `sourcelimit`, `hostsecurity`, `bearercred`, `alert` — pre-auth per-source request bounding
+  ahead of the project limiter, core-dump/host hardening, rotatable bearer-token credential
+  files (`/metrics`, audit anchor), and outbound alert webhooks.
 - `store`, `domain` — bbolt-backed transactional metadata (Projects, Routes, Deployments,
   Credentials, pricing, admin). Authoritative mutations validate before commit and
   preserve revision/tombstone/rollback/audit invariants.
@@ -154,7 +204,11 @@ and why a merge conflict in it is resolved by rebuilding rather than by hand.
   everywhere: auth, budget, redaction, transport.
 - **No secrets in logs, errors, metrics, or audit records**: authorization headers,
   Provider/Gateway keys, prompts, response bodies, raw source IPs never get logged or
-  persisted outside their one-time-response path.
+  persisted outside their one-time-response path. The single deliberate exception is
+  `internal/failurecapture`: a failed call's request and upstream answer, encrypted under the
+  master key, bound to its request and project, bounded in size and count, expiring on a
+  clock, and readable only as an audited admin action. Extending that exception anywhere
+  else is a design decision, not a convenience.
 - **Determinism on replay**: random IDs, wall-clock reads, and external results must be
   captured before replay, not regenerated during it.
 - **Retry/fallback is bounded** and stops being invisible once downstream response bytes
@@ -163,6 +217,9 @@ and why a merge conflict in it is resolved by rebuilding rather than by hand.
   implicit without deliberate contract review — they're pinned on purpose. The same goes
   for un-withholding a profile: it changes what every connection form offers and what the
   write path accepts, so it is a decision, not a cleanup.
+
+`docs/README.md` is the index for everything under `docs/` (contracts, ADRs, runbooks,
+verification evidence); much of it is zh-CN, the contracts are English.
 
 Full detail: `.github/copilot-instructions.md` (review checklist used for this repo),
 `docs/architecture/threat-model.md`, `docs/contracts/gateway-correctness.md`,
@@ -206,9 +263,10 @@ commit. This is not a style preference; it is where the expensive mistakes come 
 
 ## Pre-1.0.0: fix in place, do not accumulate compatibility
 
-Nothing has been published (no GitHub Release; the `v1.0.0-rc.1` tag's publish job never
-shipped). Until a version above 1.0.0 exists there is no deployment in the wild to stay
-compatible with, and the operator re-initialises their own instance.
+Releases `v0.1.0` through `v0.5.0` are published (latest `v0.5.0`, 2026-09-01), and every
+one of them is below 1.0.0 — which is the whole point: while the version stays under
+1.0.0 there is no compatibility promise to keep, and an operator re-initialises their own
+instance rather than being migrated. Check `gh release list` before assuming what exists.
 
 - **A wrong construct must not survive beside its replacement.** If a field is wrong, fix
   the field — do not keep it and add a corrected one. If a parameter is wrong, change it —

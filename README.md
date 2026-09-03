@@ -221,9 +221,9 @@ Requires cosign v2.2 or newer (`--bundle` reads the new Sigstore bundle format).
 ```bash
 # Download everything: checksums.txt lists every published artifact, and both
 # the checksum check and the loop below expect the files to be present.
-gh release download v1.0.0 --repo akz142857/Halro   # or download all assets by hand
+gh release download v0.5.0 --repo akz142857/Halro   # or download all assets by hand
 
-COSIGN_IDENTITY='https://github.com/akz142857/Halro/.github/workflows/release.yml@refs/tags/v1.0.0'
+COSIGN_IDENTITY='https://github.com/akz142857/Halro/.github/workflows/release.yml@refs/tags/v0.5.0'
 COSIGN_ISSUER='https://token.actions.githubusercontent.com'
 cosign verify-blob \
   --certificate-identity "$COSIGN_IDENTITY" \
@@ -243,20 +243,23 @@ done
 ```
 
 Do not verify the blobs against an unsigned `checksums.txt`, and do not replace
-the exact tag identity with a branch identity. Release candidates use their own
-exact `refs/tags/v1.0.0-rc.N` identity.
+the exact tag identity with a branch identity — substitute the tag you actually
+downloaded. Release candidates use their own exact `refs/tags/vX.Y.Z-rc.N`
+identity.
 
 ## API status
 
 | API | Status | Notes |
 |---|---|---|
 | `POST /v1/chat/completions` | Compatible | JSON and SSE; OpenAI Go/Node/Python SDK matrix |
-| `POST /v1/embeddings` | Compatible | Per-Profile coverage applies; Titan Text Embeddings V2 remains Experimental |
-| `POST /v1/responses` | Compatible subset | Stateless Create and text SSE; `store:true` and stateful fields are rejected |
+| `POST /v1/embeddings` | Compatible | Per-Profile coverage applies: OpenAI, Azure OpenAI, Gemini Beta, and the OpenAI-compatible Profile |
+| `POST /v1/responses` | Compatible subset | Stateless Create and text SSE, plus `background: true` deferred submission; `store:true` and stateful fields are rejected |
+| `GET`/`POST .../cancel`/`DELETE /v1/responses/{id}` | Experimental | Deferred retrieval, cancel, and delete for `background: true`; per-Project opt-in, answers sealed and retained at most 24 h ([ADR 0024](docs/adr/0024-deferred-response-tier.md)) |
 | `POST /v1/messages` | Compatible | Anthropic JSON/SSE; portable or exact native Profile routing |
+| `POST /v1/messages/count_tokens` | Compatible | Anthropic token counting over the same Profile routing |
 | Moderations, Images, Audio | Experimental | Strict Phase 2 endpoint and Provider Profile contracts |
 | Files and Batches | Experimental | Project-scoped opaque IDs, idempotency, ownership, private local objects |
-| `/v1/rerank` and Async Invoke | Experimental | Halro extensions backed by isolated Bedrock Profiles |
+| `/v1/rerank` and Async Invoke | Not served in this build | Halro extensions whose only backing Profiles — Cohere Rerank 3.5 on Bedrock Agent Runtime, Nova Reel Async on Bedrock Runtime — are withheld, so no Deployment can be created for either |
 | Realtime WebSocket/WebRTC | Not implemented | Architecture only; no Realtime data plane is claimed |
 
 The authoritative machine-readable contract is
@@ -274,11 +277,19 @@ Access Surface, operations, credential scheme, and capability evidence.
 | OpenAI | Chat, streaming, embeddings, Stateless Responses, and Experimental Phase 2 media/resources |
 | Anthropic | Native Messages JSON/SSE, `count_tokens`, tools, and signed Thinking round-trip; no embeddings |
 | Azure OpenAI | Deployment-scoped Chat/stream/embeddings with an explicitly pinned API version |
-| DeepSeek | OpenAI-compatible Chat/stream; embeddings disabled by default |
+| DeepSeek | OpenAI-compatible Chat/stream with reasoning and cache-tier usage; no embeddings |
 | OpenAI-compatible | Chat/stream/embeddings with explicitly declared optional capabilities |
+| MiniMax | One host and one key across three Profiles: Chat, Stateless Responses (no streaming), and Anthropic Messages |
+| Kimi | One key across the connection group: Chat (the only face reaching all published models) and Anthropic Messages; its Responses Profile is withheld |
 | Gemini Beta | Native text generation/SSE and float embeddings translation |
-| AWS Bedrock Beta | Converse, Titan Text Embeddings V2, Titan Image V2, Cohere Rerank 3.5, and Nova Reel Async through isolated Runtime/Agent Runtime Profiles |
 | AWS Bedrock Mantle Beta | Isolated OpenAI Chat, Stateless Responses, and Anthropic Messages Profiles |
+
+Bedrock is offered through Mantle alone. The five Bedrock Runtime and Agent
+Runtime Profiles — Converse, Titan Text Embeddings V2, Titan Image V2, Cohere
+Rerank 3.5, and Nova Reel Async — are **withheld** in this build: the
+implementation is present, but the served Profile matrix omits them and every
+write path refuses them, so no Deployment can be created against one. An install
+that already holds such a connection still starts and can delete it.
 
 Provider capabilities and per-field coverage are checked before Provider I/O.
 Unknown or unsupported fields are rejected instead of silently dropped.
@@ -299,6 +310,16 @@ and capability evidence are not merged.
   to Provider, Deployment, Profile, and Region.
 - Admin secrets and CSRF state are never persisted in browser storage; the
   production bundle is scanned for secret canaries and persistence APIs.
+- Prompts and response bodies never reach a log, a metric, or an audit record.
+  Two opt-in stores are the only places caller-written content is kept at rest,
+  and both change what the data directory contains, so enabling either is a
+  decision rather than a default: `gateway.failure_capture` retains the request
+  and upstream answer of a *failed* call, and the per-Project deferred tier
+  (`background: true`) retains the answer of a *successful* one. Both are sealed
+  under the Master Key, bound to their request and Project, bounded in size and
+  count, and swept on expiry. A captured failure payload is readable only
+  through an audited admin action; a deferred answer is readable only by the
+  Project that submitted it, within its retention window.
 
 See the [Threat Model](docs/architecture/threat-model.md),
 [Gateway correctness contract](docs/contracts/gateway-correctness.md), and
@@ -357,6 +378,8 @@ contract, and production boundaries are documented in the
 - [User Guide](docs/guides/user-guide.md) · [中文使用手册](docs/guides/user-guide.zh-CN.md)
 - [Operator Guide](docs/guides/operator-guide.md)
 - [Backup and restore](docs/guides/backup-restore.md)
+- [异步提交与延迟取回](docs/guides/deferred-responses.zh-CN.md) — `background: true`
+- [Choosing an AWS access surface](docs/guides/aws-surface-selection.md)
 - [Metrics reference](docs/contracts/metrics-reference.md)
 - [Prometheus/Alertmanager deployment](deploy/observability/README.md)
 - [Observability operations runbook](docs/observability/operations-runbook.md)
