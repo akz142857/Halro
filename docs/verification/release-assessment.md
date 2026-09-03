@@ -78,10 +78,15 @@ Baseline: `docs/verification/performance-baseline.md` (regression baseline,
 same-host comparison only).
 
 - Re-run the baseline benchmarks on the reference host; compare with
-  `benchstat`. Flag any hot-path regression >10% time or any new allocation
-  on a path documented as allocation-free (Token Guard admit, route
-  resolution). A flagged regression is not automatically blocking — it is
-  explained in the record or reverted.
+  `benchstat`. If the published table is stale, measure both the previous tag
+  and the candidate on the same host and toolchain with identical fixtures;
+  an obsolete table is not a reason to omit the comparison. Archive raw samples,
+  source revisions (and hashes for uncommitted code), commands and tool versions.
+  Flag any hot-path regression >10% time or any new allocation on a path that
+  was allocation-free in that same-host baseline. Token Guard admission and
+  route resolution already allocate; compare their measured counts rather than
+  describing them as allocation-free. A flagged regression is not automatically
+  blocking — it is explained in the record or reverted.
 - Diff scan for serialization: new locks, channels, or single-goroutine
   funnels on the request path. #13's finding stands — the first bottleneck is
   apply serialization/CPU, not fsync — so added serialization is the thing to

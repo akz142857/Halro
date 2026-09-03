@@ -1,0 +1,26 @@
+{
+  "date_utc": "2026-09-03T15:36:05Z",
+  "go": "go version go1.26.6 darwin/arm64",
+  "host": "Apple M4",
+  "cpu_count": "10",
+  "memory_bytes": "25769803776",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7\nBuildVersion:\t\t25G220",
+  "baseline_commit": "556f1d7992fe9e2be8e5b2a26ad54c5d44319f90",
+  "candidate_parent_commit": "cc14e1865754387d7c45ca073c161048e59d54bc",
+  "candidate_dirty": true,
+  "gomaxprocs": 4,
+  "cgo_enabled": 1,
+  "samples": 8,
+  "benchtime": "1s",
+  "packages": {
+    "provider": "^BenchmarkRegistryResolveCandidates$",
+    "redaction": "^Benchmark(StandardRedaction|RollingRedaction)$",
+    "tokenguard": "^Benchmark(Admit|AcquireReleaseContended)$",
+    "limiter": "^BenchmarkProjectAdmission(Contended)?$",
+    "ledger": "^BenchmarkReplayLargeWAL$"
+  },
+  "benchstat": "/tmp/halro-v060-tools/benchstat: go1.26.6\n\tpath\tgolang.org/x/perf/cmd/benchstat\n\tmod\tgolang.org/x/perf\tv0.0.0-20260825160852-19be9d8e6c70\th1:M+kM03JKR23KkrutTue5KEQYDSbZTZTJ4FJ1v5zYrHM=\n\tdep\tgithub.com/aclements/go-moremath\tv0.0.0-20210112150236-f10218a38794\th1:xlwdaKcTNVW4PtpQb8aKA4Pjy0CdJHEqvFbAnvR5m2g=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=arm64\n\tbuild\tGOOS=darwin\n\tbuild\tGOARM64=v8.0",
+  "method": "Same host and toolchain; serial packages; alternating version order each round; no race detector; no provider calls. Shared limiter harness copied unchanged into v0.5.0.",
+  "v0.5.0_go_source_sha256": "cdc8c4959cd9821185389cd43360824090e76db87b25a4d3ed253101216cb67b",
+  "candidate_go_source_sha256": "a49dfd927b76bedfdd5dd283db433eb13e808884424c066ee505178d68675b5c"
+}

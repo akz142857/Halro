@@ -78,15 +78,22 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 	if err != nil {
 		return ledger.ChainReport{}, fmt.Errorf("load ledger chain checkpoint: %w", err)
 	}
+	if err := verifyLedgerCheckpoint(report, checkpoint); err != nil {
+		return ledger.ChainReport{}, err
+	}
+	return report, nil
+}
+
+func verifyLedgerCheckpoint(report ledger.ChainReport, checkpoint boltstore.LedgerChainCheckpoint) error {
 	// An unverified chain is only benign on a ledger that never had one. Once
 	// the checkpoint is non-zero, "no authenticated frames" is the signature of
 	// a wiped or downgraded WAL, and reporting it as a clean result would make
 	// this command certify exactly what it exists to detect.
 	if !report.ChainVerified {
 		if checkpoint.Sequence > 0 {
-			return ledger.ChainReport{}, errors.New("ledger chain does not match its trusted checkpoint")
+			return errors.New("ledger chain does not match its trusted checkpoint")
 		}
-		return report, nil
+		return nil
 	}
 	// The checkpoint only advances at startup reconciliation, so a clean
 	// shutdown after a long session leaves the on-disk chain well ahead of
@@ -98,12 +105,12 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 	// sequence and the chain head exactly where they were and moves the head
 	// into a fresh file at offset zero.
 	if checkpoint.Sequence > report.ChainSequence || checkpoint.Generation > report.Head.Generation {
-		return ledger.ChainReport{}, errors.New("ledger chain does not match its trusted checkpoint")
+		return errors.New("ledger chain does not match its trusted checkpoint")
 	}
 	if checkpoint.Sequence == report.ChainSequence &&
 		(checkpoint.Hash != report.ChainHash ||
 			(checkpoint.Generation == report.Head.Generation && checkpoint.Offset != report.ChainOffset)) {
-		return ledger.ChainReport{}, errors.New("ledger chain does not match its trusted checkpoint")
+		return errors.New("ledger chain does not match its trusted checkpoint")
 	}
-	return report, nil
+	return nil
 }

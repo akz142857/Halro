@@ -1,0 +1,108 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+                 │ v0.5.0.txt  │        candidate.txt         │
+                 │   sec/op    │   sec/op     vs base         │
+ReplayLargeWAL-4   562.3m ± 8%   551.7m ± 6%  ~ (p=0.574 n=8)
+
+                 │  v0.5.0.txt  │           candidate.txt            │
+                 │     B/op     │     B/op      vs base              │
+ReplayLargeWAL-4   220.1Mi ± 0%   232.4Mi ± 0%  +5.58% (p=0.000 n=8)
+
+                 │ v0.5.0.txt  │           candidate.txt           │
+                 │  allocs/op  │  allocs/op   vs base              │
+ReplayLargeWAL-4   3.000M ± 0%   3.000M ± 0%  +0.00% (p=0.000 n=8)
+
+                 │  v0.5.0.txt   │         candidate.txt         │
+                 │      B/s      │     B/s       vs base         │
+ReplayLargeWAL-4   52.37Mi ± 12%   53.38Mi ± 7%  ~ (p=0.574 n=8)
+
+pkg: github.com/akz142857/Halro/internal/limiter
+                             │ v0.5.0.txt  │           candidate.txt            │
+                             │   sec/op    │    sec/op     vs base              │
+ProjectAdmission/unlimited-4   100.8n ± 4%   110.8n ± 13%  +9.82% (p=0.004 n=8)
+ProjectAdmission/limited-4     130.9n ± 4%   139.2n ±  3%  +6.30% (p=0.007 n=8)
+ProjectAdmissionContended-4    288.4n ± 7%   282.6n ±  3%       ~ (p=0.505 n=8)
+geomean                        156.1n        163.3n        +4.59%
+
+                             │ v0.5.0.txt │           candidate.txt            │
+                             │    B/op    │    B/op     vs base                │
+ProjectAdmission/unlimited-4   200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=8) ¹
+ProjectAdmission/limited-4     200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=8) ¹
+ProjectAdmissionContended-4    200.0 ± 0%   200.0 ± 0%       ~ (p=1.000 n=8) ¹
+geomean                        200.0        200.0       +0.00%
+¹ all samples are equal
+
+                             │ v0.5.0.txt │           candidate.txt            │
+                             │ allocs/op  │ allocs/op   vs base                │
+ProjectAdmission/unlimited-4   5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=8) ¹
+ProjectAdmission/limited-4     5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=8) ¹
+ProjectAdmissionContended-4    5.000 ± 0%   5.000 ± 0%       ~ (p=1.000 n=8) ¹
+geomean                        5.000        5.000       +0.00%
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/provider
+                            │ v0.5.0.txt  │        candidate.txt         │
+                            │   sec/op    │   sec/op     vs base         │
+RegistryResolveCandidates-4   5.198µ ± 4%   5.233µ ± 8%  ~ (p=0.505 n=8)
+
+                            │  v0.5.0.txt  │          candidate.txt          │
+                            │     B/op     │     B/op      vs base           │
+RegistryResolveCandidates-4   15.52Ki ± 0%   15.52Ki ± 0%  ~ (p=1.000 n=8) ¹
+¹ all samples are equal
+
+                            │ v0.5.0.txt │         candidate.txt         │
+                            │ allocs/op  │ allocs/op   vs base           │
+RegistryResolveCandidates-4   41.00 ± 0%   41.00 ± 0%  ~ (p=1.000 n=8) ¹
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/redaction
+                    │  v0.5.0.txt  │           candidate.txt            │
+                    │    sec/op    │    sec/op     vs base              │
+StandardRedaction-4   74.29µ ± 13%   80.19µ ± 11%       ~ (p=0.065 n=8)
+RollingRedaction-4    17.80µ ±  8%   17.42µ ±  3%       ~ (p=0.798 n=8)
+geomean               36.37µ         37.38µ        +2.79%
+
+                    │  v0.5.0.txt  │           candidate.txt            │
+                    │     B/op     │     B/op      vs base              │
+StandardRedaction-4   13.35Ki ± 0%   13.37Ki ± 1%       ~ (p=0.505 n=8)
+RollingRedaction-4    17.41Ki ± 0%   17.38Ki ± 0%       ~ (p=0.382 n=8)
+geomean               15.25Ki        15.25Ki       +0.01%
+
+                    │ v0.5.0.txt │           candidate.txt            │
+                    │ allocs/op  │ allocs/op   vs base                │
+StandardRedaction-4   32.00 ± 0%   32.00 ± 0%       ~ (p=1.000 n=8) ¹
+RollingRedaction-4    79.00 ± 0%   79.00 ± 0%       ~ (p=1.000 n=8) ¹
+geomean               50.28        50.28       +0.00%
+¹ all samples are equal
+
+                    │  v0.5.0.txt   │            candidate.txt            │
+                    │      B/s      │      B/s       vs base              │
+StandardRedaction-4   11.82Mi ± 13%   10.96Mi ± 12%       ~ (p=0.063 n=8)
+RollingRedaction-4    13.07Mi ± 11%   13.36Mi ±  5%       ~ (p=0.798 n=8)
+geomean               12.43Mi         12.10Mi        -2.69%
+
+pkg: github.com/akz142857/Halro/internal/tokenguard
+                          │ v0.5.0.txt  │           candidate.txt            │
+                          │   sec/op    │    sec/op     vs base              │
+Admit/fixed-4               172.0n ± 3%   179.9n ±  4%  +4.59% (p=0.021 n=8)
+Admit/ewma-4                189.9n ± 4%   185.5n ± 10%       ~ (p=0.574 n=8)
+AcquireReleaseContended-4   331.1n ± 8%   342.2n ±  9%       ~ (p=0.279 n=8)
+geomean                     221.2n        225.2n        +1.82%
+
+                          │ v0.5.0.txt │           candidate.txt            │
+                          │    B/op    │    B/op     vs base                │
+Admit/fixed-4               64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=8) ¹
+Admit/ewma-4                64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=8) ¹
+AcquireReleaseContended-4   128.0 ± 0%   128.0 ± 0%       ~ (p=1.000 n=8) ¹
+geomean                     80.63        80.63       +0.00%
+¹ all samples are equal
+
+                          │ v0.5.0.txt │           candidate.txt            │
+                          │ allocs/op  │ allocs/op   vs base                │
+Admit/fixed-4               2.000 ± 0%   2.000 ± 0%       ~ (p=1.000 n=8) ¹
+Admit/ewma-4                2.000 ± 0%   2.000 ± 0%       ~ (p=1.000 n=8) ¹
+AcquireReleaseContended-4   3.000 ± 0%   3.000 ± 0%       ~ (p=1.000 n=8) ¹
+geomean                     2.289        2.289       +0.00%
+¹ all samples are equal

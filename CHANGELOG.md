@@ -212,6 +212,14 @@ semantic versioning.
   create`, `halro admin *` and `halro key *` still migrate: they are commands
   that already intend to write.
 
+- Offline `usage compact`, `verify`, `prune` and `rebuild-summary` now unlock
+  the Ledger key and authenticate epoch-4 frames across the active WAL and all
+  sealed generations, including compressed history. They check the resulting
+  chain against the trusted checkpoint before exporting, pruning or replacing
+  derivatives. Missing or wrong keys, tampering, checkpoint rollback and a
+  partial tail are refused without changing the Ledger or existing derivatives.
+  Legacy epoch-1–3 frames retain their checksum-only compatibility.
+
 ### Operator impact
 
 - **Storage schema 33 → 35 upgrades in place on the first start; no
@@ -234,6 +242,13 @@ semantic versioning.
   2. with the **v0.5.0** binary: `halro backup create`, `halro ledger verify`,
      `halro usage verify`;
   3. swap the binary and run `halro start`.
+
+  Offline usage commands now require the master key (or access to the configured
+  primary KMS slot) and current metadata schema for authentication. Use the old
+  binary for pre-upgrade checks. The new usage commands refuse an older schema
+  instead of migrating it, including `rebuild-summary`; take the backup first,
+  then use `halro start` to perform the upgrade. A partial WAL tail must also be
+  recovered by startup before offline usage commands can proceed.
 
   After the swap, `halro backup create`, `halro admin *` and `halro key *` open
   the metadata store for writing and therefore migrate it to schema 35 as a side
