@@ -24,7 +24,7 @@ func TestDecodeResponseRequestRejectsStatefulUnknownAndLossyFields(t *testing.T)
 		`{"model":"route","input":"hello","store":true}`,
 		`{"model":"route","input":"hello","previous_response_id":"resp_1"}`,
 		`{"model":"route","input":"hello","conversation":"conv_1"}`,
-		`{"model":"route","input":"hello","background":true}`,
+		`{"model":"route","input":"hello","background":true,"stream":true}`,
 		`{"model":"route","input":"hello","reasoning":{"effort":"high"}}`,
 		// A provider-executed tool is named, not described: the caller is not
 		// declaring a function, so function fields on it are a caller who thinks
@@ -39,6 +39,24 @@ func TestDecodeResponseRequestRejectsStatefulUnknownAndLossyFields(t *testing.T)
 		if _, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(body))); err == nil {
 			t.Fatalf("accepted unsafe request: %s", body)
 		}
+	}
+}
+
+// background is the one field of the stateful set that this endpoint now
+// accepts, and it does not drag the rest in with it: the answer is collected
+// later, but nothing about the request is remembered as conversation.
+func TestDecodeResponseRequestAcceptsBackgroundWithoutStore(t *testing.T) {
+	request, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(
+		`{"model":"route","input":"hello","background":true}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Background {
+		t.Fatalf("background was dropped: %#v", request)
+	}
+	if _, err := DecodeResponseRequest(json.NewDecoder(strings.NewReader(
+		`{"model":"route","input":"hello","background":true,"store":true}`))); err == nil {
+		t.Fatal("store=true rode in on background")
 	}
 }
 

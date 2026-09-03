@@ -113,6 +113,34 @@ func (v *Vault) DecryptFailurePayload(requestID, projectID string, envelope []by
 	return v.decryptScoped("failure-payload", requestID, projectID, envelope)
 }
 
+// EncryptResourceObject seals one provider object — an uploaded batch input, a
+// batch result, a deferred response — under the resource that owns it and the
+// project that paid for it.
+//
+// These bytes are the same class of material EncryptFailurePayload guards: a
+// prompt the caller wrote, or output a model produced. They used to be written
+// to the object directory in the clear, which held them to a lower standard
+// than the identical bytes captured from a failed request. Binding the seal to
+// both identifiers means an object renamed onto another record, or lifted into
+// another install's directory, fails to open rather than opening as somebody
+// else's traffic.
+func (v *Vault) EncryptResourceObject(resourceID, projectID string, plaintext []byte) ([]byte, error) {
+	return v.encryptScoped("resource-object", resourceID, projectID, plaintext)
+}
+
+func (v *Vault) DecryptResourceObject(resourceID, projectID string, envelope []byte) ([]byte, error) {
+	return v.decryptScoped("resource-object", resourceID, projectID, envelope)
+}
+
+// SealedEnvelope reports whether the bytes carry the envelope header every
+// scoped seal writes. It answers "was this written by a build that sealed" and
+// nothing else: a true answer does not mean the envelope opens, and separating
+// the two lets a caller reclaim a plaintext leftover quietly while treating an
+// envelope that refuses to open as the far louder event it is.
+func SealedEnvelope(data []byte) bool {
+	return len(data) >= 6 && string(data[:4]) == envelopeMagic && data[4] == envelopeVersion
+}
+
 func (v *Vault) encryptScoped(kind, id, audience string, plaintext []byte) ([]byte, error) {
 	aead, aad, err := v.scopedAEAD(kind, id, audience)
 	if err != nil {

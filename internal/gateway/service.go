@@ -93,6 +93,9 @@ type Service struct {
 	now                           func() time.Time
 	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
+	resourceObjectSealer          ResourceObjectSealer
+	deferred                      *deferredEngine
+	deferredExecutionTimeout      time.Duration
 	contentScanner                contentscan.Scanner
 	pricing                       PriceSelector
 	pricingClockRollbackTolerance time.Duration
@@ -127,18 +130,28 @@ func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accoun
 }
 
 type ServiceOptions struct {
-	MaxAttempts                   int
-	CircuitFailureThreshold       int
-	CircuitOpenDuration           time.Duration
-	CircuitHalfOpenMaxRequests    int
-	MaxAttemptsPerTarget          int
-	RetryBaseDelay                time.Duration
-	RetryMaxDelay                 time.Duration
-	RetryJitter                   bool
-	TokenGuard                    *tokenguard.Manager
-	Redactor                      *redaction.Engine
-	Resources                     InferenceResourcesResourceStore
-	ResourceObjectDir             string
+	MaxAttempts                int
+	CircuitFailureThreshold    int
+	CircuitOpenDuration        time.Duration
+	CircuitHalfOpenMaxRequests int
+	MaxAttemptsPerTarget       int
+	RetryBaseDelay             time.Duration
+	RetryMaxDelay              time.Duration
+	RetryJitter                bool
+	TokenGuard                 *tokenguard.Manager
+	Redactor                   *redaction.Engine
+	Resources                  InferenceResourcesResourceStore
+	ResourceObjectDir          string
+	ResourceObjectSealer       ResourceObjectSealer
+	// DeferredResponseWorkers bounds how many deferred submissions this
+	// instance executes at once, above and beyond each Project's own
+	// concurrency limit. Zero takes the default.
+	DeferredResponseWorkers int
+	// DeferredExecutionTimeout bounds one deferred attempt the way
+	// route_total_timeout bounds a synchronous one. SafeTransport caps the
+	// connect and the response header; a body arriving one byte at a time is
+	// capped by nothing. Zero takes the default.
+	DeferredExecutionTimeout      time.Duration
 	ContentScanner                contentscan.Scanner
 	Pricing                       PriceSelector
 	PricingClockRollbackTolerance time.Duration
@@ -301,6 +314,18 @@ func (s *Service) resolveRequest(
 	return principal, targets, nil
 }
 
+// admissionMode says which rate limits this run still has to pass.
+//
+// A synchronous request pays all of them here. A deferred request paid its RPM
+// slot when it was submitted, possibly minutes ago; charging it again on the way
+// out of the queue would bill one request twice against the per-minute ceiling.
+type admissionMode int
+
+const (
+	admitFullRequest admissionMode = iota
+	admitExecutionOnly
+)
+
 // beginRequestRun opens the accounting for a request.
 //
 // payload is the operation as it will go upstream, taken here rather than at
@@ -316,12 +341,19 @@ func (s *Service) beginRequestRun(
 	targets []provider.Target,
 	totalTokens, inputTokens, outputTokens int64,
 	payload any,
+	admission admissionMode,
 ) (*requestRun, error) {
 	tokenGuardLease, pricingViewDigest, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
 		return nil, err
 	}
-	policyLease, err := s.limiter.Acquire(principal.Project, totalTokens, s.now())
+	var policyLease *limiter.Lease
+	switch admission {
+	case admitExecutionOnly:
+		policyLease, err = s.limiter.AcquireExecutionSlot(principal.Project, totalTokens, s.now())
+	default:
+		policyLease, err = s.limiter.Acquire(principal.Project, totalTokens, s.now())
+	}
 	if err != nil {
 		tokenGuardLease.Release()
 		return nil, s.mapLimitError(err)
@@ -852,6 +884,13 @@ func NewServiceWithOptions(
 		options.ContentScanner = contentscan.Builtin{}
 	}
 	if options.ResourceObjectDir != "" {
+		// An object directory without a sealer would write caller-written
+		// prompts and model output in the clear. There is no degraded mode
+		// worth having here: refuse to build rather than start an instance
+		// whose object directory is quietly a plaintext copy of its traffic.
+		if options.ResourceObjectSealer == nil {
+			return nil, errors.New("resource object directory requires a sealer")
+		}
 		options.ResourceObjectDir = filepath.Clean(options.ResourceObjectDir)
 		if !filepath.IsAbs(options.ResourceObjectDir) {
 			return nil, errors.New("resource object directory must be absolute")
@@ -879,7 +918,7 @@ func NewServiceWithOptions(
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{
+	service := &Service{
 		logger:                        logger,
 		failureCapture:                options.FailureCapture,
 		auth:                          authSnapshot,
@@ -901,12 +940,21 @@ func NewServiceWithOptions(
 		now:                           clock,
 		resources:                     options.Resources,
 		resourceObjectDir:             options.ResourceObjectDir,
+		resourceObjectSealer:          options.ResourceObjectSealer,
 		contentScanner:                options.ContentScanner,
 		pricing:                       options.Pricing,
 		pricingClockRollbackTolerance: options.PricingClockRollbackTolerance,
 		pricingClockForwardTolerance:  options.PricingClockForwardTolerance,
 		pricingUnknownPolicy:          options.PricingUnknownPolicy,
-	}, nil
+	}
+	if options.DeferredExecutionTimeout <= 0 {
+		options.DeferredExecutionTimeout = defaultDeferredExecutionTimeout
+	}
+	service.deferredExecutionTimeout = options.DeferredExecutionTimeout
+	if service.resources != nil && service.resourceObjectDir != "" {
+		service.deferred = newDeferredEngine(service, options.DeferredResponseWorkers)
+	}
+	return service, nil
 }
 
 func (s *Service) RejectionMetrics() RejectionMetrics {
@@ -1037,7 +1085,32 @@ func (s *Service) generate(
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
+	return s.executeGenerate(ctx, principal, targets, publicModel, canonical, render, admitFullRequest, nil)
+}
+
+// executeGenerate runs a resolved request: capability filtering, redaction,
+// admission, the attempt ladder, and settlement.
+//
+// It is separate from route resolution because the deferred tier resolves at
+// submission and executes minutes later. Re-resolving at execution would serve
+// an answer from a route the caller never asked for, and re-authenticating is
+// impossible without holding their key — so the caller of this function decides
+// how the principal and the targets were arrived at, and everything from here
+// down is identical for both paths. That identity is the point: a deferred
+// request's ledger events are the synchronous path's events, in the same order,
+// because they are produced by the same code.
+func (s *Service) executeGenerate(
+	ctx context.Context,
+	principal auth.AuthResult,
+	targets []provider.Target,
+	publicModel string,
+	canonical semantic.GenerateRequest,
+	render func(semantic.GenerateResult) error,
+	admission admissionMode,
+	requestIDOut *string,
+) (semantic.GenerateResult, error) {
 	candidates := targets
+	var err error
 	targets = filterSemanticCapabilities(targets, canonical.Requirements)
 	targets = filterGenerateProfileCompatibility(targets, canonical)
 	targets = filterUnrenderableReasoning(targets, canonical)
@@ -1071,12 +1144,18 @@ func (s *Service) generate(
 	if len(targets) == 0 {
 		return semantic.GenerateResult{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical, admission)
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
 	defer run.close()
 	requestID := run.requestID
+	// Handed back before the first attempt, not after the last: a caller that
+	// records which request paid for its work needs the identifier even when
+	// the work then fails.
+	if requestIDOut != nil {
+		*requestIDOut = requestID
+	}
 	var lastErr error
 	attemptCount := 0
 	for targetIndex, target := range targets {
@@ -1215,6 +1294,13 @@ func (s *Service) Responses(
 ) (openaiapi.Response, error) {
 	if request.Stream {
 		return openaiapi.Response{}, gatewayError("invalid_request_error", "stream must be false", 400, nil)
+	}
+	// The facade routes a background submission to the deferred tier before it
+	// gets here. This is the belt: a caller who reached the synchronous path
+	// with background set would otherwise be answered on this connection, which
+	// is the one thing they asked not to happen.
+	if request.Background {
+		return openaiapi.Response{}, gatewayError("invalid_request_error", "background must be false", 400, nil)
 	}
 	canonical, err := openaiwire.DecodeResponseGenerate(request)
 	if err != nil {
@@ -1408,7 +1494,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 	if err != nil {
 		return anthropicapi.Message{}, gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request, admitFullRequest)
 	if err != nil {
 		return anthropicapi.Message{}, err
 	}
@@ -1513,7 +1599,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	if err := s.checkNativeInboundRedaction(principal, payload); err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0, request)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, inputTokens, inputTokens, 0, request, admitFullRequest)
 	if err != nil {
 		return anthropicapi.TokenCount{}, err
 	}
@@ -1604,7 +1690,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 	if err != nil {
 		return gatewayError("token_limit_exceeded", "requested token count is too large", 400, err)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, []provider.Target{target}, totalTokens, inputTokens, outputTokens, request, admitFullRequest)
 	if err != nil {
 		return err
 	}
@@ -2079,7 +2165,7 @@ func (s *Service) generateStream(
 	if len(targets) == 0 {
 		return gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical)
+	run, err := s.beginRequestRun(ctx, principal, publicModel, targets, totalTokens, inputTokens, outputTokens, canonical, admitFullRequest)
 	if err != nil {
 		return err
 	}
@@ -2256,7 +2342,7 @@ func (s *Service) Embeddings(
 	if len(targets) == 0 {
 		return openaiapi.EmbeddingResponse{}, gatewayError("token_limit_exceeded", "request exceeds the model deployment token limits", 400, nil)
 	}
-	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0, request)
+	run, err := s.beginRequestRun(ctx, principal, request.Model, targets, inputTokens, inputTokens, 0, request, admitFullRequest)
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}

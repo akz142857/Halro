@@ -8,9 +8,14 @@ import (
 type NorthboundProfileID string
 
 const (
-	ProfileOpenAIChatCompletions   NorthboundProfileID = "openai.chat-completions.v1"
-	ProfileOpenAIEmbeddings        NorthboundProfileID = "openai.embeddings.v1"
-	ProfileOpenAIResponses         NorthboundProfileID = "openai.responses.stateless.v1"
+	ProfileOpenAIChatCompletions NorthboundProfileID = "openai.chat-completions.v1"
+	ProfileOpenAIEmbeddings      NorthboundProfileID = "openai.embeddings.v1"
+	// Not "openai.responses.v1": that string is already the identifier of the
+	// OpenAI Responses *provider* profile (domain.ProfileOpenAIResponses), and
+	// both names appear in one manifest document. "stateless" is what had to go
+	// — the face now defers an answer to disk — and "deferrable" says which tier
+	// it gained without claiming the request became stateful.
+	ProfileOpenAIResponses         NorthboundProfileID = "openai.responses.deferrable.v1"
 	ProfileAnthropicMessages       NorthboundProfileID = "anthropic.messages.2023-06-01"
 	ProfileOpenAIMediaResources    NorthboundProfileID = "openai.media-resources.v1"
 	ProfileHalroInferenceResources NorthboundProfileID = "halro.inference-resources.v1"
@@ -38,7 +43,7 @@ func (profile NorthboundProfile) Validate() error {
 var builtinNorthboundProfiles = []NorthboundProfile{
 	{ID: ProfileOpenAIChatCompletions, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/chat/completions"}},
 	{ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
-	{ID: ProfileOpenAIResponses, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/responses"}},
+	{ID: ProfileOpenAIResponses, Revision: 2, Protocol: "openai", Methods: []string{"POST /v1/responses", "GET /v1/responses/{id}", "POST /v1/responses/{id}/cancel", "DELETE /v1/responses/{id}"}},
 	{ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
 	{ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
 	{ID: ProfileHalroInferenceResources, Revision: 1, Protocol: "halro", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},

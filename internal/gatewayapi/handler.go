@@ -95,6 +95,10 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 		h.responsesStream(writer, request.WithContext(ctx), key, decoded)
 		return
 	}
+	if decoded.Background {
+		h.submitDeferredResponse(writer, request, key, decoded)
+		return
+	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
 	defer cancel()
 	if h.responses == nil {
@@ -296,6 +300,7 @@ type Handler struct {
 	responses          ResponsesService
 	messages           MessagesService
 	inferenceResources InferenceResourcesService
+	deferredResponses  DeferredResponsesService
 	maxRequestBytes    int64
 	routeTimeout       time.Duration
 	streamTimeout      time.Duration
@@ -373,6 +378,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
 	handler.inferenceResources, _ = service.(InferenceResourcesService)
+	handler.deferredResponses, _ = service.(DeferredResponsesService)
 	return handler, nil
 }
 

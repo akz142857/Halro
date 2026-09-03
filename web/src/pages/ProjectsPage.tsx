@@ -34,6 +34,10 @@ const PAGE_SIZE = "50";
 
 // Mirrors domain.MaxProjectNameLength so the browser and the store agree on the limit.
 const MAX_PROJECT_NAME = 128;
+// Mirrors domain.MaxDeferredQueueCeiling. Every queued submission holds a sealed
+// copy of the caller's request on disk until it runs, so the ceiling is what
+// stops one form field turning a slow upstream into an unbounded local store.
+const MAX_DEFERRED_QUEUE = 10_000;
 
 const projectSchema = (t: TFunction) => z.object({
   name: z.string().trim().min(1, t("projects.nameRequired")).max(MAX_PROJECT_NAME, t("projects.nameTooLong")),
@@ -46,6 +50,8 @@ const projectSchema = (t: TFunction) => z.object({
   concurrency: z.coerce.number().int().min(0),
   budget: z.coerce.number().min(0),
   requestKB: z.coerce.number().int().min(0),
+  deferredResponses: z.boolean(),
+  deferredQueue: z.coerce.number().int().min(0).max(MAX_DEFERRED_QUEUE),
   cidrs: z.string().refine(
     (value) => splitValues(value).every(isCIDR),
     { message: t("projects.cidrInvalid") },
@@ -74,6 +80,11 @@ function projectUpdateBody(project: Project, enabled: boolean) {
     max_output_tokens: project.max_output_tokens,
     max_request_bytes: project.max_request_bytes,
     max_stream_duration_seconds: Math.round(project.max_stream_duration / 1_000_000_000),
+    // Carried through an enable/disable toggle rather than defaulted. Omitting
+    // them here would send zero, quietly switching deferred responses off for a
+    // project whose operator only clicked "disable" on something else.
+    deferred_responses: project.deferred_responses,
+    max_deferred_queue: project.max_deferred_queue,
     allowed_cidrs: project.allowed_cidrs ?? [],
     redaction_policy_id: project.redaction_policy_id,
     token_guard_policy_id: project.token_guard_policy_id,
@@ -472,6 +483,8 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       // one, and inventing a tighter number the operator never chose is how a
       // limit surprises them.
       requestKB: Math.round((current?.max_request_bytes ?? 0) / 1024),
+      deferredResponses: current?.deferred_responses ?? false,
+      deferredQueue: current?.max_deferred_queue ?? 0,
       routes: current?.allowed_models ?? [],
       cidrs: (current?.allowed_cidrs ?? []).join(", "),
       tokenGuardPolicyID: current?.token_guard_policy_id ?? "",
@@ -481,6 +494,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   });
   const selectedRouteAliases = watch("routes") ?? [];
   const enabled = watch("enabled");
+  const deferredResponses = watch("deferredResponses");
   const { notify } = useNotify();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
@@ -500,6 +514,8 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       max_output_tokens: current?.max_output_tokens ?? 16_384,
       max_request_bytes: value.requestKB * 1024,
       max_stream_duration_seconds: current ? Math.round(current.max_stream_duration / 1_000_000_000) : 600,
+      deferred_responses: value.deferredResponses,
+      max_deferred_queue: value.deferredQueue,
       allowed_cidrs: splitValues(value.cidrs),
       redaction_policy_id: value.redactionPolicyID,
       token_guard_policy_id: value.tokenGuardPolicyID,
@@ -582,6 +598,20 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
             <Field label={t("projects.maxConcurrency")}><input autoComplete="off" type="number" {...register("concurrency")} /></Field>
             <Field label={t("projects.dailyBudgetUSD")}><input autoComplete="off" type="number" step="0.01" {...register("budget")} /></Field>
             <Field label={t("projects.maxRequestKB")} hint={t("projects.maxRequestKBHint")}><input autoComplete="off" type="number" min={0} {...register("requestKB")} /></Field>
+          </div>
+        </section>
+        <section className="project-form-section" aria-labelledby="project-deferred-title">
+          <header><h3 id="project-deferred-title">{t("projects.deferredResponses")}</h3><p>{t("projects.deferredResponsesDescription")}</p></header>
+          <div className="form-grid">
+            <Field label={t("projects.deferredResponsesEnable")} hint={t("projects.deferredResponsesHint")}>
+              <label className="form-inline-check">
+                <input type="checkbox" {...register("deferredResponses")} />
+                <span>{deferredResponses ? t("common.enabled") : t("common.disabled")}</span>
+              </label>
+            </Field>
+            <Field label={t("projects.deferredQueue")} hint={t("projects.deferredQueueHint")}>
+              <input autoComplete="off" type="number" min={0} max={MAX_DEFERRED_QUEUE} disabled={!deferredResponses} {...register("deferredQueue")} />
+            </Field>
           </div>
         </section>
         <section className="project-form-section" aria-labelledby="project-security-title">

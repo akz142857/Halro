@@ -641,7 +641,7 @@
               "declared_transforms": [
                 "Responses items are mapped through the Anthropic Messages ProviderPrimitive"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "text.format",
@@ -913,7 +913,7 @@
                 "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O",
                 "user is carried as DeepSeek's user_id"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "parallel_tool_calls",
@@ -1206,7 +1206,7 @@
               "declared_transforms": [
                 "instructions are mapped to a developer message and merged into Gemini system_instruction"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "tools",
@@ -1620,7 +1620,7 @@
               "declared_transforms": [
                 "stateless Responses are sent directly with store=false"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "tools"
@@ -1776,7 +1776,7 @@
               "declared_transforms": [
                 "stateless Responses are sent directly with store=false"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "tools"
@@ -1934,7 +1934,7 @@
                 "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it",
                 "Responses items are mapped through Bedrock Mantle Anthropic Messages"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "text.format",
@@ -2095,7 +2095,7 @@
                 "Responses items are mapped through MiniMax's Anthropic Messages ProviderPrimitive",
                 "an Anthropic image source is base64, url, or file and has no member for the OpenAI fidelity hint, so detail is rejected before provider I/O at any value other than auto rather than dropped from a request that paid for it"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "text.format",
@@ -2258,7 +2258,7 @@
                 "max_output_tokens is carried as MiniMax's max_completion_tokens, which is the same quantity: this endpoint rejects the reasoning request field outright, so nothing served here thinks",
                 "parallel_tool_calls is value-dependent: true is what omitting the member already means"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "parallel_tool_calls",
@@ -2418,7 +2418,7 @@
                 "stateless Responses are sent directly with store=false",
                 "reasoning is rejected before provider I/O because the canonical response mapper cannot preserve the reasoning items MiniMax returns"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "parallel_tool_calls",
@@ -2594,7 +2594,7 @@
                 "parallel_tool_calls is value-dependent: true is what omitting the member already means",
                 "text.format is carried: the Kimi Chat face documents the json_schema response format alongside json_object"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "temperature",
@@ -2767,7 +2767,7 @@
                 "temperature and top_p are rejected because Kimi pins each per model",
                 "text.format is value-dependent: this face takes a schema through output_config.format and enforces it, so a schema-less request is routed away"
               ],
-              "endpoint_id": "openai.responses.stateless.v1",
+              "endpoint_id": "openai.responses.create.v1",
               "path": "/v1/responses",
               "unsupported_request_fields": [
                 "temperature",

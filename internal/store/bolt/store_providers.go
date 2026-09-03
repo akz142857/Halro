@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -476,6 +477,46 @@ func (s *Store) ListProviderResources(ctx context.Context) ([]domain.ProviderRes
 		return nil
 	})
 	return resources, err
+}
+
+// PendingDeferredResponses returns the deferred responses that still owe an
+// answer, for one project or — with an empty project — for the instance.
+//
+// Two callers need it: submission, to refuse when a Project's queue is full,
+// and startup, to decide what to do with work the previous process was holding.
+// It scans, like the idempotency lookup beside it, because the population it
+// walks is bounded by the queue ceiling and the TTL rather than by traffic.
+func (s *Store) PendingDeferredResponses(ctx context.Context, projectID string) ([]domain.ProviderResource, error) {
+	var pending []domain.ProviderResource
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var resource domain.ProviderResource
+			if err := json.Unmarshal(raw, &resource); err != nil {
+				return err
+			}
+			if resource.Kind != domain.ResourceDeferredResponse {
+				return nil
+			}
+			if projectID != "" && resource.ProjectID != projectID {
+				return nil
+			}
+			if domain.DeferredTerminal(resource.Status) {
+				return nil
+			}
+			pending = append(pending, resource)
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(pending, func(a, b domain.ProviderResource) int {
+		return a.SubmittedAt.Compare(b.SubmittedAt)
+	})
+	return pending, nil
 }
 
 func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) (domain.ProviderResource, error) {

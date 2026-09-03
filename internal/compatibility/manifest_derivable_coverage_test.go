@@ -107,7 +107,7 @@ func servedNatively(manifest EndpointCompatibilityManifest, profileID domain.Pro
 // routing can compare them; the manifest speaks each endpoint's own.
 func endpointSpelling(endpointID, field string) string {
 	switch endpointID {
-	case "openai.responses.stateless.v1":
+	case "openai.responses.create.v1":
 		switch field {
 		case "messages[].content[].detail":
 			return "input[].content[].detail"

@@ -1829,6 +1829,11 @@ textarea { resize: vertical; }
 .form-footer-enable { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-3); cursor: pointer; }
 .form-footer-enable input { width: 1rem; min-height: 1rem; margin: 0; accent-color: var(--color-action-primary); }
 .form-footer-summary { min-width: 0; }
+/* A checkbox that sits inside a Field, where the label is the Field's own and
+   the text beside the box only reports the current state. */
+.form-inline-check { display: flex; align-items: center; gap: var(--space-2); min-height: 2.25rem; cursor: pointer; }
+.form-inline-check input { width: 1rem; min-height: 1rem; margin: 0; accent-color: var(--color-action-primary); }
+.form-inline-check span { color: var(--text); font-size: var(--font-size-xs); }
 .form-footer-enable strong, .form-footer-enable small,
 .form-footer-summary strong, .form-footer-summary small { display: block; }
 .form-footer-enable strong, .form-footer-summary strong { color: var(--text); font-size: var(--font-size-xs); }

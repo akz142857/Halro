@@ -250,11 +250,19 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	}
 	const objectName = "file_backup.object"
 	const objectCanary = "provider-object-backup-canary"
+	// A deferred response holds two objects, and until this test existed the
+	// backup took only the first: restoring left queued records naming a
+	// request that was not in the archive.
+	const deferredInputName = "resp_backup.input"
+	const deferredInputCanary = "deferred-input-backup-canary"
 	objectDir := filepath.Join(cfg.Storage.DataDir, "provider-objects")
 	if err := os.MkdirAll(objectDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(objectDir, objectName), []byte(objectCanary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(objectDir, deferredInputName), []byte(deferredInputCanary), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store, err := boltstore.Open(cfg.MetadataPath())
@@ -269,6 +277,13 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 		PublicModel: "chat", ProfileID: profile.ProfileID, ObjectPath: objectName,
 		CreationStatus: "completed", Status: "uploaded", CreatedAt: now,
 		UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
+	}, 0)
+	_, deferredErr := store.PutProviderResource(context.Background(), domain.ProviderResource{
+		ID: "resp_backup", Kind: domain.ResourceDeferredResponse, ProjectID: bootstrap.ProjectID,
+		ProviderID: bootstrap.ProviderID, DeploymentID: bootstrap.DeploymentID,
+		PublicModel: "chat", ProfileID: profile.ProfileID, InputObjectPath: deferredInputName,
+		CreationStatus: "completed", Status: domain.DeferredQueued, SubmittedAt: now,
+		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
 	}, 0)
 	instance, detectionErr := store.GetProvider(context.Background(), bootstrap.ProviderID)
 	if detectionErr == nil {
@@ -295,7 +310,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 		}
 	}
 	closeErr := store.Close()
-	if err := errors.Join(putErr, detectionErr, closeErr); err != nil {
+	if err := errors.Join(putErr, deferredErr, detectionErr, closeErr); err != nil {
 		t.Fatal(err)
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
@@ -343,6 +358,9 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	extracted := filepath.Join(root, "extracted-backup")
 	if _, err := backuppkg.Extract(output, key, extracted); err != nil {
 		t.Fatal(err)
+	}
+	if payload, err := os.ReadFile(filepath.Join(extracted, "data", "provider-objects", deferredInputName)); err != nil || string(payload) != deferredInputCanary {
+		t.Fatalf("the deferred request object was left out of the archive: %v %q", err, payload)
 	}
 	if payload, err := os.ReadFile(filepath.Join(extracted, "data", "provider-objects", objectName)); err != nil || string(payload) != objectCanary {
 		t.Fatalf("restored provider object=%q err=%v", payload, err)

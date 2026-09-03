@@ -4,7 +4,10 @@
 
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
-- `POST /v1/responses` (`openai.responses.stateless.v1`)
+- `POST /v1/responses` (`openai.responses.deferrable.v1`)
+- `GET /v1/responses/{id}`, `POST /v1/responses/{id}/cancel`, `DELETE /v1/responses/{id}`
+  — the deferred tier only: they address a submission made with `background: true`
+  and never a synchronous response, which is not stored (ADR 0024)
 
 ## Required request matrix
 

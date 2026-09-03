@@ -105,7 +105,7 @@ func TestPortableMessagesCoverageDeclaresEveryOutputConfigLoss(t *testing.T) {
 func TestResponsesCoverageDeclaresEveryOutputBudgetAndFormatLoss(t *testing.T) {
 	var responses compatibility.EndpointCompatibilityManifest
 	for _, manifest := range compatibility.BuiltinEndpointManifests() {
-		if manifest.ID == "openai.responses.stateless.v1" {
+		if manifest.ID == "openai.responses.create.v1" {
 			responses = manifest
 			break
 		}

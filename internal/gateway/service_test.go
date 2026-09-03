@@ -297,7 +297,7 @@ type adapterOnly struct{ provider.Adapter }
 
 func (a *fakeAdapter) Close() {}
 
-func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+func (a *fakeAdapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
 	a.mu.Lock()
 	a.calls++
 	a.lastChatRequest = call.Request
@@ -306,7 +306,15 @@ func (a *fakeAdapter) Chat(_ context.Context, call provider.ChatCall) (openaiapi
 		a.started <- struct{}{}
 	}
 	if a.release != nil {
-		<-a.release
+		// A real adapter abandons the call when its context ends. Blocking on
+		// release alone would make this fake the one thing in the process that
+		// cannot be timed out, which is the opposite of what a test about
+		// deadlines needs from it.
+		select {
+		case <-a.release:
+		case <-ctx.Done():
+			return openaiapi.ChatCompletionResponse{}, ctx.Err()
+		}
 	}
 	if call.ProviderModel != "provider-model" {
 		return openaiapi.ChatCompletionResponse{}, errors.New("provider model was not mapped")
@@ -387,6 +395,20 @@ func newFixtureAt(
 	options ledger.Options,
 	clock func() time.Time,
 ) fixture {
+	return newFixtureShaped(t, dailyBudget, options, clock, nil, nil)
+}
+
+// newFixtureShaped is newFixtureAt with the two hooks the deferred tier needs:
+// a Project that has the feature turned on, and a Service that has somewhere to
+// keep what it defers.
+func newFixtureShaped(
+	t *testing.T,
+	dailyBudget int64,
+	options ledger.Options,
+	clock func() time.Time,
+	shapeProject func(*domain.Project),
+	shapeOptions func(*ServiceOptions),
+) fixture {
 	t.Helper()
 	project := domain.Project{
 		ID:                   "project_1",
@@ -396,6 +418,9 @@ func newFixtureAt(
 		DailyBudgetMicrosUSD: dailyBudget,
 		MaxInputTokens:       10_000,
 		MaxOutputTokens:      100,
+	}
+	if shapeProject != nil {
+		shapeProject(&project)
 	}
 	plaintext, key, err := auth.GenerateGatewayKey(project.ID, "test", nil)
 	if err != nil {
@@ -457,7 +482,11 @@ func newFixtureAt(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewServiceWithOptions(snapshot, registry, accounting, ServiceOptions{Now: clock})
+	serviceOptions := ServiceOptions{Now: clock}
+	if shapeOptions != nil {
+		shapeOptions(&serviceOptions)
+	}
+	service, err := NewServiceWithOptions(snapshot, registry, accounting, serviceOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1767,7 +1796,7 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := targets[0]
-	run, err := f.service.beginRequestRun(ctx, principal, "chat", targets, 15, 10, 5, nil)
+	run, err := f.service.beginRequestRun(ctx, principal, "chat", targets, 15, 10, 5, nil, admitFullRequest)
 	if err != nil {
 		t.Fatal(err)
 	}

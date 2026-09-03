@@ -1,6 +1,8 @@
 # ADR 0005: Stateless OpenAI Responses facade
 
-Status: Accepted for Phase 1A
+Status: Accepted for Phase 1A; the resource-ownership section is amended by
+[ADR 0024](0024-deferred-response-tier.md), which admits `background` as a
+deferred tier and leaves the rest of that section standing
 
 Date: 2026-08-01
 
@@ -20,8 +22,10 @@ is portable.
 
 ## Decision
 
-Halro publishes only `POST /v1/responses` as the versioned northbound
-profile `openai.responses.stateless.v1`.
+Halro publishes only `POST /v1/responses` as a versioned northbound profile.
+(That profile was `openai.responses.stateless.v1` when this ADR was written; it
+is `openai.responses.deferrable.v1` since ADR 0024, which added the deferred
+tier and its three lifecycle routes.)
 
 The endpoint is a stateless protocol facade:
 
@@ -34,16 +38,20 @@ The endpoint is a stateless protocol facade:
 5. Render a Responses object or typed Responses SSE events from the canonical
    result/events.
 
-The `resp_*` and output-item IDs returned by this tier are ephemeral Gateway
-correlation identifiers. They are not provider resource IDs, cannot be used
-with a retrieval API, and are not stored by Halro.
+The `resp_*` and output-item IDs returned by the synchronous tier are ephemeral
+Gateway correlation identifiers. They are not provider resource IDs, cannot be
+used with a retrieval API, and are not stored by Halro. A `resp_*` identifier
+minted for a deferred submission is the exception ADR 0024 defines: it names a
+project-owned record, and it is still not a provider resource ID.
 
 ## Resource ownership
 
 - Omitted `store` means `false` in Halro; `store: true` is rejected.
-- `previous_response_id`, `conversation`, `background`, prompt resources,
-  metadata persistence, retrieval, deletion, cancellation, input-item listing,
-  compaction/context management, and webhooks are unavailable.
+- `previous_response_id`, `conversation`, prompt resources, metadata
+  persistence, input-item listing, compaction/context management, and webhooks
+  are unavailable. `background` was refused here too, and is now served as the
+  deferred tier defined by ADR 0024; retrieval, deletion and cancellation exist
+  for a deferred submission alone and reach nothing else.
 - Provider-owned Responses IDs are neither exposed as durable resources nor
   accepted as routing input.
 - A future stored tier requires a new ADR defining provider/deployment/profile/

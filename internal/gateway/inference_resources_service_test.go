@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/semantic"
+	"github.com/akz142857/Halro/internal/vault"
 )
 
 var errInferenceResourcesResourceNotFound = errors.New("inferenceResources resource not found")
@@ -106,6 +109,28 @@ func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.
 		}
 	}
 	return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
+}
+
+func (s *inferenceResourcesMemoryStore) PendingDeferredResponses(_ context.Context, projectID string) ([]domain.ProviderResource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var pending []domain.ProviderResource
+	for _, resource := range s.resources {
+		if resource.Kind != domain.ResourceDeferredResponse {
+			continue
+		}
+		if projectID != "" && resource.ProjectID != projectID {
+			continue
+		}
+		if domain.DeferredTerminal(resource.Status) {
+			continue
+		}
+		pending = append(pending, resource)
+	}
+	slices.SortFunc(pending, func(a, b domain.ProviderResource) int {
+		return a.SubmittedAt.Compare(b.SubmittedAt)
+	})
+	return pending, nil
 }
 
 type inferenceResourcesAdapter struct {
@@ -242,7 +267,12 @@ func newInferenceResourcesServiceFixture(t *testing.T, profileID domain.Provider
 	}
 	store := newInferenceResourcesMemoryStore()
 	objectDir := filepath.Join(t.TempDir(), "objects")
-	service, err := NewServiceWithOptions(snapshot, registry, accounting, ServiceOptions{Resources: store, ResourceObjectDir: objectDir, Redactor: redactor})
+	sealer, err := vault.New(bytes.Repeat([]byte{0x2b}, vault.MasterKeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(sealer.Close)
+	service, err := NewServiceWithOptions(snapshot, registry, accounting, ServiceOptions{Resources: store, ResourceObjectDir: objectDir, ResourceObjectSealer: sealer, Redactor: redactor})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +753,8 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 	defer f.close()
 	now := time.Now()
 
-	objectPath, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n"))
+	contents := []byte("{\"custom_id\":\"a\"}\n")
+	objectPath, err := f.service.writeResourceObject("file-local", f.project.ID, objectRoleContent, contents)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +762,7 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 		ID: "file-local", Kind: domain.ResourceFile, ProjectID: f.project.ID,
 		ProviderID: "inferenceResources-provider", DeploymentID: "inferenceResources-deployment",
 		PublicModel: "resources", ProfileID: domain.ProfileOpenAIMediaResources, Region: "us-east-1",
-		UpstreamID: "", ObjectPath: objectPath, ObjectContentType: "application/jsonl",
+		UpstreamID: "", ObjectPath: objectPath, ObjectBytes: int64(len(contents)), ObjectContentType: "application/jsonl",
 		ObjectFilename: "batch-input.jsonl", ObjectPurpose: "batch",
 		CreationStatus: "completed", Status: "uploaded",
 		CreatedAt: now.Add(-time.Hour), UpdatedAt: now, ExpiresAt: now.Add(-time.Minute), Revision: 1,
@@ -745,8 +776,10 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 	if object.ID != local.ID || object.Filename != "batch-input.jsonl" || object.Purpose != "batch" {
 		t.Fatalf("metadata came back wrong: %#v", object)
 	}
-	if object.Bytes == 0 {
-		t.Fatal("metadata reported no size for an object that exists")
+	// The size a file object reports is the size of the caller's bytes, not of
+	// the sealed file holding them. Stat would answer the second question.
+	if object.Bytes != int64(len(contents)) {
+		t.Fatalf("metadata reported %d bytes, want %d", object.Bytes, len(contents))
 	}
 	if adapter.getFileCalls != 0 {
 		t.Fatalf("the upstream was asked about a file it never received (%d calls)", adapter.getFileCalls)
@@ -781,7 +814,7 @@ func TestLocalOnlyFileIsServedAndReapedWithoutTouchingTheUpstream(t *testing.T) 
 	// against an object that is actually there. Left as it was, the interactive
 	// delete above would have removed it and the assertion below would pass
 	// against nothing.
-	if _, err := f.service.writeResourceObject("file-local", []byte("{\"custom_id\":\"a\"}\n")); err != nil {
+	if _, err := f.service.writeResourceObject("file-local", f.project.ID, objectRoleContent, []byte("{\"custom_id\":\"a\"}\n")); err != nil {
 		t.Fatal(err)
 	}
 	f.store.resources[local.ID] = local
@@ -963,5 +996,73 @@ func TestBatchResultsAreFetchedOnceAndThenNamed(t *testing.T) {
 	}
 	if adapter.fetchCalls != 1 {
 		t.Fatalf("results were fetched %d times", adapter.fetchCalls)
+	}
+}
+
+// The object directory used to hold what the caller uploaded verbatim. These
+// two tests are the ones that fail if that ever comes back: the first says the
+// bytes are not on disk, the second says the seal is bound to the record rather
+// than to the directory.
+func TestUploadedObjectIsNotOnDiskInTheClear(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
+	defer f.close()
+	secret := []byte(`{"prompt":"canary-9f3a-do-not-store-in-the-clear"}` + "\n")
+	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "seal-key", provider.FileCreateCall{
+		Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: secret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.objectDir, resource.ObjectPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("canary-9f3a-do-not-store-in-the-clear")) {
+		t.Fatal("the uploaded bytes are readable in the object directory")
+	}
+	if !vault.SealedEnvelope(raw) {
+		t.Fatalf("the object carries no seal envelope: %q", raw[:min(len(raw), 8)])
+	}
+	if resource.ObjectBytes != int64(len(secret)) {
+		t.Fatalf("record says %d bytes, uploaded %d", resource.ObjectBytes, len(secret))
+	}
+	content, err := f.service.DownloadFile(context.Background(), f.plaintext, created.ID)
+	if err != nil {
+		t.Fatalf("download of a sealed object: %v", err)
+	}
+	if !bytes.Equal(content.Data, secret) {
+		t.Fatalf("download returned %q, want %q", content.Data, secret)
+	}
+}
+
+func TestSealedObjectDoesNotOpenUnderAnotherRecord(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("files", adapter), nil)
+	defer f.close()
+	created, err := f.service.CreateFile(context.Background(), f.plaintext, "files", "rebind-key", provider.FileCreateCall{
+		Filename: "batch.jsonl", ContentType: "application/json", Purpose: "batch", Data: []byte(`{"x":1}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resource, err := f.store.ProviderResource(context.Background(), f.project.ID, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, moved := range []struct {
+		name     string
+		resource domain.ProviderResource
+	}{
+		{"another resource id", func() domain.ProviderResource { r := resource; r.ID = "file-someone-else"; return r }()},
+		{"another project", func() domain.ProviderResource { r := resource; r.ProjectID = "proj-someone-else"; return r }()},
+	} {
+		if _, err := f.service.readResourceObject(moved.resource); err == nil {
+			t.Fatalf("the object opened under %s", moved.name)
+		}
 	}
 }

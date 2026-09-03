@@ -29,6 +29,7 @@ type AuthResult struct {
 
 type snapshotData struct {
 	keys     map[[32]byte]domain.GatewayKey
+	byID     map[string]domain.GatewayKey
 	projects map[string]domain.Project
 }
 
@@ -49,6 +50,7 @@ func NewSnapshot() *Snapshot {
 	snapshot := &Snapshot{}
 	snapshot.current.Store(&snapshotData{
 		keys:     make(map[[32]byte]domain.GatewayKey),
+		byID:     make(map[string]domain.GatewayKey),
 		projects: make(map[string]domain.Project),
 	})
 	return snapshot
@@ -67,6 +69,7 @@ func (s *Snapshot) Refresh(ctx context.Context, source SnapshotSource) error {
 	}
 	next := &snapshotData{
 		keys:     make(map[[32]byte]domain.GatewayKey, len(keys)),
+		byID:     make(map[string]domain.GatewayKey, len(keys)),
 		projects: make(map[string]domain.Project, len(projects)),
 	}
 	for _, project := range projects {
@@ -77,10 +80,33 @@ func (s *Snapshot) Refresh(ctx context.Context, source SnapshotSource) error {
 	for _, key := range keys {
 		if key.DeletedAt == nil {
 			next.keys[key.KeyHash] = key
+			next.byID[key.ID] = key
 		}
 	}
 	s.current.Store(next)
 	return nil
+}
+
+// AuthorizeKeyID answers the same question as Authenticate for a request whose
+// plaintext key is long gone.
+//
+// Work that was queued on one connection and runs on another cannot present the
+// key again — and must not, because storing a Gateway Key to replay it later
+// would be a far worse thing than anything it enables. The identifier is enough
+// to ask whether the key is still one this instance would accept, which is the
+// question that matters at the moment the work actually reaches an upstream:
+// revoking a key has to stop the work it authorised, not only the work it has
+// not yet submitted.
+func (s *Snapshot) AuthorizeKeyID(keyID string, now time.Time) (AuthResult, error) {
+	if keyID == "" {
+		return AuthResult{}, ErrInvalidKey
+	}
+	current := s.current.Load()
+	key, ok := current.byID[keyID]
+	if !ok {
+		return AuthResult{}, ErrInvalidKey
+	}
+	return authorize(current, key, now)
 }
 
 func (s *Snapshot) Authenticate(plaintext string, now time.Time) (AuthResult, error) {
@@ -93,6 +119,10 @@ func (s *Snapshot) Authenticate(plaintext string, now time.Time) (AuthResult, er
 	if !ok || !ConstantTimeHashMatch(key.KeyHash, hash) {
 		return AuthResult{}, ErrInvalidKey
 	}
+	return authorize(current, key, now)
+}
+
+func authorize(current *snapshotData, key domain.GatewayKey, now time.Time) (AuthResult, error) {
 	if !key.Enabled {
 		return AuthResult{}, ErrKeyDisabled
 	}
