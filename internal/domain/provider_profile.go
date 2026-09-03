@@ -316,6 +316,14 @@ func IsWithheldProfile(id ProviderProfileID) bool {
 	return profileIndex[id].Withheld
 }
 
+// IsRoutePartitionedProfile reports whether absence from the catalogue may be
+// read as "this profile refuses this model" rather than "nobody has established
+// what it does". See profileRow.RoutePartitioned for why that distinction is a
+// declared property and never an inference.
+func IsRoutePartitionedProfile(id ProviderProfileID) bool {
+	return profileIndex[id].RoutePartitioned
+}
+
 // IsBedrockMantleProfile reports whether a profile addresses the Bedrock Mantle
 // surface. Mantle spans five profiles across three routes, and spelling that
 // list out at each call site is how one of them gets left behind — which is the

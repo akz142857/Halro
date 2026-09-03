@@ -66,9 +66,20 @@ func (r *Runtime) probeDeployments(ctx context.Context) {
 			// routable custom adapter; passive circuit health still applies.
 			continue
 		}
-		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		err := prober.Probe(probeCtx, deployment.ProviderModel)
-		cancel()
+		// Asked before the wire, like the manual connection test: a model this
+		// profile's route refuses is a deployment that cannot serve, and the
+		// probe endpoint cannot see that — on Bedrock Mantle the model list
+		// enumerates the account rather than the route, so it answers for a
+		// model the route will refuse. Without this the active probe keeps
+		// reporting healthy while every request the deployment serves is
+		// refused, which is exactly the disagreement a reader resolves in the
+		// wrong direction.
+		err := deploymentRouteRefusal(r.effectiveModelCatalog(), instance, deployment)
+		if err == nil {
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			err = prober.Probe(probeCtx, deployment.ProviderModel)
+			cancel()
+		}
 		failure := r.recordDeploymentProbe(deployment.ID, err)
 		if err != nil {
 			// The same field set a manual connection test logs, for the same

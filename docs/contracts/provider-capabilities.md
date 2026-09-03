@@ -64,6 +64,17 @@ Rules the catalog holds to:
   to `unknown` with no capabilities, never to the profile ceiling. An explicit
   safe capability detection may create `verified_probe` evidence; the advanced
   fallback remains an operator declaration.
+- **Absence is a refusal only on a route-partitioned profile.** "Unknown means
+  zero" says nobody established what a model does, and the operator answers it
+  by declaring. On a profile whose row marks the route partitioned — the
+  upstream serves each model from exactly one profile in the group and refuses
+  it on the others, and the catalog's coverage was measured against every route
+  — absence carries the further claim that this profile refuses the model, so a
+  deployment naming it is refused with `model_not_served_by_profile` rather than
+  declared through. It applies only when the catalog covers the model on a
+  sibling profile: a model no profile covers stays the operator's to declare,
+  and an existing deployment can still be disabled. Bedrock Mantle's five
+  profiles are the only ones marked today (ADR 0007).
 - **A covered model can still be measured.** An operator may verify a model the
   catalog already answers for. The verification probes on the interface the
   catalog names, replaces every capability a probe established, and carries the

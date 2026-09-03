@@ -157,6 +157,7 @@ export const zhCN = {
     modelCapabilityChanged: "这个模型的能力在你阅读之后发生了变化，请刷新并重新确认。",
     modelCapabilitiesUnknown: "系统不掌握这个模型的能力，请使用手动声明。",
     modelCapabilitiesExceedCatalog: "所选能力超出目录为这个模型确立的范围，请使用手动声明。",
+    modelNotServedByProfile: "这个服务商用另一套接口服务该模型。手动声明能力改变不了这一点，请改选下面指出的接口。",
     operationBindingsUnavailable: "一个部署只通过一个能力接口承载一个模型的能力。若要在同一个公共模型下提供多项能力，请为每个接口各建一个部署，再从同一个公共模型分别指向它们。",
     resolutionChanged: "上游调用目标的解析结果已变化，保存前请复核更新后的能力摘要。",
   },

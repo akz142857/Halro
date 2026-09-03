@@ -47,16 +47,28 @@ import "strings"
 // not a read-path gate: an install that already holds a withheld connection has
 // to start in order for the operator to delete it, and refusing to resolve a
 // stored row would take that away.
+//
+// RoutePartitioned says the upstream serves each model from exactly one of this
+// group's profiles and refuses it on the others, and that the catalogue's
+// coverage was measured against every route rather than assembled from whatever
+// evidence turned up. Both halves are needed before absence may be read as a
+// refusal: everywhere else an uncovered model means "nobody has established
+// what this does here", which the operator answers by declaring it, and turning
+// that into a rejection would take a working deployment away from them. Where
+// this is true, a model the catalogue places on a sibling profile is not a gap
+// to declare through — it is a request the upstream will refuse — so the write
+// path and the connection test say so instead of letting it reach the wire.
 type profileRow struct {
-	ID              ProviderProfileID
-	Type            ProviderType
-	Surface         AccessSurface
-	Scheme          CredentialScheme
-	BaseURLTemplate string
-	Immutable       bool
-	Withheld        bool
-	Defaults        ProviderCapabilities
-	Ceiling         ProviderCapabilities
+	ID               ProviderProfileID
+	Type             ProviderType
+	Surface          AccessSurface
+	Scheme           CredentialScheme
+	BaseURLTemplate  string
+	Immutable        bool
+	Withheld         bool
+	RoutePartitioned bool
+	Defaults         ProviderCapabilities
+	Ceiling          ProviderCapabilities
 }
 
 // RegionPlaceholder is what BaseURLTemplate carries where a deployment's own
@@ -270,16 +282,18 @@ var profileTable = []profileRow{
 		// model's own capabilities are narrowed from this ceiling by detection.
 		ID: ProfileBedrockMantleChat, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		BaseURLTemplate: bedrockMantleEndpoint,
-		Immutable:       true,
-		Defaults:        mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
+		BaseURLTemplate:  bedrockMantleEndpoint,
+		Immutable:        true,
+		RoutePartitioned: true,
+		Defaults:         mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
 	},
 	{
 		ID: ProfileBedrockMantleOpenAIChat, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		BaseURLTemplate: bedrockMantleEndpoint,
-		Immutable:       true,
-		Defaults:        mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
+		BaseURLTemplate:  bedrockMantleEndpoint,
+		Immutable:        true,
+		RoutePartitioned: true,
+		Defaults:         mantleOpenAIChatSet, Ceiling: mantleOpenAIChatSet,
 	},
 	{
 		// Phase 1C deliberately exposes only the stateless Responses subset. The
@@ -287,23 +301,26 @@ var profileTable = []profileRow{
 		// is the one capability this row does not share with the chat profile.
 		ID: ProfileBedrockMantleResponses, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		BaseURLTemplate: bedrockMantleEndpoint,
-		Immutable:       true,
-		Defaults:        mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
+		BaseURLTemplate:  bedrockMantleEndpoint,
+		Immutable:        true,
+		RoutePartitioned: true,
+		Defaults:         mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
 	},
 	{
 		ID: ProfileBedrockMantleOpenAIResponses, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		BaseURLTemplate: bedrockMantleEndpoint,
-		Immutable:       true,
-		Defaults:        mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
+		BaseURLTemplate:  bedrockMantleEndpoint,
+		Immutable:        true,
+		RoutePartitioned: true,
+		Defaults:         mantleOpenAIResponsesSet, Ceiling: mantleOpenAIResponsesSet,
 	},
 	{
 		ID: ProfileBedrockMantleAnthropicMessages, Type: ProviderBedrock,
 		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
-		BaseURLTemplate: bedrockMantleEndpoint,
-		Immutable:       true,
-		Defaults:        mantleAnthropicSet, Ceiling: mantleAnthropicSet,
+		BaseURLTemplate:  bedrockMantleEndpoint,
+		Immutable:        true,
+		RoutePartitioned: true,
+		Defaults:         mantleAnthropicSet, Ceiling: mantleAnthropicSet,
 	},
 	{
 		// The three MiniMax rows share one surface and one scheme, so they form a

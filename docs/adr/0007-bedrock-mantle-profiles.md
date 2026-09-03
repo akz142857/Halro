@@ -213,3 +213,40 @@ member is omitted, so sending it is load-bearing rather than decorative.
 
 Evidence: `docs/verification/provider-real-matrix.md`, section "AWS Bedrock
 Mantle: measured against a real account (2026-08-21)".
+
+## Amendment, 2026-09-03: the wrong route is refused, not discovered at runtime
+
+The amendment above says the route is a property of the profile and that an
+existing instance must be re-created. Nothing enforced either. A deployment
+naming an `/openai/v1` model on `bedrock.mantle.chat.v1` was accepted, and the
+only thing that ever objected was the upstream, once per request, as
+`400 validation_error`.
+
+Its probes made that worse by passing — the manual connection test and the
+unattended one alike. The Mantle model catalogue is
+not route-scoped — `GET /v1/models` enumerates the account and
+`/openai/v1/models` 404s (see `internal/provider/openai/adapter.go`) — so a probe
+that dials it proves the model exists on the account and nothing about the route
+serving it, while reporting the deployment healthy.
+
+Two checks close that, both reading the model catalogue rather than the wire:
+
+- The deployment write path refuses a model the catalogue places on a sibling
+  profile, with `model_not_served_by_profile` naming the profile that serves it.
+  The refusal excludes the binding rather than ending the resolution, so a
+  connection holding both routes still resolves automatically to the right one.
+- Both probes ask the same question before dialling — the manual connection
+  test and the unattended `probeDeployments` loop — so a deployment created
+  before this existed reports the reason instead of a green tick. They are
+  different code, and closing one without the other leaves the console showing
+  a failed test beside a healthy active probe for the same deployment.
+
+Reading absence from the catalogue as a refusal is only sound where the
+catalogue's coverage was measured against every route and the upstream refuses
+the others — both true here and true of nothing else today. It is therefore a
+declared property of the profile row (`profileRow.RoutePartitioned`), not an
+inference from the catalogue, and it does not apply to a model no profile
+covers: `zai.glm-4.6` is listed by the account, deliberately absent from the
+catalogue, and stays the operator's to declare. A deployment already on the
+wrong route can still be disabled, because the check protects traffic and a
+disabled deployment carries none.
