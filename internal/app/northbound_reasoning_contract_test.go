@@ -264,3 +264,48 @@ func renderThroughEndpoint(t *testing.T, endpointID string, content []semantic.C
 	t.Fatalf("endpoint %q renders generate results and this guard does not know how to ask it whether reasoning survives; add it to renderThroughEndpoint", endpointID)
 	return nil
 }
+
+// TestNoEndpointIsServedByATargetThatReasonsUnasked is the guard four comments
+// and three documents name as the thing that stops a target which reasons
+// unasked from being served. It did not exist. Deleting a Withheld field was
+// said to fail it; measured, that deletion left the two tests above at PASS and
+// SKIP — the second skips precisely because the profile it guards is no longer
+// withheld, so removing the withholding removes the check with it.
+//
+// What actually refused an un-withheld kimi.responses.v1 was the served-matrix
+// golden and the write path's IsWithheldProfile. Both are real guards, and
+// neither says anything about reasoning: they would have refused the change for
+// being a matrix change, not for being unsafe. So the reason was carried by
+// comments alone.
+//
+// This states it directly: a target the catalogue marks as reasoning unasked
+// must not be reachable through an endpoint whose decoder cannot represent the
+// reasoning it will return unasked. Reachable means the profile is offered —
+// withholding is how such a target is kept out, and this is the assertion that
+// makes withholding load-bearing rather than decorative.
+func TestNoEndpointIsServedByATargetThatReasonsUnasked(t *testing.T) {
+	marked := 0
+	for _, entry := range modelcatalog.Builtin().Entries() {
+		if !entry.ReasonsUnasked {
+			continue
+		}
+		marked++
+		if domain.IsWithheldProfile(entry.Key.Profile) {
+			continue
+		}
+		if profileDecodesReasoning(t, entry.Key.Profile) {
+			// The decoder can carry what this target returns unasked, so the
+			// caller sees the reasoning rather than a 502 after a billed call.
+			continue
+		}
+		t.Errorf(
+			"%s/%s reasons unasked and its profile's decoder refuses a reasoning item, "+
+				"yet the profile is offered: every request through it would be paid for upstream "+
+				"and then fail. Withhold the profile, or teach the decoder to carry the item.",
+			entry.Key.Profile, entry.Key.Model,
+		)
+	}
+	if marked == 0 {
+		t.Fatal("no catalogue entry is marked as reasoning unasked, so this guard asserts nothing")
+	}
+}

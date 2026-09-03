@@ -475,7 +475,7 @@ func (e *Engine) ProcessJSON(policyID, scope string, value json.RawMessage) (jso
 
 // ProcessOutboundChat is the outbound pass for the streaming path, which is
 // still Chat-shaped: a Stream rewrites Chat chunks, so its unary twin has to
-// speak the same shape to be comparable — TestStreamMatchesUnaryRedaction is
+// speak the same shape to be comparable — FuzzBoundedStreamMatchesNonStream is
 // that comparison and it is the reason both exist.
 //
 // The unary generate path does not use it; that side reads

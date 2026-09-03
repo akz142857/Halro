@@ -397,8 +397,9 @@ func (s *Service) SubmitDeferredResponse(
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(deferredDefaultTTL),
 	}
 	// The request goes to disk before the record does. A sealed object nothing
-	// names is swept at startup; a record naming an object that was never
-	// written is a queued request the worker can only fail.
+	// names is swept once it is old enough that no write could still be holding
+	// it; a record naming an object that was never written is a queued request
+	// the worker can only fail.
 	inputPath, err := s.writeResourceObject(record.ID, record.ProjectID, objectRoleInput, payload)
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the request could not be stored", 503, err)
@@ -713,9 +714,10 @@ func (s *Service) finishDeferred(
 	}
 	if input != "" {
 		if err := s.removeResourceObject(input); err != nil {
-			// The record no longer names it, so a sweep at startup reclaims it.
-			// Failing the settlement over it would be worse: the answer is
-			// already stored and the caller is owed it.
+			// The record no longer names it, so the hourly orphan sweep reclaims
+			// it once it is old enough to be one. Failing the settlement over it
+			// would be worse: the answer is already stored and the caller is
+			// owed it.
 			s.logger.Error("a stored deferred request could not be erased", "resource_id", record.ID, "error", err)
 		}
 	}

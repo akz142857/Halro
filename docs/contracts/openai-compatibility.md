@@ -48,14 +48,23 @@ OpenAI error envelope whose code is `configuration_stale`, and
 `Retry-After: 5`. The runtime retries activation every five seconds; this is a
 temporary gateway state, not evidence that a Provider received the request.
 
-## Stateless Responses tier
+## Responses tier
 
 The Responses endpoint has its own typed item and event contract; it is not a
-Chat Completions response with renamed fields. Phase 1A supports strict Create
-and text SSE only. Omitted `store` is treated as false. `store: true`,
-`previous_response_id`, Conversations, background mode, prompt resources,
-webhooks, retrieve/delete/cancel/input-items operations, strict function tools,
-reasoning output, and streaming tools are rejected before Provider I/O.
+Chat Completions response with renamed fields. Two shapes are served: the
+stateless Create with text SSE, and — since v0.6.0 — deferred submission with
+`background: true` plus the retrieve, cancel and delete operations that address
+it (ADR 0024). Omitted `store` is treated as false.
+
+Still rejected before Provider I/O: `store: true`, `previous_response_id`,
+Conversations, prompt resources, webhooks, input-items operations, strict
+function tools, reasoning output, and streaming tools. `background: true` with
+`stream: true` is refused as a pair — the deferred tier promises one final
+answer, not a replayable event stream.
+
+The deferred operations address a submission made with `background: true` and
+never a synchronous response, which is not stored. They are enabled per Project
+and refused with `unsupported_feature` where the Project has not enabled them.
 
 `tools: [{"type": "web_search"}]` is the one hosted tool accepted. It names a
 tool the upstream runs itself, so it is routed against the

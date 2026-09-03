@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -63,12 +64,51 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/token-guard-policies", "POST /admin/api/v1/token-guard-policies",
 		"GET /admin/api/v1/token-guard-policies/{}", "PUT /admin/api/v1/token-guard-policies/{}", "DELETE /admin/api/v1/token-guard-policies/{}", "POST /admin/api/v1/token-guard-policies/{}/test",
 		"GET /admin/api/v1/dashboard", "GET /admin/api/v1/onboarding/readiness", "GET /admin/api/v1/usage", "GET /admin/api/v1/usage/requests/{}",
+		"GET /admin/api/v1/usage/summary", "GET /admin/api/v1/usage/failures", "GET /admin/api/v1/usage/failures/{}/payload",
+		"GET /admin/api/v1/settings/usage", "PUT /admin/api/v1/settings/usage",
 		"GET /admin/api/v1/alerts", "POST /admin/api/v1/alerts/test", "GET /admin/api/v1/audit", "GET /admin/api/v1/system/status",
 		"GET /admin/api/v1/developer/config", "POST /admin/api/v1/developer/execute/{}",
+		// Routes that were served without ever being frozen. The list was
+		// one-way until this round, so each of these was added and nothing
+		// noticed; the two-way check below is what found them.
+		"GET /admin/api/v1/admin-users", "POST /admin/api/v1/admin-users", "DELETE /admin/api/v1/admin-users/{}",
+		"POST /admin/api/v1/alerts", "DELETE /admin/api/v1/alerts/{}", "GET /admin/api/v1/alerts/{}", "PUT /admin/api/v1/alerts/{}", "POST /admin/api/v1/alerts/{}/test",
+		"GET /admin/api/v1/master-key/custody", "GET /admin/api/v1/master-key/runbooks/lifecycle", "GET /admin/api/v1/master-key/runbooks/recovery",
+		"GET /admin/api/v1/model-catalog", "POST /admin/api/v1/model-catalog/refresh",
+		"GET /admin/api/v1/preferences", "PUT /admin/api/v1/preferences",
+		"GET /admin/api/v1/projects/{}/keys/{}", "PUT /admin/api/v1/projects/{}/keys/{}",
+		"GET /admin/api/v1/provider-profiles",
+		"GET /admin/api/v1/providers/{}/invocation-targets", "POST /admin/api/v1/providers/{}/invocation-targets",
+		"GET /admin/api/v1/runbooks/configuration-stale", "GET /admin/api/v1/runbooks/file-master-key-rotation", "GET /admin/api/v1/runbooks/gateway-key-compromise",
+		"GET /admin/api/v1/settings", "PUT /admin/api/v1/settings", "GET /admin/api/v1/settings/accounting", "PUT /admin/api/v1/settings/accounting", "DELETE /admin/api/v1/settings/accounting/pending", "GET /admin/api/v1/settings/ui", "PUT /admin/api/v1/settings/ui",
+		"GET /admin/api/v1/system/config",
+		"GET /admin/api/v1/ui/bootstrap",
 	}
+	frozen := make(map[string]struct{}, len(expected))
 	for _, route := range expected {
+		frozen[route] = struct{}{}
 		if _, exists := registered[route]; !exists {
 			t.Errorf("frozen v1 route is not registered: %s", route)
+		}
+	}
+	// The other direction, which this check was missing. A one-way list says
+	// "everything frozen is still served" and is silent about a route that was
+	// added and never frozen — so the list fell behind by one endpoint family in
+	// v0.5.0 and by four more in v0.6.0, and nothing failed. The gateway router
+	// grew a two-way contract test this round; this is its Admin counterpart.
+	//
+	// Adding a route to this list is the deliberate act: it is a v1 surface from
+	// then on, and the compatibility promise attaches to it.
+	// Scoped to the Admin API itself: the gateway's own routes have their own
+	// two-way contract test, and the console's static routes are a wildcard
+	// serving a bundle rather than an interface anyone integrates against.
+	for route := range registered {
+		method, path, found := strings.Cut(route, " ")
+		if !found || !strings.HasPrefix(path, "/admin/api/v1/") || strings.Contains(path, "*") {
+			continue
+		}
+		if _, isFrozen := frozen[route]; !isFrozen {
+			t.Errorf("registered Admin API route is not in the frozen v1 list: %s %s", method, path)
 		}
 	}
 }

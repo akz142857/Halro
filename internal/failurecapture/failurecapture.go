@@ -38,6 +38,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // DirPerm and FilePerm match the log sink's and the data directory's. The
@@ -224,10 +226,51 @@ func (s *Store) Put(record Record) (bool, error) {
 		return false, fmt.Errorf("create failure capture day: %w", err)
 	}
 	path := filepath.Join(directory, captureName(record.CapturedAt, record.RequestID))
-	if err := os.WriteFile(path, sealed, FilePerm); err != nil {
+	if err := writeSealedCapture(directory, path, sealed); err != nil {
 		return false, fmt.Errorf("write failure capture: %w", err)
 	}
 	return true, nil
+}
+
+// writeSealedCapture puts the envelope on disk whole or not at all.
+//
+// A plain write can be interrupted, and the moment it is most likely to be is
+// exactly when captures are densest — an upstream failing under load is also
+// when a process is most likely to be killed. What that leaves is a truncated
+// GCM envelope, and every reader of it fails authentication: the admin endpoint
+// reports "no captured payload", so the operator is told nothing was captured
+// while the file sits there until its retention expires. Told nothing was kept
+// is worse than told the capture is damaged.
+//
+// This is the same temp-write-fsync-rename-fsync sequence every other durable
+// write here uses; internal/durable exists so that there is one of them rather
+// than six, and this was the one place that had grown its own.
+func writeSealedCapture(directory, path string, sealed []byte) error {
+	temporary, err := os.CreateTemp(directory, ".capture-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(FilePerm); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(sealed); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return err
+	}
+	return durable.SyncDirectory(directory)
 }
 
 // reserve takes one slot from the day's budget, reporting false once the day is

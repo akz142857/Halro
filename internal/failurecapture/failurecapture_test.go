@@ -340,3 +340,40 @@ func TestTheCeilingBoundsWhatIsStoredNotWhatWasCut(t *testing.T) {
 		t.Fatal("a cut side was stored without saying it was cut")
 	}
 }
+
+// The write is atomic because the moment it is most likely to be interrupted is
+// exactly when captures are densest: an upstream failing under load is also when
+// a process is most likely to be killed. A truncated GCM envelope fails
+// authentication on every read, so the admin endpoint reports "no captured
+// payload" — the operator is told nothing was captured while the file sits there
+// until its retention expires.
+func TestACaptureIsPublishedWholeAndLeavesNoTemporaryFile(t *testing.T) {
+	store, root := newStore(t, nil)
+	if written, err := store.Put(record("req_atomic")); err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	days, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, day := range days {
+		if !day.IsDir() {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(root, day.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".capture-") {
+				t.Fatalf("a temporary file survived the write: %s", entry.Name())
+			}
+			if !strings.HasSuffix(entry.Name(), ".hfc") {
+				t.Fatalf("unexpected entry in a capture day: %s", entry.Name())
+			}
+		}
+	}
+	if _, found, err := store.Get("req_atomic", "project_1"); err != nil || !found {
+		t.Fatalf("the published capture could not be read back: found=%v err=%v", found, err)
+	}
+}
