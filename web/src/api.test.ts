@@ -103,6 +103,28 @@ describe("typed admin API client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("follows every Run Governance and Outcome page without dropping filters", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://halro.test");
+      if (!url.pathname.endsWith("/outcome-definitions")) expect(url.searchParams.get("project_id")).toBe("prj_1");
+      expect(url.searchParams.get("limit")).toBe("100");
+      const cursor = url.searchParams.get("cursor");
+      return response({ items: [{ id: cursor ? "second" : "first" }], next_cursor: cursor ? "" : "page-one" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const listings = [
+      api.workUnits("?project_id=prj_1&limit=200"),
+      api.runs("?project_id=prj_1&limit=200"),
+      api.outcomeDefinitions("prj_1"),
+      api.outcomes("?project_id=prj_1&limit=200"),
+    ];
+    for (const listing of listings) {
+      await expect(listing).resolves.toEqual({ items: [{ id: "first" }, { id: "second" }], next_cursor: "" });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
   // Callers turn these lists into a project's model authorization set and into
   // the count of enabled routes that disables a deployment's delete button, so
   // a truncated answer must never be handed back looking complete. A cursor

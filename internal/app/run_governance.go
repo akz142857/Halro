@@ -17,6 +17,7 @@ import (
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/idempotency"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/go-chi/chi/v5"
 )
@@ -186,16 +187,31 @@ func (r *Runtime) getWorkUnit(writer http.ResponseWriter, request *http.Request)
 		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
 		return
 	}
-	workUnit, found := r.accounting.WorkUnit(principal.Project.ID, workUnitID)
-	if !found {
+	accounting, err := r.state.GovernanceSnapshot(request.Context(), ledger.GovernanceSnapshotOptions{
+		ProjectID: principal.Project.ID, WorkUnitID: workUnitID, IncludeRuns: true,
+	})
+	if err != nil {
+		writeGovernanceError(writer, http.StatusServiceUnavailable, "run_governance_unavailable", "run governance state is unavailable")
+		return
+	}
+	if len(accounting.WorkUnits) != 1 {
 		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
 		return
 	}
-	runs := r.accounting.Runs(principal.Project.ID, workUnit.ID)
+	workUnit := accounting.WorkUnits[0]
+	runs := accounting.Runs
 	for index := range runs {
 		runs[index].Status = domain.EffectiveRunStatus(runs[index], r.clockNow())
 	}
-	outcomes := r.governance.manager.Outcomes(principal.Project.ID, workUnit.ID, "")
+	outcomeSnapshot, err := r.governance.manager.ReadOutcomeSnapshot(request.Context(), principal.Project.ID, workUnit.ID, "")
+	if err != nil {
+		writeOutcomeError(writer, err)
+		return
+	}
+	outcomes := outcomeSnapshot.Outcomes
+	for index := range outcomes {
+		outcomes[index].Provisional = workUnit.Status == domain.WorkUnitOpen || accounting.InflightWorkUnit[workUnit.ID]
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{"work_unit": workUnit, "runs": runs, "outcomes": outcomes})
 }
 
@@ -213,7 +229,10 @@ func (r *Runtime) reportOutcome(writer http.ResponseWriter, request *http.Reques
 	if !decodeGovernanceJSON(writer, request, &input) {
 		return
 	}
-	intent, err := governanceIntent(request, "outcome.report", input)
+	intent, err := governanceIntent(request, "outcome.report", struct {
+		WorkUnitID string             `json:"work_unit_id"`
+		Outcome    reportOutcomeInput `json:"outcome"`
+	}{WorkUnitID: workUnitID, Outcome: input})
 	if err != nil {
 		writeGovernanceError(writer, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
 		return

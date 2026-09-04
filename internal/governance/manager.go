@@ -2,7 +2,6 @@ package governance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -30,7 +29,7 @@ type DefinitionReader interface {
 }
 
 type CheckpointStore interface {
-	SaveGovernanceCheckpoint(sequence uint64, offset int64, payload []byte) error
+	PutGovernanceJournalAnchor(sequence uint64, offset int64, hash, authentication [32]byte) error
 }
 
 type Intent struct {
@@ -71,17 +70,26 @@ type SnapshotRecord struct {
 const SnapshotVersion = 1
 
 type State struct {
-	mu          sync.RWMutex
-	outcomes    map[string]domain.Outcome
-	heads       map[string]string
-	history     map[string][]string
-	idempotency map[string]idemRecord
-	intents     map[string]SnapshotRecord
-	sequence    uint64
+	mu           sync.RWMutex
+	outcomes     map[string]domain.Outcome
+	outcomeOrder []string
+	byProject    map[string][]string
+	byWorkUnit   map[string][]string
+	byDefinition map[string][]string
+	heads        map[string]string
+	history      map[string][]string
+	idempotency  map[string]idemRecord
+	intents      map[string]SnapshotRecord
+	sequence     uint64
 }
 
 func NewState() *State {
-	return &State{outcomes: map[string]domain.Outcome{}, heads: map[string]string{}, history: map[string][]string{}, idempotency: map[string]idemRecord{}, intents: map[string]SnapshotRecord{}}
+	return &State{
+		outcomes: map[string]domain.Outcome{}, byProject: map[string][]string{},
+		byWorkUnit: map[string][]string{}, byDefinition: map[string][]string{},
+		heads: map[string]string{}, history: map[string][]string{},
+		idempotency: map[string]idemRecord{}, intents: map[string]SnapshotRecord{},
+	}
 }
 
 func headKey(projectID, workUnitID, definitionID string, version uint64) string {
@@ -125,6 +133,10 @@ func (s *State) Apply(record Record) error {
 		SupersedesOutcomeID: e.SupersedesOutcomeID, Revision: e.Revision, GovernanceSequence: record.Sequence,
 	}
 	s.outcomes[outcome.ID] = outcome
+	s.outcomeOrder = append(s.outcomeOrder, outcome.ID)
+	s.byProject[outcome.ProjectID] = append(s.byProject[outcome.ProjectID], outcome.ID)
+	s.byWorkUnit[outcome.WorkUnitID] = append(s.byWorkUnit[outcome.WorkUnitID], outcome.ID)
+	s.byDefinition[outcome.DefinitionID] = append(s.byDefinition[outcome.DefinitionID], outcome.ID)
 	s.history[key] = append(history, outcome.ID)
 	s.heads[key] = outcome.ID
 	s.idempotency[idemKey(e.ProjectID, e.IdempotencyKeyHash)] = idemRecord{Fingerprint: e.RequestFingerprint, OutcomeID: outcome.ID}
@@ -149,16 +161,41 @@ func (s *State) Current(projectID, workUnitID, definitionID string, version uint
 }
 
 func (s *State) Outcomes(projectID, workUnitID, definitionID string) []domain.Outcome {
+	items, _ := s.OutcomesContext(context.Background(), projectID, workUnitID, definitionID)
+	return items
+}
+
+func (s *State) OutcomesContext(ctx context.Context, projectID, workUnitID, definitionID string) ([]domain.Outcome, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	items := make([]domain.Outcome, 0, len(s.outcomes))
-	for _, item := range s.outcomes {
+	candidates := s.outcomeOrder
+	filters := []struct {
+		value string
+		index map[string][]string
+	}{{projectID, s.byProject}, {workUnitID, s.byWorkUnit}, {definitionID, s.byDefinition}}
+	for _, filter := range filters {
+		if filter.value == "" {
+			continue
+		}
+		indexed, ok := filter.index[filter.value]
+		if !ok {
+			return []domain.Outcome{}, nil
+		}
+		if len(indexed) < len(candidates) {
+			candidates = indexed
+		}
+	}
+	items := make([]domain.Outcome, 0, len(candidates))
+	for _, outcomeID := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		item := s.outcomes[outcomeID]
 		if (projectID == "" || item.ProjectID == projectID) && (workUnitID == "" || item.WorkUnitID == workUnitID) && (definitionID == "" || item.DefinitionID == definitionID) {
 			items = append(items, item)
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].GovernanceSequence < items[j].GovernanceSequence })
-	return items
+	return items, nil
 }
 
 func (s *State) Idempotency(projectID, hash string) (idemRecord, bool) {
@@ -204,7 +241,9 @@ func (s *State) Restore(snapshot Snapshot) error {
 		return errors.New("governance checkpoint sequence does not match outcomes")
 	}
 	s.mu.Lock()
-	s.outcomes, s.heads, s.history, s.idempotency, s.intents, s.sequence = rebuilt.outcomes, rebuilt.heads, rebuilt.history, rebuilt.idempotency, rebuilt.intents, rebuilt.sequence
+	s.outcomes, s.outcomeOrder = rebuilt.outcomes, rebuilt.outcomeOrder
+	s.byProject, s.byWorkUnit, s.byDefinition = rebuilt.byProject, rebuilt.byWorkUnit, rebuilt.byDefinition
+	s.heads, s.history, s.idempotency, s.intents, s.sequence = rebuilt.heads, rebuilt.history, rebuilt.idempotency, rebuilt.intents, rebuilt.sequence
 	s.mu.Unlock()
 	return nil
 }
@@ -248,6 +287,9 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 		outcome, found := m.state.Outcome(previous.OutcomeID)
 		if !found {
 			return domain.Outcome{}, false, ErrUnavailable
+		}
+		if outcome.ProjectID != input.ProjectID || outcome.WorkUnitID != input.WorkUnitID || outcome.DefinitionID != input.DefinitionID {
+			return domain.Outcome{}, false, ErrIdempotency
 		}
 		return outcome, true, nil
 	}
@@ -322,13 +364,9 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 		return domain.Outcome{}, false, m.unavailable
 	}
 	if m.checkpoint != nil {
-		payload, snapshotErr := json.Marshal(m.state.Snapshot())
-		if snapshotErr == nil {
-			summary := m.log.Summary()
-			snapshotErr = m.checkpoint.SaveGovernanceCheckpoint(summary.Records, summary.Bytes, payload)
-		}
-		if snapshotErr != nil {
-			m.unavailable = errors.Join(ErrUnavailable, snapshotErr)
+		summary, authentication := m.log.AuthenticatedHead()
+		if err := m.checkpoint.PutGovernanceJournalAnchor(summary.Records, summary.Bytes, summary.LastHash, authentication); err != nil {
+			m.unavailable = errors.Join(ErrUnavailable, err)
 			return domain.Outcome{}, false, m.unavailable
 		}
 	}
@@ -338,17 +376,14 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 }
 
 func (m *Manager) workUnitInflight(workUnitID string) bool {
-	runs := m.accounting.Runs("", workUnitID)
-	runIDs := make(map[string]struct{}, len(runs))
-	for _, run := range runs {
-		runIDs[run.ID] = struct{}{}
+	workUnit, ok := m.accounting.WorkUnit(workUnitID)
+	if !ok {
+		return true
 	}
-	for _, lease := range m.accounting.PendingLeases() {
-		if _, ok := runIDs[lease.Reservation.RunID]; ok {
-			return true
-		}
-	}
-	return false
+	snapshot, err := m.accounting.GovernanceSnapshot(context.Background(), ledger.GovernanceSnapshotOptions{
+		ProjectID: workUnit.ProjectID, WorkUnitID: workUnitID,
+	})
+	return err != nil || snapshot.InflightWorkUnit[workUnitID]
 }
 
 func (m *Manager) Outcomes(projectID, workUnitID, definitionID string) []domain.Outcome {
@@ -358,4 +393,31 @@ func (m *Manager) Outcomes(projectID, workUnitID, definitionID string) []domain.
 		items[index].Provisional = !ok || wu.Status == domain.WorkUnitOpen || m.workUnitInflight(wu.ID)
 	}
 	return slices.Clone(items)
+}
+
+type OutcomeSnapshot struct {
+	Outcomes []domain.Outcome
+	Sequence uint64
+	Offset   int64
+}
+
+// ReadOutcomeSnapshot returns Outcome rows and the exact journal watermark
+// that produced them. It deliberately leaves accounting-derived provisional
+// state to the caller's separate accounting snapshot.
+func (m *Manager) ReadOutcomeSnapshot(ctx context.Context, projectID, workUnitID, definitionID string) (OutcomeSnapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.unavailable != nil || m.log == nil {
+		return OutcomeSnapshot{}, ErrUnavailable
+	}
+	items, err := m.state.OutcomesContext(ctx, projectID, workUnitID, definitionID)
+	if err != nil {
+		return OutcomeSnapshot{}, err
+	}
+	summary := m.log.Summary()
+	return OutcomeSnapshot{
+		Outcomes: items,
+		Sequence: summary.Records,
+		Offset:   summary.Bytes,
+	}, nil
 }

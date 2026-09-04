@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,10 +105,38 @@ func TestOutcomeHTTPFreezesDefinitionAndReplaysIdempotently(t *testing.T) {
 	if summaryResponse.Code != http.StatusOK || !strings.Contains(summaryResponse.Body.String(), `"eligible_units":1`) || !strings.Contains(summaryResponse.Body.String(), `"successful_units":1`) || !strings.Contains(summaryResponse.Body.String(), `"success_rate":1`) {
 		t.Fatalf("summary status=%d body=%s", summaryResponse.Code, summaryResponse.Body.String())
 	}
+	secondCreated := httptest.NewRecorder()
+	router.ServeHTTP(secondCreated, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "outcome-wu-2", `{"outcome_definition_ids":["`+definition.ID+`"]}`))
+	var secondWorkUnit domain.WorkUnit
+	if err := json.Unmarshal(secondCreated.Body.Bytes(), &secondWorkUnit); err != nil || secondCreated.Code != http.StatusCreated {
+		t.Fatalf("create second Work Unit status=%d body=%s err=%v", secondCreated.Code, secondCreated.Body.String(), err)
+	}
+	crossResourceReplay := httptest.NewRecorder()
+	router.ServeHTTP(crossResourceReplay, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+secondWorkUnit.ID+"/outcomes", bootstrap.GatewayKey, "outcome-one", body))
+	if crossResourceReplay.Code != http.StatusConflict || !strings.Contains(crossResourceReplay.Body.String(), "idempotency_conflict") {
+		t.Fatalf("cross-Work-Unit idempotency status=%d body=%s", crossResourceReplay.Code, crossResourceReplay.Body.String())
+	}
 }
 
 func TestGovernanceCorruptionDoesNotBlockRuntimeOrAccounting(t *testing.T) {
-	runtime, _, reopen := openBootstrappedRuntime(t)
+	runtime, bootstrap, reopen := openBootstrappedRuntime(t)
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := domain.OutcomeDefinition{ID: "odef_corrupt", ProjectID: bootstrap.ProjectID, Name: "corrupt", Version: 1,
+		DataType: domain.OutcomeCategorical, AllowedValues: []string{"accepted", "rejected"}, SuccessValues: []string{"accepted"}, Enabled: true, CreatedAt: time.Now().UTC(), CreatedBy: "admin"}
+	definition, err = runtime.store.PutOutcomeDefinition(context.Background(), definition, project.Revision, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := httptest.NewRecorder()
+	runtime.gatewayRouter().ServeHTTP(created, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "corrupt-wu", `{"outcome_definition_ids":["`+definition.ID+`"]}`))
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +159,112 @@ func TestGovernanceCorruptionDoesNotBlockRuntimeOrAccounting(t *testing.T) {
 	if ready, _ := recovered.governance.manager.Ready(); ready {
 		t.Fatal("corrupt Governance Journal reported ready")
 	}
+	publicRead := httptest.NewRecorder()
+	recovered.gatewayRouter().ServeHTTP(publicRead, governanceRequest(http.MethodGet, "/halro/v1/work-units/"+workUnit.ID, bootstrap.GatewayKey, "", ""))
+	if publicRead.Code != http.StatusServiceUnavailable || !strings.Contains(publicRead.Body.String(), "governance_unavailable") {
+		t.Fatalf("unavailable public Outcome read status=%d body=%s", publicRead.Code, publicRead.Body.String())
+	}
+	cookie, csrf := loginAdminForTest(t, recovered)
+	readOutcomes := adminRequest(t, http.MethodGet, "/admin/api/v1/governance/outcomes", nil)
+	readOutcomes.AddCookie(cookie)
+	readResponse := httptest.NewRecorder()
+	recovered.adminRouter().ServeHTTP(readResponse, readOutcomes)
+	if readResponse.Code != http.StatusServiceUnavailable || !strings.Contains(readResponse.Body.String(), "governance_unavailable") {
+		t.Fatalf("unavailable Outcome read status=%d body=%s", readResponse.Code, readResponse.Body.String())
+	}
+	summaryPath := "/admin/api/v1/governance/summary?project_id=" + bootstrap.ProjectID + "&definition_id=" + definition.ID + "&definition_version=1&cohort_start=" + workUnit.PeriodID + "&cohort_end=" + workUnit.PeriodID
+	summaryRequest := adminRequest(t, http.MethodGet, summaryPath, nil)
+	summaryRequest.AddCookie(cookie)
+	summaryResponse := httptest.NewRecorder()
+	recovered.adminRouter().ServeHTTP(summaryResponse, summaryRequest)
+	if summaryResponse.Code != http.StatusServiceUnavailable || !strings.Contains(summaryResponse.Body.String(), "governance_unavailable") {
+		t.Fatalf("unavailable summary status=%d body=%s", summaryResponse.Code, summaryResponse.Body.String())
+	}
+	exportRequest := adminRequest(t, http.MethodPost, "/admin/api/v1/governance/export", nil)
+	exportRequest.AddCookie(cookie)
+	exportRequest.Header.Set("X-CSRF-Token", csrf)
+	exportResponse := httptest.NewRecorder()
+	recovered.adminRouter().ServeHTTP(exportResponse, exportRequest)
+	if exportResponse.Code != http.StatusServiceUnavailable || !strings.Contains(exportResponse.Body.String(), "governance_unavailable") {
+		t.Fatalf("unavailable export status=%d body=%s", exportResponse.Code, exportResponse.Body.String())
+	}
 	event := ledger.Event{EventID: "evt_after_governance_failure", Kind: ledger.EventRequestAccepted, RequestID: "req_after_governance_failure", ProjectID: "project_test", PeriodID: "2026-09-04", OccurredAt: time.Now().UTC()}
 	if _, err := recovered.ledger.Append(context.Background(), event); err != nil {
 		t.Fatalf("Accounting append was poisoned by Governance failure: %v", err)
+	}
+}
+
+func TestGovernanceSummaryCheckedAdditionRejectsOverflow(t *testing.T) {
+	if _, err := checkedSummaryAdd(math.MaxInt64, 1); err == nil {
+		t.Fatal("summary amount overflow was silently saturated")
+	}
+}
+
+func TestGovernanceSummaryKeepsAcceptedRequestInProgressUntilFinalized(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	defer runtime.Close()
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	definition := domain.OutcomeDefinition{ID: "odef_maturity", ProjectID: bootstrap.ProjectID, Name: "maturity", Version: 1,
+		DataType: domain.OutcomeCategorical, AllowedValues: []string{"accepted", "rejected"}, SuccessValues: []string{"accepted"}, Enabled: true, CreatedAt: now, CreatedBy: "admin"}
+	definition, err = runtime.store.PutOutcomeDefinition(context.Background(), definition, project.Revision, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := runtime.gatewayRouter()
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "maturity-wu", `{"outcome_definition_ids":["`+definition.ID+`"]}`))
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	createdRun := httptest.NewRecorder()
+	router.ServeHTTP(createdRun, governanceRequest(http.MethodPost, "/halro/v1/runs", bootstrap.GatewayKey, "maturity-run", `{"work_unit_id":"`+workUnit.ID+`","budget_micros_usd":1000,"ttl_seconds":3600}`))
+	var run domain.Run
+	if err := json.Unmarshal(createdRun.Body.Bytes(), &run); err != nil || createdRun.Code != http.StatusCreated {
+		t.Fatalf("create Run status=%d body=%s err=%v", createdRun.Code, createdRun.Body.String(), err)
+	}
+	outcomeBody := `{"definition_id":"` + definition.ID + `","value":"accepted","observed_at":"` + now.Format(time.RFC3339Nano) + `"}`
+	reported := httptest.NewRecorder()
+	router.ServeHTTP(reported, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", bootstrap.GatewayKey, "maturity-outcome", outcomeBody))
+	if reported.Code != http.StatusCreated {
+		t.Fatalf("report Outcome status=%d body=%s", reported.Code, reported.Body.String())
+	}
+	requestLease, err := runtime.accounting.BeginRequestAttributed(context.Background(), bootstrap.ProjectID, bootstrap.KeyID, "req_maturity", "model", workUnit.ID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := httptest.NewRecorder()
+	router.ServeHTTP(closed, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/close", bootstrap.GatewayKey, "maturity-close", `{}`))
+	if closed.Code != http.StatusCreated {
+		t.Fatalf("close Work Unit status=%d body=%s", closed.Code, closed.Body.String())
+	}
+	cookie, _ := loginAdminForTest(t, runtime)
+	query := "/admin/api/v1/governance/summary?project_id=" + bootstrap.ProjectID + "&definition_id=" + definition.ID + "&definition_version=1&cohort_start=" + workUnit.PeriodID + "&cohort_end=" + workUnit.PeriodID
+	readSummary := func() governanceSummary {
+		t.Helper()
+		request := adminRequest(t, http.MethodGet, query, nil)
+		request.AddCookie(cookie)
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		var summary governanceSummary
+		if err := json.Unmarshal(response.Body.Bytes(), &summary); err != nil || response.Code != http.StatusOK {
+			t.Fatalf("summary status=%d body=%s err=%v", response.Code, response.Body.String(), err)
+		}
+		return summary
+	}
+	if summary := readSummary(); summary.MaturedUnits != 0 || summary.EvaluatedUnits != 0 || summary.InProgressCostMicrosUSD != 0 {
+		t.Fatalf("accepted request was prematurely matured: %#v", summary)
+	}
+	if err := runtime.accounting.Finalize(context.Background(), requestLease, "success"); err != nil {
+		t.Fatal(err)
+	}
+	if summary := readSummary(); summary.MaturedUnits != 1 || summary.EvaluatedUnits != 1 || summary.SuccessfulUnits != 1 {
+		t.Fatalf("finalized request did not mature Work Unit: %#v", summary)
 	}
 }
 

@@ -84,8 +84,13 @@ export function localizedError(t: TFunction, error: unknown) {
   }
   const capabilities = capabilityRefusal(t, error);
   if (capabilities) return capabilities;
-	const codeMessages: Record<string, string> = {
-		run_governance_active_runs: "errors.runGovernanceActiveRuns",
+  const codeMessages: Record<string, string> = {
+    run_governance_active_runs: "errors.runGovernanceActiveRuns",
+    governance_unavailable: "errors.governanceUnavailable",
+    run_governance_unavailable: "errors.runGovernanceUnavailable",
+    governance_summary_unavailable: "errors.governanceSummaryUnavailable",
+    governance_export_inconsistent: "errors.governanceExportInconsistent",
+    governance_summary_overflow: "errors.governanceSummaryOverflow",
     deployment_price_unavailable: "errors.deploymentPriceUnavailable",
     price_effective_from_conflict: "errors.priceEffectiveConflict",
     price_timeline_conflict: "errors.priceTimelineConflict",

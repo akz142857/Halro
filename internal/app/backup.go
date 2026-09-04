@@ -571,6 +571,10 @@ func createBackupSnapshotWithLedger(
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("open Governance Journal for backup: %w", err)
 	}
+	if _, err := restoreGovernanceState(metadata, governanceLog, governanceKey); err != nil {
+		governanceLog.Close()
+		return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for backup: %w", err)
+	}
 	governanceSummary, replayErr := governanceLog.Replay(func(record governance.Record) error { return record.Event.Validate() })
 	governanceCloseErr := governanceLog.Close()
 	if err := errors.Join(replayErr, governanceCloseErr); err != nil {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -169,18 +170,32 @@ func (s *Store) ListOutcomeDefinitions(ctx context.Context, projectID string) ([
 }
 
 type GovernanceCheckpoint struct {
-	Version  int      `json:"version"`
-	Sequence uint64   `json:"sequence"`
-	Offset   int64    `json:"offset"`
-	Segments []string `json:"segments"`
-	Payload  []byte   `json:"-"`
+	Version        int      `json:"version"`
+	Sequence       uint64   `json:"sequence"`
+	Offset         int64    `json:"offset"`
+	JournalHash    [32]byte `json:"journal_hash"`
+	PayloadSHA256  [32]byte `json:"payload_sha256"`
+	Authentication [32]byte `json:"authentication"`
+	Segments       []string `json:"segments"`
+	Payload        []byte   `json:"-"`
+}
+
+type GovernanceJournalAnchor struct {
+	Version        int      `json:"version"`
+	Sequence       uint64   `json:"sequence"`
+	Offset         int64    `json:"offset"`
+	Hash           [32]byte `json:"hash"`
+	Authentication [32]byte `json:"authentication"`
 }
 
 const governanceCheckpointSegmentSize = 4 << 20
 
-func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, payload []byte) error {
-	value := GovernanceCheckpoint{Version: 1, Sequence: sequence, Offset: offset, Payload: payload}
-	if value.Version <= 0 || value.Sequence == 0 || value.Offset <= 0 || len(value.Payload) == 0 {
+func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, journalHash, payloadSHA256, authentication [32]byte, payload []byte) error {
+	value := GovernanceCheckpoint{Version: 1, Sequence: sequence, Offset: offset, JournalHash: journalHash,
+		PayloadSHA256: payloadSHA256, Authentication: authentication, Payload: payload}
+	actualPayloadHash := sha256.Sum256(payload)
+	if value.Sequence == 0 || value.Offset <= 0 || value.JournalHash == [32]byte{} ||
+		value.PayloadSHA256 != actualPayloadHash || value.Authentication == [32]byte{} || len(value.Payload) == 0 {
 		return errors.New("governance checkpoint is invalid")
 	}
 	for start := 0; start < len(payload); start += governanceCheckpointSegmentSize {
@@ -198,6 +213,21 @@ func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, payload 
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		segments := tx.Bucket(bucketGovernanceCheckpointSegments)
+		if raw := tx.Bucket(bucketMeta).Get(keyGovernanceCheckpoint); raw != nil {
+			var current GovernanceCheckpoint
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode current governance checkpoint: %w", err)
+			}
+			if value.Sequence < current.Sequence {
+				return errors.New("governance checkpoint cannot move backwards")
+			}
+			if value.Sequence == current.Sequence {
+				if !reflect.DeepEqual(value, current) {
+					return errors.New("governance checkpoint conflicts at the same sequence")
+				}
+				return nil
+			}
+		}
 		for index, digest := range value.Segments {
 			start, end := index*governanceCheckpointSegmentSize, (index+1)*governanceCheckpointSegmentSize
 			if end > len(payload) {
@@ -212,7 +242,22 @@ func (s *Store) SaveGovernanceCheckpoint(sequence uint64, offset int64, payload 
 				return err
 			}
 		}
-		return tx.Bucket(bucketMeta).Put(keyGovernanceCheckpoint, encoded)
+		if err := tx.Bucket(bucketMeta).Put(keyGovernanceCheckpoint, encoded); err != nil {
+			return err
+		}
+		referenced := make(map[string]struct{}, len(value.Segments))
+		for _, digest := range value.Segments {
+			referenced[digest] = struct{}{}
+		}
+		cursor := segments.Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			if _, keep := referenced[string(key)]; !keep {
+				if err := cursor.Delete(); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 
@@ -226,7 +271,8 @@ func (s *Store) LoadGovernanceCheckpoint() (GovernanceCheckpoint, error) {
 		if err := json.Unmarshal(raw, &value); err != nil {
 			return err
 		}
-		if value.Version != 1 || value.Sequence == 0 || value.Offset <= 0 || len(value.Segments) == 0 {
+		if value.Version != 1 || value.Sequence == 0 || value.Offset <= 0 || value.JournalHash == [32]byte{} ||
+			value.PayloadSHA256 == [32]byte{} || value.Authentication == [32]byte{} || len(value.Segments) == 0 {
 			return errors.New("governance checkpoint head is invalid")
 		}
 		segments := tx.Bucket(bucketGovernanceCheckpointSegments)
@@ -241,9 +287,57 @@ func (s *Store) LoadGovernanceCheckpoint() (GovernanceCheckpoint, error) {
 			}
 			value.Payload = append(value.Payload, segment...)
 		}
+		if sha256.Sum256(value.Payload) != value.PayloadSHA256 {
+			return errors.New("governance checkpoint payload checksum mismatch")
+		}
 		return nil
 	})
 	return value, err
+}
+
+func (s *Store) PutGovernanceJournalAnchor(sequence uint64, offset int64, hash, authentication [32]byte) error {
+	anchor := GovernanceJournalAnchor{Version: 1, Sequence: sequence, Offset: offset, Hash: hash, Authentication: authentication}
+	if anchor.Version != 1 || anchor.Sequence == 0 || anchor.Offset <= 0 || anchor.Hash == [32]byte{} || anchor.Authentication == [32]byte{} {
+		return errors.New("governance journal anchor is invalid")
+	}
+	encoded, err := json.Marshal(anchor)
+	if err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		if raw := meta.Get(keyGovernanceJournalAnchor); raw != nil {
+			var current GovernanceJournalAnchor
+			if err := json.Unmarshal(raw, &current); err != nil {
+				return fmt.Errorf("decode current governance journal anchor: %w", err)
+			}
+			if anchor.Sequence < current.Sequence || anchor.Offset < current.Offset {
+				return errors.New("governance journal anchor cannot move backwards")
+			}
+			if anchor.Sequence == current.Sequence {
+				if anchor != current {
+					return errors.New("governance journal anchor conflicts at the same sequence")
+				}
+				return nil
+			}
+		}
+		return meta.Put(keyGovernanceJournalAnchor, encoded)
+	})
+}
+
+func (s *Store) GovernanceJournalAnchor() (GovernanceJournalAnchor, error) {
+	var anchor GovernanceJournalAnchor
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyGovernanceJournalAnchor)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &anchor); err != nil {
+			return fmt.Errorf("decode governance journal anchor: %w", err)
+		}
+		return nil
+	})
+	return anchor, err
 }
 
 func (s *Store) ResetGovernanceCheckpoint() error {

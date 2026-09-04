@@ -102,10 +102,16 @@ function listingIncomplete(resource: string, reason: string) {
 async function listAll<T>(resource: string, path: string): Promise<T[]> {
   const items: T[] = [];
   const seenCursors = new Set<string>();
+  const question = path.indexOf("?");
+  const pathname = question < 0 ? path : path.slice(0, question);
+  const baseQuery = new URLSearchParams(question < 0 ? "" : path.slice(question + 1));
   let cursor = "";
   for (let page = 0; page < LIST_PAGE_CEILING; page++) {
-    const query = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
-    const result = await request<Page<T>>(`${path}?${query}`).then((value) => value.data);
+    const query = new URLSearchParams(baseQuery);
+    query.set("limit", "100");
+    if (cursor) query.set("cursor", cursor);
+    else query.delete("cursor");
+    const result = await request<Page<T>>(`${pathname}?${query}`).then((value) => value.data);
     items.push(...(result.items ?? []));
     const next = result.next_cursor;
     if (!next) return items;
@@ -496,19 +502,21 @@ export const api = {
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
   workUnits: (query = "") =>
-    request<Page<WorkUnit>>(`/run-governance/work-units${query}`).then((value) => value.data),
+    pageOfAll<WorkUnit>("Work Unit", `/run-governance/work-units${query}`),
   workUnit: (id: string) =>
     request<WorkUnit>(`/run-governance/work-units/${encodeURIComponent(id)}`).then((value) => value.data),
   runs: (query = "") =>
-    request<Page<Run>>(`/run-governance/runs${query}`).then((value) => value.data),
+    pageOfAll<Run>("Run", `/run-governance/runs${query}`),
   run: (id: string) =>
     request<Run>(`/run-governance/runs/${encodeURIComponent(id)}`).then((value) => value.data),
-	outcomeDefinitions: (projectID: string) =>
-		request<Page<OutcomeDefinition>>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions?limit=200`).then((value) => value.data),
-	createOutcomeDefinition: (projectID: string, revision: number, value: unknown) =>
-		request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions`, json("POST", value), `"${revision}"`),
-	outcomes: (query = "") => request<Page<Outcome>>(`/governance/outcomes${query}`).then((value) => value.data),
-	governanceSummary: (query: string) => request<GovernanceSummary>(`/governance/summary${query}`).then((value) => value.data),
+  outcomeDefinitions: (projectID: string) =>
+    pageOfAll<OutcomeDefinition>("Outcome definition", `/projects/${encodeURIComponent(projectID)}/outcome-definitions`),
+  createOutcomeDefinition: (projectID: string, revision: number, value: unknown) =>
+    request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions`, json("POST", value), `"${revision}"`).then((result) => result.data),
+  createOutcomeDefinitionVersion: (projectID: string, definitionID: string, revision: number, value: unknown) =>
+    request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions/${encodeURIComponent(definitionID)}/versions`, json("POST", value), `"${revision}"`).then((result) => result.data),
+  outcomes: (query = "") => pageOfAll<Outcome>("Outcome", `/governance/outcomes${query}`),
+  governanceSummary: (query: string) => request<GovernanceSummary>(`/governance/summary${query}`).then((value) => value.data),
   usageFailures: (query = "") =>
     request<Page<RequestFailure>>(`/usage/failures${query}`).then((value) => value.data),
   usageFailurePayload: (requestID: string) =>

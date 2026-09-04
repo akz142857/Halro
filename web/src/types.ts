@@ -414,10 +414,29 @@ export interface Outcome {
 	supersedes_outcome_id?: string; revision: number; governance_sequence: number; provisional: boolean;
 }
 export interface GovernanceSummary {
-	basis: "work_unit_cohort"; cohort_start: string; cohort_end: string; definition_id: string; definition_version: number;
-	generated_at: string; eligible_units: number; matured_units: number; evaluated_units: number; successful_units: number;
-	outcome_coverage: number | null; success_rate: number | null; known_cost_micros_usd: number; in_progress_cost_micros_usd: number;
-	estimated_cost_micros_usd: number; unknown_attempts: number; cost_completeness: "complete" | "partial"; cost_per_success_micros_usd: number | null;
+  basis: "work_unit_cohort";
+  cohort_start: string;
+  cohort_end: string;
+  definition_id: string;
+  definition_version: number;
+  generated_at: string;
+  accounting_watermark: { generation: number; sequence: number; offset: number };
+  governance_watermark: { sequence: number; offset: number };
+  eligible_units: number;
+  matured_units: number;
+  evaluated_units: number;
+  successful_units: number;
+  outcome_coverage: number | null;
+  success_rate: number | null;
+  known_cost_micros_usd: number;
+  in_progress_cost_micros_usd: number;
+  estimated_cost_micros_usd: number;
+  unknown_attempts: number;
+  outcome_completeness?: "complete" | "partial" | "unknown";
+  outcome_reason?: string;
+  cost_completeness: "complete" | "partial" | "unknown";
+  cost_per_success_micros_usd: number | null;
+  cost_per_success_reason?: string;
 }
 
 export interface Run {

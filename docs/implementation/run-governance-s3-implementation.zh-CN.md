@@ -33,17 +33,22 @@ writer mutex、回放状态与 event-ID 冲突检测。链密钥从 envelope-bac
 当前只有一个稳定密钥代际。未来若引入 chain key replacement，必须先增加可验证的
 代际链接与恢复契约；不能直接用新密钥打开既有 Journal。
 
-启动时先完整验证 Journal 链，再从有效 checkpoint 恢复 head/idempotency，并只应用
-checkpoint 后的事件。checkpoint 使用最多 4 MiB 的 content-addressed immutable
-segments；head、sequence、offset 和 segment 列表在一个 bbolt transaction 中推进。
-版本不匹配、领先 Journal、缺段或摘要不符时删除整个派生 checkpoint，从 Journal
-重建。Journal 打不开或回放失败时 Outcome API 返回 `governance_unavailable`，但
-Runtime、无 Run 推理和 Accounting Ledger 继续工作；Admin system status 单独报告
-Governance ready 与 watermark。
+每次 acknowledged Outcome 都同步持久化 HMAC terminal anchor。非空 Journal 缺少
+anchor，或 anchor 指向的终端 frame 不存在、摘要不匹配时，启动与读取均 fail closed，
+不会把截断后的前缀当成完整历史。
 
-Outcome append 已持久但 checkpoint 推进失败时，manager 转为 unavailable。重启后
-以 Journal 为准重建，并通过持久的 Project + operation + idempotency-key hash 返回
-原 Outcome；bbolt 派生数据不能覆盖或改写 Journal 历史。
+启动时先完整验证 Journal 链。当前实现可以从 Journal 全量回放 head/idempotency；
+checkpoint 只是可选的恢复加速器，不是权威数据。checkpoint 使用最多 4 MiB 的
+content-addressed immutable segments，并由 HMAC 认证且绑定对应 Journal frame；版本
+不匹配、领先 Journal、缺段或摘要不符时删除整个派生 checkpoint，从 Journal 重建。
+Report 热路径不会为每次读取生成全量 checkpoint，当前也没有可据此宣称恢复为
+O(delta) 的运行期 checkpoint writer。Journal 打不开或回放失败时 Outcome API 返回
+`governance_unavailable`，但 Runtime、无 Run 推理和 Accounting Ledger 继续工作；
+Admin system status 单独报告 Governance ready 与 watermark。
+
+Outcome append 已持久但 terminal anchor 同步失败时，manager 转为 unavailable。重启后
+以 Journal 和已验证 anchor 为准重建，并通过持久的 Project + operation +
+idempotency-key hash 返回原 Outcome；bbolt 派生数据不能覆盖或改写 Journal 历史。
 
 ## 3. Outcome Definition 与 Work Unit 冻结
 
@@ -102,9 +107,12 @@ cost-per-success。零分母返回 `null`。`CostMicrosUSD` 已含 estimated 子
 Governance 双 watermarks；它不被命名为 ROI 或总业务成本。
 
 Admin 还提供 `GET /admin/api/v1/governance/outcomes` 查看 reporter、证据摘要、两种时间
-和完整修订链。Console 在 Run Governance 页面展示 Definition 管理、Outcome 历史、
-coverage、success rate、模型调用单位成功成本及进行中成本，并明确显示 provisional 和
-partial。
+和完整修订链。Console 会沿稳定 cursor 读取完整的 Work Unit、Run、Definition 与 Outcome
+列表；cursor 不前进或超过客户端安全页数时失败关闭，不把首个分页显示成总量。Run
+Governance 页面支持 BOOLEAN/CATEGORICAL Definition、不可变新版本和启停，并提示版本
+只影响新 Work Unit。Summary 同屏展示 coverage、success rate、known/estimated/unknown
+费用、单位成功成本、completeness/reason、生成时间与双 watermarks，并明确显示
+provisional 和 partial。
 
 ## 6. Governance export 与备份恢复
 
@@ -131,12 +139,14 @@ key 验证完整 HMAC chain、逐事件回放和 manifest head，失败时不会
 - Outcome 幂等重放返回同一 ID，不同 fingerprint 冲突；
 - evidence URL、换行和 credential canary 在持久化前拒绝；
 - Work Unit 冻结 Definition version，旧版本不被新版本改写；
-- segmented checkpoint 跨多段 round-trip 与整体 reset；
+- acknowledged Outcome 的 terminal anchor 同步、非空 Journal 缺 anchor 及截断拒绝；
+- 可选 segmented checkpoint 跨多段 round-trip、frame 绑定与整体 reset；
 - Governance 损坏时 Runtime 和 Accounting append 仍可用；
 - cohort 的 matured/evaluated/successful 与零成本分母；
 - export 四数据集、checksum、count 及无重复成本列；
 - backup/restore 对 Governance Journal 的包含、链校验和 head 核对；
-- northbound/Admin route 双向契约、Runtime breadth、前端类型和直接受影响页面测试。
+- northbound/Admin route 双向契约、Runtime breadth、前端类型，以及 Definition
+  创建/版本化、Summary partial 与双水位、分页和 unavailable 状态的页面测试。
 
 ## 8. 发布边界
 

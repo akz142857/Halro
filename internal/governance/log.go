@@ -79,6 +79,7 @@ func (e Event) Validate() error {
 
 type Record struct {
 	Sequence uint64   `json:"sequence"`
+	Offset   int64    `json:"offset"`
 	Event    Event    `json:"event"`
 	Hash     [32]byte `json:"hash"`
 }
@@ -87,6 +88,50 @@ type Summary struct {
 	Records  uint64   `json:"records"`
 	LastHash [32]byte `json:"last_hash"`
 	Bytes    int64    `json:"bytes"`
+}
+
+const (
+	journalAnchorVersion  = 1
+	checkpointAuthVersion = 1
+)
+
+// JournalAnchorAuth authenticates a durable high-water mark kept outside the
+// Journal. The external anchor is what makes deletion of an otherwise valid
+// suffix observable; the per-frame chain alone can only authenticate the
+// prefix that remains on disk.
+func JournalAnchorAuth(key []byte, sequence uint64, offset int64, hash [32]byte) [32]byte {
+	return governanceMAC(key, "halro:governance-journal-anchor:v1", journalAnchorVersion, sequence, offset, hash, [32]byte{})
+}
+
+func VerifyJournalAnchorAuth(key []byte, sequence uint64, offset int64, hash, authentication [32]byte) bool {
+	expected := JournalAnchorAuth(key, sequence, offset, hash)
+	return hmac.Equal(expected[:], authentication[:])
+}
+
+// CheckpointAuth binds a rebuildable snapshot to both its bytes and the exact
+// authenticated Journal frame it projects through.
+func CheckpointAuth(key []byte, sequence uint64, offset int64, journalHash, payloadHash [32]byte) [32]byte {
+	return governanceMAC(key, "halro:governance-checkpoint:v1", checkpointAuthVersion, sequence, offset, journalHash, payloadHash)
+}
+
+func VerifyCheckpointAuth(key []byte, sequence uint64, offset int64, journalHash, payloadHash, authentication [32]byte) bool {
+	expected := CheckpointAuth(key, sequence, offset, journalHash, payloadHash)
+	return hmac.Equal(expected[:], authentication[:])
+}
+
+func governanceMAC(key []byte, domain string, version int, sequence uint64, offset int64, first, second [32]byte) [32]byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(domain))
+	var encoded [24]byte
+	binary.BigEndian.PutUint64(encoded[0:8], uint64(version))
+	binary.BigEndian.PutUint64(encoded[8:16], sequence)
+	binary.BigEndian.PutUint64(encoded[16:24], uint64(offset))
+	mac.Write(encoded[:])
+	mac.Write(first[:])
+	mac.Write(second[:])
+	var result [32]byte
+	copy(result[:], mac.Sum(nil))
+	return result
 }
 
 type Log struct {
@@ -226,7 +271,7 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 		}
 		offset += int64(len(frame))
 		previous = hash
-		records[index] = Record{Sequence: sequence, Event: events[index], Hash: hash}
+		records[index] = Record{Sequence: sequence, Offset: offset, Event: events[index], Hash: hash}
 	}
 	if err := l.file.Sync(); err != nil {
 		return nil, fmt.Errorf("sync governance journal: %w", err)
@@ -258,6 +303,22 @@ func (l *Log) Summary() Summary {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return Summary{Records: l.sequence, LastHash: l.lastHash, Bytes: l.offset}
+}
+
+func (l *Log) AuthenticatedHead() (Summary, [32]byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	summary := Summary{Records: l.sequence, LastHash: l.lastHash, Bytes: l.offset}
+	return summary, JournalAnchorAuth(l.key, summary.Records, summary.Bytes, summary.LastHash)
+}
+
+func (l *Log) AuthenticatedCheckpoint(payload []byte) (Summary, [32]byte, [32]byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	summary := Summary{Records: l.sequence, LastHash: l.lastHash, Bytes: l.offset}
+	payloadHash := sha256.Sum256(payload)
+	authentication := CheckpointAuth(l.key, summary.Records, summary.Bytes, summary.LastHash, payloadHash)
+	return summary, payloadHash, authentication
 }
 
 func (l *Log) Close() error {
@@ -344,7 +405,7 @@ func scan(file *os.File, key []byte, visit func(Record) error) (Summary, bool, e
 		summary.Bytes += int64(len(frame))
 		summary.LastHash = hash
 		if visit != nil {
-			if err := visit(Record{Sequence: sequence, Event: event, Hash: hash}); err != nil {
+			if err := visit(Record{Sequence: sequence, Offset: summary.Bytes, Event: event, Hash: hash}); err != nil {
 				return Summary{}, false, err
 			}
 		}

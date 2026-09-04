@@ -27,6 +27,20 @@ describe("server refusals", () => {
     expect(localizedError(i18n.t, error)).toBe("The route is disabled. Enable it first.");
   });
 
+  it("translates every Run Governance consistency refusal", async () => {
+    const cases = [
+      ["governance_unavailable", "业务结果治理暂不可用。当前页面不会把缺失数据解释为零，请先检查系统状态。", "Business outcome governance is unavailable. This view will not interpret missing data as zero; check system status first."],
+      ["run_governance_unavailable", "运行治理数据暂不可用。当前页面不会把不完整结果显示为完整，请先检查系统状态。", "Run Governance data is unavailable. This view will not show a partial result as complete; check system status first."],
+      ["governance_summary_unavailable", "无法从一致的费用与结果快照生成治理汇总。请检查系统状态后重试。", "The governance summary could not be produced from a consistent accounting and outcome snapshot. Try again after checking system status."],
+      ["governance_export_inconsistent", "治理导出无法取得一致的费用与结果快照，未接受不完整导出。", "The governance export could not capture a consistent accounting and outcome snapshot. No partial export was accepted."],
+      ["governance_summary_overflow", "治理汇总超出支持的数值范围，请缩小统计群组后重试。", "The governance summary exceeds the supported numeric range. Narrow the cohort before trying again."],
+    ] as const;
+
+    for (const [code, zh] of cases) expect(localizedError(i18n.t, refusal(code, "server fallback", 503))).toBe(zh);
+    await applyLocale("en-US");
+    for (const [code, , en] of cases) expect(localizedError(i18n.t, refusal(code, "server fallback", 503))).toBe(en);
+  });
+
   it("does not repeat the server's English sentence under the translated one", () => {
     expect(errorDetail(refusal("provider_disabled", "provider is disabled"))).toBe("");
     expect(errorDetail(refusal("invalid_request", "invalid request"))).toBe("");

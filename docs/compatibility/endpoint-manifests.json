@@ -2559,8 +2559,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",
@@ -2592,16 +2592,14 @@
       "id"
     ],
     "request_headers": [
-      "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Authorization"
     ],
     "response_fields": [
       "work_unit",
       "runs",
       "outcomes"
     ],
-    "state_semantics": "project-owned ledger-derived Work Unit read",
+    "state_semantics": "project-owned dual-source read: Work Unit and Runs from Accounting Ledger, Outcomes from Governance Journal",
     "sdk_matrix": null,
     "evidence": [
       "gateway_contract"
@@ -2626,8 +2624,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",
@@ -2666,8 +2664,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",
@@ -2709,8 +2707,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",
@@ -2743,9 +2741,7 @@
       "id"
     ],
     "request_headers": [
-      "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Authorization"
     ],
     "response_fields": [
       "id",
@@ -2782,8 +2778,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type on POST",
-      "Idempotency-Key on POST"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",

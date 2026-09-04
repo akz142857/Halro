@@ -41,6 +41,28 @@ func TestBuiltinEndpointManifestsAreValidImmutableAndGolden(t *testing.T) {
 	}
 }
 
+func TestRunGovernanceManifestHeadersAndDualSourceReadAreExact(t *testing.T) {
+	foundWorkUnitRead := false
+	for _, manifest := range governanceEndpointManifests() {
+		if manifest.Method == "GET" {
+			if !slices.Equal(manifest.RequestHeaders, []string{"Authorization"}) {
+				t.Fatalf("%s GET headers = %v", manifest.ID, manifest.RequestHeaders)
+			}
+		} else if !slices.Equal(manifest.RequestHeaders, []string{"Authorization", "Content-Type", "Idempotency-Key"}) {
+			t.Fatalf("%s POST headers = %v", manifest.ID, manifest.RequestHeaders)
+		}
+		if manifest.ID == "halro.work-units.get.v1" {
+			foundWorkUnitRead = true
+			if !strings.Contains(manifest.StateSemantics, "Accounting Ledger") || !strings.Contains(manifest.StateSemantics, "Governance Journal") {
+				t.Fatalf("Work Unit read does not name both authorities: %q", manifest.StateSemantics)
+			}
+		}
+	}
+	if !foundWorkUnitRead {
+		t.Fatal("Work Unit read manifest is missing")
+	}
+}
+
 func TestInferenceResourcesMaturityDoesNotClaimUnvalidatedSDKCompatibility(t *testing.T) {
 	for _, manifest := range inferenceResourcesEndpointManifests() {
 		if manifest.Status != StatusExperimental {

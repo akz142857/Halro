@@ -1,12 +1,16 @@
 package ledger
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 func governanceEvent(id string, kind EventKind, occurredAt time.Time) Event {
@@ -65,6 +69,73 @@ func TestRunAttributionLifecycleReplaysAndSettlesOnce(t *testing.T) {
 	run, _ = state.Run("run_1")
 	if run.CommittedMicrosUSD != 75 {
 		t.Fatalf("duplicate settlement committed %d, want 75", run.CommittedMicrosUSD)
+	}
+}
+
+func TestSettlementCannotChangeReservedRunAttribution(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	state := NewState()
+	events := []Event{
+		governanceEvent("evt_wu", EventWorkUnitCreated, now),
+		governanceEvent("evt_run", EventRunCreated, now.Add(time.Second)),
+		governanceEvent("evt_req", EventRequestAccepted, now.Add(2*time.Second)),
+		governanceEvent("evt_res", EventReservationCreated, now.Add(3*time.Second)),
+	}
+	events[0].WorkUnitID = "wku_1"
+	events[1].WorkUnitID, events[1].RunID = "wku_1", "run_1"
+	events[1].RunBudgetMicrosUSD, events[1].RunExpiresAt = 1_000, now.Add(time.Hour)
+	events[2].RequestID, events[2].WorkUnitID, events[2].RunID = "req_1", "wku_1", "run_1"
+	events[3].RequestID, events[3].AttemptID = "req_1", "att_1"
+	events[3].WorkUnitID, events[3].RunID, events[3].ReservationMicrosUSD = "wku_1", "run_1", MicrosUSD(100)
+	for index, event := range events {
+		if err := state.Apply(Record{Sequence: uint64(index + 1), Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settled := governanceEvent("evt_settle_wrong_attribution", EventAttemptSettled, now.Add(4*time.Second))
+	settled.RequestID, settled.AttemptID, settled.CommittedMicrosUSD = "req_1", "att_1", MicrosUSD(75)
+	if err := state.Apply(Record{Sequence: 5, Event: settled}); err == nil || !strings.Contains(err.Error(), "changed run attribution") {
+		t.Fatalf("settlement attribution error=%v", err)
+	}
+}
+
+func TestGovernanceSnapshotTracksAcceptedRequestsAndFiltersCohortBeforeLimit(t *testing.T) {
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	state := NewState()
+	sequence := uint64(0)
+	apply := func(event Event) {
+		t.Helper()
+		sequence++
+		if err := state.Apply(Record{Sequence: sequence, Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, spec := range []struct{ id, period string }{{"wku_in", "2026-09-04"}, {"wku_out", "2026-08-01"}} {
+		event := governanceEvent("evt_"+spec.id, EventWorkUnitCreated, now)
+		event.WorkUnitID, event.PeriodID = spec.id, spec.period
+		event.OutcomeDefinitions = []domain.OutcomeDefinitionRef{{ID: "odef_result", Version: 1}}
+		apply(event)
+	}
+	run := governanceEvent("evt_snapshot_run", EventRunCreated, now.Add(time.Second))
+	run.WorkUnitID, run.RunID, run.RunBudgetMicrosUSD, run.RunExpiresAt = "wku_in", "run_snapshot", 100, now.Add(time.Hour)
+	apply(run)
+	accepted := governanceEvent("evt_snapshot_accepted", EventRequestAccepted, now.Add(2*time.Second))
+	accepted.RequestID, accepted.WorkUnitID, accepted.RunID = "req_snapshot", "wku_in", "run_snapshot"
+	apply(accepted)
+
+	snapshot, err := state.GovernanceSnapshot(context.Background(), GovernanceSnapshotOptions{
+		ProjectID: "prj_1", DefinitionID: "odef_result", DefinitionVersion: 1,
+		CohortStart: "2026-09-04", CohortEnd: "2026-09-04", MaxWorkUnits: 1,
+	})
+	if err != nil || len(snapshot.WorkUnits) != 1 || snapshot.WorkUnits[0].ID != "wku_in" || !snapshot.InflightWorkUnit["wku_in"] {
+		t.Fatalf("snapshot=%#v err=%v", snapshot, err)
+	}
+	finalized := governanceEvent("evt_snapshot_finalized", EventRequestFinalized, now.Add(3*time.Second))
+	finalized.RequestID, finalized.WorkUnitID, finalized.RunID = "req_snapshot", "wku_in", "run_snapshot"
+	apply(finalized)
+	snapshot, err = state.GovernanceSnapshot(context.Background(), GovernanceSnapshotOptions{ProjectID: "prj_1", WorkUnitID: "wku_in"})
+	if err != nil || snapshot.InflightWorkUnit["wku_in"] {
+		t.Fatalf("finalized request remained inflight: %#v err=%v", snapshot, err)
 	}
 }
 

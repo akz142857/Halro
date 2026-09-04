@@ -384,6 +384,7 @@ describe("projects page", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    expect(screen.getByRole("checkbox", { name: "outcome:write" })).toBeVisible();
     const nameField = screen.getByLabelText(/密钥名称/);
     fireEvent.change(nameField, { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });

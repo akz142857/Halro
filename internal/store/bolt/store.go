@@ -103,6 +103,7 @@ var (
 	keyLedgerHMACEnvelope              = []byte("ledger_hmac_envelope")
 	keyLedgerChainCheckpoint           = []byte("ledger_chain_checkpoint")
 	keyGovernanceCheckpoint            = []byte("governance_checkpoint")
+	keyGovernanceJournalAnchor         = []byte("governance_journal_anchor")
 	keyVaultKeyring                    = []byte("vault_keyring")
 	keyKeySlotDescriptor               = []byte("key_slot_descriptor")
 	keyKeySlotAuditIntent              = []byte("key_slot_audit_intent")

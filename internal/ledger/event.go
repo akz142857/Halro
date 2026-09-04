@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -376,6 +377,10 @@ type State struct {
 	workUnits             map[string]domain.WorkUnit
 	runs                  map[string]domain.Run
 	requestRuns           map[string]requestAttribution
+	runsByWorkUnit        map[string][]string
+	activeByWorkUnit      map[string]map[string]struct{}
+	pendingByWorkUnit     map[string]map[string]struct{}
+	settledByWorkUnit     map[string][]string
 	governanceIdempotency map[string]GovernanceIdempotency
 	watermark             Watermark
 }
@@ -404,6 +409,10 @@ func NewState() *State {
 		workUnits:             make(map[string]domain.WorkUnit),
 		runs:                  make(map[string]domain.Run),
 		requestRuns:           make(map[string]requestAttribution),
+		runsByWorkUnit:        make(map[string][]string),
+		activeByWorkUnit:      make(map[string]map[string]struct{}),
+		pendingByWorkUnit:     make(map[string]map[string]struct{}),
+		settledByWorkUnit:     make(map[string][]string),
 		governanceIdempotency: make(map[string]GovernanceIdempotency),
 	}
 }
@@ -455,6 +464,9 @@ func (s *State) Apply(record Record) error {
 	if event.Kind <= EventRequestFinalized {
 		attribution, exists := s.requestRuns[event.RequestID]
 		if event.Kind == EventRequestAccepted {
+			if exists && (attribution.WorkUnitID != event.WorkUnitID || attribution.RunID != event.RunID) {
+				return errors.New("accepted request changed run attribution")
+			}
 			if event.RunID != "" {
 				run, runExists := s.runs[event.RunID]
 				if !runExists || run.ProjectID != event.ProjectID || run.WorkUnitID != event.WorkUnitID ||
@@ -462,6 +474,10 @@ func (s *State) Apply(record Record) error {
 					return errors.New("request run attribution is not active in this project")
 				}
 				s.requestRuns[event.RequestID] = requestAttribution{WorkUnitID: event.WorkUnitID, RunID: event.RunID}
+				if s.activeByWorkUnit[event.WorkUnitID] == nil {
+					s.activeByWorkUnit[event.WorkUnitID] = make(map[string]struct{})
+				}
+				s.activeByWorkUnit[event.WorkUnitID][event.RequestID] = struct{}{}
 			}
 		} else if exists {
 			if attribution.WorkUnitID != event.WorkUnitID || attribution.RunID != event.RunID {
@@ -524,6 +540,7 @@ func (s *State) Apply(record Record) error {
 			return err
 		}
 		s.runs[run.ID] = run
+		s.runsByWorkUnit[run.WorkUnitID] = append(s.runsByWorkUnit[run.WorkUnitID], run.ID)
 	case EventRunClosed:
 		run, exists := s.runs[event.RunID]
 		if !exists || run.ProjectID != event.ProjectID || run.WorkUnitID != event.WorkUnitID {
@@ -553,6 +570,12 @@ func (s *State) Apply(record Record) error {
 			}
 		}
 		s.reservations[event.AttemptID] = attemptReservation{Key: key, Amount: amount, Lease: event}
+		if event.WorkUnitID != "" {
+			if s.pendingByWorkUnit[event.WorkUnitID] == nil {
+				s.pendingByWorkUnit[event.WorkUnitID] = make(map[string]struct{})
+			}
+			s.pendingByWorkUnit[event.WorkUnitID][event.AttemptID] = struct{}{}
+		}
 		s.leaseRecords[event.AttemptID] = record
 		if event.RunID != "" && event.LeaseMode != LeaseModeUnknownAllowed {
 			run := s.runs[event.RunID]
@@ -582,6 +605,9 @@ func (s *State) Apply(record Record) error {
 		}
 		if reservation.Key != key {
 			return fmt.Errorf("attempt %q settlement changed project or period", event.AttemptID)
+		}
+		if event.WorkUnitID != reservation.Lease.WorkUnitID || event.RunID != reservation.Lease.RunID {
+			return fmt.Errorf("attempt %q settlement changed run attribution", event.AttemptID)
 		}
 		if reservation.Lease.PriceSnapshot != nil {
 			if event.PriceSnapshot == nil || !samePriceSnapshot(*reservation.Lease.PriceSnapshot, *event.PriceSnapshot) {
@@ -638,13 +664,28 @@ func (s *State) Apply(record Record) error {
 			s.runs[event.RunID] = run
 		}
 		delete(s.reservations, event.AttemptID)
+		if event.WorkUnitID != "" {
+			delete(s.pendingByWorkUnit[event.WorkUnitID], event.AttemptID)
+			if len(s.pendingByWorkUnit[event.WorkUnitID]) == 0 {
+				delete(s.pendingByWorkUnit, event.WorkUnitID)
+			}
+		}
 		settlementDigest := "sha256:" + fmt.Sprintf("%x", digest)
 		base := int64(0)
 		if event.CommittedMicrosUSD != nil {
 			base = *event.CommittedMicrosUSD
 		}
 		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, CostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
+		if event.WorkUnitID != "" {
+			s.settledByWorkUnit[event.WorkUnitID] = append(s.settledByWorkUnit[event.WorkUnitID], event.AttemptID)
+		}
 	case EventRequestFinalized:
+		if attribution, ok := s.requestRuns[event.RequestID]; ok {
+			delete(s.activeByWorkUnit[attribution.WorkUnitID], event.RequestID)
+			if len(s.activeByWorkUnit[attribution.WorkUnitID]) == 0 {
+				delete(s.activeByWorkUnit, attribution.WorkUnitID)
+			}
+		}
 		delete(s.requestRuns, event.RequestID)
 	}
 
@@ -662,6 +703,91 @@ func (s *State) Apply(record Record) error {
 		Sequence:   record.Sequence,
 	}
 	return nil
+}
+
+var ErrGovernanceCohortLimit = errors.New("governance cohort work unit limit exceeded")
+
+type GovernanceSnapshotOptions struct {
+	ProjectID         string
+	WorkUnitID        string
+	DefinitionID      string
+	DefinitionVersion uint64
+	CohortStart       string
+	CohortEnd         string
+	MaxWorkUnits      int
+	IncludeRuns       bool
+	IncludeAttempts   bool
+}
+
+// GovernanceSnapshot captures every accounting input used by one governance
+// query under the State read lock. The watermark therefore names this exact
+// accounting view, while the two journals remain intentionally independent.
+type GovernanceSnapshot struct {
+	WorkUnits        []domain.WorkUnit
+	Runs             []domain.Run
+	SettledAttempts  []SettledAttempt
+	InflightWorkUnit map[string]bool
+	Watermark        Watermark
+}
+
+func (s *State) GovernanceSnapshot(ctx context.Context, options GovernanceSnapshotOptions) (GovernanceSnapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := GovernanceSnapshot{InflightWorkUnit: make(map[string]bool), Watermark: s.watermark}
+	selected := make(map[string]struct{})
+	for _, workUnit := range s.workUnits {
+		if err := ctx.Err(); err != nil {
+			return GovernanceSnapshot{}, err
+		}
+		if options.ProjectID != "" && workUnit.ProjectID != options.ProjectID {
+			continue
+		}
+		if options.WorkUnitID != "" && workUnit.ID != options.WorkUnitID {
+			continue
+		}
+		if options.CohortStart != "" && (workUnit.PeriodID < options.CohortStart || workUnit.PeriodID > options.CohortEnd) {
+			continue
+		}
+		if options.DefinitionID != "" {
+			eligible := false
+			for _, reference := range workUnit.OutcomeDefinitions {
+				if reference.ID == options.DefinitionID && reference.Version == options.DefinitionVersion {
+					eligible = true
+					break
+				}
+			}
+			if !eligible {
+				continue
+			}
+		}
+		if options.MaxWorkUnits > 0 && len(result.WorkUnits) >= options.MaxWorkUnits {
+			return GovernanceSnapshot{}, ErrGovernanceCohortLimit
+		}
+		workUnit.OutcomeDefinitions = slices.Clone(workUnit.OutcomeDefinitions)
+		result.WorkUnits = append(result.WorkUnits, workUnit)
+		selected[workUnit.ID] = struct{}{}
+	}
+	for workUnitID := range selected {
+		if err := ctx.Err(); err != nil {
+			return GovernanceSnapshot{}, err
+		}
+		if options.IncludeRuns {
+			for _, runID := range s.runsByWorkUnit[workUnitID] {
+				result.Runs = append(result.Runs, s.runs[runID])
+			}
+		}
+		if len(s.activeByWorkUnit[workUnitID]) > 0 || len(s.pendingByWorkUnit[workUnitID]) > 0 {
+			result.InflightWorkUnit[workUnitID] = true
+		}
+		if options.IncludeAttempts {
+			for _, attemptID := range s.settledByWorkUnit[workUnitID] {
+				result.SettledAttempts = append(result.SettledAttempts, s.settled[attemptID])
+			}
+		}
+	}
+	sort.Slice(result.WorkUnits, func(i, j int) bool { return result.WorkUnits[i].ID < result.WorkUnits[j].ID })
+	sort.Slice(result.Runs, func(i, j int) bool { return result.Runs[i].ID < result.Runs[j].ID })
+	return result, nil
 }
 
 func (s *State) WorkUnit(id string) (domain.WorkUnit, bool) {

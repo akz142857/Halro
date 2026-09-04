@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -143,7 +146,26 @@ func (r *Runtime) listAdminOutcomes(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	query := request.URL.Query()
-	items := r.governance.manager.Outcomes(strings.TrimSpace(query.Get("project_id")), strings.TrimSpace(query.Get("work_unit_id")), strings.TrimSpace(query.Get("definition_id")))
+	projectID, workUnitID, definitionID := strings.TrimSpace(query.Get("project_id")), strings.TrimSpace(query.Get("work_unit_id")), strings.TrimSpace(query.Get("definition_id"))
+	outcomeSnapshot, err := r.governance.manager.ReadOutcomeSnapshot(request.Context(), projectID, workUnitID, definitionID)
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "outcome governance is unavailable", "code": "governance_unavailable"})
+		return
+	}
+	accounting, err := r.state.GovernanceSnapshot(request.Context(), ledger.GovernanceSnapshotOptions{ProjectID: projectID, WorkUnitID: workUnitID})
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "accounting governance view is unavailable", "code": "run_governance_unavailable"})
+		return
+	}
+	workUnits := make(map[string]domain.WorkUnit, len(accounting.WorkUnits))
+	for _, item := range accounting.WorkUnits {
+		workUnits[item.ID] = item
+	}
+	items := outcomeSnapshot.Outcomes
+	for index := range items {
+		workUnit, ok := workUnits[items[index].WorkUnitID]
+		items[index].Provisional = !ok || workUnit.Status == domain.WorkUnitOpen || accounting.InflightWorkUnit[workUnit.ID]
+	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 	writeGovernanceAdminPage(writer, request, items, func(item domain.Outcome) string { return item.ID })
 }
@@ -169,6 +191,9 @@ type governanceSummary struct {
 	UnknownAttempts         int64          `json:"unknown_attempts"`
 	CostCompleteness        string         `json:"cost_completeness"`
 	CostPerSuccessMicrosUSD *int64         `json:"cost_per_success_micros_usd"`
+	OutcomeCompleteness     string         `json:"outcome_completeness"`
+	OutcomeReason           string         `json:"outcome_reason,omitempty"`
+	CostPerSuccessReason    string         `json:"cost_per_success_reason,omitempty"`
 }
 
 func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *http.Request) {
@@ -185,84 +210,100 @@ func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *ht
 		adminBadRequest(writer, "summary requires a valid project, definition version, and cohort of at most 90 days")
 		return
 	}
-	definition, err := r.store.GetOutcomeDefinition(request.Context(), projectID, definitionID, version)
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	defer cancel()
+	outcomes, err := r.governance.manager.ReadOutcomeSnapshot(ctx, projectID, "", definitionID)
 	if err != nil {
-		adminNotFound(writer)
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "outcome governance is unavailable", "code": "governance_unavailable"})
 		return
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	workUnits := r.state.WorkUnits(projectID)
-	if len(workUnits) > 100_000 {
-		adminBadRequest(writer, "cohort exceeds 100000 Work Units; use governance export")
+	definition, err := r.store.GetOutcomeDefinition(ctx, projectID, definitionID, version)
+	if err != nil {
+		if ctx.Err() != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "summary deadline exceeded", "code": "governance_summary_unavailable"})
+		} else {
+			adminNotFound(writer)
+		}
 		return
 	}
-	pendingRuns := map[string]struct{}{}
-	for _, lease := range r.state.PendingLeases() {
-		pendingRuns[lease.Reservation.RunID] = struct{}{}
+	accounting, err := r.state.GovernanceSnapshot(ctx, ledger.GovernanceSnapshotOptions{
+		ProjectID: projectID, DefinitionID: definitionID, DefinitionVersion: version,
+		CohortStart: query.Get("cohort_start"), CohortEnd: query.Get("cohort_end"),
+		MaxWorkUnits: 100_000, IncludeAttempts: true,
+	})
+	if errors.Is(err, ledger.ErrGovernanceCohortLimit) {
+		adminBadRequest(writer, "cohort exceeds 100000 eligible Work Units; use governance export")
+		return
 	}
-	runWorkUnit := map[string]string{}
-	for _, run := range r.state.Runs(projectID, "") {
-		runWorkUnit[run.ID] = run.WorkUnitID
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "summary deadline exceeded or accounting view is unavailable", "code": "governance_summary_unavailable"})
+		return
 	}
 	costs, estimates, unknown := map[string]int64{}, map[string]int64{}, map[string]int64{}
-	for _, attempt := range r.state.SettledAttempts() {
+	for _, attempt := range accounting.SettledAttempts {
 		wu := attempt.Settlement.WorkUnitID
-		if wu == "" {
-			continue
-		}
 		if attempt.CostKnown {
-			costs[wu] = satAdd(costs[wu], attempt.CostMicrosUSD)
+			costs[wu], err = checkedSummaryAdd(costs[wu], attempt.CostMicrosUSD)
+			if err != nil {
+				writeSummaryOverflow(writer)
+				return
+			}
 			if attempt.Settlement.CostEstimated {
-				estimates[wu] = satAdd(estimates[wu], attempt.CostMicrosUSD)
+				estimates[wu], err = checkedSummaryAdd(estimates[wu], attempt.CostMicrosUSD)
+				if err != nil {
+					writeSummaryOverflow(writer)
+					return
+				}
 			}
 		} else {
-			unknown[wu]++
+			unknown[wu], err = checkedSummaryAdd(unknown[wu], 1)
+			if err != nil {
+				writeSummaryOverflow(writer)
+				return
+			}
 		}
 	}
 	result := governanceSummary{Basis: "work_unit_cohort", CohortStart: query.Get("cohort_start"), CohortEnd: query.Get("cohort_end"), DefinitionID: definitionID, DefinitionVersion: version,
-		GeneratedAt: time.Now().UTC(), AccountingWatermark: r.state.Watermark(), CostCompleteness: "complete"}
-	if r.governance.log != nil {
-		summary := r.governance.log.Summary()
-		result.GovernanceWatermark = map[string]any{"sequence": summary.Records, "offset": summary.Bytes}
-	} else {
-		result.GovernanceWatermark = map[string]any{"sequence": 0, "offset": 0}
+		GeneratedAt: time.Now().UTC(), AccountingWatermark: accounting.Watermark,
+		GovernanceWatermark: map[string]any{"sequence": outcomes.Sequence, "offset": outcomes.Offset},
+		CostCompleteness:    "complete", OutcomeCompleteness: "complete"}
+	current := make(map[string]domain.Outcome)
+	for _, outcome := range outcomes.Outcomes {
+		if outcome.DefinitionVersion != version {
+			continue
+		}
+		if previous, ok := current[outcome.WorkUnitID]; !ok || outcome.GovernanceSequence > previous.GovernanceSequence {
+			current[outcome.WorkUnitID] = outcome
+		}
 	}
-	for _, workUnit := range workUnits {
-		if time.Now().After(deadline) {
-			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "summary deadline exceeded; use governance export"})
+	for _, workUnit := range accounting.WorkUnits {
+		if err := ctx.Err(); err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "summary deadline exceeded; use governance export", "code": "governance_summary_unavailable"})
 			return
 		}
-		if workUnit.PeriodID < result.CohortStart || workUnit.PeriodID > result.CohortEnd {
-			continue
-		}
-		eligible := false
-		for _, ref := range workUnit.OutcomeDefinitions {
-			if ref.ID == definitionID && ref.Version == version {
-				eligible = true
-				break
-			}
-		}
-		if !eligible {
-			continue
-		}
 		result.EligibleUnits++
-		matured := workUnit.Status == domain.WorkUnitClosed
-		for runID, wuID := range runWorkUnit {
-			if wuID == workUnit.ID {
-				if _, inflight := pendingRuns[runID]; inflight {
-					matured = false
-				}
-			}
-		}
+		matured := workUnit.Status == domain.WorkUnitClosed && !accounting.InflightWorkUnit[workUnit.ID]
 		if !matured {
-			result.InProgressCostMicrosUSD = satAdd(result.InProgressCostMicrosUSD, costs[workUnit.ID])
+			result.InProgressCostMicrosUSD, err = checkedSummaryAdd(result.InProgressCostMicrosUSD, costs[workUnit.ID])
+			if err != nil {
+				writeSummaryOverflow(writer)
+				return
+			}
 			continue
 		}
 		result.MaturedUnits++
-		result.KnownCostMicrosUSD = satAdd(result.KnownCostMicrosUSD, costs[workUnit.ID])
-		result.EstimatedCostMicrosUSD = satAdd(result.EstimatedCostMicrosUSD, estimates[workUnit.ID])
-		result.UnknownAttempts = satAdd(result.UnknownAttempts, unknown[workUnit.ID])
-		if outcome, ok := r.governance.manager.State().Current(projectID, workUnit.ID, definitionID, version); ok {
+		result.KnownCostMicrosUSD, err = checkedSummaryAdd(result.KnownCostMicrosUSD, costs[workUnit.ID])
+		if err == nil {
+			result.EstimatedCostMicrosUSD, err = checkedSummaryAdd(result.EstimatedCostMicrosUSD, estimates[workUnit.ID])
+		}
+		if err == nil {
+			result.UnknownAttempts, err = checkedSummaryAdd(result.UnknownAttempts, unknown[workUnit.ID])
+		}
+		if err != nil {
+			writeSummaryOverflow(writer)
+			return
+		}
+		if outcome, ok := current[workUnit.ID]; ok {
 			result.EvaluatedUnits++
 			if definition.Successful(outcome.Value) {
 				result.SuccessfulUnits++
@@ -271,10 +312,19 @@ func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *ht
 	}
 	if result.UnknownAttempts > 0 {
 		result.CostCompleteness = "partial"
+		result.CostPerSuccessReason = "unknown_costs_excluded"
 	}
 	if result.EligibleUnits > 0 {
 		value := float64(result.EvaluatedUnits) / float64(result.EligibleUnits)
 		result.OutcomeCoverage = &value
+	}
+	if result.EvaluatedUnits < result.EligibleUnits {
+		result.OutcomeCompleteness = "partial"
+		result.OutcomeReason = "missing_or_in_progress_outcomes"
+	}
+	if result.EligibleUnits == 0 {
+		result.OutcomeCompleteness = "unknown"
+		result.OutcomeReason = "no_eligible_units"
 	}
 	if result.EvaluatedUnits > 0 {
 		value := float64(result.SuccessfulUnits) / float64(result.EvaluatedUnits)
@@ -283,6 +333,8 @@ func (r *Runtime) adminGovernanceSummary(writer http.ResponseWriter, request *ht
 	if result.SuccessfulUnits > 0 {
 		value := result.KnownCostMicrosUSD / result.SuccessfulUnits
 		result.CostPerSuccessMicrosUSD = &value
+	} else {
+		result.CostPerSuccessReason = "no_successful_units"
 	}
 	writeJSON(writer, http.StatusOK, result)
 }
@@ -296,20 +348,37 @@ func (r *Runtime) createAdminGovernanceExport(writer http.ResponseWriter, reques
 		adminStoreError(writer)
 		return
 	}
-	directory := filepath.Join(r.config.GovernanceExportPath(), exportID)
+	outcomes, err := r.governance.manager.ReadOutcomeSnapshot(request.Context(), "", "", "")
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "outcome governance is unavailable", "code": "governance_unavailable"})
+		return
+	}
+	accounting, err := r.state.GovernanceSnapshot(request.Context(), ledger.GovernanceSnapshotOptions{IncludeRuns: true})
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "accounting governance view is unavailable", "code": "run_governance_unavailable"})
+		return
+	}
 	definitions, err := r.store.ListOutcomeDefinitions(request.Context(), "")
 	if err != nil {
 		adminStoreError(writer)
 		return
 	}
-	journalSummary := map[string]int64{"sequence": 0, "offset": 0}
-	if r.governance.log != nil {
-		current := r.governance.log.Summary()
-		journalSummary["sequence"], journalSummary["offset"] = int64(current.Records), current.Bytes
+	workUnits := make(map[string]domain.WorkUnit, len(accounting.WorkUnits))
+	for _, item := range accounting.WorkUnits {
+		workUnits[item.ID] = item
 	}
+	for index := range outcomes.Outcomes {
+		workUnit, ok := workUnits[outcomes.Outcomes[index].WorkUnitID]
+		if !ok {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "governance export references an absent Work Unit", "code": "governance_export_inconsistent"})
+			return
+		}
+		outcomes.Outcomes[index].Provisional = workUnit.Status == domain.WorkUnitOpen || accounting.InflightWorkUnit[workUnit.ID]
+	}
+	directory := filepath.Join(r.config.GovernanceExportPath(), exportID)
 	manifest, err := governance.WriteExport(request.Context(), directory, governance.ExportInput{
-		WorkUnits: r.state.WorkUnits(""), Runs: r.state.Runs("", ""), Outcomes: r.governance.manager.Outcomes("", "", ""), Definitions: definitions,
-		AccountingWatermark: r.state.Watermark(), GovernanceSequence: uint64(journalSummary["sequence"]), GovernanceOffset: journalSummary["offset"],
+		WorkUnits: accounting.WorkUnits, Runs: accounting.Runs, Outcomes: outcomes.Outcomes, Definitions: definitions,
+		AccountingWatermark: accounting.Watermark, GovernanceSequence: outcomes.Sequence, GovernanceOffset: outcomes.Offset,
 	})
 	if err != nil {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "governance export failed"})
@@ -320,9 +389,16 @@ func (r *Runtime) createAdminGovernanceExport(writer http.ResponseWriter, reques
 	writeJSON(writer, http.StatusCreated, map[string]any{"id": exportID, "directory": directory, "manifest": manifest})
 }
 
-func satAdd(left, right int64) int64 {
+func checkedSummaryAdd(left, right int64) (int64, error) {
 	if right > 0 && left > math.MaxInt64-right {
-		return math.MaxInt64
+		return 0, errors.New("governance summary amount overflow")
 	}
-	return left + right
+	return left + right, nil
+}
+
+func writeSummaryOverflow(writer http.ResponseWriter) {
+	writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+		"error": "governance summary amount overflow; use export for reconciliation",
+		"code":  "governance_summary_overflow",
+	})
 }

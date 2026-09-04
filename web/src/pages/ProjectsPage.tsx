@@ -804,7 +804,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         </Field>
         <fieldset className="scope-checks">
           <legend>{t("projects.keyScopes")}</legend>
-          {(["inference", "work_unit:create", "run:create", "run:attach", "governance:read"] as GatewayScope[]).map((scope) => (
+          {(["inference", "work_unit:create", "run:create", "run:attach", "governance:read", "outcome:write"] as GatewayScope[]).map((scope) => (
             <label className="check-row" key={scope}>
               <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} />
               <span>{scope}</span>

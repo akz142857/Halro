@@ -29,20 +29,30 @@ func (r definitionReader) GetOutcomeDefinition(context.Context, string, string, 
 }
 
 type checkpointRecorder struct {
-	mu       sync.Mutex
-	sequence uint64
-	payload  []byte
+	mu              sync.Mutex
+	sequence        uint64
+	payload         []byte
+	anchors         int
+	checkpointSaves int
 }
 
-func (r *checkpointRecorder) SaveGovernanceCheckpoint(sequence uint64, _ int64, payload []byte) error {
+func (r *checkpointRecorder) PutGovernanceJournalAnchor(uint64, int64, [32]byte, [32]byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.anchors++
+	return nil
+}
+
+func (r *checkpointRecorder) SaveGovernanceCheckpoint(sequence uint64, _ int64, _, _, _ [32]byte, payload []byte) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sequence = sequence
 	r.payload = append([]byte(nil), payload...)
+	r.checkpointSaves++
 	return nil
 }
 
-func testManager(t *testing.T) (*Manager, *Log, *ledger.State, domain.OutcomeDefinition) {
+func testManager(t *testing.T) (*Manager, *Log, *ledger.State, domain.OutcomeDefinition, *checkpointRecorder) {
 	t.Helper()
 	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
 	definition := domain.OutcomeDefinition{ID: "odef_result", ProjectID: "prj_1", Name: "resolved", Version: 1, DataType: domain.OutcomeCategorical,
@@ -64,7 +74,7 @@ func testManager(t *testing.T) (*Manager, *Log, *ledger.State, domain.OutcomeDef
 	checkpoint := &checkpointRecorder{}
 	manager := NewManager(log, NewState(), state, definitionReader{definition}, checkpoint)
 	manager.now = func() time.Time { return now.Add(time.Hour) }
-	return manager, log, state, definition
+	return manager, log, state, definition, checkpoint
 }
 
 func reportInput(value, supersedes, idem string) ReportInput {
@@ -74,7 +84,7 @@ func reportInput(value, supersedes, idem string) ReportInput {
 }
 
 func TestManagerSerializesCurrentHeadAndPersistsIdempotency(t *testing.T) {
-	manager, log, _, _ := testManager(t)
+	manager, log, _, _, checkpoint := testManager(t)
 	defer log.Close()
 	first, replay, err := manager.Report(context.Background(), reportInput("accepted", "", "first"))
 	if err != nil || replay {
@@ -116,6 +126,11 @@ func TestManagerSerializesCurrentHeadAndPersistsIdempotency(t *testing.T) {
 	}
 	if log.Summary().Records != 2 {
 		t.Fatalf("journal records=%d, want 2", log.Summary().Records)
+	}
+	checkpoint.mu.Lock()
+	defer checkpoint.mu.Unlock()
+	if checkpoint.anchors != 2 || checkpoint.checkpointSaves != 0 {
+		t.Fatalf("anchors=%d checkpoints=%d, want one anchor per append and no full snapshot on the write path", checkpoint.anchors, checkpoint.checkpointSaves)
 	}
 }
 
@@ -220,5 +235,34 @@ func TestOutcomeDefinitionRejectsDuplicateSuccessValues(t *testing.T) {
 		AllowedValues: []string{"accepted", "rejected"}, SuccessValues: []string{"accepted", "accepted"}, Enabled: true, CreatedAt: now, CreatedBy: "admin"}
 	if err := definition.Validate(); err == nil {
 		t.Fatal("duplicate success values were accepted")
+	}
+}
+
+func TestOutcomeIndexesPreserveSequenceAndFilterIntersections(t *testing.T) {
+	state := NewState()
+	now := time.Date(2026, 9, 4, 8, 0, 0, 0, time.UTC)
+	for index, spec := range []struct {
+		project, workUnit, definition string
+	}{{"prj_1", "wku_1", "odef_a"}, {"prj_2", "wku_2", "odef_a"}, {"prj_1", "wku_1", "odef_b"}} {
+		sequence := uint64(index + 1)
+		event := Event{
+			EventID: fmt.Sprintf("gov_%d", sequence), ProjectID: spec.project,
+			WorkUnitID: spec.workUnit, DefinitionID: spec.definition, DefinitionVersion: 1,
+			OutcomeID: fmt.Sprintf("out_%d", sequence), Value: "accepted", ReporterKeyID: "key_1",
+			ObservedAt: now, IngestedAt: now, Revision: 1,
+			IdempotencyKeyHash: shaLabel(fmt.Sprintf("idem_%d", sequence)),
+			RequestFingerprint: shaLabel(fmt.Sprintf("fingerprint_%d", sequence)),
+		}
+		if err := state.Apply(Record{Sequence: sequence, Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := state.OutcomesContext(context.Background(), "prj_1", "wku_1", "")
+	if err != nil || len(items) != 2 || items[0].ID != "out_1" || items[1].ID != "out_3" {
+		t.Fatalf("project/work-unit intersection=%#v err=%v", items, err)
+	}
+	items, err = state.OutcomesContext(context.Background(), "prj_2", "", "odef_a")
+	if err != nil || len(items) != 1 || items[0].ID != "out_2" {
+		t.Fatalf("project/definition intersection=%#v err=%v", items, err)
 	}
 }
