@@ -383,6 +383,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	}
 	allowed := map[string]struct{}{
 		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
+		"work_unit_id": {}, "run_id": {},
 		"deployment_id": {}, "model": {}, "provider_model": {}, "status": {},
 		"start": {}, "end": {},
 	}
@@ -412,6 +413,8 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	query := usage.AttemptQuery{
 		BeforeSequence: cursor, Limit: limit,
 		ProjectID:      request.URL.Query().Get("project_id"),
+		WorkUnitID:     request.URL.Query().Get("work_unit_id"),
+		RunID:          request.URL.Query().Get("run_id"),
 		ProviderID:     request.URL.Query().Get("provider_id"),
 		DeploymentID:   request.URL.Query().Get("deployment_id"),
 		RequestID:      request.URL.Query().Get("request_id"),

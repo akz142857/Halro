@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -85,6 +87,52 @@ func (f deferredFixture) record(t *testing.T, id string) domain.ProviderResource
 		t.Fatal(err)
 	}
 	return record
+}
+
+func TestDeferredResponseCarriesRunAttributionFromSubmissionToSettlement(t *testing.T) {
+	f := newDeferredFixtureWith(t, func(project *domain.Project) {
+		project.RunGovernance = domain.RunGovernanceConfig{
+			Enabled: true, DefaultRunBudgetMicrosUSD: 1_000_000, MaxRunBudgetMicrosUSD: 2_000_000,
+			DefaultRunTTLSeconds: 3600, MaxRunTTLSeconds: 86400,
+			MaxActiveRuns: 10, MaxOpenWorkUnits: 10,
+		}
+	})
+	f.key.Scopes = []domain.GatewayScope{domain.GatewayScopeInference, domain.GatewayScopeRunAttach}
+	if err := f.service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project}}); err != nil {
+		t.Fatal(err)
+	}
+	intent := func(operation, keyHash string) budget.GovernanceIntent {
+		return budget.GovernanceIntent{
+			Operation:          operation,
+			IdempotencyKeyHash: "sha256:" + keyHash,
+			RequestFingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		}
+	}
+	workUnit, _, err := f.accounting.CreateWorkUnit(context.Background(), f.project.ID, f.key.ID, 10,
+		intent("work_unit.create", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := f.accounting.CreateRun(context.Background(), f.project.ID, f.key.ID, workUnit.ID, 1_000_000, time.Hour, 10,
+		intent("run.create", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := requestmeta.WithRunID(context.Background(), run.ID)
+	response, err := f.service.SubmitDeferredResponse(ctx, f.plaintext, "deferred-run",
+		openaiapi.ResponseRequest{Model: "chat", Input: json.RawMessage(`"hello"`), Background: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := f.record(t, response.ID)
+	if record.WorkUnitID != workUnit.ID || record.RunID != run.ID {
+		t.Fatalf("stored attribution=%s/%s", record.WorkUnitID, record.RunID)
+	}
+	f.runOnce(t)
+	settled, ok := f.accounting.Run(f.project.ID, run.ID)
+	if !ok || settled.CommittedMicrosUSD <= 0 || settled.ReservedMicrosUSD != 0 {
+		t.Fatalf("settled Run=%#v found=%t", settled, ok)
+	}
 }
 
 // The submission returns before any upstream is touched, and it writes no

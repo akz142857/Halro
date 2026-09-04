@@ -113,6 +113,23 @@ type Service struct {
 	captureDegraded atomic.Bool
 }
 
+func (s *Service) AuthorizeGovernance(ctx context.Context, plaintextKey string, scope domain.GatewayScope) (auth.AuthResult, error) {
+	principal, err := s.auth.Authenticate(plaintextKey, s.now())
+	if err != nil {
+		return auth.AuthResult{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
+	}
+	if err := authorizeSource(ctx, principal.Project); err != nil {
+		return auth.AuthResult{}, err
+	}
+	if !principal.Project.RunGovernance.Enabled {
+		return auth.AuthResult{}, gatewayError("run_governance_disabled", "run governance is not enabled for this project", 403, nil)
+	}
+	if !domain.HasGatewayScope(principal.Key.Scopes, scope) {
+		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow this operation", 403, nil)
+	}
+	return principal, nil
+}
+
 type PriceSelector interface {
 	SelectDeploymentPriceVersion(context.Context, string, time.Time) (domain.DeploymentPriceVersion, error)
 }
@@ -285,6 +302,9 @@ func (s *Service) resolveRequest(
 	if err != nil {
 		return auth.AuthResult{}, nil, gatewayError("invalid_api_key", "invalid API key", 401, err)
 	}
+	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
+		return auth.AuthResult{}, nil, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
+	}
 	if !slices.Contains(principal.Project.AllowedModels, model) {
 		return auth.AuthResult{}, nil, gatewayError("model_not_allowed", "model is not allowed for this project", 403, nil)
 	}
@@ -343,6 +363,10 @@ func (s *Service) beginRequestRun(
 	payload any,
 	admission admissionMode,
 ) (*requestRun, error) {
+	workUnitID, governanceRunID, err := s.resolveRunAttribution(ctx, principal)
+	if err != nil {
+		return nil, err
+	}
 	tokenGuardLease, pricingViewDigest, err := s.admitTokenGuard(ctx, principal, targets, totalTokens, inputTokens, outputTokens)
 	if err != nil {
 		return nil, err
@@ -367,12 +391,25 @@ func (s *Service) beginRequestRun(
 			return nil, gatewayError("internal_error", "unable to create request ID", 500, err)
 		}
 	}
-	requestLease, err := s.accounting.BeginRequestDetailed(
-		ctx, principal.Project.ID, principal.Key.ID, requestID, model,
-	)
+	var requestLease budget.Request
+	if governanceRunID != "" {
+		requestLease, err = s.accounting.BeginRequestAttributed(
+			ctx, principal.Project.ID, principal.Key.ID, requestID, model, workUnitID, governanceRunID,
+		)
+	} else {
+		requestLease, err = s.accounting.BeginRequestDetailed(
+			ctx, principal.Project.ID, principal.Key.ID, requestID, model,
+		)
+	}
 	if err != nil {
 		policyLease.Release()
 		tokenGuardLease.Release()
+		if errors.Is(err, budget.ErrRunNotFound) {
+			return nil, gatewayError("run_not_found", "run was not found", 404, err)
+		}
+		if errors.Is(err, budget.ErrRunNotActive) {
+			return nil, gatewayError("run_not_active", "run is closed or expired", 409, err)
+		}
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
 	run := &requestRun{
@@ -382,6 +419,33 @@ func (s *Service) beginRequestRun(
 	}
 	run.captureRequest(payload)
 	return run, nil
+}
+
+func (s *Service) resolveRunAttribution(ctx context.Context, principal auth.AuthResult) (string, string, error) {
+	runID, supplied := requestmeta.RunID(ctx)
+	if !supplied {
+		return "", "", nil
+	}
+	if !domain.ValidRunID(runID) {
+		return "", "", gatewayError("invalid_run_id", "X-Halro-Run-ID is invalid", 400, nil)
+	}
+	if !principal.Project.RunGovernance.Enabled {
+		return "", "", gatewayError("run_governance_disabled", "run governance is not enabled for this project", 403, nil)
+	}
+	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeRunAttach) {
+		return "", "", gatewayError("gateway_key_scope_denied", "gateway key does not allow Run attachment", 403, nil)
+	}
+	governedRun, err := s.accounting.ActiveRun(principal.Project.ID, runID)
+	if errors.Is(err, budget.ErrRunNotFound) {
+		return "", "", gatewayError("run_not_found", "run was not found", 404, err)
+	}
+	if errors.Is(err, budget.ErrRunNotActive) {
+		return "", "", gatewayError("run_not_active", "run is closed or expired", 409, err)
+	}
+	if err != nil {
+		return "", "", gatewayError("accounting_unavailable", "run attribution could not be verified", 503, err)
+	}
+	return governedRun.WorkUnitID, governedRun.ID, nil
 }
 
 func (run *requestRun) close() {

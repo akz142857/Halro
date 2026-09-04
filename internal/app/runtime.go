@@ -114,6 +114,7 @@ type Runtime struct {
 	// Lock and map travel together in one field so this stays one entry in the
 	// breadth this type is allowed, rather than two.
 	adminElevation   adminElevationState
+	governanceRate   governanceRateState
 	setupMu          sync.Mutex
 	setupToken       string
 	setupTokenNeeded bool
@@ -1516,6 +1517,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	// an anonymous caller sets the parsing cost and the per-project limiter
 	// that would bound it does not yet apply.
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(withRunAttribution)
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
 		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
@@ -1542,11 +1544,25 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(withRunAttribution)
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorAnthropic))
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
 		guarded.Post("/v1/messages/count_tokens", r.gateway.CountTokens)
+	})
+	router.Group(func(governance chi.Router) {
+		governance.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
+		governance.Use(r.gateway.LimitOpenAI)
+		governance.Use(r.gateway.GuardOpenAI)
+		governance.Use(r.gateway.WithSourceIPOpenAI)
+		governance.Use(r.withGovernanceRequestID)
+		governance.Post("/halro/v1/work-units", r.createWorkUnit)
+		governance.Get("/halro/v1/work-units/{workUnitID}", r.getWorkUnit)
+		governance.Post("/halro/v1/work-units/{workUnitID}/close", r.closeWorkUnit)
+		governance.Post("/halro/v1/runs", r.createRun)
+		governance.Get("/halro/v1/runs/{runID}", r.getRun)
+		governance.Post("/halro/v1/runs/{runID}/close", r.closeRun)
 	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{
@@ -1625,6 +1641,10 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/keys/{keyID}", r.getAdminProjectKey)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/projects/{id}/keys/{keyID}", r.updateAdminProjectKey)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/projects/{id}/keys/{keyID}", r.deleteAdminProjectKey)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/work-units", r.listAdminWorkUnits)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/work-units/{workUnitID}", r.getAdminWorkUnit)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs", r.listAdminRuns)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs/{runID}", r.getAdminRun)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials", r.listAdminCredentials)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/credentials", r.createAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials/{id}", r.getAdminCredential)

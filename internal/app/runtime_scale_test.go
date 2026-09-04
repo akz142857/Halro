@@ -69,7 +69,10 @@ const (
 	// into a versioned, audited store is what makes shortening it — a
 	// destructive change — leave a record. It sits beside uiSettings for the
 	// same reason and in the same shape, an atomic pointer to a small struct.
-	runtimeFieldBudget = 73
+	// 74: governanceLimiter. The public Work Unit and Run control plane needs
+	// an instance-scoped, bounded key/project rate limiter. Keeping its mutexes
+	// and maps behind one value avoids scattering lifecycle state across Runtime.
+	runtimeFieldBudget = 74
 	runtimeMutexBudget = 10
 )
 

@@ -18,14 +18,22 @@ import (
 )
 
 var (
-	ErrExceeded      = errors.New("daily budget exceeded")
-	ErrInvalidAmount = errors.New("invalid accounting amount")
+	ErrExceeded            = errors.New("daily budget exceeded")
+	ErrInvalidAmount       = errors.New("invalid accounting amount")
+	ErrRunNotFound         = errors.New("run was not found")
+	ErrRunNotActive        = errors.New("run is not active")
+	ErrWorkUnitClosed      = errors.New("work unit is closed")
+	ErrWorkUnitNotFound    = errors.New("work unit was not found")
+	ErrResourceLimit       = errors.New("run governance resource limit exceeded")
+	ErrIdempotencyConflict = errors.New("idempotency key conflicts with another request")
 )
 
 type Attempt struct {
 	RequestID                   string
 	AttemptID                   string
 	ProjectID                   string
+	WorkUnitID                  string
+	RunID                       string
 	Period                      Period
 	ReservationMicrosUSD        int64
 	KeyID                       string
@@ -48,8 +56,10 @@ type Attempt struct {
 }
 
 type Request struct {
-	RequestID string
-	ProjectID string
+	RequestID  string
+	ProjectID  string
+	WorkUnitID string
+	RunID      string
 	// Period is fixed when the request is accepted and inherited by every
 	// event that follows it. A request that outlives a period boundary settles
 	// in the period it began in, matching how its price snapshot is pinned.
@@ -107,6 +117,19 @@ type Settlement struct {
 	// OccurredAt is reserved for deterministic recovery events. Normal
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
+}
+
+type GovernanceIntent struct {
+	Operation          string
+	IdempotencyKeyHash string
+	RequestFingerprint string
+}
+
+func (i GovernanceIntent) validate() error {
+	if i.Operation == "" || !domain.ValidSHA256Label(i.IdempotencyKeyHash) || !domain.ValidSHA256Label(i.RequestFingerprint) {
+		return errors.New("governance idempotency evidence is invalid")
+	}
+	return nil
 }
 
 type Manager struct {
@@ -208,6 +231,269 @@ func (m *Manager) localNow() time.Time {
 	return m.inAccountingZone(m.now())
 }
 
+func (m *Manager) governanceLock(projectID string) func() {
+	value, _ := m.projectLocks.LoadOrStore(projectID, &projectAdmission{})
+	admission := value.(*projectAdmission)
+	admission.lifecycle.Lock()
+	return admission.lifecycle.Unlock
+}
+
+func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, maxOpen int64, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	if projectID == "" || keyID == "" || maxOpen <= 0 || maxOpen > domain.MaxOpenWorkUnits {
+		return domain.WorkUnit{}, false, ErrResourceLimit
+	}
+	if err := intent.validate(); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.WorkUnit{}, false, ErrIdempotencyConflict
+		}
+		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		if !found {
+			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
+		}
+		return workUnit, true, nil
+	}
+	open := int64(0)
+	for _, workUnit := range m.state.WorkUnits(projectID) {
+		if workUnit.Status == domain.WorkUnitOpen {
+			open++
+		}
+	}
+	if open >= maxOpen {
+		return domain.WorkUnit{}, false, ErrResourceLimit
+	}
+	workUnitID, err := id.New("wku")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventWorkUnitCreated,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok {
+		return domain.WorkUnit{}, false, errors.New("created work unit is absent from accounting state")
+	}
+	return workUnit, false, nil
+}
+
+func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitID string, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" {
+		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
+	}
+	if err := intent.validate(); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.WorkUnit{}, false, ErrIdempotencyConflict
+		}
+		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		if !found {
+			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
+		}
+		return workUnit, true, nil
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok || workUnit.ProjectID != projectID {
+		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
+	}
+	if workUnit.Status == domain.WorkUnitClosed {
+		return workUnit, true, nil
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventWorkUnitClosed,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	closed, _ := m.state.WorkUnit(workUnitID)
+	return closed, false, nil
+}
+
+func (m *Manager) CreateRun(
+	ctx context.Context,
+	projectID, keyID, workUnitID string,
+	budgetMicrosUSD int64,
+	ttl time.Duration,
+	maxActive int64,
+	intent GovernanceIntent,
+) (domain.Run, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" || budgetMicrosUSD <= 0 ||
+		ttl <= 0 || ttl > time.Duration(domain.MaxRunTTLSeconds)*time.Second ||
+		maxActive <= 0 || maxActive > domain.MaxActiveRuns {
+		return domain.Run{}, false, ErrResourceLimit
+	}
+	if err := intent.validate(); err != nil {
+		return domain.Run{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.Run{}, false, ErrIdempotencyConflict
+		}
+		run, found := m.state.Run(previous.RunID)
+		if !found {
+			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
+		}
+		return run, true, nil
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok || workUnit.ProjectID != projectID || workUnit.Status != domain.WorkUnitOpen {
+		return domain.Run{}, false, ErrWorkUnitClosed
+	}
+	now := m.localNow()
+	active := int64(0)
+	for _, run := range m.state.Runs(projectID, "") {
+		if run.Status == domain.RunActive && now.Before(run.ExpiresAt) {
+			active++
+		}
+	}
+	if active >= maxActive || len(m.state.Runs(projectID, workUnitID)) >= domain.MaxRunsPerWorkUnit {
+		return domain.Run{}, false, ErrResourceLimit
+	}
+	runID, err := id.New("run")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventRunCreated,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, RunID: runID,
+		RunBudgetMicrosUSD: budgetMicrosUSD, RunExpiresAt: now.Add(ttl), OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.Run{}, false, err
+	}
+	run, ok := m.state.Run(runID)
+	if !ok {
+		return domain.Run{}, false, errors.New("created run is absent from accounting state")
+	}
+	return run, false, nil
+}
+
+func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, runID, reason string, intent GovernanceIntent) (domain.Run, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" || runID == "" || len(reason) == 0 || len(reason) > 64 {
+		return domain.Run{}, false, ErrRunNotFound
+	}
+	if err := intent.validate(); err != nil {
+		return domain.Run{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.Run{}, false, ErrIdempotencyConflict
+		}
+		run, found := m.state.Run(previous.RunID)
+		if !found {
+			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
+		}
+		return run, true, nil
+	}
+	run, ok := m.state.Run(runID)
+	if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
+		return domain.Run{}, false, ErrRunNotFound
+	}
+	if run.Status == domain.RunClosed {
+		return run, true, nil
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventRunClosed,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, RunID: runID,
+		CloseReason: reason, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.Run{}, false, err
+	}
+	closed, _ := m.state.Run(runID)
+	return closed, false, nil
+}
+
+func (m *Manager) WorkUnit(projectID, workUnitID string) (domain.WorkUnit, bool) {
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	return workUnit, ok && (projectID == "" || workUnit.ProjectID == projectID)
+}
+
+func (m *Manager) WorkUnits(projectID string) []domain.WorkUnit {
+	return m.state.WorkUnits(projectID)
+}
+
+func (m *Manager) Run(projectID, runID string) (domain.Run, bool) {
+	run, ok := m.state.Run(runID)
+	return run, ok && (projectID == "" || run.ProjectID == projectID)
+}
+
+func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	run, ok := m.state.Run(runID)
+	if !ok || run.ProjectID != projectID {
+		return domain.Run{}, ErrRunNotFound
+	}
+	if run.Status != domain.RunActive || !m.localNow().Before(run.ExpiresAt) {
+		return domain.Run{}, ErrRunNotActive
+	}
+	return run, nil
+}
+
+func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
+	return m.state.Runs(projectID, workUnitID)
+}
+
 // lockProject serializes one project's admission decisions — reading its balance
 // and deciding whether one more reservation fits — and nothing else.
 //
@@ -235,6 +521,10 @@ func (m *Manager) localNow() time.Time {
 // multi-project benchmark hit it on the first run.
 type projectAdmission struct {
 	mu sync.Mutex
+	// lifecycle serializes Work Unit/Run create/close and attached request
+	// acceptance. It is separate from the monetary admission mutex, so a
+	// control-plane fsync cannot delay an ordinary request.
+	lifecycle sync.Mutex
 	// pending is spend admitted but not yet visible in the Ledger's own balance,
 	// keyed by period so a request near midnight counts against its own day.
 	pending map[ledger.BalanceKey]int64
@@ -365,6 +655,13 @@ func (m *Manager) BeginRequestDetailed(
 	ctx context.Context,
 	projectID, keyID, requestID, requestedModel string,
 ) (Request, error) {
+	return m.BeginRequestAttributed(ctx, projectID, keyID, requestID, requestedModel, "", "")
+}
+
+func (m *Manager) BeginRequestAttributed(
+	ctx context.Context,
+	projectID, keyID, requestID, requestedModel, workUnitID, runID string,
+) (Request, error) {
 	if projectID == "" || requestID == "" {
 		return Request{}, errors.New("project and request IDs are required")
 	}
@@ -379,12 +676,28 @@ func (m *Manager) BeginRequestDetailed(
 	}
 	request := Request{
 		RequestID: requestID, ProjectID: projectID, Period: period,
-		KeyID: keyID, RequestedModel: requestedModel,
+		KeyID: keyID, RequestedModel: requestedModel, WorkUnitID: workUnitID, RunID: runID,
+	}
+	var unlockLifecycle func()
+	if runID != "" || workUnitID != "" {
+		if runID == "" || workUnitID == "" {
+			return Request{}, ErrRunNotFound
+		}
+		unlockLifecycle = m.governanceLock(projectID)
+		defer unlockLifecycle()
+		run, ok := m.state.Run(runID)
+		if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
+			return Request{}, ErrRunNotFound
+		}
+		if run.Status != domain.RunActive || !now.Before(run.ExpiresAt) {
+			return Request{}, ErrRunNotActive
+		}
 	}
 	event := ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,
 		RequestID: request.RequestID, ProjectID: request.ProjectID,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
+		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		OccurredAt: now,
 	}
 	period.Stamp(&event)
@@ -463,6 +776,7 @@ func (m *Manager) reserveAttemptDetailed(
 		RequestID: request.RequestID, AttemptID: attemptID, ProjectID: request.ProjectID,
 		Period: request.Period, ReservationMicrosUSD: spec.ReservationMicrosUSD,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
+		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		RouteID: metadata.RouteID, DeploymentID: metadata.DeploymentID,
 		ProviderID: metadata.ProviderID, ProviderModel: metadata.ProviderModel,
 		AttemptNumber: metadata.AttemptNumber, RetryCount: metadata.RetryCount,
@@ -508,6 +822,8 @@ func (m *Manager) reserveAttemptDetailed(
 		RequestID:            request.RequestID,
 		AttemptID:            attemptID,
 		ProjectID:            request.ProjectID,
+		WorkUnitID:           request.WorkUnitID,
+		RunID:                request.RunID,
 		KeyID:                request.KeyID,
 		RouteID:              metadata.RouteID,
 		DeploymentID:         metadata.DeploymentID,
@@ -536,7 +852,7 @@ func (m *Manager) reserveAttemptDetailed(
 func (a Attempt) Request() Request {
 	return Request{
 		RequestID: a.RequestID, ProjectID: a.ProjectID, Period: a.Period,
-		KeyID: a.KeyID, RequestedModel: a.RequestedModel,
+		KeyID: a.KeyID, RequestedModel: a.RequestedModel, WorkUnitID: a.WorkUnitID, RunID: a.RunID,
 	}
 }
 
@@ -546,12 +862,13 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		return err
 	}
 	started := ledger.Event{
-		EventID:   eventID,
-		Kind:      ledger.EventAttemptStarted,
-		RequestID: attempt.RequestID,
-		AttemptID: attempt.AttemptID,
-		ProjectID: attempt.ProjectID,
-		KeyID:     attempt.KeyID, RouteID: attempt.RouteID, DeploymentID: attempt.DeploymentID, ProviderID: attempt.ProviderID,
+		EventID:    eventID,
+		Kind:       ledger.EventAttemptStarted,
+		RequestID:  attempt.RequestID,
+		AttemptID:  attempt.AttemptID,
+		ProjectID:  attempt.ProjectID,
+		WorkUnitID: attempt.WorkUnitID, RunID: attempt.RunID,
+		KeyID: attempt.KeyID, RouteID: attempt.RouteID, DeploymentID: attempt.DeploymentID, ProviderID: attempt.ProviderID,
 		RequestedModel: attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
 		AttemptNumber: attempt.AttemptNumber, RetryCount: attempt.RetryCount,
 		FallbackCount: attempt.FallbackCount,
@@ -659,6 +976,8 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		RequestID:          attempt.RequestID,
 		AttemptID:          attempt.AttemptID,
 		ProjectID:          attempt.ProjectID,
+		WorkUnitID:         attempt.WorkUnitID,
+		RunID:              attempt.RunID,
 		KeyID:              attempt.KeyID,
 		RouteID:            attempt.RouteID,
 		DeploymentID:       attempt.DeploymentID,
@@ -716,6 +1035,7 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 		}
 		attempt := Attempt{
 			RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
+			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
 			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
 			ProviderID: event.ProviderID, RequestedModel: event.RequestedModel, ProviderModel: event.ProviderModel,
@@ -773,11 +1093,13 @@ func (m *Manager) Finalize(ctx context.Context, request Request, outcome string)
 		return err
 	}
 	finalized := ledger.Event{
-		EventID:   eventID,
-		Kind:      ledger.EventRequestFinalized,
-		RequestID: request.RequestID,
-		ProjectID: request.ProjectID,
-		KeyID:     request.KeyID, RequestedModel: request.RequestedModel,
+		EventID:    eventID,
+		Kind:       ledger.EventRequestFinalized,
+		RequestID:  request.RequestID,
+		ProjectID:  request.ProjectID,
+		WorkUnitID: request.WorkUnitID,
+		RunID:      request.RunID,
+		KeyID:      request.KeyID, RequestedModel: request.RequestedModel,
 		OccurredAt: m.localNow(),
 		Outcome:    outcome,
 	}

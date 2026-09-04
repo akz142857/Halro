@@ -321,7 +321,7 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		// The intent, written; the rename, never reached.
 		if err := saveSegmentManifest(directory, segmentManifest{Pending: &Segment{
 			Generation: 1, File: "ledger-1.wal", FirstSequence: 1, LastSequence: head.Sequence,
-			Length: length, StoredLength: length, EndHash: encodeChainHash(hash),
+			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionRunAttribution,
 			PlainChecksum: checksum, StoredChecksum: checksum,
 		}}); err != nil {
 			t.Fatal(err)
@@ -355,7 +355,7 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		}
 		if err := saveSegmentManifest(directory, segmentManifest{Pending: &Segment{
 			Generation: 1, File: "ledger-1.wal", FirstSequence: 1, LastSequence: head.Sequence,
-			Length: length, StoredLength: length, EndHash: encodeChainHash(hash),
+			Length: length, StoredLength: length, EndHash: encodeChainHash(hash), EndEpoch: frameVersionRunAttribution,
 			PlainChecksum: checksum, StoredChecksum: checksum,
 		}}); err != nil {
 			t.Fatal(err)

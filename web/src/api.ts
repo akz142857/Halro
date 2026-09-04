@@ -9,8 +9,11 @@ import type {
   OnboardingReadiness,
   Deployment,
   GatewayKey,
+  GatewayScope,
   Page,
   Project,
+  Run,
+  WorkUnit,
   Provider,
   ProviderCapabilities,
   InvocationTargetCatalog,
@@ -312,18 +315,18 @@ export const api = {
       .then((value) => value.data),
   // The plaintext is returned once and never again, so a retried create must carry the
   // same idempotency key: the server then refuses to mint a second unaccounted credential.
-  createKey: (projectID: string, name: string, idempotencyKey: string, reauth: Reauth, expiresAt?: string) =>
+  createKey: (projectID: string, name: string, idempotencyKey: string, reauth: Reauth, expiresAt?: string, scopes?: GatewayScope[]) =>
     request<CreatedGatewayKey>(
       `/projects/${encodeURIComponent(projectID)}/keys`,
       {
-        ...json("POST", { name, ...stepUpBody(reauth), ...(expiresAt ? { expires_at: expiresAt } : {}) }),
+        ...json("POST", { name, ...stepUpBody(reauth), ...(expiresAt ? { expires_at: expiresAt } : {}), ...(scopes ? { scopes } : {}) }),
         headers: { "Idempotency-Key": idempotencyKey },
       },
     ),
   updateKey: (
     projectID: string,
     keyID: string,
-    value: { name: string; enabled: boolean; expires_at?: string },
+    value: { name: string; enabled: boolean; expires_at?: string; scopes?: GatewayScope[] },
     revision: number,
   ) =>
     request<GatewayKey>(
@@ -489,6 +492,14 @@ export const api = {
     request<UsageSummary>(`/usage/summary${query}`).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  workUnits: (query = "") =>
+    request<Page<WorkUnit>>(`/run-governance/work-units${query}`).then((value) => value.data),
+  workUnit: (id: string) =>
+    request<WorkUnit>(`/run-governance/work-units/${encodeURIComponent(id)}`).then((value) => value.data),
+  runs: (query = "") =>
+    request<Page<Run>>(`/run-governance/runs${query}`).then((value) => value.data),
+  run: (id: string) =>
+    request<Run>(`/run-governance/runs/${encodeURIComponent(id)}`).then((value) => value.data),
   usageFailures: (query = "") =>
     request<Page<RequestFailure>>(`/usage/failures${query}`).then((value) => value.data),
   usageFailurePayload: (requestID: string) =>

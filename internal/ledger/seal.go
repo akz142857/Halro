@@ -119,6 +119,7 @@ func (l *Log) Roll() (SealResult, error) {
 		StoredLength:   l.offset,
 		StartHash:      encodeChainHash(l.chainAnchor),
 		EndHash:        encodeChainHash(l.chainHash),
+		EndEpoch:       uint8(l.chainEpoch),
 		PlainChecksum:  checksum,
 		StoredChecksum: checksum,
 		SealedAt:       time.Now().UTC(),
@@ -296,6 +297,7 @@ func VerifySegments(directory string, key []byte, since uint64) ([]ChainReport, 
 	reports := make([]ChainReport, 0, len(segments))
 	var previousEnd [32]byte
 	var previousSequence uint64
+	var previousEpoch byte
 	for _, segment := range segments {
 		// Skipped generations still hand their chain head and sequence to the
 		// next one, so a partial verification checks the same links a full one
@@ -306,6 +308,7 @@ func VerifySegments(directory string, key []byte, since uint64) ([]ChainReport, 
 				return nil, err
 			}
 			previousSequence = segment.LastSequence
+			previousEpoch = segmentEndEpoch(segment)
 			continue
 		}
 		start, err := decodeChainHash(segment.StartHash)
@@ -331,10 +334,10 @@ func VerifySegments(directory string, key []byte, since uint64) ([]ChainReport, 
 		if err != nil {
 			return nil, err
 		}
-		verifier := &chainVerifier{key: key, hash: start, sequence: previousSequence}
+		verifier := &chainVerifier{key: key, hash: start, sequence: previousSequence, epoch: previousEpoch}
 		report := ChainReport{}
 		head, partial, scanErr := scan(reader, segment.Generation, 0, previousSequence, func(record Record) error {
-			if record.Epoch == frameVersionLedgerIntegrity && verifier.verify() {
+			if authenticatedFrameEpoch(record.Epoch) && verifier.verify() {
 				report.Authenticated++
 			} else {
 				report.ChecksumOnly++
@@ -360,11 +363,19 @@ func VerifySegments(directory string, key []byte, since uint64) ([]ChainReport, 
 			return nil, fmt.Errorf("%w: generation %d does not end at its recorded chain head",
 				ErrTampered, segment.Generation)
 		}
+		if verifier.epoch == frameVersionRunAttribution && segment.EndEpoch != uint8(frameVersionRunAttribution) {
+			return nil, fmt.Errorf("%w: generation %d omits or misstates its run-attribution epoch",
+				ErrCorrupt, segment.Generation)
+		}
+		if segment.EndEpoch != 0 && byte(segment.EndEpoch) != verifier.epoch {
+			return nil, fmt.Errorf("%w: generation %d ends at epoch %d, manifest says %d",
+				ErrCorrupt, segment.Generation, verifier.epoch, segment.EndEpoch)
+		}
 		report.Head = head
 		report.ChainSequence, report.ChainOffset, report.ChainHash, report.ChainVerified =
 			verifier.sequence, verifier.offset, verifier.hash, verifier.sawFrames
 		reports = append(reports, report)
-		previousEnd, previousSequence = end, segment.LastSequence
+		previousEnd, previousSequence, previousEpoch = end, segment.LastSequence, verifier.epoch
 	}
 	return reports, nil
 }

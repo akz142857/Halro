@@ -2545,5 +2545,214 @@
         "status": "experimental"
       }
     ]
+  },
+  {
+    "id": "halro.work-units.create.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "POST",
+    "path": "/halro/v1/work-units",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "outcome_definition_ids"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "id",
+      "project_id",
+      "status",
+      "created_at"
+    ],
+    "state_semantics": "ledger-authoritative idempotent Work Unit creation",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
+  },
+  {
+    "id": "halro.work-units.get.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "GET",
+    "path": "/halro/v1/work-units/{id}",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "work_unit",
+      "runs"
+    ],
+    "state_semantics": "project-owned ledger-derived Work Unit read",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
+  },
+  {
+    "id": "halro.work-units.close.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "POST",
+    "path": "/halro/v1/work-units/{id}/close",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "id",
+      "project_id",
+      "status",
+      "closed_at"
+    ],
+    "state_semantics": "ledger-authoritative idempotent Work Unit close",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
+  },
+  {
+    "id": "halro.runs.create.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "POST",
+    "path": "/halro/v1/runs",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "work_unit_id",
+      "budget_micros_usd",
+      "ttl_seconds"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "id",
+      "work_unit_id",
+      "budget_micros_usd",
+      "status",
+      "expires_at"
+    ],
+    "state_semantics": "ledger-authoritative idempotent Run creation",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
+  },
+  {
+    "id": "halro.runs.get.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "GET",
+    "path": "/halro/v1/runs/{id}",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "id"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "id",
+      "work_unit_id",
+      "budget_micros_usd",
+      "committed_micros_usd",
+      "reserved_micros_usd",
+      "unknown_attempts",
+      "status"
+    ],
+    "state_semantics": "project-owned ledger-derived Run read",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
+  },
+  {
+    "id": "halro.runs.close.v1",
+    "northbound_profile": "halro.run-governance.v1",
+    "profile_revision": 1,
+    "protocol": "halro",
+    "method": "POST",
+    "path": "/halro/v1/runs/{id}/close",
+    "semantic_operation": "governance",
+    "request_fields": [
+      "id",
+      "reason"
+    ],
+    "request_headers": [
+      "Authorization",
+      "Content-Type on POST",
+      "Idempotency-Key on POST"
+    ],
+    "response_fields": [
+      "id",
+      "status",
+      "closed_at",
+      "close_reason"
+    ],
+    "state_semantics": "ledger-authoritative idempotent Run close",
+    "sdk_matrix": null,
+    "evidence": [
+      "gateway_contract"
+    ],
+    "status": "experimental",
+    "documented_deviations": [
+      "S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"
+    ],
+    "provider_profiles": null,
+    "profile_coverage": null
   }
 ]

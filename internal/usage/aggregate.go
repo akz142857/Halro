@@ -32,6 +32,8 @@ type AttemptEvent struct {
 	Sequence      uint64 `json:"sequence"`
 	AttemptNumber int    `json:"attempt"`
 	ProjectID     string `json:"project_id"`
+	WorkUnitID    string `json:"work_unit_id,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
 	KeyID         string `json:"key_id,omitempty"`
 	RouteID       string `json:"route_id,omitempty"`
 	DeploymentID  string `json:"deployment_id,omitempty"`
@@ -92,6 +94,8 @@ func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
 type RequestSummary struct {
 	RequestID      string `json:"request_id"`
 	ProjectID      string `json:"project_id"`
+	WorkUnitID     string `json:"work_unit_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
 	KeyID          string `json:"key_id,omitempty"`
 	RequestedModel string `json:"requested_model,omitempty"`
 	// Sequence of the RequestFinalized event, and therefore this summary's
@@ -227,10 +231,16 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		return errors.New("usage record sequence is not monotonic")
 	}
 	event := record.Event
+	if event.Kind >= ledger.EventWorkUnitCreated {
+		a.rememberEventID(event.EventID)
+		a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+		return nil
+	}
 	accumulator := a.requests[event.RequestID]
 	if accumulator == nil {
 		accumulator = &requestAccumulator{summary: RequestSummary{
 			RequestID: event.RequestID, ProjectID: event.ProjectID, KeyID: event.KeyID,
+			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			RequestedModel:        event.RequestedModel,
 			PeriodID:              event.PeriodID,
 			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
@@ -270,6 +280,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			EventID: event.EventID, RequestID: event.RequestID, AttemptID: event.AttemptID,
 			Sequence: record.Sequence, AttemptNumber: event.AttemptNumber,
 			ProjectID: event.ProjectID, KeyID: event.KeyID, RouteID: event.RouteID,
+			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			DeploymentID:          event.DeploymentID,
 			PeriodID:              event.PeriodID,
 			PeriodTimezoneVersion: event.PeriodTimezoneVersion,

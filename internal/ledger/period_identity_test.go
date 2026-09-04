@@ -96,8 +96,8 @@ func TestBalanceKeepsUnversionedEventsApart(t *testing.T) {
 // charged against, without access to any setting.
 func TestPeriodIdentitySurvivesEncoding(t *testing.T) {
 	record := settledEvent(1, "2026-08-06", "Asia/Shanghai", 3, 100)
-	if record.Epoch != frameVersionLedgerIntegrity {
-		t.Fatalf("epoch = %d, want %d", record.Epoch, frameVersionLedgerIntegrity)
+	if record.Epoch != frameVersionRunAttribution {
+		t.Fatalf("epoch = %d, want %d", record.Epoch, frameVersionRunAttribution)
 	}
 	event := record.Event
 	if event.PeriodTimezone != "Asia/Shanghai" || event.PeriodTimezoneVersion != 3 {
@@ -114,14 +114,14 @@ func TestPeriodIdentitySurvivesEncoding(t *testing.T) {
 // event this build writes — with or without period identity, lease mode, a
 // price snapshot — is promoted to the same epoch, so there is no event shape
 // that produces a lesser-authenticated frame.
-func TestFrameVersionIsUnconditionallyLedgerIntegrity(t *testing.T) {
+func TestFrameVersionIsUnconditionallyRunAttribution(t *testing.T) {
 	for _, event := range []Event{
 		{Kind: EventAttemptSettled, LeaseMode: LeaseModeMetered},
 		{Kind: EventRequestAccepted},
 		{Kind: EventRequestAccepted, PeriodTimezone: "UTC"},
 	} {
-		if got := eventFrameVersion(event); got != frameVersionLedgerIntegrity {
-			t.Fatalf("event %#v = epoch %d, want %d", event, got, frameVersionLedgerIntegrity)
+		if got := eventFrameVersion(event); got != frameVersionRunAttribution {
+			t.Fatalf("event %#v = epoch %d, want %d", event, got, frameVersionRunAttribution)
 		}
 	}
 }
@@ -157,8 +157,8 @@ func TestPeriodIdentitySurvivesTheWAL(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("replayed %d records, want 1", len(records))
 	}
-	if records[0].Epoch != frameVersionLedgerIntegrity {
-		t.Fatalf("period event replayed at epoch %d, want %d", records[0].Epoch, frameVersionLedgerIntegrity)
+	if records[0].Epoch != frameVersionRunAttribution {
+		t.Fatalf("period event replayed at epoch %d, want %d", records[0].Epoch, frameVersionRunAttribution)
 	}
 	replayed := records[0].Event
 	if replayed.PeriodTimezone != written.PeriodTimezone ||

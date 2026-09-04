@@ -91,7 +91,7 @@ func TestMixedV1V2V3ReplayAndUnsupportedFutureEpoch(t *testing.T) {
 	}
 	payload, _ := json.Marshal(Event{EventID: "future", Kind: EventRequestAccepted, RequestID: "r", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: now})
 	future := filepath.Join(t.TempDir(), "future.wal")
-	if err := os.WriteFile(future, encodeFrameVersion(frameVersionLedgerIntegrity+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
+	if err := os.WriteFile(future, encodeFrameVersion(frameVersionRunAttribution+1, 1, EventRequestAccepted, payload), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := Inspect(future); !errors.Is(err, ErrUnsupportedVersion) {

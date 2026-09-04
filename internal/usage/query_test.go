@@ -17,18 +17,18 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 		attemptID := requestID + ":1"
 		for _, event := range []ledger.Event{
 			{EventID: requestID + "_accepted", Kind: ledger.EventRequestAccepted,
-				RequestID: requestID, ProjectID: "project", PeriodID: "period",
+				RequestID: requestID, ProjectID: "project", WorkUnitID: "wku_1", RunID: fmt.Sprintf("run_%d", requestIndex), PeriodID: "period",
 				OccurredAt:     now.Add(time.Duration(requestIndex) * time.Minute),
 				RequestedModel: "chat"},
 			{EventID: requestID + "_settled", Kind: ledger.EventAttemptSettled,
-				RequestID: requestID, AttemptID: attemptID, ProjectID: "project",
+				RequestID: requestID, AttemptID: attemptID, ProjectID: "project", WorkUnitID: "wku_1", RunID: fmt.Sprintf("run_%d", requestIndex),
 				ProviderID: fmt.Sprintf("provider_%d", requestIndex), PeriodID: "period",
 				ProviderModel:       fmt.Sprintf("model_%d", requestIndex),
 				OccurredAt:          now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
 				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: ledger.MicrosUSD(int64(requestIndex)),
 				Outcome: "success"},
 			{EventID: requestID + "_final", Kind: ledger.EventRequestFinalized,
-				RequestID: requestID, ProjectID: "project", PeriodID: "period",
+				RequestID: requestID, ProjectID: "project", WorkUnitID: "wku_1", RunID: fmt.Sprintf("run_%d", requestIndex), PeriodID: "period",
 				OccurredAt: now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
 				Outcome:    "success"},
 		} {
@@ -72,6 +72,10 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	requestFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, RequestID: "req_1"})
 	if err != nil || len(requestFiltered.Attempts) != 1 || requestFiltered.Attempts[0].RequestID != "req_1" {
 		t.Fatalf("request filtered=%#v err=%v", requestFiltered, err)
+	}
+	runFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, WorkUnitID: "wku_1", RunID: "run_2"})
+	if err != nil || len(runFiltered.Attempts) != 1 || runFiltered.Attempts[0].RequestID != "req_2" {
+		t.Fatalf("run filtered=%#v err=%v", runFiltered, err)
 	}
 	detail, exists := aggregate.RequestDetail("req_2")
 	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {

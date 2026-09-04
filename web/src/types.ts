@@ -356,19 +356,64 @@ export interface Project {
   allowed_cidrs: string[] | null;
   redaction_policy_id: string;
   token_guard_policy_id: string;
+  run_governance?: RunGovernanceConfig;
   revision: number;
   created_at: string;
   updated_at: string;
 }
+
+export interface RunGovernanceConfig {
+  enabled: boolean;
+  default_run_budget_micros_usd: number;
+  max_run_budget_micros_usd: number;
+  default_run_ttl_seconds: number;
+  max_run_ttl_seconds: number;
+  max_active_runs: number;
+  max_open_work_units: number;
+}
+
+export type GatewayScope = "inference" | "work_unit:create" | "run:create" | "run:attach" | "governance:read" | "outcome:write";
 
 export interface GatewayKey {
   id: string;
   project_id: string;
   name: string;
   enabled: boolean;
+  scopes?: GatewayScope[];
   expires_at?: string;
   created_at: string;
   revision: number;
+}
+
+export interface WorkUnit {
+  id: string;
+  project_id: string;
+  status: "open" | "closed";
+  created_by_key_id: string;
+  created_at: string;
+  closed_at?: string;
+  period_id: string;
+  period_timezone_version: number;
+  run_count?: number;
+  committed_micros_usd?: number;
+  reserved_micros_usd?: number;
+  unknown_attempts?: number;
+}
+
+export interface Run {
+  id: string;
+  project_id: string;
+  work_unit_id: string;
+  budget_micros_usd: number;
+  committed_micros_usd: number;
+  reserved_micros_usd: number;
+  unknown_attempts: number;
+  status: "active" | "closed" | "expired";
+  created_by_key_id: string;
+  created_at: string;
+  expires_at: string;
+  closed_at?: string;
+  close_reason?: string;
 }
 
 export interface CreatedGatewayKey {
@@ -869,6 +914,8 @@ export interface UsageAttempt {
   sequence: number;
   attempt: number;
   project_id: string;
+  work_unit_id?: string;
+  run_id?: string;
   key_id?: string;
   route_id?: string;
   deployment_id?: string;

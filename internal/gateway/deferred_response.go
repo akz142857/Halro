@@ -17,6 +17,7 @@ import (
 	"github.com/akz142857/Halro/internal/idempotency"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -379,6 +380,10 @@ func (s *Service) SubmitDeferredResponse(
 			"unsupported_feature", "deferred responses are not enabled for this project", 400, nil,
 		)
 	}
+	workUnitID, governanceRunID, err := s.resolveRunAttribution(ctx, principal)
+	if err != nil {
+		return openaiapi.Response{}, err
+	}
 	payload, err := json.Marshal(request)
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
@@ -405,6 +410,9 @@ func (s *Service) SubmitDeferredResponse(
 	// — one lookup away from answering "these are all the same submission".
 	var keyHash [32]byte
 	fingerprint := sha256.Sum256(payload)
+	if governanceRunID != "" {
+		fingerprint = sha256.Sum256(append(append([]byte(governanceRunID), 0), payload...))
+	}
 	if idempotencyKey != "" {
 		keyHash = sha256.Sum256([]byte(idempotencyKey))
 		existing, verdict, err := s.classifyIdempotency(ctx, principal.Project.ID, domain.ResourceDeferredResponse, keyHash, fingerprint)
@@ -431,6 +439,7 @@ func (s *Service) SubmitDeferredResponse(
 		ProviderID: target.ProviderID, DeploymentID: target.DeploymentID, PublicModel: request.Model,
 		ProfileID: target.ProfileID, Region: target.Region,
 		KeyID: principal.Key.ID, IdempotencyKeyHash: keyHash, RequestFingerprint: fingerprint,
+		WorkUnitID: workUnitID, RunID: governanceRunID,
 		CreationStatus: creationCompleted, ReservedBy: s.instanceID,
 		Status: domain.DeferredQueued, SubmittedAt: now,
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(deferredDefaultTTL),
@@ -558,6 +567,9 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 	// and it would hold one of a small number of workers while it did.
 	attemptCtx, releaseAttempt := context.WithTimeout(ctx, s.deferredExecutionTimeout)
 	defer releaseAttempt()
+	if record.RunID != "" {
+		attemptCtx = requestmeta.WithRunID(attemptCtx, record.RunID)
+	}
 	var rendered openaiapi.Response
 	requestID := ""
 	_, execErr := s.executeGenerate(attemptCtx, principal, []provider.Target{target}, record.PublicModel, canonical,

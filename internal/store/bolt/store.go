@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 35
+const schemaVersion uint64 = 36
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -54,61 +54,65 @@ var (
 )
 
 var (
-	bucketMeta                       = []byte("meta")
-	bucketCredentials                = []byte("credentials")
-	bucketProjects                   = []byte("projects")
-	bucketGatewayKeys                = []byte("gateway_keys")
-	bucketGatewayKeyHash             = []byte("gateway_key_hash")
-	bucketProviders                  = []byte("providers")
-	bucketDeployments                = []byte("deployments")
-	bucketRoutes                     = []byte("routes")
-	bucketRedactionPolicies          = []byte("redaction_policies")
-	bucketTokenGuardPolicies         = []byte("token_guard_policies")
-	bucketAlertWebhooks              = []byte("alert_webhooks")
-	bucketAdminUsers                 = []byte("admin_users")
-	bucketAdminSessions              = []byte("admin_sessions")
-	bucketAdminMFAAuthenticators     = []byte("admin_mfa_authenticators")
-	bucketAdminMFARecoveryCodes      = []byte("admin_mfa_recovery_codes")
-	bucketAdminMFAChallenges         = []byte("admin_mfa_challenges")
-	bucketMigrationHistory           = []byte("migration_history")
-	bucketProviderResources          = []byte("provider_resources")
-	bucketDeploymentPriceVersions    = []byte("deployment_price_versions")
-	bucketDeploymentPriceTimeline    = []byte("deployment_price_timeline")
-	bucketDeploymentPriceNext        = []byte("deployment_price_next_version")
-	bucketDeploymentPricingHighWater = []byte("deployment_pricing_high_water")
-	bucketDeploymentPricePins        = []byte("deployment_price_pin_intents")
-	bucketPricingAuditIntents        = []byte("pricing_audit_intents")
-	bucketAdminAuditIntents          = []byte("admin_audit_intents")
-	bucketPricingIdempotency         = []byte("pricing_idempotency")
-	bucketDeploymentPriceProposals   = []byte("deployment_price_proposals")
-	bucketPricingProposalIdempotency = []byte("pricing_proposal_idempotency")
-	bucketCostAdjustmentIntents      = []byte("cost_adjustment_intents")
-	bucketAuditAnchors               = []byte("audit_anchors")
-	bucketModelCapabilityDetections  = []byte("model_capability_detections")
-	bucketCapabilityDetectionIdem    = []byte("model_capability_detection_idempotency")
-	bucketCapabilityDetectionIndex   = []byte("model_capability_detection_fingerprint_index")
-	bucketUsageDailyRollup           = []byte("usage_daily_rollup")
-	bucketUsageCheckpointSegments    = []byte("usage_checkpoint_segments")
-	keySchemaVersion                 = []byte("schema_version")
-	keyVaultCheck                    = []byte("vault_key_check")
-	keyUsageCheckpoint               = []byte("usage_checkpoint")
-	keyUsageRollupState              = []byte("usage_rollup_state")
-	keyTokenGuardCheckpoint          = []byte("token_guard_checkpoint")
-	keyAuditCheckpoint               = []byte("audit_checkpoint")
-	keyAuditHMACEnvelope             = []byte("audit_hmac_envelope")
-	keyLedgerHMACEnvelope            = []byte("ledger_hmac_envelope")
-	keyLedgerChainCheckpoint         = []byte("ledger_chain_checkpoint")
-	keyVaultKeyring                  = []byte("vault_keyring")
-	keyKeySlotDescriptor             = []byte("key_slot_descriptor")
-	keyKeySlotAuditIntent            = []byte("key_slot_audit_intent")
-	keyMasterKeyRotationAuditIntent  = []byte("master_key_rotation_audit_intent")
-	keyRuntimeSettings               = []byte("runtime_settings")
-	keyInstanceUISettings            = []byte("instance_ui_settings")
-	keyInstanceUsageSettings         = []byte("instance_usage_settings")
-	keyInstanceAccountingSettings    = []byte("instance_accounting_settings")
-	keyInstanceID                    = []byte("instance_id")
-	keyMinimumLedgerReaderVersion    = []byte("minimum_ledger_reader_version")
-	keyLedgerFeatureEpoch            = []byte("ledger_feature_epoch")
+	bucketMeta                         = []byte("meta")
+	bucketCredentials                  = []byte("credentials")
+	bucketProjects                     = []byte("projects")
+	bucketGatewayKeys                  = []byte("gateway_keys")
+	bucketGatewayKeyHash               = []byte("gateway_key_hash")
+	bucketProviders                    = []byte("providers")
+	bucketDeployments                  = []byte("deployments")
+	bucketRoutes                       = []byte("routes")
+	bucketRedactionPolicies            = []byte("redaction_policies")
+	bucketTokenGuardPolicies           = []byte("token_guard_policies")
+	bucketAlertWebhooks                = []byte("alert_webhooks")
+	bucketAdminUsers                   = []byte("admin_users")
+	bucketAdminSessions                = []byte("admin_sessions")
+	bucketAdminMFAAuthenticators       = []byte("admin_mfa_authenticators")
+	bucketAdminMFARecoveryCodes        = []byte("admin_mfa_recovery_codes")
+	bucketAdminMFAChallenges           = []byte("admin_mfa_challenges")
+	bucketMigrationHistory             = []byte("migration_history")
+	bucketProviderResources            = []byte("provider_resources")
+	bucketDeploymentPriceVersions      = []byte("deployment_price_versions")
+	bucketDeploymentPriceTimeline      = []byte("deployment_price_timeline")
+	bucketDeploymentPriceNext          = []byte("deployment_price_next_version")
+	bucketDeploymentPricingHighWater   = []byte("deployment_pricing_high_water")
+	bucketDeploymentPricePins          = []byte("deployment_price_pin_intents")
+	bucketPricingAuditIntents          = []byte("pricing_audit_intents")
+	bucketAdminAuditIntents            = []byte("admin_audit_intents")
+	bucketPricingIdempotency           = []byte("pricing_idempotency")
+	bucketDeploymentPriceProposals     = []byte("deployment_price_proposals")
+	bucketPricingProposalIdempotency   = []byte("pricing_proposal_idempotency")
+	bucketCostAdjustmentIntents        = []byte("cost_adjustment_intents")
+	bucketAuditAnchors                 = []byte("audit_anchors")
+	bucketModelCapabilityDetections    = []byte("model_capability_detections")
+	bucketCapabilityDetectionIdem      = []byte("model_capability_detection_idempotency")
+	bucketCapabilityDetectionIndex     = []byte("model_capability_detection_fingerprint_index")
+	bucketUsageDailyRollup             = []byte("usage_daily_rollup")
+	bucketUsageCheckpointSegments      = []byte("usage_checkpoint_segments")
+	bucketOutcomeDefinitions           = []byte("outcome_definitions")
+	bucketRunGovernanceIdempotency     = []byte("run_governance_idempotency")
+	bucketRunGovernanceIndex           = []byte("run_governance_index")
+	bucketGovernanceCheckpointSegments = []byte("governance_checkpoint_segments")
+	keySchemaVersion                   = []byte("schema_version")
+	keyVaultCheck                      = []byte("vault_key_check")
+	keyUsageCheckpoint                 = []byte("usage_checkpoint")
+	keyUsageRollupState                = []byte("usage_rollup_state")
+	keyTokenGuardCheckpoint            = []byte("token_guard_checkpoint")
+	keyAuditCheckpoint                 = []byte("audit_checkpoint")
+	keyAuditHMACEnvelope               = []byte("audit_hmac_envelope")
+	keyLedgerHMACEnvelope              = []byte("ledger_hmac_envelope")
+	keyLedgerChainCheckpoint           = []byte("ledger_chain_checkpoint")
+	keyVaultKeyring                    = []byte("vault_keyring")
+	keyKeySlotDescriptor               = []byte("key_slot_descriptor")
+	keyKeySlotAuditIntent              = []byte("key_slot_audit_intent")
+	keyMasterKeyRotationAuditIntent    = []byte("master_key_rotation_audit_intent")
+	keyRuntimeSettings                 = []byte("runtime_settings")
+	keyInstanceUISettings              = []byte("instance_ui_settings")
+	keyInstanceUsageSettings           = []byte("instance_usage_settings")
+	keyInstanceAccountingSettings      = []byte("instance_accounting_settings")
+	keyInstanceID                      = []byte("instance_id")
+	keyMinimumLedgerReaderVersion      = []byte("minimum_ledger_reader_version")
+	keyLedgerFeatureEpoch              = []byte("ledger_feature_epoch")
 )
 
 type MigrationRecord struct {
@@ -978,6 +982,53 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_create_usage_checkpoint_segments")
+	}},
+	{version: 36, name: "run_governance_attribution", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_run_governance_attribution"); err != nil {
+			return err
+		}
+		for _, name := range [][]byte{bucketOutcomeDefinitions, bucketRunGovernanceIdempotency, bucketRunGovernanceIndex, bucketGovernanceCheckpointSegments} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return err
+			}
+		}
+		if err := rewriteBucket(tx.Bucket(bucketGatewayKeys), func(raw []byte) ([]byte, error) {
+			var key domain.GatewayKey
+			if err := json.Unmarshal(raw, &key); err != nil {
+				return nil, err
+			}
+			if len(key.Scopes) == 0 {
+				key.Scopes = []domain.GatewayScope{domain.GatewayScopeInference}
+			}
+			if err := key.Validate(); err != nil {
+				return nil, err
+			}
+			return json.Marshal(key)
+		}); err != nil {
+			return err
+		}
+		if err := tx.Bucket(bucketMeta).Delete(keyUsageCheckpoint); err != nil {
+			return err
+		}
+		if tx.Bucket(bucketUsageCheckpointSegments) != nil {
+			if err := tx.DeleteBucket(bucketUsageCheckpointSegments); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if err := meta.Put(keyMinimumLedgerReaderVersion, []byte("v5")); err != nil {
+			return err
+		}
+		if err := meta.Put(keyLedgerFeatureEpoch, []byte{5}); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_run_governance_attribution")
 	}},
 }
 
@@ -1876,6 +1927,11 @@ func requiredBuckets() [][]byte {
 		bucketCapabilityDetectionIdem,
 		bucketCapabilityDetectionIndex,
 		bucketUsageDailyRollup,
+		bucketUsageCheckpointSegments,
+		bucketOutcomeDefinitions,
+		bucketRunGovernanceIdempotency,
+		bucketRunGovernanceIndex,
+		bucketGovernanceCheckpointSegments,
 	}
 }
 

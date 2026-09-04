@@ -12,6 +12,8 @@ type AttemptQuery struct {
 	BeforeSequence uint64
 	Limit          int
 	ProjectID      string
+	WorkUnitID     string
+	RunID          string
 	ProviderID     string
 	DeploymentID   string
 	RequestID      string
@@ -81,6 +83,8 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 			continue
 		}
 		if query.ProjectID != "" && attempt.ProjectID != query.ProjectID ||
+			query.WorkUnitID != "" && attempt.WorkUnitID != query.WorkUnitID ||
+			query.RunID != "" && attempt.RunID != query.RunID ||
 			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
 			query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
 			query.RequestID != "" && attempt.RequestID != query.RequestID ||

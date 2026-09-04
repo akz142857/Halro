@@ -29,6 +29,7 @@ const ProvidersPage = lazy(() => import("./pages/ProvidersPage").then((module) =
 const RoutesPage = lazy(() => import("./pages/RoutesPage").then((module) => ({ default: module.RoutesPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const UsagePage = lazy(() => import("./pages/UsagePage").then((module) => ({ default: module.UsagePage })));
+const RunGovernancePage = lazy(() => import("./pages/RunGovernancePage").then((module) => ({ default: module.RunGovernancePage })));
 const MasterKeyCustodyPage = lazy(() => import("./pages/MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
 const DeveloperPage = lazy(() => import("./pages/DeveloperPage").then((module) => ({ default: module.DeveloperPage })));
 
@@ -161,6 +162,7 @@ function Route({ path }: { path: string }) {
   if (path.startsWith("/admin/routes")) return <RoutesPage />;
   if (path.startsWith("/admin/policies") || path.startsWith("/admin/token-guard")) return <PoliciesPage />;
   if (path.startsWith("/admin/usage")) return <UsagePage />;
+  if (path.startsWith("/admin/run-governance")) return <RunGovernancePage />;
   if (path.startsWith("/admin/operations") || path.startsWith("/admin/audit") || path.startsWith("/admin/alerts")) {
     return <OperationsPage />;
   }

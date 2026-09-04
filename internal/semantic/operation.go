@@ -18,6 +18,7 @@ const (
 	OperationAsyncGenerate Operation = "async_generate"
 	OperationFile          Operation = "file"
 	OperationBatch         Operation = "batch"
+	OperationGovernance    Operation = "governance"
 )
 
 func (operation Operation) Validate() error {
@@ -25,6 +26,8 @@ func (operation Operation) Validate() error {
 	case OperationGenerate, OperationEmbed, OperationModerate, OperationImage,
 		OperationTranscribe, OperationSynthesize, OperationRerank,
 		OperationAsyncGenerate, OperationFile, OperationBatch:
+		return nil
+	case OperationGovernance:
 		return nil
 	default:
 		return errors.New("semantic operation is invalid")

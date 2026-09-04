@@ -35,7 +35,12 @@ const (
 	// shape, so there is no window where some new frames are authenticated
 	// and others are not.
 	frameVersionLedgerIntegrity = 4
-	frameHeaderSize             = 24
+	// frameVersionRunAttribution introduces Work Unit and Run lifecycle events
+	// and nullable attribution on the existing request/attempt events. It keeps
+	// the epoch-4 authenticated frame shape; the new epoch is a reader gate for
+	// event semantics, not a weakening or replacement of the chain.
+	frameVersionRunAttribution = 5
+	frameHeaderSize            = 24
 	// chainPreviousHashSize and chainMACSize are appended after the base
 	// 24-byte header for epoch 4 only. The CRC32 field keeps its original
 	// meaning and byte range (header[4:20]||payload) unchanged by their
@@ -86,6 +91,11 @@ type chainVerifier struct {
 	sequence  uint64
 	offset    int64
 	sawFrames bool
+	epoch     byte
+}
+
+func authenticatedFrameEpoch(epoch byte) bool {
+	return epoch == frameVersionLedgerIntegrity || epoch == frameVersionRunAttribution
 }
 
 func (v *chainVerifier) verify() bool { return v != nil && len(v.key) == 32 }
@@ -136,6 +146,7 @@ type Log struct {
 	chainSequence  uint64
 	chainOffset    int64
 	chainSawFrames bool
+	chainEpoch     byte
 
 	// directory, generation, segments and the two anchors describe sealing.
 	// generation is what the active file is writing; segments is the sealed
@@ -337,7 +348,7 @@ func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
 	if err != nil {
 		return ChainReport{}, false, err
 	}
-	anchor, sealedSequence, err := sealedTail(segments)
+	anchor, sealedSequence, sealedEpoch, err := sealedTail(segments)
 	if err != nil {
 		return ChainReport{}, false, err
 	}
@@ -351,11 +362,11 @@ func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
 	// tampering on every sealed instance, which is the failure mode a chain
 	// check must not have.
 	verifier := &chainVerifier{
-		key: key, hash: anchor, sequence: sealedSequence, sawFrames: len(segments) > 0,
+		key: key, hash: anchor, sequence: sealedSequence, sawFrames: len(segments) > 0, epoch: sealedEpoch,
 	}
 	var report ChainReport
 	watermark, partial, err := scan(file, activeGeneration(segments), 0, sealedSequence, func(record Record) error {
-		if record.Epoch == frameVersionLedgerIntegrity && verifier.verify() {
+		if authenticatedFrameEpoch(record.Epoch) && verifier.verify() {
 			report.Authenticated++
 		} else {
 			report.ChecksumOnly++
@@ -410,7 +421,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		status.RequireRecovery()
 		return nil, err
 	}
-	anchor, sealedSequence, err := sealedTail(segments)
+	anchor, sealedSequence, sealedEpoch, err := sealedTail(segments)
 	if err != nil {
 		status.RequireRecovery()
 		return nil, err
@@ -425,7 +436,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	// generation, so the verifier is seeded there rather than at zero. A
 	// directory that has never been sealed seeds at zero, which is what every
 	// log did before sealing existed.
-	verifier := &chainVerifier{key: options.ChainKey, hash: anchor, sequence: sealedSequence}
+	verifier := &chainVerifier{key: options.ChainKey, hash: anchor, sequence: sealedSequence, epoch: sealedEpoch}
 	last, partial, err := scan(file, generation, 0, sealedSequence, nil, verifier)
 	if err != nil {
 		file.Close()
@@ -474,6 +485,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		chainSequence:  verifier.sequence,
 		chainOffset:    verifier.offset,
 		chainSawFrames: verifier.sawFrames || len(segments) > 0,
+		chainEpoch:     verifier.epoch,
 		directory:      directory,
 		generation:     generation,
 		segments:       segments,
@@ -657,7 +669,23 @@ func (l *Log) sealedVerifier(segment Segment, offset int64) *chainVerifier {
 	if err != nil {
 		return nil
 	}
-	return &chainVerifier{key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1}
+	return &chainVerifier{
+		key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1,
+		epoch: l.segmentStartEpoch(segment.Generation),
+	}
+}
+
+func (l *Log) segmentStartEpoch(generation uint64) byte {
+	for index, segment := range l.segments {
+		if segment.Generation != generation {
+			continue
+		}
+		if index == 0 {
+			return 0
+		}
+		return segmentEndEpoch(l.segments[index-1])
+	}
+	return 0
 }
 
 // Snapshot copies exactly the committed prefix while holding the writer lock.
@@ -813,7 +841,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	var encoded bytes.Buffer
 	for index, request := range batch {
 		sequence++
-		frame, nextHash := encodeChainFrame(l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
+		frame, nextHash := encodeChainFrameVersion(frameVersionRunAttribution, l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
 		if _, err := encoded.Write(frame); err != nil {
 			respondBatch(batch, nil, fmt.Errorf("encode ledger batch: %w", err))
 			return
@@ -862,6 +890,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	l.chainSequence = sequence
 	l.chainOffset = offset
 	l.chainSawFrames = true
+	l.chainEpoch = frameVersionRunAttribution
 	l.batches.Add(1)
 	l.writtenRecords.Add(uint64(len(batch)))
 	respondBatch(batch, watermarks, nil)
@@ -887,7 +916,7 @@ func encodeFrame(sequence uint64, kind EventKind, payload []byte) []byte {
 // checksummed. The function stays, rather than being inlined at its one call
 // site, because "what epoch does a fresh write use" is a fact worth a name.
 func eventFrameVersion(Event) byte {
-	return frameVersionLedgerIntegrity
+	return frameVersionRunAttribution
 }
 
 func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload []byte) []byte {
@@ -915,9 +944,13 @@ func encodeFrameVersion(version byte, sequence uint64, kind EventKind, payload [
 // MAC alone (not the whole frame) is cheaper and does not require re-reading
 // the payload to extend the chain.
 func encodeChainFrame(key []byte, sequence uint64, kind EventKind, payload []byte, previousHash [32]byte) ([]byte, [32]byte) {
+	return encodeChainFrameVersion(frameVersionLedgerIntegrity, key, sequence, kind, payload, previousHash)
+}
+
+func encodeChainFrameVersion(version byte, key []byte, sequence uint64, kind EventKind, payload []byte, previousHash [32]byte) ([]byte, [32]byte) {
 	frame := make([]byte, chainHeaderSize+len(payload))
 	copy(frame[:4], frameMagic)
-	frame[4] = frameVersionLedgerIntegrity
+	frame[4] = version
 	frame[5] = byte(kind)
 	binary.BigEndian.PutUint64(frame[8:16], sequence)
 	binary.BigEndian.PutUint32(frame[16:20], uint32(len(payload)))
@@ -960,7 +993,10 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 	// lease mode wrote epoch 2 while the plain event beside it wrote epoch 1.
 	// Requiring a non-decreasing epoch across the whole file would reject
 	// exactly the histories that predate the guarantee.
-	var seenAuthenticatedEpoch bool
+	highestAuthenticatedEpoch := byte(0)
+	if verifier != nil {
+		highestAuthenticatedEpoch = verifier.epoch
+	}
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)
@@ -977,17 +1013,23 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: invalid frame header", ErrCorrupt, offset)
 		}
 		epoch := header[4]
-		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && epoch != frameVersionLedgerIntegrity {
+		if epoch != frameVersionLegacy && epoch != frameVersionCurrent && epoch != frameVersionPeriod && !authenticatedFrameEpoch(epoch) {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d", ErrUnsupportedVersion, offset, epoch)
 		}
-		if seenAuthenticatedEpoch && epoch != frameVersionLedgerIntegrity {
+		if highestAuthenticatedEpoch > 0 && !authenticatedFrameEpoch(epoch) {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows an authenticated frame", ErrTampered, offset, epoch)
 		}
-		if epoch == frameVersionLedgerIntegrity {
-			seenAuthenticatedEpoch = true
+		if highestAuthenticatedEpoch == frameVersionRunAttribution && epoch == frameVersionLedgerIntegrity {
+			return Watermark{}, false, fmt.Errorf("%w at offset %d: frame epoch %d follows run-attribution epoch", ErrTampered, offset, epoch)
+		}
+		if authenticatedFrameEpoch(epoch) && epoch > highestAuthenticatedEpoch {
+			highestAuthenticatedEpoch = epoch
+			if verifier != nil {
+				verifier.epoch = epoch
+			}
 		}
 		kind := EventKind(header[5])
-		if !kind.Valid() || epoch == frameVersionLegacy && kind > EventRequestFinalized {
+		if !kind.Valid() || epoch < frameVersionRunAttribution && kind > EventRequestFinalized {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: event kind %d is not supported by epoch %d", ErrUnsupportedVersion, offset, kind, epoch)
 		}
 		sequence := binary.BigEndian.Uint64(header[8:16])
@@ -1004,7 +1046,7 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 		// callers without one get the same checksum-only treatment epochs
 		// 1-3 always get.
 		var previousHash, frameMAC [chainMACSize]byte
-		if epoch == frameVersionLedgerIntegrity {
+		if authenticatedFrameEpoch(epoch) {
 			chainTail := make([]byte, chainPreviousHashSize+chainMACSize)
 			if _, err := io.ReadFull(file, chainTail); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -1028,7 +1070,7 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 		if checksum.Sum32() != binary.BigEndian.Uint32(header[20:24]) {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: checksum mismatch", ErrCorrupt, offset)
 		}
-		if epoch == frameVersionLedgerIntegrity && verifier.verify() {
+		if authenticatedFrameEpoch(epoch) && verifier.verify() {
 			if previousHash != verifier.hash {
 				return Watermark{}, false, fmt.Errorf("%w at offset %d: chain link does not match the running hash", ErrTampered, offset)
 			}
@@ -1060,11 +1102,11 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 				return Watermark{}, false, fmt.Errorf("%w at offset %d: v2 accounting event is missing its payload epoch fields", ErrCorrupt, offset)
 			}
 		}
-		if (epoch == frameVersionPeriod || epoch == frameVersionLedgerIntegrity) && event.PeriodTimezone == "" {
+		if (epoch == frameVersionPeriod || authenticatedFrameEpoch(epoch)) && event.PeriodTimezone == "" {
 			return Watermark{}, false, fmt.Errorf("%w at offset %d: v%d event is missing its period identity", ErrCorrupt, offset, epoch)
 		}
 		nextOffset := offset + int64(headerSizeForEpoch(epoch)) + int64(payloadLength)
-		if epoch == frameVersionLedgerIntegrity && verifier.verify() {
+		if authenticatedFrameEpoch(epoch) && verifier.verify() {
 			verifier.offset = nextOffset
 		}
 		if visit != nil {
@@ -1078,7 +1120,7 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 }
 
 func headerSizeForEpoch(epoch byte) int {
-	if epoch == frameVersionLedgerIntegrity {
+	if authenticatedFrameEpoch(epoch) {
 		return chainHeaderSize
 	}
 	return frameHeaderSize

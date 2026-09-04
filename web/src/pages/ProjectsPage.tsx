@@ -22,7 +22,7 @@ import {
 } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import type { CreatedGatewayKey, GatewayKey, Project } from "../types";
+import type { CreatedGatewayKey, GatewayKey, GatewayScope, Project } from "../types";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
@@ -52,6 +52,13 @@ const projectSchema = (t: TFunction) => z.object({
   requestKB: z.coerce.number().int().min(0),
   deferredResponses: z.boolean(),
   deferredQueue: z.coerce.number().int().min(0).max(MAX_DEFERRED_QUEUE),
+  runGovernance: z.boolean(),
+  runDefaultBudget: z.coerce.number().min(0),
+  runMaxBudget: z.coerce.number().min(0),
+  runDefaultTTLHours: z.coerce.number().int().min(0).max(720),
+  runMaxTTLHours: z.coerce.number().int().min(0).max(720),
+  runMaxActive: z.coerce.number().int().min(0).max(1_000),
+  runMaxOpenWorkUnits: z.coerce.number().int().min(0).max(1_000),
   cidrs: z.string().refine(
     (value) => splitValues(value).every(isCIDR),
     { message: t("projects.cidrInvalid") },
@@ -59,6 +66,17 @@ const projectSchema = (t: TFunction) => z.object({
   tokenGuardPolicyID: z.string(),
   redactionPolicyID: z.string(),
   enabled: z.boolean(),
+}).superRefine((value, context) => {
+  if (!value.runGovernance) return;
+  if (value.runDefaultBudget <= 0 || value.runMaxBudget <= 0 || value.runDefaultBudget > value.runMaxBudget) {
+    context.addIssue({ code: "custom", path: ["runDefaultBudget"], message: t("projects.runBudgetInvalid") });
+  }
+  if (value.runDefaultTTLHours <= 0 || value.runMaxTTLHours <= 0 || value.runDefaultTTLHours > value.runMaxTTLHours) {
+    context.addIssue({ code: "custom", path: ["runDefaultTTLHours"], message: t("projects.runTTLInvalid") });
+  }
+  if (value.runMaxActive <= 0 || value.runMaxOpenWorkUnits <= 0) {
+    context.addIssue({ code: "custom", path: ["runMaxActive"], message: t("projects.runLimitsInvalid") });
+  }
 });
 type ProjectInput = z.input<ReturnType<typeof projectSchema>>;
 type ProjectValue = z.output<ReturnType<typeof projectSchema>>;
@@ -88,6 +106,7 @@ function projectUpdateBody(project: Project, enabled: boolean) {
     allowed_cidrs: project.allowed_cidrs ?? [],
     redaction_policy_id: project.redaction_policy_id,
     token_guard_policy_id: project.token_guard_policy_id,
+    run_governance: project.run_governance,
   };
 }
 
@@ -285,6 +304,7 @@ function ProjectDetail({ project }: { project: Project }) {
               : t("common.none"),
             `${compactNumber(project.rpm)} RPM`,
             project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited"),
+            project.run_governance?.enabled ? t("projects.runGovernanceEnabled") : t("projects.runGovernanceDisabled"),
           ].join(" · ")}</small>
           {/* Looks and behaves like the expand control the provider and deployment rows
               use. Not a real button — nesting one inside <summary> is invalid, and the
@@ -300,7 +320,11 @@ function ProjectDetail({ project }: { project: Project }) {
           <Policy label={t("projects.concurrency")} value={String(project.max_concurrency || t("common.unlimited"))} />
           <Policy label={t("projects.dailyBudget")} value={project.daily_budget_micros_usd ? money(project.daily_budget_micros_usd) : t("common.unlimited")} />
           <Policy label={t("projects.tokenGuardPolicy")} value={project.token_guard_policy_id || t("projects.notAttached")} />
+          <Policy label={t("projects.runGovernance")} value={project.run_governance?.enabled
+            ? `${money(project.run_governance.default_run_budget_micros_usd)} / ${project.run_governance.default_run_ttl_seconds / 3600}h`
+            : t("projects.runGovernanceDisabled")} />
         </div>
+        {project.run_governance?.enabled && <Link className="notice-link" href={`/admin/run-governance?project_id=${encodeURIComponent(project.id)}`}>{t("projects.openRunGovernance")} →</Link>}
       </details>
       {unblock.isError && !isStepUpPrompt(unblock.error) && <ErrorState error={unblock.error} />}
       {toggleStatus.isError && <ErrorState error={toggleStatus.error} />}
@@ -344,7 +368,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
     mutationFn: () => api.updateKey(
       project.id,
       value.id,
-      { name: value.name, enabled: !value.enabled, ...(value.expires_at ? { expires_at: value.expires_at } : {}) },
+      { name: value.name, enabled: !value.enabled, scopes: value.scopes ?? ["inference"], ...(value.expires_at ? { expires_at: value.expires_at } : {}) },
       value.revision,
     ),
     onSuccess: () => {
@@ -373,6 +397,7 @@ function KeyRow({ project, value }: { project: Project; value: GatewayKey }) {
             <strong>{value.name}</strong>
           </span>
           <code>{value.id}</code>
+          <small>{t("projects.keyScopes")}: {(value.scopes ?? ["inference"]).join(", ")}</small>
         </div>
         <div className="key-dates">
           <small>{t("projects.created", { date: dateTime(value.created_at) })}</small>
@@ -485,6 +510,13 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       requestKB: Math.round((current?.max_request_bytes ?? 0) / 1024),
       deferredResponses: current?.deferred_responses ?? false,
       deferredQueue: current?.max_deferred_queue ?? 0,
+      runGovernance: current?.run_governance?.enabled ?? false,
+      runDefaultBudget: (current?.run_governance?.default_run_budget_micros_usd ?? 5_000_000) / 1_000_000,
+      runMaxBudget: (current?.run_governance?.max_run_budget_micros_usd ?? 100_000_000) / 1_000_000,
+      runDefaultTTLHours: (current?.run_governance?.default_run_ttl_seconds ?? 86_400) / 3_600,
+      runMaxTTLHours: (current?.run_governance?.max_run_ttl_seconds ?? 2_592_000) / 3_600,
+      runMaxActive: current?.run_governance?.max_active_runs ?? 1_000,
+      runMaxOpenWorkUnits: current?.run_governance?.max_open_work_units ?? 1_000,
       routes: current?.allowed_models ?? [],
       cidrs: (current?.allowed_cidrs ?? []).join(", "),
       tokenGuardPolicyID: current?.token_guard_policy_id ?? "",
@@ -495,6 +527,7 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
   const selectedRouteAliases = watch("routes") ?? [];
   const enabled = watch("enabled");
   const deferredResponses = watch("deferredResponses");
+  const runGovernance = watch("runGovernance");
   const { notify } = useNotify();
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
@@ -519,6 +552,23 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
       allowed_cidrs: splitValues(value.cidrs),
       redaction_policy_id: value.redactionPolicyID,
       token_guard_policy_id: value.tokenGuardPolicyID,
+      run_governance: value.runGovernance ? {
+        enabled: true,
+        default_run_budget_micros_usd: Math.round(value.runDefaultBudget * 1_000_000),
+        max_run_budget_micros_usd: Math.round(value.runMaxBudget * 1_000_000),
+        default_run_ttl_seconds: value.runDefaultTTLHours * 3_600,
+        max_run_ttl_seconds: value.runMaxTTLHours * 3_600,
+        max_active_runs: value.runMaxActive,
+        max_open_work_units: value.runMaxOpenWorkUnits,
+      } : {
+        enabled: false,
+        default_run_budget_micros_usd: 0,
+        max_run_budget_micros_usd: 0,
+        default_run_ttl_seconds: 0,
+        max_run_ttl_seconds: 0,
+        max_active_runs: 0,
+        max_open_work_units: 0,
+      },
       };
       return current
         ? api.updateProject(current.id, body, `"${current.revision}"`)
@@ -614,6 +664,20 @@ function ProjectForm({ current, onClose }: { current?: Project; onClose: () => v
             </Field>
           </div>
         </section>
+        <section className="project-form-section" aria-labelledby="project-run-governance-title">
+          <header><h3 id="project-run-governance-title">{t("projects.runGovernance")}</h3><p>{t("projects.runGovernanceDescription")}</p></header>
+          <div className="form-grid">
+            <Field label={t("projects.runGovernanceEnable")}>
+              <label className="form-inline-check"><input type="checkbox" {...register("runGovernance")} /><span>{runGovernance ? t("common.enabled") : t("common.disabled")}</span></label>
+            </Field>
+            <Field label={t("projects.runDefaultBudgetUSD")} error={errors.runDefaultBudget?.message}><input type="number" min={0} step="0.01" disabled={!runGovernance} {...register("runDefaultBudget")} /></Field>
+            <Field label={t("projects.runMaxBudgetUSD")}><input type="number" min={0} step="0.01" disabled={!runGovernance} {...register("runMaxBudget")} /></Field>
+            <Field label={t("projects.runDefaultTTLHours")} error={errors.runDefaultTTLHours?.message}><input type="number" min={1} max={720} disabled={!runGovernance} {...register("runDefaultTTLHours")} /></Field>
+            <Field label={t("projects.runMaxTTLHours")}><input type="number" min={1} max={720} disabled={!runGovernance} {...register("runMaxTTLHours")} /></Field>
+            <Field label={t("projects.runMaxActive")} error={errors.runMaxActive?.message}><input type="number" min={1} max={1000} disabled={!runGovernance} {...register("runMaxActive")} /></Field>
+            <Field label={t("projects.runMaxOpenWorkUnits")}><input type="number" min={1} max={1000} disabled={!runGovernance} {...register("runMaxOpenWorkUnits")} /></Field>
+          </div>
+        </section>
         <section className="project-form-section" aria-labelledby="project-security-title">
           <header><h3 id="project-security-title">{t("projects.securityControls")}</h3><p>{t("projects.securityControlsDescription")}</p></header>
           <div className="form-grid">
@@ -642,6 +706,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   const { t } = useTranslation();
   const [name, setName] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
+  const [scopes, setScopes] = useState<GatewayScope[]>(["inference"]);
   const timeZone = useAccountingTimeZone();
   const [created, setCreated] = useState<CreatedGatewayKey | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -666,6 +731,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
       // expiry back in; the browser's own wall clock would have made the two
       // disagree by the offset between them.
       zonedInputToISO(expiresAt, timeZone) || undefined,
+      scopes,
     ),
     onSuccess: (result) => {
       setCreated(result.data);
@@ -736,11 +802,21 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         <Field label={t("projects.keyExpiry")} hint={t("projects.keyExpiryHint")}>
           <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
+        <fieldset className="scope-checks">
+          <legend>{t("projects.keyScopes")}</legend>
+          {(["inference", "work_unit:create", "run:create", "run:attach", "governance:read"] as GatewayScope[]).map((scope) => (
+            <label className="check-row" key={scope}>
+              <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} />
+              <span>{scope}</span>
+            </label>
+          ))}
+          <small>{t("projects.keyScopesHint")}</small>
+        </fieldset>
         <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpMintKey")} />
         {mutation.isError && <ErrorState error={mutation.error} />}
         <div className="form-actions">
           <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={!name.trim() || !reauth.currentPassword || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
+          <button className="button primary" disabled={!name.trim() || scopes.length === 0 || !reauth.currentPassword || mutation.isPending}>{mutation.isPending ? t("common.working") : t("projects.generateKey")}</button>
         </div>
       </form>
     </Modal>

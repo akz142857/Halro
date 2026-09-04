@@ -59,6 +59,8 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/projects", "POST /admin/api/v1/projects",
 		"GET /admin/api/v1/projects/{}", "PUT /admin/api/v1/projects/{}", "DELETE /admin/api/v1/projects/{}", "POST /admin/api/v1/projects/{}/unblock",
 		"GET /admin/api/v1/projects/{}/keys", "POST /admin/api/v1/projects/{}/keys", "DELETE /admin/api/v1/projects/{}/keys/{}",
+		"GET /admin/api/v1/run-governance/work-units", "GET /admin/api/v1/run-governance/work-units/{}",
+		"GET /admin/api/v1/run-governance/runs", "GET /admin/api/v1/run-governance/runs/{}",
 		"GET /admin/api/v1/redaction-policies", "POST /admin/api/v1/redaction-policies",
 		"GET /admin/api/v1/redaction-policies/{}", "PUT /admin/api/v1/redaction-policies/{}", "DELETE /admin/api/v1/redaction-policies/{}", "POST /admin/api/v1/redaction-policies/{}/test",
 		"GET /admin/api/v1/token-guard-policies", "POST /admin/api/v1/token-guard-policies",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,16 +37,28 @@ const (
 	EventAttemptStarted
 	EventAttemptSettled
 	EventRequestFinalized
+	EventWorkUnitCreated
+	EventWorkUnitClosed
+	EventRunCreated
+	EventRunClosed
 )
 
 func (k EventKind) Valid() bool {
-	return k >= EventRequestAccepted && k <= EventRequestFinalized
+	return k >= EventRequestAccepted && k <= EventRunClosed
 }
 
 type Event struct {
 	EventID                     string                             `json:"event_id"`
 	Kind                        EventKind                          `json:"kind"`
 	RequestID                   string                             `json:"request_id"`
+	WorkUnitID                  string                             `json:"work_unit_id,omitempty"`
+	RunID                       string                             `json:"run_id,omitempty"`
+	RunBudgetMicrosUSD          int64                              `json:"run_budget_micros_usd,omitempty"`
+	RunExpiresAt                time.Time                          `json:"run_expires_at,omitempty"`
+	CloseReason                 string                             `json:"close_reason,omitempty"`
+	Operation                   string                             `json:"operation,omitempty"`
+	IdempotencyKeyHash          string                             `json:"idempotency_key_hash,omitempty"`
+	RequestFingerprint          string                             `json:"request_fingerprint,omitempty"`
 	AttemptID                   string                             `json:"attempt_id,omitempty"`
 	ProjectID                   string                             `json:"project_id"`
 	KeyID                       string                             `json:"key_id,omitempty"`
@@ -117,7 +130,7 @@ func (e Event) Validate() error {
 	if !e.Kind.Valid() {
 		problems = append(problems, errors.New("event kind is invalid"))
 	}
-	if e.RequestID == "" {
+	if e.Kind <= EventRequestFinalized && e.RequestID == "" {
 		problems = append(problems, errors.New("request id is required"))
 	}
 	if e.ProjectID == "" {
@@ -128,6 +141,31 @@ func (e Event) Validate() error {
 	}
 	if e.OccurredAt.IsZero() {
 		problems = append(problems, errors.New("occurred_at is required"))
+	}
+	if (e.WorkUnitID == "") != (e.RunID == "") && e.Kind <= EventRequestFinalized {
+		problems = append(problems, errors.New("request attribution requires both work unit and run ids"))
+	}
+	if e.Kind >= EventWorkUnitCreated && e.WorkUnitID == "" {
+		problems = append(problems, errors.New("work unit id is required for lifecycle events"))
+	}
+	switch e.Kind {
+	case EventWorkUnitCreated, EventWorkUnitClosed:
+		if e.RunID != "" || e.RunBudgetMicrosUSD != 0 || !e.RunExpiresAt.IsZero() {
+			problems = append(problems, errors.New("work unit event cannot carry run fields"))
+		}
+	case EventRunCreated:
+		if e.RunID == "" || e.RunBudgetMicrosUSD <= 0 || e.RunExpiresAt.IsZero() || !e.RunExpiresAt.After(e.OccurredAt) {
+			problems = append(problems, errors.New("run creation fields are invalid"))
+		}
+	case EventRunClosed:
+		if e.RunID == "" || strings.TrimSpace(e.CloseReason) == "" || len(e.CloseReason) > 64 {
+			problems = append(problems, errors.New("run close fields are invalid"))
+		}
+	}
+	if e.Kind >= EventWorkUnitCreated {
+		if e.Operation == "" || !domain.ValidSHA256Label(e.IdempotencyKeyHash) || !domain.ValidSHA256Label(e.RequestFingerprint) {
+			problems = append(problems, errors.New("lifecycle event requires operation and idempotency evidence"))
+		}
 	}
 	if (e.ReservationMicrosUSD != nil && *e.ReservationMicrosUSD < 0) || (e.CommittedMicrosUSD != nil && *e.CommittedMicrosUSD < 0) {
 		problems = append(problems, errors.New("amounts cannot be negative"))
@@ -324,22 +362,44 @@ type SettledAttempt struct {
 }
 
 type State struct {
-	mu           sync.RWMutex
-	balances     map[BalanceKey]Balance
-	reservations map[string]attemptReservation
-	leaseRecords map[string]Record
-	settled      map[string]SettledAttempt
-	eventDigests map[string][32]byte
-	watermark    Watermark
+	mu                    sync.RWMutex
+	balances              map[BalanceKey]Balance
+	reservations          map[string]attemptReservation
+	leaseRecords          map[string]Record
+	settled               map[string]SettledAttempt
+	eventDigests          map[string][32]byte
+	workUnits             map[string]domain.WorkUnit
+	runs                  map[string]domain.Run
+	requestRuns           map[string]requestAttribution
+	governanceIdempotency map[string]GovernanceIdempotency
+	watermark             Watermark
+}
+
+type requestAttribution struct {
+	WorkUnitID string
+	RunID      string
+}
+
+type GovernanceIdempotency struct {
+	ProjectID          string
+	Operation          string
+	KeyHash            string
+	RequestFingerprint string
+	WorkUnitID         string
+	RunID              string
 }
 
 func NewState() *State {
 	return &State{
-		balances:     make(map[BalanceKey]Balance),
-		reservations: make(map[string]attemptReservation),
-		leaseRecords: make(map[string]Record),
-		settled:      make(map[string]SettledAttempt),
-		eventDigests: make(map[string][32]byte),
+		balances:              make(map[BalanceKey]Balance),
+		reservations:          make(map[string]attemptReservation),
+		leaseRecords:          make(map[string]Record),
+		settled:               make(map[string]SettledAttempt),
+		eventDigests:          make(map[string][32]byte),
+		workUnits:             make(map[string]domain.WorkUnit),
+		runs:                  make(map[string]domain.Run),
+		requestRuns:           make(map[string]requestAttribution),
+		governanceIdempotency: make(map[string]GovernanceIdempotency),
 	}
 }
 
@@ -374,10 +434,101 @@ func (s *State) Apply(record Record) error {
 	}
 
 	event := record.Event
+	if event.Kind >= EventWorkUnitCreated {
+		idempotencyKey := governanceIdempotencyMapKey(event.ProjectID, event.Operation, event.IdempotencyKeyHash)
+		if existing, ok := s.governanceIdempotency[idempotencyKey]; ok {
+			if existing.RequestFingerprint != event.RequestFingerprint {
+				return errors.New("idempotency key conflicts with another governance request")
+			}
+			s.eventDigests[event.EventID] = digest
+			s.watermark = Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+			return nil
+		}
+	}
 	key := BalanceKey{ProjectID: event.ProjectID, PeriodID: event.PeriodID, TimezoneVersion: event.PeriodTimezoneVersion}
 	balance := s.balances[key]
+	if event.Kind <= EventRequestFinalized {
+		attribution, exists := s.requestRuns[event.RequestID]
+		if event.Kind == EventRequestAccepted {
+			if event.RunID != "" {
+				run, runExists := s.runs[event.RunID]
+				if !runExists || run.ProjectID != event.ProjectID || run.WorkUnitID != event.WorkUnitID ||
+					run.Status != domain.RunActive || !event.OccurredAt.Before(run.ExpiresAt) {
+					return errors.New("request run attribution is not active in this project")
+				}
+				s.requestRuns[event.RequestID] = requestAttribution{WorkUnitID: event.WorkUnitID, RunID: event.RunID}
+			}
+		} else if exists {
+			if attribution.WorkUnitID != event.WorkUnitID || attribution.RunID != event.RunID {
+				return errors.New("request event changed run attribution")
+			}
+		} else if event.WorkUnitID != "" || event.RunID != "" {
+			return errors.New("request event has attribution without an accepted request")
+		}
+	}
 
 	switch event.Kind {
+	case EventWorkUnitCreated:
+		if _, exists := s.workUnits[event.WorkUnitID]; exists {
+			return fmt.Errorf("work unit %q already exists", event.WorkUnitID)
+		}
+		workUnit := domain.WorkUnit{
+			ID: event.WorkUnitID, ProjectID: event.ProjectID, Status: domain.WorkUnitOpen,
+			CreatedByKeyID: event.KeyID, CreatedAt: event.OccurredAt,
+			PeriodID: event.PeriodID, PeriodTimezoneVersion: event.PeriodTimezoneVersion,
+		}
+		if err := workUnit.Validate(); err != nil {
+			return err
+		}
+		s.workUnits[workUnit.ID] = workUnit
+	case EventWorkUnitClosed:
+		workUnit, exists := s.workUnits[event.WorkUnitID]
+		if !exists || workUnit.ProjectID != event.ProjectID {
+			return fmt.Errorf("work unit %q is not in project", event.WorkUnitID)
+		}
+		if workUnit.Status != domain.WorkUnitOpen {
+			return fmt.Errorf("work unit %q is already closed", event.WorkUnitID)
+		}
+		closedAt := event.OccurredAt
+		workUnit.Status, workUnit.ClosedAt = domain.WorkUnitClosed, &closedAt
+		s.workUnits[workUnit.ID] = workUnit
+	case EventRunCreated:
+		if _, exists := s.runs[event.RunID]; exists {
+			return fmt.Errorf("run %q already exists", event.RunID)
+		}
+		workUnit, exists := s.workUnits[event.WorkUnitID]
+		if !exists || workUnit.ProjectID != event.ProjectID || workUnit.Status != domain.WorkUnitOpen {
+			return fmt.Errorf("work unit %q is not open in project", event.WorkUnitID)
+		}
+		count := 0
+		for _, existing := range s.runs {
+			if existing.WorkUnitID == event.WorkUnitID {
+				count++
+			}
+		}
+		if count >= domain.MaxRunsPerWorkUnit {
+			return errors.New("work unit run limit exceeded")
+		}
+		run := domain.Run{
+			ID: event.RunID, ProjectID: event.ProjectID, WorkUnitID: event.WorkUnitID,
+			BudgetMicrosUSD: event.RunBudgetMicrosUSD, Status: domain.RunActive,
+			CreatedByKeyID: event.KeyID, CreatedAt: event.OccurredAt, ExpiresAt: event.RunExpiresAt,
+		}
+		if err := run.Validate(); err != nil {
+			return err
+		}
+		s.runs[run.ID] = run
+	case EventRunClosed:
+		run, exists := s.runs[event.RunID]
+		if !exists || run.ProjectID != event.ProjectID || run.WorkUnitID != event.WorkUnitID {
+			return fmt.Errorf("run %q is not in work unit", event.RunID)
+		}
+		if run.Status != domain.RunActive {
+			return fmt.Errorf("run %q is already closed", event.RunID)
+		}
+		closedAt := event.OccurredAt
+		run.Status, run.ClosedAt, run.CloseReason = domain.RunClosed, &closedAt, event.CloseReason
+		s.runs[run.ID] = run
 	case EventReservationCreated:
 		amount := int64(0)
 		if event.ReservationMicrosUSD != nil {
@@ -397,6 +548,14 @@ func (s *State) Apply(record Record) error {
 		}
 		s.reservations[event.AttemptID] = attemptReservation{Key: key, Amount: amount, Lease: event}
 		s.leaseRecords[event.AttemptID] = record
+		if event.RunID != "" && event.LeaseMode != LeaseModeUnknownAllowed {
+			run := s.runs[event.RunID]
+			run.ReservedMicrosUSD, err = checkedAdd(run.ReservedMicrosUSD, amount)
+			if err != nil {
+				return err
+			}
+			s.runs[event.RunID] = run
+		}
 	case EventAttemptStarted:
 		reservation, exists := s.reservations[event.AttemptID]
 		if !exists {
@@ -450,6 +609,28 @@ func (s *State) Apply(record Record) error {
 				return err
 			}
 		}
+		if event.RunID != "" {
+			run := s.runs[event.RunID]
+			if reservation.Lease.LeaseMode != LeaseModeUnknownAllowed {
+				if run.ReservedMicrosUSD < reservation.Amount {
+					return fmt.Errorf("attempt %q reservation exceeds run balance", event.AttemptID)
+				}
+				run.ReservedMicrosUSD -= reservation.Amount
+			}
+			if event.CommittedMicrosUSD != nil {
+				run.CommittedMicrosUSD, err = checkedAdd(run.CommittedMicrosUSD, *event.CommittedMicrosUSD)
+				if err != nil {
+					return err
+				}
+			}
+			if reservation.Lease.LeaseMode == LeaseModeUnknownAllowed {
+				run.UnknownAttempts, err = checkedAdd(run.UnknownAttempts, 1)
+				if err != nil {
+					return err
+				}
+			}
+			s.runs[event.RunID] = run
+		}
 		delete(s.reservations, event.AttemptID)
 		settlementDigest := "sha256:" + fmt.Sprintf("%x", digest)
 		base := int64(0)
@@ -457,9 +638,17 @@ func (s *State) Apply(record Record) error {
 			base = *event.CommittedMicrosUSD
 		}
 		s.settled[event.AttemptID] = SettledAttempt{Settlement: event, SettlementDigest: settlementDigest, CostMicrosUSD: base, CostKnown: event.CommittedMicrosUSD != nil}
+	case EventRequestFinalized:
+		delete(s.requestRuns, event.RequestID)
 	}
 
 	s.balances[key] = balance
+	if event.Kind >= EventWorkUnitCreated {
+		s.governanceIdempotency[governanceIdempotencyMapKey(event.ProjectID, event.Operation, event.IdempotencyKeyHash)] = GovernanceIdempotency{
+			ProjectID: event.ProjectID, Operation: event.Operation, KeyHash: event.IdempotencyKeyHash,
+			RequestFingerprint: event.RequestFingerprint, WorkUnitID: event.WorkUnitID, RunID: event.RunID,
+		}
+	}
 	s.eventDigests[event.EventID] = digest
 	s.watermark = Watermark{
 		Generation: record.Generation,
@@ -467,6 +656,57 @@ func (s *State) Apply(record Record) error {
 		Sequence:   record.Sequence,
 	}
 	return nil
+}
+
+func (s *State) WorkUnit(id string) (domain.WorkUnit, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.workUnits[id]
+	return value, ok
+}
+
+func (s *State) WorkUnits(projectID string) []domain.WorkUnit {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.WorkUnit, 0)
+	for _, item := range s.workUnits {
+		if projectID == "" || item.ProjectID == projectID {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items
+}
+
+func (s *State) Run(id string) (domain.Run, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.runs[id]
+	return value, ok
+}
+
+func (s *State) Runs(projectID, workUnitID string) []domain.Run {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]domain.Run, 0)
+	for _, item := range s.runs {
+		if (projectID == "" || item.ProjectID == projectID) && (workUnitID == "" || item.WorkUnitID == workUnitID) {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items
+}
+
+func governanceIdempotencyMapKey(projectID, operation, keyHash string) string {
+	return projectID + "\x00" + operation + "\x00" + keyHash
+}
+
+func (s *State) GovernanceIdempotency(projectID, operation, keyHash string) (GovernanceIdempotency, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, ok := s.governanceIdempotency[governanceIdempotencyMapKey(projectID, operation, keyHash)]
+	return value, ok
 }
 
 func (e Event) KnownCommittedMicrosUSD() (int64, bool) {
