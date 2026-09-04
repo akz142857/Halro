@@ -410,6 +410,9 @@ func (s *Service) beginRequestRun(
 		if errors.Is(err, budget.ErrRunNotActive) {
 			return nil, gatewayError("run_not_active", "run is closed or expired", 409, err)
 		}
+		if governanceRunID != "" {
+			return nil, gatewayError("run_governance_unavailable", "run governance state is unavailable", 503, err)
+		}
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
 	run := &requestRun{
@@ -443,7 +446,7 @@ func (s *Service) resolveRunAttribution(ctx context.Context, principal auth.Auth
 		return "", "", gatewayError("run_not_active", "run is closed or expired", 409, err)
 	}
 	if err != nil {
-		return "", "", gatewayError("accounting_unavailable", "run attribution could not be verified", 503, err)
+		return "", "", gatewayError("run_governance_unavailable", "run attribution could not be verified", 503, err)
 	}
 	return governedRun.WorkUnitID, governedRun.ID, nil
 }
@@ -507,6 +510,9 @@ func (s *Service) exhaustedAttemptsError(lastErr error) error {
 	case errors.Is(lastErr, budget.ErrExceeded):
 		s.rejections.budget.Add(1)
 		return gatewayError("budget_exceeded", "daily budget exceeded", 403, lastErr)
+	case errors.Is(lastErr, budget.ErrRunExceeded):
+		s.rejections.runBudget.Add(1)
+		return gatewayError("run_budget_exceeded", "run budget exceeded", 403, lastErr)
 	case errors.Is(lastErr, errDeploymentConcurrency):
 		return gatewayError("deployment_concurrency_limit_exceeded", "deployment concurrency limit exceeded", 429, lastErr)
 	case errors.Is(lastErr, provider.ErrConcurrency):
@@ -637,8 +643,20 @@ func (s *Service) startAttempt(
 		}
 		providerLease.Release()
 		breakerLease.Abandon()
-		if errors.Is(err, budget.ErrExceeded) {
+		if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 			return nil, err
+		}
+		if errors.Is(err, budget.ErrRunNotActive) {
+			finalizeErr := run.finalize("run_not_active")
+			return nil, gatewayError("run_not_active", "run is closed or expired", 409, errors.Join(err, finalizeErr))
+		}
+		if errors.Is(err, budget.ErrRunPriceUnavailable) {
+			finalizeErr := run.finalize("price_unavailable")
+			return nil, gatewayError("price_unavailable", "a priced target is required for a run budget", 409, errors.Join(err, finalizeErr))
+		}
+		if run.requestLease.RunID != "" {
+			finalizeErr := run.finalize("run_governance_unavailable")
+			return nil, gatewayError("run_governance_unavailable", "run governance state is unavailable", 503, errors.Join(err, finalizeErr))
 		}
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
@@ -871,6 +889,7 @@ type RejectionMetrics struct {
 	ProviderConcurrency   uint64
 	DeploymentConcurrency uint64
 	Budget                uint64
+	RunBudget             uint64
 	TokenGuard            uint64
 }
 
@@ -882,6 +901,7 @@ type rejectionCounters struct {
 	providerConcurrency   atomic.Uint64
 	deploymentConcurrency atomic.Uint64
 	budget                atomic.Uint64
+	runBudget             atomic.Uint64
 	tokenGuard            atomic.Uint64
 }
 
@@ -1028,7 +1048,7 @@ func (s *Service) RejectionMetrics() RejectionMetrics {
 		ProjectConcurrency:    s.rejections.projectConcurrency.Load(),
 		ProviderConcurrency:   s.rejections.providerConcurrency.Load(),
 		DeploymentConcurrency: s.rejections.deploymentConcurrency.Load(),
-		Budget:                s.rejections.budget.Load(), TokenGuard: s.rejections.tokenGuard.Load(),
+		Budget:                s.rejections.budget.Load(), RunBudget: s.rejections.runBudget.Load(), TokenGuard: s.rejections.tokenGuard.Load(),
 	}
 }
 
@@ -1243,7 +1263,7 @@ func (s *Service) executeGenerate(
 				if errors.As(err, &fatal) {
 					return semantic.GenerateResult{}, fatal
 				}
-				if errors.Is(err, budget.ErrExceeded) {
+				if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 					return semantic.GenerateResult{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
@@ -2259,7 +2279,7 @@ func (s *Service) generateStream(
 				if errors.As(err, &fatal) {
 					return fatal
 				}
-				if errors.Is(err, budget.ErrExceeded) {
+				if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 					return s.exhaustedAttemptsError(err)
 				}
 				lastErr = err
@@ -2435,7 +2455,7 @@ func (s *Service) Embeddings(
 				if errors.As(err, &fatal) {
 					return openaiapi.EmbeddingResponse{}, fatal
 				}
-				if errors.Is(err, budget.ErrExceeded) {
+				if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 					return openaiapi.EmbeddingResponse{}, s.exhaustedAttemptsError(err)
 				}
 				lastErr = err

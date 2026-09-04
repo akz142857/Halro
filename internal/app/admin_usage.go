@@ -227,6 +227,7 @@ type policyRejectionSummary struct {
 	ProviderConcurrency   uint64 `json:"provider_concurrency"`
 	DeploymentConcurrency uint64 `json:"deployment_concurrency"`
 	Budget                uint64 `json:"budget"`
+	RunBudget             uint64 `json:"run_budget"`
 	TokenGuard            uint64 `json:"token_guard"`
 	Total                 uint64 `json:"total"`
 }
@@ -301,10 +302,10 @@ func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSum
 		RPM:             source.RPM, TPM: source.TPM, ProjectConcurrency: source.ProjectConcurrency,
 		ProviderConcurrency:   source.ProviderConcurrency,
 		DeploymentConcurrency: source.DeploymentConcurrency,
-		Budget:                source.Budget, TokenGuard: source.TokenGuard,
+		Budget:                source.Budget, RunBudget: source.RunBudget, TokenGuard: source.TokenGuard,
 	}
 	result.Total = result.RouteCapability + result.RPM + result.TPM + result.ProjectConcurrency +
-		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.TokenGuard
+		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.RunBudget + result.TokenGuard
 	return result
 }
 

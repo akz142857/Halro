@@ -266,6 +266,7 @@ export interface Dashboard {
       provider_concurrency: number;
       deployment_concurrency: number;
       budget: number;
+      run_budget: number;
       token_guard: number;
       total: number;
     };
@@ -407,6 +408,8 @@ export interface Run {
   budget_micros_usd: number;
   committed_micros_usd: number;
   reserved_micros_usd: number;
+  remaining_micros_usd: number;
+  budget_state: "available" | "fully_reserved" | "depleted";
   unknown_attempts: number;
   status: "active" | "closed" | "expired";
   created_by_key_id: string;

@@ -132,6 +132,7 @@ export function DashboardPage() {
                 <div className="rejection-tags">
                   <span>RPM {compactNumber(dashboard.governance.policy_rejections.rpm)}</span><span>TPM {compactNumber(dashboard.governance.policy_rejections.tpm)}</span>
                   <span>{t("dashboard.budgetShort")} {compactNumber(dashboard.governance.policy_rejections.budget)}</span>
+                  <span>{t("dashboard.runBudgetShort")} {compactNumber(dashboard.governance.policy_rejections.run_budget)}</span>
                   <span>{t("dashboard.concurrencyShort")} {compactNumber(concurrencyRejections(dashboard.governance.policy_rejections))}</span>
                   <span>Token Guard {compactNumber(dashboard.governance.policy_rejections.token_guard)}</span>
                   {/* The one refusal here that is a configuration answer rather

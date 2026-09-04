@@ -18,7 +18,7 @@ describe("RunGovernancePage", () => {
     }], next_cursor: "" });
     const runs = vi.spyOn(api, "runs").mockResolvedValue({ items: [{
       id: "run_a", project_id: "prj_a", work_unit_id: "wku_a", budget_micros_usd: 5_000_000,
-      committed_micros_usd: 125_000, reserved_micros_usd: 0, unknown_attempts: 0, status: "active",
+      committed_micros_usd: 125_000, reserved_micros_usd: 25_000, remaining_micros_usd: 4_850_000, budget_state: "available", unknown_attempts: 0, status: "active",
       created_by_key_id: "key_a", created_at: "2026-09-04T00:00:00Z", expires_at: "2026-09-05T00:00:00Z",
     }], next_cursor: "" });
     const usage = vi.spyOn(api, "usage").mockResolvedValue({ items: [{
@@ -41,5 +41,7 @@ describe("RunGovernancePage", () => {
     await waitFor(() => expect(usage).toHaveBeenCalled());
     expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("run_id")).toBe("run_a");
     expect(await screen.findByText("req_a")).toBeVisible();
+    expect(screen.getByText("可用")).toBeVisible();
+    expect(screen.getByText(/已预留/)).toBeVisible();
   });
 });

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -138,10 +139,16 @@ func (w WorkUnit) Validate() error {
 
 type RunStatus string
 
+type RunBudgetState string
+
 const (
 	RunActive  RunStatus = "active"
 	RunClosed  RunStatus = "closed"
 	RunExpired RunStatus = "expired"
+
+	RunBudgetAvailable     RunBudgetState = "available"
+	RunBudgetFullyReserved RunBudgetState = "fully_reserved"
+	RunBudgetDepleted      RunBudgetState = "depleted"
 )
 
 // EffectiveRunStatus derives expiry from the reader's clock without inventing
@@ -155,19 +162,53 @@ func EffectiveRunStatus(run Run, now time.Time) RunStatus {
 }
 
 type Run struct {
-	ID                 string     `json:"id"`
-	ProjectID          string     `json:"project_id"`
-	WorkUnitID         string     `json:"work_unit_id"`
-	BudgetMicrosUSD    int64      `json:"budget_micros_usd"`
-	CommittedMicrosUSD int64      `json:"committed_micros_usd"`
-	ReservedMicrosUSD  int64      `json:"reserved_micros_usd"`
-	UnknownAttempts    int64      `json:"unknown_attempts"`
-	Status             RunStatus  `json:"status"`
-	CreatedByKeyID     string     `json:"created_by_key_id"`
-	CreatedAt          time.Time  `json:"created_at"`
-	ExpiresAt          time.Time  `json:"expires_at"`
-	ClosedAt           *time.Time `json:"closed_at,omitempty"`
-	CloseReason        string     `json:"close_reason,omitempty"`
+	ID                 string         `json:"id"`
+	ProjectID          string         `json:"project_id"`
+	WorkUnitID         string         `json:"work_unit_id"`
+	BudgetMicrosUSD    int64          `json:"budget_micros_usd"`
+	CommittedMicrosUSD int64          `json:"committed_micros_usd"`
+	ReservedMicrosUSD  int64          `json:"reserved_micros_usd"`
+	RemainingMicrosUSD int64          `json:"remaining_micros_usd"`
+	BudgetState        RunBudgetState `json:"budget_state"`
+	UnknownAttempts    int64          `json:"unknown_attempts"`
+	Status             RunStatus      `json:"status"`
+	CreatedByKeyID     string         `json:"created_by_key_id"`
+	CreatedAt          time.Time      `json:"created_at"`
+	ExpiresAt          time.Time      `json:"expires_at"`
+	ClosedAt           *time.Time     `json:"closed_at,omitempty"`
+	CloseReason        string         `json:"close_reason,omitempty"`
+}
+
+// WithRunBudgetState adds the live, non-authoritative budget projection used by
+// the public and Admin APIs. pendingMicrosUSD is admitted spend whose durable
+// reservation has not reached the Ledger state yet. It is never persisted in a
+// Run event and therefore cannot become a second accounting authority.
+func WithRunBudgetState(run Run, pendingMicrosUSD int64) Run {
+	if pendingMicrosUSD < 0 {
+		pendingMicrosUSD = 0
+	}
+	durable := int64(math.MaxInt64)
+	if run.CommittedMicrosUSD <= math.MaxInt64-run.ReservedMicrosUSD {
+		durable = run.CommittedMicrosUSD + run.ReservedMicrosUSD
+	}
+	used := int64(math.MaxInt64)
+	if durable <= math.MaxInt64-pendingMicrosUSD {
+		used = durable + pendingMicrosUSD
+	}
+	if used >= run.BudgetMicrosUSD {
+		run.RemainingMicrosUSD = 0
+	} else {
+		run.RemainingMicrosUSD = run.BudgetMicrosUSD - used
+	}
+	switch {
+	case durable >= run.BudgetMicrosUSD:
+		run.BudgetState = RunBudgetDepleted
+	case used >= run.BudgetMicrosUSD:
+		run.BudgetState = RunBudgetFullyReserved
+	default:
+		run.BudgetState = RunBudgetAvailable
+	}
+	return run
 }
 
 func (r Run) Validate() error {

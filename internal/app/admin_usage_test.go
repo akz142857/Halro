@@ -9,9 +9,9 @@ import (
 func TestDashboardGovernanceSummaries(t *testing.T) {
 	rejections := summarizeRejections(gatewaycore.RejectionMetrics{
 		RPM: 1, TPM: 2, ProjectConcurrency: 3, ProviderConcurrency: 4,
-		DeploymentConcurrency: 5, Budget: 6, TokenGuard: 7,
+		DeploymentConcurrency: 5, Budget: 6, TokenGuard: 7, RunBudget: 8,
 	})
-	if rejections.Total != 28 || rejections.TokenGuard != 7 {
+	if rejections.Total != 36 || rejections.TokenGuard != 7 || rejections.RunBudget != 8 {
 		t.Fatalf("rejections=%#v", rejections)
 	}
 

@@ -89,7 +89,8 @@ func TestRunGovernanceHTTPScopesLifecycleAndIdempotency(t *testing.T) {
 	createdRun := httptest.NewRecorder()
 	router.ServeHTTP(createdRun, governanceRequest(http.MethodPost, "/halro/v1/runs", bootstrap.GatewayKey, "run-create", createRunBody))
 	var run domain.Run
-	if err := json.Unmarshal(createdRun.Body.Bytes(), &run); err != nil || createdRun.Code != http.StatusCreated || !domain.ValidRunID(run.ID) {
+	if err := json.Unmarshal(createdRun.Body.Bytes(), &run); err != nil || createdRun.Code != http.StatusCreated || !domain.ValidRunID(run.ID) ||
+		run.BudgetState != domain.RunBudgetAvailable || run.RemainingMicrosUSD != 2_000 {
 		t.Fatalf("Run response status=%d body=%s err=%v", createdRun.Code, createdRun.Body.String(), err)
 	}
 	conflict := httptest.NewRecorder()

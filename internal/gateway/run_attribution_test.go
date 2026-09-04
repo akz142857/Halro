@@ -58,6 +58,37 @@ func TestInferenceRunHeaderRequiresAttachScopeBeforeProviderIO(t *testing.T) {
 	}
 }
 
+func TestInferenceRunBudgetRejectsBeforeProviderIO(t *testing.T) {
+	f := newFixtureShaped(t, 1_000, ledger.Options{}, nil, func(project *domain.Project) {
+		project.RunGovernance = testRunGovernanceConfig()
+	}, nil)
+	defer f.close()
+	f.key.Scopes = []domain.GatewayScope{domain.GatewayScopeInference, domain.GatewayScopeRunAttach}
+	if err := f.service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project}}); err != nil {
+		t.Fatal(err)
+	}
+	workUnit, _, err := f.accounting.CreateWorkUnit(context.Background(), f.project.ID, f.key.ID, 10, gatewayGovernanceIntent("wu-budget"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := f.accounting.CreateRun(context.Background(), f.project.ID, f.key.ID, workUnit.ID, 10, time.Hour, 10, gatewayGovernanceIntent("run-budget"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.service.Chat(requestmeta.WithRunID(context.Background(), run.ID), f.plaintext, chatRequest())
+	assertGatewayCode(t, err, "run_budget_exceeded")
+	if f.adapter.calls != 0 {
+		t.Fatal("Run budget rejection reached the provider")
+	}
+	if got := f.service.RejectionMetrics().RunBudget; got != 1 {
+		t.Fatalf("Run budget rejections=%d", got)
+	}
+	got, _ := f.accounting.Run(f.project.ID, run.ID)
+	if got.CommittedMicrosUSD != 0 || got.ReservedMicrosUSD != 0 || got.BudgetState != domain.RunBudgetAvailable {
+		t.Fatalf("rejected request changed Run=%#v", got)
+	}
+}
+
 func TestUntaggedLegacyInferenceDoesNotEnterRunGovernancePath(t *testing.T) {
 	f := newFixtureShaped(t, 1_000, ledger.Options{}, nil, func(project *domain.Project) {
 		project.RunGovernance = testRunGovernanceConfig()

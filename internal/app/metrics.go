@@ -394,6 +394,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		{"provider_concurrency", rejections.ProviderConcurrency},
 		{"deployment_concurrency", rejections.DeploymentConcurrency},
 		{"budget", rejections.Budget},
+		{"run_budget", rejections.RunBudget},
 		{"token_guard", rejections.TokenGuard},
 	} {
 		fmt.Fprintf(output, "halro_policy_rejections_total{reason=%s} %d\n",
