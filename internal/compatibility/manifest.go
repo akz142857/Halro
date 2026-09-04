@@ -418,18 +418,19 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 func governanceEndpointManifests() []EndpointCompatibilityManifest {
 	makeManifest := func(id, method, path string, requestFields, responseFields []string, state string) EndpointCompatibilityManifest {
 		return EndpointCompatibilityManifest{
-			ID: id, NorthboundProfile: ProfileHalroRunGovernance, ProfileRevision: 1,
+			ID: id, NorthboundProfile: ProfileHalroRunGovernance, ProfileRevision: 2,
 			Protocol: "halro", Method: method, Path: path, SemanticOperation: semantic.OperationGovernance,
 			RequestFields: requestFields, RequestHeaders: []string{"Authorization", "Content-Type on POST", "Idempotency-Key on POST"},
 			ResponseFields: responseFields, StateSemantics: state,
 			Evidence: []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental,
-			DocumentedDeviations: []string{"S1 exposes Work Unit and Run lifecycle and attribution; Outcome reporting and Run monetary admission ship in later milestones"},
+			DocumentedDeviations: []string{"Run Governance remains experimental until a real business pilot validates the Work Unit and Outcome Definition boundary"},
 		}
 	}
 	return []EndpointCompatibilityManifest{
 		makeManifest("halro.work-units.create.v1", "POST", "/halro/v1/work-units", []string{"outcome_definition_ids"}, []string{"id", "project_id", "status", "created_at"}, "ledger-authoritative idempotent Work Unit creation"),
-		makeManifest("halro.work-units.get.v1", "GET", "/halro/v1/work-units/{id}", []string{"id"}, []string{"work_unit", "runs"}, "project-owned ledger-derived Work Unit read"),
+		makeManifest("halro.work-units.get.v1", "GET", "/halro/v1/work-units/{id}", []string{"id"}, []string{"work_unit", "runs", "outcomes"}, "project-owned ledger-derived Work Unit read"),
 		makeManifest("halro.work-units.close.v1", "POST", "/halro/v1/work-units/{id}/close", []string{"id"}, []string{"id", "project_id", "status", "closed_at"}, "ledger-authoritative idempotent Work Unit close"),
+		makeManifest("halro.outcomes.report.v1", "POST", "/halro/v1/work-units/{id}/outcomes", []string{"id", "definition_id", "value", "observed_at", "evidence_ref", "evidence_sha256", "supersedes_outcome_id"}, []string{"id", "work_unit_id", "definition_id", "definition_version", "value", "reporter_key_id", "observed_at", "ingested_at", "revision", "governance_sequence", "provisional"}, "governance-journal-authoritative idempotent Outcome report"),
 		makeManifest("halro.runs.create.v1", "POST", "/halro/v1/runs", []string{"work_unit_id", "budget_micros_usd", "ttl_seconds"}, []string{"id", "work_unit_id", "budget_micros_usd", "status", "expires_at"}, "ledger-authoritative idempotent Run creation"),
 		makeManifest("halro.runs.get.v1", "GET", "/halro/v1/runs/{id}", []string{"id"}, []string{"id", "work_unit_id", "budget_micros_usd", "committed_micros_usd", "reserved_micros_usd", "unknown_attempts", "status"}, "project-owned ledger-derived Run read"),
 		makeManifest("halro.runs.close.v1", "POST", "/halro/v1/runs/{id}/close", []string{"id", "reason"}, []string{"id", "status", "closed_at", "close_reason"}, "ledger-authoritative idempotent Run close"),

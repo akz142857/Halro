@@ -107,14 +107,15 @@ const (
 )
 
 type WorkUnit struct {
-	ID                    string         `json:"id"`
-	ProjectID             string         `json:"project_id"`
-	Status                WorkUnitStatus `json:"status"`
-	CreatedByKeyID        string         `json:"created_by_key_id"`
-	CreatedAt             time.Time      `json:"created_at"`
-	ClosedAt              *time.Time     `json:"closed_at,omitempty"`
-	PeriodID              string         `json:"period_id"`
-	PeriodTimezoneVersion uint64         `json:"period_timezone_version"`
+	ID                    string                 `json:"id"`
+	ProjectID             string                 `json:"project_id"`
+	Status                WorkUnitStatus         `json:"status"`
+	CreatedByKeyID        string                 `json:"created_by_key_id"`
+	CreatedAt             time.Time              `json:"created_at"`
+	ClosedAt              *time.Time             `json:"closed_at,omitempty"`
+	PeriodID              string                 `json:"period_id"`
+	PeriodTimezoneVersion uint64                 `json:"period_timezone_version"`
+	OutcomeDefinitions    []OutcomeDefinitionRef `json:"outcome_definitions,omitempty"`
 }
 
 func (w WorkUnit) Validate() error {
@@ -133,6 +134,19 @@ func (w WorkUnit) Validate() error {
 		}
 	default:
 		return errors.New("work unit status is invalid")
+	}
+	if len(w.OutcomeDefinitions) > MaxDefinitionsPerWorkUnit {
+		return errors.New("work unit outcome definition limit exceeded")
+	}
+	seenDefinitions := map[string]struct{}{}
+	for _, reference := range w.OutcomeDefinitions {
+		if !ValidOutcomeDefinitionID(reference.ID) || reference.Version == 0 {
+			return errors.New("work unit outcome definition is invalid")
+		}
+		if _, exists := seenDefinitions[reference.ID]; exists {
+			return errors.New("work unit outcome definitions must be unique")
+		}
+		seenDefinitions[reference.ID] = struct{}{}
 	}
 	return nil
 }

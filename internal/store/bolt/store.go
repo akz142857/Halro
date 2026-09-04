@@ -102,6 +102,7 @@ var (
 	keyAuditHMACEnvelope               = []byte("audit_hmac_envelope")
 	keyLedgerHMACEnvelope              = []byte("ledger_hmac_envelope")
 	keyLedgerChainCheckpoint           = []byte("ledger_chain_checkpoint")
+	keyGovernanceCheckpoint            = []byte("governance_checkpoint")
 	keyVaultKeyring                    = []byte("vault_keyring")
 	keyKeySlotDescriptor               = []byte("key_slot_descriptor")
 	keyKeySlotAuditIntent              = []byte("key_slot_audit_intent")

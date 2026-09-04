@@ -241,6 +241,10 @@ func (m *Manager) governanceLock(projectID string) func() {
 }
 
 func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, maxOpen int64, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	return m.CreateWorkUnitWithDefinitions(ctx, projectID, keyID, maxOpen, nil, intent)
+}
+
+func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, keyID string, maxOpen int64, definitions []domain.OutcomeDefinitionRef, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
 	if projectID == "" || keyID == "" || maxOpen <= 0 || maxOpen > domain.MaxOpenWorkUnits {
 		return domain.WorkUnit{}, false, ErrResourceLimit
 	}
@@ -285,6 +289,7 @@ func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, m
 		EventID: eventID, Kind: ledger.EventWorkUnitCreated,
 		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, OccurredAt: now,
 		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+		OutcomeDefinitions: slices.Clone(definitions),
 	}
 	period.Stamp(&event)
 	if err := m.appendApply(ctx, event); err != nil {

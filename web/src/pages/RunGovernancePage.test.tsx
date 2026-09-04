@@ -12,6 +12,8 @@ describe("RunGovernancePage", () => {
 
   it("drills from a Project through Work Unit and Run to attributed attempts", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "prj_a", name: "Agent plane" }] as never, next_cursor: "" });
+		vi.spyOn(api, "outcomeDefinitions").mockResolvedValue({ items: [], next_cursor: "" });
+		vi.spyOn(api, "outcomes").mockResolvedValue({ items: [], next_cursor: "" });
     const workUnits = vi.spyOn(api, "workUnits").mockResolvedValue({ items: [{
       id: "wku_a", project_id: "prj_a", status: "open", created_by_key_id: "key_a",
       created_at: "2026-09-04T00:00:00Z", period_id: "prj_a:2026-09-04:UTC", period_timezone_version: 1,

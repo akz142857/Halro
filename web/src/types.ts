@@ -399,6 +399,25 @@ export interface WorkUnit {
   committed_micros_usd?: number;
   reserved_micros_usd?: number;
   unknown_attempts?: number;
+	 outcome_definitions?: OutcomeDefinitionRef[];
+}
+
+export interface OutcomeDefinitionRef { id: string; version: number }
+export interface OutcomeDefinition {
+	id: string; project_id: string; name: string; version: number; data_type: "BOOLEAN" | "CATEGORICAL";
+	allowed_values: string[]; success_values: string[]; unit?: string; description?: string; enabled: boolean;
+	created_at: string; created_by: string; revision: number;
+}
+export interface Outcome {
+	id: string; project_id: string; work_unit_id: string; definition_id: string; definition_version: number; value: string;
+	reporter_key_id: string; evidence_sha256?: string; evidence_ref?: string; observed_at: string; ingested_at: string;
+	supersedes_outcome_id?: string; revision: number; governance_sequence: number; provisional: boolean;
+}
+export interface GovernanceSummary {
+	basis: "work_unit_cohort"; cohort_start: string; cohort_end: string; definition_id: string; definition_version: number;
+	generated_at: string; eligible_units: number; matured_units: number; evaluated_units: number; successful_units: number;
+	outcome_coverage: number | null; success_rate: number | null; known_cost_micros_usd: number; in_progress_cost_micros_usd: number;
+	estimated_cost_micros_usd: number; unknown_attempts: number; cost_completeness: "complete" | "partial"; cost_per_success_micros_usd: number | null;
 }
 
 export interface Run {
@@ -1212,6 +1231,7 @@ export interface SystemStatus {
   audit: Record<string, number | string>;
   alerts: Record<string, number>;
   usage_watermark: Record<string, number>;
+	governance?: { ready: boolean; sequence: number; offset: number };
   time_context: TimeContext;
   activation?: ActivationStatus;
   reload?: ReloadStatus;

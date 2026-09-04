@@ -14,6 +14,9 @@ import type {
   Project,
   Run,
   WorkUnit,
+	OutcomeDefinition,
+	Outcome,
+	GovernanceSummary,
   Provider,
   ProviderCapabilities,
   InvocationTargetCatalog,
@@ -500,6 +503,12 @@ export const api = {
     request<Page<Run>>(`/run-governance/runs${query}`).then((value) => value.data),
   run: (id: string) =>
     request<Run>(`/run-governance/runs/${encodeURIComponent(id)}`).then((value) => value.data),
+	outcomeDefinitions: (projectID: string) =>
+		request<Page<OutcomeDefinition>>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions?limit=200`).then((value) => value.data),
+	createOutcomeDefinition: (projectID: string, revision: number, value: unknown) =>
+		request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions`, json("POST", value), `"${revision}"`),
+	outcomes: (query = "") => request<Page<Outcome>>(`/governance/outcomes${query}`).then((value) => value.data),
+	governanceSummary: (query: string) => request<GovernanceSummary>(`/governance/summary${query}`).then((value) => value.data),
   usageFailures: (query = "") =>
     request<Page<RequestFailure>>(`/usage/failures${query}`).then((value) => value.data),
   usageFailurePayload: (requestID: string) =>

@@ -79,6 +79,7 @@ export const zhCN = {
     refusals: { adapter_unavailable: "这个绑定没有建立起连接：凭据或端点无法构建出适配器。最常见的是 AWS 凭据里的 region 与绑定地址不一致，请检查该绑定使用的凭据。", binding_profile_incompatible: "这个绑定的能力实现与当前版本内置的 Profile 不兼容，请重新选择能力实现后保存。", capability_ceiling_exceeded: "这个绑定声明的能力超出该能力实现允许的上限，请取消多余能力后保存。", endpoint_rejected: "这个服务商的地址不再符合当前的出站策略，请检查地址或 allow_private_provider_endpoints 设置。", binding_adapter_missing: "这个绑定当前没有可用的适配器，请重新保存该服务商或查看服务端日志。", probe_requires_deployment: "这个绑定还没有启用的模型部署，连接测试没有可探测的模型。请先为它创建并启用一个模型部署，再测试。" },
     delivery: { transport_error: "无法连接到这个 Webhook 地址（DNS、TLS 或网络）", http_client_error: "Webhook 端点拒绝了这次投递", retry_exhausted: "重试次数用尽，端点始终没有成功接收", retry_interrupted: "重试被中断，投递未完成", encode_error: "告警事件无法编码，未发出", endpoint_inactive: "这个 Webhook 已停用，不会接收事件", delivery_failed: "投递失败，原因未分类" } },
   errors: {
+		runGovernanceActiveRuns: "请先关闭活跃的 Run，再停用运行治理。",
     invalidConsoleWindow: "控制台窗口长度不在允许范围内。",
     consoleWindowExceedsRetention: "控制台窗口不能超过归档保留天数，否则界面会承诺归档已经没有的历史。",
     consoleWindowTrimUnacknowledged: "缩短窗口会丢弃调用历史，需要先确认。",
@@ -203,6 +204,9 @@ export const zhCN = {
     noWorkUnits: "没有 Work Unit", noWorkUnitsDescription: "该筛选条件下还没有业务工作单元。", noRuns: "没有 Run", noRunsDescription: "该筛选条件下还没有运行实例。",
     budget: "预算上限", budgetState: "预算状态", available: "可用", fully_reserved: "已全部预留", depleted: "已耗尽", remaining: "实时余额", committed: "已归集费用", reserved: "已预留 {{amount}}", expiresAt: "到期时间", unknownAttempts: "{{count}} 次费用未知", viewAttempts: "查看调用",
     attempts: "调用明细", noAttempts: "没有调用记录", noAttemptsDescription: "这个 Run 尚未产生已结算的模型调用。", request: "请求", model: "模型", cost: "费用", completedAt: "完成时间",
+		outcomeDefinitions: "结果定义", outcomeDefinitionsDescription: "定义按不可变版本保存；新建 Work Unit 时冻结当前已启用版本。", definition: "结果定义", version: "版本", values: "允许值", successValues: "成功值", definitionName: "定义名称", createDefinition: "创建定义",
+		outcomeSummary: "业务结果摘要", outcomeSummaryDescription: "按 Work Unit cohort，在两个明确水位上连接当前结果声明与已结算模型费用。", chooseDefinition: "选择结果定义", cohortStart: "Cohort 开始", cohortEnd: "Cohort 结束", coverage: "结果覆盖率", successRate: "成功率", costPerSuccess: "单次成功模型费用", inProgressCost: "进行中模型费用", matured: "{{count}} 个已成熟单元", complete: "费用完整", partial: "费用不完整",
+		outcomes: "结果修订历史", value: "结果值", revision: "修订", observedAt: "业务观察时间", provisional: "暂定结果",
   },
   developer: {
     notifyKeyCreated: "调试网关密钥已创建（计费有效）",

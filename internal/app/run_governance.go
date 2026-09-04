@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/idempotency"
 	"github.com/akz142857/Halro/internal/requestmeta"
@@ -47,6 +48,15 @@ type closeRunInput struct {
 
 type closeWorkUnitInput struct{}
 
+type reportOutcomeInput struct {
+	DefinitionID        string    `json:"definition_id"`
+	Value               string    `json:"value"`
+	ObservedAt          time.Time `json:"observed_at"`
+	EvidenceRef         string    `json:"evidence_ref,omitempty"`
+	EvidenceSHA256      string    `json:"evidence_sha256,omitempty"`
+	SupersedesOutcomeID string    `json:"supersedes_outcome_id,omitempty"`
+}
+
 func (r *Runtime) withGovernanceRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requestID, err := id.New("req")
@@ -77,7 +87,7 @@ func (r *Runtime) governancePrincipal(writer http.ResponseWriter, request *http.
 	if write {
 		keyLimit, projectLimit = governanceWriteKeyRPM, governanceWriteProjectRPM
 	}
-	allowed, retryAfter := r.governanceRate.allow(r.clockNow(), principal.Key.ID, principal.Project.ID, write, keyLimit, projectLimit)
+	allowed, retryAfter := r.governance.rate.allow(r.clockNow(), principal.Key.ID, principal.Project.ID, write, keyLimit, projectLimit)
 	if !allowed {
 		writer.Header().Set("Retry-After", retryAfter)
 		writeGovernanceError(writer, http.StatusTooManyRequests, "governance_rate_limited", "governance request rate exceeded")
@@ -126,16 +136,35 @@ func (r *Runtime) createWorkUnit(writer http.ResponseWriter, request *http.Reque
 	if !decodeGovernanceJSON(writer, request, &input) {
 		return
 	}
-	if len(input.OutcomeDefinitionIDs) != 0 {
-		writeGovernanceError(writer, http.StatusBadRequest, "outcome_definitions_unavailable", "outcome definitions are not available in S1")
+	if len(input.OutcomeDefinitionIDs) > domain.MaxDefinitionsPerWorkUnit {
+		writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome_definitions", "too many outcome definitions")
 		return
+	}
+	seen := map[string]struct{}{}
+	definitions := make([]domain.OutcomeDefinitionRef, 0, len(input.OutcomeDefinitionIDs))
+	for _, definitionID := range input.OutcomeDefinitionIDs {
+		if !domain.ValidOutcomeDefinitionID(definitionID) {
+			writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome_definitions", "outcome definition is invalid")
+			return
+		}
+		if _, exists := seen[definitionID]; exists {
+			writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome_definitions", "outcome definitions must be unique")
+			return
+		}
+		seen[definitionID] = struct{}{}
+		definition, err := r.store.GetOutcomeDefinition(request.Context(), principal.Project.ID, definitionID, 0)
+		if err != nil || !definition.Enabled {
+			writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome_definitions", "outcome definition is not enabled")
+			return
+		}
+		definitions = append(definitions, domain.OutcomeDefinitionRef{ID: definition.ID, Version: definition.Version})
 	}
 	intent, err := governanceIntent(request, "work_unit.create", input)
 	if err != nil {
 		writeGovernanceError(writer, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
 		return
 	}
-	workUnit, replay, err := r.accounting.CreateWorkUnit(request.Context(), principal.Project.ID, principal.Key.ID, principal.Project.RunGovernance.MaxOpenWorkUnits, intent)
+	workUnit, replay, err := r.accounting.CreateWorkUnitWithDefinitions(request.Context(), principal.Project.ID, principal.Key.ID, principal.Project.RunGovernance.MaxOpenWorkUnits, definitions, intent)
 	if err != nil {
 		writeGovernanceOperationError(writer, err, "work_unit")
 		return
@@ -166,7 +195,64 @@ func (r *Runtime) getWorkUnit(writer http.ResponseWriter, request *http.Request)
 	for index := range runs {
 		runs[index].Status = domain.EffectiveRunStatus(runs[index], r.clockNow())
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"work_unit": workUnit, "runs": runs})
+	outcomes := r.governance.manager.Outcomes(principal.Project.ID, workUnit.ID, "")
+	writeJSON(writer, http.StatusOK, map[string]any{"work_unit": workUnit, "runs": runs, "outcomes": outcomes})
+}
+
+func (r *Runtime) reportOutcome(writer http.ResponseWriter, request *http.Request) {
+	principal, ok := r.governancePrincipal(writer, request, domain.GatewayScopeOutcomeWrite)
+	if !ok {
+		return
+	}
+	workUnitID := chi.URLParam(request, "workUnitID")
+	if !domain.ValidWorkUnitID(workUnitID) {
+		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
+		return
+	}
+	var input reportOutcomeInput
+	if !decodeGovernanceJSON(writer, request, &input) {
+		return
+	}
+	intent, err := governanceIntent(request, "outcome.report", input)
+	if err != nil {
+		writeGovernanceError(writer, http.StatusBadRequest, "invalid_idempotency_key", err.Error())
+		return
+	}
+	outcome, replay, err := r.governance.manager.Report(request.Context(), governance.ReportInput{
+		ProjectID: principal.Project.ID, WorkUnitID: workUnitID, DefinitionID: input.DefinitionID,
+		Value: input.Value, ReporterKeyID: principal.Key.ID, EvidenceRef: input.EvidenceRef,
+		EvidenceSHA256: input.EvidenceSHA256, ObservedAt: input.ObservedAt,
+		SupersedesOutcomeID: input.SupersedesOutcomeID,
+		Intent:              governance.Intent{IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint},
+	})
+	if err != nil {
+		writeOutcomeError(writer, err)
+		return
+	}
+	status := http.StatusCreated
+	if replay {
+		status = http.StatusOK
+	}
+	writeJSON(writer, status, outcome)
+}
+
+func writeOutcomeError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, governance.ErrNotFound):
+		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit or definition was not found")
+	case errors.Is(err, governance.ErrDefinitionDenied):
+		writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome", "definition was not declared by the work unit")
+	case errors.Is(err, governance.ErrRevisionConflict):
+		writeGovernanceError(writer, http.StatusConflict, "outcome_revision_conflict", "supersedes_outcome_id is not the current outcome")
+	case errors.Is(err, governance.ErrIdempotency):
+		writeGovernanceError(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key conflicts with another request")
+	case errors.Is(err, governance.ErrRevisionLimit), errors.Is(err, governance.ErrWriteWindow):
+		writeGovernanceError(writer, http.StatusConflict, "outcome_write_closed", err.Error())
+	case errors.Is(err, governance.ErrUnavailable):
+		writeGovernanceError(writer, http.StatusServiceUnavailable, "governance_unavailable", "outcome governance is unavailable")
+	default:
+		writeGovernanceError(writer, http.StatusBadRequest, "invalid_outcome", err.Error())
+	}
 }
 
 func (r *Runtime) closeWorkUnit(writer http.ResponseWriter, request *http.Request) {

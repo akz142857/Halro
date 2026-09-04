@@ -28,6 +28,7 @@ import (
 	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/gatewayapi"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -44,14 +45,15 @@ import (
 )
 
 type Runtime struct {
-	config config.Config
-	logger *slog.Logger
-	lock   *lock.Lock
-	store  *boltstore.Store
-	ledger *ledger.Log
-	state  *ledger.State
-	status *ledger.Status
-	vault  *vault.Vault
+	config     config.Config
+	logger     *slog.Logger
+	lock       *lock.Lock
+	store      *boltstore.Store
+	ledger     *ledger.Log
+	state      *ledger.State
+	status     *ledger.Status
+	governance governanceRuntime
+	vault      *vault.Vault
 	// failureCapture holds the payloads of failed requests. Nil when the
 	// operator has not switched it on, which is the default; every read path
 	// treats nil as "the feature is off" rather than as an error.
@@ -114,7 +116,6 @@ type Runtime struct {
 	// Lock and map travel together in one field so this stays one entry in the
 	// breadth this type is allowed, rather than two.
 	adminElevation   adminElevationState
-	governanceRate   governanceRateState
 	setupMu          sync.Mutex
 	setupToken       string
 	setupTokenNeeded bool
@@ -144,6 +145,12 @@ type Runtime struct {
 	// five because the material, the sources it comes from, and the record of
 	// what was applied are one subsystem, and Runtime is already wide.
 	reload reloadRuntime
+}
+
+type governanceRuntime struct {
+	log     *governance.Log
+	manager *governance.Manager
+	rate    governanceRateState
 }
 
 type capabilityResolutionRuntime struct {
@@ -302,6 +309,49 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("replay ledger: %w", err))
+	}
+	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	defer clear(governanceKey)
+	governanceState := governance.NewState()
+	governanceLog, governanceOpenErr := governance.Open(cfg.GovernancePath(), governanceKey)
+	var governanceManager *governance.Manager
+	if governanceOpenErr != nil {
+		logger.Error("Governance Journal unavailable; ordinary inference remains available", "error", governanceOpenErr)
+		governanceManager = governance.NewUnavailable(governanceOpenErr)
+		governanceLog = nil
+	} else {
+		checkpointSequence := uint64(0)
+		if checkpoint, checkpointErr := metadata.LoadGovernanceCheckpoint(); checkpointErr == nil {
+			var snapshot governance.Snapshot
+			journalSummary := governanceLog.Summary()
+			if checkpoint.Version == governance.SnapshotVersion && checkpoint.Sequence <= journalSummary.Records && checkpoint.Offset <= journalSummary.Bytes &&
+				json.Unmarshal(checkpoint.Payload, &snapshot) == nil && snapshot.Sequence == checkpoint.Sequence && governanceState.Restore(snapshot) == nil {
+				checkpointSequence = checkpoint.Sequence
+			} else {
+				_ = metadata.ResetGovernanceCheckpoint()
+				governanceState = governance.NewState()
+			}
+		}
+		_, replayErr := governanceLog.Replay(func(record governance.Record) error {
+			if record.Sequence <= checkpointSequence {
+				return nil
+			}
+			return governanceState.Apply(record)
+		})
+		if replayErr != nil {
+			logger.Error("Governance Journal replay failed; ordinary inference remains available", "error", replayErr)
+			governanceLog.Close()
+			governanceLog = nil
+			governanceManager = governance.NewUnavailable(replayErr)
+		} else {
+			governanceManager = governance.NewManager(governanceLog, governanceState, ledgerState, metadata, metadata)
+		}
 	}
 	if err := reconcileLedgerChainCheckpoint(metadata, ledgerLog); err != nil {
 		ledgerLog.Close()
@@ -626,6 +676,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		ledger:              ledgerLog,
 		state:               ledgerState,
 		status:              accountingStatus,
+		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
 		failureCapture:      captureStore,
 		auth:                authSnapshot,
@@ -1340,6 +1391,12 @@ func (r *Runtime) Close() error {
 				return nil
 			}(),
 			r.ledger.Close(),
+			func() error {
+				if r.governance.log != nil {
+					return r.governance.log.Close()
+				}
+				return nil
+			}(),
 			r.audit.Close(),
 			func() error {
 				r.adminSessions.Close()
@@ -1560,6 +1617,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		governance.Post("/halro/v1/work-units", r.createWorkUnit)
 		governance.Get("/halro/v1/work-units/{workUnitID}", r.getWorkUnit)
 		governance.Post("/halro/v1/work-units/{workUnitID}/close", r.closeWorkUnit)
+		governance.Post("/halro/v1/work-units/{workUnitID}/outcomes", r.reportOutcome)
 		governance.Post("/halro/v1/runs", r.createRun)
 		governance.Get("/halro/v1/runs/{runID}", r.getRun)
 		governance.Post("/halro/v1/runs/{runID}/close", r.closeRun)
@@ -1635,6 +1693,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}", r.getAdminProject)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/projects/{id}", r.updateAdminProject)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/projects/{id}", r.deleteAdminProject)
+	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/outcome-definitions", r.listAdminOutcomeDefinitions)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/outcome-definitions", r.createAdminOutcomeDefinition)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/outcome-definitions/{definitionID}/versions", r.createAdminOutcomeDefinitionVersion)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/unblock", r.unblockAdminProject)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/keys", r.listAdminProjectKeys)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/keys", r.createAdminProjectKey)
@@ -1645,6 +1706,9 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/work-units/{workUnitID}", r.getAdminWorkUnit)
 	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs", r.listAdminRuns)
 	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs/{runID}", r.getAdminRun)
+	router.With(r.requireAdmin).Get("/admin/api/v1/governance/outcomes", r.listAdminOutcomes)
+	router.With(r.requireAdmin).Get("/admin/api/v1/governance/summary", r.adminGovernanceSummary)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/governance/export", r.createAdminGovernanceExport)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials", r.listAdminCredentials)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/credentials", r.createAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials/{id}", r.getAdminCredential)

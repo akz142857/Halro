@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 func enableRunGovernanceForTest(t *testing.T, runtime *Runtime, projectID, keyID string) {
@@ -38,12 +40,99 @@ func enableRunGovernanceForTest(t *testing.T, runtime *Runtime, projectID, keyID
 		domain.GatewayScopeRunCreate,
 		domain.GatewayScopeRunAttach,
 		domain.GatewayScopeGovernanceRead,
+		domain.GatewayScopeOutcomeWrite,
 	}
 	if _, err := runtime.store.PutGatewayKey(context.Background(), key, key.Revision, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.auth.Refresh(context.Background(), runtime.store); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOutcomeHTTPFreezesDefinitionAndReplaysIdempotently(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	defer runtime.Close()
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	definition := domain.OutcomeDefinition{ID: "odef_acceptance", ProjectID: bootstrap.ProjectID, Name: "accepted", Version: 1,
+		DataType: domain.OutcomeCategorical, AllowedValues: []string{"accepted", "rejected"}, SuccessValues: []string{"accepted"}, Enabled: true, CreatedAt: now, CreatedBy: "admin"}
+	definition, err = runtime.store.PutOutcomeDefinition(context.Background(), definition, project.Revision, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := runtime.gatewayRouter()
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "outcome-wu", `{"outcome_definition_ids":["`+definition.ID+`"]}`))
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	body := `{"definition_id":"` + definition.ID + `","value":"accepted","observed_at":"` + now.Format(time.RFC3339Nano) + `","evidence_ref":"acceptance_42"}`
+	reported := httptest.NewRecorder()
+	router.ServeHTTP(reported, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", bootstrap.GatewayKey, "outcome-one", body))
+	var outcome domain.Outcome
+	if err := json.Unmarshal(reported.Body.Bytes(), &outcome); err != nil || reported.Code != http.StatusCreated || !outcome.Provisional || outcome.DefinitionVersion != 1 {
+		t.Fatalf("report status=%d body=%s err=%v", reported.Code, reported.Body.String(), err)
+	}
+	replayed := httptest.NewRecorder()
+	router.ServeHTTP(replayed, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", bootstrap.GatewayKey, "outcome-one", body))
+	var again domain.Outcome
+	if err := json.Unmarshal(replayed.Body.Bytes(), &again); err != nil || replayed.Code != http.StatusOK || again.ID != outcome.ID {
+		t.Fatalf("replay status=%d body=%s err=%v", replayed.Code, replayed.Body.String(), err)
+	}
+	unsafe := httptest.NewRecorder()
+	router.ServeHTTP(unsafe, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/outcomes", bootstrap.GatewayKey, "outcome-secret", strings.Replace(body, "acceptance_42", "https://example.test/token=secret", 1)))
+	if unsafe.Code != http.StatusBadRequest || !strings.Contains(unsafe.Body.String(), "invalid_outcome") {
+		t.Fatalf("unsafe evidence status=%d body=%s", unsafe.Code, unsafe.Body.String())
+	}
+	closed := httptest.NewRecorder()
+	router.ServeHTTP(closed, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/close", bootstrap.GatewayKey, "outcome-close", `{}`))
+	if closed.Code != http.StatusCreated {
+		t.Fatalf("close status=%d body=%s", closed.Code, closed.Body.String())
+	}
+	cookie, _ := loginAdminForTest(t, runtime)
+	query := "/admin/api/v1/governance/summary?project_id=" + bootstrap.ProjectID + "&definition_id=" + definition.ID + "&definition_version=1&cohort_start=" + workUnit.PeriodID + "&cohort_end=" + workUnit.PeriodID
+	summaryRequest := adminRequest(t, http.MethodGet, query, nil)
+	summaryRequest.AddCookie(cookie)
+	summaryResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(summaryResponse, summaryRequest)
+	if summaryResponse.Code != http.StatusOK || !strings.Contains(summaryResponse.Body.String(), `"eligible_units":1`) || !strings.Contains(summaryResponse.Body.String(), `"successful_units":1`) || !strings.Contains(summaryResponse.Body.String(), `"success_rate":1`) {
+		t.Fatalf("summary status=%d body=%s", summaryResponse.Code, summaryResponse.Body.String())
+	}
+}
+
+func TestGovernanceCorruptionDoesNotBlockRuntimeOrAccounting(t *testing.T) {
+	runtime, _, reopen := openBootstrappedRuntime(t)
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := runtime.config.GovernancePath()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) == 0 {
+		// Create a syntactically non-empty journal that cannot pass the HGOV header check.
+		payload = []byte("broken-governance-frame-that-is-long-enough-to-be-non-partial")
+	} else {
+		payload[0] ^= 1
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovered := reopen()
+	defer recovered.Close()
+	if ready, _ := recovered.governance.manager.Ready(); ready {
+		t.Fatal("corrupt Governance Journal reported ready")
+	}
+	event := ledger.Event{EventID: "evt_after_governance_failure", Kind: ledger.EventRequestAccepted, RequestID: "req_after_governance_failure", ProjectID: "project_test", PeriodID: "2026-09-04", OccurredAt: time.Now().UTC()}
+	if _, err := recovered.ledger.Append(context.Background(), event); err != nil {
+		t.Fatalf("Accounting append was poisoned by Governance failure: %v", err)
 	}
 }
 
@@ -190,6 +279,39 @@ func TestAdminRunGovernanceListsAndDrillsIntoLedgerState(t *testing.T) {
 	}
 	if response := get("/admin/api/v1/run-governance/runs?unknown=true"); response.Code != http.StatusBadRequest {
 		t.Fatalf("unknown query status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestAdminOutcomeDefinitionVersionsAreImmutable(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	defer runtime.Close()
+	cookie, csrf := loginAdminForTest(t, runtime)
+	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(path string, revision uint64, body any) *httptest.ResponseRecorder {
+		request := adminRequest(t, http.MethodPost, path, body)
+		request.AddCookie(cookie)
+		request.Header.Set("X-CSRF-Token", csrf)
+		request.Header.Set("If-Match", revisionETag(revision))
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, request)
+		return response
+	}
+	created := post("/admin/api/v1/projects/"+bootstrap.ProjectID+"/outcome-definitions", project.Revision, map[string]any{"name": "ticket_resolved", "data_type": "CATEGORICAL", "allowed_values": []string{"accepted", "rejected"}, "success_values": []string{"accepted"}})
+	var first domain.OutcomeDefinition
+	if err := json.Unmarshal(created.Body.Bytes(), &first); err != nil || created.Code != http.StatusCreated || first.Version != 1 {
+		t.Fatalf("create definition status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	secondResponse := post("/admin/api/v1/projects/"+bootstrap.ProjectID+"/outcome-definitions/"+first.ID+"/versions", first.Revision, map[string]any{"name": "ticket_resolved", "data_type": "CATEGORICAL", "allowed_values": []string{"accepted", "rejected", "unknown"}, "success_values": []string{"accepted"}, "enabled": true})
+	var second domain.OutcomeDefinition
+	if err := json.Unmarshal(secondResponse.Body.Bytes(), &second); err != nil || secondResponse.Code != http.StatusCreated || second.Version != 2 || second.ID != first.ID {
+		t.Fatalf("version status=%d body=%s err=%v", secondResponse.Code, secondResponse.Body.String(), err)
+	}
+	storedFirst, err := runtime.store.GetOutcomeDefinition(context.Background(), bootstrap.ProjectID, first.ID, 1)
+	if err != nil || len(storedFirst.AllowedValues) != 2 {
+		t.Fatalf("v1 was changed: %#v err=%v", storedFirst, err)
 	}
 }
 

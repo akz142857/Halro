@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ type Event struct {
 	RunID                       string                             `json:"run_id,omitempty"`
 	RunBudgetMicrosUSD          int64                              `json:"run_budget_micros_usd,omitempty"`
 	RunExpiresAt                time.Time                          `json:"run_expires_at,omitempty"`
+	OutcomeDefinitions          []domain.OutcomeDefinitionRef      `json:"outcome_definitions,omitempty"`
 	CloseReason                 string                             `json:"close_reason,omitempty"`
 	Operation                   string                             `json:"operation,omitempty"`
 	IdempotencyKeyHash          string                             `json:"idempotency_key_hash,omitempty"`
@@ -152,6 +154,9 @@ func (e Event) Validate() error {
 	case EventWorkUnitCreated, EventWorkUnitClosed:
 		if e.RunID != "" || e.RunBudgetMicrosUSD != 0 || !e.RunExpiresAt.IsZero() {
 			problems = append(problems, errors.New("work unit event cannot carry run fields"))
+		}
+		if e.Kind == EventWorkUnitClosed && len(e.OutcomeDefinitions) != 0 {
+			problems = append(problems, errors.New("work unit close cannot carry outcome definitions"))
 		}
 	case EventRunCreated:
 		if e.RunID == "" || e.RunBudgetMicrosUSD <= 0 || e.RunExpiresAt.IsZero() || !e.RunExpiresAt.After(e.OccurredAt) {
@@ -476,6 +481,7 @@ func (s *State) Apply(record Record) error {
 			ID: event.WorkUnitID, ProjectID: event.ProjectID, Status: domain.WorkUnitOpen,
 			CreatedByKeyID: event.KeyID, CreatedAt: event.OccurredAt,
 			PeriodID: event.PeriodID, PeriodTimezoneVersion: event.PeriodTimezoneVersion,
+			OutcomeDefinitions: slices.Clone(event.OutcomeDefinitions),
 		}
 		if err := workUnit.Validate(); err != nil {
 			return err

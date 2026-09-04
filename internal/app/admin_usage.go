@@ -555,6 +555,12 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	auditSummary := r.audit.Summary()
+	governanceReady, _ := r.governance.manager.Ready()
+	governanceWatermark := map[string]any{"ready": governanceReady, "sequence": uint64(0), "offset": int64(0)}
+	if r.governance.log != nil {
+		summary := r.governance.log.Summary()
+		governanceWatermark["sequence"], governanceWatermark["offset"] = summary.Records, summary.Bytes
+	}
 	payload := map[string]any{
 		"build":             buildinfo.Current(),
 		"accounting_status": r.status.Load(),
@@ -564,6 +570,7 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"audit":             auditSummary,
 		"alerts":            r.alerts.Stats(),
 		"usage_watermark":   r.usage.Watermark(),
+		"governance":        governanceWatermark,
 		"time_context":      timing,
 		// The commit protocol makes "durable" and "in force" two different
 		// questions, so the answer to the second one has to be visible
