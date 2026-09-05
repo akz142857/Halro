@@ -9,7 +9,7 @@ those files together with a versioned SPDX SBOM.
 
 The root module currently declares 12 direct Go dependencies. Eleven are linked
 into the `halro` runtime; `github.com/google/jsonschema-go` is used by tests and
-release validation only. The embedded Admin UI has 11 direct runtime npm
+release validation only. The embedded Admin UI has 10 direct runtime npm
 dependencies. Versions below are the exact versions pinned by the reviewed
 module and lock files.
 
@@ -73,15 +73,15 @@ is linked into the Go runtime.
 | Package | Version | License |
 |---|---:|---|
 | `@hookform/resolvers` | 5.9.1 | MIT |
-| `@tanstack/react-query` | 5.102.3 | MIT |
-| `i18next` | 26.4.0 | MIT |
+| `@tanstack/react-query` | 5.102.8 | MIT |
+| `i18next` | 26.4.1 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |
-| `react-hook-form` | 7.86.0 | MIT |
-| `react-i18next` | 17.0.12 | MIT |
+| `react-hook-form` | 7.87.0 | MIT |
+| `react-i18next` | 17.0.13 | MIT |
 | `uplot` | 1.6.32 | MIT |
-| `zod` | 4.4.3 | MIT |
+| `zod` | 4.5.4 | MIT |
 
 The same 2026-08-28 refresh moved five of the rows above — `@hookform/resolvers`
 5.7.1 to 5.9.1, `@tanstack/react-query` 5.101.4 to 5.102.3, `i18next` 26.3.6 to
@@ -95,6 +95,18 @@ added to the dependency surface. The build-tooling bump did rewrite
 `internal/webui/dist` — chunk contents and hashed names moved, and one
 auto-named shared chunk regrouped — with no change to which packages reach the
 bundle.
+
+The 2026-09-05 Admin UI refresh then moved five runtime dependencies:
+`@tanstack/react-query` 5.102.3 to 5.102.8, `i18next` 26.4.0 to 26.4.1,
+`react-hook-form` 7.86.0 to 7.87.0, `react-i18next` 17.0.12 to 17.0.13, and
+`zod` 4.4.3 to 4.5.4. It also moved the dev-only
+`@testing-library/react` 16.3.2 to 16.3.3 and `@vitejs/plugin-react` 6.1.0 to
+6.1.1. The lockfile package-node set is unchanged; the only transitive version
+movement is `@tanstack/query-core` alongside `@tanstack/react-query`. All eight
+changed package entries remain MIT, their installed packages carry MIT license
+files, and none changed distribution scope. The embedded Admin UI bundle was
+rebuilt from the reviewed lockfile so its content-hashed assets match the
+source dependency tree.
 
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
@@ -128,12 +140,13 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `e28dc15e3e77c15c4167156510a6ccb7fe2f5671`
 - `go.sum`: `4f2cd7b82cbd5a7a5443bc67db2ed578385bacc5`
-- `web/package.json`: `b3fc788a018b7488844eddc3dfc495b28c6139e9`
-- `web/package-lock.json`: `e3b353565b858c1e8691db605c54edaad084b4cb`
+- `web/package.json`: `bea10d69f9af3ff27ef8f5198056172360fcb012`
+- `web/package-lock.json`: `ead9a2ae04feb01459a8ddd29c566ea736ab93b1`
 
 The Go hashes last moved for the 2026-09-05 five-module AWS refresh recorded
-above. The two web hashes moved for the nine-package Admin UI bump recorded
-above, and before that only
+above. The two web hashes last moved for the 2026-09-05 seven-direct-package
+Admin UI refresh recorded above, before that for the nine-package Admin UI bump,
+and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
 for `v0.5.0`, and again for `v0.6.0`, each of which bumped the `version` field in
 both files and changed nothing else.
