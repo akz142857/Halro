@@ -289,7 +289,7 @@ export const api = {
   // values for the fields they are not changing.
   updatePreferences: (preferences: { locale: LocalePreference; appearance: Appearance }, revision: number) =>
     request<AdminPreferences>("/preferences", json("PUT", preferences), `"${revision}"`),
-  projects: () => request<Page<Project>>("/projects").then((value) => value.data),
+  projects: () => pageOfAll<Project>("project", "/projects"),
   projectsPage: (query = "") =>
     request<Page<Project>>(`/projects${query}`).then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
@@ -337,8 +337,7 @@ export const api = {
       json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
-  credentials: () =>
-    request<Page<Credential>>("/credentials").then((value) => value.data),
+  credentials: () => pageOfAll<Credential>("credential", "/credentials"),
   createCredential: (value: unknown) =>
     request<Credential>("/credentials", json("POST", value)),
   // Replacing credential material carries step-up for the same reason deleting
@@ -496,8 +495,7 @@ export const api = {
   usageRequest: (requestID: string) =>
     request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
-  tokenGuardPolicies: () =>
-    request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),
+  tokenGuardPolicies: () => pageOfAll<TokenGuardPolicy>("token guard policy", "/token-guard-policies"),
   tokenGuardPoliciesPage: (query = "") =>
     request<Page<TokenGuardPolicy>>(`/token-guard-policies${query}`).then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>
@@ -521,8 +519,7 @@ export const api = {
       `/token-guard-policies/${encodeURIComponent(id)}/test`,
       json("POST", value),
     ).then((result) => result.data),
-  redactionPolicies: () =>
-    request<Page<RedactionPolicy>>("/redaction-policies").then((value) => value.data),
+  redactionPolicies: () => pageOfAll<RedactionPolicy>("redaction policy", "/redaction-policies"),
   redactionPoliciesPage: (query = "") =>
     request<Page<RedactionPolicy>>(`/redaction-policies${query}`).then((value) => value.data),
   createRedactionPolicy: (value: unknown) =>

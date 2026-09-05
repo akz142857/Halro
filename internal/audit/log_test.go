@@ -35,6 +35,52 @@ func TestAuditRoundTripAndVerification(t *testing.T) {
 	}
 }
 
+func TestReplaySnapshotDoesNotBlockAppend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	log, err := Open(path, randomKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if _, err = log.Append(context.Background(), validEvent(1, "seed")); err != nil {
+		t.Fatal(err)
+	}
+
+	visitorStarted := make(chan struct{})
+	releaseVisitor := make(chan struct{})
+	replayDone := make(chan error, 1)
+	go func() {
+		_, replayErr := log.Replay(func(Record) error {
+			close(visitorStarted)
+			<-releaseVisitor
+			return nil
+		})
+		replayDone <- replayErr
+	}()
+	<-visitorStarted
+
+	appendDone := make(chan error, 1)
+	go func() {
+		_, appendErr := log.Append(context.Background(), validEvent(2, "concurrent"))
+		appendDone <- appendErr
+	}()
+	select {
+	case err := <-appendDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("append waited for a replay visitor")
+	}
+	close(releaseVisitor)
+	if err := <-replayDone; err != nil {
+		t.Fatal(err)
+	}
+	if summary := log.Summary(); summary.Records != 2 {
+		t.Fatalf("records=%d, want 2", summary.Records)
+	}
+}
+
 func TestAppendBatchProducesOneConsecutiveDurableChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	key := randomKey(t)

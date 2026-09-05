@@ -17,7 +17,13 @@ follow the [M11 KMS key lifecycle runbook](m11-kms-key-lifecycle.md) instead.
 3. Stop Halro and prove the Gateway and Admin listeners are no longer serving.
 4. Retain the old Master Key under the approved key-custody and backup-retention
    policy. A pre-rotation backup cannot be restored using only the new key.
-5. Create a separate replacement key; never overwrite the configured key by
+5. Confirm both `storage.data_dir/failures` and
+   `storage.data_dir/provider-objects` contain no retained objects. The current
+   implementation refuses rotation while either store is non-empty because
+   those ciphertexts cannot yet be published atomically with the metadata
+   generation. Let their configured retention lifecycle remove them; do not
+   delete live caller data merely to bypass this guard.
+6. Create a separate replacement key; never overwrite the configured key by
    hand:
 
    ```bash

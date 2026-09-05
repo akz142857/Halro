@@ -108,6 +108,7 @@ func (t PriceScheduleTier) Validate() error {
 		return err
 	}
 	inWindow := t.StartMinute != nil && t.EndMinute != nil
+	hasWindowBound := t.StartMinute != nil || t.EndMinute != nil
 	switch t.Source {
 	case PriceTierWindow:
 		if !inWindow {
@@ -120,11 +121,11 @@ func (t PriceScheduleTier) Validate() error {
 			return errors.New("window price tier local minute falls outside its window")
 		}
 	case PriceTierBase:
-		if inWindow || t.LocalMinute == nil {
+		if hasWindowBound || t.LocalMinute == nil {
 			return errors.New("base price tier must carry a local minute and no window bounds")
 		}
 	case PriceTierZoneUnavailable:
-		if inWindow || t.LocalMinute != nil {
+		if hasWindowBound || t.LocalMinute != nil {
 			return errors.New("zone-unavailable price tier must not claim a local time")
 		}
 	default:

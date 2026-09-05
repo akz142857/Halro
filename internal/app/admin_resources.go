@@ -326,10 +326,21 @@ func (r *Runtime) listAdminAudit(writer http.ResponseWriter, request *http.Reque
 	if !ok || !allowed {
 		return
 	}
-	records := make([]auditRecordView, 0)
+	// Replay authenticates the chain from the beginning, but the response only
+	// needs the newest page before the cursor. Keep a fixed tail rather than one
+	// allocation per historical record; limit+1 is enough to decide whether a
+	// next cursor exists.
+	pageCapacity := limit + 1
+	records := make([]auditRecordView, 0, pageCapacity)
 	if _, err := r.audit.Replay(func(record audit.Record) error {
 		if cursor == 0 || record.Sequence < cursor {
-			records = append(records, auditRecordFlatView(record))
+			view := auditRecordFlatView(record)
+			if len(records) < pageCapacity {
+				records = append(records, view)
+			} else {
+				copy(records, records[1:])
+				records[len(records)-1] = view
+			}
 		}
 		return nil
 	}); err != nil {

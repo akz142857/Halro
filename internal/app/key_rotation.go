@@ -185,6 +185,10 @@ func rotateMasterKeyWithHook(
 		metadata.Close()
 		return KeyRotationResult{}, errors.New("vault keyring version is exhausted")
 	}
+	if err := refuseRotationWithRetainedCiphertext(cfg); err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
 	credentials, err := metadata.ListCredentials(ctx)
 	if err != nil {
 		metadata.Close()

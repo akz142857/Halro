@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
+import { navigate } from "../navigation";
 import { UsagePage, billedTierLabel } from "./UsagePage";
 
 describe("UsagePage request correlation", () => {
@@ -19,6 +20,36 @@ describe("UsagePage request correlation", () => {
     await waitFor(() => expect(usage).toHaveBeenCalled());
     const query = usage.mock.calls[0][0] ?? "";
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_debug_1");
+  });
+});
+
+describe("UsagePage same-path navigation", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?tab=summary");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "usage").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "usageSummary").mockResolvedValue({
+      granularity: "month", start: "2026-09-01", end: "2026-09-30",
+      totals: emptySummaryMetrics(), buckets: [], timezone_changes: [], watermark_sequence: 1,
+    } as never);
+  });
+
+  it("synchronizes the tab and linked filters after an in-app query-only jump", async () => {
+    const failures = vi.spyOn(api, "usageFailures").mockResolvedValue({ items: [], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+    expect(await screen.findByRole("tab", { name: "汇总" })).toHaveAttribute("aria-selected", "true");
+
+    act(() => navigate("/admin/usage?tab=failures&project_id=project_51&start=2026-09-01T00%3A00%3A00Z"));
+
+    expect(await screen.findByRole("tab", { name: "最终失败" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(failures).toHaveBeenCalled());
+    const query = failures.mock.calls.at(-1)?.[0] ?? "";
+    expect(new URLSearchParams(query.slice(1)).get("project_id")).toBe("project_51");
+    expect(new URLSearchParams(query.slice(1)).get("start")).toBe("2026-09-01T00:00:00.000Z");
   });
 });
 

@@ -1,0 +1,133 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type adjudicationStore struct {
+	*boltstore.Store
+	armed           atomic.Bool
+	entered, resume chan struct{}
+}
+
+func (s *adjudicationStore) PutAdminSession(ctx context.Context, v domain.AdminSession) error {
+	if s.armed.CompareAndSwap(true, false) {
+		close(s.entered)
+		select {
+		case <-s.resume:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.Store.PutAdminSession(ctx, v)
+}
+func TestIndependentSessionRevocationAdjudication(t *testing.T) {
+	for _, mode := range []string{"logout", "generation_change"} {
+		t.Run(mode, func(t *testing.T) {
+			r, login := stepUpTestRuntime(t)
+			ctx := context.Background()
+			user, e := r.store.GetAdminUser(ctx, "admin")
+			if e != nil {
+				t.Fatal(e)
+			}
+			gate := &adjudicationStore{Store: r.store, entered: make(chan struct{}), resume: make(chan struct{})}
+			var release sync.Once
+			unblock := func() { release.Do(func() { close(gate.resume) }) }
+			defer unblock()
+			manager, e := adminauth.NewManager(gate, make([]byte, 32), 8*time.Hour, 30*time.Minute)
+			if e != nil {
+				t.Fatal(e)
+			}
+			r.adminSessions.Close()
+			r.adminSessions = manager
+			created, e := manager.Create(ctx, user, time.Now().Add(-2*time.Minute))
+			if e != nil {
+				t.Fatal(e)
+			}
+			login.cookie.Value = created.Token
+			login.csrf = created.CSRFToken
+			router := r.adminRouter()
+			get := func(path string) *httptest.ResponseRecorder {
+				req := adminRequest(t, http.MethodGet, path, nil)
+				req.AddCookie(login.cookie)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				return res
+			}
+			gate.armed.Store(true)
+			done := make(chan int, 1)
+			go func() { done <- get("/admin/api/v1/session").Code }()
+			select {
+			case <-gate.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("refresh not reached")
+			}
+			if mode == "logout" {
+				req := adminMutationRequest(t, http.MethodPost, "/admin/api/v1/session/logout", login, nil)
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, req)
+				if res.Code != 200 {
+					t.Fatalf("logout=%d %s", res.Code, res.Body.String())
+				}
+				cookies := res.Result().Cookies()
+				if len(cookies) != 1 || cookies[0].MaxAge >= 0 {
+					t.Fatal("logout did not expire cookie")
+				}
+				t.Log("real logout HTTP 200 with expired cookie")
+			} else {
+				user.SessionGeneration++
+				if _, e = r.store.PutAdminUser(ctx, user, user.Revision); e != nil {
+					t.Fatal(e)
+				}
+				if e = r.store.DeleteAdminSessionsForUser(ctx, user.Username); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if _, e = r.store.GetAdminSession(ctx, created.Session.IDHash); !errors.Is(e, boltstore.ErrNotFound) {
+				t.Fatalf("row not absent after revocation: %v", e)
+			}
+			t.Log("session row absent before delayed refresh resumes")
+			unblock()
+			select {
+			case code := <-done:
+				t.Logf("already-in-flight request=%d", code)
+			case <-time.After(5 * time.Second):
+				t.Fatal("refresh stuck")
+			}
+			if _, e = r.store.GetAdminSession(ctx, created.Session.IDHash); e != nil {
+				t.Fatalf("expected delayed upsert to reinsert: %v", e)
+			}
+			fresh, e := adminauth.NewManager(r.store, make([]byte, 32), 8*time.Hour, 30*time.Minute)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer fresh.Close()
+			_, freshErr := fresh.Authenticate(ctx, created.Token, time.Now())
+			res := get("/admin/api/v1/admin-users")
+			t.Logf("new manager auth=%v; new protected HTTP GET=%d", freshErr, res.Code)
+			if mode == "logout" {
+				if freshErr != nil || res.Code != 200 {
+					t.Fatal("resurrection not reproduced")
+				}
+				if _, e = fresh.Authenticate(ctx, created.Token, created.Session.AbsoluteExpiresAt); !errors.Is(e, adminauth.ErrInvalidSession) {
+					t.Fatal("absolute expiry bypassed")
+				}
+				if get("/admin/api/v1/admin-users").Code != 401 {
+					t.Fatal("expiry failed")
+				}
+			} else if !errors.Is(freshErr, adminauth.ErrInvalidSession) || res.Code != 401 {
+				t.Fatal("generation defense bypassed")
+			}
+		})
+	}
+}

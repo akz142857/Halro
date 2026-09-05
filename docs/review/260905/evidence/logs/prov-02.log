@@ -1,0 +1,9 @@
+=== RUN   TestReviewMalformedUnaryRetries
+    review_provider_overlay_test.go:30: calls=2 error=provider request failed committed=0 reserved=0
+--- PASS: TestReviewMalformedUnaryRetries (0.15s)
+=== RUN   TestReviewCRStreamBlocksUntilEOF
+    review_provider_overlay_test.go:38: complete CR-delimited event is withheld while upstream stays open
+    review_provider_overlay_test.go:40: same event delivered after EOF
+--- PASS: TestReviewCRStreamBlocksUntilEOF (0.15s)
+PASS
+ok  	github.com/akz142857/Halro/internal/gateway	1.075s

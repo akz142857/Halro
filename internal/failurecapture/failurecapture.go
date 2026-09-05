@@ -373,7 +373,7 @@ func (s *Store) ProjectOf(requestID string) (string, bool, error) {
 		return "", false, err
 	}
 	for _, day := range days {
-		_, projectID, found, err := s.locate(day, requestID)
+		_, projectID, _, found, err := s.locate(day, requestID)
 		if err != nil {
 			return "", false, err
 		}
@@ -397,12 +397,19 @@ func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 		// found by listing the day rather than by composing a path. A day holds
 		// at most MaxRecordsPerDay entries and this is an audited admin read,
 		// not a hot path.
-		path, _, found, err := s.locate(day, requestID)
+		path, _, capturedAt, found, err := s.locate(day, requestID)
 		if err != nil {
 			return Record{}, false, err
 		}
 		if !found {
 			continue
+		}
+		// Expiry is a read-time authorization boundary, not a promise that the
+		// periodic physical sweep always wins its scheduling race. At the exact
+		// TTL boundary the payload is already unavailable even if deletion is
+		// delayed or repeatedly fails.
+		if !s.now().UTC().Before(capturedAt.Add(s.retain)) {
+			return Record{}, false, nil
 		}
 		sealed, err := os.ReadFile(path)
 		if errors.Is(err, os.ErrNotExist) {
@@ -481,24 +488,24 @@ func (s *Store) Purge() error {
 }
 
 // locate finds the capture for one request inside a day directory.
-func (s *Store) locate(day, requestID string) (string, string, bool, error) {
+func (s *Store) locate(day, requestID string) (string, string, time.Time, bool, error) {
 	directory := filepath.Join(s.root, day)
 	entries, err := os.ReadDir(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", "", false, nil
+		return "", "", time.Time{}, false, nil
 	}
 	if err != nil {
-		return "", "", false, fmt.Errorf("list failure captures: %w", err)
+		return "", "", time.Time{}, false, fmt.Errorf("list failure captures: %w", err)
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		if name, project, _, ours := capturedIdentity(entry.Name()); ours && name == requestID {
-			return filepath.Join(directory, entry.Name()), project, true, nil
+		if name, project, capturedAt, ours := capturedIdentity(entry.Name()); ours && name == requestID {
+			return filepath.Join(directory, entry.Name()), project, capturedAt, true, nil
 		}
 	}
-	return "", "", false, nil
+	return "", "", time.Time{}, false, nil
 }
 
 func (s *Store) days() ([]string, error) {

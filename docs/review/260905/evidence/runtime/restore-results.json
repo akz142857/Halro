@@ -1,0 +1,275 @@
+[
+  {
+    "label": "source-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.09748637513257563
+  },
+  {
+    "label": "backup-create",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "create",
+      "--config",
+      "/private/tmp/halro-review-260905/config.yaml",
+      "--output",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key"
+    ],
+    "exit": 0,
+    "seconds": 0.28875091578811407
+  },
+  {
+    "label": "backup-verify",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "verify",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key"
+    ],
+    "exit": 0,
+    "seconds": 0.019074959214776754
+  },
+  {
+    "label": "verify-wrong-key",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "verify",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/wrong.key"
+    ],
+    "exit": 1,
+    "seconds": 0.007513584103435278
+  },
+  {
+    "label": "verify-truncated",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "verify",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/truncated.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key"
+    ],
+    "exit": 1,
+    "seconds": 0.019296290818601847
+  },
+  {
+    "label": "restore-wrong-key",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "restore",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/wrong.key",
+      "--confirm-backup-id",
+      "bkp_8bede768079896881ccdb3dd4dc0e7a0"
+    ],
+    "exit": 1,
+    "seconds": 0.007211165968328714
+  },
+  {
+    "label": "restore-wrong-key-preserves-destination",
+    "unchanged": true
+  },
+  {
+    "label": "restore-wrong-confirmation",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "restore",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key",
+      "--confirm-backup-id",
+      "not-the-backup"
+    ],
+    "exit": 1,
+    "seconds": 0.017446333076804876
+  },
+  {
+    "label": "restore-wrong-confirmation-preserves-destination",
+    "unchanged": true
+  },
+  {
+    "label": "restore-wrong-master",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "restore",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/wrong-master-config.yaml",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key",
+      "--confirm-backup-id",
+      "bkp_8bede768079896881ccdb3dd4dc0e7a0"
+    ],
+    "exit": 1,
+    "seconds": 0.0854306670371443
+  },
+  {
+    "label": "restore-wrong-master-preserves-destination",
+    "unchanged": true
+  },
+  {
+    "label": "restore-truncated",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "restore",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/truncated.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key",
+      "--confirm-backup-id",
+      "bkp_8bede768079896881ccdb3dd4dc0e7a0"
+    ],
+    "exit": 1,
+    "seconds": 0.018672415986657143
+  },
+  {
+    "label": "restore-truncated-preserves-destination",
+    "unchanged": true
+  },
+  {
+    "label": "restore-correct",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "backup",
+      "restore",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml",
+      "--file",
+      "/private/tmp/halro-review-260905/restore-drill/snapshot.hbk",
+      "--key-file",
+      "/private/tmp/halro-review-260905/restore-drill/backup.key",
+      "--confirm-backup-id",
+      "bkp_8bede768079896881ccdb3dd4dc0e7a0"
+    ],
+    "exit": 0,
+    "seconds": 0.2549021248705685
+  },
+  {
+    "label": "restored-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.06225645914673805
+  },
+  {
+    "label": "restored-usage",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.05289258295670152
+  },
+  {
+    "label": "restored-start",
+    "ready": true,
+    "ready_seconds": 0.2487861248664558
+  },
+  {
+    "label": "restore-command-plus-ready",
+    "seconds": 0.5037267908919603
+  },
+  {
+    "label": "old-admin-session-rejected",
+    "status": 401
+  },
+  {
+    "label": "restored-gateway-call",
+    "status": 200
+  },
+  {
+    "label": "process-kill-after-ack",
+    "exit": -9
+  },
+  {
+    "label": "post-kill-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.07696820818819106
+  },
+  {
+    "label": "post-kill-restart",
+    "ready": true,
+    "ready_seconds": 0.3325138329528272
+  },
+  {
+    "label": "post-restart-gateway-call",
+    "status": 200
+  },
+  {
+    "label": "final-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.09456595894880593
+  },
+  {
+    "label": "final-usage",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/restore-drill/config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.05620570806786418
+  },
+  {
+    "label": "ledger-sequences",
+    "source": 5020,
+    "restored": 5020,
+    "after_kill": 5025,
+    "after_restart": 5030
+  }
+]

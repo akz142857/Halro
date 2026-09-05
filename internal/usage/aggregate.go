@@ -166,6 +166,12 @@ type requestAccumulator struct {
 }
 
 type Aggregate struct {
+	// rollupView coordinates the external store transaction with summary reads.
+	// The aggregate lock alone cannot cover a bbolt write: TakeCheckpoint must
+	// release it before encoding so collection can continue. A summary needs a
+	// view in which the stored rows and the pending increment cross that
+	// boundary together.
+	rollupView   sync.RWMutex
 	mu           sync.RWMutex
 	watermark    ledger.Watermark
 	eventIDs     map[string]struct{}

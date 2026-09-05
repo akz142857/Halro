@@ -1011,6 +1011,15 @@ func (r *Runtime) saveUsageCheckpoint() {
 		r.logger.Warn("usage checkpoint catch-up failed", "error", err)
 		return
 	}
+	r.usage.WithRollupCheckpoint(r.saveUsageCheckpointCoordinated)
+}
+
+// saveUsageCheckpointCoordinated runs while the aggregate's rollup view is
+// exclusively held. That lock deliberately spans TakeCheckpoint, the bbolt
+// transaction, and Commit/Return: a summary can therefore observe either the
+// old stored rows plus the old pending increment, or the new stored rows plus
+// the new increment, never the drained gap or both copies.
+func (r *Runtime) saveUsageCheckpointCoordinated() {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)

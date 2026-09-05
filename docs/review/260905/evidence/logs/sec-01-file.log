@@ -1,0 +1,6 @@
+=== RUN   TestSecurityReviewRotationRetainedCiphertext
+    security_review_test.go:57: after successful rotation: capture found=false err=open failure capture: secret authentication failed
+    security_review_test.go:59: unchanged provider object: new key read err=secret authentication failed
+--- PASS: TestSecurityReviewRotationRetainedCiphertext (0.31s)
+PASS
+ok  	github.com/akz142857/Halro/internal/app	1.184s

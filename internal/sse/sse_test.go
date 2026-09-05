@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDecodeMultilineCommentsAndEncode(t *testing.T) {
@@ -23,6 +24,56 @@ func TestDecodeMultilineCommentsAndEncode(t *testing.T) {
 	}
 	if encoded.String() != "event: message\ndata: one\ndata: two\n\n" {
 		t.Fatalf("unexpected encoding: %q", encoded.String())
+	}
+}
+
+func TestBareCarriageReturnEventIsDeliveredBeforeEOF(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	decoder := NewDecoder(reader, 1024)
+	done := make(chan Event, 1)
+	errs := make(chan error, 1)
+	go func() {
+		event, err := decoder.Next()
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- event
+	}()
+	if _, err := io.WriteString(writer, "data: one\r\r"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-done:
+		if string(event.Data) != "one" {
+			t.Fatalf("event = %#v", event)
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("complete CR-only event waited for EOF")
+	}
+	_ = writer.Close()
+}
+
+func TestCRLFMaySpanReadsWithoutCreatingAnEmptyEvent(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	decoder := NewDecoder(reader, 1024)
+	go func() {
+		_, _ = io.WriteString(writer, "event: message\r")
+		_, _ = io.WriteString(writer, "\ndata: one\r")
+		_, _ = io.WriteString(writer, "\n\r")
+		_, _ = io.WriteString(writer, "\n")
+		_ = writer.Close()
+	}()
+	event, err := decoder.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Event != "message" || string(event.Data) != "one" {
+		t.Fatalf("cross-read CRLF changed event: %#v", event)
 	}
 }
 

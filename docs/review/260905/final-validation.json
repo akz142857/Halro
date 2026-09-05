@@ -1,0 +1,48 @@
+{
+  "checked_at_utc": "2026-09-05T10:46:47.328395+00:00",
+  "baseline": "381743f6613607dc256828f4776b52af8bdd232c",
+  "planned_deliverables": 9,
+  "module_count": 44,
+  "unmapped_modules": [],
+  "finding_counts": {
+    "P0": 0,
+    "P1": 3,
+    "P2": 14,
+    "P3": 1
+  },
+  "independent_confirmed": 11,
+  "local_links_checked": 760,
+  "archive_hashes_checked": 66,
+  "actual_fixture_secret_matches": [],
+  "files_scanned": 91,
+  "total_bytes_before_receipt": 734416,
+  "commands": {
+    "sha": {
+      "exit": 0,
+      "output": "381743f6613607dc256828f4776b52af8bdd232c\n"
+    },
+    "status": {
+      "exit": 0,
+      "output": " M docs/review/README.md\n?? docs/review/260905/\n"
+    },
+    "tracked": {
+      "exit": 0,
+      "output": "docs/review/README.md\n"
+    },
+    "staged": {
+      "exit": 0,
+      "output": ""
+    },
+    "whitespace": {
+      "exit": 0,
+      "output": ""
+    },
+    "bundle": {
+      "exit": 0,
+      "output": ""
+    }
+  },
+  "untracked_file_count": 91,
+  "errors": [],
+  "note": "Independent count is limited to adjudication register, excluding the separate seven unreviewed findings. No tests repeated for Markdown."
+}

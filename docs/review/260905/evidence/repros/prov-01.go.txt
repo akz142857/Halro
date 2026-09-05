@@ -1,0 +1,173 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/provider"
+	oa "github.com/akz142857/Halro/internal/provider/openai"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+)
+
+type adjudicationTransport func(*http.Request) (*http.Response, error)
+
+func (f adjudicationTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type adjudicationReader struct{}
+
+func (adjudicationReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+type adjudicationObserved struct {
+	*oa.Adapter
+	t              *testing.T
+	forceAmbiguous bool
+	classes        []provider.ErrorClass
+}
+
+func (a *adjudicationObserved) Chat(ctx context.Context, c provider.ChatCall) (openaiapi.ChatCompletionResponse, error) {
+	out, err := a.Adapter.Chat(ctx, c)
+	var pe *provider.Error
+	if !errors.As(err, &pe) {
+		a.t.Fatalf("expected classified adapter error, got %v", err)
+	}
+	a.classes = append(a.classes, pe.Class)
+	a.t.Logf("adapter class=%s ambiguous=%t retryable=%t", pe.Class, pe.Ambiguous, pe.Retryable)
+	if pe.Ambiguous {
+		a.t.Fatal("unexpected baseline ambiguity")
+	}
+	if a.forceAmbiguous {
+		clone := *pe
+		clone.Ambiguous = true
+		err = &clone
+	}
+	return out, err
+}
+func TestAdjudicationPROV01(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		status                   int
+		body                     string
+		readFail, forceAmbiguous bool
+		wantCalls                int
+	}{
+		{name: "truncated_200", status: 200, body: `{"id":"accepted"`, wantCalls: 2},
+		{name: "missing_fields_200", status: 200, body: `{}`, wantCalls: 2},
+		{name: "body_read_failure_200", status: 200, readFail: true, wantCalls: 2},
+		{name: "oversized_200", status: 200, body: strings.Repeat(" ", (16<<20)+1), wantCalls: 2},
+		{name: "definitive_400_control", status: 400, body: `{"error":{"message":"rejected"}}`, wantCalls: 1},
+		{name: "ambiguity_flag_counterfactual", status: 200, body: `{"id":"accepted"`, forceAmbiguous: true, wantCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 10000)
+			defer f.close()
+			now := time.Now().UTC()
+			pins := &fakePricePinStore{price: domain.DeploymentPriceVersion{
+				ID: "price_adjudication", DeploymentID: "dep_adjudication", Version: 1, Revision: 1,
+				BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+				InputMicrosPerMillion: 1000000, OutputMicrosPerMillion: 2000000, FixedRequestMicrosUSD: 7,
+				EffectiveFrom: now.Add(-time.Hour), CreatedBy: "fixture", CreatedAt: now.Add(-time.Hour),
+				Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted, ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Reference: "fixture", AssertedWithoutArchive: true},
+			}}
+			calls := 0
+			requestID := ""
+			endpoint, _ := url.Parse("https://api.openai.com")
+			authorizer, e := provider.NewStaticHeaderAuthorizer(domain.CredentialBearerStatic, "Authorization", "Bearer ", []byte("adjudication-fixture"), "api-key")
+			if e != nil {
+				t.Fatal(e)
+			}
+			a, e := oa.NewWithOptions(oa.Options{Endpoint: endpoint, Authorizer: authorizer, ProviderType: "openai", Capabilities: provider.Capabilities{Chat: true}, Client: &http.Client{Transport: adjudicationTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != "POST" || r.URL.String() != "https://api.openai.com/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer adjudication-fixture" {
+					t.Fatalf("unexpected production wire route or auth: %s %s", r.Method, r.URL)
+				}
+				if requestID == "" {
+					requestID = r.Header.Get("X-Request-ID")
+				}
+				if requestID == "" || requestID != r.Header.Get("X-Request-ID") {
+					t.Fatal("missing or changed request ID")
+				}
+				var req openaiapi.ChatCompletionRequest
+				if e := json.NewDecoder(r.Body).Decode(&req); e != nil {
+					t.Fatal(e)
+				}
+				if req.Model != "provider-model" || req.Stream || len(req.Messages) != 1 {
+					t.Fatalf("unexpected unary request: %#v", req)
+				}
+				balance := f.state.Balance(f.project.ID, now.Format("2006-01-02"), testTimezoneVersion)
+				if balance.ReservedMicrosUSD <= 0 || pins.committed.State != domain.PricePinCommitted {
+					t.Fatal("provider entered without positive reservation and committed price pin")
+				}
+				lease, ok := f.state.AccountingLease(pins.committed.AttemptID)
+				if !ok || lease.Event.LeaseMode != ledger.LeaseModeMetered || lease.Event.PriceSnapshot == nil {
+					t.Fatal("metered price snapshot absent")
+				}
+				t.Logf("accepted call=%d reserved=%d pin_committed=true snapshot=metered", calls, balance.ReservedMicrosUSD)
+				var body io.Reader = strings.NewReader(tc.body)
+				if tc.readFail {
+					body = adjudicationReader{}
+				}
+				return &http.Response{StatusCode: tc.status, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(body), Request: r}, nil
+			})}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer a.Close()
+			observed := &adjudicationObserved{Adapter: a, t: t, forceAmbiguous: tc.forceAmbiguous}
+			manifest, ok := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
+			if !ok {
+				t.Fatal("missing manifest")
+			}
+			bridge, e := provider.NewLegacyAdapterBridge(observed, manifest, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			reg := provider.NewRegistry()
+			e = reg.Register(provider.Target{ID: "route_adjudication", DeploymentID: "dep_adjudication", ProviderID: "provider_adjudication", BindingID: "binding_adjudication", ProfileID: manifest.ID, AccessSurface: manifest.AccessSurface, PublicModel: "chat", ProviderModel: "provider-model", Adapter: bridge, Capabilities: provider.Capabilities{Chat: true}})
+			if e != nil {
+				t.Fatal(e)
+			}
+			target, found := reg.Resolve("chat")
+			if !found {
+				t.Fatal("target not registered")
+			}
+			generation, resolveErr := target.Generation(provider.OperationChat)
+			if resolveErr != nil {
+				t.Fatal(resolveErr)
+			}
+			if generation.ProviderPrimitive() != provider.PrimitiveOpenAIChatCompletions {
+				t.Fatal("incorrect production primitive")
+			}
+			svc, e := NewServiceWithOptions(f.service.auth, reg, f.accounting, ServiceOptions{Pricing: pins})
+			if e != nil {
+				t.Fatal(e)
+			}
+			_, e = svc.Chat(context.Background(), f.plaintext, chatRequest())
+			if e == nil {
+				t.Fatal("expected failed response")
+			}
+			b := f.state.Balance(f.project.ID, now.Format("2006-01-02"), testTimezoneVersion)
+			t.Logf("FINAL calls=%d committed=%d reserved=%d error=%v", calls, b.CommittedMicrosUSD, b.ReservedMicrosUSD, e)
+			if calls != tc.wantCalls || b.ReservedMicrosUSD != 0 {
+				t.Fatal("unexpected attempt count or retained reservation")
+			}
+			if tc.forceAmbiguous {
+				if b.CommittedMicrosUSD <= 0 {
+					t.Fatal("ambiguity did not conservatively charge")
+				}
+			} else if b.CommittedMicrosUSD != 0 {
+				t.Fatal("zero-cost claim refuted")
+			}
+			if tc.status == 200 && observed.classes[0] != provider.ErrorMalformed {
+				t.Fatal("not malformed")
+			}
+		})
+	}
+}

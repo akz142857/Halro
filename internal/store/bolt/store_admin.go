@@ -213,6 +213,85 @@ func (s *Store) GetAdminSession(
 	return session, err
 }
 
+// RefreshAdminSession advances an existing session without ever creating it.
+// The existence, user generation and expiry checks share the transaction with
+// the write so a concurrent logout or identity rotation cannot be undone by a
+// refresh that read the old row first. If another request already refreshed the
+// same session, its newer value wins and is returned to the caller.
+func (s *Store) RefreshAdminSession(
+	ctx context.Context,
+	observed domain.AdminSession,
+	refreshed domain.AdminSession,
+	now time.Time,
+) (domain.AdminSession, bool, error) {
+	if err := observed.Validate(); err != nil {
+		return domain.AdminSession{}, false, err
+	}
+	if err := refreshed.Validate(); err != nil {
+		return domain.AdminSession{}, false, err
+	}
+	if observed.IDHash != refreshed.IDHash || observed.Username != refreshed.Username ||
+		observed.Generation != refreshed.Generation || !observed.CreatedAt.Equal(refreshed.CreatedAt) ||
+		!observed.AbsoluteExpiresAt.Equal(refreshed.AbsoluteExpiresAt) ||
+		refreshed.LastSeenAt.Before(observed.LastSeenAt) || refreshed.IdleExpiresAt.Before(observed.IdleExpiresAt) ||
+		refreshed.IdleExpiresAt.After(refreshed.AbsoluteExpiresAt) {
+		return domain.AdminSession{}, false, errors.New("invalid admin session refresh transition")
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.AdminSession{}, false, err
+	}
+	now = now.UTC()
+	var result domain.AdminSession
+	valid := false
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		sessions := tx.Bucket(bucketAdminSessions)
+		raw := sessions.Get(observed.IDHash[:])
+		if raw == nil {
+			return nil
+		}
+		var current domain.AdminSession
+		if err := json.Unmarshal(raw, &current); err != nil {
+			return err
+		}
+		if current.IDHash != observed.IDHash || current.Username != observed.Username ||
+			current.Generation != observed.Generation || !current.CreatedAt.Equal(observed.CreatedAt) ||
+			!current.AbsoluteExpiresAt.Equal(observed.AbsoluteExpiresAt) {
+			return nil
+		}
+		users := tx.Bucket(bucketAdminUsers)
+		userRaw := users.Get([]byte(current.Username))
+		if userRaw == nil {
+			return sessions.Delete(current.IDHash[:])
+		}
+		var user domain.AdminUser
+		if err := json.Unmarshal(userRaw, &user); err != nil {
+			return err
+		}
+		if user.SessionGeneration != current.Generation || !now.Before(current.AbsoluteExpiresAt) || !now.Before(current.IdleExpiresAt) {
+			return sessions.Delete(current.IDHash[:])
+		}
+		// A parallel request may already have advanced the row. Never replace
+		// that newer view with a refresh derived from an older observation.
+		if current.LastSeenAt.After(observed.LastSeenAt) || current.IdleExpiresAt.After(observed.IdleExpiresAt) {
+			result, valid = current, true
+			return nil
+		}
+		if !current.LastSeenAt.Equal(observed.LastSeenAt) || !current.IdleExpiresAt.Equal(observed.IdleExpiresAt) {
+			return nil
+		}
+		encoded, err := json.Marshal(refreshed)
+		if err != nil {
+			return err
+		}
+		if err := sessions.Put(refreshed.IDHash[:], encoded); err != nil {
+			return err
+		}
+		result, valid = refreshed, true
+		return nil
+	})
+	return result, valid, err
+}
+
 func (s *Store) DeleteAdminSession(ctx context.Context, hash [32]byte) error {
 	if err := ctx.Err(); err != nil {
 		return err

@@ -242,16 +242,37 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 
 func (l *Log) Replay(visit func(Record) error) (Summary, error) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.file == nil {
+		l.mu.Unlock()
 		return Summary{}, errors.New("audit log is closed")
 	}
-	summary, partial, err := scan(l.file, l.key, visit)
+	// Appends are serialized on l.file, but replay does not need to hold that
+	// lock while it authenticates and decodes historical records. Capture the
+	// last durable byte and read it through a separate descriptor: a concurrent
+	// append starts after that boundary and therefore cannot change this view.
+	// Opening the descriptor while locked also makes Close harmless to the
+	// snapshot after the lock is released.
+	file, err := os.Open(l.file.Name())
+	if err != nil {
+		l.mu.Unlock()
+		return Summary{}, err
+	}
+	boundary := l.offset
+	expected := Summary{Records: l.sequence, LastHash: l.lastHash, Bytes: l.offset}
+	key := append([]byte(nil), l.key...)
+	l.mu.Unlock()
+	defer file.Close()
+	defer clear(key)
+
+	summary, partial, err := scan(io.NewSectionReader(file, 0, boundary), key, visit)
 	if err != nil {
 		return Summary{}, err
 	}
 	if partial {
 		return Summary{}, fmt.Errorf("%w: partial final record", ErrCorrupt)
+	}
+	if summary != expected {
+		return Summary{}, fmt.Errorf("%w: replay snapshot does not match durable boundary", ErrCorrupt)
 	}
 	return summary, nil
 }
@@ -289,7 +310,7 @@ func encodeFrame(key []byte, sequence uint64, previous [32]byte, payload []byte)
 	return frame, sha256.Sum256(frame)
 }
 
-func scan(file *os.File, key []byte, visit func(Record) error) (Summary, bool, error) {
+func scan(file io.ReadSeeker, key []byte, visit func(Record) error) (Summary, bool, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return Summary{}, false, err
 	}

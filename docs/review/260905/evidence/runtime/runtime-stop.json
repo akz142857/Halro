@@ -1,0 +1,7 @@
+{
+  "pid": 31473,
+  "verified_command": "/private/tmp/halro-review-260905/halro-fixture start --config /private/tmp/halro-review-260905/config.yaml",
+  "signal": "SIGTERM",
+  "stopped": true,
+  "seconds": 0.11550608300603926
+}

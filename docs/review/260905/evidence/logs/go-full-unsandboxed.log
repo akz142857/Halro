@@ -1,0 +1,67 @@
+ok  	github.com/akz142857/Halro/cmd/halro	2.442s
+?   	github.com/akz142857/Halro/cmd/halro-deadman	[no test files]
+?   	github.com/akz142857/Halro/configs	[no test files]
+ok  	github.com/akz142857/Halro/deploy/observability	3.461s
+?   	github.com/akz142857/Halro/docs/runbooks	[no test files]
+ok  	github.com/akz142857/Halro/internal/adminauth	4.709s
+ok  	github.com/akz142857/Halro/internal/alert	2.847s
+ok  	github.com/akz142857/Halro/internal/anthropicapi	3.582s
+ok  	github.com/akz142857/Halro/internal/app	211.698s
+ok  	github.com/akz142857/Halro/internal/audit	5.635s
+ok  	github.com/akz142857/Halro/internal/auth	5.918s
+ok  	github.com/akz142857/Halro/internal/backup	6.565s
+ok  	github.com/akz142857/Halro/internal/bearercred	7.298s
+ok  	github.com/akz142857/Halro/internal/budget	6.102s
+?   	github.com/akz142857/Halro/internal/buildinfo	[no test files]
+ok  	github.com/akz142857/Halro/internal/circuit	5.203s
+ok  	github.com/akz142857/Halro/internal/compatibility	5.200s
+ok  	github.com/akz142857/Halro/internal/compatibility/anthropic	5.672s
+ok  	github.com/akz142857/Halro/internal/compatibility/openai	5.146s
+ok  	github.com/akz142857/Halro/internal/config	4.890s
+ok  	github.com/akz142857/Halro/internal/contentscan	4.827s
+ok  	github.com/akz142857/Halro/internal/deadman	7.018s
+ok  	github.com/akz142857/Halro/internal/domain	4.366s
+?   	github.com/akz142857/Halro/internal/durable	[no test files]
+ok  	github.com/akz142857/Halro/internal/failurecapture	4.288s
+ok  	github.com/akz142857/Halro/internal/gateway	17.969s
+ok  	github.com/akz142857/Halro/internal/gatewayapi	4.828s
+ok  	github.com/akz142857/Halro/internal/hostsecurity	4.594s
+?   	github.com/akz142857/Halro/internal/id	[no test files]
+ok  	github.com/akz142857/Halro/internal/idempotency	4.361s
+ok  	github.com/akz142857/Halro/internal/kms	4.059s
+ok  	github.com/akz142857/Halro/internal/kms/awskms	4.170s
+ok  	github.com/akz142857/Halro/internal/kms/fakekms	3.529s
+ok  	github.com/akz142857/Halro/internal/ledger	59.190s
+ok  	github.com/akz142857/Halro/internal/limiter	3.110s
+ok  	github.com/akz142857/Halro/internal/logging	6.463s
+ok  	github.com/akz142857/Halro/internal/masterkey	3.774s
+ok  	github.com/akz142857/Halro/internal/modelcatalog	4.743s
+ok  	github.com/akz142857/Halro/internal/openaiapi	3.983s
+ok  	github.com/akz142857/Halro/internal/provider	4.334s
+ok  	github.com/akz142857/Halro/internal/provider/anthropic	4.594s
+ok  	github.com/akz142857/Halro/internal/provider/bedrock	4.037s
+ok  	github.com/akz142857/Halro/internal/provider/bedrockmantle	3.745s
+ok  	github.com/akz142857/Halro/internal/provider/gemini	3.392s
+ok  	github.com/akz142857/Halro/internal/provider/openai	3.793s
+ok  	github.com/akz142857/Halro/internal/redaction	4.323s
+?   	github.com/akz142857/Halro/internal/requestmeta	[no test files]
+ok  	github.com/akz142857/Halro/internal/safelog	3.972s
+ok  	github.com/akz142857/Halro/internal/safetransport	4.138s
+ok  	github.com/akz142857/Halro/internal/semantic	4.354s
+ok  	github.com/akz142857/Halro/internal/sourcelimit	3.982s
+ok  	github.com/akz142857/Halro/internal/sse	3.737s
+ok  	github.com/akz142857/Halro/internal/store/bolt	48.974s
+ok  	github.com/akz142857/Halro/internal/store/lock	2.987s
+ok  	github.com/akz142857/Halro/internal/timezone	3.093s
+ok  	github.com/akz142857/Halro/internal/tokenguard	3.447s
+ok  	github.com/akz142857/Halro/internal/usage	10.229s
+ok  	github.com/akz142857/Halro/internal/vault	3.563s
+ok  	github.com/akz142857/Halro/internal/webui	3.453s
+?   	github.com/akz142857/Halro/tests/compatibility/server	[no test files]
+ok  	github.com/akz142857/Halro/tests/provider-matrix	3.979s
+ok  	github.com/akz142857/Halro/tests/soak	3.941s
+ok  	github.com/akz142857/Halro/tests/stress	4.718s
+?   	github.com/akz142857/Halro/tools/modelcatalog/assemble	[no test files]
+?   	github.com/akz142857/Halro/tools/modelcatalog/prepare	[no test files]
+?   	github.com/akz142857/Halro/tools/modelcatalog/roots	[no test files]
+ok  	github.com/akz142857/Halro/tools/modelcatalog/verify	4.728s

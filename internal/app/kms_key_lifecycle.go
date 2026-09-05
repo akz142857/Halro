@@ -845,6 +845,10 @@ func rotateKMSMasterKeyWithOptions(ctx context.Context, cfg config.Config, optio
 		metadata.Close()
 		return KeyRotationResult{}, errors.New("KMS Vault generation is inconsistent or exhausted")
 	}
+	if err := refuseRotationWithRetainedCiphertext(cfg); err != nil {
+		metadata.Close()
+		return KeyRotationResult{}, err
+	}
 
 	newKey := make([]byte, vault.MasterKeySize)
 	if _, err := io.ReadFull(options.random, newKey); err != nil {

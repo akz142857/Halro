@@ -461,6 +461,11 @@ describe("DeveloperPage", () => {
       project.id, expect.stringContaining("工作台调试"), expect.any(String),
       expect.objectContaining({ currentPassword: "a passphrase" }), expect.any(String),
     );
+	const firstAttempt = createKey.mock.calls[0];
+	const retry = createKey.mock.calls[1];
+	expect(retry[1]).toBe(firstAttempt[1]);
+	expect(retry[2]).toBe(firstAttempt[2]);
+	expect(retry[4]).toBe(firstAttempt[4]);
     const expiresAt = Date.parse(createKey.mock.calls.at(-1)![4] as string);
     expect(expiresAt).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000);

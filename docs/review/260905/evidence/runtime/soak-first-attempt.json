@@ -1,0 +1,5 @@
+{
+  "status": "aborted_fixture_error",
+  "cause": "mock omitted GET /v1/models/{id}; active health probe correctly withheld route after 404",
+  "not_product_failure": true
+}

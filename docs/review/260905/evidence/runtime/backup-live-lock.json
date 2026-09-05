@@ -1,0 +1,17 @@
+{
+  "command": [
+    "/private/tmp/halro-review-260905/halro",
+    "backup",
+    "create",
+    "--config",
+    "/private/tmp/halro-review-260905/config.yaml",
+    "--output",
+    "/private/tmp/halro-review-260905/live-lock-test.hbk",
+    "--key-file",
+    "/private/tmp/halro-review-260905/backup-lock-test.key"
+  ],
+  "exit": 1,
+  "seconds": 0.039964208,
+  "archive_exists": false,
+  "stderr": "halro: acquire offline backup lock: data directory is already locked by another process\n"
+}

@@ -1,0 +1,28 @@
+package app
+
+import (
+	"context"
+	"testing"
+	"time"
+)
+
+func TestReviewSummaryOmitsInFlightCheckpoint(t *testing.T) {
+	r, cookie := summaryRuntime(t, 1)
+	if e := r.usageCollector.CatchUp(context.Background()); e != nil {
+		t.Fatal(e)
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	path := "/admin/api/v1/usage/summary?start=" + today + "&end=" + today
+	before := getSummary(t, r, cookie, path)
+	snapshot, e := r.usage.TakeCheckpoint()
+	if e != nil {
+		t.Fatal(e)
+	}
+	during := getSummary(t, r, cookie, path)
+	r.returnUsageCheckpoint(snapshot)
+	after := getSummary(t, r, cookie, path)
+	t.Logf("requests before=%v during=%v after=%v; cost before=%d during=%d after=%d", *before.Totals.Requests, *during.Totals.Requests, *after.Totals.Requests, before.Totals.CostMicrosUSD, during.Totals.CostMicrosUSD, after.Totals.CostMicrosUSD)
+	if *before.Totals.Requests != 1 || *during.Totals.Requests != 0 || *after.Totals.Requests != 1 {
+		t.Fatal("candidate not reproduced")
+	}
+}

@@ -103,6 +103,28 @@ describe("typed admin API client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["projects", () => api.projects()],
+    ["credentials", () => api.credentials()],
+    ["token-guard-policies", () => api.tokenGuardPolicies()],
+    ["redaction-policies", () => api.redactionPolicies()],
+  ])("follows every %s page used by finite selectors", async (resource, list) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(`/${resource}?limit=100`)) {
+        return response({ items: [{ id: "first" }], next_cursor: "first" });
+      }
+      if (url.endsWith(`/${resource}?limit=100&cursor=first`)) {
+        return response({ items: [{ id: "second" }], next_cursor: "" });
+      }
+      return response({ error: "unexpected request" }, 500);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(list()).resolves.toEqual({ items: [{ id: "first" }, { id: "second" }], next_cursor: "" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   // Callers turn these lists into a project's model authorization set and into
   // the count of enabled routes that disables a deployment's delete button, so
   // a truncated answer must never be handed back looking complete. A cursor

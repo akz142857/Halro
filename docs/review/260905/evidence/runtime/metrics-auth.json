@@ -1,0 +1,14 @@
+[
+  {
+    "label": "anonymous",
+    "status": 401
+  },
+  {
+    "label": "wrong",
+    "status": 401
+  },
+  {
+    "label": "correct",
+    "status": 200
+  }
+]

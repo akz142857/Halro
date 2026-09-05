@@ -18,10 +18,10 @@ type Event struct {
 type Decoder struct {
 	reader   *bufio.Reader
 	maxBytes int
-	// pending holds the lines a single LF-terminated chunk split into. The SSE
-	// grammar terminates a line on CR, LF or CRLF; bufio only knows LF, so a
-	// bare CR arrives inside a chunk and has to be split out here.
-	pending [][]byte
+	// skipLF remembers a CR line ending. If the next byte is LF it belongs to
+	// the same CRLF terminator; any other byte starts the next line. Keeping
+	// this state avoids peeking (and blocking) after a bare CR.
+	skipLF bool
 }
 
 func NewDecoder(reader io.Reader, maxBytes int) *Decoder {
@@ -74,48 +74,34 @@ func (d *Decoder) Next() (Event, error) {
 }
 
 func (d *Decoder) readLine() ([]byte, error) {
-	for len(d.pending) == 0 {
-		if err := d.fill(); err != nil {
+	line := make([]byte, 0, 128)
+	for {
+		value, err := d.reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) && len(line) > 0 {
+				return line, nil
+			}
 			return nil, err
 		}
-	}
-	line := d.pending[0]
-	d.pending = d.pending[1:]
-	return line, nil
-}
-
-// fill reads one LF-terminated chunk and splits it into lines. A trailing CR
-// belongs to the CRLF that ended the chunk; every other CR is a line terminator
-// in its own right, which is what a spec-compliant client does with it and why
-// the encoder must never emit one inside a payload.
-func (d *Decoder) fill() error {
-	var chunk []byte
-	for {
-		fragment, err := d.reader.ReadSlice('\n')
-		if len(chunk)+len(fragment) > d.maxBytes {
-			return fmt.Errorf("SSE line exceeds %d bytes", d.maxBytes)
-		}
-		chunk = append(chunk, fragment...)
-		if err == nil {
-			break
-		}
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		if errors.Is(err, io.EOF) {
-			if len(chunk) == 0 {
-				return io.EOF
+		if d.skipLF {
+			d.skipLF = false
+			if value == '\n' {
+				continue
 			}
-			break
 		}
-		return err
+		switch value {
+		case '\n':
+			return line, nil
+		case '\r':
+			d.skipLF = true
+			return line, nil
+		default:
+			if len(line)+1 > d.maxBytes {
+				return nil, fmt.Errorf("SSE line exceeds %d bytes", d.maxBytes)
+			}
+			line = append(line, value)
+		}
 	}
-	if bytes.HasSuffix(chunk, []byte{'\n'}) {
-		chunk = bytes.TrimSuffix(chunk, []byte{'\n'})
-		chunk = bytes.TrimSuffix(chunk, []byte{'\r'})
-	}
-	d.pending = bytes.Split(chunk, []byte{'\r'})
-	return nil
 }
 
 type Encoder struct {

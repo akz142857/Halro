@@ -130,8 +130,9 @@ func (e *Engine) Tick(ctx context.Context) error {
 	defer e.tickMu.Unlock()
 	now := e.now()
 	e.mu.Lock()
-	if err := e.enqueue("heartbeat", TargetConfig{}, "", "", 0, now); err != nil {
-		e.logger.Error("dead-man heartbeat was not queued", "error", err)
+	if err := e.enqueueDurable("heartbeat", TargetConfig{}, "", "", 0, now); err != nil {
+		e.mu.Unlock()
+		return fmt.Errorf("persist heartbeat: %w", err)
 	}
 	e.mu.Unlock()
 	select {
@@ -164,7 +165,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 		}
 		state := e.state.Targets[target.ID]
 		if state.AnchorReason != reason {
-			if err := e.enqueue("anchor_status", target, state.Phase, reason, 0, now); err != nil {
+			if err := e.enqueueDurable("anchor_status", target, state.Phase, reason, 0, now); err != nil {
 				e.logger.Error("dead-man anchor status was not queued", "target_id", target.ID, "error", err)
 			} else {
 				state.AnchorReason = reason
@@ -185,7 +186,7 @@ func (e *Engine) Tick(ctx context.Context) error {
 			return err
 		}
 		if transition {
-			if err := e.enqueue("state_transition", target, next.Phase, next.LastReason, latency, now); err != nil {
+			if err := e.enqueueDurable("state_transition", target, next.Phase, next.LastReason, latency, now); err != nil {
 				e.logger.Error("dead-man transition was not queued; retaining prior state", "target_id", target.ID, "error", err)
 				continue
 			}
@@ -287,6 +288,25 @@ func (e *Engine) enqueue(kind string, target TargetConfig, state Phase, reason s
 		LatencyMS:     latency.Milliseconds(),
 	}
 	e.state.Outbox = append(e.state.Outbox, queuedEvent{Event: event, NextAttempt: now})
+	return nil
+}
+
+// enqueueDurable makes a notification eligible for delivery only after its
+// identity and payload are in the state file. Delivery deliberately happens
+// outside e.mu, so waking the worker before this commit creates a send-before-
+// persist window in which a restart can generate the same event ID for a
+// different observation. Callers must hold e.mu.
+func (e *Engine) enqueueDurable(kind string, target TargetConfig, state Phase, reason string, latency time.Duration, now time.Time) error {
+	previousSequence := e.state.Sequence
+	previousOutbox := append([]queuedEvent(nil), e.state.Outbox...)
+	if err := e.enqueue(kind, target, state, reason, latency, now); err != nil {
+		return err
+	}
+	if err := saveState(e.cfg.StateFile, e.state); err != nil {
+		e.state.Sequence = previousSequence
+		e.state.Outbox = previousOutbox
+		return err
+	}
 	return nil
 }
 

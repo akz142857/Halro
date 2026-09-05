@@ -52,6 +52,89 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 	return f(request)
 }
 
+type failingResponseReader struct{}
+
+func (failingResponseReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestAcceptedUnaryResponseFailuresAreAmbiguous(t *testing.T) {
+	chatRequest := provider.ChatCall{
+		RequestID: "req_accepted", ProviderModel: "provider-model",
+		Request: openaiapi.ChatCompletionRequest{
+			Model:    "public-model",
+			Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}},
+		},
+	}
+	tests := []struct {
+		name      string
+		body      func() io.Reader
+		responses bool
+		embed     bool
+	}{
+		{name: "chat malformed JSON", body: func() io.Reader { return strings.NewReader(`{"id":"accepted"`) }},
+		{name: "chat missing envelope", body: func() io.Reader { return strings.NewReader(`{}`) }},
+		{name: "chat body read failure", body: func() io.Reader { return failingResponseReader{} }},
+		{name: "chat oversized body", body: func() io.Reader { return strings.NewReader(strings.Repeat(" ", maxResponseBytes+1)) }},
+		{name: "responses malformed JSON", responses: true, body: func() io.Reader { return strings.NewReader(`{"id":"accepted"`) }},
+		{name: "embeddings missing envelope", embed: true, body: func() io.Reader { return strings.NewReader(`{}`) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(test.body()), Request: request,
+				}, nil
+			})}
+			endpoint, _ := url.Parse("https://provider.example")
+			adapter, err := NewWithOptions(Options{
+				Endpoint: endpoint, APIKey: []byte("provider-key"), Client: client,
+				ProviderType: "openai", Responses: test.responses,
+				Capabilities: provider.Capabilities{Chat: true, Embeddings: true},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer adapter.Close()
+			if test.embed {
+				_, err = adapter.Embed(context.Background(), provider.EmbeddingCall{
+					RequestID: "req_accepted", ProviderModel: "provider-model",
+					Request: openaiapi.EmbeddingRequest{Model: "public-model", Input: json.RawMessage(`["hello"]`)},
+				})
+			} else {
+				_, err = adapter.Chat(context.Background(), chatRequest)
+			}
+			var classified *provider.Error
+			if !errors.As(err, &classified) || classified.Class != provider.ErrorMalformed || !classified.Ambiguous {
+				t.Fatalf("accepted response error = %#v, want ambiguous malformed", err)
+			}
+		})
+	}
+}
+
+func TestRejectedUnaryResponseIsDefinitive(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"rejected"}}`)), Request: request,
+		}, nil
+	})}
+	endpoint, _ := url.Parse("https://provider.example")
+	adapter, err := New(endpoint, []byte("provider-key"), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	_, err = adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_rejected", ProviderModel: "provider-model",
+		Request: openaiapi.ChatCompletionRequest{Model: "public-model", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hello")}}},
+	})
+	var classified *provider.Error
+	if !errors.As(err, &classified) || classified.Ambiguous {
+		t.Fatalf("rejected response error = %#v, want definitive refusal", err)
+	}
+}
+
 func TestChatTransformsPublicModelAndAuthorization(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://provider.example/v1/chat/completions" {
