@@ -1,0 +1,11 @@
+=== RUN   TestCheckpointWritesOnlyTheRecordsSinceTheLastOne
+    checkpoint_test.go:123: first round 41755032 bytes, second round 1821556 bytes, window 41755032 bytes
+--- PASS: TestCheckpointWritesOnlyTheRecordsSinceTheLastOne (0.44s)
+=== RUN   TestTheCheckpointCostsAKnownAmountPerAttempt
+    retention_contract_test.go:212: checkpoint: 560026 bytes for 500 attempts (1120 bytes each)
+--- PASS: TestTheCheckpointCostsAKnownAmountPerAttempt (0.00s)
+=== RUN   TestTheWindowCostsAKnownAmountOfMemoryPerAttempt
+    retention_contract_test.go:270: resident: 20289536 bytes for 20000 attempts (1014 bytes each, struct floor 752)
+--- PASS: TestTheWindowCostsAKnownAmountOfMemoryPerAttempt (0.05s)
+PASS
+ok  	github.com/akz142857/Halro/internal/usage	1.514s

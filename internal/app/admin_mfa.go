@@ -101,18 +101,25 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	password := []byte(input.CurrentPassword)
+	active, activeErr := r.activeAdminMFA(req.Context(), admin.session.Username)
+	if activeErr != nil {
+		adminStoreError(w)
+		return
+	}
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_create", func() bool {
-		return err == nil && adminauth.VerifyPassword(user, password)
+		if err != nil || !adminauth.VerifyPassword(user, password) {
+			return false
+		}
+		if len(active) == 0 {
+			return true
+		}
+		_, verified := r.verifyAnyTOTP(req.Context(), active, input.Code, time.Now())
+		return verified
 	})
 	if !ok {
 		if !answered {
 			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		}
-		return
-	}
-	active, err := r.activeAdminMFA(req.Context(), user.Username)
-	if err != nil {
-		adminStoreError(w)
 		return
 	}
 	if len(active) >= 5 {
@@ -133,12 +140,6 @@ func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 				adminStoreError(w)
 				return
 			}
-		}
-	}
-	if len(active) > 0 {
-		if _, ok := r.verifyAnyTOTP(req.Context(), active, input.Code, time.Now()); !ok {
-			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-			return
 		}
 	}
 	authID, err := id.New("mfa")
@@ -455,16 +456,11 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
-		return err == nil && adminauth.VerifyPassword(user, p)
-	})
-	if !ok {
-		if !answered {
-			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-		}
+	active, activeErr := r.activeAdminMFA(req.Context(), admin.session.Username)
+	if activeErr != nil {
+		adminStoreError(w)
 		return
 	}
-	active, _ := r.activeAdminMFA(req.Context(), user.Username)
 	target := chi.URLParam(req, "id")
 	others := make([]domain.AdminMFAAuthenticator, 0)
 	for _, a := range active {
@@ -473,19 +469,34 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 		}
 	}
 	if len(others) == 0 && r.config.Admin.MFAPolicy == "required" {
+		ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
+			return err == nil && adminauth.VerifyPassword(user, p)
+		})
+		if !ok {
+			if !answered {
+				writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
+			}
+			return
+		}
 		writeJSON(w, 409, map[string]string{"error": "MFA is required"})
 		return
 	}
+	verificationSet := active
 	if len(others) > 0 {
-		if _, ok := r.verifyAnyTOTP(req.Context(), others, in.Code, time.Now()); !ok {
-			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-			return
+		verificationSet = others
+	}
+	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
+		if err != nil || !adminauth.VerifyPassword(user, p) {
+			return false
 		}
-	} else {
-		if _, ok := r.verifyAnyTOTP(req.Context(), active, in.Code, time.Now()); !ok {
+		_, verified := r.verifyAnyTOTP(req.Context(), verificationSet, in.Code, time.Now())
+		return verified
+	})
+	if !ok {
+		if !answered {
 			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
-			return
 		}
+		return
 	}
 	_, err = r.store.GetAdminMFAAuthenticator(req.Context(), user.Username, target)
 	if err != nil {
@@ -525,18 +536,22 @@ func (r *Runtime) regenerateAdminMFARecoveryCodes(w http.ResponseWriter, req *ht
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	active, _ := r.activeAdminMFA(req.Context(), admin.session.Username)
+	active, activeErr := r.activeAdminMFA(req.Context(), admin.session.Username)
+	if activeErr != nil {
+		adminStoreError(w)
+		return
+	}
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_recovery_codes_regenerate", func() bool {
-		return err == nil && adminauth.VerifyPassword(user, p)
+		if err != nil || !adminauth.VerifyPassword(user, p) {
+			return false
+		}
+		_, verified := r.verifyAnyTOTP(req.Context(), active, in.Code, time.Now())
+		return verified
 	})
 	if !ok {
 		if !answered {
 			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		}
-		return
-	}
-	if _, ok := r.verifyAnyTOTP(req.Context(), active, in.Code, time.Now()); !ok {
-		writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 		return
 	}
 	codes, records, err := newRecoveryCodes(user.Username, uint64(time.Now().UnixNano()))
@@ -581,7 +596,11 @@ func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
 	}
 	user, err := r.store.GetAdminUser(req.Context(), admin.session.Username)
 	p := []byte(in.CurrentPassword)
-	active, _ := r.activeAdminMFA(req.Context(), user.Username)
+	active, activeErr := r.activeAdminMFA(req.Context(), admin.session.Username)
+	if activeErr != nil {
+		adminStoreError(w)
+		return
+	}
 	ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_disable", func() bool {
 		return err == nil && adminauth.VerifyPassword(user, p)
 	})
@@ -604,6 +623,7 @@ func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
 	rotatedUser, err := r.store.DisableAdminMFAAndRotate(req.Context(), user.Username, recoveryHash, intent)
 	if err != nil {
 		if errors.Is(err, boltstore.ErrNotFound) {
+			r.recordAdminCredentialFailure(user.Username, "mfa_disable")
 			writeJSON(w, 401, map[string]string{"error": "invalid credentials"})
 			return
 		}

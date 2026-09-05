@@ -1,0 +1,10 @@
+=== RUN   TestAdjudicationRunSendBeforePersist
+=== RUN   TestAdjudicationRunSendBeforePersist/a
+    adjudication_test.go:17: Run outbound accepted boundary: durable=0 sent=1 restart=review-00000000000000000001 sameID=true changedObservation=true
+=== RUN   TestAdjudicationRunSendBeforePersist/\u008a
+    adjudication_test.go:17: Run outbound accepted boundary: durable=41 sent=42 restart=review-00000000000000000042 sameID=true changedObservation=true
+--- PASS: TestAdjudicationRunSendBeforePersist (0.09s)
+    --- PASS: TestAdjudicationRunSendBeforePersist/a (0.05s)
+    --- PASS: TestAdjudicationRunSendBeforePersist/\u008a (0.05s)
+PASS
+ok  	github.com/akz142857/Halro/internal/deadman	1.815s

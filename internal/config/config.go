@@ -1301,6 +1301,14 @@ func (c Config) AuditPath() string {
 	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
 }
 
+func (c Config) GovernancePath() string {
+	return filepath.Join(c.Storage.DataDir, "governance", "governance.journal")
+}
+
+func (c Config) GovernanceExportPath() string {
+	return filepath.Join(c.Storage.DataDir, "governance", "export")
+}
+
 // validateLogging refuses a logging block that cannot be honoured. The limits
 // are validated whether or not a file is written: a value that only becomes
 // invalid when the operator later switches output to a file is a trap set for

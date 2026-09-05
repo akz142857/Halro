@@ -32,6 +32,9 @@ import (
 // long window at high throughput still costs what it costs to hold. Serving
 // the console from disk is a different question and not this one.
 
+// checkpointVersion 13 adds Work Unit and Run attribution to request and
+// attempt rows. Older checkpoints are replayed from the authenticated Ledger.
+//
 // checkpointVersion 12 replaced the single whole-aggregate blob with a head
 // plus segments. A checkpoint written before this is refused rather than
 // migrated — it is a derivative, and the Ledger rebuilds it.
@@ -53,7 +56,7 @@ import (
 // it was charged to, and the daily rollup, which keys on the period stamped at
 // admission, had nothing to key on. Version 7 persisted the dedup window;
 // version 6 dropped the duplicate cost columns.
-const checkpointVersion = 12
+const checkpointVersion = 13
 
 // checkpointSegmentTargetBytes is the size an open segment is allowed to reach
 // before it is sealed and a new one starts. It bounds the only work a tick

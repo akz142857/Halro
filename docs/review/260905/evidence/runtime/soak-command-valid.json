@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/private/tmp/halro-review-260905/soak",
+    "-pid",
+    "31473",
+    "-commit",
+    "381743f6613607dc256828f4776b52af8bdd232c",
+    "-model",
+    "review-chat",
+    "-duration",
+    "30m",
+    "-sample-interval",
+    "30s",
+    "-request-interval",
+    "2s",
+    "-gateway-url",
+    "http://127.0.0.1:28080/v1/chat/completions",
+    "-metrics-url",
+    "http://127.0.0.1:29090/metrics",
+    "-output",
+    "/private/tmp/halro-review-260905/soak-30m-valid"
+  ],
+  "source_overlay": "runtime-overlay.json",
+  "started": 1788603116.2975192
+}

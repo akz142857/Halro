@@ -224,8 +224,12 @@ func TestPriceScheduleTierValidationRejectsIncoherentProvenance(t *testing.T) {
 		"window without bounds":     {Timezone: "Asia/Shanghai", Source: PriceTierWindow, LocalMinute: minute(600)},
 		"local minute outside":      {Timezone: "Asia/Shanghai", Source: PriceTierWindow, StartMinute: minute(540), EndMinute: minute(720), LocalMinute: minute(800)},
 		"base claiming bounds":      {Timezone: "Asia/Shanghai", Source: PriceTierBase, StartMinute: minute(540), EndMinute: minute(720), LocalMinute: minute(600)},
+		"base claiming start only":  {Timezone: "Asia/Shanghai", Source: PriceTierBase, StartMinute: minute(540), LocalMinute: minute(600)},
+		"base claiming end only":    {Timezone: "Asia/Shanghai", Source: PriceTierBase, EndMinute: minute(720), LocalMinute: minute(600)},
 		"base without local minute": {Timezone: "Asia/Shanghai", Source: PriceTierBase},
 		"fallback claiming a time":  {Timezone: "Asia/Shanghai", Source: PriceTierZoneUnavailable, LocalMinute: minute(600)},
+		"fallback claiming start":   {Timezone: "Asia/Shanghai", Source: PriceTierZoneUnavailable, StartMinute: minute(540)},
+		"fallback claiming end":     {Timezone: "Asia/Shanghai", Source: PriceTierZoneUnavailable, EndMinute: minute(720)},
 		"unknown source":            {Timezone: "Asia/Shanghai", Source: "whenever"},
 		"missing zone":              {Source: PriceTierBase, LocalMinute: minute(600)},
 	}

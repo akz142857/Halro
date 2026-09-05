@@ -232,6 +232,18 @@ func (r *Runtime) recordStepUpFailure(username string, now time.Time) {
 	}
 }
 
+// recordAdminCredentialFailure accounts for a factor whose validity is only
+// known after an atomic store operation. Recovery codes used to disable MFA
+// are checked and consumed in the same transaction as the disable; separating
+// those operations would let a concurrent request reuse the code. The caller
+// still passes through guardAdminCredentialCheck before reaching the store, so
+// this completes the same shared failure protocol without weakening the
+// recovery-code transaction.
+func (r *Runtime) recordAdminCredentialFailure(username, action string) {
+	r.recordStepUpFailure(username, r.clockNow())
+	r.auditStepUp(username, "failure", action)
+}
+
 // auditStepUp records a refused re-authentication. A failure here is a signal
 // worth keeping — it means someone holding a live session could not prove they
 // are the operator it belongs to — but it must never turn into a reason to fail

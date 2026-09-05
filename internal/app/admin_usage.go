@@ -227,6 +227,7 @@ type policyRejectionSummary struct {
 	ProviderConcurrency   uint64 `json:"provider_concurrency"`
 	DeploymentConcurrency uint64 `json:"deployment_concurrency"`
 	Budget                uint64 `json:"budget"`
+	RunBudget             uint64 `json:"run_budget"`
 	TokenGuard            uint64 `json:"token_guard"`
 	Total                 uint64 `json:"total"`
 }
@@ -301,10 +302,10 @@ func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSum
 		RPM:             source.RPM, TPM: source.TPM, ProjectConcurrency: source.ProjectConcurrency,
 		ProviderConcurrency:   source.ProviderConcurrency,
 		DeploymentConcurrency: source.DeploymentConcurrency,
-		Budget:                source.Budget, TokenGuard: source.TokenGuard,
+		Budget:                source.Budget, RunBudget: source.RunBudget, TokenGuard: source.TokenGuard,
 	}
 	result.Total = result.RouteCapability + result.RPM + result.TPM + result.ProjectConcurrency +
-		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.TokenGuard
+		result.ProviderConcurrency + result.DeploymentConcurrency + result.Budget + result.RunBudget + result.TokenGuard
 	return result
 }
 
@@ -383,6 +384,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	}
 	allowed := map[string]struct{}{
 		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
+		"work_unit_id": {}, "run_id": {},
 		"deployment_id": {}, "model": {}, "provider_model": {}, "status": {},
 		"start": {}, "end": {},
 	}
@@ -412,6 +414,8 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	query := usage.AttemptQuery{
 		BeforeSequence: cursor, Limit: limit,
 		ProjectID:      request.URL.Query().Get("project_id"),
+		WorkUnitID:     request.URL.Query().Get("work_unit_id"),
+		RunID:          request.URL.Query().Get("run_id"),
 		ProviderID:     request.URL.Query().Get("provider_id"),
 		DeploymentID:   request.URL.Query().Get("deployment_id"),
 		RequestID:      request.URL.Query().Get("request_id"),
@@ -551,6 +555,12 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	auditSummary := r.audit.Summary()
+	governanceReady, _ := r.governance.manager.Ready()
+	governanceWatermark := map[string]any{"ready": governanceReady, "sequence": uint64(0), "offset": int64(0)}
+	if r.governance.log != nil {
+		summary := r.governance.log.Summary()
+		governanceWatermark["sequence"], governanceWatermark["offset"] = summary.Records, summary.Bytes
+	}
 	payload := map[string]any{
 		"build":             buildinfo.Current(),
 		"accounting_status": r.status.Load(),
@@ -560,6 +570,7 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"audit":             auditSummary,
 		"alerts":            r.alerts.Stats(),
 		"usage_watermark":   r.usage.Watermark(),
+		"governance":        governanceWatermark,
 		"time_context":      timing,
 		// The commit protocol makes "durable" and "in force" two different
 		// questions, so the answer to the second one has to be visible

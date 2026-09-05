@@ -91,8 +91,11 @@ type EndpointCompatibilityManifest struct {
 }
 
 func (manifest EndpointCompatibilityManifest) Validate() error {
-	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 || len(manifest.ProviderProfiles) == 0 {
+	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 {
 		return errors.New("endpoint compatibility manifest is incomplete")
+	}
+	if manifest.SemanticOperation != semantic.OperationGovernance && len(manifest.ProviderProfiles) == 0 {
+		return errors.New("provider-backed endpoint compatibility manifest has no provider profiles")
 	}
 	switch manifest.Status {
 	case StatusUnsupported, StatusExperimental, StatusCompatible, StatusNativePassThrough:
@@ -408,7 +411,34 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 			ProviderProfiles:     responseProfiles, ProfileCoverage: deferredCoverage},
 	)
 	setProfileCompatibilityStatuses(manifests)
-	return append(manifests, inferenceResourcesEndpointManifests()...)
+	manifests = append(manifests, inferenceResourcesEndpointManifests()...)
+	return append(manifests, governanceEndpointManifests()...)
+}
+
+func governanceEndpointManifests() []EndpointCompatibilityManifest {
+	makeManifest := func(id, method, path string, requestFields, responseFields []string, state string) EndpointCompatibilityManifest {
+		headers := []string{"Authorization"}
+		if method == "POST" {
+			headers = append(headers, "Content-Type", "Idempotency-Key")
+		}
+		return EndpointCompatibilityManifest{
+			ID: id, NorthboundProfile: ProfileHalroRunGovernance, ProfileRevision: 2,
+			Protocol: "halro", Method: method, Path: path, SemanticOperation: semantic.OperationGovernance,
+			RequestFields: requestFields, RequestHeaders: headers,
+			ResponseFields: responseFields, StateSemantics: state,
+			Evidence: []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental,
+			DocumentedDeviations: []string{"Run Governance remains experimental until a real business pilot validates the Work Unit and Outcome Definition boundary"},
+		}
+	}
+	return []EndpointCompatibilityManifest{
+		makeManifest("halro.work-units.create.v1", "POST", "/halro/v1/work-units", []string{"outcome_definition_ids"}, []string{"id", "project_id", "status", "created_at"}, "ledger-authoritative idempotent Work Unit creation"),
+		makeManifest("halro.work-units.get.v1", "GET", "/halro/v1/work-units/{id}", []string{"id"}, []string{"work_unit", "runs", "outcomes"}, "project-owned dual-source read: Work Unit and Runs from Accounting Ledger, Outcomes from Governance Journal"),
+		makeManifest("halro.work-units.close.v1", "POST", "/halro/v1/work-units/{id}/close", []string{"id"}, []string{"id", "project_id", "status", "closed_at"}, "ledger-authoritative idempotent Work Unit close"),
+		makeManifest("halro.outcomes.report.v1", "POST", "/halro/v1/work-units/{id}/outcomes", []string{"id", "definition_id", "value", "observed_at", "evidence_ref", "evidence_sha256", "supersedes_outcome_id"}, []string{"id", "work_unit_id", "definition_id", "definition_version", "value", "reporter_key_id", "observed_at", "ingested_at", "revision", "governance_sequence", "provisional"}, "governance-journal-authoritative idempotent Outcome report"),
+		makeManifest("halro.runs.create.v1", "POST", "/halro/v1/runs", []string{"work_unit_id", "budget_micros_usd", "ttl_seconds"}, []string{"id", "work_unit_id", "budget_micros_usd", "status", "expires_at"}, "ledger-authoritative idempotent Run creation"),
+		makeManifest("halro.runs.get.v1", "GET", "/halro/v1/runs/{id}", []string{"id"}, []string{"id", "work_unit_id", "budget_micros_usd", "committed_micros_usd", "reserved_micros_usd", "unknown_attempts", "status"}, "project-owned ledger-derived Run read"),
+		makeManifest("halro.runs.close.v1", "POST", "/halro/v1/runs/{id}/close", []string{"id", "reason"}, []string{"id", "status", "closed_at", "close_reason"}, "ledger-authoritative idempotent Run close"),
+	}
 }
 
 func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {

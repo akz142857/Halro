@@ -22,7 +22,7 @@ import (
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
-const manifestVersion = 2
+const manifestVersion = 3
 
 type SourceFile struct {
 	ArchivePath string
@@ -55,6 +55,10 @@ type Manifest struct {
 	LedgerChainHeadOffset   int64          `json:"ledger_chain_head_offset,omitempty"`
 	LedgerChainHeadHash     [32]byte       `json:"ledger_chain_head_hash,omitempty"`
 	LedgerChainVerified     bool           `json:"ledger_chain_verified,omitempty"`
+	GovernanceSequence      uint64         `json:"governance_sequence,omitempty"`
+	GovernanceOffset        int64          `json:"governance_offset,omitempty"`
+	GovernanceHeadHash      [32]byte       `json:"governance_head_hash,omitempty"`
+	GovernanceFormatVersion int            `json:"governance_format_version,omitempty"`
 	PricingStateSHA256      string         `json:"pricing_state_sha256,omitempty"`
 	PendingIntentSHA256     string         `json:"pending_intent_sha256,omitempty"`
 	PendingIntents          int            `json:"pending_intents,omitempty"`
@@ -79,6 +83,10 @@ type CreateOptions struct {
 	LedgerChainHeadOffset      int64
 	LedgerChainHeadHash        [32]byte
 	LedgerChainVerified        bool
+	GovernanceSequence         uint64
+	GovernanceOffset           int64
+	GovernanceHeadHash         [32]byte
+	GovernanceFormatVersion    int
 	PricingStateSHA256         string
 	PendingIntentSHA256        string
 	PendingIntents             int
@@ -129,8 +137,12 @@ func Create(options CreateOptions) (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	formatVersion := 2
+	if options.GovernanceFormatVersion > 0 {
+		formatVersion = manifestVersion
+	}
 	manifest := Manifest{
-		FormatVersion: manifestVersion, BackupID: backupID,
+		FormatVersion: formatVersion, BackupID: backupID,
 		CreatedAt: options.Now().UTC(), Encrypted: true,
 		Metadata: options.Metadata, LedgerWatermark: options.LedgerWatermark,
 		CheckpointWatermark:  options.CheckpointWatermark,
@@ -138,6 +150,8 @@ func Create(options CreateOptions) (Manifest, error) {
 		LedgerFeatureEpoch:   options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
 		LedgerChainHeadSequence: options.LedgerChainHeadSequence, LedgerChainHeadOffset: options.LedgerChainHeadOffset,
 		LedgerChainHeadHash: options.LedgerChainHeadHash, LedgerChainVerified: options.LedgerChainVerified,
+		GovernanceSequence: options.GovernanceSequence, GovernanceOffset: options.GovernanceOffset,
+		GovernanceHeadHash: options.GovernanceHeadHash, GovernanceFormatVersion: options.GovernanceFormatVersion,
 		PricingStateSHA256: options.PricingStateSHA256, PendingIntentSHA256: options.PendingIntentSHA256, PendingIntents: options.PendingIntents,
 		MasterKeyFingerprint:    options.MasterKeyFingerprint,
 		KeySlotDescriptorSHA256: options.KeySlotDescriptorSHA256,
@@ -275,7 +289,7 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 			manifest.Metadata.SchemaVersion, boltstore.CurrentSchemaVersion(),
 		)
 	}
-	if !foundManifest || (manifest.FormatVersion != 1 && manifest.FormatVersion != manifestVersion) || !manifest.Encrypted ||
+	if !foundManifest || (manifest.FormatVersion < 1 || manifest.FormatVersion > manifestVersion) || !manifest.Encrypted ||
 		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
 		manifest.Metadata.SchemaVersion == 0 ||
 		manifest.Metadata.TxID == 0 ||
@@ -287,6 +301,9 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		manifest.MinimumLedgerReaderVersion != fmt.Sprintf("v%d", manifest.LedgerFeatureEpoch) ||
 		!validSHA256Label(manifest.PricingStateSHA256) || !validSHA256Label(manifest.PendingIntentSHA256)) {
 		return Manifest{}, errors.New("backup compatibility manifest is invalid")
+	}
+	if manifest.FormatVersion >= 3 && (manifest.GovernanceFormatVersion != 1 || manifest.GovernanceOffset < 0) {
+		return Manifest{}, errors.New("backup Governance manifest is invalid")
 	}
 	if manifest.LedgerChainVerified && (manifest.LedgerChainHeadSequence > manifest.LedgerWatermark.Sequence ||
 		manifest.LedgerChainHeadOffset > manifest.LedgerWatermark.Offset) {
@@ -314,6 +331,11 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 	} {
 		if _, exists := expectedFile(manifest.Files, required); !exists {
 			return Manifest{}, fmt.Errorf("backup is missing required file %q", required)
+		}
+	}
+	if manifest.FormatVersion >= 3 {
+		if _, exists := expectedFile(manifest.Files, "data/governance/governance.journal"); !exists {
+			return Manifest{}, errors.New("backup is missing Governance Journal")
 		}
 	}
 	return manifest, nil

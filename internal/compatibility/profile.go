@@ -20,6 +20,7 @@ const (
 	ProfileAnthropicMessages       NorthboundProfileID = "anthropic.messages.2023-06-01"
 	ProfileOpenAIMediaResources    NorthboundProfileID = "openai.media-resources.v1"
 	ProfileHalroInferenceResources NorthboundProfileID = "halro.inference-resources.v1"
+	ProfileHalroRunGovernance      NorthboundProfileID = "halro.run-governance.v1"
 )
 
 type NorthboundProfile struct {
@@ -48,6 +49,7 @@ var builtinNorthboundProfiles = []NorthboundProfile{
 	{ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
 	{ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},
 	{ID: ProfileHalroInferenceResources, Revision: 1, Protocol: "halro", Methods: []string{"POST /v1/rerank", "POST /v1/async/invocations", "GET /v1/async/invocations/{id}", "POST /v1/async/invocations/{id}/cancel"}},
+	{ID: ProfileHalroRunGovernance, Revision: 2, Protocol: "halro", Methods: []string{"POST /halro/v1/work-units", "GET /halro/v1/work-units/{id}", "POST /halro/v1/work-units/{id}/close", "POST /halro/v1/work-units/{id}/outcomes", "POST /halro/v1/runs", "GET /halro/v1/runs/{id}", "POST /halro/v1/runs/{id}/close"}},
 }
 
 // SourceOf stamps a semantic operation with the northbound profile that

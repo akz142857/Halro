@@ -1,0 +1,13 @@
+=== RUN   TestS0GovernanceRecoveryProfile
+=== RUN   TestS0GovernanceRecoveryProfile/records=10000
+    s0_journal_capacity_test.go:273: records=10000 heads=9000 bytes=650012 write=15.011625ms replay=11.790667ms replay_records_s=848128.44 heap_alloc_delta=2735664 total_alloc_delta=5999320
+=== RUN   TestS0GovernanceRecoveryProfile/records=100000
+    s0_journal_capacity_test.go:273: records=100000 heads=90000 bytes=6500012 write=43.44025ms replay=63.400542ms replay_records_s=1577273.58 heap_alloc_delta=6602072 total_alloc_delta=58190320
+=== RUN   TestS0GovernanceRecoveryProfile/records=1000000
+    s0_journal_capacity_test.go:273: records=1000000 heads=900000 bytes=65000012 write=314.835792ms replay=681.875459ms replay_records_s=1466543.47 heap_alloc_delta=68226344 total_alloc_delta=583444064
+--- PASS: TestS0GovernanceRecoveryProfile (1.13s)
+    --- PASS: TestS0GovernanceRecoveryProfile/records=10000 (0.03s)
+    --- PASS: TestS0GovernanceRecoveryProfile/records=100000 (0.11s)
+    --- PASS: TestS0GovernanceRecoveryProfile/records=1000000 (1.00s)
+PASS
+ok  	github.com/akz142857/Halro/internal/governance	1.908s

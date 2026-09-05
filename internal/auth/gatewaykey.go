@@ -55,6 +55,7 @@ func GenerateGatewayKeyWithID(keyID, projectID, name string, expiresAt *time.Tim
 		HashVersion: HashVersion,
 		KeyHash:     HashGatewayKey(plaintext),
 		Enabled:     true,
+		Scopes:      []domain.GatewayScope{domain.GatewayScopeInference},
 		ExpiresAt:   expiresAt,
 		CreatedAt:   now,
 	}

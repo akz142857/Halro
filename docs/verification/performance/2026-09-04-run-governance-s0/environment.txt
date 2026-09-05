@@ -1,0 +1,11 @@
+baseline_commit=1cddd9c65a88d0225f6919e3abee812a1b182d2c
+branch=codex/run-governance-prd-review
+go_version=go1.26.6
+goos=darwin
+goarch=arm64
+cpu=Apple M4
+logical_cpus=10
+kernel=Darwin 25.6.0 arm64
+budget_probe_sha256=36a3da7763fe809aaeecc0707307a34ac064a9917778bb72f73e8a1703b5cd5d
+governance_probe_sha256=a3a3c72c19c93b1c4a390d95f64bb21aff85fd3e68f9e6bdee7dfdc8927353ab
+accounting_state_probe_sha256=63ee76ba5987fd7238c3690b8bf92f0694c230a327a081ff506e79665e268b7b

@@ -1,0 +1,12 @@
+
+> halro-admin@0.6.0 test
+> vitest run --config vite.config.ts
+
+
+ RUN  v4.1.11 <repo>/web
+
+
+ Test Files  43 passed (43)
+      Tests  531 passed (531)
+   Start at  18:01:24
+   Duration  10.53s (transform 3.74s, setup 7.13s, import 5.30s, tests 41.81s, environment 27.72s)

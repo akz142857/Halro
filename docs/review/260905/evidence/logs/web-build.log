@@ -1,0 +1,13 @@
+
+> halro-admin@0.6.0 build
+> tsc -b && vite build --config vite.config.ts && node scripts/check-bundle.mjs && node scripts/check-artifacts.mjs
+
+vite v8.2.2 building client environment for production...
+transforming...
+✓ 249 modules transformed.
+rendering chunks...
+computing gzip size...
+
+✓ built in 126ms
+Initial bundle: 206662 bytes gzip (7 entry assets + heaviest locale)
+Browser artifact secret scan: 28 files clean

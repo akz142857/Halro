@@ -286,17 +286,22 @@ func (r *Runtime) collectSummaryRows(
 		}
 		return existing.Add(row)
 	}
-	if err := r.store.UsageRollupRange(start, end, keep); err != nil {
+	if err := r.usage.WithRollupView(func(pending map[string]domain.DailyRollup) error {
+		if err := r.store.UsageRollupRange(start, end, keep); err != nil {
+			return err
+		}
+		for encoded, row := range pending {
+			key, err := domain.DecodeRollupKey(encoded)
+			if err != nil {
+				return err
+			}
+			if err := keep(key, row); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, nil, err
-	}
-	for encoded, row := range r.usage.PendingRollup() {
-		key, err := domain.DecodeRollupKey(encoded)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := keep(key, row); err != nil {
-			return nil, nil, err
-		}
 	}
 	rows := make([]summaryRow, 0, len(merged))
 	for key, row := range merged {

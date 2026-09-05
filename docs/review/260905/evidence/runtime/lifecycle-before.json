@@ -1,0 +1,24 @@
+{
+  "status": 200,
+  "body": {
+    "id": "chatcmpl-review-1788603723562137000",
+    "object": "chat.completion",
+    "created": 1788603723,
+    "model": "review-chat",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "review-ok"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 3,
+      "completion_tokens": 2,
+      "total_tokens": 5
+    }
+  }
+}

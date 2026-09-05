@@ -384,6 +384,7 @@ describe("projects page", () => {
 
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    expect(screen.getByRole("checkbox", { name: "outcome:write" })).toBeVisible();
     const nameField = screen.getByLabelText(/密钥名称/);
     fireEvent.change(nameField, { target: { value: "service-a" } });
     fireEvent.change(screen.getByLabelText(/^当前密码/), { target: { value: "a passphrase" } });
@@ -494,6 +495,24 @@ describe("projects page", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
     await waitFor(() => expect(createProject).toHaveBeenCalledOnce());
     expect(createProject.mock.calls[0][0]).toMatchObject({ max_request_bytes: 2048 * 1024 });
+  });
+
+  it.each([500, 1023, 1025])("preserves an exact %i-byte ceiling during an unrelated edit", async (bytes) => {
+    const current = project({ max_request_bytes: bytes });
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [current], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_1", public_model: "chat", deployment_id: "dep_1", enabled: true, revision: 1 },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [deployment("dep_1")] } as never);
+    const update = vi.spyOn(api, "updateProject").mockResolvedValue(current as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0][1]).toMatchObject({ max_request_bytes: bytes });
   });
 
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {

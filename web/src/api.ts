@@ -9,8 +9,14 @@ import type {
   OnboardingReadiness,
   Deployment,
   GatewayKey,
+  GatewayScope,
   Page,
   Project,
+  Run,
+  WorkUnit,
+	OutcomeDefinition,
+	Outcome,
+	GovernanceSummary,
   Provider,
   ProviderCapabilities,
   InvocationTargetCatalog,
@@ -96,10 +102,16 @@ function listingIncomplete(resource: string, reason: string) {
 async function listAll<T>(resource: string, path: string): Promise<T[]> {
   const items: T[] = [];
   const seenCursors = new Set<string>();
+  const question = path.indexOf("?");
+  const pathname = question < 0 ? path : path.slice(0, question);
+  const baseQuery = new URLSearchParams(question < 0 ? "" : path.slice(question + 1));
   let cursor = "";
   for (let page = 0; page < LIST_PAGE_CEILING; page++) {
-    const query = new URLSearchParams({ limit: "100", ...(cursor ? { cursor } : {}) });
-    const result = await request<Page<T>>(`${path}?${query}`).then((value) => value.data);
+    const query = new URLSearchParams(baseQuery);
+    query.set("limit", "100");
+    if (cursor) query.set("cursor", cursor);
+    else query.delete("cursor");
+    const result = await request<Page<T>>(`${pathname}?${query}`).then((value) => value.data);
     items.push(...(result.items ?? []));
     const next = result.next_cursor;
     if (!next) return items;
@@ -289,7 +301,7 @@ export const api = {
   // values for the fields they are not changing.
   updatePreferences: (preferences: { locale: LocalePreference; appearance: Appearance }, revision: number) =>
     request<AdminPreferences>("/preferences", json("PUT", preferences), `"${revision}"`),
-  projects: () => request<Page<Project>>("/projects").then((value) => value.data),
+  projects: () => pageOfAll<Project>("project", "/projects"),
   projectsPage: (query = "") =>
     request<Page<Project>>(`/projects${query}`).then((value) => value.data),
   project: (id: string) => request<Project>(`/projects/${encodeURIComponent(id)}`),
@@ -312,18 +324,18 @@ export const api = {
       .then((value) => value.data),
   // The plaintext is returned once and never again, so a retried create must carry the
   // same idempotency key: the server then refuses to mint a second unaccounted credential.
-  createKey: (projectID: string, name: string, idempotencyKey: string, reauth: Reauth, expiresAt?: string) =>
+  createKey: (projectID: string, name: string, idempotencyKey: string, reauth: Reauth, expiresAt?: string, scopes?: GatewayScope[]) =>
     request<CreatedGatewayKey>(
       `/projects/${encodeURIComponent(projectID)}/keys`,
       {
-        ...json("POST", { name, ...stepUpBody(reauth), ...(expiresAt ? { expires_at: expiresAt } : {}) }),
+        ...json("POST", { name, ...stepUpBody(reauth), ...(expiresAt ? { expires_at: expiresAt } : {}), ...(scopes ? { scopes } : {}) }),
         headers: { "Idempotency-Key": idempotencyKey },
       },
     ),
   updateKey: (
     projectID: string,
     keyID: string,
-    value: { name: string; enabled: boolean; expires_at?: string },
+    value: { name: string; enabled: boolean; expires_at?: string; scopes?: GatewayScope[] },
     revision: number,
   ) =>
     request<GatewayKey>(
@@ -337,8 +349,7 @@ export const api = {
       json("DELETE", stepUpBody(reauth)),
       `"${revision}"`,
     ),
-  credentials: () =>
-    request<Page<Credential>>("/credentials").then((value) => value.data),
+  credentials: () => pageOfAll<Credential>("credential", "/credentials"),
   createCredential: (value: unknown) =>
     request<Credential>("/credentials", json("POST", value)),
   // Replacing credential material carries step-up for the same reason deleting
@@ -489,6 +500,22 @@ export const api = {
     request<UsageSummary>(`/usage/summary${query}`).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  workUnits: (query = "") =>
+    pageOfAll<WorkUnit>("Work Unit", `/run-governance/work-units${query}`),
+  workUnit: (id: string) =>
+    request<WorkUnit>(`/run-governance/work-units/${encodeURIComponent(id)}`).then((value) => value.data),
+  runs: (query = "") =>
+    pageOfAll<Run>("Run", `/run-governance/runs${query}`),
+  run: (id: string) =>
+    request<Run>(`/run-governance/runs/${encodeURIComponent(id)}`).then((value) => value.data),
+  outcomeDefinitions: (projectID: string) =>
+    pageOfAll<OutcomeDefinition>("Outcome definition", `/projects/${encodeURIComponent(projectID)}/outcome-definitions`),
+  createOutcomeDefinition: (projectID: string, revision: number, value: unknown) =>
+    request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions`, json("POST", value), `"${revision}"`).then((result) => result.data),
+  createOutcomeDefinitionVersion: (projectID: string, definitionID: string, revision: number, value: unknown) =>
+    request<OutcomeDefinition>(`/projects/${encodeURIComponent(projectID)}/outcome-definitions/${encodeURIComponent(definitionID)}/versions`, json("POST", value), `"${revision}"`).then((result) => result.data),
+  outcomes: (query = "") => pageOfAll<Outcome>("Outcome", `/governance/outcomes${query}`),
+  governanceSummary: (query: string) => request<GovernanceSummary>(`/governance/summary${query}`).then((value) => value.data),
   usageFailures: (query = "") =>
     request<Page<RequestFailure>>(`/usage/failures${query}`).then((value) => value.data),
   usageFailurePayload: (requestID: string) =>
@@ -496,8 +523,7 @@ export const api = {
   usageRequest: (requestID: string) =>
     request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
-  tokenGuardPolicies: () =>
-    request<Page<TokenGuardPolicy>>("/token-guard-policies").then((value) => value.data),
+  tokenGuardPolicies: () => pageOfAll<TokenGuardPolicy>("token guard policy", "/token-guard-policies"),
   tokenGuardPoliciesPage: (query = "") =>
     request<Page<TokenGuardPolicy>>(`/token-guard-policies${query}`).then((value) => value.data),
   createTokenGuardPolicy: (value: unknown) =>
@@ -521,8 +547,7 @@ export const api = {
       `/token-guard-policies/${encodeURIComponent(id)}/test`,
       json("POST", value),
     ).then((result) => result.data),
-  redactionPolicies: () =>
-    request<Page<RedactionPolicy>>("/redaction-policies").then((value) => value.data),
+  redactionPolicies: () => pageOfAll<RedactionPolicy>("redaction policy", "/redaction-policies"),
   redactionPoliciesPage: (query = "") =>
     request<Page<RedactionPolicy>>(`/redaction-policies${query}`).then((value) => value.data),
   createRedactionPolicy: (value: unknown) =>

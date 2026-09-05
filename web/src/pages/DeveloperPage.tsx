@@ -197,19 +197,35 @@ export function DeveloperPage() {
   };
   const queryClient = useQueryClient();
   const { notify } = useNotify();
+  const debugKeyOperation = useRef<{
+    projectID: string;
+    name: string;
+    idempotencyKey: string;
+    expiresAt: string;
+  } | null>(null);
+  const beginDebugKeyOperation = () => {
+    if (!selectedProject) return;
+    debugKeyOperation.current = {
+      projectID: selectedProject.id,
+      name: t("developer.debugKeyName", { time: debugKeyTimestamp() }),
+      idempotencyKey: crypto.randomUUID(),
+      expiresAt: new Date(Date.now() + debugKeyLifetimeMillis).toISOString(),
+    };
+  };
   // The console never holds an existing key's plaintext — it is stored as a SHA-256 hash.
   // Creating one is the only moment the secret exists, so fill it in straight from there.
   const createDebugKey = useMutation({
     // A debug key is a real Gateway Key: shown once, valid after this session
     // ends, and billable. It asks for the same proof any other minting does.
-    mutationFn: (reauth: ReauthValues) => api.createKey(
-      selectedProject!.id,
-      t("developer.debugKeyName", { time: debugKeyTimestamp() }),
-      crypto.randomUUID(),
-      reauth,
-      new Date(Date.now() + debugKeyLifetimeMillis).toISOString(),
-    ),
+    mutationFn: (reauth: ReauthValues) => {
+      if (!debugKeyOperation.current || debugKeyOperation.current.projectID !== selectedProject?.id) {
+        beginDebugKeyOperation();
+      }
+      const operation = debugKeyOperation.current!;
+      return api.createKey(operation.projectID, operation.name, operation.idempotencyKey, reauth, operation.expiresAt);
+    },
     onSuccess: (created) => {
+      debugKeyOperation.current = null;
       setGatewayKey(created.data.key);
       setShowGatewayKey(false);
       setCreatedKeyName(created.data.metadata.name);
@@ -410,6 +426,7 @@ export function DeveloperPage() {
                     label={t("developer.createDebugKey")}
                     confirmLabel={t("auth.stepUpMintKey")}
                     disabled={readOnly || createDebugKey.isPending}
+                    onOpen={beginDebugKeyOperation}
                     requireStepUp
                     onConfirm={(reauth) => createDebugKey.mutateAsync(reauth)}
                   />

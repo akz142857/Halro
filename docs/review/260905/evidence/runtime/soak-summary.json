@@ -1,0 +1,55 @@
+{
+  "status": "smoke_only",
+  "commit": "381743f6613607dc256828f4776b52af8bdd232c",
+  "started_at": "2026-09-05T10:11:56.312279Z",
+  "finished_at": "2026-09-05T10:42:01.393464Z",
+  "duration_ns": 1800000000000,
+  "samples": 61,
+  "start": {
+    "time": "2026-09-05T10:11:56.363702Z",
+    "rss_bytes": 32948224,
+    "goroutines": 21,
+    "open_fds": 15,
+    "wal_queue_depth": 0,
+    "wal_queue_capacity": 4096,
+    "wal_append_errors_total": 0,
+    "analytics_queue_depth": 0,
+    "analytics_lagging": 0,
+    "requests_succeeded": 0,
+    "requests_failed": 0
+  },
+  "end": {
+    "time": "2026-09-05T10:42:01.393074Z",
+    "rss_bytes": 71794688,
+    "goroutines": 21,
+    "open_fds": 15,
+    "wal_queue_depth": 0,
+    "wal_queue_capacity": 4096,
+    "wal_append_errors_total": 0,
+    "analytics_queue_depth": 0,
+    "analytics_lagging": 0,
+    "requests_succeeded": 899,
+    "requests_failed": 0
+  },
+  "maximum": {
+    "time": "2026-09-05T10:11:56.363702Z",
+    "rss_bytes": 128188416,
+    "goroutines": 29,
+    "open_fds": 19,
+    "wal_queue_depth": 0,
+    "wal_queue_capacity": 4096,
+    "wal_append_errors_total": 0,
+    "analytics_queue_depth": 0,
+    "analytics_lagging": 0,
+    "requests_succeeded": 899,
+    "requests_failed": 0
+  },
+  "limits": {
+    "rss_growth_bytes": 67108864,
+    "goroutine_growth": 20,
+    "fd_growth": 20,
+    "wal_queue_percent": 75,
+    "request_failure_percent": 1
+  },
+  "passed": true
+}

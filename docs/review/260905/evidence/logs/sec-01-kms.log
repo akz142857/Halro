@@ -1,0 +1,8 @@
+=== RUN   TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion
+--- PASS: TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion (0.25s)
+=== RUN   TestAdjudicationKMSRetainedCiphertext
+    rotation_adjudication_test.go:28: after successful rotation: capture found=false err=open failure capture: secret authentication failed
+    rotation_adjudication_test.go:30: unchanged provider object: new key read err=secret authentication failed
+--- PASS: TestAdjudicationKMSRetainedCiphertext (0.37s)
+PASS
+ok  	github.com/akz142857/Halro/internal/app	1.534s

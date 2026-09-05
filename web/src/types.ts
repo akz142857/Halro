@@ -266,6 +266,7 @@ export interface Dashboard {
       provider_concurrency: number;
       deployment_concurrency: number;
       budget: number;
+      run_budget: number;
       token_guard: number;
       total: number;
     };
@@ -356,19 +357,104 @@ export interface Project {
   allowed_cidrs: string[] | null;
   redaction_policy_id: string;
   token_guard_policy_id: string;
+  run_governance?: RunGovernanceConfig;
   revision: number;
   created_at: string;
   updated_at: string;
 }
+
+export interface RunGovernanceConfig {
+  enabled: boolean;
+  default_run_budget_micros_usd: number;
+  max_run_budget_micros_usd: number;
+  default_run_ttl_seconds: number;
+  max_run_ttl_seconds: number;
+  max_active_runs: number;
+  max_open_work_units: number;
+}
+
+export type GatewayScope = "inference" | "work_unit:create" | "run:create" | "run:attach" | "governance:read" | "outcome:write";
 
 export interface GatewayKey {
   id: string;
   project_id: string;
   name: string;
   enabled: boolean;
+  scopes?: GatewayScope[];
   expires_at?: string;
   created_at: string;
   revision: number;
+}
+
+export interface WorkUnit {
+  id: string;
+  project_id: string;
+  status: "open" | "closed";
+  created_by_key_id: string;
+  created_at: string;
+  closed_at?: string;
+  period_id: string;
+  period_timezone_version: number;
+  run_count?: number;
+  committed_micros_usd?: number;
+  reserved_micros_usd?: number;
+  unknown_attempts?: number;
+	 outcome_definitions?: OutcomeDefinitionRef[];
+}
+
+export interface OutcomeDefinitionRef { id: string; version: number }
+export interface OutcomeDefinition {
+	id: string; project_id: string; name: string; version: number; data_type: "BOOLEAN" | "CATEGORICAL";
+	allowed_values: string[]; success_values: string[]; unit?: string; description?: string; enabled: boolean;
+	created_at: string; created_by: string; revision: number;
+}
+export interface Outcome {
+	id: string; project_id: string; work_unit_id: string; definition_id: string; definition_version: number; value: string;
+	reporter_key_id: string; evidence_sha256?: string; evidence_ref?: string; observed_at: string; ingested_at: string;
+	supersedes_outcome_id?: string; revision: number; governance_sequence: number; provisional: boolean;
+}
+export interface GovernanceSummary {
+  basis: "work_unit_cohort";
+  cohort_start: string;
+  cohort_end: string;
+  definition_id: string;
+  definition_version: number;
+  generated_at: string;
+  accounting_watermark: { generation: number; sequence: number; offset: number };
+  governance_watermark: { sequence: number; offset: number };
+  eligible_units: number;
+  matured_units: number;
+  evaluated_units: number;
+  successful_units: number;
+  outcome_coverage: number | null;
+  success_rate: number | null;
+  known_cost_micros_usd: number;
+  in_progress_cost_micros_usd: number;
+  estimated_cost_micros_usd: number;
+  unknown_attempts: number;
+  outcome_completeness?: "complete" | "partial" | "unknown";
+  outcome_reason?: string;
+  cost_completeness: "complete" | "partial" | "unknown";
+  cost_per_success_micros_usd: number | null;
+  cost_per_success_reason?: string;
+}
+
+export interface Run {
+  id: string;
+  project_id: string;
+  work_unit_id: string;
+  budget_micros_usd: number;
+  committed_micros_usd: number;
+  reserved_micros_usd: number;
+  remaining_micros_usd: number;
+  budget_state: "available" | "fully_reserved" | "depleted";
+  unknown_attempts: number;
+  status: "active" | "closed" | "expired";
+  created_by_key_id: string;
+  created_at: string;
+  expires_at: string;
+  closed_at?: string;
+  close_reason?: string;
 }
 
 export interface CreatedGatewayKey {
@@ -869,6 +955,8 @@ export interface UsageAttempt {
   sequence: number;
   attempt: number;
   project_id: string;
+  work_unit_id?: string;
+  run_id?: string;
   key_id?: string;
   route_id?: string;
   deployment_id?: string;
@@ -1162,6 +1250,7 @@ export interface SystemStatus {
   audit: Record<string, number | string>;
   alerts: Record<string, number>;
   usage_watermark: Record<string, number>;
+	governance?: { ready: boolean; sequence: number; offset: number };
   time_context: TimeContext;
   activation?: ActivationStatus;
   reload?: ReloadStatus;

@@ -17,6 +17,7 @@ import (
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
@@ -381,6 +382,13 @@ func validateRestoreStage(
 		clear(auditKey)
 		return err
 	}
+	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
+	if err != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		return err
+	}
+	defer clear(governanceKey)
 	auditLog, err := audit.Open(filepath.Join(stageData, "audit", "audit.log"), auditKey)
 	clear(auditKey)
 	if err != nil {
@@ -430,6 +438,21 @@ func validateRestoreStage(
 	}
 	if err := metadata.ValidateDeploymentPriceReferences(stagedLedgerState); err != nil {
 		return fmt.Errorf("verify staged pricing references: %w", err)
+	}
+	if manifest.FormatVersion >= 3 {
+		governanceLog, err := governance.Open(filepath.Join(stageData, "governance", "governance.journal"), governanceKey)
+		if err != nil {
+			return fmt.Errorf("open staged Governance Journal: %w", err)
+		}
+		state := governance.NewState()
+		summary, replayErr := governanceLog.Replay(state.Apply)
+		closeErr := governanceLog.Close()
+		if err := errors.Join(replayErr, closeErr); err != nil {
+			return fmt.Errorf("replay staged Governance Journal: %w", err)
+		}
+		if summary.Records != manifest.GovernanceSequence || summary.Bytes != manifest.GovernanceOffset || summary.LastHash != manifest.GovernanceHeadHash {
+			return errors.New("staged Governance Journal head does not match backup manifest")
+		}
 	}
 	exporter, err := usage.NewExporter(filepath.Join(stageData, "usage"))
 	if err != nil {
@@ -538,6 +561,24 @@ func createBackupSnapshotWithLedger(
 	}
 	if ledgerLog == nil {
 		return backup.Manifest{}, errors.New("open Ledger is required for backup snapshot")
+	}
+	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	defer clear(governanceKey)
+	governanceLog, err := governance.Open(cfg.GovernancePath(), governanceKey)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("open Governance Journal for backup: %w", err)
+	}
+	if _, err := restoreGovernanceState(metadata, governanceLog, governanceKey); err != nil {
+		governanceLog.Close()
+		return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for backup: %w", err)
+	}
+	governanceSummary, replayErr := governanceLog.Replay(func(record governance.Record) error { return record.Event.Validate() })
+	governanceCloseErr := governanceLog.Close()
+	if err := errors.Join(replayErr, governanceCloseErr); err != nil {
+		return backup.Manifest{}, fmt.Errorf("verify Governance Journal for backup: %w", err)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(outputPath), ".halro-backup-stage-*")
 	if err != nil {
@@ -663,6 +704,7 @@ func createBackupSnapshotWithLedger(
 		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
+		{ArchivePath: "data/governance/governance.journal", LocalPath: cfg.GovernancePath()},
 	}
 	for _, name := range stagedSegments {
 		files = append(files, backup.SourceFile{
@@ -684,6 +726,8 @@ func createBackupSnapshotWithLedger(
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
 		LedgerChainHeadSequence: chainSequence, LedgerChainHeadOffset: chainOffset,
 		LedgerChainHeadHash: chainHash, LedgerChainVerified: chainVerified,
+		GovernanceSequence: governanceSummary.Records, GovernanceOffset: governanceSummary.Bytes,
+		GovernanceHeadHash: governanceSummary.LastHash, GovernanceFormatVersion: 1,
 		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
 		LedgerFeatureEpoch: metadataInfo.LedgerFeatureEpoch, MinimumLedgerReaderVersion: metadataInfo.MinimumLedgerReaderVersion,
 		PricingStateSHA256: pricingBackupState.StateSHA256, PendingIntentSHA256: pricingBackupState.PendingIntentSHA256, PendingIntents: pricingBackupState.PendingIntents,

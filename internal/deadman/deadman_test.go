@@ -90,6 +90,36 @@ func TestHeartbeatOutboxIsCoalescedAndBounded(t *testing.T) {
 	}
 }
 
+func TestDurableEnqueueCommitsBeforeDeliveryAndRollsBackOnSaveFailure(t *testing.T) {
+	directory := t.TempDir()
+	statePath := filepath.Join(directory, "state.json")
+	now := time.Now().UTC()
+	engine := &Engine{
+		cfg:   Config{ProbeID: "probe", HeartbeatTTL: Duration(time.Minute), OutboxLimit: 8, StateFile: statePath},
+		state: persistedState{Version: 1, Targets: make(map[string]TargetState)},
+	}
+	if err := engine.enqueueDurable("heartbeat", TargetConfig{}, "", "", 0, now); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := loadState(statePath, engine.cfg.OutboxLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.Sequence != 1 || len(disk.Outbox) != 1 || disk.Outbox[0].Event.EventID != engine.state.Outbox[0].Event.EventID {
+		t.Fatalf("durable state=%#v memory=%#v", disk, engine.state)
+	}
+
+	engine.cfg.StateFile = directory // rename cannot replace a directory
+	before := engine.state
+	before.Outbox = append([]queuedEvent(nil), engine.state.Outbox...)
+	if err := engine.enqueueDurable("state_transition", TargetConfig{ID: "halro", Kind: "halro"}, PhaseDown, "failed", 0, now); err == nil {
+		t.Fatal("state save failure was accepted")
+	}
+	if engine.state.Sequence != before.Sequence || len(engine.state.Outbox) != len(before.Outbox) || engine.state.Outbox[0].Event.EventID != before.Outbox[0].Event.EventID {
+		t.Fatalf("failed durable enqueue changed memory: before=%#v after=%#v", before, engine.state)
+	}
+}
+
 func TestStateIsDurableAndRejectsCorruption(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "deadman.json")
 	want := persistedState{Version: 1, Sequence: 7, Targets: map[string]TargetState{"prometheus": {Phase: PhaseDown, StablePhase: PhaseDown}}, Outbox: []queuedEvent{{Event: Event{EventID: "probe-7", Sequence: 7}}}}

@@ -1,0 +1,138 @@
+{
+  "baseline": "381743f6613607dc256828f4776b52af8bdd232c",
+  "cases": {
+    "SEC-01-file": {
+      "source": "repros/sec-01-file.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_sec_01_file_test.go",
+      "selector": "^TestSecurityReviewRotationRetainedCiphertext$",
+      "race": false,
+      "required_files": [
+        "internal/app/key_rotation_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-security-review-260905/security_review_test.go",
+      "original_sha256": "233a68780456ade796edd3a0d6ab295b48c8bf9833d7c8ce4b74c1638ca1ac2e",
+      "archived_sha256": "4a47ff77221688838851cfaad2cd820c04c24235e2baf92c3f4d4b288cb84327",
+      "transformation": "extracted rotation function; minimized imports; gofmt"
+    },
+    "SEC-01-kms": {
+      "source": "repros/sec-01-kms.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_sec_01_kms_test.go",
+      "selector": "^(TestAdjudicationKMSRetainedCiphertext|TestKMSRewrapPreservesMasterKeyCiphertextAndKeyVersion)$",
+      "race": false,
+      "required_files": [
+        "internal/app/kms_key_lifecycle_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-security-rotation-adjudication-260905/rotation_test.go",
+      "original_sha256": "8eaf43e2e296bcab0b4af0bd7c88c948007b8767fceb585899ea6567c6b53733",
+      "archived_sha256": "bf519d48b8e6ed9b3c13bce7d35826a7ca721795cfe40ecea3addbbec8e1e4ee",
+      "transformation": "gofmt only"
+    },
+    "SEC-02": {
+      "source": "repros/sec-02.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_sec_02_test.go",
+      "selector": "^TestIndependentSessionRevocationAdjudication$",
+      "race": true,
+      "required_files": [
+        "internal/app/admin_stepup_test.go",
+        "internal/app/admin_session_test.go",
+        "internal/app/admin_users_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-reliability-review/session_adjudication_test.go",
+      "original_sha256": "2edd11b6b3785e63639d7e3f44e651a04f6440b8d2841337dcafbd9cfe849cdf",
+      "archived_sha256": "2edd11b6b3785e63639d7e3f44e651a04f6440b8d2841337dcafbd9cfe849cdf",
+      "transformation": "gofmt only"
+    },
+    "PROV-01": {
+      "source": "repros/prov-01.go.txt",
+      "package": "internal/gateway",
+      "virtual": "internal/gateway/evidence_prov_01_test.go",
+      "selector": "^TestAdjudicationPROV01$",
+      "race": false,
+      "required_files": [
+        "internal/gateway/service_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-provider-adjudication-260905/adjudication_test.go",
+      "original_sha256": "3d35bc38404aec4990c3b6ab6f9bd1bd743215ffd88cce0e3ff8411ce35b919e",
+      "archived_sha256": "ab9860c9133c9ef0da8a18745a8609df9e1e644a7402870ce96dc4604778584f",
+      "transformation": "gofmt only"
+    },
+    "SUM-01": {
+      "source": "repros/sum-01.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_sum_01_test.go",
+      "selector": "^TestReviewSummaryOmitsInFlightCheckpoint$",
+      "race": false,
+      "required_files": [
+        "internal/app/admin_usage_summary_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-review-260905/summary-review_test.go",
+      "original_sha256": "05d2b7a4a67068ea55c32db327e568da95cb26e9d06cedcdba610800a87370ca",
+      "archived_sha256": "1cf9ed10655094bb54907d148ee19c7f317a9b584b8704ca3a4ef3ec6a385b8c",
+      "transformation": "gofmt only"
+    },
+    "REL-01": {
+      "source": "repros/rel-01.go.txt",
+      "package": "internal/deadman",
+      "virtual": "internal/deadman/evidence_rel_01_test.go",
+      "selector": "^TestAdjudicationRunSendBeforePersist$",
+      "race": true,
+      "required_files": [
+        "internal/deadman/engine.go",
+        "internal/deadman/store.go"
+      ],
+      "original_source": "<review-tmp>/halro-deadman-adjudication/run_test.go",
+      "original_sha256": "26aebdcb06335b47bca4ddebf8dc3048b03ea6c8f4ba2a5cd48987fd40fcab25",
+      "archived_sha256": "634a15854ab08be70261a52c8a7b59987b6c20b485dc89e941ca3137151d2dc6",
+      "transformation": "gofmt only"
+    },
+    "PROV-02": {
+      "source": "repros/prov-02.go.txt",
+      "package": "internal/gateway",
+      "virtual": "internal/gateway/evidence_prov_02_test.go",
+      "selector": "^TestReviewCRStreamBlocksUntilEOF$",
+      "race": false,
+      "required_files": [
+        "internal/sse/sse.go"
+      ],
+      "original_source": "<review-tmp>/halro-provider-review-260905/review_test.go",
+      "original_sha256": "36ce8ebef4d29dfb17b15ddd9695c4c8bce36bbec8e2edcab9a4d7d39837b45b",
+      "archived_sha256": "903aec25e173e9604083115211b36dbd747110116bc20e02b9791bcd5e25f9f3",
+      "transformation": "extracted CR framing function; minimized imports; gofmt"
+    },
+    "SEC-03": {
+      "source": "repros/security-secondary.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_security_secondary_test.go",
+      "selector": "^TestSecondaryManagementFactorBudget$",
+      "race": false,
+      "required_files": [
+        "internal/app/admin_stepup_test.go",
+        "internal/app/admin_session_test.go",
+        "internal/app/admin_users_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-security-secondary-260905/secondary_test.go",
+      "original_sha256": "5483a892b8e62e831ed7878e522a27b8f785694038b55548a4e1c29149818d8b",
+      "archived_sha256": "2baf28ed2f8021d4e837f973422255ed55a3f1a1ad740a670b3479fdc289a1d8",
+      "transformation": "gofmt only; fixed MFA bytes are synthetic test data, not an exported authenticator"
+    },
+    "SEC-04-C2": {
+      "source": "repros/security-secondary.go.txt",
+      "package": "internal/app",
+      "virtual": "internal/app/evidence_security_secondary_test.go",
+      "selector": "^TestSecondaryCaptureHTTPRoleTTL$",
+      "race": false,
+      "required_files": [
+        "internal/app/admin_stepup_test.go",
+        "internal/app/admin_session_test.go",
+        "internal/app/admin_users_test.go"
+      ],
+      "original_source": "<review-tmp>/halro-security-secondary-260905/secondary_test.go",
+      "original_sha256": "5483a892b8e62e831ed7878e522a27b8f785694038b55548a4e1c29149818d8b",
+      "archived_sha256": "2baf28ed2f8021d4e837f973422255ed55a3f1a1ad740a670b3479fdc289a1d8",
+      "transformation": "gofmt only; fixed MFA bytes are synthetic test data, not an exported authenticator"
+    }
+  }
+}

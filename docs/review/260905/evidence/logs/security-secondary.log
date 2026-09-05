@@ -1,0 +1,56 @@
+=== RUN   TestSecondaryManagementFactorBudget
+=== RUN   TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/authenticators
+    security_secondary_test.go:18: attempt=1 status=401
+    security_secondary_test.go:18: attempt=2 status=401
+    security_secondary_test.go:18: attempt=3 status=401
+    security_secondary_test.go:18: attempt=4 status=401
+    security_secondary_test.go:18: attempt=5 status=401
+    security_secondary_test.go:18: attempt=6 status=401
+    security_secondary_test.go:18: attempt=7 status=401
+    security_secondary_test.go:23: failure audits=0
+    security_secondary_test.go:30: wrong-password control: five 401 then 429 in pinned window
+=== RUN   TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/recovery-codes/regenerate
+    security_secondary_test.go:18: attempt=1 status=401
+    security_secondary_test.go:18: attempt=2 status=401
+    security_secondary_test.go:18: attempt=3 status=401
+    security_secondary_test.go:18: attempt=4 status=401
+    security_secondary_test.go:18: attempt=5 status=401
+    security_secondary_test.go:18: attempt=6 status=401
+    security_secondary_test.go:18: attempt=7 status=401
+    security_secondary_test.go:23: failure audits=0
+    security_secondary_test.go:30: wrong-password control: five 401 then 429 in pinned window
+=== RUN   TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa
+    security_secondary_test.go:18: attempt=1 status=401
+    security_secondary_test.go:18: attempt=2 status=401
+    security_secondary_test.go:18: attempt=3 status=401
+    security_secondary_test.go:18: attempt=4 status=401
+    security_secondary_test.go:18: attempt=5 status=401
+    security_secondary_test.go:18: attempt=6 status=401
+    security_secondary_test.go:18: attempt=7 status=401
+    security_secondary_test.go:23: failure audits=0
+    security_secondary_test.go:30: wrong-password control: five 401 then 429 in pinned window
+=== RUN   TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/authenticators/mfa_review
+    security_secondary_test.go:18: attempt=1 status=401
+    security_secondary_test.go:18: attempt=2 status=401
+    security_secondary_test.go:18: attempt=3 status=401
+    security_secondary_test.go:18: attempt=4 status=401
+    security_secondary_test.go:18: attempt=5 status=401
+    security_secondary_test.go:18: attempt=6 status=401
+    security_secondary_test.go:18: attempt=7 status=401
+    security_secondary_test.go:23: failure audits=0
+    security_secondary_test.go:30: wrong-password control: five 401 then 429 in pinned window
+--- PASS: TestSecondaryManagementFactorBudget (5.08s)
+    --- PASS: TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/authenticators (1.45s)
+    --- PASS: TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/recovery-codes/regenerate (1.24s)
+    --- PASS: TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa (1.21s)
+    --- PASS: TestSecondaryManagementFactorBudget//admin/api/v1/security/mfa/authenticators/mfa_review (1.18s)
+=== RUN   TestSecondaryCaptureHTTPRoleTTL
+    security_secondary_test.go:49: read_only age=30m0s status=200
+    security_secondary_test.go:49: read_only age=1h0m0s status=200
+    security_secondary_test.go:49: read_only age=2h0m0s status=200
+    security_secondary_test.go:52: successful payload audit records=4
+    security_secondary_test.go:54: read_only with audit closed:503 and no payload
+    security_secondary_test.go:55: after purge:404
+--- PASS: TestSecondaryCaptureHTTPRoleTTL (0.48s)
+PASS
+ok  	github.com/akz142857/Halro/internal/app	6.440s

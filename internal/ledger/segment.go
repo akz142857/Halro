@@ -52,15 +52,19 @@ var ErrSegmentMissing = errors.New("ledger segment is missing")
 // compaction be verified rather than trusted: the compressed file is read back
 // and measured against the plaintext figures the roll recorded.
 type Segment struct {
-	Generation     uint64    `json:"generation"`
-	File           string    `json:"file"`
-	Compressed     bool      `json:"compressed"`
-	FirstSequence  uint64    `json:"first_sequence"`
-	LastSequence   uint64    `json:"last_sequence"`
-	Length         int64     `json:"length"`
-	StoredLength   int64     `json:"stored_length"`
-	StartHash      string    `json:"start_hash"`
-	EndHash        string    `json:"end_hash"`
+	Generation    uint64 `json:"generation"`
+	File          string `json:"file"`
+	Compressed    bool   `json:"compressed"`
+	FirstSequence uint64 `json:"first_sequence"`
+	LastSequence  uint64 `json:"last_sequence"`
+	Length        int64  `json:"length"`
+	StoredLength  int64  `json:"stored_length"`
+	StartHash     string `json:"start_hash"`
+	EndHash       string `json:"end_hash"`
+	// EndEpoch records the highest authenticated frame epoch observed when the
+	// generation was sealed. It is optional for manifests written before epoch
+	// 5 existed; those generations can only have ended at epoch 4.
+	EndEpoch       uint8     `json:"end_epoch,omitempty"`
 	PlainChecksum  string    `json:"plain_checksum"`
 	StoredChecksum string    `json:"stored_checksum"`
 	SealedAt       time.Time `json:"sealed_at"`
@@ -499,14 +503,26 @@ func activeGeneration(segments []Segment) uint64 {
 
 // sealedTail is where the active WAL picks up: the last sealed generation's
 // chain head and sequence, or the zero value when nothing has been sealed.
-func sealedTail(segments []Segment) (hash [32]byte, sequence uint64, err error) {
+func sealedTail(segments []Segment) (hash [32]byte, sequence uint64, epoch byte, err error) {
 	if len(segments) == 0 {
-		return hash, 0, nil
+		return hash, 0, 0, nil
 	}
 	last := segments[len(segments)-1]
 	hash, err = decodeChainHash(last.EndHash)
 	if err != nil {
-		return hash, 0, err
+		return hash, 0, 0, err
 	}
-	return hash, last.LastSequence, nil
+	return hash, last.LastSequence, segmentEndEpoch(last), nil
+}
+
+func segmentEndEpoch(segment Segment) byte {
+	if segment.EndEpoch != 0 {
+		return byte(segment.EndEpoch)
+	}
+	// EndEpoch was added with epoch 5. A non-empty historical segment without
+	// it was therefore written by an epoch-4 binary.
+	if segment.LastSequence != 0 {
+		return frameVersionLedgerIntegrity
+	}
+	return 0
 }

@@ -1,0 +1,5 @@
+=== RUN   TestReviewSummaryOmitsInFlightCheckpoint
+    review_summary_test.go:12: requests before=1 during=0 after=1; cost before=90 during=0 after=90
+--- PASS: TestReviewSummaryOmitsInFlightCheckpoint (0.53s)
+PASS
+ok  	github.com/akz142857/Halro/internal/app	1.210s

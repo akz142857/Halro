@@ -188,7 +188,7 @@ function dashboard(overrides: Partial<Dashboard> = {}): Dashboard {
       recent_anomalies: [],
     },
     governance: {
-      policy_rejections: { route_capability: 0, rpm: 0, tpm: 0, project_concurrency: 0, provider_concurrency: 0, deployment_concurrency: 0, budget: 0, token_guard: 0, total: 0 },
+      policy_rejections: { route_capability: 0, rpm: 0, tpm: 0, project_concurrency: 0, provider_concurrency: 0, deployment_concurrency: 0, budget: 0, run_budget: 0, token_guard: 0, total: 0 },
       budget: { at_risk: 0, items: [] },
       capacity: { at_risk: 0, items: [] },
     },

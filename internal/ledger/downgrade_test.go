@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// downgradeFrameToPeriodEpoch rewrites one epoch-4 frame as an epoch-3 frame:
+// downgradeFrameToPeriodEpoch rewrites one authenticated frame as an epoch-3 frame:
 // drop the 64-byte previous-hash/MAC tail, set the epoch byte to 3, recompute
 // the CRC. Every step uses public information — the CRC is keyless and covers
 // exactly the same bytes in both epochs, and an epoch-4 payload already
@@ -22,8 +22,8 @@ import (
 // once the authenticated epoch has started.
 func downgradeFrameToPeriodEpoch(t *testing.T, frame []byte) []byte {
 	t.Helper()
-	if frame[4] != frameVersionLedgerIntegrity {
-		t.Fatalf("frame is epoch %d, want %d", frame[4], frameVersionLedgerIntegrity)
+	if !authenticatedFrameEpoch(frame[4]) {
+		t.Fatalf("frame is epoch %d, want an authenticated epoch", frame[4])
 	}
 	payloadLength := binary.BigEndian.Uint32(frame[16:20])
 	payload := frame[chainHeaderSize : chainHeaderSize+int(payloadLength)]

@@ -1,0 +1,41 @@
+package gateway
+
+import (
+	"github.com/akz142857/Halro/internal/sse"
+	"io"
+	"testing"
+	"time"
+)
+
+func TestReviewCRStreamBlocksUntilEOF(t *testing.T) {
+	r, w := io.Pipe()
+	defer r.Close()
+	defer w.Close()
+	result := make(chan error, 1)
+	go func() {
+		e, err := sse.NewDecoder(r, 1024).Next()
+		if err == nil && string(e.Data) != "one" {
+			t.Errorf("wrong payload %q", e.Data)
+		}
+		result <- err
+	}()
+	if _, err := w.Write([]byte("data: one\r\r")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("candidate not reproduced, decoder returned %v", err)
+	case <-time.After(150 * time.Millisecond):
+		t.Log("complete CR-delimited event is withheld while upstream stays open")
+	}
+	w.Close()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log("same event delivered after EOF")
+	case <-time.After(time.Second):
+		t.Fatal("decoder did not finish")
+	}
+}

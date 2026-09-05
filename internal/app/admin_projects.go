@@ -30,11 +30,12 @@ type projectInput struct {
 	MaxStreamDurationSeconds int64    `json:"max_stream_duration_seconds"`
 	// DeferredResponses turns on background: true for this project. Off unless
 	// an operator says otherwise: it changes what the data directory holds.
-	DeferredResponses  bool     `json:"deferred_responses"`
-	MaxDeferredQueue   int64    `json:"max_deferred_queue"`
-	AllowedCIDRs       []string `json:"allowed_cidrs"`
-	RedactionPolicyID  string   `json:"redaction_policy_id"`
-	TokenGuardPolicyID string   `json:"token_guard_policy_id"`
+	DeferredResponses  bool                        `json:"deferred_responses"`
+	MaxDeferredQueue   int64                       `json:"max_deferred_queue"`
+	AllowedCIDRs       []string                    `json:"allowed_cidrs"`
+	RedactionPolicyID  string                      `json:"redaction_policy_id"`
+	TokenGuardPolicyID string                      `json:"token_guard_policy_id"`
+	RunGovernance      *domain.RunGovernanceConfig `json:"run_governance,omitempty"`
 }
 
 type gatewayKeyInput struct {
@@ -48,8 +49,9 @@ type gatewayKeyInput struct {
 	// than any of the deletions step-up already covered. Carried on this struct
 	// rather than read by the shared middleware because the body is decoded
 	// here and can only be read once.
-	CurrentPassword string `json:"current_password,omitempty"`
-	TOTPCode        string `json:"totp_code,omitempty"`
+	CurrentPassword string                 `json:"current_password,omitempty"`
+	TOTPCode        string                 `json:"totp_code,omitempty"`
+	Scopes          *[]domain.GatewayScope `json:"scopes,omitempty"`
 }
 
 func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.Request) {
@@ -65,7 +67,7 @@ func (r *Runtime) createAdminProject(writer http.ResponseWriter, request *http.R
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	projectID := adminCreateID("prj", "project", admin.session.Username, idempotencyKey)
 	now := time.Now().UTC()
-	project, err := input.project(projectID, now, now)
+	project, err := input.project(projectID, now, now, nil)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -133,12 +135,26 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 		adminPreconditionFailed(writer)
 		return
 	}
-	replacement, err := input.project(current.ID, current.CreatedAt, time.Now().UTC())
+	replacement, err := input.project(current.ID, current.CreatedAt, time.Now().UTC(), &current)
 	if err != nil {
 		adminBadRequest(writer, err.Error())
 		return
 	}
 	replacement.DeletedAt = current.DeletedAt
+	if current.RunGovernance.Enabled && !replacement.RunGovernance.Enabled {
+		activeRuns := 0
+		for _, run := range r.accounting.Runs(current.ID, "") {
+			if domain.EffectiveRunStatus(run, r.clockNow()) == domain.RunActive {
+				activeRuns++
+			}
+		}
+		if activeRuns > 0 {
+			writeJSON(writer, http.StatusConflict, map[string]any{
+				"code": "run_governance_active_runs", "error": "close active Runs before disabling Run Governance", "active_runs": activeRuns,
+			})
+			return
+		}
+	}
 	if err := r.validateProjectReferences(request, replacement); err != nil {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -263,6 +279,17 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	if input.Scopes != nil {
+		if len(*input.Scopes) == 0 {
+			adminBadRequest(writer, "gateway key scopes cannot be empty")
+			return
+		}
+		key.Scopes = append([]domain.GatewayScope(nil), (*input.Scopes)...)
+		if err := key.Validate(); err != nil {
+			adminBadRequest(writer, err.Error())
+			return
+		}
+	}
 	r.adminProjectMu.Lock()
 	defer r.adminProjectMu.Unlock()
 	project, err := r.store.GetProject(request.Context(), projectID)
@@ -299,7 +326,7 @@ func (r *Runtime) createAdminProjectKey(writer http.ResponseWriter, request *htt
 		"key": plaintext,
 		"metadata": gatewayKeyView{
 			ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
-			ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
+			Scopes: domain.EffectiveGatewayScopes(key.Scopes), ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
 		},
 	})
 }
@@ -312,7 +339,7 @@ func (r *Runtime) getAdminProjectKey(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
-		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
+		Scopes: domain.EffectiveGatewayScopes(key.Scopes), ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
 	})
 }
 
@@ -341,6 +368,17 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	if input.Enabled != nil {
 		key.Enabled = *input.Enabled
 	}
+	if input.Scopes != nil {
+		if len(*input.Scopes) == 0 {
+			adminBadRequest(writer, "gateway key scopes cannot be empty")
+			return
+		}
+		key.Scopes = append([]domain.GatewayScope(nil), (*input.Scopes)...)
+		if err := key.Validate(); err != nil {
+			adminBadRequest(writer, err.Error())
+			return
+		}
+	}
 	intent, intentErr := r.newAdminAuditIntent(request, "gateway_key.update", "gateway_key", key.ID)
 	if intentErr != nil {
 		adminStoreError(writer)
@@ -356,7 +394,7 @@ func (r *Runtime) updateAdminProjectKey(writer http.ResponseWriter, request *htt
 	writer.Header().Set("ETag", revisionETag(key.Revision))
 	writeJSON(writer, http.StatusOK, gatewayKeyView{
 		ID: key.ID, ProjectID: key.ProjectID, Name: key.Name, Enabled: key.Enabled,
-		ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
+		Scopes: domain.EffectiveGatewayScopes(key.Scopes), ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt, Revision: key.Revision,
 	})
 }
 
@@ -401,7 +439,7 @@ func (r *Runtime) deleteAdminProjectKey(writer http.ResponseWriter, request *htt
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (input projectInput) project(id string, createdAt, updatedAt time.Time) (domain.Project, error) {
+func (input projectInput) project(id string, createdAt, updatedAt time.Time, current *domain.Project) (domain.Project, error) {
 	cidrs := make([]netip.Prefix, 0, len(input.AllowedCIDRs))
 	for _, raw := range input.AllowedCIDRs {
 		prefix, err := netip.ParsePrefix(raw)
@@ -430,6 +468,11 @@ func (input projectInput) project(id string, createdAt, updatedAt time.Time) (do
 		DeferredResponses: input.DeferredResponses, MaxDeferredQueue: input.MaxDeferredQueue,
 		AllowedCIDRs: cidrs, RedactionPolicyID: input.RedactionPolicyID,
 		TokenGuardPolicyID: input.TokenGuardPolicyID, CreatedAt: createdAt, UpdatedAt: updatedAt,
+	}
+	if input.RunGovernance != nil {
+		project.RunGovernance = *input.RunGovernance
+	} else if current != nil {
+		project.RunGovernance = current.RunGovernance
 	}
 	return project, project.Validate()
 }

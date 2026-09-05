@@ -55,12 +55,16 @@ func runStats(fetch statsFetcher, interval time.Duration, out io.Writer) error {
 	return nil
 }
 
-// deltaSample subtracts two snapshots so the report describes a window rather
-// than the process's whole life. Gauges are not counters, so a value that went
-// down is taken from the newer snapshot rather than reported as negative work.
+// deltaSample subtracts counters so the report describes a window rather than
+// the process's whole life. Gauges always keep the newer level: a growing queue
+// is not five units deep merely because it grew from ten to fifteen.
 func deltaSample(first, second statsSample) statsSample {
 	delta := make(statsSample, len(second))
 	for name, newer := range second {
+		if statsGauge(name) {
+			delta[name] = newer
+			continue
+		}
 		older, seen := first[name]
 		if !seen || newer < older {
 			delta[name] = newer
@@ -69,6 +73,15 @@ func deltaSample(first, second statsSample) statsSample {
 		delta[name] = newer - older
 	}
 	return delta
+}
+
+func statsGauge(name string) bool {
+	switch name {
+	case "halro_usage_queue_depth", "halro_usage_queue_capacity":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeStatsReport(out io.Writer, sample statsSample, window string) {

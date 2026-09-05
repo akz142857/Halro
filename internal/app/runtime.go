@@ -28,6 +28,7 @@ import (
 	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/gatewayapi"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/modelcatalog"
@@ -44,14 +45,15 @@ import (
 )
 
 type Runtime struct {
-	config config.Config
-	logger *slog.Logger
-	lock   *lock.Lock
-	store  *boltstore.Store
-	ledger *ledger.Log
-	state  *ledger.State
-	status *ledger.Status
-	vault  *vault.Vault
+	config     config.Config
+	logger     *slog.Logger
+	lock       *lock.Lock
+	store      *boltstore.Store
+	ledger     *ledger.Log
+	state      *ledger.State
+	status     *ledger.Status
+	governance governanceRuntime
+	vault      *vault.Vault
 	// failureCapture holds the payloads of failed requests. Nil when the
 	// operator has not switched it on, which is the default; every read path
 	// treats nil as "the feature is off" rather than as an error.
@@ -143,6 +145,12 @@ type Runtime struct {
 	// five because the material, the sources it comes from, and the record of
 	// what was applied are one subsystem, and Runtime is already wide.
 	reload reloadRuntime
+}
+
+type governanceRuntime struct {
+	log     *governance.Log
+	manager *governance.Manager
+	rate    governanceRateState
 }
 
 type capabilityResolutionRuntime struct {
@@ -301,6 +309,33 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("replay ledger: %w", err))
+	}
+	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	defer clear(governanceKey)
+	governanceState := governance.NewState()
+	governanceLog, governanceOpenErr := governance.Open(cfg.GovernancePath(), governanceKey)
+	var governanceManager *governance.Manager
+	if governanceOpenErr != nil {
+		logger.Error("Governance Journal unavailable; ordinary inference remains available", "error", governanceOpenErr)
+		governanceManager = governance.NewUnavailable(governanceOpenErr)
+		governanceLog = nil
+	} else {
+		governanceState, governanceOpenErr = restoreGovernanceState(metadata, governanceLog, governanceKey)
+		replayErr := governanceOpenErr
+		if replayErr != nil {
+			logger.Error("Governance Journal replay failed; ordinary inference remains available", "error", replayErr)
+			governanceLog.Close()
+			governanceLog = nil
+			governanceManager = governance.NewUnavailable(replayErr)
+		} else {
+			governanceManager = governance.NewManager(governanceLog, governanceState, ledgerState, metadata, metadata)
+		}
 	}
 	if err := reconcileLedgerChainCheckpoint(metadata, ledgerLog); err != nil {
 		ledgerLog.Close()
@@ -625,6 +660,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		ledger:              ledgerLog,
 		state:               ledgerState,
 		status:              accountingStatus,
+		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
 		failureCapture:      captureStore,
 		auth:                authSnapshot,
@@ -872,6 +908,98 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 	return runtime, nil
 }
 
+var (
+	errGovernanceAnchorMismatch     = errors.New("governance journal does not match its authenticated terminal anchor")
+	errGovernanceCheckpointMismatch = errors.New("governance checkpoint does not match its journal frame")
+)
+
+func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance.Log, governanceKey []byte) (*governance.State, error) {
+	journalSummary := governanceLog.Summary()
+	anchor, anchorErr := metadata.GovernanceJournalAnchor()
+	hasAnchor := anchorErr == nil
+	if anchorErr != nil && !errors.Is(anchorErr, boltstore.ErrNotFound) {
+		return nil, fmt.Errorf("load governance journal anchor: %w", anchorErr)
+	}
+	if !hasAnchor && journalSummary.Records > 0 {
+		return nil, errGovernanceAnchorMismatch
+	}
+	if hasAnchor {
+		if !governance.VerifyJournalAnchorAuth(governanceKey, anchor.Sequence, anchor.Offset, anchor.Hash, anchor.Authentication) ||
+			anchor.Sequence > journalSummary.Records || anchor.Offset > journalSummary.Bytes {
+			return nil, errGovernanceAnchorMismatch
+		}
+	}
+
+	checkpoint, checkpointErr := metadata.LoadGovernanceCheckpoint()
+	checkpointSequence := uint64(0)
+	state := governance.NewState()
+	if checkpointErr == nil {
+		var snapshot governance.Snapshot
+		valid := checkpoint.Version == governance.SnapshotVersion && checkpoint.Sequence <= journalSummary.Records && checkpoint.Offset <= journalSummary.Bytes &&
+			governance.VerifyCheckpointAuth(governanceKey, checkpoint.Sequence, checkpoint.Offset, checkpoint.JournalHash,
+				checkpoint.PayloadSHA256, checkpoint.Authentication) &&
+			json.Unmarshal(checkpoint.Payload, &snapshot) == nil && snapshot.Sequence == checkpoint.Sequence && state.Restore(snapshot) == nil
+		if valid {
+			checkpointSequence = checkpoint.Sequence
+		} else {
+			_ = metadata.ResetGovernanceCheckpoint()
+			state = governance.NewState()
+		}
+	} else if !errors.Is(checkpointErr, boltstore.ErrNotFound) {
+		_ = metadata.ResetGovernanceCheckpoint()
+	}
+
+	replay := func(target *governance.State, skip uint64) error {
+		anchorMatched := !hasAnchor
+		checkpointMatched := skip == 0
+		_, err := governanceLog.Replay(func(record governance.Record) error {
+			if hasAnchor && record.Sequence == anchor.Sequence {
+				if record.Offset != anchor.Offset || record.Hash != anchor.Hash {
+					return errGovernanceAnchorMismatch
+				}
+				anchorMatched = true
+			}
+			if skip > 0 && record.Sequence == skip {
+				if record.Offset != checkpoint.Offset || record.Hash != checkpoint.JournalHash {
+					return errGovernanceCheckpointMismatch
+				}
+				checkpointMatched = true
+			}
+			if record.Sequence <= skip {
+				return nil
+			}
+			return target.Apply(record)
+		})
+		if err != nil {
+			return err
+		}
+		if !anchorMatched {
+			return errGovernanceAnchorMismatch
+		}
+		if !checkpointMatched {
+			return errGovernanceCheckpointMismatch
+		}
+		return nil
+	}
+	if err := replay(state, checkpointSequence); errors.Is(err, errGovernanceCheckpointMismatch) {
+		_ = metadata.ResetGovernanceCheckpoint()
+		state = governance.NewState()
+		if err := replay(state, 0); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
+
+	if journalSummary.Records > 0 {
+		head, authentication := governanceLog.AuthenticatedHead()
+		if err := metadata.PutGovernanceJournalAnchor(head.Records, head.Bytes, head.LastHash, authentication); err != nil {
+			return nil, fmt.Errorf("advance governance journal anchor: %w", err)
+		}
+	}
+	return state, nil
+}
+
 // head is the watermark the ledger actually replayed to. A checkpoint that
 // claims to have consumed more of the WAL than the WAL contains describes a
 // log that has since shrunk, and resuming from it would seek past the real
@@ -1011,6 +1139,15 @@ func (r *Runtime) saveUsageCheckpoint() {
 		r.logger.Warn("usage checkpoint catch-up failed", "error", err)
 		return
 	}
+	r.usage.WithRollupCheckpoint(r.saveUsageCheckpointCoordinated)
+}
+
+// saveUsageCheckpointCoordinated runs while the aggregate's rollup view is
+// exclusively held. That lock deliberately spans TakeCheckpoint, the bbolt
+// transaction, and Commit/Return: a summary can therefore observe either the
+// old stored rows plus the old pending increment, or the new stored rows plus
+// the new increment, never the drained gap or both copies.
+func (r *Runtime) saveUsageCheckpointCoordinated() {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
@@ -1339,6 +1476,12 @@ func (r *Runtime) Close() error {
 				return nil
 			}(),
 			r.ledger.Close(),
+			func() error {
+				if r.governance.log != nil {
+					return r.governance.log.Close()
+				}
+				return nil
+			}(),
 			r.audit.Close(),
 			func() error {
 				r.adminSessions.Close()
@@ -1516,6 +1659,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	// an anonymous caller sets the parsing cost and the per-project limiter
 	// that would bound it does not yet apply.
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(withRunAttribution)
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
 		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
@@ -1542,11 +1686,26 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
 	router.Group(func(guarded chi.Router) {
+		guarded.Use(withRunAttribution)
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorAnthropic))
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
 		guarded.Post("/v1/messages", r.gateway.Messages)
 		guarded.Post("/v1/messages/count_tokens", r.gateway.CountTokens)
+	})
+	router.Group(func(governance chi.Router) {
+		governance.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
+		governance.Use(r.gateway.LimitOpenAI)
+		governance.Use(r.gateway.GuardOpenAI)
+		governance.Use(r.gateway.WithSourceIPOpenAI)
+		governance.Use(r.withGovernanceRequestID)
+		governance.Post("/halro/v1/work-units", r.createWorkUnit)
+		governance.Get("/halro/v1/work-units/{workUnitID}", r.getWorkUnit)
+		governance.Post("/halro/v1/work-units/{workUnitID}/close", r.closeWorkUnit)
+		governance.Post("/halro/v1/work-units/{workUnitID}/outcomes", r.reportOutcome)
+		governance.Post("/halro/v1/runs", r.createRun)
+		governance.Get("/halro/v1/runs/{runID}", r.getRun)
+		governance.Post("/halro/v1/runs/{runID}/close", r.closeRun)
 	})
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeJSON(writer, http.StatusOK, map[string]any{
@@ -1619,12 +1778,22 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}", r.getAdminProject)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/projects/{id}", r.updateAdminProject)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/projects/{id}", r.deleteAdminProject)
+	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/outcome-definitions", r.listAdminOutcomeDefinitions)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/outcome-definitions", r.createAdminOutcomeDefinition)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/outcome-definitions/{definitionID}/versions", r.createAdminOutcomeDefinitionVersion)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/unblock", r.unblockAdminProject)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/keys", r.listAdminProjectKeys)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/projects/{id}/keys", r.createAdminProjectKey)
 	router.With(r.requireAdmin).Get("/admin/api/v1/projects/{id}/keys/{keyID}", r.getAdminProjectKey)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/projects/{id}/keys/{keyID}", r.updateAdminProjectKey)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/projects/{id}/keys/{keyID}", r.deleteAdminProjectKey)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/work-units", r.listAdminWorkUnits)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/work-units/{workUnitID}", r.getAdminWorkUnit)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs", r.listAdminRuns)
+	router.With(r.requireAdmin).Get("/admin/api/v1/run-governance/runs/{runID}", r.getAdminRun)
+	router.With(r.requireAdmin).Get("/admin/api/v1/governance/outcomes", r.listAdminOutcomes)
+	router.With(r.requireAdmin).Get("/admin/api/v1/governance/summary", r.adminGovernanceSummary)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/governance/export", r.createAdminGovernanceExport)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials", r.listAdminCredentials)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/credentials", r.createAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/credentials/{id}", r.getAdminCredential)

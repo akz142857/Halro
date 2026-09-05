@@ -20,6 +20,9 @@ import (
 	"github.com/akz142857/Halro/internal/durable"
 )
 
+// Schema 6 adds nullable Work Unit and Run attribution. Rows written under
+// schema 5 decode with both columns empty, preserving ungoverned history.
+//
 // Schema 5 adds the upstream's own identifiers for a failed attempt — the
 // provider code, the provider request ID, and the phase the failure happened in
 // — so history keeps what a support ticket to the upstream is built out of.
@@ -31,7 +34,7 @@ import (
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 5
+const parquetSchemaVersion = 6
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -58,6 +61,8 @@ type parquetAttempt struct {
 	Sequence                      int64  `parquet:"sequence,delta" json:"sequence"`
 	AttemptNumber                 int32  `parquet:"attempt_number" json:"attempt_number"`
 	ProjectID                     string `parquet:"project_id,dict" json:"project_id"`
+	WorkUnitID                    string `parquet:"work_unit_id,dict" json:"work_unit_id"`
+	RunID                         string `parquet:"run_id,dict" json:"run_id"`
 	KeyID                         string `parquet:"key_id,dict" json:"key_id"`
 	RouteID                       string `parquet:"route_id,dict" json:"route_id"`
 	DeploymentID                  string `parquet:"deployment_id,dict" json:"deployment_id"`
@@ -700,6 +705,10 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 6 {
+		row.WorkUnitID = ""
+		row.RunID = ""
+	}
 	if version < 5 {
 		// Schema 5 introduced the upstream's own failure identifiers.
 		row.ProviderCode = ""
@@ -777,6 +786,7 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		RequestID: attempt.RequestID, AttemptID: attempt.AttemptID,
 		Sequence: int64(attempt.Sequence), AttemptNumber: int32(attempt.AttemptNumber),
 		ProjectID: attempt.ProjectID, KeyID: attempt.KeyID, RouteID: attempt.RouteID,
+		WorkUnitID: attempt.WorkUnitID, RunID: attempt.RunID,
 		DeploymentID: attempt.DeploymentID,
 		ProviderID:   attempt.ProviderID, RequestedModel: attempt.RequestedModel,
 		ProviderModel: attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,

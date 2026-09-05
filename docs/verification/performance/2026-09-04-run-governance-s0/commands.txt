@@ -1,0 +1,9 @@
+GOCACHE=/tmp/halro-go-cache go test -count=1 ./internal/budget/ -run '^TestS0'
+GOCACHE=/tmp/halro-go-cache go test -race -count=1 ./internal/budget/ -run '^TestS0'
+GOCACHE=/tmp/halro-go-cache go test -count=1 ./internal/governance/
+GOCACHE=/tmp/halro-go-cache go test ./internal/budget/ -run '^$' -bench '^BenchmarkS0AdmissionPrototype$' -benchmem -count=3 -benchtime=1s
+GOCACHE=/tmp/halro-go-cache go test ./internal/budget/ -run '^$' -bench '^BenchmarkRequestLifecycle$' -benchmem -count=3 -benchtime=1s
+HALRO_RUN_GOVERNANCE_S0_PROFILE=1 GOCACHE=/tmp/halro-go-cache go test -count=1 ./internal/governance/ -run '^TestS0GovernanceRecoveryProfile$' -v
+HALRO_RUN_GOVERNANCE_S0_PROFILE=1 GOCACHE=/tmp/halro-go-cache go test -count=1 ./internal/ledger/ -run '^TestS0AccountingStateCapacityProfile$' -v
+GOCACHE=/tmp/halro-go-cache go test ./internal/governance/ -run '^$' -bench '^BenchmarkS0CohortSummary$' -benchmem -count=3 -benchtime=1s
+GOCACHE=/tmp/halro-go-cache go test -count=1 ./internal/usage/ -run '^(TestTheCheckpointCostsAKnownAmountPerAttempt|TestTheWindowCostsAKnownAmountOfMemoryPerAttempt|TestCheckpointWritesOnlyTheRecordsSinceTheLastOne)$' -v

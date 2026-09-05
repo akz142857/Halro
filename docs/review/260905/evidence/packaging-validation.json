@@ -1,0 +1,87 @@
+{
+  "baseline": "381743f6613607dc256828f4776b52af8bdd232c",
+  "date": "2026-09-05",
+  "command": "python3 docs/review/260905/evidence/run_repros.py --run all",
+  "process_exit": 1,
+  "note": "Initial all run had file fixture import error; other eight passed. Only failed file case rerun after fixing archived import; not claiming a single all-green all invocation. All nine final fixture versions now individually validated.",
+  "initial_attempts": [
+    {
+      "selection": "initial seven",
+      "exit": 1,
+      "reason": "GOTOOLCHAIN=local selected Go1.26.2 below required1.26.6; tests not executed"
+    },
+    {
+      "selection": "all nine",
+      "exit": 1,
+      "reason": "GOSUMDB=off prevented cached toolchain verification; tests not executed"
+    },
+    {
+      "selection": "SEC-01-file in all",
+      "exit": 1,
+      "reason": "extractor omitted bytes import; compile failure; fixed archive only"
+    }
+  ],
+  "final_results": [
+    {
+      "case": "SEC-01-file",
+      "exit": 0,
+      "seconds": 4.999,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run SEC-01-file"
+    },
+    {
+      "case": "SEC-01-kms",
+      "exit": 0,
+      "seconds": 5.196,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "SEC-02",
+      "exit": 0,
+      "seconds": 10.152,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "PROV-01",
+      "exit": 0,
+      "seconds": 2.483,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "SUM-01",
+      "exit": 0,
+      "seconds": 4.028,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "REL-01",
+      "exit": 0,
+      "seconds": 2.266,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "PROV-02",
+      "exit": 0,
+      "seconds": 1.563,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "SEC-03",
+      "exit": 0,
+      "seconds": 8.579,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    },
+    {
+      "case": "SEC-04-C2",
+      "exit": 0,
+      "seconds": 1.9,
+      "command": "python3 docs/review/260905/evidence/run_repros.py --run all"
+    }
+  ],
+  "process_evidence": "Actual subprocess return codes observed by runner and exec tool, not inferred from log PASS text. Compact transcription; original role logs separately preserved.",
+  "environment": "Go1.26.6 darwin/arm64; cache access escalated; GOPROXY=off; no full gates repeated",
+  "checks": {
+    "manifest_and_missing_file_check": 0,
+    "dry_run_initial_seven": 0,
+    "selected_text_secret_pattern_scan": "no private-key PEM, actual hms token, realistic sk/AKIA credential, or raw auth/cookie header detected; supplemented by manual source/log review"
+  }
+}

@@ -249,6 +249,24 @@ func (a *Aggregate) PendingRollup() map[string]domain.DailyRollup {
 	return pending
 }
 
+// WithRollupCheckpoint excludes summary reads while a caller moves a rollup
+// increment from memory into the checkpoint store. Apply remains independent:
+// events arriving during the write accumulate in the new pending increment.
+func (a *Aggregate) WithRollupCheckpoint(write func()) {
+	a.rollupView.Lock()
+	defer a.rollupView.Unlock()
+	write()
+}
+
+// WithRollupView holds the checkpoint boundary stable while a summary combines
+// stored rows with a snapshot of the pending increment. The callback may read
+// the checkpoint store; it must not begin a checkpoint write itself.
+func (a *Aggregate) WithRollupView(read func(map[string]domain.DailyRollup) error) error {
+	a.rollupView.RLock()
+	defer a.rollupView.RUnlock()
+	return read(a.PendingRollup())
+}
+
 // ApproximateLatencyPercentile reads a percentile off a stored histogram.
 //
 // It reports the upper bound of the bucket the percentile falls into, which is

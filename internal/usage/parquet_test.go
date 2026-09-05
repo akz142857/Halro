@@ -253,6 +253,35 @@ func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
 	}
 }
 
+func TestExportedRowsPreserveRunAttribution(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	exporter, err := NewExporter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{Attempts: []AttemptEvent{{
+		EventID: "attributed", RequestID: "req_1", AttemptID: "att_1", Sequence: 1,
+		ProjectID: "p", WorkUnitID: "wku_1", RunID: "run_1",
+		StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(), Status: "success",
+		CostMicrosUSD: ledger.MicrosUSD(0),
+	}}}
+	manifest, err := exporter.Export(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := readAttemptRows(filepath.Join(root, filepath.FromSlash(manifest.Files[0].Path)), manifest.Files[0].Format)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].WorkUnitID != "wku_1" || rows[0].RunID != "run_1" {
+		t.Fatalf("exported attribution=%#v", rows)
+	}
+	legacy := narrowToSchema(rows[0], 5)
+	if legacy.WorkUnitID != "" || legacy.RunID != "" {
+		t.Fatalf("schema 5 narrowing retained new fields: %#v", legacy)
+	}
+}
+
 func TestExporterPrunesOnlyExpiredPartitions(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "usage")
 	exporter, err := NewExporter(root)

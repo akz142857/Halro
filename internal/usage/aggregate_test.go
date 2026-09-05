@@ -210,6 +210,46 @@ func TestAggregateBuildsAttemptAndRequestViewsIdempotently(t *testing.T) {
 	}
 }
 
+func TestAggregatePreservesRunAttributionAndSkipsLifecycleRows(t *testing.T) {
+	aggregate := NewAggregate()
+	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
+	lifecycle := ledger.Event{
+		EventID: "work_unit_created", Kind: ledger.EventWorkUnitCreated,
+		ProjectID: "p", KeyID: "k", WorkUnitID: "wku_1",
+		PeriodID: "2026-09-04", OccurredAt: now, Operation: "work_unit.create",
+		IdempotencyKeyHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RequestFingerprint: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}
+	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Epoch: 5, Event: lifecycle}); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Metrics().ActiveRequests != 0 || aggregate.Watermark().Sequence != 1 {
+		t.Fatalf("lifecycle event polluted request state: metrics=%#v watermark=%#v", aggregate.Metrics(), aggregate.Watermark())
+	}
+	common := ledger.Event{
+		RequestID: "req_1", ProjectID: "p", KeyID: "k", WorkUnitID: "wku_1", RunID: "run_1",
+		RequestedModel: "chat", PeriodID: "2026-09-04",
+	}
+	events := []ledger.Event{
+		{EventID: "accepted", Kind: ledger.EventRequestAccepted, RequestID: common.RequestID, ProjectID: common.ProjectID, KeyID: common.KeyID, WorkUnitID: common.WorkUnitID, RunID: common.RunID, RequestedModel: common.RequestedModel, PeriodID: common.PeriodID, OccurredAt: now.Add(time.Second)},
+		{EventID: "settled", Kind: ledger.EventAttemptSettled, RequestID: common.RequestID, AttemptID: "att_1", ProjectID: common.ProjectID, KeyID: common.KeyID, WorkUnitID: common.WorkUnitID, RunID: common.RunID, RequestedModel: common.RequestedModel, PeriodID: common.PeriodID, OccurredAt: now.Add(2 * time.Second), CommittedMicrosUSD: ledger.MicrosUSD(7), Outcome: "success"},
+		{EventID: "final", Kind: ledger.EventRequestFinalized, RequestID: common.RequestID, ProjectID: common.ProjectID, KeyID: common.KeyID, WorkUnitID: common.WorkUnitID, RunID: common.RunID, RequestedModel: common.RequestedModel, PeriodID: common.PeriodID, OccurredAt: now.Add(3 * time.Second), Outcome: "success"},
+	}
+	for index, event := range events {
+		if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: uint64(index + 2), Offset: int64((index + 2) * 100), Epoch: 5, Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := aggregate.Snapshot()
+	if len(snapshot.Attempts) != 1 || len(snapshot.Requests) != 1 {
+		t.Fatalf("snapshot rows=%d/%d", len(snapshot.Attempts), len(snapshot.Requests))
+	}
+	if snapshot.Attempts[0].WorkUnitID != "wku_1" || snapshot.Attempts[0].RunID != "run_1" ||
+		snapshot.Requests[0].WorkUnitID != "wku_1" || snapshot.Requests[0].RunID != "run_1" {
+		t.Fatalf("run attribution was lost: attempt=%#v request=%#v", snapshot.Attempts[0], snapshot.Requests[0])
+	}
+}
+
 func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) {
 	aggregate := NewAggregate()
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)

@@ -991,6 +991,18 @@ func (h *Handler) GuardOpenAI(next http.Handler) http.Handler {
 	})
 }
 
+// WithSourceIPOpenAI installs the same trusted-source identity used by the
+// inference handlers for an additional Gateway surface.
+func (h *Handler) WithSourceIPOpenAI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		withSource, ok := h.withSourceIP(writer, request)
+		if !ok {
+			return
+		}
+		next.ServeHTTP(writer, withSource)
+	})
+}
+
 // GuardAnthropic is GuardOpenAI for the endpoint that answers in Anthropic's
 // envelope. A caller's SDK has to be able to parse the refusal.
 func (h *Handler) GuardAnthropic(next http.Handler) http.Handler {

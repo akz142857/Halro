@@ -71,6 +71,8 @@ type ProviderResource struct {
 	// itself is never stored: keeping a Gateway Key to replay it later would be
 	// worse than anything replaying it enables.
 	KeyID              string   `json:"key_id,omitempty"`
+	WorkUnitID         string   `json:"work_unit_id,omitempty"`
+	RunID              string   `json:"run_id,omitempty"`
 	IdempotencyKeyHash [32]byte `json:"idempotency_key_hash"`
 	RequestFingerprint [32]byte `json:"request_fingerprint"`
 	CreationStatus     string   `json:"creation_status"`
@@ -159,6 +161,11 @@ func (r ProviderResource) Validate() error {
 		if r.SubmittedAt.IsZero() {
 			problems = append(problems, errors.New("deferred response submission time is required"))
 		}
+	}
+	if (r.WorkUnitID == "") != (r.RunID == "") {
+		problems = append(problems, errors.New("resource Run attribution requires both ids"))
+	} else if r.RunID != "" && (!ValidWorkUnitID(r.WorkUnitID) || !ValidRunID(r.RunID)) {
+		problems = append(problems, errors.New("resource Run attribution is invalid"))
 	}
 	if r.CreationStatus == "" || r.Status == "" || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || r.ExpiresAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt) {
 		problems = append(problems, errors.New("resource lifecycle is invalid"))
@@ -266,14 +273,15 @@ type Project struct {
 	// means the instance default. An unbounded queue is fail-open exactly when
 	// it matters — an upstream slows down, the queue grows silently, and every
 	// entry is a promise of an answer.
-	MaxDeferredQueue   int64          `json:"max_deferred_queue"`
-	AllowedCIDRs       []netip.Prefix `json:"allowed_cidrs"`
-	RedactionPolicyID  string         `json:"redaction_policy_id"`
-	TokenGuardPolicyID string         `json:"token_guard_policy_id"`
-	CreatedAt          time.Time      `json:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at"`
-	Revision           uint64         `json:"revision"`
-	DeletedAt          *time.Time     `json:"deleted_at,omitempty"`
+	MaxDeferredQueue   int64               `json:"max_deferred_queue"`
+	AllowedCIDRs       []netip.Prefix      `json:"allowed_cidrs"`
+	RedactionPolicyID  string              `json:"redaction_policy_id"`
+	TokenGuardPolicyID string              `json:"token_guard_policy_id"`
+	RunGovernance      RunGovernanceConfig `json:"run_governance"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
+	Revision           uint64              `json:"revision"`
+	DeletedAt          *time.Time          `json:"deleted_at,omitempty"`
 }
 
 func (p *Project) GetRevision() uint64      { return p.Revision }
@@ -355,6 +363,9 @@ func (p Project) Validate() error {
 	if p.MaxDeferredQueue > MaxDeferredQueueCeiling {
 		problems = append(problems, errors.New("max_deferred_queue is above the ceiling"))
 	}
+	if err := p.RunGovernance.Validate(); err != nil {
+		problems = append(problems, err)
+	}
 	return errors.Join(problems...)
 }
 
@@ -363,16 +374,17 @@ func (p Project) Validate() error {
 // write. Admin handlers must serialise gatewayKeyView instead of this struct — the
 // TestAdminKeyResponsesNeverExposeKeyHash regression test enforces that.
 type GatewayKey struct {
-	ID          string     `json:"id"`
-	ProjectID   string     `json:"project_id"`
-	Name        string     `json:"name"`
-	HashVersion uint16     `json:"hash_version"`
-	KeyHash     [32]byte   `json:"key_hash"`
-	Enabled     bool       `json:"enabled"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	Revision    uint64     `json:"revision"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	ID          string         `json:"id"`
+	ProjectID   string         `json:"project_id"`
+	Name        string         `json:"name"`
+	HashVersion uint16         `json:"hash_version"`
+	KeyHash     [32]byte       `json:"key_hash"`
+	Enabled     bool           `json:"enabled"`
+	Scopes      []GatewayScope `json:"scopes"`
+	ExpiresAt   *time.Time     `json:"expires_at,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	Revision    uint64         `json:"revision"`
+	DeletedAt   *time.Time     `json:"deleted_at,omitempty"`
 }
 
 // There is deliberately no LastUsedAt here. One existed, was serialised through
@@ -1310,6 +1322,17 @@ func (k GatewayKey) Validate() error {
 	}
 	if k.HashVersion != 1 {
 		problems = append(problems, errors.New("unsupported gateway key hash version"))
+	}
+	seenScopes := make(map[GatewayScope]struct{}, len(k.Scopes))
+	for _, scope := range k.Scopes {
+		if !ValidGatewayScope(scope) {
+			problems = append(problems, errors.New("gateway key scope is invalid"))
+			continue
+		}
+		if _, repeated := seenScopes[scope]; repeated {
+			problems = append(problems, errors.New("gateway key scope is repeated"))
+		}
+		seenScopes[scope] = struct{}{}
 	}
 	return errors.Join(problems...)
 }

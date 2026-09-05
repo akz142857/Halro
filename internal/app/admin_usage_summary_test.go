@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -155,6 +156,57 @@ func TestUsageSummaryIncludesTheUnpersistedIncrement(t *testing.T) {
 	summary := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day")
 	if summary.Totals.Attempts != 1 {
 		t.Fatalf("summary hid work that has not been checkpointed yet: %#v", summary.Totals)
+	}
+}
+
+func TestUsageSummaryWaitsForInFlightCheckpointOutcome(t *testing.T) {
+	runtime, cookie := summaryRuntime(t, 1)
+	checkpointTaken := make(chan struct{})
+	releaseCheckpoint := make(chan struct{})
+	checkpointDone := make(chan error, 1)
+	go runtime.usage.WithRollupCheckpoint(func() {
+		snapshot, err := runtime.usage.TakeCheckpoint()
+		if err != nil {
+			checkpointDone <- err
+			close(checkpointTaken)
+			return
+		}
+		close(checkpointTaken)
+		<-releaseCheckpoint
+		checkpointDone <- runtime.usage.ReturnCheckpoint(snapshot)
+	})
+	<-checkpointTaken
+
+	type result struct {
+		response summaryResponse
+		status   int
+		err      error
+	}
+	requestStarted := make(chan struct{})
+	summaryDone := make(chan result, 1)
+	go func() {
+		request := httptest.NewRequest(http.MethodGet, "/admin/api/v1/usage/summary?granularity=day", nil)
+		request.AddCookie(cookie)
+		recorder := httptest.NewRecorder()
+		close(requestStarted)
+		runtime.adminRouter().ServeHTTP(recorder, request)
+		var body summaryResponse
+		err := json.Unmarshal(recorder.Body.Bytes(), &body)
+		summaryDone <- result{response: body, status: recorder.Code, err: err}
+	}()
+	<-requestStarted
+	select {
+	case premature := <-summaryDone:
+		t.Fatalf("summary crossed an unresolved checkpoint boundary: status=%d body=%#v err=%v", premature.status, premature.response, premature.err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseCheckpoint)
+	if err := <-checkpointDone; err != nil {
+		t.Fatal(err)
+	}
+	completed := <-summaryDone
+	if completed.err != nil || completed.status != http.StatusOK || completed.response.Totals.Attempts != 1 {
+		t.Fatalf("summary after checkpoint return: status=%d attempts=%d err=%v", completed.status, completed.response.Totals.Attempts, completed.err)
 	}
 }
 

@@ -1,0 +1,266 @@
+[
+  {
+    "module": "internal/adminauth",
+    "source_files": 3,
+    "test_files": 3,
+    "source_lines": 402
+  },
+  {
+    "module": "internal/alert",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 511
+  },
+  {
+    "module": "internal/anthropicapi",
+    "source_files": 2,
+    "test_files": 2,
+    "source_lines": 955
+  },
+  {
+    "module": "internal/app",
+    "source_files": 69,
+    "test_files": 126,
+    "source_lines": 26659
+  },
+  {
+    "module": "internal/audit",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 368
+  },
+  {
+    "module": "internal/auth",
+    "source_files": 2,
+    "test_files": 2,
+    "source_lines": 223
+  },
+  {
+    "module": "internal/backup",
+    "source_files": 5,
+    "test_files": 1,
+    "source_lines": 767
+  },
+  {
+    "module": "internal/bearercred",
+    "source_files": 2,
+    "test_files": 1,
+    "source_lines": 636
+  },
+  {
+    "module": "internal/budget",
+    "source_files": 3,
+    "test_files": 6,
+    "source_lines": 1195
+  },
+  {
+    "module": "internal/buildinfo",
+    "source_files": 1,
+    "test_files": 0,
+    "source_lines": 21
+  },
+  {
+    "module": "internal/circuit",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 128
+  },
+  {
+    "module": "internal/compatibility",
+    "source_files": 15,
+    "test_files": 23,
+    "source_lines": 5298
+  },
+  {
+    "module": "internal/config",
+    "source_files": 2,
+    "test_files": 4,
+    "source_lines": 1777
+  },
+  {
+    "module": "internal/contentscan",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 100
+  },
+  {
+    "module": "internal/deadman",
+    "source_files": 7,
+    "test_files": 3,
+    "source_lines": 1125
+  },
+  {
+    "module": "internal/domain",
+    "source_files": 24,
+    "test_files": 17,
+    "source_lines": 6305
+  },
+  {
+    "module": "internal/durable",
+    "source_files": 1,
+    "test_files": 0,
+    "source_lines": 35
+  },
+  {
+    "module": "internal/failurecapture",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 559
+  },
+  {
+    "module": "internal/gateway",
+    "source_files": 6,
+    "test_files": 18,
+    "source_lines": 6340
+  },
+  {
+    "module": "internal/gatewayapi",
+    "source_files": 3,
+    "test_files": 6,
+    "source_lines": 1744
+  },
+  {
+    "module": "internal/hostsecurity",
+    "source_files": 5,
+    "test_files": 1,
+    "source_lines": 76
+  },
+  {
+    "module": "internal/id",
+    "source_files": 1,
+    "test_files": 0,
+    "source_lines": 17
+  },
+  {
+    "module": "internal/idempotency",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 29
+  },
+  {
+    "module": "internal/kms",
+    "source_files": 8,
+    "test_files": 6,
+    "source_lines": 1136
+  },
+  {
+    "module": "internal/ledger",
+    "source_files": 7,
+    "test_files": 13,
+    "source_lines": 2774
+  },
+  {
+    "module": "internal/limiter",
+    "source_files": 1,
+    "test_files": 2,
+    "source_lines": 211
+  },
+  {
+    "module": "internal/logging",
+    "source_files": 3,
+    "test_files": 2,
+    "source_lines": 479
+  },
+  {
+    "module": "internal/masterkey",
+    "source_files": 3,
+    "test_files": 3,
+    "source_lines": 930
+  },
+  {
+    "module": "internal/modelcatalog",
+    "source_files": 5,
+    "test_files": 4,
+    "source_lines": 2634
+  },
+  {
+    "module": "internal/openaiapi",
+    "source_files": 3,
+    "test_files": 3,
+    "source_lines": 875
+  },
+  {
+    "module": "internal/provider",
+    "source_files": 23,
+    "test_files": 44,
+    "source_lines": 9219
+  },
+  {
+    "module": "internal/redaction",
+    "source_files": 4,
+    "test_files": 9,
+    "source_lines": 1886
+  },
+  {
+    "module": "internal/requestmeta",
+    "source_files": 2,
+    "test_files": 0,
+    "source_lines": 31
+  },
+  {
+    "module": "internal/safelog",
+    "source_files": 1,
+    "test_files": 3,
+    "source_lines": 134
+  },
+  {
+    "module": "internal/safetransport",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 296
+  },
+  {
+    "module": "internal/semantic",
+    "source_files": 5,
+    "test_files": 3,
+    "source_lines": 921
+  },
+  {
+    "module": "internal/sourcelimit",
+    "source_files": 1,
+    "test_files": 2,
+    "source_lines": 143
+  },
+  {
+    "module": "internal/sse",
+    "source_files": 1,
+    "test_files": 2,
+    "source_lines": 149
+  },
+  {
+    "module": "internal/store",
+    "source_files": 17,
+    "test_files": 24,
+    "source_lines": 8624
+  },
+  {
+    "module": "internal/timezone",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 272
+  },
+  {
+    "module": "internal/tokenguard",
+    "source_files": 1,
+    "test_files": 4,
+    "source_lines": 894
+  },
+  {
+    "module": "internal/usage",
+    "source_files": 8,
+    "test_files": 13,
+    "source_lines": 3115
+  },
+  {
+    "module": "internal/vault",
+    "source_files": 6,
+    "test_files": 2,
+    "source_lines": 502
+  },
+  {
+    "module": "internal/webui",
+    "source_files": 1,
+    "test_files": 1,
+    "source_lines": 83
+  }
+]

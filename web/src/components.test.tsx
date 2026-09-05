@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { ConfirmButton, ErrorState, InlineTestControl, useTestFailureReason, useWebhookTestFailureReason } from "./components";
@@ -119,6 +119,24 @@ describe("step-up confirmation dialog", () => {
     expect(username).not.toBeNull();
     expect(username).toHaveAttribute("aria-hidden", "true");
     expect(username).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("keeps every close path locked while the confirmed action is pending", async () => {
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <ConfirmButton label="删除" confirmLabel="确认删除?" onConfirm={() => pending} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" }).at(-1)!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "取消" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "关闭" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.getByText("确认删除?")).toBeVisible();
+    finish();
   });
 });
 

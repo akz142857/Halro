@@ -29,10 +29,10 @@ func InspectReplayAuthenticated(path string, key []byte, visit func(Record) erro
 	consume := func(record Record) error {
 		// scan checks epoch downgrades within a file; the verifier carries that
 		// boundary across generations as well, including an empty active file.
-		if record.Epoch != frameVersionLedgerIntegrity && verifier.sawFrames {
+		if !authenticatedFrameEpoch(record.Epoch) && verifier.sawFrames {
 			return fmt.Errorf("%w: checksum-only frame follows an authenticated generation", ErrTampered)
 		}
-		if record.Epoch == frameVersionLedgerIntegrity {
+		if authenticatedFrameEpoch(record.Epoch) {
 			report.Authenticated++
 		} else {
 			report.ChecksumOnly++

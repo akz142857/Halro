@@ -26,6 +26,7 @@ type SessionStore interface {
 	GetAdminUser(context.Context, string) (domain.AdminUser, error)
 	PutAdminSession(context.Context, domain.AdminSession) error
 	GetAdminSession(context.Context, [32]byte) (domain.AdminSession, error)
+	RefreshAdminSession(context.Context, domain.AdminSession, domain.AdminSession, time.Time) (domain.AdminSession, bool, error)
 	DeleteAdminSession(context.Context, [32]byte) error
 }
 
@@ -118,15 +119,20 @@ func (m *Manager) Authenticate(
 	if now.Sub(session.LastSeenAt) < refreshInterval {
 		return session, nil
 	}
+	original := session
 	session.LastSeenAt = now
 	session.IdleExpiresAt = now.Add(m.idleTimeout)
 	if session.IdleExpiresAt.After(session.AbsoluteExpiresAt) {
 		session.IdleExpiresAt = session.AbsoluteExpiresAt
 	}
-	if err := m.store.PutAdminSession(ctx, session); err != nil {
+	refreshed, valid, err := m.store.RefreshAdminSession(ctx, original, session, now)
+	if err != nil {
 		return domain.AdminSession{}, err
 	}
-	return session, nil
+	if !valid {
+		return domain.AdminSession{}, ErrInvalidSession
+	}
+	return refreshed, nil
 }
 
 func (m *Manager) VerifyCSRF(sessionToken, supplied string) bool {

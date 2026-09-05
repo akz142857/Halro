@@ -18,14 +18,24 @@ import (
 )
 
 var (
-	ErrExceeded      = errors.New("daily budget exceeded")
-	ErrInvalidAmount = errors.New("invalid accounting amount")
+	ErrExceeded            = errors.New("daily budget exceeded")
+	ErrRunExceeded         = errors.New("run budget exceeded")
+	ErrRunPriceUnavailable = errors.New("run budget requires a known price")
+	ErrInvalidAmount       = errors.New("invalid accounting amount")
+	ErrRunNotFound         = errors.New("run was not found")
+	ErrRunNotActive        = errors.New("run is not active")
+	ErrWorkUnitClosed      = errors.New("work unit is closed")
+	ErrWorkUnitNotFound    = errors.New("work unit was not found")
+	ErrResourceLimit       = errors.New("run governance resource limit exceeded")
+	ErrIdempotencyConflict = errors.New("idempotency key conflicts with another request")
 )
 
 type Attempt struct {
 	RequestID                   string
 	AttemptID                   string
 	ProjectID                   string
+	WorkUnitID                  string
+	RunID                       string
 	Period                      Period
 	ReservationMicrosUSD        int64
 	KeyID                       string
@@ -48,8 +58,10 @@ type Attempt struct {
 }
 
 type Request struct {
-	RequestID string
-	ProjectID string
+	RequestID  string
+	ProjectID  string
+	WorkUnitID string
+	RunID      string
 	// Period is fixed when the request is accepted and inherited by every
 	// event that follows it. A request that outlives a period boundary settles
 	// in the period it began in, matching how its price snapshot is pinned.
@@ -107,6 +119,19 @@ type Settlement struct {
 	// OccurredAt is reserved for deterministic recovery events. Normal
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
+}
+
+type GovernanceIntent struct {
+	Operation          string
+	IdempotencyKeyHash string
+	RequestFingerprint string
+}
+
+func (i GovernanceIntent) validate() error {
+	if i.Operation == "" || !domain.ValidSHA256Label(i.IdempotencyKeyHash) || !domain.ValidSHA256Label(i.RequestFingerprint) {
+		return errors.New("governance idempotency evidence is invalid")
+	}
+	return nil
 }
 
 type Manager struct {
@@ -208,6 +233,298 @@ func (m *Manager) localNow() time.Time {
 	return m.inAccountingZone(m.now())
 }
 
+func (m *Manager) governanceLock(projectID string) func() {
+	value, _ := m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
+	admission := value.(*projectAdmission)
+	admission.lifecycle.Lock()
+	return admission.lifecycle.Unlock
+}
+
+func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, maxOpen int64, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	return m.CreateWorkUnitWithDefinitions(ctx, projectID, keyID, maxOpen, nil, intent)
+}
+
+func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, keyID string, maxOpen int64, definitions []domain.OutcomeDefinitionRef, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	if projectID == "" || keyID == "" || maxOpen <= 0 || maxOpen > domain.MaxOpenWorkUnits {
+		return domain.WorkUnit{}, false, ErrResourceLimit
+	}
+	if err := intent.validate(); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.WorkUnit{}, false, ErrIdempotencyConflict
+		}
+		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		if !found {
+			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
+		}
+		return workUnit, true, nil
+	}
+	open := int64(0)
+	for _, workUnit := range m.state.WorkUnits(projectID) {
+		if workUnit.Status == domain.WorkUnitOpen {
+			open++
+		}
+	}
+	if open >= maxOpen {
+		return domain.WorkUnit{}, false, ErrResourceLimit
+	}
+	workUnitID, err := id.New("wku")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventWorkUnitCreated,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+		OutcomeDefinitions: slices.Clone(definitions),
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok {
+		return domain.WorkUnit{}, false, errors.New("created work unit is absent from accounting state")
+	}
+	return workUnit, false, nil
+}
+
+func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitID string, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" {
+		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
+	}
+	if err := intent.validate(); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.WorkUnit{}, false, ErrIdempotencyConflict
+		}
+		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		if !found {
+			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
+		}
+		return workUnit, true, nil
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok || workUnit.ProjectID != projectID {
+		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
+	}
+	if workUnit.Status == domain.WorkUnitClosed {
+		return workUnit, true, nil
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventWorkUnitClosed,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	closed, _ := m.state.WorkUnit(workUnitID)
+	return closed, false, nil
+}
+
+func (m *Manager) CreateRun(
+	ctx context.Context,
+	projectID, keyID, workUnitID string,
+	budgetMicrosUSD int64,
+	ttl time.Duration,
+	maxActive int64,
+	intent GovernanceIntent,
+) (domain.Run, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" || budgetMicrosUSD <= 0 ||
+		ttl <= 0 || ttl > time.Duration(domain.MaxRunTTLSeconds)*time.Second ||
+		maxActive <= 0 || maxActive > domain.MaxActiveRuns {
+		return domain.Run{}, false, ErrResourceLimit
+	}
+	if err := intent.validate(); err != nil {
+		return domain.Run{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.Run{}, false, ErrIdempotencyConflict
+		}
+		run, found := m.state.Run(previous.RunID)
+		if !found {
+			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
+		}
+		run, _ = m.Run(projectID, run.ID)
+		return run, true, nil
+	}
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	if !ok || workUnit.ProjectID != projectID || workUnit.Status != domain.WorkUnitOpen {
+		return domain.Run{}, false, ErrWorkUnitClosed
+	}
+	now := m.localNow()
+	active := int64(0)
+	for _, run := range m.state.Runs(projectID, "") {
+		if run.Status == domain.RunActive && now.Before(run.ExpiresAt) {
+			active++
+		}
+	}
+	if active >= maxActive || len(m.state.Runs(projectID, workUnitID)) >= domain.MaxRunsPerWorkUnit {
+		return domain.Run{}, false, ErrResourceLimit
+	}
+	runID, err := id.New("run")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventRunCreated,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, RunID: runID,
+		RunBudgetMicrosUSD: budgetMicrosUSD, RunExpiresAt: now.Add(ttl), OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.Run{}, false, err
+	}
+	run, ok := m.state.Run(runID)
+	if !ok {
+		return domain.Run{}, false, errors.New("created run is absent from accounting state")
+	}
+	run, _ = m.Run(projectID, run.ID)
+	return run, false, nil
+}
+
+func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, runID, reason string, intent GovernanceIntent) (domain.Run, bool, error) {
+	if projectID == "" || keyID == "" || workUnitID == "" || runID == "" || len(reason) == 0 || len(reason) > 64 {
+		return domain.Run{}, false, ErrRunNotFound
+	}
+	if err := intent.validate(); err != nil {
+		return domain.Run{}, false, err
+	}
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+		if previous.RequestFingerprint != intent.RequestFingerprint {
+			return domain.Run{}, false, ErrIdempotencyConflict
+		}
+		run, found := m.state.Run(previous.RunID)
+		if !found {
+			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
+		}
+		run, _ = m.Run(projectID, run.ID)
+		return run, true, nil
+	}
+	run, ok := m.state.Run(runID)
+	if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
+		return domain.Run{}, false, ErrRunNotFound
+	}
+	if run.Status == domain.RunClosed {
+		run, _ = m.Run(projectID, run.ID)
+		return run, true, nil
+	}
+	// Establish the close/admission order before appending. An admission that
+	// already won is allowed to make its reservation durable; once closing is
+	// visible here, later admissions fail without writing or reaching Provider.
+	finishClose := m.beginRunClose(projectID, runID)
+	defer finishClose()
+	eventID, err := id.New("evt")
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	now := m.localNow()
+	period, err := m.periods.PeriodAt(now)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	event := ledger.Event{
+		EventID: eventID, Kind: ledger.EventRunClosed,
+		ProjectID: projectID, KeyID: keyID, WorkUnitID: workUnitID, RunID: runID,
+		CloseReason: reason, OccurredAt: now,
+		Operation: intent.Operation, IdempotencyKeyHash: intent.IdempotencyKeyHash, RequestFingerprint: intent.RequestFingerprint,
+	}
+	period.Stamp(&event)
+	if err := m.appendApply(ctx, event); err != nil {
+		return domain.Run{}, false, err
+	}
+	closed, _ := m.Run(projectID, runID)
+	return closed, false, nil
+}
+
+func (m *Manager) WorkUnit(projectID, workUnitID string) (domain.WorkUnit, bool) {
+	workUnit, ok := m.state.WorkUnit(workUnitID)
+	return workUnit, ok && (projectID == "" || workUnit.ProjectID == projectID)
+}
+
+func (m *Manager) WorkUnits(projectID string) []domain.WorkUnit {
+	return m.state.WorkUnits(projectID)
+}
+
+func (m *Manager) Run(projectID, runID string) (domain.Run, bool) {
+	run, ok := m.state.Run(runID)
+	if !ok || (projectID != "" && run.ProjectID != projectID) {
+		return domain.Run{}, false
+	}
+	admission, unlock := m.lockProject(run.ProjectID)
+	defer unlock()
+	run, ok = m.state.Run(runID)
+	if !ok {
+		return domain.Run{}, false
+	}
+	return domain.WithRunBudgetState(run, admission.runPending[runID]), true
+}
+
+func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
+	unlock := m.governanceLock(projectID)
+	defer unlock()
+	run, ok := m.state.Run(runID)
+	if !ok || run.ProjectID != projectID {
+		return domain.Run{}, ErrRunNotFound
+	}
+	if run.Status != domain.RunActive || !m.localNow().Before(run.ExpiresAt) {
+		return domain.Run{}, ErrRunNotActive
+	}
+	return run, nil
+}
+
+func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
+	items := m.state.Runs(projectID, workUnitID)
+	for index := range items {
+		admission, unlock := m.lockProject(items[index].ProjectID)
+		items[index] = domain.WithRunBudgetState(items[index], admission.runPending[items[index].ID])
+		unlock()
+	}
+	return items
+}
+
 // lockProject serializes one project's admission decisions — reading its balance
 // and deciding whether one more reservation fits — and nothing else.
 //
@@ -235,15 +552,51 @@ func (m *Manager) localNow() time.Time {
 // multi-project benchmark hit it on the first run.
 type projectAdmission struct {
 	mu sync.Mutex
+	// lifecycle serializes Work Unit/Run create/close and attached request
+	// acceptance. It is separate from the monetary admission mutex, so a
+	// control-plane fsync cannot delay an ordinary request.
+	lifecycle sync.Mutex
 	// pending is spend admitted but not yet visible in the Ledger's own balance,
 	// keyed by period so a request near midnight counts against its own day.
 	pending map[ledger.BalanceKey]int64
+	// runPending is the lifetime Run counterpart to pending. runAdmissions
+	// keeps a close operation behind reservations that won the decision first;
+	// closingRuns makes a close that won first reject later reservations while
+	// its event is appended outside this lock.
+	runPending    map[string]int64
+	runAdmissions map[string]int
+	closingRuns   map[string]bool
+	changed       *sync.Cond
+}
+
+func newProjectAdmission() *projectAdmission {
+	admission := &projectAdmission{}
+	admission.changed = sync.NewCond(&admission.mu)
+	return admission
+}
+
+func (m *Manager) beginRunClose(projectID, runID string) func() {
+	admission, unlock := m.lockProject(projectID)
+	if admission.closingRuns == nil {
+		admission.closingRuns = make(map[string]bool)
+	}
+	admission.closingRuns[runID] = true
+	for admission.runAdmissions[runID] > 0 {
+		admission.changed.Wait()
+	}
+	unlock()
+	return func() {
+		admission, unlock := m.lockProject(projectID)
+		delete(admission.closingRuns, runID)
+		admission.changed.Broadcast()
+		unlock()
+	}
 }
 
 func (m *Manager) lockProject(projectID string) (*projectAdmission, func()) {
 	value, loaded := m.projectLocks.Load(projectID)
 	if !loaded {
-		value, _ = m.projectLocks.LoadOrStore(projectID, &projectAdmission{})
+		value, _ = m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
 	}
 	admission := value.(*projectAdmission)
 	waitStarted := time.Now()
@@ -288,6 +641,10 @@ func (m *Manager) ProjectLockStats() ProjectLockStats {
 // in both — and that direction is safe: it can only refuse at the very edge of
 // a budget, never overspend it.
 func (m *Manager) admit(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool) error {
+	return m.admitForRun(key, dailyBudgetMicrosUSD, reservationMicrosUSD, counted, "", "", time.Time{})
+}
+
+func (m *Manager) admitForRun(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool, workUnitID, runID string, now time.Time) error {
 	admission, unlock := m.lockProject(key.ProjectID)
 	defer unlock()
 	balance := m.state.Balance(key.ProjectID, key.PeriodID, key.TimezoneVersion)
@@ -306,11 +663,47 @@ func (m *Manager) admit(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservation
 	if dailyBudgetMicrosUSD > 0 && total > dailyBudgetMicrosUSD {
 		return ErrExceeded
 	}
+	if runID != "" {
+		run, ok := m.state.Run(runID)
+		if !ok || run.ProjectID != key.ProjectID || run.WorkUnitID != workUnitID {
+			return ErrRunNotFound
+		}
+		if admission.closingRuns[runID] || run.Status != domain.RunActive || !now.Before(run.ExpiresAt) {
+			return ErrRunNotActive
+		}
+		runTotal, err := checkedAdd(run.CommittedMicrosUSD, run.ReservedMicrosUSD)
+		if err != nil {
+			return err
+		}
+		if runTotal, err = checkedAdd(runTotal, admission.runPending[runID]); err != nil {
+			return err
+		}
+		if counted {
+			if runTotal, err = checkedAdd(runTotal, reservationMicrosUSD); err != nil {
+				return err
+			}
+		}
+		if runTotal > run.BudgetMicrosUSD {
+			return ErrRunExceeded
+		}
+	}
 	if counted {
 		if admission.pending == nil {
 			admission.pending = make(map[ledger.BalanceKey]int64)
 		}
 		admission.pending[key] += reservationMicrosUSD
+		if runID != "" {
+			if admission.runPending == nil {
+				admission.runPending = make(map[string]int64)
+			}
+			admission.runPending[runID] += reservationMicrosUSD
+		}
+	}
+	if runID != "" {
+		if admission.runAdmissions == nil {
+			admission.runAdmissions = make(map[string]int)
+		}
+		admission.runAdmissions[runID]++
 	}
 	return nil
 }
@@ -328,6 +721,10 @@ func (m *Manager) admittedForTest(key ledger.BalanceKey) int64 {
 // after the append has either applied or failed, on the same goroutine that
 // admitted it, so nothing has to record whose amount to remove.
 func (m *Manager) releaseAdmitted(key ledger.BalanceKey, reservationMicrosUSD int64) {
+	m.releaseAdmittedForRun(key, reservationMicrosUSD, "")
+}
+
+func (m *Manager) releaseAdmittedForRun(key ledger.BalanceKey, reservationMicrosUSD int64, runID string) {
 	admission, unlock := m.lockProject(key.ProjectID)
 	defer unlock()
 	if remaining := admission.pending[key] - reservationMicrosUSD; remaining > 0 {
@@ -335,6 +732,19 @@ func (m *Manager) releaseAdmitted(key ledger.BalanceKey, reservationMicrosUSD in
 	} else {
 		// Keyed by period, so entries would otherwise accumulate one per day.
 		delete(admission.pending, key)
+	}
+	if runID != "" {
+		if remaining := admission.runPending[runID] - reservationMicrosUSD; remaining > 0 {
+			admission.runPending[runID] = remaining
+		} else {
+			delete(admission.runPending, runID)
+		}
+		if remaining := admission.runAdmissions[runID] - 1; remaining > 0 {
+			admission.runAdmissions[runID] = remaining
+		} else {
+			delete(admission.runAdmissions, runID)
+		}
+		admission.changed.Broadcast()
 	}
 }
 
@@ -365,6 +775,13 @@ func (m *Manager) BeginRequestDetailed(
 	ctx context.Context,
 	projectID, keyID, requestID, requestedModel string,
 ) (Request, error) {
+	return m.BeginRequestAttributed(ctx, projectID, keyID, requestID, requestedModel, "", "")
+}
+
+func (m *Manager) BeginRequestAttributed(
+	ctx context.Context,
+	projectID, keyID, requestID, requestedModel, workUnitID, runID string,
+) (Request, error) {
 	if projectID == "" || requestID == "" {
 		return Request{}, errors.New("project and request IDs are required")
 	}
@@ -379,12 +796,28 @@ func (m *Manager) BeginRequestDetailed(
 	}
 	request := Request{
 		RequestID: requestID, ProjectID: projectID, Period: period,
-		KeyID: keyID, RequestedModel: requestedModel,
+		KeyID: keyID, RequestedModel: requestedModel, WorkUnitID: workUnitID, RunID: runID,
+	}
+	var unlockLifecycle func()
+	if runID != "" || workUnitID != "" {
+		if runID == "" || workUnitID == "" {
+			return Request{}, ErrRunNotFound
+		}
+		unlockLifecycle = m.governanceLock(projectID)
+		defer unlockLifecycle()
+		run, ok := m.state.Run(runID)
+		if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
+			return Request{}, ErrRunNotFound
+		}
+		if run.Status != domain.RunActive || !now.Before(run.ExpiresAt) {
+			return Request{}, ErrRunNotActive
+		}
 	}
 	event := ledger.Event{
 		EventID: eventID, Kind: ledger.EventRequestAccepted,
 		RequestID: request.RequestID, ProjectID: request.ProjectID,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
+		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		OccurredAt: now,
 	}
 	period.Stamp(&event)
@@ -424,6 +857,9 @@ func (m *Manager) ReserveLeaseDetailed(ctx context.Context, request Request, dai
 		return Attempt{}, err
 	}
 	if spec.Mode == ledger.LeaseModeUnknownAllowed {
+		if request.RunID != "" {
+			return Attempt{}, ErrRunPriceUnavailable
+		}
 		if dailyBudgetMicrosUSD != 0 || spec.UnknownPolicyEvidence == nil || spec.UnknownPolicyEvidence.ProjectID != request.ProjectID {
 			return Attempt{}, ErrInvalidAmount
 		}
@@ -463,6 +899,7 @@ func (m *Manager) reserveAttemptDetailed(
 		RequestID: request.RequestID, AttemptID: attemptID, ProjectID: request.ProjectID,
 		Period: request.Period, ReservationMicrosUSD: spec.ReservationMicrosUSD,
 		KeyID: request.KeyID, RequestedModel: request.RequestedModel,
+		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		RouteID: metadata.RouteID, DeploymentID: metadata.DeploymentID,
 		ProviderID: metadata.ProviderID, ProviderModel: metadata.ProviderModel,
 		AttemptNumber: metadata.AttemptNumber, RetryCount: metadata.RetryCount,
@@ -484,13 +921,13 @@ func (m *Manager) reserveAttemptDetailed(
 	// it.
 	key := ledger.BalanceKey{ProjectID: request.ProjectID, PeriodID: request.Period.ID, TimezoneVersion: request.Period.TimezoneVersion}
 	counted := spec.Mode != ledger.LeaseModeUnknownAllowed
-	if err := m.admit(key, dailyBudgetMicrosUSD, spec.ReservationMicrosUSD, counted); err != nil {
+	if err := m.admitForRun(key, dailyBudgetMicrosUSD, spec.ReservationMicrosUSD, counted, request.WorkUnitID, request.RunID, m.localNow()); err != nil {
 		return Attempt{}, err
 	}
-	if counted {
+	if counted || request.RunID != "" {
 		// Released on every path out of here, so a reservation that never became
 		// durable does not hold budget headroom for the rest of the period.
-		defer m.releaseAdmitted(key, spec.ReservationMicrosUSD)
+		defer m.releaseAdmittedForRun(key, spec.ReservationMicrosUSD, request.RunID)
 	}
 	var reservationValue *int64
 	if spec.Mode != ledger.LeaseModeUnknownAllowed {
@@ -508,6 +945,8 @@ func (m *Manager) reserveAttemptDetailed(
 		RequestID:            request.RequestID,
 		AttemptID:            attemptID,
 		ProjectID:            request.ProjectID,
+		WorkUnitID:           request.WorkUnitID,
+		RunID:                request.RunID,
 		KeyID:                request.KeyID,
 		RouteID:              metadata.RouteID,
 		DeploymentID:         metadata.DeploymentID,
@@ -536,7 +975,7 @@ func (m *Manager) reserveAttemptDetailed(
 func (a Attempt) Request() Request {
 	return Request{
 		RequestID: a.RequestID, ProjectID: a.ProjectID, Period: a.Period,
-		KeyID: a.KeyID, RequestedModel: a.RequestedModel,
+		KeyID: a.KeyID, RequestedModel: a.RequestedModel, WorkUnitID: a.WorkUnitID, RunID: a.RunID,
 	}
 }
 
@@ -546,12 +985,13 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		return err
 	}
 	started := ledger.Event{
-		EventID:   eventID,
-		Kind:      ledger.EventAttemptStarted,
-		RequestID: attempt.RequestID,
-		AttemptID: attempt.AttemptID,
-		ProjectID: attempt.ProjectID,
-		KeyID:     attempt.KeyID, RouteID: attempt.RouteID, DeploymentID: attempt.DeploymentID, ProviderID: attempt.ProviderID,
+		EventID:    eventID,
+		Kind:       ledger.EventAttemptStarted,
+		RequestID:  attempt.RequestID,
+		AttemptID:  attempt.AttemptID,
+		ProjectID:  attempt.ProjectID,
+		WorkUnitID: attempt.WorkUnitID, RunID: attempt.RunID,
+		KeyID: attempt.KeyID, RouteID: attempt.RouteID, DeploymentID: attempt.DeploymentID, ProviderID: attempt.ProviderID,
 		RequestedModel: attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
 		AttemptNumber: attempt.AttemptNumber, RetryCount: attempt.RetryCount,
 		FallbackCount: attempt.FallbackCount,
@@ -659,6 +1099,8 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		RequestID:          attempt.RequestID,
 		AttemptID:          attempt.AttemptID,
 		ProjectID:          attempt.ProjectID,
+		WorkUnitID:         attempt.WorkUnitID,
+		RunID:              attempt.RunID,
 		KeyID:              attempt.KeyID,
 		RouteID:            attempt.RouteID,
 		DeploymentID:       attempt.DeploymentID,
@@ -716,6 +1158,7 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 		}
 		attempt := Attempt{
 			RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
+			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
 			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
 			ProviderID: event.ProviderID, RequestedModel: event.RequestedModel, ProviderModel: event.ProviderModel,
@@ -773,11 +1216,13 @@ func (m *Manager) Finalize(ctx context.Context, request Request, outcome string)
 		return err
 	}
 	finalized := ledger.Event{
-		EventID:   eventID,
-		Kind:      ledger.EventRequestFinalized,
-		RequestID: request.RequestID,
-		ProjectID: request.ProjectID,
-		KeyID:     request.KeyID, RequestedModel: request.RequestedModel,
+		EventID:    eventID,
+		Kind:       ledger.EventRequestFinalized,
+		RequestID:  request.RequestID,
+		ProjectID:  request.ProjectID,
+		WorkUnitID: request.WorkUnitID,
+		RunID:      request.RunID,
+		KeyID:      request.KeyID, RequestedModel: request.RequestedModel,
 		OccurredAt: m.localNow(),
 		Outcome:    outcome,
 	}

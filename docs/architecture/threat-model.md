@@ -9,6 +9,8 @@
 - TLS private key;
 - webhook/backup secrets;
 - usage, cost, source-IP derivatives, and audit data;
+- Run/Work Unit identifiers and lifecycle, Outcome definitions, authenticated
+  Outcome declarations, reporter identity, and evidence digests/references;
 - prompts and responses in transient memory.
 
 ## Trust boundaries
@@ -26,7 +28,7 @@ Admin browser
   → metadata/vault
 
 Process
-  → bbolt + Ledger WAL + derived Parquet
+  → bbolt + Accounting Ledger + Governance Journal + derived exports
 ```
 
 The host root account is trusted for v1. Audit chaining detects offline record mutation but is not non-repudiation against a root attacker.
@@ -60,6 +62,17 @@ rewrite detectable by someone other than the rewriter.
 | Browser secret recovery | no-store, strict CSP, no service worker, no local storage |
 | Admin password disclosure | optional or required TOTP; no full Admin Session is issued until the second factor succeeds |
 | TOTP/recovery replay | per-authenticator atomic time-step watermark; recovery codes are hash-only and atomically consumed |
+| Run ID enumeration or cross-project attachment | server-generated bounded IDs; Project equality; `run:attach` scope; existence-hiding errors |
+| Concurrent Project/Run over-admission | one Project critical section checks both committed + reserved + pending totals; checked integer arithmetic; reservation durable before Provider I/O |
+| Creating Runs to bypass a Run cap or exhaust storage | Project budget remains authoritative; per-Key/Project write limits; 1,000 active Run and 1,000 open Work Unit hard limits |
+| Run close/expiry races with inference | close/create/admission serialize on the Project lock; an already admitted Attempt still settles conservatively |
+| Forged or misleading business success | Outcome is labelled as an authenticated external declaration; immutable Definition versions; reporter key and revision history retained |
+| Outcome revision race or idempotency index loss | current-head compare under a short writer critical section; append-only revision; index rebuilt from the authenticated journal |
+| Evidence reference carries secrets, payloads, or SSRF input | 128-character non-URL reference; reject controls/newlines/secret-like values; optional SHA-256 only; never fetch the reference |
+| Governance corruption stops model traffic | independent Journal, writer, apply state, checkpoint, and readiness; ordinary inference never reads Governance state |
+| Cross-log inconsistency hidden as a complete report | explicit partial/unknown states and separate accounting/governance watermarks; no invented global order |
+| High-cardinality metrics or unbounded Admin query | identifiers forbidden as Prometheus labels; low-cardinality cohort rollups; cursor pagination and 200-item page limit |
+| Duplicate cost in business exports | Attempt cost exists only in Usage export; normalized governance datasets reference IDs and manifest reconciliation checks counts/ranges |
 
 ## Default assumptions
 
@@ -68,6 +81,10 @@ rewrite detectable by someone other than the rewriter.
 - Admin and Metrics are loopback or protected behind a precisely trusted TLS proxy.
 - Prompt/response bodies are not persisted by default.
 - Unknown provider price is denied for budget-protected projects.
+- Outcome reporters and evaluators are external principals; Halro authenticates
+  who declared a value but does not attest that the business judgment is true.
+- The Accounting Ledger is the only budget authority. Governance state cannot
+  release budget, alter Attempt history, or trigger a Provider call.
 
 ## Required security tests
 
@@ -78,3 +95,11 @@ rewrite detectable by someone other than the rewriter.
 - secret canary scanning across logs, errors, heap diagnostics, WAL, bbolt, Parquet, and browser artifacts;
 - WAL corruption, disk-full, backup tampering, and restore path tests.
 - price-boundary, WAL v1/v2 reader-gate, proposal non-activation, and restored scheduled-price quarantine tests.
+- Project/Run admission races at 1/8/64 workers, integer overflow, close/expiry
+  barriers, append/apply kill points, and zero Provider calls on uncertain state.
+- Governance wrong-key, truncation, tampering, revision-gap, idempotency rebuild,
+  checkpoint-ahead, incremental/full-replay equality, and failure-isolation tests.
+- Outcome field boundary/fuzz tests and secret canary scans across Journal,
+  bbolt, logs, exports, backup, errors, and browser artifacts.
+- Cross-project ID/scope matrix, control-plane rate/body/cardinality limits, and
+  bounded cohort-query scan tests.

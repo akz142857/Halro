@@ -1,0 +1,15 @@
+=== RUN   TestIndependentSessionRevocationAdjudication
+=== RUN   TestIndependentSessionRevocationAdjudication/logout
+    session_adjudication_test.go:12: real logout HTTP 200 with expired cookie
+    session_adjudication_test.go:14: session row absent before delayed refresh resumes
+    session_adjudication_test.go:15: already-in-flight request=200
+    session_adjudication_test.go:18: new manager auth=<nil>; new protected HTTP GET=200
+=== RUN   TestIndependentSessionRevocationAdjudication/generation_change
+    session_adjudication_test.go:14: session row absent before delayed refresh resumes
+    session_adjudication_test.go:15: already-in-flight request=200
+    session_adjudication_test.go:18: new manager auth=invalid admin session; new protected HTTP GET=401
+--- PASS: TestIndependentSessionRevocationAdjudication (2.93s)
+    --- PASS: TestIndependentSessionRevocationAdjudication/logout (1.43s)
+    --- PASS: TestIndependentSessionRevocationAdjudication/generation_change (1.50s)
+PASS
+ok  	github.com/akz142857/Halro/internal/app	5.070s

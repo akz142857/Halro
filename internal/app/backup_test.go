@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -691,6 +693,85 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	summary, err := VerifyAudit(context.Background(), cfg)
 	if err != nil || summary.Records < 3 {
 		t.Fatalf("restored audit is invalid: summary=%#v err=%v", summary, err)
+	}
+}
+
+func TestBackupRestoreRebuildsRunGovernanceConfigurationAndLedgerState(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := Bootstrap(context.Background(), cfg, BootstrapOptions{
+		ProviderName: "OpenAI", ProviderType: domain.ProviderOpenAI,
+		ProviderBaseURL: "https://api.openai.com", ProviderModel: "gpt-test",
+		PublicModel: "chat", ProjectName: "Run restore", BillingMode: domain.BillingModeFree,
+	}, []byte("restore-provider-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	router := runtime.gatewayRouter()
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "backup-wu", `{}`))
+	var workUnit domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &workUnit); err != nil || created.Code != http.StatusCreated {
+		runtime.Close()
+		t.Fatalf("create Work Unit status=%d body=%s err=%v", created.Code, created.Body.String(), err)
+	}
+	createdRun := httptest.NewRecorder()
+	router.ServeHTTP(createdRun, governanceRequest(http.MethodPost, "/halro/v1/runs", bootstrap.GatewayKey, "backup-run",
+		`{"work_unit_id":"`+workUnit.ID+`","budget_micros_usd":4321,"ttl_seconds":3600}`))
+	var run domain.Run
+	if err := json.Unmarshal(createdRun.Body.Bytes(), &run); err != nil || createdRun.Code != http.StatusCreated {
+		runtime.Close()
+		t.Fatalf("create Run status=%d body=%s err=%v", createdRun.Code, createdRun.Body.String(), err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := filepath.Dir(cfg.Storage.DataDir)
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backupKey := bytes.Repeat([]byte{0x73}, 32)
+	archivePath := filepath.Join(root, "run-governance.hmbk")
+	manifest, err := CreateBackup(context.Background(), cfg, configPath, archivePath, backupKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreBackup(context.Background(), cfg, archivePath, backupKey, manifest.BackupID); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("open restored runtime: %v", err)
+	}
+	defer restored.Close()
+	project, err := restored.store.GetProject(context.Background(), bootstrap.ProjectID)
+	if err != nil || !project.RunGovernance.Enabled || project.RunGovernance.MaxActiveRuns != 10 {
+		t.Fatalf("restored Project=%#v err=%v", project.RunGovernance, err)
+	}
+	key, err := restored.store.GetGatewayKey(context.Background(), bootstrap.KeyID)
+	if err != nil || !domain.HasGatewayScope(key.Scopes, domain.GatewayScopeRunAttach) {
+		t.Fatalf("restored Gateway Key scopes=%v err=%v", key.Scopes, err)
+	}
+	restoredWorkUnit, ok := restored.accounting.WorkUnit(bootstrap.ProjectID, workUnit.ID)
+	if !ok || restoredWorkUnit.ID != workUnit.ID {
+		t.Fatalf("restored Work Unit=%#v ok=%v", restoredWorkUnit, ok)
+	}
+	restoredRun, ok := restored.accounting.Run(bootstrap.ProjectID, run.ID)
+	if !ok || restoredRun.WorkUnitID != workUnit.ID || restoredRun.BudgetMicrosUSD != 4321 {
+		t.Fatalf("restored Run=%#v ok=%v", restoredRun, ok)
 	}
 }
 

@@ -54,6 +54,10 @@
 
 每次操作选择一个可公开记录、可重复使用但不包含秘密的唯一 ID。进程中断后必须使用同一个 ID；新的轮换必须使用新 ID。
 
+当前实现仅在 `storage.data_dir/failures` 与
+`storage.data_dir/provider-objects` 均无留存对象时允许开始新的 DEK rotate。
+这些目录的密文尚不能和 metadata 作为同一个可恢复发布代迁移，因此非空时命令会在生成、持久化新 DEK 前拒绝。应等待配置的留存周期和资源回收完成，不能为了绕过门禁而删除仍应向调用方提供的数据。该限制不适用于保持 DEK 不变的 KEK rewrap，也不阻止使用相同 operation ID 恢复已经开始的轮换。
+
 ```bash
 halro key rotate --config /etc/halro/config.yaml \
   --operation-id incident-2026-08-03-001

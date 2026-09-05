@@ -1,0 +1,72 @@
+package deadman
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+type adjudicationTransport func(*http.Request) (*http.Response, error)
+
+func (f adjudicationTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func TestAdjudicationRunSendBeforePersist(t *testing.T) {
+	for _, initial := range []uint64{0, 41} {
+		t.Run(string(rune('a'+initial)), func(t *testing.T) {
+			dir := t.TempDir()
+			now := time.Now().UTC()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e := &Engine{cfg: Config{ProbeID: "review", StateFile: filepath.Join(dir, "state"), OutboxLimit: 8, Interval: Duration(time.Hour), DeliveryBatch: 1, HeartbeatTTL: Duration(time.Minute), Targets: []TargetConfig{{ID: "x"}}}, state: persistedState{Version: 1, Sequence: initial, Targets: map[string]TargetState{}}, now: func() time.Time { return now }, logger: slog.New(slog.NewTextHandler(io.Discard, nil)), wake: make(chan struct{}, 1), audit: &auditWriter{path: filepath.Join(dir, "audit")}}
+			if err := saveState(e.cfg.StateFile, e.state); err != nil {
+				t.Fatal(err)
+			}
+			e.cfg.Notification.RetryMin = Duration(time.Hour)
+			e.cfg.Notification.URL = "https://review.invalid"
+			e.check = func(context.Context, Config, TargetConfig) (time.Duration, string) { <-ctx.Done(); return 0, "" }
+			observed := make(chan error, 1)
+			e.notify = &http.Client{Transport: adjudicationTransport(func(r *http.Request) (*http.Response, error) {
+				var sent Event
+				err := json.NewDecoder(r.Body).Decode(&sent)
+				if err != nil {
+					observed <- err
+					return nil, err
+				}
+				disk, err := loadState(e.cfg.StateFile, 8)
+				if err != nil {
+					observed <- err
+					return nil, err
+				}
+				restarted := &Engine{cfg: e.cfg, state: disk}
+				err = restarted.enqueue("heartbeat", TargetConfig{}, "", "", 0, now.Add(time.Second))
+				t.Logf("Run outbound accepted boundary: durable=%d sent=%d restart=%s sameID=%v changedObservation=%v", disk.Sequence, sent.Sequence, restarted.state.Outbox[0].Event.EventID, restarted.state.Outbox[0].Event.EventID == sent.EventID, !restarted.state.Outbox[0].Event.ObservedAt.Equal(sent.ObservedAt))
+				if disk.Sequence != initial || sent.Sequence != initial+1 || restarted.state.Outbox[0].Event.EventID != sent.EventID {
+					t.Error("boundary not reproduced")
+				}
+				observed <- err
+				return &http.Response{StatusCode: 204, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header)}, nil
+			})}
+			done := make(chan error, 1)
+			go func() { done <- e.Run(ctx) }()
+			select {
+			case err := <-observed:
+				if err != nil {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("no delivery")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("Run failed to stop")
+			}
+		})
+	}
+}

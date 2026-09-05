@@ -28,13 +28,14 @@ type credentialView struct {
 }
 
 type gatewayKeyView struct {
-	ID        string     `json:"id"`
-	ProjectID string     `json:"project_id"`
-	Name      string     `json:"name"`
-	Enabled   bool       `json:"enabled"`
-	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
-	Revision  uint64     `json:"revision"`
+	ID        string                `json:"id"`
+	ProjectID string                `json:"project_id"`
+	Name      string                `json:"name"`
+	Enabled   bool                  `json:"enabled"`
+	Scopes    []domain.GatewayScope `json:"scopes"`
+	ExpiresAt *time.Time            `json:"expires_at,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	Revision  uint64                `json:"revision"`
 }
 
 type alertWebhookView struct {
@@ -85,7 +86,7 @@ func (r *Runtime) listAdminProjectKeys(writer http.ResponseWriter, request *http
 			views = append(views, gatewayKeyView{
 				ID: key.ID, ProjectID: key.ProjectID, Name: key.Name,
 				Enabled: key.Enabled, ExpiresAt: key.ExpiresAt, CreatedAt: key.CreatedAt,
-				Revision: key.Revision,
+				Scopes: domain.EffectiveGatewayScopes(key.Scopes), Revision: key.Revision,
 			})
 		}
 	}
@@ -326,10 +327,21 @@ func (r *Runtime) listAdminAudit(writer http.ResponseWriter, request *http.Reque
 	if !ok || !allowed {
 		return
 	}
-	records := make([]auditRecordView, 0)
+	// Replay authenticates the chain from the beginning, but the response only
+	// needs the newest page before the cursor. Keep a fixed tail rather than one
+	// allocation per historical record; limit+1 is enough to decide whether a
+	// next cursor exists.
+	pageCapacity := limit + 1
+	records := make([]auditRecordView, 0, pageCapacity)
 	if _, err := r.audit.Replay(func(record audit.Record) error {
 		if cursor == 0 || record.Sequence < cursor {
-			records = append(records, auditRecordFlatView(record))
+			view := auditRecordFlatView(record)
+			if len(records) < pageCapacity {
+				records = append(records, view)
+			} else {
+				copy(records, records[1:])
+				records[len(records)-1] = view
+			}
 		}
 		return nil
 	}); err != nil {
