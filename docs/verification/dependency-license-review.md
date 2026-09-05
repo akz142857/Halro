@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-08-11
+Date: 2026-09-05
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -17,11 +17,11 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.43.7 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.32.38 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.19.37 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.55.7 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.27.9 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.45.1 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.2 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.2 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.58.0 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.28.1 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.2 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
@@ -43,6 +43,18 @@ only the root `chi` package and not `chi/middleware`, where the rest of that
 release landed, and the frozen Admin route contract — which enumerates the
 router through `chi.Walk` and compares it against an exact expected set — still
 matches.
+
+The 2026-09-05 AWS refresh then moved the five AWS SDK and smithy rows above,
+plus ten version-pinned AWS transitive modules, and again added, removed, and
+relicensed nothing. The old and new LICENSE files are byte-identical for all 15
+changed modules; the root AWS SDK and smithy NOTICE files are also
+byte-identical. The shared transport changes move content-length calculation
+into `SetStream`, add an opt-in connection read timeout, and fix the logger
+middleware insertion point. The KMS client also moves credential-source user
+agent attribution from per-request middleware to client construction. Halro
+does not set `AWS_ENABLE_DEFAULT_SOCKET_TIMEOUT_2026`; its KMS Encrypt/Decrypt
+surface, encryption context, retry policy, error classification, and file-mode
+no-cloud-call boundary remain covered by the KMS and application tests.
 
 The AWS KMS custody path is part of this review. The linked AWS SDK config and
 credential modules can resolve environment, shared-file, web-identity,
@@ -114,13 +126,14 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `2111333dc9b3a5dfaf7539366263147d62e382ae`
-- `go.sum`: `83ad5b798f68cc7bbc8524310f1f3f6ea49be605`
+- `go.mod`: `e28dc15e3e77c15c4167156510a6ccb7fe2f5671`
+- `go.sum`: `4f2cd7b82cbd5a7a5443bc67db2ed578385bacc5`
 - `web/package.json`: `b3fc788a018b7488844eddc3dfc495b28c6139e9`
 - `web/package-lock.json`: `e3b353565b858c1e8691db605c54edaad084b4cb`
 
-The Go hashes moved for the six-module bump recorded above. The two web hashes
-moved for the nine-package Admin UI bump recorded above, and before that only
+The Go hashes last moved for the 2026-09-05 five-module AWS refresh recorded
+above. The two web hashes moved for the nine-package Admin UI bump recorded
+above, and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
 for `v0.5.0`, and again for `v0.6.0`, each of which bumped the `version` field in
 both files and changed nothing else.
