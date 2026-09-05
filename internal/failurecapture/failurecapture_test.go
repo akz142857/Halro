@@ -240,6 +240,29 @@ func TestRetentionExpiresEachRecordOnTheConfiguredWindow(t *testing.T) {
 	}
 }
 
+func TestExpiredCaptureIsUnreadableBeforePhysicalPurge(t *testing.T) {
+	now := time.Date(2026, 9, 5, 10, 0, 0, 0, time.UTC)
+	clock := now
+	store, root := newStore(t, func(options *Options) {
+		options.Retain = time.Hour
+		options.Now = func() time.Time { return clock }
+	})
+	if _, err := store.Put(record("req_ttl")); err != nil {
+		t.Fatal(err)
+	}
+	clock = now.Add(time.Hour)
+	if _, found, err := store.Get("req_ttl", "project_1"); err != nil || found {
+		t.Fatalf("capture remained readable at TTL: found=%t err=%v", found, err)
+	}
+	if project, found, err := store.ProjectOf("req_ttl"); err != nil || !found || project != "project_1" {
+		t.Fatalf("logical expiry unexpectedly removed physical index: project=%q found=%t err=%v", project, found, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, now.Format("2006-01-02")))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("logical expiry physically removed capture: entries=%v err=%v", entries, err)
+	}
+}
+
 // The content is more sensitive than anything else in the data directory, and
 // "encrypted" is not a licence for the file to be world-readable.
 func TestCapturesAreAsPrivateAsTheDataDirectory(t *testing.T) {

@@ -1,0 +1,172 @@
+package app
+
+import (
+	"context"
+	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/failurecapture"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSecondaryManagementFactorBudget(t *testing.T) {
+	for _, endpoint := range []string{"/admin/api/v1/security/mfa/authenticators", "/admin/api/v1/security/mfa/recovery-codes/regenerate", "/admin/api/v1/security/mfa", "/admin/api/v1/security/mfa/authenticators/mfa_review"} {
+		t.Run(endpoint, func(t *testing.T) {
+			r, session := stepUpTestRuntime(t)
+			secret := []byte("12345678901234567890")
+			ciphertext, err := r.vault.EncryptAdminMFA("mfa_review", "admin", secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			_, err = r.store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{ID: "mfa_review", Username: "admin", Name: "review", Type: domain.AdminMFATypeTOTP, SecretCiphertext: ciphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now}, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrong := "000000"
+			for {
+				valid := false
+				for _, offset := range []int64{-1, 0, 1} {
+					if wrong == adminauth.TOTPCode(secret, time.Now().Unix()/30+offset) {
+						valid = true
+					}
+				}
+				if !valid {
+					break
+				}
+				wrong = "111111"
+			}
+			for i := 0; i < 7; i++ {
+				method := http.MethodPost
+				if endpoint == "/admin/api/v1/security/mfa" || endpoint == "/admin/api/v1/security/mfa/authenticators/mfa_review" {
+					method = http.MethodDelete
+				}
+				body := map[string]string{"current_password": stepUpTestPassword, "code": wrong}
+				if endpoint == "/admin/api/v1/security/mfa/authenticators" {
+					body["name"] = "extra"
+				}
+				req := adminMutationRequest(t, method, endpoint, session, body)
+				res := httptest.NewRecorder()
+				r.adminRouter().ServeHTTP(res, req)
+				t.Logf("attempt=%d status=%d", i+1, res.Code)
+				if res.Code != http.StatusUnauthorized {
+					t.Fatalf("unexpected status=%d body=%s", res.Code, res.Body.String())
+				}
+			}
+			failures := 0
+			_, err = r.audit.Replay(func(rec audit.Record) error {
+				if rec.Event.Action == "admin.reauthentication" && rec.Event.Outcome == "failure" {
+					failures++
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("failure audits=%d", failures)
+			if failures != 0 {
+				t.Fatalf("expected reproduced missing audit; got %d", failures)
+			}
+			for i := 0; i < 6; i++ {
+				method := http.MethodPost
+				if endpoint == "/admin/api/v1/security/mfa" || endpoint == "/admin/api/v1/security/mfa/authenticators/mfa_review" {
+					method = http.MethodDelete
+				}
+				body := map[string]string{"current_password": "wrong password", "code": wrong}
+				if endpoint == "/admin/api/v1/security/mfa/authenticators" {
+					body["name"] = "extra"
+				}
+				req := adminMutationRequest(t, method, endpoint, session, body)
+				res := httptest.NewRecorder()
+				r.adminRouter().ServeHTTP(res, req)
+				want := 401
+				if i == 5 {
+					want = 429
+				}
+				if res.Code != want {
+					t.Fatalf("password control %d got=%d want=%d body=%s", i, res.Code, want, res.Body.String())
+				}
+			}
+			t.Log("wrong-password control: five 401 then 429 in pinned window")
+		})
+	}
+}
+
+func TestSecondaryCaptureHTTPRoleTTL(t *testing.T) {
+	r, login := stepUpTestRuntime(t)
+	now := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	s, err := failurecapture.Open(r.vault, failurecapture.Options{Root: t.TempDir(), MaxBytes: 4096, MaxRecordsPerDay: 10, Retain: time.Hour, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.failureCapture = s
+	ok, err := s.Put(failurecapture.Record{RequestID: "req_secondary", ProjectID: "project_secondary", Request: []byte(`{"text":"SECONDARY_SYNTHETIC_PAYLOAD"}`)})
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	path := "/admin/api/v1/usage/failures/req_secondary/payload"
+	get := func(cookie bool) *httptest.ResponseRecorder {
+		req := adminRequest(t, http.MethodGet, path, nil)
+		if cookie {
+			req.AddCookie(login.cookie)
+		}
+		res := httptest.NewRecorder()
+		r.adminRouter().ServeHTTP(res, req)
+		return res
+	}
+	if got := get(false); got.Code != 401 {
+		t.Fatalf("anonymous=%d", got.Code)
+	}
+	if _, found, e := s.Get("req_secondary", "wrong_project"); e == nil || found {
+		t.Fatal("scope defense failed")
+	}
+	if got := get(true); got.Code != 200 || !strings.Contains(got.Body.String(), "SECONDARY_SYNTHETIC_PAYLOAD") {
+		t.Fatalf("admin preTTL=%d %s", got.Code, got.Body.String())
+	}
+	user, err := r.store.GetAdminUser(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user.Role = domain.AdminRoleReadOnly
+	if _, err = r.store.PutAdminUser(context.Background(), user, user.Revision); err != nil {
+		t.Fatal(err)
+	}
+	for _, offset := range []time.Duration{30 * time.Minute, time.Hour, 2 * time.Hour} {
+		now = time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC).Add(offset)
+		got := get(true)
+		t.Logf("read_only age=%s status=%d", offset, got.Code)
+		if got.Code != 200 || !strings.Contains(got.Body.String(), "SECONDARY_SYNTHETIC_PAYLOAD") {
+			t.Fatalf("read=%d %s", got.Code, got.Body.String())
+		}
+	}
+	reads := 0
+	_, err = r.audit.Replay(func(rec audit.Record) error {
+		if rec.Event.Action == "usage.failure_payload.read" && rec.Event.TargetID == "req_secondary" {
+			reads++
+		}
+		return nil
+	})
+	if err != nil || reads != 4 {
+		t.Fatalf("audit reads=%d err=%v", reads, err)
+	}
+	t.Logf("successful payload audit records=%d", reads)
+	if err = r.audit.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got := get(true)
+	if got.Code != 503 || strings.Contains(got.Body.String(), "SECONDARY_SYNTHETIC_PAYLOAD") {
+		t.Fatalf("audit fail=%d %s", got.Code, got.Body.String())
+	}
+	t.Log("read_only with audit closed:503 and no payload")
+	if err = s.Purge(); err != nil {
+		t.Fatal(err)
+	}
+	if got = get(true); got.Code != 404 {
+		t.Fatalf("after purge=%d", got.Code)
+	}
+	t.Log("after purge:404")
+}

@@ -1,0 +1,10 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/6 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 6/6 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 16431 (5475/sec), new interesting: 25 (total: 31)
+fuzz: elapsed: 6s, execs: 34728 (6099/sec), new interesting: 53 (total: 59)
+fuzz: elapsed: 9s, execs: 52642 (5971/sec), new interesting: 74 (total: 80)
+fuzz: elapsed: 12s, execs: 68035 (5131/sec), new interesting: 85 (total: 91)
+fuzz: elapsed: 15s, execs: 77558 (3175/sec), new interesting: 93 (total: 99)
+fuzz: elapsed: 16s, execs: 77558 (0/sec), new interesting: 93 (total: 99)
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	16.850s

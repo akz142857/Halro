@@ -409,10 +409,10 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	}
 	var result openaiapi.ChatCompletionResponse
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider response", Cause: err}
+		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("decode provider response", err)
 	}
 	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
-		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response is missing required fields"}
+		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("provider response is missing required fields", nil)
 	}
 	return result, nil
 }
@@ -470,7 +470,7 @@ func (a *Adapter) GenerateSemantic(ctx context.Context, call provider.GenerateCa
 	}
 	var wire openaiapi.Response
 	if err := json.Unmarshal(payload, &wire); err != nil {
-		return semantic.GenerateResult{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider Responses result", Cause: err}
+		return semantic.GenerateResult{}, acceptedResponseMalformed("decode provider Responses result", err)
 	}
 	result, err := openaiwire.DecodeProviderResponse(wire)
 	if err != nil {
@@ -515,10 +515,10 @@ func (a *Adapter) postJSON(ctx context.Context, providerModel, operation, reques
 	limited := io.LimitReader(response.Body, maxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "read provider response", Cause: err}
+		return nil, acceptedResponseMalformed("read provider response", err)
 	}
 	if len(payload) > maxResponseBytes {
-		return nil, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response exceeded size limit"}
+		return nil, acceptedResponseMalformed("provider response exceeded size limit", nil)
 	}
 	// The guard sits here rather than at each decode site because postJSON is the
 	// one place a unary call comes back: Chat and Responses both pass through it,
@@ -573,19 +573,30 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
-		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "read provider response", Cause: err}
+		return openaiapi.EmbeddingResponse{}, acceptedResponseMalformed("read provider response", err)
 	}
 	if len(payload) > maxResponseBytes {
-		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response exceeded size limit"}
+		return openaiapi.EmbeddingResponse{}, acceptedResponseMalformed("provider response exceeded size limit", nil)
 	}
 	var result openaiapi.EmbeddingResponse
 	if err := json.Unmarshal(payload, &result); err != nil {
-		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "decode provider response", Cause: err}
+		return openaiapi.EmbeddingResponse{}, acceptedResponseMalformed("decode provider response", err)
 	}
 	if result.Object == "" || len(result.Data) == 0 {
-		return openaiapi.EmbeddingResponse{}, &provider.Error{Class: provider.ErrorMalformed, Message: "provider response is missing required fields"}
+		return openaiapi.EmbeddingResponse{}, acceptedResponseMalformed("provider response is missing required fields", nil)
 	}
 	return result, nil
+}
+
+// acceptedResponseMalformed marks a successful inference response whose result
+// Halro cannot safely use. HTTP 2xx proves the provider accepted the request;
+// losing, truncating or failing to decode its body does not prove that the
+// provider did no work. Keeping that uncertainty on the error prevents both a
+// duplicate fallback call and a zero-cost settlement.
+func acceptedResponseMalformed(message string, cause error) *provider.Error {
+	return &provider.Error{
+		Class: provider.ErrorMalformed, Ambiguous: true, Message: message, Cause: cause,
+	}
 }
 
 func (a *Adapter) ChatStream(

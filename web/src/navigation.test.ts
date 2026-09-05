@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
-import { render } from "@testing-library/react";
-import { navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { act, render } from "@testing-library/react";
+import { navigate, setNavigationBlocked, useNavigationLocation, usePathname } from "./navigation";
 
 function PathObserver() {
   return createElement("span", null, usePathname());
+}
+
+function LocationObserver() {
+  return createElement("span", null, useNavigationLocation());
 }
 
 describe("guarded navigation", () => {
@@ -40,6 +44,13 @@ describe("guarded navigation", () => {
     navigate("/admin/usage");
     expect(window.location.search).toBe("");
     expect(window.location.pathname).toBe("/admin/usage");
+  });
+
+  it("notifies mounted pages when only the query changes", () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=summary");
+    const view = render(createElement(LocationObserver));
+    act(() => navigate("/admin/usage?tab=failures&project_id=project_b"));
+    expect(view.container).toHaveTextContent("/admin/usage?tab=failures&project_id=project_b");
   });
 
   it("keeps the guarded page when browser history navigation is cancelled", () => {

@@ -1,0 +1,56 @@
+[
+  {
+    "kind": "mock",
+    "pid": 37161,
+    "stopped_by": "SIGTERM"
+  },
+  {
+    "kind": "compat-server",
+    "pid": 33930,
+    "stopped_by": "SIGTERM"
+  },
+  {
+    "port": 28080,
+    "listener_remaining": false
+  },
+  {
+    "port": 28081,
+    "listener_remaining": false
+  },
+  {
+    "port": 29090,
+    "listener_remaining": false
+  },
+  {
+    "port": 28088,
+    "listener_remaining": false
+  },
+  {
+    "port": 28443,
+    "listener_remaining": false
+  },
+  {
+    "port": 28280,
+    "listener_remaining": false
+  },
+  {
+    "port": 28281,
+    "listener_remaining": false
+  },
+  {
+    "port": 29290,
+    "listener_remaining": false
+  },
+  {
+    "port": 28380,
+    "listener_remaining": false
+  },
+  {
+    "port": 28381,
+    "listener_remaining": false
+  },
+  {
+    "port": 29390,
+    "listener_remaining": false
+  }
+]

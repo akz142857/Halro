@@ -497,6 +497,24 @@ describe("projects page", () => {
     expect(createProject.mock.calls[0][0]).toMatchObject({ max_request_bytes: 2048 * 1024 });
   });
 
+  it.each([500, 1023, 1025])("preserves an exact %i-byte ceiling during an unrelated edit", async (bytes) => {
+    const current = project({ max_request_bytes: bytes });
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [current], next_cursor: "" } as never);
+    vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [
+      { id: "rt_1", public_model: "chat", deployment_id: "dep_1", enabled: true, revision: 1 },
+    ] } as never);
+    vi.mocked(api.deployments).mockResolvedValue({ next_cursor: "", items: [deployment("dep_1")] } as never);
+    const update = vi.spyOn(api, "updateProject").mockResolvedValue(current as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0][1]).toMatchObject({ max_request_bytes: bytes });
+  });
+
   it("rejects an unparsable CIDR before the request leaves the browser", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [], next_cursor: "" } as never);
     vi.mocked(api.routes).mockResolvedValue({ next_cursor: "", items: [

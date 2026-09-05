@@ -130,6 +130,35 @@ func TestStatsWindowSubtractsTheEarlierSample(t *testing.T) {
 	}
 }
 
+func TestStatsWindowKeepsCurrentGaugeLevels(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		first, second float64
+	}{
+		{name: "stable", first: 10, second: 10},
+		{name: "growing", first: 10, second: 15},
+		{name: "falling", first: 10, second: 3},
+		{name: "new", second: 8},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := statsSample{}
+			if test.name != "new" {
+				first["halro_usage_queue_depth"] = test.first
+				first["halro_usage_queue_capacity"] = 1024
+			}
+			got := deltaSample(first, statsSample{
+				"halro_usage_queue_depth": test.second, "halro_usage_queue_capacity": 2048,
+			})
+			if got["halro_usage_queue_depth"] != test.second || got["halro_usage_queue_capacity"] != 2048 {
+				t.Fatalf("gauge sample = %#v", got)
+			}
+		})
+	}
+	if got := deltaSample(statsSample{"counter": 10}, statsSample{"counter": 3})["counter"]; got != 3 {
+		t.Fatalf("reset counter = %v, want current value 3", got)
+	}
+}
+
 // Batch size near 1.0 and a saturated disk present identically as "slower
 // requests"; the report has to say which one it is looking at.
 func TestStatsCallsOutAppendsThatAreNotCoalescing(t *testing.T) {

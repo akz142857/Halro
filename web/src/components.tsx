@@ -508,6 +508,7 @@ export function ConfirmButton({
   title,
   className = "button danger",
   onConfirm,
+  onOpen,
   disabled,
   disabledReason,
   requireStepUp = false,
@@ -521,6 +522,7 @@ export function ConfirmButton({
   // typed credentials, and — on pages that do not render the mutation error —
   // no sign anything had happened at all.
   onConfirm: (reauth: ReauthValues) => void | Promise<unknown>;
+  onOpen?: () => void;
   disabled?: boolean;
   disabledReason?: string;
   // Actions the server step-up gates ask for the credentials here, in the same
@@ -582,7 +584,7 @@ export function ConfirmButton({
           it is in, so opening the confirmation also saved the form behind it.
           The dialog then confirmed an action whose consequence had already
           happened. */}
-      <button type="button" className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => setOpen(true)}>{label}</button>
+      <button type="button" className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => { onOpen?.(); setOpen(true); }}>{label}</button>
       {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
       {open && (
         <Modal
@@ -590,6 +592,7 @@ export function ConfirmButton({
           title={title || t("common.confirmAction")}
           describedBy={consequenceID}
           dirty={Boolean(stepUp.values.currentPassword)}
+          closeDisabled={pending}
           onClose={close}
         >
           <form className="confirmation-dialog" onSubmit={(event) => { event.preventDefault(); void submit(); }}>

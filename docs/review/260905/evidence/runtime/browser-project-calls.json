@@ -1,0 +1,17 @@
+[
+  {
+    "label": "small",
+    "status": 200,
+    "body": "{\"id\":\"chatcmpl-review-1788603932047478000\",\"object\":\"chat.completion\",\"created\":1788603932,\"model\":\"review-chat\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"review-ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"total_tokens\":5}}\n"
+  },
+  {
+    "label": "over-project-body-limit",
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"request body exceeds the configured limit\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"request_too_large\"}}\n"
+  },
+  {
+    "label": "unauthorized-model",
+    "status": 403,
+    "body": "{\"error\":{\"message\":\"model is not allowed for this project\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"model_not_allowed\"}}\n"
+  }
+]

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/domain"
 )
@@ -107,5 +108,71 @@ func TestFailedMFACodesAreAuditedAndBounded(t *testing.T) {
 	}
 	if failures != budget {
 		t.Fatalf("audited MFA failures=%d, want %d: guessing the second factor must leave a record", failures, budget)
+	}
+}
+
+func TestAdminMFAManagementFactorFailuresShareTheCredentialBudget(t *testing.T) {
+	endpoints := []struct {
+		name   string
+		method string
+		path   string
+		body   map[string]string
+	}{
+		{"create authenticator", http.MethodPost, "/admin/api/v1/security/mfa/authenticators", map[string]string{"name": "extra"}},
+		{"regenerate recovery codes", http.MethodPost, "/admin/api/v1/security/mfa/recovery-codes/regenerate", nil},
+		{"disable MFA", http.MethodDelete, "/admin/api/v1/security/mfa", nil},
+		{"delete authenticator", http.MethodDelete, "/admin/api/v1/security/mfa/authenticators/mfa_budget", nil},
+	}
+	for _, endpoint := range endpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			runtime, session := stepUpTestRuntime(t)
+			secret := []byte("12345678901234567890")
+			ciphertext, err := runtime.vault.EncryptAdminMFA("mfa_budget", "admin", secret)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			if _, err = runtime.store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{
+				ID: "mfa_budget", Username: "admin", Name: "budget", Type: domain.AdminMFATypeTOTP,
+				SecretCiphertext: ciphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now,
+			}, 0); err != nil {
+				t.Fatal(err)
+			}
+			wrongCode := "000000"
+			for offset := int64(-1); offset <= 1; offset++ {
+				if wrongCode == adminauth.TOTPCode(secret, time.Now().Unix()/adminauth.TOTPPeriod+offset) {
+					wrongCode = "111111"
+					break
+				}
+			}
+			for attempt := 0; attempt < adminStepUpFailuresPerMinute+1; attempt++ {
+				body := map[string]string{"current_password": stepUpTestPassword, "code": wrongCode}
+				for key, value := range endpoint.body {
+					body[key] = value
+				}
+				request := adminMutationRequest(t, endpoint.method, endpoint.path, session, body)
+				response := httptest.NewRecorder()
+				runtime.adminRouter().ServeHTTP(response, request)
+				want := http.StatusUnauthorized
+				if attempt == adminStepUpFailuresPerMinute {
+					want = http.StatusTooManyRequests
+				}
+				if response.Code != want {
+					t.Fatalf("attempt %d status=%d, want %d body=%s", attempt+1, response.Code, want, response.Body.String())
+				}
+			}
+			failures := 0
+			if _, err := runtime.audit.Replay(func(record audit.Record) error {
+				if record.Event.Action == "admin.reauthentication" && record.Event.Outcome == "failure" {
+					failures++
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if failures != adminStepUpFailuresPerMinute {
+				t.Fatalf("audited failures=%d, want %d", failures, adminStepUpFailuresPerMinute)
+			}
+		})
 	}
 }

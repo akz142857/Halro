@@ -1,0 +1,42 @@
+=== RUN   TestAdjudicationPROV01
+=== RUN   TestAdjudicationPROV01/truncated_200
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:61: accepted call=2 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=2 committed=0 reserved=0 error=provider request failed
+=== RUN   TestAdjudicationPROV01/missing_fields_200
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:61: accepted call=2 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=2 committed=0 reserved=0 error=provider request failed
+=== RUN   TestAdjudicationPROV01/body_read_failure_200
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:61: accepted call=2 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=2 committed=0 reserved=0 error=provider request failed
+=== RUN   TestAdjudicationPROV01/oversized_200
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:61: accepted call=2 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=2 committed=0 reserved=0 error=provider request failed
+=== RUN   TestAdjudicationPROV01/definitive_400_control
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=bad_request ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=1 committed=0 reserved=0 error=provider rejected the request
+=== RUN   TestAdjudicationPROV01/ambiguity_flag_counterfactual
+    review_adjudication_overlay_test.go:61: accepted call=1 reserved=50 pin_committed=true snapshot=metered
+    review_adjudication_overlay_test.go:27: adapter class=malformed_response ambiguous=false retryable=false
+    review_adjudication_overlay_test.go:73: FINAL calls=1 committed=50 reserved=0 error=provider request failed
+--- PASS: TestAdjudicationPROV01 (0.64s)
+    --- PASS: TestAdjudicationPROV01/truncated_200 (0.15s)
+    --- PASS: TestAdjudicationPROV01/missing_fields_200 (0.14s)
+    --- PASS: TestAdjudicationPROV01/body_read_failure_200 (0.14s)
+    --- PASS: TestAdjudicationPROV01/oversized_200 (0.16s)
+    --- PASS: TestAdjudicationPROV01/definitive_400_control (0.03s)
+    --- PASS: TestAdjudicationPROV01/ambiguity_flag_counterfactual (0.03s)
+PASS
+ok  	github.com/akz142857/Halro/internal/gateway	2.127s

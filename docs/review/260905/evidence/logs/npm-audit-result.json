@@ -1,0 +1,10 @@
+{
+  "command": [
+    "npm",
+    "audit",
+    "--json",
+    "--registry=https://registry.npmjs.org"
+  ],
+  "exit": 0,
+  "seconds": 2.968146958
+}

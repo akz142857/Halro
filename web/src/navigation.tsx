@@ -7,7 +7,7 @@ let blockedMessage = "";
 
 export function setNavigationBlocked(blocked: boolean, message = "") {
   navigationBlocked = blocked;
-  blockedPath = blocked ? window.location.pathname : "";
+  blockedPath = blocked ? window.location.pathname + window.location.search : "";
   blockedMessage = blocked ? message : "";
 }
 
@@ -29,20 +29,21 @@ export function navigate(path: string) {
   window.dispatchEvent(new Event(navigationEvent));
 }
 
-export function usePathname() {
-  const [path, setPath] = useState(window.location.pathname);
+export function useNavigationLocation() {
+  const current = () => window.location.pathname + window.location.search;
+  const [location, setLocation] = useState(current);
   useEffect(() => {
     const update = () => {
-      if (navigationBlocked && blockedPath && window.location.pathname !== blockedPath) {
+      if (navigationBlocked && blockedPath && current() !== blockedPath) {
         if (confirmNavigation()) {
-          setPath(window.location.pathname);
+          setLocation(current());
           return;
         }
         window.history.pushState({}, "", blockedPath);
-        setPath(blockedPath);
+        setLocation(blockedPath);
         return;
       }
-      setPath(window.location.pathname);
+      setLocation(current());
     };
     window.addEventListener("popstate", update);
     window.addEventListener(navigationEvent, update);
@@ -51,7 +52,11 @@ export function usePathname() {
       window.removeEventListener(navigationEvent, update);
     };
   }, []);
-  return path;
+  return location;
+}
+
+export function usePathname() {
+  return useNavigationLocation().split("?", 1)[0];
 }
 
 export function Link({

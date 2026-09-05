@@ -1,0 +1,129 @@
+[
+  {
+    "label": "old-init",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "init",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 0
+  },
+  {
+    "label": "old-bootstrap",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "bootstrap",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml",
+      "--provider-type",
+      "openai_compatible",
+      "--provider-name",
+      "Upgrade Synthetic",
+      "--provider-base-url",
+      "https://halro-review-upgrade.invalid",
+      "--provider-model",
+      "review-chat",
+      "--public-model",
+      "review-chat",
+      "--project-name",
+      "Upgrade Synthetic",
+      "--daily-budget-micros-usd",
+      "1000000",
+      "--input-micros-per-million",
+      "1000000",
+      "--output-micros-per-million",
+      "2000000"
+    ],
+    "exit": 0
+  },
+  {
+    "label": "old-gateway-synthetic",
+    "status": 502,
+    "body": "{\"error\":{\"message\":\"provider request failed\",\"type\":\"server_error\",\"param\":null,\"code\":\"provider_error\"}}\n"
+  },
+  {
+    "label": "old-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 0
+  },
+  {
+    "label": "new-doctor-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 1
+  },
+  {
+    "label": "new-ledger-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 1
+  },
+  {
+    "label": "new-usage-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 1
+  },
+  {
+    "label": "readonly-preserved-all-files",
+    "unchanged": true
+  },
+  {
+    "label": "new-ledger",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 0
+  },
+  {
+    "label": "new-usage",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 0
+  },
+  {
+    "label": "old-refuses-new-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade-seeded-dns/config.yaml"
+    ],
+    "exit": 1
+  },
+  {
+    "label": "ledger-preserved",
+    "old": 8,
+    "new": 8
+  }
+]

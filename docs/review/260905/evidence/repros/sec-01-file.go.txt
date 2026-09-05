@@ -1,0 +1,83 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"github.com/akz142857/Halro/internal/failurecapture"
+	"github.com/akz142857/Halro/internal/vault"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestSecurityReviewRotationRetainedCiphertext(t *testing.T) {
+	cfg, newFile, _, _, oldKey, oldAudit := rotationFixture(t)
+	defer clear(oldKey)
+	defer clear(oldAudit)
+	oldVault, err := vault.New(oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldVault.Close()
+	options := failurecapture.Options{Root: filepath.Join(cfg.Storage.DataDir, "failures"), MaxBytes: 4096, MaxRecordsPerDay: 10, Retain: time.Hour}
+	captures, err := failurecapture.Open(oldVault, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := captures.Put(failurecapture.Record{RequestID: "req_review", ProjectID: "prj_review", Outcome: "failed", Request: []byte(`{"text":"review fixture"}`)}); err != nil || !ok {
+		t.Fatalf("put=%v %v", ok, err)
+	}
+	if _, found, err := captures.Get("req_review", "prj_review"); err != nil || !found {
+		t.Fatalf("before=%v %v", found, err)
+	}
+	sealed, err := oldVault.EncryptResourceObject("file_review:content", "prj_review", []byte("review fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(cfg.Storage.DataDir, "provider-objects")
+	if err = os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "file_review.content")
+	if err = os.WriteFile(path, sealed, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RotateMasterKey(context.Background(), cfg, newFile); err != nil {
+		t.Fatal(err)
+	}
+	newKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(newKey)
+	next, err := vault.New(newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	after, err := failurecapture.Open(next, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, found, err := after.Get("req_review", "prj_review")
+	t.Logf("after successful rotation: capture found=%v err=%v", found, err)
+	if err == nil {
+		t.Fatal("expected reproduction: capture unreadable")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(raw, sealed) {
+		t.Fatal("rotation changed object")
+	}
+	_, err = next.DecryptResourceObject("file_review:content", "prj_review", raw)
+	t.Logf("unchanged provider object: new key read err=%v", err)
+	if err == nil {
+		t.Fatal("expected reproduction: object unreadable")
+	}
+	if _, err = oldVault.DecryptResourceObject("file_review:content", "prj_review", raw); err != nil {
+		t.Fatal("old key should still read fixture")
+	}
+}

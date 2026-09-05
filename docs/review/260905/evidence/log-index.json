@@ -1,0 +1,269 @@
+[
+  {
+    "id": "SEC-01-file",
+    "source": "<review-tmp>/halro-security-rotation-adjudication-260905/original.log",
+    "source_sha256": "6c68ae083020a7dc55cbb19ce7718e74d1ae90524c598d8fa0666df21a0dd7e3",
+    "source_bytes": 414,
+    "archived": "logs/sec-01-file.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "SEC-01-kms",
+    "source": "<review-tmp>/halro-security-rotation-adjudication-260905/kms.log",
+    "source_sha256": "9f8456d7954814a62dcfe560cc792e4f461aeae1d922998107a6f2e056e54b01",
+    "source_bytes": 550,
+    "archived": "logs/sec-01-kms.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "SEC-02",
+    "source": "<review-tmp>/halro-reliability-review/session-adjudication.log",
+    "source_sha256": "af095053a303a5fc67408cac87401ee12f084209fe51f2e3c632f75caea1a549",
+    "source_bytes": 1047,
+    "archived": "logs/sec-02.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "PROV-01",
+    "source": "<review-tmp>/halro-provider-adjudication-260905/run2.log",
+    "source_sha256": "4bbc33f48b45170be4bf1fef94f37540ec13323b9998254f71198a33327de84e",
+    "source_bytes": 3683,
+    "archived": "logs/prov-01.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "SUM-01",
+    "source": "<review-tmp>/halro-deadman-adjudication/summary.log",
+    "source_sha256": "6a55588cd98f0a1a709abd5d69770f3e00660c6c618a951e0e2ae6a0e81caaf5",
+    "source_bytes": 267,
+    "archived": "logs/sum-01.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "REL-01",
+    "source": "<review-tmp>/halro-deadman-adjudication/run.log",
+    "source_sha256": "f55a6840a4374b0751584aa21d28abef8ce918a45e51e2bf4fe852e218158d32",
+    "source_bytes": 695,
+    "archived": "logs/rel-01.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "PROV-02",
+    "source": "<review-tmp>/halro-provider-review-260905/repro.log",
+    "source_sha256": "033251bff60eef69b88cffec8b3607e8aa76a450fb17020d3ae661df5b34f9ce",
+    "source_bytes": 525,
+    "archived": "logs/prov-02.log",
+    "transformation": "none; manually inspected synthetic results only",
+    "exit": 0,
+    "exit_evidence": "corresponding role/adjudication report (not inferred from PASS text)"
+  },
+  {
+    "id": "go-full-unsandboxed",
+    "source": "<review-tmp>/halro-review-260905/go-full-unsandboxed.log",
+    "source_sha256": "fc63c6dba441e1a78c5225f4e147b98580d4543c1023df96b3d5382ad3284a40",
+    "source_bytes": 4016,
+    "archived": "logs/go-full-unsandboxed.log",
+    "transformation": "replace checkout path; web-build omits asset size listing",
+    "exit": 0,
+    "exit_evidence": "gate-results.json; parent recorded process result"
+  },
+  {
+    "id": "web-typecheck",
+    "source": "<review-tmp>/halro-review-260905/web-typecheck.log",
+    "source_sha256": "3b730c3dfcf4a2b26ec7c662f0731e17ae4aa3efb279a65e39cc94bded3b9490",
+    "source_bytes": 56,
+    "archived": "logs/web-typecheck.log",
+    "transformation": "replace checkout path; web-build omits asset size listing",
+    "exit": 0,
+    "exit_evidence": "gate-results.json; parent recorded process result"
+  },
+  {
+    "id": "web-test",
+    "source": "<review-tmp>/halro-review-260905/web-test.log",
+    "source_sha256": "bcf3337a1e103653f03e2943db43aad3b0b3defa3ef7b483101a897d4d576c77",
+    "source_bytes": 298,
+    "archived": "logs/web-test.log",
+    "transformation": "replace checkout path; web-build omits asset size listing",
+    "exit": 0,
+    "exit_evidence": "gate-results.json; parent recorded process result"
+  },
+  {
+    "id": "web-build",
+    "source": "<review-tmp>/halro-review-260905/web-build.log",
+    "source_sha256": "4770588b1605ac04f960396d5dc581c4734057b1ca893fd5f2b0e6803395a7c7",
+    "source_bytes": 3028,
+    "archived": "logs/web-build.log",
+    "transformation": "replace checkout path; web-build omits asset size listing",
+    "exit": 0,
+    "exit_evidence": "gate-results.json; parent recorded process result"
+  },
+  {
+    "id": "go-vet",
+    "source": "<review-tmp>/halro-review-260905/go-vet.log",
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_bytes": 0,
+    "archived": "logs/go-vet.log",
+    "transformation": "replace checkout path; web-build omits asset size listing",
+    "exit": 0,
+    "exit_evidence": "gate-results.json; parent recorded process result"
+  },
+  {
+    "id": "SEC-03/04/C2",
+    "source": "<review-tmp>/halro-security-secondary-260905/independent.log",
+    "source_sha256": "23487f9b6fcaad7dde8a4a1c12d1d3b9dbb6e6df0497886ac899ee0ee217e53e",
+    "source_bytes": 3570,
+    "archived": "logs/security-secondary.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "exit 0; roles/security-secondary-adjudication.md"
+  },
+  {
+    "id": "fuzz-sse",
+    "source": "<review-tmp>/halro-review-260905/fuzz-sse.log",
+    "source_sha256": "6e6f2d7a89cf00d4cfae39c6aa07e47c81c0830ded26ac3c8a1d9b2534477fb1",
+    "source_bytes": 683,
+    "archived": "logs/fuzz-sse.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "fuzz-redaction",
+    "source": "<review-tmp>/halro-review-260905/fuzz-redaction.log",
+    "source_sha256": "d88e21f503d839f6cea1820a4ecc36cb5baa7a308c0108023f41e0866469bc07",
+    "source_bytes": 672,
+    "archived": "logs/fuzz-redaction.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "admission-race",
+    "source": "<review-tmp>/halro-review-260905/admission-race.log",
+    "source_sha256": "4e4ba5e951079196233078292a5f033128346bdce7005b8955134539d5ff5514",
+    "source_bytes": 172,
+    "archived": "logs/admission-race.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "concurrency-race",
+    "source": "<review-tmp>/halro-review-260905/concurrency-race.log",
+    "source_sha256": "1602201cbe0dbd82d0528b62bb0ef4f3fb2493935eded9c67506d4bc685a4082",
+    "source_bytes": 168,
+    "archived": "logs/concurrency-race.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "sdk-go",
+    "source": "<review-tmp>/halro-review-260905/sdk-go.log",
+    "source_sha256": "817d2e17b15b1c98339a3d766c4443f1eae479670d4c72a8ff4725e39b6345d9",
+    "source_bytes": 249,
+    "archived": "logs/sdk-go.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "sdk-node",
+    "source": "<review-tmp>/halro-review-260905/sdk-node.log",
+    "source_sha256": "032cba6588ffa04cec7b53ad6a54e6b0b27540b1d582d95dee9752b5dec2e940",
+    "source_bytes": 29,
+    "archived": "logs/sdk-node.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "sdk-python",
+    "source": "<review-tmp>/halro-review-260905/sdk-python.log",
+    "source_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "source_bytes": 0,
+    "archived": "logs/sdk-python.log",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "gate-results.json; Python empty stdout is NOT success evidence"
+  },
+  {
+    "id": "fuzz-process-results",
+    "source": "<review-tmp>/halro-review-260905/fuzz.json",
+    "source_sha256": "1bf9f57770f0f01d3c16076432dead54b92bf245e6525545bff25d7d21675f6d",
+    "source_bytes": 519,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON process results"
+  },
+  {
+    "id": "admission-race-process-results",
+    "source": "<review-tmp>/halro-review-260905/admission-race.json",
+    "source_sha256": "648385b1680a8ab72624dbe070bb96b1d8dbe4475474a1c427980da5d98e76fd",
+    "source_bytes": 193,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON process results"
+  },
+  {
+    "id": "concurrency-race-process-results",
+    "source": "<review-tmp>/halro-review-260905/concurrency-race.json",
+    "source_sha256": "cbfa3c4051dbcd07d8ba87aa204c5e5798d97bd6bc5cdea05c6221bafcbadb42",
+    "source_bytes": 193,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON process results"
+  },
+  {
+    "id": "upgrade-seeded-dns",
+    "source": "<review-tmp>/halro-review-260905/upgrade-seeded-dns/results.json",
+    "source_sha256": "cff03354df4a31d4ee8a1905c57adf6ac52326a9e66758e9cca88296bfdc8f17",
+    "source_bytes": 3028,
+    "archived": "upgrade-seeded-dns-results.json",
+    "transformation": "manually inspected; checkout/temp paths normalized where present",
+    "exit_evidence": "per-step actual exits/status in archived results"
+  },
+  {
+    "id": "go-full-unsandboxed-process-results",
+    "source": "<review-tmp>/halro-review-260905/go-full-unsandboxed.json",
+    "source_sha256": "a2efbbcd1eb74959494fee43c06604ae708abbcfb6e3bded74af0d3efbd0693e",
+    "source_bytes": 118,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON results; original process exits retained"
+  },
+  {
+    "id": "web-gate-process-results",
+    "source": "<review-tmp>/halro-review-260905/web-gate.json",
+    "source_sha256": "05540e9449467c05352f3342d3dc02a0b87b5a5a79a364c79cba25eb8fdea310",
+    "source_bytes": 436,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON results; original process exits retained"
+  },
+  {
+    "id": "go-vet-process-results",
+    "source": "<review-tmp>/halro-review-260905/go-vet.json",
+    "source_sha256": "c4220841383bf8697db0a843aa94f94fd46e9913442d39d6d371d0ca45626814",
+    "source_bytes": 101,
+    "archived": "gate-results.json",
+    "transformation": "parsed JSON results; original process exits retained"
+  },
+  {
+    "id": "npm-audit.json",
+    "source": "<review-tmp>/halro-review-260905/npm-audit.json",
+    "source_sha256": "14620ea98e1f0666e2d33e0de9f53febbcb4d0dcdb20e213afa3039363755c2c",
+    "source_bytes": 365,
+    "archived": "logs/npm-audit.json",
+    "transformation": "none; inspected complete JSON, no secrets or package credentials",
+    "exit_evidence": "npm-audit-result.json actual process exit 0"
+  },
+  {
+    "id": "npm-audit-result.json",
+    "source": "<review-tmp>/halro-review-260905/npm-audit-result.json",
+    "source_sha256": "3ce4e8a1ead526fa95bdb32623f218c723b4faaec8cf077c9c9fbd382bed4e43",
+    "source_bytes": 143,
+    "archived": "logs/npm-audit-result.json",
+    "transformation": "none; inspected complete JSON, no secrets or package credentials",
+    "exit_evidence": "npm-audit-result.json actual process exit 0"
+  }
+]

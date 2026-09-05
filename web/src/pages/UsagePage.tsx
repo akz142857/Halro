@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
-import { Link } from "../navigation";
+import { Link, navigate, useNavigationLocation } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
@@ -35,6 +35,7 @@ const usagePanelID = (tab: UsageTab) => `usage-panel-${tab}`;
 
 export function UsagePage() {
   const { t } = useTranslation();
+  const navigationLocation = useNavigationLocation();
   const [tab, setTab] = useState<UsageTab>(usageTabFromURL);
   const dateTime = useInstantFormatter();
   // Every project ever billed can show up in Usage history, including a
@@ -59,7 +60,7 @@ export function UsagePage() {
     () => Object.fromEntries((deployments.data?.items ?? []).map((item) => [item.id, item.name])),
     [deployments.data?.items],
   );
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(() => new URLSearchParams(window.location.search).get("status") ?? "");
   const [model, setModel] = useState(() => new URLSearchParams(window.location.search).get("model") ?? "");
   const [providerModel, setProviderModel] = useState(() => new URLSearchParams(window.location.search).get("provider_model") ?? "");
   // No control of its own. It was a free-text box wanting an opaque
@@ -113,16 +114,23 @@ export function UsagePage() {
     return [...aliases].sort((left, right) => left.localeCompare(right));
   }, [routes.data?.items, usage.data?.pages, model]);
   useEffect(() => {
-    const syncTab = () => setTab(usageTabFromURL());
-    window.addEventListener("popstate", syncTab);
-    return () => window.removeEventListener("popstate", syncTab);
-  }, []);
+    const params = new URLSearchParams(window.location.search);
+    setTab(usageTabFromURL());
+    setStatus(params.get("status") ?? "");
+    setModel(params.get("model") ?? "");
+    setProviderModel(params.get("provider_model") ?? "");
+    setProviderID(params.get("provider_id") ?? "");
+    setRequestID(params.get("request_id") ?? "");
+    setProjectID(params.get("project_id") ?? "");
+    setDeploymentID(params.get("deployment_id") ?? "");
+    setStart(isoToZonedInput(params.get("start") ?? undefined, accountingTimeZone()));
+    setEnd(isoToZonedInput(params.get("end") ?? undefined, accountingTimeZone()));
+  }, [navigationLocation]);
   const selectTab = (next: UsageTab) => {
     if (next === tab) return;
-    setTab(next);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
-    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    navigate(`${url.pathname}${url.search}${url.hash}`);
   };
   const onTabKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const index = usageTabs.indexOf(tab);

@@ -1,0 +1,920 @@
+[
+  {
+    "method": "GET",
+    "path": "/health/live",
+    "line": 1512,
+    "registration": "router.Get(\"/health/live\", r.live)"
+  },
+  {
+    "method": "GET",
+    "path": "/health/ready",
+    "line": 1513,
+    "registration": "router.Get(\"/health/ready\", r.ready)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "line": 1522,
+    "registration": "guarded.Post(\"/v1/chat/completions\", r.gateway.ChatCompletions)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/responses",
+    "line": 1523,
+    "registration": "guarded.Post(\"/v1/responses\", r.gateway.Responses)"
+  },
+  {
+    "method": "GET",
+    "path": "/v1/responses/{responseID}",
+    "line": 1524,
+    "registration": "guarded.Get(\"/v1/responses/{responseID}\", r.gateway.GetDeferredResponse)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/responses/{responseID}/cancel",
+    "line": 1525,
+    "registration": "guarded.Post(\"/v1/responses/{responseID}/cancel\", r.gateway.CancelDeferredResponse)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/responses/{responseID}",
+    "line": 1526,
+    "registration": "guarded.Delete(\"/v1/responses/{responseID}\", r.gateway.DeleteDeferredResponse)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/embeddings",
+    "line": 1527,
+    "registration": "guarded.Post(\"/v1/embeddings\", r.gateway.Embeddings)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/moderations",
+    "line": 1528,
+    "registration": "guarded.Post(\"/v1/moderations\", r.gateway.Moderations)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/images/generations",
+    "line": 1529,
+    "registration": "guarded.Post(\"/v1/images/generations\", r.gateway.Images)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/audio/speech",
+    "line": 1530,
+    "registration": "guarded.Post(\"/v1/audio/speech\", r.gateway.Speech)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/audio/transcriptions",
+    "line": 1531,
+    "registration": "guarded.Post(\"/v1/audio/transcriptions\", r.gateway.Transcriptions)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/rerank",
+    "line": 1532,
+    "registration": "guarded.Post(\"/v1/rerank\", r.gateway.Rerank)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/async/invocations",
+    "line": 1533,
+    "registration": "guarded.Post(\"/v1/async/invocations\", r.gateway.StartAsyncInvoke)"
+  },
+  {
+    "method": "GET",
+    "path": "/v1/async/invocations/{asyncID}",
+    "line": 1534,
+    "registration": "guarded.Get(\"/v1/async/invocations/{asyncID}\", r.gateway.GetAsyncInvoke)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/async/invocations/{asyncID}/cancel",
+    "line": 1535,
+    "registration": "guarded.Post(\"/v1/async/invocations/{asyncID}/cancel\", r.gateway.CancelAsyncInvoke)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/files",
+    "line": 1536,
+    "registration": "guarded.Post(\"/v1/files\", r.gateway.CreateFile)"
+  },
+  {
+    "method": "GET",
+    "path": "/v1/files/{fileID}",
+    "line": 1537,
+    "registration": "guarded.Get(\"/v1/files/{fileID}\", r.gateway.GetFile)"
+  },
+  {
+    "method": "GET",
+    "path": "/v1/files/{fileID}/content",
+    "line": 1538,
+    "registration": "guarded.Get(\"/v1/files/{fileID}/content\", r.gateway.DownloadFile)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/files/{fileID}",
+    "line": 1539,
+    "registration": "guarded.Delete(\"/v1/files/{fileID}\", r.gateway.DeleteFile)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/batches",
+    "line": 1540,
+    "registration": "guarded.Post(\"/v1/batches\", r.gateway.CreateBatch)"
+  },
+  {
+    "method": "GET",
+    "path": "/v1/batches/{batchID}",
+    "line": 1541,
+    "registration": "guarded.Get(\"/v1/batches/{batchID}\", r.gateway.GetBatch)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/batches/{batchID}/cancel",
+    "line": 1542,
+    "registration": "guarded.Post(\"/v1/batches/{batchID}/cancel\", r.gateway.CancelBatch)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/messages",
+    "line": 1548,
+    "registration": "guarded.Post(\"/v1/messages\", r.gateway.Messages)"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/messages/count_tokens",
+    "line": 1549,
+    "registration": "guarded.Post(\"/v1/messages/count_tokens\", r.gateway.CountTokens)"
+  },
+  {
+    "method": "GET",
+    "path": "/",
+    "line": 1551,
+    "registration": "router.Get(\"/\", func(writer http.ResponseWriter, _ *http.Request) {"
+  },
+  {
+    "method": "GET",
+    "path": "/health/live",
+    "line": 1566,
+    "registration": "router.Get(\"/health/live\", r.live)"
+  },
+  {
+    "method": "GET",
+    "path": "/health/ready",
+    "line": 1567,
+    "registration": "router.Get(\"/health/ready\", r.ready)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/setup/status",
+    "line": 1568,
+    "registration": "router.Get(\"/admin/api/v1/setup/status\", r.getAdminSetupStatus)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/ui/bootstrap",
+    "line": 1569,
+    "registration": "router.Get(\"/admin/api/v1/ui/bootstrap\", r.getAdminUIBootstrap)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/setup/admin",
+    "line": 1570,
+    "registration": "router.Post(\"/admin/api/v1/setup/admin\", r.setupAdmin)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/session/login",
+    "line": 1571,
+    "registration": "router.Post(\"/admin/api/v1/session/login\", r.loginAdmin)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/session/mfa/totp",
+    "line": 1572,
+    "registration": "router.Post(\"/admin/api/v1/session/mfa/totp\", r.completeAdminMFATOTP)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/session/mfa/recovery-code",
+    "line": 1573,
+    "registration": "router.Post(\"/admin/api/v1/session/mfa/recovery-code\", r.completeAdminMFARecovery)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/session/mfa/challenge",
+    "line": 1574,
+    "registration": "router.Delete(\"/admin/api/v1/session/mfa/challenge\", r.cancelAdminMFAChallenge)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/session",
+    "line": 1575,
+    "registration": "router.With(r.requireAdminBase).Get(\"/admin/api/v1/session\", r.getAdminSession)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/session/logout",
+    "line": 1576,
+    "registration": "router.With(r.requireAdminSelfSetupMutation).Post(\"/admin/api/v1/session/logout\", r.logoutAdmin)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/session/password",
+    "line": 1577,
+    "registration": "router.With(r.requireAdminSelfMutation).Post(\"/admin/api/v1/session/password\", r.changeAdminPassword)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/security/mfa",
+    "line": 1578,
+    "registration": "router.With(r.requireAdminBase).Get(\"/admin/api/v1/security/mfa\", r.getAdminMFA)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/security/mfa/authenticators",
+    "line": 1579,
+    "registration": "router.With(r.requireAdminSelfSetupMutation).Post(\"/admin/api/v1/security/mfa/authenticators\", r.createAdminMFAAuthenticator)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/security/mfa/authenticators/{id}/confirm",
+    "line": 1580,
+    "registration": "router.With(r.requireAdminSelfSetupMutation).Post(\"/admin/api/v1/security/mfa/authenticators/{id}/confirm\", r.confirmAdminMFAAuthenticator)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/security/mfa/authenticators/{id}/pending",
+    "line": 1581,
+    "registration": "router.With(r.requireAdminSelfSetupMutation).Delete(\"/admin/api/v1/security/mfa/authenticators/{id}/pending\", r.cancelPendingAdminMFAAuthenticator)"
+  },
+  {
+    "method": "PATCH",
+    "path": "/admin/api/v1/security/mfa/authenticators/{id}",
+    "line": 1582,
+    "registration": "router.With(r.requireAdminSelfMutation).Patch(\"/admin/api/v1/security/mfa/authenticators/{id}\", r.renameAdminMFAAuthenticator)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/security/mfa/authenticators/{id}",
+    "line": 1583,
+    "registration": "router.With(r.requireAdminSelfMutation).Delete(\"/admin/api/v1/security/mfa/authenticators/{id}\", r.deleteAdminMFAAuthenticator)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/security/mfa/recovery-codes/regenerate",
+    "line": 1584,
+    "registration": "router.With(r.requireAdminSelfMutation).Post(\"/admin/api/v1/security/mfa/recovery-codes/regenerate\", r.regenerateAdminMFARecoveryCodes)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/security/mfa",
+    "line": 1585,
+    "registration": "router.With(r.requireAdminSelfMutation).Delete(\"/admin/api/v1/security/mfa\", r.disableAdminMFA)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/admin-users",
+    "line": 1586,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/admin-users\", r.listAdminUsers)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/admin-users",
+    "line": 1587,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/admin-users\", r.createAdminUser)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/admin-users/{username}",
+    "line": 1588,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/admin-users/{username}\", r.deleteAdminUser)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/dashboard",
+    "line": 1589,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/dashboard\", r.adminDashboard)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/onboarding/readiness",
+    "line": 1590,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/onboarding/readiness\", r.getAdminOnboardingReadiness)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/master-key/custody",
+    "line": 1591,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/master-key/custody\", r.adminMasterKeyCustody)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/master-key/runbooks/lifecycle",
+    "line": 1592,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/master-key/runbooks/lifecycle\", r.adminMasterKeyLifecycleRunbook)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/master-key/runbooks/recovery",
+    "line": 1593,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/master-key/runbooks/recovery\", r.adminMasterKeyRecoveryRunbook)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/runbooks/gateway-key-compromise",
+    "line": 1594,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/runbooks/gateway-key-compromise\", r.adminGatewayKeyCompromiseRunbook)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/runbooks/configuration-stale",
+    "line": 1595,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/runbooks/configuration-stale\", r.adminConfigurationStaleRunbook)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/runbooks/file-master-key-rotation",
+    "line": 1596,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/runbooks/file-master-key-rotation\", r.adminFileMasterKeyRotationRunbook)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/usage",
+    "line": 1597,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/usage\", r.adminUsage)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/usage/summary",
+    "line": 1598,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/usage/summary\", r.adminUsageSummary)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/usage/failures",
+    "line": 1599,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/usage/failures\", r.adminUsageFailures)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/usage/failures/{requestID}/payload",
+    "line": 1600,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/usage/failures/{requestID}/payload\", r.adminUsageFailurePayload)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/usage/requests/{requestID}",
+    "line": 1601,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/usage/requests/{requestID}\", r.adminUsageRequest)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/system/status",
+    "line": 1602,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/system/status\", r.adminSystemStatus)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/system/config",
+    "line": 1603,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/system/config\", r.adminSystemConfig)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/developer/config",
+    "line": 1604,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/developer/config\", r.getAdminDeveloperConfig)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/developer/execute/{endpoint}",
+    "line": 1605,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/developer/execute/{endpoint}\", r.executeAdminDeveloperRequest)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/settings",
+    "line": 1606,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/settings\", r.getAdminSettings)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/settings",
+    "line": 1607,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/settings\", r.updateAdminSettings)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/settings/ui",
+    "line": 1608,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/settings/ui\", r.getAdminUISettings)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/settings/ui",
+    "line": 1609,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/settings/ui\", r.updateAdminUISettings)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/settings/usage",
+    "line": 1610,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/settings/usage\", r.getAdminUsageSettings)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/settings/usage",
+    "line": 1611,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/settings/usage\", r.updateAdminUsageSettings)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/settings/accounting",
+    "line": 1612,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/settings/accounting\", r.getAdminAccountingSettings)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/settings/accounting",
+    "line": 1613,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/settings/accounting\", r.updateAdminAccountingSettings)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/settings/accounting/pending",
+    "line": 1614,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/settings/accounting/pending\", r.cancelAdminAccountingTimezoneChange)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/preferences",
+    "line": 1615,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/preferences\", r.getAdminPreferences)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/preferences",
+    "line": 1616,
+    "registration": "router.With(r.requireAdminSelfMutation).Put(\"/admin/api/v1/preferences\", r.updateAdminPreferences)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/projects",
+    "line": 1617,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/projects\", r.listAdminProjects)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/projects",
+    "line": 1618,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/projects\", r.createAdminProject)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/projects/{id}",
+    "line": 1619,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/projects/{id}\", r.getAdminProject)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/projects/{id}",
+    "line": 1620,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/projects/{id}\", r.updateAdminProject)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/projects/{id}",
+    "line": 1621,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/projects/{id}\", r.deleteAdminProject)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/projects/{id}/unblock",
+    "line": 1622,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/projects/{id}/unblock\", r.unblockAdminProject)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/projects/{id}/keys",
+    "line": 1623,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/projects/{id}/keys\", r.listAdminProjectKeys)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/projects/{id}/keys",
+    "line": 1624,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/projects/{id}/keys\", r.createAdminProjectKey)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/projects/{id}/keys/{keyID}",
+    "line": 1625,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/projects/{id}/keys/{keyID}\", r.getAdminProjectKey)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/projects/{id}/keys/{keyID}",
+    "line": 1626,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/projects/{id}/keys/{keyID}\", r.updateAdminProjectKey)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/projects/{id}/keys/{keyID}",
+    "line": 1627,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/projects/{id}/keys/{keyID}\", r.deleteAdminProjectKey)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/credentials",
+    "line": 1628,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/credentials\", r.listAdminCredentials)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/credentials",
+    "line": 1629,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/credentials\", r.createAdminCredential)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/credentials/{id}",
+    "line": 1630,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/credentials/{id}\", r.getAdminCredential)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/credentials/{id}",
+    "line": 1631,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/credentials/{id}\", r.updateAdminCredential)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/credentials/{id}",
+    "line": 1632,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/credentials/{id}\", r.deleteAdminCredential)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/providers",
+    "line": 1633,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/providers\", r.listAdminProviders)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/provider-profiles",
+    "line": 1637,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/provider-profiles\", r.getAdminProviderProfiles)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/model-catalog",
+    "line": 1638,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/model-catalog\", r.getAdminModelCatalog)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/model-catalog/refresh",
+    "line": 1639,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/model-catalog/refresh\", r.refreshAdminModelCatalog)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/providers",
+    "line": 1640,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/providers\", r.createAdminProvider)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/providers/{id}",
+    "line": 1641,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/providers/{id}\", r.getAdminProvider)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/providers/{id}/invocation-targets",
+    "line": 1642,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/providers/{id}/invocation-targets\", r.listAdminInvocationTargets)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/providers/{id}/invocation-targets",
+    "line": 1647,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/providers/{id}/invocation-targets\", r.refreshAdminInvocationTargets)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/providers/{id}/invocation-targets/*",
+    "line": 1648,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/providers/{id}/invocation-targets/*\", r.resolveAdminInvocationTarget)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/providers/{id}",
+    "line": 1649,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/providers/{id}\", r.updateAdminProvider)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/providers/{id}",
+    "line": 1650,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/providers/{id}\", r.deleteAdminProvider)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/providers/{id}/test",
+    "line": 1651,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/providers/{id}/test\", r.testAdminProvider)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/providers/{id}/model-capability-detections",
+    "line": 1652,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/providers/{id}/model-capability-detections\", r.createAdminModelCapabilityDetection)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/model-capability-detections/{id}",
+    "line": 1653,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/model-capability-detections/{id}\", r.getAdminModelCapabilityDetection)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/model-capability-detections/{id}",
+    "line": 1654,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/model-capability-detections/{id}\", r.cancelAdminModelCapabilityDetection)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/deployments",
+    "line": 1655,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/deployments\", r.listAdminDeployments)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments",
+    "line": 1656,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments\", r.createAdminDeployment)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/deployments/{id}",
+    "line": 1657,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/deployments/{id}\", r.getAdminDeployment)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/deployments/{id}",
+    "line": 1658,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/deployments/{id}\", r.updateAdminDeployment)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/deployments/{id}",
+    "line": 1659,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/deployments/{id}\", r.deleteAdminDeployment)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/test",
+    "line": 1660,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/test\", r.testAdminDeployment)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/capabilities/preflight",
+    "line": 1661,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/capabilities/preflight\", r.preflightAdminDeploymentCapabilities)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/deployments/{id}/prices",
+    "line": 1662,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/deployments/{id}/prices\", r.listAdminDeploymentPrices)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/prices",
+    "line": 1663,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/prices\", r.createAdminDeploymentPrice)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/prices/preview",
+    "line": 1664,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/prices/preview\", r.previewAdminDeploymentPrice)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/prices/restore-confirm",
+    "line": 1665,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/prices/restore-confirm\", r.confirmRestoredDeploymentPricing)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/prices/{priceID}/cancel",
+    "line": 1666,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/prices/{priceID}/cancel\", r.cancelAdminDeploymentPrice)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/deployments/{id}/price-proposals",
+    "line": 1667,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/deployments/{id}/price-proposals\", r.listAdminDeploymentPriceProposals)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/price-proposals",
+    "line": 1668,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/price-proposals\", r.createAdminDeploymentPriceProposal)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/adopt",
+    "line": 1669,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/adopt\", r.adoptAdminDeploymentPriceProposal)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/reject",
+    "line": 1670,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/deployments/{id}/price-proposals/{proposalID}/reject\", r.rejectAdminDeploymentPriceProposal)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/routes",
+    "line": 1671,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/routes\", r.listAdminRoutes)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/routes",
+    "line": 1672,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/routes\", r.createAdminRoute)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/routes/{id}",
+    "line": 1673,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/routes/{id}\", r.getAdminRoute)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/routes/{id}",
+    "line": 1674,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/routes/{id}\", r.updateAdminRoute)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/routes/{id}",
+    "line": 1675,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/routes/{id}\", r.deleteAdminRoute)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/routes/{id}/test",
+    "line": 1676,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/routes/{id}/test\", r.testAdminRoute)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/token-guard-policies",
+    "line": 1677,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/token-guard-policies\", r.listAdminTokenGuardPolicies)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/token-guard-policies",
+    "line": 1678,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/token-guard-policies\", r.createAdminTokenGuardPolicy)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/token-guard-policies/{id}",
+    "line": 1679,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/token-guard-policies/{id}\", r.getAdminTokenGuardPolicy)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/token-guard-policies/{id}",
+    "line": 1680,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/token-guard-policies/{id}\", r.updateAdminTokenGuardPolicy)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/token-guard-policies/{id}",
+    "line": 1681,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/token-guard-policies/{id}\", r.deleteAdminTokenGuardPolicy)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/token-guard-policies/{id}/test",
+    "line": 1682,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/token-guard-policies/{id}/test\", r.testAdminTokenGuardPolicy)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/redaction-policies",
+    "line": 1683,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/redaction-policies\", r.listAdminRedactionPolicies)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/redaction-policies",
+    "line": 1684,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/redaction-policies\", r.createAdminRedactionPolicy)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/redaction-policies/{id}",
+    "line": 1685,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/redaction-policies/{id}\", r.getAdminRedactionPolicy)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/redaction-policies/{id}",
+    "line": 1686,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/redaction-policies/{id}\", r.updateAdminRedactionPolicy)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/redaction-policies/{id}",
+    "line": 1687,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/redaction-policies/{id}\", r.deleteAdminRedactionPolicy)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/redaction-policies/{id}/test",
+    "line": 1688,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/redaction-policies/{id}/test\", r.testAdminRedactionPolicy)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/alerts",
+    "line": 1689,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/alerts\", r.listAdminAlerts)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/alerts",
+    "line": 1690,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/alerts\", r.createAdminAlert)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/alerts/test",
+    "line": 1691,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/alerts/test\", r.testAdminAlertSelection)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/alerts/{id}",
+    "line": 1692,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/alerts/{id}\", r.getAdminAlert)"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/api/v1/alerts/{id}",
+    "line": 1693,
+    "registration": "router.With(r.requireAdminMutation).Put(\"/admin/api/v1/alerts/{id}\", r.updateAdminAlert)"
+  },
+  {
+    "method": "DELETE",
+    "path": "/admin/api/v1/alerts/{id}",
+    "line": 1694,
+    "registration": "router.With(r.requireAdminMutation).Delete(\"/admin/api/v1/alerts/{id}\", r.deleteAdminAlert)"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/api/v1/alerts/{id}/test",
+    "line": 1695,
+    "registration": "router.With(r.requireAdminMutation).Post(\"/admin/api/v1/alerts/{id}/test\", r.testAdminAlert)"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/api/v1/audit",
+    "line": 1696,
+    "registration": "router.With(r.requireAdmin).Get(\"/admin/api/v1/audit\", r.listAdminAudit)"
+  },
+  {
+    "method": "GET",
+    "path": "/health/live",
+    "line": 1721,
+    "registration": "router.Get(\"/health/live\", r.live)"
+  },
+  {
+    "method": "GET",
+    "path": "/audit/anchors",
+    "line": 1723,
+    "registration": "router.Get(\"/audit/anchors\", r.adminAuditAnchors)"
+  },
+  {
+    "method": "GET",
+    "path": "/metrics",
+    "line": 1725,
+    "registration": "router.Get(\"/metrics\", func(writer http.ResponseWriter, request *http.Request) {"
+  }
+]

@@ -1,0 +1,146 @@
+[
+  {
+    "label": "old-init",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "init",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 1.4049217700958252
+  },
+  {
+    "label": "old-doctor",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.017773866653442383
+  },
+  {
+    "label": "new-doctor-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.06102585792541504
+  },
+  {
+    "label": "doctor-preserved-old-data",
+    "equal": true,
+    "before": {
+      "halro.db": "4050c1cf15dd10976c8a2bbf7d58533207dd79d5edc93657fd91b9fc23a8f8e8",
+      "ledger/ledger.wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "audit/audit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "after": {
+      "halro.db": "4050c1cf15dd10976c8a2bbf7d58533207dd79d5edc93657fd91b9fc23a8f8e8",
+      "ledger/ledger.wal": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "audit/audit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  {
+    "label": "new-ledger-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.012985944747924805
+  },
+  {
+    "label": "new-usage-old-schema",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.008307933807373047
+  },
+  {
+    "label": "old-doctor-after-readonly",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.009334087371826172
+  },
+  {
+    "label": "new-start-upgrade",
+    "ready": true,
+    "ready_seconds": 0.23357009887695312
+  },
+  {
+    "label": "second-writer-refused",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "serve",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.014023780822753906
+  },
+  {
+    "label": "new-doctor-after-upgrade",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.014211177825927734
+  },
+  {
+    "label": "old-doctor-after-upgrade",
+    "command": [
+      "/private/tmp/halro-review-260905/halro-v050",
+      "doctor",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.012445926666259766
+  },
+  {
+    "label": "new-ledger-empty",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "ledger",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 1,
+    "seconds": 0.023914813995361328
+  },
+  {
+    "label": "new-usage-empty",
+    "command": [
+      "/private/tmp/halro-review-260905/halro",
+      "usage",
+      "verify",
+      "--config",
+      "/private/tmp/halro-review-260905/upgrade/old-config.yaml"
+    ],
+    "exit": 0,
+    "seconds": 0.010056018829345703
+  }
+]

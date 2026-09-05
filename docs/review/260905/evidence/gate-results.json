@@ -1,0 +1,155 @@
+{
+  "go": {
+    "command": [
+      "go",
+      "test",
+      "-count=1",
+      "./..."
+    ],
+    "exit": 0,
+    "seconds": 213.75287866592407
+  },
+  "web": [
+    {
+      "name": "web-typecheck",
+      "command": [
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "exit": 0,
+      "seconds": 0.7349748611450195
+    },
+    {
+      "name": "web-test",
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exit": 0,
+      "seconds": 10.865460872650146
+    },
+    {
+      "name": "web-build",
+      "command": [
+        "npm",
+        "run",
+        "build"
+      ],
+      "exit": 0,
+      "seconds": 0.9259178638458252
+    }
+  ],
+  "vet": {
+    "command": [
+      "go",
+      "vet",
+      "./..."
+    ],
+    "exit": 0,
+    "seconds": 0.4360311031341553
+  },
+  "note": "Historical parent runs at review baseline; not rerun for evidence packaging.",
+  "fuzz": [
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/sse",
+        "-run=^$",
+        "-fuzz=^FuzzDecoderNeverPanics$",
+        "-fuzztime=15s",
+        "-parallel=2"
+      ],
+      "exit": 0,
+      "seconds": 17.334245920181274
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/redaction",
+        "-run=^$",
+        "-fuzz=^FuzzBoundedStreamMatchesNonStream$",
+        "-fuzztime=15s",
+        "-parallel=2"
+      ],
+      "exit": 0,
+      "seconds": 18.613360166549683
+    }
+  ],
+  "admission-race": {
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./internal/circuit",
+      "./internal/limiter",
+      "./internal/sourcelimit"
+    ],
+    "exit": 0,
+    "seconds": 4.495212958
+  },
+  "concurrency-race": {
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-count=1",
+      "./internal/gateway",
+      "./internal/budget",
+      "./internal/ledger"
+    ],
+    "exit": 0,
+    "seconds": 59.78795075416565
+  },
+  "sdk": {
+    "go": {
+      "exit": 0
+    },
+    "node": {
+      "exit": 0
+    },
+    "python": {
+      "exit": 0,
+      "stdout_bytes": 0,
+      "interpretation": "Success established by parent-observed actual process exit 0, not by absence of stdout."
+    },
+    "exit_evidence": "../runtime-evidence.md section 2 records actual process exits; standalone machine-readable SDK exit receipts not present in reviewed temporary files. This is attributed parent evidence, not independently rerun SDK execution."
+  },
+  "npm-audit": {
+    "command": [
+      "npm",
+      "audit",
+      "--json",
+      "--registry=https://registry.npmjs.org"
+    ],
+    "exit": 0,
+    "seconds": 2.968146958,
+    "cwd": "web",
+    "metadata": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 47,
+        "dev": 133,
+        "optional": 47,
+        "peer": 10,
+        "peerOptional": 0,
+        "total": 199
+      }
+    },
+    "scope": "Read-only official registry audit of this review fixed dependency set only; 2026-09-05 response. Zero reported vulnerabilities is not a permanent vulnerability-free guarantee.",
+    "lockfile_sha256": "db712bcf0c3a5ccba460a92dfadf2829c9363b3a096d49863c6a928baba013f5",
+    "lockfile_hash_note": "Fingerprint of current review checkout lockfile at archival time; audit was executed by parent."
+  }
+}

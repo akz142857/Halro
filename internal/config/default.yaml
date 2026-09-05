@@ -1,7 +1,11 @@
 # Halro configuration — written on first run, safe for a single host.
 #
-# Every value below is the built-in default; deleting a key restores it. A
-# config-driven setting is one that cannot change while the gateway is serving:
+# This is the complete first-run template, not a sparse override file. Some
+# omitted scalar fields are normalized to defaults, while required values and
+# security-sensitive booleans may instead fail validation or retain their zero
+# value. Do not delete a key to request a default: keep the generated value, or
+# consult configs/config.example.yaml and `halro config check` after editing.
+# A config-driven setting is one that cannot change while the gateway is serving:
 # listeners, TLS, storage, key custody, security boundaries. Everything an
 # operator tunes day to day — providers, budgets, limits, policies — lives in
 # the Admin console, not here.
