@@ -2,11 +2,11 @@
 
 > **Status.** Two things are described here, and until now the document did not
 > separate them. The **v0.x line** is what `.github/workflows/release.yml`
-> actually does today: eleven jobs — `prepare`, `quality`, `sdk-compatibility`,
+> actually does today: twelve jobs — `prepare`, `quality`, `sdk-compatibility`,
 > `stress`, `web`, `binaries`, `container`, `debian-packages`, `provenance`,
-> `publish`, `container-push` — with the
+> `publish`, `container-push`, `downstream-package-repositories` — with the
 > only publication precondition being `prepare`'s CHANGELOG section check and a
-> `v*` tag. There is no environment approval, no `release-governance` preflight,
+> manual `workflow_dispatch` from `main`. There is no environment approval, no `release-governance` preflight,
 > no signed-tag requirement, and no M11 evidence verification in that workflow.
 >
 > The **1.0.0 governance gates** — the `v1-release` environment with required
@@ -24,7 +24,10 @@
 
 ## What the v0.x pipeline does
 
-Pushing a `v*` tag runs the full matrix and publishes if `prepare` passes. The
+Running `release` through `workflow_dispatch` on `main` is the only supported
+entry. It runs the full matrix, creates the annotated version tag only after all
+gates pass, publishes the immutable release and container images, then dispatches
+that exact version and full commit to both package repositories. The
 gates that genuinely hold are the ones inside those jobs: `go test`,
 `go test -race`, `go vet`, `govulncheck`, the fuzz targets, the official-SDK
 compatibility suite, the SSE stress run, the frontend suite and bundle-drift
@@ -63,7 +66,7 @@ Every release run produces:
 - a Sigstore keyless bundle for each binary archive, the SBOM, and checksum file;
 - a GitHub build-provenance attestation for every archive and SBOM, verified
   with `gh attestation verify` before publication;
-- workflow artifacts; and, for a signed `v*` tag, an immutable GitHub Release.
+- workflow artifacts, an annotated version tag, and an immutable GitHub Release.
 
 The GitHub Release is the source of truth for downstream package channels.
 `halro-ai/homebrew-tap` pins its Formula URLs and SHA-256 values to those immutable
@@ -73,13 +76,36 @@ or replace a binary. A package channel is advertised on `halro.ai` only after a
 clean-host installation smoke passes. Failure in a downstream publisher delays
 that channel and never retracts or mutates the Git tag or GitHub Release.
 
-The official v0.x path is `workflow_dispatch` on `main`. Fulcio therefore puts
+The v0.x path is exclusively `workflow_dispatch` on `main`. Fulcio therefore puts
 `release.yml@refs/heads/main` in those artifacts' certificate identity; the
 checksums and GitHub provenance attestation bind each blob to the exact commit.
-A release started by pushing an existing tag instead receives a
-`release.yml@refs/tags/vX.Y.Z` identity. README verification commands describe
-the official dispatch path and must be changed deliberately if the release is
-started from a tag.
+
+## One-time package automation setup
+
+Create one GitHub App installed on `akz142857/Halro`,
+`halro-ai/homebrew-tap`, `halro-ai/apt-repository`, and
+`akz142857/Halro-website`. Grant repository Contents, Issues, and Pull requests
+read/write. Store its client ID as `HALRO_RELEASE_APP_CLIENT_ID` and private key
+as `HALRO_RELEASE_APP_PRIVATE_KEY` in every participating repository. The App
+token is required: pull requests created by the default workflow token do not
+start the downstream validation workflows.
+
+In `halro-ai/apt-repository`, create the protected `apt-production` Environment.
+Store an unencrypted, dedicated online OpenPGP archive-signing private key as the
+Environment secret `HALRO_APT_ARCHIVE_SIGNING_KEY`; store its uppercase full
+fingerprint as `HALRO_APT_ARCHIVE_SIGNING_FINGERPRINT`. Keep the private key out
+of every repository and log. The cluster's existing `ghcr-credentials` pull
+secret must be authorized to read `halro-ai/apt-repository`; the snapshot image
+remains private while `packages.halro.ai/apt` is the public package surface.
+
+The website package ingress and automation workflows must already be present on
+the default branch because `repository_dispatch` only loads workflows there.
+Once those one-time conditions are met, a release operator does exactly one
+thing: run `.github/workflows/release.yml` on `main` with the new version and
+`dry_run=false`. Homebrew and APT update through reviewed automation branches;
+APT switches the GitOps image by digest, executes clean-host Debian/Ubuntu
+amd64/arm64 acceptance, waits for the Homebrew Formula, and only then updates
+the public install page.
 
 **[1.0.0 target — not in `release.yml` today.]** Configure the GitHub `v1-release` environment with required reviewers. Its
 approval is the explicit boundary where reviewers verify the exact-commit GA

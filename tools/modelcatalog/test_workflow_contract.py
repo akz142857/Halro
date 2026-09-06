@@ -29,6 +29,17 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertGreater(len(ANY_ACTION.findall(workflow)), 0)
         self.assertEqual(len(ANY_ACTION.findall(workflow)), len(FULL_SHA_ACTION.findall(workflow)))
 
+    def test_release_has_one_entry_and_dispatches_exact_release_downstream(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertNotRegex(workflow, r"(?m)^\s+push:\s*$")
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("downstream-package-repositories:", workflow)
+        self.assertIn("needs: [prepare, publish, container-push]", workflow)
+        self.assertIn('event_type:"halro-release-published"', workflow)
+        self.assertRegex(workflow, r"repositories:\s*\|\s*homebrew-tap\s+apt-repository")
+        self.assertIn("commit:$commit", workflow)
+        self.assertIn("permission-contents: write", workflow)
+
     def test_release_generates_binary_sbom_and_verifies_provenance(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("attestations: write", workflow)
@@ -40,6 +51,8 @@ class WorkflowContractTest(unittest.TestCase):
         # the action into a failure of the SBOM contract.
         self.assertRegex(workflow, r"actions/attest-build-provenance@[0-9a-f]{40}")
         self.assertIn('gh attestation verify "${artifact}"', workflow)
+        self.assertIn('--source-digest "${GITHUB_SHA}"', workflow)
+        self.assertIn("--source-ref refs/heads/main", workflow)
 
     def test_release_keeps_dynamic_signed_catalog_inactive(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
