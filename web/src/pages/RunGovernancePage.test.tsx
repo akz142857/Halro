@@ -46,10 +46,17 @@ describe("RunGovernancePage", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Work Units" }));
     await waitFor(() => expect(runs).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    expect(screen.getByRole("heading", { name: "生命周期" })).toBeVisible();
+    expect(screen.getByText(/从创建到关闭的关键节点/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "业务结果" })).toBeVisible();
     fireEvent.click(await screen.findByRole("button", { name: "查看调用" }));
     await waitFor(() => expect(usage).toHaveBeenCalled());
     expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("run_id")).toBe("run_a");
     expect(await screen.findByText("req_a")).toBeVisible();
+    expect(screen.getByText("请求模型")).toBeVisible();
+    expect(screen.getByText("实际模型")).toBeVisible();
+    expect(screen.getByText("输入 10 · 输出 2")).toBeVisible();
+    expect(screen.getByText("1 次调用")).toBeVisible();
     expect(screen.getAllByText("可用").length).toBeGreaterThan(0);
     expect(screen.getByText(/已归集 US\$0\.13 · 已预留 US\$0\.03/)).toBeVisible();
   });
