@@ -41,6 +41,8 @@ describe("RunGovernancePage", () => {
 
     await screen.findByRole("option", { name: "Agent plane" });
     await waitFor(() => expect(workUnits).toHaveBeenCalledWith(expect.stringContaining("project_id=prj_a")));
+    expect(await screen.findByText("1 个 Run")).toBeVisible();
+    expect(screen.getByText("当前无需处理")).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "Work Units" }));
     await waitFor(() => expect(runs).toHaveBeenCalled());
     fireEvent.click(await screen.findByRole("button", { name: "查看详情" }));

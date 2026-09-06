@@ -61,16 +61,20 @@ export function GovernanceOverview({
     </div>
     <div className="governance-overview-grid">
       <section className="governance-section">
-        <header className="governance-section-header"><div><p className="eyebrow">{t("runGovernance.recentActivity")}</p><h2>{t("runGovernance.recentWorkUnits")}</h2></div><button type="button" className="button ghost" onClick={() => onOpenWorkUnits("all")}>{t("runGovernance.viewAll")}</button></header>
+        <header className="governance-section-header"><div><p className="eyebrow">{t("runGovernance.recentActivity")}</p><h2>{t("runGovernance.recentWorkUnits")}</h2></div><button type="button" className="button ghost governance-section-action" onClick={() => onOpenWorkUnits("all")}>{t("runGovernance.viewAll")}<span aria-hidden="true">→</span></button></header>
         {recentUnits.length === 0 ? <EmptyState title={t("runGovernance.noWorkUnits")}>{t("runGovernance.noWorkUnitsDescription")}</EmptyState> : <div className="governance-list">{recentUnits.map((unit) => {
           const unitRuns = runs.filter((run) => run.work_unit_id === unit.id);
           const activity = latestActivity(unit, runs, outcomes);
-          return <article className="governance-list-row" key={unit.id}><span><strong>{t("runGovernance.workUnit")}</strong><CopyableID value={unit.id} label={t("runGovernance.workUnit")} /></span><WorkUnitStatusBadge status={unit.status} /><span>{t("runGovernance.runCount", { count: unitRuns.length })}</span><span>{unit.committed_micros_usd == null ? "—" : money(unit.committed_micros_usd)}</span><time dateTime={activity}>{dateTime(activity, "full")}</time><button type="button" className="button ghost governance-row-action" onClick={() => onOpenWorkUnits("all", unit.id)}>{t("runGovernance.viewDetails")}</button></article>;
+          return <article className="governance-list-row" key={unit.id}>
+            <div className="governance-recent-identity"><span>{t("runGovernance.workUnit")}</span><CopyableID value={unit.id} label={t("runGovernance.workUnit")} /></div>
+            <div className="governance-recent-actions"><WorkUnitStatusBadge status={unit.status} /><button type="button" className="button ghost governance-row-action" onClick={() => onOpenWorkUnits("all", unit.id)}>{t("runGovernance.viewDetails")}<span aria-hidden="true">→</span></button></div>
+            <dl className="governance-recent-facts"><div><dt>{t("runGovernance.runs")}</dt><dd>{t("runGovernance.runCount", { count: unitRuns.length })}</dd></div><div><dt>{t("runGovernance.costEvidence")}</dt><dd>{unit.committed_micros_usd == null ? "—" : money(unit.committed_micros_usd)}</dd></div><div><dt>{t("runGovernance.lastActivity")}</dt><dd><time dateTime={activity}>{dateTime(activity, "full")}</time></dd></div></dl>
+          </article>;
         })}</div>}
       </section>
       <section className="governance-section">
         <header className="governance-section-header"><div><p className="eyebrow">{t("runGovernance.attentionEyebrow")}</p><h2>{t("runGovernance.attentionQueue")}</h2></div><span className="governance-count">{attention.length}</span></header>
-        {attention.length === 0 ? <div className="governance-clear-state"><GovernanceBadge tone="good">{t("runGovernance.noAttentionNeeded")}</GovernanceBadge><p>{t("runGovernance.noAttentionDescription")}</p></div> : <div className="governance-list">{attention.map((item) => <article className="governance-attention-row" key={item.key}><GovernanceBadge tone={item.tone}>{item.title}</GovernanceBadge><CopyableID value={item.detail} label={t("runGovernance.workUnit")} /><button type="button" className="button ghost" onClick={() => onOpenWorkUnits("all", item.workUnitID)}>{t("runGovernance.viewDetails")}</button></article>)}</div>}
+        {attention.length === 0 ? <div className="governance-clear-state" role="status"><span className="governance-clear-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6.5 12.5 3.5 3.5 7.5-8" /></svg></span><div><strong>{t("runGovernance.noAttentionNeeded")}</strong><p>{t("runGovernance.noAttentionDescription")}</p></div></div> : <div className="governance-list">{attention.map((item) => <article className="governance-attention-row" key={item.key}><GovernanceBadge tone={item.tone}>{item.title}</GovernanceBadge><CopyableID value={item.detail} label={t("runGovernance.workUnit")} /><button type="button" className="button ghost" onClick={() => onOpenWorkUnits("all", item.workUnitID)}>{t("runGovernance.viewDetails")}</button></article>)}</div>}
       </section>
     </div>
   </section>;
