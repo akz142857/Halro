@@ -55,7 +55,8 @@ describe("RunGovernancePage", () => {
     expect(await screen.findByText("req_a")).toBeVisible();
     expect(screen.getByText("请求模型")).toBeVisible();
     expect(screen.getByText("实际模型")).toBeVisible();
-    expect(screen.getByText("输入 10 · 输出 2")).toBeVisible();
+    expect(screen.getByLabelText("Token 构成")).toHaveTextContent("输入 Token10");
+    expect(screen.getByLabelText("Token 构成")).toHaveTextContent("输出 Token2");
     expect(screen.getByText("1 次调用")).toBeVisible();
     expect(screen.getAllByText("可用").length).toBeGreaterThan(0);
     expect(screen.getByText(/已归集 US\$0\.13 · 已预留 US\$0\.03/)).toBeVisible();

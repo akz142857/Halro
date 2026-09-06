@@ -433,7 +433,7 @@ CSS-only 迭代使用视觉检查和 `design-system.test.ts`，不在每次间�
 - 完成中英文对齐、英文单复数、非颜色状态、Modal 焦点进入 / 返回、移动端字段标签，以及 390 / 768 / 1024 / 1440 px 响应式布局；
 - 收口页头操作与审计凭据的视觉规范：刷新 / 项目设置使用有边界的 44 px 操作控件，审计信息采用标准 disclosure、结构化证据卡和固定区块间距；
 - 升级概览活动区：最近 Work Unit 使用身份、状态、运行数、费用证据和最近活动的结构化记录卡；异常队列使用一致的标题计数和正向空状态，并修复中文 Run 数量文案；
-- 专业化 Work Unit 详情 Drawer：标题使用短 ID；生命周期采用“创建 → 当前/关闭”节点并将冻结口径降为上下文；业务结果独立展示；调用明细按状态与请求、模型路由、核心指标、费用证据四层组织；长标识可复制，选中态和状态均提供非颜色表达；
+- 专业化 Work Unit 详情 Drawer：标题使用短 ID；生命周期采用“创建 → 当前/关闭”节点并将冻结口径降为上下文；业务结果独立展示；调用明细按状态与请求、模型路由、核心指标、费用证据四层组织，Token 总量下以具名子项展示输入 / 输出构成；长标识可复制，选中态和状态均提供非颜色表达；
 - 已重建 `internal/webui/dist`，源码与 embedded bundle 同步交付。
 
 ### 13.2 安全约束下的状态恢复
@@ -463,7 +463,7 @@ CSS-only 迭代使用视觉检查和 `design-system.test.ts`，不在每次间�
 
 二次 Agent 复核受到 Agent 额度限制；改由定向回归、类型检查、四断点真实浏览器检查、完整前端测试和生产构建完成闭环。
 
-最终门禁：TypeScript typecheck 通过；Vitest `44 files / 556 tests` 通过；生产构建、bundle size 与 `29 files` artifact secret scan 通过。连续两次生产构建的 embedded bundle 内容哈希一致（`7807ad956139edb3eb1770ddaa293fdb26d2eb251d52cec428a4215c64a02964`）。本次仅修改前端、文案和生成 bundle，没有 Go 源码变化，依据仓库“run what the change can affect”规则未重复运行 Go / race 门禁。
+最终门禁：TypeScript typecheck 通过；Vitest `44 files / 556 tests` 通过；生产构建、bundle size 与 `29 files` artifact secret scan 通过。连续两次生产构建的 embedded bundle 内容哈希一致（`78443d961cb3371f9c78e65c25f5fcbf5cf5c10ca4f82d8a8182a797a2d475e6`）。本次仅修改前端、文案和生成 bundle，没有 Go 源码变化，依据仓库“run what the change can affect”规则未重复运行 Go / race 门禁。
 
 ### 13.4 验证边界
 
