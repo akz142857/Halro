@@ -12,10 +12,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    tags:
-      - "v*"
-
 permissions:
   contents: read
 
@@ -27,10 +23,9 @@ env:
   GOTOOLCHAIN: go1.26.6
 
 jobs:
-  # prepare is the one place a release version is decided, so the tag push and
-  # the Actions-UI dispatch cannot drift into disagreeing about what is being
-  # released. Everything downstream reads needs.prepare.outputs.version rather
-  # than github.ref_name, which names a branch on a dispatch run.
+  # prepare is the one place a release version is decided. Everything downstream
+  # reads needs.prepare.outputs.version rather than github.ref_name, which names
+  # the main branch on the only supported workflow_dispatch entry.
   prepare:
     runs-on: ubuntu-latest
     outputs:
@@ -50,21 +45,17 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ "${EVENT}" = "push" ]; then
-            version="${GITHUB_REF_NAME}"
-            publish=true
-          else
-            version="${INPUT_VERSION}"
-            publish=true
-            if [ "${INPUT_DRY_RUN}" = "true" ]; then
-              publish=false
-            fi
-            # Releasing from anywhere else would publish ':latest' from a ref
-            # nobody reviewed as the release.
-            if [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
-              echo "::error::release from ${DEFAULT_BRANCH} only; this run is on ${GITHUB_REF}"
-              exit 1
-            fi
+          version="${INPUT_VERSION}"
+          publish=true
+          if [ "${INPUT_DRY_RUN}" = "true" ]; then
+            publish=false
+          fi
+          # workflow_dispatch on the default branch is the only release entry.
+          # The workflow creates the tag after every gate passes, then fans out
+          # to the package repositories after the immutable release is public.
+          if [ "${EVENT}" != "workflow_dispatch" ] || [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::release through workflow_dispatch on ${DEFAULT_BRANCH} only; event=${EVENT}, ref=${GITHUB_REF}"
+            exit 1
           fi
           if ! printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
             echo "::error::version must look like v1.2.3 or v1.2.3-rc.1, got '${version}'"
@@ -72,7 +63,7 @@ jobs:
           fi
           # A dispatch creates its own tag later, so one that already exists means
           # the version was typed twice — refuse before spending the whole matrix.
-          if [ "${EVENT}" = "workflow_dispatch" ] && git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
             echo "::error::tag ${version} already exists"
             exit 1
           fi
@@ -475,7 +466,10 @@ jobs:
           set -euo pipefail
           (cd release && sha256sum --check checksums.txt)
           for artifact in release/halro-*.tar.gz release/*.deb release/halro*.spdx.json; do
-            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref refs/heads/main \
+              --cert-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
           done
           for artifact in release/halro-* release/halro.spdx.json release/checksums.txt; do
             case "${artifact}" in
@@ -492,7 +486,6 @@ jobs:
       # version exists in the repository. A release that fails leaves no tag to
       # retract, and no tag that a reader could mistake for a published one.
       - name: Create the release tag
-        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -544,4 +537,45 @@ jobs:
             done
             docker buildx imagetools create -t "ghcr.io/${owner}/${name}:${tag}" ${refs}
             docker buildx imagetools create -t "ghcr.io/${owner}/${name}:latest" ${refs}
+          done
+
+  downstream-package-repositories:
+    needs: [prepare, publish, container-push]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create a repository-scoped release automation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HALRO_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HALRO_RELEASE_APP_PRIVATE_KEY }}
+          owner: halro-ai
+          repositories: |
+            homebrew-tap
+            apt-repository
+          permission-contents: write
+      - name: Dispatch the exact published release to Homebrew and APT
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${RELEASE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::release commit is not a full SHA: ${RELEASE_COMMIT}"
+            exit 1
+          fi
+          payload=$(jq -n \
+            --arg version "${VERSION}" \
+            --arg commit "${RELEASE_COMMIT}" \
+            --arg release_url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/${VERSION}" \
+            --arg run_url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{event_type:"halro-release-published",client_payload:{version:$version,commit:$commit,release_url:$release_url,run_url:$run_url}}')
+          for repository in homebrew-tap apt-repository; do
+            printf '%s' "${payload}" | gh api \
+              --method POST "repos/halro-ai/${repository}/dispatches" \
+              --input -
           done
