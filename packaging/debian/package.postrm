@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+# Package removal deliberately retains system users, configuration, master keys,
+# and runtime data. An operator must remove those separately after recovery and
+# retention requirements have been satisfied.
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

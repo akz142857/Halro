@@ -1,0 +1,39 @@
+[Unit]
+Description=Halro self-hosted LLM gateway
+Documentation=https://halro.ai/docs/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=halro
+Group=halro
+ExecStart=/usr/bin/halro start --config /etc/halro/config.yaml
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=120s
+TimeoutStopSec=150s
+LimitCORE=0
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/halro
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectProc=invisible
+ProcSubset=pid
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

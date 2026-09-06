@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+  if ! getent group halro-deadman >/dev/null; then
+    addgroup --system halro-deadman
+  fi
+  if ! getent passwd halro-deadman >/dev/null; then
+    adduser --system --ingroup halro-deadman --home /var/lib/halro-deadman \
+      --no-create-home --disabled-password --shell /usr/sbin/nologin halro-deadman
+  fi
+  install -d -m 0700 -o halro-deadman -g halro-deadman /var/lib/halro-deadman
+fi
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0

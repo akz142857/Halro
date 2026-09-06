@@ -1,0 +1,9 @@
+Origin: Halro
+Label: Halro
+Codename: stable
+Suite: stable
+Architectures: amd64 arm64
+Components: main
+Description: Official Halro APT repository
+SignWith: HALRO_ARCHIVE_SIGNING_KEY_FINGERPRINT
+Contents:

@@ -1,0 +1,34 @@
+name: test-formula
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Homebrew on Linux
+        if: runner.os == 'Linux'
+        uses: Homebrew/actions/setup-homebrew@3cdb78d0f62ad29dd32de765782654f4eedea607 # 2026.08.31.1
+      - name: Register the checked-out tap
+        run: |
+          set -euo pipefail
+          tap_root="$(brew --repository)/Library/Taps/halro-ai"
+          mkdir -p "${tap_root}"
+          ln -s "${GITHUB_WORKSPACE}" "${tap_root}/homebrew-tap"
+      - run: brew style halro-ai/tap/halro
+      - run: brew audit --strict --formula halro-ai/tap/halro
+      - run: brew install halro-ai/tap/halro
+      - run: brew test halro-ai/tap/halro
+      - run: halro version
