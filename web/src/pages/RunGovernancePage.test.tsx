@@ -51,7 +51,7 @@ describe("RunGovernancePage", () => {
     expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("run_id")).toBe("run_a");
     expect(await screen.findByText("req_a")).toBeVisible();
     expect(screen.getAllByText("可用").length).toBeGreaterThan(0);
-    expect(screen.getByText(/已归集/)).toBeVisible();
+    expect(screen.getByText(/已归集 US\$0\.13 · 已预留 US\$0\.03/)).toBeVisible();
   });
 
   it("renders complete cost evidence and creates an immutable Definition version", async () => {
