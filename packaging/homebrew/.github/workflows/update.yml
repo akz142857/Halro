@@ -1,0 +1,52 @@
+name: update-formula
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published Halro tag, for example v0.7.1"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [halro-release-published]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version || github.event.client_payload.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate the released version
+        run: |
+          if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "invalid version: ${VERSION}" >&2
+            exit 2
+          fi
+      - name: Download the signed release checksum manifest
+        run: gh release download "${VERSION}" --repo akz142857/Halro --pattern checksums.txt
+      - name: Update Formula URLs and checksums
+        run: ruby scripts/update-formula.rb "${VERSION}" checksums.txt Formula/halro.rb
+      - name: Open or update the Formula pull request
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Formula/halro.rb; then
+            echo "Formula already describes ${VERSION}"
+            exit 0
+          fi
+          branch="package/${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${branch}"
+          git add Formula/halro.rb
+          git commit -m "halro ${VERSION#v}"
+          git push --force-with-lease origin "${branch}"
+          gh pr view "${branch}" >/dev/null 2>&1 || \
+            gh pr create --base main --head "${branch}" \
+              --title "halro ${VERSION#v}" \
+              --body "Update the Formula from the immutable Halro ${VERSION} Release. Merge only after the full tap CI passes."

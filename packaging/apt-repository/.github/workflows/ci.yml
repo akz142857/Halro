@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-control-plane:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate shell entrypoints
+        run: |
+          set -euo pipefail
+          bash -n scripts/verify-release.sh scripts/import-release.sh
+          shellcheck scripts/verify-release.sh scripts/import-release.sh
+      - name: Confirm bootstrap signing state
+        run: |
+          set -euo pipefail
+          grep -Fx 'SignWith: HALRO_ARCHIVE_SIGNING_KEY_FINGERPRINT' conf/distributions

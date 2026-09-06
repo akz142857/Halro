@@ -1,0 +1,9 @@
+# reprepro state and generated publication output
+db/
+public/
+incoming/
+
+# Signing material is provisioned by the protected publisher, never Git.
+private/
+*.key
+*.secret

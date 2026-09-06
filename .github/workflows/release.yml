@@ -252,6 +252,7 @@ jobs:
             deploy/observability/external-probe/RECEIVER-CONTRACT.md \
             deploy/observability/external-probe/halro-deadman.service \
             "${package_dir}/"
+          cp configs/config.example.yaml "${package_dir}/halro.config.example.yaml"
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "${package_dir}/"
           tar --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@${SOURCE_DATE_EPOCH}" -C release -cf - \
@@ -328,8 +329,42 @@ jobs:
             halro-deadman-container-amd64.tar.gz
             halro-deadman-container-arm64.tar.gz
 
+  debian-packages:
+    needs: [prepare, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: halro-linux-*
+          path: release-input
+          merge-multiple: true
+      - name: Build Debian packages from the released Linux binaries
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "${GITHUB_SHA}")
+          export SOURCE_DATE_EPOCH
+          for arch in amd64 arm64; do
+            tools/release/build_deb.sh \
+              --version "${VERSION}" \
+              --arch "${arch}" \
+              --archive "release-input/halro-linux-${arch}.tar.gz" \
+              --output release
+          done
+          halro_deb=$(find release -maxdepth 1 -name 'halro_*_amd64.deb' -print)
+          deadman_deb=$(find release -maxdepth 1 -name 'halro-deadman_*_amd64.deb' -print)
+          test "$(printf '%s\n' "${halro_deb}" | grep -c .)" -eq 1
+          test "$(printf '%s\n' "${deadman_deb}" | grep -c .)" -eq 1
+          tools/release/test_deb.sh "${halro_deb}" "${deadman_deb}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: halro-debian
+          path: release/*.deb
+
   provenance:
-    needs: [prepare, binaries, container]
+    needs: [prepare, binaries, container, debian-packages]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -373,6 +408,7 @@ jobs:
         with:
           subject-path: |
             release/halro-*.tar.gz
+            release/*.deb
             release/halro*.spdx.json
       - name: Generate checksums
         working-directory: release
@@ -438,7 +474,7 @@ jobs:
         run: |
           set -euo pipefail
           (cd release && sha256sum --check checksums.txt)
-          for artifact in release/halro-*.tar.gz release/halro*.spdx.json; do
+          for artifact in release/halro-*.tar.gz release/*.deb release/halro*.spdx.json; do
             gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}"
           done
           for artifact in release/halro-* release/halro.spdx.json release/checksums.txt; do

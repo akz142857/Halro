@@ -68,6 +68,11 @@ jobs:
       - run: go vet ./...
       - name: Verify KMS dependency and spike boundaries
         run: |
+          sh -n tools/release/build_deb.sh
+          sh -n tools/release/test_deb.sh
+          sh -n packaging/debian/halro.postinst
+          sh -n packaging/debian/halro-deadman.postinst
+          sh -n packaging/debian/package.postrm
           sh -n tools/m11/aws-sdk-spike/run.sh
           sh -n tools/m11/aws-kms-smoke/run.sh
           sh -n tools/m11/aws-kms-dual-slot-smoke/run.sh

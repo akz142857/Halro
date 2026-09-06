@@ -2,8 +2,9 @@
 
 > **Status.** Two things are described here, and until now the document did not
 > separate them. The **v0.x line** is what `.github/workflows/release.yml`
-> actually does today: nine jobs — `prepare`, `quality`, `sdk-compatibility`,
-> `stress`, `web`, `binaries`, `container`, `provenance`, `publish` — with the
+> actually does today: eleven jobs — `prepare`, `quality`, `sdk-compatibility`,
+> `stress`, `web`, `binaries`, `container`, `debian-packages`, `provenance`,
+> `publish`, `container-push` — with the
 > only publication precondition being `prepare`'s CHANGELOG section check and a
 > `v*` tag. There is no environment approval, no `release-governance` preflight,
 > no signed-tag requirement, and no M11 evidence verification in that workflow.
@@ -46,11 +47,15 @@ Every release run produces:
 
 - `halro-deadman` in every supported binary archive together with its
   versioned config/event schemas, receiver contract, and systemd unit;
+- the main Halro example configuration as `halro.config.example.yaml` in every
+  supported binary archive, separate from the dead-man configuration;
 - a non-root `halro-deadman-container.tar.gz` image archive built from
   digest-pinned base images;
 
 - four version-stamped, stripped binary archives, each containing `LICENSE`,
   `NOTICE`, `THIRD_PARTY_NOTICES.md`, and `README.md`;
+- `halro` and `halro-deadman` Debian packages for Linux amd64 and arm64, built
+  from those already-gated Linux archives rather than by recompiling binaries;
 - a non-root distroless container image exported as `halro-container.tar.gz`;
 - an SPDX JSON source/dependency SBOM and a separate SPDX JSON SBOM generated
   from the released binaries;
@@ -59,6 +64,14 @@ Every release run produces:
 - a GitHub build-provenance attestation for every archive and SBOM, verified
   with `gh attestation verify` before publication;
 - workflow artifacts; and, for a signed `v*` tag, an immutable GitHub Release.
+
+The GitHub Release is the source of truth for downstream package channels.
+`halro-ai/homebrew-tap` pins its Formula URLs and SHA-256 values to those immutable
+archives. The APT publisher imports only the attested `.deb` assets into the
+signed repository at `packages.halro.ai`; neither downstream system may rebuild
+or replace a binary. A package channel is advertised on `halro.ai` only after a
+clean-host installation smoke passes. Failure in a downstream publisher delays
+that channel and never retracts or mutates the Git tag or GitHub Release.
 
 The official v0.x path is `workflow_dispatch` on `main`. Fulcio therefore puts
 `release.yml@refs/heads/main` in those artifacts' certificate identity; the

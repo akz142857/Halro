@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+  if ! getent group halro >/dev/null; then
+    addgroup --system halro
+  fi
+  if ! getent passwd halro >/dev/null; then
+    adduser --system --ingroup halro --home /var/lib/halro --no-create-home \
+      --disabled-password --shell /usr/sbin/nologin halro
+  fi
+  install -d -m 0700 -o halro -g halro /var/lib/halro
+fi
+
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0
