@@ -240,6 +240,13 @@ func (m *Manager) governanceLock(projectID string) func() {
 	return admission.lifecycle.Unlock
 }
 
+func (m *Manager) governanceReadLock(projectID string) func() {
+	value, _ := m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
+	admission := value.(*projectAdmission)
+	admission.lifecycle.RLock()
+	return admission.lifecycle.RUnlock
+}
+
 func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, maxOpen int64, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
 	return m.CreateWorkUnitWithDefinitions(ctx, projectID, keyID, maxOpen, nil, intent)
 }
@@ -552,10 +559,11 @@ func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
 // multi-project benchmark hit it on the first run.
 type projectAdmission struct {
 	mu sync.Mutex
-	// lifecycle serializes Work Unit/Run create/close and attached request
-	// acceptance. It is separate from the monetary admission mutex, so a
-	// control-plane fsync cannot delay an ordinary request.
-	lifecycle sync.Mutex
+	// lifecycle orders Work Unit/Run create/close against attached request
+	// acceptance. Requests share the read side so their durable acceptance can
+	// batch; control-plane mutations take the write side and wait until every
+	// acceptance that won the order is visible in the Ledger.
+	lifecycle sync.RWMutex
 	// pending is spend admitted but not yet visible in the Ledger's own balance,
 	// keyed by period so a request near midnight counts against its own day.
 	pending map[ledger.BalanceKey]int64
@@ -803,7 +811,7 @@ func (m *Manager) BeginRequestAttributed(
 		if runID == "" || workUnitID == "" {
 			return Request{}, ErrRunNotFound
 		}
-		unlockLifecycle = m.governanceLock(projectID)
+		unlockLifecycle = m.governanceReadLock(projectID)
 		defer unlockLifecycle()
 		run, ok := m.state.Run(runID)
 		if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {

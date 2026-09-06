@@ -1,0 +1,35 @@
+{
+  "date_utc": "2026-09-05T17:04:52Z",
+  "go": "go version go1.26.6 darwin/arm64",
+  "host": "Apple M4",
+  "cpu_count": "10",
+  "memory_bytes": "25769803776",
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7\nBuildVersion:\t\t25G220",
+  "baseline_commit": "381743f6613607dc256828f4776b52af8bdd232c",
+  "candidate_parent_commit": "a3634d761d1b9364115ae009ee5e7a8189d6675e",
+  "candidate_dirty": true,
+  "candidate_go_patch_sha256": "01101c600b1ab5181d6425bfd73b0b20099d754ca5863674195b8ba053014ed3",
+  "candidate_frontend_patch_sha256": "3fd3a053d48b7a1a528d3285c9c5cbd72f15ff7ef4b9c23b190e3a6404b740e1",
+  "gomaxprocs": 4,
+  "cgo_enabled": 1,
+  "samples": 6,
+  "component_benchtime": "1s",
+  "request_lifecycle_benchtime": "100x",
+  "packages": {
+    "provider": "^BenchmarkRegistryResolveCandidates$",
+    "redaction": "^Benchmark(StandardRedaction|RollingRedaction)$",
+    "tokenguard": "^Benchmark(Admit|AcquireReleaseContended)$",
+    "limiter": "^BenchmarkProjectAdmission(Contended)?$",
+    "ledger": "^BenchmarkReplayLargeWAL$",
+    "budget_baseline": "^BenchmarkRequestLifecycle$",
+    "budget_candidate": "^Benchmark(RequestLifecycle|RunAttributedRequestLifecycle)$"
+  },
+  "benchstat": "golang.org/x/perf/cmd/benchstat v0.0.0-20260825160852-19be9d8e6c70, go1.26.6 darwin/arm64",
+  "method": "Same host and toolchain; binaries compiled before sampling; packages run serially; v0.6.0 then candidate in each round; no race detector and no provider calls.",
+  "raw_sha256": {
+    "v0.6.0.txt": "8b4a752a67651d2d9104932c8fcc57dd6c7df86eb641898dfa75faa154693368",
+    "candidate.txt": "2b8e981766a08518fc19696dfd3c52447eaf76fc4c9215b5d17ea212906361e3",
+    "benchstat.txt": "7b786d674add280c1905b32c4636572aa577dac4da675ffa013972a48b79ef6e",
+    "benchstat-attribution.txt": "ae9831ecb782df51811c180f5f9116eef18eb0cec353992eee1d6e3c012703e0"
+  }
+}

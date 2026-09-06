@@ -215,7 +215,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 			return latestErr
 		}
 		if latest.ID != "" && !price.EffectiveFrom.After(latest.EffectiveFrom) {
-			return fmt.Errorf("%w: effective_from must follow all non-cancelled versions", domain.ErrPriceTimelineConflict)
+			return fmt.Errorf("%w: effective_from must follow all non-canceled versions", domain.ErrPriceTimelineConflict)
 		}
 		if err := putDeploymentPriceVersionTx(tx, price); err != nil {
 			return err

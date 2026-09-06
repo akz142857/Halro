@@ -406,7 +406,7 @@ var migrations = []migration{
 		if deployments != nil && deployments.Stats().KeyN > 0 {
 			return fmt.Errorf(
 				"this build stores a model capability snapshot on every deployment and cannot infer one for the %d existing deployment(s); "+
-					"re-initialise the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
+					"reinitialize the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
 				deployments.Stats().KeyN,
 			)
 		}
@@ -467,7 +467,7 @@ var migrations = []migration{
 		if affected > 0 {
 			return fmt.Errorf(
 				"this build removed the %q capability evidence tier and will not guess what %d existing provider/deployment record(s) meant by it; "+
-					"re-initialise the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
+					"reinitialize the data directory (make reset CONFIRM=RESET) and recreate them, or keep running the previous build",
 				legacyCapabilityEvidence, affected,
 			)
 		}
@@ -514,7 +514,7 @@ var migrations = []migration{
 			return fmt.Errorf(
 				"this build requires every route to name a deployment and found %d route(s) without one; "+
 					"a route that reaches a provider directly has no versioned price, health probe, capability snapshot or concurrency limit behind it, "+
-					"and none of those can be inferred; re-initialise the data directory (make reset CONFIRM=RESET) and recreate the topology, "+
+					"and none of those can be inferred; reinitialize the data directory (make reset CONFIRM=RESET) and recreate the topology, "+
 					"or keep running the previous build",
 				affected,
 			)

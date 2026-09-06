@@ -1,0 +1,167 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+                                                       │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                                                       │                            sec/op                             │                       sec/op                         vs base               │
+RequestLifecycle/projects=1/workers=1-4                                                                  22.44m ±  27%                                         20.67m ±  41%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                  6.130m ±  88%                                         5.467m ±  20%        ~ (p=0.132 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                1001.7µ ±  18%                                         876.2µ ±  16%  -12.53% (p=0.041 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                  22.76m ±   6%                                         22.27m ±  33%        ~ (p=0.485 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                  6.245m ±   6%                                         5.521m ±  12%  -11.59% (p=0.026 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                 984.5µ ±   7%                                         860.0µ ±  22%        ~ (p=0.180 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                 22.35m ±   6%                                         21.81m ±  16%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                 6.191m ± 109%                                         5.428m ±  14%  -12.33% (p=0.026 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                               1000.1µ ±  10%                                         918.3µ ± 695%        ~ (p=0.132 n=6)
+RunAttributedRequestLifecycle/projects=1/workers=1-4                                                                                                           20.73m ±  14%
+RunAttributedRequestLifecycle/projects=1/workers=8-4                                                                                                           6.075m ± 109%
+RunAttributedRequestLifecycle/projects=1/workers=64-4                                                                                                          858.8µ ± 933%
+RunAttributedRequestLifecycle/projects=8/workers=1-4                                                                                                           19.16m ±  24%
+RunAttributedRequestLifecycle/projects=8/workers=8-4                                                                                                           5.071m ±  22%
+RunAttributedRequestLifecycle/projects=8/workers=64-4                                                                                                          848.6µ ±  17%
+RunAttributedRequestLifecycle/projects=64/workers=1-4                                                                                                          20.64m ±  38%
+RunAttributedRequestLifecycle/projects=64/workers=8-4                                                                                                          5.119m ±  20%
+RunAttributedRequestLifecycle/projects=64/workers=64-4                                                                                                         842.5µ ±  20%
+geomean                                                                                                  5.176m                                                4.616m          -9.03%
+
+                                                       │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                                                       │                           events/s                            │                      events/s                        vs base               │
+RequestLifecycle/projects=1/workers=1-4                                                                    222.9 ± 21%                                           243.4 ± 30%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                    815.8 ± 47%                                           919.2 ± 24%        ~ (p=0.132 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                  4.995k ± 16%                                          5.761k ± 19%  +15.36% (p=0.041 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                    219.8 ±  6%                                           224.6 ± 25%        ~ (p=0.485 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                    800.7 ±  6%                                           908.2 ± 13%  +13.43% (p=0.026 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                  5.082k ±  6%                                          5.819k ± 26%        ~ (p=0.180 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                   223.8 ±  5%                                           229.3 ± 14%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                   807.8 ± 52%                                           924.6 ± 13%  +14.47% (p=0.026 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                                 5.000k ±  9%                                          5.450k ± 87%        ~ (p=0.132 n=6)
+RunAttributedRequestLifecycle/projects=1/workers=1-4                                                                                                             242.2 ± 12%
+RunAttributedRequestLifecycle/projects=1/workers=8-4                                                                                                             823.3 ± 52%
+RunAttributedRequestLifecycle/projects=1/workers=64-4                                                                                                           5.981k ± 91%
+RunAttributedRequestLifecycle/projects=8/workers=1-4                                                                                                             260.9 ± 19%
+RunAttributedRequestLifecycle/projects=8/workers=8-4                                                                                                             986.8 ± 20%
+RunAttributedRequestLifecycle/projects=8/workers=64-4                                                                                                           5.923k ± 16%
+RunAttributedRequestLifecycle/projects=64/workers=1-4                                                                                                            243.5 ± 28%
+RunAttributedRequestLifecycle/projects=64/workers=8-4                                                                                                            977.5 ± 17%
+RunAttributedRequestLifecycle/projects=64/workers=64-4                                                                                                          5.939k ± 16%
+geomean                                                                                                    966.2                                                1.088k        +10.26%
+
+                                                       │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                                                       │                         lifecycles/s                          │                    lifecycles/s                      vs base               │
+RequestLifecycle/projects=1/workers=1-4                                                                    44.57 ± 21%                                           48.67 ± 30%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                    163.1 ± 47%                                           183.8 ± 25%        ~ (p=0.132 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                   999.0 ± 16%                                          1152.5 ± 19%  +15.36% (p=0.041 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                    43.95 ±  6%                                           44.91 ± 25%        ~ (p=0.485 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                    160.1 ±  6%                                           181.7 ± 12%  +13.42% (p=0.026 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                  1.016k ±  6%                                          1.164k ± 26%        ~ (p=0.180 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                   44.75 ±  5%                                           45.86 ± 14%        ~ (p=0.394 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                   161.6 ± 52%                                           184.9 ± 13%  +14.45% (p=0.026 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                                 1.000k ±  9%                                          1.090k ± 87%        ~ (p=0.143 n=6)
+RunAttributedRequestLifecycle/projects=1/workers=1-4                                                                                                             48.44 ± 12%
+RunAttributedRequestLifecycle/projects=1/workers=8-4                                                                                                             164.7 ± 52%
+RunAttributedRequestLifecycle/projects=1/workers=64-4                                                                                                           1.196k ± 91%
+RunAttributedRequestLifecycle/projects=8/workers=1-4                                                                                                             52.19 ± 19%
+RunAttributedRequestLifecycle/projects=8/workers=8-4                                                                                                             197.3 ± 20%
+RunAttributedRequestLifecycle/projects=8/workers=64-4                                                                                                           1.185k ± 16%
+RunAttributedRequestLifecycle/projects=64/workers=1-4                                                                                                            48.70 ± 28%
+RunAttributedRequestLifecycle/projects=64/workers=8-4                                                                                                            195.5 ± 17%
+RunAttributedRequestLifecycle/projects=64/workers=64-4                                                                                                          1.188k ± 16%
+geomean                                                                                                    193.2                                                 217.6        +10.27%
+
+pkg: github.com/akz142857/Halro/internal/ledger
+                 │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                 │                            sec/op                             │                          sec/op                            vs base         │
+ReplayLargeWAL-4                                                     542.2m ± 5%                                                 555.7m ± 6%  ~ (p=0.240 n=6)
+
+                 │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                 │                              B/s                              │                            B/s                             vs base         │
+ReplayLargeWAL-4                                                    54.31Mi ± 4%                                                53.00Mi ± 5%  ~ (p=0.240 n=6)
+
+pkg: github.com/akz142857/Halro/internal/limiter
+                             │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                             │                            sec/op                             │                        sec/op                         vs base              │
+ProjectAdmission/unlimited-4                                                    105.0n ± 24%                                            106.6n ± 5%       ~ (p=0.589 n=6)
+ProjectAdmission/limited-4                                                      137.2n ± 14%                                            140.6n ± 8%       ~ (p=0.589 n=6)
+ProjectAdmissionContended-4                                                     282.9n ± 20%                                            283.9n ± 8%       ~ (p=0.851 n=6)
+geomean                                                                         159.7n                                                  162.0n       +1.43%
+
+                             │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                             │                             B/op                              │                        B/op                         vs base                │
+ProjectAdmission/unlimited-4                                                      200.0 ± 0%                                           200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4                                                        200.0 ± 0%                                           200.0 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4                                                       200.0 ± 0%                                           200.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                           200.0                                                200.0       +0.00%
+¹ all samples are equal
+
+                             │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                             │                           allocs/op                           │                     allocs/op                       vs base                │
+ProjectAdmission/unlimited-4                                                      5.000 ± 0%                                           5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmission/limited-4                                                        5.000 ± 0%                                           5.000 ± 0%       ~ (p=1.000 n=6) ¹
+ProjectAdmissionContended-4                                                       5.000 ± 0%                                           5.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                           5.000                                                5.000       +0.00%
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/provider
+                            │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                            │                            sec/op                             │                          sec/op                            vs base         │
+RegistryResolveCandidates-4                                                     5.064µ ± 4%                                                 5.204µ ± 8%  ~ (p=0.818 n=6)
+
+                            │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                            │                             B/op                              │                          B/op                            vs base           │
+RegistryResolveCandidates-4                                                    15.52Ki ± 0%                                              15.52Ki ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+                            │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                            │                           allocs/op                           │                        allocs/op                         vs base           │
+RegistryResolveCandidates-4                                                      41.00 ± 0%                                                41.00 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/redaction
+                    │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                    │                            sec/op                             │                        sec/op                         vs base              │
+StandardRedaction-4                                                     73.28µ ± 3%                                           74.23µ ± 46%       ~ (p=0.132 n=6)
+RollingRedaction-4                                                      16.95µ ± 5%                                           17.75µ ± 21%       ~ (p=0.093 n=6)
+geomean                                                                 35.24µ                                                36.30µ        +2.99%
+
+                    │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                    │                             B/op                              │                         B/op                          vs base              │
+StandardRedaction-4                                                    13.33Ki ± 1%                                           13.33Ki ± 1%       ~ (p=0.426 n=6)
+RollingRedaction-4                                                     17.40Ki ± 0%                                           17.45Ki ± 1%       ~ (p=0.132 n=6)
+geomean                                                                15.23Ki                                                15.25Ki       +0.17%
+
+                    │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                    │                           allocs/op                           │                     allocs/op                       vs base                │
+StandardRedaction-4                                                      32.00 ± 0%                                           32.00 ± 0%       ~ (p=1.000 n=6) ¹
+RollingRedaction-4                                                       79.00 ± 0%                                           79.00 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                  50.28                                                50.28       +0.00%
+¹ all samples are equal
+
+                    │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                    │                              B/s                              │                         B/s                           vs base              │
+StandardRedaction-4                                                    11.99Mi ± 3%                                          11.83Mi ± 31%       ~ (p=0.121 n=6)
+RollingRedaction-4                                                     13.73Mi ± 5%                                          13.11Mi ± 17%       ~ (p=0.093 n=6)
+geomean                                                                12.83Mi                                               12.46Mi        -2.91%
+
+pkg: github.com/akz142857/Halro/internal/tokenguard
+                          │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                          │                            sec/op                             │                        sec/op                         vs base              │
+Admit/fixed-4                                                                170.0n ±  3%                                           173.4n ± 16%       ~ (p=0.310 n=6)
+Admit/ewma-4                                                                 183.8n ±  5%                                           187.2n ±  4%       ~ (p=0.288 n=6)
+AcquireReleaseContended-4                                                    341.1n ± 18%                                           336.0n ±  9%       ~ (p=0.394 n=6)
+geomean                                                                      220.1n                                                 221.8n        +0.76%
+
+                          │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                          │                             B/op                              │                        B/op                         vs base                │
+Admit/fixed-4                                                                  64.00 ± 0%                                           64.00 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                                                                   64.00 ± 0%                                           64.00 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4                                                      128.0 ± 0%                                           128.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                        80.63                                                80.63       +0.00%
+¹ all samples are equal
+
+                          │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.6.0-final.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/v0.7.0-candidate-verified.txt │
+                          │                           allocs/op                           │                     allocs/op                       vs base                │
+Admit/fixed-4                                                                  2.000 ± 0%                                           2.000 ± 0%       ~ (p=1.000 n=6) ¹
+Admit/ewma-4                                                                   2.000 ± 0%                                           2.000 ± 0%       ~ (p=1.000 n=6) ¹
+AcquireReleaseContended-4                                                      3.000 ± 0%                                           3.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                                        2.289                                                2.289       +0.00%
+¹ all samples are equal

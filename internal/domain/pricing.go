@@ -264,7 +264,7 @@ func (p DeploymentPriceVersion) Validate() error {
 	}
 	if p.CancelledAt != nil {
 		if p.CancelledAt.IsZero() || !isUTC(*p.CancelledAt) || !p.CancelledAt.Before(p.EffectiveFrom) {
-			problems = append(problems, errors.New("price must be cancelled in UTC before effective_from"))
+			problems = append(problems, errors.New("price must be canceled in UTC before effective_from"))
 		}
 	}
 	if err := p.Source.Validate(); err != nil {

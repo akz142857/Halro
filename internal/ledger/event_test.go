@@ -37,6 +37,16 @@ func TestSettlementWireFormatDistinguishesKnownZeroFromUnknown(t *testing.T) {
 	}
 }
 
+func TestRequestEventWireFormatOmitsZeroRunExpiry(t *testing.T) {
+	payload, err := json.Marshal(Event{EventID: "evt_1", Kind: EventRequestAccepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), `"run_expires_at"`) {
+		t.Fatalf("ordinary request event persisted a zero run expiry: %s", payload)
+	}
+}
+
 func TestStateDuplicateEventIsIdempotentAndAdvancesWatermark(t *testing.T) {
 	state := NewState()
 	event := Event{

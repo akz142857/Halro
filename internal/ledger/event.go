@@ -56,7 +56,7 @@ type Event struct {
 	WorkUnitID                  string                             `json:"work_unit_id,omitempty"`
 	RunID                       string                             `json:"run_id,omitempty"`
 	RunBudgetMicrosUSD          int64                              `json:"run_budget_micros_usd,omitempty"`
-	RunExpiresAt                time.Time                          `json:"run_expires_at,omitempty"`
+	RunExpiresAt                time.Time                          `json:"run_expires_at,omitzero"`
 	OutcomeDefinitions          []domain.OutcomeDefinitionRef      `json:"outcome_definitions,omitempty"`
 	CloseReason                 string                             `json:"close_reason,omitempty"`
 	Operation                   string                             `json:"operation,omitempty"`
@@ -145,30 +145,31 @@ func (e Event) Validate() error {
 	if e.OccurredAt.IsZero() {
 		problems = append(problems, errors.New("occurred_at is required"))
 	}
-	if (e.WorkUnitID == "") != (e.RunID == "") && e.Kind <= EventRequestFinalized {
-		problems = append(problems, errors.New("request attribution requires both work unit and run ids"))
-	}
-	if e.Kind >= EventWorkUnitCreated && e.WorkUnitID == "" {
-		problems = append(problems, errors.New("work unit id is required for lifecycle events"))
-	}
-	switch e.Kind {
-	case EventWorkUnitCreated, EventWorkUnitClosed:
-		if e.RunID != "" || e.RunBudgetMicrosUSD != 0 || !e.RunExpiresAt.IsZero() {
-			problems = append(problems, errors.New("work unit event cannot carry run fields"))
+	if e.Kind <= EventRequestFinalized {
+		if (e.WorkUnitID == "") != (e.RunID == "") {
+			problems = append(problems, errors.New("request attribution requires both work unit and run ids"))
 		}
-		if e.Kind == EventWorkUnitClosed && len(e.OutcomeDefinitions) != 0 {
-			problems = append(problems, errors.New("work unit close cannot carry outcome definitions"))
+	} else {
+		if e.WorkUnitID == "" {
+			problems = append(problems, errors.New("work unit id is required for lifecycle events"))
 		}
-	case EventRunCreated:
-		if e.RunID == "" || e.RunBudgetMicrosUSD <= 0 || e.RunExpiresAt.IsZero() || !e.RunExpiresAt.After(e.OccurredAt) {
-			problems = append(problems, errors.New("run creation fields are invalid"))
+		switch e.Kind {
+		case EventWorkUnitCreated, EventWorkUnitClosed:
+			if e.RunID != "" || e.RunBudgetMicrosUSD != 0 || !e.RunExpiresAt.IsZero() {
+				problems = append(problems, errors.New("work unit event cannot carry run fields"))
+			}
+			if e.Kind == EventWorkUnitClosed && len(e.OutcomeDefinitions) != 0 {
+				problems = append(problems, errors.New("work unit close cannot carry outcome definitions"))
+			}
+		case EventRunCreated:
+			if e.RunID == "" || e.RunBudgetMicrosUSD <= 0 || e.RunExpiresAt.IsZero() || !e.RunExpiresAt.After(e.OccurredAt) {
+				problems = append(problems, errors.New("run creation fields are invalid"))
+			}
+		case EventRunClosed:
+			if e.RunID == "" || strings.TrimSpace(e.CloseReason) == "" || len(e.CloseReason) > 64 {
+				problems = append(problems, errors.New("run close fields are invalid"))
+			}
 		}
-	case EventRunClosed:
-		if e.RunID == "" || strings.TrimSpace(e.CloseReason) == "" || len(e.CloseReason) > 64 {
-			problems = append(problems, errors.New("run close fields are invalid"))
-		}
-	}
-	if e.Kind >= EventWorkUnitCreated {
 		if e.Operation == "" || !domain.ValidSHA256Label(e.IdempotencyKeyHash) || !domain.ValidSHA256Label(e.RequestFingerprint) {
 			problems = append(problems, errors.New("lifecycle event requires operation and idempotency evidence"))
 		}
@@ -461,7 +462,7 @@ func (s *State) Apply(record Record) error {
 	}
 	key := BalanceKey{ProjectID: event.ProjectID, PeriodID: event.PeriodID, TimezoneVersion: event.PeriodTimezoneVersion}
 	balance := s.balances[key]
-	if event.Kind <= EventRequestFinalized {
+	if event.Kind <= EventRequestFinalized && (len(s.requestRuns) != 0 || event.WorkUnitID != "" || event.RunID != "") {
 		attribution, exists := s.requestRuns[event.RequestID]
 		if event.Kind == EventRequestAccepted {
 			if exists && (attribution.WorkUnitID != event.WorkUnitID || attribution.RunID != event.RunID) {

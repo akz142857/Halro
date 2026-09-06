@@ -1129,7 +1129,7 @@ describe("deployment invocation target workflow", () => {
     const input = screen.getByLabelText(/^Model ID/);
     fireEvent.focus(input);
     fireEvent.click(within(await screen.findByRole("listbox", { name: "Available models" })).getByRole("option", { name: "GPT Chat" }));
-    const summary = (await screen.findByText("4 capabilities ready")).closest("div.deployment-capability-summary") as HTMLElement;
+    const summary = (await screen.findByText("Capabilities ready: 4")).closest("div.deployment-capability-summary") as HTMLElement;
     expect(within(summary).getByText("Chat")).toBeVisible();
     expect(within(summary).getByText("Streaming")).toBeVisible();
     expect(within(summary).getByText("Halro's reviewed model catalog")).toBeVisible();
@@ -1938,7 +1938,7 @@ describe("deployment price panel", () => {
   });
 
   // The server refuses any version that is not strictly later than every
-  // non-cancelled one. The form used to open on "immediately" regardless, so a
+  // non-canceled one. The form used to open on "immediately" regardless, so a
   // deployment carrying a scheduled version offered a path whose only possible
   // outcome was a 409 — repeatedly, since nothing about the row explained it.
   it("keeps immediate pricing off the menu while a scheduled version outranks it", async () => {
@@ -1978,7 +1978,7 @@ describe("deployment price panel", () => {
   it("brings the refused price version's reason to the operator", async () => {
     vi.spyOn(api, "deploymentPrices").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "createDeploymentPrice").mockRejectedValue(
-      new ApiError(409, "price timeline conflict: effective_from must follow all non-cancelled versions (latest is v4 effective 2126-08-01T00:00:00Z)", "price_timeline_conflict"),
+      new ApiError(409, "price timeline conflict: effective_from must follow all non-canceled versions (latest is v4 effective 2126-08-01T00:00:00Z)", "price_timeline_conflict"),
     );
     renderPage();
 

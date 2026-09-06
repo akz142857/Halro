@@ -127,6 +127,40 @@ describe("admin internationalization", () => {
     expect(offenders).toEqual([]);
   });
 
+  // en-US is a product contract, not a generic English bucket. Mixing British
+  // and American spelling makes neighboring controls look as if they came from
+  // different products, and it is especially visible in catalog and canceled
+  // status copy. Wire enums are not locale resources and are intentionally out
+  // of scope here.
+  it("uses American English throughout the en-US catalog", () => {
+    const british = /\b(?:analyse[ds]?|analysing|authorise[ds]?|authorising|behaviours?|cancelled|cancelling|catalogues?|centres?|colours?|defence|enrolment|fulfil(?:led|ment)?|honour(?:ed|ing)?|initialise[ds]?|initialising|judgements?|labelled|licences?|modelling|normalise[ds]?|normalising|optimise[ds]?|optimising|optimisation|organisations?|organise[ds]?|organising|recognise[ds]?|recognising|serialise[ds]?|serialising)\b/i;
+    const offenders = flattenEntries(enUS)
+      .filter(([, value]) => british.test(value))
+      .map(([path, value]) => `${path}: ${value}`);
+    expect(offenders).toEqual([]);
+  });
+
+  // i18next plural variants are the right answer for prose whose grammar
+  // changes with the number. Compact dashboard labels may instead put the noun
+  // before the value ("Provider attempts: 1"), which is grammatical for every
+  // count. What must never return is "1 attempts", "route(s)", or a plural verb
+  // attached directly to an unpluralized count key.
+  it("keeps count-bearing English copy grammatical at one", () => {
+    const entries = flattenEntries(enUS);
+    const keys = new Set(entries.map(([path]) => path));
+    const parenthesizedPlural = /\b(?:change|route|target)\(s\)/i;
+    const pluralNounAfterCount = /\{\{count\}\}\s+(?:attempts|units|slots|days|failures|tokens|destinations|items|anomalies|records|capabilities|checks|requests|interfaces|routes|entries|targets|keys|models|providers|connections|projects|fields|rules|problems)\b/i;
+    const pluralVerbAfterCount = /\{\{count\}\}[^.]*\b(?:have|are|did|use|lose|stop|send|need|remain)\b/i;
+    const offenders = entries
+      .filter(([path, value]) => {
+        if (!value.includes("{{count}}") || /_(?:one|other)$/.test(path)) return false;
+        if (keys.has(`${path}_one`) && keys.has(`${path}_other`)) return false;
+        return parenthesizedPlural.test(value) || pluralNounAfterCount.test(value) || pluralVerbAfterCount.test(value);
+      })
+      .map(([path, value]) => `${path}: ${value}`);
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps navigation labels aligned with page titles", () => {
     expect([
       zhCN.navigation.overview, zhCN.navigation.providers, zhCN.navigation.deployments,
@@ -195,6 +229,15 @@ function flattenKeys(value: object, prefix = ""): string[] {
     const path = prefix ? `${prefix}.${key}` : key;
     return typeof child === "object" && child !== null ? flattenKeys(child, path) : [path];
   }).sort();
+}
+
+function flattenEntries(value: object, prefix = ""): [string, string][] {
+  return Object.entries(value).flatMap(([key, child]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    return typeof child === "object" && child !== null
+      ? flattenEntries(child, path)
+      : [[path, String(child)]];
+  });
 }
 
 // Every key i18next can still resolve counts as referenced: a literal

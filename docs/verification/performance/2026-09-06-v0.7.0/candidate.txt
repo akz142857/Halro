@@ -1,0 +1,438 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  202164	      5219 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   16099	     73723 ns/op	  12.49 MB/s	   13667 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   69163	     17522 ns/op	  13.93 MB/s	   17857 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 7078824	       171.1 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 6686409	       182.5 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3698680	       339.6 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	11503636	       105.1 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 8482980	       140.9 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 4352253	       283.5 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 538531812 ns/op	  57.34 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  198804	      5433 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   15814	     78025 ns/op	  11.80 MB/s	   13754 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   58644	     21461 ns/op	  11.37 MB/s	   17960 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 5848711	       201.3 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 5621301	       189.4 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3728167	       366.9 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	10842237	       107.6 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 8777586	       137.8 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 4317448	       305.5 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 587665958 ns/op	  52.54 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  218076	      5216 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   16508	     73638 ns/op	  12.51 MB/s	   13620 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   68712	     17153 ns/op	  14.22 MB/s	   17879 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 7047097	       175.7 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 6356479	       185.0 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3664591	       330.0 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	10769893	       111.5 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 7782378	       150.8 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 4344843	       279.5 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 571979625 ns/op	  53.98 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  239680	      4956 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   15812	    108155 ns/op	   8.52 MB/s	   13695 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   66273	     18607 ns/op	  13.11 MB/s	   17836 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 7137745	       177.7 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 6401282	       193.2 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3661881	       332.7 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	11071340	       105.6 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 9104020	       151.9 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 3967213	       284.3 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 560113875 ns/op	  55.13 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  245784	      4809 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   16947	     71099 ns/op	  12.95 MB/s	   13619 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   69532	     16377 ns/op	  14.90 MB/s	   17759 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 7227746	       166.3 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 6712110	       181.0 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3621638	       329.0 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	11274733	       105.4 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 8835992	       135.7 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 4313150	       278.9 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 536594542 ns/op	  57.54 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	  227997	      5191 ns/op	   15888 B/op	      41 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	   15434	     74738 ns/op	  12.32 MB/s	   13643 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   68374	     17976 ns/op	  13.57 MB/s	   17880 B/op	      79 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/tokenguard
+cpu: Apple M4
+BenchmarkAdmit/fixed-4               	 6966046	       168.5 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAdmit/ewma-4                	 6657703	       194.1 ns/op	      64 B/op	       2 allocs/op
+BenchmarkAcquireReleaseContended-4   	 3685074	       339.2 ns/op	     128 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/limiter
+cpu: Apple M4
+BenchmarkProjectAdmission/unlimited-4  	10710504	       109.0 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmission/limited-4    	 8404731	       140.2 ns/op	     200 B/op	       5 allocs/op
+BenchmarkProjectAdmissionContended-4   	 4200793	       286.3 ns/op	     200 B/op	       5 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       2	 551221875 ns/op	  56.02 MB/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  22319826 ns/op	       224.0 events/s	        44.80 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   6170480 ns/op	       810.3 events/s	       162.1 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	    961881 ns/op	      5198 events/s	      1040 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  22538942 ns/op	       221.8 events/s	        44.37 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   6186325 ns/op	       808.2 events/s	       161.6 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	    885162 ns/op	      5649 events/s	      1130 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  21491110 ns/op	       232.7 events/s	        46.53 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   5913444 ns/op	       845.5 events/s	       169.1 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	   7298581 ns/op	       685.1 events/s	       137.0 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  23391528 ns/op	       213.8 events/s	        42.75 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	   7120358 ns/op	       702.2 events/s	       140.4 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	   1323028 ns/op	      3779 events/s	       755.8 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  23758802 ns/op	       210.4 events/s	        42.09 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   6181571 ns/op	       808.9 events/s	       161.8 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    991688 ns/op	      5042 events/s	      1008 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  22132135 ns/op	       225.9 events/s	        45.18 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   6093307 ns/op	       820.6 events/s	       164.1 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	   1006874 ns/op	      4966 events/s	       993.2 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  29187872 ns/op	       171.3 events/s	        34.26 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   6429719 ns/op	       777.6 events/s	       155.5 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	   1015255 ns/op	      4925 events/s	       985.0 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  23235695 ns/op	       215.2 events/s	        43.04 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   6077968 ns/op	       822.6 events/s	       164.5 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	   1051529 ns/op	      4755 events/s	       951.0 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  23376373 ns/op	       213.9 events/s	        42.78 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   6183560 ns/op	       808.6 events/s	       161.7 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	    989063 ns/op	      5055 events/s	      1011 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  22053908 ns/op	       226.7 events/s	        45.34 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	   6190068 ns/op	       807.7 events/s	       161.5 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	    998630 ns/op	      5007 events/s	      1001 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  22199751 ns/op	       225.2 events/s	        45.05 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   5749761 ns/op	       869.6 events/s	       173.9 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    941997 ns/op	      5308 events/s	      1062 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  28422658 ns/op	       175.9 events/s	        35.18 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   6126558 ns/op	       816.1 events/s	       163.2 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	    982338 ns/op	      5090 events/s	      1018 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  22729242 ns/op	       220.0 events/s	        44.00 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   5859070 ns/op	       853.4 events/s	       170.7 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	    974712 ns/op	      5130 events/s	      1026 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  21999789 ns/op	       227.3 events/s	        45.45 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   5818409 ns/op	       859.3 events/s	       171.9 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	    984350 ns/op	      5080 events/s	      1016 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  22130886 ns/op	       225.9 events/s	        45.19 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   5760057 ns/op	       868.0 events/s	       173.6 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	    945763 ns/op	      5287 events/s	      1057 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  23587311 ns/op	       212.0 events/s	        42.40 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	   5960072 ns/op	       838.9 events/s	       167.8 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	   8870748 ns/op	       563.7 events/s	       112.7 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  18016644 ns/op	       277.5 events/s	        55.50 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   4228513 ns/op	      1182 events/s	       236.5 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    725430 ns/op	      6892 events/s	      1378 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  17120299 ns/op	       292.1 events/s	        58.41 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   4773373 ns/op	      1047 events/s	       209.5 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	    819238 ns/op	      6103 events/s	      1221 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  18130788 ns/op	       275.8 events/s	        55.15 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   4666280 ns/op	      1072 events/s	       214.3 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	    790533 ns/op	      6325 events/s	      1265 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  29666277 ns/op	       168.5 events/s	        33.71 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   5223440 ns/op	       957.2 events/s	       191.4 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	    834936 ns/op	      5989 events/s	      1198 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  20337675 ns/op	       245.8 events/s	        49.17 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   5095570 ns/op	       981.2 events/s	       196.2 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	    727233 ns/op	      6875 events/s	      1375 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  18787891 ns/op	       266.1 events/s	        53.23 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	   4249331 ns/op	      1177 events/s	       235.3 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	    719049 ns/op	      6954 events/s	      1391 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  19102583 ns/op	       261.7 events/s	        52.35 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   4936572 ns/op	      1013 events/s	       202.6 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    735189 ns/op	      6801 events/s	      1360 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  26700404 ns/op	       187.3 events/s	        37.45 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   5257290 ns/op	       951.1 events/s	       190.2 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	    865706 ns/op	      5776 events/s	      1155 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  19028886 ns/op	       262.8 events/s	        52.55 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   5075435 ns/op	       985.1 events/s	       197.0 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	    731962 ns/op	      6831 events/s	      1366 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  18728937 ns/op	       267.0 events/s	        53.39 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   4893660 ns/op	      1022 events/s	       204.3 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	    704577 ns/op	      7097 events/s	      1419 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  19142735 ns/op	       261.2 events/s	        52.24 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   4877007 ns/op	      1025 events/s	       205.0 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	    754138 ns/op	      6630 events/s	      1326 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  18534243 ns/op	       269.8 events/s	        53.95 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	  12715808 ns/op	       393.2 events/s	        78.64 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	    577620 ns/op	      8656 events/s	      1731 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  19218137 ns/op	       260.2 events/s	        52.03 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   5204910 ns/op	       960.6 events/s	       192.1 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    787333 ns/op	      6351 events/s	      1270 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  19148568 ns/op	       261.1 events/s	        52.22 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   4980947 ns/op	      1004 events/s	       200.8 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	    761218 ns/op	      6568 events/s	      1314 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRequestLifecycle/projects=1/workers=1-4         	     100	  18952761 ns/op	       263.8 events/s	        52.76 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=8-4         	     100	   4369368 ns/op	      1144 events/s	       228.9 lifecycles/s
+BenchmarkRequestLifecycle/projects=1/workers=64-4        	     100	    773813 ns/op	      6462 events/s	      1292 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=1-4         	     100	  19373002 ns/op	       258.1 events/s	        51.62 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=8-4         	     100	   4996249 ns/op	      1001 events/s	       200.2 lifecycles/s
+BenchmarkRequestLifecycle/projects=8/workers=64-4        	     100	    683839 ns/op	      7312 events/s	      1462 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=1-4        	     100	  25275438 ns/op	       197.8 events/s	        39.56 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=8-4        	     100	   4972819 ns/op	      1005 events/s	       201.1 lifecycles/s
+BenchmarkRequestLifecycle/projects=64/workers=64-4       	     100	    890825 ns/op	      5613 events/s	      1123 lifecycles/s
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=1-4         	     100	  19403202 ns/op	       257.7 events/s	        51.54 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=8-4         	     100	   5237895 ns/op	       954.6 events/s	       190.9 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=1/workers=64-4        	     100	    702539 ns/op	      7117 events/s	      1423 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=1-4         	     100	  18160612 ns/op	       275.3 events/s	        55.06 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=8-4         	     100	   4905789 ns/op	      1019 events/s	       203.8 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=8/workers=64-4        	     100	    909825 ns/op	      5496 events/s	      1099 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=1-4        	     100	  18999662 ns/op	       263.2 events/s	        52.63 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=8-4        	     100	   4773971 ns/op	      1047 events/s	       209.5 lifecycles/s
+BenchmarkRunAttributedRequestLifecycle/projects=64/workers=64-4       	     100	    775761 ns/op	      6445 events/s	      1289 lifecycles/s
+PASS

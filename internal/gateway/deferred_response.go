@@ -622,7 +622,7 @@ func (s *Service) runDeferredResponse(ctx context.Context, record domain.Provide
 				message = "the gateway shut down while this request was running; it may have been billed upstream and its answer cannot be retrieved"
 			} else {
 				status, code = domain.DeferredCancelled, "deferred_response_cancelled"
-				message = "the request was cancelled after it reached the upstream and may have been billed"
+				message = "the request was canceled after it reached the upstream and may have been billed"
 			}
 		}
 		if err := s.finishDeferred(ctx, record, status, code, message, nil); err != nil {
@@ -871,7 +871,7 @@ func (s *Service) CancelDeferredResponse(ctx context.Context, plaintextKey, reso
 	switch record.Status {
 	case domain.DeferredQueued:
 		if err := s.finishDeferred(ctx, record, domain.DeferredCancelled,
-			"deferred_response_cancelled", "the request was cancelled before it reached the upstream", nil); err != nil {
+			"deferred_response_cancelled", "the request was canceled before it reached the upstream", nil); err != nil {
 			return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the cancellation could not be recorded", 503, err)
 		}
 		record, err = s.resources.ProviderResource(ctx, record.ProjectID, record.ID)

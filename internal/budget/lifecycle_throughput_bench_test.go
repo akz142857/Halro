@@ -72,6 +72,73 @@ func BenchmarkRequestLifecycle(b *testing.B) {
 	}
 }
 
+// BenchmarkRunAttributedRequestLifecycle measures the production path added by
+// Run Governance. Work Unit and Run creation stay outside the timed region so
+// the result isolates the per-request cost of dual project/run admission and
+// attribution across the same five-event request lifecycle.
+func BenchmarkRunAttributedRequestLifecycle(b *testing.B) {
+	for _, projects := range []int{1, 8, 64} {
+		for _, workers := range []int{1, 8, 64} {
+			b.Run(fmt.Sprintf("projects=%d/workers=%d", projects, workers), func(b *testing.B) {
+				manager, _, closeLog := newTestManager(b)
+				defer closeLog()
+				snapshot := testPriceSnapshot(b, domain.BillingModeMetered)
+				ctx := context.Background()
+				type attribution struct {
+					projectID  string
+					workUnitID string
+					runID      string
+				}
+				attributions := make([]attribution, projects)
+				for project := 0; project < projects; project++ {
+					projectID := fmt.Sprintf("project_bench_%d", project)
+					workUnit, _, err := manager.CreateWorkUnit(ctx, projectID, "key_bench", domain.MaxOpenWorkUnits, testGovernanceIntent(fmt.Sprintf("benchmark-create-work-unit-%d", project)))
+					if err != nil {
+						b.Fatal(err)
+					}
+					run, _, err := manager.CreateRun(ctx, projectID, "key_bench", workUnit.ID, 1_000_000_000, 24*time.Hour, domain.MaxActiveRuns, testGovernanceIntent(fmt.Sprintf("benchmark-create-run-%d", project)))
+					if err != nil {
+						b.Fatal(err)
+					}
+					attributions[project] = attribution{projectID: projectID, workUnitID: workUnit.ID, runID: run.ID}
+				}
+
+				var next atomic.Int64
+				var failures atomic.Int64
+				var group sync.WaitGroup
+				b.ResetTimer()
+				start := time.Now()
+				for worker := 0; worker < workers; worker++ {
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						for {
+							index := int(next.Add(1)) - 1
+							if index >= b.N {
+								return
+							}
+							attribution := attributions[index%projects]
+							if err := runAttributedLifecycle(ctx, manager, snapshot, attribution.projectID, attribution.workUnitID, attribution.runID, index); err != nil {
+								if failures.Add(1) == 1 {
+									b.Error(err)
+								}
+								return
+							}
+						}
+					}()
+				}
+				group.Wait()
+				elapsed := time.Since(start)
+				b.StopTimer()
+				if elapsed > 0 {
+					b.ReportMetric(float64(b.N)/elapsed.Seconds(), "lifecycles/s")
+					b.ReportMetric(float64(b.N*5)/elapsed.Seconds(), "events/s")
+				}
+			})
+		}
+	}
+}
+
 func runLifecycle(ctx context.Context, manager *Manager, snapshot *domain.PriceSnapshot, projectID string, index int) error {
 	request, err := manager.BeginRequest(ctx, projectID, fmt.Sprintf("req_bench_%d", index))
 	if err != nil {
@@ -99,6 +166,37 @@ func runLifecycle(ctx context.Context, manager *Manager, snapshot *domain.PriceS
 	}
 	if err := manager.Finalize(ctx, request, "success"); err != nil {
 		return fmt.Errorf("finalize: %w", err)
+	}
+	return nil
+}
+
+func runAttributedLifecycle(ctx context.Context, manager *Manager, snapshot *domain.PriceSnapshot, projectID, workUnitID, runID string, index int) error {
+	request, err := manager.BeginRequestAttributed(ctx, projectID, "key_bench", fmt.Sprintf("req_bench_%d", index), "model-bench", workUnitID, runID)
+	if err != nil {
+		return fmt.Errorf("begin attributed request: %w", err)
+	}
+	attempt, err := manager.ReserveLeaseDetailed(ctx, request, 1_000_000_000, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 50, PriceSnapshot: snapshot,
+		PreparedInputTokens: 10, PreparedOutputTokens: 20,
+		RecoveryKey:                 "accounting-recovery-v1",
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{
+		RouteID: "route_bench", DeploymentID: "dep_bench", ProviderID: "provider_bench",
+		ProviderModel: "model-bench", AttemptNumber: 1,
+	})
+	if err != nil {
+		return fmt.Errorf("reserve attributed lease: %w", err)
+	}
+	if err := manager.MarkStarted(ctx, attempt); err != nil {
+		return fmt.Errorf("mark attributed attempt started: %w", err)
+	}
+	if err := manager.Settle(ctx, attempt, Settlement{
+		Outcome: "success", ProviderInputTokens: 10, ProviderOutputTokens: 20, CommittedMicrosUSD: 50,
+	}); err != nil {
+		return fmt.Errorf("settle attributed attempt: %w", err)
+	}
+	if err := manager.Finalize(ctx, request, "success"); err != nil {
+		return fmt.Errorf("finalize attributed request: %w", err)
 	}
 	return nil
 }

@@ -16,7 +16,7 @@ func TestMigration21RefusesADirectoryCarryingLegacyEvidence(t *testing.T) {
 		store.Close()
 		t.Fatal("a directory carrying legacy capability evidence was opened")
 	}
-	for _, want := range []string{"legacy", "make reset CONFIRM=RESET", "re-initialise"} {
+	for _, want := range []string{"legacy", "make reset CONFIRM=RESET", "reinitialize"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal omits %q: %v", want, err)
 		}

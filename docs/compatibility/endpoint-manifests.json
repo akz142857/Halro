@@ -329,9 +329,9 @@
           "max_tokens is value-dependent: Kimi has one output bound and it counts reasoning, so an answer-only bound is the same tokens exactly while nothing is thinking — which is the ordinary case, because a request that names no depth is sent with reasoning switched off. A request that does ask for depth, or that carries both output members, is routed away before provider I/O",
           "reasoning_effort is value-dependent: none, low and high are carried, and minimal, medium, xhigh and Kimi's own max are routed away because the portable ladder and Kimi's do not share those rungs",
           "the reasoning member itself depends on the model named: kimi-k3 reads a top-level reasoning_effort while the K2.x line reads thinking, and the renderer follows Kimi's own OpenAPI discriminator over exact model identifiers rather than inferring a family from a name",
-          "K2.x has one on state and no depth ladder, so an effort routed to those models is honoured as on rather than preserved",
+          "K2.x has one on state and no depth ladder, so an effort routed to those models is honored as on rather than preserved",
           "a request that names no depth is sent with reasoning explicitly switched off rather than left to Kimi's default, which is on: measured 2026-09-01, kimi-k3 and kimi-k2.6 both accept the off switch, and leaving it out returned a 64-token budget spent entirely on reasoning with an empty answer. kimi-k2.7-code has no off state and keeps reasoning, which is a per-model fact this profile-scoped declaration cannot express",
-          "stop is value-dependent: Kimi documents it as honoured and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
+          "stop is value-dependent: Kimi documents it as honored and it is carried, but only within its published bounds of five sequences of at most 32 bytes each, and a request outside them is routed away before provider I/O rather than refused while the body is encoded",
           "tool_choice is value-dependent, and the two ways of forcing a tool call are not the same value: a named function together with a depth is refused by every Kimi model measured and is routed away before provider I/O, while required together with a depth is refused by the K2.x line and accepted by kimi-k3, which answers with a tool call and a reasoning span in one response. That second half is a per-model limit this profile-scoped declaration cannot express, so it is refused after the reservation rather than routed away with the kimi-k3 request that works"
         ]
       },
@@ -355,7 +355,7 @@
           "reasoning_effort is unsupported at any value on this face, and that is what makes the face usable at all: a request naming no depth reaches Kimi with thinking disabled and comes back with no thinking block, which the portable decoder can read, while a request naming a depth comes back with one, which it refuses outright after the upstream has already been paid",
           "temperature and top_p are rejected because Kimi pins each per model and answers any other value with an error",
           "response_format is value-dependent: output_config.format takes a json_schema and enforces it, and there is no schema-less mode",
-          "stop is carried: measured honoured on this face, unlike MiniMax's, which documents the member as ignored"
+          "stop is carried: measured honored on this face, unlike MiniMax's, which documents the member as ignored"
         ]
       },
       {
@@ -379,7 +379,7 @@
           "this profile binds no stream primitive, so a streaming request is routed away rather than refused by field — Kimi itself documents stream on /v1/responses, so this is a Halro scope decision and not an upstream limit",
           "the schema-less json_object mode is unavailable here and available on the Kimi Chat profile: this endpoint models structured output as text.format and accepts the json_schema type alone, so a json_object request is routed away by the absent json_object capability rather than by field",
           "reasoning is unsupported here and supported on the Kimi Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
-          "this endpoint serves kimi-k3 alone, which the model catalogue records per model rather than this profile-scoped declaration"
+          "this endpoint serves kimi-k3 alone, which the model catalog records per model rather than this profile-scoped declaration"
         ]
       }
     ]
@@ -876,7 +876,7 @@
           "Kimi does not model temperature or top_p as request members on this face either",
           "reasoning is rejected before provider I/O because the canonical response mapper cannot preserve the reasoning items Kimi returns",
           "text.format carries a schema; the schema-less json_object mode is routed away by the absent json_object capability rather than by field, because Kimi's Responses face accepts the json_schema type alone",
-          "this endpoint serves kimi-k3 alone, which the model catalogue records per model"
+          "this endpoint serves kimi-k3 alone, which the model catalog records per model"
         ]
       }
     ]
@@ -1200,7 +1200,7 @@
         ],
         "declared_transforms": [
           "native mode preserves validated Anthropic content blocks, thinking signatures, and events",
-          "top_k, stop_sequences and cache_control are rejected on the native path as well as the portable one, because MiniMax documents them as ignored rather than refused and a silently dropped boundary is billed as if it had been honoured",
+          "top_k, stop_sequences and cache_control are rejected on the native path as well as the portable one, because MiniMax documents them as ignored rather than refused and a silently dropped boundary is billed as if it had been honored",
           "prompt caching is unavailable, so a cache_control marker would claim a discount that does not exist",
           "anthropic-beta is never forwarded: MiniMax does not accept beta headers",
           "output_config is unsupported because MiniMax's reasoning switch is the older thinking member; a portable request that asks for no depth still arrives with thinking disabled, which is MiniMax's exact spelling",
@@ -1221,7 +1221,7 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through MiniMax Chat Completions",
-          "output_config.effort reaches MiniMax's thinking switch, which has one on state and no depth ladder, so a depth is honoured as on rather than preserved — but only on a request that does not also bound the answer, and this endpoint requires max_tokens, so an effort-bearing Messages request is routed away from this profile by field rather than translated",
+          "output_config.effort reaches MiniMax's thinking switch, which has one on state and no depth ladder, so a depth is honored as on rather than preserved — but only on a request that does not also bound the answer, and this endpoint requires max_tokens, so an effort-bearing Messages request is routed away from this profile by field rather than translated",
           "max_tokens is why: MiniMax has one output bound and it counts reasoning, so the answer-only bound this endpoint requires is the same quantity only while nothing is thinking"
         ]
       },
@@ -1262,7 +1262,7 @@
           "temperature and top_p are rejected on both paths because Kimi pins each per model and answers any other value with an error",
           "top_k and cache_control are rejected on the native path as well as the portable one: Kimi's Messages schema has neither member, top_k answers 200 without anything establishing what it did, and prompt caching is automatic with no handle to mark",
           "anthropic-beta is never forwarded: Kimi documents no beta headers",
-          "stop_sequences is carried and was measured honoured, so it is not refused the way MiniMax's is"
+          "stop_sequences is carried and was measured honored, so it is not refused the way MiniMax's is"
         ]
       },
       {
@@ -1286,7 +1286,7 @@
           "output_config.effort is this endpoint's spelling of reasoning_effort and is value-dependent: low and high reach Kimi's switch, while medium, xhigh, Anthropic's max and a request for no reasoning at all have no Kimi rung on this profile",
           "output_config.format is carried: it is always a schema on this endpoint, and the Kimi Chat face documents the json_schema response format",
           "max_tokens is carried as max_completion_tokens, which Kimi documents as the same bound under a newer name — but the two are the same quantity only while nothing is thinking, because Kimi's single output bound counts reasoning, measured 2026-09-01. This endpoint requires max_tokens and means the answer alone, so a request that also asks for a depth is routed away rather than having this layer decide which of the two quantities the caller meant",
-          "stop_sequences is carried and was measured honoured, within Kimi's published bounds of five sequences of at most 32 bytes each; a request outside them is routed away before provider I/O",
+          "stop_sequences is carried and was measured honored, within Kimi's published bounds of five sequences of at most 32 bytes each; a request outside them is routed away before provider I/O",
           "tool_choice is value-dependent: a named function together with a depth is refused by every Kimi model and routed away before provider I/O, while required together with a depth is refused by the K2.x line alone — a per-model limit this declaration cannot express, refused after the reservation rather than costing kimi-k3 the request it serves"
         ]
       },
@@ -2219,7 +2219,7 @@
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
-      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
+      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
       "every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself"
     ],
     "provider_profiles": [
@@ -2283,7 +2283,7 @@
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
-      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
+      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2346,7 +2346,7 @@
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
-      "completion_window is honoured only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
+      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",

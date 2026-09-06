@@ -123,7 +123,7 @@ func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 	// is gone with the upgrade path, not merely disabled here.
 	if _, err := Open(path); err == nil {
 		t.Fatal("legacy pricing data upgraded past schema 20")
-	} else if !strings.Contains(err.Error(), "re-initialise the data directory") {
+	} else if !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("refusal is not actionable: %v", err)
 	}
 }
@@ -171,7 +171,7 @@ func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T)
 	// refused at schema 20 before any pricing decision arises. The ambiguity it
 	// guarded against can no longer be reached, so the refusal is what upgrading
 	// this fixture produces.
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "re-initialise the data directory") {
+	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("upgrade error=%v", err)
 	}
 }

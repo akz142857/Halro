@@ -1,0 +1,1 @@
+{"Authenticated":16,"ChecksumOnly":0,"Head":{"generation":1,"offset":19423,"sequence":16},"ChainSequence":16,"ChainOffset":19423,"ChainHash":[37,85,71,174,13,75,110,52,242,147,4,144,214,229,179,157,21,247,201,114,243,35,117,76,248,153,154,181,216,118,91,143],"ChainVerified":true}

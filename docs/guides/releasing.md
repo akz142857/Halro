@@ -60,6 +60,14 @@ Every release run produces:
   with `gh attestation verify` before publication;
 - workflow artifacts; and, for a signed `v*` tag, an immutable GitHub Release.
 
+The official v0.x path is `workflow_dispatch` on `main`. Fulcio therefore puts
+`release.yml@refs/heads/main` in those artifacts' certificate identity; the
+checksums and GitHub provenance attestation bind each blob to the exact commit.
+A release started by pushing an existing tag instead receives a
+`release.yml@refs/tags/vX.Y.Z` identity. README verification commands describe
+the official dispatch path and must be changed deliberately if the release is
+started from a tag.
+
 **[1.0.0 target — not in `release.yml` today.]** Configure the GitHub `v1-release` environment with required reviewers. Its
 approval is the explicit boundary where reviewers verify the exact-commit GA
 Provider matrix, 24-hour soak artifacts, RC checklist, and release description.

@@ -1,0 +1,6 @@
+4923b0ec483f480c752bd9d8e783d26dcb8df2cb2ded1ce63afc7c7d44deb915  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/usage/date=2026-09-05/usage-00000000000000000004-00000000000000000007.parquet
+a99bab301713eba1cf0b9cdcbdb5be8dfb664281ffc308bfd90b3668ac193335  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/usage/manifest.json
+b1ee9c4f8fd885512fadf32ce42ecb62b7ff59536631e29c51ddf23aa114bd00  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/halro.db
+b614dab843645a07847a9d8351c3515b4a500ca29e709614a1f15b7fcf847647  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/ledger/ledger.wal
+cd3d669721ff2be9a61a75362b53f19df58fb83bb8749176131e2b44d0aaa818  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/audit/audit.log
+f9f0252c9bb46db60179cb2c46e1451377ea8bfa5847ee3b1c6e7ce018350df9  /private/tmp/halro-v070-release.Os5iu8/preupgrade-restored-data/.halro.lock

@@ -429,7 +429,7 @@ func renderBatchResultLine(batchID string, raw []byte) ([]byte, error) {
 	case "errored":
 		out.Error = &openAIResultError{Code: batchResultErrorCode(line.Result.Error), Message: "the provider refused this request"}
 	case "canceled":
-		out.Error = &openAIResultError{Code: "cancelled", Message: "the batch was cancelled before this request ran"}
+		out.Error = &openAIResultError{Code: "cancelled", Message: "the batch was canceled before this request ran"}
 	case "expired":
 		out.Error = &openAIResultError{Code: "expired", Message: "the batch expired before this request ran"}
 	default:

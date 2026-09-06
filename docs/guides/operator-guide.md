@@ -156,7 +156,7 @@ mapping is harder to diagnose than a missing one.
 scalars, and the old keys are gone rather than deprecated: unknown YAML fields
 are refused, so a configuration still carrying them stops the process at load
 with `field cert_file not found in type config.TLS`. Rewrite the block as the list
-above — one entry with the two paths reproduces the previous behaviour exactly.
+above — one entry with the two paths reproduces the previous behavior exactly.
 The data directory is untouched by this; only `config.yaml` needs editing.
 
 `trust_proxy_headers` must stay `false` in this shape. Clients connect directly,
@@ -417,7 +417,7 @@ request that exists anywhere.
 
 **`request failed` is written for two of the six non-success outcomes**,
 `provider_error` and `accounting_error` — with one exclusion inside the first:
-a request the caller cancelled writes none. A client hanging up is driven
+a request the caller canceled writes none. A client hanging up is driven
 entirely from outside Halro, and a frontend deploy or a gateway restart cancels
 every request in flight at once, which is the same flood the four policy
 outcomes are excluded to prevent. A deadline that expired is not this, and does
@@ -629,7 +629,7 @@ What is captured, and what is not:
 
 | Outcome | Captured | Why |
 | --- | --- | --- |
-| `provider_error` | yes | The request and the upstream's reply are the diagnosis. Except when the caller cancelled: nobody hung up on Halro's account, and one frontend deploy cancels every request in flight at once. |
+| `provider_error` | yes | The request and the upstream's reply are the diagnosis. Except when the caller canceled: nobody hung up on Halro's account, and one frontend deploy cancels every request in flight at once. |
 | `unsupported_feature` | yes | Which field the target could not serve is only visible in the request. |
 | `policy_rejected` | **no** | Storing the content redaction just refused would make the capture the leak the policy prevents. |
 | `rejected`, `token_guard_rejected` | no | Never reached an upstream; nothing to reproduce, and a runaway client produces them at its own rate. |
@@ -768,7 +768,7 @@ name, and two surfaces follow it — only two:
 Everything else is UTC and stays UTC regardless of this setting: Parquet
 partition dates, retention pruning, price-version effective times, audit
 records, backup manifests, and authenticator codes. Storage layout is not an
-accounting judgement — partitioning by a configurable zone would move a single
+accounting judgment — partitioning by a configurable zone would move a single
 attempt between partitions whenever the setting changed.
 
 `usage.retention_days` is therefore a floor rather than an exact age. Partitions
@@ -786,8 +786,8 @@ a request accepted at 23:59 and settled at 00:02 is reported on the day it
 reserved budget against and appears in the *next* day's partition.
 
 Only IANA names are accepted; a fixed offset such as `UTC+08:00` cannot express
-summer time and would make the days on either side of a transition the wrong
-length. A day is 23 or 25 hours where summer time applies, and the daily budget
+daylight saving time and would make the days on either side of a transition the
+wrong length. A day is 23 or 25 hours where daylight saving time applies, and the daily budget
 covers that whole calendar day rather than a fixed 24 hours.
 
 `usage.timezone` in config.yaml **seeds** this setting on an instance's first
@@ -799,7 +799,7 @@ Change it under Settings → Instance, or through
 `PUT /admin/api/v1/settings/accounting`. A change never applies immediately: it
 is scheduled for the end of the period in progress, because redefining a day
 that is already being billed would change what budgets already enforced against
-it meant. Until then it shows as pending and can be cancelled. Nothing already
+it meant. Until then it shows as pending and can be canceled. Nothing already
 recorded is recomputed — every ledger event carries the zone, the version and
 the exact UTC interval it was filed under, so a charge can be re-derived from
 the record alone.

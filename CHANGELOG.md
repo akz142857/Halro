@@ -4,6 +4,81 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [0.7.0] - 2026-09-06
+
+### Added
+
+- **Run Governance connects model spend to business work.** Projects may enable
+  Work Units and Runs, attach model attempts with the `x-halro-work-unit` and
+  `x-halro-run` headers, enforce a Run lifetime budget together with the existing
+  Project daily budget, and inspect the complete attribution chain in the Admin
+  console. A Run cannot outlive its Work Unit, and closing either boundary fails
+  closed against new admissions without losing the settlement of work already
+  accepted upstream.
+
+- **Versioned business outcomes and cohort reporting.** Administrators can define
+  immutable boolean or categorical outcomes, report revisioned observations, and
+  compare outcome coverage, success rate, known model cost, and cost per success
+  at explicit accounting and governance watermarks. Missing outcomes and unknown
+  prices remain visible; neither is converted to zero. Governance exports use the
+  same consistent snapshot contract as the console summary.
+
+- **A separate authenticated Governance Journal.** Work Unit, Run, and outcome
+  evidence is append-only and hash-chained without becoming a second accounting
+  authority. The Ledger remains authoritative for reservations, settlement, and
+  cost. Backups, restore validation, diagnostics, metrics, and the dead-man status
+  surface now include the governance state needed to reproduce a report.
+
+### Changed
+
+- Gateway Keys created before this release are backfilled with the inference
+  scope. Run and outcome control-plane operations require their own explicit
+  scopes, so an upgraded inference key does not silently gain governance write
+  authority.
+
+- Accepted OpenAI-compatible responses that cannot be read or decoded are now
+  classified as ambiguous. Halro does not retry them against another target and
+  settles them conservatively because HTTP success proves the upstream may have
+  completed billable work.
+
+- The Admin console's `en-US` catalog now consistently uses American English,
+  count-neutral or plural-aware wording, and technically accurate units. The
+  localization gate rejects British spellings and singular forms such as
+  `1 attempts` from returning.
+
+### Fixed
+
+- Master Key rotation now refuses before mutation when retained encrypted
+  captures or provider objects still depend on the current key.
+- Admin session refresh can no longer recreate a concurrently revoked session;
+  MFA management failures share the credential failure budget.
+- Expired failure captures are unreadable before physical cleanup, and audit
+  history queries no longer hold the append lock while replaying a large result.
+- The SSE decoder accepts bare carriage-return line endings and preserves CRLF
+  split across reads.
+- Query-only navigation, paginated Admin resource reads, retry idempotency, modal
+  pending locks, Project request-size round trips, usage checkpoint visibility,
+  dead-man outbox ordering, and runtime gauge reporting retain their intended
+  semantics under their documented edge cases.
+- Release documentation now describes the actual v0.x workflow, and artifact
+  verification uses the certificate identity produced by the official
+  workflow-dispatch release path.
+
+### Operator impact
+
+- **Back up and verify the v0.6.0 data directory before the first v0.7.0 start.**
+  Metadata schema 35 upgrades atomically to 36. The migration adds governance
+  buckets, backfills legacy Gateway Key scopes, and clears the rebuildable Usage
+  checkpoint so attribution can be reconstructed from the Ledger. A v0.6.0
+  binary refuses schema 36; rollback requires restoring the pre-upgrade backup.
+- Usage checkpoint format 12 is rebuilt as format 13. Parquet manifest and rows
+  move from schema 5 to 6 and remain readable through the versioned compatibility
+  range. The new Governance Journal is stored and backed up beside, but separately
+  from, the accounting Ledger.
+- Run Governance is disabled per Project until an administrator enables it. The
+  existing inference request contract remains valid when attribution headers are
+  absent.
+
 ## [0.6.0] - 2026-09-04
 
 ### Added
@@ -1426,6 +1501,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.7.0]: https://github.com/akz142857/Halro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akz142857/Halro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/akz142857/Halro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/akz142857/Halro/compare/v0.3.0...v0.4.0

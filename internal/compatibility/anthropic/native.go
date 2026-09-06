@@ -54,10 +54,10 @@ func validateMiniMaxNativePayload(kind compatibility.NativePayloadKind, payload 
 		return err
 	}
 	if request.TopK != nil {
-		return errors.New("MiniMax ignores top_k rather than honouring it, so it is refused instead of forwarded")
+		return errors.New("MiniMax ignores top_k rather than honoring it, so it is refused instead of forwarded")
 	}
 	if len(request.StopSequences) > 0 {
-		return errors.New("MiniMax ignores stop_sequences rather than honouring them, so they are refused instead of forwarded")
+		return errors.New("MiniMax ignores stop_sequences rather than honoring them, so they are refused instead of forwarded")
 	}
 	// cache_control is not a member of any struct here — it rides inside content
 	// blocks, system blocks and tool definitions, which are forwarded as raw

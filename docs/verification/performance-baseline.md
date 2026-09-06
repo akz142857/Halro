@@ -2,39 +2,40 @@
 
 Release comparisons use the previous tag and the candidate on the **same host
 and toolchain**, with identical benchmark fixtures. The current paired evidence
-is in [2026-09-03 v0.6.0](performance/2026-09-03-v0.6.0/README.md), including
-raw samples, exact source hashes, commands and benchstat output.
+is in [2026-09-06 v0.7.0](performance/2026-09-06-v0.7.0/README.md), including
+raw samples, exact source hashes, method and benchstat output.
 
-## Current comparison, 2026-09-03
+## Current comparison, 2026-09-06
 
 Apple M4 / macOS 26.7 / 24 GiB / Go 1.26.6 / `GOMAXPROCS=4`.
-Eight samples per version, `-benchtime=1s`, serial alternating version order.
-Baseline: v0.5.0 (`556f1d7`); candidate: `cc14e18` plus the P10/P14 follow-up,
+Six samples per version, serial package execution, baseline then candidate in
+each round. Baseline: v0.6.0 (`381743f`); candidate: `a3634d7` plus the fixes
 identified by the source hashes in the linked evidence.
 
-| Benchmark | v0.5.0 median | Candidate median | benchstat time comparison |
+| Benchmark | v0.6.0 median | Candidate median | benchstat time comparison |
 |---|---:|---:|---|
-| Route candidate resolution, 8 targets | 5.198 µs | 5.233 µs | no significant difference, p=0.505 |
-| Strict response redaction | 74.29 µs | 80.19 µs | no significant difference, p=0.065 |
-| Bounded streaming redaction | 17.80 µs | 17.42 µs | no significant difference, p=0.798 |
-| Token Guard admit, fixed | 172.0 ns | 179.9 ns | +4.59%, p=0.021 |
-| Token Guard admit, EWMA | 189.9 ns | 185.5 ns | no significant difference, p=0.574 |
-| Token Guard acquire/release, contended | 331.1 ns | 342.2 ns | no significant difference, p=0.279 |
-| Project admission/reconcile/release, unlimited | 100.8 ns | 110.8 ns | +9.82%, p=0.004 |
-| Project admission/reconcile/release, limited | 130.9 ns | 139.2 ns | +6.30%, p=0.007 |
-| Project admission/reconcile/release, contended | 288.4 ns | 282.6 ns | no significant difference, p=0.505 |
-| Open and replay 100,000 WAL records | 562.3 ms | 551.7 ms | no significant difference, p=0.574 |
+| Route candidate resolution, 8 targets | 5.064 µs | 5.204 µs | no significant difference, p=0.818 |
+| Strict response redaction | 73.28 µs | 74.23 µs | no significant difference, p=0.132 |
+| Bounded streaming redaction | 16.95 µs | 17.75 µs | no significant difference, p=0.093 |
+| Token Guard admit, fixed | 170.0 ns | 173.4 ns | no significant difference, p=0.310 |
+| Token Guard admit, EWMA | 183.8 ns | 187.2 ns | no significant difference, p=0.288 |
+| Token Guard acquire/release, contended | 341.1 ns | 336.0 ns | no significant difference, p=0.394 |
+| Project admission/reconcile/release, unlimited | 105.0 ns | 106.6 ns | no significant difference, p=0.589 |
+| Project admission/reconcile/release, limited | 137.2 ns | 140.6 ns | no significant difference, p=0.589 |
+| Project admission/reconcile/release, contended | 282.9 ns | 283.9 ns | no significant difference, p=0.851 |
+| Open and replay 100,000 WAL records | 542.2 ms | 555.7 ms | no significant difference, p=0.240 |
 
-No measured median time increase exceeds the release procedure's 10% threshold.
-That is not a claim that every path is unchanged: unlimited project admission
-is statistically slower and close to the threshold (candidate interval ±13%).
-The redaction intervals are also wide; retain the raw data and uncertainty.
-
+No candidate time regression is statistically significant. The production
+Run-attributed request benchmark also has no significant difference from the
+ordinary candidate request path in any of nine project/worker combinations.
 Route resolution remains **15,888 B / 41 allocations**, Token Guard admit
 **64 B / 2 allocations**, and project admission **200 B / 5 allocations** on
-both sides. WAL open/replay allocates **220.1 → 232.4 MiB per operation (+5.58%)**,
-with roughly 3 million allocations on both sides. This is cumulative allocation,
-not retained heap or peak RSS. Exact medians and counts are in `medians.json`.
+both sides. Retain the raw samples: several request-lifecycle confidence
+intervals are wide because 100 durable operations are distributed across up to
+64 workers.
+
+The frontend entry set plus its heaviest locale is **205,977 → 213,586 gzip
+bytes (+3.69%)**, within the bundle gate.
 
 ## Historical microbenchmarks, 2026-07-31 — superseded
 

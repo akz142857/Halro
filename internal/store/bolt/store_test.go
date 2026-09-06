@@ -1163,7 +1163,7 @@ func TestSchema20RefusesADataDirectoryHoldingDeployments(t *testing.T) {
 	}
 	if _, err := Open(path); err == nil {
 		t.Fatal("a data directory with deployments upgraded to schema 20")
-	} else if !strings.Contains(err.Error(), "re-initialise the data directory") {
+	} else if !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("refusal is not actionable: %v", err)
 	}
 }

@@ -1,0 +1,42 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/budget
+cpu: Apple M4
+                                          │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-normal-verified.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-attributed-verified.txt │
+                                          │                                   sec/op                                   │                          sec/op                           vs base              │
+RequestLifecycle/projects=1/workers=1-4                                                                  20.67m ±  41%                                              20.73m ±  14%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                  5.467m ±  20%                                              6.075m ± 109%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                 876.2µ ±  16%                                              858.8µ ± 933%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                  22.27m ±  33%                                              19.16m ±  24%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                  5.521m ±  12%                                              5.071m ±  22%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                 860.0µ ±  22%                                              848.6µ ±  17%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                 21.81m ±  16%                                              20.64m ±  38%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                 5.428m ±  14%                                              5.119m ±  20%       ~ (p=0.699 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                                918.3µ ± 695%                                              842.5µ ±  20%       ~ (p=0.937 n=6)
+geomean                                                                                                  4.709m                                                     4.524m         -3.93%
+
+                                          │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-normal-verified.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-attributed-verified.txt │
+                                          │                                  events/s                                  │                         events/s                          vs base              │
+RequestLifecycle/projects=1/workers=1-4                                                                    243.4 ± 30%                                                242.2 ± 12%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                    919.2 ± 24%                                                823.3 ± 52%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                  5.761k ± 19%                                               5.981k ± 91%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                    224.6 ± 25%                                                260.9 ± 19%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                    908.2 ± 13%                                                986.8 ± 20%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                  5.819k ± 26%                                               5.923k ± 16%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                   229.3 ± 14%                                                243.5 ± 28%       ~ (p=0.853 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                   924.6 ± 13%                                                977.5 ± 17%       ~ (p=0.660 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                                 5.450k ± 87%                                               5.939k ± 16%       ~ (p=0.937 n=6)
+geomean                                                                                                   1.065k                                                     1.111k        +4.25%
+
+                                          │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-normal-verified.txt │ /private/tmp/halro-v070-release.Os5iu8/bench/candidate-attributed-verified.txt │
+                                          │                                lifecycles/s                                │                       lifecycles/s                        vs base              │
+RequestLifecycle/projects=1/workers=1-4                                                                    48.67 ± 30%                                                48.44 ± 12%       ~ (p=1.000 n=6)
+RequestLifecycle/projects=1/workers=8-4                                                                    183.8 ± 25%                                                164.7 ± 52%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=1/workers=64-4                                                                  1.153k ± 19%                                               1.196k ± 91%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=8/workers=1-4                                                                    44.91 ± 25%                                                52.19 ± 19%       ~ (p=0.240 n=6)
+RequestLifecycle/projects=8/workers=8-4                                                                    181.7 ± 12%                                                197.3 ± 20%       ~ (p=0.394 n=6)
+RequestLifecycle/projects=8/workers=64-4                                                                  1.164k ± 26%                                               1.185k ± 16%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=64/workers=1-4                                                                   45.86 ± 14%                                                48.70 ± 28%       ~ (p=0.937 n=6)
+RequestLifecycle/projects=64/workers=8-4                                                                   184.9 ± 13%                                                195.5 ± 17%       ~ (p=0.660 n=6)
+RequestLifecycle/projects=64/workers=64-4                                                                 1.090k ± 87%                                               1.188k ± 16%       ~ (p=0.937 n=6)
+geomean                                                                                                    213.1                                                      222.1        +4.25%

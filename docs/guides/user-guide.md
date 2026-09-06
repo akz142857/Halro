@@ -588,7 +588,7 @@ Async creation requests must carry an `Idempotency-Key`; file uploads must also
 carry `Halro-Route`. A resource ID is visible only inside the project that
 created it, and reads and deletes always return to the original Provider,
 Deployment, profile, and region. Bedrock async jobs cannot currently be
-cancelled: the API answers `provider_cancel_unsupported` rather than reporting a
+canceled: the API answers `provider_cancel_unsupported` rather than reporting a
 success that did not happen.
 
 The price version's fixed USD-per-request applies to media, rerank, and resource
