@@ -144,11 +144,11 @@ export function RunGovernancePage() {
   const selectedProject = governanceProjects.find((project) => project.id === projectID);
   const pageAction = <div className="governance-page-actions" role="group" aria-label={t("runGovernance.actions")}>
     <button type="button" className="button ghost governance-page-action" disabled={!projectID || isRefreshing} onClick={() => void refreshAll()}>
-      <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M13 5.5V2.75l-1.2 1.2A5.5 5.5 0 1 0 13.5 8" /><path d="M13 2.75h-2.75" /></svg>
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 3v5h-5" /></svg>
       <span>{isRefreshing ? t("runGovernance.refreshing") : t("runGovernance.refresh")}</span>
     </button>
     <a className="button ghost governance-page-action" href={projectID ? `/admin/projects?project_id=${encodeURIComponent(projectID)}` : "/admin/projects"}>
-      <svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.25" /><path d="M8 1.75v1.5M8 12.75v1.5M14.25 8h-1.5M3.25 8h-1.5M12.42 3.58l-1.06 1.06M4.64 11.36l-1.06 1.06M12.42 12.42l-1.06-1.06M4.64 4.64 3.58 3.58" /></svg>
+      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h6m4 0h6M10 3v6M4 12h10m4 0h2M14 9v6M4 18h3m4 0h9M7 15v6" /></svg>
       <span>{t("runGovernance.projectSettings")}</span>
     </a>
   </div>;

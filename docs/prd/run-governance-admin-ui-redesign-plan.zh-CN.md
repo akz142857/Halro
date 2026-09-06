@@ -461,7 +461,7 @@ CSS-only 迭代使用视觉检查和 `design-system.test.ts`，不在每次间�
 
 二次 Agent 复核受到 Agent 额度限制；改由定向回归、类型检查、四断点真实浏览器检查、完整前端测试和生产构建完成闭环。
 
-最终门禁：TypeScript typecheck 通过；Vitest `44 files / 556 tests` 通过；生产构建、bundle size 与 `29 files` artifact secret scan 通过。连续两次生产构建的 embedded bundle 内容哈希一致（`b70b2b6f7d9d2a1bac7b65493037e57bb8483ff63e664abd38cc0a00d6afe84f`）。本次仅修改前端、文案和生成 bundle，没有 Go 源码变化，依据仓库“run what the change can affect”规则未重复运行 Go / race 门禁。
+最终门禁：TypeScript typecheck 通过；Vitest `44 files / 556 tests` 通过；生产构建、bundle size 与 `29 files` artifact secret scan 通过。连续两次生产构建的 embedded bundle 内容哈希一致（`e5864c64c76482dff6321268fe6342b0dafb543ef2f147543b333858e30950c2`）。本次仅修改前端、文案和生成 bundle，没有 Go 源码变化，依据仓库“run what the change can affect”规则未重复运行 Go / race 门禁。
 
 ### 13.4 验证边界
 
