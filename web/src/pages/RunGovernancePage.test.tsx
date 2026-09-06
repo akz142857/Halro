@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
 import { RunGovernancePage } from "./RunGovernancePage";
+import { governanceGuideSteps } from "./run-governance/GovernanceFirstRunGuide";
 import { CostEvidence } from "./run-governance/GovernancePrimitives";
 import { isGovernanceDataStale, rememberGovernanceProject } from "./run-governance/governance-state";
 
@@ -12,6 +13,87 @@ describe("RunGovernancePage", () => {
     vi.restoreAllMocks();
     window.history.replaceState({}, "", "/admin/run-governance");
     rememberGovernanceProject("");
+    vi.spyOn(api, "keys").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  it("guides the first governed business run with verified progress and executable API examples", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "prj_a", name: "Agent plane", revision: 7, run_governance: { enabled: true } }] as never, next_cursor: "" });
+    vi.spyOn(api, "workUnits").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "runs").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomeDefinitions").mockResolvedValue({ items: [{
+      id: "odef_a", project_id: "prj_a", name: "accepted", version: 1, data_type: "CATEGORICAL",
+      allowed_values: ["accepted", "rejected"], success_values: ["accepted"], enabled: true,
+      created_at: "2026-09-04T00:00:00Z", created_by: "admin", revision: 2,
+    }], next_cursor: "" });
+    vi.mocked(api.keys).mockResolvedValue({ items: [
+      { id: "key_orchestrator", project_id: "prj_a", name: "orchestrator", enabled: true, scopes: ["inference", "work_unit:create", "run:create", "run:attach"], created_at: "2026-09-04T00:00:00Z", revision: 1 },
+      { id: "key_acceptance", project_id: "prj_a", name: "acceptance", enabled: true, scopes: ["outcome:write"], created_at: "2026-09-04T00:00:00Z", revision: 1 },
+    ], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><RunGovernancePage /></QueryClientProvider>);
+
+    expect(await screen.findByRole("heading", { name: "完成第一条运行治理闭环" })).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "运行治理接入进度" })).toHaveAttribute("aria-valuenow", "3");
+    expect(screen.getByText("业务系统 API 闭环")).toBeVisible();
+    expect(screen.getAllByText(/odef_a/)).toHaveLength(2);
+    expect(screen.getByText(/X-Halro-Run-ID: run_xxx/)).toBeVisible();
+    expect(screen.getByText(/-d '\{\}'/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "隐藏向导" }));
+    expect(screen.queryByRole("heading", { name: "完成第一条运行治理闭环" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "接入向导" }));
+    expect(screen.getByRole("heading", { name: "完成第一条运行治理闭环" })).toBeVisible();
+  });
+
+  it("treats legacy and expired keys as insufficient governance authority", () => {
+    const steps = governanceGuideSteps({
+      projectEnabled: true,
+      definitions: [{ id: "odef_a", enabled: true }] as never,
+      keys: [
+        { id: "legacy", enabled: true },
+        { id: "expired", enabled: true, scopes: ["inference", "work_unit:create", "run:create", "run:attach", "outcome:write"], expires_at: "2026-09-05T00:00:00Z" },
+      ] as never,
+      workUnits: [], runs: [], outcomes: [], now: Date.parse("2026-09-06T00:00:00Z"),
+    });
+
+    expect(steps.map((step) => step.state)).toEqual(["complete", "complete", "current", "blocked", "blocked", "blocked"]);
+  });
+
+  it("takes the Definition step directly to Definition management", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "prj_a", name: "Agent plane", revision: 7, run_governance: { enabled: true } }] as never, next_cursor: "" });
+    vi.spyOn(api, "workUnits").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "runs").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "outcomeDefinitions").mockResolvedValue({ items: [], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><RunGovernancePage /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "创建结果定义" }));
+
+    expect(screen.getByRole("tab", { name: "结果与口径" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Definition 管理" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("button", { name: "创建定义" })).toBeVisible();
+  });
+
+  it("retires the automatic guide after the first complete lifecycle and keeps it available on demand", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "prj_a", name: "Agent plane", revision: 7, run_governance: { enabled: true } }] as never, next_cursor: "" });
+    vi.spyOn(api, "outcomeDefinitions").mockResolvedValue({ items: [{ id: "odef_a", enabled: true, version: 1, success_values: ["accepted"] }] as never, next_cursor: "" });
+    vi.mocked(api.keys).mockResolvedValue({ items: [{ id: "key_all", enabled: true, scopes: ["inference", "work_unit:create", "run:create", "run:attach", "outcome:write"] }] as never, next_cursor: "" });
+    vi.spyOn(api, "workUnits").mockResolvedValue({ items: [{ id: "wku_a", status: "closed", created_at: "2026-09-06T00:00:00Z", period_id: "2026-09-06" }] as never, next_cursor: "" });
+    vi.spyOn(api, "runs").mockResolvedValue({ items: [{ id: "run_a", work_unit_id: "wku_a", status: "closed", budget_state: "available" }] as never, next_cursor: "" });
+    vi.spyOn(api, "outcomes").mockResolvedValue({ items: [{ id: "out_a", work_unit_id: "wku_a", definition_id: "odef_a", definition_version: 1, value: "accepted", provisional: false }] as never, next_cursor: "" });
+    vi.spyOn(api, "governanceSummary").mockRejectedValue(new Error("not needed on overview"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><RunGovernancePage /></QueryClientProvider>);
+
+    await screen.findByLabelText("当前治理概况");
+    expect(screen.queryByRole("heading", { name: "完成第一条运行治理闭环" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "接入向导" }));
+    expect(screen.getByRole("progressbar", { name: "运行治理接入进度" })).toHaveAttribute("aria-valuenow", "6");
+    expect(screen.getByText("第一条治理闭环已建立")).toBeVisible();
   });
 
   it("drills from a Project through Work Unit and Run to attributed attempts", async () => {

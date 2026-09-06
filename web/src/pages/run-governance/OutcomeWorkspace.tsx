@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { EmptyState, ErrorState, Loading, Modal, SegmentedTabs } from "../../components";
 import { money, useInstantFormatter } from "../../format";
@@ -46,6 +46,7 @@ function ValueTokens({ label, values, disabled = false, initial = false, onChang
 }
 
 export function OutcomeWorkspace({
+  initialView,
   definitions,
   outcomes,
   workUnits,
@@ -63,6 +64,7 @@ export function OutcomeWorkspace({
   onSaveDefinition,
   onToggleDefinition,
 }: {
+  initialView: ResultsView;
   definitions: OutcomeDefinition[];
   outcomes: Outcome[];
   workUnits: WorkUnit[];
@@ -82,7 +84,8 @@ export function OutcomeWorkspace({
 }) {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
-  const [view, setView] = useState<ResultsView>("analytics");
+  const [view, setView] = useState<ResultsView>(initialView);
+  useEffect(() => setView(initialView), [initialView]);
   const [form, setForm] = useState<DefinitionForm | null>(null);
   const [pendingToggle, setPendingToggle] = useState<OutcomeDefinition | null>(null);
   const selectedDefinition = definitions.find((item) => `${item.id}:${item.version}` === definitionID);

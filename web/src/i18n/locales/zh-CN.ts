@@ -203,6 +203,22 @@ export const zhCN = {
   },
   runGovernance: {
     eyebrow: "业务运行归因", title: "运行治理", description: "按项目查看 Work Unit、Run、业务结果及其真实模型调用；费用来自同一条可验证账本。",
+    firstRun: {
+      eyebrow: "首次接入", title: "完成第一条运行治理闭环", description: "控制台负责配置和查看证据；业务应用负责创建 Work Unit、Run、发送模型请求与关闭生命周期，独立验收方负责上报 Outcome。完成当前步骤后，向导会自动推进。",
+      progress: "{{done}} / {{total}}", progressLabel: "运行治理接入进度", open: "接入向导", hide: "隐藏向导", next: "当前步骤", finished: "接入完成", finishedTitle: "第一条治理闭环已建立", finishedDescription: "项目已经产生 Work Unit、Run 和最终 Outcome；现在可以从概览、调用明细和结果分析继续运营。", openAPI: "查看 API 示例",
+      states: { complete: "已完成", current: "进行中", blocked: "等待前置步骤", error: "无法确认" },
+      steps: {
+        project: { title: "选择并启用治理项目", detail: "选择一个项目，并设置默认与最大 Run 预算、TTL 和资源上限。", action: "配置项目" },
+        definition: { title: "定义可验收结果", detail: "创建启用的 Outcome Definition，明确允许值以及哪些值代表成功。", action: "创建结果定义" },
+        keys: { title: "签发最小权限密钥", detail: "编排密钥需要 inference、work_unit:create、run:create、run:attach；验收密钥需要 outcome:write。建议分成两把密钥。", error: "暂时无法读取项目密钥，不能确认权限是否齐备；请重试或前往项目设置检查。", action: "配置项目密钥" },
+        workUnit: { title: "创建第一个 Work Unit", detail: "把最终只应计算一次结果的业务对象建成 Work Unit，并冻结当前结果定义。" },
+        run: { title: "创建第一个 Run", detail: "一次完整执行对应一个 Run；随后让同一执行内的请求、重试和 fallback 都携带同一个 X-Halro-Run-ID。" },
+        outcome: { title: "关闭生命周期并上报 Outcome", detail: "结束执行后关闭 Run 和 Work Unit，再由独立验收密钥上报结构化结果。最终 Outcome 出现后向导完成。" },
+      },
+      apiTitle: "业务系统 API 闭环", apiDescription: "按顺序执行并保存每一步响应中的 wku_、run_ 和 out_ 标识。", apiBoundary: "先设置 HALRO_GATEWAY_URL、HALRO_ORCHESTRATOR_KEY 和 HALRO_ACCEPTANCE_KEY。示例不会在控制台内代替业务应用执行，也不要把真实密钥粘贴到页面或提交到代码仓库。",
+      samples: { workUnit: "1. 创建 Work Unit", run: "2. 创建 Run", inference: "3. 发送归属于 Run 的模型请求", outcome: "4. 关闭并上报 Outcome" },
+      copy: { idle: "复制", copied: "已复制", failed: "复制失败" },
+    },
     project: "项目", chooseProject: "选择项目", chooseProjectDescription: "选择已启用运行治理的项目，读取它的 Work Unit 与 Run。",
     workUnitStatus: "Work Unit 状态", runStatus: "Run 状态", allStatuses: "全部状态", open: "进行中", active: "活跃", expired: "已过期", closed: "已关闭", status: "状态",
     workUnits: "Work Units", runs: "Runs", createdBy: "创建密钥", createdAt: "创建时间", filterRuns: "只看其 Runs", showAllRuns: "显示全部 Runs",

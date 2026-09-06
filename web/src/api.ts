@@ -317,8 +317,7 @@ export const api = {
       json("POST", stepUpBody(reauth)),
     ).then((value) => value.data),
   keys: (projectID: string) =>
-    request<Page<GatewayKey>>(`/projects/${encodeURIComponent(projectID)}/keys`)
-      .then((value) => value.data),
+    pageOfAll<GatewayKey>("Gateway Key", `/projects/${encodeURIComponent(projectID)}/keys`),
   keysPage: (projectID: string, query = "") =>
     request<Page<GatewayKey>>(`/projects/${encodeURIComponent(projectID)}/keys${query}`)
       .then((value) => value.data),

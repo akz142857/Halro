@@ -195,6 +195,22 @@ export const enUS = {
   },
   runGovernance: {
     eyebrow: "Business run attribution", title: "Run Governance", description: "Inspect Work Units, Runs, business outcomes, and their actual model attempts by project. Costs come from the same verifiable ledger.",
+    firstRun: {
+      eyebrow: "First integration", title: "Complete the first governed run", description: "The console configures governance and inspects evidence. Your application creates Work Units and Runs, sends model requests, and closes their lifecycle; an independent acceptance system reports the Outcome. The guide advances as each result becomes visible.",
+      progress: "{{done}} / {{total}}", progressLabel: "Run Governance integration progress", open: "Integration guide", hide: "Hide guide", next: "Current step", finished: "Integration complete", finishedTitle: "The first governed lifecycle is complete", finishedDescription: "The project has produced a Work Unit, Run, and final Outcome. Continue operating from the overview, attempt evidence, and result analytics.", openAPI: "View API examples",
+      states: { complete: "Complete", current: "In progress", blocked: "Waiting", error: "Cannot verify" },
+      steps: {
+        project: { title: "Select and enable a governed project", detail: "Select a project and set its default and maximum Run budget, lifetime, and resource limits.", action: "Configure project" },
+        definition: { title: "Define an acceptable outcome", detail: "Create an enabled Outcome Definition with allowed values and the values that count as success.", action: "Create outcome definition" },
+        keys: { title: "Issue least-privilege keys", detail: "The orchestration key needs inference, work_unit:create, run:create, and run:attach. The acceptance key needs outcome:write. Use separate keys when possible.", error: "Project keys could not be read, so their scopes cannot be verified. Retry or inspect them in project settings.", action: "Configure project keys" },
+        workUnit: { title: "Create the first Work Unit", detail: "Represent the business object that should produce one final result and freeze its current Outcome Definition." },
+        run: { title: "Create the first Run", detail: "One complete execution is one Run. Then give every request, retry, and fallback in that execution the same X-Halro-Run-ID." },
+        outcome: { title: "Close the lifecycle and report an Outcome", detail: "Close the Run and Work Unit, then use the independent acceptance key to report a structured result. The guide completes when a final Outcome appears." },
+      },
+      apiTitle: "Application API workflow", apiDescription: "Run these in order and retain the wku_, run_, and out_ identifiers returned by each step.", apiBoundary: "Set HALRO_GATEWAY_URL, HALRO_ORCHESTRATOR_KEY, and HALRO_ACCEPTANCE_KEY first. The console does not execute these application lifecycle calls for you. Never paste real keys into this page or commit them to source control.",
+      samples: { workUnit: "1. Create a Work Unit", run: "2. Create a Run", inference: "3. Send a model request attributed to the Run", outcome: "4. Close and report the Outcome" },
+      copy: { idle: "Copy", copied: "Copied", failed: "Copy failed" },
+    },
     project: "Project", chooseProject: "Choose a project", chooseProjectDescription: "Choose a project with Run Governance enabled to inspect its Work Units and Runs.",
     workUnitStatus: "Work Unit status", runStatus: "Run status", allStatuses: "All statuses", open: "Open", active: "Active", expired: "Expired", closed: "Closed", status: "Status",
     workUnits: "Work Units", runs: "Runs", createdBy: "Created by key", createdAt: "Created", filterRuns: "Show its Runs", showAllRuns: "Show all Runs",
