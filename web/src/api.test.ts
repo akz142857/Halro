@@ -106,7 +106,8 @@ describe("typed admin API client", () => {
   it("follows every Run Governance and Outcome page without dropping filters", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input), "http://halro.test");
-      if (!url.pathname.endsWith("/outcome-definitions")) expect(url.searchParams.get("project_id")).toBe("prj_1");
+      if (url.pathname.endsWith("/usage")) expect(url.searchParams.get("run_id")).toBe("run_1");
+      else if (!url.pathname.endsWith("/outcome-definitions")) expect(url.searchParams.get("project_id")).toBe("prj_1");
       expect(url.searchParams.get("limit")).toBe("100");
       const cursor = url.searchParams.get("cursor");
       return response({ items: [{ id: cursor ? "second" : "first" }], next_cursor: cursor ? "" : "page-one" });
@@ -116,13 +117,34 @@ describe("typed admin API client", () => {
     const listings = [
       api.workUnits("?project_id=prj_1&limit=200"),
       api.runs("?project_id=prj_1&limit=200"),
+      api.usageAll("?run_id=run_1&limit=200"),
       api.outcomeDefinitions("prj_1"),
       api.outcomes("?project_id=prj_1&limit=200"),
     ];
     for (const listing of listings) {
       await expect(listing).resolves.toEqual({ items: [{ id: "first" }, { id: "second" }], next_cursor: "" });
     }
-    expect(fetchMock).toHaveBeenCalledTimes(8);
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+  });
+
+  it("uses the server maximum and preserves the Run filter while following Usage cursors", async () => {
+    const requested: URL[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://halro.test");
+      requested.push(url);
+      expect(url.pathname).toBe("/admin/api/v1/usage");
+      expect(url.searchParams.get("run_id")).toBe("run_contract");
+      expect(url.searchParams.get("limit")).toBe("100");
+      const cursor = url.searchParams.get("cursor");
+      return response({ items: [{ event_id: cursor ? "evt_2" : "evt_1" }], next_cursor: cursor ? "" : "usage-page-1" });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.usageAll("?run_id=run_contract")).resolves.toEqual({
+      items: [{ event_id: "evt_1" }, { event_id: "evt_2" }],
+      next_cursor: "",
+    });
+    expect(requested.map((url) => url.searchParams.get("cursor"))).toEqual([null, "usage-page-1"]);
   });
 
   it.each([

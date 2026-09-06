@@ -500,6 +500,11 @@ export const api = {
     request<UsageSummary>(`/usage/summary${query}`).then((value) => value.data),
   usage: (query = "") =>
     request<Page<UsageAttempt>>(`/usage${query}`).then((value) => value.data),
+  // Run Governance needs the complete attempt chain for one Run. The Usage
+  // endpoint caps pages at 100, so follow its cursor instead of asking for an
+  // invalid oversized page or presenting the first page as the whole Run.
+  usageAll: (query = "") =>
+    pageOfAll<UsageAttempt>("Usage attempt", `/usage${query}`),
   workUnits: (query = "") =>
     pageOfAll<WorkUnit>("Work Unit", `/run-governance/work-units${query}`),
   workUnit: (id: string) =>
