@@ -68,8 +68,8 @@ jobs:
       - run: go vet ./...
       - name: Verify KMS dependency and spike boundaries
         run: |
-          sh -n tools/release/build_deb.sh
-          sh -n tools/release/test_deb.sh
+          bash -n tools/release/build_deb.sh
+          bash -n tools/release/test_deb.sh
           sh -n packaging/debian/halro.postinst
           sh -n packaging/debian/halro-deadman.postinst
           sh -n packaging/debian/package.postrm
