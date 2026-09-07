@@ -2560,13 +2560,14 @@ textarea { resize: vertical; }
 .governance-outcome-meta { display: flex; align-items: center; gap: var(--space-3); grid-column: 1 / -1; padding-top: var(--space-3); color: var(--muted-2); border-top: 0.0625rem solid var(--line); font-size: var(--font-size-xs); }
 .governance-outcome-meta time { margin-right: auto; }
 .governance-run-list { display: grid; gap: var(--space-2); }
-.governance-run-list > article { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-4); padding: var(--space-4); color: var(--text); border: 0.0625rem solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.governance-run-list > article { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "identity action" "evidence action"; align-items: center; column-gap: var(--space-4); row-gap: var(--space-3); padding: var(--space-4); color: var(--text); border: 0.0625rem solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
 .governance-run-list > article.selected { border-color: var(--accent-border); background: var(--accent-tint); box-shadow: inset 0.1875rem 0 var(--color-action-primary); }
-.governance-run-identity, .governance-run-evidence { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
-.governance-run-evidence > span { display: grid; justify-items: end; gap: var(--space-1); }
+.governance-run-identity { display: flex; grid-area: identity; align-items: center; gap: var(--space-3); min-width: 0; }
+.governance-run-evidence { display: flex; grid-area: evidence; align-items: center; gap: var(--space-6); min-width: 0; padding-top: var(--space-3); border-top: 0.0625rem solid var(--line); }
+.governance-run-evidence > span { display: grid; justify-items: start; gap: var(--space-1); }
 .governance-run-evidence small { color: var(--muted-2); font-size: var(--font-size-xs); }
 .governance-run-evidence strong { font-size: var(--font-size-sm); }
-.governance-run-list .button { min-height: 2.25rem; padding: 0 var(--space-3); }
+.governance-run-list .button { grid-area: action; min-height: 2.25rem; padding: 0 var(--space-3); }
 .run-budget { display: grid; gap: 0.5rem; }
 .run-budget-label { display: flex; justify-content: space-between; gap: var(--space-3); }
 .run-budget-track { overflow: hidden; height: 0.625rem; border: 0.0625rem solid var(--line-strong); border-radius: 62.44rem; background: var(--surface-inset); }
@@ -2574,6 +2575,10 @@ textarea { resize: vertical; }
 .run-budget small { color: var(--muted); }
 .governance-run-detail { min-width: 0; }
 .governance-budget-card { padding: var(--space-4); border: 0.0625rem solid var(--line); border-radius: var(--radius-md); background: var(--surface-raised); }
+.governance-run-facts { grid-template-columns: minmax(8rem, .65fr) minmax(12rem, 1fr) minmax(12rem, 1fr); }
+.governance-run-facts > div { display: grid; align-content: start; justify-content: stretch; gap: var(--space-2); border-top: 0; }
+.governance-run-facts dt { margin: 0; }
+.governance-run-facts dd { text-align: left; }
 .governance-run-facts code { color: var(--muted); }
 .governance-subsection-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-2); }
 .governance-subsection-heading h4 { margin: 0; font-size: var(--font-size-md); }
@@ -2590,14 +2595,15 @@ textarea { resize: vertical; }
 .governance-route-arrow { display: inline-grid; width: 2rem; height: 2rem; place-items: center; color: var(--color-action-primary); border: 0.0625rem solid var(--accent-border); border-radius: 50%; background: var(--accent-tint); }
 .governance-attempt-evidence { display: grid; }
 .governance-attempts dl { display: grid; grid-template-columns: minmax(15rem, 1.25fr) minmax(8rem, .6fr) minmax(12rem, 1fr); gap: 0.0625rem; margin: 0; border-top: 0.0625rem solid var(--line); background: var(--line); }
-.governance-attempts dl > div { min-width: 0; padding: var(--space-4) var(--space-5); background: var(--surface-raised); }
-.governance-attempts dd { display: grid; gap: var(--space-1); }
+.governance-attempts dl > div { display: grid; align-content: start; justify-content: stretch; gap: var(--space-2); min-width: 0; padding: var(--space-4) var(--space-5); border-top: 0; background: var(--surface-raised); }
+.governance-attempts dl > div > dt { margin: 0; }
+.governance-attempts dd { display: grid; gap: var(--space-1); text-align: left; }
 .governance-attempts dd > strong { font-size: var(--font-size-lg); }
 .governance-attempts dd > small { color: var(--muted-2); font-size: var(--font-size-xs); }
 .governance-token-metric dd > strong { font-size: var(--font-size-xl); line-height: 1; }
-.governance-token-breakdown-group { display: grid; gap: var(--space-1); margin-top: var(--space-2); }
+.governance-token-breakdown-group { display: grid; justify-content: stretch; gap: var(--space-1); margin-top: var(--space-2); padding: 0; border: 0; }
 .governance-token-breakdown-group > span { color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
-.governance-token-breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.0625rem; overflow: hidden; border: 0.0625rem solid var(--line); border-radius: var(--radius-sm); background: var(--line); }
+.governance-token-breakdown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); justify-content: stretch; gap: 0.0625rem; padding: 0; overflow: hidden; border: 0.0625rem solid var(--line); border-radius: var(--radius-sm); background: var(--line); }
 .governance-token-breakdown > span { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); background: var(--surface-panel); }
 .governance-token-breakdown small { color: var(--muted-2); font-size: var(--font-size-xs); }
 .governance-token-breakdown b { color: var(--text); font: var(--font-size-sm) var(--mono); }
@@ -2730,7 +2736,7 @@ textarea { resize: vertical; }
   .governance-outcome-definition { justify-items: start; text-align: left; }
   .governance-outcome-meta { grid-column: auto; flex-wrap: wrap; }
   .governance-outcome-meta time { width: 100%; margin-right: 0; }
-  .governance-run-list > article { grid-template-columns: 1fr; align-items: stretch; }
+  .governance-run-list > article { grid-template-columns: 1fr; grid-template-areas: "identity" "evidence" "action"; align-items: stretch; }
   .governance-run-identity, .governance-run-evidence { width: 100%; justify-content: space-between; }
   .governance-run-list .button { width: 100%; }
   .governance-attempts article > header { align-items: flex-start; flex-direction: column; }

@@ -203,6 +203,26 @@ describe("design system themes", () => {
     expect(bare.length, "converted a value? lower the baseline. added one? use a token").toBe(bareSizeValueBaseline);
   });
 
+  it("keeps governance attempt metrics stacked beneath their labels", () => {
+    const rule = ruleBody(read("./styles.css"), ".governance-attempts dl > div");
+    // The global `dl div` rule is a horizontal fact-row layout. Attempt metrics
+    // are cards instead: without this local override, the token total and its
+    // input/output breakdown drift into unrelated positions across the row.
+    expect(rule).toMatch(/display:\s*grid/);
+    expect(rule).toMatch(/align-content:\s*start/);
+    expect(rule).toMatch(/justify-content:\s*stretch/);
+    expect(ruleBody(read("./styles.css"), ".governance-attempts dd")).toMatch(/text-align:\s*left/);
+    expect(ruleBody(read("./styles.css"), ".governance-token-breakdown-group")).toMatch(/padding:\s*0/);
+    expect(ruleBody(read("./styles.css"), ".governance-token-breakdown")).toMatch(/padding:\s*0/);
+  });
+
+  it("keeps Run facts in compact label-over-value cells", () => {
+    const rule = ruleBody(read("./styles.css"), ".governance-run-facts > div");
+    expect(rule).toMatch(/display:\s*grid/);
+    expect(rule).toMatch(/justify-content:\s*stretch/);
+    expect(ruleBody(read("./styles.css"), ".governance-run-facts dd")).toMatch(/text-align:\s*left/);
+  });
+
   // tokens.css states a 12px floor because CJK glyphs lose stroke separation
   // below it at 1x. For a long time that was a comment and nothing else: the
   // business stylesheet carried 106 declarations under the floor, and the pages

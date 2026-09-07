@@ -135,6 +135,7 @@ describe("RunGovernancePage", () => {
     await waitFor(() => expect(usage).toHaveBeenCalled());
     expect(new URLSearchParams((usage.mock.calls[0][0] ?? "").slice(1)).get("run_id")).toBe("run_a");
     expect(await screen.findByText("req_a")).toBeVisible();
+    expect(screen.getByText("预算状态")).toBeVisible();
     expect(screen.getByText("请求模型")).toBeVisible();
     expect(screen.getByText("实际模型")).toBeVisible();
     expect(screen.getByLabelText("Token 构成")).toHaveTextContent("输入 Token10");
