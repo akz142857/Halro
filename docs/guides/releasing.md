@@ -107,6 +107,216 @@ APT switches the GitOps image by digest, executes clean-host Debian/Ubuntu
 amd64/arm64 acceptance, waits for the Homebrew Formula, and only then updates
 the public install page.
 
+## v0.x package release operator checklist
+
+Use this checklist for `v0.8.0` and later v0.x releases. Replace `v0.8.0` in
+the examples, but do not change the repository names or run a release from a
+branch other than `main`.
+
+### 1. Decide the release contents and exact commit
+
+Merge every intended change before starting the release. A local working tree,
+an unmerged pull request, or a commit on another branch is not part of the
+release. Add a complete `## [0.8.0]` section to `CHANGELOG.md` and fill a
+release assessment under `docs/verification/assessments/`. The workflow checks
+that the changelog section exists; the owner remains responsible for the
+assessment being complete and for recording any explicitly waived external
+acceptance, such as a real-Provider smoke.
+
+Fetch the remote state, verify that the version is unused, and record the exact
+commit to be rehearsed:
+
+```bash
+git fetch origin main --tags
+git show origin/main:CHANGELOG.md | grep -F '## [0.8.0]'
+git rev-parse origin/main
+git rev-parse -q --verify refs/tags/v0.8.0  # must print nothing and fail
+gh release view v0.8.0 --repo akz142857/Halro  # must report not found
+```
+
+Do not continue until the `main` CI for that commit is green. Avoid merging
+anything else to `main` between the dry run and the formal release.
+
+### 2. Verify the one-time package automation setup
+
+The same least-privilege GitHub App must be installed on all four repositories:
+
+- `akz142857/Halro`;
+- `halro-ai/homebrew-tap`;
+- `halro-ai/apt-repository`;
+- `akz142857/Halro-website`.
+
+It needs repository Contents, Issues, and Pull requests read/write. Each
+repository must expose `HALRO_RELEASE_APP_CLIENT_ID` as an Actions variable and
+`HALRO_RELEASE_APP_PRIVATE_KEY` as an Actions secret. Listing secrets shows only
+their names, never their values:
+
+```bash
+for repository in \
+  akz142857/Halro \
+  halro-ai/homebrew-tap \
+  halro-ai/apt-repository \
+  akz142857/Halro-website
+do
+  printf '\n%s\n' "${repository}"
+  gh variable list --repo "${repository}"
+  gh secret list --repo "${repository}"
+done
+```
+
+In `halro-ai/apt-repository`, verify that the protected `apt-production`
+Environment exists. It must contain the dedicated online archive-signing key as
+the Environment secret `HALRO_APT_ARCHIVE_SIGNING_KEY` and its uppercase full
+fingerprint as the Environment variable
+`HALRO_APT_ARCHIVE_SIGNING_FINGERPRINT`. Never print or copy the private key
+through a workflow log.
+
+```bash
+gh api repos/halro-ai/apt-repository/environments \
+  --jq '.environments[].name'
+gh secret list --repo halro-ai/apt-repository --env apt-production
+gh variable list --repo halro-ai/apt-repository --env apt-production
+```
+
+Also verify that the production cluster's `ghcr-credentials` pull secret can
+read the private `ghcr.io/halro-ai/apt-repository` snapshot image. A dry run does
+not execute `publish`, `container-push`, or the downstream repository jobs, so a
+green dry run does **not** prove that any of these credentials are configured.
+
+### 3. Run the non-publishing rehearsal
+
+Start the only supported release workflow on `main` with `dry_run=true`:
+
+```bash
+gh workflow run release.yml \
+  --repo akz142857/Halro \
+  --ref main \
+  -f version=v0.8.0 \
+  -f dry_run=true
+```
+
+Find and follow the new run:
+
+```bash
+gh run list \
+  --repo akz142857/Halro \
+  --workflow release.yml \
+  --event workflow_dispatch \
+  --limit 5
+gh run watch RUN_ID --repo akz142857/Halro
+gh run view RUN_ID \
+  --repo akz142857/Halro \
+  --json headSha,conclusion,url
+```
+
+The rehearsal must finish green. Confirm that its `headSha` equals the recorded
+`origin/main` commit and that no tag or GitHub Release was created. It builds
+and verifies all release artifacts, Debian packages, SBOMs, attestations, and
+Sigstore bundles, but publishes none of them.
+
+### 4. Trigger the formal release once
+
+After the dry run is green, recheck that `main` still resolves to the rehearsed
+commit. Then make the single formal trigger:
+
+```bash
+gh workflow run release.yml \
+  --repo akz142857/Halro \
+  --ref main \
+  -f version=v0.8.0 \
+  -f dry_run=false
+```
+
+This run repeats the release gates, creates the annotated `v0.8.0` tag only
+after they pass, publishes the immutable GitHub Release and GHCR images, and
+dispatches the exact version and full commit to Homebrew and APT. A protected
+`apt-production` Environment may pause for its configured approval; that is an
+approval inside the same release chain, not a second release trigger.
+
+### 5. Monitor the four-repository chain
+
+Follow the control-plane workflows in order:
+
+```bash
+gh run list --repo akz142857/Halro \
+  --workflow release.yml --limit 5
+gh run list --repo halro-ai/homebrew-tap \
+  --workflow update.yml --limit 5
+gh run list --repo halro-ai/apt-repository \
+  --workflow publish.yml --limit 5
+gh run list --repo akz142857/Halro-website \
+  --workflow package-release.yml --limit 5
+```
+
+The expected sequence is:
+
+1. Halro publishes the immutable Release and multi-architecture images.
+2. Homebrew verifies the released archives, opens `package/v0.8.0`, runs macOS
+   and Linuxbrew Formula CI, and auto-merges the protected pull request.
+3. APT verifies the released Debian assets, signs and publishes an immutable
+   repository snapshot, and asks Halro-website to deploy its exact image digest.
+4. Halro-website auto-merges the protected deployment pull request.
+5. APT waits for that snapshot, runs clean-host Debian and Ubuntu acceptance on
+   amd64 and arm64, and waits for the matching Homebrew Formula.
+6. Only after every acceptance cell passes does Halro-website advertise the new
+   version and package channels.
+
+An `auto-merge-package-release` run with a grey slashed-circle icon and
+`conclusion=skipped` is normal for `main` pushes and unrelated pull requests.
+Only automation-owned release branches are eligible to enter the merge job.
+
+### 6. Confirm publication and acceptance
+
+Do not call the release complete merely because the GitHub tag exists. Confirm
+each independent channel:
+
+```bash
+gh release view v0.8.0 --repo akz142857/Halro
+curl --fail --silent --show-error \
+  https://packages.halro.ai/apt/repository-version.json
+curl --fail --silent --show-error \
+  https://raw.githubusercontent.com/halro-ai/homebrew-tap/main/Formula/halro.rb \
+  | grep -F '/releases/download/v0.8.0/'
+```
+
+Verify that the APT clean-host matrix and both Homebrew Formula jobs passed,
+that `brew install halro-ai/tap/halro` and the documented APT installation
+produce `v0.8.0`, and that neither installer initializes configuration or starts
+a service. Finally confirm that `halro.ai` advertises only channels whose install
+acceptance passed.
+
+### 7. Recover without rewriting a published version
+
+- If the run fails before the tag exists, fix the candidate and repeat the
+  exact-commit dry run before starting a new formal run.
+- If the tag and GitHub Release exist, do not start another formal `v0.8.0`
+  release, delete the tag, or replace an asset. After repairing credentials or
+  an external dependency, rerun only failed jobs from the original run:
+
+  ```bash
+  gh run rerun RUN_ID --failed --repo akz142857/Halro
+  ```
+
+- A failed downstream channel can also be retriggered with the exact published
+  version and full release commit:
+
+  ```bash
+  gh workflow run update.yml \
+    --repo halro-ai/homebrew-tap \
+    --ref main \
+    -f version=v0.8.0 \
+    -f commit=FULL_RELEASE_COMMIT
+  gh workflow run publish.yml \
+    --repo halro-ai/apt-repository \
+    --ref main \
+    -f version=v0.8.0 \
+    -f commit=FULL_RELEASE_COMMIT
+  ```
+
+- Keep a failed channel unavailable until its own clean-host acceptance passes.
+  A downstream failure never authorizes rewriting the Git tag, GitHub Release,
+  checksums, or package assets.
+
 **[1.0.0 target — not in `release.yml` today.]** Configure the GitHub `v1-release` environment with required reviewers. Its
 approval is the explicit boundary where reviewers verify the exact-commit GA
 Provider matrix, 24-hour soak artifacts, RC checklist, and release description.
