@@ -848,13 +848,14 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       providerCodeLabel: "服务商错误码",
       providerRequestLabel: "服务商请求标识",
       viewAttemptChain: "查看该请求的完整尝试链",
-      payloadHeading: "原始请求与响应",
+      payloadHeading: "请求诊断载荷",
       revealPayload: "查看",
       // 服务端每次读取都写审计；这句话是让操作者知道自己正在看调用方写的内容，
       // 而不是 Halro 自己产生的元数据。
-      payloadWarning: "调用方发往上游的内容与上游返回的内容。每次查看都会记入审计日志。",
-      payloadRequest: "发往上游的请求",
-      payloadResponse: "上游返回",
+      payloadWarning: "Gateway 收到的请求、Halro 规范化后的请求，以及上游返回或传输错误。每次查看都会记入审计日志。",
+      payloadGatewayRequest: "Gateway 收到的请求",
+      payloadRequest: "Halro 规范化后的请求",
+      payloadResponse: "上游返回或传输错误",
       payloadTruncated: "该侧超过保存上限已被截断，不是上游返回不完整。",
       noPayload: "没有保存该请求的原始内容。",
     },

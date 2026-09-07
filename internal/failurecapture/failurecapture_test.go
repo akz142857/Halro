@@ -50,8 +50,9 @@ func newStore(t *testing.T, mutate func(*Options)) (*Store, string) {
 func record(requestID string) Record {
 	return Record{
 		RequestID: requestID, ProjectID: "project_1", Outcome: "provider_error",
-		Request:  json.RawMessage(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`),
-		Response: json.RawMessage(`{"provider_status":400,"body":"invalid image url"}`),
+		GatewayRequest: json.RawMessage(`{"model":"chat","messages":[{"role":"user","content":"hello"}],"max_tokens":8}`),
+		Request:        json.RawMessage(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`),
+		Response:       json.RawMessage(`{"provider_status":400,"body":"invalid image url"}`),
 	}
 }
 
@@ -65,7 +66,8 @@ func TestACapturedFailureRoundTrips(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
-	if string(got.Request) != `{"model":"chat","messages":[{"role":"user","content":"hello"}]}` ||
+	if string(got.GatewayRequest) != `{"model":"chat","messages":[{"role":"user","content":"hello"}],"max_tokens":8}` ||
+		string(got.Request) != `{"model":"chat","messages":[{"role":"user","content":"hello"}]}` ||
 		got.Outcome != "provider_error" || got.CapturedAt.IsZero() {
 		t.Fatalf("record = %#v", got)
 	}
@@ -116,6 +118,7 @@ func TestACaptureRefusesARequestIDThatIsNotAFileName(t *testing.T) {
 func TestAnOversizedCaptureIsTruncatedAndFlagged(t *testing.T) {
 	store, _ := newStore(t, func(options *Options) { options.MaxBytes = 64 })
 	large := record("req_1")
+	large.GatewayRequest = json.RawMessage(`{"prompt":"` + strings.Repeat("g", 4096) + `"}`)
 	large.Request = json.RawMessage(`{"prompt":"` + strings.Repeat("x", 4096) + `"}`)
 	if _, err := store.Put(large); err != nil {
 		t.Fatal(err)
@@ -124,13 +127,19 @@ func TestAnOversizedCaptureIsTruncatedAndFlagged(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("found=%v err=%v", found, err)
 	}
-	if !got.RequestTruncated {
+	if !got.GatewayRequestTruncated || !got.RequestTruncated {
 		t.Fatal("an oversized request was stored without saying it was cut")
+	}
+	if len(got.GatewayRequest) > 128 {
+		t.Fatalf("the Gateway request ceiling did not apply: %d bytes", len(got.GatewayRequest))
 	}
 	if len(got.Request) > 128 {
 		t.Fatalf("the ceiling did not apply: %d bytes", len(got.Request))
 	}
 	var decoded any
+	if err := json.Unmarshal(got.GatewayRequest, &decoded); err != nil {
+		t.Fatalf("a truncated Gateway request is no longer decodable: %v", err)
+	}
 	if err := json.Unmarshal(got.Request, &decoded); err != nil {
 		t.Fatalf("a truncated capture is no longer decodable: %v", err)
 	}

@@ -25,6 +25,7 @@ type fakeService struct {
 	err       error
 	calls     int
 	requestID string
+	inbound   any
 }
 
 func (s *fakeService) Messages(_ context.Context, key string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {
@@ -107,6 +108,7 @@ func (s *fakeService) Chat(
 	s.key = key
 	s.request = request
 	s.requestID, _ = requestmeta.RequestID(ctx)
+	s.inbound, _ = requestmeta.InboundRequest(ctx)
 	return s.response, s.err
 }
 
@@ -157,7 +159,7 @@ func TestChatCompletionsContract(t *testing.T) {
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
-		strings.NewReader(`{"model":"chat","messages":[{"role":"user","content":"hello"}]}`),
+		strings.NewReader(`{"model":"chat","messages":[{"role":"user","content":"hello"}],"max_tokens":8}`),
 	)
 	request.Header.Set("Authorization", "Bearer gw_test")
 	response := httptest.NewRecorder()
@@ -167,6 +169,10 @@ func TestChatCompletionsContract(t *testing.T) {
 	}
 	if service.key != "gw_test" || service.request.Model != "chat" {
 		t.Fatalf("request was not forwarded: %#v", service)
+	}
+	inbound, ok := service.inbound.(openaiapi.ChatCompletionRequest)
+	if !ok || inbound.MaxTokens == nil || *inbound.MaxTokens != 8 || inbound.MaxCompletionTokens != nil {
+		t.Fatalf("Gateway request shape was not carried with the call: %#v", service.inbound)
 	}
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("sensitive response was cacheable")

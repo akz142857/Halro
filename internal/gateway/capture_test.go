@@ -10,6 +10,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -54,7 +55,11 @@ func TestAFailedRequestCapturesWhatItSentAndWhatCameBack(t *testing.T) {
 		Message:      "provider error (400): Error while downloading https://example.test/photo.png",
 	}
 
-	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+	inbound := chatRequest()
+	maxTokens := int64(8)
+	inbound.MaxTokens = &maxTokens
+	ctx := requestmeta.WithInboundRequest(context.Background(), inbound)
+	if _, err := f.service.Chat(ctx, f.plaintext, inbound); err == nil {
 		t.Fatal("the provider failure did not reach the caller")
 	}
 	if len(capture.records) != 1 {
@@ -63,6 +68,13 @@ func TestAFailedRequestCapturesWhatItSentAndWhatCameBack(t *testing.T) {
 	record := capture.records[0]
 	if record.Outcome != "provider_error" || record.ProjectID != "project_1" || record.RequestID == "" {
 		t.Fatalf("record = %#v", record)
+	}
+	// The public Gateway shape stays distinct from the normalized operation.
+	// In particular, this tells the operator that the caller chose max_tokens,
+	// which is the field the upstream refusal names.
+	if !strings.Contains(string(record.GatewayRequest), `"max_tokens":8`) ||
+		strings.Contains(string(record.GatewayRequest), "completion_token_limit") {
+		t.Fatalf("the captured Gateway request lost its public field names: %s", record.GatewayRequest)
 	}
 	// The request as it went upstream, so the failure can be replayed.
 	if !strings.Contains(string(record.Request), "hello") {
