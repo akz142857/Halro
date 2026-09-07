@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-09-06
+Date: 2026-09-07
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -140,15 +140,16 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `e28dc15e3e77c15c4167156510a6ccb7fe2f5671`
 - `go.sum`: `4f2cd7b82cbd5a7a5443bc67db2ed578385bacc5`
-- `web/package.json`: `8372ef7b796ecebaaaf4693334df237f8bb237d9`
-- `web/package-lock.json`: `9a2c7321bdd0379c627a70fcd63e606472bf5207`
+- `web/package.json`: `55c2f09af26844654cd50fc781da04f301a96b79`
+- `web/package-lock.json`: `fbc4603da7a8ff221b1855faa5c1126f69bbd404`
 
 The Go hashes last moved for the 2026-09-05 five-module AWS refresh recorded
 above. The two web hashes last moved for the 2026-09-05 seven-direct-package
 Admin UI refresh recorded above, before that for the nine-package Admin UI bump,
 and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
-for `v0.5.0`, `v0.6.0`, and now `v0.7.0`, each of which bumped the `version`
+for `v0.5.0`, `v0.6.0`, `v0.7.0`, and now `v0.7.1`, each of which bumped the
+`version`
 field in both files and changed nothing else.
 Nothing in any of it added, removed, or relicensed a dependency, so the
 inventory above still describes the reviewed tree. The gate hashes whole files

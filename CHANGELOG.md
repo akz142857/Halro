@@ -4,13 +4,41 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
-## [Unreleased]
+## [0.7.1] - 2026-09-07
 
 ### Added
 
+- Release packaging now includes Debian packages for `halro` and
+  `halro-deadman`, together with source-controlled Homebrew and signed APT
+  publishing automation. The GitHub Release remains the immutable artifact
+  source for both package channels.
 - `admin.mfa_policy` accepts `administrators_required`, which requires MFA for
   `administrator` accounts while leaving enrollment optional for `read_only`
   accounts. Existing `optional` and `required` behavior is unchanged.
+
+### Changed
+
+- The v0.x release workflow now has one supported entry: a manual dispatch from
+  `main`. It creates the version tag only after every release gate passes,
+  publishes the exact commit's Release and container images, then dispatches
+  that version and full commit to the Homebrew and APT repositories. The public
+  package page is updated only after downstream clean-host acceptance succeeds.
+
+### Fixed
+
+- Run Governance evidence details keep their hierarchy and explanatory copy
+  aligned in the Work Unit explorer instead of rendering the detail row with
+  the surrounding list's spacing and border treatment.
+
+### Operator impact
+
+- No data, Ledger, Usage, Governance Journal, or backup format changes are made
+  by this patch release; an existing v0.7.0 data directory upgrades in place
+  without migration or reinitialization.
+- Existing `admin.mfa_policy: optional` and `required` configurations retain
+  their behavior. Before rolling back to v0.7.0, replace
+  `administrators_required` with one of those older accepted values or the old
+  binary will refuse the configuration at startup.
 
 ## [0.7.0] - 2026-09-06
 
@@ -1509,6 +1537,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.7.1]: https://github.com/akz142857/Halro/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akz142857/Halro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akz142857/Halro/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/akz142857/Halro/compare/v0.4.0...v0.5.0
