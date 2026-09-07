@@ -160,7 +160,7 @@ func (r *Runtime) getAdminSession(writer http.ResponseWriter, request *http.Requ
 		"csrf_token":          r.adminSessionsCSRF(admin.token),
 		"absolute_expires_at": admin.session.AbsoluteExpiresAt,
 		"idle_expires_at":     admin.session.IdleExpiresAt,
-		"mfa_setup_required":  r.config.Admin.MFAPolicy == "required" && len(active) == 0,
+		"mfa_setup_required":  r.config.Admin.MFARequiredForRole(user.Role) && len(active) == 0,
 	})
 }
 
@@ -257,8 +257,8 @@ func (r *Runtime) changeAdminPassword(writer http.ResponseWriter, request *http.
 
 func (r *Runtime) requireAdmin(next http.Handler) http.Handler {
 	return r.requireAdminBase(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if r.config.Admin.MFAPolicy == "required" {
-			admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+		if r.config.Admin.MFARequiredForRole(admin.role) {
 			active, err := r.activeAdminMFA(request.Context(), admin.session.Username)
 			if err != nil || len(active) == 0 {
 				writeJSON(writer, http.StatusForbidden, map[string]string{"error": "MFA setup required", "code": "mfa_setup_required"})

@@ -130,3 +130,105 @@ func TestRequiredMFAPolicyRestrictsUnenrolledSessionToSetup(t *testing.T) {
 		t.Fatalf("unenrolled logout status=%d body=%s", logoutResponse.Code, logoutResponse.Body.String())
 	}
 }
+
+func TestAdministratorsRequiredMFAPolicyExemptsReadOnlyAccounts(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Admin.MFAPolicy = "administrators_required"
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	adminPassword := "correct horse battery staple"
+	readerPassword := "another correct horse battery staple"
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte(adminPassword)); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	reader, err := adminauth.NewUser("reader", []byte(readerPassword), domain.AdminRoleReadOnly, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(reader.PasswordHash)
+	defer clear(reader.PasswordSalt)
+	if _, err = runtime.store.PutAdminUser(context.Background(), reader, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	var readerSession loggedInAdmin
+	for _, test := range []struct {
+		username string
+		password string
+		required bool
+		status   int
+	}{
+		{"admin", adminPassword, true, http.StatusForbidden},
+		{"reader", readerPassword, false, http.StatusOK},
+	} {
+		t.Run(test.username, func(t *testing.T) {
+			session := loginTestAdmin(t, runtime, test.username, test.password)
+			if test.username == "reader" {
+				readerSession = session
+			}
+			current := authenticatedAdminGet(t, runtime, session.cookie, "/admin/api/v1/session")
+			if current.Code != http.StatusOK {
+				t.Fatalf("session status=%d body=%s", current.Code, current.Body.String())
+			}
+			var sessionBody struct {
+				MFASetupRequired bool `json:"mfa_setup_required"`
+			}
+			if err := json.Unmarshal(current.Body.Bytes(), &sessionBody); err != nil {
+				t.Fatal(err)
+			}
+			if sessionBody.MFASetupRequired != test.required {
+				t.Errorf("mfa_setup_required=%t, want %t", sessionBody.MFASetupRequired, test.required)
+			}
+
+			mfa := authenticatedAdminGet(t, runtime, session.cookie, "/admin/api/v1/security/mfa")
+			if mfa.Code != http.StatusOK {
+				t.Fatalf("MFA status=%d body=%s", mfa.Code, mfa.Body.String())
+			}
+			var mfaBody struct {
+				Policy   string `json:"policy"`
+				Required bool   `json:"required"`
+			}
+			if err := json.Unmarshal(mfa.Body.Bytes(), &mfaBody); err != nil {
+				t.Fatal(err)
+			}
+			if mfaBody.Policy != "administrators_required" || mfaBody.Required != test.required {
+				t.Errorf("MFA policy=%q required=%t, want administrators_required/%t", mfaBody.Policy, mfaBody.Required, test.required)
+			}
+
+			dashboard := authenticatedAdminGet(t, runtime, session.cookie, "/admin/api/v1/dashboard")
+			if dashboard.Code != test.status {
+				t.Errorf("dashboard status=%d, want %d; body=%s", dashboard.Code, test.status, dashboard.Body.String())
+			}
+		})
+	}
+
+	// A read-only account may still enroll voluntarily. The role-scoped policy
+	// must let that account remove its own factor again; otherwise the login gate
+	// would be optional while enrollment remained irreversible.
+	secret := []byte("12345678901234567890")
+	ciphertext, err := runtime.vault.EncryptAdminMFA("mfa_reader", "reader", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err = runtime.store.PutAdminMFAAuthenticator(context.Background(), domain.AdminMFAAuthenticator{
+		ID: "mfa_reader", Username: "reader", Name: "reader phone", Type: domain.AdminMFATypeTOTP,
+		SecretCiphertext: ciphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now,
+	}, 0); err != nil {
+		t.Fatal(err)
+	}
+	disable := performAdminMutation(t, runtime, readerSession.cookie, readerSession.csrf, http.MethodDelete,
+		"/admin/api/v1/security/mfa", "", map[string]string{
+			"current_password": readerPassword,
+			"code":             adminauth.TOTPCode(secret, time.Now().Unix()/adminauth.TOTPPeriod),
+		})
+	if disable.Code != http.StatusOK {
+		t.Fatalf("read_only MFA disable status=%d body=%s", disable.Code, disable.Body.String())
+	}
+}

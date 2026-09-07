@@ -4,6 +4,14 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- `admin.mfa_policy` accepts `administrators_required`, which requires MFA for
+  `administrator` accounts while leaving enrollment optional for `read_only`
+  accounts. Existing `optional` and `required` behavior is unchanged.
+
 ## [0.7.0] - 2026-09-06
 
 ### Added

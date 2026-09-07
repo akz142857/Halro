@@ -85,7 +85,11 @@ func (r *Runtime) getAdminMFA(w http.ResponseWriter, req *http.Request) {
 		adminStoreError(w)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"enabled": len(items) > 0, "policy": r.config.Admin.MFAPolicy, "authenticators": items, "recovery_codes_remaining": remaining})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": len(items) > 0, "policy": r.config.Admin.MFAPolicy,
+		"required":       r.config.Admin.MFARequiredForRole(admin.role),
+		"authenticators": items, "recovery_codes_remaining": remaining,
+	})
 }
 
 func (r *Runtime) createAdminMFAAuthenticator(w http.ResponseWriter, req *http.Request) {
@@ -468,7 +472,8 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 			others = append(others, a)
 		}
 	}
-	if len(others) == 0 && r.config.Admin.MFAPolicy == "required" {
+	mfaRequired := err == nil && r.config.Admin.MFARequiredForRole(user.Role)
+	if len(others) == 0 && mfaRequired {
 		ok, answered := r.guardAdminCredentialCheck(w, admin.session.Username, "mfa_authenticator_delete", func() bool {
 			return err == nil && adminauth.VerifyPassword(user, p)
 		})
@@ -508,7 +513,7 @@ func (r *Runtime) deleteAdminMFAAuthenticator(w http.ResponseWriter, req *http.R
 		adminStoreError(w)
 		return
 	}
-	rotatedUser, err := r.store.RevokeAdminMFAAuthenticatorAndRotate(req.Context(), user.Username, target, r.config.Admin.MFAPolicy == "required", len(others) == 0, intent)
+	rotatedUser, err := r.store.RevokeAdminMFAAuthenticatorAndRotate(req.Context(), user.Username, target, mfaRequired, len(others) == 0, intent)
 	if err != nil {
 		adminStoreError(w)
 		return
@@ -581,11 +586,11 @@ func (r *Runtime) regenerateAdminMFARecoveryCodes(w http.ResponseWriter, req *ht
 }
 
 func (r *Runtime) disableAdminMFA(w http.ResponseWriter, req *http.Request) {
-	if r.config.Admin.MFAPolicy == "required" {
+	admin := req.Context().Value(adminContextKey{}).(adminRequestContext)
+	if r.config.Admin.MFARequiredForRole(admin.role) {
 		writeJSON(w, 409, map[string]string{"error": "MFA is required"})
 		return
 	}
-	admin := req.Context().Value(adminContextKey{}).(adminRequestContext)
 	var in struct {
 		CurrentPassword string `json:"current_password"`
 		Code            string `json:"code"`

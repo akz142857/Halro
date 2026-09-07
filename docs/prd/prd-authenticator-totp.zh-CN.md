@@ -70,11 +70,12 @@ SHA-1 在此处是 TOTP 兼容参数，不用于密码哈希或数据完整性�
 
 ```yaml
 admin:
-  mfa_policy: "optional" # optional|required
+  mfa_policy: "optional" # optional|administrators_required|required
 ```
 
-- `optional`：管理员可以自行启用或关闭 MFA；默认值，保持升级兼容。
-- `required`：未完成 MFA 设置的管理员通过密码后只能进入受限的 MFA 设置流程，不能访问其他 Admin API。
+- `optional`：所有控制台账号都可以自行启用或关闭 MFA；默认值，保持升级兼容。
+- `administrators_required`：`administrator` 角色必须启用 MFA，`read_only` 角色可以自行选择。
+- `required`：所有控制台账号都必须启用 MFA。策略覆盖但未完成设置的账号通过密码后只能进入受限的 MFA 设置流程，不能访问其他 Admin API。
 
 仅 loopback/SSH 隧道部署可以保持 `optional`。Admin 通过反向代理、VPN 或公网域名开放时，运维文档应建议使用 `required`。
 
@@ -156,7 +157,8 @@ pre-auth challenge：
 
 ### 5.7 关闭二次验证
 
-仅当实例 `mfa_policy=optional` 时允许：
+仅当当前账号不受 MFA 强制策略约束时允许：`optional` 下所有账号均可关闭，
+`administrators_required` 下只有 `read_only` 账号可关闭。
 
 1. 输入当前密码；
 2. 使用当前任意有效 TOTP 或一枚恢复码完成验证；
@@ -165,7 +167,7 @@ pre-auth challenge：
 5. 使账号所有 Session 与未完成 challenge 失效；
 6. 写入 Audit。
 
-`mfa_policy=required` 时，UI 和 API 均拒绝关闭最后一个验证器。
+当前账号受 `administrators_required` 或 `required` 约束时，UI 和 API 均拒绝关闭最后一个验证器。
 
 ### 5.8 重新生成恢复码
 
@@ -551,4 +553,3 @@ Audit 可包含：Admin 用户名、验证器稳定 ID、动作结果、受控�
 2. 恢复码的可读格式与哈希算法，需要在“高随机熵、易抄写、常量时间验证、低运维成本”之间确定具体实现。
 3. bbolt 中 revoked 验证器非敏感元数据的保留周期；Secret 密文必须立即清除。
 4. `required` 策略从 optional 切换时，是否在配置检查之外增加启动期显式告警 Metric。
-

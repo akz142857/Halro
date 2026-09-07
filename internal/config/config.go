@@ -349,6 +349,20 @@ type Admin struct {
 	ModelCapabilityDetection ModelCapabilityDetection `yaml:"model_capability_detection"`
 }
 
+const (
+	AdminMFAPolicyOptional               = "optional"
+	AdminMFAPolicyRequired               = "required"
+	AdminMFAPolicyAdministratorsRequired = "administrators_required"
+)
+
+// MFARequiredForRole resolves the instance policy for one Admin-console role.
+// An invalid role is never a valid stored AdminUser, but treating it as subject
+// to the role-scoped policy keeps a corrupted identity from weakening MFA.
+func (a Admin) MFARequiredForRole(role string) bool {
+	return a.MFAPolicy == AdminMFAPolicyRequired ||
+		(a.MFAPolicy == AdminMFAPolicyAdministratorsRequired && role != domain.AdminRoleReadOnly)
+}
+
 type ModelCapabilityDetection struct {
 	FreshTTL            Duration `yaml:"fresh_ttl"`
 	Retention           Duration `yaml:"retention"`
@@ -1254,8 +1268,10 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Admin.DeveloperWorkbench != "enabled" && c.Admin.DeveloperWorkbench != "disabled" {
 		return errors.New("admin.developer_workbench must be enabled or disabled")
 	}
-	if c.Admin.MFAPolicy != "optional" && c.Admin.MFAPolicy != "required" {
-		return errors.New("admin.mfa_policy must be optional or required")
+	if c.Admin.MFAPolicy != AdminMFAPolicyOptional &&
+		c.Admin.MFAPolicy != AdminMFAPolicyRequired &&
+		c.Admin.MFAPolicy != AdminMFAPolicyAdministratorsRequired {
+		return errors.New("admin.mfa_policy must be optional, required, or administrators_required")
 	}
 	detection := c.Admin.ModelCapabilityDetection
 	if detection.FreshTTL <= 0 || detection.Retention < detection.FreshTTL || detection.RefreshCooldown <= 0 ||

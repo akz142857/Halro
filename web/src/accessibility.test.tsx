@@ -144,7 +144,7 @@ describe("admin accessibility baseline", () => {
     vi.spyOn(api, "settings").mockResolvedValue({ data: { health_probe_interval_seconds: 30, revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "uiSettings").mockResolvedValue({ data: { default_locale: "zh-CN", revision: 1 }, etag: '"1"' });
     vi.spyOn(api, "preferences").mockResolvedValue({ data: { locale: "zh-CN", appearance: "dark", revision: 1 }, etag: '"1"' });
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", required: false, authenticators: [] });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><Layout username="admin"><SettingsPage /></Layout></QueryClientProvider>);
     await screen.findByRole("heading", { name: "通用" });

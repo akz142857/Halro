@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 const validConfig = `
@@ -91,6 +93,39 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	_, err := Decode(strings.NewReader(validConfig + "\nunknown: true\n"))
 	if err == nil {
 		t.Fatal("expected unknown field error")
+	}
+}
+
+func TestAdminMFAPolicyValidationAndRoleResolution(t *testing.T) {
+	tests := []struct {
+		policy        string
+		administrator bool
+		readOnly      bool
+	}{
+		{AdminMFAPolicyOptional, false, false},
+		{AdminMFAPolicyRequired, true, true},
+		{AdminMFAPolicyAdministratorsRequired, true, false},
+	}
+	for _, test := range tests {
+		t.Run(test.policy, func(t *testing.T) {
+			candidate := Default()
+			candidate.Admin.MFAPolicy = test.policy
+			if err := candidate.Validate(LoadOptions{}); err != nil {
+				t.Fatalf("valid MFA policy was rejected: %v", err)
+			}
+			if got := candidate.Admin.MFARequiredForRole(domain.AdminRoleAdministrator); got != test.administrator {
+				t.Errorf("administrator required=%t, want %t", got, test.administrator)
+			}
+			if got := candidate.Admin.MFARequiredForRole(domain.AdminRoleReadOnly); got != test.readOnly {
+				t.Errorf("read_only required=%t, want %t", got, test.readOnly)
+			}
+		})
+	}
+
+	invalid := Default()
+	invalid.Admin.MFAPolicy = "administrators"
+	if err := invalid.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "administrators_required") {
+		t.Fatalf("invalid MFA policy error=%v", err)
 	}
 }
 

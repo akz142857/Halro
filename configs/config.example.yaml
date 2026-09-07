@@ -99,8 +99,8 @@ admin:
   login_rpm: 5
   # @title.zh-CN MFA 策略
   # @title.en-US MFA policy
-  # @description.zh-CN 管理员多因素认证的实例策略。
-  # @description.en-US Instance policy for administrator multi-factor authentication.
+  # @description.zh-CN 多因素认证策略：optional 不强制，administrators_required 仅强制 administrator 角色，required 强制所有控制台账户。
+  # @description.en-US MFA policy: optional does not require enrollment, administrators_required requires the administrator role, and required covers every console account.
   mfa_policy: "optional"
   # "disabled" keeps the Admin listener free of data-plane traffic. Leave it
   # enabled for a loopback-only Admin listener; set "disabled" once that

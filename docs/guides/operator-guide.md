@@ -877,11 +877,15 @@ listener or set `developer_workbench: "disabled"`.
 
 ### Authenticator two-factor authentication
 
-Set `admin.mfa_policy` to `optional` (the upgrade-compatible default) or
-`required`. Remote Admin deployments should use `required`. Halro implements
-standard 6-digit, 30-second TOTP and works with Microsoft Authenticator, Google
-Authenticator, 1Password, and other compatible applications. Production hosts
-must keep UTC time synchronized.
+Set `admin.mfa_policy` to `optional` (the upgrade-compatible default),
+`administrators_required`, or `required`. `administrators_required` forces the
+`administrator` role to enroll while leaving `read_only` enrollment optional;
+`required` forces every Admin-console account to enroll. Remote Admin deployments
+should use at least `administrators_required`, and should use `required` when the
+configuration and usage data visible to read-only accounts also requires a second
+factor. Halro implements standard 6-digit, 30-second TOTP and works with Microsoft
+Authenticator, Google Authenticator, 1Password, and other compatible applications.
+Production hosts must keep UTC time synchronized.
 
 If every authenticator and recovery code is lost, stop Halro and run:
 
@@ -891,7 +895,8 @@ If every authenticator and recovery code is lost, stop Halro and run:
 
 This removes all factors and recovery codes, invalidates sessions and pending
 challenges, and appends `admin.mfa.reset_offline` to the trusted Audit chain.
-With `mfa_policy: required`, the next password login is restricted to setup.
+When the account's role is covered by the configured policy, the next password
+login is restricted to setup.
 
 ### Re-authentication for destructive actions
 

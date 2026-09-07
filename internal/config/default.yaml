@@ -65,6 +65,7 @@ admin:
   external_origin: ""
   # "required" forces every administrator through an authenticator. Remote Admin
   # deployments should use it.
+  # optional | administrators_required | required
   mfa_policy: optional
   # While enabled, the Admin listener also serves real Gateway calls so an
   # administrator can send a billed request from the console. Harmless on a

@@ -182,7 +182,7 @@ describe("MFASettings", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("shows authenticator metadata and renames with its revision", async () => {
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", recovery_codes_remaining: 7, authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", required: false, recovery_codes_remaining: 7, authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
     const rename = vi.spyOn(api, "renameMFAAuthenticator").mockResolvedValue({ status: "renamed" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
@@ -194,7 +194,7 @@ describe("MFASettings", () => {
   });
 
   it("requires explicit confirmation before disabling optional MFA", async () => {
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", authenticators: [] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "optional", required: false, authenticators: [] });
     const disable = vi.spyOn(api, "disableMFA").mockResolvedValue({ status: "disabled" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
@@ -206,6 +206,20 @@ describe("MFASettings", () => {
     expect(disable).not.toHaveBeenCalled();
   });
 
+  it("allows a read-only account to disable MFA under the administrator-only policy", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "administrators_required", required: false, authenticators: [] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    expect(await screen.findByRole("button", { name: "关闭二次验证" })).toBeEnabled();
+  });
+
+  it("describes the administrator-only policy when MFA is not enabled", async () => {
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "administrators_required", required: false, authenticators: [] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
+    expect(await screen.findByText("仅管理员必需")).toBeVisible();
+  });
+
   it("does not claim MFA is optional while status is still loading", () => {
     vi.spyOn(api, "mfaStatus").mockReturnValue(new Promise(() => {}));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -215,7 +229,7 @@ describe("MFASettings", () => {
   });
 
   it("keeps recovery regeneration open after an error", async () => {
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", recovery_codes_remaining: 4, authenticators: [] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", required: true, recovery_codes_remaining: 4, authenticators: [] });
     vi.spyOn(api, "regenerateMFARecoveryCodes").mockRejectedValue(new Error("offline"));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
@@ -230,7 +244,7 @@ describe("MFASettings", () => {
   });
 
   it("restores focus after cancelling an authenticator action", async () => {
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: true, policy: "required", required: true, authenticators: [{ id: "mfa-1", name: "Phone", type: "totp", created_at: "2026-01-01T00:00:00Z", revision: 3 }] });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><MFASettings /></QueryClientProvider>);
     const trigger = await screen.findByRole("button", { name: "重命名" });
@@ -247,7 +261,7 @@ describe("SettingsPage account security pane", () => {
   });
 
   it("binds self-service security actions to the signed-in account regardless of role", async () => {
-    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", authenticators: [] });
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "optional", required: false, authenticators: [] });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(["session"], {
       username: "auditor", role: "read_only", locale: "system", appearance: "light",
