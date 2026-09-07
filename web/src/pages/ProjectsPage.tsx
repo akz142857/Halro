@@ -802,14 +802,16 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
         <Field label={t("projects.keyExpiry")} hint={t("projects.keyExpiryHint")}>
           <input autoComplete="off" type="datetime-local" value={expiresAt} onChange={(event) => setExpiresAt(event.target.value)} />
         </Field>
-        <fieldset className="scope-checks">
+        <fieldset className="gateway-key-scope-checks">
           <legend>{t("projects.keyScopes")}</legend>
-          {(["inference", "work_unit:create", "run:create", "run:attach", "governance:read", "outcome:write"] as GatewayScope[]).map((scope) => (
-            <label className="check-row" key={scope}>
-              <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} />
-              <span>{scope}</span>
-            </label>
-          ))}
+          <div className="gateway-key-scope-options">
+            {(["inference", "work_unit:create", "run:create", "run:attach", "governance:read", "outcome:write"] as GatewayScope[]).map((scope) => (
+              <label className="check-row" key={scope}>
+                <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} />
+                <span>{scope}</span>
+              </label>
+            ))}
+          </div>
           <small>{t("projects.keyScopesHint")}</small>
         </fieldset>
         <ReauthFields values={reauth} onChange={setReauth} description={t("auth.stepUpMintKey")} />

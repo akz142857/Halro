@@ -223,6 +223,14 @@ describe("design system themes", () => {
     expect(ruleBody(read("./styles.css"), ".governance-run-facts dd")).toMatch(/text-align:\s*left/);
   });
 
+  it("keeps gateway key scopes beside their legend instead of stretching the fieldset", () => {
+    const css = read("./styles.css");
+    expect(ruleBody(css, ".gateway-key-scope-checks")).not.toMatch(/display:\s*flex/);
+    expect(ruleBody(css, ".gateway-key-scope-options")).toMatch(/display:\s*grid/);
+    expect(ruleBody(css, ".gateway-key-scope-options")).toMatch(/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(ruleBody(css, ".gateway-key-scope-checks > small")).toMatch(/display:\s*block/);
+  });
+
   // tokens.css states a 12px floor because CJK glyphs lose stroke separation
   // below it at 1x. For a long time that was a comment and nothing else: the
   // business stylesheet carried 106 declarations under the floor, and the pages
