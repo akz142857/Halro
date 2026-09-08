@@ -442,12 +442,15 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
-	var result openaiapi.ChatCompletionResponse
-	if err := json.Unmarshal(payload, &result); err != nil {
+	result, err := decodeChatCompletionResponse(payload, a.bigModel)
+	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("decode provider response", err)
 	}
-	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
+	if result.ID == "" || len(result.Choices) == 0 || (!a.bigModel && result.Object == "") {
 		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("provider response is missing required fields", nil)
+	}
+	if a.bigModel && result.Object == "" {
+		result.Object = "chat.completion"
 	}
 	if a.bigModel {
 		if err := bigModelFinishError(result.Choices); err != nil {
@@ -656,6 +659,123 @@ func bigModelFinishError(choices []openaiapi.Choice) error {
 	return nil
 }
 
+// BigModel's two regional APIs do not share one exact tool-call response
+// dialect. The mainland API returns function.arguments as a JSON string, while
+// the international API documents it as an object. Decode both here and keep
+// the rest of Halro on the OpenAI contract, where arguments is the JSON text.
+func decodeChatCompletionResponse(payload []byte, bigModel bool) (openaiapi.ChatCompletionResponse, error) {
+	if !bigModel {
+		var result openaiapi.ChatCompletionResponse
+		err := json.Unmarshal(payload, &result)
+		return result, err
+	}
+	var wire bigModelChatCompletionResponse
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	return wire.openAI()
+}
+
+type bigModelChatCompletionResponse struct {
+	ID      string           `json:"id"`
+	Object  string           `json:"object"`
+	Created int64            `json:"created"`
+	Model   string           `json:"model"`
+	Choices []bigModelChoice `json:"choices"`
+	Usage   *openaiapi.Usage `json:"usage,omitempty"`
+}
+
+type bigModelChoice struct {
+	Index        int              `json:"index"`
+	Message      *bigModelMessage `json:"message,omitempty"`
+	Delta        *bigModelMessage `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason"`
+}
+
+type bigModelMessage struct {
+	Role             string             `json:"role"`
+	Content          json.RawMessage    `json:"content,omitempty"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	Name             string             `json:"name,omitempty"`
+	ToolCallID       string             `json:"tool_call_id,omitempty"`
+	ToolCalls        []bigModelToolCall `json:"tool_calls,omitempty"`
+}
+
+type bigModelToolCall struct {
+	Index    *int                     `json:"index,omitempty"`
+	ID       string                   `json:"id"`
+	Type     string                   `json:"type"`
+	Function bigModelToolCallFunction `json:"function"`
+}
+
+type bigModelToolCallFunction struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+func (response bigModelChatCompletionResponse) openAI() (openaiapi.ChatCompletionResponse, error) {
+	result := openaiapi.ChatCompletionResponse{
+		ID: response.ID, Object: response.Object, Created: response.Created,
+		Model: response.Model, Usage: response.Usage,
+		Choices: make([]openaiapi.Choice, len(response.Choices)),
+	}
+	for index, choice := range response.Choices {
+		message, err := choice.Message.openAI()
+		if err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
+		delta, err := choice.Delta.openAI()
+		if err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
+		result.Choices[index] = openaiapi.Choice{
+			Index: choice.Index, Message: message, Delta: delta, FinishReason: choice.FinishReason,
+		}
+	}
+	return result, nil
+}
+
+func (message *bigModelMessage) openAI() (*openaiapi.Message, error) {
+	if message == nil {
+		return nil, nil
+	}
+	result := &openaiapi.Message{
+		Role: message.Role, Content: message.Content, ReasoningContent: message.ReasoningContent,
+		Name: message.Name, ToolCallID: message.ToolCallID,
+		ToolCalls: make([]openaiapi.ToolCall, len(message.ToolCalls)),
+	}
+	for index, toolCall := range message.ToolCalls {
+		arguments, err := bigModelToolArguments(toolCall.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("decode BigModel tool call %d arguments: %w", index, err)
+		}
+		result.ToolCalls[index] = openaiapi.ToolCall{
+			Index: toolCall.Index, ID: toolCall.ID, Type: toolCall.Type,
+			Function: openaiapi.ToolCallFunction{Name: toolCall.Function.Name, Arguments: arguments},
+		}
+	}
+	return result, nil
+}
+
+func bigModelToolArguments(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return "", errors.New("arguments must be a JSON string or object")
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func (a *Adapter) ChatStream(
 	ctx context.Context,
 	call provider.ChatCall,
@@ -769,8 +889,8 @@ func (a *Adapter) ChatStream(
 				return usage, err
 			}
 		}
-		var chunk openaiapi.ChatCompletionResponse
-		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+		chunk, err := decodeChatCompletionResponse(event.Data, a.bigModel)
+		if err != nil {
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,
 				Message: "decode provider stream chunk", Cause: err,

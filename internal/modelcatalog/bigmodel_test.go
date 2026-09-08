@@ -52,3 +52,28 @@ func TestBigModelCatalogClaimsVisionAndUnaskedReasoningOnlyForExactModels(t *tes
 		}
 	}
 }
+
+func TestBigModelCatalogDoesNotOverclaimVisionToolsOrJSONMode(t *testing.T) {
+	catalog := Builtin()
+	for _, test := range []struct {
+		profile domain.ProviderProfileID
+		model   string
+		tools   bool
+	}{
+		{domain.ProfileBigModelCNChatEmbeddings, "glm-4.6v", true},
+		{domain.ProfileBigModelCNChatEmbeddings, "glm-4v-flash", false},
+		{domain.ProfileBigModelGlobalChat, "autoglm-phone-multilingual", true},
+		{domain.ProfileBigModelGlobalChat, "glm-4.5v", false},
+	} {
+		entry, ok := catalog.Lookup(Key{ProviderType: domain.ProviderBigModel, Profile: test.profile, Model: test.model})
+		if !ok {
+			t.Fatalf("%s/%s is not covered", test.profile, test.model)
+		}
+		if entry.Capabilities.Tools != test.tools {
+			t.Errorf("%s/%s tools=%v want=%v", test.profile, test.model, entry.Capabilities.Tools, test.tools)
+		}
+		if entry.Capabilities.JSONObject {
+			t.Errorf("%s/%s incorrectly claims JSON object support", test.profile, test.model)
+		}
+	}
+}

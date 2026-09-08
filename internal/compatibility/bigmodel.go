@@ -105,8 +105,8 @@ func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestI
 	if request.Temperature != nil && (*request.Temperature < 0 || *request.Temperature > 1) {
 		return BigModelChatRequest{}, errors.New("BigModel temperature must be between 0 and 1")
 	}
-	if request.TopP != nil && (*request.TopP <= 0 || *request.TopP > 1) {
-		return BigModelChatRequest{}, errors.New("BigModel top_p must be greater than 0 and at most 1")
+	if request.TopP != nil && (*request.TopP < 0.01 || *request.TopP > 1) {
+		return BigModelChatRequest{}, errors.New("BigModel top_p must be between 0.01 and 1")
 	}
 	if request.N != nil && *request.N != 1 {
 		return BigModelChatRequest{}, errors.New("BigModel Chat Completions accepts only n=1")
@@ -155,6 +155,9 @@ func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestI
 		default:
 			limit = request.MaxTokens
 		}
+	}
+	if limit != nil && (*limit < 1 || *limit > 131_072) {
+		return BigModelChatRequest{}, errors.New("BigModel max_tokens must be between 1 and 131072")
 	}
 	result := BigModelChatRequest{
 		Model: request.Model, Messages: messages, Stream: request.Stream,
@@ -275,7 +278,8 @@ func renderBigModelStop(raw json.RawMessage) (json.RawMessage, error) {
 	}
 	var single string
 	if json.Unmarshal(raw, &single) == nil {
-		return raw, nil
+		encoded, err := json.Marshal([]string{single})
+		return encoded, err
 	}
 	var many []string
 	if err := json.Unmarshal(raw, &many); err != nil {

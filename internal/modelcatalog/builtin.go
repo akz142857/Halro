@@ -631,7 +631,14 @@ func bigModelModels() []Entry {
 	visionModels := func(profile domain.ProviderProfileID, models []string) []Entry {
 		entries := make([]Entry, 0, len(models))
 		for _, model := range models {
-			capabilities := with(base, vision)
+			capabilities := domain.ProviderCapabilities{
+				Chat: true, Streaming: true, StreamUsage: true, Vision: true, FetchedImage: true,
+			}
+			switch model {
+			case "glm-5.3-flash", "glm-4.6v", "glm-4.6v-flash", "glm-4.6v-flashx",
+				"autoglm-phone", "autoglm-phone-multilingual":
+				capabilities.Tools = true
+			}
 			if model == "glm-5.3-flash" {
 				capabilities.Reasoning = true
 			}

@@ -95,6 +95,9 @@ func TestBigModelChatRefusesLossyValuesBeforeProviderIO(t *testing.T) {
 	}{
 		{"temperature", func(r *openaiapi.ChatCompletionRequest) { value := 1.1; r.Temperature = &value }},
 		{"top_p", func(r *openaiapi.ChatCompletionRequest) { value := 0.0; r.TopP = &value }},
+		{"top_p_below_minimum", func(r *openaiapi.ChatCompletionRequest) { value := 0.009; r.TopP = &value }},
+		{"max_tokens_zero", func(r *openaiapi.ChatCompletionRequest) { value := int64(0); r.MaxCompletionTokens = &value }},
+		{"max_tokens_above_maximum", func(r *openaiapi.ChatCompletionRequest) { value := int64(131_073); r.MaxCompletionTokens = &value }},
 		{"n", func(r *openaiapi.ChatCompletionRequest) { value := 2; r.N = &value }},
 		{"n_zero", func(r *openaiapi.ChatCompletionRequest) { value := 0; r.N = &value }},
 		{"seed", func(r *openaiapi.ChatCompletionRequest) { value := int64(3); r.Seed = &value }},
@@ -125,16 +128,37 @@ func TestBigModelChatCarriesToolsJSONAndImagesWithoutInventingImageFidelity(t *t
 	request.Messages[0].Content = json.RawMessage(`[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.test/a.png","detail":"auto"}}]`)
 	request.Tools = []openaiapi.Tool{{Type: "function", Function: openaiapi.ToolFunction{Name: "inspect", Parameters: json.RawMessage(`{"type":"object"}`)}}}
 	request.ToolChoice = json.RawMessage(`"auto"`)
-	request.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
 	body, err := RenderBigModelChatRequest(request, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Tools) != 1 || string(body.ToolChoice) != `"auto"` || string(body.ResponseFormat) != `{"type":"json_object"}` {
-		t.Fatalf("tools/json were not preserved: %#v", body)
+	if len(body.Tools) != 1 || string(body.ToolChoice) != `"auto"` {
+		t.Fatalf("tools were not preserved: %#v", body)
 	}
 	if encoded := string(body.Messages[0].Content); strings.Contains(encoded, "detail") || !strings.Contains(encoded, "https://example.test/a.png") {
 		t.Fatalf("image content was rendered incorrectly: %s", encoded)
+	}
+
+	jsonRequest := bigModelBaseRequest("glm-5.2")
+	jsonRequest.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
+	jsonBody, err := RenderBigModelChatRequest(jsonRequest, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(jsonBody.ResponseFormat) != `{"type":"json_object"}` {
+		t.Fatalf("JSON response format was not preserved: %#v", jsonBody)
+	}
+}
+
+func TestBigModelChatAlwaysRendersStopAsAnArray(t *testing.T) {
+	request := bigModelBaseRequest("glm-4.7")
+	request.Stop = json.RawMessage(`"END"`)
+	body, err := RenderBigModelChatRequest(request, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body.Stop), `["END"]`; got != want {
+		t.Fatalf("stop=%s want=%s", got, want)
 	}
 }
 

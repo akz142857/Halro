@@ -69,7 +69,7 @@ func TestBigModelUsesTheRegionalGeneralAPIPathAndDialect(t *testing.T) {
 						t.Errorf("%s leaked onto the BigModel wire: %s", name, body)
 					}
 				}
-				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_1","object":"chat.completion","created":1,"model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)), Request: request}, nil
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_1","request_id":"req-123","created":1,"model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`)), Request: request}, nil
 			})
 			limit := int64(16)
 			response, err := adapter.Chat(context.Background(), provider.ChatCall{
@@ -84,6 +84,9 @@ func TestBigModelUsesTheRegionalGeneralAPIPathAndDialect(t *testing.T) {
 			}
 			if len(response.Choices) != 1 {
 				t.Fatalf("choices=%d", len(response.Choices))
+			}
+			if response.Object != "chat.completion" {
+				t.Fatalf("object=%q", response.Object)
 			}
 		})
 	}
@@ -136,32 +139,31 @@ func TestBigModelStreamCarriesFinalUsageWithoutStreamOptions(t *testing.T) {
 	}
 }
 
-func TestBigModelJSONVisionAndToolFixturesUseTheSharedChatContract(t *testing.T) {
+func TestBigModelVisionAndGlobalToolFixturesUseTheSharedChatContract(t *testing.T) {
 	call := 0
-	adapter := newBigModelTestAdapter(t, "https://open.bigmodel.cn", func(request *http.Request) (*http.Response, error) {
+	adapter := newBigModelTestAdapter(t, "https://api.z.ai", func(request *http.Request) (*http.Response, error) {
 		call++
 		body, _ := io.ReadAll(request.Body)
 		if call == 1 {
-			if strings.Contains(string(body), `"detail"`) || !strings.Contains(string(body), `"response_format":{"type":"json_object"}`) {
-				t.Fatalf("vision/json request was not rendered as BigModel documents it: %s", body)
+			if strings.Contains(string(body), `"detail"`) || strings.Contains(string(body), `"response_format"`) {
+				t.Fatalf("vision request was not rendered as BigModel documents it: %s", body)
 			}
-			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_1","object":"chat.completion","created":1,"model":"glm-4.6v","choices":[{"index":0,"message":{"role":"assistant","content":"{\"ok\":true}"},"finish_reason":"stop"}]}`)), Request: request}, nil
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_1","created":1,"model":"glm-4.6v","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)), Request: request}, nil
 		}
 		if !strings.Contains(string(body), `"tools"`) || !strings.Contains(string(body), `"tool_choice":"auto"`) {
 			t.Fatalf("tool request was not carried: %s", body)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_2","object":"chat.completion","created":1,"model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`)), Request: request}, nil
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chat_2","created":1,"model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":{"q":"x"}}}]},"finish_reason":"tool_calls"}]}`)), Request: request}, nil
 	})
 	jsonResponse, err := adapter.Chat(context.Background(), provider.ChatCall{RequestID: "json", ProviderModel: "glm-4.6v", Request: openaiapi.ChatCompletionRequest{
-		Messages:       []openaiapi.Message{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.test/image.png","detail":"auto"}}]`)}},
-		ResponseFormat: json.RawMessage(`{"type":"json_object"}`),
+		Messages: []openaiapi.Message{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.test/image.png","detail":"auto"}}]`)}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	content, ok := openaiapi.DecodeTextContent(jsonResponse.Choices[0].Message.Content)
-	if !ok || !json.Valid([]byte(content)) {
-		t.Fatalf("JSON response=%q", content)
+	if !ok || content != "ok" {
+		t.Fatalf("vision response=%q", content)
 	}
 	toolResponse, err := adapter.Chat(context.Background(), provider.ChatCall{RequestID: "tool", ProviderModel: "glm-5.2", Request: openaiapi.ChatCompletionRequest{
 		Messages:   []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("use lookup")}},
@@ -171,7 +173,8 @@ func TestBigModelJSONVisionAndToolFixturesUseTheSharedChatContract(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(toolResponse.Choices[0].Message.ToolCalls) != 1 || toolResponse.Choices[0].Message.ToolCalls[0].Function.Name != "lookup" {
+	if len(toolResponse.Choices[0].Message.ToolCalls) != 1 || toolResponse.Choices[0].Message.ToolCalls[0].Function.Name != "lookup" ||
+		toolResponse.Choices[0].Message.ToolCalls[0].Function.Arguments != `{"q":"x"}` {
 		t.Fatalf("tool response=%#v", toolResponse)
 	}
 }
