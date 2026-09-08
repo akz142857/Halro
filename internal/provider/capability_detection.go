@@ -173,7 +173,7 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 	// capability the profile serves, this is the one to give up. Ordering is the
 	// whole mechanism: add() fills until the ceiling and defers the rest.
 	if c.Reasoning {
-		if _, askable := reasoningProbeEffort(b.manifest.ID); askable {
+		if _, askable := reasoningProbeEffortForTarget(b.manifest.ID, target.ProviderModel); askable {
 			add("reasoning", "reasoning_effort", "chat")
 		}
 	}
@@ -215,8 +215,27 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 		// The case above was not enough on its own, which is why the test beside
 		// this function now walks the profile table instead of naming profiles.
 		return shallowestEffort(compatibility.KimiEffortLevels), true
+	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat:
+		return shallowestEffort(compatibility.BigModelEffortLevels), true
 	default:
 		return shallowestEffort(openaiapi.ReasoningEffortLevels), true
+	}
+}
+
+// reasoningProbeEffortForTarget narrows profiles whose effort contract changes
+// by exact model. A probe is never useful when Halro cannot encode a depth for
+// that target without rounding it or changing whether thinking runs.
+func reasoningProbeEffortForTarget(profile domain.ProviderProfileID, model string) (string, bool) {
+	if profile != domain.ProfileBigModelCNChatEmbeddings && profile != domain.ProfileBigModelGlobalChat {
+		return reasoningProbeEffort(profile)
+	}
+	switch model {
+	case "glm-5.2":
+		return "high", true
+	case "glm-5.3", "glm-5.3-flash":
+		return "low", true
+	default:
+		return "", false
 	}
 }
 
@@ -272,7 +291,12 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		}
 	case "tool_call":
 		request.Tools = []openaiapi.Tool{{Type: "function", Function: openaiapi.ToolFunction{Name: "halro_probe", Description: "Return the fixed value", Parameters: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)}}}
-		request.ToolChoice = json.RawMessage(`{"type":"function","function":{"name":"halro_probe"}}`)
+		if target.ProfileID == domain.ProfileBigModelCNChatEmbeddings || target.ProfileID == domain.ProfileBigModelGlobalChat {
+			request.Messages[0].Content = openaiapi.TextContent("Call the halro_probe function with ok=true.")
+			request.ToolChoice = json.RawMessage(`"auto"`)
+		} else {
+			request.ToolChoice = json.RawMessage(`{"type":"function","function":{"name":"halro_probe"}}`)
+		}
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil && len(response.Choices[0].Message.ToolCalls) > 0 {
@@ -340,7 +364,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		// The effort level is the lowest the ladder offers above "none": the
 		// probe is asking whether reasoning happens at all, and paying for a
 		// deep one to learn that would be paying for the wrong answer.
-		effort, askable := reasoningProbeEffort(target.ProfileID)
+		effort, askable := reasoningProbeEffortForTarget(target.ProfileID, target.ProviderModel)
 		if !askable {
 			return result
 		}
@@ -355,9 +379,13 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 			}
 		}
 	case "embedding":
+		embeddingRequest := openaiapi.EmbeddingRequest{Model: target.ProviderModel, Input: json.RawMessage(`"halro"`)}
+		if target.ProfileID != domain.ProfileBigModelCNChatEmbeddings {
+			embeddingRequest.EncodingFormat = "float"
+		}
 		var response openaiapi.EmbeddingResponse
 		response, err = b.Embed(ctx, EmbeddingCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel,
-			Request: openaiapi.EmbeddingRequest{Model: target.ProviderModel, Input: json.RawMessage(`"halro"`), EncodingFormat: "float"}})
+			Request: embeddingRequest})
 		valid := err == nil && len(response.Data) > 0
 		if valid {
 			var vector []float64

@@ -2775,7 +2775,7 @@ func unservableReasons(candidates []provider.Target, request semantic.GenerateRe
 	reasons := newReasonSet()
 	for _, target := range candidates {
 		reasons.addAll(missingCapabilities([]provider.Target{target}, request.Requirements))
-		reasons.addAll(compatibility.UnsupportedGenerateFields(target.ProfileID, request))
+		reasons.addAll(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.ProviderModel, request))
 		if targetReasoningIsUnrenderable(target, request) {
 			// Not a capability key and not a request field, because it is neither:
 			// the request asked for nothing and the target is not lacking
@@ -2870,7 +2870,7 @@ func filterSemanticCapabilities(targets []provider.Target, requirements semantic
 
 func filterGenerateProfileCompatibility(targets []provider.Target, request semantic.GenerateRequest) []provider.Target {
 	return slices.DeleteFunc(slices.Clone(targets), func(target provider.Target) bool {
-		return len(compatibility.UnsupportedGenerateFields(target.ProfileID, request)) > 0
+		return len(compatibility.UnsupportedGenerateFieldsForTarget(target.ProfileID, target.ProviderModel, request)) > 0
 	})
 }
 

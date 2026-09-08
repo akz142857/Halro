@@ -44,9 +44,13 @@ type Adapter struct {
 	// direction — see the verification plan in
 	// docs/prd/kimi-adaptation-plan.zh-CN.md for the check that would settle it.
 	kimi                bool
+	bigModel            bool
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
+	catalogPathPrefix   string
+	catalogPathExplicit bool
+	canDescribeTargets  bool
 	// responses says this adapter was built for the Responses profile. It is a
 	// property of the profile the connection is bound to, not something inferred
 	// from a request, so a deployment cannot address a surface its operator did
@@ -93,6 +97,15 @@ type Options struct {
 	// exactly: OpenAI, Azure, DeepSeek and compatibility servers keep joining
 	// operations onto their configured base URL untouched.
 	OperationPathPrefix string
+	// CatalogPathPrefix is independent from the operation prefix because some
+	// providers expose one account-wide catalogue beside several wire surfaces.
+	// A nil value preserves the historical behaviour; a non-nil value, including
+	// an explicitly empty prefix, selects the catalogue route for this profile.
+	CatalogPathPrefix *string
+	// DisableTargetDescribe keeps discovery honest when only list enumeration is
+	// established. DescribeInvocationTarget currently falls back to the list,
+	// but the Admin API will not advertise a per-model describe operation.
+	DisableTargetDescribe bool
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -132,17 +145,24 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		authorizer.Close()
 		return nil, errors.New("credential scheme does not match OpenAI adapter profile")
 	}
-	return &Adapter{
+	adapter := &Adapter{
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
 		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
 		kimi:                options.ProviderType == string(domain.ProviderKimi),
+		bigModel:            options.ProviderType == string(domain.ProviderBigModel),
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
+		canDescribeTargets:  !options.DisableTargetDescribe,
 		responses:           options.Responses,
-	}, nil
+	}
+	if options.CatalogPathPrefix != nil {
+		adapter.catalogPathPrefix = strings.Trim(*options.CatalogPathPrefix, "/")
+		adapter.catalogPathExplicit = true
+	}
+	return adapter, nil
 }
 
 // encodeChatRequest turns the OpenAI-shaped call into the bytes this upstream
@@ -154,10 +174,16 @@ func NewWithOptions(options Options) (*Adapter, error) {
 // reaches reasoning through `thinking`, and it names the end-user reference
 // user_id. Marshalling the OpenAI struct straight out sent five members it
 // ignores and one under a name it does not read.
-func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest) ([]byte, error) {
+func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, requestID string) ([]byte, error) {
 	switch {
 	case a.deepSeek:
 		body, err := compatibility.RenderDeepSeekChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	case a.bigModel:
+		body, err := compatibility.RenderBigModelChatRequest(request, requestID)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +259,16 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	// wrong route is refused with "isn't supported on this route", never served
 	// by a fallback — and a connection test passing here means the model exists
 	// on the account, not that this route serves it.
-	endpoint.Path = versionedPath(basePath, "models")
+	if a.catalogPathExplicit {
+		if a.catalogPathPrefix == "" {
+			endpoint.Path = basePath + "/models"
+		} else {
+			endpoint.Path = basePath + "/" + a.catalogPathPrefix + "/models"
+		}
+		endpoint.RawPath = ""
+	} else {
+		endpoint.Path = versionedPath(basePath, "models")
+	}
 	return endpoint, nil
 }
 
@@ -249,7 +284,7 @@ func (a *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCa
 		kind = domain.TargetCustomEndpointModel
 	}
 	return domain.InvocationTargetDiscoveryCapabilities{
-		TargetKinds: []domain.DeploymentTargetKind{kind}, CanEnumerate: true, CanDescribe: true, CanVerify: true,
+		TargetKinds: []domain.DeploymentTargetKind{kind}, CanEnumerate: true, CanDescribe: a.canDescribeTargets, CanVerify: true,
 	}
 }
 
@@ -399,7 +434,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = false
-	encoded, err := a.encodeChatRequest(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -413,6 +448,11 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	}
 	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
 		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("provider response is missing required fields", nil)
+	}
+	if a.bigModel {
+		if err := bigModelFinishError(result.Choices); err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
 	}
 	return result, nil
 }
@@ -599,6 +639,23 @@ func acceptedResponseMalformed(message string, cause error) *provider.Error {
 	}
 }
 
+func bigModelFinishError(choices []openaiapi.Choice) error {
+	for _, choice := range choices {
+		if choice.FinishReason == nil {
+			continue
+		}
+		switch *choice.FinishReason {
+		case "sensitive":
+			return &provider.Error{Class: provider.ErrorBadRequest, Ambiguous: true, Message: "BigModel blocked the completion as sensitive"}
+		case "network_error":
+			return &provider.Error{Class: provider.ErrorProvider5xx, Ambiguous: true, Message: "BigModel reported a network error while generating"}
+		case "model_context_window_exceeded":
+			return &provider.Error{Class: provider.ErrorBadRequest, Ambiguous: true, Message: "BigModel reported that the model context window was exceeded"}
+		}
+	}
+	return nil
+}
+
 func (a *Adapter) ChatStream(
 	ctx context.Context,
 	call provider.ChatCall,
@@ -623,12 +680,12 @@ func (a *Adapter) ChatStream(
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = true
-	if a.capabilities.StreamUsage {
+	if a.capabilities.StreamUsage && !a.bigModel {
 		requestBody.StreamOptions = &openaiapi.StreamOptions{IncludeUsage: true}
 	} else {
 		requestBody.StreamOptions = nil
 	}
-	encoded, err := a.encodeChatRequest(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -719,6 +776,15 @@ func (a *Adapter) ChatStream(
 				Message: "decode provider stream chunk", Cause: err,
 			}
 		}
+		if chunk.Usage != nil {
+			copyUsage := *chunk.Usage
+			usage = &copyUsage
+		}
+		if a.bigModel {
+			if err := bigModelFinishError(chunk.Choices); err != nil {
+				return usage, err
+			}
+		}
 		semanticEvent, err := openaiwire.DecodeEvent(chunk)
 		if err != nil {
 			return usage, &provider.Error{
@@ -730,10 +796,6 @@ func (a *Adapter) ChatStream(
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				finished = true
 			}
-		}
-		if chunk.Usage != nil {
-			copyUsage := *chunk.Usage
-			usage = &copyUsage
 		}
 		if err := emit(semanticEvent); err != nil {
 			return usage, err

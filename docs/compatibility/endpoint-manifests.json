@@ -69,6 +69,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -144,6 +146,56 @@
           "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart",
           "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens",
           "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n\u003e1 and a request to run tools one at a time are rejected"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "seed",
+          "parallel_tool_calls",
+          "tools",
+          "response_format",
+          "stop",
+          "tool_choice",
+          "user",
+          "messages[].content[].detail"
+        ],
+        "declared_transforms": [
+          "BigModel's smaller Chat request is rendered explicitly; OpenAI-only members are never forwarded",
+          "user is renamed to user_id",
+          "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+          "function tools are carried up to the documented limit of 128",
+          "json_object is preserved while json_schema is rejected",
+          "stream usage is returned by the final provider chunk without sending stream_options",
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "seed",
+          "parallel_tool_calls",
+          "tools",
+          "response_format",
+          "stop",
+          "tool_choice",
+          "user",
+          "messages[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Z.AI uses the same explicitly rendered BigModel Chat dialect on an isolated global surface",
+          "user is renamed to user_id",
+          "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+          "function tools are carried up to the documented limit of 128",
+          "json_object is preserved while json_schema is rejected",
+          "stream usage is returned by the final provider chunk without sending stream_options",
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
         ]
       },
       {
@@ -429,6 +481,7 @@
     "provider_profiles": [
       "openai.chat-embeddings.v1",
       "azure-openai.chat-embeddings.v1",
+      "bigmodel.cn.chat-embeddings.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.invoke.titan-embed-text-v2.v1"
@@ -441,6 +494,18 @@
       {
         "profile_id": "azure-openai.chat-embeddings.v1",
         "status": "compatible"
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "encoding_format",
+          "user"
+        ],
+        "declared_transforms": [
+          "the OpenAI-shaped embedding body is sent to the mainland /api/paas/v4/embeddings route",
+          "encoding_format and user are omitted only when absent and otherwise rejected before provider I/O"
+        ]
       },
       {
         "profile_id": "openai-compatible.chat-embeddings.v1",
@@ -637,6 +702,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -701,6 +768,42 @@
           "parallel_tool_calls is value-dependent: true is what omitting the member already means, and only a request to run tools one at a time is rejected",
           "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O",
           "user is carried as DeepSeek's user_id"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "tools",
+          "text.format",
+          "tool_choice",
+          "user",
+          "input[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through BigModel Chat Completions",
+          "max_output_tokens is carried as BigModel max_tokens",
+          "function tools are carried up to the documented limit of 128",
+          "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "tools",
+          "text.format",
+          "tool_choice",
+          "user",
+          "input[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through Z.AI Chat Completions",
+          "max_output_tokens is carried as BigModel max_tokens",
+          "function tools are carried up to the documented limit of 128",
+          "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
         ]
       },
       {
@@ -984,6 +1087,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1064,6 +1169,46 @@
           "portable Messages content is mapped through DeepSeek Chat Completions",
           "output_config.effort and output_config.format are declared unsupported at field granularity because support is value-dependent: none, low and high reach DeepSeek's thinking switch while minimal, medium and xhigh have no rung, and DeepSeek has json_object but no schema mode",
           "thinking stays unsupported for the same reason it is on every other portable profile — it is the Anthropic-native block config, which only native mode forwards; DeepSeek's own thinking switch is reached through output_config.effort"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "metadata",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "thinking",
+          "tool_choice",
+          "tools",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through BigModel Chat Completions",
+          "function tools are carried up to the documented limit of 128",
+          "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+          "json_schema has no BigModel counterpart"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "metadata",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "thinking",
+          "tool_choice",
+          "tools",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through Z.AI Chat Completions",
+          "function tools are carried up to the documented limit of 128",
+          "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+          "json_schema has no BigModel counterpart"
         ]
       },
       {
@@ -1422,6 +1567,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1456,6 +1603,14 @@
       },
       {
         "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
         "status": "experimental"
       },
       {
@@ -1558,6 +1713,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1592,6 +1749,14 @@
       },
       {
         "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
         "status": "experimental"
       },
       {
@@ -1687,6 +1852,8 @@
       "anthropic.messages.2023-06-01",
       "azure-openai.chat-embeddings.v1",
       "deepseek.chat.v1",
+      "bigmodel.cn.chat-embeddings.v1",
+      "bigmodel.global.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1721,6 +1888,14 @@
       },
       {
         "profile_id": "deepseek.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.cn.chat-embeddings.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.chat.v1",
         "status": "experimental"
       },
       {

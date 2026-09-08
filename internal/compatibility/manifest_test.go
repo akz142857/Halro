@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 func TestBuiltinEndpointManifestsAreValidImmutableAndGolden(t *testing.T) {
@@ -80,7 +82,7 @@ func TestInferenceResourcesMaturityDoesNotClaimUnvalidatedSDKCompatibility(t *te
 	}
 }
 
-func TestEmbeddingsProfileMaturityDoesNotPromoteTitanEmbed(t *testing.T) {
+func TestEmbeddingsProfileMaturityDoesNotPromoteExperimentalProviders(t *testing.T) {
 	var embeddings EndpointCompatibilityManifest
 	for _, manifest := range BuiltinEndpointManifests() {
 		if manifest.ID == "openai.embeddings.v1" {
@@ -93,7 +95,8 @@ func TestEmbeddingsProfileMaturityDoesNotPromoteTitanEmbed(t *testing.T) {
 	}
 	for _, coverage := range embeddings.ProfileCoverage {
 		want := StatusCompatible
-		if coverage.ProfileID == "bedrock.runtime.invoke.titan-embed-text-v2.v1" {
+		if coverage.ProfileID == domain.ProfileBedrockInvokeTitanEmbedV2 ||
+			coverage.ProfileID == domain.ProfileBigModelCNChatEmbeddings {
 			want = StatusExperimental
 		}
 		if coverage.Status != want {

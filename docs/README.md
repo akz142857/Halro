@@ -60,6 +60,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [分时价位（按日时段折扣）](prd/time-of-day-pricing-review.zh-CN.md) | 采纳方案 B 并已实施，见 [ADR 0023](adr/0023-time-of-day-pricing.md)。价格版本可携带按供应商本地时段的费率表，档位在预留时刻定档并写入价格快照；空规则表 = 全天一档，**不需要迁移，不需要重新初始化数据目录** |
 | [适用能力改由服务端统一下发](prd/provider-capability-single-source.zh-CN.md) | 两轮全部实施并合入（PR #182）。六处 switch 收敛成 `internal/domain/provider_table.go`，新增只读端点 `GET /admin/api/v1/provider-profiles`，控制台不再镜像能力矩阵；请求契约改为扁平能力集，`bindings` 由服务端拆分——这是 API 形状变更，见 §10.8 |
 | [DeepSeek 适配方案](prd/deepseek-adaptation-plan.zh-CN.md) | 片 1–5 全部完成。片 1–4（缓存用量解码、字段申报按真实子集、thinking 映射、目录订正）2026-08-17 实施；片 5 于 2026-08-20 在真实账号跑通，`thinking` 拼写、`none` 关得掉、`hit + miss = prompt_tokens` 三条推断全部被证实（该文 §11）。仍未测量：思考开着时 `max_tokens` 算不算思维链——现实现按保守读法申报 `max_completion_tokens`。这次不是 GA 发版证据，未走 `tests/provider-matrix` |
+| [BigModel / Z.AI 适配方案](prd/bigmodel-adaptation-plan.zh-CN.md) | 中国大陆 Chat/Stream/Embeddings 与海外 Z.AI Chat/Stream 首期代码已实施：地域 profile/凭据隔离、严格方言渲染、模型目录、目标级推理约束、控制台与契约快照均已落地。当前标记为实验性；真实账号验证未运行，Anthropic 兼容 profile 仍按方案保持未注册 |
 | [开发者文档站方案](prd/docs-site-plan.zh-CN.md) | P0 已实施在网站仓库 `Halro-website`（`d6db4de`）：Starlight + 13 页，API 参考由契约生成，link checker 进构建。英文 locale 被实现推翻（只声明不写正文会让 Pagefind 把中文按英文索引）；§5.1 的契约补字段、§5.2 的同步门禁、§8 的 CI 与域名、P1 六页均未做，逐条见该文「归档说明」 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)

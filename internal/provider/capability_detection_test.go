@@ -17,8 +17,9 @@ import (
 )
 
 type capabilityDetectorAdapter struct {
-	errorFor map[string]error
-	requests []openaiapi.ChatCompletionRequest
+	errorFor   map[string]error
+	requests   []openaiapi.ChatCompletionRequest
+	embeddings []openaiapi.EmbeddingRequest
 	// toolsAnswerWithoutCall makes the upstream answer a tool probe normally and
 	// simply not call the tool — the shape the probe's own assertion rejects,
 	// with no error anywhere.
@@ -102,8 +103,40 @@ func (a *capabilityDetectorAdapter) ChatStream(_ context.Context, _ ChatCall, em
 	_ = emit(semantic.Event{Outputs: []semantic.OutputDelta{{Termination: "stop"}}})
 	return &openaiapi.Usage{TotalTokens: 2}, nil
 }
-func (a *capabilityDetectorAdapter) Embed(_ context.Context, _ EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+func (a *capabilityDetectorAdapter) Embed(_ context.Context, call EmbeddingCall) (openaiapi.EmbeddingResponse, error) {
+	a.embeddings = append(a.embeddings, call.Request)
 	return openaiapi.EmbeddingResponse{Data: []openaiapi.EmbeddingData{{Embedding: json.RawMessage(`[0.1,0.2]`)}}}, nil
+}
+
+type bigModelCapabilityDetectorAdapter struct{ capabilityDetectorAdapter }
+
+func (*bigModelCapabilityDetectorAdapter) Type() string { return string(domain.ProviderBigModel) }
+
+func TestBigModelDetectionUsesOnlyValuesItsDialectCanRender(t *testing.T) {
+	manifest, ok := BuiltinProfile(domain.ProfileBigModelCNChatEmbeddings)
+	if !ok {
+		t.Fatal("BigModel profile missing")
+	}
+	adapter := &bigModelCapabilityDetectorAdapter{}
+	bridge, err := NewLegacyAdapterBridge(adapter, manifest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := ModelCapabilityDetectionTarget{ProviderModel: "glm-5.2", BindingID: "binding", ProfileID: manifest.ID, RiskTier: "safe_automatic"}
+	if got, ok := reasoningProbeEffortForTarget(target.ProfileID, target.ProviderModel); !ok || got != "high" {
+		t.Fatalf("GLM-5.2 probe effort=%q askable=%v", got, ok)
+	}
+	if _, ok := reasoningProbeEffortForTarget(target.ProfileID, "glm-4.7"); ok {
+		t.Fatal("a model with no exact effort mapping was offered a reasoning probe")
+	}
+	toolResult := bridge.DetectCapability(context.Background(), target, CapabilityProbe{Capability: "tools", Kind: "tool_call"})
+	if toolResult.Status != domain.ProbeSupported || len(adapter.requests) != 1 || string(adapter.requests[0].ToolChoice) != `"auto"` {
+		t.Fatalf("tool result=%#v requests=%#v", toolResult, adapter.requests)
+	}
+	embedResult := bridge.DetectCapability(context.Background(), target, CapabilityProbe{Capability: "embeddings", Kind: "embedding"})
+	if embedResult.Status != domain.ProbeSupported || len(adapter.embeddings) != 1 || adapter.embeddings[0].EncodingFormat != "" {
+		t.Fatalf("embedding result=%#v requests=%#v", embedResult, adapter.embeddings)
+	}
 }
 
 func TestLegacyProfileCapabilityDetectorHasBoundedSideEffectFreePlan(t *testing.T) {
@@ -523,13 +556,15 @@ func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
 	// DeepSeek's failure again, invisible because this table did not have to
 	// mention it.
 	ladders := map[domain.ProviderProfileID][]string{
-		domain.ProfileOpenAIChatEmbeddings:    openaiapi.ReasoningEffortLevels,
-		domain.ProfileAzureChatEmbeddings:     openaiapi.ReasoningEffortLevels,
-		domain.ProfileBedrockMantleChat:       openaiapi.ReasoningEffortLevels,
-		domain.ProfileBedrockMantleOpenAIChat: openaiapi.ReasoningEffortLevels,
-		domain.ProfileMiniMaxChat:             openaiapi.ReasoningEffortLevels,
-		domain.ProfileDeepSeekChat:            compatibility.DeepSeekEffortLevels,
-		domain.ProfileKimiChat:                compatibility.KimiEffortLevels,
+		domain.ProfileOpenAIChatEmbeddings:     openaiapi.ReasoningEffortLevels,
+		domain.ProfileAzureChatEmbeddings:      openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleChat:        openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleOpenAIChat:  openaiapi.ReasoningEffortLevels,
+		domain.ProfileMiniMaxChat:              openaiapi.ReasoningEffortLevels,
+		domain.ProfileDeepSeekChat:             compatibility.DeepSeekEffortLevels,
+		domain.ProfileKimiChat:                 compatibility.KimiEffortLevels,
+		domain.ProfileBigModelCNChatEmbeddings: compatibility.BigModelEffortLevels,
+		domain.ProfileBigModelGlobalChat:       compatibility.BigModelEffortLevels,
 	}
 	// Every profile that both declares reasoning and plans a probe has to be in
 	// the table. A platform added without a case in reasoningProbeEffort fails

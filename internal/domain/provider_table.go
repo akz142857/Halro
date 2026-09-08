@@ -212,6 +212,20 @@ var profileTable = []profileRow{
 		Defaults: openAICompatibleSet, Ceiling: openAICompatibleSet,
 	},
 	{
+		ID: ProfileBigModelCNChatEmbeddings, Type: ProviderBigModel,
+		Surface: SurfaceBigModelCNGeneral, Scheme: CredentialBigModelAPIKey,
+		BaseURLTemplate: "https://open.bigmodel.cn",
+		Defaults:        bigModelCNSet,
+		Ceiling:         withBigModelOptionalCapabilities(bigModelCNSet),
+	},
+	{
+		ID: ProfileBigModelGlobalChat, Type: ProviderBigModel,
+		Surface: SurfaceBigModelGlobalGeneral, Scheme: CredentialBigModelAPIKey,
+		BaseURLTemplate: "https://api.z.ai",
+		Defaults:        bigModelGlobalSet,
+		Ceiling:         withBigModelOptionalCapabilities(bigModelGlobalSet),
+	},
+	{
 		// Beta profile intentionally declares only the translated text subset.
 		ID: ProfileGeminiText, Type: ProviderGemini,
 		Surface: SurfaceGemini, Scheme: CredentialGoogleAPIKey,
@@ -447,6 +461,14 @@ var (
 		Chat: true, Streaming: true, Tools: true, JSONObject: true,
 		Reasoning: true, StreamUsage: true,
 	}
+	bigModelCNSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Embeddings: true, Tools: true,
+		JSONObject: true, StreamUsage: true,
+	}
+	bigModelGlobalSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true,
+		JSONObject: true, StreamUsage: true,
+	}
 	openAICompatibleSet = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
 	geminiTextSet       = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}
 	bedrockConverseSet  = ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true}
@@ -652,6 +674,13 @@ func withVision(base ProviderCapabilities) ProviderCapabilities {
 	return base
 }
 
+func withBigModelOptionalCapabilities(base ProviderCapabilities) ProviderCapabilities {
+	base.Vision = true
+	base.FetchedImage = true
+	base.Reasoning = true
+	return base
+}
+
 // providerTypeRow is what a provider type implies before a profile is chosen.
 //
 // LegacyDefaults is not the default profile's Defaults, and the difference is
@@ -676,6 +705,7 @@ var providerTypeTable = []providerTypeRow{
 	}},
 	{ProviderAzureOpenAI, ProfileAzureChatEmbeddings, openAIChatSet},
 	{ProviderDeepSeek, ProfileDeepSeekChat, deepSeekSet},
+	{ProviderBigModel, ProfileBigModelCNChatEmbeddings, bigModelCNSet},
 	{ProviderOpenAICompatible, ProfileOpenAICompatible, openAICompatibleSet},
 	{ProviderGemini, ProfileGeminiText, geminiTextSet},
 	// Mantle Chat leads Bedrock because the Runtime profiles are withheld: the

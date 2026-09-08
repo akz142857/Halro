@@ -176,6 +176,12 @@ func coverageProbes(northbound string) []semantic.GenerateRequest {
 			r.ToolChoice = &semantic.ToolChoice{Mode: "auto"}
 		}),
 		with(func(r *semantic.GenerateRequest) {
+			r.Tools = make([]semantic.Tool, 129)
+			for i := range r.Tools {
+				r.Tools[i].Name = "f"
+			}
+		}),
+		with(func(r *semantic.GenerateRequest) {
 			r.Tools = []semantic.Tool{{Name: "f"}}
 			r.Stream = true
 		}),

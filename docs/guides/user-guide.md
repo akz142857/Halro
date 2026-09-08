@@ -234,6 +234,15 @@ the real Provider model name.
 | Gemini | `https://generativelanguage.googleapis.com` | Beta, native adapter |
 | Bedrock Runtime | `https://bedrock-runtime.<region>.amazonaws.com` | Beta, Converse text, explicit static AWS credential |
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta; OpenAI Chat, stateless Responses, or Anthropic Messages |
+| BigModel (mainland China) | `https://open.bigmodel.cn` | Experimental; Chat, streaming, and embeddings through the mainland general API profile |
+| Z.AI (global) | `https://api.z.ai` | Experimental; Chat and streaming through an isolated global profile |
+
+BigModel credentials are region-bound. Create a separate credential and
+Provider for each region; do not reuse a mainland key or balance on Z.AI (or the
+reverse). Save the root host shown above—the selected profile fixes the
+`/api/paas/v4` operation and model-catalog paths. Anthropic-compatible BigModel
+routes are not registered yet because their successful response and
+authentication contracts still require real-account verification.
 
 A Bedrock credential is a JSON secret:
 

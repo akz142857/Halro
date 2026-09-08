@@ -26,6 +26,9 @@ const (
 	PrimitiveAzureEmbeddings                      Primitive = "azure-openai.embeddings"
 	PrimitiveDeepSeekChat                         Primitive = "deepseek.chat-completions"
 	PrimitiveDeepSeekChatStream                   Primitive = "deepseek.chat-completions.stream"
+	PrimitiveBigModelChat                         Primitive = "bigmodel.chat-completions"
+	PrimitiveBigModelChatStream                   Primitive = "bigmodel.chat-completions.stream"
+	PrimitiveBigModelEmbeddings                   Primitive = "bigmodel.embeddings"
 	PrimitiveCompatibleChat                       Primitive = "openai-compatible.chat-completions"
 	PrimitiveCompatibleChatStream                 Primitive = "openai-compatible.chat-completions.stream"
 	PrimitiveCompatibleEmbeddings                 Primitive = "openai-compatible.embeddings"
@@ -276,6 +279,7 @@ func translationForPrimitive(primitive Primitive) semantic.TranslationLoss {
 		PrimitiveBedrockMantleAnthropicMessages, PrimitiveBedrockMantleAnthropicMessagesStream,
 		PrimitiveAzureChatCompletions, PrimitiveAzureChatStream, PrimitiveAzureEmbeddings,
 		PrimitiveDeepSeekChat, PrimitiveDeepSeekChatStream,
+		PrimitiveBigModelChat, PrimitiveBigModelChatStream, PrimitiveBigModelEmbeddings,
 		PrimitiveCompatibleChat, PrimitiveCompatibleChatStream, PrimitiveCompatibleEmbeddings:
 		return semantic.TranslationNone
 	case PrimitiveGeminiGenerateContent, PrimitiveGeminiStreamGenerateContent, PrimitiveGeminiEmbedContent,

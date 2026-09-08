@@ -398,6 +398,19 @@ func TestPinnedRouteCarriesOperationsWhileCatalogStaysOnV1(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyCatalogPrefixDoesNotInsertOpenAIVersion(t *testing.T) {
+	endpoint, _ := url.Parse("https://provider.example/root")
+	empty := ""
+	adapter := &Adapter{endpoint: endpoint, catalogPathExplicit: true, catalogPathPrefix: empty}
+	catalog, err := adapter.modelCatalogURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := catalog.Path, "/root/models"; got != want {
+		t.Fatalf("catalog path=%q want=%q", got, want)
+	}
+}
+
 func TestListInvocationTargetsUsesBoundCatalogEndpointAndParsesIDs(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet || request.URL.String() != "https://provider.example/v1/models" {

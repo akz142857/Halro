@@ -991,6 +991,15 @@ needs it and the hostname/IP boundary has been reviewed.
 | Bedrock Runtime | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta Converse, Titan Embeddings/Image, or Nova Reel Async profile |
 | Bedrock Agent Runtime | `https://bedrock-agent-runtime.us-east-1.amazonaws.com` | JSON below | Beta Cohere Rerank 3.5 profile only |
 | Bedrock Mantle | `https://bedrock-mantle.us-east-1.api.aws` | Bedrock API key | Beta OpenAI Chat, stateless Responses, or Anthropic Messages |
+| BigModel (mainland China) | `https://open.bigmodel.cn` | BigModel API key | Experimental Chat/stream/embeddings; fixed mainland general API surface |
+| Z.AI (global) | `https://api.z.ai` | Z.AI API key | Experimental Chat/stream; separate global surface and credential |
+
+For BigModel, save the root host and select the matching regional profile. The
+profile appends `/api/paas/v4`, and model refresh reads the sibling
+`/api/paas/v4/models` route. Never auto-fallback between the two hosts: account
+entitlements, keys, balances, and model availability are region-scoped. The
+Anthropic-compatible routes remain unavailable until their real-account
+contract gate is recorded.
 
 An OpenAI connection on the Responses profile addresses `/v1/responses`
 instead of `/v1/chat/completions`. It is the same account and the same

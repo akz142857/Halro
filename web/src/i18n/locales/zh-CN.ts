@@ -1331,7 +1331,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
   providers: {
     notifyCreated: "服务商已创建并热加载", notifyUpdated: "服务商已保存", notifyDeleted: "服务商已删除", notifyEnabled: "服务商已启用", notifyDisabled: "服务商已禁用",
     notifyCredentialSaved: "凭据已加密保存", notifyCredentialRotated: "凭据已轮换", notifyCredentialDeleted: "凭据已删除",
-    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", openai_compatible: "OpenAI 兼容服务" },
+    types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI 兼容服务" },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     connectionSection: "连接与能力", connectionSectionDescription: "服务商类型决定 API 家族、认证方式和推荐能力；你可以选择这个连接实际开放的能力。", capacitySection: "凭据与容量", capacitySectionDescription: "绑定加密凭据并限制服务商级并发。", enableDescription: "启用后，模型部署可以使用这个上游连接。", disabledImpact: "模型部署无法使用这个上游连接", capabilitySectionDescription: "选择此连接开放的适用能力；具体模型只能再从中选择子集。", fixedCapabilityDescription: "该能力实现使用固定协议，无需额外配置。", capabilitySummary: "已选能力", advancedCapabilities: "适用能力", advancedCapabilitiesHint: "服务商类型提供推荐预设；未实现或不适用的能力不可选择。", selectedCapabilities: "已启用 {{count}} 项",
     addCredential: "＋ 凭据", addProvider: "＋ 服务商",
@@ -1346,6 +1346,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     credentialName: "凭据名称", providerType: "服务商类型", boundURL: "地址绑定", boundURLHint: "密钥将与规范化后的协议、主机、端口和服务商类型绑定",
     minimaxRegionHint: "国际账号使用 https://api.minimax.io，中国大陆账号使用 https://api.minimaxi.com。两边接口完全一致，但密钥不通用。",
     kimiRegionHint: "国际账号使用 https://api.moonshot.ai，中国大陆账号使用 https://api.moonshot.cn。两边接口完全一致，但密钥不通用，价目表也不同。",
+    bigmodelRegionHint: "中国大陆使用 https://open.bigmodel.cn，海外 Z.AI 使用 https://api.z.ai。请选择匹配的 profile：账号、密钥、余额和可用模型均按地域隔离，不假定可以互通。",
     newSecret: "新密钥（留空则只更新元数据）", providerSecret: "服务商密钥", secretConfigured: "已配置的密钥永不回显",
     bedrockMantleHint: "粘贴 Bedrock API Key。Halro 将它绑定到准确的区域 Mantle 端点，且不会写入浏览器存储。", secretHint: "只通过 HTTPS 请求体发送，不写入浏览器存储",
     billableProbe: "该实现的连接测试会产生费用", billableProbeDescription: "Anthropic Messages 没有免费的元数据接口，连接测试会发起一次真实推理调用（最多 1 个输出词元）。另外两个 Mantle 实现读取模型元数据，不计费。",
