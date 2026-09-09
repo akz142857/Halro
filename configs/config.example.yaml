@@ -326,13 +326,13 @@ gateway:
   failure_capture:
     # @title.zh-CN 保存失败请求的原始载荷
     # @title.en-US Capture failed request payloads
-    # @description.zh-CN 保存失败请求发往上游的内容与上游返回的内容，便于复现；成功的调用不保存。这是 Halro 唯一保存调用方所写内容的地方，开启会改变本数据目录的数据分级：记录用主密钥加密、绑定到所属请求与项目、按 max_bytes 截断、按 max_records_per_day 封顶、到 retain 后删除，且只能通过写审计的管理员操作读取。脱敏在保存之前完成，存下的是发往上游的形态而不是调用方原文。
-    # @description.en-US Keeps what a failed call sent upstream and what came back, so the failure can be reproduced; successful calls are never stored. This is the only place Halro stores material a caller wrote, and enabling it changes what this data directory contains: records are encrypted under the master key, bound to the request and project they belong to, truncated at max_bytes, capped at max_records_per_day, deleted after retain, and readable only through an audited admin action. Redaction runs before capture, so what is stored is what went upstream rather than what the caller sent.
+    # @description.zh-CN 保存 Gateway 收到的失败请求正文、Halro 脱敏后的规范化请求，以及上游返回或传输错误，便于核对业务字段经过了什么转换；成功调用不保存，请求头和 Gateway 凭据永不保存。开启会改变本数据目录的数据分级：记录用主密钥加密、绑定到所属请求与项目、各部分按 max_bytes 截断、按 max_records_per_day 封顶、到 retain 后删除，且只能通过写审计的管理员操作读取。Gateway 请求位于脱敏之前，可能包含脱敏策略随后移除的调用方内容。
+    # @description.en-US Keeps the failed request body received by the Gateway, Halro's normalized post-redaction request, and the provider response or transport error so an operator can see how caller-facing fields were translated; successful calls, request headers, and Gateway credentials are never stored. Enabling it changes the data classification of this directory: records are encrypted under the master key, bound to their request and project, each part is truncated at max_bytes, capture is capped at max_records_per_day, records are deleted after retain, and reads require an audited admin action. The Gateway request precedes redaction and may contain caller material that the policy subsequently removes.
     enabled: false
     # @title.zh-CN 单条载荷上限（字节）
     # @title.en-US Payload size ceiling (bytes)
-    # @description.zh-CN 请求与响应分别截断到该长度（允许范围 1024–1048576）；被截断的一侧会在记录里标注。
-    # @description.en-US The request and the response are truncated to this length separately (allowed range 1024 to 1048576); a truncated side is flagged in the record.
+    # @description.zh-CN Gateway 请求、规范化请求与响应分别截断到该长度（允许范围 1024–1048576）；被截断的一侧会在记录里标注。
+    # @description.en-US The Gateway request, normalized request, and response are truncated to this length separately (allowed range 1024 to 1048576); a truncated part is flagged in the record.
     max_bytes: 65536
     # @title.zh-CN 每日保存条数上限
     # @title.en-US Daily record ceiling

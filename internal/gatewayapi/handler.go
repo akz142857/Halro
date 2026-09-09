@@ -89,6 +89,7 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	if decoded.Stream {
 		ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
 		defer cancel()
@@ -210,6 +211,7 @@ func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
 	defer cancel()
 	response, err := h.service.Embeddings(ctx, key, decoded)
@@ -439,6 +441,7 @@ func (h *Handler) Messages(writer http.ResponseWriter, request *http.Request) {
 		writeAnthropicError(writer, status, kind, message, requestID)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	if mode == anthropicapi.ModeNative {
 		if decoded.Stream {
 			ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
@@ -546,6 +549,7 @@ func (h *Handler) CountTokens(writer http.ResponseWriter, request *http.Request)
 		writeAnthropicError(writer, status, kind, message, requestID)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
 	defer cancel()
 	if h.messages == nil {
@@ -778,6 +782,7 @@ func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, code, message, param)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	if decoded.Stream {
 		ctx, cancel := context.WithTimeout(request.Context(), h.streamTimeout)
 		defer cancel()

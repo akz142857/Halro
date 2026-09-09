@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -82,6 +83,7 @@ func (h *Handler) inferenceResourcesJSON(writer http.ResponseWriter, request *ht
 		writeError(writer, 400, "invalid_request_error", message, param)
 		return
 	}
+	request = request.WithContext(requestmeta.WithInboundRequest(request.Context(), decoded))
 	ctx, cancel := context.WithTimeout(request.Context(), h.routeTimeout)
 	defer cancel()
 	response, err := invoke(ctx, key, decoded)
@@ -179,6 +181,7 @@ func (h *Handler) Speech(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_request_error", message, param)
 		return
 	}
+	r = r.WithContext(requestmeta.WithInboundRequest(r.Context(), decoded))
 	ctx, cancel := context.WithTimeout(r.Context(), h.routeTimeout)
 	defer cancel()
 	result, err := h.inferenceResources.Speech(ctx, key, decoded)

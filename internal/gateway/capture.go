@@ -57,6 +57,17 @@ func capturesPayload(outcome string) bool {
 	return captured
 }
 
+// captureGatewayRequest remembers the decoded body at Halro's public API
+// boundary. Keeping it beside the normalized request is what lets an operator
+// distinguish max_tokens from max_completion_tokens (and equivalent facade
+// differences) after translation has changed the request's shape.
+func (run *requestRun) captureGatewayRequest(request any) {
+	if run == nil || run.service.failureCapture == nil {
+		return
+	}
+	run.capturedGatewayRequest = request
+}
+
 // captureRequest remembers the operation as it will go upstream, so a failure
 // can be explained without buffering anything on the successful path.
 //
@@ -128,15 +139,16 @@ func (run *requestRun) writeCapture(outcome string) {
 	if store == nil || !capturesPayload(outcome) || run.callerAbandoned() {
 		return
 	}
-	if run.capturedRequest == nil && run.capturedResponse == nil {
+	if run.capturedGatewayRequest == nil && run.capturedRequest == nil && run.capturedResponse == nil {
 		return
 	}
 	record := failurecapture.Record{
-		RequestID: run.requestID,
-		ProjectID: run.principal.Project.ID,
-		Outcome:   outcome,
-		Request:   encodeCaptured(run.capturedRequest),
-		Response:  encodeCaptured(run.capturedResponse),
+		RequestID:      run.requestID,
+		ProjectID:      run.principal.Project.ID,
+		Outcome:        outcome,
+		GatewayRequest: encodeCaptured(run.capturedGatewayRequest),
+		Request:        encodeCaptured(run.capturedRequest),
+		Response:       encodeCaptured(run.capturedResponse),
 	}
 	written, err := store.Put(record)
 	switch {

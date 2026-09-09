@@ -1015,8 +1015,11 @@ export interface FailurePayload {
   project_id: string;
   outcome: string;
   captured_at: string;
-  // The operation as it went upstream — already through the project's redaction
-  // policy, because capture happens after that policy has run.
+  // The decoded body accepted by the public Gateway facade, before Halro
+  // translates caller-facing fields into its provider-neutral request.
+  gateway_request?: unknown;
+  gateway_request_truncated?: boolean;
+  // Halro's provider-neutral operation after the project's redaction policy.
   request?: unknown;
   request_truncated?: boolean;
   // The upstream's own answer, or the answer Halro could not put on the
