@@ -1213,7 +1213,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     editCapabilities: "去编辑能力",
     lastTest: "最近手动测试",
     lastUpdated: "最近更新",
-    accessSurfaces: { "openai-api": "OpenAI 接口", "azure-openai": "Azure OpenAI 接口", "deepseek-api": "DeepSeek 接口", "openai-compatible": "OpenAI 兼容接口", "gemini-generate-content": "Gemini 接口", "anthropic-api": "Anthropic 接口", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax 接口", "kimi-api": "Kimi 接口" },
+    accessSurfaces: { "openai-api": "OpenAI 接口", "azure-openai": "Azure OpenAI 接口", "deepseek-api": "DeepSeek 接口", "openai-compatible": "OpenAI 兼容接口", "gemini-generate-content": "Gemini 接口", "anthropic-api": "Anthropic 接口", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax 接口", "kimi-api": "Kimi 接口", "bigmodel-cn-general-api": "BigModel 通用接口（中国大陆）", "bigmodel-global-general-api": "Z.AI 通用接口（国际）" },
     compatibleInterface: "兼容接口",
     activeRoutesEnabled: "{{count}} 条启用路由",
     uniformEvidence: "全部为{{evidence}}",

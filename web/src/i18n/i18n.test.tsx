@@ -63,6 +63,22 @@ describe("admin internationalization", () => {
     expect(extra, "product copy for products the server does not serve").toEqual([]);
   });
 
+  // Access surfaces reach the operator too — a deployment reports which
+  // interface it addresses — and this map was already a profile behind: the two
+  // BigModel surfaces landed with the platform and nothing here named them, so
+  // the deployment detail printed `bigmodel-cn-general-api` at an operator.
+  it("names every access surface the server serves, in both languages", () => {
+    const served = [...new Set(
+      providerProfilesFixture.provider_types.flatMap((type) => type.profiles.map((profile) => profile.access_surface)),
+    )];
+    expect(served.length).toBeGreaterThan(0);
+    for (const locale of [zhCN, enUS]) {
+      const copy = locale.deployments.accessSurfaces as Record<string, string>;
+      const missing = served.filter((surface) => !copy[surface]?.trim());
+      expect(missing, "access surfaces the server serves that this locale cannot name").toEqual([]);
+    }
+  });
+
   // And the implementations an operator actually has to choose between. Only
   // those need a name: everywhere else the group's profiles ride one connection
   // together and the control is not rendered, so copy for them would be copy

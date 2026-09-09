@@ -1206,7 +1206,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     editCapabilities: "Edit capabilities",
     lastTest: "Last manual test",
     lastUpdated: "Last updated",
-    accessSurfaces: { "openai-api": "OpenAI API", "azure-openai": "Azure OpenAI API", "deepseek-api": "DeepSeek API", "openai-compatible": "OpenAI-compatible API", "gemini-generate-content": "Gemini API", "anthropic-api": "Anthropic API", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax API", "kimi-api": "Kimi API" },
+    accessSurfaces: { "openai-api": "OpenAI API", "azure-openai": "Azure OpenAI API", "deepseek-api": "DeepSeek API", "openai-compatible": "OpenAI-compatible API", "gemini-generate-content": "Gemini API", "anthropic-api": "Anthropic API", "bedrock-runtime": "Bedrock Runtime", "bedrock-agent-runtime": "Bedrock Agent Runtime", "bedrock-mantle": "Bedrock Mantle", "minimax-api": "MiniMax API", "kimi-api": "Kimi API", "bigmodel-cn-general-api": "BigModel general API (mainland China)", "bigmodel-global-general-api": "Z.AI general API (international)" },
     compatibleInterface: "Compatible interface",
     activeRoutesEnabled: "Enabled routes: {{count}}",
     uniformEvidence: "All {{evidence}}",
