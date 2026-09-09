@@ -160,6 +160,7 @@ func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) b
 	switch profileID {
 	case domain.ProfileKimiChat, domain.ProfileMiniMaxChat, domain.ProfileDeepSeekChat,
 		domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat,
 		domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings:
 		// The Chat wire carries reasoning in its own member, and the decoder maps
 		// it to a reasoning content part.

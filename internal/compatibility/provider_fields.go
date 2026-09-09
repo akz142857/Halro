@@ -458,7 +458,7 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.EndUserRef != "" && (utf8.RuneCountInString(request.EndUserRef) < 6 || utf8.RuneCountInString(request.EndUserRef) > 128), "user")
 		add(len(request.Stop) > 4, "stop")
 		add(request.ToolChoice != nil && request.ToolChoice.Mode != semantic.ToolChoiceAuto, "tool_choice")
-	}, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat)
+	}, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat, domain.ProfileBigModelCNCodingChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Bedrock's inability to fetch an image used to be declared here, once per
 		// northbound endpoint, in each endpoint's own name for the same member.
@@ -543,7 +543,8 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 // output-limit meaning vary between exact GLM model identifiers.
 func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
 	unsupported := UnsupportedGenerateFields(profileID, request)
-	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat {
+	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat &&
+		profileID != domain.ProfileBigModelCNCodingChat {
 		return unsupported
 	}
 	seen := make(map[string]struct{}, len(unsupported))

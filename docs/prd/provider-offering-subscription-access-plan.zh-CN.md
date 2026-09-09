@@ -1,6 +1,7 @@
 # Provider Offering 与订阅接入统一方案
 
-状态：**阶段 1 已实施；阶段 0 / 2 / 3 / 4 未实施**（实施差异见 §14）  
+状态：**阶段 1 已实施；阶段 0（BigModel 国内）与阶段 2（BigModel 国内 Coding Plan）已实施；
+阶段 2 的海外部分、阶段 3 / 4 未实施**（实施差异见 §14）  
 建立日期：2026-09-09  
 最近修订：2026-09-09（第 1 轮 review 并实施阶段 1）  
 范围：`internal/domain`、`internal/provider`、`internal/compatibility`、`internal/app`、
@@ -563,8 +564,82 @@ Z.AI 海外站是否使用同一前缀尚未核实。见 §13 第 1、2 问。
 9. 大小写模型标识符是否归一化或严格区分；
 10. 海外站的 coding path prefix。
 
+中国大陆站的 1–7、9 已于 2026-09-09 实测完成，结论见下方"阶段 0 实测证据"；8（国内外 Key 是否
+严格隔离）与 10 仍缺海外 Key。
+
 如果上游提供模型列表，则上游列表是"谁存在"的唯一来源；内建目录只补充能力。如果订阅 endpoint
 确实没有模型列表，才允许使用带来源和复核日期的订阅模型 seed。
+
+#### 阶段 0 实测证据（2026-09-09，真实个人 Coding Plan 账号，中国大陆站）
+
+以下全部为真实请求实测，非文档推断。每次 chat 都用 `max_tokens` 1–8。
+
+**1. `GET /api/coding/paas/v4/models` 存在**，HTTP 200，OpenAI 形状
+（`{"object":"list","data":[{"id","object","created","owned_by"}]}`，无额外成员），列出 10 个
+模型：`glm-4.5`、`glm-4.5-air`、`glm-4.6`、`glm-4.7`、`glm-5`、`glm-5-turbo`、`glm-5.1`、
+`glm-5.2`、`glm-5.3`、`glm-5.3-flash`，`owned_by` 均为 `z-ai`。
+
+**2. 该列表与通用 API 的 `GET /api/paas/v4/models` 逐字节相同。**
+
+**3. 但 Coding endpoint 实际只服务两个模型，其余静默替换。** 用同一把 Coding Key 逐个请求上面
+10 个 id，读回响应里的 `model`：
+
+| 请求 | 实际应答 |
+| --- | --- |
+| `glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.7` / `glm-5-turbo` | `glm-5.3-flash` |
+| `glm-5` / `glm-5.1` / `glm-5.2` / `glm-5.3` | `glm-5.3` |
+| `glm-5.3-flash` | `glm-5.3-flash` |
+| `GLM-5.3`（大写） | `glm-5.3` —— 模型 ID 大小写不敏感 |
+| `not-a-model` | HTTP **400**，`{"error":{"code":"1211","message":"模型不存在，请检查模型代码。"}}` |
+
+**这推翻了 §5.1 的一条前提。**原文写"如果上游提供模型列表，则上游列表是'谁存在'的唯一来源"。
+这里列表存在、可读、且**对这个 endpoint 是错的**：它列 10 个、服务 2 个，另外 8 个会被按套餐档位
+悄悄改写。这是方案没有预见的第三种情形——**列表存在但不权威**——处理办法见下方"实现取舍"。
+
+**4. 同一把 Coding Key 在通用路径上被接受，且不替换模型**：`POST /api/paas/v4/chat/completions`
+请求 `glm-4.5-air`，应答 `glm-4.5-air`。这正是 §6.1 担心的情形的实证：**路径猜错不会报错，只会
+悄悄花另一份余额**。（两条路径分别扣套餐额度还是按量余额，响应里没有任何可观测字段，未能证实。）
+
+**5. Chat unary 与 stream 均为 OpenAI 形状**，与通用 profile 一致：
+- unary：`choices[0].message.{content,reasoning_content}`、`finish_reason`、顶层 `id` 与 `request_id`；
+- usage：`prompt_tokens`、`completion_tokens`、`total_tokens`、
+  `prompt_tokens_details.cached_tokens`、`completion_tokens_details.reasoning_tokens`；
+- stream：`chat.completion.chunk`，`delta.reasoning_content` 先行，末帧带 `finish_reason` 与
+  `usage`（需 `stream_options.include_usage`），随后 `data: [DONE]`。
+
+**6. Tool calls 正常**，标准 OpenAI 形状（`tool_calls[].{index,id,type,function.{name,arguments}}`，
+`finish_reason: "tool_calls"`）。
+
+**7. `thinking:{"type":"disabled"}` 不生效**，仍返回 `reasoning_content` 且计入
+`reasoning_tokens`。这**不是新发现**：`glm-5.3` 与 `glm-5.3-flash` 在
+`internal/compatibility/bigmodel.go` 里已被分类为 `bigModelAlwaysReasoning`，实测与现有分类一致。
+
+**8. `POST /api/coding/paas/v4/embeddings` 返回 200**，`embedding-3` 不被替换。但 `embedding-3`
+不在该路径的模型列表里，且是否扣套餐额度无法观测——**不据此申报 Embeddings 能力**。
+
+**未能取得的证据**（不得据推测实现）：
+
+- Z.AI 海外站的 coding path prefix 与模型映射（需要一把海外 Key）；
+- 额度耗尽、套餐过期、模型无权限的原始业务码（无法在不耗尽套餐的前提下触发）；
+- 两条路径各自扣哪份余额（响应无可观测字段）。
+
+#### 实现取舍（由上述证据决定）
+
+1. **枚举保持动态，目录只承担能力证据。**不改成写死名单——上游发新模型就要发 Halro 版本，那正是
+   仓库"适配器的沉默不是上游的答案"要避免的。但这条路径的列表也不是"谁存在"：内建目录只登记实测
+   服务的 `glm-5.3`、`glm-5.3-flash` 两条能力证据，其余标识符出现在选择器里时没有证据，由操作者
+   声明或探测——这与其他 profile 的规则完全一致（上游列表回答谁存在，目录回答已知模型会什么）。
+2. **能力探测加"模型替换"护栏。**探测到上游以另一个模型作答时，丢弃该次证据并标记
+   `model_substituted`，否则 `glm-5.3-flash` 的能力会被记成 `glm-4.6` 的 **verified** 证据——而
+   verified 正是路由后续信赖的那条记录。
+   护栏**只对"会原样回显模型标识符"的 profile 生效**（实测：BigModel 三条 profile 都会，连大小写
+   都归一化）。这是必要的作用域：Azure 用部署名寻址、回的是底层模型名，OpenAI 的别名会解析成带
+   日期的快照，两者都不是替换，一刀切会把它们的探测证据全部作废。
+3. 能力只声明实测过的：Chat、Streaming、Tools、JSONObject、StreamUsage、Reasoning。
+   **不继承通用 profile 的 Embeddings**（见证据 8），不声明 Vision 与 Structured Outputs（未测）。
+4. **尚未实现：用量归因仍记部署配置的模型，而不是响应里的。**响应带回的 `model` 目前在
+   `gateway/service.go` 被公开别名覆盖，attempt/ledger 记录里没有"实际应答模型"这个字段。补它要动
+   Ledger 事件结构，属于独立改动；在此之前，替换只在探测期被发现和拦截，运行期不留痕。
 
 官方资料（未复核）：
 
@@ -922,18 +997,30 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 处置由操作者执行。唯一的行为收窄是 anthropic-beta 的接受条件（§4.2），它只影响一种控制台从未
 产生过的组合。
 
-### 阶段 2：BigModel / Z.AI Coding Plan
+### 阶段 2：BigModel / Z.AI Coding Plan — **国内已实施，海外缺证据未做**
 
-- [ ] 注册两个 Coding surface（带 offering/region）、credential scheme 与 Profile。
-- [ ] adapter 按 profile 选择 `/api/coding/paas/v4`，并为该 switch 写路径断言测试。
-- [ ] 以真实 response 编写 Chat、stream、usage、tool 与 error fixtures。
-- [ ] 验证并接入 subscription `/models`；若不存在，记录探测证据后使用保守 catalog。
-- [ ] 只声明真实验证过的模型能力。
-- [ ] 增加 CN / Global 凭据和目录隔离测试。
-- [ ] 增加 plan expired、quota exhausted、model unavailable、rate limited 分类。
-- [ ] 决定订阅计价形态（等效单价 or 显式关闭成本治理），并在控制台与 operator guide 写明后果。
-- [ ] usage attribution 增加 offering 维度，bump `parquetSchemaVersion`。
-- [ ] 更新兼容 manifest、operator guide、user guide 和真实 provider matrix。
+- [x] 注册 **国内** Coding surface（`bigmodel-cn-coding-api`，offering `bigmodel.coding-plan`，
+      kind `subscription`，region `cn`）、credential scheme `bigmodel.coding-plan-key` 与 profile
+      `bigmodel.cn.coding.chat.v1`。海外 Coding profile **不注册**：没有海外 Key，path prefix 与
+      模型映射均未知。
+- [x] adapter 按 profile 选择 `/api/coding/paas/v4`（`bigModelPathPrefix`），并有路径断言测试
+      `TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath`；反向验证过：去掉分支该行变红。
+- [x] 真实账号实测 Chat、stream、usage、tool、JSON 模式与 `1211` 错误，证据见 §5.1 与
+      `docs/verification/provider-real-matrix.md`。
+- [x] **枚举保持动态**（与通用 profile 同一条路径），内建目录只登记实测服务的
+      `glm-5.3`、`glm-5.3-flash` 两条能力证据——上游列表回答"谁存在"，目录回答"已知模型会什么"，
+      新模型上线不需要发 Halro 版本。
+- [x] 只声明实测过的能力：Chat / Streaming / Tools / JSONObject / StreamUsage / Reasoning。
+      **不声明 Embeddings**（`/embeddings` 虽 200，但模型不在该产品列表内且无法观测扣哪份余额）、
+      不声明 Vision 与 Structured Outputs（未测）。
+- [x] 新增**模型替换护栏**：探测到上游以另一个模型作答时，丢弃该次证据并标记
+      `model_substituted`，避免把 `glm-5.3-flash` 的能力记成 `glm-4.6` 的 verified 证据。
+- [x] 三个产品的凭据、surface、path 隔离测试。
+- [~] 错误分类：只拿到 `1211`（HTTP 400，模型不存在）。plan expired / quota exhausted /
+      model unavailable 无法在不耗尽真实套餐的前提下触发，**未实现**。
+- [x] 计价形态已定：接受 unknown price + 该项目显式关闭成本治理，后果写入 operator guide。
+- [ ] usage attribution 增加 offering 维度，bump `parquetSchemaVersion`。**未做**——见 §14。
+- [x] 更新兼容 manifest、operator guide 与真实 provider matrix。
 
 ### 阶段 3：Kimi Code 与 MiniMax Token Plan
 
@@ -1060,8 +1147,9 @@ git diff --exit-code -- internal/webui/dist
 
 实施前仍需回答：
 
-1. BigModel Coding Plan 的 `/models` 是否真实存在，国内与海外 response 是否一致？
-2. Z.AI 海外站的 coding path prefix 是否也是 `/api/coding/paas/v4`？
+1. ~~BigModel Coding Plan 的 `/models` 是否真实存在~~ —— **已答**：存在，但不权威（列 10 个、
+   服务 2 个），见 §5.1 阶段 0 证据 1–3。海外 response 仍未知。
+2. Z.AI 海外站的 coding path prefix 是否也是 `/api/coding/paas/v4`？**仍未知**，需要海外 Key。
 3. BigModel 团队套餐 Key 是否需要独立于个人 Coding Plan 的 Credential Scheme？
 4. Kimi Code 当前允许哪些第三方 agent，Halro 作为中间网关是否符合其使用范围？
 5. MiniMax Token Plan 的 `sk-cp` Key 支持哪些 endpoint 和 wire profile？官方正式产品名是什么？
@@ -1096,13 +1184,26 @@ git diff --exit-code -- internal/webui/dist
    同一个 `domain.ProfileSendsAnthropicBetas`（§4.2）。这是本阶段唯一的行为收窄，影响的组合
    （Mantle 上锚在 OpenAI profile 的连接携带 beta token）控制台从未产生过。
 
+### 第 2 轮（阶段 0 + 2，国内 Coding Plan）
+
+第 6 处偏离，来自真实账号实测：
+
+6. **上游 `/models` 不再被当作"谁存在"的唯一来源——但也没有改成写死名单。**方案 §5.1 原文假设
+   列表要么存在（则权威）要么不存在（则 seed）。GLM Coding Plan 是第三种：列表存在、可读、
+   **且对该 endpoint 是错的**（列 10 个、服务 2 个）。做法是两者都保留各自的职责——
+   **枚举仍然动态**（否则上游发新模型就要发 Halro 版本），**内建目录只承担能力证据**，
+   再加一道运行时护栏：探测到上游以另一个模型作答就丢弃该次证据（`model_substituted`）。
+   证据在 §5.1，护栏在 `internal/provider/capability_detection.go`。
+
 尚未实施、且**不能**由本仓库单独完成的部分：
 
-- **阶段 0**：每个订阅产品的真实账号证据。需要真实的 GLM Coding Plan / Kimi Code / MiniMax Token
-  Plan 订阅，会消耗套餐额度，且 §5 的外链仍全部标注"未复核"。
-- **阶段 2/3**：BigModel Coding Plan、Kimi Code、MiniMax Token Plan 的 surface 与 profile。按
-  [Adding a provider platform](../contracts/adding-a-platform.md)，一个 profile 要带 fixture、
-  能力证据和 endpoint manifest；没有阶段 0 的证据就只能凭猜测申报能力，而那正是 §5.1 明令禁止的。
+- **阶段 0 / 2 的海外部分**：Z.AI 国际站的 Coding Plan。需要一把海外订阅 Key——path prefix 与
+  模型映射都不能从国内站推断，国内站本身就证明了"文档说的和 endpoint 做的不是一回事"。
+- **Coding Plan 的额度类错误码**：plan expired / quota exhausted / model unavailable。触发它们
+  需要真的把一份订阅用尽，未做。
+- **阶段 3**：Kimi Code 与 MiniMax Token Plan，各自需要一份真实订阅走完阶段 0。
+- **运行期的替换留痕**：把上游实际应答的模型写进 attempt / usage 归因。需要改 Ledger 事件结构，
+  是一次独立的持久化格式改动，见 §5.1 实现取舍第 4 条。
 - **阶段 4**：OAuth 型订阅，还阻塞在 §7.2 的刷新语义与官方授权边界上。
 
 阶段 1 之外、方案里提到但本次未做的小项：

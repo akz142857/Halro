@@ -237,23 +237,39 @@ func TestEveryTypeHasAtLeastOneCredentialIdentity(t *testing.T) {
 	}
 }
 
-// The one case the whole model exists for: BigModel sells two regional products
-// on one credential scheme, so its type has two identities and the write path
-// cannot pick between them.
-func TestBigModelHasTwoRegionalCredentialIdentities(t *testing.T) {
+// The case the whole model exists for: BigModel sells three products on one
+// provider type — two regional general APIs and a mainland Coding Plan — so its
+// type cannot have a credential's product guessed.
+func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 	identities := CredentialIdentities(ProviderBigModel)
-	if len(identities) != 2 {
-		t.Fatalf("BigModel has %d credential identities, want 2", len(identities))
+	if len(identities) != 3 {
+		t.Fatalf("BigModel has %d credential identities, want 3", len(identities))
 	}
-	regions := map[ProviderRegionID]AccessSurface{}
+	type product struct {
+		Offering ProviderOfferingID
+		Region   ProviderRegionID
+	}
+	got := map[product]AccessSurface{}
+	schemes := map[AccessSurface]CredentialScheme{}
 	for _, identity := range identities {
-		if identity.Offering != OfferingBigModelGeneral {
-			t.Fatalf("BigModel identity %+v is not the general API offering", identity)
-		}
-		regions[identity.Region] = identity.AccessSurface
+		got[product{identity.Offering, identity.Region}] = identity.AccessSurface
+		schemes[identity.AccessSurface] = identity.CredentialScheme
 	}
-	if regions[RegionCN] != SurfaceBigModelCNGeneral || regions[RegionGlobal] != SurfaceBigModelGlobalGeneral {
-		t.Fatalf("BigModel regions resolve to %+v", regions)
+	for key, want := range map[product]AccessSurface{
+		{OfferingBigModelGeneral, RegionCN}:     SurfaceBigModelCNGeneral,
+		{OfferingBigModelGeneral, RegionGlobal}: SurfaceBigModelGlobalGeneral,
+		{OfferingBigModelCodingPlan, RegionCN}:  SurfaceBigModelCNCoding,
+	} {
+		if got[key] != want {
+			t.Fatalf("%s/%s resolves to %q, want %q", key.Offering, key.Region, got[key], want)
+		}
+	}
+	// The subscription key is its own scheme. Sharing the general one would let a
+	// general key be saved against the Coding Plan surface, where it would spend
+	// a different balance than the operator chose.
+	if schemes[SurfaceBigModelCNCoding] == schemes[SurfaceBigModelCNGeneral] {
+		t.Fatalf("the Coding Plan and the general API share credential scheme %q",
+			schemes[SurfaceBigModelCNCoding])
 	}
 }
 
@@ -299,18 +315,44 @@ func TestRegionForEndpointReadsTheHost(t *testing.T) {
 	}
 }
 
-// A surface that recognises hosts at all has to recognise its own prefill, or
-// the form opens on a value it immediately labels as belonging somewhere else.
-func TestSurfacesRecogniseTheirOwnPrefills(t *testing.T) {
+// A surface that recognises hosts has to recognise its own prefill — unless the
+// host belongs to more than one surface of its type, where the address is not
+// the discriminator and the honest answer is "unknown". BigModel's mainland
+// general API and its Coding Plan are that case: one host, two products, told
+// apart by path.
+func TestSurfacesRecogniseTheirOwnPrefillsUnlessTheHostIsShared(t *testing.T) {
+	owners := map[string]map[AccessSurface]bool{}
+	for _, row := range surfaceTable {
+		for _, host := range row.Hosts {
+			key := string(row.Type) + "\x00" + host.Host
+			if owners[key] == nil {
+				owners[key] = map[AccessSurface]bool{}
+			}
+			owners[key][row.Surface] = true
+		}
+	}
+	shared := 0
 	for _, profile := range AllProviderProfiles() {
 		identity, ok := IdentityForSurface(profile.AccessSurface)
 		if !ok || len(identity.Hosts) == 0 || profile.BaseURLTemplate == "" {
 			continue
 		}
-		if surface, known := SurfaceForEndpoint(profile.Type, profile.BaseURLTemplate); !known || surface != profile.AccessSurface {
+		surface, known := SurfaceForEndpoint(profile.Type, profile.BaseURLTemplate)
+		if len(owners[string(profile.Type)+"\x00"+endpointHost(profile.BaseURLTemplate)]) > 1 {
+			shared++
+			if known {
+				t.Fatalf("profile %s prefills %q, a host two surfaces answer to, and it was still"+
+					" resolved to %q", profile.ID, profile.BaseURLTemplate, surface)
+			}
+			continue
+		}
+		if !known || surface != profile.AccessSurface {
 			t.Fatalf("profile %s prefills %q, which its own surface does not recognise (got %q, known=%v)",
 				profile.ID, profile.BaseURLTemplate, surface, known)
 		}
+	}
+	if shared == 0 {
+		t.Fatal("no shared host in the table; this test no longer covers the ambiguity it was written for")
 	}
 }
 
@@ -324,7 +366,9 @@ func TestSurfaceForEndpointSeparatesBigModelRegions(t *testing.T) {
 		want     AccessSurface
 		known    bool
 	}{
-		{"https://open.bigmodel.cn", SurfaceBigModelCNGeneral, true},
+		// The mainland host serves both the general API and the Coding Plan, so it
+		// identifies neither: the path is what separates them.
+		{"https://open.bigmodel.cn", "", false},
 		{"https://api.z.ai", SurfaceBigModelGlobalGeneral, true},
 		{"https://api.z.ai:443/api/paas/v4", SurfaceBigModelGlobalGeneral, true},
 		{"https://bigmodel.internal.example", "", false},

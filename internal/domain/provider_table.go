@@ -226,6 +226,23 @@ var profileTable = []profileRow{
 		Ceiling:         withBigModelOptionalCapabilities(bigModelGlobalSet),
 	},
 	{
+		// GLM Coding Plan, mainland. Same host as the row above it and nothing
+		// else in common: its own key, its own path, its own balance.
+		//
+		// The set is narrower than the general profile's and does not inherit
+		// from it. Chat, streaming, tools, JSON mode and stream usage were each
+		// measured against a real subscription on 2026-09-09; embeddings were
+		// not declared, because the coding path answers an embeddings request
+		// with a model its own list does not carry and nothing observable says
+		// which balance paid for it. Vision and structured outputs were not
+		// measured at all.
+		ID: ProfileBigModelCNCodingChat, Type: ProviderBigModel,
+		Surface: SurfaceBigModelCNCoding, Scheme: CredentialBigModelCodingPlanKey,
+		BaseURLTemplate: "https://open.bigmodel.cn",
+		Defaults:        bigModelCodingSet,
+		Ceiling:         bigModelCodingSet,
+	},
+	{
 		// Beta profile intentionally declares only the translated text subset.
 		ID: ProfileGeminiText, Type: ProviderGemini,
 		Surface: SurfaceGemini, Scheme: CredentialGoogleAPIKey,
@@ -468,6 +485,17 @@ var (
 	bigModelGlobalSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true,
 		JSONObject: true, StreamUsage: true,
+	}
+	// The measured subset, and nothing else. No Embeddings: the coding path
+	// answers an embeddings request with a model its own list does not carry and
+	// nothing observable says which balance paid. No Vision or Structured
+	// Outputs: not measured. Reasoning sits in the defaults rather than in a
+	// ceiling, unlike the general profile's, because the two models this product
+	// serves reason unconditionally — `thinking: {"type": "disabled"}` was sent
+	// and ignored — so it is what the connection does, not something to turn on.
+	bigModelCodingSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true,
+		JSONObject: true, StreamUsage: true, Reasoning: true,
 	}
 	openAICompatibleSet = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
 	geminiTextSet       = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}

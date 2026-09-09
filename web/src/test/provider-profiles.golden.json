@@ -1023,6 +1023,20 @@
             "cn",
             "global"
           ]
+        },
+        {
+          "id": "bigmodel.coding-plan",
+          "kind": "subscription",
+          "region_hosts": [
+            {
+              "host": "open.bigmodel.cn",
+              "region": "cn"
+            }
+          ],
+          "region_scope": "fixed",
+          "regions": [
+            "cn"
+          ]
         }
       ],
       "profiles": [
@@ -1363,6 +1377,180 @@
             {
               "declared_transforms": [
                 "portable Messages content is mapped through Z.AI Chat Completions",
+                "function tools are carried up to the documented limit of 128",
+                "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+                "json_schema has no BigModel counterpart"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "metadata",
+                "output_config.format",
+                "service_tier",
+                "stop_sequences",
+                "thinking",
+                "tool_choice",
+                "tools",
+                "top_k"
+              ]
+            }
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
+        },
+        {
+          "access_surface": "bigmodel-cn-coding-api",
+          "ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "combines_with": [],
+          "connection_ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "credential_scheme": "bigmodel.coding-plan-key",
+          "default_base_url": "https://open.bigmodel.cn",
+          "defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "id": "bigmodel.cn.coding.chat.v1",
+          "immutable": false,
+          "offering_id": "bigmodel.coding-plan",
+          "region_id": "cn",
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "the GLM Coding Plan uses the same explicitly rendered BigModel Chat dialect on its own /api/coding/paas/v4 path and its own subscription key",
+                "the product routes every published model identifier onto the tier its plan entitles, so the model that answers is read back from the response rather than assumed from the request",
+                "user is renamed to user_id",
+                "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+                "function tools are carried up to the documented limit of 128",
+                "json_object is preserved while json_schema is rejected",
+                "stream usage is returned by the final provider chunk without sending stream_options",
+                "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "parallel_tool_calls",
+                "tools",
+                "response_format",
+                "stop",
+                "tool_choice",
+                "user",
+                "messages[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the Coding Plan's Chat Completions route",
+                "max_output_tokens is carried as BigModel max_tokens",
+                "function tools are carried up to the documented limit of 128",
+                "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "tools",
+                "text.format",
+                "tool_choice",
+                "user",
+                "input[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through the Coding Plan's Chat Completions route",
                 "function tools are carried up to the documented limit of 128",
                 "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
                 "json_schema has no BigModel counterpart"

@@ -61,10 +61,10 @@ func TestWithheldOnlyOfferingIsNotServed(t *testing.T) {
 	}
 }
 
-// The one product axis this build actually has: BigModel's two regional
-// products, which the console has to be able to tell apart because their
-// capability sets differ.
-func TestBigModelIsServedAsOneProductWithTwoRegions(t *testing.T) {
+// BigModel is the type that carries two products: a metered general API with two
+// regional surfaces, and a mainland Coding Plan subscription. This is what the
+// console renders as a product choice and then a region choice.
+func TestBigModelIsServedAsTwoProducts(t *testing.T) {
 	view := buildProviderProfilesView("us-east-1")
 	var bigmodel providerTypeView
 	for _, providerType := range view.ProviderTypes {
@@ -72,32 +72,37 @@ func TestBigModelIsServedAsOneProductWithTwoRegions(t *testing.T) {
 			bigmodel = providerType
 		}
 	}
-	if len(bigmodel.Offerings) != 1 {
-		t.Fatalf("BigModel is served with %d offerings, want 1", len(bigmodel.Offerings))
+	kinds := map[domain.ProviderOfferingID]domain.ProviderOfferingKind{}
+	regions := map[domain.ProviderOfferingID][]domain.ProviderRegionID{}
+	for _, offering := range bigmodel.Offerings {
+		kinds[offering.ID] = offering.Kind
+		regions[offering.ID] = offering.Regions
+		if offering.RegionScope != domain.RegionScopeFixed {
+			t.Fatalf("offering %q has region scope %q, want fixed", offering.ID, offering.RegionScope)
+		}
 	}
-	offering := bigmodel.Offerings[0]
-	if offering.RegionScope != domain.RegionScopeFixed {
-		t.Fatalf("BigModel's region scope is %q, want fixed", offering.RegionScope)
+	if kinds[domain.OfferingBigModelGeneral] != domain.OfferingKindMeteredAPI {
+		t.Fatalf("the general API is served as %q", kinds[domain.OfferingBigModelGeneral])
 	}
-	if len(offering.Regions) != 2 {
-		t.Fatalf("BigModel is served with regions %v, want two", offering.Regions)
+	// The first subscription this build offers. The console reads this to tell a
+	// plan apart from a metered API.
+	if kinds[domain.OfferingBigModelCodingPlan] != domain.OfferingKindSubscription {
+		t.Fatalf("the Coding Plan is served as %q, want a subscription", kinds[domain.OfferingBigModelCodingPlan])
 	}
-	regions := map[domain.ProviderRegionID]domain.ProviderProfileID{}
+	if len(regions[domain.OfferingBigModelGeneral]) != 2 {
+		t.Fatalf("the general API is served with regions %v, want two", regions[domain.OfferingBigModelGeneral])
+	}
+	// Mainland only: the international Coding Plan has no evidence behind it, so
+	// it has no profile and must not appear.
+	if got := regions[domain.OfferingBigModelCodingPlan]; len(got) != 1 || got[0] != domain.RegionCN {
+		t.Fatalf("the Coding Plan is served with regions %v, want mainland only", got)
+	}
+	profiles := map[domain.ProviderProfileID]domain.ProviderOfferingID{}
 	for _, profile := range bigmodel.Profiles {
-		regions[profile.RegionID] = profile.ID
+		profiles[profile.ID] = profile.OfferingID
 	}
-	if regions[domain.RegionCN] != domain.ProfileBigModelCNChatEmbeddings ||
-		regions[domain.RegionGlobal] != domain.ProfileBigModelGlobalChat {
-		t.Fatalf("BigModel regions resolve to %v", regions)
-	}
-	// The two endpoints are what an operator recognises the products by, and the
-	// console shows them; a product spanning two surfaces has to carry both.
-	hosts := make([]string, 0, len(offering.RegionHosts))
-	for _, host := range offering.RegionHosts {
-		hosts = append(hosts, host.Host)
-	}
-	if len(hosts) != 2 {
-		t.Fatalf("BigModel is served with hosts %v, want both regional addresses", hosts)
+	if profiles[domain.ProfileBigModelCNCodingChat] != domain.OfferingBigModelCodingPlan {
+		t.Fatalf("the Coding Plan profile resolves to offering %q", profiles[domain.ProfileBigModelCNCodingChat])
 	}
 }
 

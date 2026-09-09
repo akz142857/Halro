@@ -40,6 +40,14 @@ const (
 	SurfaceKimi                  AccessSurface = "kimi-api"
 	SurfaceBigModelCNGeneral     AccessSurface = "bigmodel-cn-general-api"
 	SurfaceBigModelGlobalGeneral AccessSurface = "bigmodel-global-general-api"
+	// The Coding Plan is a separate surface even though it shares a host with the
+	// mainland general API, because nothing else about it is shared: a different
+	// key, a different path, a different balance, and a model set that is not the
+	// one the host's /models route reports. Measured 2026-09-09 against a real
+	// subscription: the coding path answers every published identifier with one
+	// of two models, while the general path on the same key answers with the one
+	// that was asked for. Two products, and a credential belongs to exactly one.
+	SurfaceBigModelCNCoding AccessSurface = "bigmodel-cn-coding-api"
 )
 
 const (
@@ -104,6 +112,10 @@ const (
 	ProfileKimiResponses            ProviderProfileID = "kimi.responses.v1"
 	ProfileBigModelCNChatEmbeddings ProviderProfileID = "bigmodel.cn.chat-embeddings.v1"
 	ProfileBigModelGlobalChat       ProviderProfileID = "bigmodel.global.chat.v1"
+	// Chat only. The coding path answers an embeddings request, but the model it
+	// serves them with is not in its own list and nothing observable says which
+	// balance paid, so the capability is not declared on the strength of a 200.
+	ProfileBigModelCNCodingChat ProviderProfileID = "bigmodel.cn.coding.chat.v1"
 )
 
 const (
@@ -114,6 +126,11 @@ const (
 	CredentialAWSSigV4Explicit CredentialScheme = "aws.sigv4.explicit-session"
 	CredentialBedrockAPIKey    CredentialScheme = "aws.bedrock.api-key"
 	CredentialBigModelAPIKey   CredentialScheme = "bigmodel.api-key"
+	// A separate scheme, not a reuse of the general one: the two keys are issued
+	// by different products and a credential's scheme is half of what binds it to
+	// its surface. Sharing one would let a general key be saved against the
+	// Coding Plan surface and spend the wrong balance.
+	CredentialBigModelCodingPlanKey CredentialScheme = "bigmodel.coding-plan-key"
 )
 
 const (

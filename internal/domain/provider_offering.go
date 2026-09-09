@@ -67,6 +67,10 @@ const (
 	OfferingKimiOpenPlatform ProviderOfferingID = "kimi.open-platform"
 	OfferingMiniMaxAPI       ProviderOfferingID = "minimax.api-platform"
 	OfferingBigModelGeneral  ProviderOfferingID = "bigmodel.general-api"
+	// The first subscription product this build offers. Kind is what it is sold
+	// as, and nothing routes on it: the path and the credential come from the
+	// profile, as they do for every other product.
+	OfferingBigModelCodingPlan ProviderOfferingID = "bigmodel.coding-plan"
 )
 
 // An Offering identifier is permanent. It reaches the Admin audit trail — the
@@ -165,6 +169,7 @@ var providerOfferingTable = []providerOfferingRow{
 	{OfferingKimiOpenPlatform, ProviderKimi, OfferingKindMeteredAPI},
 	{OfferingMiniMaxAPI, ProviderMiniMax, OfferingKindMeteredAPI},
 	{OfferingBigModelGeneral, ProviderBigModel, OfferingKindMeteredAPI},
+	{OfferingBigModelCodingPlan, ProviderBigModel, OfferingKindSubscription},
 }
 
 type surfaceRow struct {
@@ -225,6 +230,14 @@ var surfaceTable = []surfaceRow{
 		Surface: SurfaceBigModelGlobalGeneral, Type: ProviderBigModel, Offering: OfferingBigModelGeneral,
 		Region: RegionGlobal, RegionScope: RegionScopeFixed,
 		Hosts: []RegionHost{{Region: RegionGlobal, Host: "api.z.ai"}},
+	},
+	{
+		// Shares its host with the mainland general surface, which is why
+		// SurfaceForEndpoint refuses a host two surfaces answer to: here the path
+		// is the discriminator and the address says nothing.
+		Surface: SurfaceBigModelCNCoding, Type: ProviderBigModel, Offering: OfferingBigModelCodingPlan,
+		Region: RegionCN, RegionScope: RegionScopeFixed,
+		Hosts: []RegionHost{{Region: RegionCN, Host: "open.bigmodel.cn"}},
 	},
 }
 
@@ -398,15 +411,26 @@ func SurfaceForEndpoint(providerType ProviderType, endpoint string) (AccessSurfa
 	if host == "" {
 		return "", false
 	}
+	var found AccessSurface
 	for _, row := range surfaceTable {
 		if row.Type != providerType {
 			continue
 		}
 		for _, candidate := range row.Hosts {
-			if candidate.Host == host {
-				return row.Surface, true
+			if candidate.Host != host {
+				continue
 			}
+			// A host two surfaces share tells nothing apart, and this function's
+			// only caller acts on "belongs somewhere else". BigModel's mainland
+			// general and Coding Plan products are both served from
+			// open.bigmodel.cn and differ by path, so the host is not the
+			// discriminator there and answering with either would invent a
+			// finding out of a legal pairing.
+			if found != "" && found != row.Surface {
+				return "", false
+			}
+			found = row.Surface
 		}
 	}
-	return "", false
+	return found, found != ""
 }

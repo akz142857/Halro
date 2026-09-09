@@ -1027,9 +1027,41 @@ needs it and the hostname/IP boundary has been reviewed.
 | Bedrock Mantle | `https://bedrock-mantle.us-east-1.api.aws` | Bedrock API key | Beta OpenAI Chat, stateless Responses, or Anthropic Messages |
 | BigModel (mainland China) | `https://open.bigmodel.cn` | BigModel API key | Experimental Chat/stream/embeddings; fixed mainland general API surface |
 | Z.AI (global) | `https://api.z.ai` | Z.AI API key | Experimental Chat/stream; separate global surface and credential |
+| BigModel GLM Coding Plan (mainland China) | `https://open.bigmodel.cn` | Coding Plan subscription key | Experimental Chat/stream/tools on `/api/coding/paas/v4`; separate product, key and balance |
 
-For BigModel, the credential form asks which account region the key belongs to
-before anything else, and the endpoint follows that choice — mainland and
+The GLM Coding Plan is a **separate product on the same host**, not a billing
+label on the general API. It has its own subscription key, its own
+`/api/coding/paas/v4` path and its own balance, and Halro never infers the path
+from the host, the key or the model — a Coding Plan key sent to `/api/paas/v4` is
+accepted and answered, so the only consequence of a wrong path is that the other
+balance paid.
+
+Two things about it will surprise an operator, both measured on a real
+subscription (`docs/verification/provider-real-matrix.md`):
+
+- **It serves two models and lists ten.** `GET /api/coding/paas/v4/models`
+  returns the general catalogue, and every identifier other than `glm-5.3` and
+  `glm-5.3-flash` is answered by one of those two. Create deployments on the two
+  it serves. If a deployment names another, capability detection will refuse to
+  record what it measured — the reason reads "the upstream answered as a
+  different model" — because the evidence would belong to a model that never ran.
+  That guard runs on detection, not on save: declaring capabilities by hand for a
+  model this product does not serve still creates a deployment, and it will run
+  as whichever of the two the plan routes it to. Halro does not refuse it,
+  because a plan that gains a model later must not need a Halro release to be
+  usable — but nothing that deployment declares will be true of the model it
+  names.
+- **It reasons unconditionally.** `thinking: {"type": "disabled"}` is accepted
+  and ignored, so every answer spends reasoning tokens.
+
+Subscription calls have no published per-token price. A deployment on this
+product therefore runs with an unknown cost, which the accounting model only
+accepts when the project has explicitly disabled cost governance — **budgets do
+not restrain that project while it does**. Decide that deliberately before
+creating the deployment.
+
+For BigModel, the credential form asks which product and account region the key
+belongs to before anything else, and the endpoint follows that choice — mainland and
 international are separate products with separate accounts, balances and
 capability sets, so the Admin API refuses to guess: a credential request that
 names neither `access_surface` nor `scheme` is rejected and told which two to

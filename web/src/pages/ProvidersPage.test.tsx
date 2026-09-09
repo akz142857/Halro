@@ -435,22 +435,33 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
   });
 
-  // The defect this whole model exists to close. The form used to send no
-  // product at all, and the server filled one in from the provider type's
-  // default profile — so a key bound to api.z.ai was sealed to the mainland
-  // surface and carried its capability set, embeddings included.
+  // The defect this whole model exists to close, and the product axis it added.
+  // The form used to send no product at all, and the server filled one in from
+  // the provider type's default profile — so a key bound to api.z.ai was sealed
+  // to the mainland surface and carried its embeddings claim.
+  //
+  // BigModel now sells three products on one provider type: a metered general
+  // API in two regions and a mainland Coding Plan subscription. None of them can
+  // be guessed from the type.
   it("asks which BigModel product a credential is for and sends it", async () => {
     const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
     renderPage();
 
     fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
     fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
-    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Z.AI" } });
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Coding Plan" } });
     fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
 
-    const product = screen.getByLabelText(/^账号地域/) as HTMLSelectElement;
+    const product = screen.getByLabelText(/^上游产品/) as HTMLSelectElement;
     expect(product.value).toBe("bigmodel-cn-general-api");
     expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://open.bigmodel.cn");
+    // Every product of the type is offered, subscription included, and each one
+    // reads as what an operator bought rather than as a surface identifier.
+    expect(Array.from(product.options).map((option) => option.text)).toEqual([
+      "BigModel / Z.AI 通用 API · 中国大陆",
+      "BigModel / Z.AI 通用 API · 国际",
+      "GLM Coding Plan（订阅） · 中国大陆",
+    ]);
 
     fireEvent.change(product, { target: { value: "bigmodel-global-general-api" } });
     // The endpoint belongs to the product and is rewritten with it: a mainland
@@ -467,6 +478,31 @@ describe("ProvidersPage profile and credential bindings", () => {
       access_surface: "bigmodel-global-general-api",
       scheme: "bigmodel.api-key",
       base_url: "https://api.z.ai",
+    });
+  });
+
+  // The subscription is a different key on the same host, so the scheme is what
+  // separates it — and the form has to send that, not just the surface.
+  it("seals a Coding Plan credential to the subscription scheme", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "bigmodel-cn-coding-api" } });
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "coding-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api",
+      scheme: "bigmodel.coding-plan-key",
+      // Same host as the general mainland API. The path is what separates the
+      // two products, and it belongs to the profile.
+      base_url: "https://open.bigmodel.cn",
     });
   });
 

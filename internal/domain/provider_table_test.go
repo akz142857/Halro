@@ -290,6 +290,10 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		ProfileKimiResponses:            "https://api.moonshot.ai",
 		ProfileBigModelCNChatEmbeddings: "https://open.bigmodel.cn",
 		ProfileBigModelGlobalChat:       "https://api.z.ai",
+		// The Coding Plan is the same host as the mainland general API and a
+		// different path, which the adapter appends. Two products behind one
+		// address is why the endpoint cannot tell them apart.
+		ProfileBigModelCNCodingChat: "https://open.bigmodel.cn",
 	}
 	for _, profile := range AllProviderProfiles() {
 		expected, listed := want[profile.ID]

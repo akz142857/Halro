@@ -81,6 +81,94 @@ Gemini, Bedrock, MiniMax and BigModel are Beta/experimental and therefore do not
 GA matrix, but each has a separate opt-in real smoke test under its adapter
 package. Run those when the corresponding Beta is included in an RC deployment.
 
+## BigModel GLM Coding Plan: measured on a real mainland subscription (2026-09-09)
+
+A personal GLM Coding Plan key, mainland station. Every line below is a real
+request, not a reading of the documentation. Chat probes used `max_tokens` 1–8
+except the two JSON-mode calls, which needed 400 because the models reason first
+and a short budget is spent before any content appears.
+
+### The product's model list is not the product's models
+
+`GET /api/coding/paas/v4/models` exists, answers 200, and returns the OpenAI list
+shape with ten identifiers: `glm-4.5`, `glm-4.5-air`, `glm-4.6`, `glm-4.7`,
+`glm-5`, `glm-5-turbo`, `glm-5.1`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`. Its
+body is **byte-for-byte identical** to `GET /api/paas/v4/models` on the same key:
+it is the general catalogue echoed on the coding path.
+
+Asking each of the ten and reading the `model` the response carries:
+
+| requested | answered |
+| --- | --- |
+| `glm-4.5`, `glm-4.5-air`, `glm-4.6`, `glm-4.7`, `glm-5-turbo` | `glm-5.3-flash` |
+| `glm-5`, `glm-5.1`, `glm-5.2`, `glm-5.3` | `glm-5.3` |
+| `glm-5.3-flash` | `glm-5.3-flash` |
+| `GLM-5.3` | `glm-5.3` — the identifier is case-insensitive |
+| `not-a-model` | HTTP 400, `{"error":{"code":"1211","message":"模型不存在，请检查模型代码。"}}` |
+
+The product serves two models and routes every other published identifier onto
+the tier the plan entitles. This is why the coding profile's catalogue entries
+are the two measured models rather than the ten the route lists, and why
+`applySubstitutionGuard` discards evidence from a probe the upstream answered as
+a different model: without it, detection would record `glm-5.3-flash`'s
+capabilities as *verified* against a `glm-4.6` deployment.
+
+Enumeration itself is unchanged and still comes from the upstream, as it does for
+every profile. What the catalogue carries is capability evidence per (profile,
+model), so a model the plan gains later appears in the picker and is declared or
+detected rather than waiting for a release.
+
+### The key is accepted on the other product's path
+
+`POST /api/paas/v4/chat/completions` with the same Coding Plan key answered 200
+and returned `glm-4.5-air` for a request naming `glm-4.5-air` — the general path
+does not substitute. So a request that took the wrong path does not fail; it is
+served, and the only consequence is which balance paid. Nothing observable in
+either response says which one did, so the split is recorded as unverified.
+
+That is the measured form of the rule in the adaptation plan §6.1: the path is a
+property of the profile and is never inferred from the host, the key or the
+model. `TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath` asserts it,
+and removing the prefix branch makes that test fail on the coding row alone.
+
+### Wire shape
+
+Unary and SSE are the OpenAI shape the general profile already decodes:
+`choices[0].message.{content,reasoning_content}`, `finish_reason`, a top-level
+`id` and `request_id`; usage carries `prompt_tokens`, `completion_tokens`,
+`total_tokens`, `prompt_tokens_details.cached_tokens` and
+`completion_tokens_details.reasoning_tokens`. Streaming emits
+`chat.completion.chunk` with `delta.reasoning_content` first and a final chunk
+carrying `finish_reason` and `usage` when `stream_options.include_usage` is set,
+then `data: [DONE]`.
+
+Tool calls work and carry the standard shape
+(`tool_calls[].{index,id,type,function.{name,arguments}}`, `finish_reason:
+"tool_calls"`). `response_format` was honoured in both spellings: `json_object`
+and `json_schema` each returned `{"a":1}`. Only `json_object` is declared, which
+matches the sibling general profile — one conforming answer is not evidence a
+schema is enforced.
+
+`thinking: {"type": "disabled"}` was sent and ignored: `reasoning_content` came
+back and `reasoning_tokens` counted 4 of 8. This is not a new finding — both
+models the product serves are already classified `bigModelAlwaysReasoning` in
+`internal/compatibility/bigmodel.go` — and it is why the profile's defaults
+carry Reasoning rather than offering it as something to turn on.
+
+### Not measured, and therefore not declared
+
+- **Embeddings.** `POST /api/coding/paas/v4/embeddings` answered 200 for
+  `embedding-3`, a model the product's own list does not carry, and nothing says
+  which balance paid. A 200 is not the evidence a capability needs, so the
+  profile declares none.
+- **Vision and structured outputs.** Not probed.
+- **The international station.** No Z.AI Coding Plan key was available, so its
+  path prefix and model mapping are unknown and no global coding profile is
+  registered.
+- **Quota exhausted, plan expired, model not entitled.** Not reachable without
+  exhausting a real subscription. The error taxonomy therefore covers `1211`
+  (HTTP 400, model does not exist) and nothing else specific to the plan.
+
 ## BigModel / Z.AI: implementation complete, real-account cells not run (2026-09-08)
 
 Halro has separate mainland and global profiles for the shared BigModel Chat

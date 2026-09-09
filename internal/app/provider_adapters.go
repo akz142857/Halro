@@ -208,6 +208,15 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
 		build:     bigModelOpenAIAdapter,
 	},
+	// The GLM Coding Plan is the same host and dialect as the mainland general
+	// API, reached through a different path with a different key. The path is a
+	// property of the profile and never of the model identifier or the host: the
+	// two products answer on one address, and a request that took the wrong path
+	// does not fail — it spends the other balance.
+	domain.ProfileBigModelCNCodingChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     bigModelOpenAIAdapter,
+	},
 
 	// Bedrock Runtime and Agent Runtime. Withheld from every write path today,
 	// so no connection can be created on them; the rows stay because the
@@ -286,8 +295,22 @@ func kimiOpenAIAdapter(responses bool) func(adapterBuildContext, provider.Author
 	}
 }
 
+// bigModelPathPrefix is decided by the exact profile and by nothing else.
+//
+// Not by the host — the mainland general API and the Coding Plan share one — and
+// not by the key or the model, neither of which is a stable public protocol. A
+// wrong guess here is silent: measured on 2026-09-09, a Coding Plan key sent to
+// /api/paas/v4 is accepted and answered, so the only visible consequence of
+// guessing wrong is that a different balance paid.
+func bigModelPathPrefix(profileID domain.ProviderProfileID) string {
+	if profileID == domain.ProfileBigModelCNCodingChat {
+		return "api/coding/paas/v4"
+	}
+	return "api/paas/v4"
+}
+
 func bigModelOpenAIAdapter(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
-	prefix := "api/paas/v4"
+	prefix := bigModelPathPrefix(ctx.Binding.ProfileID)
 	return openaiprovider.NewWithOptions(openaiprovider.Options{
 		Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
 		ProviderType: string(domain.ProviderBigModel), CredentialScheme: ctx.Binding.CredentialScheme,

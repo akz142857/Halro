@@ -14,14 +14,29 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 )
 
-func TestBigModelWiringKeepsEachRegionOnItsOwnHostAndSurface(t *testing.T) {
+// The three BigModel products, each on its own address *and* its own path.
+//
+// The path half is what nothing else catches. docs/contracts/adding-a-platform.md
+// records that a wrong primitive binding leaves the tree green and that a
+// platform's own wiring test is what has to assert the route; here it matters
+// more than usual, because the mainland general API and the GLM Coding Plan
+// answer on one host and are told apart by the prefix alone. Measured
+// 2026-09-09: a Coding Plan key sent to /api/paas/v4 is accepted and answered,
+// so a wrong prefix does not fail — it spends the other balance.
+func TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath(t *testing.T) {
 	for _, test := range []struct {
 		profile domain.ProviderProfileID
 		surface domain.AccessSurface
+		scheme  domain.CredentialScheme
 		host    string
+		path    string
 	}{
-		{domain.ProfileBigModelCNChatEmbeddings, domain.SurfaceBigModelCNGeneral, "https://open.bigmodel.cn"},
-		{domain.ProfileBigModelGlobalChat, domain.SurfaceBigModelGlobalGeneral, "https://api.z.ai"},
+		{domain.ProfileBigModelCNChatEmbeddings, domain.SurfaceBigModelCNGeneral, domain.CredentialBigModelAPIKey,
+			"https://open.bigmodel.cn", "/api/paas/v4/chat/completions"},
+		{domain.ProfileBigModelGlobalChat, domain.SurfaceBigModelGlobalGeneral, domain.CredentialBigModelAPIKey,
+			"https://api.z.ai", "/api/paas/v4/chat/completions"},
+		{domain.ProfileBigModelCNCodingChat, domain.SurfaceBigModelCNCoding, domain.CredentialBigModelCodingPlanKey,
+			"https://open.bigmodel.cn", "/api/coding/paas/v4/chat/completions"},
 	} {
 		t.Run(string(test.profile), func(t *testing.T) {
 			endpoint, _ := url.Parse(test.host)
@@ -37,11 +52,11 @@ func TestBigModelWiringKeepsEachRegionOnItsOwnHostAndSurface(t *testing.T) {
 			})}
 			instance := domain.ProviderInstance{
 				ID: "prov_1", Name: "bigmodel", Type: domain.ProviderBigModel, BaseURL: endpoint.String(), CredentialID: "cred_1",
-				AccessSurface: test.surface, ProfileID: test.profile, CredentialScheme: domain.CredentialBigModelAPIKey,
+				AccessSurface: test.surface, ProfileID: test.profile, CredentialScheme: test.scheme,
 			}
 			binding := domain.ProviderProfileBinding{
 				ID: domain.DefaultProviderProfileBindingID(instance.ID, test.profile), ProviderID: instance.ID,
-				ProfileID: test.profile, AccessSurface: test.surface, CredentialScheme: domain.CredentialBigModelAPIKey,
+				ProfileID: test.profile, AccessSurface: test.surface, CredentialScheme: test.scheme,
 				Enabled: true, Capabilities: domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBigModel, test.profile),
 			}
 			adapter, err := newProviderBindingAdapterWithClient(instance, binding, endpoint, []byte("regional-key"), client)
@@ -56,7 +71,7 @@ func TestBigModelWiringKeepsEachRegionOnItsOwnHostAndSurface(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if seen == nil || seen.URL.Scheme+"://"+seen.URL.Host != test.host || seen.URL.Path != "/api/paas/v4/chat/completions" {
+			if seen == nil || seen.URL.Scheme+"://"+seen.URL.Host != test.host || seen.URL.Path != test.path {
 				t.Fatalf("request=%v", seen)
 			}
 			if got := seen.Header.Get("Authorization"); got != "Bearer regional-key" {

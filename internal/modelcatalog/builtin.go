@@ -666,6 +666,29 @@ func bigModelModels() []Entry {
 		builtinEntry(provider, cn, "embedding-3", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 3_072}),
 		builtinEntry(provider, cn, "embedding-2", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 512}),
 	)
+	// The GLM Coding Plan, measured against a real subscription on 2026-09-09.
+	//
+	// Two entries and not the ten its /models route lists, because the route is
+	// the general catalogue echoed on the coding path: every other identifier is
+	// answered by one of these two. Enumeration still comes from the upstream, as
+	// it does for every profile — this table only says what a known model does
+	// here, so a model the plan gains later appears in the picker and is declared
+	// or detected rather than waiting for a Halro release.
+	//
+	// Both reason unconditionally: `thinking: {"type": "disabled"}` was sent and
+	// ignored. No vision on either — glm-5.3-flash carries it on the general
+	// profiles and it was not measured here, and a capability is per (profile,
+	// model), not per model.
+	coding := domain.ProfileBigModelCNCodingChat
+	codingSet := domain.ProviderCapabilities{
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+		JSONObject: true, Reasoning: true,
+	}
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
+		entry := builtinEntry(provider, coding, model, codingSet)
+		entry.ReasonsUnasked = true
+		entries = append(entries, entry)
+	}
 	entries = append(entries, text(global, []string{
 		"glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
 		"glm-4.7-flash", "glm-4.7-flashx", "glm-4.6", "glm-4.5",

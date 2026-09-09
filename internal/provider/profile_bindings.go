@@ -93,6 +93,11 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 		operationBinding{OperationEmbeddings, PrimitiveBigModelEmbeddings})},
 	domain.ProfileBigModelGlobalChat: {Revision: 1, Bindings: chatPair(
 		PrimitiveBigModelChat, PrimitiveBigModelChatStream)},
+	// The Coding Plan speaks the same Chat dialect on its own path, and no
+	// embeddings pair: the product's own model list does not carry an embedding
+	// model, and a 200 from the route is not evidence of which balance paid.
+	domain.ProfileBigModelCNCodingChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveBigModelChat, PrimitiveBigModelChatStream)},
 	domain.ProfileOpenAICompatible: {Revision: 1, Bindings: append(
 		chatPair(PrimitiveCompatibleChat, PrimitiveCompatibleChatStream),
 		operationBinding{OperationEmbeddings, PrimitiveCompatibleEmbeddings})},
