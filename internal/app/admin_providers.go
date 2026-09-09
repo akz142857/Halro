@@ -1081,9 +1081,9 @@ func (r *Runtime) credentialFromInput(
 	if current != nil && surface == "" && scheme == "" {
 		surface, scheme = current.AccessSurface, current.Scheme
 	}
-	profile, ok := domain.ResolveCredentialProfile(input.Type, surface, scheme)
-	if !ok {
-		return domain.Credential{}, fmt.Errorf("credential access surface %q or scheme %q is incompatible with provider type %q", surface, scheme, input.Type)
+	profile, err := resolveCredentialIdentity(input.Type, surface, scheme)
+	if err != nil {
+		return domain.Credential{}, err
 	}
 	// Refused here rather than only hidden from the served matrix: the console is
 	// one caller of this API, and a surface this build does not offer must not be
@@ -1147,6 +1147,59 @@ func (r *Runtime) credentialFromInput(
 		CreatedAt: createdAt, UpdatedAt: now,
 	}
 	return credential, credential.Validate()
+}
+
+// resolveCredentialIdentity turns a request's product identity into the exact
+// profile a credential will be sealed to.
+//
+// A credential stores which product it belongs to, as an (access surface,
+// credential scheme) pair, and a request may leave that unstated. What to do
+// then is not one answer:
+//
+//   - One identity for the type: there is nothing to choose, so it is resolved.
+//     This is every provider but one, and demanding that a caller spell out
+//     "openai-api" plus "bearer.static" would be ceremony with no decision
+//     behind it.
+//   - Two or more: it is refused, naming them. The alternative is what this
+//     build did until now — fall back to the provider type's default profile —
+//     and that is how every BigModel credential came to be sealed to the
+//     mainland surface no matter which host it was bound to, including the ones
+//     pointing at api.z.ai. A global key stored as a mainland one is not a
+//     display problem: it carries the mainland profile's capability set, which
+//     declares embeddings the global endpoint does not serve.
+//
+// Refusing rather than guessing is the whole fix. `halro doctor` reports the
+// credentials the guess already produced; see checkDoctorCredentialProducts.
+func resolveCredentialIdentity(
+	providerType domain.ProviderType,
+	surface domain.AccessSurface,
+	scheme domain.CredentialScheme,
+) (domain.ProviderProfileDefaults, error) {
+	if surface == "" && scheme == "" {
+		identities := domain.CredentialIdentities(providerType)
+		if len(identities) > 1 {
+			choices := make([]string, 0, len(identities))
+			for _, identity := range identities {
+				choice := string(identity.Offering)
+				if identity.Region != domain.RegionNone {
+					choice += "/" + string(identity.Region)
+				}
+				choices = append(choices, fmt.Sprintf("%s (access_surface=%q scheme=%q)",
+					choice, identity.AccessSurface, identity.CredentialScheme))
+			}
+			return domain.ProviderProfileDefaults{}, fmt.Errorf(
+				"provider type %q offers more than one product, so a credential must say which one:"+
+					" send access_surface and scheme for one of %s",
+				providerType, strings.Join(choices, ", "))
+		}
+	}
+	profile, ok := domain.ResolveCredentialProfile(providerType, surface, scheme)
+	if !ok {
+		return domain.ProviderProfileDefaults{}, fmt.Errorf(
+			"credential access surface %q or scheme %q is incompatible with provider type %q",
+			surface, scheme, providerType)
+	}
+	return profile, nil
 }
 
 // validateCredentialMaterial runs the credential through the same constructor
@@ -1344,8 +1397,15 @@ func (r *Runtime) providerFromInput(
 	if err := domain.ValidateAnthropicBetaTokens(allowedBetas); err != nil {
 		return domain.ProviderInstance{}, err
 	}
-	if len(allowedBetas) > 0 && profile.AccessSurface != domain.SurfaceAnthropic && profile.AccessSurface != domain.SurfaceBedrockMantle {
-		return domain.ProviderInstance{}, errors.New("anthropic beta tokens are only valid on an Anthropic-wire access surface")
+	// Checked against the profile that would send them rather than against the
+	// surface. The surface was too wide: Bedrock Mantle carries OpenAI chat and
+	// responses profiles alongside its Anthropic one, so a connection anchored on
+	// one of those used to store beta tokens it would never send. The console
+	// already asked the narrower question — it is what ProfileSendsAnthropicBetas
+	// answers — and having the two disagree is what put the rule in two places.
+	if len(allowedBetas) > 0 && !domain.ProfileSendsAnthropicBetas(profile.ProfileID) {
+		return domain.ProviderInstance{}, errors.New(
+			"anthropic beta tokens are only valid on a connection whose implementation sends the anthropic-beta header")
 	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
@@ -1848,10 +1908,18 @@ func implementedProviderType(value domain.ProviderType) bool {
 }
 
 func credentialViewFrom(item domain.Credential) credentialView {
+	origin := credentialOrigin(item.Audience, item.Type)
+	identity, _ := domain.IdentityForSurface(item.AccessSurface)
+	// A fixed-region surface is its own answer; a by-endpoint one is read from
+	// the endpoint the credential is sealed to, and an endpoint the upstream does
+	// not publish leaves it empty rather than guessed.
+	region, _ := domain.RegionForEndpoint(item.AccessSurface, origin)
 	return credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
 		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
-		BoundBaseURL:     credentialOrigin(item.Audience, item.Type),
+		BoundBaseURL:     origin,
+		OfferingID:       identity.Offering,
+		RegionID:         region,
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 		ExpiresAt: item.ExpiresAt,
 		Revision:  item.Revision,

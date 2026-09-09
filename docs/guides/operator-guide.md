@@ -841,6 +841,36 @@ The diagnostic acquires the already initialized lock file through a read-only
 descriptor and does not rewrite its PID metadata. Regression tests hash every
 file under the data directory before and after a successful run.
 
+### `credential_product`: a key sealed to one product and bound to another
+
+A credential records which upstream product it belongs to, as an Access Surface,
+and every connection built on it takes its capability set from that surface.
+Before the Offering model landed the console did not send one and the server
+filled it in from the provider type's default profile. For a vendor with one
+product that was right. For BigModel it was not: mainland and international are
+separate products with separate accounts and balances, so a key bound to
+`https://api.z.ai` was stored on the mainland surface, and connections built on
+it declared the embeddings the international endpoint does not serve.
+
+This check reports those credentials by count. It never repairs them, because
+re-pointing the surface would silently change what the existing connections
+claim to do, and narrowing a capability takes a deployment out of service until
+it is retested — that is an operator's decision, not a migration's. Only a host
+the upstream itself publishes for a *different* surface of the same provider
+type is reported; an endpoint fronted by a proxy or a private gateway is
+unknown, not wrong, and says nothing.
+
+To clear it:
+
+1. Create a new credential, choosing the product and region explicitly. The
+   console asks whenever a provider type sells more than one, and the Admin API
+   refuses to guess: send `access_surface` and `scheme`.
+2. Recreate the connections that used the old credential against the new one,
+   and check the capabilities each one declares — the two products' ceilings
+   differ, which is the reason this matters.
+3. Retest and re-enable the deployments behind them, then delete the old
+   credential.
+
 If the local Admin password is lost, keep the server stopped and pipe a new
 password through standard input:
 
@@ -998,9 +1028,14 @@ needs it and the hostname/IP boundary has been reviewed.
 | BigModel (mainland China) | `https://open.bigmodel.cn` | BigModel API key | Experimental Chat/stream/embeddings; fixed mainland general API surface |
 | Z.AI (global) | `https://api.z.ai` | Z.AI API key | Experimental Chat/stream; separate global surface and credential |
 
-For BigModel, save the root host and select the matching regional profile. The
-profile appends `/api/paas/v4`, and model refresh reads the sibling
-`/api/paas/v4/models` route. Never auto-fallback between the two hosts: account
+For BigModel, the credential form asks which account region the key belongs to
+before anything else, and the endpoint follows that choice — mainland and
+international are separate products with separate accounts, balances and
+capability sets, so the Admin API refuses to guess: a credential request that
+names neither `access_surface` nor `scheme` is rejected and told which two to
+choose from. The connection form then offers only the profiles that match the
+credential. The profile appends `/api/paas/v4`, and model refresh reads the
+sibling `/api/paas/v4/models` route. Never auto-fallback between the two hosts: account
 entitlements, keys, balances, and model availability are region-scoped. The
 Anthropic-compatible routes remain unavailable until their real-account
 contract gate is recorded.

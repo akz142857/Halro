@@ -300,7 +300,8 @@ func summaryOf(row profileRow) ProviderProfileSummary {
 		ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
 		CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
 		Immutable: row.Immutable, Withheld: row.Withheld,
-		Defaults: row.Defaults, Ceiling: row.Ceiling,
+		RoutePartitioned: row.RoutePartitioned,
+		Defaults:         row.Defaults, Ceiling: row.Ceiling,
 	}
 }
 

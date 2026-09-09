@@ -12,6 +12,8 @@ const openAICredential: Credential = {
   name: "OpenAI production",
   type: "openai",
   access_surface: "openai-api",
+  offering_id: "openai.api-platform",
+  region_id: "",
   scheme: "bearer.static",
   bound_base_url: "https://api.openai.com:443",
   secret_configured: true,
@@ -433,6 +435,126 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
   });
 
+  // The defect this whole model exists to close. The form used to send no
+  // product at all, and the server filled one in from the provider type's
+  // default profile — so a key bound to api.z.ai was sealed to the mainland
+  // surface and carried its capability set, embeddings included.
+  it("asks which BigModel product a credential is for and sends it", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Z.AI" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
+
+    const product = screen.getByLabelText(/^账号地域/) as HTMLSelectElement;
+    expect(product.value).toBe("bigmodel-cn-general-api");
+    expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://open.bigmodel.cn");
+
+    fireEvent.change(product, { target: { value: "bigmodel-global-general-api" } });
+    // The endpoint belongs to the product and is rewritten with it: a mainland
+    // key left pointing at the global host is the pairing this form exists to
+    // stop.
+    expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://api.z.ai");
+
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "zai-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      type: "bigmodel",
+      access_surface: "bigmodel-global-general-api",
+      scheme: "bigmodel.api-key",
+      base_url: "https://api.z.ai",
+    });
+  });
+
+  // One product, two account hosts, keys that are not interchangeable. The
+  // region is the endpoint here, so choosing it writes the endpoint — and an
+  // address the upstream does not publish is unknown rather than refused,
+  // because an operator may front any upstream with a proxy.
+  it("writes the endpoint from the account region, and tolerates a fronted one", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Kimi" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "kimi" } });
+
+    const region = screen.getByLabelText(/^账号地域/) as HTMLSelectElement;
+    expect(region.value).toBe("global");
+    fireEvent.change(region, { target: { value: "cn" } });
+    expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://api.moonshot.cn");
+
+    fireEvent.change(screen.getByLabelText(/^地址绑定/), { target: { value: "https://kimi.internal.example" } });
+    expect((screen.getByLabelText(/^账号地域/) as HTMLSelectElement).value).toBe("");
+    expect(screen.getByRole("option", { name: "自定义端点（地域未知）" })).toBeInTheDocument();
+
+    fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "kimi-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      type: "kimi",
+      access_surface: "kimi-api",
+      base_url: "https://kimi.internal.example",
+    });
+  });
+
+  // A connection picks an implementation only where there is one to pick. This
+  // used to be a `type === "bedrock"` branch, so BigModel's two regional
+  // profiles were unreachable and every connection took the type default.
+  it("saves the exact BigModel profile the connection selected", async () => {
+    const globalCredential: Credential = {
+      id: "credential_zai",
+      name: "Z.AI",
+      type: "bigmodel",
+      access_surface: "bigmodel-global-general-api",
+      offering_id: "bigmodel.general-api",
+      region_id: "global",
+      scheme: "bigmodel.api-key",
+      bound_base_url: "https://api.z.ai:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [globalCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Z.AI" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.global.chat.v1" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      type: "bigmodel",
+      profile_id: "bigmodel.global.chat.v1",
+      access_surface: "bigmodel-global-general-api",
+      credential_scheme: "bigmodel.api-key",
+    });
+  });
+
+  // And says nothing where there is nothing to say: an OpenAI connection spans
+  // one group, so naming an implementation would assert that the enabled
+  // capabilities land on it — a claim the form has no business making.
+  it("names no implementation where the type offers one", async () => {
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "OpenAI" } });
+    expect(screen.queryByLabelText(/^能力实现/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).not.toHaveProperty("profile_id");
+  });
+
   it.each([
     {
       name: "Agent Runtime",
@@ -455,6 +577,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       type: "bedrock",
       access_surface: surface,
       scheme,
+      offering_id: surface === "bedrock-mantle" ? "aws.bedrock-mantle" : "aws.bedrock-runtime",
+      region_id: "",
       bound_base_url: boundBaseURL,
       secret_configured: true,
       key_version: 1,
@@ -514,6 +638,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -541,6 +667,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -577,6 +705,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -620,6 +750,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -676,6 +808,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -744,6 +878,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Anthropic production",
       type: "anthropic",
       access_surface: "anthropic-api",
+      offering_id: "anthropic.console-api",
+      region_id: "",
       scheme: "anthropic.x-api-key",
       bound_base_url: "https://api.anthropic.com:443",
       secret_configured: true,
@@ -774,6 +910,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Anthropic production",
       type: "anthropic",
       access_surface: "anthropic-api",
+      offering_id: "anthropic.console-api",
+      region_id: "",
       scheme: "anthropic.x-api-key",
       bound_base_url: "https://api.anthropic.com:443",
       secret_configured: true,
@@ -800,6 +938,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Anthropic production",
       type: "anthropic",
       access_surface: "anthropic-api",
+      offering_id: "anthropic.console-api",
+      region_id: "",
       scheme: "anthropic.x-api-key",
       bound_base_url: "https://api.anthropic.com:443",
       secret_configured: true,
@@ -849,6 +989,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "AWS-EAST2-365",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,
@@ -953,6 +1095,8 @@ describe("ProvidersPage profile and credential bindings", () => {
       name: "Mantle",
       type: "bedrock",
       access_surface: "bedrock-mantle",
+      offering_id: "aws.bedrock-mantle",
+      region_id: "",
       scheme: "aws.bedrock.api-key",
       bound_base_url: "https://bedrock-mantle.us-east-1.api.aws:443",
       secret_configured: true,

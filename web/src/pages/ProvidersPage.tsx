@@ -31,13 +31,19 @@ import {
   capabilityNeedsOptInWarning,
   combinableProfiles,
   connectionCeiling,
+  connectionChoices,
   connectionDefaults,
+  credentialIdentities,
   defaultProfileID,
+  findOffering,
   findProfile,
-  profilesForType,
+  offeringsForType,
+  regionForEndpoint,
   unservableCapabilities,
   updateCapabilitySelection,
   useProviderProfiles,
+  type ConnectionChoice,
+  type CredentialIdentity,
 } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
@@ -46,23 +52,6 @@ import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../Onboardin
 const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
-
-// regionHintKey names the warning a provider type needs on its endpoint field.
-// Two platforms serve one contract from two regional hosts whose keys are not
-// interchangeable, so the endpoint is the field an operator gets wrong and the
-// failure it produces looks like a credential problem.
-function regionHintKey(type: ProviderType): string | null {
-  switch (type) {
-    case "minimax":
-      return "providers.minimaxRegionHint";
-    case "kimi":
-      return "providers.kimiRegionHint";
-    case "bigmodel":
-      return "providers.bigmodelRegionHint";
-    default:
-      return null;
-  }
-}
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
@@ -97,16 +86,6 @@ function credentialExpiry(value: string | undefined, now = Date.now()) {
   return { expired: at <= now, days, soon: at > now && days <= credentialExpiryWarningDays };
 }
 
-// Which profile a Bedrock credential is created for.
-//
-// The form used to ask, because Bedrock's surfaces have different hosts and
-// different credential schemes. The served matrix answers it now: this build
-// offers Mantle alone, so the type's default profile is the only binding a new
-// credential can take, and a question with one answer is not asked.
-function bedrockCredentialProfile(catalog: ProviderProfilesCatalog) {
-  return findProfile(catalog, "bedrock", defaultProfileID(catalog, "bedrock"));
-}
-
 // The anthropic-beta header is comma separated, so the form takes one comma
 // separated string and stores the token set. Splitting here (rather than asking
 // the operator for one row per token) keeps copy-paste from Anthropic's docs
@@ -121,8 +100,40 @@ function endpointForType(catalog: ProviderProfilesCatalog, type: ProviderType) {
   return findProfile(catalog, type, defaultProfileID(catalog, type))?.default_base_url ?? "";
 }
 
-function isBedrockProfile(catalog: ProviderProfilesCatalog, value: string) {
-  return profilesForType(catalog, "bedrock").some((profile) => profile.id === value);
+// The label for one product identity or connection choice.
+//
+// Built from the served identifiers and translated by them, so adding a product
+// upstream adds a row here without this file being edited. The product name is
+// dropped where the type has only one — it would repeat the type — and the
+// region is dropped where the product has none.
+function productLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+  regionID: string,
+): string {
+  const parts: string[] = [];
+  if (offeringsForType(catalog, type).length > 1) {
+    parts.push(t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }));
+  }
+  if (regionID) parts.push(t(`providers.regions.${regionID}`, { defaultValue: regionID }));
+  return parts.join(" · ");
+}
+
+// The same label where an empty one would leave a blank option. Two identities
+// of one product with no region between them is not a shape any platform has
+// today; if one arrives, the operator sees the identifiers rather than a control
+// with nothing in it.
+function productOptionLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+  regionID: string,
+  fallback: string,
+): string {
+  return productLabel(t, catalog, type, offeringID, regionID) || fallback;
 }
 
 export function ProvidersPage() {
@@ -442,6 +453,13 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
             <p>{t("providers.credentialDetailsDescription")}</p>
           </header>
           <dl className="credential-detail-grid">
+            {/* The product first, in the words an operator bought it in; the
+                surface below it is the identifier that decides behaviour, and
+                the two are one fact seen from two sides. */}
+            <div><dt>{t("providers.product")}</dt><dd>{[
+              t(`providers.offerings.${credential.offering_id}`, { defaultValue: credential.offering_id }),
+              credential.region_id ? t(`providers.regions.${credential.region_id}`, { defaultValue: credential.region_id }) : "",
+            ].filter(Boolean).join(" · ")}</dd></div>
             <div><dt>{t("providers.normalizedBoundURL")}</dt><dd><code>{credential.bound_base_url}</code></dd></div>
             <div><dt>{t("providers.surface")}</dt><dd><code>{credential.access_surface}</code></dd></div>
             <div><dt>{t("providers.scheme")}</dt><dd><code>{credential.scheme}</code></dd></div>
@@ -486,8 +504,21 @@ function CredentialForm({
   const { notify } = useNotify();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
+  // Which upstream product this key is for. A credential stores it as an access
+  // surface and a scheme, and the server refuses to guess where a type sells
+  // more than one — which is what let every BigModel key be sealed to the
+  // mainland surface no matter which host it was bound to. A rotation keeps
+  // whatever the credential was sealed to and does not ask again: changing the
+  // product is a new credential, because every connection built on this one
+  // takes its endpoint and its capability set from that surface.
+  const initialIdentities = credentialIdentities(catalog, current?.type ?? "openai");
+  const [identity, setIdentity] = useState<CredentialIdentity | undefined>(
+    current
+      ? initialIdentities.find((candidate) => candidate.accessSurface === current.access_surface)
+      : initialIdentities[0],
+  );
   const [baseURL, setBaseURL] = useState(
-    current ? displayBoundBaseURL(current.bound_base_url) : endpointForType(catalog, "openai"),
+    current ? displayBoundBaseURL(current.bound_base_url) : initialIdentities[0]?.defaultBaseURL ?? "",
   );
   const [secret, setSecret] = useState("");
   // datetime-local has no zone of its own. Read and written in the accounting
@@ -510,15 +541,13 @@ function CredentialForm({
       // whatever the credential was sealed to — including a surface this build no
       // longer offers, which must be deleted rather than silently re-pointed at
       // the one that is.
-      const bedrockBinding = type === "bedrock" && !current
-        ? bedrockCredentialProfile(catalog)
-        : undefined;
+      const product = !current && identity ? identity : undefined;
       const value = {
         name,
         type,
         base_url: baseURL,
-        ...(bedrockBinding
-          ? { access_surface: bedrockBinding.access_surface, scheme: bedrockBinding.credential_scheme }
+        ...(product
+          ? { access_surface: product.accessSurface, scheme: product.credentialScheme }
           : {}),
         ...(secret ? { secret } : {}),
         // Always sent, including as null: the stored expiry is whatever the
@@ -556,6 +585,18 @@ function CredentialForm({
     event.preventDefault();
     if (name.trim() && baseURL.trim() && (current || secret) && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
   };
+  // Everything below is read from the served matrix. A type that sells one
+  // product asks nothing; one that sells two cannot have it guessed, and one
+  // whose regions live in the endpoint gets the endpoint written for it.
+  const typeIdentities = credentialIdentities(catalog, type);
+  const offering = findOffering(catalog, type, identity?.offeringID ?? "");
+  const detectedRegion = regionForEndpoint(offering, baseURL);
+  // The control names what it actually chooses: a product where the type sells
+  // more than one, and otherwise the region, which is what the identities of a
+  // single-product type differ by.
+  const identityLabel = offeringsForType(catalog, type).length > 1
+    ? t("providers.product")
+    : t("providers.region");
   const dirty = useDirty({ name, type, baseURL, secret, expiresAt });
   return (
     <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
@@ -567,22 +608,73 @@ function CredentialForm({
         <Field label={t("providers.providerType")}>
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
+            const first = credentialIdentities(catalog, next)[0];
             setType(next);
-            setBaseURL(endpointForType(catalog, next));
+            setIdentity(first);
+            setBaseURL(first?.defaultBaseURL ?? "");
           }}>
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
-        <Field label={t("providers.boundURL")} hint={regionHintKey(type) ? t(regionHintKey(type)!) : t("providers.boundURLHint")}>
+        {/* Which product this key belongs to. Shown only where there is more
+            than one, because a question with one answer is not asked — and
+            never on a rotation, where the answer is already sealed into the
+            credential and changing it is a new credential rather than a new
+            secret. */}
+        {!current && typeIdentities.length > 1 && (
+          <Field label={identityLabel} hint={t("providers.productHint")}>
+            <select value={identity?.accessSurface ?? ""} onChange={(event) => {
+              const next = typeIdentities.find((candidate) => candidate.accessSurface === event.target.value);
+              setIdentity(next);
+              // The endpoint belongs to the product, so it is rewritten rather
+              // than carried over: a mainland key left pointing at the global
+              // host is the exact pairing this form exists to stop.
+              setBaseURL(next?.defaultBaseURL ?? "");
+            }}>
+              {typeIdentities.map((candidate) => (
+                <option key={candidate.accessSurface} value={candidate.accessSurface}>
+                  {productOptionLabel(t, catalog, type, candidate.offeringID, candidate.regionID, candidate.credentialScheme)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {current && identity && productLabel(t, catalog, type, identity.offeringID, identity.regionID) && (
+          <Field label={identityLabel} hint={t("providers.productLockedHint")}>
+            <output className="badge">{productLabel(t, catalog, type, identity.offeringID, identity.regionID)}</output>
+          </Field>
+        )}
+        {/* One product, several account hosts, keys that are not interchangeable
+            between them. The region is the endpoint here, so choosing it writes
+            the endpoint field; an address the upstream does not publish is
+            unknown rather than wrong, and saves either way. */}
+        {offering?.region_scope === "by_endpoint" && (
+          <Field label={t("providers.region")} hint={t("providers.regionByEndpointHint")}>
+            <select value={detectedRegion ?? ""} onChange={(event) => {
+              const host = offering.region_hosts.find((entry) => entry.region === event.target.value)?.host;
+              if (host) setBaseURL(`https://${host}`);
+            }}>
+              {detectedRegion === undefined && <option value="">{t("providers.regionUnknown")}</option>}
+              {offering.region_hosts.map((entry) => (
+                <option key={entry.region} value={entry.region}>
+                  {t(`providers.regions.${entry.region}`, { defaultValue: entry.region })} · {entry.host}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
+        {/* What kind of material this is belongs to the credential scheme, not to
+            the provider name: the same scheme on a new platform needs the same
+            sentence, and the fallback keeps a new scheme readable rather than
+            blank. */}
         <Field
           label={current ? t("providers.newSecret") : t("providers.providerSecret")}
           hint={current
             ? t("providers.secretConfigured")
-            : type === "bedrock"
-              ? t("providers.bedrockMantleHint")
-              : t("providers.secretHint")}
+            : t(`providers.schemeHints.${identity?.credentialScheme ?? ""}`, { defaultValue: t("providers.secretHint") })}
         >
           <input
             type="password"
@@ -626,10 +718,16 @@ function ProviderForm({
   const initialType = current?.type ?? "openai";
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
-  const bedrockDefaultProfile = defaultProfileID(catalog, "bedrock");
-  const initialProfile = current?.profile_id && isBedrockProfile(catalog, current.profile_id)
+  // Which implementation this connection is anchored on. There is something to
+  // choose in exactly two situations, and the served matrix says which: a type
+  // that sells more than one product (BigModel's two regions), and a group whose
+  // routes are partitioned (Bedrock Mantle, where each model answers on exactly
+  // one route). Everywhere else the group's profiles ride one connection
+  // together and this control is not rendered.
+  const initialProfile = current?.profile_id
+    && connectionChoices(catalog, initialType).some((choice) => choice.profileID === current.profile_id)
     ? current.profile_id
-    : bedrockDefaultProfile;
+    : connectionChoices(catalog, initialType)[0]?.profileID ?? defaultProfileID(catalog, initialType);
   const [profileID, setProfileID] = useState(initialProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? endpointForType(catalog, initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
@@ -645,14 +743,17 @@ function ProviderForm({
   // questions — provider_executed_tools sits above the defaults and inside the
   // ceiling, because the profile supports it and enabling it accepts upstream
   // egress Halro never sees.
-  const anchorProfile = type === "bedrock" ? profileID : defaultProfileID(catalog, type);
+  const choices = connectionChoices(catalog, type);
+  const selectedChoice: ConnectionChoice | undefined =
+    choices.find((choice) => choice.profileID === profileID) ?? choices[0];
+  const anchorProfile = selectedChoice?.profileID ?? defaultProfileID(catalog, type);
   const capabilityCeiling = connectionCeiling(catalog, type, anchorProfile);
   const capabilityNames = booleanCapabilityNames(catalog);
   // A profile whose set is fixed by the build offers no checkboxes to widen.
   const fixedCapabilities = combinableProfiles(catalog, type, anchorProfile).every((profile) => profile.immutable);
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
-  const selectedSurface = type === "bedrock" ? findProfile(catalog, "bedrock", profileID)?.access_surface : undefined;
+  const selectedSurface = selectedChoice?.accessSurface;
   // What is ticked that this connection cannot serve. The server refuses these
   // too, and names them; catching it here points at the checkbox instead.
   const unservable = unservableCapabilities(catalog, type, anchorProfile, capabilities);
@@ -663,15 +764,16 @@ function ProviderForm({
   // The header is only ever sent by the native Anthropic Messages path, which is
   // a property of the profile rather than the surface: Bedrock Mantle also
   // carries OpenAI chat and responses profiles, and a token stored on one of
-  // those would be kept and never sent.
-  const supportsAnthropicBetas = type === "anthropic" || profileID === "bedrock.mantle.anthropic.messages.v1";
+  // those would be kept and never sent. Which profiles those are is the
+  // server's answer now — it used to be a pair of identifiers written here, and
+  // the same rule in two places is a rule that drifts.
+  const supportsAnthropicBetas = Boolean(findProfile(catalog, type, anchorProfile)?.sends_anthropic_betas);
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(
     current?.credential_id ??
       credentials.find((credential) =>
         credential.type === initialType &&
-        (initialType !== "bedrock" ||
-          credential.access_surface === findProfile(catalog, "bedrock", initialProfile)?.access_surface),
+        credential.access_surface === findProfile(catalog, initialType, initialProfile)?.access_surface,
       )?.id ??
       "",
   );
@@ -695,14 +797,19 @@ function ProviderForm({
     mutationFn: () => {
       const value = {
       name, type, base_url: baseURL,
-      ...(type === "bedrock" ? {
-        profile_id: profileID,
-        access_surface: findProfile(catalog, "bedrock", profileID)?.access_surface,
-        credential_scheme: findProfile(catalog, "bedrock", profileID)?.credential_scheme,
-        ...(selectedSurface === "bedrock-mantle"
-          ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
-          : {}),
+      // Sent where the operator actually chose, and only there. Naming the
+      // implementation asserts that the enabled capabilities land on it, which
+      // is a claim a form has no business making when the matrix offered one
+      // option and it picked it: the server assigns capabilities across the
+      // group and the anchor follows.
+      ...(choices.length > 1 && selectedChoice ? {
+        profile_id: selectedChoice.profileID,
+        access_surface: selectedChoice.accessSurface,
+        credential_scheme: selectedChoice.credentialScheme,
       } : {}),
+      ...(selectedSurface === "bedrock-mantle"
+        ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
+        : {}),
       // One flat set. A connection can span more than one profile — an OpenAI key
       // serves both the chat endpoints and the media ones — and sorting the
       // ticked capabilities into a binding per profile is the server's job:
@@ -793,40 +900,46 @@ function ProviderForm({
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
+              const first = connectionChoices(catalog, next)[0];
               setType(next);
-              setBaseURL(endpointForType(catalog, next));
-              setProfileID(defaultProfileID(catalog, "bedrock"));
+              setBaseURL(first?.defaultBaseURL ?? endpointForType(catalog, next));
+              setProfileID(first?.profileID ?? defaultProfileID(catalog, next));
               setCredentialID(credentials.find((credential) => credential.type === next
-                && (next !== "bedrock" || credential.access_surface === bedrockCredentialProfile(catalog)?.access_surface))?.id ?? "");
-              setCapabilities(connectionDefaults(catalog, next, defaultProfileID(catalog, next)));
+                && credential.access_surface === first?.accessSurface)?.id ?? "");
+              setCapabilities(connectionDefaults(catalog, next, first?.profileID ?? defaultProfileID(catalog, next)));
             }}>
               <ProviderTypeOptions t={t} />
             </select>
           </Field>
-          {type === "bedrock" && (
-            <Field label={t("providers.capabilityImplementation")} hint={t("providers.bedrockProfileHint")}>
-              <select value={profileID} onChange={(event) => {
-                const next = event.target.value;
-                const profile = findProfile(catalog, "bedrock", next);
-                setProfileID(next);
-                setBaseURL(profile?.default_base_url ?? "");
-                setCredentialID(credentials.find((credential) => credential.type === "bedrock" && credential.access_surface === profile?.access_surface)?.id ?? "");
-                setCapabilities(connectionDefaults(catalog, "bedrock", next));
+          {choices.length > 1 && (
+            <Field label={t("providers.capabilityImplementation")} hint={t("providers.implementationHint")}>
+              <select value={anchorProfile} onChange={(event) => {
+                const next = choices.find((choice) => choice.profileID === event.target.value);
+                if (!next) return;
+                setProfileID(next.profileID);
+                setBaseURL(next.defaultBaseURL);
+                setCredentialID(credentials.find((credential) =>
+                  credential.type === type && credential.access_surface === next.accessSurface)?.id ?? "");
+                setCapabilities(connectionDefaults(catalog, type, next.profileID));
               }}>
-                {profilesForType(catalog, "bedrock").map((profile) => (
-                  <option value={profile.id} key={profile.id}>{t(`providers.bedrockProfiles.${profile.id}`)}</option>
+                {choices.map((choice) => (
+                  <option value={choice.profileID} key={choice.profileID}>
+                    {t(`providers.profiles.${choice.profileID}`, {
+                      defaultValue: productLabel(t, catalog, type, choice.offeringID, choice.regionID) || choice.profileID,
+                    })}
+                  </option>
                 ))}
               </select>
             </Field>
           )}
+          {/* A connection's endpoint follows its credential, which is already
+              sealed to one. Where a product splits by account host — Kimi and
+              MiniMax — the two addresses differ by a couple of letters and the
+              wrong one fails as an authentication error, so the credential's
+              own bound URL is what the field is checked against rather than a
+              per-provider sentence. */}
           <Field label={t("providers.baseURL")} hint={
-            credentialBaseURLMismatch
-              ? t("providers.baseURLBoundHint", { credential: credentialBoundURL })
-              // MiniMax and Kimi both split by account region, and in both cases the
-              // two addresses differ by a couple of letters while the contract is
-              // identical. The wrong one fails as an authentication error, which
-              // reads as a bad key rather than as a wrong host.
-              : regionHintKey(type) ? t(regionHintKey(type)!) : undefined
+            credentialBoundURL ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined
           }>
             <input autoComplete="off" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
           </Field>

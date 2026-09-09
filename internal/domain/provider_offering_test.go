@@ -1,0 +1,337 @@
+package domain
+
+import (
+	"strings"
+	"testing"
+)
+
+// The Offering/Region model is only worth having if it is total: every profile
+// this build knows about — withheld ones included, because the profile table is
+// the one enumeration — has to answer which product it belongs to, and has to
+// answer it the same way through either derivation path. These tests are what
+// says so.
+
+func TestEverySurfaceUsedByAProfileHasAnIdentity(t *testing.T) {
+	for _, profile := range AllProviderProfiles() {
+		identity, ok := IdentityForSurface(profile.AccessSurface)
+		if !ok {
+			t.Fatalf("profile %s names access surface %q, which has no row in surfaceTable",
+				profile.ID, profile.AccessSurface)
+		}
+		if identity.Type != profile.Type {
+			t.Fatalf("profile %s is provider type %q but its surface %q belongs to %q",
+				profile.ID, profile.Type, profile.AccessSurface, identity.Type)
+		}
+	}
+}
+
+func TestIdentityForProfileMatchesIdentityForItsSurface(t *testing.T) {
+	for _, profile := range AllProviderProfiles() {
+		fromProfile, ok := IdentityForProfile(profile.ID)
+		if !ok {
+			t.Fatalf("profile %s resolves to no identity", profile.ID)
+		}
+		fromSurface, _ := IdentityForSurface(profile.AccessSurface)
+		if fromProfile.Surface != fromSurface.Surface ||
+			fromProfile.Offering != fromSurface.Offering ||
+			fromProfile.Region != fromSurface.Region ||
+			fromProfile.RegionScope != fromSurface.RegionScope ||
+			fromProfile.Kind != fromSurface.Kind {
+			t.Fatalf("profile %s derives %+v through the profile and %+v through the surface",
+				profile.ID, fromProfile, fromSurface)
+		}
+	}
+}
+
+func TestEverySurfaceRowIsReferencedByAProfile(t *testing.T) {
+	used := make(map[AccessSurface]bool)
+	for _, profile := range AllProviderProfiles() {
+		used[profile.AccessSurface] = true
+	}
+	for _, row := range surfaceTable {
+		if !used[row.Surface] {
+			t.Fatalf("surface %q has a row but no profile names it; a surface nothing reaches is a"+
+				" constant that cannot be resolved", row.Surface)
+		}
+	}
+}
+
+func TestEveryOfferingRowIsReferencedByASurface(t *testing.T) {
+	used := make(map[ProviderOfferingID]bool)
+	for _, row := range surfaceTable {
+		used[row.Offering] = true
+	}
+	for _, offering := range providerOfferingTable {
+		if !used[offering.ID] {
+			t.Fatalf("offering %q is registered but no surface belongs to it; register it when it"+
+				" gains a surface, not before", offering.ID)
+		}
+	}
+}
+
+// Both tables are indexed by map, so a duplicated row would be silently replaced
+// rather than reported — and the row that survived would be whichever came last.
+func TestSurfaceAndOfferingRowsAreUnique(t *testing.T) {
+	surfaces := make(map[AccessSurface]bool, len(surfaceTable))
+	for _, row := range surfaceTable {
+		if surfaces[row.Surface] {
+			t.Fatalf("surface %q has more than one row; the index keeps only the last", row.Surface)
+		}
+		surfaces[row.Surface] = true
+	}
+	offerings := make(map[ProviderOfferingID]bool, len(providerOfferingTable))
+	for _, row := range providerOfferingTable {
+		if offerings[row.ID] {
+			t.Fatalf("offering %q has more than one row; the index keeps only the last", row.ID)
+		}
+		offerings[row.ID] = true
+	}
+}
+
+func TestEverySurfaceOfferingExistsAndSharesItsProviderType(t *testing.T) {
+	for _, row := range surfaceTable {
+		offering, ok := offeringIndex[row.Offering]
+		if !ok {
+			t.Fatalf("surface %q names offering %q, which is not registered", row.Surface, row.Offering)
+		}
+		if offering.Type != row.Type {
+			t.Fatalf("surface %q is provider type %q but its offering %q belongs to %q",
+				row.Surface, row.Type, row.Offering, offering.Type)
+		}
+		if !IsRegisteredProviderType(row.Type) {
+			t.Fatalf("surface %q belongs to unregistered provider type %q", row.Surface, row.Type)
+		}
+	}
+}
+
+func TestRegionScopeAndRegionAgree(t *testing.T) {
+	for _, row := range surfaceTable {
+		switch row.RegionScope {
+		case RegionScopeFixed:
+			if row.Region == RegionNone {
+				t.Fatalf("surface %q pins a region but names none", row.Surface)
+			}
+			for _, host := range row.Hosts {
+				if host.Region != row.Region {
+					t.Fatalf("surface %q pins region %q but lists host %q as %q; on a fixed surface"+
+						" the hosts are recognition for that one region, not a second answer",
+						row.Surface, row.Region, host.Host, host.Region)
+				}
+			}
+		case RegionScopeByEndpoint:
+			if row.Region != RegionNone {
+				t.Fatalf("surface %q reads its region from the endpoint and also names one", row.Surface)
+			}
+			if len(row.Hosts) < 2 {
+				t.Fatalf("surface %q reads its region from the endpoint but lists %d host(s); with"+
+					" fewer than two there is nothing to read", row.Surface, len(row.Hosts))
+			}
+			seenHost := make(map[string]bool, len(row.Hosts))
+			seenRegion := make(map[ProviderRegionID]bool, len(row.Hosts))
+			for _, host := range row.Hosts {
+				if host.Host != strings.ToLower(strings.TrimSpace(host.Host)) {
+					t.Fatalf("surface %q lists host %q, which is not the normalised form the lookup"+
+						" compares against", row.Surface, host.Host)
+				}
+				if seenHost[host.Host] {
+					t.Fatalf("surface %q lists host %q twice", row.Surface, host.Host)
+				}
+				if seenRegion[host.Region] {
+					t.Fatalf("surface %q maps two hosts to region %q", row.Surface, host.Region)
+				}
+				if host.Region == RegionNone {
+					t.Fatalf("surface %q maps host %q to no region", row.Surface, host.Host)
+				}
+				seenHost[host.Host], seenRegion[host.Region] = true, true
+			}
+		case RegionScopeNone:
+			if row.Region != RegionNone || len(row.Hosts) != 0 {
+				t.Fatalf("surface %q has no region axis but declares one", row.Surface)
+			}
+		default:
+			t.Fatalf("surface %q has unknown region scope %q", row.Surface, row.RegionScope)
+		}
+	}
+}
+
+// An operator picks a product and a region; the console has to turn that pair
+// into exactly one surface. Scoped to surfaces an operator can actually reach:
+// the two withheld Bedrock surfaces share one Offering and one (empty) region,
+// which is correct — they are two API faces of one product — and no form ever
+// has to choose between them.
+func TestOfferingAndRegionResolveOneReachableSurface(t *testing.T) {
+	reachable := make(map[AccessSurface]bool)
+	for _, profile := range AllProviderProfiles() {
+		if !profile.Withheld {
+			reachable[profile.AccessSurface] = true
+		}
+	}
+	type key struct {
+		Type     ProviderType
+		Offering ProviderOfferingID
+		Region   ProviderRegionID
+	}
+	seen := make(map[key]AccessSurface)
+	for _, row := range surfaceTable {
+		if !reachable[row.Surface] {
+			continue
+		}
+		identity := key{row.Type, row.Offering, row.Region}
+		if previous, clash := seen[identity]; clash {
+			t.Fatalf("surfaces %q and %q are both reachable as %q/%q/%q; an operator choosing a"+
+				" product and a region would have no way to say which",
+				previous, row.Surface, row.Type, row.Offering, row.Region)
+		}
+		seen[identity] = row.Surface
+	}
+}
+
+// One Offering, one region shape. A product whose surfaces disagreed about
+// whether the region is the surface or the endpoint could not be rendered as a
+// single control.
+func TestOfferingRegionScopeIsUniform(t *testing.T) {
+	scopes := make(map[ProviderOfferingID]ProviderRegionScope)
+	for _, row := range surfaceTable {
+		if previous, seen := scopes[row.Offering]; seen && previous != row.RegionScope {
+			t.Fatalf("offering %q has surfaces with region scopes %q and %q", row.Offering, previous, row.RegionScope)
+		}
+		scopes[row.Offering] = row.RegionScope
+	}
+}
+
+func TestEveryTypeDefaultProfileResolvesAnOffering(t *testing.T) {
+	for _, providerType := range AllProviderTypes() {
+		defaults, ok := DefaultProviderProfile(providerType)
+		if !ok {
+			t.Fatalf("provider type %q has no default profile", providerType)
+		}
+		if _, resolved := IdentityForProfile(defaults.ProfileID); !resolved {
+			t.Fatalf("the default profile %s of provider type %q resolves to no offering",
+				defaults.ProfileID, providerType)
+		}
+	}
+}
+
+// Every registered type can have a credential created for it, and the identity
+// list is what the write path and the console both read. An empty list would
+// mean a type the console offers and no credential can be saved for.
+func TestEveryTypeHasAtLeastOneCredentialIdentity(t *testing.T) {
+	for _, providerType := range AllProviderTypes() {
+		identities := CredentialIdentities(providerType)
+		if len(identities) == 0 {
+			t.Fatalf("provider type %q offers no credential identity", providerType)
+		}
+		for _, identity := range identities {
+			if identity.AccessSurface == "" || identity.CredentialScheme == "" || identity.Offering == "" {
+				t.Fatalf("provider type %q has an incomplete credential identity %+v", providerType, identity)
+			}
+			resolved, ok := ResolveCredentialProfile(providerType, identity.AccessSurface, identity.CredentialScheme)
+			if !ok || resolved.ProfileID != identity.PrimaryProfileID {
+				t.Fatalf("credential identity %+v of %q does not resolve back to its own primary profile",
+					identity, providerType)
+			}
+			if IsWithheldProfile(resolved.ProfileID) {
+				t.Fatalf("credential identity %+v of %q resolves to a withheld profile", identity, providerType)
+			}
+		}
+	}
+}
+
+// The one case the whole model exists for: BigModel sells two regional products
+// on one credential scheme, so its type has two identities and the write path
+// cannot pick between them.
+func TestBigModelHasTwoRegionalCredentialIdentities(t *testing.T) {
+	identities := CredentialIdentities(ProviderBigModel)
+	if len(identities) != 2 {
+		t.Fatalf("BigModel has %d credential identities, want 2", len(identities))
+	}
+	regions := map[ProviderRegionID]AccessSurface{}
+	for _, identity := range identities {
+		if identity.Offering != OfferingBigModelGeneral {
+			t.Fatalf("BigModel identity %+v is not the general API offering", identity)
+		}
+		regions[identity.Region] = identity.AccessSurface
+	}
+	if regions[RegionCN] != SurfaceBigModelCNGeneral || regions[RegionGlobal] != SurfaceBigModelGlobalGeneral {
+		t.Fatalf("BigModel regions resolve to %+v", regions)
+	}
+}
+
+// Every other registered type has exactly one identity today, which is what
+// lets the write path keep resolving an unstated one instead of demanding
+// ceremony where there is no choice to make.
+func TestOnlyBigModelHasAmbiguousCredentialIdentity(t *testing.T) {
+	for _, providerType := range AllProviderTypes() {
+		if providerType == ProviderBigModel {
+			continue
+		}
+		if count := len(CredentialIdentities(providerType)); count != 1 {
+			t.Fatalf("provider type %q has %d credential identities; the write path's"+
+				" resolve-when-unambiguous rule and the console's selector both need updating",
+				providerType, count)
+		}
+	}
+}
+
+func TestRegionForEndpointReadsTheHost(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		surface  AccessSurface
+		endpoint string
+		want     ProviderRegionID
+		known    bool
+	}{
+		{"fixed surface ignores the endpoint", SurfaceBigModelGlobalGeneral, "https://proxy.internal", RegionGlobal, true},
+		{"mainland Kimi", SurfaceKimi, "https://api.moonshot.cn", RegionCN, true},
+		{"international Kimi", SurfaceKimi, "https://api.moonshot.ai:443/v1", RegionGlobal, true},
+		{"uppercase host", SurfaceKimi, "https://API.MOONSHOT.CN", RegionCN, true},
+		{"mainland MiniMax", SurfaceMiniMax, "https://api.minimaxi.com", RegionCN, true},
+		{"a fronted endpoint is unknown, not wrong", SurfaceKimi, "https://gateway.example.com", RegionNone, false},
+		{"a surface with no region axis is known and empty", SurfaceOpenAI, "https://api.openai.com", RegionNone, true},
+		{"an unregistered surface answers nothing", AccessSurface("nope"), "https://api.openai.com", RegionNone, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			region, known := RegionForEndpoint(testCase.surface, testCase.endpoint)
+			if region != testCase.want || known != testCase.known {
+				t.Fatalf("got (%q, %v), want (%q, %v)", region, known, testCase.want, testCase.known)
+			}
+		})
+	}
+}
+
+// A surface that recognises hosts at all has to recognise its own prefill, or
+// the form opens on a value it immediately labels as belonging somewhere else.
+func TestSurfacesRecogniseTheirOwnPrefills(t *testing.T) {
+	for _, profile := range AllProviderProfiles() {
+		identity, ok := IdentityForSurface(profile.AccessSurface)
+		if !ok || len(identity.Hosts) == 0 || profile.BaseURLTemplate == "" {
+			continue
+		}
+		if surface, known := SurfaceForEndpoint(profile.Type, profile.BaseURLTemplate); !known || surface != profile.AccessSurface {
+			t.Fatalf("profile %s prefills %q, which its own surface does not recognise (got %q, known=%v)",
+				profile.ID, profile.BaseURLTemplate, surface, known)
+		}
+	}
+}
+
+// The stored defect this model exists to expose: a credential sealed to the
+// mainland BigModel surface while bound to the global host. Nothing else in the
+// build can tell those apart, because both are legal endpoints and the surface
+// was never asked for.
+func TestSurfaceForEndpointSeparatesBigModelRegions(t *testing.T) {
+	for _, testCase := range []struct {
+		endpoint string
+		want     AccessSurface
+		known    bool
+	}{
+		{"https://open.bigmodel.cn", SurfaceBigModelCNGeneral, true},
+		{"https://api.z.ai", SurfaceBigModelGlobalGeneral, true},
+		{"https://api.z.ai:443/api/paas/v4", SurfaceBigModelGlobalGeneral, true},
+		{"https://bigmodel.internal.example", "", false},
+	} {
+		surface, known := SurfaceForEndpoint(ProviderBigModel, testCase.endpoint)
+		if surface != testCase.want || known != testCase.known {
+			t.Fatalf("%s: got (%q, %v), want (%q, %v)", testCase.endpoint, surface, known, testCase.want, testCase.known)
+		}
+	}
+}

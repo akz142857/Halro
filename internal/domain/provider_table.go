@@ -752,8 +752,14 @@ type ProviderProfileSummary struct {
 	// keeps: AllProviderProfiles stays the one enumeration, and whoever presents
 	// the matrix decides what to do with a withheld row. See profileRow.
 	Withheld bool
-	Defaults ProviderCapabilities
-	Ceiling  ProviderCapabilities
+	// RoutePartitioned travels for the same reason, and it is what tells a
+	// connection form whether the profiles of one group are alternatives or
+	// companions: where it is true the upstream serves each model from exactly
+	// one of them, so an operator picks a route; where it is false the group's
+	// profiles ride one connection together and there is nothing to pick.
+	RoutePartitioned bool
+	Defaults         ProviderCapabilities
+	Ceiling          ProviderCapabilities
 }
 
 // AllProviderProfiles returns every registered profile in table order.
@@ -764,12 +770,7 @@ type ProviderProfileSummary struct {
 func AllProviderProfiles() []ProviderProfileSummary {
 	summaries := make([]ProviderProfileSummary, 0, len(profileTable))
 	for _, row := range profileTable {
-		summaries = append(summaries, ProviderProfileSummary{
-			ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
-			CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
-			Immutable: row.Immutable, Withheld: row.Withheld,
-			Defaults: row.Defaults, Ceiling: row.Ceiling,
-		})
+		summaries = append(summaries, summaryOf(row))
 	}
 	return summaries
 }

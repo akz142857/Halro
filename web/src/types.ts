@@ -468,6 +468,12 @@ export interface Credential {
   type: ProviderType;
   access_surface: AccessSurface;
   scheme: CredentialScheme;
+  /** Which upstream product this credential was sealed to, and which account
+   * region. Derived by the server from the access surface and the bound
+   * endpoint; the region is empty where the product has no region axis, and
+   * where the endpoint is one the upstream does not publish. */
+  offering_id: string;
+  region_id: string;
   bound_base_url: string;
   secret_configured: boolean;
   key_version: number;
@@ -558,6 +564,23 @@ export interface ProviderProfileDescriptor {
   id: string;
   access_surface: AccessSurface;
   credential_scheme: CredentialScheme;
+  /** Which upstream product this profile belongs to, and which account region.
+   * Both are properties of the Access Surface on the server — a credential
+   * stores the surface, so that is where the product identity has to live — and
+   * arrive derived so a form can group profiles by product without a rule of
+   * its own. The region is empty where the product has no region axis, and
+   * where the region is read from the endpoint instead. */
+  offering_id: string;
+  region_id: string;
+  /** Whether a connection anchored here forwards the caller's anthropic-beta
+   * tokens. Narrower than "speaks the Anthropic wire": the token claims the
+   * request bytes were sent unchanged, so only the native path can carry one. */
+  sends_anthropic_betas: boolean;
+  /** Whether the profiles of this connection group are alternatives rather than
+   * companions: where it is true the upstream serves each model from exactly one
+   * of them, so an operator picks a route; where it is false they ride one
+   * connection together and there is nothing to pick. */
+  route_partitioned: boolean;
   default_base_url: string;
   immutable: boolean;
   defaults: ProviderCapabilities;
@@ -587,9 +610,34 @@ export interface ProfileRequestConstraint {
   declared_transforms?: string[];
 }
 
+/** One host an upstream publishes, and the account region behind it.
+ *
+ * Recognition, not an allowlist: an operator may front any upstream with a
+ * proxy, so a host that matches nothing here is unknown rather than wrong. */
+export interface ProviderRegionHost {
+  region: string;
+  host: string;
+}
+
+/** One upstream product of one provider type — a metered API, a Coding Plan, an
+ * enterprise contract. Only products with at least one profile this build offers
+ * appear, so a form cannot present something it would then be unable to save. */
+export interface ProviderOfferingDescriptor {
+  id: string;
+  kind: "metered_api" | "subscription" | "enterprise";
+  /** How this product expresses its region. "fixed": the surface is the region,
+   * so choosing the region chooses the profile. "by_endpoint": one surface,
+   * several account hosts, chosen in the endpoint field. "none": no region
+   * axis. */
+  region_scope: "none" | "fixed" | "by_endpoint";
+  regions: string[];
+  region_hosts: ProviderRegionHost[];
+}
+
 export interface ProviderTypeDescriptor {
   type: ProviderType;
   default_profile_id: string;
+  offerings: ProviderOfferingDescriptor[];
   profiles: ProviderProfileDescriptor[];
 }
 

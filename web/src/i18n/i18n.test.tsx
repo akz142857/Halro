@@ -8,6 +8,8 @@ import i18n, { applyPreference } from ".";
 import { enUS } from "./locales/en-US";
 import { zhCN } from "./locales/zh-CN";
 import { providerProfilesFixture } from "../test/fixtures";
+import { connectionChoices } from "../hooks/useProviderProfiles";
+import type { ProviderProfilesCatalog } from "../types";
 
 describe("admin internationalization", () => {
   afterEach(async () => {
@@ -41,6 +43,44 @@ describe("admin internationalization", () => {
     // nobody can reach, which is what the unreferenced-key audit below is for.
     const extra = Object.keys(zhCN.capabilities).filter((name) => !served.includes(name));
     expect(extra, "capability copy for capabilities the server does not serve").toEqual([]);
+  });
+
+  // Products are the axis a credential form asks about first, and the console
+  // prints them through `providers.offerings.*`. Same failure as the capability
+  // list above: a product added upstream with no copy here shows the operator a
+  // raw identifier like `bigmodel.coding-plan`, and nothing else notices.
+  it("names every upstream product the server serves, in both languages", () => {
+    const served = [...new Set(
+      providerProfilesFixture.provider_types.flatMap((type) => type.offerings.map((offering) => offering.id)),
+    )];
+    expect(served.length).toBeGreaterThan(0);
+    for (const locale of [zhCN, enUS]) {
+      const copy = locale.providers.offerings as Record<string, string>;
+      const missing = served.filter((id) => !copy[id]?.trim());
+      expect(missing, "products the server serves that this locale cannot name").toEqual([]);
+    }
+    const extra = Object.keys(zhCN.providers.offerings).filter((id) => !served.includes(id));
+    expect(extra, "product copy for products the server does not serve").toEqual([]);
+  });
+
+  // And the implementations an operator actually has to choose between. Only
+  // those need a name: everywhere else the group's profiles ride one connection
+  // together and the control is not rendered, so copy for them would be copy
+  // nobody can reach.
+  it("names every implementation the connection form makes a choice of", () => {
+    const catalog = providerProfilesFixture as unknown as ProviderProfilesCatalog;
+    const served = catalog.provider_types.flatMap((type) => {
+      const choices = connectionChoices(catalog, type.type);
+      return choices.length > 1 ? choices.map((choice) => choice.profileID) : [];
+    });
+    expect(served.length).toBeGreaterThan(0);
+    for (const locale of [zhCN, enUS]) {
+      const copy = locale.providers.profiles as Record<string, string>;
+      const missing = served.filter((id) => !copy[id]?.trim());
+      expect(missing, "implementations this locale cannot name").toEqual([]);
+    }
+    const extra = Object.keys(zhCN.providers.profiles).filter((id) => !served.includes(id));
+    expect(extra, "copy for implementations no form offers a choice of").toEqual([]);
   });
 
   // Each locale ships as its own chunk, so switching language has to fetch the

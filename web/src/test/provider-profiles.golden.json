@@ -137,6 +137,15 @@
   "provider_types": [
     {
       "default_profile_id": "openai.chat-embeddings.v1",
+      "offerings": [
+        {
+          "id": "openai.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "openai-api",
@@ -244,6 +253,8 @@
           },
           "id": "openai.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "openai.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -258,7 +269,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "openai-api",
@@ -366,6 +379,8 @@
           },
           "id": "openai.responses.v1",
           "immutable": false,
+          "offering_id": "openai.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -399,7 +414,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "openai-api",
@@ -507,13 +524,26 @@
           },
           "id": "openai.media-resources.v1",
           "immutable": true,
-          "request_constraints": []
+          "offering_id": "openai.api-platform",
+          "region_id": "",
+          "request_constraints": [],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "openai"
     },
     {
       "default_profile_id": "anthropic.messages.2023-06-01",
+      "offerings": [
+        {
+          "id": "anthropic.console-api",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "anthropic-api",
@@ -618,6 +648,8 @@
           },
           "id": "anthropic.messages.2023-06-01",
           "immutable": false,
+          "offering_id": "anthropic.console-api",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -649,13 +681,24 @@
                 "input[].content[].detail"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": true
         }
       ],
       "type": "anthropic"
     },
     {
       "default_profile_id": "azure-openai.chat-embeddings.v1",
+      "offerings": [
+        {
+          "id": "azure-openai.resource",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "azure-openai",
@@ -760,6 +803,8 @@
           },
           "id": "azure-openai.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "azure-openai.resource",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -774,13 +819,24 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "azure_openai"
     },
     {
       "default_profile_id": "deepseek.chat.v1",
+      "offerings": [
+        {
+          "id": "deepseek.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "deepseek-api",
@@ -885,6 +941,8 @@
           },
           "id": "deepseek.chat.v1",
           "immutable": false,
+          "offering_id": "deepseek.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -937,13 +995,36 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "deepseek"
     },
     {
       "default_profile_id": "bigmodel.cn.chat-embeddings.v1",
+      "offerings": [
+        {
+          "id": "bigmodel.general-api",
+          "kind": "metered_api",
+          "region_hosts": [
+            {
+              "host": "open.bigmodel.cn",
+              "region": "cn"
+            },
+            {
+              "host": "api.z.ai",
+              "region": "global"
+            }
+          ],
+          "region_scope": "fixed",
+          "regions": [
+            "cn",
+            "global"
+          ]
+        }
+      ],
       "profiles": [
         {
           "access_surface": "bigmodel-cn-general-api",
@@ -1048,6 +1129,8 @@
           },
           "id": "bigmodel.cn.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "bigmodel.general-api",
+          "region_id": "cn",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1124,7 +1207,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bigmodel-global-general-api",
@@ -1229,6 +1314,8 @@
           },
           "id": "bigmodel.global.chat.v1",
           "immutable": false,
+          "offering_id": "bigmodel.general-api",
+          "region_id": "global",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1293,13 +1380,24 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "bigmodel"
     },
     {
       "default_profile_id": "openai-compatible.chat-embeddings.v1",
+      "offerings": [
+        {
+          "id": "openai-compatible.self-declared",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "openai-compatible",
@@ -1404,6 +1502,8 @@
           },
           "id": "openai-compatible.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "openai-compatible.self-declared",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1418,13 +1518,24 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "openai_compatible"
     },
     {
       "default_profile_id": "gemini.generate-content.text.v1beta",
+      "offerings": [
+        {
+          "id": "google.gemini-api",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "gemini-generate-content",
@@ -1529,6 +1640,8 @@
           },
           "id": "gemini.generate-content.text.v1beta",
           "immutable": false,
+          "offering_id": "google.gemini-api",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1590,13 +1703,24 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "gemini"
     },
     {
       "default_profile_id": "bedrock.mantle.chat.v1",
+      "offerings": [
+        {
+          "id": "aws.bedrock-mantle",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": []
+        }
+      ],
       "profiles": [
         {
           "access_surface": "bedrock-mantle",
@@ -1706,6 +1830,8 @@
           },
           "id": "bedrock.mantle.chat.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1720,7 +1846,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1830,6 +1958,8 @@
           },
           "id": "bedrock.mantle.openai.chat.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1844,7 +1974,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1954,6 +2086,8 @@
           },
           "id": "bedrock.mantle.responses.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2000,7 +2134,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -2110,6 +2246,8 @@
           },
           "id": "bedrock.mantle.openai.responses.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2156,7 +2294,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -2266,6 +2406,8 @@
           },
           "id": "bedrock.mantle.anthropic.messages.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2310,13 +2452,36 @@
                 "output_config.format"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": true
         }
       ],
       "type": "bedrock"
     },
     {
       "default_profile_id": "minimax.anthropic.messages.v1",
+      "offerings": [
+        {
+          "id": "minimax.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [
+            {
+              "host": "api.minimax.io",
+              "region": "global"
+            },
+            {
+              "host": "api.minimaxi.com",
+              "region": "cn"
+            }
+          ],
+          "region_scope": "by_endpoint",
+          "regions": [
+            "global",
+            "cn"
+          ]
+        }
+      ],
       "profiles": [
         {
           "access_surface": "minimax-api",
@@ -2424,6 +2589,8 @@
           },
           "id": "minimax.anthropic.messages.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2477,7 +2644,9 @@
                 "output_config.format"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "minimax-api",
@@ -2585,6 +2754,8 @@
           },
           "id": "minimax.chat.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2640,7 +2811,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "minimax-api",
@@ -2748,6 +2921,8 @@
           },
           "id": "minimax.responses.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2800,13 +2975,36 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "minimax"
     },
     {
       "default_profile_id": "kimi.chat.v1",
+      "offerings": [
+        {
+          "id": "kimi.open-platform",
+          "kind": "metered_api",
+          "region_hosts": [
+            {
+              "host": "api.moonshot.ai",
+              "region": "global"
+            },
+            {
+              "host": "api.moonshot.cn",
+              "region": "cn"
+            }
+          ],
+          "region_scope": "by_endpoint",
+          "regions": [
+            "global",
+            "cn"
+          ]
+        }
+      ],
       "profiles": [
         {
           "access_surface": "kimi-api",
@@ -2913,6 +3111,8 @@
           },
           "id": "kimi.chat.v1",
           "immutable": false,
+          "offering_id": "kimi.open-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2985,7 +3185,9 @@
                 "top_p"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "kimi-api",
@@ -3092,6 +3294,8 @@
           },
           "id": "kimi.anthropic.messages.v1",
           "immutable": false,
+          "offering_id": "kimi.open-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -3155,7 +3359,9 @@
                 "top_p"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "kimi"
