@@ -37,7 +37,9 @@ const (
 	// was established by comparing the two published OpenAPI documents rather
 	// than by reading prose: identical path sets, identical schema name sets,
 	// identical request property sets, one differing servers[0].url.
-	SurfaceKimi AccessSurface = "kimi-api"
+	SurfaceKimi                  AccessSurface = "kimi-api"
+	SurfaceBigModelCNGeneral     AccessSurface = "bigmodel-cn-general-api"
+	SurfaceBigModelGlobalGeneral AccessSurface = "bigmodel-global-general-api"
 )
 
 const (
@@ -97,9 +99,11 @@ const (
 	// which is exactly the body Halro's portable mapper emits and exactly the
 	// response it can decode. The undocumented member is the one that makes the
 	// face portable. Documentation being silent is not the upstream refusing.
-	ProfileKimiChat              ProviderProfileID = "kimi.chat.v1"
-	ProfileKimiAnthropicMessages ProviderProfileID = "kimi.anthropic.messages.v1"
-	ProfileKimiResponses         ProviderProfileID = "kimi.responses.v1"
+	ProfileKimiChat                 ProviderProfileID = "kimi.chat.v1"
+	ProfileKimiAnthropicMessages    ProviderProfileID = "kimi.anthropic.messages.v1"
+	ProfileKimiResponses            ProviderProfileID = "kimi.responses.v1"
+	ProfileBigModelCNChatEmbeddings ProviderProfileID = "bigmodel.cn.chat-embeddings.v1"
+	ProfileBigModelGlobalChat       ProviderProfileID = "bigmodel.global.chat.v1"
 )
 
 const (
@@ -109,6 +113,7 @@ const (
 	CredentialGoogleAPIKey     CredentialScheme = "google.api-key"
 	CredentialAWSSigV4Explicit CredentialScheme = "aws.sigv4.explicit-session"
 	CredentialBedrockAPIKey    CredentialScheme = "aws.bedrock.api-key"
+	CredentialBigModelAPIKey   CredentialScheme = "bigmodel.api-key"
 )
 
 const (

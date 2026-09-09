@@ -197,6 +197,18 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 		build:     kimiOpenAIAdapter(true),
 	},
 
+	// BigModel mainland and Z.AI global share the same Chat dialect and path
+	// layout, but remain distinct profiles so credentials and model catalogues
+	// cannot cross regions.
+	domain.ProfileBigModelCNChatEmbeddings: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     bigModelOpenAIAdapter,
+	},
+	domain.ProfileBigModelGlobalChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     bigModelOpenAIAdapter,
+	},
+
 	// Bedrock Runtime and Agent Runtime. Withheld from every write path today,
 	// so no connection can be created on them; the rows stay because the
 	// profiles are still implemented and withholding scopes what an operator may
@@ -272,6 +284,16 @@ func kimiOpenAIAdapter(responses bool) func(adapterBuildContext, provider.Author
 			Capabilities: ctx.Binding.Capabilities, Responses: responses,
 		})
 	}
+}
+
+func bigModelOpenAIAdapter(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+	prefix := "api/paas/v4"
+	return openaiprovider.NewWithOptions(openaiprovider.Options{
+		Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+		ProviderType: string(domain.ProviderBigModel), CredentialScheme: ctx.Binding.CredentialScheme,
+		Capabilities: ctx.Binding.Capabilities, OperationPathPrefix: prefix,
+		CatalogPathPrefix: &prefix, DisableTargetDescribe: true,
+	})
 }
 
 func bedrockRuntimeAdapter(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {

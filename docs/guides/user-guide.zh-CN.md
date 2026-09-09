@@ -184,6 +184,12 @@ Provider 能力是上限，Deployment 能力只能是 Provider 能力的子集�
 | Gemini | `https://generativelanguage.googleapis.com` | Beta，原生适配器 |
 | Bedrock Runtime | `https://bedrock-runtime.<region>.amazonaws.com` | Beta，Converse 文本，显式静态 AWS Credential |
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta，可选择 OpenAI Chat、无状态 Responses 或 Anthropic Messages |
+| BigModel（中国大陆） | `https://open.bigmodel.cn` | 实验性；中国大陆通用 API 的 Chat、流式与 Embeddings |
+| Z.AI（海外） | `https://api.z.ai` | 实验性；独立海外 profile 的 Chat 与流式 |
+
+BigModel 凭据按地域绑定。国内与海外需要分别创建 Credential 与 Provider，不能假定密钥或余额可以
+跨区复用。Base URL 应保存上表的根 host；选定的 profile 会固定 `/api/paas/v4` 操作与模型目录路径。
+BigModel 的 Anthropic 兼容路由尚未注册，因为成功响应形状与鉴权契约仍需真实账号验证。
 
 Bedrock Credential 是一个 JSON Secret：
 

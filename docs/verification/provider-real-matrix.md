@@ -77,9 +77,44 @@ never accepted as `unsupported`; the fake-server contract tests cover those
 negative classifications even when a real account has no stable negative
 model.
 
-Gemini, Bedrock and MiniMax are Beta and therefore do not satisfy or block the
+Gemini, Bedrock, MiniMax and BigModel are Beta/experimental and therefore do not satisfy or block the
 GA matrix, but each has a separate opt-in real smoke test under its adapter
 package. Run those when the corresponding Beta is included in an RC deployment.
+
+## BigModel / Z.AI: implementation complete, real-account cells not run (2026-09-08)
+
+Halro has separate mainland and global profiles for the shared BigModel Chat
+dialect. The mainland profile uses `https://open.bigmodel.cn` and also exposes
+Embeddings; the global Z.AI profile uses `https://api.z.ai` and exposes Chat
+only. Credentials, balances, model availability, and built-in catalog entries
+remain scoped to their profile and are never copied across regions.
+
+Fixture coverage establishes path construction, bearer authentication, strict
+request rendering, unary and SSE decoding, final-chunk usage including cached
+tokens, sensitive/network/context finish classification, exact-model reasoning
+constraints, and the mainland embedding field contract. It does not establish
+that an account key can authenticate, that the successful `/models` body on a
+particular account has the documented list shape, or that keys can cross hosts.
+
+No real key was available for this implementation, so neither regional cell is
+recorded as passing. The opt-in harness is
+`internal/provider/openai/bigmodel_real_smoke_test.go`; it skips during ordinary
+tests and makes bounded billable calls only after an operator explicitly sets:
+
+```bash
+export HALRO_BIGMODEL_SMOKE=1
+export HALRO_BIGMODEL_BASE_URL="https://open.bigmodel.cn" # or https://api.z.ai
+export HALRO_BIGMODEL_API_KEY="<dedicated, budget-limited key>"
+export HALRO_BIGMODEL_MODEL="<exact model returned by /api/paas/v4/models>"
+# Mainland only, optional:
+export HALRO_BIGMODEL_EMBEDDING_MODEL="embedding-3"
+go test ./internal/provider/openai -run TestBigModelRealSmoke -count=1
+```
+
+Run the command once per region with separately issued credentials. Do not copy
+a successful result from one host into the other cell, and do not enable the
+Anthropic-shaped profiles from a Chat-only result; those profiles retain the
+independent real-body and authentication gates in the adaptation plan.
 
 ## MiniMax: measured on an international account (2026-08-31)
 

@@ -57,6 +57,7 @@ var builtinOnce = sync.OnceValues(func() (*Catalog, error) {
 		openAICompatibleModels(),
 		minimaxModels(),
 		kimiModels(),
+		bigModelModels(),
 	)...)
 })
 
@@ -589,6 +590,92 @@ func kimiModels() []Entry {
 	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
 		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}
+	return entries
+}
+
+// bigModelModels is deliberately split by profile even where the identifier is
+// the same. The mainland BigModel and international Z.AI products have separate
+// accounts, keys and availability, so one region's entry must never make the
+// other region look covered.
+//
+// The identifiers and text/vision partition come from the model enums in the
+// two official Chat Completions OpenAPI documents reviewed 2026-09-08. Those
+// enums establish that the exact identifier is accepted by that request shape;
+// they do not establish account entitlement, which still comes from /models.
+// No context or output window is inferred where the documents do not state a
+// stable per-model value.
+//
+// GLM-5.3 and GLM-5.3-Flash are marked ReasonsUnasked because their documented
+// thinking contract only permits enabled. GLM-5.2 can disable thinking and is
+// therefore not marked. Earlier models are not credited with portable
+// reasoning: their boolean thinking switch cannot preserve Halro's effort
+// ladder exactly.
+func bigModelModels() []Entry {
+	const provider = domain.ProviderBigModel
+	base := domain.ProviderCapabilities{
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true, JSONObject: true,
+	}
+	text := func(profile domain.ProviderProfileID, models []string) []Entry {
+		entries := make([]Entry, 0, len(models))
+		for _, model := range models {
+			capabilities := base
+			if model == "glm-5.2" || model == "glm-5.3" {
+				capabilities.Reasoning = true
+			}
+			entry := builtinEntry(provider, profile, model, capabilities)
+			entry.ReasonsUnasked = model == "glm-5.3"
+			entries = append(entries, entry)
+		}
+		return entries
+	}
+	visionModels := func(profile domain.ProviderProfileID, models []string) []Entry {
+		entries := make([]Entry, 0, len(models))
+		for _, model := range models {
+			capabilities := domain.ProviderCapabilities{
+				Chat: true, Streaming: true, StreamUsage: true, Vision: true, FetchedImage: true,
+			}
+			switch model {
+			case "glm-5.3-flash", "glm-4.6v", "glm-4.6v-flash", "glm-4.6v-flashx",
+				"autoglm-phone", "autoglm-phone-multilingual":
+				capabilities.Tools = true
+			}
+			if model == "glm-5.3-flash" {
+				capabilities.Reasoning = true
+			}
+			entry := builtinEntry(provider, profile, model, capabilities)
+			entry.ReasonsUnasked = model == "glm-5.3-flash"
+			entries = append(entries, entry)
+		}
+		return entries
+	}
+
+	cn := domain.ProfileBigModelCNChatEmbeddings
+	global := domain.ProfileBigModelGlobalChat
+	entries := text(cn, []string{
+		"glm-5.3", "glm-5.2", "glm-5.1", "glm-5-turbo", "glm-5",
+		"glm-4.7", "glm-4.7-flash", "glm-4.7-flashx", "glm-4.6",
+		"glm-4.5-air", "glm-4.5-airx", "glm-4.5-flash",
+		"glm-4-flash-250414", "glm-4-flashx-250414",
+	})
+	entries = append(entries, visionModels(cn, []string{
+		"glm-5.3-flash", "glm-5v-turbo", "glm-4.6v", "autoglm-phone",
+		"glm-4.6v-flash", "glm-4.6v-flashx", "glm-4v-flash",
+		"glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
+	})...)
+	entries = append(entries,
+		builtinEntry(provider, cn, "embedding-3", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 3_072}),
+		builtinEntry(provider, cn, "embedding-2", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 512}),
+	)
+	entries = append(entries, text(global, []string{
+		"glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
+		"glm-4.7-flash", "glm-4.7-flashx", "glm-4.6", "glm-4.5",
+		"glm-4.5-air", "glm-4.5-x", "glm-4.5-airx", "glm-4.5-flash",
+		"glm-4-32b-0414-128k",
+	})...)
+	entries = append(entries, visionModels(global, []string{
+		"glm-5.3-flash", "glm-4.6v", "autoglm-phone-multilingual",
+		"glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.5v",
+	})...)
 	return entries
 }
 

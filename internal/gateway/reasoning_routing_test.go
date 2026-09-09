@@ -109,3 +109,23 @@ func TestTheRefusalNamesATargetThatReasonsUnasked(t *testing.T) {
 		}
 	}
 }
+
+func TestBigModelTargetSpecificReasoningIsFilteredBeforeAnAttempt(t *testing.T) {
+	request := semantic.GenerateRequest{ReasoningEffort: "none"}
+	targets := []provider.Target{
+		{ID: "always", ProfileID: domain.ProfileBigModelGlobalChat, ProviderModel: "glm-5.3"},
+		{ID: "optional", ProfileID: domain.ProfileBigModelGlobalChat, ProviderModel: "glm-5.2"},
+	}
+	filtered := filterGenerateProfileCompatibility(targets, request)
+	if len(filtered) != 1 || filtered[0].ID != "optional" {
+		t.Fatalf("targets after exact-model filtering = %#v", filtered)
+	}
+	reasons := unservableReasons(targets[:1], request, provider.OperationChat)
+	found := false
+	for _, reason := range reasons {
+		found = found || reason == "reasoning_effort"
+	}
+	if !found {
+		t.Fatalf("refusal reasons = %v", reasons)
+	}
+}

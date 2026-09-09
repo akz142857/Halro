@@ -44,7 +44,7 @@ import { useIsReadOnly } from "../session";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 const providerTypes: ProviderType[] = [
-  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "openai_compatible",
+  "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
 
 // regionHintKey names the warning a provider type needs on its endpoint field.
@@ -57,6 +57,8 @@ function regionHintKey(type: ProviderType): string | null {
       return "providers.minimaxRegionHint";
     case "kimi":
       return "providers.kimiRegionHint";
+    case "bigmodel":
+      return "providers.bigmodelRegionHint";
     default:
       return null;
   }

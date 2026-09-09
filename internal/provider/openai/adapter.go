@@ -44,9 +44,13 @@ type Adapter struct {
 	// direction — see the verification plan in
 	// docs/prd/kimi-adaptation-plan.zh-CN.md for the check that would settle it.
 	kimi                bool
+	bigModel            bool
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
+	catalogPathPrefix   string
+	catalogPathExplicit bool
+	canDescribeTargets  bool
 	// responses says this adapter was built for the Responses profile. It is a
 	// property of the profile the connection is bound to, not something inferred
 	// from a request, so a deployment cannot address a surface its operator did
@@ -93,6 +97,15 @@ type Options struct {
 	// exactly: OpenAI, Azure, DeepSeek and compatibility servers keep joining
 	// operations onto their configured base URL untouched.
 	OperationPathPrefix string
+	// CatalogPathPrefix is independent from the operation prefix because some
+	// providers expose one account-wide catalogue beside several wire surfaces.
+	// A nil value preserves the historical behaviour; a non-nil value, including
+	// an explicitly empty prefix, selects the catalogue route for this profile.
+	CatalogPathPrefix *string
+	// DisableTargetDescribe keeps discovery honest when only list enumeration is
+	// established. DescribeInvocationTarget currently falls back to the list,
+	// but the Admin API will not advertise a per-model describe operation.
+	DisableTargetDescribe bool
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -132,17 +145,24 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		authorizer.Close()
 		return nil, errors.New("credential scheme does not match OpenAI adapter profile")
 	}
-	return &Adapter{
+	adapter := &Adapter{
 		endpoint: endpoint, authorizer: authorizer, client: client,
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
 		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
 		kimi:                options.ProviderType == string(domain.ProviderKimi),
+		bigModel:            options.ProviderType == string(domain.ProviderBigModel),
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
+		canDescribeTargets:  !options.DisableTargetDescribe,
 		responses:           options.Responses,
-	}, nil
+	}
+	if options.CatalogPathPrefix != nil {
+		adapter.catalogPathPrefix = strings.Trim(*options.CatalogPathPrefix, "/")
+		adapter.catalogPathExplicit = true
+	}
+	return adapter, nil
 }
 
 // encodeChatRequest turns the OpenAI-shaped call into the bytes this upstream
@@ -154,10 +174,16 @@ func NewWithOptions(options Options) (*Adapter, error) {
 // reaches reasoning through `thinking`, and it names the end-user reference
 // user_id. Marshalling the OpenAI struct straight out sent five members it
 // ignores and one under a name it does not read.
-func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest) ([]byte, error) {
+func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, requestID string) ([]byte, error) {
 	switch {
 	case a.deepSeek:
 		body, err := compatibility.RenderDeepSeekChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
+	case a.bigModel:
+		body, err := compatibility.RenderBigModelChatRequest(request, requestID)
 		if err != nil {
 			return nil, err
 		}
@@ -233,7 +259,16 @@ func (a *Adapter) modelCatalogURL() (url.URL, error) {
 	// wrong route is refused with "isn't supported on this route", never served
 	// by a fallback — and a connection test passing here means the model exists
 	// on the account, not that this route serves it.
-	endpoint.Path = versionedPath(basePath, "models")
+	if a.catalogPathExplicit {
+		if a.catalogPathPrefix == "" {
+			endpoint.Path = basePath + "/models"
+		} else {
+			endpoint.Path = basePath + "/" + a.catalogPathPrefix + "/models"
+		}
+		endpoint.RawPath = ""
+	} else {
+		endpoint.Path = versionedPath(basePath, "models")
+	}
 	return endpoint, nil
 }
 
@@ -249,7 +284,7 @@ func (a *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDiscoveryCa
 		kind = domain.TargetCustomEndpointModel
 	}
 	return domain.InvocationTargetDiscoveryCapabilities{
-		TargetKinds: []domain.DeploymentTargetKind{kind}, CanEnumerate: true, CanDescribe: true, CanVerify: true,
+		TargetKinds: []domain.DeploymentTargetKind{kind}, CanEnumerate: true, CanDescribe: a.canDescribeTargets, CanVerify: true,
 	}
 }
 
@@ -399,7 +434,7 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = false
-	encoded, err := a.encodeChatRequest(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -407,12 +442,20 @@ func (a *Adapter) Chat(ctx context.Context, call provider.ChatCall) (openaiapi.C
 	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, err
 	}
-	var result openaiapi.ChatCompletionResponse
-	if err := json.Unmarshal(payload, &result); err != nil {
+	result, err := decodeChatCompletionResponse(payload, a.bigModel)
+	if err != nil {
 		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("decode provider response", err)
 	}
-	if result.ID == "" || result.Object == "" || len(result.Choices) == 0 {
+	if result.ID == "" || len(result.Choices) == 0 || (!a.bigModel && result.Object == "") {
 		return openaiapi.ChatCompletionResponse{}, acceptedResponseMalformed("provider response is missing required fields", nil)
+	}
+	if a.bigModel && result.Object == "" {
+		result.Object = "chat.completion"
+	}
+	if a.bigModel {
+		if err := bigModelFinishError(result.Choices); err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
 	}
 	return result, nil
 }
@@ -599,6 +642,140 @@ func acceptedResponseMalformed(message string, cause error) *provider.Error {
 	}
 }
 
+func bigModelFinishError(choices []openaiapi.Choice) error {
+	for _, choice := range choices {
+		if choice.FinishReason == nil {
+			continue
+		}
+		switch *choice.FinishReason {
+		case "sensitive":
+			return &provider.Error{Class: provider.ErrorBadRequest, Ambiguous: true, Message: "BigModel blocked the completion as sensitive"}
+		case "network_error":
+			return &provider.Error{Class: provider.ErrorProvider5xx, Ambiguous: true, Message: "BigModel reported a network error while generating"}
+		case "model_context_window_exceeded":
+			return &provider.Error{Class: provider.ErrorBadRequest, Ambiguous: true, Message: "BigModel reported that the model context window was exceeded"}
+		}
+	}
+	return nil
+}
+
+// BigModel's two regional APIs do not share one exact tool-call response
+// dialect. The mainland API returns function.arguments as a JSON string, while
+// the international API documents it as an object. Decode both here and keep
+// the rest of Halro on the OpenAI contract, where arguments is the JSON text.
+func decodeChatCompletionResponse(payload []byte, bigModel bool) (openaiapi.ChatCompletionResponse, error) {
+	if !bigModel {
+		var result openaiapi.ChatCompletionResponse
+		err := json.Unmarshal(payload, &result)
+		return result, err
+	}
+	var wire bigModelChatCompletionResponse
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		return openaiapi.ChatCompletionResponse{}, err
+	}
+	return wire.openAI()
+}
+
+type bigModelChatCompletionResponse struct {
+	ID      string           `json:"id"`
+	Object  string           `json:"object"`
+	Created int64            `json:"created"`
+	Model   string           `json:"model"`
+	Choices []bigModelChoice `json:"choices"`
+	Usage   *openaiapi.Usage `json:"usage,omitempty"`
+}
+
+type bigModelChoice struct {
+	Index        int              `json:"index"`
+	Message      *bigModelMessage `json:"message,omitempty"`
+	Delta        *bigModelMessage `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason"`
+}
+
+type bigModelMessage struct {
+	Role             string             `json:"role"`
+	Content          json.RawMessage    `json:"content,omitempty"`
+	ReasoningContent string             `json:"reasoning_content,omitempty"`
+	Name             string             `json:"name,omitempty"`
+	ToolCallID       string             `json:"tool_call_id,omitempty"`
+	ToolCalls        []bigModelToolCall `json:"tool_calls,omitempty"`
+}
+
+type bigModelToolCall struct {
+	Index    *int                     `json:"index,omitempty"`
+	ID       string                   `json:"id"`
+	Type     string                   `json:"type"`
+	Function bigModelToolCallFunction `json:"function"`
+}
+
+type bigModelToolCallFunction struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+func (response bigModelChatCompletionResponse) openAI() (openaiapi.ChatCompletionResponse, error) {
+	result := openaiapi.ChatCompletionResponse{
+		ID: response.ID, Object: response.Object, Created: response.Created,
+		Model: response.Model, Usage: response.Usage,
+		Choices: make([]openaiapi.Choice, len(response.Choices)),
+	}
+	for index, choice := range response.Choices {
+		message, err := choice.Message.openAI()
+		if err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
+		delta, err := choice.Delta.openAI()
+		if err != nil {
+			return openaiapi.ChatCompletionResponse{}, err
+		}
+		result.Choices[index] = openaiapi.Choice{
+			Index: choice.Index, Message: message, Delta: delta, FinishReason: choice.FinishReason,
+		}
+	}
+	return result, nil
+}
+
+func (message *bigModelMessage) openAI() (*openaiapi.Message, error) {
+	if message == nil {
+		return nil, nil
+	}
+	result := &openaiapi.Message{
+		Role: message.Role, Content: message.Content, ReasoningContent: message.ReasoningContent,
+		Name: message.Name, ToolCallID: message.ToolCallID,
+		ToolCalls: make([]openaiapi.ToolCall, len(message.ToolCalls)),
+	}
+	for index, toolCall := range message.ToolCalls {
+		arguments, err := bigModelToolArguments(toolCall.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("decode BigModel tool call %d arguments: %w", index, err)
+		}
+		result.ToolCalls[index] = openaiapi.ToolCall{
+			Index: toolCall.Index, ID: toolCall.ID, Type: toolCall.Type,
+			Function: openaiapi.ToolCallFunction{Name: toolCall.Function.Name, Arguments: arguments},
+		}
+	}
+	return result, nil
+}
+
+func bigModelToolArguments(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return "", errors.New("arguments must be a JSON string or object")
+	}
+	encoded, err := json.Marshal(object)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
 func (a *Adapter) ChatStream(
 	ctx context.Context,
 	call provider.ChatCall,
@@ -623,12 +800,12 @@ func (a *Adapter) ChatStream(
 		requestBody.Model = call.ProviderModel
 	}
 	requestBody.Stream = true
-	if a.capabilities.StreamUsage {
+	if a.capabilities.StreamUsage && !a.bigModel {
 		requestBody.StreamOptions = &openaiapi.StreamOptions{IncludeUsage: true}
 	} else {
 		requestBody.StreamOptions = nil
 	}
-	encoded, err := a.encodeChatRequest(requestBody)
+	encoded, err := a.encodeChatRequest(requestBody, call.RequestID)
 	if err != nil {
 		return nil, &provider.Error{Class: provider.ErrorBadRequest, Message: "encode provider request", Cause: err}
 	}
@@ -712,11 +889,20 @@ func (a *Adapter) ChatStream(
 				return usage, err
 			}
 		}
-		var chunk openaiapi.ChatCompletionResponse
-		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+		chunk, err := decodeChatCompletionResponse(event.Data, a.bigModel)
+		if err != nil {
 			return usage, &provider.Error{
 				Class: provider.ErrorMalformed, Ambiguous: true,
 				Message: "decode provider stream chunk", Cause: err,
+			}
+		}
+		if chunk.Usage != nil {
+			copyUsage := *chunk.Usage
+			usage = &copyUsage
+		}
+		if a.bigModel {
+			if err := bigModelFinishError(chunk.Choices); err != nil {
+				return usage, err
 			}
 		}
 		semanticEvent, err := openaiwire.DecodeEvent(chunk)
@@ -730,10 +916,6 @@ func (a *Adapter) ChatStream(
 			if choice.FinishReason != nil && *choice.FinishReason != "" {
 				finished = true
 			}
-		}
-		if chunk.Usage != nil {
-			copyUsage := *chunk.Usage
-			usage = &copyUsage
 		}
 		if err := emit(semanticEvent); err != nil {
 			return usage, err

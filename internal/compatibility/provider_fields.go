@@ -444,6 +444,22 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(hasNamedMessage(request), "messages[].name")
 	}, domain.ProfileKimiResponses)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(hasImageDetail(request), "messages[].content[].detail")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		add(len(request.Tools) > 128, "tools")
+		add(request.OutputFormat != nil && request.OutputFormat.Kind == semantic.OutputJSONSchema, "response_format")
+		add(request.Temperature != nil && (*request.Temperature < 0 || *request.Temperature > 1), "temperature")
+		add(request.TopP != nil && (*request.TopP <= 0 || *request.TopP > 1), "top_p")
+		add(request.EndUserRef != "" && (utf8.RuneCountInString(request.EndUserRef) < 6 || utf8.RuneCountInString(request.EndUserRef) > 128), "user")
+		add(len(request.Stop) > 4, "stop")
+		add(request.ToolChoice != nil && request.ToolChoice.Mode != semantic.ToolChoiceAuto, "tool_choice")
+	}, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Bedrock's inability to fetch an image used to be declared here, once per
 		// northbound endpoint, in each endpoint's own name for the same member.
 		// Three spellings of one fact was the evidence that it did not belong in
@@ -519,6 +535,28 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 	// be forgotten. The allowlist inverts that — a new profile carries it only by
 	// being named here.
 	add(hasProviderExecutedTool(request) && !slices.Contains(providerExecutedToolProfiles, profileID), "tools[].type")
+	return unsupported
+}
+
+// UnsupportedGenerateFieldsForTarget adds the small set of constraints that
+// cannot be expressed at profile granularity. BigModel's reasoning switch and
+// output-limit meaning vary between exact GLM model identifiers.
+func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
+	unsupported := UnsupportedGenerateFields(profileID, request)
+	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat {
+		return unsupported
+	}
+	seen := make(map[string]struct{}, len(unsupported))
+	for _, field := range unsupported {
+		seen[field] = struct{}{}
+	}
+	for _, field := range BigModelTargetUnsupportedGenerateFields(providerModel, request) {
+		if _, exists := seen[field]; exists {
+			continue
+		}
+		unsupported = append(unsupported, field)
+		seen[field] = struct{}{}
+	}
 	return unsupported
 }
 
@@ -606,6 +644,15 @@ func UnsupportedEmbeddingFields(profileID domain.ProviderProfileID, request sema
 	switch profileID {
 	case domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings, domain.ProfileOpenAICompatible:
 		return nil
+	case domain.ProfileBigModelCNChatEmbeddings:
+		var unsupported []string
+		if request.Encoding != "" {
+			unsupported = append(unsupported, "encoding_format")
+		}
+		if request.EndUserRef != "" {
+			unsupported = append(unsupported, "user")
+		}
+		return unsupported
 	case domain.ProfileGeminiText:
 		var unsupported []string
 		if request.Encoding != "" && request.Encoding != "float" {

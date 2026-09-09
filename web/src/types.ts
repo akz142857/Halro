@@ -486,7 +486,9 @@ export type AccessSurface =
   | "bedrock-agent-runtime"
   | "bedrock-mantle"
   | "minimax-api"
-  | "kimi-api";
+  | "kimi-api"
+  | "bigmodel-cn-general-api"
+  | "bigmodel-global-general-api";
 
 export type CredentialScheme =
   | "bearer.static"
@@ -494,7 +496,8 @@ export type CredentialScheme =
   | "azure.api-key"
   | "google.api-key"
   | "aws.sigv4.explicit-session"
-  | "aws.bedrock.api-key";
+  | "aws.bedrock.api-key"
+  | "bigmodel.api-key";
 
 export type CapabilityEvidence = "verified" | "declared" | "unsupported";
 export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
@@ -508,6 +511,7 @@ export type ProviderType =
   | "bedrock"
   | "minimax"
   | "kimi"
+  | "bigmodel"
   | "openai_compatible";
 
 export interface ProviderCapabilities {

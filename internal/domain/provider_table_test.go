@@ -162,9 +162,11 @@ func TestImmutableProfileSet(t *testing.T) {
 // list, rather than appearing in a table row nobody re-read.
 func TestOnlyNamedProfilesHaveAWiderCeiling(t *testing.T) {
 	optIn := map[ProviderProfileID]func(ProviderCapabilities) ProviderCapabilities{
-		ProfileAnthropicMessages: withProviderExecutedTools,
-		ProfileOpenAIResponses:   withProviderExecutedTools,
-		ProfileDeepSeekChat:      withVision,
+		ProfileAnthropicMessages:        withProviderExecutedTools,
+		ProfileOpenAIResponses:          withProviderExecutedTools,
+		ProfileDeepSeekChat:             withVision,
+		ProfileBigModelCNChatEmbeddings: withBigModelOptionalCapabilities,
+		ProfileBigModelGlobalChat:       withBigModelOptionalCapabilities,
 	}
 	for _, profile := range AllProviderProfiles() {
 		widen, named := optIn[profile.ID]
@@ -283,9 +285,11 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		// mainland accounts reach the identical contract at api.moonshot.cn.
 		// Kimi's own error documentation says a key from one platform answers 401
 		// on the other, so the two are not interchangeable either.
-		ProfileKimiChat:              "https://api.moonshot.ai",
-		ProfileKimiAnthropicMessages: "https://api.moonshot.ai",
-		ProfileKimiResponses:         "https://api.moonshot.ai",
+		ProfileKimiChat:                 "https://api.moonshot.ai",
+		ProfileKimiAnthropicMessages:    "https://api.moonshot.ai",
+		ProfileKimiResponses:            "https://api.moonshot.ai",
+		ProfileBigModelCNChatEmbeddings: "https://open.bigmodel.cn",
+		ProfileBigModelGlobalChat:       "https://api.z.ai",
 	}
 	for _, profile := range AllProviderProfiles() {
 		expected, listed := want[profile.ID]
