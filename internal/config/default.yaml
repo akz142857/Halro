@@ -191,9 +191,10 @@ gateway:
   # changes what this data directory contains. Records are encrypted under the
   # master key, bound to the request and project they belong to, truncated at
   # max_bytes, capped at max_records_per_day, deleted after `retain`, and
-  # readable only through an audited admin action. Redaction runs before
-  # capture, so what is stored is what went upstream and not what the caller
-  # sent.
+  # readable only through an audited admin action. The capture includes the
+  # decoded body received by the Gateway before redaction, but never request
+  # headers or the Gateway credential, plus Halro's post-redaction normalized
+  # request so an operator can compare the two safely.
   failure_capture:
     enabled: false
     max_bytes: 65536

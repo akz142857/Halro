@@ -606,10 +606,11 @@ still executed, collected and expired on their own clock.
 
 #### Capturing what a failed call carried
 
-`gateway.failure_capture.enabled` keeps the request a failed call sent upstream
-and the answer that came back, so a failure can be reproduced rather than
-guessed at. It is off by default, and turning it on is a decision about what
-this instance's data directory contains rather than a verbosity setting.
+`gateway.failure_capture.enabled` keeps the decoded request body accepted by the
+Gateway, Halro's normalized post-redaction request, and the provider answer or
+transport error, so a failure can be reproduced rather than guessed at. It is
+off by default, and turning it on is a decision about what this instance's data
+directory contains rather than a verbosity setting.
 
 Everything else Halro persists is metadata it produced itself — identifiers,
 counts, classes, costs. This is the only store that holds material a caller
@@ -620,7 +621,7 @@ metric or an audit record is unchanged: this is a separate, narrower act.
 gateway:
   failure_capture:
     enabled: true
-    max_bytes: 65536          # each side truncated separately
+    max_bytes: 65536          # each captured part truncated separately
     max_records_per_day: 1000
     retain: 24h               # 1h to 720h
 ```
@@ -643,9 +644,12 @@ your own compliance position before enabling it:
   request ID and project ID as associated data, so a record cannot be renamed
   onto another request, opened under another project, or lifted into another
   install's directory.
-- **Post-redaction.** Capture happens after the project's redaction policy has
-  run, so what is stored is what went upstream and not what the caller sent.
-- **Bounded.** Each side is truncated at `max_bytes` and flagged as truncated;
+- **Both sides of translation.** The decoded Gateway body precedes redaction so
+  it preserves the caller-facing fields and may contain material the policy
+  subsequently removes. Request headers and Gateway credentials are never
+  captured. A separate normalized request shows the post-redaction operation
+  Halro used for routing and provider rendering.
+- **Bounded.** Each captured part is truncated at `max_bytes` and flagged as truncated;
   each day is capped at `max_records_per_day`, past which capture stops for the
   day and logs one line.
 - **Expiring.** Each record is removed once it is older than `retain`, swept on

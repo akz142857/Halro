@@ -316,8 +316,9 @@ and capability evidence are not merged.
 - Prompts and response bodies never reach a log, a metric, or an audit record.
   Two opt-in stores are the only places caller-written content is kept at rest,
   and both change what the data directory contains, so enabling either is a
-  decision rather than a default: `gateway.failure_capture` retains the request
-  and upstream answer of a *failed* call, and the per-Project deferred tier
+  decision rather than a default: `gateway.failure_capture` retains the Gateway
+  request body, normalized request and upstream answer or transport error of a
+  *failed* call, and the per-Project deferred tier
   (`background: true`) retains the answer of a *successful* one. Both are sealed
   under the Master Key, bound to their request and Project, bounded in size and
   count, and swept on expiry. A captured failure payload is readable only

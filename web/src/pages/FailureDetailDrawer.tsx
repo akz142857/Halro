@@ -152,6 +152,11 @@ function CapturedPayload({ requestID }: { requestID: string }) {
       {requested && payload.data && (
         <>
           <PayloadSection
+            label={t("usage.failures.payloadGatewayRequest")}
+            value={payload.data.gateway_request}
+            truncated={payload.data.gateway_request_truncated}
+          />
+          <PayloadSection
             label={t("usage.failures.payloadRequest")}
             value={payload.data.request}
             truncated={payload.data.request_truncated}

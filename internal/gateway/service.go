@@ -217,9 +217,12 @@ type requestRun struct {
 	fallbackCount int
 	// What a failed request carried, held as references and serialized only if
 	// the request actually fails. Nil whenever capture is switched off, so the
-	// successful path pays nothing for a feature it does not use.
-	capturedRequest  any
-	capturedResponse any
+	// successful path pays nothing for a feature it does not use. The Gateway
+	// request preserves the caller-facing field names; capturedRequest is the
+	// provider-neutral form after Halro has processed it.
+	capturedGatewayRequest any
+	capturedRequest        any
+	capturedResponse       any
 	// captureOutcome is what finalize decided, carried to close() so the write
 	// happens outside the lease window. Empty means nothing was finalized, and
 	// close() finalizes before it reads this.
@@ -421,6 +424,9 @@ func (s *Service) beginRequestRun(
 		acceptedAt: s.now(),
 	}
 	run.captureRequest(payload)
+	if inbound, ok := requestmeta.InboundRequest(ctx); ok {
+		run.captureGatewayRequest(inbound)
+	}
 	return run, nil
 }
 

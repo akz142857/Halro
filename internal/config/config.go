@@ -458,8 +458,9 @@ type Gateway struct {
 	FailureCapture                FailureCapture  `yaml:"failure_capture"`
 }
 
-// FailureCapture keeps the request a failed call carried and the answer the
-// upstream gave it, so a failure can be reproduced rather than guessed at.
+// FailureCapture keeps the request body Halro accepted, its normalized form,
+// and the answer or transport error the upstream gave it, so a failure can be
+// reproduced rather than guessed at.
 //
 // It is off by default, and turning it on is a decision about what this
 // instance's data directory contains rather than a verbosity setting. Nothing
@@ -474,9 +475,9 @@ type Gateway struct {
 // keeps this a small tail of traffic rather than a copy of it.
 type FailureCapture struct {
 	Enabled bool `yaml:"enabled"`
-	// MaxBytes bounds each captured side. The request and the response are
-	// bounded separately: a large answer must not cost the request that
-	// explains it.
+	// MaxBytes bounds each captured part. The Gateway request, normalized
+	// request and response are bounded separately: a large answer must not cost
+	// either request view that explains it.
 	MaxBytes int `yaml:"max_bytes"`
 	// MaxRecordsPerDay bounds the store against an upstream that is failing
 	// everything. Past it capture stops for the day and says so once, rather

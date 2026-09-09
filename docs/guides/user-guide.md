@@ -486,8 +486,9 @@ A row may also say the record predates the fields it would otherwise show, which
 is not the same as an upstream that gave none.
 
 If `gateway.failure_capture` is switched on, a failed request whose payload was
-captured offers the request and the upstream reply. Opening it writes an audit
-record: it is the only place in the console that shows what a caller wrote.
+captured shows the request accepted by the Gateway, Halro's normalized request,
+and the provider reply or transport error. Opening it writes an audit record:
+it is the only place in the console that shows what a caller wrote.
 
 ### 7.2 The console's window
 

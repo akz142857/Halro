@@ -107,10 +107,18 @@ type Record struct {
 	ProjectID  string    `json:"project_id"`
 	Outcome    string    `json:"outcome"`
 	CapturedAt time.Time `json:"captured_at"`
-	// Request is the operation as it went upstream: provider-agnostic, and
-	// already through the project's redaction policy, because capture happens
-	// after that policy has run. Storing the pre-redaction form would put back
-	// exactly what the policy exists to remove.
+	// GatewayRequest is the decoded body accepted at Halro's public API
+	// boundary, before protocol translation changes field names or structure.
+	// It is retained only in this encrypted, bounded and audited store. Headers
+	// are never included, so a Gateway credential cannot enter the capture.
+	GatewayRequest json.RawMessage `json:"gateway_request,omitempty"`
+	// GatewayRequestTruncated distinguishes an incomplete diagnostic copy from
+	// a malformed request sent by the caller.
+	GatewayRequestTruncated bool `json:"gateway_request_truncated,omitempty"`
+	// Request is Halro's provider-neutral operation after the project's
+	// redaction policy has run. Comparing it with GatewayRequest explains which
+	// translation produced the field the provider ultimately accepted or
+	// refused.
 	Request json.RawMessage `json:"request,omitempty"`
 	// RequestTruncated says the ceiling cut the request short, so a reader does
 	// not diagnose a malformed body that is only an incomplete one.
@@ -230,6 +238,7 @@ func (s *Store) Put(record Record) (bool, error) {
 		return false, errors.New("request ID is not a safe file name")
 	}
 	record.CapturedAt = s.now().UTC()
+	record.GatewayRequest, record.GatewayRequestTruncated = truncateJSON(record.GatewayRequest, s.maxBytes)
 	record.Request, record.RequestTruncated = truncateJSON(record.Request, s.maxBytes)
 	record.Response, record.ResponseTruncated = truncateJSON(record.Response, s.maxBytes)
 

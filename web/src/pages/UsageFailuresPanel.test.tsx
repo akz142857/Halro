@@ -156,6 +156,7 @@ describe("UsageFailuresPanel", () => {
     const payload = vi.spyOn(api, "usageFailurePayload").mockResolvedValue({
       request_id: "req_failed", project_id: "project_a", outcome: "provider_error",
       captured_at: "2026-08-21T10:01:02Z",
+	  gateway_request: { model: "chat", messages: [{ role: "user", content: "hello" }], max_tokens: 8 },
       request: { model: "chat", messages: [{ role: "user", content: "hello" }] },
       response: { provider_status: 401, body: "invalid api key" },
     });
@@ -173,8 +174,10 @@ describe("UsageFailuresPanel", () => {
     expect(within(dialog).getByText(/每次查看都会记入审计日志/)).toBeVisible();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "查看" }));
-    await waitFor(() => expect(payload).toHaveBeenCalledWith("req_failed"));
-    expect(await within(dialog).findByText(/invalid api key/)).toBeVisible();
+	await waitFor(() => expect(payload).toHaveBeenCalledWith("req_failed"));
+	expect(await within(dialog).findByRole("heading", { name: "Gateway 收到的请求" })).toBeVisible();
+	expect(within(dialog).getByText(/"max_tokens": 8/)).toBeVisible();
+	expect(await within(dialog).findByText(/invalid api key/)).toBeVisible();
   });
 
   // Not captured is the ordinary case, not a fault: capture may be off, the

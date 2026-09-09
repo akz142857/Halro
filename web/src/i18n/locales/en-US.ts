@@ -846,14 +846,15 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       providerCodeLabel: "Provider code",
       providerRequestLabel: "Provider request ID",
       viewAttemptChain: "See this request's full attempt chain",
-      payloadHeading: "Request and response",
+      payloadHeading: "Request diagnostic payload",
       revealPayload: "Show",
       // The server audits every read. This line is what tells the operator they
       // are looking at material a caller wrote rather than at Halro's own
       // metadata.
-      payloadWarning: "What the caller sent upstream and what came back. Every view is recorded in the audit log.",
-      payloadRequest: "Request sent upstream",
-      payloadResponse: "Upstream answer",
+      payloadWarning: "What the Gateway received, Halro's normalized request, and the provider response or transport error. Every view is recorded in the audit log.",
+      payloadGatewayRequest: "Request received by Gateway",
+      payloadRequest: "Request normalized by Halro",
+      payloadResponse: "Provider response or transport error",
       payloadTruncated: "This side was cut at the storage ceiling. It is not an incomplete upstream answer.",
       noPayload: "Nothing was captured for this request.",
     },
