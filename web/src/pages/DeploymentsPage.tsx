@@ -20,7 +20,7 @@ import {
 import { exactNumber, formatAge, money, useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { CapabilityPreflight, CapabilityReview, Deployment, DeploymentPriceVersion, DeploymentTargetKind, DeploymentVariant, ModelCapabilityDetection, PriceSchedule, Provider, ProviderBinding, ProviderCapabilities, ProviderProfilesCatalog, ResolutionState, ResolvedInvocationTarget } from "../types";
-import { interfaceCeiling, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
+import { findOffering, findProfile, interfaceCeiling, regionForEndpoint, updateCapabilitySelection, useProviderProfiles } from "../hooks/useProviderProfiles";
 import { ModalityMarks } from "../ModalityMarks";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -1254,6 +1254,23 @@ function bindingLabel(binding: SelectableBinding, t: ReturnType<typeof useTransl
   return `${capabilities.join(" · ")} — ${binding.profile_id}`;
 }
 
+function deploymentProviderLabel(
+  provider: Provider,
+  catalog: ProviderProfilesCatalog | undefined,
+  t: TFunction,
+): string {
+  if (!catalog) return provider.name;
+  const profile = findProfile(catalog, provider.type, provider.profile_id);
+  const offering = findOffering(catalog, provider.type, profile?.offering_id ?? "");
+  if (!offering) return provider.name;
+  const region = profile?.region_id || regionForEndpoint(offering, provider.base_url);
+  return [
+    provider.name,
+    t(`providers.offerings.${offering.id}`, { defaultValue: offering.id }),
+    region ? t(`providers.regions.${region}`, { defaultValue: region }) : "",
+  ].filter(Boolean).join(" · ");
+}
+
 function DeploymentForm({
   current,
   template,
@@ -1301,6 +1318,12 @@ function DeploymentForm({
   const [targetKind, setTargetKind] = useState<DeploymentTargetKind>(source?.target_kind ?? "model_id");
   const queryClient = useQueryClient();
   const selectedProvider = enabledProviders.find((item) => item.id === providerID);
+  const selectedProviderProfile = selectedProvider && catalogReady
+    ? findProfile(catalogReady, selectedProvider.type, selectedProvider.profile_id)
+    : undefined;
+  const selectedProviderOffering = selectedProvider && catalogReady
+    ? findOffering(catalogReady, selectedProvider.type, selectedProviderProfile?.offering_id ?? "")
+    : undefined;
   const selectableBindings = providerBindings(selectedProvider);
   const pinnedBinding = selectableBindings.find((item) => item.id === bindingID);
   // "Which interface does this model speak" is the same question detection
@@ -1916,7 +1939,9 @@ function DeploymentForm({
                 setRegion("");
               }
             }}>
-              {enabledProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
+              {enabledProviders.map((provider) => (
+                <option key={provider.id} value={provider.id}>{deploymentProviderLabel(provider, catalogReady, t)}</option>
+              ))}
             </select>
           </Field>
           {availableTargetKinds.length > 1 && <Field label={t("deployments.targetKind")} hint={t("deployments.targetKindHint")}>
@@ -2060,6 +2085,12 @@ function DeploymentForm({
               </div>
             ) : null}
           </div>
+          {(selectedProviderOffering?.kind === "subscription" || selectedProviderOffering?.kind === "entitlement") && (
+            <details className="deployment-subscription-pricing">
+              <summary><strong>{t("deployments.subscriptionPricingTitle")}</strong></summary>
+              <div role="note">{t("deployments.subscriptionPricingDescription")}</div>
+            </details>
+          )}
           {capabilityModelSupported && <Field label={t("deployments.capabilityModel")} hint={t("deployments.capabilityModelHint")}>
             <select
               value={canonicalModelRef}
@@ -2693,4 +2724,3 @@ function catalogEditCeiling(deployment: Deployment): ProviderCapabilities | null
   }
   return ceiling;
 }
-

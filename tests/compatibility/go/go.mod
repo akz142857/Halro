@@ -3,8 +3,8 @@ module github.com/akz142857/Halro/tests/compatibility/go
 go 1.25.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.68.0
-	github.com/openai/openai-go/v3 v3.55.0
+	github.com/anthropics/anthropic-sdk-go v1.71.0
+	github.com/openai/openai-go/v3 v3.56.0
 )
 
 require (

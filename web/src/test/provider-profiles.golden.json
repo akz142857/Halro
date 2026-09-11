@@ -137,6 +137,17 @@
   "provider_types": [
     {
       "default_profile_id": "openai.chat-embeddings.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "openai.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "openai-api",
@@ -216,6 +227,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "openai-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.openai.com",
           "defaults": {
@@ -244,6 +256,8 @@
           },
           "id": "openai.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "openai.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -258,7 +272,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "openai-api",
@@ -338,6 +354,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "openai-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.openai.com",
           "defaults": {
@@ -366,6 +383,8 @@
           },
           "id": "openai.responses.v1",
           "immutable": false,
+          "offering_id": "openai.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -399,7 +418,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "openai-api",
@@ -479,6 +500,7 @@
             "transcriptions": true,
             "vision": false
           },
+          "connection_group_id": "openai-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.openai.com",
           "defaults": {
@@ -507,13 +529,28 @@
           },
           "id": "openai.media-resources.v1",
           "immutable": true,
-          "request_constraints": []
+          "offering_id": "openai.api-platform",
+          "region_id": "",
+          "request_constraints": [],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "openai"
     },
     {
       "default_profile_id": "anthropic.messages.2023-06-01",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "anthropic.console-api",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "anthropic-api",
@@ -590,6 +627,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "anthropic-api",
           "credential_scheme": "anthropic.x-api-key",
           "default_base_url": "https://api.anthropic.com",
           "defaults": {
@@ -618,6 +656,8 @@
           },
           "id": "anthropic.messages.2023-06-01",
           "immutable": false,
+          "offering_id": "anthropic.console-api",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -649,13 +689,26 @@
                 "input[].content[].detail"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": true
         }
       ],
       "type": "anthropic"
     },
     {
       "default_profile_id": "azure-openai.chat-embeddings.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "azure-openai.resource",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "azure-openai",
@@ -732,6 +785,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "azure-openai",
           "credential_scheme": "azure.api-key",
           "default_base_url": "",
           "defaults": {
@@ -760,6 +814,8 @@
           },
           "id": "azure-openai.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "azure-openai.resource",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -774,13 +830,26 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "azure_openai"
     },
     {
       "default_profile_id": "deepseek.chat.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "deepseek.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "deepseek-api",
@@ -857,6 +926,7 @@
             "transcriptions": false,
             "vision": false
           },
+          "connection_group_id": "deepseek-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.deepseek.com",
           "defaults": {
@@ -885,6 +955,8 @@
           },
           "id": "deepseek.chat.v1",
           "immutable": false,
+          "offering_id": "deepseek.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -937,13 +1009,52 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "deepseek"
     },
     {
       "default_profile_id": "bigmodel.cn.chat-embeddings.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "bigmodel.general-api",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "fixed",
+          "regions": [
+            "cn",
+            "global"
+          ],
+          "requires_usage_warning": false
+        },
+        {
+          "documentation": [
+            {
+              "policy_revision": "bigmodel-coding-plan-cn-2026-09-10",
+              "region": "cn",
+              "url": "https://docs.bigmodel.cn/cn/coding-plan/usage-notes"
+            },
+            {
+              "policy_revision": "zai-coding-plan-global-2026-09-10",
+              "region": "global",
+              "url": "https://docs.z.ai/devpack/usage-policy"
+            }
+          ],
+          "id": "bigmodel.coding-plan",
+          "kind": "subscription",
+          "region_hosts": [],
+          "region_scope": "fixed",
+          "regions": [
+            "cn",
+            "global"
+          ],
+          "requires_usage_warning": true
+        }
+      ],
       "profiles": [
         {
           "access_surface": "bigmodel-cn-general-api",
@@ -1020,6 +1131,7 @@
             "transcriptions": false,
             "vision": false
           },
+          "connection_group_id": "bigmodel-cn-general",
           "credential_scheme": "bigmodel.api-key",
           "default_base_url": "https://open.bigmodel.cn",
           "defaults": {
@@ -1048,6 +1160,8 @@
           },
           "id": "bigmodel.cn.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "bigmodel.general-api",
+          "region_id": "cn",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1124,7 +1238,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bigmodel-global-general-api",
@@ -1201,6 +1317,7 @@
             "transcriptions": false,
             "vision": false
           },
+          "connection_group_id": "bigmodel-global-general",
           "credential_scheme": "bigmodel.api-key",
           "default_base_url": "https://api.z.ai",
           "defaults": {
@@ -1229,6 +1346,8 @@
           },
           "id": "bigmodel.global.chat.v1",
           "immutable": false,
+          "offering_id": "bigmodel.general-api",
+          "region_id": "global",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1293,13 +1412,375 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
+        },
+        {
+          "access_surface": "bigmodel-cn-coding-api",
+          "ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "combines_with": [],
+          "connection_ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_group_id": "bigmodel-cn-coding",
+          "credential_scheme": "bigmodel.coding-plan-key",
+          "default_base_url": "https://open.bigmodel.cn",
+          "defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": true,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "id": "bigmodel.cn.coding.chat.v1",
+          "immutable": false,
+          "offering_id": "bigmodel.coding-plan",
+          "region_id": "cn",
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "the GLM Coding Plan uses the same explicitly rendered BigModel Chat dialect on its own /api/coding/paas/v4 path and its own subscription key",
+                "the product routes every published model identifier onto the tier its plan entitles, so the model that answers is read back from the response rather than assumed from the request",
+                "user is renamed to user_id",
+                "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+                "function tools are carried up to the documented limit of 128",
+                "json_object is preserved while json_schema is rejected",
+                "stream usage is returned by the final provider chunk without sending stream_options",
+                "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "parallel_tool_calls",
+                "tools",
+                "response_format",
+                "stop",
+                "tool_choice",
+                "user",
+                "messages[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the Coding Plan's Chat Completions route",
+                "max_output_tokens is carried as BigModel max_tokens",
+                "function tools are carried up to the documented limit of 128",
+                "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "tools",
+                "text.format",
+                "tool_choice",
+                "user",
+                "input[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through the Coding Plan's Chat Completions route",
+                "function tools are carried up to the documented limit of 128",
+                "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+                "json_schema has no BigModel counterpart"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "metadata",
+                "output_config.format",
+                "service_tier",
+                "stop_sequences",
+                "thinking",
+                "tool_choice",
+                "tools",
+                "top_k"
+              ]
+            }
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
+        },
+        {
+          "access_surface": "bigmodel-global-coding-api",
+          "ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": false,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "combines_with": [],
+          "connection_ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": false,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": false,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_group_id": "bigmodel-global-coding",
+          "credential_scheme": "bigmodel.coding-plan-key",
+          "default_base_url": "https://api.z.ai",
+          "defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": false,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "id": "bigmodel.global.coding.chat.v1",
+          "immutable": false,
+          "offering_id": "bigmodel.coding-plan",
+          "region_id": "global",
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "the international GLM Coding Plan uses the documented Z.AI /api/coding/paas/v4 path and the same explicitly rendered BigModel Chat dialect",
+                "user is renamed to user_id",
+                "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+                "function tools are carried up to the documented limit of 128",
+                "json_object and json_schema are both routed away until the international Coding endpoint is measured",
+                "streaming is declared from the official coding-agent contract, but stream usage accounting remains unknown until a subscription response is captured",
+                "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "messages[].name",
+                "n",
+                "seed",
+                "parallel_tool_calls",
+                "tools",
+                "response_format",
+                "stop",
+                "tool_choice",
+                "user",
+                "messages[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "Responses items are mapped through the international Coding Plan's documented Chat Completions route",
+                "max_output_tokens is carried as BigModel max_tokens",
+                "function tools are carried up to the documented limit of 128",
+                "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "tools",
+                "text.format",
+                "tool_choice",
+                "user",
+                "input[].content[].detail"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "portable Messages content is mapped through the international Coding Plan's documented Chat Completions route",
+                "function tools are carried up to the documented limit of 128",
+                "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+                "json_schema has no BigModel counterpart"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "metadata",
+                "output_config.format",
+                "service_tier",
+                "stop_sequences",
+                "thinking",
+                "tool_choice",
+                "tools",
+                "top_k"
+              ]
+            }
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "bigmodel"
     },
     {
       "default_profile_id": "openai-compatible.chat-embeddings.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "openai-compatible.self-declared",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "openai-compatible",
@@ -1376,6 +1857,7 @@
             "transcriptions": false,
             "vision": false
           },
+          "connection_group_id": "openai-compatible",
           "credential_scheme": "bearer.static",
           "default_base_url": "",
           "defaults": {
@@ -1404,6 +1886,8 @@
           },
           "id": "openai-compatible.chat-embeddings.v1",
           "immutable": false,
+          "offering_id": "openai-compatible.self-declared",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1418,13 +1902,26 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "openai_compatible"
     },
     {
       "default_profile_id": "gemini.generate-content.text.v1beta",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "google.gemini-api",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "gemini-generate-content",
@@ -1501,6 +1998,7 @@
             "transcriptions": false,
             "vision": false
           },
+          "connection_group_id": "gemini-text",
           "credential_scheme": "google.api-key",
           "default_base_url": "https://generativelanguage.googleapis.com",
           "defaults": {
@@ -1529,6 +2027,8 @@
           },
           "id": "gemini.generate-content.text.v1beta",
           "immutable": false,
+          "offering_id": "google.gemini-api",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1590,13 +2090,26 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "gemini"
     },
     {
       "default_profile_id": "bedrock.mantle.chat.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "aws.bedrock-mantle",
+          "kind": "metered_api",
+          "region_hosts": [],
+          "region_scope": "none",
+          "regions": [],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "bedrock-mantle",
@@ -1678,6 +2191,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "bedrock-mantle",
           "credential_scheme": "aws.bedrock.api-key",
           "default_base_url": "https://bedrock-mantle.us-east-1.api.aws",
           "defaults": {
@@ -1706,6 +2220,8 @@
           },
           "id": "bedrock.mantle.chat.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1720,7 +2236,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1802,6 +2320,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "bedrock-mantle",
           "credential_scheme": "aws.bedrock.api-key",
           "default_base_url": "https://bedrock-mantle.us-east-1.api.aws",
           "defaults": {
@@ -1830,6 +2349,8 @@
           },
           "id": "bedrock.mantle.openai.chat.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -1844,7 +2365,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -1926,6 +2449,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "bedrock-mantle",
           "credential_scheme": "aws.bedrock.api-key",
           "default_base_url": "https://bedrock-mantle.us-east-1.api.aws",
           "defaults": {
@@ -1954,6 +2478,8 @@
           },
           "id": "bedrock.mantle.responses.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2000,7 +2526,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -2082,6 +2610,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "bedrock-mantle",
           "credential_scheme": "aws.bedrock.api-key",
           "default_base_url": "https://bedrock-mantle.us-east-1.api.aws",
           "defaults": {
@@ -2110,6 +2639,8 @@
           },
           "id": "bedrock.mantle.openai.responses.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2156,7 +2687,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "bedrock-mantle",
@@ -2238,6 +2771,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "bedrock-mantle",
           "credential_scheme": "aws.bedrock.api-key",
           "default_base_url": "https://bedrock-mantle.us-east-1.api.aws",
           "defaults": {
@@ -2266,6 +2800,8 @@
           },
           "id": "bedrock.mantle.anthropic.messages.v1",
           "immutable": true,
+          "offering_id": "aws.bedrock-mantle",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2310,13 +2846,61 @@
                 "output_config.format"
               ]
             }
-          ]
+          ],
+          "route_partitioned": true,
+          "sends_anthropic_betas": true
         }
       ],
       "type": "bedrock"
     },
     {
       "default_profile_id": "minimax.anthropic.messages.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "minimax.api-platform",
+          "kind": "metered_api",
+          "region_hosts": [
+            {
+              "host": "api.minimax.io",
+              "region": "global"
+            },
+            {
+              "host": "api.minimaxi.com",
+              "region": "cn"
+            }
+          ],
+          "region_scope": "by_endpoint",
+          "regions": [
+            "global",
+            "cn"
+          ],
+          "requires_usage_warning": false
+        },
+        {
+          "documentation": [
+            {
+              "policy_revision": "minimax-subscription-cn-2026-09-10",
+              "region": "cn",
+              "url": "https://platform.minimaxi.com/docs/token-plan/intro"
+            },
+            {
+              "policy_revision": "minimax-subscription-global-2026-09-10",
+              "region": "global",
+              "url": "https://platform.minimax.io/docs/token-plan/intro"
+            }
+          ],
+          "id": "minimax.subscription-access",
+          "kind": "entitlement",
+          "region_hosts": [],
+          "region_scope": "fixed",
+          "regions": [
+            "cn",
+            "global"
+          ],
+          "requires_usage_warning": true
+        }
+      ],
       "profiles": [
         {
           "access_surface": "minimax-api",
@@ -2396,6 +2980,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "minimax-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.minimax.io",
           "defaults": {
@@ -2424,6 +3009,8 @@
           },
           "id": "minimax.anthropic.messages.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2477,7 +3064,9 @@
                 "output_config.format"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "minimax-api",
@@ -2557,6 +3146,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "minimax-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.minimax.io",
           "defaults": {
@@ -2585,6 +3175,8 @@
           },
           "id": "minimax.chat.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2640,7 +3232,9 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "minimax-api",
@@ -2720,6 +3314,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "minimax-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.minimax.io",
           "defaults": {
@@ -2748,6 +3343,8 @@
           },
           "id": "minimax.responses.v1",
           "immutable": false,
+          "offering_id": "minimax.api-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2800,13 +3397,354 @@
                 "top_k"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
+        },
+        {
+          "access_surface": "minimax-cn-subscription-access",
+          "ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "combines_with": [],
+          "connection_ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_group_id": "minimax-cn-subscription-openai",
+          "credential_scheme": "minimax.subscription-key",
+          "default_base_url": "https://api.minimax.cn",
+          "defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "id": "minimax.cn.subscription.openai.chat.v1",
+          "immutable": false,
+          "offering_id": "minimax.subscription-access",
+          "region_id": "cn",
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "n",
+                "seed",
+                "stop",
+                "response_format",
+                "parallel_tool_calls",
+                "user",
+                "max_tokens"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "text.format",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "max_tokens",
+                "metadata",
+                "output_config.format",
+                "service_tier",
+                "stop_sequences",
+                "thinking",
+                "top_k"
+              ]
+            }
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
+        },
+        {
+          "access_surface": "minimax-global-subscription-access",
+          "ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "combines_with": [],
+          "connection_ceiling": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "connection_group_id": "minimax-global-subscription-openai",
+          "credential_scheme": "minimax.subscription-key",
+          "default_base_url": "https://api.minimax.io",
+          "defaults": {
+            "async_generate": false,
+            "batches": false,
+            "chat": true,
+            "developer_role": false,
+            "embeddings": false,
+            "fetched_image": false,
+            "files": false,
+            "images": false,
+            "json_object": false,
+            "max_context_tokens": 0,
+            "max_output_tokens": 0,
+            "moderations": false,
+            "provider_executed_tools": false,
+            "reasoning": true,
+            "rerank": false,
+            "speech": false,
+            "stream_usage": true,
+            "streaming": true,
+            "structured_outputs": false,
+            "tools": true,
+            "transcriptions": false,
+            "vision": false
+          },
+          "id": "minimax.global.subscription.openai.chat.v1",
+          "immutable": false,
+          "offering_id": "minimax.subscription-access",
+          "region_id": "global",
+          "request_constraints": [
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "openai.chat-completions.v1",
+              "path": "/v1/chat/completions",
+              "unsupported_request_fields": [
+                "n",
+                "seed",
+                "stop",
+                "response_format",
+                "parallel_tool_calls",
+                "user",
+                "max_tokens"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "openai.responses.create.v1",
+              "path": "/v1/responses",
+              "unsupported_request_fields": [
+                "parallel_tool_calls",
+                "text.format",
+                "user"
+              ]
+            },
+            {
+              "declared_transforms": [
+                "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+                "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+              ],
+              "endpoint_id": "anthropic.messages.2023-06-01",
+              "path": "/v1/messages",
+              "unsupported_request_fields": [
+                "max_tokens",
+                "metadata",
+                "output_config.format",
+                "service_tier",
+                "stop_sequences",
+                "thinking",
+                "top_k"
+              ]
+            }
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "minimax"
     },
     {
       "default_profile_id": "kimi.chat.v1",
+      "offerings": [
+        {
+          "documentation": [],
+          "id": "kimi.open-platform",
+          "kind": "metered_api",
+          "region_hosts": [
+            {
+              "host": "api.moonshot.ai",
+              "region": "global"
+            },
+            {
+              "host": "api.moonshot.cn",
+              "region": "cn"
+            }
+          ],
+          "region_scope": "by_endpoint",
+          "regions": [
+            "global",
+            "cn"
+          ],
+          "requires_usage_warning": false
+        }
+      ],
       "profiles": [
         {
           "access_surface": "kimi-api",
@@ -2885,6 +3823,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "kimi-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.moonshot.ai",
           "defaults": {
@@ -2913,6 +3852,8 @@
           },
           "id": "kimi.chat.v1",
           "immutable": false,
+          "offering_id": "kimi.open-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -2985,7 +3926,9 @@
                 "top_p"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         },
         {
           "access_surface": "kimi-api",
@@ -3064,6 +4007,7 @@
             "transcriptions": false,
             "vision": true
           },
+          "connection_group_id": "kimi-api",
           "credential_scheme": "bearer.static",
           "default_base_url": "https://api.moonshot.ai",
           "defaults": {
@@ -3092,6 +4036,8 @@
           },
           "id": "kimi.anthropic.messages.v1",
           "immutable": false,
+          "offering_id": "kimi.open-platform",
+          "region_id": "",
           "request_constraints": [
             {
               "declared_transforms": [
@@ -3155,7 +4101,9 @@
                 "top_p"
               ]
             }
-          ]
+          ],
+          "route_partitioned": false,
+          "sends_anthropic_betas": false
         }
       ],
       "type": "kimi"

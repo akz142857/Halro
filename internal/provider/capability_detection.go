@@ -204,7 +204,15 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 // same treatment as every other capability no probe reaches.
 func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 	switch profile {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages,
+		domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages,
+		domain.ProfileKimiCodeAnthropicMessages,
+		domain.ProfileKimiCodeOpenAIChat:
+		// The Kimi Code OpenAI face is also withheld until its documented
+		// thinking ladder is verified with a real membership key. Do not spend a
+		// capability probe by guessing an OpenAI effort rung in the meantime.
 		return "", false
 	case domain.ProfileDeepSeekChat:
 		return shallowestEffort(compatibility.DeepSeekEffortLevels), true
@@ -215,10 +223,25 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 		// The case above was not enough on its own, which is why the test beside
 		// this function now walks the profile table instead of naming profiles.
 		return shallowestEffort(compatibility.KimiEffortLevels), true
-	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat:
+	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
 		return shallowestEffort(compatibility.BigModelEffortLevels), true
 	default:
 		return shallowestEffort(openaiapi.ReasoningEffortLevels), true
+	}
+}
+
+// isBigModelChatProfile names the profiles that speak the BigModel Chat dialect:
+// the two regional general APIs and the two regional Coding Plans. What separates
+// them is the path and the key, and neither changes how a probe is phrased or
+// which depth ladder the wire accepts.
+func isBigModelChatProfile(profile domain.ProviderProfileID) bool {
+	switch profile {
+	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -226,7 +249,7 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 // by exact model. A probe is never useful when Halro cannot encode a depth for
 // that target without rounding it or changing whether thinking runs.
 func reasoningProbeEffortForTarget(profile domain.ProviderProfileID, model string) (string, bool) {
-	if profile != domain.ProfileBigModelCNChatEmbeddings && profile != domain.ProfileBigModelGlobalChat {
+	if !isBigModelChatProfile(profile) {
 		return reasoningProbeEffort(profile)
 	}
 	switch model {
@@ -252,6 +275,20 @@ func shallowestEffort(ladder []string) string {
 
 func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target ModelCapabilityDetectionTarget, probe CapabilityProbe) domain.CapabilityProbeResult {
 	result := domain.CapabilityProbeResult{Status: domain.ProbeInconclusive, BindingID: target.BindingID, ProbeKind: probe.Kind}
+	// What the upstream says it actually ran. A product that routes a request
+	// onto the tier a plan entitles answers as a different model than the one
+	// asked for — measured on BigModel's GLM Coding Plan, where eight of the ten
+	// identifiers its own /models route lists are answered by one of two models.
+	// A probe that measured another model must not leave verified evidence
+	// against this one; the check is at the end of this function.
+	//
+	// Read from the unary probes only. The streaming ones are driven through
+	// ChatStream, which hands back usage rather than the response envelope, so a
+	// substitution seen only there goes unnoticed — narrower than it should be,
+	// and stated rather than left to be discovered. The unary probes are what
+	// establish chat, tools, vision and the JSON modes, which is where a wrong
+	// model's answer would do the most damage.
+	answered := ""
 	maxTokens := probe.MaxOutputTokens
 	request := openaiapi.ChatCompletionRequest{Model: target.ProviderModel,
 		Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("Reply briefly.")}}}
@@ -274,6 +311,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 	case "minimal_chat":
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
@@ -291,7 +329,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		}
 	case "tool_call":
 		request.Tools = []openaiapi.Tool{{Type: "function", Function: openaiapi.ToolFunction{Name: "halro_probe", Description: "Return the fixed value", Parameters: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)}}}
-		if target.ProfileID == domain.ProfileBigModelCNChatEmbeddings || target.ProfileID == domain.ProfileBigModelGlobalChat {
+		if isBigModelChatProfile(target.ProfileID) {
 			request.Messages[0].Content = openaiapi.TextContent("Call the halro_probe function with ok=true.")
 			request.ToolChoice = json.RawMessage(`"auto"`)
 		} else {
@@ -299,6 +337,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		}
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil && len(response.Choices[0].Message.ToolCalls) > 0 {
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
@@ -307,6 +346,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		request.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
 			if content, ok := openaiapi.DecodeTextContent(response.Choices[0].Message.Content); ok {
 				var object map[string]any
@@ -328,6 +368,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		request.ResponseFormat = json.RawMessage(`{"type":"json_schema","json_schema":{"name":"halro_probe","strict":true,"schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}}}`)
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
 			if content, ok := openaiapi.DecodeTextContent(response.Choices[0].Message.Content); ok {
 				var object struct {
@@ -342,6 +383,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		request.Messages = append([]openaiapi.Message{{Role: "developer", Content: openaiapi.TextContent("Be brief.")}}, request.Messages...)
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 {
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
@@ -349,6 +391,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		request.Messages[0].Content = json.RawMessage(`[{"type":"text","text":"Describe briefly."},{"type":"image_url","image_url":{"url":"` + CapabilityProbeImage + `"}}]`)
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 {
 			result.Status, result.Evidence = domain.ProbeSupported, domain.EvidenceVerified
 		}
@@ -371,6 +414,7 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 		request.ReasoningEffort = effort
 		var response openaiapi.ChatCompletionResponse
 		response, err = b.Chat(ctx, ChatCall{RequestID: "capability-detection", ProviderModel: target.ProviderModel, Request: request})
+		answered = response.Model
 		if err == nil && len(response.Choices) > 0 && response.Choices[0].Message != nil {
 			reasoned := response.Usage != nil && response.Usage.ReasoningTokens() > 0
 			reasoned = reasoned || strings.TrimSpace(response.Choices[0].Message.ReasoningContent) != ""
@@ -424,6 +468,14 @@ func (b *LegacyAdapterBridge) DetectCapability(ctx context.Context, target Model
 	// "inconclusive".
 	if err == nil && result.Status == domain.ProbeInconclusive {
 		result.Status = domain.ProbeAssertionFailed
+	}
+	// Measured, and measured on something else. The capability may well be real,
+	// but this call is not evidence for the target that was named, so the result
+	// says so by identifier rather than recording another model's answer as this
+	// one's. Case-insensitive because the upstream normalises the identifier it
+	// echoes back.
+	if err == nil && profileEchoesTheModelItWasGiven(target.ProfileID) {
+		applySubstitutionGuard(&result, target.ProviderModel, answered)
 	}
 	if err != nil {
 		result.Status, result.Evidence, result.ErrorClass = classifyCapabilityProbeError(err, probe), "", capabilityProbeErrorClass(err)
@@ -508,4 +560,47 @@ func capabilityProbeErrorClass(err error) string {
 		return "timeout"
 	}
 	return "unknown"
+}
+
+// profileEchoesTheModelItWasGiven names the profiles whose upstream answers with
+// the exact identifier the request carried, so that a different one coming back
+// means a different model ran.
+//
+// It is deliberately a short list and not the default, because "the response
+// names another model" is ordinary elsewhere and would be a false alarm on most
+// platforms: an Azure deployment is addressed by its deployment name and answers
+// with the underlying model, and an OpenAI alias resolves to a dated snapshot.
+// Neither is a substitution — the target is what was asked for, described
+// differently.
+//
+// The BigModel profiles are on the list because the general profiles echo the
+// identifier verbatim, including normalising its case, and the Coding Plans
+// answers eight of the ten identifiers its own /models route lists with one of
+// two models. That difference is a different model, and it is the whole reason
+// this check exists. Mainland substitution was measured; Z.AI explicitly
+// documents its old identifiers as aliases routed to current plan models, so
+// the international row needs the same fail-closed attribution guard.
+func profileEchoesTheModelItWasGiven(profile domain.ProviderProfileID) bool {
+	switch profile {
+	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
+		return true
+	default:
+		return false
+	}
+}
+
+// applySubstitutionGuard discards evidence a probe collected from a model other
+// than the one it named.
+//
+// Case-insensitive because the upstream normalises the identifier it echoes:
+// BigModel answers a request for GLM-5.3 as glm-5.3, and treating that as a
+// substitution would throw away a real measurement. An upstream that echoes
+// nothing is not evidence of a substitution either, so silence leaves the result
+// alone.
+func applySubstitutionGuard(result *domain.CapabilityProbeResult, requested, answered string) {
+	if answered == "" || strings.EqualFold(answered, requested) {
+		return
+	}
+	result.Status, result.Evidence, result.ErrorClass = domain.ProbeAssertionFailed, "", "model_substituted"
 }

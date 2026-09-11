@@ -67,6 +67,11 @@ type Options struct {
 	// would appear as a target nothing can be deployed on until someone declares
 	// what it does.
 	CatalogShape CatalogShape
+	// CatalogPath is the exact model-list route relative to Endpoint. Empty uses
+	// /v1/models for Anthropic itself and for the existing OpenAI-shaped
+	// compatibility catalogues; a non-empty value enables enumeration on that
+	// explicit route.
+	CatalogPath string
 	// BedrockProjectID is empty for Anthropic's own API, which has no such
 	// concept, and for a Bedrock Mantle provider that addresses the account's
 	// default project.
@@ -81,6 +86,7 @@ type Adapter struct {
 	providerType     string
 	messagesPath     string
 	catalogShape     CatalogShape
+	catalogPath      string
 	bedrockProjectID string
 	profileID        domain.ProviderProfileID
 }
@@ -104,10 +110,15 @@ func New(options Options) (*Adapter, error) {
 	if profileID == "" {
 		profileID = domain.ProfileAnthropicMessages
 	}
+	catalogPath := strings.Trim(options.CatalogPath, "/")
+	if catalogPath == "" && (options.CatalogShape == CatalogOpenAI ||
+		(options.MessagesPath == "" && providerType == string(domain.ProviderAnthropic))) {
+		catalogPath = "v1/models"
+	}
 	return &Adapter{
 		endpoint: options.Endpoint, authorizer: options.Authorizer, client: options.Client,
 		capabilities: options.Capabilities, providerType: providerType, messagesPath: options.MessagesPath,
-		catalogShape:     options.CatalogShape,
+		catalogShape: options.CatalogShape, catalogPath: catalogPath,
 		bedrockProjectID: options.BedrockProjectID, profileID: profileID,
 	}, nil
 }
@@ -121,8 +132,7 @@ func (adapter *Adapter) InvocationTargetDiscovery() domain.InvocationTargetDisco
 	// Messages-shaped catalogue this package was written for; a profile declaring
 	// the OpenAI shape serves the other one, which provider.DecodeOpenAIShaped-
 	// ModelCatalog reads for both adapter packages.
-	canEnumerate := adapter.catalogShape == CatalogOpenAI ||
-		(adapter.messagesPath == "" && adapter.providerType == string(domain.ProviderAnthropic))
+	canEnumerate := adapter.catalogPath != ""
 	return domain.InvocationTargetDiscoveryCapabilities{
 		TargetKinds:  []domain.DeploymentTargetKind{domain.TargetModelID},
 		CanEnumerate: canEnumerate, CanDescribe: canEnumerate, CanVerify: true,
@@ -144,11 +154,7 @@ type anthropicModelDescriptor struct {
 // and the credential-only connection test read.
 func (adapter *Adapter) modelCatalogURL(limit int, afterID string) url.URL {
 	endpoint := *adapter.endpoint
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
-	if !strings.HasSuffix(endpoint.Path, "/v1") {
-		endpoint.Path += "/v1"
-	}
-	endpoint.Path += "/models"
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + adapter.catalogPath
 	// limit and after_id are Anthropic's pagination. A zero limit asks for the
 	// bare route, which is what a host defining neither parameter should be sent.
 	if limit > 0 {
@@ -202,7 +208,7 @@ func (adapter *Adapter) ListInvocationTargets(ctx context.Context, query domain.
 		func() {
 			defer response.Body.Close()
 			if response.StatusCode < 200 || response.StatusCode >= 300 {
-				err = decodeHTTPError(response)
+				err = adapter.decodeHTTPError(response)
 				return
 			}
 			payload, readErr := readLimited(response.Body, maxResponseBytes)
@@ -262,7 +268,7 @@ func (adapter *Adapter) listOpenAIShapedTargets(ctx context.Context) ([]domain.I
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, decodeHTTPError(response)
+		return nil, adapter.decodeHTTPError(response)
 	}
 	payload, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {
@@ -430,7 +436,7 @@ func (adapter *Adapter) probeModelCatalog(ctx context.Context) error {
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return decodeHTTPError(response)
+		return adapter.decodeHTTPError(response)
 	}
 	payload, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {
@@ -575,7 +581,7 @@ func (adapter *Adapter) MessagesNative(ctx context.Context, call provider.Native
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return provider.NativeMessageResult{}, decodeHTTPError(response)
+		return provider.NativeMessageResult{}, adapter.decodeHTTPError(response)
 	}
 	body, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {
@@ -605,7 +611,7 @@ func (adapter *Adapter) MessagesNativeStream(ctx context.Context, call provider.
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, decodeHTTPError(response)
+		return nil, adapter.decodeHTTPError(response)
 	}
 	validator := anthropicapi.NewStreamValidator()
 	decoder := sse.NewDecoder(response.Body, semantic.MaxEncodedEventBytes)
@@ -657,7 +663,7 @@ func (adapter *Adapter) CountTokensNative(ctx context.Context, call provider.Nat
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return provider.NativeMessageResult{}, decodeHTTPError(response)
+		return provider.NativeMessageResult{}, adapter.decodeHTTPError(response)
 	}
 	body, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {
@@ -773,7 +779,7 @@ func readLimited(reader io.Reader, limit int64) ([]byte, error) {
 	return payload, nil
 }
 
-func decodeHTTPError(response *http.Response) error {
+func (a *Adapter) decodeHTTPError(response *http.Response) error {
 	payload, _ := readLimited(response.Body, 1<<20)
 	var envelope anthropicapi.ErrorResponse
 	_ = json.Unmarshal(payload, &envelope)
@@ -831,7 +837,14 @@ func decodeHTTPError(response *http.Response) error {
 		code != "" {
 		refusal = provider.RefusalInvalid
 	}
-	return &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: code, Refusal: refusal, RetryAfter: parseRetryAfter(response.Header)}
+	result := &provider.Error{Class: class, StatusCode: response.StatusCode, Retryable: retryable, Ambiguous: ambiguous, Message: message, ProviderRequestID: upstreamRequestID(response.Header), ProviderCode: code, Refusal: refusal, RetryAfter: parseRetryAfter(response.Header)}
+	if a.profileID == domain.ProfileKimiCodeAnthropicMessages && response.StatusCode == http.StatusPaymentRequired {
+		result.Class = provider.ErrorUnknown
+		result.FailureReason = provider.FailureReasonEntitlementVerificationUnavailable
+		result.Retryable = true
+		result.Ambiguous = false
+	}
+	return result
 }
 
 func upstreamRequestID(header http.Header) string {

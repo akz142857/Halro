@@ -16,6 +16,14 @@ import (
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
+func TestKimiCodePaymentRequiredUsesSubscriptionSemantics(t *testing.T) {
+	classified := (&Adapter{kimiCode: true}).classifyHTTPError(http.StatusPaymentRequired, upstreamRefusal{})
+	if classified.Class != provider.ErrorUnknown || classified.FailureReason != provider.FailureReasonEntitlementVerificationUnavailable ||
+		!classified.Retryable || classified.Ambiguous {
+		t.Fatalf("Kimi Code 402 classification = %#v", classified)
+	}
+}
+
 func TestBedrockMantleChatUsesBearerAPIKeyAndOpenAIPath(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != "https://bedrock-mantle.us-east-1.api.aws/v1/chat/completions" || request.Header.Get("Authorization") != "Bearer bedrock-key" || request.Header.Get("x-api-key") != "" {

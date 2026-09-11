@@ -84,6 +84,26 @@ func TestProviderProfileBindingIdentityAndLegacyProjection(t *testing.T) {
 	}
 }
 
+func TestProviderBindingsCannotCrossConnectionGroups(t *testing.T) {
+	capabilities := DefaultProviderCapabilitiesForProfile(ProviderKimi, ProfileKimiCodeOpenAIChat)
+	evidence := EvidenceForCapabilities(capabilities, EvidenceDeclared)
+	provider := ProviderInstance{
+		ID: "prv_kimi_code", Name: "Kimi Code", Type: ProviderKimi,
+		BaseURL: "https://api.kimi.com", CredentialID: "cred_kimi_code",
+		AccessSurface: SurfaceKimiCode, ProfileID: ProfileKimiCodeOpenAIChat,
+		CredentialScheme: CredentialKimiCodeKey, AllowedHosts: []string{"api.kimi.com"},
+		Capabilities: capabilities, CapabilityEvidence: evidence, Enabled: true,
+	}
+	provider.Bindings = []ProviderProfileBinding{
+		{ID: "bind_openai", ProviderID: provider.ID, ProfileID: ProfileKimiCodeOpenAIChat, AccessSurface: SurfaceKimiCode, CredentialScheme: CredentialKimiCodeKey, Capabilities: capabilities, CapabilityEvidence: evidence.Clone(), Enabled: true},
+		{ID: "bind_anthropic", ProviderID: provider.ID, ProfileID: ProfileKimiCodeAnthropicMessages, AccessSurface: SurfaceKimiCode, CredentialScheme: CredentialKimiCodeKey, Capabilities: capabilities, CapabilityEvidence: evidence.Clone(), Enabled: true},
+	}
+	provider.Capabilities, provider.CapabilityEvidence = BindingsCapabilitiesSummary(provider.Bindings)
+	if err := provider.Validate(); err == nil || !strings.Contains(err.Error(), "connection group") {
+		t.Fatalf("profiles from different connection groups were accepted: %v", err)
+	}
+}
+
 func TestBindingsCapabilitiesSummaryUnionsEnabledProfiles(t *testing.T) {
 	chat := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIChatEmbeddings)
 	media := DefaultProviderCapabilitiesForProfile(ProviderOpenAI, ProfileOpenAIMediaResources)

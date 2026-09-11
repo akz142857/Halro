@@ -69,10 +69,12 @@ func classifyMiniMaxStatus(code int64) *provider.Error {
 	switch code {
 	case 1002:
 		result.Class = provider.ErrorRateLimit
+		result.FailureReason = provider.FailureReasonRateLimited
 		result.Retryable = true
 		result.Message = "MiniMax rate limit"
 	case 1004:
 		result.Class = provider.ErrorAuthentication
+		result.FailureReason = provider.FailureReasonInvalidCredential
 		result.Message = "MiniMax authentication failed"
 	case 1008:
 		// Not retryable and not a rate limit, though it arrives looking like one.

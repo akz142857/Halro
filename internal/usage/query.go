@@ -6,22 +6,28 @@ import (
 	"errors"
 	"sort"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 type AttemptQuery struct {
-	BeforeSequence uint64
-	Limit          int
-	ProjectID      string
-	WorkUnitID     string
-	RunID          string
-	ProviderID     string
-	DeploymentID   string
-	RequestID      string
-	RequestedModel string
-	ProviderModel  string
-	Status         string
-	Start          time.Time
-	End            time.Time
+	BeforeSequence        uint64
+	Limit                 int
+	ProjectID             string
+	WorkUnitID            string
+	RunID                 string
+	ProviderID            string
+	OfferingID            domain.ProviderOfferingID
+	AccountRegionID       domain.ProviderRegionID
+	ProviderFailureReason provider.FailureReason
+	DeploymentID          string
+	RequestID             string
+	RequestedModel        string
+	ProviderModel         string
+	Status                string
+	Start                 time.Time
+	End                   time.Time
 }
 
 type AttemptPage struct {
@@ -74,6 +80,12 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 	if query.Limit < 1 || query.Limit > 100 {
 		return AttemptPage{}, errors.New("usage page limit must be between 1 and 100")
 	}
+	if query.AccountRegionID != domain.RegionNone && query.AccountRegionID != domain.RegionCN && query.AccountRegionID != domain.RegionGlobal {
+		return AttemptPage{}, errors.New("usage account region is invalid")
+	}
+	if !query.ProviderFailureReason.Valid() {
+		return AttemptPage{}, errors.New("usage provider failure reason is invalid")
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	page := AttemptPage{Attempts: make([]AttemptEvent, 0, query.Limit+1)}
@@ -86,6 +98,9 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 			query.WorkUnitID != "" && attempt.WorkUnitID != query.WorkUnitID ||
 			query.RunID != "" && attempt.RunID != query.RunID ||
 			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
+			query.OfferingID != "" && attempt.OfferingID != query.OfferingID ||
+			query.AccountRegionID != "" && attempt.AccountRegionID != query.AccountRegionID ||
+			query.ProviderFailureReason != "" && attempt.ProviderFailureReason != query.ProviderFailureReason ||
 			query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
 			query.RequestID != "" && attempt.RequestID != query.RequestID ||
 			query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
@@ -166,7 +181,7 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 		Hourly:          make([]Bucket, 0, 7*24),
 		RecentAnomalies: make([]Anomaly, 0, 5),
 		Breakdowns: map[string]map[string][]Breakdown{
-			"project": {}, "provider": {}, "requested_model": {}, "provider_model": {},
+			"project": {}, "provider": {}, "offering": {}, "requested_model": {}, "provider_model": {},
 		},
 	}
 	hourIndexes := make(map[int64]int, len(a.hourly))
@@ -215,7 +230,7 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 	// that accounting total while exposing the estimated portion separately so
 	// operators do not mistake an upper bound for Provider-reported consumption.
 	breakdowns := map[string]map[string]*Breakdown{
-		"project": {}, "provider": {}, "requested_model": {}, "provider_model": {},
+		"project": {}, "provider": {}, "offering": {}, "requested_model": {}, "provider_model": {},
 	}
 	for index := len(a.attempts) - 1; index >= 0; index-- {
 		attempt := a.attempts[index]
@@ -250,6 +265,7 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 			}
 			addBreakdown(breakdowns["project"], attempt.ProjectID, attempt)
 			addBreakdown(breakdowns["provider"], attempt.ProviderID, attempt)
+			addBreakdown(breakdowns["offering"], string(attempt.OfferingID), attempt)
 			addBreakdown(breakdowns["requested_model"], attempt.RequestedModel, attempt)
 			addBreakdown(breakdowns["provider_model"], attempt.ProviderModel, attempt)
 			if len(result.RecentAnomalies) < 5 &&

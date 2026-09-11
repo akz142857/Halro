@@ -22,12 +22,13 @@ import (
 )
 
 type credentialInput struct {
-	Name          string                  `json:"name"`
-	Type          domain.ProviderType     `json:"type"`
-	BaseURL       string                  `json:"base_url"`
-	AccessSurface domain.AccessSurface    `json:"access_surface,omitempty"`
-	Scheme        domain.CredentialScheme `json:"scheme,omitempty"`
-	Secret        *string                 `json:"secret,omitempty"`
+	Name                       string                  `json:"name"`
+	Type                       domain.ProviderType     `json:"type"`
+	BaseURL                    string                  `json:"base_url"`
+	AccessSurface              domain.AccessSurface    `json:"access_surface,omitempty"`
+	Scheme                     domain.CredentialScheme `json:"scheme,omitempty"`
+	Secret                     *string                 `json:"secret,omitempty"`
+	AcknowledgedPolicyRevision string                  `json:"acknowledged_policy_revision,omitempty"`
 	// Absolute, like the Gateway Key's own expiry: what the request says is what
 	// is stored, and an omitted or null value means the secret has no declared
 	// end. A rotation that means to keep an expiry sends it again.
@@ -53,9 +54,10 @@ type providerInput struct {
 	// deliberately no bindings field to send alongside this; decodeAdminJSON
 	// refuses unknown fields, so a caller still sending one is told rather than
 	// having it silently overridden.
-	Capabilities   *domain.ProviderCapabilities `json:"capabilities,omitempty"`
-	MaxConcurrency int64                        `json:"max_concurrency"`
-	Enabled        bool                         `json:"enabled"`
+	Capabilities               *domain.ProviderCapabilities `json:"capabilities,omitempty"`
+	MaxConcurrency             int64                        `json:"max_concurrency"`
+	Enabled                    bool                         `json:"enabled"`
+	AcknowledgedPolicyRevision string                       `json:"acknowledged_policy_revision,omitempty"`
 }
 
 type routeInput struct {
@@ -86,9 +88,16 @@ func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	profile, _ := domain.ResolveCredentialProfile(credential.Type, credential.AccessSurface, credential.Scheme)
+	auditMetadata, acknowledged := requireUsagePolicyAcknowledgement(
+		writer, profile.ProfileID, input.AcknowledgedPolicyRevision, false,
+	)
+	if !acknowledged {
+		return
+	}
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	intent, intentErr := r.newAdminAuditIntent(request, "credential.create", "credential", credential.ID)
+	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "credential.create", "credential", credential.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
 		return
@@ -131,6 +140,16 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
+		return
+	}
+	if input.Type != current.Type ||
+		input.AccessSurface != "" && input.AccessSurface != current.AccessSurface ||
+		input.Scheme != "" && input.Scheme != current.Scheme {
+		adminBadRequestCode(writer, "credential_product_immutable", "credential rotation cannot change provider type, product, region, or credential scheme; create a new credential instead")
+		return
+	}
+	if err := validateCredentialRotationRegion(current, input.BaseURL); err != nil {
+		adminBadRequestCode(writer, "credential_region_immutable", err.Error())
 		return
 	}
 	credential, err := r.credentialFromInput(current.ID, input.credentialInput, &current, current.CreatedAt)
@@ -219,7 +238,13 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminProviderInputError(writer, err)
 		return
 	}
-	intent, intentErr := r.newAdminAuditIntent(request, "provider.create", "provider", instance.ID)
+	auditMetadata, acknowledged := requireUsagePolicyAcknowledgement(
+		writer, instance.ProfileID, input.AcknowledgedPolicyRevision, true,
+	)
+	if !acknowledged {
+		return
+	}
+	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "provider.create", "provider", instance.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
 		return
@@ -306,7 +331,20 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	instance.LastTestRevision = current.LastTestRevision
 	instance.LastTestHealthyTargets = current.LastTestHealthyTargets
 	instance.LastTestTotalTargets = current.LastTestTotalTargets
-	intent, intentErr := r.newAdminAuditIntent(request, "provider.update", "provider", instance.ID)
+	productBindingChanged := current.CredentialID != instance.CredentialID || current.ProfileID != instance.ProfileID
+	var auditMetadata map[string]string
+	if productBindingChanged {
+		var acknowledged bool
+		auditMetadata, acknowledged = requireUsagePolicyAcknowledgement(
+			writer, instance.ProfileID, input.AcknowledgedPolicyRevision, true,
+		)
+		if !acknowledged {
+			return
+		}
+	} else {
+		auditMetadata = nil
+	}
+	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "provider.update", "provider", instance.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
 		return
@@ -1081,9 +1119,9 @@ func (r *Runtime) credentialFromInput(
 	if current != nil && surface == "" && scheme == "" {
 		surface, scheme = current.AccessSurface, current.Scheme
 	}
-	profile, ok := domain.ResolveCredentialProfile(input.Type, surface, scheme)
-	if !ok {
-		return domain.Credential{}, fmt.Errorf("credential access surface %q or scheme %q is incompatible with provider type %q", surface, scheme, input.Type)
+	profile, err := resolveCredentialIdentity(input.Type, surface, scheme)
+	if err != nil {
+		return domain.Credential{}, err
 	}
 	// Refused here rather than only hidden from the served matrix: the console is
 	// one caller of this API, and a surface this build does not offer must not be
@@ -1092,6 +1130,9 @@ func (r *Runtime) credentialFromInput(
 	// not carried forward.
 	if domain.IsWithheldProfile(profile.ProfileID) {
 		return domain.Credential{}, fmt.Errorf("credential access surface %q is not supported by this build", profile.AccessSurface)
+	}
+	if err := validateCredentialProductRegion(profile.AccessSurface, input.Type, input.BaseURL); err != nil {
+		return domain.Credential{}, err
 	}
 	if profile.AccessSurface == domain.SurfaceBedrockMantle {
 		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
@@ -1147,6 +1188,147 @@ func (r *Runtime) credentialFromInput(
 		CreatedAt: createdAt, UpdatedAt: now,
 	}
 	return credential, credential.Validate()
+}
+
+func validateCredentialProductRegion(surface domain.AccessSurface, providerType domain.ProviderType, endpoint string) error {
+	if endpointSurface, known := domain.SurfaceForEndpoint(providerType, endpoint); known && endpointSurface != surface {
+		return fmt.Errorf("credential access surface %q does not publish endpoint for surface %q", surface, endpointSurface)
+	}
+	identity, ok := domain.IdentityForSurface(surface)
+	if !ok || identity.RegionScope != domain.RegionScopeFixed {
+		return nil
+	}
+	region, known := domain.RegionForProviderEndpoint(providerType, endpoint)
+	if !known || region == identity.Region {
+		return nil
+	}
+	return fmt.Errorf("credential access surface %q is for region %q but the endpoint belongs to region %q", surface, identity.Region, region)
+}
+
+// validateCredentialRotationRegion prevents a by-endpoint credential ID from
+// crossing the upstream account and balance boundary. A custom proxy has no
+// provable region, so moving between a recognised host and an unrecognised one
+// also fails closed. Two unrecognised endpoints may be the same enterprise
+// proxy only; changing an unknown host requires a new credential because Halro
+// cannot prove that both proxies terminate at the same regional account.
+func validateCredentialRotationRegion(current domain.Credential, nextEndpoint string) error {
+	identity, ok := domain.IdentityForSurface(current.AccessSurface)
+	if !ok || identity.RegionScope != domain.RegionScopeByEndpoint {
+		return nil
+	}
+	currentRegion, currentKnown := domain.RegionForEndpoint(
+		current.AccessSurface, credentialOrigin(current.Audience, current.Type),
+	)
+	nextRegion, nextKnown := domain.RegionForEndpoint(current.AccessSurface, nextEndpoint)
+	if currentKnown && nextKnown && currentRegion == nextRegion {
+		return nil
+	}
+	if !currentKnown && !nextKnown && credentialOrigin(current.Audience, current.Type) == nextEndpoint {
+		return nil
+	}
+	return errors.New("credential rotation cannot change or unverify the account region; create a new credential instead")
+}
+
+// resolveCredentialIdentity turns a request's product identity into the exact
+// profile a credential will be sealed to.
+//
+// A credential stores which product it belongs to, as an (access surface,
+// credential scheme) pair, and a request may leave that unstated. What to do
+// then is not one answer:
+//
+//   - One identity for the type: there is nothing to choose, so it is resolved.
+//     This is every provider but one, and demanding that a caller spell out
+//     "openai-api" plus "bearer.static" would be ceremony with no decision
+//     behind it.
+//   - Two or more: it is refused, naming them. The alternative is what this
+//     build did until now — fall back to the provider type's default profile —
+//     and that is how every BigModel credential came to be sealed to the
+//     mainland surface no matter which host it was bound to, including the ones
+//     pointing at api.z.ai. A global key stored as a mainland one is not a
+//     display problem: it carries the mainland profile's capability set, which
+//     declares embeddings the global endpoint does not serve.
+//
+// Refusing rather than guessing is the whole fix. `halro doctor` reports the
+// credentials the guess already produced; see checkDoctorCredentialProducts.
+func resolveCredentialIdentity(
+	providerType domain.ProviderType,
+	surface domain.AccessSurface,
+	scheme domain.CredentialScheme,
+) (domain.ProviderProfileDefaults, error) {
+	if surface == "" && scheme == "" {
+		identities := domain.CredentialIdentities(providerType)
+		if len(identities) > 1 {
+			choices := make([]string, 0, len(identities))
+			for _, identity := range identities {
+				choice := string(identity.Offering)
+				if identity.Region != domain.RegionNone {
+					choice += "/" + string(identity.Region)
+				}
+				choices = append(choices, fmt.Sprintf("%s (access_surface=%q scheme=%q)",
+					choice, identity.AccessSurface, identity.CredentialScheme))
+			}
+			return domain.ProviderProfileDefaults{}, fmt.Errorf(
+				"provider type %q offers more than one product, so a credential must say which one:"+
+					" send access_surface and scheme for one of %s",
+				providerType, strings.Join(choices, ", "))
+		}
+	}
+	profile, ok := domain.ResolveCredentialProfile(providerType, surface, scheme)
+	if !ok {
+		return domain.ProviderProfileDefaults{}, fmt.Errorf(
+			"credential access surface %q or scheme %q is incompatible with provider type %q",
+			surface, scheme, providerType)
+	}
+	return profile, nil
+}
+
+// usageWarningAuditMetadata binds an operator's acknowledgement to the exact
+// product interface the credential or connection will use. The permanent IDs,
+// regional source URL, and Halro policy revision make the acknowledgement
+// reviewable even after the upstream changes the document at that URL.
+// Returning the requirement separately keeps metered products out of the audit
+// metadata instead of recording an acknowledgement nobody made or needed.
+func requireUsagePolicyAcknowledgement(
+	writer http.ResponseWriter,
+	profileID domain.ProviderProfileID,
+	acknowledgedRevision string,
+	includeProfile bool,
+) (map[string]string, bool) {
+	identity, ok := domain.IdentityForProfile(profileID)
+	if !ok || !identity.RequiresUsageWarning {
+		return nil, true
+	}
+	current := identity.UsagePolicyRevision
+	fields := map[string]string{
+		"code":                    "usage_policy_acknowledgement_required",
+		"error":                   "the selected provider product usage restrictions must be acknowledged",
+		"current_policy_revision": current,
+		"documentation_url":       identity.DocumentationURL,
+		"region_id":               string(identity.Region),
+	}
+	acknowledgedRevision = strings.TrimSpace(acknowledgedRevision)
+	if acknowledgedRevision == "" {
+		writeJSON(writer, http.StatusUnprocessableEntity, fields)
+		return nil, false
+	}
+	if acknowledgedRevision != current {
+		fields["code"] = "usage_policy_revision_mismatch"
+		fields["error"] = "the selected provider product usage policy has changed"
+		writeJSON(writer, http.StatusConflict, fields)
+		return nil, false
+	}
+	metadata := map[string]string{
+		"offering_id":                string(identity.Offering),
+		"access_surface":             string(identity.Surface),
+		"account_region_id":          string(identity.Region),
+		"usage_policy_documentation": identity.DocumentationURL,
+		"usage_policy_revision":      acknowledgedRevision,
+		"usage_warning_acknowledged": "true",
+	}
+	if includeProfile {
+		metadata["profile_id"] = string(profileID)
+	}
+	return metadata, true
 }
 
 // validateCredentialMaterial runs the credential through the same constructor
@@ -1323,6 +1505,14 @@ func (r *Runtime) providerFromInput(
 			),
 		}
 	}
+	if err := validateCredentialProductRegion(credential.AccessSurface, credential.Type,
+		credentialOrigin(credential.Audience, credential.Type)); err != nil {
+		return domain.ProviderInstance{}, credentialMatchError{
+			code:   "credential_region_mismatch",
+			fields: map[string]string{"credential_access_surface": string(credential.AccessSurface)},
+			err:    err,
+		}
+	}
 	if profile.AccessSurface == domain.SurfaceBedrockMantle {
 		if err := bedrockmantleprovider.ValidateEndpoint(endpoint); err != nil {
 			return domain.ProviderInstance{}, err
@@ -1344,8 +1534,15 @@ func (r *Runtime) providerFromInput(
 	if err := domain.ValidateAnthropicBetaTokens(allowedBetas); err != nil {
 		return domain.ProviderInstance{}, err
 	}
-	if len(allowedBetas) > 0 && profile.AccessSurface != domain.SurfaceAnthropic && profile.AccessSurface != domain.SurfaceBedrockMantle {
-		return domain.ProviderInstance{}, errors.New("anthropic beta tokens are only valid on an Anthropic-wire access surface")
+	// Checked against the profile that would send them rather than against the
+	// surface. The surface was too wide: Bedrock Mantle carries OpenAI chat and
+	// responses profiles alongside its Anthropic one, so a connection anchored on
+	// one of those used to store beta tokens it would never send. The console
+	// already asked the narrower question — it is what ProfileSendsAnthropicBetas
+	// answers — and having the two disagree is what put the rule in two places.
+	if len(allowedBetas) > 0 && !domain.ProfileSendsAnthropicBetas(profile.ProfileID) {
+		return domain.ProviderInstance{}, errors.New(
+			"anthropic beta tokens are only valid on a connection whose implementation sends the anthropic-beta header")
 	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
@@ -1848,10 +2045,18 @@ func implementedProviderType(value domain.ProviderType) bool {
 }
 
 func credentialViewFrom(item domain.Credential) credentialView {
+	origin := credentialOrigin(item.Audience, item.Type)
+	identity, _ := domain.IdentityForSurface(item.AccessSurface)
+	// A fixed-region surface is its own answer; a by-endpoint one is read from
+	// the endpoint the credential is sealed to, and an endpoint the upstream does
+	// not publish leaves it empty rather than guessed.
+	region, _ := domain.RegionForEndpoint(item.AccessSurface, origin)
 	return credentialView{
 		ID: item.ID, Name: item.Name, Type: item.Type,
 		AccessSurface: item.AccessSurface, Scheme: item.Scheme,
-		BoundBaseURL:     credentialOrigin(item.Audience, item.Type),
+		BoundBaseURL:     origin,
+		OfferingID:       identity.Offering,
+		RegionID:         region,
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
 		ExpiresAt: item.ExpiresAt,
 		Revision:  item.Revision,

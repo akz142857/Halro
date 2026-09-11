@@ -84,6 +84,41 @@ it may declare. Keep them equal unless the difference is a deliberate opt-in an
 operator reaches for — `TestOnlyNamedProfilesHaveAWiderCeiling` holds the list of
 profiles allowed to differ and what each gap is allowed to contain.
 
+### 2b. The surface's product identity
+
+`internal/domain/provider_offering.go` — if the profile introduces a new Access
+Surface, that surface needs a `surfaceRow`: which Offering (upstream product) it
+belongs to, and how that product expresses its account region. A new product
+needs a `providerOfferingRow` too, and a name in both locales
+(`web/src/i18n/locales/*.ts`, under `providers.offerings`).
+
+Nothing is stored per credential or per connection: a credential stores the
+surface, and the product and region are read back from it. That is why they are
+declared here and not on the profile row — several profiles share one surface,
+and a credential has no field able to choose between two products on it.
+
+`RegionScope` is the question to answer deliberately:
+
+- `fixed` — the surface *is* the region. Two regional products means two
+  surfaces, two profiles and two capability sets. `Hosts` carries this surface's
+  own published addresses, so a bound endpoint can be recognised as belonging to
+  the other one.
+- `by_endpoint` — one surface, several account hosts, told apart by the
+  credential's bound URL. `Hosts` is the choice itself, one region each.
+- `none` — no product region. A cloud region substituted into `BaseURLTemplate`
+  is not this: it is a deployment choice, not a product an operator bought.
+
+`Hosts` is recognition, never an allowlist. `BaseURLTemplate` is a prefill and
+not a bound, so an operator may front any upstream; an unrecognised host is
+"unknown", which the console shows and no write path refuses.
+
+Guarded by `internal/domain/provider_offering_test.go`, which walks the whole
+profile table — withheld rows included — and refuses a surface with no row, a
+row with no profile, an Offering with no surface, a region scope that disagrees
+with the region or the hosts, and two reachable surfaces that answer to the same
+`(type, offering, region)`. The console's copy is guarded by the two coverage
+tests in `web/src/i18n/i18n.test.tsx`.
+
 ### 3. Operation → primitive bindings
 
 `internal/provider/profile_bindings.go` — which operations the profile serves
@@ -174,7 +209,11 @@ holding a different half of native mode:
   offered for this (profile, surface) pair at all.
 - `internal/domain/provider_profile.go`, `ProfileSendsAnthropicBetas` — whether
   an `anthropic-beta` header may be forwarded. Deliberately a subset: a platform
-  can serve native and still not accept beta headers.
+  can serve native and still not accept beta headers. It is also the Admin write
+  path's gate — a connection anchored on any other profile is refused the tokens
+  rather than storing ones it would never send — and it is served to the console
+  as `sends_anthropic_betas`, so the field appears exactly where a token is
+  accepted.
 
 Guarded by `TestNativeAnthropicListsAgree`, which requires the first two to
 match exactly and the third to be a subset, and by `TestNoNativeProfileIsWithheld`.

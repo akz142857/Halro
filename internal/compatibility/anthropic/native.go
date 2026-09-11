@@ -14,7 +14,12 @@ import (
 )
 
 func NewNativeSchemaRegistry() (*compatibility.NativeSchemaRegistry, error) {
-	profiles := []domain.ProviderProfileID{domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages}
+	profiles := []domain.ProviderProfileID{
+		domain.ProfileAnthropicMessages,
+		domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileMiniMaxAnthropicMessages,
+		domain.ProfileKimiAnthropicMessages,
+	}
 	schemas := make([]compatibility.NativeSchema, 0, len(profiles))
 	for _, profileID := range profiles {
 		validate := validateNativePayload

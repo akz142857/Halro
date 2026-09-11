@@ -13,6 +13,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/ledger"
 )
@@ -25,6 +26,8 @@ type failureRow struct {
 		ErrorClass     string `json:"error_class"`
 		ProviderStatus int    `json:"provider_status"`
 		DeploymentID   string `json:"deployment_id"`
+		OfferingID     string `json:"offering_id"`
+		ProfileID      string `json:"profile_id"`
 	} `json:"last_failure"`
 }
 
@@ -72,6 +75,7 @@ func seedFailures(t *testing.T, runtime *Runtime) {
 			RequestID: requestID, AttemptID: attemptID, AttemptNumber: 1,
 			ProjectID: "project_1", PeriodID: "2026-08-21", ProviderID: "provider_1",
 			DeploymentID: "dep_1", ProviderModel: "gpt-4o", RequestedModel: "chat",
+			OfferingID: domain.OfferingOpenAIAPI, ProfileID: domain.ProfileOpenAIChatEmbeddings,
 			OccurredAt: now, Outcome: outcome, ErrorClass: class, HTTPStatus: status,
 			CommittedMicrosUSD: ledger.MicrosUSD(1),
 		}
@@ -132,7 +136,9 @@ func TestUsageFailuresListsEveryFailedRequestOncePerRequest(t *testing.T) {
 		t.Fatalf("a policy rejection was served with a provider context: %#v", rejected)
 	}
 	if failed.Outcome != "provider_error" || failed.LastFailure == nil ||
-		failed.LastFailure.ErrorClass != "authentication" || failed.LastFailure.ProviderStatus != 401 {
+		failed.LastFailure.ErrorClass != "authentication" || failed.LastFailure.ProviderStatus != 401 ||
+		failed.LastFailure.OfferingID != string(domain.OfferingOpenAIAPI) ||
+		failed.LastFailure.ProfileID != string(domain.ProfileOpenAIChatEmbeddings) {
 		t.Fatalf("the provider failure lost its context: %#v", failed)
 	}
 }
@@ -146,6 +152,11 @@ func TestUsageFailuresFiltersAndRefusesUnknownParameters(t *testing.T) {
 	byDeployment := readFailures(t, runtime, cookie, "/admin/api/v1/usage/failures?deployment_id=dep_1")
 	if len(byDeployment.Items) != 1 || byDeployment.Items[0].RequestID != "req_failed" {
 		t.Fatalf("deployment filter=%#v", byDeployment.Items)
+	}
+	byOffering := readFailures(t, runtime, cookie,
+		"/admin/api/v1/usage/failures?offering_id="+string(domain.OfferingOpenAIAPI))
+	if len(byOffering.Items) != 1 || byOffering.Items[0].RequestID != "req_failed" {
+		t.Fatalf("offering filter=%#v", byOffering.Items)
 	}
 	byRequest := readFailures(t, runtime, cookie, "/admin/api/v1/usage/failures?request_id=req_rejected")
 	if len(byRequest.Items) != 1 || byRequest.Items[0].RequestID != "req_rejected" {
