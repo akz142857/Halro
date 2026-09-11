@@ -36,17 +36,19 @@ export function UsageFailuresPanel() {
   const [requestID, setRequestID] = useState(() => parameter("request_id"));
   const [projectID, setProjectID] = useState(() => parameter("project_id"));
   const [deploymentID, setDeploymentID] = useState(() => parameter("deployment_id"));
+  const [offeringID, setOfferingID] = useState(() => parameter("offering_id"));
   const [start, setStart] = useState(() => isoToZonedInput(parameter("start") || undefined, accountingTimeZone()));
   const [end, setEnd] = useState(() => isoToZonedInput(parameter("end") || undefined, accountingTimeZone()));
 
   const failures = useInfiniteQuery({
-    queryKey: ["usage-failures", requestID, projectID, deploymentID, start, end, timeZone],
+    queryKey: ["usage-failures", requestID, projectID, deploymentID, offeringID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usageFailures(`?${new URLSearchParams({
       limit: "100",
       ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
       ...(deploymentID ? { deployment_id: deploymentID } : {}),
+      ...(offeringID ? { offering_id: offeringID } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
       ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
@@ -78,6 +80,12 @@ export function UsageFailuresPanel() {
         </label>
         <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        {offeringID && (
+          <button type="button" className="filter-chip" onClick={() => setOfferingID("")}>
+            {t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) })}
+            <span aria-hidden="true"> ×</span>
+          </button>
+        )}
         <span className="filter-count">{t("usage.failures.records", { count: rows.length })}</span>
       </div>
       {failures.isPending && <Loading />}
@@ -263,12 +271,33 @@ function FailureDetailDrawerFor({ failure, projectName, deploymentName, formatIn
           label: t("usage.deployment"),
           value: last?.deployment_id ? deploymentName || last.deployment_id : t("usage.failures.noTarget"),
         },
+        {
+          label: t("providers.product"),
+          value: last?.offering_id
+            ? t(`providers.offerings.${last.offering_id}`, { defaultValue: last.offering_id })
+            : undefined,
+        },
+        {
+          label: t("providers.capabilityImplementation"),
+          value: last?.profile_id
+            ? t(`providers.profiles.${last.profile_id}`, { defaultValue: last.profile_id })
+            : undefined,
+        },
+        {
+          label: t("usage.failures.accountRegionLabel"),
+          value: last?.account_region_id
+            ? t(`providers.regions.${last.account_region_id}`, { defaultValue: last.account_region_id })
+            : undefined,
+        },
         { label: t("usage.actualModel"), value: last?.provider_model },
         {
           label: t("usage.status"),
           value: last?.provider_status ? t("usage.httpStatus", { status: last.provider_status }) : undefined,
         },
         ...identifiers.facts,
+        { label: t("usage.failures.providerReasonLabel"), value: last?.provider_failure_reason ? t(`usage.failures.providerReasons.${last.provider_failure_reason}`, { defaultValue: last.provider_failure_reason }) : undefined },
+        { label: t("usage.failures.retryabilityLabel"), value: last ? last.failure_semantics_recorded ? t(last.retryable ? "usage.failures.retryable" : "usage.failures.notRetryable") : t("usage.failures.notRecorded") : undefined },
+        { label: t("usage.failures.ambiguityLabel"), value: last ? last.failure_semantics_recorded ? t(last.ambiguous ? "usage.failures.ambiguous" : "usage.failures.unambiguous") : t("usage.failures.notRecorded") : undefined },
         { label: t("usage.failures.attempts"), value: t("usage.failures.attemptCount", { count: failure.attempts }) },
         { label: t("usage.failures.fallbacks"), value: failure.fallbacks > 0 ? String(failure.fallbacks) : undefined },
         {

@@ -14,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/timezone"
 	"github.com/akz142857/Halro/internal/usage"
 	"github.com/go-chi/chi/v5"
@@ -383,7 +384,8 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	allowed := map[string]struct{}{
-		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
+		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "offering_id": {}, "account_region_id": {},
+		"provider_failure_reason": {}, "request_id": {},
 		"work_unit_id": {}, "run_id": {},
 		"deployment_id": {}, "model": {}, "provider_model": {}, "status": {},
 		"start": {}, "end": {},
@@ -413,15 +415,18 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	}
 	query := usage.AttemptQuery{
 		BeforeSequence: cursor, Limit: limit,
-		ProjectID:      request.URL.Query().Get("project_id"),
-		WorkUnitID:     request.URL.Query().Get("work_unit_id"),
-		RunID:          request.URL.Query().Get("run_id"),
-		ProviderID:     request.URL.Query().Get("provider_id"),
-		DeploymentID:   request.URL.Query().Get("deployment_id"),
-		RequestID:      request.URL.Query().Get("request_id"),
-		RequestedModel: request.URL.Query().Get("model"),
-		ProviderModel:  request.URL.Query().Get("provider_model"),
-		Status:         request.URL.Query().Get("status"),
+		ProjectID:             request.URL.Query().Get("project_id"),
+		WorkUnitID:            request.URL.Query().Get("work_unit_id"),
+		RunID:                 request.URL.Query().Get("run_id"),
+		ProviderID:            request.URL.Query().Get("provider_id"),
+		OfferingID:            domain.ProviderOfferingID(request.URL.Query().Get("offering_id")),
+		AccountRegionID:       domain.ProviderRegionID(request.URL.Query().Get("account_region_id")),
+		ProviderFailureReason: provider.FailureReason(request.URL.Query().Get("provider_failure_reason")),
+		DeploymentID:          request.URL.Query().Get("deployment_id"),
+		RequestID:             request.URL.Query().Get("request_id"),
+		RequestedModel:        request.URL.Query().Get("model"),
+		ProviderModel:         request.URL.Query().Get("provider_model"),
+		Status:                request.URL.Query().Get("status"),
 	}
 	if raw := request.URL.Query().Get("start"); raw != "" {
 		query.Start, err = time.Parse(time.RFC3339, raw)
@@ -464,7 +469,8 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 		return
 	}
 	allowed := map[string]struct{}{
-		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "request_id": {},
+		"cursor": {}, "limit": {}, "project_id": {}, "provider_id": {}, "offering_id": {}, "account_region_id": {},
+		"provider_failure_reason": {}, "request_id": {},
 		"deployment_id": {}, "model": {}, "provider_model": {}, "start": {}, "end": {},
 	}
 	for name := range request.URL.Query() {
@@ -494,12 +500,15 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 	}
 	query := usage.FailureQuery{
 		BeforeSequence: cursor, Limit: limit,
-		ProjectID:      request.URL.Query().Get("project_id"),
-		ProviderID:     request.URL.Query().Get("provider_id"),
-		RequestID:      request.URL.Query().Get("request_id"),
-		DeploymentID:   request.URL.Query().Get("deployment_id"),
-		RequestedModel: request.URL.Query().Get("model"),
-		ProviderModel:  request.URL.Query().Get("provider_model"),
+		ProjectID:             request.URL.Query().Get("project_id"),
+		ProviderID:            request.URL.Query().Get("provider_id"),
+		OfferingID:            domain.ProviderOfferingID(request.URL.Query().Get("offering_id")),
+		AccountRegionID:       domain.ProviderRegionID(request.URL.Query().Get("account_region_id")),
+		ProviderFailureReason: provider.FailureReason(request.URL.Query().Get("provider_failure_reason")),
+		RequestID:             request.URL.Query().Get("request_id"),
+		DeploymentID:          request.URL.Query().Get("deployment_id"),
+		RequestedModel:        request.URL.Query().Get("model"),
+		ProviderModel:         request.URL.Query().Get("provider_model"),
 	}
 	if raw := request.URL.Query().Get("start"); raw != "" {
 		query.Start, err = time.Parse(time.RFC3339, raw)

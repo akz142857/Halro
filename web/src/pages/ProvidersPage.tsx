@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import {
   ConfirmButton,
   EmptyState,
@@ -31,13 +31,22 @@ import {
   capabilityNeedsOptInWarning,
   combinableProfiles,
   connectionCeiling,
+  connectionChoices,
   connectionDefaults,
+  credentialIdentities,
   defaultProfileID,
+  endpointHost,
+  findOffering,
   findProfile,
+  offeringDocumentation,
+  offeringsForType,
   profilesForType,
+  regionForEndpoint,
   unservableCapabilities,
   updateCapabilitySelection,
   useProviderProfiles,
+  type ConnectionChoice,
+  type CredentialIdentity,
 } from "../hooks/useProviderProfiles";
 import { useTranslation } from "react-i18next";
 import { useIsReadOnly } from "../session";
@@ -46,23 +55,6 @@ import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../Onboardin
 const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
-
-// regionHintKey names the warning a provider type needs on its endpoint field.
-// Two platforms serve one contract from two regional hosts whose keys are not
-// interchangeable, so the endpoint is the field an operator gets wrong and the
-// failure it produces looks like a credential problem.
-function regionHintKey(type: ProviderType): string | null {
-  switch (type) {
-    case "minimax":
-      return "providers.minimaxRegionHint";
-    case "kimi":
-      return "providers.kimiRegionHint";
-    case "bigmodel":
-      return "providers.bigmodelRegionHint";
-    default:
-      return null;
-  }
-}
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
@@ -77,6 +69,21 @@ function urlOrigin(value: string) {
   } catch {
     return "";
   }
+}
+
+function fixedRegionEndpointStatus(
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+  regionID: string,
+  baseURL: string,
+): "match" | "cross_region" | "unknown" {
+  const host = endpointHost(baseURL);
+  if (!host) return "unknown";
+  const published = profilesForType(catalog, type).filter((profile) =>
+    profile.offering_id === offeringID && endpointHost(profile.default_base_url) === host);
+  if (published.some((profile) => profile.region_id === regionID)) return "match";
+  return published.length ? "cross_region" : "unknown";
 }
 
 function displayBoundBaseURL(value: string) {
@@ -97,16 +104,6 @@ function credentialExpiry(value: string | undefined, now = Date.now()) {
   return { expired: at <= now, days, soon: at > now && days <= credentialExpiryWarningDays };
 }
 
-// Which profile a Bedrock credential is created for.
-//
-// The form used to ask, because Bedrock's surfaces have different hosts and
-// different credential schemes. The served matrix answers it now: this build
-// offers Mantle alone, so the type's default profile is the only binding a new
-// credential can take, and a question with one answer is not asked.
-function bedrockCredentialProfile(catalog: ProviderProfilesCatalog) {
-  return findProfile(catalog, "bedrock", defaultProfileID(catalog, "bedrock"));
-}
-
 // The anthropic-beta header is comma separated, so the form takes one comma
 // separated string and stores the token set. Splitting here (rather than asking
 // the operator for one row per token) keeps copy-paste from Anthropic's docs
@@ -121,8 +118,106 @@ function endpointForType(catalog: ProviderProfilesCatalog, type: ProviderType) {
   return findProfile(catalog, type, defaultProfileID(catalog, type))?.default_base_url ?? "";
 }
 
-function isBedrockProfile(catalog: ProviderProfilesCatalog, value: string) {
-  return profilesForType(catalog, "bedrock").some((profile) => profile.id === value);
+// The label for one product identity or connection choice.
+//
+// Built from the served identifiers and translated by them, so adding a product
+// upstream adds a row here without this file being edited. The product name is
+// dropped where the type has only one — it would repeat the type — and the
+// region is dropped where the product has none.
+function productLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+  regionID: string,
+): string {
+  const parts: string[] = [];
+  if (offeringsForType(catalog, type).length > 1) {
+    parts.push(t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }));
+  }
+  if (regionID) parts.push(t(`providers.regions.${regionID}`, { defaultValue: regionID }));
+  return parts.join(" · ");
+}
+
+// The same label where an empty one would leave a blank option. Two identities
+// of one product with no region between them is not a shape any platform has
+// today; if one arrives, the operator sees the identifiers rather than a control
+// with nothing in it.
+function productOptionLabel(
+  t: ReturnType<typeof useTranslation>["t"],
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+  regionID: string,
+  fallback: string,
+): string {
+  return productLabel(t, catalog, type, offeringID, regionID) || fallback;
+}
+
+// Keep the required action visible without letting the full terms dominate the
+// form. Native details/summary supplies keyboard and screen-reader disclosure
+// behaviour; the expanded body holds the regional source and acknowledgement.
+function SubscriptionUsageDisclosure({
+  acknowledged,
+  documentationURL,
+  attentionKey = 0,
+  disabled = false,
+  onAcknowledgedChange,
+}: {
+  acknowledged: boolean;
+  documentationURL?: string;
+  attentionKey?: number;
+  disabled?: boolean;
+  onAcknowledgedChange: (acknowledged: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const checkboxRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!attentionKey) return;
+    if (detailsRef.current) detailsRef.current.open = true;
+    if (disabled) return;
+    requestAnimationFrame(() => checkboxRef.current?.focus());
+  }, [attentionKey, disabled]);
+  return (
+    <details ref={detailsRef} className={`subscription-usage-disclosure${acknowledged ? " confirmed" : ""}`}>
+      <summary>
+        <span className="subscription-usage-icon" aria-hidden="true">!</span>
+        <span className="subscription-usage-summary-copy">
+          <strong>{t("providers.usageWarningTitle")}</strong>
+          <small>{t(acknowledged ? "providers.usageWarningConfirmedHint" : "providers.usageWarningCollapsedHint")}</small>
+        </span>
+        <span className="subscription-usage-state">
+          {t(acknowledged ? "providers.usageWarningConfirmed" : "providers.usageWarningNeedsConfirmation")}
+        </span>
+        <span className="subscription-usage-chevron" aria-hidden="true">›</span>
+      </summary>
+      <div className="subscription-usage-body" role="note">
+        <p>{t("providers.usageWarningDescription")}</p>
+        {documentationURL && (
+          <a href={documentationURL} target="_blank" rel="noreferrer">
+            {t("providers.usageWarningDocumentation")} <span aria-hidden="true">↗</span>
+          </a>
+        )}
+        <label className="subscription-usage-acknowledgement">
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            required
+            disabled={disabled}
+            checked={acknowledged}
+            onChange={(event) => onAcknowledgedChange(event.target.checked)}
+            onInvalid={(event) => {
+              const input = event.currentTarget;
+              if (detailsRef.current) detailsRef.current.open = true;
+              requestAnimationFrame(() => input.focus());
+            }}
+          />
+          <span>{t("providers.usageWarningAcknowledge")}</span>
+        </label>
+      </div>
+    </details>
+  );
 }
 
 export function ProvidersPage() {
@@ -233,7 +328,7 @@ export function ProvidersPage() {
             {!!providerItems.length && <ResourceToolbar query={providerQuery} onQueryChange={setProviderQuery} queryPlaceholder={t("providers.searchProviders")} count={t("providers.resultCount", { visible: filteredProviders.length, total: providerItems.length })} status={providerStatus} onStatusChange={setProviderStatus} />}
             {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredProviders.map((provider) => (
-              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} editable={catalog.isSuccess} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
+              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} catalog={catalog.data} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
             ))}
           </section>}
           {activeView === "credentials" && <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" className="panel provider-resource-panel">
@@ -278,12 +373,18 @@ function providerViewFromURL(): "providers" | "credentials" {
   return new URLSearchParams(window.location.search).get("view") === "credentials" ? "credentials" : "providers";
 }
 
-function ProviderRow({ provider, credential, editable, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; editable: boolean; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
+function ProviderRow({ provider, credential, catalog, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; catalog?: ProviderProfilesCatalog; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
   const queryClient = useQueryClient();
   const { notify } = useNotify();
+  const profile = catalog ? findProfile(catalog, provider.type, provider.profile_id) : undefined;
+  const withdrawn = Boolean(catalog && !profile);
+  const editable = Boolean(catalog && profile);
+  const product = profile
+    ? productLabel(t, catalog!, provider.type, profile.offering_id, profile.region_id)
+    : "";
   const testMutation = useMutation({
     mutationFn: () => api.testProvider(provider.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
@@ -343,19 +444,19 @@ function ProviderRow({ provider, credential, editable, highlighted, onCredential
     <>
       <article id={`provider-${provider.id}`} className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
         <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
-        <div className="resource-identity"><span><StatusDot ok={provider.enabled} /><strong>{provider.name}</strong></span><small>{t(`providers.types.${provider.type}`)}</small></div>
+        <div className="resource-identity"><span><StatusDot ok={provider.enabled && !withdrawn} /><strong>{provider.name}</strong></span><small>{product || t(`providers.types.${provider.type}`)}</small>{withdrawn && <small className="warning-text">{t("providers.productWithdrawn")}</small>}</div>
         <div className="resource-fact provider-fact-endpoint"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
         <div className="resource-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name}</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
         <div className="resource-fact provider-fact-capabilities"><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
         <div className="resource-row-state provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
         <div className="row-actions provider-compact-actions">
-          <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled} title={totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
+          <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
           {/* Editing opens a form built from the served matrix. Without it the
               click would set state and render nothing, so the reason is on the
               button — the same treatment the create and rotate buttons get. */}
-          <button className="button ghost" disabled={readOnly || !editable} title={!editable ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button ghost" disabled={readOnly || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
-          {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" disabled={stateMutation.isPending} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
+          {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={withdrawn ? t("providers.productWithdrawnAction") : t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending || !editable} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" title={withdrawn ? t("providers.productWithdrawnAction") : undefined} disabled={stateMutation.isPending || !editable} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} /></OverflowMenu>
         </div>
         {/* The reason belongs in the row that failed, not behind an expander:
@@ -397,6 +498,9 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
   const displayBaseURL = displayBoundBaseURL(credential.bound_base_url);
   const expiry = credentialExpiry(credential.expires_at);
   const { notify } = useNotify();
+  const identityAvailable = Boolean(catalog && credentialIdentities(catalog, credential.type).some((identity) =>
+    identity.accessSurface === credential.access_surface && identity.credentialScheme === credential.scheme));
+  const withdrawn = Boolean(catalog && !identityAvailable);
   const remove = useMutation({
     mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
     onSuccess: () => {
@@ -411,6 +515,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
         <div className="resource-identity credential-compact-identity">
           <strong>{credential.name}</strong>
           <small>{t(`providers.types.${credential.type}`)}</small>
+          {withdrawn && <small className="warning-text">{t("providers.productWithdrawn")}</small>}
           {/* Only stated once there is something to state: a secret with no
               declared end says nothing here, and the two cases worth acting on
               carry their own tone. */}
@@ -430,7 +535,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
           {/* Rotating opens the same form, which needs the matrix; without it the
               click would set state and render nothing. Say so on the button
               rather than letting it look broken. */}
-          <button className="button ghost" disabled={!catalog} title={!catalog ? t("providers.matrixUnavailable") : undefined} onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
+          <button className="button ghost" disabled={!identityAvailable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={useCount > 0
               ? t("providers.deleteCredentialInUse", { name: credential.name, count: useCount })
@@ -442,6 +547,13 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
             <p>{t("providers.credentialDetailsDescription")}</p>
           </header>
           <dl className="credential-detail-grid">
+            {/* The product first, in the words an operator bought it in; the
+                surface below it is the identifier that decides behaviour, and
+                the two are one fact seen from two sides. */}
+            <div><dt>{t("providers.product")}</dt><dd>{[
+              t(`providers.offerings.${credential.offering_id}`, { defaultValue: credential.offering_id }),
+              credential.region_id ? t(`providers.regions.${credential.region_id}`, { defaultValue: credential.region_id }) : "",
+            ].filter(Boolean).join(" · ")}</dd></div>
             <div><dt>{t("providers.normalizedBoundURL")}</dt><dd><code>{credential.bound_base_url}</code></dd></div>
             <div><dt>{t("providers.surface")}</dt><dd><code>{credential.access_surface}</code></dd></div>
             <div><dt>{t("providers.scheme")}</dt><dd><code>{credential.scheme}</code></dd></div>
@@ -451,7 +563,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
         </section>}
       </article>
       {remove.isError && !isStepUpPrompt(remove.error) && <ErrorState error={remove.error} />}
-      {rotating && catalog && <CredentialForm current={credential} catalog={catalog} onClose={() => setRotating(false)} />}
+      {rotating && catalog && identityAvailable && <CredentialForm current={credential} catalog={catalog} onClose={() => setRotating(false)} />}
     </>
   );
 }
@@ -486,10 +598,24 @@ function CredentialForm({
   const { notify } = useNotify();
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(current?.type ?? "openai");
+  // Which upstream product this key is for. A credential stores it as an access
+  // surface and a scheme, and the server refuses to guess where a type sells
+  // more than one — which is what let every BigModel key be sealed to the
+  // mainland surface no matter which host it was bound to. A rotation keeps
+  // whatever the credential was sealed to and does not ask again: changing the
+  // product is a new credential, because every connection built on this one
+  // takes its endpoint and its capability set from that surface.
+  const initialIdentities = credentialIdentities(catalog, current?.type ?? "openai");
+  const [identity, setIdentity] = useState<CredentialIdentity | undefined>(
+    current
+      ? initialIdentities.find((candidate) => candidate.accessSurface === current.access_surface)
+      : initialIdentities[0],
+  );
   const [baseURL, setBaseURL] = useState(
-    current ? displayBoundBaseURL(current.bound_base_url) : endpointForType(catalog, "openai"),
+    current ? displayBoundBaseURL(current.bound_base_url) : initialIdentities[0]?.defaultBaseURL ?? "",
   );
   const [secret, setSecret] = useState("");
+  const [usageWarningAcknowledged, setUsageWarningAcknowledged] = useState(false);
   // datetime-local has no zone of its own. Read and written in the accounting
   // zone, which is the zone every timestamp the console displays is rendered in
   // — including this credential's expiry in the row behind the form. Reading it
@@ -504,21 +630,25 @@ function CredentialForm({
   // appear only if this rotation comes back asking for them.
   const stepUp = useStepUpPrompt();
   const queryClient = useQueryClient();
+  const [policyRefreshPending, setPolicyRefreshPending] = useState(false);
+  const [policyRefreshFailed, setPolicyRefreshFailed] = useState(false);
+  const [policyAttention, setPolicyAttention] = useState(0);
   const mutation = useMutation({
     mutationFn: () => {
       // Sent on creation only. A rotation leaves the pair out so the server keeps
       // whatever the credential was sealed to — including a surface this build no
       // longer offers, which must be deleted rather than silently re-pointed at
       // the one that is.
-      const bedrockBinding = type === "bedrock" && !current
-        ? bedrockCredentialProfile(catalog)
-        : undefined;
+      const product = !current && identity ? identity : undefined;
       const value = {
         name,
         type,
         base_url: baseURL,
-        ...(bedrockBinding
-          ? { access_surface: bedrockBinding.access_surface, scheme: bedrockBinding.credential_scheme }
+        ...(product
+          ? { access_surface: product.accessSurface, scheme: product.credentialScheme }
+          : {}),
+        ...(product && offering?.requires_usage_warning && usageDocument
+          ? { acknowledged_policy_revision: usageDocument.policy_revision }
           : {}),
         ...(secret ? { secret } : {}),
         // Always sent, including as null: the stored expiry is whatever the
@@ -534,7 +664,24 @@ function CredentialForm({
     // The typed secret survives the console's own step-up question, and only
     // that. Clearing it there would leave the retry rotating to nothing, having
     // silently thrown away material the operator cannot retype from memory.
-    onError: (error) => { if (!stepUp.absorb(error)) setSecret(""); },
+    onError: (error) => {
+      if (stepUp.absorb(error)) return;
+      if (error instanceof ApiError && error.code === "usage_policy_revision_mismatch") {
+        setUsageWarningAcknowledged(false);
+        setPolicyAttention((value) => value + 1);
+        setPolicyRefreshPending(true);
+        setPolicyRefreshFailed(false);
+        void api.providerProfiles()
+          .then((latest) => {
+            queryClient.setQueryData(["provider-profiles"], latest);
+            mutation.reset();
+          })
+          .catch(() => setPolicyRefreshFailed(true))
+          .finally(() => setPolicyRefreshPending(false));
+        return;
+      }
+      setSecret("");
+    },
     onSuccess: () => {
       setSecret("");
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
@@ -546,7 +693,7 @@ function CredentialForm({
   // operator who clicked, not sit in a scrolled-away part of the modal.
   const submitError = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!mutation.isError || stepUp.probing) return;
+    if (!mutation.isError || stepUp.probing || (mutation.error instanceof ApiError && mutation.error.code === "usage_policy_revision_mismatch")) return;
     requestAnimationFrame(() => {
       submitError.current?.scrollIntoView?.({ block: "center" });
       submitError.current?.focus();
@@ -554,9 +701,32 @@ function CredentialForm({
   }, [mutation.isError, mutation.error, stepUp.probing]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (name.trim() && baseURL.trim() && (current || secret) && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
+    if (name.trim() && baseURL.trim() && (current || secret)
+      && (!usageWarningRequired || usageWarningAcknowledged)
+      && !policyRefreshPending && !policyRefreshFailed
+      && !fixedRegionMismatch
+      && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
   };
-  const dirty = useDirty({ name, type, baseURL, secret, expiresAt });
+  // Everything below is read from the served matrix. A type that sells one
+  // product asks nothing; one that sells two cannot have it guessed, and one
+  // whose regions live in the endpoint gets the endpoint written for it.
+  const typeIdentities = credentialIdentities(catalog, type);
+  const offering = findOffering(catalog, type, identity?.offeringID ?? "");
+  const usageWarningRequired = !current && Boolean(offering?.requires_usage_warning);
+  const usageDocument = offeringDocumentation(offering, identity?.regionID ?? "");
+  const detectedRegion = regionForEndpoint(offering, baseURL);
+  const fixedRegionStatus = offering?.region_scope === "fixed" && identity
+    ? fixedRegionEndpointStatus(catalog, type, identity.offeringID, identity.regionID, baseURL)
+    : "match";
+  const fixedRegionUnverified = fixedRegionStatus === "unknown";
+  const fixedRegionMismatch = fixedRegionStatus === "cross_region";
+  // The control names what it actually chooses: a product where the type sells
+  // more than one, and otherwise the region, which is what the identities of a
+  // single-product type differ by.
+  const identityLabel = offeringsForType(catalog, type).length > 1
+    ? t("providers.product")
+    : t("providers.region");
+  const dirty = useDirty({ name, type, baseURL, secret, expiresAt, usageWarningAcknowledged });
   return (
     <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
       {/* Like the other modal forms: the form drops the modal's margin so the
@@ -567,22 +737,86 @@ function CredentialForm({
         <Field label={t("providers.providerType")}>
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
+            const first = credentialIdentities(catalog, next)[0];
             setType(next);
-            setBaseURL(endpointForType(catalog, next));
+            setIdentity(first);
+            setBaseURL(first?.defaultBaseURL ?? "");
+            setUsageWarningAcknowledged(false);
           }}>
             <ProviderTypeOptions t={t} />
           </select>
         </Field>
-        <Field label={t("providers.boundURL")} hint={regionHintKey(type) ? t(regionHintKey(type)!) : t("providers.boundURLHint")}>
+        {/* Which product this key belongs to. Shown only where there is more
+            than one, because a question with one answer is not asked — and
+            never on a rotation, where the answer is already sealed into the
+            credential and changing it is a new credential rather than a new
+            secret. */}
+        {!current && typeIdentities.length > 1 && (
+          <Field label={identityLabel} hint={t("providers.productHint")}>
+            <select value={identity?.accessSurface ?? ""} onChange={(event) => {
+              const next = typeIdentities.find((candidate) => candidate.accessSurface === event.target.value);
+              setIdentity(next);
+              // The endpoint belongs to the product, so it is rewritten rather
+              // than carried over: a mainland key left pointing at the global
+              // host is the exact pairing this form exists to stop.
+              setBaseURL(next?.defaultBaseURL ?? "");
+              setUsageWarningAcknowledged(false);
+            }}>
+              {typeIdentities.map((candidate) => (
+                <option key={candidate.accessSurface} value={candidate.accessSurface}>
+                  {productOptionLabel(t, catalog, type, candidate.offeringID, candidate.regionID, candidate.credentialScheme)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {current && identity && productLabel(t, catalog, type, identity.offeringID, identity.regionID) && (
+          <Field label={identityLabel} hint={t("providers.productLockedHint")}>
+            <output className="badge">{productLabel(t, catalog, type, identity.offeringID, identity.regionID)}</output>
+          </Field>
+        )}
+        {usageWarningRequired && (
+          <SubscriptionUsageDisclosure
+            acknowledged={usageWarningAcknowledged}
+            documentationURL={usageDocument?.url}
+            attentionKey={policyAttention}
+            disabled={policyRefreshPending || policyRefreshFailed}
+            onAcknowledgedChange={setUsageWarningAcknowledged}
+          />
+        )}
+        {policyRefreshFailed && <p className="field-hint warning-text">{t("providers.usagePolicyRefreshFailed")}</p>}
+        {/* One product, several account hosts, keys that are not interchangeable
+            between them. The region is the endpoint here, so choosing it writes
+            the endpoint field; an address the upstream does not publish is
+            unknown rather than wrong, and saves either way. */}
+        {offering?.region_scope === "by_endpoint" && (
+          <Field label={t("providers.region")} hint={t("providers.regionByEndpointHint")}>
+            <select value={detectedRegion ?? ""} onChange={(event) => {
+              const host = offering.region_hosts.find((entry) => entry.region === event.target.value)?.host;
+              if (host) setBaseURL(`https://${host}`);
+            }}>
+              {detectedRegion === undefined && <option value="">{t("providers.regionUnknown")}</option>}
+              {offering.region_hosts.map((entry) => (
+                <option key={entry.region} value={entry.region}>
+                  {t(`providers.regions.${entry.region}`, { defaultValue: entry.region })} · {entry.host}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+        <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : undefined}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
         </Field>
+        {fixedRegionUnverified && <p className="field-hint warning-text">{t("providers.fixedRegionUnverified")}</p>}
+        {/* What kind of material this is belongs to the credential scheme, not to
+            the provider name: the same scheme on a new platform needs the same
+            sentence, and the fallback keeps a new scheme readable rather than
+            blank. */}
         <Field
           label={current ? t("providers.newSecret") : t("providers.providerSecret")}
           hint={current
             ? t("providers.secretConfigured")
-            : type === "bedrock"
-              ? t("providers.bedrockMantleHint")
-              : t("providers.secretHint")}
+            : t(`providers.schemeHints.${identity?.credentialScheme ?? ""}`, { defaultValue: t("providers.secretHint") })}
         >
           <input
             type="password"
@@ -601,7 +835,7 @@ function CredentialForm({
         </div>
         <div className="form-actions sticky-form-actions">
           <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || (!current && !secret) || (stepUp.asked && !stepUp.values.currentPassword)}>
+          <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (!current && !secret) || (stepUp.asked && !stepUp.values.currentPassword)}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}
           </button>
         </div>
@@ -626,10 +860,16 @@ function ProviderForm({
   const initialType = current?.type ?? "openai";
   const [name, setName] = useState(current?.name ?? "");
   const [type, setType] = useState<ProviderType>(initialType);
-  const bedrockDefaultProfile = defaultProfileID(catalog, "bedrock");
-  const initialProfile = current?.profile_id && isBedrockProfile(catalog, current.profile_id)
+  // Which implementation this connection is anchored on. There is something to
+  // choose in exactly two situations, and the served matrix says which: a type
+  // that sells more than one product (BigModel's two regions), and a group whose
+  // routes are partitioned (Bedrock Mantle, where each model answers on exactly
+  // one route). Everywhere else the group's profiles ride one connection
+  // together and this control is not rendered.
+  const initialProfile = current?.profile_id
+    && connectionChoices(catalog, initialType).some((choice) => choice.profileID === current.profile_id)
     ? current.profile_id
-    : bedrockDefaultProfile;
+    : connectionChoices(catalog, initialType)[0]?.profileID ?? defaultProfileID(catalog, initialType);
   const [profileID, setProfileID] = useState(initialProfile);
   const [baseURL, setBaseURL] = useState(current?.base_url ?? endpointForType(catalog, initialType));
   const [apiVersion, setAPIVersion] = useState(current?.api_version ?? "");
@@ -637,6 +877,7 @@ function ProviderForm({
   const [anthropicBetas, setAnthropicBetas] = useState((current?.allowed_anthropic_betas ?? []).join(", "));
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
+  const [usageWarningAcknowledged, setUsageWarningAcknowledged] = useState(false);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(
     current?.capabilities ?? connectionDefaults(catalog, initialType, defaultProfileID(catalog, initialType)),
   );
@@ -645,14 +886,18 @@ function ProviderForm({
   // questions — provider_executed_tools sits above the defaults and inside the
   // ceiling, because the profile supports it and enabling it accepts upstream
   // egress Halro never sees.
-  const anchorProfile = type === "bedrock" ? profileID : defaultProfileID(catalog, type);
+  const choices = connectionChoices(catalog, type);
+  const selectedChoice: ConnectionChoice | undefined =
+    choices.find((choice) => choice.profileID === profileID) ?? choices[0];
+  const anchorProfile = selectedChoice?.profileID ?? defaultProfileID(catalog, type);
   const capabilityCeiling = connectionCeiling(catalog, type, anchorProfile);
   const capabilityNames = booleanCapabilityNames(catalog);
   // A profile whose set is fixed by the build offers no checkboxes to widen.
   const fixedCapabilities = combinableProfiles(catalog, type, anchorProfile).every((profile) => profile.immutable);
   const visibleCapabilities = capabilityNames.filter((capability) => capabilities[capability]);
   const configurableCapabilities = capabilityNames.filter((capability) => capabilityCeiling[capability] || capabilities[capability]);
-  const selectedSurface = type === "bedrock" ? findProfile(catalog, "bedrock", profileID)?.access_surface : undefined;
+  const selectedSurface = selectedChoice?.accessSurface;
+  const selectedOffering = findOffering(catalog, type, selectedChoice?.offeringID ?? "");
   // What is ticked that this connection cannot serve. The server refuses these
   // too, and names them; catching it here points at the checkbox instead.
   const unservable = unservableCapabilities(catalog, type, anchorProfile, capabilities);
@@ -663,15 +908,16 @@ function ProviderForm({
   // The header is only ever sent by the native Anthropic Messages path, which is
   // a property of the profile rather than the surface: Bedrock Mantle also
   // carries OpenAI chat and responses profiles, and a token stored on one of
-  // those would be kept and never sent.
-  const supportsAnthropicBetas = type === "anthropic" || profileID === "bedrock.mantle.anthropic.messages.v1";
+  // those would be kept and never sent. Which profiles those are is the
+  // server's answer now — it used to be a pair of identifiers written here, and
+  // the same rule in two places is a rule that drifts.
+  const supportsAnthropicBetas = Boolean(findProfile(catalog, type, anchorProfile)?.sends_anthropic_betas);
   const matchingCredentials = credentials.filter((credential) => credential.type === type && (!selectedSurface || credential.access_surface === selectedSurface));
   const [credentialID, setCredentialID] = useState(
     current?.credential_id ??
       credentials.find((credential) =>
         credential.type === initialType &&
-        (initialType !== "bedrock" ||
-          credential.access_surface === findProfile(catalog, "bedrock", initialProfile)?.access_surface),
+        credential.access_surface === findProfile(catalog, initialType, initialProfile)?.access_surface,
       )?.id ??
       "",
   );
@@ -686,7 +932,18 @@ function ProviderForm({
   const credentialBaseURLMismatch = credentialBoundURL && baseURLOrigin && credentialBoundURL !== baseURLOrigin
     ? t("providers.validationCredentialBaseURL")
     : "";
+  const usageWarningRequired = Boolean(selectedOffering?.requires_usage_warning)
+    && (!current || current.profile_id !== anchorProfile || current.credential_id !== credentialID);
+  const usageDocument = offeringDocumentation(selectedOffering, selectedChoice?.regionID ?? "");
+  const fixedRegionStatus = selectedOffering?.region_scope === "fixed" && selectedChoice
+    ? fixedRegionEndpointStatus(catalog, type, selectedChoice.offeringID, selectedChoice.regionID, baseURL)
+    : "match";
+  const fixedRegionUnverified = fixedRegionStatus === "unknown";
+  const fixedRegionMismatch = fixedRegionStatus === "cross_region";
   const queryClient = useQueryClient();
+  const [policyRefreshPending, setPolicyRefreshPending] = useState(false);
+  const [policyRefreshFailed, setPolicyRefreshFailed] = useState(false);
+  const [policyAttention, setPolicyAttention] = useState(0);
   // One key per open form: a retry after a lost response reaches the same
   // record instead of creating a second one, while a deliberate second create
   // opens the form again and gets a new key.
@@ -695,14 +952,22 @@ function ProviderForm({
     mutationFn: () => {
       const value = {
       name, type, base_url: baseURL,
-      ...(type === "bedrock" ? {
-        profile_id: profileID,
-        access_surface: findProfile(catalog, "bedrock", profileID)?.access_surface,
-        credential_scheme: findProfile(catalog, "bedrock", profileID)?.credential_scheme,
-        ...(selectedSurface === "bedrock-mantle"
-          ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
-          : {}),
+      // Sent where the operator actually chose, and only there. Naming the
+      // implementation asserts that the enabled capabilities land on it, which
+      // is a claim a form has no business making when the matrix offered one
+      // option and it picked it: the server assigns capabilities across the
+      // group and the anchor follows.
+      ...(choices.length > 1 && selectedChoice ? {
+        profile_id: selectedChoice.profileID,
+        access_surface: selectedChoice.accessSurface,
+        credential_scheme: selectedChoice.credentialScheme,
       } : {}),
+      ...(usageWarningRequired && usageDocument
+        ? { acknowledged_policy_revision: usageDocument.policy_revision }
+        : {}),
+      ...(selectedSurface === "bedrock-mantle"
+        ? { bedrock_project_id: normalizeBedrockProjectID(bedrockProjectID) }
+        : {}),
       // One flat set. A connection can span more than one profile — an OpenAI key
       // serves both the chat endpoints and the media ones — and sorting the
       // ticked capabilities into a binding per profile is the server's job:
@@ -724,13 +989,28 @@ function ProviderForm({
         ? api.updateProvider(current.id, value, current.revision)
         : api.createProvider(value, idempotencyKey.current);
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "usage_policy_revision_mismatch") {
+        setUsageWarningAcknowledged(false);
+        setPolicyAttention((value) => value + 1);
+        setPolicyRefreshPending(true);
+        setPolicyRefreshFailed(false);
+        void api.providerProfiles()
+          .then((latest) => {
+            queryClient.setQueryData(["provider-profiles"], latest);
+            mutation.reset();
+          })
+          .catch(() => setPolicyRefreshFailed(true))
+          .finally(() => setPolicyRefreshPending(false));
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["providers"] });
       notify({ tone: "success", title: t(current ? "providers.notifyUpdated" : "providers.notifyCreated"), description: name });
       onClose();
     },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID, usageWarningAcknowledged });
   // The save button sits in a sticky footer while the form scrolls behind it,
   // so a rejection renders into the part of the modal the operator is not
   // looking at: the click appears to do nothing and they click again. Bring the
@@ -738,7 +1018,7 @@ function ProviderForm({
   // than merely present.
   const submitError = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!mutation.isError) return;
+    if (!mutation.isError || (mutation.error instanceof ApiError && mutation.error.code === "usage_policy_revision_mismatch")) return;
     requestAnimationFrame(() => {
       submitError.current?.scrollIntoView?.({ block: "center" });
       submitError.current?.focus();
@@ -781,9 +1061,10 @@ function ProviderForm({
               anthropicBetas: supportsAnthropicBetas ? anthropicBetas : "",
             }, t);
             if (!nextErrors.credentialID && credentialBaseURLMismatch) nextErrors.credentialID = credentialBaseURLMismatch;
+            if (fixedRegionMismatch) nextErrors.baseURL = t("providers.validationFixedRegionMismatch");
             setErrors(nextErrors);
             if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
-            else mutation.mutate();
+            else if (!policyRefreshPending && !policyRefreshFailed) mutation.mutate();
           }}
         >
           <section className="provider-form-section" aria-labelledby="provider-connection-title">
@@ -793,43 +1074,69 @@ function ProviderForm({
           <Field label={t("providers.type")}>
             <select value={type} onChange={(event) => {
               const next = event.target.value as ProviderType;
+              const first = connectionChoices(catalog, next)[0];
               setType(next);
-              setBaseURL(endpointForType(catalog, next));
-              setProfileID(defaultProfileID(catalog, "bedrock"));
+              setBaseURL(first?.defaultBaseURL ?? endpointForType(catalog, next));
+              setProfileID(first?.profileID ?? defaultProfileID(catalog, next));
               setCredentialID(credentials.find((credential) => credential.type === next
-                && (next !== "bedrock" || credential.access_surface === bedrockCredentialProfile(catalog)?.access_surface))?.id ?? "");
-              setCapabilities(connectionDefaults(catalog, next, defaultProfileID(catalog, next)));
+                && credential.access_surface === first?.accessSurface)?.id ?? "");
+              setCapabilities(connectionDefaults(catalog, next, first?.profileID ?? defaultProfileID(catalog, next)));
+              setUsageWarningAcknowledged(false);
+              setErrors({});
+              mutation.reset();
             }}>
               <ProviderTypeOptions t={t} />
             </select>
           </Field>
-          {type === "bedrock" && (
-            <Field label={t("providers.capabilityImplementation")} hint={t("providers.bedrockProfileHint")}>
-              <select value={profileID} onChange={(event) => {
-                const next = event.target.value;
-                const profile = findProfile(catalog, "bedrock", next);
-                setProfileID(next);
-                setBaseURL(profile?.default_base_url ?? "");
-                setCredentialID(credentials.find((credential) => credential.type === "bedrock" && credential.access_surface === profile?.access_surface)?.id ?? "");
-                setCapabilities(connectionDefaults(catalog, "bedrock", next));
+          {choices.length > 1 && (
+            <Field label={t("providers.capabilityImplementation")} hint={t("providers.implementationHint")}>
+              <select value={anchorProfile} onChange={(event) => {
+                const next = choices.find((choice) => choice.profileID === event.target.value);
+                if (!next) return;
+                setProfileID(next.profileID);
+                setBaseURL(next.defaultBaseURL);
+                setCredentialID(credentials.find((credential) =>
+                  credential.type === type && credential.access_surface === next.accessSurface)?.id ?? "");
+                setCapabilities(connectionDefaults(catalog, type, next.profileID));
+                setUsageWarningAcknowledged(false);
+                setErrors({});
+                mutation.reset();
               }}>
-                {profilesForType(catalog, "bedrock").map((profile) => (
-                  <option value={profile.id} key={profile.id}>{t(`providers.bedrockProfiles.${profile.id}`)}</option>
+                {choices.map((choice) => (
+                  <option value={choice.profileID} key={choice.profileID}>
+                    {t(`providers.profiles.${choice.profileID}`, {
+                      defaultValue: productLabel(t, catalog, type, choice.offeringID, choice.regionID) || choice.profileID,
+                    })}
+                  </option>
                 ))}
               </select>
             </Field>
           )}
-          <Field label={t("providers.baseURL")} hint={
-            credentialBaseURLMismatch
-              ? t("providers.baseURLBoundHint", { credential: credentialBoundURL })
-              // MiniMax and Kimi both split by account region, and in both cases the
-              // two addresses differ by a couple of letters while the contract is
-              // identical. The wrong one fails as an authentication error, which
-              // reads as a bad key rather than as a wrong host.
-              : regionHintKey(type) ? t(regionHintKey(type)!) : undefined
+          {usageWarningRequired && (
+            <SubscriptionUsageDisclosure
+              acknowledged={usageWarningAcknowledged}
+              documentationURL={usageDocument?.url}
+              attentionKey={policyAttention}
+              disabled={policyRefreshPending || policyRefreshFailed}
+              onAcknowledgedChange={setUsageWarningAcknowledged}
+            />
+          )}
+          {policyRefreshFailed && <p className="field-hint warning-text">{t("providers.usagePolicyRefreshFailed")}</p>}
+          {/* A connection's endpoint follows its credential, which is already
+              sealed to one. Where a product splits by account host — Kimi and
+              MiniMax — the two addresses differ by a couple of letters and the
+              wrong one fails as an authentication error, so the credential's
+              own bound URL is what the field is checked against rather than a
+              per-provider sentence. */}
+          <Field label={t("providers.baseURL")} error={errors.baseURL} hint={
+            credentialBoundURL ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined
           }>
-            <input autoComplete="off" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }} />
+            <input autoComplete="off" value={baseURL} onChange={(event) => {
+              setBaseURL(event.target.value);
+              setErrors((previous) => omitError(omitError(previous, "credentialID"), "baseURL"));
+            }} />
           </Field>
+          {fixedRegionUnverified && <p className="field-hint warning-text">{t("providers.fixedRegionUnverified")}</p>}
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input autoComplete="off" value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
@@ -896,7 +1203,7 @@ function ProviderForm({
             {/* The endpoint the credential is sealed to is what decides whether
                 it can be used here, so it is in the option rather than a detail
                 page the operator would have to leave the form to read. */}
-            <select value={credentialID} onChange={(event) => { setCredentialID(event.target.value); setErrors((previous) => omitError(previous, "credentialID")); }}>
+            <select value={credentialID} onChange={(event) => { setCredentialID(event.target.value); setUsageWarningAcknowledged(false); setErrors((previous) => omitError(previous, "credentialID")); }}>
               {matchingCredentials.map((credential) => (
                 <option value={credential.id} key={credential.id}>{credential.name} · {displayBoundBaseURL(credential.bound_base_url)}</option>
               ))}
@@ -926,7 +1233,7 @@ function ProviderForm({
             <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
             {/* Every refusal reason is reported by the submit path rather than
                 by a disabled button, which states nothing about why. */}
-            <button className="button primary" disabled={mutation.isPending}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
+            <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>
         </form>
       )}

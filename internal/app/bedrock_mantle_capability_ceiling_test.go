@@ -146,6 +146,73 @@ func TestStoredMantleBindingAboveTheCeilingIsWithheldNotFatal(t *testing.T) {
 	}
 }
 
+// A profile can be withdrawn after a connection has already been persisted.
+// The Admin write path prevents creating this state today, but startup must
+// treat the old binding as read-only configuration rather than constructing an
+// adapter that makes the withdrawn product reachable again.
+func TestStoredEnabledWithheldProfileDoesNotEnterTheRegistry(t *testing.T) {
+	cfg := testConfig(t)
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	cookie, csrf := loginAdminForTest(t, runtime)
+	endpoint := "https://bedrock-mantle.us-east-1.api.aws"
+
+	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Mantle API key", "type": "bedrock", "base_url": endpoint, "secret": "bedrock-api-key",
+		"access_surface": domain.SurfaceBedrockMantle, "scheme": domain.CredentialBedrockAPIKey,
+	})
+	var credential struct {
+		ID string `json:"id"`
+	}
+	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {
+		t.Fatalf("credential setup: status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
+	}
+	providerResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/providers", "", map[string]any{
+		"name": "mantle", "type": "bedrock", "base_url": endpoint,
+		"credential_id": credential.ID, "enabled": true,
+		"access_surface": domain.SurfaceBedrockMantle, "profile_id": domain.ProfileBedrockMantleChat,
+		"credential_scheme": domain.CredentialBedrockAPIKey,
+	})
+	var instance domain.ProviderInstance
+	if providerResponse.Code != http.StatusCreated || json.Unmarshal(providerResponse.Body.Bytes(), &instance) != nil {
+		t.Fatalf("provider setup: status=%d body=%s", providerResponse.Code, providerResponse.Body.String())
+	}
+	if len(instance.Bindings) == 0 {
+		t.Fatal("provider setup created no binding")
+	}
+	bindingID := instance.Bindings[0].ID
+	runtime.Close()
+
+	widenStoredProviderCapabilities(t, cfg.MetadataPath(), instance.ID, func(stored *domain.ProviderInstance) {
+		stored.ProfileID = domain.ProfileBedrockAgentRerankCohere35
+		for index := range stored.Bindings {
+			stored.Bindings[index].ProfileID = domain.ProfileBedrockAgentRerankCohere35
+		}
+	})
+
+	reopened, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("a stored withdrawn profile stopped startup: %v", err)
+	}
+	defer reopened.Close()
+	registry, report, err := loadProviderRegistry(context.Background(), cfg, reopened.store, reopened.vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	if _, ok := registry.AdapterForBinding(instance.ID, bindingID); ok {
+		t.Fatal("withdrawn binding entered the adapter registry")
+	}
+	found := false
+	for _, item := range report.Excluded {
+		if item.ProviderID == instance.ID && item.BindingID == bindingID && item.Reason == excludedBindingProfileIncompatible {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("withdrawn binding exclusion was not reported: %+v", report.Excluded)
+	}
+}
+
 func widenStoredProviderCapabilities(t *testing.T, path, providerID string, widen func(*domain.ProviderInstance)) {
 	t.Helper()
 	db, err := bbolt.Open(path, 0o600, nil)

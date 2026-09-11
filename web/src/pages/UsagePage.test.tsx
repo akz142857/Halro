@@ -145,6 +145,23 @@ describe("UsagePage provider filter", () => {
       expect(new URLSearchParams(latest.slice(1)).get("provider_id")).toBeNull();
     });
   });
+
+  it("applies a linked Offering filter and shows its localized product name", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts&offering_id=bigmodel.coding-plan");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+    const calls = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls;
+    expect(new URLSearchParams((calls.at(-1)?.[0] ?? "").slice(1)).get("offering_id"))
+      .toBe("bigmodel.coding-plan");
+    const chip = await screen.findByRole("button", { name: /GLM Coding Plan（订阅）/ });
+    fireEvent.click(chip);
+    await waitFor(() => {
+      const latest = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls.at(-1)?.[0] ?? "";
+      expect(new URLSearchParams(latest.slice(1)).get("offering_id")).toBeNull();
+    });
+  });
 });
 
 // The model column shows the alias, which is identical on every attempt of a
@@ -155,9 +172,11 @@ describe("UsagePage deployment column", () => {
   const chain = [
     { event_id: "e1", request_id: "req_1", attempt: 1, project_id: "p", requested_model: "chat",
       deployment_id: "dep_primary", provider_model: "gpt-5.1", provider_input_tokens: 1, provider_output_tokens: 1,
+      offering_id: "bigmodel.coding-plan", profile_id: "bigmodel.cn.coding.chat.v1",
       latency_millis: 5, status: "error", completed_at: "2026-08-06T00:00:00Z" },
     { event_id: "e2", request_id: "req_1", attempt: 2, project_id: "p", requested_model: "chat",
       deployment_id: "dep_fallback", provider_model: "gpt-5.1", provider_input_tokens: 1, provider_output_tokens: 1,
+      offering_id: "bigmodel.general-api", profile_id: "bigmodel.cn.chat-embeddings.v1",
       latency_millis: 7, status: "success", completed_at: "2026-08-06T00:00:01Z" },
   ];
 
@@ -194,6 +213,10 @@ describe("UsagePage deployment column", () => {
     // and the usage partitions carry.
     expect(rows.getByText("dep_primary")).toBeVisible();
     expect(rows.getByText("dep_fallback")).toBeVisible();
+    // An explicitly configured cross-product fallback must reveal which
+    // balance each attempt used, not only which deployment object it selected.
+    expect(rows.getByText("GLM Coding Plan（订阅）")).toBeVisible();
+    expect(rows.getByText("BigModel / Z.AI 通用 API")).toBeVisible();
   });
 
   // History outlives a deployment: the list drops tombstones, so a name is not

@@ -15,6 +15,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 var (
@@ -42,6 +43,9 @@ type Attempt struct {
 	RouteID                     string
 	DeploymentID                string
 	ProviderID                  string
+	OfferingID                  domain.ProviderOfferingID
+	ProfileID                   domain.ProviderProfileID
+	AccountRegionID             domain.ProviderRegionID
 	RequestedModel              string
 	ProviderModel               string
 	AttemptNumber               int
@@ -71,13 +75,16 @@ type Request struct {
 }
 
 type AttemptMetadata struct {
-	RouteID       string
-	DeploymentID  string
-	ProviderID    string
-	ProviderModel string
-	AttemptNumber int
-	RetryCount    int
-	FallbackCount int
+	RouteID         string
+	DeploymentID    string
+	ProviderID      string
+	OfferingID      domain.ProviderOfferingID
+	ProfileID       domain.ProviderProfileID
+	AccountRegionID domain.ProviderRegionID
+	ProviderModel   string
+	AttemptNumber   int
+	RetryCount      int
+	FallbackCount   int
 }
 
 type LeaseSpec struct {
@@ -112,10 +119,14 @@ type Settlement struct {
 	// happened in. They are carried through to the ledger so a support ticket
 	// raised days later can still name the request the upstream saw; the
 	// gateway narrows them before they get here.
-	ProviderCode      string
-	ProviderRequestID string
-	FailurePhase      string
-	LatencyMillis     int64
+	ProviderCode             string
+	ProviderFailureReason    provider.FailureReason
+	Retryable                bool
+	Ambiguous                bool
+	FailureSemanticsRecorded bool
+	ProviderRequestID        string
+	FailurePhase             string
+	LatencyMillis            int64
 	// OccurredAt is reserved for deterministic recovery events. Normal
 	// callers leave it zero and the manager captures its clock at commit.
 	OccurredAt time.Time
@@ -910,7 +921,9 @@ func (m *Manager) reserveAttemptDetailed(
 		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		RouteID: metadata.RouteID, DeploymentID: metadata.DeploymentID,
 		ProviderID: metadata.ProviderID, ProviderModel: metadata.ProviderModel,
-		AttemptNumber: metadata.AttemptNumber, RetryCount: metadata.RetryCount,
+		OfferingID: metadata.OfferingID, ProfileID: metadata.ProfileID,
+		AccountRegionID: metadata.AccountRegionID,
+		AttemptNumber:   metadata.AttemptNumber, RetryCount: metadata.RetryCount,
 		FallbackCount:       metadata.FallbackCount,
 		LeaseMode:           spec.Mode,
 		PreparedInputTokens: spec.PreparedInputTokens, PreparedOutputTokens: spec.PreparedOutputTokens,
@@ -959,6 +972,9 @@ func (m *Manager) reserveAttemptDetailed(
 		RouteID:              metadata.RouteID,
 		DeploymentID:         metadata.DeploymentID,
 		ProviderID:           metadata.ProviderID,
+		OfferingID:           metadata.OfferingID,
+		ProfileID:            metadata.ProfileID,
+		AccountRegionID:      metadata.AccountRegionID,
 		RequestedModel:       request.RequestedModel,
 		ProviderModel:        metadata.ProviderModel,
 		AttemptNumber:        metadata.AttemptNumber,
@@ -1000,7 +1016,9 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		ProjectID:  attempt.ProjectID,
 		WorkUnitID: attempt.WorkUnitID, RunID: attempt.RunID,
 		KeyID: attempt.KeyID, RouteID: attempt.RouteID, DeploymentID: attempt.DeploymentID, ProviderID: attempt.ProviderID,
-		RequestedModel: attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
+		OfferingID: attempt.OfferingID, ProfileID: attempt.ProfileID,
+		AccountRegionID: attempt.AccountRegionID,
+		RequestedModel:  attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
 		AttemptNumber: attempt.AttemptNumber, RetryCount: attempt.RetryCount,
 		FallbackCount: attempt.FallbackCount,
 		OccurredAt:    m.localNow(),
@@ -1113,6 +1131,9 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		RouteID:            attempt.RouteID,
 		DeploymentID:       attempt.DeploymentID,
 		ProviderID:         attempt.ProviderID,
+		OfferingID:         attempt.OfferingID,
+		ProfileID:          attempt.ProfileID,
+		AccountRegionID:    attempt.AccountRegionID,
 		RequestedModel:     attempt.RequestedModel,
 		ProviderModel:      attempt.ProviderModel,
 		AttemptNumber:      attempt.AttemptNumber,
@@ -1135,6 +1156,10 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		ErrorClass:                    settlement.ErrorClass,
 		HTTPStatus:                    settlement.HTTPStatus,
 		ProviderCode:                  settlement.ProviderCode,
+		ProviderFailureReason:         settlement.ProviderFailureReason,
+		Retryable:                     settlement.Retryable,
+		Ambiguous:                     settlement.Ambiguous,
+		FailureSemanticsRecorded:      settlement.FailureSemanticsRecorded,
 		ProviderRequestID:             settlement.ProviderRequestID,
 		FailurePhase:                  settlement.FailurePhase,
 		LatencyMillis:                 settlement.LatencyMillis,

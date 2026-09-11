@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
 )
 
 // fakeSealer binds a record to its request and project the way the vault does,
@@ -447,5 +449,20 @@ func TestACaptureRefusesIdentifiersCarryingTheNameSeparator(t *testing.T) {
 	project.ProjectID = "project-1"
 	if _, err := store.Put(project); err == nil {
 		t.Fatal("a project ID carrying the separator was accepted")
+	}
+}
+
+func TestACaptureRefusesAnAccountRegionOutsideItsProfileSurface(t *testing.T) {
+	store, _ := newStore(t, nil)
+	captured := record("req_region")
+	captured.OfferingID = domain.OfferingKimiOpenPlatform
+	captured.ProfileID = domain.ProfileKimiChat
+	captured.AccountRegionID = domain.ProviderRegionID("mars")
+	if _, err := store.Put(captured); err == nil {
+		t.Fatal("an account region outside the profile surface was accepted")
+	}
+	captured.AccountRegionID = domain.RegionCN
+	if written, err := store.Put(captured); err != nil || !written {
+		t.Fatalf("a region published by the profile surface was refused: written=%v err=%v", written, err)
 	}
 }

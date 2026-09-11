@@ -13,6 +13,7 @@
 相关：
 [Adding a provider platform](../contracts/adding-a-platform.md)、
 [Provider 模型选择与能力解析](provider-model-selection-and-capability-resolution.zh-CN.md)、
+[Provider Offering 与订阅接入统一方案](provider-offering-subscription-access-plan.zh-CN.md)、
 [Kimi 适配方案](kimi-adaptation-plan.zh-CN.md)、
 [MiniMax 适配方案](minimax-adaptation-plan.zh-CN.md)
 

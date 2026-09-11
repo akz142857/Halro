@@ -236,8 +236,16 @@ the real Provider model name.
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta; OpenAI Chat, stateless Responses, or Anthropic Messages |
 | BigModel (mainland China) | `https://open.bigmodel.cn` | Experimental; Chat, streaming, and embeddings through the mainland general API profile |
 | Z.AI (global) | `https://api.z.ai` | Experimental; Chat and streaming through an isolated global profile |
+| BigModel GLM Coding Plan (mainland China) | `https://open.bigmodel.cn` | Experimental; a subscription product with its own key and balance, serving Chat, streaming and tools on `/api/coding/paas/v4` |
 
-BigModel credentials are region-bound. Create a separate credential and
+The GLM Coding Plan shares its host with the mainland general API and differs by
+path and key, so a request that takes the wrong path is answered rather than
+refused — it simply draws the other balance. It also serves two models,
+`glm-5.3` and `glm-5.3-flash`: its `/models` route returns the general catalogue
+and every other identifier is silently routed onto one of those two, so create
+deployments on the two it serves.
+
+BigModel credentials are bound to a product and a region. Create a separate credential and
 Provider for each region; do not reuse a mainland key or balance on Z.AI (or the
 reverse). Save the root host shown above—the selected profile fixes the
 `/api/paas/v4` operation and model-catalog paths. Anthropic-compatible BigModel

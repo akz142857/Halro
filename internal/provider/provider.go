@@ -31,6 +31,31 @@ func CapabilityClaimRevision(parts ...string) string {
 
 type ErrorClass string
 
+// FailureReason is the stable, cross-provider reason an operator can filter
+// and automate on. It is deliberately smaller than ErrorClass: a class says
+// how Halro handles a failure, while a reason is emitted only when structured
+// status/code evidence supports the more specific conclusion.
+type FailureReason string
+
+const (
+	FailureReasonInvalidCredential                  FailureReason = "invalid_credential"
+	FailureReasonEntitlementVerificationUnavailable FailureReason = "entitlement_verification_unavailable"
+	FailureReasonSubscriptionInactive               FailureReason = "subscription_inactive"
+	FailureReasonSubscriptionQuotaExhausted         FailureReason = "subscription_quota_exhausted"
+	FailureReasonRateLimited                        FailureReason = "rate_limited"
+)
+
+func (reason FailureReason) Valid() bool {
+	switch reason {
+	case "", FailureReasonInvalidCredential, FailureReasonEntitlementVerificationUnavailable,
+		FailureReasonSubscriptionInactive, FailureReasonSubscriptionQuotaExhausted,
+		FailureReasonRateLimited:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	ErrorAuthentication ErrorClass = "authentication"
 	ErrorRateLimit      ErrorClass = "rate_limit"
@@ -101,6 +126,7 @@ const (
 
 type Error struct {
 	Class             ErrorClass
+	FailureReason     FailureReason
 	StatusCode        int
 	Retryable         bool
 	Ambiguous         bool
@@ -398,6 +424,8 @@ type Target struct {
 	ProviderModel               string
 	AccessSurface               domain.AccessSurface
 	ProfileID                   domain.ProviderProfileID
+	OfferingID                  domain.ProviderOfferingID
+	AccountRegionID             domain.ProviderRegionID
 	Region                      string
 	Adapter                     Adapter
 	InputMicrosPerMillion       int64
@@ -535,6 +563,22 @@ func (r *Registry) Register(target Target) error {
 		}
 		if target.ProfileID != manifest.ID || target.AccessSurface != manifest.AccessSurface {
 			return errors.New("target profile does not match adapter profile")
+		}
+		identity, ok := domain.IdentityForProfile(target.ProfileID)
+		if !ok {
+			return errors.New("target profile has no provider offering")
+		}
+		if target.OfferingID == "" {
+			target.OfferingID = identity.Offering
+		}
+		if target.OfferingID != identity.Offering {
+			return errors.New("target offering does not match adapter profile")
+		}
+		if identity.RegionScope == domain.RegionScopeFixed && target.AccountRegionID == domain.RegionNone {
+			target.AccountRegionID = identity.Region
+		}
+		if !domain.AccountRegionBelongsToSurface(target.AccessSurface, target.AccountRegionID) {
+			return errors.New("target account region does not match adapter profile")
 		}
 		if len(target.CapabilityEvidence) == 0 {
 			target.CapabilityEvidence = profiled.CapabilityEvidence()
