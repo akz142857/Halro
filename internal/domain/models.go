@@ -681,6 +681,7 @@ func (p ProviderInstance) Validate() error {
 	}
 	seenBindings := make(map[string]struct{}, len(p.Bindings))
 	seenProfiles := make(map[ProviderProfileID]struct{}, len(p.Bindings))
+	connectionGroup, connectionGroupKnown := ConnectionGroupForProfile(p.ProfileID)
 	enabledBinding := false
 	for _, binding := range p.Bindings {
 		if _, duplicate := seenBindings[binding.ID]; duplicate {
@@ -701,6 +702,9 @@ func (p ProviderInstance) Validate() error {
 		}
 		if binding.AccessSurface != p.AccessSurface {
 			problems = append(problems, errors.New("provider profile binding access surface is incompatible with connection"))
+		}
+		if bindingGroup, known := ConnectionGroupForProfile(binding.ProfileID); connectionGroupKnown && known && bindingGroup != connectionGroup {
+			problems = append(problems, errors.New("provider profile binding connection group is incompatible with connection"))
 		}
 	}
 	if p.Enabled && len(p.Bindings) != 0 && !enabledBinding {

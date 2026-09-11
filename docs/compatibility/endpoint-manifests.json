@@ -72,6 +72,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -85,7 +86,13 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
+      "minimax.cn.subscription.anthropic.messages.v1",
+      "minimax.global.subscription.anthropic.messages.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -197,6 +204,31 @@
           "function tools are carried up to the documented limit of 128",
           "json_object is preserved while json_schema is rejected",
           "stream usage is returned by the final provider chunk without sending stream_options",
+          "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "messages[].name",
+          "n",
+          "seed",
+          "parallel_tool_calls",
+          "tools",
+          "response_format",
+          "stop",
+          "tool_choice",
+          "user",
+          "messages[].content[].detail"
+        ],
+        "declared_transforms": [
+          "the international GLM Coding Plan uses the documented Z.AI /api/coding/paas/v4 path and the same explicitly rendered BigModel Chat dialect",
+          "user is renamed to user_id",
+          "n=1 and parallel_tool_calls=true are omitted as equivalent defaults",
+          "function tools are carried up to the documented limit of 128",
+          "json_object and json_schema are both routed away until the international Coding endpoint is measured",
+          "streaming is declared from the official coding-agent contract, but stream usage accounting remains unknown until a subscription response is captured",
           "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"
         ]
       },
@@ -459,6 +491,103 @@
           "the schema-less json_object mode is unavailable here and available on the Kimi Chat profile: this endpoint models structured output as text.format and accepts the json_schema type alone, so a json_object request is routed away by the absent json_object capability rather than by field",
           "reasoning is unsupported here and supported on the Kimi Chat profile: the canonical response mapper cannot preserve the reasoning items this endpoint returns",
           "this endpoint serves kimi-k3 alone, which the model catalog records per model rather than this profile-scoped declaration"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "messages[].content[].detail",
+          "messages[].name",
+          "n",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_p",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "messages[].content[].detail",
+          "messages[].name",
+          "n",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "top_p",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "n",
+          "seed",
+          "stop",
+          "response_format",
+          "parallel_tool_calls",
+          "user",
+          "max_tokens"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "n",
+          "seed",
+          "stop",
+          "response_format",
+          "parallel_tool_calls",
+          "user",
+          "max_tokens"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "messages[].name",
+          "n",
+          "seed",
+          "response_format",
+          "reasoning_effort",
+          "user",
+          "messages[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
         ]
       }
     ]
@@ -732,6 +861,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -745,7 +875,13 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
+      "minimax.cn.subscription.anthropic.messages.v1",
+      "minimax.global.subscription.anthropic.messages.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -829,6 +965,24 @@
         ],
         "declared_transforms": [
           "Responses items are mapped through the Coding Plan's Chat Completions route",
+          "max_output_tokens is carried as BigModel max_tokens",
+          "function tools are carried up to the documented limit of 128",
+          "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "tools",
+          "text.format",
+          "tool_choice",
+          "user",
+          "input[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Responses items are mapped through the international Coding Plan's documented Chat Completions route",
           "max_output_tokens is carried as BigModel max_tokens",
           "function tools are carried up to the documented limit of 128",
           "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"
@@ -1027,6 +1181,84 @@
           "text.format carries a schema; the schema-less json_object mode is routed away by the absent json_object capability rather than by field, because Kimi's Responses face accepts the json_schema type alone",
           "this endpoint serves kimi-k3 alone, which the model catalog records per model"
         ]
+      },
+      {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "input[].content[].detail",
+          "temperature",
+          "text.format",
+          "top_p",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "input[].content[].detail",
+          "temperature",
+          "text.format",
+          "top_p",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "text.format",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "text.format",
+          "user"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "temperature",
+          "top_p",
+          "text.format",
+          "user",
+          "input[].content[].detail"
+        ],
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+        ]
       }
     ]
   },
@@ -1136,6 +1368,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1149,7 +1382,9 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1"
     ],
     "profile_coverage": [
       {
@@ -1253,6 +1488,26 @@
         ],
         "declared_transforms": [
           "portable Messages content is mapped through the Coding Plan's Chat Completions route",
+          "function tools are carried up to the documented limit of 128",
+          "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
+          "json_schema has no BigModel counterpart"
+        ]
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "metadata",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "thinking",
+          "tool_choice",
+          "tools",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through the international Coding Plan's documented Chat Completions route",
           "function tools are carried up to the documented limit of 128",
           "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O",
           "json_schema has no BigModel counterpart"
@@ -1523,6 +1778,40 @@
           "temperature and top_p are rejected for the same reason as on the Kimi Chat profile: Kimi models neither member",
           "output_config.format is carried: it is always a schema on this endpoint, and a schema is exactly what Kimi's Responses face accepts"
         ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "thinking",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "thinking",
+          "top_k"
+        ],
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
       }
     ]
   },
@@ -1637,6 +1926,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1650,7 +1940,13 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
+      "minimax.cn.subscription.anthropic.messages.v1",
+      "minimax.global.subscription.anthropic.messages.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -1683,6 +1979,10 @@
       },
       {
         "profile_id": "bigmodel.cn.coding.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
         "status": "experimental"
       },
       {
@@ -1740,6 +2040,50 @@
       {
         "profile_id": "kimi.responses.v1",
         "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+        ]
       }
     ]
   },
@@ -1788,6 +2132,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1801,7 +2146,13 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
+      "minimax.cn.subscription.anthropic.messages.v1",
+      "minimax.global.subscription.anthropic.messages.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -1834,6 +2185,10 @@
       },
       {
         "profile_id": "bigmodel.cn.coding.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
         "status": "experimental"
       },
       {
@@ -1891,6 +2246,50 @@
       {
         "profile_id": "kimi.responses.v1",
         "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+        ]
       }
     ]
   },
@@ -1932,6 +2331,7 @@
       "bigmodel.cn.chat-embeddings.v1",
       "bigmodel.global.chat.v1",
       "bigmodel.cn.coding.chat.v1",
+      "bigmodel.global.coding.chat.v1",
       "openai-compatible.chat-embeddings.v1",
       "gemini.generate-content.text.v1beta",
       "bedrock.runtime.converse.text.v1",
@@ -1945,7 +2345,13 @@
       "minimax.responses.v1",
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
-      "kimi.responses.v1"
+      "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
+      "minimax.cn.subscription.anthropic.messages.v1",
+      "minimax.global.subscription.anthropic.messages.v1",
+      "minimax.cn.subscription.openai.chat.v1",
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -1978,6 +2384,10 @@
       },
       {
         "profile_id": "bigmodel.cn.coding.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "bigmodel.global.coding.chat.v1",
         "status": "experimental"
       },
       {
@@ -2035,6 +2445,50 @@
       {
         "profile_id": "kimi.responses.v1",
         "status": "experimental"
+      },
+      {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental"
+      },
+      {
+        "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.cn.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "minimax.global.subscription.openai.chat.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+          "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+        ]
       }
     ]
   },

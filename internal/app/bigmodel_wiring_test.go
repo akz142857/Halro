@@ -14,7 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 )
 
-// The three BigModel products, each on its own address *and* its own path.
+// The four BigModel regional product surfaces, each on its exact address and path.
 //
 // The path half is what nothing else catches. docs/contracts/adding-a-platform.md
 // records that a wrong primitive binding leaves the tree green and that a
@@ -37,6 +37,8 @@ func TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath(t *testing.T) 
 			"https://api.z.ai", "/api/paas/v4/chat/completions"},
 		{domain.ProfileBigModelCNCodingChat, domain.SurfaceBigModelCNCoding, domain.CredentialBigModelCodingPlanKey,
 			"https://open.bigmodel.cn", "/api/coding/paas/v4/chat/completions"},
+		{domain.ProfileBigModelGlobalCodingChat, domain.SurfaceBigModelGlobalCoding, domain.CredentialBigModelCodingPlanKey,
+			"https://api.z.ai", "/api/coding/paas/v4/chat/completions"},
 	} {
 		t.Run(string(test.profile), func(t *testing.T) {
 			endpoint, _ := url.Parse(test.host)

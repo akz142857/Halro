@@ -1,9 +1,12 @@
 # Provider Offering 与订阅接入统一方案
 
-状态：**阶段 1 已实施；阶段 0（BigModel 国内）与阶段 2（BigModel 国内 Coding Plan）已实施；
-阶段 2 的海外部分、阶段 3 / 4 未实施**（实施差异见 §14）  
+状态：**首期已实施：阶段 1、BigModel / Z.AI 国内与国际 Coding surface、使用范围确认审计与
+Offering 用量归因；国际实际响应行为、阶段 3 / 4 等待对应凭据或授权证据**（见 §14）
 建立日期：2026-09-09  
-最近修订：2026-09-09（第 1 轮 review 并实施阶段 1）  
+最近修订：2026-09-10（补齐 Z.AI、Kimi、MiniMax 订阅产品的国内/海外地域设计，并重设计使用条款折叠区）
+
+Kimi、MiniMax 与 DeepSeek Code 订阅的具体实施拆分见
+[《Kimi、MiniMax、DeepSeek Code 订阅适配实施方案》](./code-subscription-adaptation-plan.zh-CN.md)。
 范围：`internal/domain`、`internal/provider`、`internal/compatibility`、`internal/app`、
 `internal/modelcatalog`、`internal/usage`、`web/src`、运维与用户文档  
 首期落地：通用 Offering 抽象、控制台统一选择器、BigModel / Z.AI Coding Plan  
@@ -151,7 +154,7 @@ const (
 )
 ```
 
-后续阶段加入（拿到 surface 时才注册）：`bigmodel.coding-plan`、`kimi.code`、
+已注册的首个订阅 Offering 是 `bigmodel.coding-plan`。后续阶段在拿到 surface 时再加入：`kimi.code`、
 `minimax.token-plan`、`openai.codex-subscription`、`anthropic.claude-subscription`。
 
 地域使用语义 ID，例如：
@@ -185,11 +188,10 @@ type providerOfferingRow struct {
 - CI 校验每个**可达** Offering 都有中英文文案，并且没有多余文案（`withheld` 产品的文案会被判为
   不可达而删除，重新提供时测试的另一半又会把它要回来）。
 
-**`RequiresUsageWarning` 与 `DocumentationURL` 不在阶段 1 加。**阶段 1 的每个 Offering 都是按量
-API，没有需要确认的使用范围，也就没有真值可填；而订阅产品需要的文档链接是按 `(offering, region)`
-的——BigModel 通用 API 的一手文档在 `docs.bigmodel.cn`（大陆）和 `docs.z.ai`（海外）是两份，一个
-Offering 一条 URL 对其中一边必然是错的。这两个字段与第一个真正需要它们的订阅 Offering 一起进表，
-而不是先作为空列让控制台绕着渲染。
+`RequiresUsageWarning` 随第一个受限订阅 Offering 加入 Offering 表；`DocumentationURL` 声明在
+surface 表，因为文档链接是按 `(offering, region)` 的——BigModel 国内与海外是两份资料，一条全局
+URL 对其中一边必然是错的。普通按量产品不发布使用限制文档；任何
+`RequiresUsageWarning=true` 的可达 surface 都必须有自己的官方文档，不变量测试对此 fail closed。
 
 **Offering ID 是持久标识符，不得改名或复用。**§7.1 的使用范围确认会把 Offering ID 写进 Admin 审计
 事件，审计记录是只读且完整性受校验的，改名会让既有审计条目不可解释。这条与事件 kind 号、frame
@@ -337,17 +339,21 @@ GET /admin/api/v1/provider-profiles
           "id": "bigmodel.general-api",
           "kind": "metered_api",
           "requires_usage_warning": false,
-          "documentation_url": "https://docs.bigmodel.cn/cn/api/introduction",
+          "documentation": [],
           "region_scope": "fixed",
-          "regions": ["cn", "global"]
+          "regions": ["cn", "global"],
+          "region_hosts": []
         },
         {
           "id": "bigmodel.coding-plan",
           "kind": "subscription",
           "requires_usage_warning": true,
-          "documentation_url": "https://docs.bigmodel.cn/cn/coding-plan/quick-start",
+          "documentation": [
+            {"region": "cn", "url": "https://docs.bigmodel.cn/cn/coding-plan/usage-notes"}
+          ],
           "region_scope": "fixed",
-          "regions": ["cn", "global"]
+          "regions": ["cn"],
+          "region_hosts": []
         }
       ],
       "profiles": [
@@ -425,7 +431,9 @@ endpoint 选择：
   重打的材料，正是既有轮换代码专门避免的失败模式；
 - 凭据保存后展示 `服务商 · Offering · 地域 · 鉴权方式`；
 - 订阅产品的使用范围提示紧邻 Offering，不放在提交后的错误里；
-- `requires_usage_warning=true` 时，提交前要求一次明确确认，并写入 Admin 审计事件。
+- `requires_usage_warning=true` 时，提交前要求一次明确确认，并把 Offering、Profile、当前地域官方文档
+  URL 与 Halro 的稳定 policy revision 一并写入 Admin 审计事件。它是操作者确认记录，不是 Halro
+  对实际用途合规性的判定。
 
 **有选择时必须显式发送 `access_surface` 与 `scheme`。**今天的表单只在 Bedrock 分支发这两个字段，
 其余类型留空，服务端于是回退到 provider type 的默认 profile——这正是 §8.3 那个缺陷的成因。
@@ -522,7 +530,7 @@ Offering 和 profile，帮助操作者区分"换 Key""换模型""等额度恢复
 ## 5. 服务商接入矩阵与分期
 
 本节引用的所有上游 URL 均按该文自己在 §5.1 定的规矩处理：**标注复核日期，未复核的显式写明**。
-下列链接为撰写时按官方站点结构记录，尚未逐条抓取复核，实施阶段 0 必须逐条打开并补日期。
+下列链接在各产品阶段 0 逐条复核并记录日期；尚未复核的候选产品仍显式标注。
 
 ### 5.1 BigModel / Z.AI
 
@@ -540,10 +548,12 @@ Offering 和 profile，帮助操作者区分"换 Key""换模型""等额度恢复
 | CN | `bigmodel.coding-plan` | `bigmodel-cn-coding-api` | `bigmodel.cn.coding.chat.v1` | `https://open.bigmodel.cn` | `/api/coding/paas/v4` |
 | Global | `bigmodel.coding-plan` | `bigmodel-global-coding-api` | `bigmodel.global.coding.chat.v1` | `https://api.z.ai` | `/api/coding/paas/v4` |
 
-上表的 path prefix 是**待验证项，不是已知事实**：`/api/coding/paas/v4` 取自 BigModel 国内文档，
-Z.AI 海外站是否使用同一前缀尚未核实。见 §13 第 1、2 问。
+上表两地的 path prefix 都已由各自官方文档确认；海外 endpoint 的无 Key 请求返回 401 只证明请求
+到达了鉴权边界，不能单独证明 `/models` 路由存在。海外授权后的响应 shape、模型枚举与错误码仍待
+海外订阅 Key 实测，见 §13 第 2 问。
 
-首期 Coding profile 只声明真实验证过的 OpenAI Chat 能力。不得从 general profile 自动继承：
+Coding profile 不得从 general profile 自动继承能力：国内只声明真实验证过的能力；国际只声明官方
+契约明确支撑的能力，并保持为 declared/unknown，不冒充实测：
 
 - Embeddings；
 - Vision；
@@ -564,8 +574,9 @@ Z.AI 海外站是否使用同一前缀尚未核实。见 §13 第 1、2 问。
 9. 大小写模型标识符是否归一化或严格区分；
 10. 海外站的 coding path prefix。
 
-中国大陆站的 1–7、9 已于 2026-09-09 实测完成，结论见下方"阶段 0 实测证据"；8（国内外 Key 是否
-严格隔离）与 10 仍缺海外 Key。
+中国大陆站的 1–7、9 已于 2026-09-09 实测完成，结论见下方"阶段 0 实测证据"；Z.AI 官方资料已确认
+国际 Coding path prefix 为 `/api/coding/paas/v4`、主机为 `api.z.ai`，并列明订阅 Key 获取流程、
+支持模型与使用范围。8（国内外 Key 是否严格隔离）及国际 endpoint 的实际响应/模型映射仍缺海外 Key。
 
 如果上游提供模型列表，则上游列表是"谁存在"的唯一来源；内建目录只补充能力。如果订阅 endpoint
 确实没有模型列表，才允许使用带来源和复核日期的订阅模型 seed。
@@ -619,7 +630,7 @@ Z.AI 海外站是否使用同一前缀尚未核实。见 §13 第 1、2 问。
 
 **未能取得的证据**（不得据推测实现）：
 
-- Z.AI 海外站的 coding path prefix 与模型映射（需要一把海外 Key）；
+- Z.AI 海外站的实际模型映射与响应细节（需要一把海外 Key；path prefix 已由官方资料确认）；
 - 额度耗尽、套餐过期、模型无权限的原始业务码（无法在不耗尽套餐的前提下触发）；
 - 两条路径各自扣哪份余额（响应无可观测字段）。
 
@@ -641,35 +652,67 @@ Z.AI 海外站是否使用同一前缀尚未核实。见 §13 第 1、2 问。
    `gateway/service.go` 被公开别名覆盖，attempt/ledger 记录里没有"实际应答模型"这个字段。补它要动
    Ledger 事件结构，属于独立改动；在此之前，替换只在探测期被发现和拦截，运行期不留痕。
 
-官方资料（未复核）：
+官方资料：
 
-- [BigModel 通用 API](https://docs.bigmodel.cn/cn/api/introduction)
-- [BigModel Coding Plan 快速开始](https://docs.bigmodel.cn/cn/coding-plan/quick-start)
-- [Z.AI General/Coding Endpoint](https://docs.z.ai/api-reference/introduction)
-- [Z.AI Coding Plan](https://docs.z.ai/devpack/quick-start)
+- [BigModel 通用 API](https://docs.bigmodel.cn/cn/api/introduction)（2026-09-10 复核）
+- [BigModel Coding Plan 概览](https://docs.bigmodel.cn/cn/coding-plan/overview)（2026-09-10 复核）
+- [BigModel 其他 Coding 工具接入](https://docs.bigmodel.cn/cn/coding-plan/tool/others)（2026-09-10
+  复核；明确列出 OpenAI Chat endpoint `/api/coding/paas/v4`，并要求使用官方列出的工具/环境）
+- [BigModel Coding Plan 使用须知](https://docs.bigmodel.cn/cn/coding-plan/usage-notes)（2026-09-10
+  复核；确认配额与禁止共享、转发/转售风险）
+- [Z.AI General/Coding Endpoint](https://docs.z.ai/api-reference/introduction)（2026-09-10 复核；明确
+  General 与 Coding 的独立路径）
+- [Z.AI Coding Plan](https://docs.z.ai/devpack/quick-start)（2026-09-10 复核；明确订阅、Key 获取、
+  Coding endpoint 与支持工具）
+- [Z.AI Coding Plan 工具与使用范围](https://docs.z.ai/devpack/tool/others)（2026-09-10 复核；明确
+  OpenAI Chat endpoint、支持模型及仅限官方支持工具/产品环境）
+- [Z.AI Coding Plan 使用政策](https://docs.z.ai/devpack/usage-policy)（2026-09-10 复核；国际 surface
+  的控制台警示直接链接此页）
+
+补充非计费鉴权观测（2026-09-10）：不带 Key 请求
+`GET https://api.z.ai/api/coding/paas/v4/models` 返回 HTTP 401、业务码 `1001`（缺少鉴权头）。该结果只
+证明请求到达 Z.AI 的鉴权边界；统一鉴权中间件也可能先于路由匹配返回 401，因此不能单独证明
+`/models` 路由存在，更不证明授权后的响应 shape 或模型集合。路径依据仍以官方 API 文档为准。
 
 ### 5.2 Kimi
 
-Kimi Open Platform 与 Kimi Code 是独立产品，Base URL、Key 来源和额度不互通。Kimi Code 官方资料
-给出的订阅入口为 Anthropic-compatible `https://api.kimi.com/coding/`（未复核）。
+Kimi Open Platform 与 Kimi Code 是独立产品，Base URL、Key 来源和额度不互通。产品需求指出 Kimi
+Code 同时有国内与海外订阅模式；现阶段把它作为待双账号验证的需求假设，不能冒充官方已公开的
+凭据隔离契约。截至
+2026-09-10，Kimi 中英文官方接入文档公开的是同一组 Coding API 地址：OpenAI-compatible
+`https://api.kimi.com/coding/v1` 与 Anthropic-compatible `https://api.kimi.com/coding/`。因此地域
+不能从 Host 推断；创建凭据时必须由操作者明确选择，分别绑定固定地域 surface。后续若官方为某一地域
+发布独立 Host，只更新对应 surface 的 endpoint，不改变 Offering ID 或另一地域的凭据。
 
 候选 Offering：
 
 | Offering | 阶段 | 说明 |
 | --- | --- | --- |
 | `kimi.open-platform` | 已有能力迁移元数据 | 现有 Kimi profile 归属该 Offering，**含当前 withheld 的 `kimi.responses.v1`**；`SurfaceKimi` 的 `region_scope` 为 `by_endpoint` |
-| `kimi.code` | 第二批静态 Key | 新 surface、凭据方案和 Anthropic profile；先真实验证 |
+| `kimi.code` | 第二批静态 Key | 国内、海外各自的新 surface 与凭据身份；共用 Offering，不共用凭据；先真实验证 |
 
 `kimi.responses.v1` 是被从一个已提供的 profile 组中间抽掉的第一条 profile，它仍要有 Offering
 归属（不变量走全表），但不出现在 `offerings[].profiles` 和 `combines_with` 里。
 
 不得把现有 `api.moonshot.cn` / `api.moonshot.ai` profile 改地址来兼容 Kimi Code；那会让开放平台
-凭据和订阅凭据共享模型与能力证据。
+凭据和订阅凭据共享模型与能力证据。建议登记：
 
-官方资料（未复核；路径形式取自 [Kimi 适配方案](kimi-adaptation-plan.zh-CN.md) 记录的文档站结构，
-大陆站与国际站分列）：
+| Surface | Region | 当前官方 endpoint | 说明 |
+| --- | --- | --- | --- |
+| `kimi-code-cn` | `cn` | `https://api.kimi.com/coding/` | 中国大陆订阅账号；固定地域，不按 Host 推断 |
+| `kimi-code-global` | `global` | `https://api.kimi.com/coding/` | 海外订阅账号；固定地域，不按 Host 推断 |
 
-- Kimi Code FAQ：`https://www.kimi.com/code/docs/en/kimi-code/faq.html`
+两条 surface 即使暂时共用 Host 也不能合并：它们表达的是 Key、会员资格、额度与账号归属，不只是网络
+地址。`SurfaceForEndpoint` 对共享 Host 应返回“不足以判定”，不得自动把存量凭据迁到任一地域。
+
+官方资料（2026-09-10 复核）：
+
+- [Kimi Code 中文概览](https://www.kimi.com/code/docs/)：明确会员订阅、两种兼容协议、Coding Base URL
+  与四个当前模型 ID；
+- [Kimi Code 英文概览](https://www.kimi.com/code/docs/en/)：明确 Kimi Code 会员与 Kimi Platform
+  按量 API 是两套产品；
+- [Kimi Code FAQ](https://www.kimi.com/code/docs/kimi-code/faq.html)：明确 Kimi Code Key 与开放平台
+  Key / Base URL 不可混用；
 - Kimi Open Platform 文档索引：`https://platform.kimi.com/docs/llms.txt`（大陆）、
   `https://platform.kimi.ai/docs/llms.txt`（国际）
 - OpenAPI Schema：`https://platform.kimi.com/docs/openapi.json` /
@@ -677,25 +720,41 @@ Kimi Open Platform 与 Kimi Code 是独立产品，Base URL、Key 来源和额�
 
 ### 5.3 MiniMax
 
-MiniMax 的订阅产品在官方站点上以 Coding Plan 入口呈现，业内也称 Token Plan；本方案统一使用
-`minimax.token-plan` 作为 Offering ID，并在阶段 0 确认官方正式名称后固定 i18n 文案（ID 本身
-不再改，见 §2.2）。它提供独立套餐权益和专用 `sk-cp` Key（未复核）。
+MiniMax 官方正式名称为 **Token Plan**。它同时提供国内与海外订阅，使用各区域的 Token Plan Key，
+并明确说明该 Key 与按量 API Key 不互通。两地都开放 Anthropic-compatible 与 OpenAI-compatible
+文本接口：国内使用 `api.minimax.cn`，海外使用 `api.minimax.io`。
 
-`SurfaceMiniMax` 的 `region_scope` 为 `by_endpoint`（`api.minimax.io` 与国内站），与 Kimi 同形。
+`SurfaceMiniMax` 的 `region_scope=by_endpoint` 只描述现有按量 API Offering；订阅产品不能复用它。
+Token Plan 应建立两个 `region_scope=fixed` surface：
 
-实施前必须确认：
+| Surface | Region | Anthropic Base URL | OpenAI Base URL |
+| --- | --- | --- | --- |
+| `minimax-cn-token-plan` | `cn` | `https://api.minimax.cn/anthropic` | `https://api.minimax.cn/v1` |
+| `minimax-global-token-plan` | `global` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` |
 
-- 国内、海外 endpoint；
-- `sk-cp` 对应的 surface 和 Header；
-- Chat / Responses / Anthropic 三条 wire 是否都开放；
+两条 surface 同属 `minimax.token-plan`，但凭据不能跨地域复用。首个 profile 优先采用官方推荐的
+Anthropic-compatible Messages；OpenAI Chat profile 在同一区域作为同一连接组的 companion。官方资料
+没有证明 Token Plan 开放 Responses API，因此不能因按量 surface 有 Responses profile 就复制过来。
+
+实施前仍需用专用订阅账号确认：
+
 - 模型枚举路径与实际 response；
 - 多模态是否与文本共享同一 endpoint 和配额；
-- 套餐使用范围和并发语义。
+- 套餐使用范围、并发语义及额度耗尽错误体。
 
 在这些证据完成前只登记 Offering 提案，不注册可达 Profile。
 
-官方资料（未复核）：`https://platform.minimax.io/subscribe/coding-plan`；两站文档索引见
-[MiniMax 适配方案](minimax-adaptation-plan.zh-CN.md)（`platform.minimax.io` / `platform.minimax.cn`）。
+官方资料（2026-09-10 复核）：
+
+- [MiniMax 国内 Token Plan 快速接入](https://platform.minimaxi.com/docs/token-plan/quickstart)：专用 Key、
+  国内 Anthropic endpoint；
+- [MiniMax 海外 Token Plan Quick Start](https://platform.minimax.io/docs/token-plan/quickstart)：专用 Key、
+  海外 Anthropic endpoint；
+- [MiniMax 国内文本生成](https://platform.minimaxi.com/docs/guides/text-generation) 与
+  [海外文本生成](https://platform.minimax.io/docs/guides/text-generation)：分别列出两地 Anthropic / OpenAI
+  Base URL、模型与流式支持；
+- [MiniMax 国内 Token Plan 概要](https://platform.minimaxi.com/docs/token-plan/intro)：明确 Token Plan Key、
+  Credits 与按量 Key 的隔离关系。
 
 ### 5.4 OpenAI
 
@@ -863,7 +922,7 @@ Halro 当前预算以 token/价格为核心，但订阅产品可能按周期额�
 首期：
 
 - 仍记录 token usage；
-- Offering ID 写入 span、failure capture 和 usage attribution；
+- Offering ID 写入失败日志、failure capture 和 usage attribution；
 - 不把订阅调用伪装成金额为零的"免费 API"；
 - 未有稳定单价时金额保持 unknown，而不是 0；
 - 429 原始业务码和 reset time 经过脱敏后保留；
@@ -880,10 +939,10 @@ Halro 当前预算以 token/价格为核心，但订阅产品可能按周期额�
 - 若拿不到，操作者必须为该项目显式接受"成本治理关闭"，控制台在创建订阅 Deployment 时就说明
   这一点，而不是等到调用被记成 unknown 才发现预算没生效。
 
-**Offering 进 usage attribution 会动 usage schema。**`internal/usage` 的
-`parquetSchemaVersion` 当前为 6，且有 min-readable 范围与就地升级逻辑，因此新增 offering 列是
-bump 到 7、旧分区仍可读、旧行 offering 为空——**不需要重新初始化数据目录**，但 §8.1 的"不需要
-迁移"必须限定为"元数据不需要迁移"，usage 侧是一次带 min-readable 范围的版本推进。
+**Offering 进 usage attribution 已推进 usage schema。**`internal/usage` 的
+`parquetSchemaVersion` 已从 6 bump 到 7；min-readable 范围与就地升级逻辑保留，旧分区仍可读，
+旧行 offering/profile 为空——**不需要重新初始化数据目录**。因此 §8.1 的"不需要迁移"只指元数据；
+usage 侧已经完成一次带 min-readable 范围的版本推进。
 
 后续再设计 subscription allowance dashboard，不阻塞静态 Key 的正确路由。
 
@@ -962,12 +1021,14 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 
 ### 阶段 0：证据采集
 
-- [ ] 为每个候选订阅产品建立官方来源、endpoint、认证、用途限制清单，逐条打开链接并记录复核日期。
-- [ ] 使用专用测试账号验证订阅 endpoint；测试会消耗套餐额度，必须显式启用。
-- [ ] 先捕获真实 `/models`、Chat、stream、tool、usage 与 error body，再写 decoder fixture。
-- [ ] 明确哪些产品允许第三方网关或自定义 Coding Agent。
-- [ ] 确认 Z.AI 海外站的 coding path prefix 是否与国内一致。
-- [ ] 不使用生产 Key，不在测试日志打印 secret。
+- [~] 为每个候选订阅产品建立官方来源、endpoint、认证、用途限制清单。BigModel / Z.AI、Kimi Code、
+      MiniMax Token Plan 的公开契约已复核；三者尚缺少全部地域的专用凭据实测，OAuth 候选仍等待授权证据。
+- [~] 使用专用测试账号验证订阅 endpoint。BigModel 国内已完成；其他产品未取得专用凭据。
+- [x] BigModel 国内先捕获真实 `/models`、Chat、stream、tool、usage 与 error body，再写 fixture。
+- [~] BigModel 国内/海外和 Kimi Code 官方文档明确订阅产品与通用 API 的用途边界；Halro 不代替
+      操作者判断实际链路是否合规。MiniMax 的受限使用条款仍需逐条确认。
+- [x] 确认 Z.AI 海外站的 coding path prefix 与国内一致。
+- [x] 不使用生产 Key，不在测试日志打印 secret。
 
 ### 阶段 1：Offering 通用抽象，不新增上游能力 — **已实施**
 
@@ -997,38 +1058,60 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 处置由操作者执行。唯一的行为收窄是 anthropic-beta 的接受条件（§4.2），它只影响一种控制台从未
 产生过的组合。
 
-### 阶段 2：BigModel / Z.AI Coding Plan — **国内已实施，海外缺证据未做**
+### 阶段 2：BigModel / Z.AI Coding Plan — **国内实测实施，国际按官方契约实施**
 
-- [x] 注册 **国内** Coding surface（`bigmodel-cn-coding-api`，offering `bigmodel.coding-plan`，
-      kind `subscription`，region `cn`）、credential scheme `bigmodel.coding-plan-key` 与 profile
-      `bigmodel.cn.coding.chat.v1`。海外 Coding profile **不注册**：没有海外 Key，path prefix 与
-      模型映射均未知。
+- [x] 注册国内 Coding surface（`bigmodel-cn-coding-api`，region `cn`）与国际 Coding surface
+      （`bigmodel-global-coding-api`，region `global`）；二者同属 offering `bigmodel.coding-plan`、
+      kind `subscription`，使用 credential scheme `bigmodel.coding-plan-key`，但分别绑定
+      `open.bigmodel.cn` 与 `api.z.ai`，不能跨地域复用凭据。
+- [x] 注册 `bigmodel.cn.coding.chat.v1` 与 `bigmodel.global.coding.chat.v1`。国际 profile 的 host、
+      path、Key 流程、支持模型及用途边界来自 Z.AI 一手文档；没有海外 Key，因此不声称已经验证其
+      模型替换、错误码或实际响应细节。
 - [x] adapter 按 profile 选择 `/api/coding/paas/v4`（`bigModelPathPrefix`），并有路径断言测试
       `TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath`；反向验证过：去掉分支该行变红。
 - [x] 真实账号实测 Chat、stream、usage、tool、JSON 模式与 `1211` 错误，证据见 §5.1 与
       `docs/verification/provider-real-matrix.md`。
-- [x] **枚举保持动态**（与通用 profile 同一条路径），内建目录只登记实测服务的
-      `glm-5.3`、`glm-5.3-flash` 两条能力证据——上游列表回答"谁存在"，目录回答"已知模型会什么"，
-      新模型上线不需要发 Halro 版本。
-- [x] 只声明实测过的能力：Chat / Streaming / Tools / JSONObject / StreamUsage / Reasoning。
+- [x] **枚举保持动态**。国内内建目录只登记实测服务的 `glm-5.3`、`glm-5.3-flash` 两条能力证据；
+      国际目录按 Z.AI 当前官方清单只 seed 实际目标 `glm-5.3`、`glm-5.3-flash`；旧 ID 是官方声明的
+      自动路由别名，不作为独立能力种子。无 Key 401 只证明到达鉴权边界，不证明 `/models` 路由；
+      授权后的列表仍待真实 Key 捕获。目录只补能力证据，新模型上线不需要先发 Halro 版本。
+- [x] 国内只声明实测过的能力：Chat / Streaming / Tools / JSONObject / StreamUsage / Reasoning。
       **不声明 Embeddings**（`/embeddings` 虽 200，但模型不在该产品列表内且无法观测扣哪份余额）、
-      不声明 Vision 与 Structured Outputs（未测）。
+      不声明 Vision 与 Structured Outputs（未测）。国际 profile 只声明一手文档和官方 coding-agent
+      工作流能够支撑的 Chat / Streaming / Tools / Reasoning；JSONObject、StreamUsage、Vision、
+      Structured Outputs 与 Embeddings 均保持 unknown。
 - [x] 新增**模型替换护栏**：探测到上游以另一个模型作答时，丢弃该次证据并标记
       `model_substituted`，避免把 `glm-5.3-flash` 的能力记成 `glm-4.6` 的 verified 证据。
-- [x] 三个产品的凭据、surface、path 隔离测试。
+- [x] 两种产品 × 两个地域的凭据、surface、host、path 隔离测试。
 - [~] 错误分类：只拿到 `1211`（HTTP 400，模型不存在）。plan expired / quota exhausted /
       model unavailable 无法在不耗尽真实套餐的前提下触发，**未实现**。
-- [x] 计价形态已定：接受 unknown price + 该项目显式关闭成本治理，后果写入 operator guide。
-- [ ] usage attribution 增加 offering 维度，bump `parquetSchemaVersion`。**未做**——见 §14。
+- [x] 计价形态已定：接受 unknown price + 该项目显式关闭成本治理；后果写入 operator guide，并在
+      创建订阅部署时由元数据驱动的提示直接说明预算不再拦截、成本保持 unknown。
+- [x] usage attribution、失败日志与加密 failure capture 增加 `offering_id` / `profile_id`，
+      `parquetSchemaVersion` 从 6 推进到 7；旧事件/分区读取为空值，新写入在 durable boundary 校验
+      Offering 与 Profile 一致，并支持 Offering 查询与 dashboard breakdown。
+- [x] `requires_usage_warning` 与地域化官方文档由 Admin 元数据下发；创建订阅凭据及新建/重新绑定
+      连接必须明确确认，审计记录固定 Offering ID、Profile ID、地域文档 URL、policy revision、
+      操作者与时间，轮换 Key 不重复确认。该记录只证明操作者确认过这版提示，不等于合规证明。
+- [x] 使用条款 UI 默认收起为紧凑摘要，持续显示待确认/已确认状态；展开后显示地域化官方文档、
+      完整说明和确认框，凭据与连接表单复用同一组件。
+- [x] 模型部署页的连接选项显示由元数据派生的 Offering / 地域，模型 ID 列表仍只包含真实调用目标。
 - [x] 更新兼容 manifest、operator guide 与真实 provider matrix。
 
 ### 阶段 3：Kimi Code 与 MiniMax Token Plan
 
-- [ ] 每个产品独立完成阶段 0。
-- [ ] 复用 Offering/UI 抽象，不复用未经证明的 general profile 能力。
-- [ ] Kimi Code 按 Anthropic-compatible endpoint 建立独立 surface/profile。
-- [ ] MiniMax 先确认 `sk-cp` endpoint 与可用 wire，再注册 profile。
-- [ ] 为订阅额度耗尽和产品不匹配错误建立 fixture。
+- [x] 具体结论与实现门槛统一以
+      [`code-subscription-adaptation-plan.zh-CN.md`](code-subscription-adaptation-plan.zh-CN.md) 为准；本阶段不再维护一份会漂移的厂商矩阵。
+- [x] Kimi Code 只建立一个 `RegionScopeNone` 的 membership surface；公开资料无法证明独立的
+      国内/海外账号边界。OpenAI 与 Anthropic 是互斥 ConnectionGroup，且在真实订阅 Key 完成账号身份、
+      Thinking 与错误 fixture 前均 withheld。
+- [x] MiniMax Subscription Access 建立 `api.minimax.cn`（国内）与 `api.minimax.io`（海外）两个固定地域
+      surface。每个地域的 OpenAI Chat 与 Anthropic Messages 是独立 ConnectionGroup；OpenAI profile
+      offered，Anthropic profile 在 Thinking fixture 完成前 withheld，不注册未经证明的 Responses profile。
+- [x] Credential / Connection 选择器只显示 offered 身份并复用统一的默认收起条款组件；被撤回或
+      withheld 的存量记录只读且仅允许删除，不能静默改指向可见 Profile。
+- [~] 已建立结构化错误与产品不匹配的非真实网络 fixture；真实订阅额度/错误响应仍按专项方案的
+      admission gate 待专用、限额账号验证，普通测试不得运行计费 smoke。
 
 ### 阶段 4：OAuth 型订阅
 
@@ -1051,8 +1134,8 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 - default profile 可解析 Offering；
 - Profile 的 surface/scheme 与 credential 保存匹配；
 - Offering/Region 只在 surface 表声明，`ProviderInstance` / `Credential` 上不存第二份；
-- 每个可达 Offering 都有中英文文案；`DocumentationURL` 为空只允许出现在白名单里的
-  `openai-compatible.self-declared`；
+- 每个可达 Offering 都有中英文文案；每个 `requires_usage_warning=true` 的可达 surface 都有该地域的
+  官方文档，普通产品不伪造限制文档；
 - Admin metadata 完整列出所有可达 Offering/Profile；
 - 凭据创建缺 `access_surface`/`scheme` 时返回具名 400（回退路径已删除）；
 - offering/profile 不匹配返回具名 400。
@@ -1070,6 +1153,7 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 - 模型部署列表不出现 Offering ID；
 - deployment provider 选项显示 Offering/Region；
 - 使用限制提示可访问、可键盘操作且中英文完整；
+- 未确认受限产品时前后端均拒绝创建；确认审计绑定 exact Offering/Profile，轮换不重复确认；
 - provider profile golden 与服务端保持一致；
 - 断言 `ProvidersPage.tsx` 不再包含 provider type 字面量分支（§4.2 列出的四类）。
 
@@ -1086,7 +1170,7 @@ Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未
 - `/models` 响应使用真实 shape；
 - 请求字段在 provider I/O 前拒绝或转换；
 - response/tool arguments/stream usage 不静默丢失；
-- 429 业务码分类保留可操作信息；
+- 已取得 fixture 的 429 业务码分类保留可操作信息；没有真实响应的额度类型保持未分类，不猜 message；
 - fallback 不跨 Offering，除非 Route 显式配置多个 Deployment，且归因可分辨 Offering。
 
 ### 10.4 推送前 gate
@@ -1114,18 +1198,21 @@ git diff --exit-code -- internal/webui/dist
 2. Offering 与 Region 只在 surface 表声明一次，凭据与连接均可无歧义派生出产品身份。
 3. 元数据侧无需数据迁移；usage schema 的版本推进在 min-readable 范围内，旧分区可读。
 4. 控制台可以明确创建 BigModel CN/Global General API 连接。
-5. 控制台可以明确创建 BigModel CN/Global Coding Plan 连接。
+5. 控制台可以明确创建 BigModel CN 与 Z.AI Global Coding Plan 连接；前者标明真实账号实测，后者
+   标明按一手官方契约接入且尚未验证实际模型映射，不把未实测行为写成 verified 证据。
 6. 凭据创建缺 surface/scheme、或 credential 与 profile 的 surface/scheme 不一致时，在保存前或
    保存时具名拒绝；endpoint 检查按 §2.6 执行——有 profile 级 endpoint 规则的 surface 拒绝，
    其余提示地域未知但不阻断。
 7. `halro doctor` 能报出 §8.3 的错配凭据，运维文档给出处置步骤。
 8. 模型部署只保存真实模型 ID，不出现 plan/Offering 伪模型。
 9. General 与 Coding 的模型列表、能力检测、缓存和错误证据完全隔离。
-10. Coding Plan Chat unary、stream、usage 和至少一个额度错误经过真实账号验证。
+10. Coding Plan Chat unary、stream、usage 与真实 `1211` 模型错误经过真实账号验证；不得为了验收
+    主动耗尽个人套餐，额度耗尽/过期分类等待自然样本后再实现。
 11. 未验证能力保持 unknown，不从 General API profile 或模型名称继承。
 12. 订阅计价形态已决策：要么有等效单价，要么控制台在创建时说明"该项目成本治理将被关闭、预算不再
     拦截"，且 operator guide 记录之。
-13. 控制台展示官方使用范围提示，确认按 `(credential, profile)` 粒度写入审计日志。
+13. 控制台以默认收起的紧凑区域展示地域化官方使用范围提示，确认按 `(credential, profile)` 粒度
+    写入审计日志。
 14. 完整 frontend gate、Go suite 与 bundle drift check 通过。
 
 ---
@@ -1149,10 +1236,14 @@ git diff --exit-code -- internal/webui/dist
 
 1. ~~BigModel Coding Plan 的 `/models` 是否真实存在~~ —— **已答**：存在，但不权威（列 10 个、
    服务 2 个），见 §5.1 阶段 0 证据 1–3。海外 response 仍未知。
-2. Z.AI 海外站的 coding path prefix 是否也是 `/api/coding/paas/v4`？**仍未知**，需要海外 Key。
+2. ~~Z.AI 海外站的 coding path prefix 是否也是 `/api/coding/paas/v4`~~ —— **已答**：Z.AI 官方
+   API Reference、Coding Plan Quick Start 与工具接入页均明确为该路径；实际模型映射仍需海外 Key。
 3. BigModel 团队套餐 Key 是否需要独立于个人 Coding Plan 的 Credential Scheme？
-4. Kimi Code 当前允许哪些第三方 agent，Halro 作为中间网关是否符合其使用范围？
-5. MiniMax Token Plan 的 `sk-cp` Key 支持哪些 endpoint 和 wire profile？官方正式产品名是什么？
+4. Kimi Code 国内与海外订阅当前共用公开 Coding Host；两类 Key 是否在服务端严格隔离，以及 Halro
+   作为中间网关是否符合其使用范围，仍需两地专用账号验证。
+5. ~~MiniMax 订阅的正式产品名、国内/海外 endpoint 与 wire 是什么~~ —— **公开契约已答**：正式名称
+   Token Plan；国内 `api.minimax.cn`、海外 `api.minimax.io`；两地均有 Anthropic Messages 与 OpenAI
+   Chat。仍需回答 `/models`、额度错误体及是否存在未公开的 Token Plan Responses 支持。
 6. 订阅额度没有货币单价时，成本报表显示 unknown、额度单位，还是二者并列？（"关闭成本治理"这个
    前置条件已在 §7.3 定死，此问只关乎展示与后续 allowance dashboard。）
 7. OAuth Offering 是否应属于 Provider Credential，还是独立的 Account Connection 资源？这一问与
@@ -1166,7 +1257,7 @@ git diff --exit-code -- internal/webui/dist
 
 ---
 
-## 14. 实施状态与与本方案的差异
+## 14. 实施状态与本方案的差异
 
 阶段 1 已实施（清单见 §9）。实施过程中有五处与方案原文不同，理由记在这里，方案正文已同步：
 
@@ -1174,8 +1265,9 @@ git diff --exit-code -- internal/webui/dist
    `(surface, scheme)` 的个数分流：只有一个时解析，两个及以上时具名拒绝。理由是仓库自己的原则
    ——"只有一个答案的问题不问"——写在控制台既有的 Bedrock 注释里；要求每个调用方写出
    `openai-api` + `bearer.static` 是没有决策的仪式，而 BigModel 那一处正是需要拒绝的地方。
-2. **Offering 表只有三个字段。**`RequiresUsageWarning` 与 `DocumentationURL` 推迟到第一个订阅
-   Offering，理由见 §2.2：现在没有真值，且文档链接是按 `(offering, region)` 的。
+2. **使用警告随第一个订阅产品加入。**`RequiresUsageWarning` 在 Offering 表声明，地域化
+   `DocumentationURL` 与稳定 `UsagePolicyRevision` 在 surface 表声明；阶段 1 的按量产品不携带
+   无意义空文档和 revision，理由见 §2.2。
 3. **候选 Offering 不注册。**`openai.codex-subscription` / `anthropic.claude-subscription` 要等到
    有 surface 才进表，否则不变量测试要为它们写例外（§2.1）。
 4. **`Hosts` 挂在所有 surface 上，不只 by_endpoint。**`fixed` 的 surface 也列 host，供
@@ -1195,20 +1287,26 @@ git diff --exit-code -- internal/webui/dist
    再加一道运行时护栏：探测到上游以另一个模型作答就丢弃该次证据（`model_substituted`）。
    证据在 §5.1，护栏在 `internal/provider/capability_detection.go`。
 
+第 7 处是首期收尾 review 发现并修复的持久化缺口：
+
+7. **Offering/Profile 已进入完整运行归因链。**目标注册从 profile 派生并校验 Offering；预算 attempt、
+   Ledger、usage aggregate、schema 7 Parquet、查询/聚合、失败日志和加密 failure capture 均保留二者。
+   旧 Ledger 事件和 schema 3–6 分区仍可读，字段为空表示历史版本未记录；schema 对账会按分区版本
+   收窄新列，避免把合法旧分区误报为损坏。
+
 尚未实施、且**不能**由本仓库单独完成的部分：
 
-- **阶段 0 / 2 的海外部分**：Z.AI 国际站的 Coding Plan。需要一把海外订阅 Key——path prefix 与
-  模型映射都不能从国内站推断，国内站本身就证明了"文档说的和 endpoint 做的不是一回事"。
+- **国际 Coding Plan 的实测补证**：surface/profile 已按 Z.AI 一手文档注册；仍需一把海外订阅 Key
+  验证实际模型映射、响应 usage 与错误码。缺少该 Key 不再隐藏官方已公开的国际产品，但所有未实测
+  结论保持 declared/unknown，不冒充 verified。
 - **Coding Plan 的额度类错误码**：plan expired / quota exhausted / model unavailable。触发它们
   需要真的把一份订阅用尽，未做。
-- **阶段 3**：Kimi Code 与 MiniMax Token Plan，各自需要一份真实订阅走完阶段 0。
+- **阶段 3**：Kimi Code 与 MiniMax Token Plan 的国内/海外 surface 设计及公开 endpoint 已确认；仍需
+  两个产品在两个地域的真实订阅凭据验证响应、模型枚举与额度错误，之后才能注册可达 profile。
 - **运行期的替换留痕**：把上游实际应答的模型写进 attempt / usage 归因。需要改 Ledger 事件结构，
   是一次独立的持久化格式改动，见 §5.1 实现取舍第 4 条。
 - **阶段 4**：OAuth 型订阅，还阻塞在 §7.2 的刷新语义与官方授权边界上。
 
-阶段 1 之外、方案里提到但本次未做的小项：
-
-- §4.3 的"服务商连接选项增加 Offering 与地域 badge"（模型部署页）——它不在阶段 1 清单里，且
-  当前每个 type 只有一个 Offering，badge 只会显示地域；随阶段 2 一起做更省一次改动。
-- §7.3 的 Offering 进 usage attribution 与 `parquetSchemaVersion` 推进——按方案属于阶段 2，
-  因为在只有一个 Offering 的情况下该维度恒为常量。
+本次完成边界是阶段 1、国内实测支撑的 Coding profile，以及国际一手官方契约足以确定的 surface、
+path、用途边界和保守能力种子。上述未实施项需要新的上游账号、自然出现的额度错误样本或独立 OAuth
+授权决策；它们不阻塞已公开契约的国际 surface，但仍阻塞将对应运行行为标记为 verified。

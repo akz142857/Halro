@@ -18,6 +18,117 @@ func TestProfileDefaultsWithinCeiling(t *testing.T) {
 	}
 }
 
+func TestConnectionGroupsAreExplicitAndInternallyConsistent(t *testing.T) {
+	type identity struct {
+		provider ProviderType
+		surface  AccessSurface
+		scheme   CredentialScheme
+	}
+	groups := map[ProviderConnectionGroupID]identity{}
+	for _, profile := range AllProviderProfiles() {
+		if profile.ConnectionGroupID == "" {
+			t.Fatalf("profile %s has no connection group", profile.ID)
+		}
+		got := identity{profile.Type, profile.AccessSurface, profile.CredentialScheme}
+		if previous, exists := groups[profile.ConnectionGroupID]; exists && previous != got {
+			t.Fatalf("connection group %q spans incompatible identities: %+v and %+v",
+				profile.ConnectionGroupID, previous, got)
+		}
+		groups[profile.ConnectionGroupID] = got
+	}
+	var openAIGroup, anthropicGroup ProviderConnectionGroupID
+	for _, profile := range AllProviderProfiles() {
+		switch profile.ID {
+		case ProfileMiniMaxCNSubscriptionOpenAIChat:
+			openAIGroup = profile.ConnectionGroupID
+		case ProfileMiniMaxCNSubscriptionAnthropicMessages:
+			anthropicGroup = profile.ConnectionGroupID
+		}
+	}
+	if openAIGroup == "" || anthropicGroup == "" || openAIGroup == anthropicGroup {
+		t.Fatalf("MiniMax subscription protocol alternatives share group %q", openAIGroup)
+	}
+}
+
+// Connection-group identifiers are persisted indirectly through the profile
+// chosen by a stored binding. Renaming one or moving an existing profile into a
+// different group changes which profiles a connection can combine with, so this
+// is an append-only compatibility map rather than a formatting preference.
+func TestProfileConnectionGroupsAreStable(t *testing.T) {
+	want := map[ProviderProfileID]ProviderConnectionGroupID{
+		ProfileOpenAIChatEmbeddings: "openai-api", ProfileOpenAIResponses: "openai-api",
+		ProfileAnthropicMessages: "anthropic-api", ProfileAzureChatEmbeddings: "azure-openai",
+		ProfileDeepSeekChat: "deepseek-api", ProfileOpenAICompatible: "openai-compatible",
+		ProfileBigModelCNChatEmbeddings: "bigmodel-cn-general", ProfileBigModelGlobalChat: "bigmodel-global-general",
+		ProfileBigModelCNCodingChat: "bigmodel-cn-coding", ProfileBigModelGlobalCodingChat: "bigmodel-global-coding",
+		ProfileGeminiText: "gemini-text", ProfileBedrockConverseText: "bedrock-runtime",
+		ProfileBedrockInvokeTitanEmbedV2: "bedrock-runtime", ProfileOpenAIMediaResources: "openai-api",
+		ProfileBedrockInvokeTitanImageV2: "bedrock-runtime", ProfileBedrockAgentRerankCohere35: "bedrock-agent-runtime",
+		ProfileBedrockAsyncNovaReel: "bedrock-runtime", ProfileBedrockMantleChat: "bedrock-mantle",
+		ProfileBedrockMantleOpenAIChat: "bedrock-mantle", ProfileBedrockMantleResponses: "bedrock-mantle",
+		ProfileBedrockMantleOpenAIResponses: "bedrock-mantle", ProfileBedrockMantleAnthropicMessages: "bedrock-mantle",
+		ProfileMiniMaxAnthropicMessages: "minimax-api", ProfileMiniMaxChat: "minimax-api",
+		ProfileMiniMaxResponses: "minimax-api", ProfileKimiChat: "kimi-api",
+		ProfileKimiAnthropicMessages: "kimi-api", ProfileKimiResponses: "kimi-api",
+		ProfileKimiCodeOpenAIChat: "kimi-code-openai", ProfileKimiCodeAnthropicMessages: "kimi-code-anthropic",
+		ProfileMiniMaxCNSubscriptionOpenAIChat:            "minimax-cn-subscription-openai",
+		ProfileMiniMaxCNSubscriptionAnthropicMessages:     "minimax-cn-subscription-anthropic",
+		ProfileMiniMaxGlobalSubscriptionOpenAIChat:        "minimax-global-subscription-openai",
+		ProfileMiniMaxGlobalSubscriptionAnthropicMessages: "minimax-global-subscription-anthropic",
+	}
+	profiles := AllProviderProfiles()
+	if len(profiles) != len(want) {
+		t.Fatalf("profile compatibility map has %d rows, table has %d; add new profiles without changing existing mappings", len(want), len(profiles))
+	}
+	for _, profile := range profiles {
+		if got, ok := want[profile.ID]; !ok || got != profile.ConnectionGroupID {
+			t.Errorf("%s connection group = %q, want %q (known=%v)", profile.ID, profile.ConnectionGroupID, got, ok)
+		}
+	}
+}
+
+// A surface is also a stored credential identity. Re-pointing it at another
+// offering or changing how its account region is derived would reinterpret
+// existing credentials and usage history, so those two fields are pinned here.
+func TestSurfaceOfferingAndRegionScopeAreStable(t *testing.T) {
+	type stableIdentity struct {
+		offering ProviderOfferingID
+		scope    ProviderRegionScope
+		region   ProviderRegionID
+		hosts    string
+	}
+	want := map[AccessSurface]stableIdentity{
+		SurfaceOpenAI: {OfferingOpenAIAPI, RegionScopeNone, RegionNone, ""}, SurfaceAnthropic: {OfferingAnthropicAPI, RegionScopeNone, RegionNone, ""},
+		SurfaceAzureOpenAI: {OfferingAzureOpenAI, RegionScopeNone, RegionNone, ""}, SurfaceDeepSeek: {OfferingDeepSeekAPI, RegionScopeNone, RegionNone, ""},
+		SurfaceOpenAICompatible: {OfferingOpenAICompatible, RegionScopeNone, RegionNone, ""}, SurfaceGemini: {OfferingGeminiAPI, RegionScopeNone, RegionNone, ""},
+		SurfaceBedrockRuntime: {OfferingBedrockRuntime, RegionScopeNone, RegionNone, ""}, SurfaceBedrockAgentRuntime: {OfferingBedrockRuntime, RegionScopeNone, RegionNone, ""},
+		SurfaceBedrockMantle:             {OfferingBedrockMantle, RegionScopeNone, RegionNone, ""},
+		SurfaceMiniMax:                   {OfferingMiniMaxAPI, RegionScopeByEndpoint, RegionNone, "api.minimax.io=global,api.minimaxi.com=cn"},
+		SurfaceKimi:                      {OfferingKimiOpenPlatform, RegionScopeByEndpoint, RegionNone, "api.moonshot.ai=global,api.moonshot.cn=cn"},
+		SurfaceBigModelCNGeneral:         {OfferingBigModelGeneral, RegionScopeFixed, RegionCN, "open.bigmodel.cn=cn"},
+		SurfaceBigModelGlobalGeneral:     {OfferingBigModelGeneral, RegionScopeFixed, RegionGlobal, "api.z.ai=global"},
+		SurfaceBigModelCNCoding:          {OfferingBigModelCodingPlan, RegionScopeFixed, RegionCN, "open.bigmodel.cn=cn"},
+		SurfaceBigModelGlobalCoding:      {OfferingBigModelCodingPlan, RegionScopeFixed, RegionGlobal, "api.z.ai=global"},
+		SurfaceKimiCode:                  {OfferingKimiCode, RegionScopeNone, RegionNone, ""},
+		SurfaceMiniMaxCNSubscription:     {OfferingMiniMaxSubscriptionAccess, RegionScopeFixed, RegionCN, "api.minimax.cn=cn"},
+		SurfaceMiniMaxGlobalSubscription: {OfferingMiniMaxSubscriptionAccess, RegionScopeFixed, RegionGlobal, "api.minimax.io=global"},
+	}
+	if len(surfaceTable) != len(want) {
+		t.Fatalf("surface compatibility map has %d rows, table has %d; add new surfaces without changing existing mappings", len(want), len(surfaceTable))
+	}
+	for _, row := range surfaceTable {
+		hosts := make([]string, 0, len(row.Hosts))
+		for _, host := range row.Hosts {
+			hosts = append(hosts, strings.ToLower(host.Host)+"="+string(host.Region))
+		}
+		slices.Sort(hosts)
+		actualHosts := strings.Join(hosts, ",")
+		if got, ok := want[row.Surface]; !ok || got.offering != row.Offering || got.scope != row.RegionScope || got.region != row.Region || got.hosts != actualHosts {
+			t.Errorf("%s identity = (%q, %q, %q, %q), want (%q, %q, %q, %q), known=%v", row.Surface, row.Offering, row.RegionScope, row.Region, actualHosts, got.offering, got.scope, got.region, got.hosts, ok)
+		}
+	}
+}
+
 // The type-level defaults may be narrower than the profile's — Anthropic's are,
 // because files and batches ride with the profile rather than the type — but
 // never wider. A type-level set that claimed more than the profile it starts on
@@ -293,7 +404,14 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		// The Coding Plan is the same host as the mainland general API and a
 		// different path, which the adapter appends. Two products behind one
 		// address is why the endpoint cannot tell them apart.
-		ProfileBigModelCNCodingChat: "https://open.bigmodel.cn",
+		ProfileBigModelCNCodingChat:                       "https://open.bigmodel.cn",
+		ProfileBigModelGlobalCodingChat:                   "https://api.z.ai",
+		ProfileKimiCodeOpenAIChat:                         "https://api.kimi.com",
+		ProfileKimiCodeAnthropicMessages:                  "https://api.kimi.com",
+		ProfileMiniMaxCNSubscriptionOpenAIChat:            "https://api.minimax.cn",
+		ProfileMiniMaxCNSubscriptionAnthropicMessages:     "https://api.minimax.cn",
+		ProfileMiniMaxGlobalSubscriptionOpenAIChat:        "https://api.minimax.io",
+		ProfileMiniMaxGlobalSubscriptionAnthropicMessages: "https://api.minimax.io",
 	}
 	for _, profile := range AllProviderProfiles() {
 		expected, listed := want[profile.ID]

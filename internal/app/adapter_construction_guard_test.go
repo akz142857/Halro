@@ -65,13 +65,14 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 	// One fake secret per credential scheme. The shapes matter only where a
 	// constructor parses them.
 	secrets := map[domain.CredentialScheme][]byte{
-		domain.CredentialBearerStatic:          []byte("test-key"),
-		domain.CredentialAnthropicAPIKey:       []byte("test-key"),
-		domain.CredentialAzureAPIKey:           []byte("test-key"),
-		domain.CredentialGoogleAPIKey:          []byte("test-key"),
-		domain.CredentialBedrockAPIKey:         []byte("test-key"),
-		domain.CredentialBigModelAPIKey:        []byte("test-key"),
-		domain.CredentialBigModelCodingPlanKey: []byte("test-key"),
+		domain.CredentialBearerStatic:           []byte("test-key"),
+		domain.CredentialAnthropicAPIKey:        []byte("test-key"),
+		domain.CredentialAzureAPIKey:            []byte("test-key"),
+		domain.CredentialGoogleAPIKey:           []byte("test-key"),
+		domain.CredentialBedrockAPIKey:          []byte("test-key"),
+		domain.CredentialBigModelAPIKey:         []byte("test-key"),
+		domain.CredentialBigModelCodingPlanKey:  []byte("test-key"),
+		domain.CredentialMiniMaxSubscriptionKey: []byte("test-key"),
 	}
 	for _, profile := range domain.AllProviderProfiles() {
 		// Withheld profiles are refused by every write path, so no connection can
@@ -151,13 +152,15 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 // with no guard rather than left looking covered.
 func TestEveryReachableProfileReachesTheNetworkWhenCalled(t *testing.T) {
 	secrets := map[domain.CredentialScheme][]byte{
-		domain.CredentialBearerStatic:          []byte("test-key"),
-		domain.CredentialAnthropicAPIKey:       []byte("test-key"),
-		domain.CredentialAzureAPIKey:           []byte("test-key"),
-		domain.CredentialGoogleAPIKey:          []byte("test-key"),
-		domain.CredentialBedrockAPIKey:         []byte("test-key"),
-		domain.CredentialBigModelAPIKey:        []byte("test-key"),
-		domain.CredentialBigModelCodingPlanKey: []byte("test-key"),
+		domain.CredentialBearerStatic:           []byte("test-key"),
+		domain.CredentialAnthropicAPIKey:        []byte("test-key"),
+		domain.CredentialAzureAPIKey:            []byte("test-key"),
+		domain.CredentialGoogleAPIKey:           []byte("test-key"),
+		domain.CredentialBedrockAPIKey:          []byte("test-key"),
+		domain.CredentialBigModelAPIKey:         []byte("test-key"),
+		domain.CredentialBigModelCodingPlanKey:  []byte("test-key"),
+		domain.CredentialKimiCodeKey:            []byte("test-key"),
+		domain.CredentialMiniMaxSubscriptionKey: []byte("test-key"),
 	}
 	for _, profile := range domain.AllProviderProfiles() {
 		if profile.Withheld {

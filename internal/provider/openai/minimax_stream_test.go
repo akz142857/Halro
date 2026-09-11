@@ -100,6 +100,22 @@ func TestMiniMaxStreamTruncatedBeforeFinishReasonStillFails(t *testing.T) {
 	}
 }
 
+func TestMiniMaxLateStructuredStreamFailureIsAmbiguous(t *testing.T) {
+	valid := minimaxRealStream[:strings.Index(minimaxRealStream, `data: {"id":"06e4","choices":[{"finish_reason"`)]
+	lateFailure := valid + "data: {\"base_resp\":{\"status_code\":1002,\"status_msg\":\"limited\"}}\n\n"
+	_, err := minimaxStreamAdapter(t, lateFailure).ChatStream(context.Background(), minimaxStreamCall(), func(semantic.Event) error { return nil })
+	classified, ok := err.(*provider.Error)
+	if !ok || !classified.Ambiguous || classified.FailureReason != provider.FailureReasonRateLimited {
+		t.Fatalf("late MiniMax stream failure = %#v, want ambiguous rate limit", err)
+	}
+
+	_, err = minimaxStreamAdapter(t, "data: {\"base_resp\":{\"status_code\":1002,\"status_msg\":\"limited\"}}\n\n").ChatStream(context.Background(), minimaxStreamCall(), func(semantic.Event) error { return nil })
+	classified, ok = err.(*provider.Error)
+	if !ok || classified.Ambiguous {
+		t.Fatalf("first-chunk MiniMax refusal = %#v, want determinate", err)
+	}
+}
+
 // The exemption is scoped to MiniMax. For every other OpenAI-family upstream a
 // stream without the sentinel is a partial response, and reading it as complete
 // would settle a truncated generation as a finished one.

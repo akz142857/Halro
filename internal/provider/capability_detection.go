@@ -204,7 +204,15 @@ func (b *LegacyAdapterBridge) CapabilityDetectionPlan(target ModelCapabilityDete
 // same treatment as every other capability no probe reaches.
 func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 	switch profile {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages,
+		domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages,
+		domain.ProfileKimiCodeAnthropicMessages,
+		domain.ProfileKimiCodeOpenAIChat:
+		// The Kimi Code OpenAI face is also withheld until its documented
+		// thinking ladder is verified with a real membership key. Do not spend a
+		// capability probe by guessing an OpenAI effort rung in the meantime.
 		return "", false
 	case domain.ProfileDeepSeekChat:
 		return shallowestEffort(compatibility.DeepSeekEffortLevels), true
@@ -216,7 +224,7 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 		// this function now walks the profile table instead of naming profiles.
 		return shallowestEffort(compatibility.KimiEffortLevels), true
 	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
-		domain.ProfileBigModelCNCodingChat:
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
 		return shallowestEffort(compatibility.BigModelEffortLevels), true
 	default:
 		return shallowestEffort(openaiapi.ReasoningEffortLevels), true
@@ -224,13 +232,13 @@ func reasoningProbeEffort(profile domain.ProviderProfileID) (string, bool) {
 }
 
 // isBigModelChatProfile names the profiles that speak the BigModel Chat dialect:
-// the two regional general APIs and the mainland Coding Plan. What separates
+// the two regional general APIs and the two regional Coding Plans. What separates
 // them is the path and the key, and neither changes how a probe is phrased or
 // which depth ladder the wire accepts.
 func isBigModelChatProfile(profile domain.ProviderProfileID) bool {
 	switch profile {
 	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
-		domain.ProfileBigModelCNCodingChat:
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
 		return true
 	default:
 		return false
@@ -565,13 +573,21 @@ func capabilityProbeErrorClass(err error) string {
 // Neither is a substitution — the target is what was asked for, described
 // differently.
 //
-// BigModel is on the list because it was measured: the general profiles echo the
-// identifier verbatim, including normalising its case, and the Coding Plan
+// The BigModel profiles are on the list because the general profiles echo the
+// identifier verbatim, including normalising its case, and the Coding Plans
 // answers eight of the ten identifiers its own /models route lists with one of
 // two models. That difference is a different model, and it is the whole reason
-// this check exists.
+// this check exists. Mainland substitution was measured; Z.AI explicitly
+// documents its old identifiers as aliases routed to current plan models, so
+// the international row needs the same fail-closed attribution guard.
 func profileEchoesTheModelItWasGiven(profile domain.ProviderProfileID) bool {
-	return isBigModelChatProfile(profile)
+	switch profile {
+	case domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat:
+		return true
+	default:
+		return false
+	}
 }
 
 // applySubstitutionGuard discards evidence a probe collected from a model other

@@ -1028,6 +1028,8 @@ needs it and the hostname/IP boundary has been reviewed.
 | BigModel (mainland China) | `https://open.bigmodel.cn` | BigModel API key | Experimental Chat/stream/embeddings; fixed mainland general API surface |
 | Z.AI (global) | `https://api.z.ai` | Z.AI API key | Experimental Chat/stream; separate global surface and credential |
 | BigModel GLM Coding Plan (mainland China) | `https://open.bigmodel.cn` | Coding Plan subscription key | Experimental Chat/stream/tools on `/api/coding/paas/v4`; separate product, key and balance |
+| MiniMax Subscription Access (mainland China) | `https://api.minimax.cn` | Subscription Key | OpenAI Chat on `/v1`; separate Token Plan/Credits entitlement |
+| MiniMax Subscription Access (global) | `https://api.minimax.io` | Subscription Key | OpenAI Chat on `/v1`; separate Token Plan/Credits entitlement |
 
 The GLM Coding Plan is a **separate product on the same host**, not a billing
 label on the general API. It has its own subscription key, its own
@@ -1059,6 +1061,24 @@ product therefore runs with an unknown cost, which the accounting model only
 accepts when the project has explicitly disabled cost governance — **budgets do
 not restrain that project while it does**. Decide that deliberately before
 creating the deployment.
+
+MiniMax Subscription Access is likewise a separate credential product, offered
+for both mainland and global accounts. The same Subscription Key may consume a
+Token Plan entitlement or purchased Credits, so Halro labels the product as an
+entitlement and does not claim which internal balance paid for a request. The
+OpenAI profiles are available; the Anthropic profiles remain withheld until
+portable/native Thinking behavior is verified with dedicated subscription keys.
+The two regions use separate fixed surfaces and cannot share a credential.
+
+Kimi Code support is implemented behind a withheld profile. Its public contract
+uses `https://api.kimi.com/coding/v1` for OpenAI-compatible calls and requires a
+real `User-Agent`, which Halro sends as `Halro/<version>`. Public material does
+not establish separate mainland/global account and quota boundaries, and no
+dedicated account has yet established that Halro's identity and portable
+Thinking behavior are admitted. Consequently the console continues to show only
+Kimi Open Platform; it does not expose a speculative Kimi Code region or key
+choice. DeepSeek remains API Platform only because no first-party independent
+Code subscription credential contract is published.
 
 For BigModel, the credential form asks which product and account region the key
 belongs to before anything else, and the endpoint follows that choice — mainland and

@@ -36,9 +36,33 @@ func TestIdentityForProfileMatchesIdentityForItsSurface(t *testing.T) {
 			fromProfile.Offering != fromSurface.Offering ||
 			fromProfile.Region != fromSurface.Region ||
 			fromProfile.RegionScope != fromSurface.RegionScope ||
-			fromProfile.Kind != fromSurface.Kind {
+			fromProfile.Kind != fromSurface.Kind ||
+			fromProfile.RequiresUsageWarning != fromSurface.RequiresUsageWarning ||
+			fromProfile.DocumentationURL != fromSurface.DocumentationURL ||
+			fromProfile.UsagePolicyRevision != fromSurface.UsagePolicyRevision {
 			t.Fatalf("profile %s derives %+v through the profile and %+v through the surface",
 				profile.ID, fromProfile, fromSurface)
+		}
+	}
+}
+
+func TestEveryUsageRestrictedSurfaceHasItsOwnOfficialDocument(t *testing.T) {
+	for _, row := range surfaceTable {
+		identity, ok := IdentityForSurface(row.Surface)
+		if !ok {
+			t.Fatalf("surface %q has no identity", row.Surface)
+		}
+		if identity.RequiresUsageWarning && strings.TrimSpace(identity.DocumentationURL) == "" {
+			t.Fatalf("usage-restricted surface %q has no regional official document", row.Surface)
+		}
+		if identity.RequiresUsageWarning && strings.TrimSpace(identity.UsagePolicyRevision) == "" {
+			t.Fatalf("usage-restricted surface %q has no stable policy revision", row.Surface)
+		}
+		if !identity.RequiresUsageWarning && identity.DocumentationURL != "" {
+			t.Fatalf("surface %q publishes a usage-warning document without requiring the warning", row.Surface)
+		}
+		if !identity.RequiresUsageWarning && identity.UsagePolicyRevision != "" {
+			t.Fatalf("surface %q publishes a usage-policy revision without requiring the warning", row.Surface)
 		}
 	}
 }
@@ -237,13 +261,13 @@ func TestEveryTypeHasAtLeastOneCredentialIdentity(t *testing.T) {
 	}
 }
 
-// The case the whole model exists for: BigModel sells three products on one
-// provider type — two regional general APIs and a mainland Coding Plan — so its
+// The case the whole model exists for: BigModel sells two products on one
+// provider type across two account regions — so its
 // type cannot have a credential's product guessed.
 func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 	identities := CredentialIdentities(ProviderBigModel)
-	if len(identities) != 3 {
-		t.Fatalf("BigModel has %d credential identities, want 3", len(identities))
+	if len(identities) != 4 {
+		t.Fatalf("BigModel has %d credential identities, want 4", len(identities))
 	}
 	type product struct {
 		Offering ProviderOfferingID
@@ -256,9 +280,10 @@ func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 		schemes[identity.AccessSurface] = identity.CredentialScheme
 	}
 	for key, want := range map[product]AccessSurface{
-		{OfferingBigModelGeneral, RegionCN}:     SurfaceBigModelCNGeneral,
-		{OfferingBigModelGeneral, RegionGlobal}: SurfaceBigModelGlobalGeneral,
-		{OfferingBigModelCodingPlan, RegionCN}:  SurfaceBigModelCNCoding,
+		{OfferingBigModelGeneral, RegionCN}:        SurfaceBigModelCNGeneral,
+		{OfferingBigModelGeneral, RegionGlobal}:    SurfaceBigModelGlobalGeneral,
+		{OfferingBigModelCodingPlan, RegionCN}:     SurfaceBigModelCNCoding,
+		{OfferingBigModelCodingPlan, RegionGlobal}: SurfaceBigModelGlobalCoding,
 	} {
 		if got[key] != want {
 			t.Fatalf("%s/%s resolves to %q, want %q", key.Offering, key.Region, got[key], want)
@@ -271,20 +296,28 @@ func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 		t.Fatalf("the Coding Plan and the general API share credential scheme %q",
 			schemes[SurfaceBigModelCNCoding])
 	}
+	if schemes[SurfaceBigModelGlobalCoding] == schemes[SurfaceBigModelGlobalGeneral] {
+		t.Fatalf("the international Coding Plan and general API share credential scheme %q",
+			schemes[SurfaceBigModelGlobalCoding])
+	}
 }
 
-// Every other registered type has exactly one identity today, which is what
-// lets the write path keep resolving an unstated one instead of demanding
-// ceremony where there is no choice to make.
-func TestOnlyBigModelHasAmbiguousCredentialIdentity(t *testing.T) {
+// Types with more than one reachable product require an explicit credential
+// identity; everys and MiniMax now both do. Kimi Code remains withheld, so Kimi
+// still exposes only its metered identity until the evidence gate is cleared.
+func TestCredentialIdentityCountsMatchReachableProducts(t *testing.T) {
 	for _, providerType := range AllProviderTypes() {
-		if providerType == ProviderBigModel {
-			continue
+		want := 1
+		switch providerType {
+		case ProviderBigModel:
+			want = 4
+		case ProviderMiniMax:
+			want = 3
 		}
-		if count := len(CredentialIdentities(providerType)); count != 1 {
+		if count := len(CredentialIdentities(providerType)); count != want {
 			t.Fatalf("provider type %q has %d credential identities; the write path's"+
-				" resolve-when-unambiguous rule and the console's selector both need updating",
-				providerType, count)
+				" resolve-when-unambiguous rule and the console's selector expect %d",
+				providerType, count, want)
 		}
 	}
 }
@@ -304,12 +337,39 @@ func TestRegionForEndpointReadsTheHost(t *testing.T) {
 		{"mainland MiniMax", SurfaceMiniMax, "https://api.minimaxi.com", RegionCN, true},
 		{"a fronted endpoint is unknown, not wrong", SurfaceKimi, "https://gateway.example.com", RegionNone, false},
 		{"a surface with no region axis is known and empty", SurfaceOpenAI, "https://api.openai.com", RegionNone, true},
+		{"Kimi Code has no proven region axis", SurfaceKimiCode, "https://api.kimi.com", RegionNone, true},
+		{"MiniMax subscription region is fixed", SurfaceMiniMaxCNSubscription, "https://proxy.internal", RegionCN, true},
 		{"an unregistered surface answers nothing", AccessSurface("nope"), "https://api.openai.com", RegionNone, false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			region, known := RegionForEndpoint(testCase.surface, testCase.endpoint)
 			if region != testCase.want || known != testCase.known {
 				t.Fatalf("got (%q, %v), want (%q, %v)", region, known, testCase.want, testCase.known)
+			}
+		})
+	}
+}
+
+func TestAccountRegionBelongsToSurface(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		surface AccessSurface
+		region  ProviderRegionID
+		want    bool
+	}{
+		{"fixed exact", SurfaceMiniMaxCNSubscription, RegionCN, true},
+		{"fixed empty", SurfaceMiniMaxCNSubscription, RegionNone, false},
+		{"fixed other", SurfaceMiniMaxCNSubscription, RegionGlobal, false},
+		{"by endpoint known", SurfaceKimi, RegionGlobal, true},
+		{"by endpoint unknown proxy", SurfaceKimi, RegionNone, true},
+		{"by endpoint invalid", SurfaceKimi, ProviderRegionID("mars"), false},
+		{"regionless empty", SurfaceOpenAI, RegionNone, true},
+		{"regionless value", SurfaceOpenAI, RegionCN, false},
+		{"unknown surface", AccessSurface("missing"), RegionNone, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := AccountRegionBelongsToSurface(testCase.surface, testCase.region); got != testCase.want {
+				t.Fatalf("AccountRegionBelongsToSurface(%q, %q)=%v, want %v", testCase.surface, testCase.region, got, testCase.want)
 			}
 		})
 	}
@@ -357,9 +417,9 @@ func TestSurfacesRecogniseTheirOwnPrefillsUnlessTheHostIsShared(t *testing.T) {
 }
 
 // The stored defect this model exists to expose: a credential sealed to the
-// mainland BigModel surface while bound to the global host. Nothing else in the
-// build can tell those apart, because both are legal endpoints and the surface
-// was never asked for.
+// mainland BigModel surface while bound to the global host. Both regional hosts
+// now serve a general API and a Coding Plan, so a host identifies the region but
+// cannot identify the surface; the product choice must always be explicit.
 func TestSurfaceForEndpointSeparatesBigModelRegions(t *testing.T) {
 	for _, testCase := range []struct {
 		endpoint string
@@ -369,13 +429,30 @@ func TestSurfaceForEndpointSeparatesBigModelRegions(t *testing.T) {
 		// The mainland host serves both the general API and the Coding Plan, so it
 		// identifies neither: the path is what separates them.
 		{"https://open.bigmodel.cn", "", false},
-		{"https://api.z.ai", SurfaceBigModelGlobalGeneral, true},
-		{"https://api.z.ai:443/api/paas/v4", SurfaceBigModelGlobalGeneral, true},
+		{"https://api.z.ai", "", false},
+		{"https://api.z.ai:443/api/paas/v4", "", false},
 		{"https://bigmodel.internal.example", "", false},
 	} {
 		surface, known := SurfaceForEndpoint(ProviderBigModel, testCase.endpoint)
 		if surface != testCase.want || known != testCase.known {
 			t.Fatalf("%s: got (%q, %v), want (%q, %v)", testCase.endpoint, surface, known, testCase.want, testCase.known)
+		}
+	}
+}
+
+func TestRegionForProviderEndpointRecognisesSharedBigModelHosts(t *testing.T) {
+	for _, testCase := range []struct {
+		endpoint string
+		want     ProviderRegionID
+		known    bool
+	}{
+		{"https://open.bigmodel.cn", RegionCN, true},
+		{"https://api.z.ai:443/api/paas/v4", RegionGlobal, true},
+		{"https://bigmodel.internal.example", RegionNone, false},
+	} {
+		region, known := RegionForProviderEndpoint(ProviderBigModel, testCase.endpoint)
+		if region != testCase.want || known != testCase.known {
+			t.Fatalf("%s: got (%q, %v), want (%q, %v)", testCase.endpoint, region, known, testCase.want, testCase.known)
 		}
 	}
 }

@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../api";
-import { stepUpRequired } from "../test/fixtures";
-import type { Credential } from "../types";
+import { providerProfilesFixture, stepUpRequired } from "../test/fixtures";
+import type { Credential, ProviderProfilesCatalog } from "../types";
 import { NotificationProvider } from "../notifications";
 import { ProvidersPage } from "./ProvidersPage";
 
@@ -440,8 +440,8 @@ describe("ProvidersPage profile and credential bindings", () => {
   // the provider type's default profile — so a key bound to api.z.ai was sealed
   // to the mainland surface and carried its embeddings claim.
   //
-  // BigModel now sells three products on one provider type: a metered general
-  // API in two regions and a mainland Coding Plan subscription. None of them can
+  // BigModel now sells two products in two account regions: a metered general
+  // API and a Coding Plan subscription. None of the four identities can
   // be guessed from the type.
   it("asks which BigModel product a credential is for and sends it", async () => {
     const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
@@ -459,8 +459,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     // reads as what an operator bought rather than as a surface identifier.
     expect(Array.from(product.options).map((option) => option.text)).toEqual([
       "BigModel / Z.AI 通用 API · 中国大陆",
-      "BigModel / Z.AI 通用 API · 国际",
+      "BigModel / Z.AI 通用 API · 海外",
       "GLM Coding Plan（订阅） · 中国大陆",
+      "GLM Coding Plan（订阅） · 海外",
     ]);
 
     fireEvent.change(product, { target: { value: "bigmodel-global-general-api" } });
@@ -468,6 +469,15 @@ describe("ProvidersPage profile and credential bindings", () => {
     // key left pointing at the global host is the pairing this form exists to
     // stop.
     expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://api.z.ai");
+
+    fireEvent.change(screen.getByLabelText(/^地址绑定/), { target: { value: "https://open.bigmodel.cn:8443" } });
+    expect(screen.getByText("该官方端点属于另一个账号地域。请选择对应的产品地域，或改回当前地域的正确端点。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "加密保存" })).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/^地址绑定/), { target: { value: "https://zai.internal.example" } });
+    expect(screen.getByText("正在使用自定义端点；产品账号地域保持不变，但无法从该端点验证地域。")).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^地址绑定/), { target: { value: "https://api.z.ai" } });
+    expect(screen.queryByText("正在使用自定义端点；产品账号地域保持不变，但无法从该端点验证地域。")).not.toBeInTheDocument();
 
     fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "zai-key" } });
     fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
@@ -483,7 +493,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
   // The subscription is a different key on the same host, so the scheme is what
   // separates it — and the form has to send that, not just the surface.
-  it("seals a Coding Plan credential to the subscription scheme", async () => {
+  it("offers both Coding Plan regions in a compact terms disclosure", async () => {
     const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
     renderPage();
 
@@ -491,19 +501,220 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
     fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Coding Plan" } });
     fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
-    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "bigmodel-cn-coding-api" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "bigmodel-global-coding-api" } });
     fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "coding-key" } });
+    expect((screen.getByLabelText(/^地址绑定/) as HTMLInputElement).value).toBe("https://api.z.ai");
+    const disclosure = screen.getByText("该订阅产品有专门使用条款").closest("details");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(within(disclosure!).getByText("创建前需要展开阅读并确认")).toBeVisible();
+    // Native validation points at a required checkbox inside a closed details.
+    // Open it before focusing so the operator can see what blocked the save.
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+    expect(create).not.toHaveBeenCalled();
+    expect(disclosure).toHaveAttribute("open");
+    const terms = screen.getByRole("link", { name: "查看官方使用须知" });
+    expect(terms).toHaveAttribute("href", "https://docs.z.ai/devpack/usage-policy");
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
     fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(create.mock.calls[0][0]).toMatchObject({
       type: "bigmodel",
-      access_surface: "bigmodel-cn-coding-api",
+      access_surface: "bigmodel-global-coding-api",
       scheme: "bigmodel.coding-plan-key",
-      // Same host as the general mainland API. The path is what separates the
-      // two products, and it belongs to the profile.
-      base_url: "https://open.bigmodel.cn",
+      // Same host as the international general API. The path is what separates
+      // the two products, and it belongs to the profile.
+      base_url: "https://api.z.ai",
+      acknowledged_policy_revision: "zai-coding-plan-global-2026-09-10",
     });
+  });
+
+  it("refreshes changed subscription terms before allowing a new acknowledgement", async () => {
+    const oldCatalog = providerProfilesFixture as unknown as ProviderProfilesCatalog;
+    const refreshedCatalog = structuredClone(oldCatalog);
+    const document = refreshedCatalog.provider_types
+      .find((entry) => entry.type === "bigmodel")?.offerings
+      .find((entry) => entry.id === "bigmodel.coding-plan")?.documentation
+      .find((entry) => entry.region === "global");
+    if (!document) throw new Error("fixture has no global Coding Plan policy");
+    document.policy_revision = "zai-coding-plan-global-2026-09-11";
+
+    let finishRefresh!: (catalog: ProviderProfilesCatalog) => void;
+    vi.mocked(api.providerProfiles)
+      .mockResolvedValueOnce(oldCatalog)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
+    vi.spyOn(api, "createCredential").mockRejectedValueOnce(
+      new ApiError(409, "usage policy changed", "usage_policy_revision_mismatch"),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "bigmodel-global-coding-api" } });
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "coding-key" } });
+    const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(checkbox).toBeDisabled());
+    expect(checkbox.closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "加密保存" })).toBeDisabled();
+
+    finishRefresh(refreshedCatalog);
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    expect(checkbox).not.toBeChecked();
+    await waitFor(() => expect(checkbox).toHaveFocus());
+  });
+
+  it("fails closed when changed subscription terms cannot be refreshed", async () => {
+    const catalog = providerProfilesFixture as unknown as ProviderProfilesCatalog;
+    vi.mocked(api.providerProfiles)
+      .mockResolvedValueOnce(catalog)
+      .mockRejectedValueOnce(new Error("catalog unavailable"));
+    vi.spyOn(api, "createCredential").mockRejectedValueOnce(
+      new ApiError(409, "usage policy changed", "usage_policy_revision_mismatch"),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "bigmodel-global-coding-api" } });
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "coding-key" } });
+    const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    expect(await screen.findByText("无法刷新当前使用条款。请关闭表单，并在服务商目录恢复后重试。")).toBeVisible();
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByRole("button", { name: "加密保存" })).toBeDisabled();
+  });
+
+  it("offers validated MiniMax subscription regions while keeping Kimi Code withheld", async () => {
+		renderPage();
+
+		fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+		fireEvent.click(await screen.findByRole("button", { name: "＋ 凭据" }));
+		fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "minimax" } });
+		let products = screen.getByLabelText(/^上游产品/) as HTMLSelectElement;
+		const miniMaxLabels = Array.from(products.options).map((option) => option.text);
+		expect(miniMaxLabels).toContain("MiniMax Subscription Access（订阅与 Credits） · 中国大陆");
+		expect(miniMaxLabels).toContain("MiniMax Subscription Access（订阅与 Credits） · 海外");
+
+		fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "kimi" } });
+		expect(screen.queryByLabelText(/^上游产品/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Kimi Code/)).not.toBeInTheDocument();
+	});
+
+  it("requires a fresh usage acknowledgement when a subscription credential is bound to a connection", async () => {
+    const codingCredential: Credential = {
+      id: "credential_coding", name: "Coding Plan", type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api", offering_id: "bigmodel.coding-plan", region_id: "cn",
+      scheme: "bigmodel.coding-plan-key", bound_base_url: "https://open.bigmodel.cn:443",
+      secret_configured: true, key_version: 1, revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [codingCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+    expect(create).not.toHaveBeenCalled();
+    const disclosure = screen.getByText("该订阅产品有专门使用条款").closest("details");
+    expect(disclosure).toHaveAttribute("open");
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      profile_id: "bigmodel.cn.coding.chat.v1",
+      credential_id: codingCredential.id,
+      acknowledged_policy_revision: "bigmodel-coding-plan-cn-2026-09-10",
+    });
+  });
+
+  it("refreshes changed subscription terms before retrying a provider connection", async () => {
+    const codingCredential: Credential = {
+      id: "credential_coding", name: "Coding Plan", type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api", offering_id: "bigmodel.coding-plan", region_id: "cn",
+      scheme: "bigmodel.coding-plan-key", bound_base_url: "https://open.bigmodel.cn:443",
+      secret_configured: true, key_version: 1, revision: 1,
+    };
+    const oldCatalog = providerProfilesFixture as unknown as ProviderProfilesCatalog;
+    const refreshedCatalog = structuredClone(oldCatalog);
+    const document = refreshedCatalog.provider_types
+      .find((entry) => entry.type === "bigmodel")?.offerings
+      .find((entry) => entry.id === "bigmodel.coding-plan")?.documentation
+      .find((entry) => entry.region === "cn");
+    if (!document) throw new Error("fixture has no mainland Coding Plan policy");
+    document.policy_revision = "bigmodel-coding-plan-cn-2026-09-11";
+    let finishRefresh!: (catalog: ProviderProfilesCatalog) => void;
+    vi.mocked(api.providerProfiles)
+      .mockResolvedValueOnce(oldCatalog)
+      .mockImplementationOnce(() => new Promise((resolve) => { finishRefresh = resolve; }));
+    vi.mocked(api.credentials).mockResolvedValue({ items: [codingCredential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider")
+      .mockRejectedValueOnce(new ApiError(409, "usage policy changed", "usage_policy_revision_mismatch"))
+      .mockResolvedValueOnce({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+    const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(checkbox).toBeDisabled());
+    expect(checkbox.closest("details")).toHaveAttribute("open");
+    finishRefresh(refreshedCatalog);
+    await waitFor(() => expect(checkbox).toBeEnabled());
+    await waitFor(() => expect(checkbox).toHaveFocus());
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(create.mock.calls[1][0]).toMatchObject({
+      profile_id: "bigmodel.cn.coding.chat.v1",
+      acknowledged_policy_revision: "bigmodel-coding-plan-cn-2026-09-11",
+    });
+  });
+
+  it("keeps provider connection creation disabled when changed terms cannot be refreshed", async () => {
+    const codingCredential: Credential = {
+      id: "credential_coding", name: "Coding Plan", type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api", offering_id: "bigmodel.coding-plan", region_id: "cn",
+      scheme: "bigmodel.coding-plan-key", bound_base_url: "https://open.bigmodel.cn:443",
+      secret_configured: true, key_version: 1, revision: 1,
+    };
+    vi.mocked(api.providerProfiles)
+      .mockResolvedValueOnce(providerProfilesFixture as unknown as ProviderProfilesCatalog)
+      .mockRejectedValueOnce(new Error("catalog unavailable"));
+    vi.mocked(api.credentials).mockResolvedValue({ items: [codingCredential], next_cursor: "" });
+    vi.spyOn(api, "createProvider").mockRejectedValueOnce(
+      new ApiError(409, "usage policy changed", "usage_policy_revision_mismatch"),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Coding Plan" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
+    fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.cn.coding.chat.v1" } });
+    const checkbox = screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    expect(await screen.findByText("无法刷新当前使用条款。请关闭表单，并在服务商目录恢复后重试。")).toBeVisible();
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建并热加载" })).toBeDisabled();
   });
 
   // One product, two account hosts, keys that are not interchangeable. The
@@ -564,6 +775,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Z.AI" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
     fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.global.chat.v1" } });
+    fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://zai.internal.example" } });
+    expect(screen.getByText("正在使用自定义端点；产品账号地域保持不变，但无法从该端点验证地域。")).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://api.z.ai" } });
     fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
@@ -592,12 +806,6 @@ describe("ProvidersPage profile and credential bindings", () => {
   });
 
   it.each([
-    {
-      name: "Agent Runtime",
-      surface: "bedrock-agent-runtime" as const,
-      scheme: "aws.sigv4.explicit-session" as const,
-      boundBaseURL: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com:443",
-    },
     {
       name: "Mantle",
       surface: "bedrock-mantle" as const,
@@ -655,6 +863,30 @@ describe("ProvidersPage profile and credential bindings", () => {
     // stored on a surface this build no longer offers at the one it does.
     expect(rotate.mock.calls[1][1]).not.toHaveProperty("access_surface");
     expect(rotate.mock.calls[1][1]).not.toHaveProperty("scheme");
+  });
+
+  it("keeps a credential for a withdrawn product readable and deletable but not rotatable", async () => {
+    const credential: Credential = {
+      id: "credential_agent_runtime",
+      name: "Agent Runtime",
+      type: "bedrock",
+      access_surface: "bedrock-agent-runtime",
+      scheme: "aws.sigv4.explicit-session",
+      offering_id: "aws.bedrock-runtime",
+      region_id: "",
+      bound_base_url: "https://bedrock-agent-runtime.eu-west-1.amazonaws.com:443",
+      secret_configured: true,
+      key_version: 1,
+      revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [credential], next_cursor: "" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    expect(await screen.findByText("该产品接口已撤回")).toBeVisible();
+    expect(screen.getByRole("button", { name: "轮换" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /查看详情/ })).toBeEnabled();
+    expect(screen.getByLabelText("更多操作")).toBeVisible();
   });
 
   // The Bedrock Mantle profiles are Beta and their capability set is fixed by

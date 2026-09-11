@@ -8,6 +8,7 @@ import (
 
 type AccessSurface string
 type ProviderProfileID string
+type ProviderConnectionGroupID string
 type CredentialScheme string
 type CapabilityEvidence string
 
@@ -40,14 +41,22 @@ const (
 	SurfaceKimi                  AccessSurface = "kimi-api"
 	SurfaceBigModelCNGeneral     AccessSurface = "bigmodel-cn-general-api"
 	SurfaceBigModelGlobalGeneral AccessSurface = "bigmodel-global-general-api"
-	// The Coding Plan is a separate surface even though it shares a host with the
-	// mainland general API, because nothing else about it is shared: a different
-	// key, a different path, a different balance, and a model set that is not the
-	// one the host's /models route reports. Measured 2026-09-09 against a real
-	// subscription: the coding path answers every published identifier with one
-	// of two models, while the general path on the same key answers with the one
-	// that was asked for. Two products, and a credential belongs to exactly one.
-	SurfaceBigModelCNCoding AccessSurface = "bigmodel-cn-coding-api"
+	// Coding Plans are separate surfaces even where they share a host with the
+	// regional general API: they use a different key, path and balance. Mainland
+	// behaviour was measured 2026-09-09; Z.AI publishes the same dedicated path
+	// for international subscriptions. The two account regions stay separate so
+	// credentials cannot cross their balance boundary.
+	SurfaceBigModelCNCoding     AccessSurface = "bigmodel-cn-coding-api"
+	SurfaceBigModelGlobalCoding AccessSurface = "bigmodel-global-coding-api"
+	// Kimi Code currently publishes one coding host and no independently
+	// verifiable regional account boundary. Keep the product on one RegionNone
+	// surface until first-party account evidence proves otherwise.
+	SurfaceKimiCode AccessSurface = "kimi-code"
+	// MiniMax publishes separate mainland and international Subscription Access
+	// endpoints. Fixed surfaces prevent one credential from being rotated across
+	// those account and quota boundaries.
+	SurfaceMiniMaxCNSubscription     AccessSurface = "minimax-cn-subscription-access"
+	SurfaceMiniMaxGlobalSubscription AccessSurface = "minimax-global-subscription-access"
 )
 
 const (
@@ -115,7 +124,19 @@ const (
 	// Chat only. The coding path answers an embeddings request, but the model it
 	// serves them with is not in its own list and nothing observable says which
 	// balance paid, so the capability is not declared on the strength of a 200.
-	ProfileBigModelCNCodingChat ProviderProfileID = "bigmodel.cn.coding.chat.v1"
+	ProfileBigModelCNCodingChat     ProviderProfileID = "bigmodel.cn.coding.chat.v1"
+	ProfileBigModelGlobalCodingChat ProviderProfileID = "bigmodel.global.coding.chat.v1"
+	// Kimi Code profiles remain withheld until a real subscription verifies that
+	// Halro's honest User-Agent is accepted and the portable wire is lossless.
+	ProfileKimiCodeOpenAIChat        ProviderProfileID = "kimi.code.openai.chat.v1"
+	ProfileKimiCodeAnthropicMessages ProviderProfileID = "kimi.code.anthropic.messages.v1"
+	// MiniMax Subscription Access has one OpenAI and one Anthropic connection
+	// choice per account region. The Anthropic profiles remain withheld until the
+	// Thinking response can be preserved by the portable contract.
+	ProfileMiniMaxCNSubscriptionOpenAIChat            ProviderProfileID = "minimax.cn.subscription.openai.chat.v1"
+	ProfileMiniMaxCNSubscriptionAnthropicMessages     ProviderProfileID = "minimax.cn.subscription.anthropic.messages.v1"
+	ProfileMiniMaxGlobalSubscriptionOpenAIChat        ProviderProfileID = "minimax.global.subscription.openai.chat.v1"
+	ProfileMiniMaxGlobalSubscriptionAnthropicMessages ProviderProfileID = "minimax.global.subscription.anthropic.messages.v1"
 )
 
 const (
@@ -130,7 +151,9 @@ const (
 	// by different products and a credential's scheme is half of what binds it to
 	// its surface. Sharing one would let a general key be saved against the
 	// Coding Plan surface and spend the wrong balance.
-	CredentialBigModelCodingPlanKey CredentialScheme = "bigmodel.coding-plan-key"
+	CredentialBigModelCodingPlanKey  CredentialScheme = "bigmodel.coding-plan-key"
+	CredentialKimiCodeKey            CredentialScheme = "kimi.code-key"
+	CredentialMiniMaxSubscriptionKey CredentialScheme = "minimax.subscription-key"
 )
 
 const (

@@ -30,9 +30,10 @@ import (
 type providerCapabilityView = domain.ProviderCapabilities
 
 type providerProfileView struct {
-	ID               domain.ProviderProfileID `json:"id"`
-	AccessSurface    domain.AccessSurface     `json:"access_surface"`
-	CredentialScheme domain.CredentialScheme  `json:"credential_scheme"`
+	ID                domain.ProviderProfileID         `json:"id"`
+	ConnectionGroupID domain.ProviderConnectionGroupID `json:"connection_group_id"`
+	AccessSurface     domain.AccessSurface             `json:"access_surface"`
+	CredentialScheme  domain.CredentialScheme          `json:"credential_scheme"`
 	// Which upstream product this profile belongs to, and which account region.
 	// Both are derived from the profile's Access Surface rather than stored on
 	// the profile — see internal/domain/provider_offering.go — and they are sent
@@ -91,6 +92,16 @@ type providerRegionHostView struct {
 	Host   string                  `json:"host"`
 }
 
+// providerOfferingDocumentView keeps a product document attached to the
+// region/surface whose terms it describes. A single URL on an Offering would
+// become ambiguous as soon as its mainland and global products point at
+// different legal and product documentation.
+type providerOfferingDocumentView struct {
+	Region         domain.ProviderRegionID `json:"region"`
+	URL            string                  `json:"url"`
+	PolicyRevision string                  `json:"policy_revision"`
+}
+
 // providerOfferingView is one upstream product of one provider type.
 //
 // Regions and hosts are computed from the profiles this build actually offers,
@@ -99,15 +110,17 @@ type providerRegionHostView struct {
 // produces no entry at all, so a form cannot present a product it would then
 // have nothing to save.
 type providerOfferingView struct {
-	ID   domain.ProviderOfferingID   `json:"id"`
-	Kind domain.ProviderOfferingKind `json:"kind"`
+	ID                   domain.ProviderOfferingID   `json:"id"`
+	Kind                 domain.ProviderOfferingKind `json:"kind"`
+	RequiresUsageWarning bool                        `json:"requires_usage_warning"`
 	// RegionScope says how this product expresses its region: "fixed" (the
 	// surface is the region, so choosing the region chooses the profile),
 	// "by_endpoint" (one surface, several account hosts, chosen in the endpoint
 	// field) or "none".
-	RegionScope domain.ProviderRegionScope `json:"region_scope"`
-	Regions     []domain.ProviderRegionID  `json:"regions"`
-	RegionHosts []providerRegionHostView   `json:"region_hosts"`
+	RegionScope   domain.ProviderRegionScope     `json:"region_scope"`
+	Regions       []domain.ProviderRegionID      `json:"regions"`
+	RegionHosts   []providerRegionHostView       `json:"region_hosts"`
+	Documentation []providerOfferingDocumentView `json:"documentation"`
 }
 
 type providerTypeView struct {
@@ -178,6 +191,7 @@ func buildProviderProfilesView(region string) providerProfilesView {
 		identity, _ := domain.IdentityForProfile(profile.ID)
 		profilesByType[profile.Type] = append(profilesByType[profile.Type], providerProfileView{
 			ID:                  profile.ID,
+			ConnectionGroupID:   profile.ConnectionGroupID,
 			AccessSurface:       profile.AccessSurface,
 			CredentialScheme:    profile.CredentialScheme,
 			OfferingID:          identity.Offering,
@@ -238,24 +252,26 @@ func offeringsForProfiles(providerType domain.ProviderType, profiles []providerP
 		if !seen {
 			views = append(views, providerOfferingView{
 				ID: identity.Offering, Kind: identity.Kind,
-				RegionScope: identity.RegionScope,
-				Regions:     make([]domain.ProviderRegionID, 0, 2),
-				RegionHosts: make([]providerRegionHostView, 0, 2),
+				RequiresUsageWarning: identity.RequiresUsageWarning,
+				RegionScope:          identity.RegionScope,
+				Regions:              make([]domain.ProviderRegionID, 0, 2),
+				RegionHosts:          make([]providerRegionHostView, 0, 2),
+				Documentation:        make([]providerOfferingDocumentView, 0, 2),
 			})
 			index = len(views) - 1
 			at[identity.Offering] = index
 		}
-		// Accumulated across the product's surfaces rather than taken from the
-		// first one seen: a fixed-region product is several surfaces, and one
-		// surface's host list is only ever half of its addresses.
-		for _, host := range identity.Hosts {
-			views[index].RegionHosts = appendHostOnce(views[index].RegionHosts,
-				providerRegionHostView{Region: host.Region, Host: host.Host})
+		if identity.DocumentationURL != "" {
+			views[index].Documentation = appendDocumentOnce(views[index].Documentation,
+				providerOfferingDocumentView{Region: identity.Region, URL: identity.DocumentationURL,
+					PolicyRevision: identity.UsagePolicyRevision})
 		}
 		// A by-endpoint product's regions are its hosts', not its surfaces': the
 		// surface pins none, and a blank entry is not a choice.
 		if identity.RegionScope == domain.RegionScopeByEndpoint {
 			for _, host := range identity.Hosts {
+				views[index].RegionHosts = appendHostOnce(views[index].RegionHosts,
+					providerRegionHostView{Region: host.Region, Host: host.Host})
 				views[index].Regions = appendRegionOnce(views[index].Regions, host.Region)
 			}
 			continue
@@ -265,6 +281,16 @@ func offeringsForProfiles(providerType domain.ProviderType, profiles []providerP
 		}
 	}
 	return views
+}
+
+func appendDocumentOnce(documents []providerOfferingDocumentView, document providerOfferingDocumentView) []providerOfferingDocumentView {
+	for _, existing := range documents {
+		if existing.Region == document.Region && existing.URL == document.URL &&
+			existing.PolicyRevision == document.PolicyRevision {
+			return documents
+		}
+	}
+	return append(documents, document)
 }
 
 func appendRegionOnce(regions []domain.ProviderRegionID, region domain.ProviderRegionID) []domain.ProviderRegionID {

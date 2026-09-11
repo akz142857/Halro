@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -20,6 +21,68 @@ func TestReservationWireFormatDistinguishesKnownZeroFromUnknown(t *testing.T) {
 	}
 	if !strings.Contains(string(free), `"reservation_micros_usd":0`) || !strings.Contains(string(unknown), `"reservation_micros_usd":null`) {
 		t.Fatalf("free=%s unknown=%s", free, unknown)
+	}
+}
+
+func TestProviderProductAttributionIsValidatedAtTheDurableBoundary(t *testing.T) {
+	base := Event{
+		EventID: "event_1", Kind: EventAttemptSettled, RequestID: "req_1",
+		AttemptID: "att_1", ProjectID: "project_1", PeriodID: "2026-09-10",
+		OccurredAt:         time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC),
+		CommittedMicrosUSD: MicrosUSD(1),
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("a legacy event without product attribution was refused: %v", err)
+	}
+	attributed := base
+	attributed.OfferingID = domain.OfferingOpenAIAPI
+	attributed.ProfileID = domain.ProfileOpenAIChatEmbeddings
+	if err := attributed.Validate(); err != nil {
+		t.Fatalf("matching product attribution was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"offering without profile": func(event *Event) { event.ProfileID = "" },
+		"profile without offering": func(event *Event) { event.OfferingID = "" },
+		"mismatched offering":      func(event *Event) { event.OfferingID = domain.OfferingBigModelGeneral },
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := attributed
+			mutate(&event)
+			if err := event.Validate(); err == nil {
+				t.Fatal("invalid product attribution was accepted")
+			}
+		})
+	}
+}
+
+func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
+	event := Event{
+		EventID: "event_region", Kind: EventAttemptSettled, RequestID: "req_region",
+		AttemptID: "att_region", ProjectID: "project_1", PeriodID: "2026-09-11",
+		OccurredAt:         time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC),
+		CommittedMicrosUSD: MicrosUSD(1),
+		OfferingID:         domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
+		AccountRegionID: domain.RegionGlobal,
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("a region published by the by-endpoint surface was refused: %v", err)
+	}
+	event.AccountRegionID = domain.ProviderRegionID("mars")
+	if err := event.Validate(); err == nil {
+		t.Fatal("an account region outside the profile surface was accepted")
+	}
+	event.ProfileID = domain.ProfileBigModelGlobalChat
+	event.OfferingID = domain.OfferingBigModelGeneral
+	event.AccountRegionID = domain.RegionNone
+	if err := event.Validate(); err != nil {
+		t.Fatalf("a pre-region fixed-profile event was not backward-compatible: %v", err)
+	}
+	if err := event.validateForAppend(); err == nil {
+		t.Fatal("a new fixed-profile event without account region attribution was accepted")
+	}
+	event.AccountRegionID = domain.RegionGlobal
+	if err := event.validateForAppend(); err != nil {
+		t.Fatalf("a new fixed-profile event with its exact account region was refused: %v", err)
 	}
 }
 

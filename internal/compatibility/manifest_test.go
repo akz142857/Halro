@@ -94,6 +94,9 @@ func TestEmbeddingsProfileMaturityDoesNotPromoteExperimentalProviders(t *testing
 		t.Fatalf("embeddings endpoint status = %q, want compatible", embeddings.Status)
 	}
 	for _, coverage := range embeddings.ProfileCoverage {
+		if coverage.ProfileID == domain.ProfileKimiCodeOpenAIChat {
+			t.Fatal("chat-only Kimi Code profile was published on the embeddings endpoint")
+		}
 		want := StatusCompatible
 		if coverage.ProfileID == domain.ProfileBedrockInvokeTitanEmbedV2 ||
 			coverage.ProfileID == domain.ProfileBigModelCNChatEmbeddings {

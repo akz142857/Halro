@@ -43,16 +43,18 @@ type ProviderRegionScope string
 // primitive bindings, exactly as before; a subscription that happened to be
 // mislabelled metered must not thereby change endpoint or authentication.
 //
-// Every Offering in this build is metered, so nothing distinguishes on Kind
-// yet. It is carried rather than deferred because it is what an Offering *is* —
-// the classification the whole model turns on — and its value is a fact for
-// every row today, unlike the subscription-only fields the table deliberately
-// does not have yet (see providerOfferingTable). Whatever reads it first should
-// be presentation.
+// Kind is carried because it is what an Offering *is* — the classification the
+// whole model turns on — and its value is a fact for every row. Whatever reads
+// it first should be presentation; routing must continue to use the exact
+// profile and surface.
 const (
 	OfferingKindMeteredAPI   ProviderOfferingKind = "metered_api"
 	OfferingKindSubscription ProviderOfferingKind = "subscription"
 	OfferingKindEnterprise   ProviderOfferingKind = "enterprise"
+	// Entitlement is an access key that may consume a recurring plan or prepaid
+	// credits behind the same upstream product boundary. It is descriptive only;
+	// routing continues to be selected by the exact profile.
+	OfferingKindEntitlement ProviderOfferingKind = "entitlement"
 )
 
 const (
@@ -70,7 +72,9 @@ const (
 	// The first subscription product this build offers. Kind is what it is sold
 	// as, and nothing routes on it: the path and the credential come from the
 	// profile, as they do for every other product.
-	OfferingBigModelCodingPlan ProviderOfferingID = "bigmodel.coding-plan"
+	OfferingBigModelCodingPlan        ProviderOfferingID = "bigmodel.coding-plan"
+	OfferingKimiCode                  ProviderOfferingID = "kimi.code"
+	OfferingMiniMaxSubscriptionAccess ProviderOfferingID = "minimax.subscription-access"
 )
 
 // An Offering identifier is permanent. It reaches the Admin audit trail — the
@@ -141,35 +145,27 @@ type RegionHost struct {
 }
 
 type providerOfferingRow struct {
-	ID   ProviderOfferingID
-	Type ProviderType
-	Kind ProviderOfferingKind
+	ID                   ProviderOfferingID
+	Type                 ProviderType
+	Kind                 ProviderOfferingKind
+	RequiresUsageWarning bool
 }
 
-// Deliberately three fields.
-//
-// The plan also describes a per-Offering usage warning and a documentation URL,
-// for the subscription products whose terms restrict which tools may use them.
-// Neither is here yet, because neither has a true value yet: every Offering in
-// this build is a metered API with no usage restriction to acknowledge, and the
-// documentation link a subscription needs is per (offering, region) — BigModel's
-// own product is documented at docs.bigmodel.cn for mainland and docs.z.ai for
-// global, so one URL per Offering would be wrong for one of them. They arrive
-// with the first Offering that needs them rather than as empty columns the
-// console has to render around.
 var providerOfferingTable = []providerOfferingRow{
-	{OfferingOpenAIAPI, ProviderOpenAI, OfferingKindMeteredAPI},
-	{OfferingAnthropicAPI, ProviderAnthropic, OfferingKindMeteredAPI},
-	{OfferingAzureOpenAI, ProviderAzureOpenAI, OfferingKindMeteredAPI},
-	{OfferingDeepSeekAPI, ProviderDeepSeek, OfferingKindMeteredAPI},
-	{OfferingGeminiAPI, ProviderGemini, OfferingKindMeteredAPI},
-	{OfferingBedrockRuntime, ProviderBedrock, OfferingKindMeteredAPI},
-	{OfferingBedrockMantle, ProviderBedrock, OfferingKindMeteredAPI},
-	{OfferingOpenAICompatible, ProviderOpenAICompatible, OfferingKindMeteredAPI},
-	{OfferingKimiOpenPlatform, ProviderKimi, OfferingKindMeteredAPI},
-	{OfferingMiniMaxAPI, ProviderMiniMax, OfferingKindMeteredAPI},
-	{OfferingBigModelGeneral, ProviderBigModel, OfferingKindMeteredAPI},
-	{OfferingBigModelCodingPlan, ProviderBigModel, OfferingKindSubscription},
+	{ID: OfferingOpenAIAPI, Type: ProviderOpenAI, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingAnthropicAPI, Type: ProviderAnthropic, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingAzureOpenAI, Type: ProviderAzureOpenAI, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingDeepSeekAPI, Type: ProviderDeepSeek, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingGeminiAPI, Type: ProviderGemini, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingBedrockRuntime, Type: ProviderBedrock, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingBedrockMantle, Type: ProviderBedrock, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingOpenAICompatible, Type: ProviderOpenAICompatible, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingKimiOpenPlatform, Type: ProviderKimi, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingMiniMaxAPI, Type: ProviderMiniMax, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingBigModelGeneral, Type: ProviderBigModel, Kind: OfferingKindMeteredAPI},
+	{ID: OfferingBigModelCodingPlan, Type: ProviderBigModel, Kind: OfferingKindSubscription, RequiresUsageWarning: true},
+	{ID: OfferingKimiCode, Type: ProviderKimi, Kind: OfferingKindSubscription, RequiresUsageWarning: true},
+	{ID: OfferingMiniMaxSubscriptionAccess, Type: ProviderMiniMax, Kind: OfferingKindEntitlement, RequiresUsageWarning: true},
 }
 
 type surfaceRow struct {
@@ -186,6 +182,16 @@ type surfaceRow struct {
 	// only one surface for its type, so recognising a host would answer a
 	// question nobody asks.
 	Hosts []RegionHost
+	// DocumentationURL is scoped to the exact product surface. Subscription
+	// terms are regional documents (docs.bigmodel.cn versus docs.z.ai), so
+	// putting one URL on the Offering would make a multi-region product lie for
+	// one of its regions.
+	DocumentationURL string
+	// UsagePolicyRevision is Halro's stable identifier for the regional policy
+	// metadata an operator acknowledged. The upstream document may change at
+	// the same URL; storing only a boolean and URL would make an old audit event
+	// indistinguishable from acceptance of a later revision.
+	UsagePolicyRevision string
 }
 
 // surfaceTable is the authority for Offering and Region. Every Access Surface a
@@ -237,7 +243,42 @@ var surfaceTable = []surfaceRow{
 		// is the discriminator and the address says nothing.
 		Surface: SurfaceBigModelCNCoding, Type: ProviderBigModel, Offering: OfferingBigModelCodingPlan,
 		Region: RegionCN, RegionScope: RegionScopeFixed,
-		Hosts: []RegionHost{{Region: RegionCN, Host: "open.bigmodel.cn"}},
+		Hosts:               []RegionHost{{Region: RegionCN, Host: "open.bigmodel.cn"}},
+		DocumentationURL:    "https://docs.bigmodel.cn/cn/coding-plan/usage-notes",
+		UsagePolicyRevision: "bigmodel-coding-plan-cn-2026-09-10",
+	},
+	{
+		// Z.AI documents a distinct international Coding endpoint and limits it
+		// to its supported tools and product environments. It is registered from
+		// that first-party contract even though no international subscription key
+		// was available for a billable smoke test during implementation.
+		Surface: SurfaceBigModelGlobalCoding, Type: ProviderBigModel, Offering: OfferingBigModelCodingPlan,
+		Region: RegionGlobal, RegionScope: RegionScopeFixed,
+		Hosts:               []RegionHost{{Region: RegionGlobal, Host: "api.z.ai"}},
+		DocumentationURL:    "https://docs.z.ai/devpack/usage-policy",
+		UsagePolicyRevision: "zai-coding-plan-global-2026-09-10",
+	},
+	{
+		// Kimi Code currently publishes one membership endpoint for third-party
+		// tools and no independently verifiable regional account boundary.
+		Surface: SurfaceKimiCode, Type: ProviderKimi, Offering: OfferingKimiCode,
+		RegionScope:         RegionScopeNone,
+		DocumentationURL:    "https://www.kimi.com/code/docs/en/",
+		UsagePolicyRevision: "kimi-code-2026-09-10",
+	},
+	{
+		Surface: SurfaceMiniMaxCNSubscription, Type: ProviderMiniMax, Offering: OfferingMiniMaxSubscriptionAccess,
+		Region: RegionCN, RegionScope: RegionScopeFixed,
+		Hosts:               []RegionHost{{Region: RegionCN, Host: "api.minimax.cn"}},
+		DocumentationURL:    "https://platform.minimaxi.com/docs/token-plan/intro",
+		UsagePolicyRevision: "minimax-subscription-cn-2026-09-10",
+	},
+	{
+		Surface: SurfaceMiniMaxGlobalSubscription, Type: ProviderMiniMax, Offering: OfferingMiniMaxSubscriptionAccess,
+		Region: RegionGlobal, RegionScope: RegionScopeFixed,
+		Hosts:               []RegionHost{{Region: RegionGlobal, Host: "api.minimax.io"}},
+		DocumentationURL:    "https://platform.minimax.io/docs/token-plan/intro",
+		UsagePolicyRevision: "minimax-subscription-global-2026-09-10",
 	},
 }
 
@@ -259,13 +300,16 @@ var surfaceIndex = func() map[AccessSurface]surfaceRow {
 
 // SurfaceIdentity is what a surface says about the product behind it.
 type SurfaceIdentity struct {
-	Surface     AccessSurface
-	Type        ProviderType
-	Offering    ProviderOfferingID
-	Kind        ProviderOfferingKind
-	Region      ProviderRegionID
-	RegionScope ProviderRegionScope
-	Hosts       []RegionHost
+	Surface              AccessSurface
+	Type                 ProviderType
+	Offering             ProviderOfferingID
+	Kind                 ProviderOfferingKind
+	Region               ProviderRegionID
+	RegionScope          ProviderRegionScope
+	Hosts                []RegionHost
+	RequiresUsageWarning bool
+	DocumentationURL     string
+	UsagePolicyRevision  string
 }
 
 // IdentityForSurface answers what product and region a surface belongs to.
@@ -279,7 +323,8 @@ func IdentityForSurface(surface AccessSurface) (SurfaceIdentity, bool) {
 		Surface: row.Surface, Type: row.Type,
 		Offering: row.Offering, Kind: offering.Kind,
 		Region: row.Region, RegionScope: row.RegionScope,
-		Hosts: row.Hosts,
+		Hosts: row.Hosts, RequiresUsageWarning: offering.RequiresUsageWarning,
+		DocumentationURL: row.DocumentationURL, UsagePolicyRevision: row.UsagePolicyRevision,
 	}, true
 }
 
@@ -290,6 +335,37 @@ func IdentityForProfile(profileID ProviderProfileID) (SurfaceIdentity, bool) {
 		return SurfaceIdentity{}, false
 	}
 	return IdentityForSurface(row.Surface)
+}
+
+// AccountRegionBelongsToSurface validates a persisted account-region snapshot
+// against the product surface that produced it. Empty is a valid value for a
+// by-endpoint surface because an enterprise proxy may hide the upstream region;
+// fixed surfaces always have one exact region, and regionless products have
+// none. Durable readers that need to accept pre-region records may explicitly
+// allow an empty fixed value before calling this helper.
+func AccountRegionBelongsToSurface(surface AccessSurface, region ProviderRegionID) bool {
+	identity, ok := IdentityForSurface(surface)
+	if !ok {
+		return false
+	}
+	switch identity.RegionScope {
+	case RegionScopeFixed:
+		return region == identity.Region
+	case RegionScopeByEndpoint:
+		if region == RegionNone {
+			return true
+		}
+		for _, host := range identity.Hosts {
+			if host.Region == region {
+				return true
+			}
+		}
+		return false
+	case RegionScopeNone:
+		return region == RegionNone
+	default:
+		return false
+	}
 }
 
 // RegionForEndpoint reads a credential's or connection's endpoint back as a
@@ -432,5 +508,47 @@ func SurfaceForEndpoint(providerType ProviderType, endpoint string) (AccessSurfa
 			found = row.Surface
 		}
 	}
+	// Regionless products have no RegionHost rows by definition, but their
+	// immutable profile prefill is still a first-party product endpoint. Include
+	// it in surface recognition so a Kimi Code key cannot be sealed to the Kimi
+	// Open Platform host (or vice versa) merely because neither has a fixed
+	// regional identity.
+	for _, row := range profileTable {
+		if row.Type != providerType || endpointHost(row.BaseURLTemplate) != host {
+			continue
+		}
+		if found != "" && found != row.Surface {
+			return "", false
+		}
+		found = row.Surface
+	}
 	return found, found != ""
+}
+
+// RegionForProviderEndpoint answers the account region published for a host,
+// even when that host serves more than one product surface. BigModel is the
+// motivating case: each regional host serves both General API and Coding Plan,
+// so the host cannot identify a surface, but every matching surface agrees on
+// the region. Conflicting regions remain unknown rather than being guessed.
+func RegionForProviderEndpoint(providerType ProviderType, endpoint string) (ProviderRegionID, bool) {
+	host := endpointHost(endpoint)
+	if host == "" {
+		return RegionNone, false
+	}
+	var found ProviderRegionID
+	for _, row := range surfaceTable {
+		if row.Type != providerType {
+			continue
+		}
+		for _, candidate := range row.Hosts {
+			if candidate.Host != host {
+				continue
+			}
+			if found != RegionNone && found != candidate.Region {
+				return RegionNone, false
+			}
+			found = candidate.Region
+		}
+	}
+	return found, found != RegionNone
 }

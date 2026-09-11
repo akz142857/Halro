@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // The identifiers an operator quotes to an upstream's support desk. They lived
@@ -28,10 +30,13 @@ func failureIdentifierEvents(now time.Time) []ledger.Event {
 			RequestID: "req_1", AttemptID: "att_1", AttemptNumber: 1,
 			ProjectID: "project_1", PeriodID: "2026-08-22", ProviderID: "provider_1",
 			DeploymentID: "dep_1", ProviderModel: "gpt-4o", RequestedModel: "chat",
-			OccurredAt: now, Outcome: "provider_error", ErrorClass: "bad_request",
+			OfferingID: domain.OfferingMiniMaxSubscriptionAccess, ProfileID: domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
+			AccountRegionID: domain.RegionGlobal,
+			OccurredAt:      now, Outcome: "provider_error", ErrorClass: "bad_request",
 			HTTPStatus: 400, CommittedMicrosUSD: ledger.MicrosUSD(1),
-			ProviderCode:      "invalid_image_url:messages[0].content[1].image_url",
-			ProviderRequestID: "upstream-req-42", FailurePhase: "provider",
+			ProviderCode:          "invalid_image_url:messages[0].content[1].image_url",
+			ProviderFailureReason: provider.FailureReasonRateLimited,
+			ProviderRequestID:     "upstream-req-42", FailurePhase: "provider", Retryable: true, Ambiguous: true,
 		},
 		{
 			EventID: "req_final", Kind: ledger.EventRequestFinalized,
@@ -64,7 +69,11 @@ func TestProviderIdentifiersSurviveTheDerivation(t *testing.T) {
 	}
 	attempt := detail.Attempts[0]
 	if attempt.ProviderCode != "invalid_image_url:messages[0].content[1].image_url" ||
-		attempt.ProviderRequestID != "upstream-req-42" || attempt.FailurePhase != "provider" {
+		attempt.ProviderRequestID != "upstream-req-42" || attempt.FailurePhase != "provider" ||
+		attempt.OfferingID != domain.OfferingMiniMaxSubscriptionAccess ||
+		attempt.ProfileID != domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat ||
+		attempt.AccountRegionID != domain.RegionGlobal ||
+		attempt.ProviderFailureReason != provider.FailureReasonRateLimited || !attempt.Retryable || !attempt.Ambiguous {
 		t.Fatalf("the attempt lost the upstream's identifiers: %#v", attempt)
 	}
 
@@ -78,8 +87,24 @@ func TestProviderIdentifiersSurviveTheDerivation(t *testing.T) {
 	last := page.Failures[0].LastFailure
 	if last.ProviderCode != attempt.ProviderCode ||
 		last.ProviderRequestID != attempt.ProviderRequestID ||
-		last.FailurePhase != attempt.FailurePhase {
+		last.FailurePhase != attempt.FailurePhase || last.OfferingID != attempt.OfferingID ||
+		last.ProfileID != attempt.ProfileID || last.AccountRegionID != attempt.AccountRegionID ||
+		last.ProviderFailureReason != attempt.ProviderFailureReason || !last.Retryable || !last.Ambiguous {
 		t.Fatalf("the failed-request row lost them: %#v", last)
+	}
+	filteredAttempts, err := aggregate.QueryAttempts(AttemptQuery{
+		Limit: 10, AccountRegionID: domain.RegionGlobal,
+		ProviderFailureReason: provider.FailureReasonRateLimited,
+	})
+	if err != nil || len(filteredAttempts.Attempts) != 1 {
+		t.Fatalf("attempt filters lost canonical subscription attribution: page=%#v err=%v", filteredAttempts, err)
+	}
+	filteredFailures, err := aggregate.QueryFailedRequests(FailureQuery{
+		Limit: 10, AccountRegionID: domain.RegionGlobal,
+		ProviderFailureReason: provider.FailureReasonRateLimited,
+	})
+	if err != nil || len(filteredFailures.Failures) != 1 {
+		t.Fatalf("failure filters lost canonical subscription attribution: page=%#v err=%v", filteredFailures, err)
 	}
 }
 
@@ -125,12 +150,14 @@ func TestParquetKeepsAndNarrowsTheProviderIdentifiers(t *testing.T) {
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 4, AttemptNumber: 1, ProjectID: "project_1", KeyID: "key_1",
 		RouteID: "route_1", ProviderID: "provider_1", RequestedModel: "chat",
-		ProviderModel: "model_1", ProviderInputTokens: 3, ProviderOutputTokens: 2,
+		OfferingID: domain.OfferingMiniMaxSubscriptionAccess, ProfileID: domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
+		AccountRegionID: domain.RegionGlobal,
+		ProviderModel:   "model_1", ProviderInputTokens: 3, ProviderOutputTokens: 2,
 		CostMicrosUSD: ledger.MicrosUSD(7), StartedAt: day.Add(-time.Second),
 		CompletedAt: day, Status: "provider_error", ErrorClass: "bad_request",
 		HTTPStatus: 400, LatencyMillis: 1000,
-		ProviderCode: "invalid_image_url", ProviderRequestID: "upstream-req-42",
-		FailurePhase: "provider",
+		ProviderCode: "invalid_image_url", ProviderFailureReason: provider.FailureReasonRateLimited,
+		ProviderRequestID: "upstream-req-42", FailurePhase: "provider", Retryable: true, Ambiguous: true,
 	}}}
 	if _, err := exporter.Export(snapshot); err != nil {
 		t.Fatal(err)
@@ -141,14 +168,20 @@ func TestParquetKeepsAndNarrowsTheProviderIdentifiers(t *testing.T) {
 
 	row := toParquetAttempt(snapshot.Attempts[0])
 	if row.SchemaVersion != parquetSchemaVersion || row.ProviderCode != "invalid_image_url" ||
-		row.ProviderRequestID != "upstream-req-42" || row.FailurePhase != "provider" {
+		row.ProviderRequestID != "upstream-req-42" || row.FailurePhase != "provider" ||
+		row.OfferingID != string(domain.OfferingMiniMaxSubscriptionAccess) ||
+		row.ProfileID != string(domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat) ||
+		row.AccountRegionID != string(domain.RegionGlobal) ||
+		row.ProviderFailureReason != string(provider.FailureReasonRateLimited) || !row.Retryable || !row.Ambiguous {
 		t.Fatalf("row = %#v", row)
 	}
 	// What a row written by the version before this one decodes as. Narrowed to
 	// empty rather than kept, so the comparison the verifier makes against a
 	// schema-4 partition still holds.
 	narrowed := narrowToSchema(row, 4)
-	if narrowed.ProviderCode != "" || narrowed.ProviderRequestID != "" || narrowed.FailurePhase != "" {
+	if narrowed.ProviderCode != "" || narrowed.ProviderRequestID != "" || narrowed.FailurePhase != "" ||
+		narrowed.OfferingID != "" || narrowed.ProfileID != "" || narrowed.AccountRegionID != "" ||
+		narrowed.ProviderFailureReason != "" || narrowed.Retryable || narrowed.Ambiguous {
 		t.Fatalf("a schema-4 row was compared against schema-5 columns: %#v", narrowed)
 	}
 	// And the columns the version before that never had are still narrowed too:

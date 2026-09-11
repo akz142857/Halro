@@ -228,6 +228,23 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(len(request.Stop) > 0, "stop")
 	}, domain.ProfileMiniMaxAnthropicMessages)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Subscription Access is a different account and credential product from
+		// MiniMax's metered API. Until its Anthropic face has its own fixture, do
+		// not inherit any optional-field claim measured against a metered key.
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasImageDetail(request), "messages[].content[].detail")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.OutputFormat != nil, "response_format")
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		add(request.EndUserRef != "", "user")
+		add(len(request.Stop) > 0, "stop")
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+	}, domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// MiniMax's two OpenAI-shaped faces. They share this rule because they
 		// share the accepted set; where they differ is reasoning, which is
 		// reachable on Responses under its OpenAI name and reachable on Chat only
@@ -260,6 +277,23 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 			"max_tokens")
 
 	}, domain.ProfileMiniMaxChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Subscription Access reuses the renderer, not the evidence collected
+		// from a metered MiniMax account. Until a subscription-key fixture proves
+		// the value-dependent extensions, fail closed on the whole JSON mode and
+		// retain only the conservative OpenAI-chat field restrictions.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(len(request.Stop) > 0, "stop")
+		add(request.OutputFormat != nil, "response_format")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		add(request.VisibleOutputTokenLimit != nil &&
+			(minimaxThinkingIsOn(request.ReasoningEffort) || request.CompletionTokenLimit != nil),
+			"max_tokens")
+	}, domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
+		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Kimi's Anthropic face. It starts from the direct Anthropic profile's
 		// losses because it is the same wire form, then adds what Kimi alone
@@ -309,6 +343,21 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// switched off by the rule above, so the answer-only bound this endpoint
 		// requires and the bound Kimi applies are the same tokens.
 	}, domain.ProfileKimiAnthropicMessages)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Kimi Code's Anthropic face is not the Open Platform account measured by
+		// the rule above. Keep its portable path conservative and independent
+		// until a subscription-key fixture reaches the admission gate.
+		add(hasNamedMessage(request), "messages[].name")
+		add(hasImageDetail(request), "messages[].content[].detail")
+		add(hasDeveloperMessage(request), "messages[].role=developer")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		add(request.Seed != nil, "seed")
+		add(request.EndUserRef != "", "user")
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+		add(request.ReasoningEffort != "", "reasoning_effort")
+		add(request.OutputFormat != nil, "response_format")
+	}, domain.ProfileKimiCodeAnthropicMessages)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.
 		// It is written out rather than layered on top of the rule above because
@@ -405,6 +454,13 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(KimiEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceNamesAFunction(request.ToolChoice), "tool_choice")
 	}, domain.ProfileKimiChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
+		// Kimi Code's OpenAI-compatible face is a separate contract from the
+		// Open Platform Kimi dialect. Until real-key verification establishes
+		// narrower limits, preserve the OpenAI request shape and declare only the
+		// canonical tool-result loss shared by compatible Chat profiles.
+		add(hasFailedToolResult(request), "messages[].content[].is_error")
+	}, domain.ProfileKimiCodeOpenAIChat)
+	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.
 		// It is written out rather than layered on top of the rule above because
 		// register keys by profile, so a second registration for the same profile
@@ -458,7 +514,8 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(request.EndUserRef != "" && (utf8.RuneCountInString(request.EndUserRef) < 6 || utf8.RuneCountInString(request.EndUserRef) > 128), "user")
 		add(len(request.Stop) > 4, "stop")
 		add(request.ToolChoice != nil && request.ToolChoice.Mode != semantic.ToolChoiceAuto, "tool_choice")
-	}, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat, domain.ProfileBigModelCNCodingChat)
+	}, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Bedrock's inability to fetch an image used to be declared here, once per
 		// northbound endpoint, in each endpoint's own name for the same member.
@@ -544,7 +601,7 @@ func UnsupportedGenerateFields(profileID domain.ProviderProfileID, request seman
 func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, providerModel string, request semantic.GenerateRequest) []string {
 	unsupported := UnsupportedGenerateFields(profileID, request)
 	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat &&
-		profileID != domain.ProfileBigModelCNCodingChat {
+		profileID != domain.ProfileBigModelCNCodingChat && profileID != domain.ProfileBigModelGlobalCodingChat {
 		return unsupported
 	}
 	seen := make(map[string]struct{}, len(unsupported))

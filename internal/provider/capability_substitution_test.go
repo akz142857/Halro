@@ -68,7 +68,7 @@ func TestTheSubstitutionGuardIsScopedToUpstreamsThatEchoTheIdentifier(t *testing
 	}
 	for _, profile := range []domain.ProviderProfileID{
 		domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
-		domain.ProfileBigModelCNCodingChat,
+		domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat,
 	} {
 		if !profileEchoesTheModelItWasGiven(profile) {
 			t.Fatalf("%s was measured echoing the identifier it was given and is not covered", profile)

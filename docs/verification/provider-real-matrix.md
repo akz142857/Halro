@@ -162,9 +162,12 @@ carry Reasoning rather than offering it as something to turn on.
   which balance paid. A 200 is not the evidence a capability needs, so the
   profile declares none.
 - **Vision and structured outputs.** Not probed.
-- **The international station.** No Z.AI Coding Plan key was available, so its
-  path prefix and model mapping are unknown and no global coding profile is
-  registered.
+- **The international station's runtime behaviour.** No Z.AI Coding Plan key
+  was available. The global coding profile is registered from Z.AI's first-party
+  host/path, model and usage-policy contract; an unauthenticated `/models`
+  request returned 401 and confirmed that route exists. Its authenticated
+  response shape, model mapping and provider errors remain unmeasured and are
+  not reported here as verified evidence.
 - **Quota exhausted, plan expired, model not entitled.** Not reachable without
   exhausting a real subscription. The error taxonomy therefore covers `1211`
   (HTTP 400, model does not exist) and nothing else specific to the plan.
@@ -203,6 +206,31 @@ Run the command once per region with separately issued credentials. Do not copy
 a successful result from one host into the other cell, and do not enable the
 Anthropic-shaped profiles from a Chat-only result; those profiles retain the
 independent real-body and authentication gates in the adaptation plan.
+
+## Kimi Code and MiniMax Subscription Access: implementation evidence (2026-09-10)
+
+No dedicated subscription credential was supplied for this change, so no
+billable real-provider call was run and no existing pay-as-you-go result is
+credited to either subscription product.
+
+- Kimi Code has isolated `kimi.code-key` and `kimi-code` identities, exact
+  `/coding/v1/chat/completions` and `/coding/v1/messages` paths, and a forced
+  `User-Agent: Halro/<version>`. Both profiles remain withheld pending the
+  account-bound identity and Thinking checks in the adaptation plan. The
+  surface is deliberately regionless because the public host does not prove a
+  mainland/global quota boundary.
+- MiniMax Subscription Access has separate mainland and global fixed surfaces
+  and a distinct `minimax.subscription-key`. Fake-transport contract tests bind
+  OpenAI to Bearer `/v1/chat/completions` and Anthropic to `x-api-key`
+  `/anthropic/v1/messages`; only the OpenAI profiles are offered. The Anthropic
+  profiles remain withheld pending subscription-key Thinking fixtures.
+- DeepSeek has no registered Code subscription offering, surface, scheme or
+  profile. Its existing API Platform remains unchanged.
+
+Real admission requires dedicated, budget-limited subscription accounts and
+must capture redacted model-list, unary, streaming, tool, Thinking, and
+structured error fixtures per product and region. These smokes are intentionally
+not part of the ordinary suite.
 
 ## MiniMax: measured on an international account (2026-08-31)
 

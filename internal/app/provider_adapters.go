@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
@@ -58,6 +59,29 @@ type adapterBuilder struct {
 	validateEndpoint func(*url.URL) error
 	authorize        func(adapterBuildContext) (provider.Authorizer, error)
 	build            func(adapterBuildContext, provider.Authorizer) (provider.Adapter, error)
+}
+
+type userAgentAuthorizer struct {
+	provider.Authorizer
+	value string
+}
+
+func (a userAgentAuthorizer) Authorize(request *http.Request, body []byte) error {
+	if err := a.Authorizer.Authorize(request, body); err != nil {
+		return err
+	}
+	request.Header.Set("User-Agent", a.value)
+	return nil
+}
+
+func withHalroUserAgent(build func(adapterBuildContext) (provider.Authorizer, error)) func(adapterBuildContext) (provider.Authorizer, error) {
+	return func(ctx adapterBuildContext) (provider.Authorizer, error) {
+		authorizer, err := build(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return userAgentAuthorizer{Authorizer: authorizer, value: "Halro/" + buildinfo.Version}, nil
+	}
 }
 
 // staticHeader is the credential scheme most profiles use: the secret becomes
@@ -208,14 +232,58 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
 		build:     bigModelOpenAIAdapter,
 	},
-	// The GLM Coding Plan is the same host and dialect as the mainland general
+	// Each regional GLM Coding Plan shares the host and dialect of its general
 	// API, reached through a different path with a different key. The path is a
 	// property of the profile and never of the model identifier or the host: the
-	// two products answer on one address, and a request that took the wrong path
-	// does not fail — it spends the other balance.
+	// two products answer on one address. On the mainland endpoint, a measured
+	// request on the wrong path did not fail and drew from the other balance;
+	// the international split follows the published profile contract but has not
+	// been billable-smoked with an international subscription key.
 	domain.ProfileBigModelCNCodingChat: {
 		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
 		build:     bigModelOpenAIAdapter,
+	},
+	domain.ProfileBigModelGlobalCodingChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     bigModelOpenAIAdapter,
+	},
+
+	// Kimi Code is a distinct membership product. It uses the coding path and
+	// requires callers to preserve their real identity; the wrapper overwrites
+	// any inherited User-Agent with Halro's own build identity.
+	domain.ProfileKimiCodeOpenAIChat: {
+		authorize: withHalroUserAgent(staticHeader("Authorization", "Bearer ", "api-key", "x-api-key")),
+		build:     kimiCodeOpenAIAdapter,
+	},
+	domain.ProfileKimiCodeAnthropicMessages: {
+		authorize: withHalroUserAgent(staticHeader("Authorization", "Bearer ", "api-key", "x-api-key")),
+		build: func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+			return anthropicprovider.New(anthropicprovider.Options{
+				Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+				Capabilities: ctx.Binding.Capabilities,
+				ProviderType: string(domain.ProviderKimi), CredentialScheme: ctx.Binding.CredentialScheme,
+				MessagesPath: "coding/v1/messages", ProfileID: ctx.Binding.ProfileID,
+			})
+		},
+	},
+
+	// MiniMax Subscription Access shares one credential scheme across protocols,
+	// while each profile applies the header required by that protocol.
+	domain.ProfileMiniMaxCNSubscriptionOpenAIChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     miniMaxOpenAIAdapter(false),
+	},
+	domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat: {
+		authorize: staticHeader("Authorization", "Bearer ", "api-key", "x-api-key"),
+		build:     miniMaxOpenAIAdapter(false),
+	},
+	domain.ProfileMiniMaxCNSubscriptionAnthropicMessages: {
+		authorize: staticHeader("x-api-key", "", "Authorization", "api-key"),
+		build:     miniMaxSubscriptionAnthropicAdapter,
+	},
+	domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages: {
+		authorize: staticHeader("x-api-key", "", "Authorization", "api-key"),
+		build:     miniMaxSubscriptionAnthropicAdapter,
 	},
 
 	// Bedrock Runtime and Agent Runtime. Withheld from every write path today,
@@ -295,15 +363,37 @@ func kimiOpenAIAdapter(responses bool) func(adapterBuildContext, provider.Author
 	}
 }
 
+func kimiCodeOpenAIAdapter(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+	prefix := "coding/v1"
+	return openaiprovider.NewWithOptions(openaiprovider.Options{
+		Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+		ProviderType: string(domain.ProviderKimi), CredentialScheme: ctx.Binding.CredentialScheme,
+		Capabilities: ctx.Binding.Capabilities, OperationPathPrefix: prefix,
+		CatalogPathPrefix: &prefix, DisableTargetDescribe: true, UseOpenAIChatDialect: true, KimiCode: true,
+	})
+}
+
+func miniMaxSubscriptionAnthropicAdapter(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+	return anthropicprovider.New(anthropicprovider.Options{
+		Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+		Capabilities: ctx.Binding.Capabilities,
+		ProviderType: string(domain.ProviderMiniMax), CredentialScheme: ctx.Binding.CredentialScheme,
+		MessagesPath: "anthropic/v1/messages", ProfileID: ctx.Binding.ProfileID,
+		CatalogPath: "anthropic/v1/models", CatalogShape: anthropicprovider.CatalogAnthropic,
+	})
+}
+
 // bigModelPathPrefix is decided by the exact profile and by nothing else.
 //
-// Not by the host — the mainland general API and the Coding Plan share one — and
+// Not by the host — each regional general API and Coding Plan share one — and
 // not by the key or the model, neither of which is a stable public protocol. A
-// wrong guess here is silent: measured on 2026-09-09, a Coding Plan key sent to
-// /api/paas/v4 is accepted and answered, so the only visible consequence of
-// guessing wrong is that a different balance paid.
+// wrong guess here is silent on the mainland endpoint: measured on 2026-09-09,
+// a Coding Plan key sent to /api/paas/v4 is accepted and answered, so the only
+// visible consequence there is that a different balance paid. International
+// uses the same explicit profile split from its published contract; that
+// wrong-path billing behaviour has not been measured.
 func bigModelPathPrefix(profileID domain.ProviderProfileID) string {
-	if profileID == domain.ProfileBigModelCNCodingChat {
+	if profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
 		return "api/coding/paas/v4"
 	}
 	return "api/paas/v4"

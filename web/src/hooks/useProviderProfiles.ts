@@ -99,6 +99,22 @@ export function findOffering(
   return offeringsForType(catalog, type).find((offering) => offering.id === offeringID);
 }
 
+export function offeringDocumentationURL(
+  offering: ProviderOfferingDescriptor | undefined,
+  regionID: string,
+): string | undefined {
+  return offeringDocumentation(offering, regionID)?.url;
+}
+
+export function offeringDocumentation(
+  offering: ProviderOfferingDescriptor | undefined,
+  regionID: string,
+) {
+  if (!offering) return undefined;
+  return offering.documentation.find((document) => document.region === regionID)
+    ?? offering.documentation.find((document) => document.region === "");
+}
+
 /** One product identity a credential of this type can be created for.
  *
  * A credential stores an access surface and a scheme, and that pair is what says
@@ -144,8 +160,10 @@ export function credentialIdentities(catalog: ProviderProfilesCatalog, type: Pro
  *
  *  - more than one credential identity, which is BigModel's two regional
  *    products: different surfaces, different capability sets, different keys;
- *  - a route-partitioned group, which is Bedrock Mantle: one credential, one
- *    surface, and models that each answer on exactly one of its routes.
+ *  - distinct connection groups on one credential identity, which represent
+ *    protocol alternatives such as OpenAI versus Anthropic;
+ *  - a route-partitioned group, which is Bedrock Mantle: one credential and
+ *    models that each answer on exactly one of its routes.
  *
  * Where neither holds, the group's profiles ride one connection together and
  * there is nothing to ask — which is every other provider. */
@@ -162,7 +180,7 @@ export function connectionChoices(catalog: ProviderProfilesCatalog, type: Provid
   const choices: ConnectionChoice[] = [];
   const groupsSeen = new Set<string>();
   for (const profile of profilesForType(catalog, type)) {
-    const group = `${profile.access_surface}\u0000${profile.credential_scheme}`;
+    const group = profile.connection_group_id;
     if (groupsSeen.has(group) && !profile.route_partitioned) continue;
     groupsSeen.add(group);
     choices.push({

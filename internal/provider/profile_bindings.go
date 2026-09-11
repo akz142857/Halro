@@ -98,6 +98,8 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 	// model, and a 200 from the route is not evidence of which balance paid.
 	domain.ProfileBigModelCNCodingChat: {Revision: 1, Bindings: chatPair(
 		PrimitiveBigModelChat, PrimitiveBigModelChatStream)},
+	domain.ProfileBigModelGlobalCodingChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveBigModelChat, PrimitiveBigModelChatStream)},
 	domain.ProfileOpenAICompatible: {Revision: 1, Bindings: append(
 		chatPair(PrimitiveCompatibleChat, PrimitiveCompatibleChatStream),
 		operationBinding{OperationEmbeddings, PrimitiveCompatibleEmbeddings})},
@@ -150,6 +152,18 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 	// the unary Responses call and binds no stream primitive.
 	domain.ProfileKimiResponses: {Revision: 1, Bindings: []operationBinding{
 		{OperationChat, PrimitiveKimiResponses}}},
+	domain.ProfileKimiCodeOpenAIChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveKimiChat, PrimitiveKimiChatStream)},
+	domain.ProfileKimiCodeAnthropicMessages: {Revision: 1, Bindings: anthropicWire(
+		PrimitiveKimiAnthropicMessages, PrimitiveKimiAnthropicMessagesStream)},
+	domain.ProfileMiniMaxCNSubscriptionOpenAIChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveMiniMaxChat, PrimitiveMiniMaxChatStream)},
+	domain.ProfileMiniMaxCNSubscriptionAnthropicMessages: {Revision: 1, Bindings: anthropicWire(
+		PrimitiveMiniMaxAnthropicMessages, PrimitiveMiniMaxAnthropicMessagesStream)},
+	domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat: {Revision: 1, Bindings: chatPair(
+		PrimitiveMiniMaxChat, PrimitiveMiniMaxChatStream)},
+	domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages: {Revision: 1, Bindings: anthropicWire(
+		PrimitiveMiniMaxAnthropicMessages, PrimitiveMiniMaxAnthropicMessagesStream)},
 }
 
 // builtinProfileDerived assembles a manifest from the table above plus the

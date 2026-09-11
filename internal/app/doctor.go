@@ -633,9 +633,15 @@ func checkDoctorCredentialProducts(credentials []domain.Credential, add func(str
 		// The endpoint a credential is sealed to is its audience with the
 		// provider type appended, which is the same value the Admin listing
 		// shows as bound_base_url.
-		surface, known := domain.SurfaceForEndpoint(
-			credential.Type, credentialOrigin(credential.Audience, credential.Type))
-		if !known || surface == credential.AccessSurface {
+		endpoint := credentialOrigin(credential.Audience, credential.Type)
+		surface, surfaceKnown := domain.SurfaceForEndpoint(credential.Type, endpoint)
+		if surfaceKnown && surface != credential.AccessSurface {
+			mismatched++
+			continue
+		}
+		identity, identityKnown := domain.IdentityForSurface(credential.AccessSurface)
+		region, regionKnown := domain.RegionForProviderEndpoint(credential.Type, endpoint)
+		if !identityKnown || !regionKnown || identity.Region == domain.RegionNone || region == identity.Region {
 			continue
 		}
 		mismatched++

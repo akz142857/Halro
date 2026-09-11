@@ -493,8 +493,13 @@ export type AccessSurface =
   | "bedrock-mantle"
   | "minimax-api"
   | "kimi-api"
+  | "kimi-code"
+  | "minimax-cn-subscription-access"
+  | "minimax-global-subscription-access"
   | "bigmodel-cn-general-api"
-  | "bigmodel-global-general-api";
+  | "bigmodel-global-general-api"
+  | "bigmodel-cn-coding-api"
+  | "bigmodel-global-coding-api";
 
 export type CredentialScheme =
   | "bearer.static"
@@ -503,7 +508,10 @@ export type CredentialScheme =
   | "google.api-key"
   | "aws.sigv4.explicit-session"
   | "aws.bedrock.api-key"
-  | "bigmodel.api-key";
+  | "bigmodel.api-key"
+  | "bigmodel.coding-plan-key"
+  | "kimi.code-key"
+  | "minimax.subscription-key";
 
 export type CapabilityEvidence = "verified" | "declared" | "unsupported";
 export type CapabilityEvidenceSet = Record<string, CapabilityEvidence>;
@@ -562,6 +570,8 @@ export interface ProviderCapabilities {
  * the form. */
 export interface ProviderProfileDescriptor {
   id: string;
+  /** Permanent grouping for profiles that ride one connection together. */
+  connection_group_id: string;
   access_surface: AccessSurface;
   credential_scheme: CredentialScheme;
   /** Which upstream product this profile belongs to, and which account region.
@@ -619,12 +629,22 @@ export interface ProviderRegionHost {
   host: string;
 }
 
+export interface ProviderOfferingDocument {
+  region: string;
+  url: string;
+  policy_revision: string;
+}
+
 /** One upstream product of one provider type — a metered API, a Coding Plan, an
  * enterprise contract. Only products with at least one profile this build offers
  * appear, so a form cannot present something it would then be unable to save. */
 export interface ProviderOfferingDescriptor {
   id: string;
-  kind: "metered_api" | "subscription" | "enterprise";
+  kind: "metered_api" | "subscription" | "entitlement" | "enterprise";
+  /** True when upstream terms restrict which tools or scenarios may consume
+   * the product. The server requires an explicit acknowledgement on credential
+   * creation and every new credential/profile binding. */
+  requires_usage_warning: boolean;
   /** How this product expresses its region. "fixed": the surface is the region,
    * so choosing the region chooses the profile. "by_endpoint": one surface,
    * several account hosts, chosen in the endpoint field. "none": no region
@@ -632,6 +652,9 @@ export interface ProviderOfferingDescriptor {
   region_scope: "none" | "fixed" | "by_endpoint";
   regions: string[];
   region_hosts: ProviderRegionHost[];
+  /** Official product terms keyed by product region. A regional document must
+   * not be reused for another account surface. */
+  documentation: ProviderOfferingDocument[];
 }
 
 export interface ProviderTypeDescriptor {
@@ -1013,6 +1036,9 @@ export interface UsageAttempt {
   route_id?: string;
   deployment_id?: string;
   provider_id?: string;
+  offering_id?: string;
+  profile_id?: string;
+  account_region_id?: "cn" | "global";
   requested_model?: string;
   provider_model?: string;
   provider_input_tokens: number;
@@ -1043,8 +1069,12 @@ export interface UsageAttempt {
   // kept, which is a different answer from "the upstream named none" — the
   // console says which, rather than filling either with a placeholder.
   provider_code?: string;
+  provider_failure_reason?: "invalid_credential" | "entitlement_verification_unavailable" | "subscription_inactive" | "subscription_quota_exhausted" | "rate_limited";
   provider_request_id?: string;
   failure_phase?: string;
+  retryable?: boolean;
+  ambiguous?: boolean;
+  failure_semantics_recorded?: boolean;
   latency_millis: number;
   // Which rung of the retry/fallback chain this attempt is: retry_count counts
   // re-tries against the same target, fallback_count counts targets already
@@ -1063,6 +1093,16 @@ export interface FailurePayload {
   project_id: string;
   outcome: string;
   captured_at: string;
+  offering_id?: string;
+  profile_id?: string;
+  account_region_id?: "cn" | "global";
+  provider_code?: string;
+  provider_failure_reason?: string;
+  provider_request_id?: string;
+  failure_phase?: string;
+  retryable?: boolean;
+  ambiguous?: boolean;
+  failure_semantics_recorded?: boolean;
   // The decoded body accepted by the public Gateway facade, before Halro
   // translates caller-facing fields into its provider-neutral request.
   gateway_request?: unknown;
@@ -1103,11 +1143,18 @@ export interface RequestFailure {
     error_class?: string;
     provider_status?: number;
     provider_id?: string;
+    offering_id?: string;
+    profile_id?: string;
+    account_region_id?: "cn" | "global";
     deployment_id?: string;
     provider_model?: string;
     provider_code?: string;
+    provider_failure_reason?: string;
     provider_request_id?: string;
     failure_phase?: string;
+    retryable?: boolean;
+    ambiguous?: boolean;
+    failure_semantics_recorded?: boolean;
     completed_at: string;
   };
 }

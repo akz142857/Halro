@@ -44,6 +44,7 @@ type Adapter struct {
 	// direction — see the verification plan in
 	// docs/prd/kimi-adaptation-plan.zh-CN.md for the check that would settle it.
 	kimi                bool
+	kimiCode            bool
 	bigModel            bool
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
@@ -106,6 +107,15 @@ type Options struct {
 	// established. DescribeInvocationTarget currently falls back to the list,
 	// but the Admin API will not advertise a per-model describe operation.
 	DisableTargetDescribe bool
+	// UseOpenAIChatDialect prevents a provider-type default dialect from being
+	// selected for a profile that explicitly publishes the OpenAI request shape.
+	// Products under one provider type may have different wire contracts; the
+	// Kimi Code surface is the first such case.
+	UseOpenAIChatDialect bool
+	// KimiCode enables the subscription product's status contract. It is
+	// separate from the wire dialect: the profile speaks OpenAI Chat, but its
+	// 401 and 402 meanings differ from a general API account.
+	KimiCode bool
 }
 
 func NewWithOptions(options Options) (*Adapter, error) {
@@ -150,7 +160,8 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		providerType: options.ProviderType, apiVersion: options.APIVersion,
 		azure: options.Azure, deepSeek: options.ProviderType == string(domain.ProviderDeepSeek),
 		miniMax:             options.ProviderType == string(domain.ProviderMiniMax),
-		kimi:                options.ProviderType == string(domain.ProviderKimi),
+		kimi:                options.ProviderType == string(domain.ProviderKimi) && !options.UseOpenAIChatDialect,
+		kimiCode:            options.KimiCode,
 		bigModel:            options.ProviderType == string(domain.ProviderBigModel),
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
@@ -308,7 +319,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return nil, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -398,7 +409,7 @@ func (a *Adapter) Probe(ctx context.Context, providerModel string) error {
 		return nil
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
 	}
 	_, err = io.Copy(io.Discard, io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -553,7 +564,7 @@ func (a *Adapter) postJSON(ctx context.Context, providerModel, operation, reques
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message := limitedErrorMessage(response.Body)
-		return nil, classifyHTTPError(response.StatusCode, message)
+		return nil, a.classifyHTTPError(response.StatusCode, message)
 	}
 	limited := io.LimitReader(response.Body, maxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
@@ -612,7 +623,7 @@ func (a *Adapter) Embed(ctx context.Context, call provider.EmbeddingCall) (opena
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return openaiapi.EmbeddingResponse{}, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return openaiapi.EmbeddingResponse{}, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
 	}
 	payload, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil {
@@ -830,7 +841,7 @@ func (a *Adapter) ChatStream(
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
+		return nil, a.classifyHTTPError(response.StatusCode, limitedErrorMessage(response.Body))
 	}
 	if contentType := response.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(contentType), "text/event-stream") {
 		return nil, &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "provider did not return an SSE stream"}
@@ -841,6 +852,7 @@ func (a *Adapter) ChatStream(
 	// saying it stopped. It is what tells a completed stream from a truncated one
 	// on an upstream that ends by closing the connection.
 	finished := false
+	receivedGeneration := false
 	for {
 		event, err := decoder.Next()
 		if err != nil {
@@ -886,6 +898,9 @@ func (a *Adapter) ChatStream(
 		// whatever usage was seen — never as a success, and never refunded.
 		if a.miniMax {
 			if err := checkMiniMaxBaseResp(event.Data); err != nil {
+				if receivedGeneration {
+					err.Ambiguous = true
+				}
 				return usage, err
 			}
 		}
@@ -899,6 +914,9 @@ func (a *Adapter) ChatStream(
 		if chunk.Usage != nil {
 			copyUsage := *chunk.Usage
 			usage = &copyUsage
+		}
+		if len(chunk.Choices) != 0 || chunk.Usage != nil {
+			receivedGeneration = true
 		}
 		if a.bigModel {
 			if err := bigModelFinishError(chunk.Choices); err != nil {
@@ -1027,6 +1045,20 @@ func classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
 		}
 	}
 	result.Message = fmt.Sprintf("provider error (%d): %s", status, refusalSentence(refusal))
+	return result
+}
+
+func (a *Adapter) classifyHTTPError(status int, refusal upstreamRefusal) *provider.Error {
+	result := classifyHTTPError(status, refusal)
+	if !a.kimiCode {
+		return result
+	}
+	if status == http.StatusPaymentRequired {
+		result.Class = provider.ErrorUnknown
+		result.FailureReason = provider.FailureReasonEntitlementVerificationUnavailable
+		result.Retryable = true
+		result.Ambiguous = false
+	}
 	return result
 }
 

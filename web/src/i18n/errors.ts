@@ -113,6 +113,12 @@ export function localizedError(t: TFunction, error: unknown) {
     binding_referenced_by_deployment: "errors.bindingReferencedByDeployment",
     route_referenced_by_project: "errors.routeReferencedByProject",
     bedrock_project_id_invalid: "errors.bedrockProjectIDInvalid",
+    offering_usage_warning_unacknowledged: "errors.offeringUsageWarningUnacknowledged",
+    usage_policy_acknowledgement_required: "errors.usagePolicyAcknowledgementRequired",
+    usage_policy_revision_mismatch: "errors.usagePolicyRevisionMismatch",
+    credential_product_immutable: "errors.credentialProductImmutable",
+    credential_region_immutable: "errors.credentialRegionImmutable",
+    credential_region_mismatch: "errors.credentialRegionMismatch",
     idempotency_conflict: "errors.idempotencyConflict",
     provider_idempotency_replay: "errors.providerIdempotencyReplay",
     deployment_idempotency_replay: "errors.deploymentIdempotencyReplay",
@@ -225,6 +231,12 @@ export function errorDetail(error: unknown) {
     "route_idempotency_replay",
     "project_idempotency_replay",
     "gateway_key_idempotency_replay",
+    "offering_usage_warning_unacknowledged",
+    "usage_policy_acknowledgement_required",
+    "usage_policy_revision_mismatch",
+    "credential_product_immutable",
+    "credential_region_immutable",
+    "credential_region_mismatch",
   ];
   if (localizedWorkflowCodes.includes(error.code)) return "";
   // The translated sentence already names both values the server compared, so
