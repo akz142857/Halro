@@ -8,8 +8,8 @@
 | S3 实机与兼容性 | PARTIAL | SDK、升级/回滚、backup/restore、性能/包体完成；真实 Provider/KMS/浏览器完整旅程/24h soak 未执行 |
 | S4 对抗裁决 | DONE | 五个 P1 均由非原作者 CONFIRMED / P1 / 高置信度 |
 | S5 修复与回归 | DONE LOCALLY | F-001～F-017 已整改；C-002～C-007 已关闭，C-001 以 operator-declared/unverified 明示残余；全量 Go/前端与发布契约本机通过 |
-| S6 发布执行 | BLOCKED | 包含本文件的整改提交尚无精确 SHA 的普通 CI 与 dry-run；真实 Provider/KMS 等外部验收仍待授权或具名接受 |
+| S6 发布执行 | IN PROGRESS | Owner 已接受未执行的真实 Provider/KMS 等证据边界并请求发布；release commit、精确 SHA CI、dry-run 与正式 workflow 依序执行中 |
 
-当前 gate 结论：**LOCAL REMEDIATION COMPLETE / RELEASE NO-GO**。整改明细与门禁见
-[`remediation.md`](remediation.md)。下一步是等待该提交的普通 CI；release dry-run、真实
-Provider/KMS 等验收仍需另行授权，不得用本机 fixture 结果代替。
+当前 gate 结论：**CONDITIONAL GO / S6 IN PROGRESS**。整改明细与门禁见
+[`remediation.md`](remediation.md)。Owner 已在发布 assessment 中显式接受未执行的真实
+Provider/KMS 等证据边界；GO 仍只对通过普通 CI 与 release dry-run 的同一精确 SHA 有效。

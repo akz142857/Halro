@@ -4,6 +4,78 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [0.8.0] - 2026-09-11
+
+### Added
+
+- Provider configuration now models the upstream product as a stable Offering,
+  Access Surface and account Region. BigModel / Z.AI includes separate mainland
+  and global General API and Coding Plan profiles, with product-bound credentials,
+  connection groups and model capability declarations.
+- Failed-request diagnostics can retain an encrypted, size- and time-bounded copy
+  of the Gateway request when explicitly enabled. The Usage console adds a
+  filterable final-failures view, audited payload reveal and clearer Provider,
+  product, region and standardized failure attribution.
+- Release artifacts now include per-architecture SPDX image SBOMs for both the
+  Halro gateway and independent dead-man probe. Both images are scanned before
+  publication, and compatibility SDK dependencies are hash-locked, license-
+  reviewed and vulnerability-audited.
+
+### Changed
+
+- Restricted subscription products persist the exact policy revision accepted
+  for both the credential and connection. Missing or stale acknowledgement is
+  withheld at activation with an actionable reason. MiniMax Global's wire-
+  indistinguishable General and Subscription identities are explicitly marked
+  `operator_declared_unverified` and require separate product-bound confirmation.
+- BigModel reasoning translation is scoped by exact Profile and model. An
+  explicit `reasoning_effort=none` now sends `thinking.type=disabled` where the
+  upstream permits it, while forced or unknown combinations are rejected before
+  Provider I/O instead of silently changing intent.
+- Failure capture writes use one bounded asynchronous worker. Daily limits
+  survive restart, failed writes do not inflate metrics, and shutdown drains or
+  cancels the worker within the configured deadline.
+- The release workflow requires a successful ordinary `main` CI run for the
+  exact commit, supports an idempotent retry after tag creation but before the
+  GitHub Release, and archives formal or dry-run evidence atomically.
+
+### Fixed
+
+- Crash recovery preserves frozen Offering, Profile and account Region through
+  settlement, Usage checkpoints and Parquet; the Ledger rejects settlements
+  that change Provider attribution or carry inconsistent failure semantics.
+- Provider error prose can no longer carry an echoed credential through the
+  encrypted capture, Admin payload, HTTP error chain, logs, audit records or
+  on-disk diagnostic data.
+- Usage failure filters now follow query-only navigation and browser history;
+  legacy missing attribution is shown as unknown without mislabelling normal
+  regionless products.
+- Provider and Credential forms explain fixed-region conflicts and required
+  fields, lock pending mutations against duplicate submits, support stale-policy
+  re-confirmation, expose endpoint-derived regions, distinguish payload reveal
+  failures, and provide wrapping keyboard navigation for their tabs.
+- Stable literal compatibility gates now freeze every built-in Profile, Surface
+  and Offering identifier together with its critical bindings.
+
+### Operator impact
+
+- **Back up and verify the v0.7.1 data directory before the first v0.8.0 start.**
+  Metadata schema 36 upgrades atomically to 37 and rebuilds the derivative Usage
+  checkpoint as version 14 from the authenticated Ledger. Parquet manifests and
+  rows use schema 8. Re-initialization is not required.
+- A v0.7.1 binary refuses metadata schema 37 before binding listeners. Rollback
+  after v0.8.0 has opened the directory therefore requires restoring the
+  pre-upgrade v0.7.1 backup; do not point the old binary at the upgraded directory.
+- Existing BigModel Coding Plan and MiniMax Subscription connections, plus
+  MiniMax Global General connections covered by the same product-identity
+  responsibility, are withheld until an operator reopens the Credential and
+  Provider forms and accepts the current policy revision. Halro does not infer
+  consent from legacy enabled state or audit history.
+- Failure captures no longer retain arbitrary upstream response prose or model
+  output. They keep a safe structured status/class or response shape alongside
+  the request, which preserves diagnosis without extending trust to text that
+  may echo a Provider credential.
+
 ## [0.7.1] - 2026-09-07
 
 ### Added
@@ -1537,6 +1609,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.0]: https://github.com/akz142857/Halro/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/akz142857/Halro/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akz142857/Halro/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/akz142857/Halro/compare/v0.5.0...v0.6.0
