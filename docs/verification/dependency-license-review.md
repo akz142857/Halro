@@ -17,17 +17,17 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.45.1 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.2 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.2 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.58.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.46.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.3 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.3 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.59.0 | Apache-2.0 | runtime |
 | `github.com/aws/smithy-go` | 1.28.1 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.2 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
-| `golang.org/x/crypto` | 0.55.0 | BSD-3-Clause | runtime |
-| `golang.org/x/sys` | 0.47.0 | BSD-3-Clause | runtime |
+| `golang.org/x/crypto` | 0.56.0 | BSD-3-Clause | runtime |
+| `golang.org/x/sys` | 0.48.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
 The 2026-08-28 refresh moved six direct versions and added, removed, and
@@ -55,6 +55,15 @@ agent attribution from per-request middleware to client construction. Halro
 does not set `AWS_ENABLE_DEFAULT_SOCKET_TIMEOUT_2026`; its KMS Encrypt/Decrypt
 surface, encryption context, retry policy, error classification, and file-mode
 no-cloud-call boundary remain covered by the KMS and application tests.
+
+The 2026-09-11 Go refresh moved four direct AWS SDK modules, nine
+version-pinned AWS transitive modules, `golang.org/x/crypto`, and
+`golang.org/x/sys`. It added, removed, and relicensed nothing: the module path
+sets in `go.mod` and `go.sum` are unchanged. The AWS SDK modules remain
+Apache-2.0, while the two Go subrepositories remain BSD-3-Clause. The KMS
+custody path, credential discovery boundary, cryptographic helpers, and
+platform syscall surface remain covered by the full Go and compatibility test
+suites.
 
 The AWS KMS custody path is part of this review. The linked AWS SDK config and
 credential modules can resolve environment, shared-file, web-identity,
@@ -147,14 +156,15 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `e28dc15e3e77c15c4167156510a6ccb7fe2f5671`
-- `go.sum`: `4f2cd7b82cbd5a7a5443bc67db2ed578385bacc5`
+- `go.mod`: `89c91b3130972bc2b5c676e9e93266c1721fb9a8`
+- `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
 - `web/package.json`: `f1eb5429cd8088ea8719c5c0a5a59074df5369d1`
 - `web/package-lock.json`: `14664cea8cb80a1a23124b7f707a1a315d573da9`
 
-The Go hashes last moved for the 2026-09-05 five-module AWS refresh recorded
-above. The two web hashes last moved for the 2026-09-05 seven-direct-package
-Admin UI refresh recorded above, before that for the nine-package Admin UI bump,
+The Go hashes last moved for the 2026-09-11 Go refresh recorded
+above. The two web hashes last moved for the 2026-09-11 Admin UI refresh
+recorded above, before that for the 2026-09-05 seven-direct-package Admin UI
+refresh, and before that for the nine-package Admin UI bump,
 and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
 for `v0.5.0`, `v0.6.0`, `v0.7.0`, and now `v0.7.1`, each of which bumped the
