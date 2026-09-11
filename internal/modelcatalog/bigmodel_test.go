@@ -28,6 +28,28 @@ func TestBigModelCatalogKeepsRegionalAvailabilitySeparate(t *testing.T) {
 	}
 }
 
+func TestZAIInternationalCodingCatalogUsesOnlyPublishedPlanModels(t *testing.T) {
+	catalog := Builtin()
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
+		entry, ok := catalog.Lookup(Key{ProviderType: domain.ProviderBigModel, Profile: domain.ProfileBigModelGlobalCodingChat, Model: model})
+		if !ok {
+			t.Errorf("published international Coding Plan model %q is missing", model)
+			continue
+		}
+		if !entry.Capabilities.Chat || !entry.Capabilities.Streaming || !entry.Capabilities.Tools || !entry.Capabilities.Reasoning {
+			t.Errorf("%s has incomplete documented coding-agent capabilities: %#v", model, entry.Capabilities)
+		}
+		if entry.Capabilities.JSONObject || entry.Capabilities.StreamUsage || !entry.ReasonsUnasked {
+			t.Errorf("%s carries unverified international Coding Plan behaviour: %#v, reasons_unasked=%v", model, entry.Capabilities, entry.ReasonsUnasked)
+		}
+	}
+	for _, alias := range []string{"glm-5.2", "glm-5.1", "glm-4.7"} {
+		if _, ok := catalog.Lookup(Key{ProviderType: domain.ProviderBigModel, Profile: domain.ProfileBigModelGlobalCodingChat, Model: alias}); ok {
+			t.Errorf("documented routing alias %q was seeded as an actual international plan model", alias)
+		}
+	}
+}
+
 func TestBigModelCatalogClaimsVisionAndUnaskedReasoningOnlyForExactModels(t *testing.T) {
 	catalog := Builtin()
 	for _, test := range []struct {

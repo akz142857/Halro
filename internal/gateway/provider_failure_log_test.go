@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/safelog"
@@ -41,6 +42,8 @@ func TestProviderAttemptFailureIsLoggedWithItsRouteAndClass(t *testing.T) {
 		`"request_id":"req_logged"`,
 		`"public_model":"chat"`,
 		`"deployment_id":"dep_target_1"`,
+		`"offering_id":"` + string(domain.OfferingOpenAIAPI) + `"`,
+		`"profile_id":"` + string(domain.ProfileOpenAIChatEmbeddings) + `"`,
 		`"error_class":"connect"`,
 		"api.example.internal",
 	} {
@@ -107,6 +110,42 @@ func TestAnUpstreamRefusalIsLoggedWithTheCodeItNamed(t *testing.T) {
 	// The sentence beside it is still a response body.
 	if strings.Contains(logged, "Error while downloading") {
 		t.Fatalf("an upstream response body was written to the log: %s", logged)
+	}
+}
+
+func TestSubscriptionFailureMappingUsesOnlyStructuredEvidence(t *testing.T) {
+	target := provider.Target{ProfileID: domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat}
+	for _, test := range []struct {
+		name      string
+		error     *provider.Error
+		class     provider.ErrorClass
+		reason    provider.FailureReason
+		retryable bool
+		ambiguous bool
+	}{
+		{"401", &provider.Error{Class: provider.ErrorAuthentication, StatusCode: 401}, provider.ErrorAuthentication, provider.FailureReasonInvalidCredential, false, false},
+		{"402", &provider.Error{Class: provider.ErrorBadRequest, StatusCode: 402}, provider.ErrorBadRequest, "", false, false},
+		{"inactive code", &provider.Error{Class: provider.ErrorUnknown, StatusCode: 403, ProviderCode: "subscription_inactive"}, provider.ErrorAuthentication, provider.FailureReasonSubscriptionInactive, false, false},
+		{"quota code", &provider.Error{Class: provider.ErrorUnknown, StatusCode: 429, ProviderCode: "subscription_quota_exhausted"}, provider.ErrorRateLimit, provider.FailureReasonSubscriptionQuotaExhausted, false, false},
+		{"403 without code", &provider.Error{Class: provider.ErrorAuthentication, StatusCode: 403, Message: "quota exhausted"}, provider.ErrorAuthentication, "", false, false},
+		{"429 without code", &provider.Error{Class: provider.ErrorRateLimit, StatusCode: 429}, provider.ErrorRateLimit, provider.FailureReasonRateLimited, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor := describeProviderFailure(test.error, target)
+			if descriptor.Class != test.class || descriptor.ProviderFailureReason != test.reason ||
+				descriptor.Retryable != test.retryable || descriptor.Ambiguous != test.ambiguous ||
+				!descriptor.FailureSemanticsRecorded {
+				t.Fatalf("descriptor=%#v", descriptor)
+			}
+		})
+	}
+	kimi := describeProviderFailure(&provider.Error{Class: provider.ErrorBadRequest, StatusCode: 402}, provider.Target{ProfileID: domain.ProfileKimiCodeOpenAIChat})
+	if kimi.ProviderFailureReason != provider.FailureReasonEntitlementVerificationUnavailable {
+		t.Fatalf("Kimi Code 402 reason = %q", kimi.ProviderFailureReason)
+	}
+	kimi401 := describeProviderFailure(&provider.Error{Class: provider.ErrorAuthentication, StatusCode: 401}, provider.Target{ProfileID: domain.ProfileKimiCodeOpenAIChat})
+	if kimi401.ProviderFailureReason != "" {
+		t.Fatalf("Kimi Code bare 401 invented a credential reason: %q", kimi401.ProviderFailureReason)
 	}
 }
 

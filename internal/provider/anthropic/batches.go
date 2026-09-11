@@ -340,7 +340,7 @@ func (adapter *Adapter) doBatch(ctx context.Context, method, suffix, requestID s
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, decodeHTTPError(response)
+		return nil, adapter.decodeHTTPError(response)
 	}
 	raw, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {
@@ -485,7 +485,7 @@ func (adapter *Adapter) FetchBatchResults(ctx context.Context, requestID, id, re
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, decodeHTTPError(response)
+		return nil, adapter.decodeHTTPError(response)
 	}
 	raw, err := readLimited(response.Body, maxResponseBytes)
 	if err != nil {

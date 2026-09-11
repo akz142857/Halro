@@ -123,6 +123,52 @@ func TestRegistryOrdersTargetsAndRoundRobinsStartingTarget(t *testing.T) {
 	}
 }
 
+func TestRegistryDerivesAndGuardsProviderOfferingFromProfile(t *testing.T) {
+	registry := NewRegistry()
+	target := Target{
+		ID: "target", DeploymentID: "deployment", PublicModel: "chat", ProviderModel: "gpt",
+		Adapter: &registryAdapter{}, Capabilities: Capabilities{Chat: true},
+	}
+	if err := registry.Register(target); err != nil {
+		t.Fatal(err)
+	}
+	candidates := registry.ResolveCandidatesFor("chat", OperationChat)
+	if len(candidates) != 1 || candidates[0].OfferingID != domain.OfferingOpenAIAPI ||
+		candidates[0].ProfileID != domain.ProfileOpenAIChatEmbeddings {
+		t.Fatalf("target product attribution was not derived from its profile: %#v", candidates)
+	}
+	target.ID, target.DeploymentID, target.PublicModel = "wrong", "wrong-deployment", "wrong"
+	target.OfferingID = domain.OfferingBigModelGeneral
+	if err := registry.Register(target); err == nil || !strings.Contains(err.Error(), "offering") {
+		t.Fatalf("a target with mismatched product attribution was accepted: %v", err)
+	}
+}
+
+func TestRegistryDerivesAndGuardsFixedAccountRegion(t *testing.T) {
+	manifest, ok := BuiltinProfile(domain.ProfileMiniMaxCNSubscriptionOpenAIChat)
+	if !ok {
+		t.Fatal("MiniMax subscription profile is not registered")
+	}
+	adapter := &registryAdapter{manifest: &manifest}
+	registry := NewRegistry()
+	target := Target{
+		ID: "target", DeploymentID: "deployment", PublicModel: "chat", ProviderModel: "MiniMax-M2.5",
+		Adapter: adapter, Capabilities: Capabilities{Chat: true},
+	}
+	if err := registry.Register(target); err != nil {
+		t.Fatal(err)
+	}
+	candidates := registry.ResolveCandidatesFor("chat", OperationChat)
+	if len(candidates) != 1 || candidates[0].AccountRegionID != domain.RegionCN {
+		t.Fatalf("fixed account region was not derived: %#v", candidates)
+	}
+	target.ID, target.DeploymentID, target.PublicModel = "wrong", "wrong-deployment", "wrong"
+	target.AccountRegionID = domain.RegionGlobal
+	if err := registry.Register(target); err == nil || !strings.Contains(err.Error(), "account region") {
+		t.Fatalf("target with mismatched account region was accepted: %v", err)
+	}
+}
+
 func TestRegistryRejectsMixedStrategies(t *testing.T) {
 	registry := NewRegistry()
 	adapter := &registryAdapter{}

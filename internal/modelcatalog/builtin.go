@@ -474,6 +474,32 @@ func minimaxModels() []Entry {
 			builtinEntry(provider, domain.ProfileMiniMaxChat, model, openAIChat(m2Context, 0)),
 		)
 	}
+	// Subscription Access currently documents the M2.7 pair on both account
+	// regions. Enumeration remains authoritative for availability; these entries
+	// only attach the conservative text/tool capability evidence to IDs returned
+	// by that account.
+	for _, profile := range []domain.ProviderProfileID{
+		domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
+		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
+	} {
+		for _, model := range []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed"} {
+			entry := builtinEntry(provider, profile, model, openAIChat(m2Context, 0))
+			entry.ReasonsUnasked = true
+			entries = append(entries, entry)
+		}
+	}
+	// The Anthropic-compatible face explicitly sends thinking disabled when the
+	// caller asks for no depth, so the same models do not reason unasked there.
+	// Keep the entries separate: the flag describes a (profile, model) pair, not
+	// a model family.
+	for _, profile := range []domain.ProviderProfileID{
+		domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages,
+	} {
+		for _, model := range []string{"MiniMax-M2.7", "MiniMax-M2.7-highspeed"} {
+			entries = append(entries, builtinEntry(provider, profile, model, anthropicChat(m2Context, 0)))
+		}
+	}
 	return entries
 }
 
@@ -590,7 +616,32 @@ func kimiModels() []Entry {
 	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
 		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}
+	// Kimi Code publishes these membership identifiers for both protocol faces.
+	// The product profiles are withheld until the honest-client and Thinking
+	// gates are exercised; keeping the seed here makes their future availability
+	// independent from the pay-as-you-go catalogue and model aliases.
+	for _, profile := range []domain.ProviderProfileID{
+		domain.ProfileKimiCodeOpenAIChat,
+		domain.ProfileKimiCodeAnthropicMessages,
+	} {
+		entries = append(entries,
+			// The unqualified k3 identifier inherits the member's plan tier: some
+			// tiers cap it at 256K and others expose 1M. A static catalogue cannot
+			// know that entitlement, so it must not claim either bound.
+			builtinEntry(provider, profile, "k3", kimiCodeModel(0)),
+			builtinEntry(provider, profile, "k3-256k", kimiCodeModel(262_144)),
+			builtinEntry(provider, profile, "kimi-for-coding", kimiCodeModel(262_144)),
+			builtinEntry(provider, profile, "kimi-for-coding-highspeed", kimiCodeModel(262_144)),
+		)
+	}
 	return entries
+}
+
+func kimiCodeModel(contextTokens int64) domain.ProviderCapabilities {
+	return domain.ProviderCapabilities{
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true, Reasoning: true,
+		MaxContextTokens: contextTokens,
+	}
 }
 
 // bigModelModels is deliberately split by profile even where the identifier is
@@ -666,6 +717,44 @@ func bigModelModels() []Entry {
 		builtinEntry(provider, cn, "embedding-3", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 3_072}),
 		builtinEntry(provider, cn, "embedding-2", domain.ProviderCapabilities{Embeddings: true, MaxContextTokens: 512}),
 	)
+	// The GLM Coding Plan, measured against a real subscription on 2026-09-09.
+	//
+	// Two entries and not the ten its /models route lists, because the route is
+	// the general catalogue echoed on the coding path: every other identifier is
+	// answered by one of these two. Enumeration still comes from the upstream, as
+	// it does for every profile — this table only says what a known model does
+	// here, so a model the plan gains later appears in the picker and is declared
+	// or detected rather than waiting for a Halro release.
+	//
+	// Both reason unconditionally: `thinking: {"type": "disabled"}` was sent and
+	// ignored. No vision on either — glm-5.3-flash carries it on the general
+	// profiles and it was not measured here, and a capability is per (profile,
+	// model), not per model.
+	coding := domain.ProfileBigModelCNCodingChat
+	codingSet := domain.ProviderCapabilities{
+		Chat: true, Streaming: true, StreamUsage: true, Tools: true,
+		JSONObject: true, Reasoning: true,
+	}
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
+		entry := builtinEntry(provider, coding, model, codingSet)
+		entry.ReasonsUnasked = true
+		entries = append(entries, entry)
+	}
+	// The international plan is registered from Z.AI's first-party contract,
+	// not from a live subscription. Z.AI currently names these two models as the
+	// plan's actual targets and documents older identifiers as aliases routed to
+	// one of them. Only the actual targets are seeded; dynamic enumeration may
+	// still expose aliases, and the substitution guard keeps their probe evidence
+	// from being attributed to the alias.
+	globalCoding := domain.ProfileBigModelGlobalCodingChat
+	globalCodingSet := domain.ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Reasoning: true,
+	}
+	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
+		entry := builtinEntry(provider, globalCoding, model, globalCodingSet)
+		entry.ReasonsUnasked = true
+		entries = append(entries, entry)
+	}
 	entries = append(entries, text(global, []string{
 		"glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
 		"glm-4.7-flash", "glm-4.7-flashx", "glm-4.6", "glm-4.5",

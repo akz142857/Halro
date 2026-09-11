@@ -60,6 +60,7 @@ import "strings"
 // path and the connection test say so instead of letting it reach the wire.
 type profileRow struct {
 	ID               ProviderProfileID
+	ConnectionGroup  ProviderConnectionGroupID
 	Type             ProviderType
 	Surface          AccessSurface
 	Scheme           CredentialScheme
@@ -157,7 +158,8 @@ var (
 var profileTable = []profileRow{
 	{
 		ID: ProfileOpenAIChatEmbeddings, Type: ProviderOpenAI,
-		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "openai-api",
+		Surface:         SurfaceOpenAI, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.openai.com",
 		Defaults:        openAIChatSet, Ceiling: openAIChatSet,
 	},
@@ -167,14 +169,16 @@ var profileTable = []profileRow{
 		// Moving this row above it would silently re-point every existing OpenAI
 		// connection at a different endpoint.
 		ID: ProfileOpenAIResponses, Type: ProviderOpenAI,
-		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "openai-api",
+		Surface:         SurfaceOpenAI, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.openai.com",
 		Defaults:        openAIResponsesSet,
 		Ceiling:         withProviderExecutedTools(openAIResponsesSet),
 	},
 	{
 		ID: ProfileAnthropicMessages, Type: ProviderAnthropic,
-		Surface: SurfaceAnthropic, Scheme: CredentialAnthropicAPIKey,
+		ConnectionGroup: "anthropic-api",
+		Surface:         SurfaceAnthropic, Scheme: CredentialAnthropicAPIKey,
 		BaseURLTemplate: "https://api.anthropic.com",
 		Defaults:        anthropicMessagesSet,
 		Ceiling:         withProviderExecutedTools(anthropicMessagesSet),
@@ -185,7 +189,8 @@ var profileTable = []profileRow{
 		// and was wrong in the worst way a prefill can be — plausible, and the one
 		// field an operator is least likely to re-read before saving.
 		ID: ProfileAzureChatEmbeddings, Type: ProviderAzureOpenAI,
-		Surface: SurfaceAzureOpenAI, Scheme: CredentialAzureAPIKey,
+		ConnectionGroup: "azure-openai",
+		Surface:         SurfaceAzureOpenAI, Scheme: CredentialAzureAPIKey,
 		Defaults: openAIChatSet, Ceiling: openAIChatSet,
 	},
 	{
@@ -196,7 +201,8 @@ var profileTable = []profileRow{
 		// defaults instead would have every DeepSeek connection assert vision on
 		// the strength of a single experimental model.
 		ID: ProfileDeepSeekChat, Type: ProviderDeepSeek,
-		Surface: SurfaceDeepSeek, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "deepseek-api",
+		Surface:         SurfaceDeepSeek, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.deepseek.com",
 		Defaults:        deepSeekSet,
 		Ceiling:         withVision(deepSeekSet),
@@ -208,27 +214,62 @@ var profileTable = []profileRow{
 		// Also no endpoint: a compatibility server is by definition somewhere else,
 		// and the whole point of this type is that Halro does not know where.
 		ID: ProfileOpenAICompatible, Type: ProviderOpenAICompatible,
-		Surface: SurfaceOpenAICompatible, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "openai-compatible",
+		Surface:         SurfaceOpenAICompatible, Scheme: CredentialBearerStatic,
 		Defaults: openAICompatibleSet, Ceiling: openAICompatibleSet,
 	},
 	{
 		ID: ProfileBigModelCNChatEmbeddings, Type: ProviderBigModel,
-		Surface: SurfaceBigModelCNGeneral, Scheme: CredentialBigModelAPIKey,
+		ConnectionGroup: "bigmodel-cn-general",
+		Surface:         SurfaceBigModelCNGeneral, Scheme: CredentialBigModelAPIKey,
 		BaseURLTemplate: "https://open.bigmodel.cn",
 		Defaults:        bigModelCNSet,
 		Ceiling:         withBigModelOptionalCapabilities(bigModelCNSet),
 	},
 	{
 		ID: ProfileBigModelGlobalChat, Type: ProviderBigModel,
-		Surface: SurfaceBigModelGlobalGeneral, Scheme: CredentialBigModelAPIKey,
+		ConnectionGroup: "bigmodel-global-general",
+		Surface:         SurfaceBigModelGlobalGeneral, Scheme: CredentialBigModelAPIKey,
 		BaseURLTemplate: "https://api.z.ai",
 		Defaults:        bigModelGlobalSet,
 		Ceiling:         withBigModelOptionalCapabilities(bigModelGlobalSet),
 	},
 	{
+		// GLM Coding Plan, mainland. Same host as the row above it and nothing
+		// else in common: its own key, its own path, its own balance.
+		//
+		// The set is narrower than the general profile's and does not inherit
+		// from it. Chat, streaming, tools, JSON mode and stream usage were each
+		// measured against a real subscription on 2026-09-09; embeddings were
+		// not declared, because the coding path answers an embeddings request
+		// with a model its own list does not carry and nothing observable says
+		// which balance paid for it. Vision and structured outputs were not
+		// measured at all.
+		ID: ProfileBigModelCNCodingChat, Type: ProviderBigModel,
+		ConnectionGroup: "bigmodel-cn-coding",
+		Surface:         SurfaceBigModelCNCoding, Scheme: CredentialBigModelCodingPlanKey,
+		BaseURLTemplate: "https://open.bigmodel.cn",
+		Defaults:        bigModelCodingSet,
+		Ceiling:         bigModelCodingSet,
+	},
+	{
+		// International GLM Coding Plan. Z.AI's first-party documentation
+		// publishes this host, Coding path, key flow, supported models and usage
+		// boundary. Defaults deliberately match the conservative Coding subset;
+		// unlike the mainland row, they have not been exercised with a real
+		// subscription key and therefore make no wider capability claim.
+		ID: ProfileBigModelGlobalCodingChat, Type: ProviderBigModel,
+		ConnectionGroup: "bigmodel-global-coding",
+		Surface:         SurfaceBigModelGlobalCoding, Scheme: CredentialBigModelCodingPlanKey,
+		BaseURLTemplate: "https://api.z.ai",
+		Defaults:        bigModelGlobalCodingSet,
+		Ceiling:         bigModelGlobalCodingSet,
+	},
+	{
 		// Beta profile intentionally declares only the translated text subset.
 		ID: ProfileGeminiText, Type: ProviderGemini,
-		Surface: SurfaceGemini, Scheme: CredentialGoogleAPIKey,
+		ConnectionGroup: "gemini-text",
+		Surface:         SurfaceGemini, Scheme: CredentialGoogleAPIKey,
 		BaseURLTemplate: "https://generativelanguage.googleapis.com",
 		Defaults:        geminiTextSet, Ceiling: geminiTextSet,
 	},
@@ -241,14 +282,16 @@ var profileTable = []profileRow{
 		// offering them means offering three Bedrock connection shapes that share
 		// nothing but a name. Removing the withholding is one field per row.
 		ID: ProfileBedrockConverseText, Type: ProviderBedrock,
-		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
+		ConnectionGroup: "bedrock-runtime",
+		Surface:         SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Withheld:        true,
 		Defaults:        bedrockConverseSet, Ceiling: bedrockConverseSet,
 	},
 	{
 		ID: ProfileBedrockInvokeTitanEmbedV2, Type: ProviderBedrock,
-		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
+		ConnectionGroup: "bedrock-runtime",
+		Surface:         SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
 		Withheld:        true,
@@ -256,14 +299,16 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileOpenAIMediaResources, Type: ProviderOpenAI,
-		Surface: SurfaceOpenAI, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "openai-api",
+		Surface:         SurfaceOpenAI, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.openai.com",
 		Immutable:       true,
 		Defaults:        openAIMediaSet, Ceiling: openAIMediaSet,
 	},
 	{
 		ID: ProfileBedrockInvokeTitanImageV2, Type: ProviderBedrock,
-		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
+		ConnectionGroup: "bedrock-runtime",
+		Surface:         SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
 		Withheld:        true,
@@ -271,7 +316,8 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileBedrockAgentRerankCohere35, Type: ProviderBedrock,
-		Surface: SurfaceBedrockAgentRuntime, Scheme: CredentialAWSSigV4Explicit,
+		ConnectionGroup: "bedrock-agent-runtime",
+		Surface:         SurfaceBedrockAgentRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockAgentRuntimeEndpoint,
 		Immutable:       true,
 		Withheld:        true,
@@ -279,7 +325,8 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileBedrockAsyncNovaReel, Type: ProviderBedrock,
-		Surface: SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
+		ConnectionGroup: "bedrock-runtime",
+		Surface:         SurfaceBedrockRuntime, Scheme: CredentialAWSSigV4Explicit,
 		BaseURLTemplate: bedrockRuntimeEndpoint,
 		Immutable:       true,
 		Withheld:        true,
@@ -295,7 +342,8 @@ var profileTable = []profileRow{
 		// Which models a route carries is recorded in the model catalogue, and a
 		// model's own capabilities are narrowed from this ceiling by detection.
 		ID: ProfileBedrockMantleChat, Type: ProviderBedrock,
-		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		ConnectionGroup: "bedrock-mantle",
+		Surface:         SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate:  bedrockMantleEndpoint,
 		Immutable:        true,
 		RoutePartitioned: true,
@@ -303,7 +351,8 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileBedrockMantleOpenAIChat, Type: ProviderBedrock,
-		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		ConnectionGroup: "bedrock-mantle",
+		Surface:         SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate:  bedrockMantleEndpoint,
 		Immutable:        true,
 		RoutePartitioned: true,
@@ -314,7 +363,8 @@ var profileTable = []profileRow{
 		// current canonical response mapper cannot preserve reasoning items, which
 		// is the one capability this row does not share with the chat profile.
 		ID: ProfileBedrockMantleResponses, Type: ProviderBedrock,
-		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		ConnectionGroup: "bedrock-mantle",
+		Surface:         SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate:  bedrockMantleEndpoint,
 		Immutable:        true,
 		RoutePartitioned: true,
@@ -322,7 +372,8 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileBedrockMantleOpenAIResponses, Type: ProviderBedrock,
-		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		ConnectionGroup: "bedrock-mantle",
+		Surface:         SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate:  bedrockMantleEndpoint,
 		Immutable:        true,
 		RoutePartitioned: true,
@@ -330,7 +381,8 @@ var profileTable = []profileRow{
 	},
 	{
 		ID: ProfileBedrockMantleAnthropicMessages, Type: ProviderBedrock,
-		Surface: SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
+		ConnectionGroup: "bedrock-mantle",
+		Surface:         SurfaceBedrockMantle, Scheme: CredentialBedrockAPIKey,
 		BaseURLTemplate:  bedrockMantleEndpoint,
 		Immutable:        true,
 		RoutePartitioned: true,
@@ -351,19 +403,22 @@ var profileTable = []profileRow{
 		// not a second profile: splitting one contract into two rows would create
 		// two truths, and one of them would go stale first.
 		ID: ProfileMiniMaxAnthropicMessages, Type: ProviderMiniMax,
-		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "minimax-api",
+		Surface:         SurfaceMiniMax, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.minimax.io",
 		Defaults:        minimaxAnthropicSet, Ceiling: minimaxAnthropicSet,
 	},
 	{
 		ID: ProfileMiniMaxChat, Type: ProviderMiniMax,
-		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "minimax-api",
+		Surface:         SurfaceMiniMax, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.minimax.io",
 		Defaults:        minimaxChatSet, Ceiling: minimaxChatSet,
 	},
 	{
 		ID: ProfileMiniMaxResponses, Type: ProviderMiniMax,
-		Surface: SurfaceMiniMax, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "minimax-api",
+		Surface:         SurfaceMiniMax, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.minimax.io",
 		Defaults:        minimaxResponsesSet, Ceiling: minimaxResponsesSet,
 	},
@@ -387,13 +442,15 @@ var profileTable = []profileRow{
 		// interchangeable between the two — Kimi's own error page says a mixed
 		// pair answers 401.
 		ID: ProfileKimiChat, Type: ProviderKimi,
-		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "kimi-api",
+		Surface:         SurfaceKimi, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.moonshot.ai",
 		Defaults:        kimiChatSet, Ceiling: kimiChatSet,
 	},
 	{
 		ID: ProfileKimiAnthropicMessages, Type: ProviderKimi,
-		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "kimi-api",
+		Surface:         SurfaceKimi, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.moonshot.ai",
 		Defaults:        kimiAnthropicSet, Ceiling: kimiAnthropicSet,
 	},
@@ -447,10 +504,57 @@ var profileTable = []profileRow{
 		// pretending it can be switched off. See
 		// docs/prd/kimi-adaptation-plan.zh-CN.md §14.5.
 		ID: ProfileKimiResponses, Type: ProviderKimi,
-		Surface: SurfaceKimi, Scheme: CredentialBearerStatic,
+		ConnectionGroup: "kimi-api",
+		Surface:         SurfaceKimi, Scheme: CredentialBearerStatic,
 		BaseURLTemplate: "https://api.moonshot.ai",
 		Withheld:        true,
 		Defaults:        kimiResponsesSet, Ceiling: kimiResponsesSet,
+	},
+	{
+		ID: ProfileKimiCodeOpenAIChat, Type: ProviderKimi,
+		ConnectionGroup: "kimi-code-openai",
+		Surface:         SurfaceKimiCode, Scheme: CredentialKimiCodeKey,
+		BaseURLTemplate: "https://api.kimi.com",
+		Withheld:        true,
+		Defaults:        kimiCodeSet, Ceiling: kimiCodeSet,
+	},
+	{
+		ID: ProfileKimiCodeAnthropicMessages, Type: ProviderKimi,
+		ConnectionGroup: "kimi-code-anthropic",
+		Surface:         SurfaceKimiCode, Scheme: CredentialKimiCodeKey,
+		BaseURLTemplate: "https://api.kimi.com",
+		Withheld:        true,
+		Defaults:        kimiCodeSet, Ceiling: kimiCodeSet,
+	},
+	{
+		ID: ProfileMiniMaxCNSubscriptionOpenAIChat, Type: ProviderMiniMax,
+		ConnectionGroup: "minimax-cn-subscription-openai",
+		Surface:         SurfaceMiniMaxCNSubscription, Scheme: CredentialMiniMaxSubscriptionKey,
+		BaseURLTemplate: "https://api.minimax.cn",
+		Defaults:        minimaxSubscriptionSet, Ceiling: minimaxSubscriptionSet,
+	},
+	{
+		ID: ProfileMiniMaxCNSubscriptionAnthropicMessages, Type: ProviderMiniMax,
+		ConnectionGroup: "minimax-cn-subscription-anthropic",
+		Surface:         SurfaceMiniMaxCNSubscription, Scheme: CredentialMiniMaxSubscriptionKey,
+		BaseURLTemplate: "https://api.minimax.cn",
+		Withheld:        true,
+		Defaults:        minimaxSubscriptionSet, Ceiling: minimaxSubscriptionSet,
+	},
+	{
+		ID: ProfileMiniMaxGlobalSubscriptionOpenAIChat, Type: ProviderMiniMax,
+		ConnectionGroup: "minimax-global-subscription-openai",
+		Surface:         SurfaceMiniMaxGlobalSubscription, Scheme: CredentialMiniMaxSubscriptionKey,
+		BaseURLTemplate: "https://api.minimax.io",
+		Defaults:        minimaxSubscriptionSet, Ceiling: minimaxSubscriptionSet,
+	},
+	{
+		ID: ProfileMiniMaxGlobalSubscriptionAnthropicMessages, Type: ProviderMiniMax,
+		ConnectionGroup: "minimax-global-subscription-anthropic",
+		Surface:         SurfaceMiniMaxGlobalSubscription, Scheme: CredentialMiniMaxSubscriptionKey,
+		BaseURLTemplate: "https://api.minimax.io",
+		Withheld:        true,
+		Defaults:        minimaxSubscriptionSet, Ceiling: minimaxSubscriptionSet,
 	},
 }
 
@@ -468,6 +572,34 @@ var (
 	bigModelGlobalSet = ProviderCapabilities{
 		Chat: true, Streaming: true, Tools: true,
 		JSONObject: true, StreamUsage: true,
+	}
+	// The measured subset, and nothing else. No Embeddings: the coding path
+	// answers an embeddings request with a model its own list does not carry and
+	// nothing observable says which balance paid. No Vision or Structured
+	// Outputs: not measured. Reasoning sits in the defaults rather than in a
+	// ceiling, unlike the general profile's, because the two models this product
+	// serves reason unconditionally — `thinking: {"type": "disabled"}` was sent
+	// and ignored — so it is what the connection does, not something to turn on.
+	bigModelCodingSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true,
+		JSONObject: true, StreamUsage: true, Reasoning: true,
+	}
+	// The international Coding endpoint is registered from Z.AI's published
+	// contract without borrowing the mainland account's observed behaviour.
+	// Chat is the named protocol; streaming, tool use and reasoning are intrinsic
+	// to the officially supported coding-agent workflows. JSON mode and stream
+	// usage stay absent until an international subscription response proves them.
+	bigModelGlobalCodingSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Reasoning: true,
+	}
+	// The subscription products start from the portable coding-agent subset.
+	// Product model catalogues add per-model bounds and optional capabilities;
+	// no multimodal capability is inferred from a plan marketing page.
+	kimiCodeSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true,
+	}
+	minimaxSubscriptionSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Reasoning: true, StreamUsage: true,
 	}
 	openAICompatibleSet = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true}
 	geminiTextSet       = ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true, DeveloperRole: true}
@@ -742,18 +874,25 @@ var providerTypeIndex = func() map[ProviderType]providerTypeRow {
 // ProviderProfileSummary is one row of the matrix, for callers outside this
 // package that need to present or walk it rather than resolve a single profile.
 type ProviderProfileSummary struct {
-	ID               ProviderProfileID
-	Type             ProviderType
-	AccessSurface    AccessSurface
-	CredentialScheme CredentialScheme
-	BaseURLTemplate  string
-	Immutable        bool
+	ID                ProviderProfileID
+	ConnectionGroupID ProviderConnectionGroupID
+	Type              ProviderType
+	AccessSurface     AccessSurface
+	CredentialScheme  CredentialScheme
+	BaseURLTemplate   string
+	Immutable         bool
 	// Withheld travels with the row rather than being a second list a caller
 	// keeps: AllProviderProfiles stays the one enumeration, and whoever presents
 	// the matrix decides what to do with a withheld row. See profileRow.
 	Withheld bool
-	Defaults ProviderCapabilities
-	Ceiling  ProviderCapabilities
+	// RoutePartitioned travels for the same reason, and it is what tells a
+	// connection form whether the profiles of one group are alternatives or
+	// companions: where it is true the upstream serves each model from exactly
+	// one of them, so an operator picks a route; where it is false the group's
+	// profiles ride one connection together and there is nothing to pick.
+	RoutePartitioned bool
+	Defaults         ProviderCapabilities
+	Ceiling          ProviderCapabilities
 }
 
 // AllProviderProfiles returns every registered profile in table order.
@@ -764,14 +903,21 @@ type ProviderProfileSummary struct {
 func AllProviderProfiles() []ProviderProfileSummary {
 	summaries := make([]ProviderProfileSummary, 0, len(profileTable))
 	for _, row := range profileTable {
-		summaries = append(summaries, ProviderProfileSummary{
-			ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
-			CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
-			Immutable: row.Immutable, Withheld: row.Withheld,
-			Defaults: row.Defaults, Ceiling: row.Ceiling,
-		})
+		summaries = append(summaries, summaryOf(row))
 	}
 	return summaries
+}
+
+// ConnectionGroupForProfile returns the immutable connection boundary for a
+// profile. A ProviderInstance may carry several bindings, but every one must
+// belong to this same group; sharing a surface and credential scheme alone is
+// not enough when one product exposes alternative protocol stacks.
+func ConnectionGroupForProfile(profileID ProviderProfileID) (ProviderConnectionGroupID, bool) {
+	row, ok := profileIndex[profileID]
+	if !ok {
+		return "", false
+	}
+	return row.ConnectionGroup, true
 }
 
 // IsRegisteredProviderType reports whether this build has a provider type.

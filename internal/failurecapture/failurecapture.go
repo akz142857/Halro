@@ -39,7 +39,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
+
 	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // DirPerm and FilePerm match the log sink's and the data directory's. The
@@ -107,6 +110,18 @@ type Record struct {
 	ProjectID  string    `json:"project_id"`
 	Outcome    string    `json:"outcome"`
 	CapturedAt time.Time `json:"captured_at"`
+	// OfferingID and ProfileID identify the exact upstream product surface that
+	// produced the captured failure. Older captures decode with both empty.
+	OfferingID               domain.ProviderOfferingID `json:"offering_id,omitempty"`
+	ProfileID                domain.ProviderProfileID  `json:"profile_id,omitempty"`
+	AccountRegionID          domain.ProviderRegionID   `json:"account_region_id,omitempty"`
+	ProviderCode             string                    `json:"provider_code,omitempty"`
+	ProviderFailureReason    provider.FailureReason    `json:"provider_failure_reason,omitempty"`
+	ProviderRequestID        string                    `json:"provider_request_id,omitempty"`
+	FailurePhase             string                    `json:"failure_phase,omitempty"`
+	Retryable                bool                      `json:"retryable,omitempty"`
+	Ambiguous                bool                      `json:"ambiguous,omitempty"`
+	FailureSemanticsRecorded bool                      `json:"failure_semantics_recorded,omitempty"`
 	// GatewayRequest is the decoded body accepted at Halro's public API
 	// boundary, before protocol translation changes field names or structure.
 	// It is retained only in this encrypted, bounded and audited store. Headers
@@ -236,6 +251,24 @@ func (s *Store) Put(record Record) (bool, error) {
 		// day an operator-supplied or upstream-supplied ID is threaded through
 		// is the day "../../master.key" would choose where a file lands.
 		return false, errors.New("request ID is not a safe file name")
+	}
+	if record.ProviderCode != provider.SafeProviderIdentifier(record.ProviderCode) ||
+		record.ProviderRequestID != provider.SafeProviderIdentifier(record.ProviderRequestID) {
+		return false, errors.New("provider identifiers must be bounded identifiers")
+	}
+	if !record.ProviderFailureReason.Valid() {
+		return false, errors.New("provider failure reason is invalid")
+	}
+	if record.OfferingID != "" || record.ProfileID != "" {
+		identity, ok := domain.IdentityForProfile(record.ProfileID)
+		if !ok || record.OfferingID == "" || identity.Offering != record.OfferingID {
+			return false, errors.New("provider offering and profile attribution must match")
+		}
+		if !domain.AccountRegionBelongsToSurface(identity.Surface, record.AccountRegionID) {
+			return false, errors.New("provider account region does not belong to the profile surface")
+		}
+	} else if record.AccountRegionID != domain.RegionNone {
+		return false, errors.New("provider account region requires provider profile attribution")
 	}
 	record.CapturedAt = s.now().UTC()
 	record.GatewayRequest, record.GatewayRequestTruncated = truncateJSON(record.GatewayRequest, s.maxBytes)

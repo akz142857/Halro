@@ -9,6 +9,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // maxTrackedEventIDs bounds the dedup index, mirroring the audit log's. A
@@ -42,13 +43,16 @@ type AttemptEvent struct {
 	// truncated to a date: a request accepted at 23:59 and settled at 00:02
 	// belongs to the day it was admitted on, and every view has to agree on
 	// that or the same call lands in two different days.
-	PeriodID              string `json:"period_id"`
-	PeriodTimezoneVersion uint64 `json:"period_timezone_version,omitempty"`
-	ProviderID            string `json:"provider_id,omitempty"`
-	RequestedModel        string `json:"requested_model,omitempty"`
-	ProviderModel         string `json:"provider_model,omitempty"`
-	ProviderInputTokens   int64  `json:"provider_input_tokens"`
-	ProviderOutputTokens  int64  `json:"provider_output_tokens"`
+	PeriodID              string                    `json:"period_id"`
+	PeriodTimezoneVersion uint64                    `json:"period_timezone_version,omitempty"`
+	ProviderID            string                    `json:"provider_id,omitempty"`
+	OfferingID            domain.ProviderOfferingID `json:"offering_id,omitempty"`
+	ProfileID             domain.ProviderProfileID  `json:"profile_id,omitempty"`
+	AccountRegionID       domain.ProviderRegionID   `json:"account_region_id,omitempty"`
+	RequestedModel        string                    `json:"requested_model,omitempty"`
+	ProviderModel         string                    `json:"provider_model,omitempty"`
+	ProviderInputTokens   int64                     `json:"provider_input_tokens"`
+	ProviderOutputTokens  int64                     `json:"provider_output_tokens"`
 	// Breakdown subsets of the two totals above, not additions to them.
 	ProviderCachedInputTokens     int64                      `json:"provider_cached_input_tokens,omitempty"`
 	ProviderCacheWriteInputTokens int64                      `json:"provider_cache_write_input_tokens,omitempty"`
@@ -76,12 +80,16 @@ type AttemptEvent struct {
 	// carried, which the console renders as "this record predates the field"
 	// rather than as an invented "unknown" — a value nobody could act on
 	// looks exactly like an upstream that named none.
-	ProviderCode      string `json:"provider_code,omitempty"`
-	ProviderRequestID string `json:"provider_request_id,omitempty"`
-	FailurePhase      string `json:"failure_phase,omitempty"`
-	LatencyMillis     int64  `json:"latency_millis"`
-	RetryCount        int    `json:"retry_count"`
-	FallbackCount     int    `json:"fallback_count"`
+	ProviderCode             string                 `json:"provider_code,omitempty"`
+	ProviderFailureReason    provider.FailureReason `json:"provider_failure_reason,omitempty"`
+	ProviderRequestID        string                 `json:"provider_request_id,omitempty"`
+	FailurePhase             string                 `json:"failure_phase,omitempty"`
+	Retryable                bool                   `json:"retryable,omitempty"`
+	Ambiguous                bool                   `json:"ambiguous,omitempty"`
+	FailureSemanticsRecorded bool                   `json:"failure_semantics_recorded,omitempty"`
+	LatencyMillis            int64                  `json:"latency_millis"`
+	RetryCount               int                    `json:"retry_count"`
+	FallbackCount            int                    `json:"fallback_count"`
 }
 
 func (a AttemptEvent) KnownCostMicrosUSD() (int64, bool) {
@@ -291,6 +299,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			PeriodID:              event.PeriodID,
 			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
 			ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
+			OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
 			ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
 			ProviderOutputTokens:          event.ProviderOutputTokens,
 			ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
@@ -304,9 +313,11 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			TokenUsageSource: event.TokenUsageSource,
 			StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
 			ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
-			ProviderCode: event.ProviderCode, ProviderRequestID: event.ProviderRequestID,
-			FailurePhase:  event.FailurePhase,
-			LatencyMillis: event.LatencyMillis, RetryCount: event.RetryCount,
+			ProviderCode: event.ProviderCode, ProviderFailureReason: event.ProviderFailureReason,
+			ProviderRequestID: event.ProviderRequestID, FailurePhase: event.FailurePhase,
+			Retryable: event.Retryable, Ambiguous: event.Ambiguous,
+			FailureSemanticsRecorded: event.FailureSemanticsRecorded,
+			LatencyMillis:            event.LatencyMillis, RetryCount: event.RetryCount,
 			FallbackCount: event.FallbackCount,
 		}
 		a.attempts = append(a.attempts, attempt)

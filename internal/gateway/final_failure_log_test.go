@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
@@ -448,6 +449,10 @@ func TestARenderFailureAfterAFallbackDoesNotReportTheEarlierAttempt(t *testing.T
 	if record["deployment_id"] != "dep_target_2" {
 		t.Fatalf("the record names the wrong target: %v", record["deployment_id"])
 	}
+	if record["offering_id"] != string(domain.OfferingOpenAIAPI) ||
+		record["profile_id"] != string(domain.ProfileOpenAIChatEmbeddings) {
+		t.Fatalf("the render failure lost the serving product/profile: %v", record)
+	}
 	for _, field := range []string{"provider_status", "provider_code", "provider_request_id"} {
 		if value, present := record[field]; present {
 			t.Fatalf("%s = %v on a request whose upstream succeeded", field, value)
@@ -547,7 +552,7 @@ func TestALocalRefusalIsNotSettledAsAnUpstreamSuccess(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			settlement := budget.Settlement{Outcome: testCase.outcome}
 			if testCase.outcome == "policy_rejected" {
-				enrichSettlement(&settlement, nil, time.Now(), time.Now())
+				enrichSettlement(&settlement, nil, provider.Target{}, time.Now(), time.Now())
 			} else {
 				// abort's settlement, which never reaches enrichSettlement.
 				settlement.FailurePhase = phasePreProvider
@@ -566,7 +571,7 @@ func TestALocalRefusalIsNotSettledAsAnUpstreamSuccess(t *testing.T) {
 	// The successful case still records 200, or the assertion above is
 	// satisfied by a build that records nothing.
 	success := budget.Settlement{Outcome: "success"}
-	enrichSettlement(&success, nil, time.Now(), time.Now())
+	enrichSettlement(&success, nil, provider.Target{}, time.Now(), time.Now())
 	if success.HTTPStatus != 200 || success.FailurePhase != "" {
 		t.Fatalf("a successful attempt = %#v", success)
 	}

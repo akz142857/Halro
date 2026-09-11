@@ -127,6 +127,44 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByText("默认")).not.toBeInTheDocument();
   });
 
+  it("names the upstream product and region in provider connection choices", async () => {
+    const general = {
+      ...provider, id: "provider_general", name: "GLM General", type: "bigmodel",
+      base_url: "https://api.z.ai", access_surface: "bigmodel-global-general-api",
+      profile_id: "bigmodel.global.chat.v1", credential_scheme: "bigmodel.api-key",
+      bindings: [{ id: "b-global", profile_id: "bigmodel.global.chat.v1", enabled: true, capabilities: chatCapabilities }],
+    } as Provider;
+    const coding = {
+      ...provider, id: "provider_coding", name: "GLM Coding", type: "bigmodel",
+      base_url: "https://open.bigmodel.cn", access_surface: "bigmodel-cn-coding-api",
+      profile_id: "bigmodel.cn.coding.chat.v1", credential_scheme: "bigmodel.coding-plan-key",
+      bindings: [{ id: "b-coding", profile_id: "bigmodel.cn.coding.chat.v1", enabled: true, capabilities: chatCapabilities }],
+    } as Provider;
+    const entitlement = {
+      ...provider, id: "provider_minimax_subscription", name: "MiniMax Subscription", type: "minimax",
+      base_url: "https://api.minimax.cn", access_surface: "minimax-cn-subscription-access",
+      profile_id: "minimax.cn.subscription.openai.chat.v1", credential_scheme: "minimax.subscription-key",
+      bindings: [{ id: "b-minimax", profile_id: "minimax.cn.subscription.openai.chat.v1", enabled: true, capabilities: chatCapabilities }],
+    } as Provider;
+    vi.mocked(api.providers).mockResolvedValue({ items: [general, coding, entitlement], next_cursor: "" });
+
+    await openCreate();
+    const choices = within(screen.getByLabelText(/^服务商/)).getAllByRole("option");
+    expect(choices[0]).toHaveTextContent("GLM General · BigModel / Z.AI 通用 API · 海外");
+    expect(choices[1]).toHaveTextContent("GLM Coding · GLM Coding Plan（订阅） · 中国大陆");
+    expect(screen.queryByText("订阅成本治理")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^服务商/), { target: { value: coding.id } });
+    const disclosure = screen.getByText("订阅成本治理").closest("details")!;
+    expect(disclosure.previousElementSibling).toHaveClass("deployment-model-field");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByText(/项目预算不会拦截这些调用/)).not.toBeVisible();
+    fireEvent.click(within(disclosure).getByText("订阅成本治理"));
+    expect(disclosure).toHaveAttribute("open");
+    expect(screen.getByText(/项目预算不会拦截这些调用/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^服务商/), { target: { value: entitlement.id } });
+    expect(screen.getByText("订阅成本治理")).toBeVisible();
+  });
+
   // "0 is automatic" dropped who enforces the limit once the deployment stops
   // declaring one, which is a billing and throttling fact, not a nicety.
   it("says what a zero token limit actually means on every limit field", async () => {

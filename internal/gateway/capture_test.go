@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
@@ -68,6 +69,9 @@ func TestAFailedRequestCapturesWhatItSentAndWhatCameBack(t *testing.T) {
 	record := capture.records[0]
 	if record.Outcome != "provider_error" || record.ProjectID != "project_1" || record.RequestID == "" {
 		t.Fatalf("record = %#v", record)
+	}
+	if record.OfferingID != domain.OfferingOpenAIAPI || record.ProfileID != domain.ProfileOpenAIChatEmbeddings {
+		t.Fatalf("capture lost provider product attribution: %#v", record)
 	}
 	// The public Gateway shape stays distinct from the normalized operation.
 	// In particular, this tells the operator that the caller chose max_tokens,

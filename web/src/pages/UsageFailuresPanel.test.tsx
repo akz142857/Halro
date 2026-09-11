@@ -13,6 +13,7 @@ const providerFailure: RequestFailure = {
   last_failure: {
     attempt_id: "att_2", attempt: 2, error_class: "authentication", provider_status: 401,
     provider_id: "provider_b", deployment_id: "dep_b", provider_model: "gpt-4o",
+    offering_id: "bigmodel.coding-plan", profile_id: "bigmodel.cn.coding.chat.v1",
     provider_code: "invalid_api_key", provider_request_id: "upstream-req-77",
     failure_phase: "provider", completed_at: "2026-08-21T10:01:02Z",
   },
@@ -83,9 +84,31 @@ describe("UsageFailuresPanel", () => {
 
     expect(within(dialog).getByText("invalid_api_key")).toBeVisible();
     expect(within(dialog).getByText("upstream-req-77")).toBeVisible();
+		expect(within(dialog).getByText("GLM Coding Plan（订阅）")).toBeVisible();
+		expect(within(dialog).getByText("GLM Coding Plan · Chat（中国大陆 /api/coding/paas/v4）")).toBeVisible();
     // Which attempt produced the class the row shows. Without it a two-attempt
     // request reads as if either could have.
     expect(within(dialog).getByText(/由第 2 次尝试决定/)).toBeVisible();
+  });
+
+  it("distinguishes recorded false failure semantics from an old unrecorded row", async () => {
+    renderPanel([{
+      ...providerFailure,
+      last_failure: {
+        ...providerFailure.last_failure!,
+        provider_failure_reason: "invalid_credential",
+        failure_semantics_recorded: true,
+        retryable: false,
+        ambiguous: false,
+      },
+    }]);
+    await screen.findByText("服务商认证或权限被拒");
+    const dialog = await openFailureDetail();
+
+    expect(within(dialog).getByText("凭据无效")).toBeVisible();
+    expect(within(dialog).getByText("不可重试")).toBeVisible();
+    expect(within(dialog).getByText("已确认上游未执行且不会计费")).toBeVisible();
+    expect(within(dialog).queryByText("旧记录未采集")).not.toBeInTheDocument();
   });
 
   // A row from before those fields were kept says so, rather than showing a
@@ -127,6 +150,22 @@ describe("UsageFailuresPanel", () => {
     await waitFor(() => expect(api.usageFailures).toHaveBeenCalled());
     const query = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls[0][0] ?? "";
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
+  });
+
+  it("carries a linked Offering filter and exposes it as a clearable product name", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=failures&offering_id=bigmodel.coding-plan");
+    renderPanel([providerFailure]);
+
+    await waitFor(() => expect(api.usageFailures).toHaveBeenCalled());
+    const calls = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls;
+    expect(new URLSearchParams((calls.at(-1)?.[0] ?? "").slice(1)).get("offering_id"))
+      .toBe("bigmodel.coding-plan");
+    const chip = await screen.findByRole("button", { name: /GLM Coding Plan（订阅）/ });
+    fireEvent.click(chip);
+    await waitFor(() => {
+      const latest = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls.at(-1)?.[0] ?? "";
+      expect(new URLSearchParams(latest.slice(1)).get("offering_id")).toBeNull();
+    });
   });
 
   // A drawer, not a centred dialog: what is read here is a captured request

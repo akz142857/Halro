@@ -502,6 +502,10 @@ func loadProviderRegistryWithCatalog(
 			if !binding.Enabled {
 				continue
 			}
+			if domain.IsWithheldProfile(binding.ProfileID) {
+				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
+				continue
+			}
 			manifest, ok := provider.BuiltinProfile(binding.ProfileID)
 			if !ok || manifest.ProviderType != instance.Type || manifest.AccessSurface != binding.AccessSurface || manifest.CredentialScheme != binding.CredentialScheme {
 				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
@@ -690,6 +694,10 @@ func loadProviderRegistryWithCatalog(
 				continue
 			}
 		}
+		accountRegion, _ := domain.RegionForEndpoint(
+			deploymentByID[deploymentID].AccessSurface,
+			instanceByID[providerID].BaseURL,
+		)
 		if err := registry.Register(provider.Target{
 			ID:                          route.ID,
 			DeploymentID:                deploymentID,
@@ -699,6 +707,7 @@ func loadProviderRegistryWithCatalog(
 			ProviderModel:               providerModel,
 			AccessSurface:               deploymentByID[deploymentID].AccessSurface,
 			ProfileID:                   deploymentByID[deploymentID].ProfileID,
+			AccountRegionID:             accountRegion,
 			Region:                      deploymentByID[deploymentID].Region,
 			Adapter:                     adapter,
 			InputMicrosPerMillion:       inputPrice,
