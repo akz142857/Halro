@@ -20,6 +20,14 @@ import (
 	"github.com/akz142857/Halro/internal/durable"
 )
 
+// Schema 8 adds account-region attribution and canonical provider failure
+// semantics. Rows written under schema 7 decode with those columns empty or
+// false.
+//
+// Schema 7 adds Provider Offering and Profile attribution. Rows written under
+// schema 6 decode with both columns empty, preserving older history while
+// making product-level fallback and spend distinguishable for new attempts.
+//
 // Schema 6 adds nullable Work Unit and Run attribution. Rows written under
 // schema 5 decode with both columns empty, preserving ungoverned history.
 //
@@ -34,7 +42,7 @@ import (
 // reasoning spans that partition the input and output totals. Rows written under
 // schema 3 decode with those columns zero, which reads correctly as "no tier
 // reported" rather than as a tier of size zero.
-const parquetSchemaVersion = 6
+const parquetSchemaVersion = 8
 
 // parquetSchemaMinReadable is the oldest manifest this build still opens. Every
 // version from here to parquetSchemaVersion is accepted and upgraded in place;
@@ -67,6 +75,9 @@ type parquetAttempt struct {
 	RouteID                       string `parquet:"route_id,dict" json:"route_id"`
 	DeploymentID                  string `parquet:"deployment_id,dict" json:"deployment_id"`
 	ProviderID                    string `parquet:"provider_id,dict" json:"provider_id"`
+	OfferingID                    string `parquet:"offering_id,dict" json:"offering_id"`
+	ProfileID                     string `parquet:"profile_id,dict" json:"profile_id"`
+	AccountRegionID               string `parquet:"account_region_id,dict" json:"account_region_id"`
 	RequestedModel                string `parquet:"requested_model,dict" json:"requested_model"`
 	ProviderModel                 string `parquet:"provider_model,dict" json:"provider_model"`
 	ProviderInputTokens           int64  `parquet:"provider_input_tokens" json:"provider_input_tokens"`
@@ -93,8 +104,12 @@ type parquetAttempt struct {
 	ErrorClass                    string `parquet:"error_class,dict" json:"error_class"`
 	HTTPStatus                    int32  `parquet:"http_status" json:"http_status"`
 	ProviderCode                  string `parquet:"provider_code,dict" json:"provider_code"`
+	ProviderFailureReason         string `parquet:"provider_failure_reason,dict" json:"provider_failure_reason"`
 	ProviderRequestID             string `parquet:"provider_request_id" json:"provider_request_id"`
 	FailurePhase                  string `parquet:"failure_phase,dict" json:"failure_phase"`
+	Retryable                     bool   `parquet:"retryable" json:"retryable"`
+	Ambiguous                     bool   `parquet:"ambiguous" json:"ambiguous"`
+	FailureSemanticsRecorded      bool   `parquet:"failure_semantics_recorded" json:"failure_semantics_recorded"`
 	LatencyMillis                 int64  `parquet:"latency_millis" json:"latency_millis"`
 	RetryCount                    int32  `parquet:"retry_count" json:"retry_count"`
 	FallbackCount                 int32  `parquet:"fallback_count" json:"fallback_count"`
@@ -705,6 +720,18 @@ func (e *Exporter) safeManifestPath(relative string) (string, error) {
 // columns the row's own schema could express take part in the comparison.
 func narrowToSchema(row parquetAttempt, version int32) parquetAttempt {
 	row.SchemaVersion = version
+	if version < 8 {
+		row.AccountRegionID = ""
+		row.ProviderFailureReason = ""
+		row.Retryable = false
+		row.Ambiguous = false
+		row.FailureSemanticsRecorded = false
+	}
+	if version < 7 {
+		// Schema 7 introduced the Provider Offering and Profile attribution.
+		row.OfferingID = ""
+		row.ProfileID = ""
+	}
 	if version < 6 {
 		row.WorkUnitID = ""
 		row.RunID = ""
@@ -789,7 +816,9 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		WorkUnitID: attempt.WorkUnitID, RunID: attempt.RunID,
 		DeploymentID: attempt.DeploymentID,
 		ProviderID:   attempt.ProviderID, RequestedModel: attempt.RequestedModel,
-		ProviderModel: attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,
+		OfferingID: string(attempt.OfferingID), ProfileID: string(attempt.ProfileID),
+		AccountRegionID: string(attempt.AccountRegionID),
+		ProviderModel:   attempt.ProviderModel, ProviderInputTokens: attempt.ProviderInputTokens,
 		ProviderOutputTokens:          attempt.ProviderOutputTokens,
 		ProviderCachedInputTokens:     attempt.ProviderCachedInputTokens,
 		ProviderCacheWriteInputTokens: attempt.ProviderCacheWriteInputTokens,
@@ -809,12 +838,16 @@ func toParquetAttempt(attempt AttemptEvent) parquetAttempt {
 		StartedAtMicros:   attempt.StartedAt.UTC().UnixMicro(),
 		CompletedAtMicros: attempt.CompletedAt.UTC().UnixMicro(),
 		Status:            attempt.Status, ErrorClass: attempt.ErrorClass,
-		HTTPStatus:        int32(attempt.HTTPStatus),
-		ProviderCode:      attempt.ProviderCode,
-		ProviderRequestID: attempt.ProviderRequestID,
-		FailurePhase:      attempt.FailurePhase,
-		LatencyMillis:     attempt.LatencyMillis,
-		RetryCount:        int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
+		HTTPStatus:               int32(attempt.HTTPStatus),
+		ProviderCode:             attempt.ProviderCode,
+		ProviderFailureReason:    string(attempt.ProviderFailureReason),
+		ProviderRequestID:        attempt.ProviderRequestID,
+		FailurePhase:             attempt.FailurePhase,
+		Retryable:                attempt.Retryable,
+		Ambiguous:                attempt.Ambiguous,
+		FailureSemanticsRecorded: attempt.FailureSemanticsRecorded,
+		LatencyMillis:            attempt.LatencyMillis,
+		RetryCount:               int32(attempt.RetryCount), FallbackCount: int32(attempt.FallbackCount),
 	}
 }
 

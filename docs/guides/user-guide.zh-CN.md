@@ -186,9 +186,15 @@ Provider 能力是上限，Deployment 能力只能是 Provider 能力的子集�
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta，可选择 OpenAI Chat、无状态 Responses 或 Anthropic Messages |
 | BigModel（中国大陆） | `https://open.bigmodel.cn` | 实验性；中国大陆通用 API 的 Chat、流式与 Embeddings |
 | Z.AI（海外） | `https://api.z.ai` | 实验性；独立海外 profile 的 Chat 与流式 |
+| BigModel GLM Coding Plan（中国大陆） | `https://open.bigmodel.cn` | 实验性；订阅产品，独立密钥与额度，走 `/api/coding/paas/v4` 的 Chat、流式与工具调用 |
 
-BigModel 凭据按地域绑定。国内与海外需要分别创建 Credential 与 Provider，不能假定密钥或余额可以
-跨区复用。Base URL 应保存上表的根 host；选定的 profile 会固定 `/api/paas/v4` 操作与模型目录路径。
+BigModel 凭据按**产品与地域**绑定。通用 API 的国内、海外，以及 GLM Coding Plan，是三个各自独立的
+产品：Credential 与 Provider 都要分别创建，不能假定密钥或余额可以互通。Base URL 保存上表的根 host；
+路径由选定的 profile 固定——通用 API 用 `/api/paas/v4`，Coding Plan 用 `/api/coding/paas/v4`。
+
+Coding Plan 与国内通用 API **同一个 host**，只有路径和密钥不同，所以走错路径不会报错，只会扣错
+余额。另外它**只服务 `glm-5.3` 与 `glm-5.3-flash` 两个模型**：它的 `/models` 返回的是通用目录，
+其余标识符都会被静默路由到这两个之一，因此模型部署请建在这两个上。
 BigModel 的 Anthropic 兼容路由尚未注册，因为成功响应形状与鉴权契约仍需真实账号验证。
 
 Bedrock Credential 是一个 JSON Secret：

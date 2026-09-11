@@ -262,7 +262,7 @@ func withAnthropicPortableLosses(profileOwn ...string) []string {
 }
 
 func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
-	chatProfiles := []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileOpenAIResponses, domain.ProfileAnthropicMessages, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat, domain.ProfileOpenAICompatible, domain.ProfileGeminiText, domain.ProfileBedrockConverseText, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileMiniMaxChat, domain.ProfileMiniMaxResponses, domain.ProfileKimiChat, domain.ProfileKimiAnthropicMessages, domain.ProfileKimiResponses}
+	chatProfiles := []domain.ProviderProfileID{domain.ProfileOpenAIChatEmbeddings, domain.ProfileOpenAIResponses, domain.ProfileAnthropicMessages, domain.ProfileAzureChatEmbeddings, domain.ProfileDeepSeekChat, domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat, domain.ProfileBigModelCNCodingChat, domain.ProfileBigModelGlobalCodingChat, domain.ProfileOpenAICompatible, domain.ProfileGeminiText, domain.ProfileBedrockConverseText, domain.ProfileBedrockMantleChat, domain.ProfileBedrockMantleOpenAIChat, domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileMiniMaxChat, domain.ProfileMiniMaxResponses, domain.ProfileKimiChat, domain.ProfileKimiAnthropicMessages, domain.ProfileKimiResponses}
 	// MiniMax is absent from embedProfiles on purpose. It serves POST
 	// /v1/embeddings, but in its own shape — `texts` and `type` in, a top-level
 	// `vectors` array out — so no MiniMax profile declares the embeddings
@@ -280,6 +280,8 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 		{ProfileID: domain.ProfileAzureChatEmbeddings},
 		{ProfileID: domain.ProfileDeepSeekChat, UnsupportedRequestFields: []string{"n", "seed", "max_completion_tokens", "parallel_tool_calls", "response_format", "reasoning_effort"}, DeclaredTransforms: []string{"DeepSeek speaks this wire format but accepts a smaller member list, so the fields it has no place for are rejected before provider I/O rather than sent and ignored", "user is carried as DeepSeek's user_id", "reasoning_effort and response_format are declared unsupported at field granularity because support is value-dependent: none maps to thinking.type=disabled and the low and high rungs map to thinking.reasoning_effort with thinking enabled, while minimal, medium and xhigh have no DeepSeek rung; json_object maps to response_format and json_schema has no DeepSeek counterpart", "max_completion_tokens is value-dependent too: it counts reasoning tokens and DeepSeek's max_tokens does not, so it is carried as max_tokens on a request with thinking off and rejected before provider I/O on one with thinking on, or on one that already carries max_tokens", "n and parallel_tool_calls are value-dependent in the same way: n=1 and parallel_tool_calls=true are what omitting the member already means, and only n>1 and a request to run tools one at a time are rejected"}},
 		{ProfileID: domain.ProfileBigModelCNChatEmbeddings, UnsupportedRequestFields: []string{"messages[].name", "n", "seed", "parallel_tool_calls", "tools", "response_format", "stop", "tool_choice", "user", "messages[].content[].detail"}, DeclaredTransforms: []string{"BigModel's smaller Chat request is rendered explicitly; OpenAI-only members are never forwarded", "user is renamed to user_id", "n=1 and parallel_tool_calls=true are omitted as equivalent defaults", "function tools are carried up to the documented limit of 128", "json_object is preserved while json_schema is rejected", "stream usage is returned by the final provider chunk without sending stream_options", "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"}},
+		{ProfileID: domain.ProfileBigModelCNCodingChat, UnsupportedRequestFields: []string{"messages[].name", "n", "seed", "parallel_tool_calls", "tools", "response_format", "stop", "tool_choice", "user", "messages[].content[].detail"}, DeclaredTransforms: []string{"the GLM Coding Plan uses the same explicitly rendered BigModel Chat dialect on its own /api/coding/paas/v4 path and its own subscription key", "the product routes every published model identifier onto the tier its plan entitles, so the model that answers is read back from the response rather than assumed from the request", "user is renamed to user_id", "n=1 and parallel_tool_calls=true are omitted as equivalent defaults", "function tools are carried up to the documented limit of 128", "json_object is preserved while json_schema is rejected", "stream usage is returned by the final provider chunk without sending stream_options", "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"}},
+		{ProfileID: domain.ProfileBigModelGlobalCodingChat, UnsupportedRequestFields: []string{"messages[].name", "n", "seed", "parallel_tool_calls", "tools", "response_format", "stop", "tool_choice", "user", "messages[].content[].detail"}, DeclaredTransforms: []string{"the international GLM Coding Plan uses the documented Z.AI /api/coding/paas/v4 path and the same explicitly rendered BigModel Chat dialect", "user is renamed to user_id", "n=1 and parallel_tool_calls=true are omitted as equivalent defaults", "function tools are carried up to the documented limit of 128", "json_object and json_schema are both routed away until the international Coding endpoint is measured", "streaming is declared from the official coding-agent contract, but stream usage accounting remains unknown until a subscription response is captured", "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"}},
 		{ProfileID: domain.ProfileBigModelGlobalChat, UnsupportedRequestFields: []string{"messages[].name", "n", "seed", "parallel_tool_calls", "tools", "response_format", "stop", "tool_choice", "user", "messages[].content[].detail"}, DeclaredTransforms: []string{"Z.AI uses the same explicitly rendered BigModel Chat dialect on an isolated global surface", "user is renamed to user_id", "n=1 and parallel_tool_calls=true are omitted as equivalent defaults", "function tools are carried up to the documented limit of 128", "json_object is preserved while json_schema is rejected", "stream usage is returned by the final provider chunk without sending stream_options", "sampling bounds, reasoning effort and max_tokens are checked against field values and the exact invocation target before provider I/O"}},
 		{ProfileID: domain.ProfileOpenAICompatible},
 		{ProfileID: domain.ProfileGeminiText, UnsupportedRequestFields: []string{"messages[].name", "seed", "tools", "tool_choice", "parallel_tool_calls", "response_format", "reasoning_effort", "user"}, DeclaredTransforms: []string{"developer messages are merged into Gemini system_instruction"}},
@@ -318,6 +320,8 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 		{ProfileID: domain.ProfileAzureChatEmbeddings, DeclaredTransforms: []string{"Responses items are mapped through the Azure Chat Completions ProviderPrimitive"}},
 		{ProfileID: domain.ProfileDeepSeekChat, UnsupportedRequestFields: []string{"parallel_tool_calls", "text.format"}, DeclaredTransforms: []string{"Responses items are mapped through the DeepSeek Chat ProviderPrimitive", "max_output_tokens is carried as DeepSeek's max_tokens: it is a completion budget that counts reasoning, and this endpoint rejects the reasoning request field outright, so nothing served here thinks and the two bound the same tokens", "parallel_tool_calls is value-dependent: true is what omitting the member already means, and only a request to run tools one at a time is rejected", "text.format is value-dependent: DeepSeek has json_object and no schema mode, so a schema is rejected before provider I/O", "user is carried as DeepSeek's user_id"}},
 		{ProfileID: domain.ProfileBigModelCNChatEmbeddings, UnsupportedRequestFields: []string{"parallel_tool_calls", "tools", "text.format", "tool_choice", "user", "input[].content[].detail"}, DeclaredTransforms: []string{"Responses items are mapped through BigModel Chat Completions", "max_output_tokens is carried as BigModel max_tokens", "function tools are carried up to the documented limit of 128", "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"}},
+		{ProfileID: domain.ProfileBigModelCNCodingChat, UnsupportedRequestFields: []string{"parallel_tool_calls", "tools", "text.format", "tool_choice", "user", "input[].content[].detail"}, DeclaredTransforms: []string{"Responses items are mapped through the Coding Plan's Chat Completions route", "max_output_tokens is carried as BigModel max_tokens", "function tools are carried up to the documented limit of 128", "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"}},
+		{ProfileID: domain.ProfileBigModelGlobalCodingChat, UnsupportedRequestFields: []string{"parallel_tool_calls", "tools", "text.format", "tool_choice", "user", "input[].content[].detail"}, DeclaredTransforms: []string{"Responses items are mapped through the international Coding Plan's documented Chat Completions route", "max_output_tokens is carried as BigModel max_tokens", "function tools are carried up to the documented limit of 128", "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"}},
 		{ProfileID: domain.ProfileBigModelGlobalChat, UnsupportedRequestFields: []string{"parallel_tool_calls", "tools", "text.format", "tool_choice", "user", "input[].content[].detail"}, DeclaredTransforms: []string{"Responses items are mapped through Z.AI Chat Completions", "max_output_tokens is carried as BigModel max_tokens", "function tools are carried up to the documented limit of 128", "value-dependent sampling, user_id, image detail and tool choice constraints are rejected before provider I/O"}},
 		{ProfileID: domain.ProfileOpenAICompatible, DeclaredTransforms: []string{"Responses items are mapped through the compatible Chat Completions ProviderPrimitive"}},
 		{ProfileID: domain.ProfileGeminiText, UnsupportedRequestFields: []string{"tools", "tool_choice", "parallel_tool_calls", "text.format", "user"}, DeclaredTransforms: []string{"instructions are mapped to a developer message and merged into Gemini system_instruction"}},
@@ -349,6 +353,8 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 				{ProfileID: domain.ProfileAzureChatEmbeddings, UnsupportedRequestFields: withAnthropicPortableLosses(), DeclaredTransforms: []string{"portable Messages content is mapped through Azure Chat Completions"}},
 				{ProfileID: domain.ProfileDeepSeekChat, UnsupportedRequestFields: withAnthropicPortableLosses("output_config.effort", "output_config.format"), DeclaredTransforms: []string{"portable Messages content is mapped through DeepSeek Chat Completions", "output_config.effort and output_config.format are declared unsupported at field granularity because support is value-dependent: none, low and high reach DeepSeek's thinking switch while minimal, medium and xhigh have no rung, and DeepSeek has json_object but no schema mode", "thinking stays unsupported for the same reason it is on every other portable profile — it is the Anthropic-native block config, which only native mode forwards; DeepSeek's own thinking switch is reached through output_config.effort"}},
 				{ProfileID: domain.ProfileBigModelCNChatEmbeddings, UnsupportedRequestFields: withAnthropicPortableLosses("output_config.format", "stop_sequences", "tool_choice", "tools"), DeclaredTransforms: []string{"portable Messages content is mapped through BigModel Chat Completions", "function tools are carried up to the documented limit of 128", "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O", "json_schema has no BigModel counterpart"}},
+				{ProfileID: domain.ProfileBigModelCNCodingChat, UnsupportedRequestFields: withAnthropicPortableLosses("output_config.format", "stop_sequences", "tool_choice", "tools"), DeclaredTransforms: []string{"portable Messages content is mapped through the Coding Plan's Chat Completions route", "function tools are carried up to the documented limit of 128", "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O", "json_schema has no BigModel counterpart"}},
+				{ProfileID: domain.ProfileBigModelGlobalCodingChat, UnsupportedRequestFields: withAnthropicPortableLosses("output_config.format", "stop_sequences", "tool_choice", "tools"), DeclaredTransforms: []string{"portable Messages content is mapped through the international Coding Plan's documented Chat Completions route", "function tools are carried up to the documented limit of 128", "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O", "json_schema has no BigModel counterpart"}},
 				{ProfileID: domain.ProfileBigModelGlobalChat, UnsupportedRequestFields: withAnthropicPortableLosses("output_config.format", "stop_sequences", "tool_choice", "tools"), DeclaredTransforms: []string{"portable Messages content is mapped through Z.AI Chat Completions", "function tools are carried up to the documented limit of 128", "sampling bounds, reasoning effort and the required max_tokens bound are checked against field values and the exact GLM model before provider I/O", "json_schema has no BigModel counterpart"}},
 				{ProfileID: domain.ProfileOpenAICompatible, UnsupportedRequestFields: withAnthropicPortableLosses(), DeclaredTransforms: []string{"portable Messages content is mapped through an OpenAI-compatible primitive"}},
 				{ProfileID: domain.ProfileGeminiText, UnsupportedRequestFields: withAnthropicPortableLosses("tools", "tool_choice", "output_config.effort", "output_config.format"), DeclaredTransforms: []string{"portable text Messages content is mapped through Gemini generateContent", "output_config.effort and output_config.format are this endpoint's spelling of reasoning_effort and response_format, which this profile declares unsupported at every value, so a request carrying either is routed away before provider I/O"}},
@@ -417,9 +423,87 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 			DocumentedDeviations: []string{"deletion removes the record and both of its sealed objects; it does not undo accounting for work that already happened", "a submission still owed an answer answers 409: cancel it first"},
 			ProviderProfiles:     responseProfiles, ProfileCoverage: deferredCoverage},
 	)
+	expandCodeSubscriptionProfiles(manifests)
 	setProfileCompatibilityStatuses(manifests)
 	manifests = append(manifests, inferenceResourcesEndpointManifests()...)
 	return append(manifests, governanceEndpointManifests()...)
+}
+
+// expandCodeSubscriptionProfiles keeps northbound compatibility attached to
+// the wire implementation a product reuses. The subscription profiles remain
+// distinct routing and credential identities, but duplicating hundreds of
+// request-field assertions by hand would let the two copies drift.
+func expandCodeSubscriptionProfiles(manifests []EndpointCompatibilityManifest) {
+	aliases := map[domain.ProviderProfileID][]domain.ProviderProfileID{
+		domain.ProfileOpenAIChatEmbeddings: {
+			domain.ProfileKimiCodeOpenAIChat,
+		},
+		domain.ProfileKimiAnthropicMessages: {
+			domain.ProfileKimiCodeAnthropicMessages,
+		},
+		domain.ProfileMiniMaxChat: {
+			domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
+			domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
+		},
+		domain.ProfileMiniMaxAnthropicMessages: {
+			domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+			domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages,
+		},
+	}
+	for manifestIndex := range manifests {
+		manifest := &manifests[manifestIndex]
+		originalCoverage := slices.Clone(manifest.ProfileCoverage)
+		for _, coverage := range originalCoverage {
+			for _, alias := range aliases[coverage.ProfileID] {
+				// Kimi Code's OpenAI-shaped surface is chat-only. Its source
+				// profile also happens to implement embeddings, so copying the
+				// source coverage to every manifest would publish an endpoint the
+				// subscription profile neither declares nor serves.
+				if alias == domain.ProfileKimiCodeOpenAIChat && manifest.SemanticOperation != semantic.OperationGenerate {
+					continue
+				}
+				// A withheld Anthropic profile has no native request path yet. It
+				// still appears on portable northbound endpoints so its field rules
+				// remain reviewable, but claiming native coverage here would require
+				// a schema and gateway route that no write path can reach.
+				if manifest.Protocol == "anthropic" && domain.IsWithheldProfile(alias) {
+					continue
+				}
+				manifest.ProviderProfiles = append(manifest.ProviderProfiles, alias)
+				copy := coverage
+				copy.ProfileID = alias
+				copy.UnsupportedRequestFields = slices.Clone(coverage.UnsupportedRequestFields)
+				copy.DeclaredTransforms = slices.Clone(coverage.DeclaredTransforms)
+				if alias == domain.ProfileMiniMaxCNSubscriptionOpenAIChat || alias == domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat {
+					copy.DeclaredTransforms = []string{
+						"MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+						"value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+					}
+				}
+				if alias == domain.ProfileKimiCodeAnthropicMessages {
+					copy.DeclaredTransforms = []string{
+						"Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+						"portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures",
+					}
+				}
+				if alias == domain.ProfileMiniMaxCNSubscriptionAnthropicMessages || alias == domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages {
+					if slices.Contains(manifest.RequestFields, "temperature") {
+						copy.UnsupportedRequestFields = append(copy.UnsupportedRequestFields, "temperature")
+					}
+					if slices.Contains(manifest.RequestFields, "top_p") {
+						copy.UnsupportedRequestFields = append(copy.UnsupportedRequestFields, "top_p")
+					}
+					slices.Sort(copy.UnsupportedRequestFields)
+					copy.UnsupportedRequestFields = slices.Compact(copy.UnsupportedRequestFields)
+					copy.DeclaredTransforms = []string{
+						"MiniMax Subscription Access reuses the Anthropic Messages wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
+						"portable optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
+					}
+				}
+				manifest.ProfileCoverage = append(manifest.ProfileCoverage, copy)
+			}
+		}
+	}
 }
 
 func governanceEndpointManifests() []EndpointCompatibilityManifest {
@@ -521,7 +605,15 @@ func setProfileCompatibilityStatuses(manifests []EndpointCompatibilityManifest) 
 func providerProfileCompatibilityStatus(profileID domain.ProviderProfileID, endpointStatus CompatibilityStatus) CompatibilityStatus {
 	if isInferenceResourcesProviderProfile(profileID) ||
 		profileID == domain.ProfileBigModelCNChatEmbeddings ||
-		profileID == domain.ProfileBigModelGlobalChat {
+		profileID == domain.ProfileBigModelGlobalChat ||
+		profileID == domain.ProfileBigModelCNCodingChat ||
+		profileID == domain.ProfileBigModelGlobalCodingChat ||
+		profileID == domain.ProfileKimiCodeOpenAIChat ||
+		profileID == domain.ProfileKimiCodeAnthropicMessages ||
+		profileID == domain.ProfileMiniMaxCNSubscriptionOpenAIChat ||
+		profileID == domain.ProfileMiniMaxCNSubscriptionAnthropicMessages ||
+		profileID == domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat ||
+		profileID == domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages {
 		return StatusExperimental
 	}
 	return endpointStatus

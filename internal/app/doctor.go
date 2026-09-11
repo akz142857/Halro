@@ -264,6 +264,11 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 
 	if store != nil {
 		checkDoctorTopology(ctx, cfg, store, add)
+		if credentials, credentialErr := store.ListCredentials(ctx); credentialErr != nil {
+			add("credential_product", "fail", credentialErr.Error())
+		} else {
+			checkDoctorCredentialProducts(credentials, add)
+		}
 		if err := store.PricingReadiness(ctx); err != nil {
 			add("pricing_clock", "fail", err.Error())
 		} else {
@@ -601,4 +606,62 @@ func checkDoctorCapabilityDrift(providers []domain.ProviderInstance, deployments
 	default:
 		add("capability_drift", "pass", "every deployment matches its capability snapshot")
 	}
+}
+
+// checkDoctorCredentialProducts reports credentials whose stored product
+// identity contradicts the endpoint they are bound to.
+//
+// This exists because of a defect this build shipped. A credential stores an
+// Access Surface, which is what says which upstream product it belongs to, and
+// until the Offering model landed the console never sent one: the server filled
+// it in from the provider type's default profile. For every vendor with one
+// product that was right. For BigModel it was not — mainland and global are
+// separate products with separate balances and different capability sets — so a
+// key bound to api.z.ai was sealed to the mainland surface and its connections
+// declared embeddings the global endpoint does not serve.
+//
+// Reported, never repaired. Re-pointing the surface would silently change what
+// the connections built on it claim to do, and narrowing a capability takes a
+// deployment out of service until it is retested; that is the operator's call,
+// and the runbook is docs/prd/provider-offering-subscription-access-plan.zh-CN.md
+// §8.3. An endpoint the tables do not recognise says nothing at all — fronting
+// an upstream with a proxy is ordinary — so only a host recognised as belonging
+// to a *different* surface of the same provider type is a finding.
+func checkDoctorCredentialProducts(credentials []domain.Credential, add func(string, string, string)) {
+	mismatched := 0
+	for _, credential := range credentials {
+		// The endpoint a credential is sealed to is its audience with the
+		// provider type appended, which is the same value the Admin listing
+		// shows as bound_base_url.
+		endpoint := credentialOrigin(credential.Audience, credential.Type)
+		surface, surfaceKnown := domain.SurfaceForEndpoint(credential.Type, endpoint)
+		if surfaceKnown && surface != credential.AccessSurface {
+			mismatched++
+			continue
+		}
+		identity, identityKnown := domain.IdentityForSurface(credential.AccessSurface)
+		region, regionKnown := domain.RegionForProviderEndpoint(credential.Type, endpoint)
+		if !identityKnown || !regionKnown || identity.Region == domain.RegionNone || region == identity.Region {
+			continue
+		}
+		mismatched++
+	}
+	if mismatched > 0 {
+		// A count and not a list, like capability_drift above: credential
+		// identifiers are the kind of specific object that belongs in the audit
+		// trail rather than in a health report.
+		//
+		// "fail" and not "warn", at the same bar capability_drift uses: some
+		// deployment will not serve. A connection on the mainland surface bound
+		// to the global host declares embeddings that endpoint does not have, and
+		// those requests fail upstream after the budget is reserved. It does mean
+		// an upgrade gate that ran green before this check existed can go red on
+		// data it already held — which is the check working, not a regression.
+		add("credential_product", "fail", fmt.Sprintf(
+			"%d credential(s) are sealed to one upstream product and bound to another product's endpoint;"+
+				" their connections carry the wrong capability set and must be recreated on the right"+
+				" product rather than re-pointed", mismatched))
+		return
+	}
+	add("credential_product", "pass", "every credential's endpoint agrees with the product it is sealed to")
 }

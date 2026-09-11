@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 )
 
@@ -23,6 +24,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 			{EventID: requestID + "_settled", Kind: ledger.EventAttemptSettled,
 				RequestID: requestID, AttemptID: attemptID, ProjectID: "project", WorkUnitID: "wku_1", RunID: fmt.Sprintf("run_%d", requestIndex),
 				ProviderID: fmt.Sprintf("provider_%d", requestIndex), PeriodID: "period",
+				OfferingID: domain.OfferingOpenAIAPI, ProfileID: domain.ProfileOpenAIChatEmbeddings,
 				ProviderModel:       fmt.Sprintf("model_%d", requestIndex),
 				OccurredAt:          now.Add(time.Duration(requestIndex)*time.Minute + time.Second),
 				ProviderInputTokens: int64(requestIndex), CommittedMicrosUSD: ledger.MicrosUSD(int64(requestIndex)),
@@ -65,6 +67,10 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if err != nil || len(filtered.Attempts) != 1 || filtered.Attempts[0].RequestID != "req_2" {
 		t.Fatalf("filtered=%#v err=%v", filtered, err)
 	}
+	offeringFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, OfferingID: domain.OfferingOpenAIAPI})
+	if err != nil || len(offeringFiltered.Attempts) != 3 {
+		t.Fatalf("offering filtered=%#v err=%v", offeringFiltered, err)
+	}
 	modelFiltered, err := aggregate.QueryAttempts(AttemptQuery{Limit: 10, ProviderModel: "model_2"})
 	if err != nil || len(modelFiltered.Attempts) != 1 || modelFiltered.Attempts[0].RequestID != "req_2" {
 		t.Fatalf("provider model filtered=%#v err=%v", modelFiltered, err)
@@ -85,6 +91,10 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if dashboard.Today.Requests != 3 || dashboard.Today.Attempts != 3 ||
 		dashboard.Today.InputTokens != 6 {
 		t.Fatalf("dashboard=%#v", dashboard)
+	}
+	if got := dashboard.Breakdowns["offering"]["calls"]; len(got) != 1 ||
+		got[0].Key != string(domain.OfferingOpenAIAPI) || got[0].Calls != 3 {
+		t.Fatalf("offering breakdown=%#v", dashboard.Breakdowns["offering"])
 	}
 }
 

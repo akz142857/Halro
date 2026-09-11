@@ -894,6 +894,15 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
 .deployment-model-band-name { padding: var(--space-1) var(--space-3) 0; color: var(--muted); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .deployment-model-options strong { min-width: 0; overflow: hidden; font: var(--font-size-sm) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .deployment-model-options small { flex: 0 0 auto; max-width: 34%; overflow: hidden; color: var(--muted); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.deployment-subscription-pricing { grid-column: 1 / -1; overflow: hidden; color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border: 1px solid var(--color-status-warning-border); border-radius: var(--radius-lg); }
+.deployment-subscription-pricing > summary { display: flex; min-height: 2.75rem; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 0 var(--space-4); cursor: pointer; list-style: none; }
+.deployment-subscription-pricing > summary::-webkit-details-marker { display: none; }
+.deployment-subscription-pricing > summary:hover { background: color-mix(in srgb, var(--color-status-warning-surface) 86%, var(--text) 4%); }
+.deployment-subscription-pricing > summary:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -3px; }
+.deployment-subscription-pricing > summary strong { min-width: 0; overflow: hidden; color: var(--text); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+.deployment-subscription-pricing > summary::after { content: "›"; flex: 0 0 auto; font-size: var(--font-size-lg); transform: rotate(0); transition: transform var(--motion-duration-normal) var(--motion-easing-standard); }
+.deployment-subscription-pricing[open] > summary::after { transform: rotate(90deg); }
+.deployment-subscription-pricing > div { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: 1.6; }
 /* The zone picker. Same shape as the model catalog combobox above — a text
    input that opens a filtered list — because it answers the same question: a
    name the operator has to spell exactly and cannot be expected to remember.
@@ -1887,6 +1896,7 @@ textarea { resize: vertical; }
 .provider-form-section > header h3 { margin: 0 0 6px; font-size: var(--font-size-md); }
 .provider-form-section > header p { margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.55; }
 .provider-form-section .form-grid > .field { grid-column: auto; margin: 0; }
+.provider-form-section .form-grid > .subscription-usage-disclosure { grid-column: 1 / -1; }
 .provider-form-section:first-child .form-grid > .field:first-child { grid-column: 1 / -1; }
 .provider-capabilities-group { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .provider-capabilities-group > header { margin-bottom: 12px; }
@@ -1923,6 +1933,28 @@ textarea { resize: vertical; }
 .capability-option.unavailable { background: color-mix(in srgb, var(--surface) 94%, var(--color-shadow-base)); cursor: default; }
 .capability-option.unavailable input:disabled { opacity: .45; }
 .provider-form > .notice { margin: 18px 24px 0; }
+/* A subscription warning is a required decision, not a page-sized alert. Its
+   summary stays compact and always names the unresolved action; details are
+   disclosed only when the operator chooses to read and acknowledge them. */
+.subscription-usage-disclosure { width: 100%; margin: 0 0 var(--space-4); overflow: hidden; color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border: .0625rem solid var(--color-status-warning-border); border-radius: var(--radius-lg); }
+.field-hint.warning-text { grid-column: 1 / -1; margin: calc(-1 * var(--space-2)) 0 var(--space-2); color: var(--color-status-warning-text); font-size: var(--font-size-xs); }
+.subscription-usage-disclosure > summary { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto 1rem; min-height: 4rem; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-4); cursor: pointer; list-style: none; }
+.subscription-usage-disclosure > summary::-webkit-details-marker { display: none; }
+.subscription-usage-disclosure > summary:hover { background: color-mix(in srgb, var(--color-status-warning-surface) 86%, var(--text) 4%); }
+.subscription-usage-disclosure > summary:focus-visible { outline: .125rem solid var(--color-focus-ring); outline-offset: -.1875rem; }
+.subscription-usage-icon { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; color: var(--color-status-warning-surface); background: var(--color-status-warning-text); border-radius: 50%; font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); }
+.subscription-usage-summary-copy { display: grid; min-width: 0; gap: .125rem; }
+.subscription-usage-summary-copy strong { color: var(--text); font-size: var(--font-size-sm); }
+.subscription-usage-summary-copy small { color: var(--color-status-warning-text); font-size: var(--font-size-xs); line-height: 1.4; }
+.subscription-usage-state { padding: .1875rem .5rem; color: var(--color-status-warning-text); border: .0625rem solid var(--color-status-warning-border); border-radius: var(--radius-pill); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+.subscription-usage-disclosure.confirmed .subscription-usage-state { color: var(--color-status-success-text); background: var(--color-status-success-surface); border-color: var(--color-status-success-border); }
+.subscription-usage-chevron { color: var(--color-status-warning-text); font-size: var(--font-size-lg); transform: rotate(0); transition: transform var(--motion-duration-normal) var(--motion-easing-standard); }
+.subscription-usage-disclosure[open] .subscription-usage-chevron { transform: rotate(90deg); }
+.subscription-usage-body { display: grid; gap: var(--space-3); padding: var(--space-4); border-top: .0625rem solid var(--color-status-warning-border); }
+.subscription-usage-body p { margin: 0; color: var(--color-status-warning-text); font-size: var(--font-size-xs); line-height: 1.6; }
+.subscription-usage-body > a { width: fit-content; color: var(--color-status-warning-text); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); text-underline-offset: .1875rem; }
+.subscription-usage-acknowledgement { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); color: var(--text); background: var(--surface); border: .0625rem solid var(--color-status-warning-border); border-radius: var(--radius-md); cursor: pointer; font-size: var(--font-size-xs); line-height: 1.5; }
+.subscription-usage-acknowledgement input { width: 1rem; height: 1rem; min-height: 1rem; flex: 0 0 auto; margin: .125rem 0 0; accent-color: var(--color-action-primary); }
 /* Sticky form footer, one rule rather than one per form. An opaque surface,
    because a translucent panel colour let the fields scroll through the bar in
    Dark, and blur is not a substitute — it still shows what is behind it. The
@@ -2222,6 +2254,8 @@ textarea { resize: vertical; }
   .onboarding-context { align-items: stretch; flex-direction: column; margin-top: 0; }
   .onboarding-context .onboarding-context-back { align-self: flex-start; }
   .button-group .button { flex: 1; }
+  .subscription-usage-disclosure > summary { grid-template-columns: 1.75rem minmax(0, 1fr) 1rem; }
+  .subscription-usage-state { display: none; }
   .modal:has(> .redaction-form) { width: 100%; height: 100dvh; max-height: 100dvh; border-right: 0; border-left: 0; }
   .redaction-policy-basics { padding: var(--space-4); }
   .redaction-policy-basics .form-grid { grid-template-columns: minmax(0, 1fr); }

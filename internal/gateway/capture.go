@@ -142,13 +142,24 @@ func (run *requestRun) writeCapture(outcome string) {
 	if run.capturedGatewayRequest == nil && run.capturedRequest == nil && run.capturedResponse == nil {
 		return
 	}
+	descriptor := run.terminalDescriptor(outcome)
 	record := failurecapture.Record{
-		RequestID:      run.requestID,
-		ProjectID:      run.principal.Project.ID,
-		Outcome:        outcome,
-		GatewayRequest: encodeCaptured(run.capturedGatewayRequest),
-		Request:        encodeCaptured(run.capturedRequest),
-		Response:       encodeCaptured(run.capturedResponse),
+		RequestID:                run.requestID,
+		ProjectID:                run.principal.Project.ID,
+		Outcome:                  outcome,
+		OfferingID:               run.lastTarget.OfferingID,
+		ProfileID:                run.lastTarget.ProfileID,
+		AccountRegionID:          run.lastTarget.AccountRegionID,
+		ProviderCode:             descriptor.ProviderCode,
+		ProviderFailureReason:    descriptor.ProviderFailureReason,
+		ProviderRequestID:        descriptor.ProviderRequestID,
+		FailurePhase:             descriptor.Phase,
+		Retryable:                descriptor.Retryable,
+		Ambiguous:                descriptor.Ambiguous,
+		FailureSemanticsRecorded: descriptor.FailureSemanticsRecorded,
+		GatewayRequest:           encodeCaptured(run.capturedGatewayRequest),
+		Request:                  encodeCaptured(run.capturedRequest),
+		Response:                 encodeCaptured(run.capturedResponse),
 	}
 	written, err := store.Put(record)
 	switch {

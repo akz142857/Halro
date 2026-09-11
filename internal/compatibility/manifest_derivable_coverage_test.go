@@ -96,7 +96,8 @@ func servedNatively(manifest EndpointCompatibilityManifest, profileID domain.Pro
 	// Naming one of them left the rest looking like drift, and the exact check
 	// below reported them as such the moment it was turned on.
 	switch profileID {
-	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages, domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
+	case domain.ProfileAnthropicMessages, domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileMiniMaxAnthropicMessages, domain.ProfileKimiAnthropicMessages:
 		return true
 	}
 	return false

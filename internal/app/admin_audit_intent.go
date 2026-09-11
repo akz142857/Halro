@@ -35,6 +35,14 @@ import (
 // the audit trail must name who the server authenticated, not who the request
 // claims to be.
 func (r *Runtime) newAdminAuditIntent(request *http.Request, action, targetType, targetID string) (*domain.AdminAuditIntent, error) {
+	return r.newAdminAuditIntentWithMetadata(request, action, targetType, targetID, nil)
+}
+
+func (r *Runtime) newAdminAuditIntentWithMetadata(
+	request *http.Request,
+	action, targetType, targetID string,
+	metadata map[string]string,
+) (*domain.AdminAuditIntent, error) {
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	eventID, err := id.New("aud")
 	if err != nil {
@@ -49,6 +57,7 @@ func (r *Runtime) newAdminAuditIntent(request *http.Request, action, targetType,
 		TargetType:    targetType,
 		TargetID:      targetID,
 		CorrelationID: strings.TrimSpace(request.Header.Get("X-Request-ID")),
+		Metadata:      metadata,
 	}
 	if err := intent.Validate(); err != nil {
 		return nil, err

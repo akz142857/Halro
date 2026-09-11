@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -47,24 +48,29 @@ type FailureDescriptor struct {
 	// resolves to ErrorUnknown rather than to a literal of its own: a log whose
 	// error_class is sometimes outside the enum cannot be aggregated by it, and
 	// that is exactly what the console's dictionary and every alert rule key on.
-	Class             provider.ErrorClass
-	ProviderStatus    int
-	ProviderCode      string
-	ProviderRequestID string
+	Class                 provider.ErrorClass
+	ProviderStatus        int
+	ProviderCode          string
+	ProviderFailureReason provider.FailureReason
+	ProviderRequestID     string
 	// ErrorType is the Go type of an error nothing classified. A type name is
 	// produced by the code rather than by an upstream, and it answers the
 	// question this case is actually asked: which component produced a failure
 	// the adapter contract should have classified. The error's text stays out,
 	// because from here an adapter that ignored the contract and Halro's own
 	// internal error are indistinguishable, and one of them can hold a body.
-	ErrorType string
-	Retryable bool
-	Ambiguous bool
+	ErrorType                string
+	Retryable                bool
+	Ambiguous                bool
+	FailureSemanticsRecorded bool
 	// Where it happened, carried from the target the attempt ran against.
-	PublicModel  string
-	DeploymentID string
-	ProviderID   string
-	BindingID    string
+	PublicModel     string
+	DeploymentID    string
+	ProviderID      string
+	BindingID       string
+	OfferingID      domain.ProviderOfferingID
+	ProfileID       domain.ProviderProfileID
+	AccountRegionID domain.ProviderRegionID
 }
 
 // describeProviderFailure reduces whatever ended an attempt to what may be
@@ -73,15 +79,19 @@ type FailureDescriptor struct {
 // what went wrong.
 func describeProviderFailure(providerErr error, target provider.Target) FailureDescriptor {
 	descriptor := FailureDescriptor{
-		Phase:        phaseProvider,
-		PublicModel:  target.PublicModel,
-		DeploymentID: target.DeploymentID,
-		ProviderID:   target.ProviderID,
-		BindingID:    target.BindingID,
+		Phase:           phaseProvider,
+		PublicModel:     target.PublicModel,
+		DeploymentID:    target.DeploymentID,
+		ProviderID:      target.ProviderID,
+		BindingID:       target.BindingID,
+		OfferingID:      target.OfferingID,
+		ProfileID:       target.ProfileID,
+		AccountRegionID: target.AccountRegionID,
 	}
 	var classified *provider.Error
 	switch {
 	case errors.As(providerErr, &classified):
+		descriptor.FailureSemanticsRecorded = true
 		descriptor.Class = classified.Class
 		descriptor.Retryable = classified.Retryable
 		descriptor.Ambiguous = classified.Ambiguous
@@ -94,6 +104,8 @@ func describeProviderFailure(providerErr error, target provider.Target) FailureD
 		// later that forgets to narrow must not be able to widen this.
 		descriptor.ProviderCode = provider.SafeProviderIdentifier(classified.ProviderCode)
 		descriptor.ProviderRequestID = provider.SafeProviderIdentifier(classified.ProviderRequestID)
+		descriptor.ProviderFailureReason = canonicalProviderFailureReason(classified, target)
+		applyCanonicalProviderFailure(&descriptor, classified, target)
 	case errors.Is(providerErr, context.Canceled), errors.Is(providerErr, context.DeadlineExceeded):
 		// The caller went away, or the deadline did. This used to be written as
 		// a literal `client_disconnected_or_timed_out`, which was not a member
@@ -111,17 +123,83 @@ func describeProviderFailure(providerErr error, target provider.Target) FailureD
 	return descriptor
 }
 
+func canonicalProviderFailureReason(classified *provider.Error, target provider.Target) provider.FailureReason {
+	if classified.FailureReason.Valid() && classified.FailureReason != "" {
+		return classified.FailureReason
+	}
+	switch provider.SafeProviderIdentifier(classified.ProviderCode) {
+	case "subscription_inactive":
+		return provider.FailureReasonSubscriptionInactive
+	case "subscription_quota_exhausted", "token_plan_quota_exhausted":
+		return provider.FailureReasonSubscriptionQuotaExhausted
+	}
+	if isKimiCodeOffering(target) && classified.StatusCode == 402 {
+		return provider.FailureReasonEntitlementVerificationUnavailable
+	}
+	switch classified.StatusCode {
+	case 401:
+		if isKimiCodeOffering(target) {
+			return ""
+		}
+		return provider.FailureReasonInvalidCredential
+	case 429:
+		return provider.FailureReasonRateLimited
+	default:
+		return ""
+	}
+}
+
+func isKimiCodeOffering(target provider.Target) bool {
+	if target.OfferingID == domain.OfferingKimiCode {
+		return true
+	}
+	identity, ok := domain.IdentityForProfile(target.ProfileID)
+	return ok && identity.Offering == domain.OfferingKimiCode
+}
+
+func isRestrictedOffering(target provider.Target) bool {
+	identity, ok := domain.IdentityForProfile(target.ProfileID)
+	return ok && identity.RequiresUsageWarning
+}
+
+// applyCanonicalProviderFailure normalizes the broad class from the bounded
+// canonical reason. Retryable and Ambiguous describe execution and billing
+// semantics, not confidence in the reason, so they remain exactly what the
+// adapter reported and stay consistent with routing and settlement decisions.
+func applyCanonicalProviderFailure(descriptor *FailureDescriptor, classified *provider.Error, target provider.Target) {
+	switch descriptor.ProviderFailureReason {
+	case provider.FailureReasonInvalidCredential, provider.FailureReasonSubscriptionInactive:
+		descriptor.Class = provider.ErrorAuthentication
+	case provider.FailureReasonEntitlementVerificationUnavailable:
+		descriptor.Class = provider.ErrorUnknown
+	case provider.FailureReasonSubscriptionQuotaExhausted:
+		descriptor.Class = provider.ErrorRateLimit
+	case provider.FailureReasonRateLimited:
+		descriptor.Class = provider.ErrorRateLimit
+	default:
+		if isRestrictedOffering(target) && classified.StatusCode == 403 {
+			descriptor.Class = provider.ErrorAuthentication
+		}
+	}
+}
+
 // attributes renders the descriptor for a log record, omitting what it does not
 // have rather than writing an empty value: a `provider_status` of 0 reads as an
 // upstream that answered with 0, and a blank `provider_code` reads as an
 // upstream that named no code when in fact none was ever asked for.
 func (d FailureDescriptor) attributes() []any {
-	attributes := []any{"phase", d.Phase, "error_class", string(d.Class)}
+	attributes := []any{
+		"phase", d.Phase, "error_class", string(d.Class),
+		"retryable", d.Retryable, "ambiguous", d.Ambiguous,
+	}
 	if d.ProviderStatus > 0 {
 		attributes = append(attributes, "provider_status", d.ProviderStatus)
 	}
 	if d.ProviderCode != "" {
 		attributes = append(attributes, "provider_code", d.ProviderCode)
+	}
+	if d.ProviderFailureReason != "" {
+		attributes = append(attributes, "provider_failure_reason", string(d.ProviderFailureReason))
 	}
 	if d.ProviderRequestID != "" {
 		attributes = append(attributes, "provider_request_id", d.ProviderRequestID)
@@ -140,6 +218,15 @@ func (d FailureDescriptor) attributes() []any {
 	}
 	if d.BindingID != "" {
 		attributes = append(attributes, "binding_id", d.BindingID)
+	}
+	if d.OfferingID != "" {
+		attributes = append(attributes, "offering_id", string(d.OfferingID))
+	}
+	if d.ProfileID != "" {
+		attributes = append(attributes, "profile_id", string(d.ProfileID))
+	}
+	if d.AccountRegionID != "" {
+		attributes = append(attributes, "account_region_id", string(d.AccountRegionID))
 	}
 	return attributes
 }
@@ -245,6 +332,9 @@ func (run *requestRun) terminalDescriptor(outcome string) FailureDescriptor {
 		descriptor.DeploymentID = run.lastTarget.DeploymentID
 		descriptor.ProviderID = run.lastTarget.ProviderID
 		descriptor.BindingID = run.lastTarget.BindingID
+		descriptor.OfferingID = run.lastTarget.OfferingID
+		descriptor.ProfileID = run.lastTarget.ProfileID
+		descriptor.AccountRegionID = run.lastTarget.AccountRegionID
 	}
 	return descriptor
 }

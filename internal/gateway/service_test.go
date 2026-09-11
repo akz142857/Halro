@@ -229,6 +229,37 @@ func TestGatewayUnknownPriceExplicitOptInPersistsUnknownCost(t *testing.T) {
 	}
 }
 
+func TestGatewayPersistsProviderProductAttributionOnEveryAttemptEvent(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	wantKinds := map[ledger.EventKind]bool{
+		ledger.EventReservationCreated: false,
+		ledger.EventAttemptStarted:     false,
+		ledger.EventAttemptSettled:     false,
+	}
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if _, expected := wantKinds[record.Event.Kind]; !expected {
+			return nil
+		}
+		wantKinds[record.Event.Kind] = true
+		if record.Event.OfferingID != domain.OfferingOpenAIAPI ||
+			record.Event.ProfileID != domain.ProfileOpenAIChatEmbeddings {
+			t.Fatalf("%v lost provider product attribution: %#v", record.Event.Kind, record.Event)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for kind, found := range wantKinds {
+		if !found {
+			t.Fatalf("attempt event %v was not written", kind)
+		}
+	}
+}
+
 func (s source) ListGatewayKeys(context.Context) ([]domain.GatewayKey, error) {
 	return s.keys, nil
 }
