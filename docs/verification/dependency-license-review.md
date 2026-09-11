@@ -1,6 +1,6 @@
 # Dependency and License Review
 
-Date: 2026-09-07
+Date: 2026-09-11
 
 Halro is distributed under Apache-2.0. The source tree includes the project
 license in `LICENSE`, required attribution in `NOTICE`, and the runtime
@@ -74,7 +74,7 @@ is linked into the Go runtime.
 |---|---:|---|
 | `@hookform/resolvers` | 5.9.1 | MIT |
 | `@tanstack/react-query` | 5.102.8 | MIT |
-| `i18next` | 26.4.1 | MIT |
+| `i18next` | 26.4.2 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.2.8 | MIT |
 | `react-dom` | 19.2.8 | MIT |
@@ -108,6 +108,15 @@ files, and none changed distribution scope. The embedded Admin UI bundle was
 rebuilt from the reviewed lockfile so its content-hashed assets match the
 source dependency tree.
 
+The 2026-09-11 Admin UI refresh moved the runtime `i18next` package from
+26.4.1 to 26.4.2 and the dev-only `@types/react-dom` from 19.2.5 to 19.2.7
+and `vitest` from 4.1.11 to 5.0.0. All three remain MIT licensed. The Vitest
+major update changes only test tooling; its lockfile adds the MIT-licensed
+`@jridgewell/resolve-uri` and `@jridgewell/trace-mapping` packages and removes
+four dev-only MIT packages. No runtime package was added, removed, or
+relicensed, and the embedded Admin UI bundle was rebuilt from the updated
+lockfile.
+
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
 dev-only CSS build tooling and are not present in the generated Admin UI bundle
@@ -140,8 +149,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `e28dc15e3e77c15c4167156510a6ccb7fe2f5671`
 - `go.sum`: `4f2cd7b82cbd5a7a5443bc67db2ed578385bacc5`
-- `web/package.json`: `55c2f09af26844654cd50fc781da04f301a96b79`
-- `web/package-lock.json`: `fbc4603da7a8ff221b1855faa5c1126f69bbd404`
+- `web/package.json`: `f1eb5429cd8088ea8719c5c0a5a59074df5369d1`
+- `web/package-lock.json`: `14664cea8cb80a1a23124b7f707a1a315d573da9`
 
 The Go hashes last moved for the 2026-09-05 five-module AWS refresh recorded
 above. The two web hashes last moved for the 2026-09-05 seven-direct-package
