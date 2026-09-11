@@ -28,9 +28,14 @@ func newBigModelTestAdapter(t *testing.T, endpoint string, transport roundTripFu
 		t.Fatal(err)
 	}
 	prefix := "api/paas/v4"
+	profileID := domain.ProfileBigModelGlobalChat
+	if baseURL.Hostname() == "open.bigmodel.cn" {
+		profileID = domain.ProfileBigModelCNChatEmbeddings
+	}
 	adapter, err := NewWithOptions(Options{
 		Endpoint: baseURL, Authorizer: authorizer, Client: &http.Client{Transport: transport},
 		ProviderType: string(domain.ProviderBigModel), CredentialScheme: domain.CredentialBigModelAPIKey,
+		ProfileID:           profileID,
 		Capabilities:        provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true, Embeddings: true},
 		OperationPathPrefix: prefix, CatalogPathPrefix: &prefix, DisableTargetDescribe: true,
 	})

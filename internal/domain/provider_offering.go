@@ -1,6 +1,9 @@
 package domain
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // What an operator bought, and where their account lives.
 //
@@ -140,9 +143,19 @@ const (
 // is bound to the global host, which is a real defect this build shipped and
 // cannot detect any other way.
 type RegionHost struct {
-	Region ProviderRegionID
-	Host   string
+	Region                      ProviderRegionID
+	Host                        string
+	UsagePolicyDocumentationURL string
+	UsagePolicyRevision         string
+	ProductIdentityAssurance    ProductIdentityAssurance
 }
+
+type ProductIdentityAssurance string
+
+const (
+	ProductIdentityMechanicallyVerified ProductIdentityAssurance = "mechanically_verified"
+	ProductIdentityOperatorDeclared     ProductIdentityAssurance = "operator_declared_unverified"
+)
 
 type providerOfferingRow struct {
 	ID                   ProviderOfferingID
@@ -191,7 +204,8 @@ type surfaceRow struct {
 	// metadata an operator acknowledged. The upstream document may change at
 	// the same URL; storing only a boolean and URL would make an old audit event
 	// indistinguishable from acceptance of a later revision.
-	UsagePolicyRevision string
+	UsagePolicyRevision      string
+	ProductIdentityAssurance ProductIdentityAssurance
 }
 
 // surfaceTable is the authority for Offering and Region. Every Access Surface a
@@ -215,7 +229,10 @@ var surfaceTable = []surfaceRow{
 		Surface: SurfaceMiniMax, Type: ProviderMiniMax, Offering: OfferingMiniMaxAPI,
 		RegionScope: RegionScopeByEndpoint,
 		Hosts: []RegionHost{
-			{Region: RegionGlobal, Host: "api.minimax.io"},
+			{Region: RegionGlobal, Host: "api.minimax.io",
+				UsagePolicyDocumentationURL: "https://platform.minimax.io/docs/token-plan/intro",
+				UsagePolicyRevision:         "minimax-subscription-global-2026-09-10",
+				ProductIdentityAssurance:    ProductIdentityOperatorDeclared},
 			{Region: RegionCN, Host: "api.minimaxi.com"},
 		},
 	},
@@ -276,9 +293,10 @@ var surfaceTable = []surfaceRow{
 	{
 		Surface: SurfaceMiniMaxGlobalSubscription, Type: ProviderMiniMax, Offering: OfferingMiniMaxSubscriptionAccess,
 		Region: RegionGlobal, RegionScope: RegionScopeFixed,
-		Hosts:               []RegionHost{{Region: RegionGlobal, Host: "api.minimax.io"}},
-		DocumentationURL:    "https://platform.minimax.io/docs/token-plan/intro",
-		UsagePolicyRevision: "minimax-subscription-global-2026-09-10",
+		Hosts:                    []RegionHost{{Region: RegionGlobal, Host: "api.minimax.io"}},
+		DocumentationURL:         "https://platform.minimax.io/docs/token-plan/intro",
+		UsagePolicyRevision:      "minimax-subscription-global-2026-09-10",
+		ProductIdentityAssurance: ProductIdentityOperatorDeclared,
 	},
 }
 
@@ -300,16 +318,104 @@ var surfaceIndex = func() map[AccessSurface]surfaceRow {
 
 // SurfaceIdentity is what a surface says about the product behind it.
 type SurfaceIdentity struct {
-	Surface              AccessSurface
-	Type                 ProviderType
-	Offering             ProviderOfferingID
-	Kind                 ProviderOfferingKind
-	Region               ProviderRegionID
-	RegionScope          ProviderRegionScope
-	Hosts                []RegionHost
-	RequiresUsageWarning bool
-	DocumentationURL     string
-	UsagePolicyRevision  string
+	Surface                  AccessSurface
+	Type                     ProviderType
+	Offering                 ProviderOfferingID
+	Kind                     ProviderOfferingKind
+	Region                   ProviderRegionID
+	RegionScope              ProviderRegionScope
+	Hosts                    []RegionHost
+	RequiresUsageWarning     bool
+	DocumentationURL         string
+	UsagePolicyRevision      string
+	ProductIdentityAssurance ProductIdentityAssurance
+}
+
+type UsagePolicyRequirement struct {
+	OfferingID               ProviderOfferingID
+	AccessSurface            AccessSurface
+	AccountRegion            ProviderRegionID
+	DocumentationURL         string
+	PolicyRevision           string
+	ProductIdentityAssurance ProductIdentityAssurance
+}
+
+// UsagePolicyAcknowledgement is the durable proof that an operator accepted
+// the policy attached to one exact product surface. It is deliberately not a
+// boolean: an Offering may span regions whose terms change independently, and
+// an old revision must never become acceptance of a new one merely because the
+// record remains enabled.
+//
+// Credential and ProviderInstance each keep their own acknowledgement. The
+// former proves the secret was admitted for this product; the latter proves the
+// live connection was admitted. Loaders require both before constructing an
+// adapter for a restricted surface.
+type UsagePolicyAcknowledgement struct {
+	OfferingID               ProviderOfferingID       `json:"offering_id"`
+	AccessSurface            AccessSurface            `json:"access_surface"`
+	AccountRegion            ProviderRegionID         `json:"account_region_id"`
+	PolicyRevision           string                   `json:"policy_revision"`
+	ProductIdentityAssurance ProductIdentityAssurance `json:"product_identity_assurance"`
+}
+
+// UsagePolicyAcknowledgementForProfile constructs an acknowledgement only for
+// a restricted profile and only for the exact current revision. Callers still
+// have to record who accepted it in the append-only Admin audit trail.
+func UsagePolicyAcknowledgementForProfile(profileID ProviderProfileID, revision string) (*UsagePolicyAcknowledgement, bool) {
+	return UsagePolicyAcknowledgementForProfileAtEndpoint(profileID, "", revision)
+}
+
+func UsagePolicyAcknowledgementForProfileAtEndpoint(profileID ProviderProfileID, endpoint, revision string) (*UsagePolicyAcknowledgement, bool) {
+	requirement, ok := UsagePolicyRequirementForProfile(profileID, endpoint)
+	if !ok || strings.TrimSpace(revision) != requirement.PolicyRevision {
+		return nil, false
+	}
+	return &UsagePolicyAcknowledgement{
+		OfferingID: requirement.OfferingID, AccessSurface: requirement.AccessSurface,
+		AccountRegion: requirement.AccountRegion, PolicyRevision: requirement.PolicyRevision,
+		ProductIdentityAssurance: requirement.ProductIdentityAssurance,
+	}, true
+}
+
+// ValidateForSurface checks the immutable identity half of an acknowledgement.
+// It intentionally accepts an older non-empty revision: a policy update must
+// leave the stored proof readable so the loader can withhold it as stale rather
+// than making the database itself invalid or silently rewriting the proof.
+func (a UsagePolicyAcknowledgement) ValidateForSurface(surface AccessSurface) error {
+	identity, ok := IdentityForSurface(surface)
+	if !ok {
+		return errors.New("usage policy acknowledgement access surface is unknown")
+	}
+	if a.OfferingID != identity.Offering || a.AccessSurface != identity.Surface ||
+		!AccountRegionBelongsToSurface(identity.Surface, a.AccountRegion) {
+		return errors.New("usage policy acknowledgement product identity is incompatible")
+	}
+	if strings.TrimSpace(a.PolicyRevision) == "" {
+		return errors.New("usage policy acknowledgement revision is required")
+	}
+	if a.ProductIdentityAssurance != ProductIdentityMechanicallyVerified &&
+		a.ProductIdentityAssurance != ProductIdentityOperatorDeclared {
+		return errors.New("usage policy acknowledgement product identity assurance is invalid")
+	}
+	return nil
+}
+
+// CurrentForProfile is the activation-time fail-closed check. Legacy records
+// have no acknowledgement and therefore return false for restricted products;
+// migrations must not invent consent from an old audit event or enabled flag.
+func (a *UsagePolicyAcknowledgement) CurrentForProfile(profileID ProviderProfileID) bool {
+	return a.CurrentForProfileAtEndpoint(profileID, "")
+}
+
+func (a *UsagePolicyAcknowledgement) CurrentForProfileAtEndpoint(profileID ProviderProfileID, endpoint string) bool {
+	requirement, required := UsagePolicyRequirementForProfile(profileID, endpoint)
+	if !required {
+		return true
+	}
+	return a != nil && a.ValidateForSurface(requirement.AccessSurface) == nil &&
+		a.OfferingID == requirement.OfferingID && a.AccountRegion == requirement.AccountRegion &&
+		a.PolicyRevision == requirement.PolicyRevision &&
+		a.ProductIdentityAssurance == requirement.ProductIdentityAssurance
 }
 
 // IdentityForSurface answers what product and region a surface belongs to.
@@ -325,6 +431,7 @@ func IdentityForSurface(surface AccessSurface) (SurfaceIdentity, bool) {
 		Region: row.Region, RegionScope: row.RegionScope,
 		Hosts: row.Hosts, RequiresUsageWarning: offering.RequiresUsageWarning,
 		DocumentationURL: row.DocumentationURL, UsagePolicyRevision: row.UsagePolicyRevision,
+		ProductIdentityAssurance: row.ProductIdentityAssurance,
 	}, true
 }
 
@@ -335,6 +442,81 @@ func IdentityForProfile(profileID ProviderProfileID) (SurfaceIdentity, bool) {
 		return SurfaceIdentity{}, false
 	}
 	return IdentityForSurface(row.Surface)
+}
+
+// UsagePolicyRequirementForProfile resolves ordinary restricted products and
+// endpoint-specific declaration responsibility. MiniMax Global's general and
+// subscription products have the same observable host/path/auth shape; both
+// therefore require the same revision acknowledgement, while the durable proof
+// remains bound to the Offering the operator selected.
+func UsagePolicyRequirementForProfile(profileID ProviderProfileID, endpoint string) (UsagePolicyRequirement, bool) {
+	identity, ok := IdentityForProfile(profileID)
+	if !ok {
+		return UsagePolicyRequirement{}, false
+	}
+	assurance := identity.ProductIdentityAssurance
+	if assurance == "" {
+		assurance = ProductIdentityMechanicallyVerified
+	}
+	if identity.RequiresUsageWarning {
+		return UsagePolicyRequirement{
+			OfferingID: identity.Offering, AccessSurface: identity.Surface, AccountRegion: identity.Region,
+			DocumentationURL: identity.DocumentationURL, PolicyRevision: identity.UsagePolicyRevision,
+			ProductIdentityAssurance: assurance,
+		}, true
+	}
+	if identity.RegionScope != RegionScopeByEndpoint {
+		return UsagePolicyRequirement{}, false
+	}
+	host := endpointHost(endpoint)
+	for _, candidate := range identity.Hosts {
+		if candidate.Host != host || candidate.UsagePolicyRevision == "" {
+			continue
+		}
+		assurance = candidate.ProductIdentityAssurance
+		if assurance == "" {
+			assurance = ProductIdentityMechanicallyVerified
+		}
+		return UsagePolicyRequirement{
+			OfferingID: identity.Offering, AccessSurface: identity.Surface, AccountRegion: candidate.Region,
+			DocumentationURL: candidate.UsagePolicyDocumentationURL,
+			PolicyRevision:   candidate.UsagePolicyRevision, ProductIdentityAssurance: assurance,
+		}, true
+	}
+	// A private proxy hides which MiniMax region and product is behind it. The
+	// only mechanically distinct general endpoint is the mainland host; every
+	// other endpoint on this surface keeps the Global same-wire responsibility
+	// instead of turning an unrecognised host into an acknowledgement bypass.
+	if identity.Surface == SurfaceMiniMax && host != "" && host != "api.minimaxi.com" {
+		for _, candidate := range identity.Hosts {
+			if candidate.Region == RegionGlobal && candidate.UsagePolicyRevision != "" {
+				return UsagePolicyRequirement{
+					OfferingID: identity.Offering, AccessSurface: identity.Surface, AccountRegion: candidate.Region,
+					DocumentationURL:         candidate.UsagePolicyDocumentationURL,
+					PolicyRevision:           candidate.UsagePolicyRevision,
+					ProductIdentityAssurance: ProductIdentityOperatorDeclared,
+				}, true
+			}
+		}
+	}
+	return UsagePolicyRequirement{}, false
+}
+
+func UsagePolicyRequirementsForProfile(profileID ProviderProfileID) []UsagePolicyRequirement {
+	identity, ok := IdentityForProfile(profileID)
+	if !ok {
+		return nil
+	}
+	if requirement, required := UsagePolicyRequirementForProfile(profileID, ""); required {
+		return []UsagePolicyRequirement{requirement}
+	}
+	var result []UsagePolicyRequirement
+	for _, host := range identity.Hosts {
+		if requirement, required := UsagePolicyRequirementForProfile(profileID, "https://"+host.Host); required {
+			result = append(result, requirement)
+		}
+	}
+	return result
 }
 
 // AccountRegionBelongsToSurface validates a persisted account-region snapshot

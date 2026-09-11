@@ -185,6 +185,57 @@ func TestCaptureStopsAtTheDailyCeilingAndSaysSoOnce(t *testing.T) {
 	}
 }
 
+func TestDailyCeilingAndMetricsSurviveRestart(t *testing.T) {
+	store, root := newStore(t, func(options *Options) { options.MaxRecordsPerDay = 2 })
+	for _, requestID := range []string{"req_a", "req_b"} {
+		if written, err := store.Put(record(requestID)); err != nil || !written {
+			t.Fatalf("seed capture: written=%v err=%v", written, err)
+		}
+	}
+	reopened, err := Open(fakeSealer{}, Options{
+		Root: root, MaxBytes: 1024, MaxRecordsPerDay: 2, Retain: 24 * time.Hour,
+		Now: func() time.Time { return time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Saturation(); got.Captured != 2 || got.DayLimit != 2 {
+		t.Fatalf("restored saturation = %#v", got)
+	}
+	if written, err := reopened.Put(record("req_over")); err != nil || written {
+		t.Fatalf("post-restart capture: written=%v err=%v", written, err)
+	}
+	if !reopened.Saturated() {
+		t.Fatal("the restored full day did not report its first dropped capture")
+	}
+	if got := reopened.Saturation(); got.Captured != 2 || !got.Saturated {
+		t.Fatalf("post-drop saturation = %#v", got)
+	}
+}
+
+func TestFailedWriteDoesNotIncreaseCapturedMetric(t *testing.T) {
+	store, _ := newStore(t, nil)
+	store.sealer = fakeSealer{failEncrypt: true}
+	if written, err := store.Put(record("req_failed")); err == nil || written {
+		t.Fatal("an encryption failure was reported as captured")
+	}
+	if got := store.Saturation().Captured; got != 0 {
+		t.Fatalf("captured metric = %d after failed write", got)
+	}
+}
+
+func TestDailyMetricsRollOverWithoutWaitingForAnotherCapture(t *testing.T) {
+	now := time.Date(2026, 9, 2, 23, 59, 0, 0, time.UTC)
+	store, _ := newStore(t, func(options *Options) { options.Now = func() time.Time { return now } })
+	if written, err := store.Put(record("req_before_midnight")); err != nil || !written {
+		t.Fatalf("capture before midnight: written=%v err=%v", written, err)
+	}
+	now = now.Add(2 * time.Minute)
+	if got := store.Saturation(); got.Captured != 0 || got.Day != "2026-09-03" || got.Saturated {
+		t.Fatalf("next-day saturation = %#v", got)
+	}
+}
+
 // Retention is the answer an operator gives their own compliance people, so the
 // configured value has to be the number that is true. Expiry is per record: day
 // granularity made `retain` a floor rather than a ceiling, keeping a record

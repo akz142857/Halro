@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { Loading, Modal } from "../components";
 import { predatesProviderIdentifiers } from "../failure";
 
@@ -110,6 +110,43 @@ export function providerIdentifierFacts(
   };
 }
 
+export function providerAttributionFacts(
+  t: (key: string, values?: Record<string, unknown>) => string,
+  failure: {
+    offering_id?: string;
+    profile_id?: string;
+    account_region_id?: string;
+    failure_semantics_recorded?: boolean;
+  } | undefined,
+): FailureFact[] {
+  if (!failure) return [];
+  const legacy = !failure.failure_semantics_recorded
+    && !failure.offering_id
+    && !failure.profile_id
+    && !failure.account_region_id;
+  const missing = legacy ? t("usage.failures.notRecorded") : undefined;
+  return [
+    {
+      label: t("providers.product"),
+      value: failure.offering_id
+        ? t(`providers.offerings.${failure.offering_id}`, { defaultValue: failure.offering_id })
+        : missing,
+    },
+    {
+      label: t("providers.capabilityImplementation"),
+      value: failure.profile_id
+        ? t(`providers.profiles.${failure.profile_id}`, { defaultValue: failure.profile_id })
+        : missing,
+    },
+    {
+      label: t("usage.failures.accountRegionLabel"),
+      value: failure.account_region_id
+        ? t(`providers.regions.${failure.account_region_id}`, { defaultValue: failure.account_region_id })
+        : missing,
+    },
+  ];
+}
+
 // What the failed call carried, fetched only when an operator asks for it.
 //
 // It is behind a click rather than loaded with the drawer for three reasons
@@ -132,6 +169,7 @@ function CapturedPayload({ requestID }: { requestID: string }) {
     staleTime: 0,
     retry: false,
   });
+  const failure = payload.isError ? payloadReadFailure(payload.error, t) : undefined;
 
   return (
     <section className="payload-panel">
@@ -145,10 +183,19 @@ function CapturedPayload({ requestID }: { requestID: string }) {
         </>
       )}
       {requested && payload.isPending && <Loading />}
-      {/* A miss here is the ordinary case, not a fault — capture may be off,
-          the failure may predate it, or the record may have aged out — so it
-          gets one short line and the reasons live in the Operator Guide. */}
-      {requested && payload.isError && <p className="payload-note">{t("usage.failures.noPayload")}</p>}
+      {requested && failure && (
+        <div role="alert">
+          <p className="payload-note">{failure.message}</p>
+          {failure.action === "retry" && (
+            <button type="button" className="button secondary" onClick={() => void payload.refetch()}>
+              {t("common.retry")}
+            </button>
+          )}
+          {failure.action === "login" && (
+            <a className="button secondary" href="/admin/login">{t("usage.failures.signInAgain")}</a>
+          )}
+        </div>
+      )}
       {requested && payload.data && (
         <>
           <PayloadSection
@@ -170,6 +217,28 @@ function CapturedPayload({ requestID }: { requestID: string }) {
       )}
     </section>
   );
+}
+
+function payloadReadFailure(
+  error: unknown,
+  t: (key: string) => string,
+): { message: string; action?: "retry" | "login" } {
+  if (error instanceof ApiError) {
+    if (error.status === 404 && error.code === "failure_capture_disabled") {
+      return { message: t("usage.failures.payloadCaptureDisabled") };
+    }
+    if (error.status === 404) return { message: t("usage.failures.noPayload") };
+    if (error.code === "audit_unavailable" || error.status === 503) {
+      return { message: t("usage.failures.payloadAuditUnavailable"), action: "retry" };
+    }
+    if (error.status === 401) {
+      return { message: t("usage.failures.payloadSessionExpired"), action: "login" };
+    }
+    if (error.status === 403) {
+      return { message: t("usage.failures.payloadForbidden") };
+    }
+  }
+  return { message: t("usage.failures.payloadLoadFailed"), action: "retry" };
 }
 
 function PayloadSection({ label, value, truncated }: { label: string; value: unknown; truncated?: boolean }) {

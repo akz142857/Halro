@@ -1194,19 +1194,22 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
 			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
-			ProviderID: event.ProviderID, RequestedModel: event.RequestedModel, ProviderModel: event.ProviderModel,
+			ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
+			AccountRegionID: event.AccountRegionID,
+			RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
 			AttemptNumber: event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
 			LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
 			PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
 			RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,
 			TokenGuardPricingViewDigest: event.TokenGuardPricingViewDigest,
 		}
-		settlement := Settlement{Outcome: "recovered_not_started", OccurredAt: event.OccurredAt}
+		settlement := Settlement{Outcome: "recovered_not_started", FailurePhase: "accounting", OccurredAt: event.OccurredAt}
 		if pending.Started {
 			settlement = Settlement{
 				ProviderInputTokens: event.PreparedInputTokens, ProviderOutputTokens: event.PreparedOutputTokens,
 				PreparedOutputTokens: event.PreparedOutputTokens, TokenEstimated: true, CostEstimated: true,
-				Outcome: "recovered_started_unknown_result", OccurredAt: event.OccurredAt,
+				Outcome: "recovered_started_unknown_result", FailurePhase: "accounting", Ambiguous: true,
+				OccurredAt: event.OccurredAt,
 			}
 			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
 				// Nothing is known about how much of a recovered attempt's prompt

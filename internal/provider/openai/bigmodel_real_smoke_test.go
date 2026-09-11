@@ -41,12 +41,17 @@ func TestBigModelRealSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	prefix := "api/paas/v4"
+	profileID := domain.ProfileBigModelGlobalChat
+	if endpoint.Hostname() == "open.bigmodel.cn" {
+		profileID = domain.ProfileBigModelCNChatEmbeddings
+	}
 	capabilities := provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true}
 	embeddingModel := os.Getenv("HALRO_BIGMODEL_EMBEDDING_MODEL")
 	capabilities.Embeddings = embeddingModel != ""
 	adapter, err := NewWithOptions(Options{
 		Endpoint: endpoint, Authorizer: authorizer, Client: &http.Client{Timeout: 45 * time.Second},
 		ProviderType: string(domain.ProviderBigModel), CredentialScheme: domain.CredentialBigModelAPIKey,
+		ProfileID:    profileID,
 		Capabilities: capabilities, OperationPathPrefix: prefix, CatalogPathPrefix: &prefix, DisableTargetDescribe: true,
 	})
 	if err != nil {

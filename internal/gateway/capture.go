@@ -1,19 +1,146 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/semantic"
 )
 
 // FailureCapture is the store a failed request's payload is written to. Nil
 // disables capture entirely, which is the default and what every test that does
 // not name it gets.
 type FailureCapture interface {
-	Put(record failurecapture.Record) (bool, error)
+	PutContext(context.Context, failurecapture.Record) (bool, error)
 	Saturated() bool
+}
+
+const failureCaptureQueueCapacity = 64
+
+func (s *Service) startFailureCapture() {
+	if s == nil || s.failureCapture == nil {
+		return
+	}
+	s.captureMu.Lock()
+	defer s.captureMu.Unlock()
+	if s.captureQueue != nil || s.captureClosed {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.captureQueue = make(chan failurecapture.Record, failureCaptureQueueCapacity)
+	s.captureCancel = cancel
+	s.captureDone = make(chan struct{})
+	go s.runFailureCapture(ctx, s.captureQueue, s.captureDone)
+}
+
+func (s *Service) runFailureCapture(ctx context.Context, queue <-chan failurecapture.Record, done chan<- struct{}) {
+	defer close(done)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case record, ok := <-queue:
+			if !ok {
+				return
+			}
+			s.storeCapture(ctx, record)
+			if ctx.Err() != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *Service) storeCapture(ctx context.Context, record failurecapture.Record) {
+	written, err := s.failureCapture.PutContext(ctx, record)
+	switch {
+	case err != nil && !errors.Is(err, context.Canceled) && s.captureDegraded.CompareAndSwap(false, true):
+		// Named without payload or upstream prose: the material that failed to
+		// be stored must not escape into the diagnostic about that failure.
+		s.logger.Warn("failure capture was not stored", "request_id", record.RequestID, "error", err)
+	case !written && s.failureCapture.Saturated():
+		s.logger.Warn("failure capture stopped for the day at its record ceiling", "request_id", record.RequestID)
+	}
+}
+
+func (s *Service) enqueueCapture(record failurecapture.Record) {
+	// Tests that install a capture after construction retain the direct behavior.
+	// A normally configured service is marked async by its constructor and starts
+	// its queue atomically before accepting the first record.
+	s.captureMu.Lock()
+	if s.captureQueue == nil && s.captureAsync && !s.captureClosed {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.captureQueue = make(chan failurecapture.Record, failureCaptureQueueCapacity)
+		s.captureCancel = cancel
+		s.captureDone = make(chan struct{})
+		go s.runFailureCapture(ctx, s.captureQueue, s.captureDone)
+	}
+	if s.captureQueue == nil {
+		closed := s.captureClosed
+		s.captureMu.Unlock()
+		if !closed {
+			s.storeCapture(context.Background(), record)
+		}
+		return
+	}
+	if s.captureClosed {
+		s.captureMu.Unlock()
+		return
+	}
+	select {
+	case s.captureQueue <- record:
+		s.captureMu.Unlock()
+	default:
+		s.captureMu.Unlock()
+		if s.captureDegraded.CompareAndSwap(false, true) {
+			s.logger.Warn("failure capture queue is full; payload was dropped", "request_id", record.RequestID)
+		}
+	}
+}
+
+// ShutdownFailureCapture stops accepting new diagnostics and drains all queued
+// captures before their vault and data directory are closed. The caller owns
+// the deadline; cancellation is passed into the active write.
+func (s *Service) ShutdownFailureCapture(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	s.captureCloseOnce.Do(func() {
+		s.captureMu.Lock()
+		s.captureClosed = true
+		if s.captureQueue != nil {
+			close(s.captureQueue)
+		}
+		s.captureMu.Unlock()
+	})
+
+	s.captureMu.Lock()
+	done, cancel := s.captureDone, s.captureCancel
+	s.captureMu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		if cancel != nil {
+			cancel()
+		}
+		return nil
+	case <-ctx.Done():
+		if cancel != nil {
+			cancel()
+		}
+		// FailureCapture.PutContext is a cancellation contract: once cancelled,
+		// the worker must release references to the vault before Runtime closes
+		// it. The concrete store can abandon a stalled regular-file syscall while
+		// its one bounded writer finishes with already sealed bytes.
+		<-done
+		return fmt.Errorf("drain failure captures: %w", ctx.Err())
+	}
 }
 
 // capturedOutcomes are the terminal states whose payload can explain the
@@ -22,7 +149,8 @@ type FailureCapture interface {
 // different and collapsing them would be wrong in both directions.
 //
 //   - provider_error: the upstream refused or failed, or its answer could not be
-//     rendered. The request and the upstream's reply are the whole diagnosis.
+//     rendered. The request and Halro's structured classification diagnose it
+//     without retaining the upstream's untrusted prose.
 //   - unsupported_feature: the target could not serve the shape of the request.
 //     Which field, and what was in it, is the only way to see why.
 //
@@ -81,23 +209,48 @@ func (run *requestRun) captureRequest(request any) {
 	run.capturedRequest = request
 }
 
-// captureResponse remembers what came back, for the failures where something
-// did. A render failure has a semantic answer Halro could not put on the wire;
-// an upstream refusal has the body it refused with.
+// captureResponse remembers only the safe shape of a semantic answer Halro
+// could not put on the wire. Provider-written values are excluded even on a
+// successful response because the upstream saw the credential and can echo it.
 func (run *requestRun) captureResponse(response any) {
 	if run == nil || run.service.failureCapture == nil {
 		return
 	}
-	run.capturedResponse = response
+	result, ok := response.(semantic.GenerateResult)
+	if !ok {
+		return
+	}
+	shape := safeGenerateResponseShape{
+		Choices: len(result.Choices), HasUsage: result.Usage != nil,
+		Translation: string(result.Translation), MappingRevision: result.MappingRevision,
+	}
+	for _, choice := range result.Choices {
+		for _, content := range choice.Message.Content {
+			shape.ContentKinds = append(shape.ContentKinds, string(content.Kind))
+		}
+	}
+	run.capturedResponse = shape
+}
+
+// safeGenerateResponseShape keeps what explains a render mismatch without any
+// provider-written text, URLs, tool arguments or identifiers. A successful
+// upstream is still untrusted and could echo its Authorization header in model
+// output just as easily as in an error body.
+type safeGenerateResponseShape struct {
+	Choices         int      `json:"choices"`
+	ContentKinds    []string `json:"content_kinds,omitempty"`
+	HasUsage        bool     `json:"has_usage"`
+	Translation     string   `json:"translation,omitempty"`
+	MappingRevision uint64   `json:"mapping_revision,omitempty"`
 }
 
 // captureProviderFailure records the upstream's own answer to a failed attempt.
 //
-// This is the one piece of provider prose Halro keeps anywhere, and it is kept
-// here rather than in the log for exactly the reason the log refuses it: the
-// body may quote back the credential the upstream just rejected. In this store
-// it is encrypted, bound to its request, bounded, expiring, and readable only
-// through an audited action; in a log file it would be none of those.
+// Provider prose is deliberately not retained. An upstream is allowed to quote
+// the credential it received in its error body, and encryption plus audited
+// reads do not make that credential appropriate for a read-only administrator.
+// The structured status and class below remain useful without copying any
+// upstream-controlled sentence across that boundary.
 func (run *requestRun) captureProviderFailure(providerErr error) {
 	if run == nil || run.service.failureCapture == nil || providerErr == nil {
 		return
@@ -106,24 +259,16 @@ func (run *requestRun) captureProviderFailure(providerErr error) {
 	if !errors.As(providerErr, &classified) {
 		return
 	}
-	body := providerFailureReason(classified)
-	if body == "" {
-		return
-	}
 	run.capturedResponse = upstreamFailureBody{
-		Status:  classified.StatusCode,
-		Class:   string(classified.Class),
-		Message: body,
+		Status: classified.StatusCode,
+		Class:  string(classified.Class),
 	}
 }
 
-// upstreamFailureBody is the shape a captured upstream refusal is stored in. It
-// keeps the sentence apart from the status and class rather than as one blob,
-// so a reader can tell what the adapter concluded from what the upstream said.
+// upstreamFailureBody is the safe shape a captured upstream refusal takes.
 type upstreamFailureBody struct {
-	Status  int    `json:"provider_status,omitempty"`
-	Class   string `json:"error_class,omitempty"`
-	Message string `json:"body"`
+	Status int    `json:"provider_status,omitempty"`
+	Class  string `json:"error_class,omitempty"`
 }
 
 // writeCapture stores the payload of a request that failed. It runs on the same
@@ -161,20 +306,7 @@ func (run *requestRun) writeCapture(outcome string) {
 		Request:                  encodeCaptured(run.capturedRequest),
 		Response:                 encodeCaptured(run.capturedResponse),
 	}
-	written, err := store.Put(record)
-	switch {
-	case err != nil && run.service.captureDegraded.CompareAndSwap(false, true):
-		// Once, not once per failed request. A provider outage and a full disk
-		// arrive together, and a line per failure is the same flood this
-		// feature is careful about everywhere else, one level down. Named
-		// without the payload: the thing that failed to be written must not be
-		// written into the log instead.
-		run.service.logger.Warn("failure capture was not stored",
-			"request_id", run.requestID, "error", err)
-	case !written && store.Saturated():
-		run.service.logger.Warn("failure capture stopped for the day at its record ceiling",
-			"request_id", run.requestID)
-	}
+	run.service.enqueueCapture(record)
 }
 
 // encodeCaptured serializes one side, or returns nothing when there is nothing

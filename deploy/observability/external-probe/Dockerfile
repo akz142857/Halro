@@ -12,11 +12,13 @@ RUN go mod download
 COPY cmd/halro-deadman ./cmd/halro-deadman
 COPY internal/deadman ./internal/deadman
 COPY internal/safelog ./internal/safelog
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o /out/halro-deadman ./cmd/halro-deadman
 RUN mkdir -p /rootfs/var/lib/halro-deadman /rootfs/var/log/halro-deadman
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35
 COPY --from=build /out/halro-deadman /usr/local/bin/halro-deadman
+COPY --from=build /licenses/ /licenses/
 COPY --from=build --chown=65532:65532 /rootfs/var/lib/halro-deadman/ /var/lib/halro-deadman/
 COPY --from=build --chown=65532:65532 /rootfs/var/log/halro-deadman/ /var/log/halro-deadman/
 USER 65532:65532

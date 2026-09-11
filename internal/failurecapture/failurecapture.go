@@ -1,6 +1,6 @@
-// Package failurecapture keeps the request a failed call carried and the answer
-// the upstream gave it, so an operator can reproduce the failure instead of
-// guessing at it.
+// Package failurecapture keeps the request a failed call carried and a safe,
+// structured description of the answer, so an operator can reproduce the
+// failure without persisting untrusted upstream prose.
 //
 // It is the only place Halro stores what a caller wrote. Everything else the
 // gateway persists is metadata it produced itself — identifiers, counts, classes
@@ -28,6 +28,7 @@
 package failurecapture
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,10 +139,9 @@ type Record struct {
 	// RequestTruncated says the ceiling cut the request short, so a reader does
 	// not diagnose a malformed body that is only an incomplete one.
 	RequestTruncated bool `json:"request_truncated,omitempty"`
-	// Response is what came back: the upstream's error body for a refusal, or
-	// the answer Halro could not put on the caller's wire for a render failure.
-	// Absent when the failure produced nothing to record — a refused dial has no
-	// response to keep.
+	// Response is Halro's structured status/class for an upstream refusal, or a
+	// prose-free shape summary for an answer the wire renderer refused. Raw
+	// upstream values are never stored: they may echo the Provider credential.
 	Response          json.RawMessage `json:"response,omitempty"`
 	ResponseTruncated bool            `json:"response_truncated,omitempty"`
 }
@@ -180,11 +180,12 @@ type Store struct {
 
 	mu sync.Mutex
 	// countedDay and dayCount enforce MaxRecordsPerDay without listing the
-	// directory on every capture. A restart resets the count, which is the
-	// conservative direction only for the day in progress and is bounded by
-	// retention either way.
+	// directory on every capture. Open seeds the count from the current day's
+	// directory, so a restart cannot replenish a ceiling intended to bound the
+	// whole day rather than one process lifetime.
 	countedDay string
 	dayCount   int
+	dayPending int
 	// dropped says a capture was actually refused today, which is not the same
 	// as the count having reached the ceiling: the record that fills the last
 	// slot is written, and reporting saturation for it would announce a
@@ -218,17 +219,54 @@ func Open(sealer Sealer, options Options) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
+	day := now().UTC().Format("2006-01-02")
+	dayCount, err := countCaptures(filepath.Join(options.Root, day), day)
+	if err != nil {
+		return nil, fmt.Errorf("count current failure captures: %w", err)
+	}
 	return &Store{
 		root: options.Root, maxBytes: options.MaxBytes,
 		maxRecordsPerDay: options.MaxRecordsPerDay, retain: options.Retain,
-		now: now, sealer: sealer,
+		now: now, sealer: sealer, countedDay: day, dayCount: dayCount,
 	}, nil
+}
+
+func countCaptures(directory, day string) (int, error) {
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		_, _, capturedAt, ok := capturedIdentity(entry.Name())
+		if ok && capturedAt.UTC().Format("2006-01-02") == day {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // Put seals one capture. It returns false when the record was dropped rather
 // than written — a saturated day, an unwritable directory — so the caller can
 // report the degradation once instead of per request.
 func (s *Store) Put(record Record) (bool, error) {
+	return s.PutContext(context.Background(), record)
+}
+
+// PutContext is Put with a shutdown boundary. Regular-file syscalls cannot be
+// interrupted once the kernel is executing them, but every user-space phase is
+// cancellable so an async capture worker does not begin another expensive step
+// after its owner has started shutting down.
+func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if record.RequestID == "" || record.ProjectID == "" {
 		return false, errors.New("a capture must name its request and project")
 	}
@@ -279,24 +317,70 @@ func (s *Store) Put(record Record) (bool, error) {
 	if !s.reserve(day) {
 		return false, nil
 	}
+	reservationOwned := true
+	defer func() {
+		if reservationOwned {
+			s.finishReservation(day, false)
+		}
+	}()
 	plaintext, err := json.Marshal(record)
 	if err != nil {
 		return false, fmt.Errorf("encode failure capture: %w", err)
 	}
+	defer clear(plaintext)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	sealed, err := s.sealer.EncryptFailurePayload(record.RequestID, record.ProjectID, plaintext)
-	clear(plaintext)
 	if err != nil {
 		return false, fmt.Errorf("seal failure capture: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	directory := filepath.Join(s.root, day)
 	if err := os.MkdirAll(directory, DirPerm); err != nil {
 		return false, fmt.Errorf("create failure capture day: %w", err)
 	}
 	path := filepath.Join(directory, captureName(record.CapturedAt, record.RequestID, record.ProjectID))
-	if err := writeSealedCapture(directory, path, sealed); err != nil {
-		return false, fmt.Errorf("write failure capture: %w", err)
+	reservationOwned = false
+	type result struct {
+		committed bool
+		err       error
 	}
-	return true, nil
+	write := func() result {
+		err := writeSealedCapture(ctx, directory, path, sealed)
+		committed := err == nil
+		if err != nil {
+			// rename is the commit point. A following directory fsync can fail
+			// even though the record is visible and consumes the day's budget.
+			_, statErr := os.Stat(path)
+			committed = statErr == nil
+		}
+		s.finishReservation(day, committed)
+		return result{committed: committed, err: err}
+	}
+	// Put is still synchronous. A cancellable worker gets one extra goroutine
+	// only while its single active filesystem operation is in progress; this
+	// lets shutdown return even if a regular-file syscall itself stalls.
+	if ctx.Done() == nil {
+		completed := write()
+		if completed.err != nil {
+			return false, fmt.Errorf("write failure capture: %w", completed.err)
+		}
+		return completed.committed, nil
+	}
+	completed := make(chan result, 1)
+	go func() { completed <- write() }()
+	select {
+	case outcome := <-completed:
+		if outcome.err != nil {
+			return false, fmt.Errorf("write failure capture: %w", outcome.err)
+		}
+		return outcome.committed, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 // writeSealedCapture puts the envelope on disk whole or not at all.
@@ -312,7 +396,10 @@ func (s *Store) Put(record Record) (bool, error) {
 // This is the same temp-write-fsync-rename-fsync sequence every other durable
 // write here uses; internal/durable exists so that there is one of them rather
 // than six, and this was the one place that had grown its own.
-func writeSealedCapture(directory, path string, sealed []byte) error {
+func writeSealedCapture(ctx context.Context, directory, path string, sealed []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	temporary, err := os.CreateTemp(directory, ".capture-*")
 	if err != nil {
 		return err
@@ -323,7 +410,15 @@ func writeSealedCapture(directory, path string, sealed []byte) error {
 		temporary.Close()
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		temporary.Close()
+		return err
+	}
 	if _, err := temporary.Write(sealed); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -332,6 +427,9 @@ func writeSealedCapture(directory, path string, sealed []byte) error {
 		return err
 	}
 	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(temporaryName, path); err != nil {
@@ -362,6 +460,7 @@ func (s *Store) Saturation() Saturation {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.rollDayLocked(s.now().UTC().Format("2006-01-02"))
 	return Saturation{
 		Day: s.countedDay, Captured: s.dayCount,
 		DayLimit: s.maxRecordsPerDay, Saturated: s.dropped,
@@ -371,15 +470,31 @@ func (s *Store) Saturation() Saturation {
 func (s *Store) reserve(day string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.countedDay != day {
-		s.countedDay, s.dayCount, s.dropped = day, 0, false
-	}
-	if s.dayCount >= s.maxRecordsPerDay {
+	s.rollDayLocked(day)
+	if s.dayCount+s.dayPending >= s.maxRecordsPerDay {
 		s.dropped = true
 		return false
 	}
-	s.dayCount++
+	s.dayPending++
 	return true
+}
+
+func (s *Store) rollDayLocked(day string) {
+	if s.countedDay != day {
+		s.countedDay, s.dayCount, s.dayPending, s.dropped = day, 0, 0, false
+	}
+}
+
+func (s *Store) finishReservation(day string, committed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.countedDay != day || s.dayPending == 0 {
+		return
+	}
+	s.dayPending--
+	if committed {
+		s.dayCount++
+	}
 }
 
 // Saturated reports whether the day in progress has hit its ceiling, and
@@ -388,6 +503,7 @@ func (s *Store) reserve(day string) bool {
 func (s *Store) Saturated() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.rollDayLocked(s.now().UTC().Format("2006-01-02"))
 	if !s.dropped || s.reportedDay == s.countedDay {
 		return false
 	}

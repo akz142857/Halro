@@ -97,9 +97,10 @@ type providerRegionHostView struct {
 // become ambiguous as soon as its mainland and global products point at
 // different legal and product documentation.
 type providerOfferingDocumentView struct {
-	Region         domain.ProviderRegionID `json:"region"`
-	URL            string                  `json:"url"`
-	PolicyRevision string                  `json:"policy_revision"`
+	Region                   domain.ProviderRegionID         `json:"region"`
+	URL                      string                          `json:"url"`
+	PolicyRevision           string                          `json:"policy_revision"`
+	ProductIdentityAssurance domain.ProductIdentityAssurance `json:"product_identity_assurance,omitempty"`
 }
 
 // providerOfferingView is one upstream product of one provider type.
@@ -261,10 +262,15 @@ func offeringsForProfiles(providerType domain.ProviderType, profiles []providerP
 			index = len(views) - 1
 			at[identity.Offering] = index
 		}
-		if identity.DocumentationURL != "" {
+		for _, requirement := range domain.UsagePolicyRequirementsForProfile(profile.ID) {
+			views[index].RequiresUsageWarning = true
+			assurance := requirement.ProductIdentityAssurance
+			if assurance == domain.ProductIdentityMechanicallyVerified {
+				assurance = ""
+			}
 			views[index].Documentation = appendDocumentOnce(views[index].Documentation,
-				providerOfferingDocumentView{Region: identity.Region, URL: identity.DocumentationURL,
-					PolicyRevision: identity.UsagePolicyRevision})
+				providerOfferingDocumentView{Region: requirement.AccountRegion, URL: requirement.DocumentationURL,
+					PolicyRevision: requirement.PolicyRevision, ProductIdentityAssurance: assurance})
 		}
 		// A by-endpoint product's regions are its hosts', not its surfaces': the
 		// surface pins none, and a blank entry is not a choice.
@@ -286,7 +292,8 @@ func offeringsForProfiles(providerType domain.ProviderType, profiles []providerP
 func appendDocumentOnce(documents []providerOfferingDocumentView, document providerOfferingDocumentView) []providerOfferingDocumentView {
 	for _, existing := range documents {
 		if existing.Region == document.Region && existing.URL == document.URL &&
-			existing.PolicyRevision == document.PolicyRevision {
+			existing.PolicyRevision == document.PolicyRevision &&
+			existing.ProductIdentityAssurance == document.ProductIdentityAssurance {
 			return documents
 		}
 	}

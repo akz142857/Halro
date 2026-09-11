@@ -24,8 +24,10 @@ import (
 func openFailureCapture(cfg config.Config, sealer failurecapture.Sealer) (*failurecapture.Store, error) {
 	root := filepath.Join(cfg.Storage.DataDir, "failures")
 	if !cfg.Gateway.FailureCapture.Enabled {
-		if _, err := os.Stat(root); err != nil {
+		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
 			return nil, nil
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect disabled failure capture store: %w", err)
 		}
 	}
 	store, err := failurecapture.Open(sealer, failurecapture.Options{

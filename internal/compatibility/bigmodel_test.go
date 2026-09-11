@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
@@ -26,7 +27,7 @@ func TestBigModelChatRendersOnlyTheDocumentedWireMembers(t *testing.T) {
 	request.ReasoningEffort = "high"
 	request.ToolChoice = json.RawMessage(`"auto"`)
 
-	body, err := RenderBigModelChatRequest(request, "request-123")
+	body, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, request, "request-123")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +63,14 @@ func TestBigModelChatReasoningIsExactPerModel(t *testing.T) {
 		{"glm-5.2", "high", "enabled", false},
 		{"glm-5.2", "none", "disabled", false},
 		{"glm-5.2", "low", "", true},
-		{"glm-4.7", "none", "", false},
+		{"glm-4.7", "none", "disabled", false},
 		{"glm-4.7", "high", "", true},
+		{"glm-4-32b-0414-128k", "none", "", false},
+		{"unknown-future-model", "none", "", true},
 	} {
 		request := bigModelBaseRequest(test.model)
 		request.ReasoningEffort = test.effort
-		body, err := RenderBigModelChatRequest(request, "")
+		body, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, request, "")
 		if test.wantErr {
 			if err == nil {
 				t.Errorf("%s/%s was accepted", test.model, test.effort)
@@ -117,7 +120,7 @@ func TestBigModelChatRefusesLossyValuesBeforeProviderIO(t *testing.T) {
 	} {
 		request := bigModelBaseRequest("glm-4.7")
 		test.mutate(&request)
-		if _, err := RenderBigModelChatRequest(request, ""); err == nil {
+		if _, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, request, ""); err == nil {
 			t.Errorf("%s was accepted", test.name)
 		}
 	}
@@ -128,7 +131,7 @@ func TestBigModelChatCarriesToolsJSONAndImagesWithoutInventingImageFidelity(t *t
 	request.Messages[0].Content = json.RawMessage(`[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.test/a.png","detail":"auto"}}]`)
 	request.Tools = []openaiapi.Tool{{Type: "function", Function: openaiapi.ToolFunction{Name: "inspect", Parameters: json.RawMessage(`{"type":"object"}`)}}}
 	request.ToolChoice = json.RawMessage(`"auto"`)
-	body, err := RenderBigModelChatRequest(request, "")
+	body, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, request, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +144,7 @@ func TestBigModelChatCarriesToolsJSONAndImagesWithoutInventingImageFidelity(t *t
 
 	jsonRequest := bigModelBaseRequest("glm-5.2")
 	jsonRequest.ResponseFormat = json.RawMessage(`{"type":"json_object"}`)
-	jsonBody, err := RenderBigModelChatRequest(jsonRequest, "")
+	jsonBody, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, jsonRequest, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +156,7 @@ func TestBigModelChatCarriesToolsJSONAndImagesWithoutInventingImageFidelity(t *t
 func TestBigModelChatAlwaysRendersStopAsAnArray(t *testing.T) {
 	request := bigModelBaseRequest("glm-4.7")
 	request.Stop = json.RawMessage(`"END"`)
-	body, err := RenderBigModelChatRequest(request, "")
+	body, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalChat, request, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,13 +177,33 @@ func TestBigModelTargetRulesProtectReasoningAndOutputBounds(t *testing.T) {
 		{"glm-5.2", "high", &answer, nil, []string{"max_tokens"}},
 		{"glm-5.2", "none", &answer, nil, nil},
 		{"glm-5.2", "none", &answer, &completion, []string{"max_tokens"}},
+		{"glm-4.7", "none", &answer, nil, nil},
+		{"glm-4.7", "", &answer, nil, []string{"max_tokens"}},
+		{"unknown-future-model", "none", nil, nil, []string{"reasoning_effort"}},
 	} {
-		got := BigModelTargetUnsupportedGenerateFields(test.model, semantic.GenerateRequest{
+		got := BigModelTargetUnsupportedGenerateFields(domain.ProfileBigModelGlobalChat, test.model, semantic.GenerateRequest{
 			ReasoningEffort: test.effort, VisibleOutputTokenLimit: test.answer, CompletionTokenLimit: test.total,
 		})
 		if stringList(got) != stringList(test.want) {
 			t.Errorf("%s/%s fields = %v, want %v", test.model, test.effort, got, test.want)
 		}
+	}
+}
+
+func TestBigModelReasoningPolicyIsProfileAndExactModelScoped(t *testing.T) {
+	if !BigModelReasonsUnasked(domain.ProfileBigModelGlobalChat, "glm-4.7") {
+		t.Fatal("GLM-4.7 defaults thinking on but was not marked as reasoning unasked")
+	}
+	if BigModelReasonsUnasked(domain.ProfileBigModelGlobalChat, "glm-4-flash-250414") {
+		t.Fatal("a non-reasoning model was marked as reasoning unasked")
+	}
+	if BigModelReasonsUnasked(domain.ProfileBigModelGlobalChat, "unknown-future-model") {
+		t.Fatal("an unknown target was credited with a reasoning behavior")
+	}
+	request := bigModelBaseRequest("glm-5.2")
+	request.ReasoningEffort = "none"
+	if _, err := RenderBigModelChatRequest(domain.ProfileBigModelGlobalCodingChat, request, ""); err == nil {
+		t.Fatal("a general-profile model policy leaked onto the Coding Plan profile")
 	}
 }
 

@@ -137,6 +137,7 @@ func TestFailedAttemptSettlesAtZeroUnderFixedRequestFee(t *testing.T) {
 	}
 	if err := manager.Settle(context.Background(), attempt, Settlement{
 		Outcome: "provider_error", ErrorClass: "bad_request", HTTPStatus: 400,
+		FailurePhase: "provider", FailureSemanticsRecorded: true,
 	}); err != nil {
 		t.Fatalf("a failed attempt could not be settled: %v", err)
 	}
@@ -175,6 +176,56 @@ func TestRecoverStartedLeaseUsesFrozenPriceAndPreparedBounds(t *testing.T) {
 	stats := manager.RecoveryStats()
 	if stats.PendingObserved != 1 || stats.ConservativelySettled != 1 || stats.Failures != 0 {
 		t.Fatalf("recovery stats=%#v", stats)
+	}
+}
+
+// A pending lease is a frozen target snapshot, not only a reserved amount.
+// Recovery must settle the exact product surface and account region that was
+// admitted; otherwise a restart permanently moves spend into the unattributed
+// bucket even though the reservation carried the complete identity.
+func TestRecoverPendingLeasePreservesFrozenProviderAttribution(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(map[bool]string{false: "not_started", true: "started"}[started], func(t *testing.T) {
+			manager, state, closeLog := newTestManager(t)
+			defer closeLog()
+			request, err := manager.BeginRequest(context.Background(), "project_recovery_attribution", "request_recovery_attribution")
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 10_000, LeaseSpec{
+				Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 50,
+				PriceSnapshot: testPriceSnapshot(t, domain.BillingModeMetered), PreparedInputTokens: 10, PreparedOutputTokens: 20,
+				TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			}, AttemptMetadata{
+				DeploymentID: "dep_bigmodel", ProviderID: "provider_bigmodel",
+				OfferingID: domain.OfferingBigModelCodingPlan, ProfileID: domain.ProfileBigModelCNCodingChat,
+				AccountRegionID: domain.RegionCN,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if started {
+				if err := manager.MarkStarted(context.Background(), attempt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := manager.RecoverPendingLeases(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			settled, ok := state.SettledAttempt(attempt.AttemptID)
+			if !ok {
+				t.Fatal("recovery did not produce a settlement")
+			}
+			got := settled.Settlement
+			if got.OfferingID != attempt.OfferingID || got.ProfileID != attempt.ProfileID || got.AccountRegionID != attempt.AccountRegionID {
+				t.Fatalf("recovered attribution=(%q,%q,%q), want (%q,%q,%q)",
+					got.OfferingID, got.ProfileID, got.AccountRegionID,
+					attempt.OfferingID, attempt.ProfileID, attempt.AccountRegionID)
+			}
+			if got.FailurePhase != "accounting" {
+				t.Fatalf("recovered failure phase=%q, want accounting", got.FailurePhase)
+			}
+		})
 	}
 }
 
@@ -538,7 +589,7 @@ func TestSettlementChargesCachedPromptTokensAtTheCacheReadRate(t *testing.T) {
 	}
 	if err := manager.Settle(ctx, attempt, Settlement{
 		CommittedMicrosUSD: cost.TotalCostMicrosUSD, ProviderInputTokens: 1_000_000,
-		ProviderCachedInputTokens: 900_000, Outcome: "ok",
+		ProviderCachedInputTokens: 900_000, Outcome: "success",
 	}); err != nil {
 		t.Fatalf("settling a cached attempt at the cache-read rate was refused: %v", err)
 	}

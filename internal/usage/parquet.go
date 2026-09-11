@@ -185,7 +185,20 @@ func NewExporterWithOptions(root string, options Options) (*Exporter, error) {
 	if format != FormatParquet && format != FormatNDJSON {
 		return nil, fmt.Errorf("usage export format %q is not supported", format)
 	}
-	return &Exporter{root: filepath.Clean(root), format: format}, nil
+	exporter := &Exporter{root: filepath.Clean(root), format: format}
+	// Runtime construction happens before any listener is bound. Validate an
+	// existing manifest here rather than waiting for the first maintenance
+	// export, where an incompatible data directory would otherwise look ready
+	// while Usage only emitted periodic warnings.
+	manifest, err := exporter.LoadManifest()
+	if err == nil {
+		if !supportedManifestSchema(manifest.SchemaVersion) {
+			return nil, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return exporter, nil
 }
 
 func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {

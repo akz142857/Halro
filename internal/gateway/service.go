@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/contentscan"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/limiter"
@@ -107,6 +109,16 @@ type Service struct {
 	// wrote, so it is something an operator turns on rather than something a
 	// gateway does unless told otherwise.
 	failureCapture FailureCapture
+	// Capture writes run behind one bounded worker. A failed upstream must not
+	// be able to turn slow storage into one blocked goroutine per socket, while
+	// one worker preserves the store's ordering and daily-ceiling accounting.
+	captureMu        sync.Mutex
+	captureQueue     chan failurecapture.Record
+	captureCancel    context.CancelFunc
+	captureDone      chan struct{}
+	captureCloseOnce sync.Once
+	captureClosed    bool
+	captureAsync     bool
 	// captureDegraded reports the store's first write failure and nothing
 	// after it. A disk that cannot take a capture cannot take the next one
 	// either, and the operator needs to be told once.
@@ -677,7 +689,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 			providerLease.Release()
 			breakerLease.Abandon()
-			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed"})
+			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed", FailurePhase: phaseAccounting})
 			finalizeErr := run.finalize("accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
 		}
@@ -688,7 +700,7 @@ func (s *Service) startAttempt(
 	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
 		providerLease.Release()
 		breakerLease.Abandon()
-		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed"})
+		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed", FailurePhase: phaseAccounting})
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
@@ -1013,6 +1025,7 @@ func NewServiceWithOptions(
 	service := &Service{
 		logger:                        logger,
 		failureCapture:                options.FailureCapture,
+		captureAsync:                  options.FailureCapture != nil,
 		auth:                          authSnapshot,
 		registry:                      registry,
 		accounting:                    accounting,
@@ -1330,10 +1343,9 @@ func (s *Service) executeGenerate(
 						)
 					} else if renderErr := render(semanticResponse); renderErr != nil {
 						outcome = "provider_error"
-						// The upstream succeeded and its answer is the whole
-						// diagnosis: the capture keeps the answer that could
-						// not be put on the wire, not an upstream error, and
-						// this is the only path where those differ.
+						// The upstream succeeded, but its prose is still
+						// untrusted. Capture only the safe response shape that
+						// explains why the wire renderer disagreed.
 						run.captureResponse(semanticResponse)
 						failure = gatewayError(
 							"provider_error", "provider response cannot be rendered safely", 502, renderErr,
@@ -3357,21 +3369,26 @@ func addTokens(left, right int64) (int64, error) {
 func mapProviderError(err error) error {
 	var classified *provider.Error
 	if !errors.As(err, &classified) {
-		return gatewayError("provider_error", "provider request failed", 502, err)
+		return gatewayError("provider_error", "provider request failed", 502, nil)
 	}
 	var mapped *Error
 	switch classified.Class {
 	case provider.ErrorBadRequest:
-		mapped = gatewayError("invalid_request_error", "provider rejected the request", 400, err)
+		mapped = gatewayError("invalid_request_error", "provider rejected the request", 400, nil)
 	case provider.ErrorAuthentication:
-		mapped = gatewayError("provider_authentication_error", "provider authentication failed", 502, err)
+		mapped = gatewayError("provider_authentication_error", "provider authentication failed", 502, nil)
 	case provider.ErrorRateLimit:
-		mapped = gatewayError("provider_rate_limit", "provider rate limit exceeded", 429, err)
+		mapped = gatewayError("provider_rate_limit", "provider rate limit exceeded", 429, nil)
 	case provider.ErrorTimeout:
-		mapped = gatewayError("provider_timeout", "provider timed out", 504, err)
+		mapped = gatewayError("provider_timeout", "provider timed out", 504, nil)
 	default:
-		mapped = gatewayError("provider_error", "provider request failed", 502, err)
+		mapped = gatewayError("provider_error", "provider request failed", 502, nil)
 	}
+	// A Provider error's message and cause are upstream-controlled and may quote
+	// the credential the authorizer presented. The gateway preserves the safe
+	// classification above, but never exposes that error through Unwrap: HTTP is
+	// not the only consumer of Service, and an embedder logging `%+v` deserves
+	// the same credential boundary as gatewayapi.
 	mapped.RetryAfter = classified.RetryAfter
 	// The upstream's own identifier does not travel to the caller: it is the
 	// provider's vocabulary, and an application reading `anthropic_error` off a

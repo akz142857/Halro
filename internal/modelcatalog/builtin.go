@@ -3,6 +3,7 @@ package modelcatalog
 import (
 	"sync"
 
+	"github.com/akz142857/Halro/internal/compatibility"
 	"github.com/akz142857/Halro/internal/domain"
 )
 
@@ -674,7 +675,7 @@ func bigModelModels() []Entry {
 				capabilities.Reasoning = true
 			}
 			entry := builtinEntry(provider, profile, model, capabilities)
-			entry.ReasonsUnasked = model == "glm-5.3"
+			entry.ReasonsUnasked = compatibility.BigModelReasonsUnasked(profile, model)
 			entries = append(entries, entry)
 		}
 		return entries
@@ -694,7 +695,7 @@ func bigModelModels() []Entry {
 				capabilities.Reasoning = true
 			}
 			entry := builtinEntry(provider, profile, model, capabilities)
-			entry.ReasonsUnasked = model == "glm-5.3-flash"
+			entry.ReasonsUnasked = compatibility.BigModelReasonsUnasked(profile, model)
 			entries = append(entries, entry)
 		}
 		return entries
@@ -737,7 +738,7 @@ func bigModelModels() []Entry {
 	}
 	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
 		entry := builtinEntry(provider, coding, model, codingSet)
-		entry.ReasonsUnasked = true
+		entry.ReasonsUnasked = compatibility.BigModelReasonsUnasked(coding, model)
 		entries = append(entries, entry)
 	}
 	// The international plan is registered from Z.AI's first-party contract,
@@ -752,7 +753,7 @@ func bigModelModels() []Entry {
 	}
 	for _, model := range []string{"glm-5.3", "glm-5.3-flash"} {
 		entry := builtinEntry(provider, globalCoding, model, globalCodingSet)
-		entry.ReasonsUnasked = true
+		entry.ReasonsUnasked = compatibility.BigModelReasonsUnasked(globalCoding, model)
 		entries = append(entries, entry)
 	}
 	entries = append(entries, text(global, []string{

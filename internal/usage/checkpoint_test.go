@@ -92,6 +92,50 @@ func restoreOneRound(aggregate *Aggregate) (*Aggregate, error) {
 	})
 }
 
+func TestCheckpointVersionProtectsProviderAttributionAndFailureSemantics(t *testing.T) {
+	aggregate := NewAggregate()
+	records := checkpointRecordsFrom(aggregate, 1)
+	settled := &records[len(records)-2].Event
+	settled.OfferingID = "bigmodel.coding-plan"
+	settled.ProfileID = "bigmodel.cn.coding.chat.v1"
+	settled.AccountRegionID = "cn"
+	settled.Outcome = "provider_error"
+	settled.ErrorClass = "rate_limit"
+	settled.HTTPStatus = 429
+	settled.FailurePhase = "provider"
+	settled.Retryable = true
+	settled.FailureSemanticsRecorded = true
+	applyRecords(t, aggregate, records)
+
+	store := newCheckpointStore()
+	store.round(t, aggregate)
+	head := decodeCheckpointHead(t, store.head)
+	if head.Version != 14 {
+		t.Fatalf("checkpoint version=%d, want 14 for provider attribution and failure semantics", head.Version)
+	}
+	var previous map[string]json.RawMessage
+	if err := json.Unmarshal(store.head, &previous); err != nil {
+		t.Fatal(err)
+	}
+	previous["version"] = json.RawMessage("13")
+	previousHead, err := json.Marshal(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RestoreCheckpoint(previousHead, store.read); err == nil || !contains(err.Error(), "version 13 is not supported") {
+		t.Fatalf("v13 checkpoint was not rejected for Ledger replay: %v", err)
+	}
+	restored := store.restore(t).Snapshot()
+	if len(restored.Attempts) != 1 {
+		t.Fatalf("restored attempts=%d, want 1", len(restored.Attempts))
+	}
+	got := restored.Attempts[0]
+	if got.OfferingID != settled.OfferingID || got.ProfileID != settled.ProfileID || got.AccountRegionID != settled.AccountRegionID ||
+		got.FailurePhase != settled.FailurePhase || got.ErrorClass != settled.ErrorClass || !got.Retryable || !got.FailureSemanticsRecorded {
+		t.Fatalf("restored attempt lost schema-14 fields: %#v", got)
+	}
+}
+
 // TestCheckpointWritesOnlyTheRecordsSinceTheLastOne is the whole point of the
 // segmented format: a tick's cost follows what arrived, not what is resident.
 // Before it, a checkpoint re-encoded every record in the window every minute.

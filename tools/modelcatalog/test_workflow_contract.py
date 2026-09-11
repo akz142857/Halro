@@ -40,6 +40,54 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("commit:$commit", workflow)
         self.assertIn("permission-contents: write", workflow)
 
+    def test_release_binds_dispatch_to_a_successful_main_ci_run(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("actions/workflows/ci.yml/runs", workflow)
+        self.assertIn("head_sha=${GITHUB_SHA}", workflow)
+        self.assertIn("status=success", workflow)
+        self.assertIn("event=push", workflow)
+
+    def test_release_repeats_local_release_only_gates(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("sh scripts/check-dependency-license-review.sh", workflow)
+        self.assertIn("npm run typecheck", workflow)
+        self.assertIn("git diff --exit-code -- internal/webui/dist", workflow)
+        self.assertIn("python -m pip_audit", workflow)
+        self.assertIn("npm audit --audit-level=moderate", workflow)
+        self.assertIn("go -C tests/compatibility/go run golang.org/x/vuln", workflow)
+
+    def test_sdk_dependency_inputs_are_locked_audited_and_reviewed(self) -> None:
+        ci = (ROOT / ".github/workflows/ci.yml").read_text()
+        requirements = (ROOT / "tests/compatibility/python/requirements.txt").read_text()
+        license_gate = (ROOT / "scripts/check-dependency-license-review.sh").read_text()
+        self.assertIn("--require-hashes", ci)
+        self.assertIn("python -m pip_audit", ci)
+        self.assertIn("npm audit --audit-level=moderate --prefix tests/compatibility/node", ci)
+        self.assertIn("go -C tests/compatibility/go run golang.org/x/vuln", ci)
+        self.assertIn("pip-audit==", requirements)
+        self.assertIn("--hash=sha256:", requirements)
+        for path in (
+            "tests/compatibility/go/go.mod",
+            "tests/compatibility/go/go.sum",
+            "tests/compatibility/node/package.json",
+            "tests/compatibility/node/package-lock.json",
+            "tests/compatibility/python/requirements.in",
+            "tests/compatibility/python/requirements.txt",
+        ):
+            self.assertIn(path, license_gate)
+
+    def test_release_scans_and_inventories_both_container_products(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn("image-ref: halro:release", workflow)
+        self.assertIn("image-ref: halro-deadman:release", workflow)
+        self.assertIn("halro-container-amd64.spdx.json", workflow)
+        self.assertIn("halro-deadman-container-amd64.spdx.json", workflow)
+
+    def test_deadman_image_contains_distribution_notices(self) -> None:
+        dockerfile = (ROOT / "deploy/observability/external-probe/Dockerfile").read_text()
+        self.assertIn("COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/", dockerfile)
+        self.assertIn("COPY --from=build /licenses/ /licenses/", dockerfile)
+
     def test_release_generates_binary_sbom_and_verifies_provenance(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("attestations: write", workflow)
@@ -53,6 +101,12 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn('gh attestation verify "${artifact}"', workflow)
         self.assertIn('--source-digest "${GITHUB_SHA}"', workflow)
         self.assertIn("--source-ref refs/heads/main", workflow)
+
+    def test_release_tag_creation_is_resume_safe(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        self.assertIn('tag_commit=$(git rev-list -n 1 "refs/tags/${version}")', workflow)
+        self.assertIn('tag_commit=$(git rev-list -n 1 "refs/tags/${VERSION}")', workflow)
+        self.assertIn('release ${version} is already published', workflow)
 
     def test_release_keeps_dynamic_signed_catalog_inactive(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()

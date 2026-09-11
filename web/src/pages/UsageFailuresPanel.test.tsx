@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "../api";
+import { api, ApiError } from "../api";
+import { navigate } from "../navigation";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import type { RequestFailure } from "../types";
 
@@ -152,6 +153,28 @@ describe("UsageFailuresPanel", () => {
     expect(new URLSearchParams(query.slice(1)).get("request_id")).toBe("req_failed");
   });
 
+  it("resynchronizes every filter after same-tab query navigation", async () => {
+    window.history.replaceState({}, "", "/admin/usage?tab=failures&request_id=req_old");
+    renderPanel([]);
+    expect(await screen.findByRole("textbox", { name: "Request ID" })).toHaveValue("req_old");
+
+    act(() => navigate("/admin/usage?tab=failures&request_id=req_new&project_id=project_new&deployment_id=dep_new&offering_id=bigmodel.coding-plan&start=2026-09-01T00%3A00%3A00Z&end=2026-09-02T00%3A00%3A00Z"));
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Request ID" })).toHaveValue("req_new"));
+    const calls = (api.usageFailures as unknown as { mock: { calls: [string][] } }).mock.calls;
+    await waitFor(() => {
+      const params = new URLSearchParams((calls.at(-1)?.[0] ?? "").slice(1));
+      expect(Object.fromEntries(params)).toMatchObject({
+        request_id: "req_new",
+        project_id: "project_new",
+        deployment_id: "dep_new",
+        offering_id: "bigmodel.coding-plan",
+        start: "2026-09-01T00:00:00.000Z",
+        end: "2026-09-02T00:00:00.000Z",
+      });
+    });
+  });
+
   it("carries a linked Offering filter and exposes it as a clearable product name", async () => {
     window.history.replaceState({}, "", "/admin/usage?tab=failures&offering_id=bigmodel.coding-plan");
     renderPanel([providerFailure]);
@@ -219,16 +242,72 @@ describe("UsageFailuresPanel", () => {
 	expect(await within(dialog).findByText(/invalid api key/)).toBeVisible();
   });
 
-  // Not captured is the ordinary case, not a fault: capture may be off, the
-  // failure may predate it, or the record may have aged out.
-  it("says nothing was captured rather than reporting a fault", async () => {
-    vi.spyOn(api, "usageFailurePayload").mockRejectedValue(new Error("not found"));
+  it.each([
+    [new ApiError(404, "not found", "failure_capture_not_found"), "没有保存该请求的原始内容。"],
+    [new ApiError(404, "disabled", "failure_capture_disabled"), "失败载荷捕获当前未启用。"],
+    [new ApiError(503, "audit unavailable", "audit_unavailable"), "审计日志当前不可用，因此载荷正文被安全扣留。"],
+    [new ApiError(401, "expired"), "管理会话已失效。请重新登录后再查看。"],
+    [new ApiError(403, "forbidden"), "当前账号没有查看失败载荷的权限。"],
+    [new Error("network down"), "暂时无法读取失败载荷。请检查连接后重试。"],
+  ])("explains payload read failures without calling all of them a capture miss", async (error, expected) => {
+    vi.spyOn(api, "usageFailurePayload").mockRejectedValue(error);
     renderPanel([providerFailure]);
 
     await screen.findByText("服务商认证或权限被拒");
     const dialog = await openFailureDetail();
     fireEvent.click(within(dialog).getByRole("button", { name: "查看" }));
-    expect(await within(dialog).findByText("没有保存该请求的原始内容。")).toBeVisible();
+    expect(await within(dialog).findByText(expected)).toBeVisible();
+  });
+
+  it("can retry a transient audited payload read", async () => {
+    const read = vi.spyOn(api, "usageFailurePayload")
+      .mockRejectedValueOnce(new ApiError(503, "audit unavailable", "audit_unavailable"))
+      .mockResolvedValueOnce({
+        request_id: "req_failed", project_id: "project_a", outcome: "provider_error",
+        captured_at: "2026-08-21T10:01:02Z", request: { model: "chat" },
+      });
+    renderPanel([providerFailure]);
+
+    await screen.findByText("服务商认证或权限被拒");
+    const dialog = await openFailureDetail();
+    fireEvent.click(within(dialog).getByRole("button", { name: "查看" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "重试" }));
+
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(await within(dialog).findByRole("heading", { name: "Halro 规范化后的请求" })).toBeVisible();
+  });
+
+  it("marks all three missing attribution fields as unknown only for legacy rows", async () => {
+    renderPanel([{
+      ...providerFailure,
+      last_failure: {
+        attempt_id: "att_old", attempt: 1, deployment_id: "dep_b", provider_status: 500,
+        error_class: "provider", completed_at: "2026-08-21T10:01:02Z",
+      },
+    }]);
+    await screen.findByRole("button", { name: "失败详情" });
+    const dialog = await openFailureDetail();
+
+    const unknowns = within(dialog).getAllByText("旧记录未采集");
+    expect(unknowns).toHaveLength(5);
+  });
+
+  it("does not invent an unknown region for a current regionless offering", async () => {
+    renderPanel([{
+      ...providerFailure,
+      last_failure: {
+        ...providerFailure.last_failure!,
+        offering_id: "openai.api-platform",
+        profile_id: "openai.chat-embeddings.v1",
+        account_region_id: undefined,
+      },
+    }]);
+    await screen.findByText("服务商认证或权限被拒");
+    const dialog = await openFailureDetail();
+
+    expect(within(dialog).getByText("OpenAI API 平台")).toBeVisible();
+    expect(within(dialog).queryByText("账号地域")).not.toBeInTheDocument();
+    expect(within(dialog).getAllByText("旧记录未采集")).toHaveLength(2);
   });
 
   // A policy refusal never reached an upstream, so there is nothing to show and

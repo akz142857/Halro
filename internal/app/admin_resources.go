@@ -26,13 +26,15 @@ type credentialView struct {
 	// as the product an operator bought instead of as an internal identifier.
 	// Region is empty where the product has no region axis, and where the
 	// endpoint is one the upstream does not publish.
-	OfferingID       domain.ProviderOfferingID `json:"offering_id"`
-	RegionID         domain.ProviderRegionID   `json:"region_id"`
-	BoundBaseURL     string                    `json:"bound_base_url"`
-	SecretConfigured bool                      `json:"secret_configured"`
-	KeyVersion       uint16                    `json:"key_version"`
-	ExpiresAt        *time.Time                `json:"expires_at,omitempty"`
-	Revision         uint64                    `json:"revision"`
+	OfferingID                 domain.ProviderOfferingID          `json:"offering_id"`
+	RegionID                   domain.ProviderRegionID            `json:"region_id"`
+	BoundBaseURL               string                             `json:"bound_base_url"`
+	SecretConfigured           bool                               `json:"secret_configured"`
+	KeyVersion                 uint16                             `json:"key_version"`
+	ExpiresAt                  *time.Time                         `json:"expires_at,omitempty"`
+	UsagePolicyAcknowledgement *domain.UsagePolicyAcknowledgement `json:"usage_policy_acknowledgement,omitempty"`
+	UsagePolicyCurrent         bool                               `json:"usage_policy_current"`
+	Revision                   uint64                             `json:"revision"`
 }
 
 type gatewayKeyView struct {

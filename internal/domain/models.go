@@ -203,6 +203,11 @@ type Credential struct {
 	Audience      string           `json:"audience"`
 	Ciphertext    []byte           `json:"ciphertext"`
 	KeyVersion    uint16           `json:"key_version"`
+	// UsagePolicyAcknowledgement is absent on unrestricted products and on
+	// legacy restricted records. Absence on a restricted product is not a
+	// migration default: activation withholds it until an operator explicitly
+	// accepts the current revision.
+	UsagePolicyAcknowledgement *UsagePolicyAcknowledgement `json:"usage_policy_acknowledgement,omitempty"`
 	// ExpiresAt is the operator's record of when the upstream stops honouring
 	// this secret — a Bedrock API key's lifetime, an STS session, a provider
 	// key with a rotation policy. Optional, because most secrets have no
@@ -243,6 +248,11 @@ func (c Credential) Validate() error {
 	}
 	if len(c.Ciphertext) == 0 {
 		problems = append(problems, errors.New("credential ciphertext is required"))
+	}
+	if c.UsagePolicyAcknowledgement != nil {
+		if err := c.UsagePolicyAcknowledgement.ValidateForSurface(c.AccessSurface); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	// A zero timestamp is what an unparsed or half-built value decays to, and
 	// stored as "expires" it would read as the year 1. No expiry is nil.
@@ -407,6 +417,10 @@ type ProviderInstance struct {
 	AccessSurface    AccessSurface     `json:"access_surface"`
 	ProfileID        ProviderProfileID `json:"profile_id"`
 	CredentialScheme CredentialScheme  `json:"credential_scheme"`
+	// A connection is admitted separately from its credential because choosing
+	// the live profile is itself a product-boundary decision. Both proofs are
+	// checked whenever topology is activated.
+	UsagePolicyAcknowledgement *UsagePolicyAcknowledgement `json:"usage_policy_acknowledgement,omitempty"`
 	// BedrockProjectID selects the Bedrock Project (Workspace, in the Anthropic
 	// protocol's naming — AWS documents them as one resource) that requests
 	// through this provider are associated with. Empty means the account's
@@ -642,6 +656,11 @@ func (p ProviderInstance) Validate() error {
 	}
 	if p.CredentialID == "" {
 		problems = append(problems, errors.New("provider credential id is required"))
+	}
+	if p.UsagePolicyAcknowledgement != nil {
+		if err := p.UsagePolicyAcknowledgement.ValidateForSurface(p.AccessSurface); err != nil {
+			problems = append(problems, err)
+		}
 	}
 	if p.BedrockProjectID != "" && p.AccessSurface != SurfaceBedrockMantle {
 		// Every other surface has no such concept, so a value here would be

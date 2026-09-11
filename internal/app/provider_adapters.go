@@ -404,6 +404,7 @@ func bigModelOpenAIAdapter(ctx adapterBuildContext, authorizer provider.Authoriz
 	return openaiprovider.NewWithOptions(openaiprovider.Options{
 		Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
 		ProviderType: string(domain.ProviderBigModel), CredentialScheme: ctx.Binding.CredentialScheme,
+		ProfileID:    ctx.Binding.ProfileID,
 		Capabilities: ctx.Binding.Capabilities, OperationPathPrefix: prefix,
 		CatalogPathPrefix: &prefix, DisableTargetDescribe: true,
 	})

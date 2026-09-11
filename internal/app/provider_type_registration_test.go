@@ -33,10 +33,12 @@ func TestMiniMaxCredentialAndConnectionSaveThroughTheAdminAPI(t *testing.T) {
 	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
 	cookie, csrf := loginAdminForTest(t, runtime)
 	const endpoint = "https://api.minimax.io"
+	const policyRevision = "minimax-subscription-global-2026-09-10"
 
 	credentialResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
 		"name": "minimax-io", "type": "minimax", "base_url": endpoint, "secret": "minimax-key",
 		"access_surface": domain.SurfaceMiniMax, "scheme": domain.CredentialBearerStatic,
+		"acknowledged_policy_revision": policyRevision,
 	})
 	if credentialResponse.Code != http.StatusCreated {
 		t.Fatalf("credential: status=%d body=%s", credentialResponse.Code, credentialResponse.Body.String())
@@ -59,7 +61,8 @@ func TestMiniMaxCredentialAndConnectionSaveThroughTheAdminAPI(t *testing.T) {
 			"name": "minimax " + string(profileID), "type": "minimax", "base_url": endpoint,
 			"credential_id": credential.ID, "enabled": true,
 			"access_surface": domain.SurfaceMiniMax, "profile_id": profileID,
-			"credential_scheme": domain.CredentialBearerStatic,
+			"credential_scheme":            domain.CredentialBearerStatic,
+			"acknowledged_policy_revision": policyRevision,
 		})
 		if response.Code != http.StatusCreated {
 			t.Fatalf("connection on %s: status=%d body=%s", profileID, response.Code, response.Body.String())

@@ -57,10 +57,11 @@ func TestBigModelCatalogClaimsVisionAndUnaskedReasoningOnlyForExactModels(t *tes
 		model                      string
 		vision, reasoning, unasked bool
 	}{
-		{domain.ProfileBigModelCNChatEmbeddings, "glm-4.6", false, false, false},
-		{domain.ProfileBigModelCNChatEmbeddings, "glm-4.6v", true, false, false},
-		{domain.ProfileBigModelCNChatEmbeddings, "glm-5.2", false, true, false},
+		{domain.ProfileBigModelCNChatEmbeddings, "glm-4.6", false, false, true},
+		{domain.ProfileBigModelCNChatEmbeddings, "glm-4.6v", true, false, true},
+		{domain.ProfileBigModelCNChatEmbeddings, "glm-5.2", false, true, true},
 		{domain.ProfileBigModelCNChatEmbeddings, "glm-5.3", false, true, true},
+		{domain.ProfileBigModelGlobalChat, "glm-4.7", false, false, true},
 		{domain.ProfileBigModelGlobalChat, "glm-5.3-flash", true, true, true},
 	} {
 		entry, ok := catalog.Lookup(Key{ProviderType: domain.ProviderBigModel, Profile: test.profile, Model: test.model})

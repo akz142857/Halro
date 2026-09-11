@@ -89,12 +89,13 @@ func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *htt
 		return
 	}
 	profile, _ := domain.ResolveCredentialProfile(credential.Type, credential.AccessSurface, credential.Scheme)
-	auditMetadata, acknowledged := requireUsagePolicyAcknowledgement(
-		writer, profile.ProfileID, input.AcknowledgedPolicyRevision, false,
+	auditMetadata, policyAcknowledgement, acknowledged := requireUsagePolicyAcknowledgement(
+		writer, profile.ProfileID, input.BaseURL, input.AcknowledgedPolicyRevision, false,
 	)
 	if !acknowledged {
 		return
 	}
+	credential.UsagePolicyAcknowledgement = policyAcknowledgement
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
 	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "credential.create", "credential", credential.ID, auditMetadata)
@@ -157,6 +158,18 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminBadRequest(writer, err.Error())
 		return
 	}
+	credential.UsagePolicyAcknowledgement = current.UsagePolicyAcknowledgement
+	var auditMetadata map[string]string
+	if strings.TrimSpace(input.AcknowledgedPolicyRevision) != "" {
+		profile, _ := domain.ResolveCredentialProfile(credential.Type, credential.AccessSurface, credential.Scheme)
+		var acknowledged bool
+		auditMetadata, credential.UsagePolicyAcknowledgement, acknowledged = requireUsagePolicyAcknowledgement(
+			writer, profile.ProfileID, input.BaseURL, input.AcknowledgedPolicyRevision, false,
+		)
+		if !acknowledged {
+			return
+		}
+	}
 	if err := r.validateCredentialReferences(request, credential); err != nil {
 		// A generic 409 reads as "someone else edited this, refresh" in the
 		// console, which is the one thing that will not help here: the rotation
@@ -169,7 +182,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	intent, intentErr := r.newAdminAuditIntent(request, "credential.rotate", "credential", credential.ID)
+	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "credential.rotate", "credential", credential.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
 		return
@@ -238,12 +251,13 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminProviderInputError(writer, err)
 		return
 	}
-	auditMetadata, acknowledged := requireUsagePolicyAcknowledgement(
-		writer, instance.ProfileID, input.AcknowledgedPolicyRevision, true,
+	auditMetadata, policyAcknowledgement, acknowledged := requireUsagePolicyAcknowledgement(
+		writer, instance.ProfileID, instance.BaseURL, input.AcknowledgedPolicyRevision, true,
 	)
 	if !acknowledged {
 		return
 	}
+	instance.UsagePolicyAcknowledgement = policyAcknowledgement
 	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "provider.create", "provider", instance.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
@@ -331,12 +345,13 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	instance.LastTestRevision = current.LastTestRevision
 	instance.LastTestHealthyTargets = current.LastTestHealthyTargets
 	instance.LastTestTotalTargets = current.LastTestTotalTargets
+	instance.UsagePolicyAcknowledgement = current.UsagePolicyAcknowledgement
 	productBindingChanged := current.CredentialID != instance.CredentialID || current.ProfileID != instance.ProfileID
 	var auditMetadata map[string]string
-	if productBindingChanged {
+	if productBindingChanged || strings.TrimSpace(input.AcknowledgedPolicyRevision) != "" {
 		var acknowledged bool
-		auditMetadata, acknowledged = requireUsagePolicyAcknowledgement(
-			writer, instance.ProfileID, input.AcknowledgedPolicyRevision, true,
+		auditMetadata, instance.UsagePolicyAcknowledgement, acknowledged = requireUsagePolicyAcknowledgement(
+			writer, instance.ProfileID, instance.BaseURL, input.AcknowledgedPolicyRevision, true,
 		)
 		if !acknowledged {
 			return
@@ -1291,44 +1306,48 @@ func resolveCredentialIdentity(
 func requireUsagePolicyAcknowledgement(
 	writer http.ResponseWriter,
 	profileID domain.ProviderProfileID,
+	endpoint string,
 	acknowledgedRevision string,
 	includeProfile bool,
-) (map[string]string, bool) {
-	identity, ok := domain.IdentityForProfile(profileID)
-	if !ok || !identity.RequiresUsageWarning {
-		return nil, true
+) (map[string]string, *domain.UsagePolicyAcknowledgement, bool) {
+	requirement, required := domain.UsagePolicyRequirementForProfile(profileID, endpoint)
+	if !required {
+		return nil, nil, true
 	}
-	current := identity.UsagePolicyRevision
+	current := requirement.PolicyRevision
 	fields := map[string]string{
-		"code":                    "usage_policy_acknowledgement_required",
-		"error":                   "the selected provider product usage restrictions must be acknowledged",
-		"current_policy_revision": current,
-		"documentation_url":       identity.DocumentationURL,
-		"region_id":               string(identity.Region),
+		"code":                       "usage_policy_acknowledgement_required",
+		"error":                      "the selected provider product usage restrictions must be acknowledged",
+		"current_policy_revision":    current,
+		"documentation_url":          requirement.DocumentationURL,
+		"region_id":                  string(requirement.AccountRegion),
+		"product_identity_assurance": string(requirement.ProductIdentityAssurance),
 	}
 	acknowledgedRevision = strings.TrimSpace(acknowledgedRevision)
 	if acknowledgedRevision == "" {
 		writeJSON(writer, http.StatusUnprocessableEntity, fields)
-		return nil, false
+		return nil, nil, false
 	}
 	if acknowledgedRevision != current {
 		fields["code"] = "usage_policy_revision_mismatch"
 		fields["error"] = "the selected provider product usage policy has changed"
 		writeJSON(writer, http.StatusConflict, fields)
-		return nil, false
+		return nil, nil, false
 	}
 	metadata := map[string]string{
-		"offering_id":                string(identity.Offering),
-		"access_surface":             string(identity.Surface),
-		"account_region_id":          string(identity.Region),
-		"usage_policy_documentation": identity.DocumentationURL,
+		"offering_id":                string(requirement.OfferingID),
+		"access_surface":             string(requirement.AccessSurface),
+		"account_region_id":          string(requirement.AccountRegion),
+		"usage_policy_documentation": requirement.DocumentationURL,
 		"usage_policy_revision":      acknowledgedRevision,
 		"usage_warning_acknowledged": "true",
+		"product_identity_assurance": string(requirement.ProductIdentityAssurance),
 	}
 	if includeProfile {
 		metadata["profile_id"] = string(profileID)
 	}
-	return metadata, true
+	acknowledgement, _ := domain.UsagePolicyAcknowledgementForProfileAtEndpoint(profileID, endpoint, acknowledgedRevision)
+	return metadata, acknowledgement, true
 }
 
 // validateCredentialMaterial runs the credential through the same constructor
@@ -1503,6 +1522,19 @@ func (r *Runtime) providerFromInput(
 				"credential is for access surface %s, this provider uses %s",
 				credential.AccessSurface, profile.AccessSurface,
 			),
+		}
+	}
+	credentialEndpoint := credentialOrigin(credential.Audience, credential.Type)
+	if !credential.UsagePolicyAcknowledgement.CurrentForProfileAtEndpoint(profile.ProfileID, credentialEndpoint) {
+		if requirement, required := domain.UsagePolicyRequirementForProfile(profile.ProfileID, credentialEndpoint); required {
+			return domain.ProviderInstance{}, credentialMatchError{
+				code: "credential_usage_policy_acknowledgement_required",
+				fields: map[string]string{
+					"current_policy_revision": requirement.PolicyRevision,
+					"documentation_url":       requirement.DocumentationURL,
+				},
+				err: errors.New("credential has not acknowledged the current usage policy revision"),
+			}
 		}
 	}
 	if err := validateCredentialProductRegion(credential.AccessSurface, credential.Type,
@@ -2047,6 +2079,7 @@ func implementedProviderType(value domain.ProviderType) bool {
 func credentialViewFrom(item domain.Credential) credentialView {
 	origin := credentialOrigin(item.Audience, item.Type)
 	identity, _ := domain.IdentityForSurface(item.AccessSurface)
+	profile, _ := domain.ResolveCredentialProfile(item.Type, item.AccessSurface, item.Scheme)
 	// A fixed-region surface is its own answer; a by-endpoint one is read from
 	// the endpoint the credential is sealed to, and an endpoint the upstream does
 	// not publish leaves it empty rather than guessed.
@@ -2058,8 +2091,10 @@ func credentialViewFrom(item domain.Credential) credentialView {
 		OfferingID:       identity.Offering,
 		RegionID:         region,
 		SecretConfigured: len(item.Ciphertext) > 0, KeyVersion: item.KeyVersion,
-		ExpiresAt: item.ExpiresAt,
-		Revision:  item.Revision,
+		ExpiresAt:                  item.ExpiresAt,
+		UsagePolicyAcknowledgement: item.UsagePolicyAcknowledgement,
+		UsagePolicyCurrent:         item.UsagePolicyAcknowledgement.CurrentForProfileAtEndpoint(profile.ProfileID, origin),
+		Revision:                   item.Revision,
 	}
 }
 

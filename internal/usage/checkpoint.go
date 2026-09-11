@@ -32,8 +32,15 @@ import (
 // long window at high throughput still costs what it costs to hold. Serving
 // the console from disk is a different question and not this one.
 
+// checkpointVersion 14 protects Provider Offering, Profile, account-region and
+// canonical failure fields carried by attempt rows. Version 13 readers ignore
+// unknown JSON members, so leaving the version unchanged would let an older
+// binary rewrite a checkpoint at a later watermark after silently discarding
+// those fields. Older checkpoints are derivatives and are replayed from the
+// authenticated Ledger.
+//
 // checkpointVersion 13 adds Work Unit and Run attribution to request and
-// attempt rows. Older checkpoints are replayed from the authenticated Ledger.
+// attempt rows.
 //
 // checkpointVersion 12 replaced the single whole-aggregate blob with a head
 // plus segments. A checkpoint written before this is refused rather than
@@ -56,7 +63,7 @@ import (
 // it was charged to, and the daily rollup, which keys on the period stamped at
 // admission, had nothing to key on. Version 7 persisted the dedup window;
 // version 6 dropped the duplicate cost columns.
-const checkpointVersion = 13
+const checkpointVersion = 14
 
 // checkpointSegmentTargetBytes is the size an open segment is allowed to reach
 // before it is sealed and a new one starts. It bounds the only work a tick

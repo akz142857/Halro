@@ -1,12 +1,12 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api } from "../api";
 import { EmptyState, ErrorState, Loading, LoadMore, StatusDot } from "../components";
-import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
+import { FailureDetailDrawer, providerAttributionFacts, providerIdentifierFacts } from "./FailureDetailDrawer";
 import { errorClassAdvice, errorClassLabel } from "../failure";
 import { useInstantFormatter, type InstantStyle } from "../format";
-import { Link } from "../navigation";
+import { Link, useNavigationLocation } from "../navigation";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import type { RequestFailure } from "../types";
 
@@ -26,6 +26,7 @@ export function UsageFailuresPanel() {
   const { t } = useTranslation();
   const dateTime = useInstantFormatter();
   const timeZone = useAccountingTimeZone();
+  const navigationLocation = useNavigationLocation();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const parameter = (name: string) => new URLSearchParams(window.location.search).get(name) ?? "";
@@ -39,6 +40,16 @@ export function UsageFailuresPanel() {
   const [offeringID, setOfferingID] = useState(() => parameter("offering_id"));
   const [start, setStart] = useState(() => isoToZonedInput(parameter("start") || undefined, accountingTimeZone()));
   const [end, setEnd] = useState(() => isoToZonedInput(parameter("end") || undefined, accountingTimeZone()));
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setRequestID(params.get("request_id") ?? "");
+    setProjectID(params.get("project_id") ?? "");
+    setDeploymentID(params.get("deployment_id") ?? "");
+    setOfferingID(params.get("offering_id") ?? "");
+    setStart(isoToZonedInput(params.get("start") || undefined, accountingTimeZone()));
+    setEnd(isoToZonedInput(params.get("end") || undefined, accountingTimeZone()));
+  }, [navigationLocation]);
 
   const failures = useInfiniteQuery({
     queryKey: ["usage-failures", requestID, projectID, deploymentID, offeringID, start, end, timeZone],
@@ -239,6 +250,7 @@ function FailureDetailDrawerFor({ failure, projectName, deploymentName, formatIn
   const identifiers = policy
     ? { facts: [], unrecorded: false }
     : providerIdentifierFacts(t, last);
+  const attribution = policy ? [] : providerAttributionFacts(t, last);
   const cause = policy
     ? t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.failures.policyRejected") })
     // An accounting failure has no upstream class; naming the outcome is more
@@ -271,24 +283,7 @@ function FailureDetailDrawerFor({ failure, projectName, deploymentName, formatIn
           label: t("usage.deployment"),
           value: last?.deployment_id ? deploymentName || last.deployment_id : t("usage.failures.noTarget"),
         },
-        {
-          label: t("providers.product"),
-          value: last?.offering_id
-            ? t(`providers.offerings.${last.offering_id}`, { defaultValue: last.offering_id })
-            : undefined,
-        },
-        {
-          label: t("providers.capabilityImplementation"),
-          value: last?.profile_id
-            ? t(`providers.profiles.${last.profile_id}`, { defaultValue: last.profile_id })
-            : undefined,
-        },
-        {
-          label: t("usage.failures.accountRegionLabel"),
-          value: last?.account_region_id
-            ? t(`providers.regions.${last.account_region_id}`, { defaultValue: last.account_region_id })
-            : undefined,
-        },
+        ...attribution,
         { label: t("usage.actualModel"), value: last?.provider_model },
         {
           label: t("usage.status"),

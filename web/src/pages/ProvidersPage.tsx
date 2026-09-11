@@ -71,6 +71,18 @@ function urlOrigin(value: string) {
   }
 }
 
+function validProviderEndpoint(value: string) {
+  try {
+    const parsed = new URL(value.trim());
+    return (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && Boolean(parsed.hostname)
+      && !parsed.username
+      && !parsed.password;
+  } catch {
+    return false;
+  }
+}
+
 function fixedRegionEndpointStatus(
   catalog: ProviderProfilesCatalog,
   type: ProviderType,
@@ -84,6 +96,18 @@ function fixedRegionEndpointStatus(
     profile.offering_id === offeringID && endpointHost(profile.default_base_url) === host);
   if (published.some((profile) => profile.region_id === regionID)) return "match";
   return published.length ? "cross_region" : "unknown";
+}
+
+function usagePolicyDocument(
+  offering: ReturnType<typeof findOffering>,
+  regionID: string,
+) {
+  const exact = offeringDocumentation(offering, regionID);
+  if (exact) return exact;
+  if (!regionID && offering?.region_scope === "by_endpoint" && offering.documentation.length === 1) {
+    return offering.documentation[0];
+  }
+  return undefined;
 }
 
 function displayBoundBaseURL(value: string) {
@@ -160,12 +184,14 @@ function productOptionLabel(
 function SubscriptionUsageDisclosure({
   acknowledged,
   documentationURL,
+  identityUnverified = false,
   attentionKey = 0,
   disabled = false,
   onAcknowledgedChange,
 }: {
   acknowledged: boolean;
   documentationURL?: string;
+  identityUnverified?: boolean;
   attentionKey?: number;
   disabled?: boolean;
   onAcknowledgedChange: (acknowledged: boolean) => void;
@@ -185,7 +211,11 @@ function SubscriptionUsageDisclosure({
         <span className="subscription-usage-icon" aria-hidden="true">!</span>
         <span className="subscription-usage-summary-copy">
           <strong>{t("providers.usageWarningTitle")}</strong>
-          <small>{t(acknowledged ? "providers.usageWarningConfirmedHint" : "providers.usageWarningCollapsedHint")}</small>
+          <small>{t(acknowledged
+            ? "providers.usageWarningConfirmedHint"
+            : identityUnverified
+              ? "providers.usageIdentityUnverifiedCollapsedHint"
+              : "providers.usageWarningCollapsedHint")}</small>
         </span>
         <span className="subscription-usage-state">
           {t(acknowledged ? "providers.usageWarningConfirmed" : "providers.usageWarningNeedsConfirmation")}
@@ -194,6 +224,7 @@ function SubscriptionUsageDisclosure({
       </summary>
       <div className="subscription-usage-body" role="note">
         <p>{t("providers.usageWarningDescription")}</p>
+        {identityUnverified && <p className="warning-text">{t("providers.usageIdentityUnverified")}</p>}
         {documentationURL && (
           <a href={documentationURL} target="_blank" rel="noreferrer">
             {t("providers.usageWarningDocumentation")} <span aria-hidden="true">↗</span>
@@ -271,7 +302,11 @@ export function ProvidersPage() {
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === "Home" || event.key === "ArrowLeft" ? "providers" : "credentials";
+    const next = event.key === "Home" ? "providers"
+      : event.key === "End" ? "credentials"
+        : event.key === "ArrowLeft"
+          ? activeView === "providers" ? "credentials" : "providers"
+          : activeView === "credentials" ? "providers" : "credentials";
     selectView(next);
     document.getElementById(`${next}-tab`)?.focus();
   };
@@ -383,7 +418,13 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
   const withdrawn = Boolean(catalog && !profile);
   const editable = Boolean(catalog && profile);
   const product = profile
-    ? productLabel(t, catalog!, provider.type, profile.offering_id, profile.region_id)
+    ? productLabel(
+        t,
+        catalog!,
+        provider.type,
+        profile.offering_id,
+        profile.region_id || regionForEndpoint(findOffering(catalog!, provider.type, profile.offering_id), provider.base_url) || "",
+      )
     : "";
   const testMutation = useMutation({
     mutationFn: () => api.testProvider(provider.id),
@@ -633,6 +674,10 @@ function CredentialForm({
   const [policyRefreshPending, setPolicyRefreshPending] = useState(false);
   const [policyRefreshFailed, setPolicyRefreshFailed] = useState(false);
   const [policyAttention, setPolicyAttention] = useState(0);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const formElement = useRef<HTMLFormElement>(null);
+  const [refusedSubmits, setRefusedSubmits] = useState(0);
+  const submissionPending = useRef(false);
   const mutation = useMutation({
     mutationFn: () => {
       // Sent on creation only. A rotation leaves the pair out so the server keeps
@@ -647,7 +692,7 @@ function CredentialForm({
         ...(product
           ? { access_surface: product.accessSurface, scheme: product.credentialScheme }
           : {}),
-        ...(product && offering?.requires_usage_warning && usageDocument
+        ...(usageWarningRequired && usageDocument
           ? { acknowledged_policy_revision: usageDocument.policy_revision }
           : {}),
         ...(secret ? { secret } : {}),
@@ -688,6 +733,7 @@ function CredentialForm({
       notify({ tone: "success", title: t(current ? "providers.notifyCredentialRotated" : "providers.notifyCredentialSaved"), description: name });
       onClose();
     },
+    onSettled: () => { submissionPending.current = false; },
   });
   // Same reason as the provider form below: the rejection must reach the
   // operator who clicked, not sit in a scrolled-away part of the modal.
@@ -699,22 +745,44 @@ function CredentialForm({
       submitError.current?.focus();
     });
   }, [mutation.isError, mutation.error, stepUp.probing]);
+  useEffect(() => {
+    if (!refusedSubmits) return;
+    requestAnimationFrame(() => {
+      const invalid = formElement.current?.querySelector<HTMLElement>("[aria-invalid='true']");
+      invalid?.scrollIntoView?.({ block: "center" });
+      invalid?.focus();
+    });
+  }, [refusedSubmits]);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (name.trim() && baseURL.trim() && (current || secret)
-      && (!usageWarningRequired || usageWarningAcknowledged)
+    if (submissionPending.current || mutation.isPending) return;
+    const nextErrors: Record<string, string> = {};
+    if (!name.trim()) nextErrors.name = t("providers.validationCredentialNameRequired");
+    if (!baseURL.trim()) nextErrors.baseURL = t("providers.validationBaseURLRequired");
+    else if (!validProviderEndpoint(baseURL)) nextErrors.baseURL = t("providers.validationBaseURLInvalid");
+    else if (fixedRegionMismatch) nextErrors.baseURL = t("providers.validationFixedRegionMismatch");
+    if (!current && !secret) nextErrors.secret = t("providers.validationSecretRequired");
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length) {
+      setRefusedSubmits((value) => value + 1);
+      return;
+    }
+    if ((!usageWarningRequired || usageWarningAcknowledged)
       && !policyRefreshPending && !policyRefreshFailed
-      && !fixedRegionMismatch
-      && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
+      && (!stepUp.asked || stepUp.values.currentPassword)) {
+      submissionPending.current = true;
+      mutation.mutate();
+    }
   };
   // Everything below is read from the served matrix. A type that sells one
   // product asks nothing; one that sells two cannot have it guessed, and one
   // whose regions live in the endpoint gets the endpoint written for it.
   const typeIdentities = credentialIdentities(catalog, type);
   const offering = findOffering(catalog, type, identity?.offeringID ?? "");
-  const usageWarningRequired = !current && Boolean(offering?.requires_usage_warning);
-  const usageDocument = offeringDocumentation(offering, identity?.regionID ?? "");
   const detectedRegion = regionForEndpoint(offering, baseURL);
+  const usageDocument = usagePolicyDocument(offering, identity?.regionID || detectedRegion || "");
+  const usageWarningRequired = Boolean(offering?.requires_usage_warning && usageDocument)
+    && (!current || current.usage_policy_current !== true);
   const fixedRegionStatus = offering?.region_scope === "fixed" && identity
     ? fixedRegionEndpointStatus(catalog, type, identity.offeringID, identity.regionID, baseURL)
     : "match";
@@ -728,12 +796,12 @@ function CredentialForm({
     : t("providers.region");
   const dirty = useDirty({ name, type, baseURL, secret, expiresAt, usageWarningAcknowledged });
   return (
-    <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} onClose={onClose}>
+    <Modal title={current ? t("providers.rotateCredential") : t("providers.saveCredential")} dirty={dirty} closeDisabled={mutation.isPending} onClose={onClose}>
       {/* Like the other modal forms: the form drops the modal's margin so the
           footer can stick to both edges, and the body carries the padding. */}
-      <form className="provider-credential-form" onSubmit={submit} autoComplete="off">
+      <form ref={formElement} className="provider-credential-form" onSubmit={submit} autoComplete="off">
         <div className="provider-credential-form-body">
-        <Field label={t("providers.credentialName")}><input autoComplete="off" autoFocus value={name} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label={t("providers.credentialName")} error={errors.name}><input autoComplete="off" autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
         <Field label={t("providers.providerType")}>
           <select value={type} disabled={Boolean(current)} onChange={(event) => {
             const next = event.target.value as ProviderType;
@@ -779,6 +847,7 @@ function CredentialForm({
           <SubscriptionUsageDisclosure
             acknowledged={usageWarningAcknowledged}
             documentationURL={usageDocument?.url}
+            identityUnverified={usageDocument?.product_identity_assurance === "operator_declared_unverified"}
             attentionKey={policyAttention}
             disabled={policyRefreshPending || policyRefreshFailed}
             onAcknowledgedChange={setUsageWarningAcknowledged}
@@ -804,8 +873,8 @@ function CredentialForm({
             </select>
           </Field>
         )}
-        <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : undefined}>
-          <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => setBaseURL(event.target.value)} />
+        <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : errors.baseURL}>
+          <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "baseURL")); }} />
         </Field>
         {fixedRegionUnverified && <p className="field-hint warning-text">{t("providers.fixedRegionUnverified")}</p>}
         {/* What kind of material this is belongs to the credential scheme, not to
@@ -817,12 +886,13 @@ function CredentialForm({
           hint={current
             ? t("providers.secretConfigured")
             : t(`providers.schemeHints.${identity?.credentialScheme ?? ""}`, { defaultValue: t("providers.secretHint") })}
+          error={errors.secret}
         >
           <input
             type="password"
             autoComplete="new-password"
             value={secret}
-            onChange={(event) => setSecret(event.target.value)}
+            onChange={(event) => { setSecret(event.target.value); setErrors((previous) => omitError(previous, "secret")); }}
           />
         </Field>
         <Field label={t("providers.credentialExpiry")} hint={t("providers.credentialExpiryHint")}>
@@ -834,8 +904,8 @@ function CredentialForm({
         {stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} />}
         </div>
         <div className="form-actions sticky-form-actions">
-          <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
-          <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (!current && !secret) || (stepUp.asked && !stepUp.values.currentPassword)}>
+          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (stepUp.asked && !stepUp.values.currentPassword)}>
             {current ? t("providers.rotateSecurely") : t("providers.saveEncrypted")}
           </button>
         </div>
@@ -932,9 +1002,20 @@ function ProviderForm({
   const credentialBaseURLMismatch = credentialBoundURL && baseURLOrigin && credentialBoundURL !== baseURLOrigin
     ? t("providers.validationCredentialBaseURL")
     : "";
-  const usageWarningRequired = Boolean(selectedOffering?.requires_usage_warning)
-    && (!current || current.profile_id !== anchorProfile || current.credential_id !== credentialID);
-  const usageDocument = offeringDocumentation(selectedOffering, selectedChoice?.regionID ?? "");
+  const selectedRegion = selectedChoice?.regionID
+    || regionForEndpoint(selectedOffering, baseURL)
+    || selectedCredential?.region_id
+    || "";
+  const usageDocument = usagePolicyDocument(selectedOffering, selectedRegion);
+  const currentAcknowledgement = current?.usage_policy_acknowledgement;
+  const usagePolicyCurrent = Boolean(currentAcknowledgement && usageDocument
+    && currentAcknowledgement.offering_id === selectedChoice?.offeringID
+    && currentAcknowledgement.access_surface === selectedSurface
+    && currentAcknowledgement.account_region_id === selectedRegion
+    && currentAcknowledgement.policy_revision === usageDocument.policy_revision
+    && currentAcknowledgement.product_identity_assurance === (usageDocument.product_identity_assurance ?? "mechanically_verified"));
+  const usageWarningRequired = Boolean(selectedOffering?.requires_usage_warning && usageDocument)
+    && (!current || !usagePolicyCurrent);
   const fixedRegionStatus = selectedOffering?.region_scope === "fixed" && selectedChoice
     ? fixedRegionEndpointStatus(catalog, type, selectedChoice.offeringID, selectedChoice.regionID, baseURL)
     : "match";
@@ -948,6 +1029,7 @@ function ProviderForm({
   // record instead of creating a second one, while a deliberate second create
   // opens the form again and gets a new key.
   const idempotencyKey = useRef(crypto.randomUUID());
+  const submissionPending = useRef(false);
   const mutation = useMutation({
     mutationFn: () => {
       const value = {
@@ -1009,6 +1091,7 @@ function ProviderForm({
       notify({ tone: "success", title: t(current ? "providers.notifyUpdated" : "providers.notifyCreated"), description: name });
       onClose();
     },
+    onSettled: () => { submissionPending.current = false; },
   });
   const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID, usageWarningAcknowledged });
   // The save button sits in a sticky footer while the form scrolls behind it,
@@ -1043,7 +1126,7 @@ function ProviderForm({
     });
   }, [refusedSubmits]);
   return (
-    <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} onClose={onClose}>
+    <Modal wide title={current ? t("providers.editProvider") : t("providers.createProvider")} dirty={dirty} closeDisabled={mutation.isPending} onClose={onClose}>
       {credentials.length === 0 ? (
         <div className="notice warning">
           <strong>{t("providers.credentialRequired")}</strong>
@@ -1053,6 +1136,7 @@ function ProviderForm({
         <form className="provider-form" ref={formElement}
           onSubmit={(event) => {
             event.preventDefault();
+            if (submissionPending.current || mutation.isPending) return;
             const nextErrors = validateProvider({
               name, credentialID, bedrockProjectID,
               mantle: selectedSurface === "bedrock-mantle",
@@ -1064,7 +1148,10 @@ function ProviderForm({
             if (fixedRegionMismatch) nextErrors.baseURL = t("providers.validationFixedRegionMismatch");
             setErrors(nextErrors);
             if (Object.keys(nextErrors).length) setRefusedSubmits((value) => value + 1);
-            else if (!policyRefreshPending && !policyRefreshFailed) mutation.mutate();
+            else if (!policyRefreshPending && !policyRefreshFailed) {
+              submissionPending.current = true;
+              mutation.mutate();
+            }
           }}
         >
           <section className="provider-form-section" aria-labelledby="provider-connection-title">
@@ -1116,6 +1203,7 @@ function ProviderForm({
             <SubscriptionUsageDisclosure
               acknowledged={usageWarningAcknowledged}
               documentationURL={usageDocument?.url}
+              identityUnverified={usageDocument?.product_identity_assurance === "operator_declared_unverified"}
               attentionKey={policyAttention}
               disabled={policyRefreshPending || policyRefreshFailed}
               onAcknowledgedChange={setUsageWarningAcknowledged}
@@ -1128,7 +1216,7 @@ function ProviderForm({
               wrong one fails as an authentication error, so the credential's
               own bound URL is what the field is checked against rather than a
               per-provider sentence. */}
-          <Field label={t("providers.baseURL")} error={errors.baseURL} hint={
+          <Field label={t("providers.baseURL")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : errors.baseURL} hint={
             credentialBoundURL ? t("providers.baseURLBoundHint", { credential: credentialBoundURL }) : undefined
           }>
             <input autoComplete="off" value={baseURL} onChange={(event) => {
@@ -1230,7 +1318,7 @@ function ProviderForm({
                 </span>
               </label>
             </div>
-            <button type="button" className="button ghost" onClick={onClose}>{t("common.cancel")}</button>
+            <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
             {/* Every refusal reason is reported by the submit path rather than
                 by a disabled button, which states nothing about why. */}
             <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>

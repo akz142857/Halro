@@ -51,6 +51,8 @@ jobs:
         working-directory: web
       - run: npm audit --audit-level=moderate
         working-directory: web
+      - run: npm run typecheck
+        working-directory: web
       - run: npm run build
         working-directory: web
       - run: git diff --exit-code -- internal/webui/dist
@@ -353,9 +355,14 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: tests/compatibility/python/requirements.txt
-      - run: python -m pip install -r tests/compatibility/python/requirements.txt
+      - run: python -m pip install --require-hashes -r tests/compatibility/python/requirements.txt
       - run: npm ci --ignore-scripts
         working-directory: tests/compatibility/node
+      - name: Audit compatibility SDK dependencies
+        run: |
+          python -m pip_audit --requirement tests/compatibility/python/requirements.txt --no-deps
+          npm audit --audit-level=moderate --prefix tests/compatibility/node
+          go -C tests/compatibility/go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Run official SDK black-box contracts
         shell: bash
         run: |

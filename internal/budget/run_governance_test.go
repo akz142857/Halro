@@ -250,7 +250,7 @@ func TestRunGovernanceRejectsUnknownPriceAndIntegerOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Settle(ctx, attempt, Settlement{CommittedMicrosUSD: math.MaxInt64, Outcome: "provider_overage"}); err != nil {
+	if err := manager.Settle(ctx, attempt, Settlement{CommittedMicrosUSD: math.MaxInt64, Outcome: "provider_overage", FailurePhase: "accounting"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := manager.ReserveAttemptDetailed(ctx, request, 0, 1, AttemptMetadata{}); err == nil || errors.Is(err, ErrRunExceeded) {

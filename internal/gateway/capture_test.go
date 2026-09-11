@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +26,10 @@ type recordingCapture struct {
 }
 
 func (c *recordingCapture) Put(record failurecapture.Record) (bool, error) {
+	return c.PutContext(context.Background(), record)
+}
+
+func (c *recordingCapture) PutContext(_ context.Context, record failurecapture.Record) (bool, error) {
 	if c.err != nil {
 		return false, c.err
 	}
@@ -84,17 +90,33 @@ func TestAFailedRequestCapturesWhatItSentAndWhatCameBack(t *testing.T) {
 	if !strings.Contains(string(record.Request), "hello") {
 		t.Fatalf("the captured request does not hold what was sent: %s", record.Request)
 	}
-	// The upstream's own sentence. It is refused everywhere else — a provider
-	// body is the one place a rejected credential is most likely to be quoted
-	// back — and this store is where it can be held under encryption, a clock
-	// and an audit.
+	// The upstream's sentence is not retained: an error body can quote the
+	// credential it just rejected, and read-only administrators must never gain
+	// that credential through diagnostics.
 	var response map[string]any
 	if err := json.Unmarshal(record.Response, &response); err != nil {
 		t.Fatalf("captured response is not decodable: %s", record.Response)
 	}
-	if !strings.Contains(response["body"].(string), "Error while downloading") ||
-		response["provider_status"] != float64(400) {
-		t.Fatalf("the captured response lost the upstream's answer: %v", response)
+	if _, retained := response["body"]; retained || response["provider_status"] != float64(400) ||
+		response["error_class"] != string(provider.ErrorBadRequest) {
+		t.Fatalf("the capture did not preserve only structured diagnostics: %v", response)
+	}
+}
+
+func TestProviderProseDoesNotEscapeThroughTheGatewayError(t *testing.T) {
+	const canary = "opaque-authorizer-canary-value"
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorAuthentication, StatusCode: 401,
+		Message: "upstream echoed Bearer " + canary,
+	}
+	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+	if err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", err), canary) {
+		t.Fatal("provider prose escaped through the gateway error chain")
 	}
 }
 
@@ -185,7 +207,10 @@ func TestAnUnrenderableAnswerCapturesTheAnswer(t *testing.T) {
 		t.Fatal("a render that failed answered the caller successfully")
 	}
 	if len(capture.records) != 1 || len(capture.records[0].Response) == 0 {
-		t.Fatalf("the answer that could not be rendered was not captured: %#v", capture.records)
+		t.Fatalf("the safe response shape was not captured: %#v", capture.records)
+	}
+	if strings.Contains(string(capture.records[0].Response), "hello") {
+		t.Fatal("provider-written response prose was captured")
 	}
 }
 
@@ -235,14 +260,19 @@ func TestAStoreThatCannotBeWrittenDoesNotChangeTheAnswer(t *testing.T) {
 // blockingCapture holds the write open until it is released, which is what a
 // stalled data directory does.
 type blockingCapture struct {
-	entered chan struct{}
-	release chan struct{}
+	entered     chan struct{}
+	release     chan struct{}
+	enteredOnce sync.Once
 }
 
-func (c *blockingCapture) Put(failurecapture.Record) (bool, error) {
-	close(c.entered)
-	<-c.release
-	return true, nil
+func (c *blockingCapture) PutContext(ctx context.Context, _ failurecapture.Record) (bool, error) {
+	c.enteredOnce.Do(func() { close(c.entered) })
+	select {
+	case <-c.release:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func (c *blockingCapture) Saturated() bool { return false }
@@ -257,6 +287,7 @@ func TestASlowCaptureDoesNotHoldTheRequestsLeases(t *testing.T) {
 	defer f.close()
 	blocking := &blockingCapture{entered: make(chan struct{}), release: make(chan struct{})}
 	f.service.failureCapture = blocking
+	f.service.startFailureCapture()
 	f.adapter.err = &provider.Error{
 		Class: provider.ErrorBadRequest, StatusCode: 400, Message: "provider error (400): refused",
 	}
@@ -279,10 +310,51 @@ func TestASlowCaptureDoesNotHoldTheRequestsLeases(t *testing.T) {
 	if active := activeRequestsAfterReplay(t, f.log); active != 0 {
 		t.Fatalf("%d requests are still in flight while a capture is stuck", active)
 	}
-	close(blocking.release)
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the request never returned")
+		t.Fatal("a slow capture delayed the caller")
+	}
+	close(blocking.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.service.ShutdownFailureCapture(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFailureCaptureShutdownCancelsAnActiveWrite(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	blocking := &blockingCapture{entered: make(chan struct{}), release: make(chan struct{})}
+	f.service.failureCapture = blocking
+	f.service.startFailureCapture()
+	f.adapter.err = &provider.Error{Class: provider.ErrorBadRequest, StatusCode: 400, Message: "refused"}
+
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the capture was never attempted")
+	}
+	// One active write plus a fixed-size queue is the entire resource cost of a
+	// failure storm; enqueue never creates a goroutine per failed request.
+	for index := 0; index < failureCaptureQueueCapacity+10; index++ {
+		f.service.enqueueCapture(failurecapture.Record{RequestID: "queued", ProjectID: "project_1"})
+	}
+	if queued := len(f.service.captureQueue); queued != failureCaptureQueueCapacity {
+		t.Fatalf("bounded capture queue length = %d, want %d", queued, failureCaptureQueueCapacity)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := f.service.ShutdownFailureCapture(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown error = %v, want cancellation", err)
+	}
+	select {
+	case <-f.service.captureDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the cancelled capture worker did not stop")
 	}
 }

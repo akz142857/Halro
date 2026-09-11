@@ -57,6 +57,16 @@ func TestTheRegistryReadsReasonsUnaskedFromTheCatalogue(t *testing.T) {
 			instance:   domain.ProviderInstance{Type: domain.ProviderMiniMax},
 			deployment: deployment(domain.ProfileMiniMaxChat, "MiniMax-M2.1"), want: false,
 		},
+		{
+			name:       "BigModel defaults GLM-4.7 thinking on",
+			instance:   domain.ProviderInstance{Type: domain.ProviderBigModel},
+			deployment: deployment(domain.ProfileBigModelGlobalChat, "glm-4.7"), want: true,
+		},
+		{
+			name:       "BigModel old non-reasoning model",
+			instance:   domain.ProviderInstance{Type: domain.ProviderBigModel},
+			deployment: deployment(domain.ProfileBigModelCNChatEmbeddings, "glm-4-flash-250414"), want: false,
+		},
 	} {
 		if got := reasonsUnasked(catalog, test.instance, test.deployment); got != test.want {
 			t.Errorf("%s: reasonsUnasked = %v, want %v", test.name, got, test.want)

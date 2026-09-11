@@ -48,6 +48,7 @@ type fakePricePinStore struct {
 	admissionPrice domain.DeploymentPriceVersion
 	prepared       domain.PricePinIntent
 	committed      domain.PricePinIntent
+	commitErr      error
 	prepares       atomic.Int64
 	deletes        atomic.Int64
 }
@@ -83,6 +84,9 @@ func (s *fakePricePinStore) PrepareDeploymentPricePin(_ context.Context, deploym
 }
 
 func (s *fakePricePinStore) CommitDeploymentPricePin(_ context.Context, attemptID, digest string, sequence uint64, committedAt time.Time) (domain.PricePinIntent, error) {
+	if s.commitErr != nil {
+		return domain.PricePinIntent{}, s.commitErr
+	}
 	if s.prepared.AttemptID != attemptID || s.prepared.SnapshotSHA256 != digest || sequence == 0 {
 		return domain.PricePinIntent{}, errors.New("invalid pin commit")
 	}
@@ -154,6 +158,44 @@ func TestGatewayCommitsPricePinBeforeProviderAttempt(t *testing.T) {
 	lease, ok := f.state.AccountingLease(priceStore.prepared.AttemptID)
 	if !ok || !domain.ValidSHA256Label(lease.Event.TokenGuardPricingViewDigest) || lease.Event.RequestID != "req_developer_debug" {
 		t.Fatalf("accounting lease pricing view digest=%q exists=%t", lease.Event.TokenGuardPricingViewDigest, ok)
+	}
+}
+
+func TestPricePinCommitFailureSettlementNamesTheAccountingPhase(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	priceStore := &fakePricePinStore{commitErr: errors.New("injected pin commit failure"), price: domain.DeploymentPriceVersion{
+		ID: "price_gateway", DeploymentID: "dep_gateway", Version: 1, Revision: 1,
+		BillingMode: domain.BillingModeMetered, Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 1_000_000, OutputMicrosPerMillion: 2_000_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "test", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference: "test", AssertedWithoutArchive: true},
+	}}
+	registry := provider.NewRegistry()
+	if err := registry.Register(provider.Target{ID: "target_pin", DeploymentID: "dep_gateway", PublicModel: "chat",
+		ProviderModel: "provider-model", Adapter: f.adapter}); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewServiceWithOptions(f.service.auth, registry, f.accounting, ServiceOptions{Pricing: priceStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.now = func() time.Time { return now }
+	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("pin commit failure answered successfully")
+	}
+	settled, ok := f.state.SettledAttempt(priceStore.prepared.AttemptID)
+	if !ok {
+		t.Fatal("pin commit failure left no durable settlement")
+	}
+	if settled.Settlement.Outcome != "pin_commit_failed" || settled.Settlement.FailurePhase != phaseAccounting {
+		t.Fatalf("pin failure settlement=%#v", settled.Settlement)
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("provider was called %d times after pin commit failed", f.adapter.calls)
 	}
 }
 

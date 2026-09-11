@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,23 @@ func TestManifestBelowTheReadableRangeIsRefused(t *testing.T) {
 	}
 	if err := exporter.Verify(nil); err == nil {
 		t.Fatal("verification must refuse a manifest below the readable range")
+	}
+}
+
+func TestExporterRefusesANewerManifestDuringConstruction(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "usage")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(Manifest{SchemaVersion: parquetSchemaVersion + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "manifest.json"), payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewExporter(root); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("newer manifest did not fail startup construction: %v", err)
 	}
 }
 

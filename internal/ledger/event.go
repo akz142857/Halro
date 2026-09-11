@@ -315,12 +315,74 @@ func (e Event) validateForAppend() error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
-	if e.ProfileID == "" {
+	if e.ProfileID != "" {
+		identity, ok := domain.IdentityForProfile(e.ProfileID)
+		if ok && identity.RegionScope == domain.RegionScopeFixed && e.AccountRegionID == domain.RegionNone {
+			return errors.New("fixed provider surface requires account region attribution")
+		}
+	}
+	if e.Kind != EventAttemptSettled {
 		return nil
 	}
-	identity, ok := domain.IdentityForProfile(e.ProfileID)
-	if ok && identity.RegionScope == domain.RegionScopeFixed && e.AccountRegionID == domain.RegionNone {
-		return errors.New("fixed provider surface requires account region attribution")
+	return e.validateSettlementSemanticsForAppend()
+}
+
+// validateSettlementSemanticsForAppend is intentionally stricter than
+// Validate. Authenticated history predating the canonical fields remains
+// readable, but every event written now must form one coherent state: a
+// success has no failure attached, a failure names where it happened, and
+// upstream-specific evidence cannot be attached to a local phase.
+func (e Event) validateSettlementSemanticsForAppend() error {
+	if e.Outcome == "" {
+		return errors.New("settlement outcome is required")
+	}
+	validPhase := func(phase string) bool {
+		switch phase {
+		case "pre_provider", "provider", "response_render", "accounting", "client":
+			return true
+		default:
+			return false
+		}
+	}
+	validClass := func(class string) bool {
+		switch provider.ErrorClass(class) {
+		case provider.ErrorAuthentication, provider.ErrorRateLimit, provider.ErrorTimeout,
+			provider.ErrorProvider5xx, provider.ErrorBadRequest, provider.ErrorConnect,
+			provider.ErrorMalformed, provider.ErrorUnknown, provider.ErrorCanceled:
+			return true
+		default:
+			return false
+		}
+	}
+	providerDetails := e.ProviderCode != "" || e.ProviderFailureReason != "" || e.ProviderRequestID != ""
+	if e.Outcome == "success" {
+		if e.FailurePhase != "" || e.ErrorClass != "" || providerDetails || e.Retryable || e.Ambiguous || e.FailureSemanticsRecorded {
+			return errors.New("successful settlement cannot carry failure semantics")
+		}
+		if e.HTTPStatus != 0 && (e.HTTPStatus < 200 || e.HTTPStatus >= 300) {
+			return errors.New("successful settlement HTTP status must be 2xx")
+		}
+		return nil
+	}
+	if !validPhase(e.FailurePhase) {
+		return errors.New("failed settlement requires a valid failure phase")
+	}
+	if e.ErrorClass != "" && !validClass(e.ErrorClass) {
+		return errors.New("failed settlement error class is invalid")
+	}
+	if e.ErrorClass != "" && e.FailurePhase != "provider" && e.FailurePhase != "client" {
+		return errors.New("provider error class requires provider or client phase")
+	}
+	if e.FailurePhase == "provider" && e.ErrorClass == "" {
+		return errors.New("provider failure requires an error class")
+	}
+	if e.HTTPStatus != 0 && (e.FailurePhase != "provider" || e.HTTPStatus < 100 || e.HTTPStatus > 599) {
+		return errors.New("provider HTTP status requires provider phase")
+	}
+	if providerDetails || e.Retryable || e.FailureSemanticsRecorded {
+		if e.FailurePhase != "provider" || !e.FailureSemanticsRecorded {
+			return errors.New("provider failure evidence requires recorded provider semantics")
+		}
 	}
 	return nil
 }
@@ -653,6 +715,11 @@ func (s *State) Apply(record Record) error {
 		}
 		if event.WorkUnitID != reservation.Lease.WorkUnitID || event.RunID != reservation.Lease.RunID {
 			return fmt.Errorf("attempt %q settlement changed run attribution", event.AttemptID)
+		}
+		if event.OfferingID != reservation.Lease.OfferingID ||
+			event.ProfileID != reservation.Lease.ProfileID ||
+			event.AccountRegionID != reservation.Lease.AccountRegionID {
+			return fmt.Errorf("attempt %q settlement changed provider attribution", event.AttemptID)
 		}
 		if reservation.Lease.PriceSnapshot != nil {
 			if event.PriceSnapshot == nil || !samePriceSnapshot(*reservation.Lease.PriceSnapshot, *event.PriceSnapshot) {

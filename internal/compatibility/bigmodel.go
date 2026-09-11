@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/semantic"
 )
@@ -44,55 +45,134 @@ type BigModelChatRequest struct {
 type bigModelReasoningMode int
 
 const (
-	bigModelNoReasoning bigModelReasoningMode = iota
-	bigModelOptionalReasoning
-	bigModelAlwaysReasoning
+	bigModelReasoningUnknown bigModelReasoningMode = iota
+	bigModelNoReasoning
+	bigModelDefaultOnDisableable
+	bigModelEffortReasoningDisableable
+	bigModelForcedEffortReasoning
 )
 
-func bigModelReasoningFor(model string) bigModelReasoningMode {
+// bigModelReasoningFor is deliberately keyed by profile and exact model. The
+// regional catalogues are different products, and treating every unknown name
+// as a non-reasoning model was the bug this table replaces: thinking defaults
+// on upstream, so an omitted switch inverted an explicit `none` request.
+func bigModelReasoningFor(profileID domain.ProviderProfileID, model string) bigModelReasoningMode {
+	if profileID == domain.ProfileBigModelCNCodingChat || profileID == domain.ProfileBigModelGlobalCodingChat {
+		switch model {
+		case "glm-5.3", "glm-5.3-flash":
+			return bigModelForcedEffortReasoning
+		default:
+			return bigModelReasoningUnknown
+		}
+	}
+	if profileID != domain.ProfileBigModelCNChatEmbeddings && profileID != domain.ProfileBigModelGlobalChat {
+		return bigModelReasoningUnknown
+	}
+	if !bigModelReasoningModelKnownOnProfile(profileID, model) {
+		return bigModelReasoningUnknown
+	}
 	switch model {
 	case "glm-5.3", "glm-5.3-flash":
-		return bigModelAlwaysReasoning
+		return bigModelForcedEffortReasoning
 	case "glm-5.2":
-		return bigModelOptionalReasoning
-	default:
+		return bigModelEffortReasoningDisableable
+	case "glm-5.1", "glm-5-turbo", "glm-5",
+		"glm-4.7", "glm-4.7-flash", "glm-4.7-flashx", "glm-4.6",
+		"glm-4.5", "glm-4.5-air", "glm-4.5-x", "glm-4.5-airx", "glm-4.5-flash",
+		"glm-5v-turbo", "glm-4.6v", "glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.5v",
+		"autoglm-phone", "autoglm-phone-multilingual",
+		"glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash":
+		return bigModelDefaultOnDisableable
+	case "glm-4-flash-250414", "glm-4-flashx-250414", "glm-4v-flash", "glm-4-32b-0414-128k",
+		"embedding-2", "embedding-3":
 		return bigModelNoReasoning
+	default:
+		return bigModelReasoningUnknown
 	}
 }
 
-func bigModelReasoningSupported(model, effort string) bool {
+func bigModelReasoningModelKnownOnProfile(profileID domain.ProviderProfileID, model string) bool {
+	switch profileID {
+	case domain.ProfileBigModelCNChatEmbeddings:
+		switch model {
+		case "glm-5.3", "glm-5.2", "glm-5.1", "glm-5-turbo", "glm-5",
+			"glm-4.7", "glm-4.7-flash", "glm-4.7-flashx", "glm-4.6",
+			"glm-4.5-air", "glm-4.5-airx", "glm-4.5-flash",
+			"glm-4-flash-250414", "glm-4-flashx-250414",
+			"glm-5.3-flash", "glm-5v-turbo", "glm-4.6v", "autoglm-phone",
+			"glm-4.6v-flash", "glm-4.6v-flashx", "glm-4v-flash",
+			"glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
+			"embedding-2", "embedding-3":
+			return true
+		}
+	case domain.ProfileBigModelGlobalChat:
+		switch model {
+		case "glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "glm-4.7",
+			"glm-4.7-flash", "glm-4.7-flashx", "glm-4.6", "glm-4.5",
+			"glm-4.5-air", "glm-4.5-x", "glm-4.5-airx", "glm-4.5-flash",
+			"glm-4-32b-0414-128k", "glm-5.3-flash", "glm-4.6v",
+			"autoglm-phone-multilingual", "glm-4.6v-flash", "glm-4.6v-flashx", "glm-4.5v":
+			return true
+		}
+	}
+	return false
+}
+
+func bigModelReasoningSupported(profileID domain.ProviderProfileID, model, effort string) bool {
 	if effort == "" {
 		return true
 	}
-	switch bigModelReasoningFor(model) {
-	case bigModelAlwaysReasoning:
+	switch bigModelReasoningFor(profileID, model) {
+	case bigModelForcedEffortReasoning:
 		return effort == "low" || effort == "high"
-	case bigModelOptionalReasoning:
+	case bigModelEffortReasoningDisableable:
 		// GLM-5.2 maps low/medium to high, xhigh to max, and minimal to
 		// disabled. Halro does not silently round a caller's requested rung.
 		return effort == "none" || effort == "high"
-	default:
+	case bigModelDefaultOnDisableable, bigModelNoReasoning:
 		return effort == "none"
+	default:
+		return false
 	}
 }
 
-func bigModelThinkingWillBeOn(model, effort string) bool {
-	if bigModelReasoningFor(model) == bigModelAlwaysReasoning {
+func bigModelThinkingWillBeOn(profileID domain.ProviderProfileID, model, effort string) bool {
+	switch bigModelReasoningFor(profileID, model) {
+	case bigModelForcedEffortReasoning:
 		return true
+	case bigModelDefaultOnDisableable, bigModelEffortReasoningDisableable:
+		return effort != "none"
+	case bigModelReasoningUnknown:
+		// Unknown must not be credited with an answer-only limit: omission is
+		// upstream's default-on switch, not evidence that thinking is absent.
+		return true
+	default:
+		return false
 	}
-	return effort != "" && effort != "none"
+}
+
+// BigModelReasonsUnasked is shared by the catalogue and the request renderer,
+// so a model cannot be fixed on the wire while remaining incorrectly routable
+// through a northbound endpoint that cannot preserve its reasoning answer.
+func BigModelReasonsUnasked(profileID domain.ProviderProfileID, model string) bool {
+	switch bigModelReasoningFor(profileID, model) {
+	case bigModelForcedEffortReasoning, bigModelDefaultOnDisableable, bigModelEffortReasoningDisableable:
+		return true
+	default:
+		return false
+	}
 }
 
 // BigModelTargetUnsupportedGenerateFields contains constraints that require the
 // invocation target's exact model identifier. Profile-only field rules cannot
 // distinguish GLM-5.2's optional thinking from GLM-5.3's always-on contract.
-func BigModelTargetUnsupportedGenerateFields(model string, request semantic.GenerateRequest) []string {
+func BigModelTargetUnsupportedGenerateFields(profileID domain.ProviderProfileID, model string, request semantic.GenerateRequest) []string {
 	var fields []string
-	if !bigModelReasoningSupported(model, request.ReasoningEffort) {
+	if !bigModelReasoningSupported(profileID, model, request.ReasoningEffort) {
 		fields = append(fields, "reasoning_effort")
 	}
 	if request.VisibleOutputTokenLimit != nil &&
-		(bigModelThinkingWillBeOn(model, request.ReasoningEffort) || request.CompletionTokenLimit != nil) {
+		(bigModelThinkingWillBeOn(profileID, model, request.ReasoningEffort) || request.CompletionTokenLimit != nil) {
 		fields = append(fields, "max_tokens")
 	}
 	return fields
@@ -101,7 +181,7 @@ func BigModelTargetUnsupportedGenerateFields(model string, request semantic.Gene
 // RenderBigModelChatRequest converts the OpenAI-shaped request into the exact
 // subset both regional APIs document. Every unsupported member is refused or
 // deliberately omitted only when omission is semantically identical.
-func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestID string) (BigModelChatRequest, error) {
+func RenderBigModelChatRequest(profileID domain.ProviderProfileID, request openaiapi.ChatCompletionRequest, requestID string) (BigModelChatRequest, error) {
 	if request.Temperature != nil && (*request.Temperature < 0 || *request.Temperature > 1) {
 		return BigModelChatRequest{}, errors.New("BigModel temperature must be between 0 and 1")
 	}
@@ -142,7 +222,7 @@ func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestI
 	if err != nil {
 		return BigModelChatRequest{}, err
 	}
-	if !bigModelReasoningSupported(request.Model, request.ReasoningEffort) {
+	if !bigModelReasoningSupported(profileID, request.Model, request.ReasoningEffort) {
 		return BigModelChatRequest{}, fmt.Errorf("BigModel model %q cannot represent reasoning effort %q", request.Model, request.ReasoningEffort)
 	}
 	limit := request.MaxCompletionTokens
@@ -150,7 +230,7 @@ func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestI
 		switch {
 		case request.MaxCompletionTokens != nil:
 			return BigModelChatRequest{}, errors.New("BigModel has one output limit and the request carries two")
-		case bigModelThinkingWillBeOn(request.Model, request.ReasoningEffort):
+		case bigModelThinkingWillBeOn(profileID, request.Model, request.ReasoningEffort):
 			return BigModelChatRequest{}, errors.New("BigModel max_tokens cannot preserve an answer-only limit while this model reasons")
 		default:
 			limit = request.MaxTokens
@@ -165,22 +245,26 @@ func RenderBigModelChatRequest(request openaiapi.ChatCompletionRequest, requestI
 		Tools: request.Tools, ToolChoice: toolChoice, Stop: stop,
 		ResponseFormat: responseFormat, RequestID: requestID, UserID: request.User,
 	}
-	applyBigModelReasoning(&result, request.Model, request.ReasoningEffort)
+	applyBigModelReasoning(&result, profileID, request.Model, request.ReasoningEffort)
 	return result, nil
 }
 
-func applyBigModelReasoning(result *BigModelChatRequest, model, effort string) {
-	switch bigModelReasoningFor(model) {
-	case bigModelAlwaysReasoning:
+func applyBigModelReasoning(result *BigModelChatRequest, profileID domain.ProviderProfileID, model, effort string) {
+	switch bigModelReasoningFor(profileID, model) {
+	case bigModelForcedEffortReasoning:
 		if effort != "" {
 			result.Thinking = &BigModelThinking{Type: "enabled"}
 			result.ReasoningEffort = effort
 		}
-	case bigModelOptionalReasoning:
+	case bigModelEffortReasoningDisableable:
 		if effort == "high" {
 			result.Thinking = &BigModelThinking{Type: "enabled"}
 			result.ReasoningEffort = effort
-		} else {
+		} else if effort == "none" {
+			result.Thinking = &BigModelThinking{Type: "disabled"}
+		}
+	case bigModelDefaultOnDisableable:
+		if effort == "none" {
 			result.Thinking = &BigModelThinking{Type: "disabled"}
 		}
 	}

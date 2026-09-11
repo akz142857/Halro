@@ -2857,7 +2857,14 @@
       "default_profile_id": "minimax.anthropic.messages.v1",
       "offerings": [
         {
-          "documentation": [],
+          "documentation": [
+            {
+              "policy_revision": "minimax-subscription-global-2026-09-10",
+              "product_identity_assurance": "operator_declared_unverified",
+              "region": "global",
+              "url": "https://platform.minimax.io/docs/token-plan/intro"
+            }
+          ],
           "id": "minimax.api-platform",
           "kind": "metered_api",
           "region_hosts": [
@@ -2875,7 +2882,7 @@
             "global",
             "cn"
           ],
-          "requires_usage_warning": false
+          "requires_usage_warning": true
         },
         {
           "documentation": [
@@ -2886,6 +2893,7 @@
             },
             {
               "policy_revision": "minimax-subscription-global-2026-09-10",
+              "product_identity_assurance": "operator_declared_unverified",
               "region": "global",
               "url": "https://platform.minimax.io/docs/token-plan/intro"
             }

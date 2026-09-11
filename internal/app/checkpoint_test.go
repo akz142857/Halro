@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/budget"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/usage"
@@ -85,6 +86,85 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 	actual := reopened.usage.Snapshot()
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("rebuilt aggregate differs:\nactual=%#v\nexpected=%#v", actual, expected)
+	}
+}
+
+func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		t.Run(map[bool]string{false: "not_started", true: "started"}[started], func(t *testing.T) {
+			cfg := testConfig(t)
+			if err := Initialize(cfg); err != nil {
+				t.Fatal(err)
+			}
+			discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+			runtime, err := Open(context.Background(), cfg, discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := runtime.accounting.BeginRequestDetailed(context.Background(), "project_recovery", "key_recovery", "request_recovery", "chat")
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt, err := runtime.accounting.ReserveAttemptDetailed(context.Background(), request, 1_000, 100, budget.AttemptMetadata{
+				RouteID: "route_recovery", DeploymentID: "deployment_recovery", ProviderID: "provider_recovery",
+				OfferingID: domain.OfferingBigModelCodingPlan, ProfileID: domain.ProfileBigModelCNCodingChat,
+				AccountRegionID: domain.RegionCN, ProviderModel: "glm-recovery", AttemptNumber: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if started {
+				if err := runtime.accounting.MarkStarted(context.Background(), attempt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := runtime.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			recovered, err := Open(context.Background(), cfg, discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := recovered.usageCollector.CatchUp(context.Background()); err != nil {
+				recovered.Close()
+				t.Fatal(err)
+			}
+			assertRecovered := func(snapshot usage.Snapshot) {
+				t.Helper()
+				for _, got := range snapshot.Attempts {
+					if got.AttemptID != attempt.AttemptID {
+						continue
+					}
+					if got.OfferingID != attempt.OfferingID || got.ProfileID != attempt.ProfileID || got.AccountRegionID != attempt.AccountRegionID || got.FailurePhase != "accounting" {
+						t.Fatalf("recovered usage attribution/phase was not preserved: %#v", got)
+					}
+					return
+				}
+				t.Fatalf("recovered attempt %q is absent from Usage", attempt.AttemptID)
+			}
+			snapshot := recovered.usage.Snapshot()
+			assertRecovered(snapshot)
+			recovered.saveUsageCheckpoint()
+			if _, err := recovered.usageExporter.Export(snapshot); err != nil {
+				recovered.Close()
+				t.Fatal(err)
+			}
+			if err := recovered.usageExporter.Verify(&snapshot); err != nil {
+				recovered.Close()
+				t.Fatal(err)
+			}
+			if err := recovered.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			checkpointed, err := Open(context.Background(), cfg, discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer checkpointed.Close()
+			assertRecovered(checkpointed.usage.Snapshot())
+		})
 	}
 }
 

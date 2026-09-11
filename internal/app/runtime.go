@@ -1464,6 +1464,9 @@ func (r *Runtime) Close() error {
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
+		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
+		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)
+		cancelCapture()
 		// Frames written since the last tick would otherwise sit outside the
 		// checkpoint until the next start, which is precisely the window a
 		// shutdown-then-truncate would use.
@@ -1471,6 +1474,7 @@ func (r *Runtime) Close() error {
 		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
 		r.closeErr = errors.Join(
 			auditErr,
+			captureErr,
 			func() error {
 				r.providers.Close()
 				return nil

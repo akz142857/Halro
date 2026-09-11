@@ -4,7 +4,18 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 review="$root/docs/verification/dependency-license-review.md"
 
-for relative in go.mod go.sum web/package.json web/package-lock.json; do
+for relative in \
+  go.mod \
+  go.sum \
+  web/package.json \
+  web/package-lock.json \
+  tests/compatibility/go/go.mod \
+  tests/compatibility/go/go.sum \
+  tests/compatibility/node/package.json \
+  tests/compatibility/node/package-lock.json \
+  tests/compatibility/python/requirements.in \
+  tests/compatibility/python/requirements.txt
+do
   actual=$(git -C "$root" hash-object "$relative")
   if ! grep -Fq -- "- \`$relative\`: \`$actual\`" "$review"; then
     echo "dependency license review is stale for $relative (current Git blob $actual)" >&2

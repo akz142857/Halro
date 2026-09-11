@@ -13,6 +13,7 @@ on:
         default: false
         type: boolean
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -39,6 +40,7 @@ jobs:
       - name: Resolve and validate the version being released
         id: resolve
         env:
+          GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
@@ -57,15 +59,28 @@ jobs:
             echo "::error::release through workflow_dispatch on ${DEFAULT_BRANCH} only; event=${EVENT}, ref=${GITHUB_REF}"
             exit 1
           fi
+          ci_runs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=success&event=push&per_page=100")
+          if ! jq -e --arg sha "${GITHUB_SHA}" --arg branch "${DEFAULT_BRANCH}" \
+            '[.workflow_runs[] | select(.head_sha == $sha and .head_branch == $branch and .conclusion == "success")] | length > 0' \
+            <<<"${ci_runs}" >/dev/null; then
+            echo "::error::ordinary ci.yml has no successful main push run for exact commit ${GITHUB_SHA}"
+            exit 1
+          fi
           if ! printf '%s' "${version}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
             echo "::error::version must look like v1.2.3 or v1.2.3-rc.1, got '${version}'"
             exit 1
           fi
-          # A dispatch creates its own tag later, so one that already exists means
-          # the version was typed twice — refuse before spending the whole matrix.
           if git rev-parse -q --verify "refs/tags/${version}" >/dev/null 2>&1; then
-            echo "::error::tag ${version} already exists"
-            exit 1
+            tag_commit=$(git rev-list -n 1 "refs/tags/${version}")
+            if [ "${publish}" != "true" ] || [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+              echo "::error::tag ${version} already exists at ${tag_commit}, not a resumable release of ${GITHUB_SHA}"
+              exit 1
+            fi
+            if gh release view "${version}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "::error::release ${version} is already published"
+              exit 1
+            fi
+            echo "::notice::resuming unpublished tag ${version} at ${tag_commit}"
           fi
           # The changelog is what an operator reads to decide whether to upgrade.
           # Tagging without it is the mistake this catches, and it is cheap here.
@@ -105,6 +120,7 @@ jobs:
           test -f THIRD_PARTY_NOTICES.md
           test ! -e v1.0.0.md
           ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test)$'
+          sh scripts/check-dependency-license-review.sh
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
@@ -132,9 +148,14 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: tests/compatibility/python/requirements.txt
-      - run: python -m pip install -r tests/compatibility/python/requirements.txt
+      - run: python -m pip install --require-hashes -r tests/compatibility/python/requirements.txt
       - run: npm ci --ignore-scripts
         working-directory: tests/compatibility/node
+      - name: Audit compatibility SDK dependencies
+        run: |
+          python -m pip_audit --requirement tests/compatibility/python/requirements.txt --no-deps
+          npm audit --audit-level=moderate --prefix tests/compatibility/node
+          go -C tests/compatibility/go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Run official SDK black-box contracts
         shell: bash
         run: |
@@ -186,8 +207,11 @@ jobs:
         working-directory: web
       - run: npm audit --audit-level=moderate
         working-directory: web
+      - run: npm run typecheck
+        working-directory: web
       - run: npm run build
         working-directory: web
+      - run: git diff --exit-code -- internal/webui/dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: admin-dist
@@ -301,7 +325,32 @@ jobs:
             test "$(docker image inspect halro-deadman:${IMAGE_TAG}-${arch} --format '{{.Architecture}}')" = "${arch}"
             docker save halro-deadman:${IMAGE_TAG}-${arch} | gzip -n > halro-deadman-container-${arch}.tar.gz
           done
+          docker tag halro:${IMAGE_TAG}-amd64 halro:release
           docker tag halro-deadman:${IMAGE_TAG}-amd64 halro-deadman:release
+      - name: Generate release container SPDX SBOMs
+        env:
+          IMAGE_TAG: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          for name in halro halro-deadman; do
+            for arch in amd64 arm64; do
+              docker run --rm \
+                -v "$PWD:/output" \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e \
+                "docker:${name}:${IMAGE_TAG}-${arch}" \
+                -o "spdx-json=/output/${name}-container-${arch}.spdx.json"
+            done
+          done
+      - name: Scan release gateway image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: halro:release
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret,misconfig
       - name: Scan release dead-man image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -319,6 +368,10 @@ jobs:
             halro-container-arm64.tar.gz
             halro-deadman-container-amd64.tar.gz
             halro-deadman-container-arm64.tar.gz
+            halro-container-amd64.spdx.json
+            halro-container-arm64.spdx.json
+            halro-deadman-container-amd64.spdx.json
+            halro-deadman-container-arm64.spdx.json
 
   debian-packages:
     needs: [prepare, binaries]
@@ -492,8 +545,18 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "${VERSION}" -m "Halro ${VERSION}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${VERSION}"
+          git fetch --force --tags origin
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            tag_commit=$(git rev-list -n 1 "refs/tags/${VERSION}")
+            if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+              echo "::error::tag ${VERSION} points to ${tag_commit}, expected ${GITHUB_SHA}"
+              exit 1
+            fi
+            echo "tag ${VERSION} already points to ${GITHUB_SHA}; resuming publish"
+          else
+            git tag -a "${VERSION}" -m "Halro ${VERSION}" "${GITHUB_SHA}"
+            git push origin "refs/tags/${VERSION}"
+          fi
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

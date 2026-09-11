@@ -67,6 +67,53 @@ func TestEveryUsageRestrictedSurfaceHasItsOwnOfficialDocument(t *testing.T) {
 	}
 }
 
+func TestMiniMaxGlobalWireIdenticalProductsShareResponsibilityWithoutClaimingVerification(t *testing.T) {
+	general, generalRequired := UsagePolicyRequirementForProfile(
+		ProfileMiniMaxChat, "https://api.minimax.io/v1",
+	)
+	subscription, subscriptionRequired := UsagePolicyRequirementForProfile(
+		ProfileMiniMaxGlobalSubscriptionOpenAIChat, "https://api.minimax.io/v1",
+	)
+	if !generalRequired || !subscriptionRequired {
+		t.Fatalf("global general/subscription requirements=%t/%t", generalRequired, subscriptionRequired)
+	}
+	if general.PolicyRevision != subscription.PolicyRevision || general.DocumentationURL != subscription.DocumentationURL {
+		t.Fatalf("same-wire products carry different responsibility: general=%+v subscription=%+v", general, subscription)
+	}
+	if general.ProductIdentityAssurance != ProductIdentityOperatorDeclared ||
+		subscription.ProductIdentityAssurance != ProductIdentityOperatorDeclared {
+		t.Fatalf("same-wire products claimed mechanical verification: general=%+v subscription=%+v", general, subscription)
+	}
+	if general.OfferingID != OfferingMiniMaxAPI || subscription.OfferingID != OfferingMiniMaxSubscriptionAccess {
+		t.Fatalf("acknowledgement lost the operator's exact product declaration: general=%+v subscription=%+v", general, subscription)
+	}
+	if _, required := UsagePolicyRequirementForProfile(ProfileMiniMaxChat, "https://api.minimaxi.com/v1"); required {
+		t.Fatal("the mechanically distinct mainland general endpoint inherited the global same-wire policy")
+	}
+	proxy, proxyRequired := UsagePolicyRequirementForProfile(
+		ProfileMiniMaxChat, "https://minimax-gateway.example/v1",
+	)
+	if !proxyRequired || proxy.AccountRegion != RegionGlobal ||
+		proxy.ProductIdentityAssurance != ProductIdentityOperatorDeclared {
+		t.Fatalf("an unverified proxy endpoint bypassed Global responsibility: required=%t requirement=%+v", proxyRequired, proxy)
+	}
+}
+
+func TestUsagePolicyAcknowledgementCannotCrossProductRegion(t *testing.T) {
+	cn, ok := UsagePolicyAcknowledgementForProfile(
+		ProfileBigModelCNCodingChat, "bigmodel-coding-plan-cn-2026-09-10",
+	)
+	if !ok {
+		t.Fatal("could not construct mainland acknowledgement")
+	}
+	if err := cn.ValidateForSurface(SurfaceBigModelGlobalCoding); err == nil {
+		t.Fatal("mainland acknowledgement was accepted for the global product surface")
+	}
+	if cn.CurrentForProfile(ProfileBigModelGlobalCodingChat) {
+		t.Fatal("mainland acknowledgement became current for the global policy")
+	}
+}
+
 func TestEverySurfaceRowIsReferencedByAProfile(t *testing.T) {
 	used := make(map[AccessSurface]bool)
 	for _, profile := range AllProviderProfiles() {

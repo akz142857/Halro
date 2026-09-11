@@ -443,6 +443,38 @@ describe("UsagePage failure detail", () => {
     expect(within(dialog).getByText(/未保存服务商错误码与请求标识/)).toBeVisible();
   });
 
+  it("shows all missing attribution fields as unrecorded on a legacy attempt", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({ error_class: "timeout" })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await screen.findByText("上游响应超时");
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getAllByText("旧记录未采集")).toHaveLength(5);
+  });
+
+  it("does not label a current regionless product as missing attribution", async () => {
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [failedAttempt({
+        error_class: "timeout", failure_phase: "provider", failure_semantics_recorded: true,
+        retryable: true, ambiguous: true, offering_id: "openai.api-platform",
+        profile_id: "openai.chat-embeddings.v1",
+      })] as never,
+      next_cursor: "",
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    await screen.findByText("上游响应超时");
+    const dialog = await openAttemptDetail();
+    expect(within(dialog).getByText("OpenAI API 平台")).toBeVisible();
+    expect(within(dialog).queryByText("账号地域")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("旧记录未采集")).not.toBeInTheDocument();
+  });
+
   // An upstream that named no code on a record that would have kept one gets
   // neither the code nor the "not recorded" notice: nothing is missing.
   it("says nothing when the upstream named no code", async () => {

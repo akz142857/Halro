@@ -5,7 +5,8 @@
 > actually does today: twelve jobs — `prepare`, `quality`, `sdk-compatibility`,
 > `stress`, `web`, `binaries`, `container`, `debian-packages`, `provenance`,
 > `publish`, `container-push`, `downstream-package-repositories` — with the
-> only publication precondition being `prepare`'s CHANGELOG section check and a
+> publication preconditions being `prepare`'s CHANGELOG section check, a
+> successful ordinary `ci.yml` push run for the exact `main` commit, and a
 > manual `workflow_dispatch` from `main`. There is no environment approval, no `release-governance` preflight,
 > no signed-tag requirement, and no M11 evidence verification in that workflow.
 >
@@ -14,7 +15,7 @@
 > requirement, and `M11_RELEASE_EVIDENCE_JSON` verification — are a target, not
 > the current pipeline. They were retired for the v0.x line by owner decision on
 > 2026-08-16, recorded in `docs/verification/release-assessment.md`: the v0.x
-> line has no release candidates and no CI-enforced release gates, and the
+> line has no release candidates or reviewer-approval gate, and the
 > go/no-go is the owner's, made against a filled assessment record.
 >
 > Sections describing the 1.0.0 gates are marked **[1.0.0 target]**. Do not
@@ -28,10 +29,11 @@ Running `release` through `workflow_dispatch` on `main` is the only supported
 entry. It runs the full matrix, creates the annotated version tag only after all
 gates pass, publishes the immutable release and container images, then dispatches
 that exact version and full commit to both package repositories. The
-gates that genuinely hold are the ones inside those jobs: `go test`,
-`go test -race`, `go vet`, `govulncheck`, the fuzz targets, the official-SDK
-compatibility suite, the SSE stress run, the frontend suite and bundle-drift
-check, Trivy on the container, reproducible packaging, dual SBOMs, cosign
+gates that genuinely hold are the exact-commit ordinary CI proof plus the ones
+inside those jobs: `go test`, `go test -race`, `go vet`, `govulncheck`, the
+ordinary-CI fuzz targets, the official-SDK compatibility and dependency audits,
+the SSE stress run, the frontend suite/typecheck/bundle-drift check, Trivy on
+both containers, reproducible packaging, source/binary/container SBOMs, cosign
 signatures, and `gh attestation verify` before publication. `prepare` refuses to
 start the matrix unless `CHANGELOG.md` carries a section for the version being
 tagged.
@@ -60,8 +62,9 @@ Every release run produces:
 - `halro` and `halro-deadman` Debian packages for Linux amd64 and arm64, built
   from those already-gated Linux archives rather than by recompiling binaries;
 - a non-root distroless container image exported as `halro-container.tar.gz`;
-- an SPDX JSON source/dependency SBOM and a separate SPDX JSON SBOM generated
-  from the released binaries;
+- an SPDX JSON source/dependency SBOM, a separate SPDX JSON SBOM generated
+  from the released binaries, and per-architecture image SBOMs for both
+  container products;
 - SHA-256 checksums;
 - a Sigstore keyless bundle for each binary archive, the SBOM, and checksum file;
 - a GitHub build-provenance attestation for every archive and SBOM, verified
@@ -119,7 +122,8 @@ Merge every intended change before starting the release. A local working tree,
 an unmerged pull request, or a commit on another branch is not part of the
 release. Add a complete `## [0.8.0]` section to `CHANGELOG.md` and fill a
 release assessment under `docs/verification/assessments/`. The workflow checks
-that the changelog section exists; the owner remains responsible for the
+that the changelog section exists and that ordinary CI passed for this exact
+`main` commit; the owner remains responsible for the
 assessment being complete and for recording any explicitly waived external
 acceptance, such as a real-Provider smoke.
 
@@ -232,6 +236,13 @@ after they pass, publishes the immutable GitHub Release and GHCR images, and
 dispatches the exact version and full commit to Homebrew and APT. A protected
 `apt-production` Environment may pause for its configured approval; that is an
 approval inside the same release chain, not a second release trigger.
+
+If a transient failure occurs after the tag is created but before the GitHub
+Release exists, rerun the failed jobs. A fresh formal dispatch is also accepted
+while `main` still points at that same tagged commit: `prepare` verifies that
+the existing tag resolves to the exact run SHA and that no Release exists, and
+the publish step reuses it. A tag at any other commit, or an already-published
+version, remains a hard failure.
 
 ### 5. Monitor the four-repository chain
 
@@ -433,3 +444,6 @@ RC failures create a new RC tag; published assets are never overwritten.
 Preserve every RC release workflow before the 90-day artifact window expires:
 `scripts/archive-release-run.sh` downloads the run metadata, complete logs,
 release assets, and signed run-evidence manifest and verifies their binding.
+It discovers the exact formal or `-dry-run` evidence artifact before creating
+the requested output directory, and publishes the local archive atomically so
+a failed download can be retried at the same path.

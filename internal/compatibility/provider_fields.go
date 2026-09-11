@@ -608,7 +608,7 @@ func UnsupportedGenerateFieldsForTarget(profileID domain.ProviderProfileID, prov
 	for _, field := range unsupported {
 		seen[field] = struct{}{}
 	}
-	for _, field := range BigModelTargetUnsupportedGenerateFields(providerModel, request) {
+	for _, field := range BigModelTargetUnsupportedGenerateFields(profileID, providerModel, request) {
 		if _, exists := seen[field]; exists {
 			continue
 		}

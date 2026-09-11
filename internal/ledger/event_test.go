@@ -62,7 +62,7 @@ func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
 		OccurredAt:         time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC),
 		CommittedMicrosUSD: MicrosUSD(1),
 		OfferingID:         domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
-		AccountRegionID: domain.RegionGlobal,
+		AccountRegionID: domain.RegionGlobal, Outcome: "success",
 	}
 	if err := event.Validate(); err != nil {
 		t.Fatalf("a region published by the by-endpoint surface was refused: %v", err)
@@ -83,6 +83,113 @@ func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
 	event.AccountRegionID = domain.RegionGlobal
 	if err := event.validateForAppend(); err != nil {
 		t.Fatalf("a new fixed-profile event with its exact account region was refused: %v", err)
+	}
+}
+
+func TestSettlementCannotChangeFrozenProviderAttribution(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	reservation := Event{
+		EventID: "evt_reservation_attribution", Kind: EventReservationCreated,
+		RequestID: "req_attribution", AttemptID: "att_attribution", ProjectID: "project_1",
+		PeriodID: "2026-09-11", OccurredAt: now, ReservationMicrosUSD: MicrosUSD(1),
+		OfferingID: domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
+		AccountRegionID: domain.RegionCN,
+	}
+	settlement := Event{
+		EventID: "evt_settlement_attribution", Kind: EventAttemptSettled,
+		RequestID: reservation.RequestID, AttemptID: reservation.AttemptID, ProjectID: reservation.ProjectID,
+		PeriodID: reservation.PeriodID, OccurredAt: now.Add(time.Second), CommittedMicrosUSD: MicrosUSD(1),
+		OfferingID: reservation.OfferingID, ProfileID: reservation.ProfileID, AccountRegionID: reservation.AccountRegionID,
+		Outcome: "success",
+	}
+	for name, mutate := range map[string]func(*Event){
+		"product tuple": func(event *Event) {
+			event.OfferingID = domain.OfferingBigModelCodingPlan
+			event.ProfileID = domain.ProfileBigModelGlobalCodingChat
+			event.AccountRegionID = domain.RegionGlobal
+		},
+		"region":  func(event *Event) { event.AccountRegionID = domain.RegionGlobal },
+		"removed": func(event *Event) { event.OfferingID, event.ProfileID, event.AccountRegionID = "", "", "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := NewState()
+			if err := state.Apply(Record{Sequence: 1, Event: reservation}); err != nil {
+				t.Fatal(err)
+			}
+			changed := settlement
+			mutate(&changed)
+			if err := state.Apply(Record{Sequence: 2, Event: changed}); err == nil || !strings.Contains(err.Error(), "provider attribution") {
+				t.Fatalf("changed settlement attribution was accepted: %v", err)
+			}
+		})
+	}
+
+	legacy := NewState()
+	legacyReservation, legacySettlement := reservation, settlement
+	legacyReservation.OfferingID, legacyReservation.ProfileID, legacyReservation.AccountRegionID = "", "", ""
+	legacySettlement.OfferingID, legacySettlement.ProfileID, legacySettlement.AccountRegionID = "", "", ""
+	if err := legacy.Apply(Record{Sequence: 1, Event: legacyReservation}); err != nil {
+		t.Fatalf("legacy reservation was refused: %v", err)
+	}
+	if err := legacy.Apply(Record{Sequence: 2, Event: legacySettlement}); err != nil {
+		t.Fatalf("matching legacy settlement was refused: %v", err)
+	}
+}
+
+func TestNewSettlementFailureSemanticsAreInternallyConsistent(t *testing.T) {
+	base := Event{
+		EventID: "evt_semantics", Kind: EventAttemptSettled, RequestID: "req_semantics",
+		AttemptID: "att_semantics", ProjectID: "project_1", PeriodID: "2026-09-11",
+		OccurredAt: time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC), CommittedMicrosUSD: MicrosUSD(0),
+	}
+	validProviderFailure := base
+	validProviderFailure.Outcome = "provider_error"
+	validProviderFailure.FailurePhase = "provider"
+	validProviderFailure.ErrorClass = "rate_limit"
+	validProviderFailure.HTTPStatus = 429
+	validProviderFailure.ProviderCode = "rate_limit"
+	validProviderFailure.ProviderFailureReason = provider.FailureReasonRateLimited
+	validProviderFailure.ProviderRequestID = "req_upstream"
+	validProviderFailure.Retryable = true
+	validProviderFailure.FailureSemanticsRecorded = true
+	if err := validProviderFailure.validateForAppend(); err != nil {
+		t.Fatalf("consistent provider failure was refused: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*Event){
+		"failure missing phase": func(event *Event) {
+			event.Outcome = "provider_error"
+		},
+		"unknown phase": func(event *Event) {
+			event.Outcome, event.FailurePhase = "provider_error", "somewhere"
+		},
+		"success with failure": func(event *Event) {
+			event.Outcome, event.FailurePhase = "success", "provider"
+			event.ErrorClass = "rate_limit"
+		},
+		"provider details without evidence": func(event *Event) {
+			event.Outcome, event.FailurePhase = "provider_error", "provider"
+			event.ErrorClass, event.ProviderCode = "rate_limit", "rate_limit"
+		},
+		"recorded semantics outside provider": func(event *Event) {
+			event.Outcome, event.FailurePhase = "accounting_error", "accounting"
+			event.ErrorClass, event.FailureSemanticsRecorded = "unknown", true
+		},
+		"retryable local failure": func(event *Event) {
+			event.Outcome, event.FailurePhase, event.Retryable = "accounting_error", "accounting", true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := base
+			mutate(&event)
+			if err := event.validateForAppend(); err == nil {
+				t.Fatal("inconsistent new settlement was accepted")
+			}
+			// Authenticated history written before this boundary remains readable.
+			if err := event.Validate(); err != nil {
+				t.Fatalf("legacy-compatible reader rejected event: %v", err)
+			}
+		})
 	}
 }
 

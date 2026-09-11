@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/safetransport"
 )
 
 // What the console is told about products, and what happens when a request does
@@ -139,9 +140,13 @@ func TestCodeSubscriptionOfferingsExposeOnlyValidatedProducts(t *testing.T) {
 			}
 		case domain.ProviderMiniMax:
 			var subscription *providerOfferingView
+			var general *providerOfferingView
 			for index := range providerType.Offerings {
 				if providerType.Offerings[index].ID == domain.OfferingMiniMaxSubscriptionAccess {
 					subscription = &providerType.Offerings[index]
+				}
+				if providerType.Offerings[index].ID == domain.OfferingMiniMaxAPI {
+					general = &providerType.Offerings[index]
 				}
 			}
 			if subscription == nil || subscription.Kind != domain.OfferingKindEntitlement || !subscription.RequiresUsageWarning {
@@ -149,6 +154,11 @@ func TestCodeSubscriptionOfferingsExposeOnlyValidatedProducts(t *testing.T) {
 			}
 			if got := subscription.Regions; len(got) != 2 || got[0] != domain.RegionCN || got[1] != domain.RegionGlobal {
 				t.Fatalf("MiniMax subscription regions=%v", got)
+			}
+			if general == nil || !general.RequiresUsageWarning || len(general.Documentation) != 1 ||
+				general.Documentation[0].Region != domain.RegionGlobal ||
+				general.Documentation[0].ProductIdentityAssurance != domain.ProductIdentityOperatorDeclared {
+				t.Fatalf("MiniMax Global same-wire responsibility is not exposed: %#v", general)
 			}
 			profiles := map[domain.ProviderProfileID]bool{}
 			for _, profile := range providerType.Profiles {
@@ -245,6 +255,176 @@ func TestSubscriptionUsageWarningIsRequiredAndAuditedForCredentialAndConnection(
 	}
 	if acknowledgements != 2 {
 		t.Fatalf("got %d usage warning acknowledgements, want credential and connection", acknowledgements)
+	}
+	storedCredential, err := runtime.store.GetCredential(context.Background(), credential.ID)
+	if err != nil || !storedCredential.UsagePolicyAcknowledgement.CurrentForProfile(domain.ProfileBigModelCNCodingChat) {
+		t.Fatalf("credential acknowledgement was not persisted: %#v err=%v", storedCredential.UsagePolicyAcknowledgement, err)
+	}
+	var storedProvider domain.ProviderInstance
+	if err := json.Unmarshal(createdProvider.Body.Bytes(), &storedProvider); err != nil {
+		t.Fatal(err)
+	}
+	storedProvider, err = runtime.store.GetProvider(context.Background(), storedProvider.ID)
+	if err != nil || !storedProvider.UsagePolicyAcknowledgement.CurrentForProfile(domain.ProfileBigModelCNCodingChat) {
+		t.Fatalf("provider acknowledgement was not persisted: %#v err=%v", storedProvider.UsagePolicyAcknowledgement, err)
+	}
+}
+
+func TestRestrictedPolicyAcknowledgementIsCheckedOnEveryTopologyActivation(t *testing.T) {
+	cfg := testConfig(t)
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	ctx := context.Background()
+	profile, _ := domain.ResolveProviderProfile(domain.ProviderBigModel, domain.ProfileBigModelCNCodingChat)
+	identity, _ := domain.IdentityForProfile(profile.ProfileID)
+	acknowledgement, _ := domain.UsagePolicyAcknowledgementForProfile(profile.ProfileID, identity.UsagePolicyRevision)
+	audience, err := safetransport.AudienceWithPolicy(
+		"https://open.bigmodel.cn", string(domain.ProviderBigModel), providerEndpointPolicy(cfg),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := runtime.vault.EncryptCredential(
+		"cred_restricted", string(domain.ProviderBigModel), audience, []byte("provider-secret"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	credential, err := runtime.store.PutCredential(ctx, domain.Credential{
+		ID: "cred_restricted", Name: "Restricted", Type: domain.ProviderBigModel,
+		AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
+		Audience: audience, Ciphertext: ciphertext, KeyVersion: 1,
+		UsagePolicyAcknowledgement: acknowledgement,
+		CreatedAt:                  now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := domain.DefaultProviderCapabilitiesForProfile(domain.ProviderBigModel, profile.ProfileID)
+	instance, err := runtime.store.PutProvider(ctx, domain.ProviderInstance{
+		ID: "provider_restricted", Name: "Restricted", Type: domain.ProviderBigModel,
+		BaseURL: "https://open.bigmodel.cn", CredentialID: credential.ID,
+		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
+		UsagePolicyAcknowledgement: acknowledgement,
+		AllowedHosts:               []string{"open.bigmodel.cn"}, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		Enabled:            true, CreatedAt: now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment, err := runtime.store.PutDeployment(ctx, domain.Deployment{
+		ID: "deployment_restricted", Name: "Restricted", ProviderID: instance.ID,
+		ProviderModel: "glm-5.3", AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
+		Capabilities:            capabilities,
+		CapabilityEvidence:      domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("glm-5.3", "sha256:restricted", capabilities, now),
+		Enabled:                 true, CreatedAt: now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.store.PutRoute(ctx, domain.Route{
+		ID: "route_restricted", PublicModel: "restricted", DeploymentID: deployment.ID,
+		Enabled: true, CreatedAt: now, UpdatedAt: now,
+	}, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertRouting := func(want bool, reason string) {
+		t.Helper()
+		if err := runtime.reloadProviderRegistry(ctx); err != nil {
+			t.Fatal(err)
+		}
+		_, routed := runtime.providers.Resolve("restricted")
+		if routed != want {
+			t.Fatalf("restricted route resolved=%t, want %t", routed, want)
+		}
+		if !want {
+			bindingID := domain.DefaultProviderProfileBindingID(instance.ID, profile.ProfileID)
+			if got := runtime.providers.UnavailableReason(instance.ID, bindingID); got != reason {
+				t.Fatalf("unavailable reason=%q, want %q", got, reason)
+			}
+		}
+	}
+	assertRouting(true, "")
+
+	credential.UsagePolicyAcknowledgement = &domain.UsagePolicyAcknowledgement{
+		OfferingID: identity.Offering, AccessSurface: identity.Surface,
+		AccountRegion: identity.Region, PolicyRevision: "superseded-revision",
+		ProductIdentityAssurance: domain.ProductIdentityMechanicallyVerified,
+	}
+	credential, err = runtime.store.PutCredential(ctx, credential, credential.Revision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRouting(false, excludedUsagePolicyRevisionChanged)
+
+	credential.UsagePolicyAcknowledgement = acknowledgement
+	credential, err = runtime.store.PutCredential(ctx, credential, credential.Revision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.UsagePolicyAcknowledgement = nil // legacy migration must not invent consent
+	instance, err = runtime.store.PutProvider(ctx, instance, instance.Revision, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRouting(false, excludedUsagePolicyRequired)
+
+	cookie, csrf := loginAdminForTest(t, runtime)
+	reacknowledged := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/providers/"+instance.ID,
+		fmt.Sprintf("%q", strconv.FormatUint(instance.Revision, 10)), map[string]any{
+			"name": instance.Name, "type": instance.Type, "base_url": instance.BaseURL,
+			"credential_id": instance.CredentialID, "profile_id": instance.ProfileID,
+			"access_surface": instance.AccessSurface, "credential_scheme": instance.CredentialScheme,
+			"capabilities": capabilities, "max_concurrency": instance.MaxConcurrency, "enabled": true,
+			"acknowledged_policy_revision": identity.UsagePolicyRevision,
+		})
+	if reacknowledged.Code != http.StatusOK {
+		t.Fatalf("re-acknowledge status=%d body=%s", reacknowledged.Code, reacknowledged.Body.String())
+	}
+	assertRouting(true, "")
+}
+
+func TestMiniMaxGlobalGeneralCannotBypassSubscriptionResponsibility(t *testing.T) {
+	cfg := testConfig(t)
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	cookie, csrf := loginAdminForTest(t, runtime)
+	input := map[string]any{
+		"name": "MiniMax Global general", "type": "minimax",
+		"base_url": "https://api.minimax.io", "secret": "provider-secret",
+		"access_surface": domain.SurfaceMiniMax, "scheme": domain.CredentialBearerStatic,
+	}
+	refused := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
+		"/admin/api/v1/credentials", "", input)
+	if refused.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(refused.Body.String(), "usage_policy_acknowledgement_required") ||
+		!strings.Contains(refused.Body.String(), string(domain.ProductIdentityOperatorDeclared)) {
+		t.Fatalf("unacknowledged same-wire product status=%d body=%s", refused.Code, refused.Body.String())
+	}
+	input["acknowledged_policy_revision"] = "minimax-subscription-global-2026-09-10"
+	created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
+		"/admin/api/v1/credentials", "", input)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("acknowledged same-wire product status=%d body=%s", created.Code, created.Body.String())
+	}
+	var view credentialView
+	if err := json.Unmarshal(created.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := runtime.store.GetCredential(context.Background(), view.ID)
+	if err != nil || stored.UsagePolicyAcknowledgement == nil ||
+		stored.UsagePolicyAcknowledgement.OfferingID != domain.OfferingMiniMaxAPI ||
+		stored.UsagePolicyAcknowledgement.AccountRegion != domain.RegionGlobal ||
+		stored.UsagePolicyAcknowledgement.ProductIdentityAssurance != domain.ProductIdentityOperatorDeclared {
+		t.Fatalf("same-wire declaration was not durably marked unverified: %#v err=%v", stored.UsagePolicyAcknowledgement, err)
+	}
+	if reason := usagePolicyExclusionReason(domain.ProfileMiniMaxChat, "https://api.minimax.io", nil); reason != excludedUsagePolicyRequired {
+		t.Fatalf("legacy general connection exclusion=%q", reason)
+	}
+	if reason := usagePolicyExclusionReason(domain.ProfileMiniMaxChat, "https://api.minimax.io", stored.UsagePolicyAcknowledgement); reason != "" {
+		t.Fatalf("acknowledged general connection exclusion=%q", reason)
 	}
 }
 

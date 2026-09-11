@@ -46,6 +46,7 @@ type Adapter struct {
 	kimi                bool
 	kimiCode            bool
 	bigModel            bool
+	profileID           domain.ProviderProfileID
 	capabilities        provider.Capabilities
 	bedrockProjectID    string
 	operationPathPrefix string
@@ -79,6 +80,7 @@ type Options struct {
 	Capabilities     provider.Capabilities
 	Authorizer       provider.Authorizer
 	CredentialScheme domain.CredentialScheme
+	ProfileID        domain.ProviderProfileID
 	// Responses builds an adapter for the OpenAI Responses profile: the same
 	// account and credential, a different endpoint, and a request that stays
 	// semantic all the way to the wire.
@@ -163,6 +165,7 @@ func NewWithOptions(options Options) (*Adapter, error) {
 		kimi:                options.ProviderType == string(domain.ProviderKimi) && !options.UseOpenAIChatDialect,
 		kimiCode:            options.KimiCode,
 		bigModel:            options.ProviderType == string(domain.ProviderBigModel),
+		profileID:           options.ProfileID,
 		capabilities:        options.Capabilities,
 		bedrockProjectID:    options.BedrockProjectID,
 		operationPathPrefix: strings.Trim(options.OperationPathPrefix, "/"),
@@ -194,7 +197,7 @@ func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, req
 		}
 		return json.Marshal(body)
 	case a.bigModel:
-		body, err := compatibility.RenderBigModelChatRequest(request, requestID)
+		body, err := compatibility.RenderBigModelChatRequest(a.profileID, request, requestID)
 		if err != nil {
 			return nil, err
 		}

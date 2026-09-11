@@ -478,7 +478,17 @@ export interface Credential {
   secret_configured: boolean;
   key_version: number;
   expires_at?: string;
+  usage_policy_acknowledgement?: UsagePolicyAcknowledgement;
+  usage_policy_current?: boolean;
   revision: number;
+}
+
+export interface UsagePolicyAcknowledgement {
+  offering_id: string;
+  access_surface: AccessSurface;
+  account_region_id: string;
+  policy_revision: string;
+  product_identity_assurance: "mechanically_verified" | "operator_declared_unverified";
 }
 
 export type AccessSurface =
@@ -633,6 +643,7 @@ export interface ProviderOfferingDocument {
   region: string;
   url: string;
   policy_revision: string;
+  product_identity_assurance?: "mechanically_verified" | "operator_declared_unverified";
 }
 
 /** One upstream product of one provider type — a metered API, a Coding Plan, an
@@ -724,6 +735,7 @@ export interface Provider {
   capability_evidence: CapabilityEvidenceSet;
   max_concurrency: number;
   enabled: boolean;
+  usage_policy_acknowledgement?: UsagePolicyAcknowledgement;
   last_test_status?: "healthy" | "unhealthy";
   last_tested_at?: string;
   last_test_latency_millis?: number;

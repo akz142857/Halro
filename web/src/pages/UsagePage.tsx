@@ -6,7 +6,7 @@ import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link, navigate, useNavigationLocation } from "../navigation";
 import { useTranslation } from "react-i18next";
 import { accountingTimeZone, isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
-import { FailureDetailDrawer, providerIdentifierFacts } from "./FailureDetailDrawer";
+import { FailureDetailDrawer, providerAttributionFacts, providerIdentifierFacts } from "./FailureDetailDrawer";
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice, upstreamStatus } from "../failure";
@@ -348,6 +348,7 @@ function AttemptDetailCell({ attempt, projectName, deploymentName }: {
   const [open, setOpen] = useState(false);
   if (attempt.status === "success") return null;
   const identifiers = providerIdentifierFacts(t, attempt);
+  const attribution = providerAttributionFacts(t, attempt);
   const chain = attempt.retry_count > 0 || attempt.fallback_count > 0
     ? t("usage.attemptChain", { fallback: attempt.fallback_count + 1, retry: attempt.retry_count })
     : t("usage.attemptFirstTry");
@@ -378,24 +379,7 @@ function AttemptDetailCell({ attempt, projectName, deploymentName }: {
             { label: t("usage.project"), value: projectName || attempt.project_id },
             { label: t("usage.model"), value: attempt.requested_model },
             { label: t("usage.deployment"), value: attempt.deployment_id ? deploymentName || attempt.deployment_id : undefined },
-            {
-              label: t("providers.product"),
-              value: attempt.offering_id
-                ? t(`providers.offerings.${attempt.offering_id}`, { defaultValue: attempt.offering_id })
-                : undefined,
-            },
-            {
-              label: t("providers.capabilityImplementation"),
-              value: attempt.profile_id
-                ? t(`providers.profiles.${attempt.profile_id}`, { defaultValue: attempt.profile_id })
-                : undefined,
-            },
-            {
-              label: t("usage.failures.accountRegionLabel"),
-              value: attempt.account_region_id
-                ? t(`providers.regions.${attempt.account_region_id}`, { defaultValue: attempt.account_region_id })
-                : undefined,
-            },
+            ...attribution,
             { label: t("usage.actualModel"), value: attempt.provider_model },
             { label: t("usage.status"), value: upstreamStatus(attempt.http_status) ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
             ...identifiers.facts,

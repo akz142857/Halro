@@ -244,6 +244,8 @@ const (
 	excludedBindingProfileIncompatible = "binding_profile_incompatible"
 	excludedAdapterUnavailable         = "adapter_unavailable"
 	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
+	excludedUsagePolicyRequired        = "usage_policy_acknowledgement_required"
+	excludedUsagePolicyRevisionChanged = "usage_policy_revision_mismatch"
 	// Not a load-time reason: what a probe reports when no adapter exists and
 	// the active load's exclusions do not account for it — a registry replaced
 	// between the lookup and the read, or a binding this build never loaded.
@@ -502,6 +504,14 @@ func loadProviderRegistryWithCatalog(
 			if !binding.Enabled {
 				continue
 			}
+			if reason := usagePolicyExclusionReason(binding.ProfileID, credentialOrigin(credential.Audience, credential.Type), credential.UsagePolicyAcknowledgement); reason != "" {
+				excludeBinding(instance, binding.ID, reason)
+				continue
+			}
+			if reason := usagePolicyExclusionReason(binding.ProfileID, instance.BaseURL, instance.UsagePolicyAcknowledgement); reason != "" {
+				excludeBinding(instance, binding.ID, reason)
+				continue
+			}
 			if domain.IsWithheldProfile(binding.ProfileID) {
 				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
 				continue
@@ -732,6 +742,20 @@ func loadProviderRegistryWithCatalog(
 		}
 	}
 	return registry, report, nil
+}
+
+func usagePolicyExclusionReason(profileID domain.ProviderProfileID, endpoint string, acknowledgement *domain.UsagePolicyAcknowledgement) string {
+	_, required := domain.UsagePolicyRequirementForProfile(profileID, endpoint)
+	if !required {
+		return ""
+	}
+	if acknowledgement == nil {
+		return excludedUsagePolicyRequired
+	}
+	if !acknowledgement.CurrentForProfileAtEndpoint(profileID, endpoint) {
+		return excludedUsagePolicyRevisionChanged
+	}
+	return ""
 }
 
 func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {

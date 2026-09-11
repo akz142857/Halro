@@ -1,0 +1,47 @@
+{
+  "review_date": "2026-09-11",
+  "baseline_tag": "v0.7.1",
+  "baseline_commit": "84f2638e973f23935b9eda423143f65ff25a852c",
+  "candidate_commit": "222d08f84f61493fc9a273d351cc728528d6e30c",
+  "local": {
+    "go_version": "go1.26.6 darwin/arm64",
+    "go_vet": "pass",
+    "go_test_all_count_1": "pass",
+    "focused_race": "pass",
+    "web_node_actual": "v25.9.0",
+    "web_node_supported": false,
+    "web_typecheck": "pass",
+    "web_tests": {"status": "pass", "files": 44, "tests": 583},
+    "web_build": "pass",
+    "bundle_drift": "pass",
+    "license_review": "pass",
+    "sdk_node": "pass",
+    "sdk_go": "pass",
+    "sdk_python": "blocked_by_local_tls_ca",
+    "backup_create_verify_restore_ready": "pass"
+  },
+  "ci": {
+    "run_id": 34569951375,
+    "url": "https://github.com/akz142857/Halro/actions/runs/34569951375",
+    "head_sha_matches": true,
+    "conclusion": "success",
+    "covered": ["go", "go-race", "vet", "govulncheck", "fuzz", "web-node22", "sdk-python-node-go", "container", "repository-hygiene", "license", "observability", "sbom"]
+  },
+  "upgrade": {
+    "v071_to_candidate": "pass",
+    "candidate_reopen_after_rollback_attempt": "pass",
+    "v071_doctor_rejects_usage_schema_8": true,
+    "v071_serve_rejects_usage_schema_8": false,
+    "rollback_data_plane_accepted_request": true,
+    "finding": "confirmed_fail_open"
+  },
+  "performance": {
+    "samples_per_version": 6,
+    "registry_median_delta_percent": 5.4,
+    "ledger_replay_median_delta_percent": 0.3,
+    "request_lifecycle_median_delta_range_percent": [-3.8, 4.5],
+    "bundle_gzip_v071_bytes": 220942,
+    "bundle_gzip_candidate_bytes": 223815,
+    "bundle_delta_percent": 1.3
+  }
+}

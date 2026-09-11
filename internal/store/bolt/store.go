@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 36
+const schemaVersion uint64 = 37
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -1031,6 +1031,33 @@ var migrations = []migration{
 			return err
 		}
 		return migrationStep(step, "after_run_governance_attribution")
+	}},
+	// Usage checkpoint v14 and Parquet schema 8 carry provider product,
+	// account-region and canonical failure semantics that a schema-36 binary
+	// does not understand. Advancing metadata is the rollback fence: v0.7.1
+	// rejects this directory during Store.Open, before runtime construction can
+	// bind a listener. The checkpoint is derivative, so discard it and replay
+	// the authenticated Ledger rather than attempt a lossy in-place rewrite.
+	{version: 37, name: "usage_provider_attribution_boundary", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_usage_provider_attribution_boundary"); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if err := meta.Delete(keyUsageCheckpoint); err != nil {
+			return err
+		}
+		if tx.Bucket(bucketUsageCheckpointSegments) != nil {
+			if err := tx.DeleteBucket(bucketUsageCheckpointSegments); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_usage_provider_attribution_boundary")
 	}},
 }
 

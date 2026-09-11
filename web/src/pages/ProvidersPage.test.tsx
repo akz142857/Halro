@@ -48,6 +48,48 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
   });
 
+  it("wraps keyboard focus around both resource tabs", async () => {
+    renderPage();
+    const providers = await screen.findByRole("tab", { name: /服务商/ });
+    const credentials = screen.getByRole("tab", { name: /凭据库/ });
+
+    providers.focus();
+    fireEvent.keyDown(providers, { key: "ArrowLeft" });
+    expect(credentials).toHaveFocus();
+    expect(credentials).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(credentials, { key: "ArrowRight" });
+    expect(providers).toHaveFocus();
+    expect(providers).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("reports and focuses each locally invalid credential field", async () => {
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+
+    const name = screen.getByLabelText("凭据名称");
+    const address = screen.getByLabelText(/^地址绑定/);
+    const secret = screen.getByLabelText(/^服务商密钥/);
+    const save = screen.getByRole("button", { name: "加密保存" });
+    fireEvent.change(address, { target: { value: "" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(name).toHaveFocus());
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(address).toHaveAttribute("aria-invalid", "true");
+    expect(secret).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(name, { target: { value: "Primary" } });
+    fireEvent.change(address, { target: { value: "not a url" } });
+    fireEvent.change(secret, { target: { value: "secret" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(address).toHaveFocus());
+    expect(address).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("请输入完整的 HTTP 或 HTTPS 地址。")).toBeVisible();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   // What the form submits is one flat capability set and nothing about profiles.
   // An OpenAI connection spans two of them, and which capability each one serves
   // is the server's answer — this form knowing it is what let the two drift.
@@ -252,6 +294,52 @@ describe("ProvidersPage profile and credential bindings", () => {
     const addProvider = await screen.findByRole("button", { name: "＋ 服务商" });
     await waitFor(() => expect(addProvider).toBeDisabled());
     expect(screen.getByText("服务商连接必须绑定一个加密凭据；创建后才能继续配置上游。")).toBeInTheDocument();
+  });
+
+  it("keeps credential creation modal and submission locked while the write is pending", async () => {
+    let finish!: (value: never) => void;
+    const create = vi.spyOn(api, "createCredential").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    renderPage();
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Pending key" } });
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const dialog = screen.getByRole("dialog", { name: "保存服务商凭据" });
+    expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(screen.getByRole("dialog", { name: "保存服务商凭据" })).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "加密保存" }));
+    expect(create).toHaveBeenCalledOnce();
+
+    finish({} as never);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "保存服务商凭据" })).not.toBeInTheDocument());
+  });
+
+  it("keeps provider creation modal and submission locked while the write is pending", async () => {
+    let finish!: (value: never) => void;
+    const create = vi.spyOn(api, "createProvider").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Pending provider" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const dialog = screen.getByRole("dialog", { name: "创建服务商" });
+    expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "关闭" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(screen.getByRole("dialog", { name: "创建服务商" })).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建并热加载" }));
+    expect(create).toHaveBeenCalledOnce();
+
+    finish({} as never);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "创建服务商" })).not.toBeInTheDocument());
   });
 
   it("waits for credentials before mounting the onboarding provider form", async () => {
@@ -593,6 +681,29 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByRole("button", { name: "加密保存" })).toBeDisabled();
   });
 
+  it("lets a legacy restricted credential record the current terms during rotation", async () => {
+    const credential: Credential = {
+      id: "credential_legacy_coding", name: "Legacy Coding Plan", type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api", offering_id: "bigmodel.coding-plan", region_id: "cn",
+      scheme: "bigmodel.coding-plan-key", bound_base_url: "https://open.bigmodel.cn:443",
+      secret_configured: true, key_version: 1, usage_policy_current: false, revision: 4,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [credential], next_cursor: "" });
+    const rotate = vi.spyOn(api, "rotateCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "轮换" }));
+    expect(screen.getByText("该订阅产品有专门使用条款")).toBeVisible();
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
+
+    await waitFor(() => expect(rotate).toHaveBeenCalledOnce());
+    expect(rotate.mock.calls[0][1]).toMatchObject({
+      acknowledged_policy_revision: "bigmodel-coding-plan-cn-2026-09-10",
+    });
+  });
+
   it("offers validated MiniMax subscription regions while keeping Kimi Code withheld", async () => {
 		renderPage();
 
@@ -608,6 +719,94 @@ describe("ProvidersPage profile and credential bindings", () => {
 		expect(screen.queryByLabelText(/^上游产品/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/Kimi Code/)).not.toBeInTheDocument();
 	});
+
+  it("requires endpoint-specific acknowledgement for unverified MiniMax global API credentials", async () => {
+    const catalog = structuredClone(providerProfilesFixture) as unknown as ProviderProfilesCatalog;
+    const offering = catalog.provider_types.find((entry) => entry.type === "minimax")?.offerings
+      .find((entry) => entry.id === "minimax.api-platform");
+    if (!offering) throw new Error("fixture has no MiniMax API offering");
+    expect(offering.requires_usage_warning).toBe(true);
+    vi.mocked(api.providerProfiles).mockResolvedValueOnce(catalog);
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "MiniMax global" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "minimax" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "minimax-api" } });
+    expect(screen.getByLabelText(/^账号地域/)).toHaveValue("global");
+    expect(screen.getByText(/产品身份待人工确认/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "minimax-key" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      access_surface: "minimax-api",
+      base_url: "https://api.minimax.io",
+      acknowledged_policy_revision: "minimax-subscription-global-2026-09-10",
+    });
+  });
+
+  it("keeps the sole conservative MiniMax policy on an unknown proxy endpoint", async () => {
+    const catalog = structuredClone(providerProfilesFixture) as unknown as ProviderProfilesCatalog;
+    const offering = catalog.provider_types.find((entry) => entry.type === "minimax")?.offerings
+      .find((entry) => entry.id === "minimax.api-platform");
+    if (!offering) throw new Error("fixture has no MiniMax API offering");
+    expect(offering.requires_usage_warning).toBe(true);
+    vi.mocked(api.providerProfiles).mockResolvedValueOnce(catalog);
+    const create = vi.spyOn(api, "createCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "MiniMax proxy" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "minimax" } });
+    fireEvent.change(screen.getByLabelText(/^上游产品/), { target: { value: "minimax-api" } });
+    fireEvent.change(screen.getByLabelText(/^地址绑定/), { target: { value: "https://minimax-proxy.example" } });
+
+    expect(screen.getByLabelText(/^账号地域/)).toHaveValue("");
+    expect(screen.getByText(/产品身份待人工确认/)).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "minimax-key" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      base_url: "https://minimax-proxy.example",
+      acknowledged_policy_revision: "minimax-subscription-global-2026-09-10",
+    });
+  });
+
+  it("requires the same MiniMax global acknowledgement when binding a provider", async () => {
+    const catalog = structuredClone(providerProfilesFixture) as unknown as ProviderProfilesCatalog;
+    const offering = catalog.provider_types.find((entry) => entry.type === "minimax")?.offerings
+      .find((entry) => entry.id === "minimax.api-platform");
+    if (!offering) throw new Error("fixture has no MiniMax API offering");
+    expect(offering.requires_usage_warning).toBe(true);
+    vi.mocked(api.providerProfiles).mockResolvedValueOnce(catalog);
+    const credential: Credential = {
+      id: "credential_minimax", name: "MiniMax global", type: "minimax", access_surface: "minimax-api",
+      offering_id: "minimax.api-platform", region_id: "", scheme: "bearer.static",
+      bound_base_url: "https://api.minimax.io:443", secret_configured: true, key_version: 1, revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [credential], next_cursor: "" });
+    const create = vi.spyOn(api, "createProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 服务商" }));
+    fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "MiniMax global" } });
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "minimax" } });
+    expect(screen.getByText(/产品身份待人工确认/)).toBeVisible();
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "创建并热加载" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      acknowledged_policy_revision: "minimax-subscription-global-2026-09-10",
+    });
+  });
 
   it("requires a fresh usage acknowledgement when a subscription credential is bound to a connection", async () => {
     const codingCredential: Credential = {
@@ -717,6 +916,38 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByRole("button", { name: "创建并热加载" })).toBeDisabled();
   });
 
+  it("lets a provider with a stale acknowledgement confirm the current revision in place", async () => {
+    const credential: Credential = {
+      id: "credential_coding", name: "Coding Plan", type: "bigmodel",
+      access_surface: "bigmodel-cn-coding-api", offering_id: "bigmodel.coding-plan", region_id: "cn",
+      scheme: "bigmodel.coding-plan-key", bound_base_url: "https://open.bigmodel.cn:443",
+      secret_configured: true, key_version: 1, usage_policy_current: true, revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [credential], next_cursor: "" });
+    vi.mocked(api.providers).mockResolvedValue({ items: [{
+      id: "provider_coding", name: "Coding Plan", type: "bigmodel", base_url: "https://open.bigmodel.cn",
+      access_surface: "bigmodel-cn-coding-api", profile_id: "bigmodel.cn.coding.chat.v1",
+      credential_scheme: "bigmodel.coding-plan-key", credential_id: credential.id,
+      capabilities: { chat: true }, capability_evidence: {}, max_concurrency: 0, enabled: true, revision: 7,
+      usage_policy_acknowledgement: {
+        offering_id: "bigmodel.coding-plan", access_surface: "bigmodel-cn-coding-api", account_region_id: "cn",
+        policy_revision: "bigmodel-coding-plan-cn-2026-01-01", product_identity_assurance: "mechanically_verified",
+      },
+    } as never], next_cursor: "" });
+    const update = vi.spyOn(api, "updateProvider").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    expect(screen.getByText("该订阅产品有专门使用条款")).toBeVisible();
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(update.mock.calls[0][1]).toMatchObject({
+      acknowledged_policy_revision: "bigmodel-coding-plan-cn-2026-09-10",
+    });
+  });
+
   // One product, two account hosts, keys that are not interchangeable. The
   // region is the endpoint here, so choosing it writes the endpoint — and an
   // address the upstream does not publish is unknown rather than refused,
@@ -775,6 +1006,13 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("服务商名称"), { target: { value: "Z.AI" } });
     fireEvent.change(screen.getByLabelText("类型"), { target: { value: "bigmodel" } });
     fireEvent.change(screen.getByLabelText(/^能力实现/), { target: { value: "bigmodel.global.chat.v1" } });
+    const address = screen.getByLabelText(/^基础地址/);
+    fireEvent.change(address, { target: { value: "https://open.bigmodel.cn" } });
+    const mismatch = screen.getByText("该官方端点属于另一个账号地域。请选择对应的产品地域，或改回当前地域的正确端点。");
+    expect(mismatch).toBeVisible();
+    expect(address).toHaveAttribute("aria-invalid", "true");
+    expect(address.getAttribute("aria-describedby")).toContain(mismatch.id);
+    expect(screen.getByRole("button", { name: "创建并热加载" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://zai.internal.example" } });
     expect(screen.getByText("正在使用自定义端点；产品账号地域保持不变，但无法从该端点验证地域。")).toBeVisible();
     fireEvent.change(screen.getByLabelText(/^基础地址/), { target: { value: "https://api.z.ai" } });
@@ -787,6 +1025,26 @@ describe("ProvidersPage profile and credential bindings", () => {
       access_surface: "bigmodel-global-general-api",
       credential_scheme: "bigmodel.api-key",
     });
+  });
+
+  it("shows endpoint-derived account region in provider rows", async () => {
+    const kimiCredential: Credential = {
+      id: "credential_kimi", name: "Kimi global", type: "kimi", access_surface: "kimi-api",
+      offering_id: "kimi.open-platform", region_id: "", scheme: "bearer.static",
+      bound_base_url: "https://api.moonshot.ai:443", secret_configured: true, key_version: 1, revision: 1,
+    };
+    vi.mocked(api.credentials).mockResolvedValue({ items: [kimiCredential], next_cursor: "" });
+    vi.mocked(api.providers).mockResolvedValue({ items: [{
+      id: "provider_kimi", name: "Kimi global", type: "kimi", base_url: "https://api.moonshot.ai",
+      access_surface: "kimi-api", profile_id: "kimi.chat.v1", credential_scheme: "kimi.api-key",
+      capability_evidence: {}, credential_id: kimiCredential.id, capabilities: { chat: true },
+      max_concurrency: 0, enabled: true, revision: 1,
+    } as never], next_cursor: "" });
+    renderPage();
+
+    const row = (await screen.findAllByText("Kimi global")).map((item) => item.closest<HTMLElement>(".provider-row")).find(Boolean);
+    expect(row).not.toBeNull();
+    expect(within(row!).getByText("海外")).toBeVisible();
   });
 
   // And says nothing where there is nothing to say: an OpenAI connection spans
