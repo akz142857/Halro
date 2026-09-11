@@ -152,12 +152,17 @@ describe("deployment invocation target workflow", () => {
     const choices = within(screen.getByLabelText(/^服务商/)).getAllByRole("option");
     expect(choices[0]).toHaveTextContent("GLM General · BigModel / Z.AI 通用 API · 海外");
     expect(choices[1]).toHaveTextContent("GLM Coding · GLM Coding Plan（订阅） · 中国大陆");
-    expect(screen.queryByText("订阅产品需要明确成本治理方式")).not.toBeInTheDocument();
+    expect(screen.queryByText("订阅成本治理")).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/^服务商/), { target: { value: coding.id } });
-    expect(screen.getByText("订阅产品需要明确成本治理方式")).toBeVisible();
+    const disclosure = screen.getByText("订阅成本治理").closest("details")!;
+    expect(disclosure.previousElementSibling).toHaveClass("deployment-model-field");
+    expect(disclosure).not.toHaveAttribute("open");
+    expect(screen.getByText(/项目预算不会拦截这些调用/)).not.toBeVisible();
+    fireEvent.click(within(disclosure).getByText("订阅成本治理"));
+    expect(disclosure).toHaveAttribute("open");
     expect(screen.getByText(/项目预算不会拦截这些调用/)).toBeVisible();
     fireEvent.change(screen.getByLabelText(/^服务商/), { target: { value: entitlement.id } });
-    expect(screen.getByText("订阅产品需要明确成本治理方式")).toBeVisible();
+    expect(screen.getByText("订阅成本治理")).toBeVisible();
   });
 
   // "0 is automatic" dropped who enforces the limit once the deployment stops

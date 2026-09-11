@@ -1944,12 +1944,6 @@ function DeploymentForm({
               ))}
             </select>
           </Field>
-          {(selectedProviderOffering?.kind === "subscription" || selectedProviderOffering?.kind === "entitlement") && (
-            <div className="notice warning" role="note">
-              <strong>{t("deployments.subscriptionPricingTitle")}</strong>
-              <span>{t("deployments.subscriptionPricingDescription")}</span>
-            </div>
-          )}
           {availableTargetKinds.length > 1 && <Field label={t("deployments.targetKind")} hint={t("deployments.targetKindHint")}>
             <select disabled={identityLocked} value={targetKind} onChange={(event) => { resetDetection(); setTargetKind(event.target.value as DeploymentTargetKind); setProviderModel(""); setSelectedTarget(null); setSelectedVariant(null); setCanonicalModelRef(""); setCapabilities(emptyCapabilities()); }}>
               {availableTargetKinds.map((kind) => <option value={kind} key={kind}>{t(`deployments.targetKinds.${kind}`)}</option>)}
@@ -2091,6 +2085,12 @@ function DeploymentForm({
               </div>
             ) : null}
           </div>
+          {(selectedProviderOffering?.kind === "subscription" || selectedProviderOffering?.kind === "entitlement") && (
+            <details className="deployment-subscription-pricing">
+              <summary><strong>{t("deployments.subscriptionPricingTitle")}</strong></summary>
+              <div role="note">{t("deployments.subscriptionPricingDescription")}</div>
+            </details>
+          )}
           {capabilityModelSupported && <Field label={t("deployments.capabilityModel")} hint={t("deployments.capabilityModelHint")}>
             <select
               value={canonicalModelRef}
