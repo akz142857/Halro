@@ -68,6 +68,9 @@ type Event struct {
 	RouteID                     string                             `json:"route_id,omitempty"`
 	DeploymentID                string                             `json:"deployment_id,omitempty"`
 	ProviderID                  string                             `json:"provider_id,omitempty"`
+	OfferingID                  domain.ProviderOfferingID          `json:"offering_id,omitempty"`
+	ProfileID                   domain.ProviderProfileID           `json:"profile_id,omitempty"`
+	AccountRegionID             domain.ProviderRegionID            `json:"account_region_id,omitempty"`
 	RequestedModel              string                             `json:"requested_model,omitempty"`
 	ProviderModel               string                             `json:"provider_model,omitempty"`
 	AttemptNumber               int                                `json:"attempt_number,omitempty"`
@@ -119,10 +122,14 @@ type Event struct {
 	// Absent on every event written before they existed, which reads correctly
 	// as "not recorded" rather than as "the upstream named none". The console
 	// says so in those words rather than showing an invented "unknown".
-	ProviderCode      string `json:"provider_code,omitempty"`
-	ProviderRequestID string `json:"provider_request_id,omitempty"`
-	FailurePhase      string `json:"failure_phase,omitempty"`
-	LatencyMillis     int64  `json:"latency_millis,omitempty"`
+	ProviderCode             string                 `json:"provider_code,omitempty"`
+	ProviderFailureReason    provider.FailureReason `json:"provider_failure_reason,omitempty"`
+	ProviderRequestID        string                 `json:"provider_request_id,omitempty"`
+	FailurePhase             string                 `json:"failure_phase,omitempty"`
+	Retryable                bool                   `json:"retryable,omitempty"`
+	Ambiguous                bool                   `json:"ambiguous,omitempty"`
+	FailureSemanticsRecorded bool                   `json:"failure_semantics_recorded,omitempty"`
+	LatencyMillis            int64                  `json:"latency_millis,omitempty"`
 }
 
 func (e Event) Validate() error {
@@ -203,6 +210,24 @@ func (e Event) Validate() error {
 		e.ProviderRequestID != provider.SafeProviderIdentifier(e.ProviderRequestID) {
 		problems = append(problems, errors.New("provider identifiers must be bounded identifiers"))
 	}
+	if !e.ProviderFailureReason.Valid() {
+		problems = append(problems, errors.New("provider failure reason is invalid"))
+	}
+	if e.OfferingID != "" || e.ProfileID != "" {
+		identity, ok := domain.IdentityForProfile(e.ProfileID)
+		if !ok || e.OfferingID == "" || identity.Offering != e.OfferingID {
+			problems = append(problems, errors.New("provider offering and profile attribution must match"))
+		} else if e.AccountRegionID != domain.RegionNone &&
+			!domain.AccountRegionBelongsToSurface(identity.Surface, e.AccountRegionID) {
+			// Empty remains readable for records written before account-region
+			// snapshots existed. Every non-empty value must still be one this
+			// surface can produce; otherwise an arbitrary string becomes a durable
+			// reporting dimension.
+			problems = append(problems, errors.New("provider account region does not belong to the profile surface"))
+		}
+	} else if e.AccountRegionID != domain.RegionNone {
+		problems = append(problems, errors.New("provider account region requires provider profile attribution"))
+	}
 	if e.PriceSnapshot != nil {
 		if err := e.PriceSnapshot.Validate(); err != nil {
 			problems = append(problems, err)
@@ -279,6 +304,25 @@ func (e Event) Validate() error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// validateForAppend applies invariants that every event written by this build
+// must satisfy while Event.Validate remains able to read authenticated history
+// written before the corresponding field existed. In particular, schema-era
+// legacy events may omit the account-region snapshot for a fixed surface; a new
+// append may not silently create another such record.
+func (e Event) validateForAppend() error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.ProfileID == "" {
+		return nil
+	}
+	identity, ok := domain.IdentityForProfile(e.ProfileID)
+	if ok && identity.RegionScope == domain.RegionScopeFixed && e.AccountRegionID == domain.RegionNone {
+		return errors.New("fixed provider surface requires account region attribution")
+	}
+	return nil
 }
 
 type Record struct {

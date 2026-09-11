@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -124,7 +125,7 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 			Header:     http.Header{},
 			Body:       io.NopCloser(strings.NewReader(test.body)),
 		}
-		err := decodeHTTPError(response)
+		err := (&Adapter{}).decodeHTTPError(response)
 		providerErr, ok := err.(*provider.Error)
 		if !ok {
 			t.Fatalf("%s: decodeHTTPError returned %T, want *provider.Error", test.name, err)
@@ -167,5 +168,15 @@ func TestAnthropicErrorDecodingToleratesShapesItHasNotSeen(t *testing.T) {
 				t.Errorf("%s: provider_request_id carries provider response bytes: %q", test.name, providerErr.ProviderRequestID)
 			}
 		}
+	}
+}
+
+func TestKimiCodeAnthropicPaymentRequiredUsesSubscriptionSemantics(t *testing.T) {
+	response := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"type":"error"}`))}
+	err := (&Adapter{profileID: domain.ProfileKimiCodeAnthropicMessages}).decodeHTTPError(response)
+	classified, ok := err.(*provider.Error)
+	if !ok || classified.Class != provider.ErrorUnknown || classified.FailureReason != provider.FailureReasonEntitlementVerificationUnavailable ||
+		!classified.Retryable || classified.Ambiguous {
+		t.Fatalf("Kimi Code Anthropic 402 = %#v", err)
 	}
 }

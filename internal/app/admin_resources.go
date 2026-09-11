@@ -15,16 +15,24 @@ import (
 )
 
 type credentialView struct {
-	ID               string                  `json:"id"`
-	Name             string                  `json:"name"`
-	Type             domain.ProviderType     `json:"type"`
-	AccessSurface    domain.AccessSurface    `json:"access_surface"`
-	Scheme           domain.CredentialScheme `json:"scheme"`
-	BoundBaseURL     string                  `json:"bound_base_url"`
-	SecretConfigured bool                    `json:"secret_configured"`
-	KeyVersion       uint16                  `json:"key_version"`
-	ExpiresAt        *time.Time              `json:"expires_at,omitempty"`
-	Revision         uint64                  `json:"revision"`
+	ID            string                  `json:"id"`
+	Name          string                  `json:"name"`
+	Type          domain.ProviderType     `json:"type"`
+	AccessSurface domain.AccessSurface    `json:"access_surface"`
+	Scheme        domain.CredentialScheme `json:"scheme"`
+	// Which upstream product this credential was sealed to, and which account
+	// region. Derived from the surface and the bound endpoint rather than stored
+	// — the surface is the stored fact — and reported so a saved credential reads
+	// as the product an operator bought instead of as an internal identifier.
+	// Region is empty where the product has no region axis, and where the
+	// endpoint is one the upstream does not publish.
+	OfferingID       domain.ProviderOfferingID `json:"offering_id"`
+	RegionID         domain.ProviderRegionID   `json:"region_id"`
+	BoundBaseURL     string                    `json:"bound_base_url"`
+	SecretConfigured bool                      `json:"secret_configured"`
+	KeyVersion       uint16                    `json:"key_version"`
+	ExpiresAt        *time.Time                `json:"expires_at,omitempty"`
+	Revision         uint64                    `json:"revision"`
 }
 
 type gatewayKeyView struct {

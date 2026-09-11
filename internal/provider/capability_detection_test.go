@@ -556,15 +556,19 @@ func TestTheReasoningProbeAsksForADepthItsOwnWireFormatAccepts(t *testing.T) {
 	// DeepSeek's failure again, invisible because this table did not have to
 	// mention it.
 	ladders := map[domain.ProviderProfileID][]string{
-		domain.ProfileOpenAIChatEmbeddings:     openaiapi.ReasoningEffortLevels,
-		domain.ProfileAzureChatEmbeddings:      openaiapi.ReasoningEffortLevels,
-		domain.ProfileBedrockMantleChat:        openaiapi.ReasoningEffortLevels,
-		domain.ProfileBedrockMantleOpenAIChat:  openaiapi.ReasoningEffortLevels,
-		domain.ProfileMiniMaxChat:              openaiapi.ReasoningEffortLevels,
-		domain.ProfileDeepSeekChat:             compatibility.DeepSeekEffortLevels,
-		domain.ProfileKimiChat:                 compatibility.KimiEffortLevels,
-		domain.ProfileBigModelCNChatEmbeddings: compatibility.BigModelEffortLevels,
-		domain.ProfileBigModelGlobalChat:       compatibility.BigModelEffortLevels,
+		domain.ProfileOpenAIChatEmbeddings:                openaiapi.ReasoningEffortLevels,
+		domain.ProfileAzureChatEmbeddings:                 openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleChat:                   openaiapi.ReasoningEffortLevels,
+		domain.ProfileBedrockMantleOpenAIChat:             openaiapi.ReasoningEffortLevels,
+		domain.ProfileMiniMaxChat:                         openaiapi.ReasoningEffortLevels,
+		domain.ProfileMiniMaxCNSubscriptionOpenAIChat:     openaiapi.ReasoningEffortLevels,
+		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat: openaiapi.ReasoningEffortLevels,
+		domain.ProfileDeepSeekChat:                        compatibility.DeepSeekEffortLevels,
+		domain.ProfileKimiChat:                            compatibility.KimiEffortLevels,
+		domain.ProfileBigModelCNChatEmbeddings:            compatibility.BigModelEffortLevels,
+		domain.ProfileBigModelGlobalChat:                  compatibility.BigModelEffortLevels,
+		domain.ProfileBigModelCNCodingChat:                compatibility.BigModelEffortLevels,
+		domain.ProfileBigModelGlobalCodingChat:            compatibility.BigModelEffortLevels,
 	}
 	// Every profile that both declares reasoning and plans a probe has to be in
 	// the table. A platform added without a case in reasoningProbeEffort fails

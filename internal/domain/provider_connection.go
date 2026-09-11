@@ -16,9 +16,10 @@ package domain
 //
 // The rules, in the order they resolve:
 //
-//   - Candidates are the profiles sharing the anchor's provider type, access
-//     surface, and credential scheme, because the server requires every binding
-//     on a connection to match its credential. The anchor comes first.
+//   - Candidates are the profiles sharing the anchor's permanent connection
+//     group. A group is constrained to one provider type, access surface and
+//     credential scheme, while protocol alternatives may intentionally share
+//     those three fields but use different groups. The anchor comes first.
 //   - A capability goes to the anchor whenever the anchor can serve it. This is
 //     what makes an explicit choice mean something: an operator who selected the
 //     Bedrock Mantle Responses implementation gets chat on that implementation,
@@ -105,7 +106,7 @@ func ConnectionProfiles(providerType ProviderType, anchor ProviderProfileID) []P
 	group := []ProviderProfileSummary{summaryOf(row)}
 	for _, peer := range profileTable {
 		if peer.ID == anchor || peer.Type != providerType ||
-			peer.Surface != row.Surface || peer.Scheme != row.Scheme {
+			peer.ConnectionGroup != row.ConnectionGroup {
 			continue
 		}
 		group = append(group, summaryOf(peer))
@@ -297,10 +298,11 @@ func boundedLimit(requested, ceiling int64) int64 {
 
 func summaryOf(row profileRow) ProviderProfileSummary {
 	return ProviderProfileSummary{
-		ID: row.ID, Type: row.Type, AccessSurface: row.Surface,
+		ID: row.ID, ConnectionGroupID: row.ConnectionGroup, Type: row.Type, AccessSurface: row.Surface,
 		CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
 		Immutable: row.Immutable, Withheld: row.Withheld,
-		Defaults: row.Defaults, Ceiling: row.Ceiling,
+		RoutePartitioned: row.RoutePartitioned,
+		Defaults:         row.Defaults, Ceiling: row.Ceiling,
 	}
 }
 

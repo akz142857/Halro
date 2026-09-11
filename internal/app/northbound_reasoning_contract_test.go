@@ -158,8 +158,13 @@ func unaskedReasoningEntries(t *testing.T) map[domain.ProviderProfileID][]string
 func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) bool {
 	t.Helper()
 	switch profileID {
-	case domain.ProfileKimiChat, domain.ProfileMiniMaxChat, domain.ProfileDeepSeekChat,
+	case domain.ProfileKimiChat, domain.ProfileMiniMaxChat,
+		domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
+		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
+		domain.ProfileDeepSeekChat,
 		domain.ProfileBigModelCNChatEmbeddings, domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat,
+		domain.ProfileBigModelGlobalCodingChat,
 		domain.ProfileOpenAIChatEmbeddings, domain.ProfileAzureChatEmbeddings:
 		// The Chat wire carries reasoning in its own member, and the decoder maps
 		// it to a reasoning content part.

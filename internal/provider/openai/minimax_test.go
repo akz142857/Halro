@@ -77,3 +77,15 @@ func TestMiniMaxInsufficientBalanceIsNeverRetried(t *testing.T) {
 		t.Fatal("1008 is retryable; retrying an empty balance only multiplies the calls")
 	}
 }
+
+func TestMiniMaxStructuredFailuresCarryCanonicalReasons(t *testing.T) {
+	if got := classifyMiniMaxStatus(1002).FailureReason; got != provider.FailureReasonRateLimited {
+		t.Fatalf("1002 reason = %q, want %q", got, provider.FailureReasonRateLimited)
+	}
+	if got := classifyMiniMaxStatus(1004).FailureReason; got != provider.FailureReasonInvalidCredential {
+		t.Fatalf("1004 reason = %q, want %q", got, provider.FailureReasonInvalidCredential)
+	}
+	if got := classifyMiniMaxStatus(1008).FailureReason; got != "" {
+		t.Fatalf("1008 invented an unsupported subscription reason: %q", got)
+	}
+}

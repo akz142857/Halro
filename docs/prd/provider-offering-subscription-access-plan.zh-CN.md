@@ -1,0 +1,1312 @@
+# Provider Offering 与订阅接入统一方案
+
+状态：**首期已实施：阶段 1、BigModel / Z.AI 国内与国际 Coding surface、使用范围确认审计与
+Offering 用量归因；国际实际响应行为、阶段 3 / 4 等待对应凭据或授权证据**（见 §14）
+建立日期：2026-09-09  
+最近修订：2026-09-10（补齐 Z.AI、Kimi、MiniMax 订阅产品的国内/海外地域设计，并重设计使用条款折叠区）
+
+Kimi、MiniMax 与 DeepSeek Code 订阅的具体实施拆分见
+[《Kimi、MiniMax、DeepSeek Code 订阅适配实施方案》](./code-subscription-adaptation-plan.zh-CN.md)。
+范围：`internal/domain`、`internal/provider`、`internal/compatibility`、`internal/app`、
+`internal/modelcatalog`、`internal/usage`、`web/src`、运维与用户文档  
+首期落地：通用 Offering 抽象、控制台统一选择器、BigModel / Z.AI Coding Plan  
+后续候选：Kimi Code、MiniMax Token Plan，以及需要 OAuth 的 OpenAI Codex 与 Claude Pro/Max
+
+相关：
+
+- [BigModel / Z.AI 适配方案](bigmodel-adaptation-plan.zh-CN.md)
+- [Kimi 适配方案](kimi-adaptation-plan.zh-CN.md)
+- [MiniMax 适配方案](minimax-adaptation-plan.zh-CN.md)
+- [平台登记点合并](platform-registration-consolidation.zh-CN.md)
+- [Provider 能力单一来源](provider-capability-single-source.zh-CN.md)
+- [Adding a provider platform](../contracts/adding-a-platform.md)
+
+---
+
+## 0. 决策摘要
+
+Halro 应新增一个跨服务商的 **Provider Offering（上游接入产品）** 概念，统一表达：
+
+- 按量 API 平台；
+- Coding Plan / Token Plan 等订阅产品；
+- 企业合约或预置吞吐产品；
+- 由账号 OAuth 提供额度的官方客户端产品。
+
+Offering 不是模型，也不只是计费标签。它可能同时改变：
+
+- 凭据来源和鉴权方式；
+- Base URL 与路径前缀；
+- 可用协议；
+- 可用模型集合；
+- 并发、周期额度和余额语义；
+- 允许使用的工具或业务场景；
+- 错误码和用量查询方式。
+
+因此，**不得**把 `Coding Plan`、`Token Plan` 放进"创建模型部署"的模型 ID 列表。部署层仍然只保存
+上游真实模型标识符，例如 `glm-5.2`、`kimi-k3`、`MiniMax-M3`。
+
+统一层级如下。注意 Offering 与 Region 挂在 **Access Surface** 上，不挂在 Profile 上——理由见
+§2.3：
+
+```text
+Provider Type（厂商）
+  └─ Access Surface（凭据实际进入的产品表面）
+       ├─ Offering（接入产品）        ← surface 声明，profile 派生
+       ├─ Region（账号/数据地域）      ← surface 声明，profile 派生
+       └─ Provider Profile（协议、路径、能力与原语绑定）
+            └─ Credential（凭据，存 surface + scheme）
+                 └─ Provider Connection（连接，存 profile_id）
+                      └─ Deployment（真实模型 ID）
+```
+
+核心实现取舍：
+
+1. **Offering 是统一的服务端元数据，不是 BigModel 专用字段。**控制台从
+   `GET /admin/api/v1/provider-profiles` 获取，不维护服务商私有判断表。
+2. **Offering 与 Region 声明在 Access Surface 层。**凭据存的是 `(type, surface, scheme)`，
+   这也是 `domain.ResolveCredentialProfile` 的解析键；把 Offering 挂到 profile 行上会让同一
+   surface 下的多个 profile 可以声明不同 Offering，而凭据无法唯一解析产品身份。见 §2.3。
+3. **Profile 仍是持久化和路由的真实事实。**连接存 `profile_id`；Offering、地域和展示分组从
+   `profile → surface → offering` 派生，不在数据库再保存一份可能冲突的状态。
+4. **凭据先绑定 Offering/地域，连接只能选择匹配的 Profile。**不能把订阅 Key 绑定到按量 API
+   surface，也不能把国内 Key 配到海外 endpoint。
+5. **模型部署只选择模型。**Offering 信息作为连接标签展示，不进入 `provider_model`。
+6. **静态 Key 与 OAuth 分阶段实施。**BigModel Coding Plan、Kimi Code、MiniMax Token Plan 可以在
+   真实协议验证后走静态凭据阶段；OpenAI、Anthropic 的账号订阅需要 OAuth 生命周期和官方授权边界，
+   不得伪装成 API Key。
+7. **受限订阅必须明确用途边界。**控制台展示官方使用限制并要求操作者确认；Halro 不声称它能判断
+   下游工具是否满足上游条款。
+8. **首期不是"纯新增"。**当前控制台不发 `access_surface`，服务端空值回退到 provider type 的默认
+   profile，已经让海外 BigModel 凭据落在 CN surface 上。这是存量数据缺陷，不是展示问题；修法和
+   影响见 §8。
+
+---
+
+## 1. 为什么不能用"订阅 / API"一个布尔字段
+
+不同厂商虽然都有"订阅"和"按量 API"的区分，但产品形态并不一致：
+
+| 厂商 | 按量/平台产品 | 订阅或额度产品 | 主要差异 |
+| --- | --- | --- | --- |
+| BigModel / Z.AI | General API | GLM Coding Plan | 静态 API Key，Coding 使用独立路径，模型与周期额度不同 |
+| Kimi | Kimi Open Platform | Kimi Code | Base URL、Key 来源、计费与产品完全隔离 |
+| MiniMax | API Platform | Token Plan | Token Plan 使用专用 Key，套餐并发和共享额度独立 |
+| OpenAI | OpenAI API Platform | ChatGPT / Codex 额度 | API Key 与 ChatGPT 账号登录是两套鉴权和计费 |
+| Anthropic | Anthropic Console API | Claude Pro / Max | Console API Key 与 Claude 账号 OAuth 是两套入口 |
+
+一个 `is_subscription` 布尔值无法回答以下问题：
+
+- 用哪个 endpoint；
+- 用 API Key、订阅 Key，还是 OAuth refresh token；
+- 一个凭据能组合哪些 Chat / Responses / Messages profile；
+- 能否枚举模型；
+- 额度耗尽应解释为余额不足、周期上限还是并发限制；
+- 是否只允许 Coding Agent 场景。
+
+所以使用稳定的 `OfferingID`，由每个厂商注册自己的 Offering；`Kind` 只用于展示和治理，不参与
+路径或鉴权推断。
+
+---
+
+## 2. 领域模型
+
+### 2.1 新增稳定标识符
+
+建议在 `internal/domain` 增加：
+
+```go
+type ProviderOfferingID string
+type ProviderOfferingKind string
+type ProviderRegionID string
+type ProviderRegionScope string
+
+const (
+    OfferingMeteredAPI   ProviderOfferingKind = "metered_api"
+    OfferingSubscription ProviderOfferingKind = "subscription"
+    OfferingEnterprise   ProviderOfferingKind = "enterprise"
+)
+```
+
+`ProviderOfferingKind` 不能决定行为。行为仍由 Profile 的 surface、credential scheme、adapter builder
+和 primitive bindings 决定。
+
+Offering 必须覆盖**全部**已注册 provider type，不只是有订阅产品的那几家：`AllProviderProfiles`
+是唯一枚举，不变量测试会走全表（含 withheld 行），所以每个 profile——包括 withheld 的五个 Bedrock
+Runtime / Agent Runtime profile——都要能解析出一个 Offering。
+
+反过来也成立：**没有 surface 引用的 Offering 不注册。**`openai.codex-subscription` 与
+`anthropic.claude-subscription` 在本方案里被命名，但它们要等到拿到 surface（阶段 4）才进表——
+一个没有任何东西能解析到的常量，只会逼不变量测试为它写例外。首批常量：
+
+```go
+const (
+    OfferingOpenAIAPI        ProviderOfferingID = "openai.api-platform"
+    OfferingAnthropicAPI     ProviderOfferingID = "anthropic.console-api"
+    OfferingAzureOpenAI      ProviderOfferingID = "azure-openai.resource"
+    OfferingDeepSeekAPI      ProviderOfferingID = "deepseek.api-platform"
+    OfferingGeminiAPI        ProviderOfferingID = "google.gemini-api"
+    OfferingBedrockRuntime   ProviderOfferingID = "aws.bedrock-runtime" // 全部 profile 当前 withheld
+    OfferingBedrockMantle    ProviderOfferingID = "aws.bedrock-mantle"
+    OfferingOpenAICompatible ProviderOfferingID = "openai-compatible.self-declared"
+    OfferingKimiOpenPlatform ProviderOfferingID = "kimi.open-platform"
+    OfferingMiniMaxAPI       ProviderOfferingID = "minimax.api-platform"
+    OfferingBigModelGeneral  ProviderOfferingID = "bigmodel.general-api"
+)
+```
+
+已注册的首个订阅 Offering 是 `bigmodel.coding-plan`。后续阶段在拿到 surface 时再加入：`kimi.code`、
+`minimax.token-plan`、`openai.codex-subscription`、`anthropic.claude-subscription`。
+
+地域使用语义 ID，例如：
+
+```go
+RegionCN     ProviderRegionID = "cn"
+RegionGlobal ProviderRegionID = "global"
+RegionNone   ProviderRegionID = ""
+```
+
+地域表示账号、凭据、余额与目录隔离边界，不承担云基础设施 region 的职责。AWS Bedrock 的
+`us-east-1` 等运行地域继续使用现有配置（`profileRow.BaseURLTemplate` 里的 `{region}` 占位与
+`domain.ResolveBaseURL`），不与这里的产品地域混为一谈——Bedrock 的产品地域是 `RegionNone`。
+
+### 2.2 Offering 元数据
+
+新增只读表：
+
+```go
+type providerOfferingRow struct {
+    ID   ProviderOfferingID
+    Type ProviderType
+    Kind ProviderOfferingKind
+}
+```
+
+不把显示名称或长篇警告文案放进 Go 表：
+
+- 服务端下发稳定 ID；
+- 前端 i18n 按 ID 渲染名称和说明；
+- CI 校验每个**可达** Offering 都有中英文文案，并且没有多余文案（`withheld` 产品的文案会被判为
+  不可达而删除，重新提供时测试的另一半又会把它要回来）。
+
+`RequiresUsageWarning` 随第一个受限订阅 Offering 加入 Offering 表；`DocumentationURL` 声明在
+surface 表，因为文档链接是按 `(offering, region)` 的——BigModel 国内与海外是两份资料，一条全局
+URL 对其中一边必然是错的。普通按量产品不发布使用限制文档；任何
+`RequiresUsageWarning=true` 的可达 surface 都必须有自己的官方文档，不变量测试对此 fail closed。
+
+**Offering ID 是持久标识符，不得改名或复用。**§7.1 的使用范围确认会把 Offering ID 写进 Admin 审计
+事件，审计记录是只读且完整性受校验的，改名会让既有审计条目不可解释。这条与事件 kind 号、frame
+epoch、migration 名同级：可以新增，不可改写，不可让同一个 ID 换含义。
+
+### 2.3 Offering 与 Region 声明在 Access Surface 表
+
+**不**在 `profileRow` 上加 `OfferingID` / `RegionID`。原因是凭据解析：
+
+```go
+// internal/domain/provider_profile.go
+func ResolveCredentialProfile(providerType ProviderType, surface AccessSurface, scheme CredentialScheme)
+```
+
+凭据只存 `(type, surface, scheme)`，而多个 profile 共享同一个三元组是常态而非例外——OpenAI 的
+chat 与 media、Bedrock 的四个 Runtime profile、Mantle 的三个、Kimi 的三个、MiniMax 的三个都是
+如此，profileTable 的行顺序就是解析优先级。若 Offering 挂在 profile 行上，同一 surface 下的两个
+profile 可以合法地声明不同 Offering，而凭据没有任何字段能选中其中之一。那正是 §0 第 3 条要避免
+的"第二份真相"，只是换了个位置。
+
+因此新增一张 surface 表，它是 Offering/Region 的唯一声明处：
+
+```go
+type surfaceRow struct {
+    Surface     AccessSurface
+    Type        ProviderType
+    Offering    ProviderOfferingID
+    Region      ProviderRegionID    // 仅 RegionScopeFixed 时非空
+    RegionScope ProviderRegionScope
+    // Hosts 是上游自己公布的地址，按表单展示顺序排列。ByEndpoint 时它就是那个
+    // 选择本身，各行地域不同；Fixed 时各行都带该 surface 自己的地域，用来把一个
+    // 绑定端点识别成"属于别处"。它是识别表，不是允许名单，见 §2.6。
+    Hosts []RegionHost
+}
+```
+
+派生方向单一：
+
+```text
+credential → (type, surface, scheme) → surfaceRow → offering_id + region
+profile_id → profileRow → surface → surfaceRow → offering_id + region
+```
+
+不变量（§10.1 逐条落测）：
+
+- 每个 `AccessSurface` 在 surface 表里恰好一行；
+- `profileRow.Surface` 必须在 surface 表中存在，且 `surfaceRow.Type == profileRow.Type`；
+- `同 (type, surface) ⇒ 同 (offering, region)`，由表结构保证，测试断言没有绕过它的第二处声明；
+- 对 `RegionScopeFixed` 的 surface，`(type, offering, region)` 必须唯一解析出一个 surface——
+  否则控制台的"产品 + 地域"两级选择无法落到一个 surface 上。
+
+管理 API 若接收 `offering_id`，它只作为创建时的选择条件，服务端必须将其解析为 exact surface /
+profile，不得原样持久化为第二份真相。
+
+### 2.4 Access Surface 仍然保留
+
+Offering 不能替代 Access Surface。二者回答的问题不同：
+
+- Offering：操作者购买或开通了哪个上游产品；
+- Access Surface：这个凭据实际发往哪个隔离的网络/协议表面。
+
+例如 BigModel Coding Plan 至少需要：
+
+```go
+SurfaceBigModelCNCoding     AccessSurface = "bigmodel-cn-coding-api"
+SurfaceBigModelGlobalCoding AccessSurface = "bigmodel-global-coding-api"
+```
+
+即使 General API 与 Coding Plan 使用同一个 host，也必须拆 surface，因为凭据权益、路径、模型和
+额度证据不能互相复用。
+
+### 2.5 Credential Scheme
+
+认证方式按真实凭据生命周期建模，而不是都叫 subscription：
+
+| 模式 | Credential Scheme 示例 | 存储方式 |
+| --- | --- | --- |
+| 普通静态 API Key | `bearer.static`、`bigmodel.api-key` | Vault 加密保存 |
+| 订阅静态 Key | `bigmodel.coding-plan-key`、`minimax.token-plan-key` | Vault 加密保存，绑定专属 surface |
+| OAuth 账号授权 | `openai.codex.oauth`、`anthropic.claude.oauth` | access/refresh token 加密保存并支持刷新与撤销 |
+
+首期不得为了复用表单，把 OAuth token 填入 API Key 输入框。OAuth 的完整代价见 §7.2。
+
+### 2.6 地域的两种形态：RegionScope
+
+上游表达"账号地域"的方式不止一种，现有代码里已经同时存在两种，方案必须承认这一点，否则控制台会
+出现"BigModel 有地域选择器、Kimi 没有"的不对称：
+
+```go
+const (
+    RegionScopeNone       ProviderRegionScope = "none"
+    RegionScopeFixed      ProviderRegionScope = "fixed"
+    RegionScopeByEndpoint ProviderRegionScope = "by_endpoint"
+)
+```
+
+- **`fixed`**：surface 本身钉住一个地域。BigModel 就是这样——`bigmodel-cn-general-api` 与
+  `bigmodel-global-general-api` 是两个 surface、两条 profile、两套能力集。地域选择器选的是 surface。
+- **`by_endpoint`**：一个 surface 服务多个账号地域，靠凭据的 bound URL 区分。Kimi 与 MiniMax 是
+  这样：`SurfaceKimi` 一条覆盖 `api.moonshot.ai` 与 `api.moonshot.cn`（该 surface 的注释已记录
+  两站是同一契约、Key 不通用），`SurfaceMiniMax` 覆盖 `api.minimax.io` 与 `api.minimaxi.com`。
+  地域选择器选的是 host，写入 bound URL。
+- **`none`**：没有产品地域。OpenAI、Anthropic、DeepSeek、Gemini、Azure（资源自带 host）、Bedrock
+  Mantle（云 region 由配置给出）、openai_compatible 都属于这一类。
+
+`Hosts` 是**识别表，不是允许名单**。`profileRow` 的既有契约明确写了 `BaseURLTemplate` 是
+prefill 而非 bound，操作者可以填任何 endpoint（企业代理、私有入口），出站允许名单从已保存连接
+派生。因此：
+
+- host 命中 → 地域已知，控制台按 ID 展示；
+- host 未命中 → 地域为 unknown，控制台显示"自定义端点（地域未知）"，**不拒绝保存**；
+- 地域 unknown 不影响任何隔离，因为运行时的模型目录缓存键已经是 `instance.ID + binding.ID` 并
+  校验 provider/credential revision（§6.3），不依赖地域标签。
+
+`fixed` 的 surface 同样列 host，虽然它的地域不需要从 endpoint 读。原因是 `halro doctor`：
+`SurfaceForEndpoint(type, endpoint)` 要能回答"这个 host 属于同类型的哪个 surface"，才能报出
+"凭据封存在大陆 surface、却绑定到海外 host"这一存量缺陷（§8.3）。识别到**别的** surface 才算发现；
+识别不出来的（代理、私有入口）什么都不说。
+
+这条同时给出 §11 验收里"endpoint 不匹配即拒绝"的准确形式：**拒绝只发生在有 profile 级 endpoint
+规则的 surface 上**（今天只有 Bedrock Mantle 的 `bedrockmantleprovider.ValidateEndpoint`），其余
+surface 的 host 不匹配是展示与告警，不是 400。把 prefill 变成 bound 是另一个设计决定，不在本方案
+范围内。
+
+---
+
+## 3. Admin 元数据契约
+
+扩展现有：
+
+```http
+GET /admin/api/v1/provider-profiles
+```
+
+建议响应增加：
+
+```jsonc
+{
+  "provider_types": [
+    {
+      "type": "bigmodel",
+      "default_profile_id": "bigmodel.cn.chat-embeddings.v1",
+      "offerings": [
+        {
+          "id": "bigmodel.general-api",
+          "kind": "metered_api",
+          "requires_usage_warning": false,
+          "documentation": [],
+          "region_scope": "fixed",
+          "regions": ["cn", "global"],
+          "region_hosts": []
+        },
+        {
+          "id": "bigmodel.coding-plan",
+          "kind": "subscription",
+          "requires_usage_warning": true,
+          "documentation": [
+            {"region": "cn", "url": "https://docs.bigmodel.cn/cn/coding-plan/usage-notes"}
+          ],
+          "region_scope": "fixed",
+          "regions": ["cn"],
+          "region_hosts": []
+        }
+      ],
+      "profiles": [
+        {
+          "id": "bigmodel.cn.coding.chat.v1",
+          "offering_id": "bigmodel.coding-plan",
+          "region_id": "cn",
+          "access_surface": "bigmodel-cn-coding-api",
+          "credential_scheme": "bigmodel.coding-plan-key",
+          "default_base_url": "https://open.bigmodel.cn"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`region_scope: "by_endpoint"` 的 Offering 额外下发 host 识别表，让控制台能把地域选择器渲染成
+endpoint 选择：
+
+```jsonc
+{
+  "id": "kimi.open-platform",
+  "kind": "metered_api",
+  "region_scope": "by_endpoint",
+  "region_hosts": [
+    { "region": "cn",     "host": "api.moonshot.cn" },
+    { "region": "global", "host": "api.moonshot.ai" }
+  ]
+}
+```
+
+约束：
+
+- `offerings`、`regions`、`region_hosts` 和 `profiles` 必须从 domain 的 surface / offering 表派生；
+- 不允许 Admin handler 自写第二份 provider → offering 清单，理由与 `buildProviderProfilesView`
+  当初存在的理由相同（消除第二份副本，而不是同步它）；
+- withheld profile 不得出现在可选列表——现有实现已经过滤 profile 本身及 `combines_with` 里的
+  withheld 同伴，Offering 沿用同一规则；
+- **一个 Offering 的可达 profile 数为 0 时，必须整条从 `offerings` 数组里省略。**不能只依赖
+  "候选 Offering 除外"的措辞，否则控制台会列出一个选得中、但下面没有任何 profile 可选的产品。
+  `openai.codex-subscription` 与 `anthropic.claude-subscription` 首期就是这种状态；
+- 一个可达 profile 必须引用一个同 provider type 的可达 Offering；
+- 每个 provider type 的默认 profile 必须能解析出 Offering。
+
+---
+
+## 4. 控制台交互
+
+### 4.1 凭据保险库：选择产品身份
+
+凭据创建顺序：
+
+```text
+服务商 → 接入产品 → 地域 → 鉴权方式 → 凭据/登录
+```
+
+示例：
+
+```text
+服务商：BigModel / Z.AI
+接入产品：GLM Coding Plan
+地域：海外 Z.AI
+鉴权方式：Coding Plan API Key
+```
+
+规则：
+
+- Offering 只有一个时隐藏选择器，但仍由服务端元数据决定；
+- 地域按 `region_scope` 渲染：`fixed` 选 surface，`by_endpoint` 选 host 并写入 bound URL，
+  `none` 不渲染；
+- 鉴权方式只有一个时显示为只读说明；
+- 选择改变时重置 endpoint 与 profile，不能静默沿用；**已输入的密钥不清空**——表单顺序是
+  「服务商 → 产品 → 地域 → 密钥」，改产品时密钥通常还是空的，而清掉操作者刚粘贴、无法凭记忆
+  重打的材料，正是既有轮换代码专门避免的失败模式；
+- 凭据保存后展示 `服务商 · Offering · 地域 · 鉴权方式`；
+- 订阅产品的使用范围提示紧邻 Offering，不放在提交后的错误里；
+- `requires_usage_warning=true` 时，提交前要求一次明确确认，并把 Offering、Profile、当前地域官方文档
+  URL 与 Halro 的稳定 policy revision 一并写入 Admin 审计事件。它是操作者确认记录，不是 Halro
+  对实际用途合规性的判定。
+
+**有选择时必须显式发送 `access_surface` 与 `scheme`。**今天的表单只在 Bedrock 分支发这两个字段，
+其余类型留空，服务端于是回退到 provider type 的默认 profile——这正是 §8.3 那个缺陷的成因。
+修法不是"一律要求显式"，而是**按是否有歧义**：该 provider type 只有一个可达 `(surface, scheme)`
+时继续解析（"只有一个答案的问题不问"，与控制台既有的 Bedrock 注释同一条原则），有两个及以上时
+具名拒绝并列出可选项。控制台则始终发送，因为它总是知道自己选了哪个。
+
+**轮换（rotate）时产品身份只读。**现有轮换路径故意不发 surface/scheme，以保留凭据被封存时的取值
+（包括本 build 已不再提供的 surface，那种凭据只能删除、不能被静默改指向）。因此 UI 的"改选择即
+重置"只适用于创建：改 Offering 或地域 = 新建凭据，不是轮换。§7.2 的"切换 Offering 必须新建或重新
+绑定"与这条是同一条规则的两面。
+
+### 4.2 服务商连接：从凭据派生产品
+
+当前控制台先选 provider type，再从同类型凭据中挑选；Profile 选择器只为 Bedrock 特判。
+这无法正确表达 BigModel 的国内/海外 general profile，也不能扩展订阅产品。
+
+调整为：
+
+```text
+连接名称 → 凭据 → 接口实现/Profile → 能力 → 并发
+```
+
+选择凭据后：
+
+- Provider Type、Offering、Region、Access Surface、Credential Scheme 从凭据身份派生并只读展示；
+- Profile 下拉只列出与该凭据 surface/scheme 匹配的 profile；
+- Base URL 使用 Profile 默认值，并继续执行凭据 bound URL 一致性检查；
+- 如果允许企业代理或私有入口覆盖 Base URL，放入"高级设置"，修改后要求重新绑定凭据；
+- 不再使用 `type === "bedrock"` 的专用 Profile 分支。实现选择器的渲染条件由元数据给出，而不是
+  provider 名：**该 type 有多于一个凭据身份**（BigModel 的两个地域产品），**或者该连接组是
+  route-partitioned 的**（Bedrock Mantle，模型各自只在其中一条路由上应答）。两者都不成立时，
+  组内 profile 同乘一个连接，没有要问的，控件不渲染。`route_partitioned` 因此进入服务端元数据。
+
+**要清掉的前端私有表比"一个 bedrock 分支"多。**`web/src/pages/ProvidersPage.tsx` 里目前有：
+
+- 7 处 `type === "bedrock"` 条件，外加 `bedrockCredentialProfile` 辅助函数与四处
+  `findProfile(catalog, "bedrock", …)`；
+- `supportsAnthropicBetas` 里硬编码的 profile ID `bedrock.mantle.anthropic.messages.v1`——这同样
+  是 provider 私有枚举。服务端把 `sends_anthropic_betas` 作为元数据下发（来源是既有的
+  `domain.ProfileSendsAnthropicBetas`），并且**写路径也改用同一个判断**：原先按 surface 检查
+  （`anthropic` 或 `bedrock-mantle`）比事实宽——Mantle 上锚在 OpenAI chat/responses profile 的
+  连接会存下永远不会被发送的 beta token；
+- `regionHintKey` 的 provider type switch——它应由 §2.6 的 `region_scope` / `region_hosts` 取代。
+
+保留的是 `providerTypes` 数组：它是**下拉框的展示顺序**，不是能力或产品判断。服务端元数据里
+provider type 的顺序是 domain 表的登记顺序，不承担"先给操作者看哪个"的职责；把展示顺序也搬到
+服务端，等于让后端替前端决定排版。这一项不算私有枚举表。
+
+§11 第 1 条"前端无 provider 私有枚举表"以上面各项清除为准。
+
+控件沿用控制台既有的"能力实现"标签（不是"计费方式"）；产品与地域是凭据表单的问题，不在这里
+重复问。选项文案按 profile ID 取 i18n，缺文案时回退到"产品 · 地域"，例如：
+
+```text
+BigModel / GLM Coding Plan / 中国大陆 / OpenAI Chat Completions
+Kimi / Kimi Code / Global / Anthropic Messages
+```
+
+### 4.3 模型部署：只选择真实调用目标
+
+"创建模型部署"保持：
+
+```text
+部署名称 → 服务商连接 → 模型 ID → 能力与限额
+```
+
+改进展示：
+
+- 服务商连接选项增加 Offering 与地域 badge，例如 `Z · Coding Plan · 海外`；
+- 模型 ID 只来自该连接的上游枚举或该 exact profile 的内建能力目录；
+- `Coding Plan`、`Token Plan`、`API Platform` 永远不是模型 ID；
+- 用户切换连接时清空原模型 ID，避免把 general profile 的模型带到 subscription profile；
+- Refresh 调用所选连接自己的模型目录，不能复用同 provider type 的其他连接结果（现有实现已如此，
+  见 §6.3）；
+- 未验证模型保持 unknown，允许操作者声明能力，但不从名称猜测。
+
+### 4.4 错误与用量提示
+
+订阅产品的 429 不能全部显示为"请求过于频繁"。应在保存原始上游业务码的前提下分类：
+
+- 并发/速率限制；
+- 周期额度已耗尽及重置时间；
+- 套餐已过期；
+- 当前套餐没有模型权限；
+- 产品 endpoint 与凭据不匹配；
+- 平台过载。
+
+北向 API 仍返回稳定、兼容的错误类型；Admin Failure Detail 展示经过脱敏的上游 code、message、
+Offering 和 profile，帮助操作者区分"换 Key""换模型""等额度恢复"和"稍后重试"。
+
+---
+
+## 5. 服务商接入矩阵与分期
+
+本节引用的所有上游 URL 均按该文自己在 §5.1 定的规矩处理：**标注复核日期，未复核的显式写明**。
+下列链接在各产品阶段 0 逐条复核并记录日期；尚未复核的候选产品仍显式标注。
+
+### 5.1 BigModel / Z.AI
+
+通用 API：
+
+| Region | Offering | Surface | Profile | 根地址 | Path Prefix |
+| --- | --- | --- | --- | --- | --- |
+| CN | `bigmodel.general-api` | `bigmodel-cn-general-api` | `bigmodel.cn.chat-embeddings.v1` | `https://open.bigmodel.cn` | `/api/paas/v4` |
+| Global | `bigmodel.general-api` | `bigmodel-global-general-api` | `bigmodel.global.chat.v1` | `https://api.z.ai` | `/api/paas/v4` |
+
+新增 Coding Plan：
+
+| Region | Offering | 新 Surface | 新 Profile | 根地址 | Path Prefix |
+| --- | --- | --- | --- | --- | --- |
+| CN | `bigmodel.coding-plan` | `bigmodel-cn-coding-api` | `bigmodel.cn.coding.chat.v1` | `https://open.bigmodel.cn` | `/api/coding/paas/v4` |
+| Global | `bigmodel.coding-plan` | `bigmodel-global-coding-api` | `bigmodel.global.coding.chat.v1` | `https://api.z.ai` | `/api/coding/paas/v4` |
+
+上表两地的 path prefix 都已由各自官方文档确认；海外 endpoint 的无 Key 请求返回 401 只证明请求
+到达了鉴权边界，不能单独证明 `/models` 路由存在。海外授权后的响应 shape、模型枚举与错误码仍待
+海外订阅 Key 实测，见 §13 第 2 问。
+
+Coding profile 不得从 general profile 自动继承能力：国内只声明真实验证过的能力；国际只声明官方
+契约明确支撑的能力，并保持为 declared/unknown，不冒充实测：
+
+- Embeddings；
+- Vision；
+- Structured Outputs / JSON mode；
+- provider-executed tools；
+- general API 的模型目录和模型能力证据。
+
+需要先用真实订阅账号验证：
+
+1. `GET /api/coding/paas/v4/models` 是否存在；
+2. 返回 shape 与账号实际可见模型；
+3. Chat unary / stream；
+4. usage、缓存 token 和 finish reason；
+5. tool calls 与 arguments shape；
+6. thinking 默认值、开关和 effort；
+7. 额度耗尽、模型无权限、套餐过期的原始业务码；
+8. 国内与海外 Key 是否严格隔离；
+9. 大小写模型标识符是否归一化或严格区分；
+10. 海外站的 coding path prefix。
+
+中国大陆站的 1–7、9 已于 2026-09-09 实测完成，结论见下方"阶段 0 实测证据"；Z.AI 官方资料已确认
+国际 Coding path prefix 为 `/api/coding/paas/v4`、主机为 `api.z.ai`，并列明订阅 Key 获取流程、
+支持模型与使用范围。8（国内外 Key 是否严格隔离）及国际 endpoint 的实际响应/模型映射仍缺海外 Key。
+
+如果上游提供模型列表，则上游列表是"谁存在"的唯一来源；内建目录只补充能力。如果订阅 endpoint
+确实没有模型列表，才允许使用带来源和复核日期的订阅模型 seed。
+
+#### 阶段 0 实测证据（2026-09-09，真实个人 Coding Plan 账号，中国大陆站）
+
+以下全部为真实请求实测，非文档推断。每次 chat 都用 `max_tokens` 1–8。
+
+**1. `GET /api/coding/paas/v4/models` 存在**，HTTP 200，OpenAI 形状
+（`{"object":"list","data":[{"id","object","created","owned_by"}]}`，无额外成员），列出 10 个
+模型：`glm-4.5`、`glm-4.5-air`、`glm-4.6`、`glm-4.7`、`glm-5`、`glm-5-turbo`、`glm-5.1`、
+`glm-5.2`、`glm-5.3`、`glm-5.3-flash`，`owned_by` 均为 `z-ai`。
+
+**2. 该列表与通用 API 的 `GET /api/paas/v4/models` 逐字节相同。**
+
+**3. 但 Coding endpoint 实际只服务两个模型，其余静默替换。** 用同一把 Coding Key 逐个请求上面
+10 个 id，读回响应里的 `model`：
+
+| 请求 | 实际应答 |
+| --- | --- |
+| `glm-4.5` / `glm-4.5-air` / `glm-4.6` / `glm-4.7` / `glm-5-turbo` | `glm-5.3-flash` |
+| `glm-5` / `glm-5.1` / `glm-5.2` / `glm-5.3` | `glm-5.3` |
+| `glm-5.3-flash` | `glm-5.3-flash` |
+| `GLM-5.3`（大写） | `glm-5.3` —— 模型 ID 大小写不敏感 |
+| `not-a-model` | HTTP **400**，`{"error":{"code":"1211","message":"模型不存在，请检查模型代码。"}}` |
+
+**这推翻了 §5.1 的一条前提。**原文写"如果上游提供模型列表，则上游列表是'谁存在'的唯一来源"。
+这里列表存在、可读、且**对这个 endpoint 是错的**：它列 10 个、服务 2 个，另外 8 个会被按套餐档位
+悄悄改写。这是方案没有预见的第三种情形——**列表存在但不权威**——处理办法见下方"实现取舍"。
+
+**4. 同一把 Coding Key 在通用路径上被接受，且不替换模型**：`POST /api/paas/v4/chat/completions`
+请求 `glm-4.5-air`，应答 `glm-4.5-air`。这正是 §6.1 担心的情形的实证：**路径猜错不会报错，只会
+悄悄花另一份余额**。（两条路径分别扣套餐额度还是按量余额，响应里没有任何可观测字段，未能证实。）
+
+**5. Chat unary 与 stream 均为 OpenAI 形状**，与通用 profile 一致：
+- unary：`choices[0].message.{content,reasoning_content}`、`finish_reason`、顶层 `id` 与 `request_id`；
+- usage：`prompt_tokens`、`completion_tokens`、`total_tokens`、
+  `prompt_tokens_details.cached_tokens`、`completion_tokens_details.reasoning_tokens`；
+- stream：`chat.completion.chunk`，`delta.reasoning_content` 先行，末帧带 `finish_reason` 与
+  `usage`（需 `stream_options.include_usage`），随后 `data: [DONE]`。
+
+**6. Tool calls 正常**，标准 OpenAI 形状（`tool_calls[].{index,id,type,function.{name,arguments}}`，
+`finish_reason: "tool_calls"`）。
+
+**7. `thinking:{"type":"disabled"}` 不生效**，仍返回 `reasoning_content` 且计入
+`reasoning_tokens`。这**不是新发现**：`glm-5.3` 与 `glm-5.3-flash` 在
+`internal/compatibility/bigmodel.go` 里已被分类为 `bigModelAlwaysReasoning`，实测与现有分类一致。
+
+**8. `POST /api/coding/paas/v4/embeddings` 返回 200**，`embedding-3` 不被替换。但 `embedding-3`
+不在该路径的模型列表里，且是否扣套餐额度无法观测——**不据此申报 Embeddings 能力**。
+
+**未能取得的证据**（不得据推测实现）：
+
+- Z.AI 海外站的实际模型映射与响应细节（需要一把海外 Key；path prefix 已由官方资料确认）；
+- 额度耗尽、套餐过期、模型无权限的原始业务码（无法在不耗尽套餐的前提下触发）；
+- 两条路径各自扣哪份余额（响应无可观测字段）。
+
+#### 实现取舍（由上述证据决定）
+
+1. **枚举保持动态，目录只承担能力证据。**不改成写死名单——上游发新模型就要发 Halro 版本，那正是
+   仓库"适配器的沉默不是上游的答案"要避免的。但这条路径的列表也不是"谁存在"：内建目录只登记实测
+   服务的 `glm-5.3`、`glm-5.3-flash` 两条能力证据，其余标识符出现在选择器里时没有证据，由操作者
+   声明或探测——这与其他 profile 的规则完全一致（上游列表回答谁存在，目录回答已知模型会什么）。
+2. **能力探测加"模型替换"护栏。**探测到上游以另一个模型作答时，丢弃该次证据并标记
+   `model_substituted`，否则 `glm-5.3-flash` 的能力会被记成 `glm-4.6` 的 **verified** 证据——而
+   verified 正是路由后续信赖的那条记录。
+   护栏**只对"会原样回显模型标识符"的 profile 生效**（实测：BigModel 三条 profile 都会，连大小写
+   都归一化）。这是必要的作用域：Azure 用部署名寻址、回的是底层模型名，OpenAI 的别名会解析成带
+   日期的快照，两者都不是替换，一刀切会把它们的探测证据全部作废。
+3. 能力只声明实测过的：Chat、Streaming、Tools、JSONObject、StreamUsage、Reasoning。
+   **不继承通用 profile 的 Embeddings**（见证据 8），不声明 Vision 与 Structured Outputs（未测）。
+4. **尚未实现：用量归因仍记部署配置的模型，而不是响应里的。**响应带回的 `model` 目前在
+   `gateway/service.go` 被公开别名覆盖，attempt/ledger 记录里没有"实际应答模型"这个字段。补它要动
+   Ledger 事件结构，属于独立改动；在此之前，替换只在探测期被发现和拦截，运行期不留痕。
+
+官方资料：
+
+- [BigModel 通用 API](https://docs.bigmodel.cn/cn/api/introduction)（2026-09-10 复核）
+- [BigModel Coding Plan 概览](https://docs.bigmodel.cn/cn/coding-plan/overview)（2026-09-10 复核）
+- [BigModel 其他 Coding 工具接入](https://docs.bigmodel.cn/cn/coding-plan/tool/others)（2026-09-10
+  复核；明确列出 OpenAI Chat endpoint `/api/coding/paas/v4`，并要求使用官方列出的工具/环境）
+- [BigModel Coding Plan 使用须知](https://docs.bigmodel.cn/cn/coding-plan/usage-notes)（2026-09-10
+  复核；确认配额与禁止共享、转发/转售风险）
+- [Z.AI General/Coding Endpoint](https://docs.z.ai/api-reference/introduction)（2026-09-10 复核；明确
+  General 与 Coding 的独立路径）
+- [Z.AI Coding Plan](https://docs.z.ai/devpack/quick-start)（2026-09-10 复核；明确订阅、Key 获取、
+  Coding endpoint 与支持工具）
+- [Z.AI Coding Plan 工具与使用范围](https://docs.z.ai/devpack/tool/others)（2026-09-10 复核；明确
+  OpenAI Chat endpoint、支持模型及仅限官方支持工具/产品环境）
+- [Z.AI Coding Plan 使用政策](https://docs.z.ai/devpack/usage-policy)（2026-09-10 复核；国际 surface
+  的控制台警示直接链接此页）
+
+补充非计费鉴权观测（2026-09-10）：不带 Key 请求
+`GET https://api.z.ai/api/coding/paas/v4/models` 返回 HTTP 401、业务码 `1001`（缺少鉴权头）。该结果只
+证明请求到达 Z.AI 的鉴权边界；统一鉴权中间件也可能先于路由匹配返回 401，因此不能单独证明
+`/models` 路由存在，更不证明授权后的响应 shape 或模型集合。路径依据仍以官方 API 文档为准。
+
+### 5.2 Kimi
+
+Kimi Open Platform 与 Kimi Code 是独立产品，Base URL、Key 来源和额度不互通。产品需求指出 Kimi
+Code 同时有国内与海外订阅模式；现阶段把它作为待双账号验证的需求假设，不能冒充官方已公开的
+凭据隔离契约。截至
+2026-09-10，Kimi 中英文官方接入文档公开的是同一组 Coding API 地址：OpenAI-compatible
+`https://api.kimi.com/coding/v1` 与 Anthropic-compatible `https://api.kimi.com/coding/`。因此地域
+不能从 Host 推断；创建凭据时必须由操作者明确选择，分别绑定固定地域 surface。后续若官方为某一地域
+发布独立 Host，只更新对应 surface 的 endpoint，不改变 Offering ID 或另一地域的凭据。
+
+候选 Offering：
+
+| Offering | 阶段 | 说明 |
+| --- | --- | --- |
+| `kimi.open-platform` | 已有能力迁移元数据 | 现有 Kimi profile 归属该 Offering，**含当前 withheld 的 `kimi.responses.v1`**；`SurfaceKimi` 的 `region_scope` 为 `by_endpoint` |
+| `kimi.code` | 第二批静态 Key | 国内、海外各自的新 surface 与凭据身份；共用 Offering，不共用凭据；先真实验证 |
+
+`kimi.responses.v1` 是被从一个已提供的 profile 组中间抽掉的第一条 profile，它仍要有 Offering
+归属（不变量走全表），但不出现在 `offerings[].profiles` 和 `combines_with` 里。
+
+不得把现有 `api.moonshot.cn` / `api.moonshot.ai` profile 改地址来兼容 Kimi Code；那会让开放平台
+凭据和订阅凭据共享模型与能力证据。建议登记：
+
+| Surface | Region | 当前官方 endpoint | 说明 |
+| --- | --- | --- | --- |
+| `kimi-code-cn` | `cn` | `https://api.kimi.com/coding/` | 中国大陆订阅账号；固定地域，不按 Host 推断 |
+| `kimi-code-global` | `global` | `https://api.kimi.com/coding/` | 海外订阅账号；固定地域，不按 Host 推断 |
+
+两条 surface 即使暂时共用 Host 也不能合并：它们表达的是 Key、会员资格、额度与账号归属，不只是网络
+地址。`SurfaceForEndpoint` 对共享 Host 应返回“不足以判定”，不得自动把存量凭据迁到任一地域。
+
+官方资料（2026-09-10 复核）：
+
+- [Kimi Code 中文概览](https://www.kimi.com/code/docs/)：明确会员订阅、两种兼容协议、Coding Base URL
+  与四个当前模型 ID；
+- [Kimi Code 英文概览](https://www.kimi.com/code/docs/en/)：明确 Kimi Code 会员与 Kimi Platform
+  按量 API 是两套产品；
+- [Kimi Code FAQ](https://www.kimi.com/code/docs/kimi-code/faq.html)：明确 Kimi Code Key 与开放平台
+  Key / Base URL 不可混用；
+- Kimi Open Platform 文档索引：`https://platform.kimi.com/docs/llms.txt`（大陆）、
+  `https://platform.kimi.ai/docs/llms.txt`（国际）
+- OpenAPI Schema：`https://platform.kimi.com/docs/openapi.json` /
+  `https://platform.kimi.ai/docs/openapi.json`
+
+### 5.3 MiniMax
+
+MiniMax 官方正式名称为 **Token Plan**。它同时提供国内与海外订阅，使用各区域的 Token Plan Key，
+并明确说明该 Key 与按量 API Key 不互通。两地都开放 Anthropic-compatible 与 OpenAI-compatible
+文本接口：国内使用 `api.minimax.cn`，海外使用 `api.minimax.io`。
+
+`SurfaceMiniMax` 的 `region_scope=by_endpoint` 只描述现有按量 API Offering；订阅产品不能复用它。
+Token Plan 应建立两个 `region_scope=fixed` surface：
+
+| Surface | Region | Anthropic Base URL | OpenAI Base URL |
+| --- | --- | --- | --- |
+| `minimax-cn-token-plan` | `cn` | `https://api.minimax.cn/anthropic` | `https://api.minimax.cn/v1` |
+| `minimax-global-token-plan` | `global` | `https://api.minimax.io/anthropic` | `https://api.minimax.io/v1` |
+
+两条 surface 同属 `minimax.token-plan`，但凭据不能跨地域复用。首个 profile 优先采用官方推荐的
+Anthropic-compatible Messages；OpenAI Chat profile 在同一区域作为同一连接组的 companion。官方资料
+没有证明 Token Plan 开放 Responses API，因此不能因按量 surface 有 Responses profile 就复制过来。
+
+实施前仍需用专用订阅账号确认：
+
+- 模型枚举路径与实际 response；
+- 多模态是否与文本共享同一 endpoint 和配额；
+- 套餐使用范围、并发语义及额度耗尽错误体。
+
+在这些证据完成前只登记 Offering 提案，不注册可达 Profile。
+
+官方资料（2026-09-10 复核）：
+
+- [MiniMax 国内 Token Plan 快速接入](https://platform.minimaxi.com/docs/token-plan/quickstart)：专用 Key、
+  国内 Anthropic endpoint；
+- [MiniMax 海外 Token Plan Quick Start](https://platform.minimax.io/docs/token-plan/quickstart)：专用 Key、
+  海外 Anthropic endpoint；
+- [MiniMax 国内文本生成](https://platform.minimaxi.com/docs/guides/text-generation) 与
+  [海外文本生成](https://platform.minimax.io/docs/guides/text-generation)：分别列出两地 Anthropic / OpenAI
+  Base URL、模型与流式支持；
+- [MiniMax 国内 Token Plan 概要](https://platform.minimaxi.com/docs/token-plan/intro)：明确 Token Plan Key、
+  Credits 与按量 Key 的隔离关系。
+
+### 5.4 OpenAI
+
+OpenAI API 与 ChatGPT/Codex 订阅是不同产品。使用 API Key 走 API 定价；使用 ChatGPT 账号登录
+Codex 才消耗订阅/agentic usage。ChatGPT credits 也不是 API credits。
+
+因此：
+
+- 现有 OpenAI profiles 归属 `openai.api-platform`；
+- `openai.codex-subscription` 不能复用 `bearer.static`；
+- 只有在官方提供并允许第三方网关使用的 OAuth / delegated access 契约后，才能注册可达 profile；
+- 在此之前它是一个可达 profile 数为 0 的 Offering，按 §3 的规则**不出现在元数据里**。
+
+官方资料（未复核，帮助中心文章号需在阶段 0 打开确认标题与内容）：
+
+- ChatGPT Work / Codex 使用说明（help.openai.com）
+- ChatGPT credits 与 API credits 的区别（help.openai.com）
+
+### 5.5 Anthropic
+
+Anthropic Console API 使用 API 账单与 API Key；Claude Pro/Max 可由 Claude Code 通过 Claude 账号
+OAuth 使用。两者不是同一个 Credential Scheme。
+
+因此：
+
+- 现有 Anthropic profile 归属 `anthropic.console-api`；
+- `anthropic.claude-subscription` 需要 OAuth 生命周期、workspace 绑定和官方授权边界；
+- 不能让操作者把 Claude OAuth token 粘贴到 `x-api-key` 字段；
+- 首期不注册可达订阅 profile，因而同样不出现在元数据里。
+
+官方资料（未复核）：Claude Code 认证文档，现址为 `docs.claude.com` 下的 Claude Code 章节；旧的
+`docs.anthropic.com` 路径需在阶段 0 复核后再写入。
+
+---
+
+## 6. Adapter 与模型目录
+
+### 6.1 Adapter builder
+
+adapter builder 必须按 exact profile 决定路径和认证。今天 `bigModelOpenAIAdapter`
+（`internal/app/provider_adapters.go`）把 `api/paas/v4` 写死，Coding profile 需要改成按 profile
+分支：
+
+```go
+func bigModelPathPrefix(profile ProviderProfileID) string {
+    switch profile {
+    case ProfileBigModelCNCodingChat, ProfileBigModelGlobalCodingChat:
+        return "api/coding/paas/v4"
+    default:
+        return "api/paas/v4"
+    }
+}
+```
+
+不能根据 Key 前缀、模型 ID、余额错误或 host 猜 Offering。原因是：
+
+- 相同 host 同时服务 general 与 coding；
+- Key 前缀不是稳定公开协议；
+- 猜错后可能消耗错误余额或违反使用范围；
+- 失败后自动切换产品会造成不可解释的重复计费。
+
+这个 switch 必须自带测试，理由见 §10.3：这类错误在本仓库属于"没有机械守卫"的一类。
+
+### 6.2 Operation 与 primitive bindings
+
+每个新 Profile 按 [Adding a provider platform](../contracts/adding-a-platform.md) 完整登记：
+
+- domain profile row 与 surface row；
+- operation → primitive bindings；
+- field compatibility；
+- endpoint manifest coverage；
+- adapter builder；
+- model catalog capability evidence；
+- provider wiring tests；
+- frontend golden metadata。
+
+即使 Coding endpoint 使用 OpenAI-shaped Chat，也不能直接声明与 general profile 等价。请求字段、
+response、错误和 usage 必须通过该 endpoint 的 fixture 与真实账号证据建立。
+
+### 6.3 模型枚举与能力证据分离：保持现状，不要改
+
+规则保持：
+
+```text
+上游 /models：谁存在
+内建 catalog：已知模型会什么
+capability detection：这个账号上的目标实测会什么
+operator declaration：没有证据时的显式选择
+```
+
+**隔离要求已经被现有实现满足，本方案不引入新的缓存键。**记录在这里是为了让新 profile 的实施者
+知道它已经成立，不要去"修"一个正确的东西：
+
+- `internal/modelcatalog` 的 `Key` 已包含 `ProviderType + Profile + TargetKind + Model + Region`；
+- 运行时的目标枚举缓存键是 `instance.ID + binding.ID`，并在命中时校验 provider revision 与
+  credential revision（`internal/app/admin_invocation_targets.go`）——比按
+  `provider_type + model_id` 缓存严格得多，也比 `provider_id + profile_id + provider_model` 严格。
+
+新增 Coding profile 自动继承这套隔离，不需要额外工作；需要的是 §10.3 里"general key 不会打到
+coding path、coding key 不会打到 general path"那组断言。
+
+### 6.4 不做产品间自动 fallback
+
+路由可以在操作者显式配置的多个 Deployment 之间 fallback，但不能在一个连接内部从订阅产品自动
+切到按量 API，或反过来。两者计费和用途不同，自动切换会改变成本边界。
+
+如果用户需要"订阅额度耗尽后转按量"，应创建两个 Provider Connection、两个 Deployment，并在 Route
+中显式排序；管理端应清楚显示下一目标属于另一个 Offering。
+
+**跨 Offering 的 Route 级 fallback 必须在归因上可分辨**：usage attribution 与 failure capture 要
+能回答"这次请求最终落在哪个 Offering"，否则"订阅耗尽转按量"产生的按量费用无法归因到具体产品。
+这依赖 §7.3 的 Offering 维度。
+
+---
+
+## 7. 安全、合规与审计
+
+### 7.1 使用范围提示
+
+部分 Coding/Token 产品只允许指定工具或场景。Offering 元数据提供：
+
+```go
+RequiresUsageWarning bool
+DocumentationURL     string
+```
+
+控制台确认文案至少说明：
+
+- 该产品可能仅允许官方列出的 Coding Agent 或工具；
+- Halro 无法替操作者判断其下游使用方式是否符合上游条款；
+- 生产、SaaS、通用聊天或转售场景应使用 General API；
+- 上游可限流、锁定或终止违规使用。
+
+**确认粒度：按 `(credential, profile)` 绑定一次。**创建凭据时确认一次；此后任何会改变实际产品
+表面的动作——新建一个落在该 Offering 上的连接、更换连接的 profile——都要求重新确认。轮换密钥
+不重新确认（产品身份未变，见 §4.1）。这条先定下来，不留作开放问题，否则前后端会各实现一套。
+
+确认动作进入 Admin audit log，记录 Offering ID、Profile ID、操作者和时间，不记录 Key。Offering ID
+一旦写入审计即不可改名（§2.2）。
+
+### 7.2 凭据隔离
+
+- Vault 记录继续加密；
+- 列表与日志只显示 Key 指纹/尾部掩码；
+- 不根据 Key 内容在浏览器端判断产品；
+- surface、scheme、bound URL 必须三者匹配，匹配的含义按 §2.6 定义；
+- 切换 Offering 必须新建或重新绑定凭据，不能在原连接上静默改路径；
+- OAuth refresh token 的读写权限要比普通 Provider Key 更窄，并在备份/恢复文档单独说明。
+
+**OAuth 自动刷新不是一次管理员轮换，这是阶段 4 的核心设计问题，不是一行 checklist。**现有凭据
+写入路径的形状是：`KeyVersion + 1`、bump revision、要求 step-up 重认证（
+`internal/app/admin_providers.go` 的凭据构建路径与控制台的 `useStepUpPrompt`），而模型目录缓存
+正是以 credential revision 作为失效条件（§6.3）。一个后台自动刷新的 token 会：
+
+- 持续 bump credential revision，反复作废目标目录缓存；
+- 绕过 step-up 与"轮换是管理员动作"的审计模型；
+- 让"凭据最后一次被改动"这个审计事实同时表示两件不同的事。
+
+阶段 4 必须先回答：刷新是否写同一条 credential 记录；如果是，revision 语义如何与目录缓存解耦；
+如果不是，token 存在哪里、备份/恢复与 master key 轮换如何覆盖它。
+
+### 7.3 计费与预算
+
+Halro 当前预算以 token/价格为核心，但订阅产品可能按周期额度、prompt、并发或动态公平使用策略限制。
+首期：
+
+- 仍记录 token usage；
+- Offering ID 写入失败日志、failure capture 和 usage attribution；
+- 不把订阅调用伪装成金额为零的"免费 API"；
+- 未有稳定单价时金额保持 unknown，而不是 0；
+- 429 原始业务码和 reset time 经过脱敏后保留；
+- 预算不能跨 Offering 聚合成同一上游余额含义。
+
+**"金额 unknown" 在现有实现里有明确代价，必须写给操作者看。**`domain.UnknownPricePolicyEvidence`
+要求 `InstanceExplicitOptIn` 且 `CostGovernanceDisabled`，`reason_code` 固定为
+`cost_governance_disabled`（`internal/domain/pricing_snapshot.go`）。也就是说：**一个没有稳定单价
+的订阅 Deployment，只能在该项目显式关闭成本治理的前提下运行；此时预算不再拦截该项目的调用。**
+
+因此阶段 2 必须二选一，并写进 operator guide：
+
+- 订阅产品若能拿到可核对的等效单价，按正常 price version 计价，预算照常生效；
+- 若拿不到，操作者必须为该项目显式接受"成本治理关闭"，控制台在创建订阅 Deployment 时就说明
+  这一点，而不是等到调用被记成 unknown 才发现预算没生效。
+
+**Offering 进 usage attribution 已推进 usage schema。**`internal/usage` 的
+`parquetSchemaVersion` 已从 6 bump 到 7；min-readable 范围与就地升级逻辑保留，旧分区仍可读，
+旧行 offering/profile 为空——**不需要重新初始化数据目录**。因此 §8.1 的"不需要迁移"只指元数据；
+usage 侧已经完成一次带 min-readable 范围的版本推进。
+
+后续再设计 subscription allowance dashboard，不阻塞静态 Key 的正确路由。
+
+---
+
+## 8. 存量数据与迁移
+
+### 8.1 元数据派生不需要迁移
+
+现有 Profile 通过 surface 映射到默认 Offering：
+
+| Existing Profile | Surface | Offering |
+| --- | --- | --- |
+| `openai.chat-embeddings.v1`、`openai.responses.v1`、`openai.media-resources.v1` | `openai-api` | `openai.api-platform` |
+| `anthropic.messages.2023-06-01` | `anthropic-api` | `anthropic.console-api` |
+| `azure-openai.chat-embeddings.v1` | `azure-openai` | `azure-openai.resource` |
+| `deepseek.chat.v1` | `deepseek-api` | `deepseek.api-platform` |
+| `gemini.generate-content.text.v1beta` | `gemini-generate-content` | `google.gemini-api` |
+| `openai-compatible.chat-embeddings.v1` | `openai-compatible` | `openai-compatible.self-declared` |
+| `bedrock.mantle.*` | `bedrock-mantle` | `aws.bedrock-mantle` |
+| `bedrock.runtime.*`、`bedrock.agent-runtime.*`（withheld） | `bedrock-runtime` / `bedrock-agent-runtime` | `aws.bedrock-runtime` |
+| `kimi.*`（含 withheld 的 `kimi.responses.v1`） | `kimi-api` | `kimi.open-platform` |
+| `minimax.*` | `minimax-api` | `minimax.api-platform` |
+| `bigmodel.cn.chat-embeddings.v1` | `bigmodel-cn-general-api` | `bigmodel.general-api` |
+| `bigmodel.global.chat.v1` | `bigmodel-global-general-api` | `bigmodel.general-api` |
+
+因为 Offering 从 surface 表派生，**元数据侧**不需要批量迁移。旧连接读取后自动获得 Offering 展示。
+usage 侧的 schema 推进见 §7.3。
+
+### 8.2 Admin API：不保留旧请求形状
+
+Admin API 的唯一客户端是内嵌控制台，且 `decodeAdminJSON` 拒绝未知字段。按仓库 pre-1.0 政策
+（"错误的构造不得与其替代物并存"），首期不保留"旧创建请求"分支：
+
+- 读取响应只增加字段，旧读取端忽略新字段仍可用；
+- **凭据创建在有歧义时必须携带 `access_surface` 与 `scheme`**：服务端删除"两者为空一律回退默认
+  profile"的行为，改为只在该 type 恰好只有一个可达 `(surface, scheme)` 时解析，否则具名拒绝并
+  列出可选产品。轮换沿用已存储取值是另一回事，保留；
+- **连接创建在有选择时必须携带 exact `profile_id`**（以及与之一致的 `access_surface` /
+  `credential_scheme`）。没有选择时不发：命名一个实现等于断言"已启用的能力落在它上面"，而当矩阵
+  只给了一个选项时，表单没有资格作这个断言——能力如何分配到组内各 profile 是服务端的答案；
+- 请求同时携带 offering/profile 时，服务端校验二者一致；
+- 不接受仅有 offering 而无法唯一解析 surface / profile 的请求。
+
+把"猜"限制在没有歧义的地方，正是 §8.3 那个缺陷的根治手段——不是在它旁边加一条正确路径。
+
+### 8.3 存量缺陷：海外 BigModel 凭据存在错误的 surface 上
+
+这不是"控制台不能显式选择 global profile"这么轻。事实链：
+
+1. 凭据表单只在 Bedrock 分支发送 `access_surface` / `scheme`（`web/src/pages/ProvidersPage.tsx`）；
+2. 服务端两者为空时走 `DefaultProviderProfile`；
+3. `providerTypeTable` 里 BigModel 的默认 profile 是 `bigmodel.cn.chat-embeddings.v1`；
+4. 因此**所有**已创建的 BigModel 凭据，无论 bound URL 是 `open.bigmodel.cn` 还是 `api.z.ai`，
+   存的都是 `bigmodel-cn-general-api`；
+5. CN 与 Global 的能力集不同——`bigModelCNSet` 含 `Embeddings`，`bigModelGlobalSet` 不含
+   （`internal/domain/provider_table.go`）。
+
+后果：指向 Z.AI 的连接跑在 CN profile 上，并可能已经开启了该 endpoint 并不提供的 Embeddings。
+所以**验收不能声称"现有连接网络行为不变"**——对这类连接，行为本来就是错的。
+
+首期必须一起做：
+
+- Profile 控件由服务端 metadata 驱动，BigModel CN / Global 都可显式选择；
+- 凭据按对应 surface 过滤；
+- 删除创建路径的默认回退（§8.2）；
+- 增加 `halro doctor` 检查：报告 bound URL host 与所属 surface 的已知 host 不一致的凭据，以及
+  由这类凭据派生的连接与其已启用能力。**只报告，不自动改写**——静默把 surface 改到 global 会同时
+  改变该连接已声明的能力，而能力收窄需要一次重新验证与路由下线，那是操作者的决定；
+- 运维文档写清处置方式：重新创建凭据与连接，并复核 Deployment 的能力声明；
+- 增加回归测试，确保选择 global 时保存的是 global profile，且创建请求缺 surface 时被具名拒绝。
+
+---
+
+## 9. 实施阶段
+
+### 阶段 0：证据采集
+
+- [~] 为每个候选订阅产品建立官方来源、endpoint、认证、用途限制清单。BigModel / Z.AI、Kimi Code、
+      MiniMax Token Plan 的公开契约已复核；三者尚缺少全部地域的专用凭据实测，OAuth 候选仍等待授权证据。
+- [~] 使用专用测试账号验证订阅 endpoint。BigModel 国内已完成；其他产品未取得专用凭据。
+- [x] BigModel 国内先捕获真实 `/models`、Chat、stream、tool、usage 与 error body，再写 fixture。
+- [~] BigModel 国内/海外和 Kimi Code 官方文档明确订阅产品与通用 API 的用途边界；Halro 不代替
+      操作者判断实际链路是否合规。MiniMax 的受限使用条款仍需逐条确认。
+- [x] 确认 Z.AI 海外站的 coding path prefix 与国内一致。
+- [x] 不使用生产 Key，不在测试日志打印 secret。
+
+### 阶段 1：Offering 通用抽象，不新增上游能力 — **已实施**
+
+- [x] 新增 `ProviderOfferingID`、Kind、Region、`RegionScope` 与 offering / surface 两张表
+      （`internal/domain/provider_offering.go`）。
+- [x] 为**全部 10 个 provider type**、全部 13 个 surface（含 withheld profile 所在的三个）补
+      Offering 与 RegionScope 元数据。
+- [x] 扩展 `/admin/api/v1/provider-profiles`：`offerings`（含 `region_scope` / `regions` /
+      `region_hosts`）、profile 的派生 `offering_id` / `region_id`，以及 `route_partitioned` 与
+      `sends_anthropic_betas`；可达 profile 数为 0 的 Offering 整条省略（Bedrock Runtime 即如此）。
+- [x] 不变量测试（`internal/domain/provider_offering_test.go`、
+      `internal/app/admin_provider_offering_test.go`）：surface 唯一且同 type、offering 与 surface
+      互相不孤立、RegionScope 与 Region/Hosts 自洽、`(type,offering,region)` 在可达 surface 上唯一、
+      每个 profile 与每个 type 默认 profile 都能解析 Offering、每个 type 至少一个凭据身份、
+      surface 认得自己的 prefill。
+- [x] 凭据创建的默认回退改为"只在无歧义时解析"，有歧义时具名拒绝并列出可选产品。
+- [x] 更新 TypeScript 类型与 `web/src/test/provider-profiles.golden.json`。
+- [x] Credential / Provider 表单改为元数据驱动选择器；轮换时产品身份只读。
+- [x] 清除前端私有表：7 处 `type === "bedrock"`、`bedrockCredentialProfile`、`isBedrockProfile`、
+      `supportsAnthropicBetas` 的硬编码 profile ID、`regionHintKey`。（保留的 `providerTypes`
+      数组是**展示顺序**，不是能力判断；见 §14。）
+- [x] 修复 BigModel Global Profile 无法在控制台显式选择的问题，并加回归测试。
+- [x] 新增 `halro doctor` 的 `credential_product` 检查（§8.3），运维处置写入 operator guide。
+- [x] 重新生成 `internal/webui/dist`。
+
+此阶段不改变任何**正确配置的**现有连接的网络行为；对 §8.3 那类错配连接，它把问题暴露出来，
+处置由操作者执行。唯一的行为收窄是 anthropic-beta 的接受条件（§4.2），它只影响一种控制台从未
+产生过的组合。
+
+### 阶段 2：BigModel / Z.AI Coding Plan — **国内实测实施，国际按官方契约实施**
+
+- [x] 注册国内 Coding surface（`bigmodel-cn-coding-api`，region `cn`）与国际 Coding surface
+      （`bigmodel-global-coding-api`，region `global`）；二者同属 offering `bigmodel.coding-plan`、
+      kind `subscription`，使用 credential scheme `bigmodel.coding-plan-key`，但分别绑定
+      `open.bigmodel.cn` 与 `api.z.ai`，不能跨地域复用凭据。
+- [x] 注册 `bigmodel.cn.coding.chat.v1` 与 `bigmodel.global.coding.chat.v1`。国际 profile 的 host、
+      path、Key 流程、支持模型及用途边界来自 Z.AI 一手文档；没有海外 Key，因此不声称已经验证其
+      模型替换、错误码或实际响应细节。
+- [x] adapter 按 profile 选择 `/api/coding/paas/v4`（`bigModelPathPrefix`），并有路径断言测试
+      `TestBigModelWiringKeepsEachProductOnItsOwnHostSurfaceAndPath`；反向验证过：去掉分支该行变红。
+- [x] 真实账号实测 Chat、stream、usage、tool、JSON 模式与 `1211` 错误，证据见 §5.1 与
+      `docs/verification/provider-real-matrix.md`。
+- [x] **枚举保持动态**。国内内建目录只登记实测服务的 `glm-5.3`、`glm-5.3-flash` 两条能力证据；
+      国际目录按 Z.AI 当前官方清单只 seed 实际目标 `glm-5.3`、`glm-5.3-flash`；旧 ID 是官方声明的
+      自动路由别名，不作为独立能力种子。无 Key 401 只证明到达鉴权边界，不证明 `/models` 路由；
+      授权后的列表仍待真实 Key 捕获。目录只补能力证据，新模型上线不需要先发 Halro 版本。
+- [x] 国内只声明实测过的能力：Chat / Streaming / Tools / JSONObject / StreamUsage / Reasoning。
+      **不声明 Embeddings**（`/embeddings` 虽 200，但模型不在该产品列表内且无法观测扣哪份余额）、
+      不声明 Vision 与 Structured Outputs（未测）。国际 profile 只声明一手文档和官方 coding-agent
+      工作流能够支撑的 Chat / Streaming / Tools / Reasoning；JSONObject、StreamUsage、Vision、
+      Structured Outputs 与 Embeddings 均保持 unknown。
+- [x] 新增**模型替换护栏**：探测到上游以另一个模型作答时，丢弃该次证据并标记
+      `model_substituted`，避免把 `glm-5.3-flash` 的能力记成 `glm-4.6` 的 verified 证据。
+- [x] 两种产品 × 两个地域的凭据、surface、host、path 隔离测试。
+- [~] 错误分类：只拿到 `1211`（HTTP 400，模型不存在）。plan expired / quota exhausted /
+      model unavailable 无法在不耗尽真实套餐的前提下触发，**未实现**。
+- [x] 计价形态已定：接受 unknown price + 该项目显式关闭成本治理；后果写入 operator guide，并在
+      创建订阅部署时由元数据驱动的提示直接说明预算不再拦截、成本保持 unknown。
+- [x] usage attribution、失败日志与加密 failure capture 增加 `offering_id` / `profile_id`，
+      `parquetSchemaVersion` 从 6 推进到 7；旧事件/分区读取为空值，新写入在 durable boundary 校验
+      Offering 与 Profile 一致，并支持 Offering 查询与 dashboard breakdown。
+- [x] `requires_usage_warning` 与地域化官方文档由 Admin 元数据下发；创建订阅凭据及新建/重新绑定
+      连接必须明确确认，审计记录固定 Offering ID、Profile ID、地域文档 URL、policy revision、
+      操作者与时间，轮换 Key 不重复确认。该记录只证明操作者确认过这版提示，不等于合规证明。
+- [x] 使用条款 UI 默认收起为紧凑摘要，持续显示待确认/已确认状态；展开后显示地域化官方文档、
+      完整说明和确认框，凭据与连接表单复用同一组件。
+- [x] 模型部署页的连接选项显示由元数据派生的 Offering / 地域，模型 ID 列表仍只包含真实调用目标。
+- [x] 更新兼容 manifest、operator guide 与真实 provider matrix。
+
+### 阶段 3：Kimi Code 与 MiniMax Token Plan
+
+- [x] 具体结论与实现门槛统一以
+      [`code-subscription-adaptation-plan.zh-CN.md`](code-subscription-adaptation-plan.zh-CN.md) 为准；本阶段不再维护一份会漂移的厂商矩阵。
+- [x] Kimi Code 只建立一个 `RegionScopeNone` 的 membership surface；公开资料无法证明独立的
+      国内/海外账号边界。OpenAI 与 Anthropic 是互斥 ConnectionGroup，且在真实订阅 Key 完成账号身份、
+      Thinking 与错误 fixture 前均 withheld。
+- [x] MiniMax Subscription Access 建立 `api.minimax.cn`（国内）与 `api.minimax.io`（海外）两个固定地域
+      surface。每个地域的 OpenAI Chat 与 Anthropic Messages 是独立 ConnectionGroup；OpenAI profile
+      offered，Anthropic profile 在 Thinking fixture 完成前 withheld，不注册未经证明的 Responses profile。
+- [x] Credential / Connection 选择器只显示 offered 身份并复用统一的默认收起条款组件；被撤回或
+      withheld 的存量记录只读且仅允许删除，不能静默改指向可见 Profile。
+- [~] 已建立结构化错误与产品不匹配的非真实网络 fixture；真实订阅额度/错误响应仍按专项方案的
+      admission gate 待专用、限额账号验证，普通测试不得运行计费 smoke。
+
+### 阶段 4：OAuth 型订阅
+
+- [ ] 先解决 §7.2 的刷新语义：refresh 与 credential revision、step-up、审计、目录缓存的关系。
+- [ ] 独立设计 OAuth credential lifecycle。
+- [ ] 确认 OpenAI、Anthropic 是否提供并允许 Halro 这种网关使用的授权契约。
+- [ ] 实现授权回调/device flow、token refresh、撤销与 workspace 选择。
+- [ ] 在官方授权边界未确认前，这两个 Offering 的可达 profile 数保持为 0，因而不出现在元数据里。
+
+---
+
+## 10. 测试计划
+
+### 10.1 Domain 与 Admin API
+
+- 每个 `AccessSurface` 在 surface 表中恰好一行，且 `surfaceRow.Type == profileRow.Type`；
+- 每个 Profile（含 withheld）可解析出存在且同 provider type 的 Offering；
+- `(type, offering, region)` 对 `RegionScopeFixed` 的 surface 唯一解析；
+- 可达 profile 数为 0 的 Offering 不出现在 Admin metadata；
+- default profile 可解析 Offering；
+- Profile 的 surface/scheme 与 credential 保存匹配；
+- Offering/Region 只在 surface 表声明，`ProviderInstance` / `Credential` 上不存第二份；
+- 每个可达 Offering 都有中英文文案；每个 `requires_usage_warning=true` 的可达 surface 都有该地域的
+  官方文档，普通产品不伪造限制文档；
+- Admin metadata 完整列出所有可达 Offering/Profile；
+- 凭据创建缺 `access_surface`/`scheme` 时返回具名 400（回退路径已删除）；
+- offering/profile 不匹配返回具名 400。
+
+### 10.2 前端
+
+- 单 Offering 服务商不展示多余选择；
+- 多 Offering 服务商展示服务端返回的选项；
+- `region_scope=fixed` 渲染 surface 选择，`by_endpoint` 渲染 host 选择并写入 bound URL，
+  `none` 不渲染地域控件；
+- 未命中 `region_hosts` 的自定义 endpoint 显示"地域未知"且**可以保存**；
+- 更换 Offering/Region 清空不兼容凭据和 Profile；轮换时产品身份为只读；
+- Provider 连接只列出与凭据匹配的 Profile；
+- BigModel Global 保存 exact global profile；
+- 模型部署列表不出现 Offering ID；
+- deployment provider 选项显示 Offering/Region；
+- 使用限制提示可访问、可键盘操作且中英文完整；
+- 未确认受限产品时前后端均拒绝创建；确认审计绑定 exact Offering/Profile，轮换不重复确认；
+- provider profile golden 与服务端保持一致；
+- 断言 `ProvidersPage.tsx` 不再包含 provider type 字面量分支（§4.2 列出的四类）。
+
+### 10.3 Adapter 与兼容性
+
+- general/coding path prefix 精确——**这条必须是显式断言**：仓库契约
+  ([Adding a provider platform](../contracts/adding-a-platform.md) 的 "Steps with no mechanical
+  guard") 已记录，`profileOperationTable` 里写错或互换 primitive 时整棵树保持绿，platform 自己的
+  wiring test 也读不到那张表。Coding profile 从 general 复制绑定正是这个错误的高发形态，因此至少
+  要断言两个 profile 构造出的 adapter 所寻址的路径不同；
+- 同 host 不因 host 相同合并 surface；
+- subscription key 不会发送到 general path；
+- general key 不会发送到 subscription path；
+- `/models` 响应使用真实 shape；
+- 请求字段在 provider I/O 前拒绝或转换；
+- response/tool arguments/stream usage 不静默丢失；
+- 已取得 fixture 的 429 业务码分类保留可操作信息；没有真实响应的额度类型保持未分类，不猜 message；
+- fallback 不跨 Offering，除非 Route 显式配置多个 Deployment，且归因可分辨 Offering。
+
+### 10.4 推送前 gate
+
+按仓库验证政策（`AGENTS.md`）执行一次，形状与 `CLAUDE.md` 一致：
+
+```bash
+go test ./...
+go vet ./...
+cd web && npm ci --ignore-scripts && npm run typecheck && npm test -- --run && npm run build && cd ..
+git diff --exit-code -- internal/webui/dist
+```
+
+涉及 usage schema 的改动另跑 `./bin/halro usage verify` 与 `./bin/halro doctor`，对真实
+`data/` 目录验证旧分区仍可读。真实订阅 smoke 默认 skip，只在操作者显式提供专用测试凭据时运行。
+
+---
+
+## 11. 验收标准
+
+满足以下条件才算首期完成：
+
+1. Offering/Region/Profile 全部由服务端权威元数据驱动；`ProvidersPage.tsx` 不再含 §4.2 列出的
+   四类 provider 私有枚举。
+2. Offering 与 Region 只在 surface 表声明一次，凭据与连接均可无歧义派生出产品身份。
+3. 元数据侧无需数据迁移；usage schema 的版本推进在 min-readable 范围内，旧分区可读。
+4. 控制台可以明确创建 BigModel CN/Global General API 连接。
+5. 控制台可以明确创建 BigModel CN 与 Z.AI Global Coding Plan 连接；前者标明真实账号实测，后者
+   标明按一手官方契约接入且尚未验证实际模型映射，不把未实测行为写成 verified 证据。
+6. 凭据创建缺 surface/scheme、或 credential 与 profile 的 surface/scheme 不一致时，在保存前或
+   保存时具名拒绝；endpoint 检查按 §2.6 执行——有 profile 级 endpoint 规则的 surface 拒绝，
+   其余提示地域未知但不阻断。
+7. `halro doctor` 能报出 §8.3 的错配凭据，运维文档给出处置步骤。
+8. 模型部署只保存真实模型 ID，不出现 plan/Offering 伪模型。
+9. General 与 Coding 的模型列表、能力检测、缓存和错误证据完全隔离。
+10. Coding Plan Chat unary、stream、usage 与真实 `1211` 模型错误经过真实账号验证；不得为了验收
+    主动耗尽个人套餐，额度耗尽/过期分类等待自然样本后再实现。
+11. 未验证能力保持 unknown，不从 General API profile 或模型名称继承。
+12. 订阅计价形态已决策：要么有等效单价，要么控制台在创建时说明"该项目成本治理将被关闭、预算不再
+    拦截"，且 operator guide 记录之。
+13. 控制台以默认收起的紧凑区域展示地域化官方使用范围提示，确认按 `(credential, profile)` 粒度
+    写入审计日志。
+14. 完整 frontend gate、Go suite 与 bundle drift check 通过。
+
+---
+
+## 12. 非目标
+
+- 不把所有网页会员订阅自动变成 Halro 可调用的 Provider。
+- 不绕过上游对客户端、工具、场景或公平使用的限制。
+- 不通过抓取浏览器 cookie、CLI 本地凭据或未公开 endpoint 接入订阅。
+- 不把 Offering 当作模型能力或模型别名。
+- 不假设订阅调用"免费"，也不把未知成本记为零。
+- 不在一个 Provider Connection 内自动从订阅额度切到按量余额。
+- 不在首期实现通用 OAuth 框架、订阅用量 dashboard 或自动续费。
+- 不把 `BaseURLTemplate` 从 prefill 改成 bound：那是独立的设计决定，会影响企业代理与私有入口。
+
+---
+
+## 13. 开放问题
+
+实施前仍需回答：
+
+1. ~~BigModel Coding Plan 的 `/models` 是否真实存在~~ —— **已答**：存在，但不权威（列 10 个、
+   服务 2 个），见 §5.1 阶段 0 证据 1–3。海外 response 仍未知。
+2. ~~Z.AI 海外站的 coding path prefix 是否也是 `/api/coding/paas/v4`~~ —— **已答**：Z.AI 官方
+   API Reference、Coding Plan Quick Start 与工具接入页均明确为该路径；实际模型映射仍需海外 Key。
+3. BigModel 团队套餐 Key 是否需要独立于个人 Coding Plan 的 Credential Scheme？
+4. Kimi Code 国内与海外订阅当前共用公开 Coding Host；两类 Key 是否在服务端严格隔离，以及 Halro
+   作为中间网关是否符合其使用范围，仍需两地专用账号验证。
+5. ~~MiniMax 订阅的正式产品名、国内/海外 endpoint 与 wire 是什么~~ —— **公开契约已答**：正式名称
+   Token Plan；国内 `api.minimax.cn`、海外 `api.minimax.io`；两地均有 Anthropic Messages 与 OpenAI
+   Chat。仍需回答 `/models`、额度错误体及是否存在未公开的 Token Plan Responses 支持。
+6. 订阅额度没有货币单价时，成本报表显示 unknown、额度单位，还是二者并列？（"关闭成本治理"这个
+   前置条件已在 §7.3 定死，此问只关乎展示与后续 allowance dashboard。）
+7. OAuth Offering 是否应属于 Provider Credential，还是独立的 Account Connection 资源？这一问与
+   §7.2 的 refresh/revision 语义是同一个决定的两面。
+8. 企业合同、预置吞吐与云市场转售产品是否复用 Offering，还是另设 Commercial Contract 层？
+
+已在本轮定案、不再作为开放问题的：Offering/Region 的挂载层级（§2.3）、地域的两种形态（§2.6）、
+使用范围确认的粒度（§7.1）、旧请求形状的兼容策略（§8.2）。
+
+这些问题不阻塞阶段 1 的通用元数据与 UI 重构，但会阻塞对应 Offering 变成可达 Profile。
+
+---
+
+## 14. 实施状态与本方案的差异
+
+阶段 1 已实施（清单见 §9）。实施过程中有五处与方案原文不同，理由记在这里，方案正文已同步：
+
+1. **凭据创建不是"一律显式"，而是"有歧义才拒绝"。**原文说删除默认回退。实际按可达
+   `(surface, scheme)` 的个数分流：只有一个时解析，两个及以上时具名拒绝。理由是仓库自己的原则
+   ——"只有一个答案的问题不问"——写在控制台既有的 Bedrock 注释里；要求每个调用方写出
+   `openai-api` + `bearer.static` 是没有决策的仪式，而 BigModel 那一处正是需要拒绝的地方。
+2. **使用警告随第一个订阅产品加入。**`RequiresUsageWarning` 在 Offering 表声明，地域化
+   `DocumentationURL` 与稳定 `UsagePolicyRevision` 在 surface 表声明；阶段 1 的按量产品不携带
+   无意义空文档和 revision，理由见 §2.2。
+3. **候选 Offering 不注册。**`openai.codex-subscription` / `anthropic.claude-subscription` 要等到
+   有 surface 才进表，否则不变量测试要为它们写例外（§2.1）。
+4. **`Hosts` 挂在所有 surface 上，不只 by_endpoint。**`fixed` 的 surface 也列 host，供
+   `SurfaceForEndpoint` 支撑 doctor 的存量检查（§2.6、§8.3）。
+5. **anthropic-beta 的接受条件收窄到 profile。**写路径原先按 surface 判断，比事实宽；改用与控制台
+   同一个 `domain.ProfileSendsAnthropicBetas`（§4.2）。这是本阶段唯一的行为收窄，影响的组合
+   （Mantle 上锚在 OpenAI profile 的连接携带 beta token）控制台从未产生过。
+
+### 第 2 轮（阶段 0 + 2，国内 Coding Plan）
+
+第 6 处偏离，来自真实账号实测：
+
+6. **上游 `/models` 不再被当作"谁存在"的唯一来源——但也没有改成写死名单。**方案 §5.1 原文假设
+   列表要么存在（则权威）要么不存在（则 seed）。GLM Coding Plan 是第三种：列表存在、可读、
+   **且对该 endpoint 是错的**（列 10 个、服务 2 个）。做法是两者都保留各自的职责——
+   **枚举仍然动态**（否则上游发新模型就要发 Halro 版本），**内建目录只承担能力证据**，
+   再加一道运行时护栏：探测到上游以另一个模型作答就丢弃该次证据（`model_substituted`）。
+   证据在 §5.1，护栏在 `internal/provider/capability_detection.go`。
+
+第 7 处是首期收尾 review 发现并修复的持久化缺口：
+
+7. **Offering/Profile 已进入完整运行归因链。**目标注册从 profile 派生并校验 Offering；预算 attempt、
+   Ledger、usage aggregate、schema 7 Parquet、查询/聚合、失败日志和加密 failure capture 均保留二者。
+   旧 Ledger 事件和 schema 3–6 分区仍可读，字段为空表示历史版本未记录；schema 对账会按分区版本
+   收窄新列，避免把合法旧分区误报为损坏。
+
+尚未实施、且**不能**由本仓库单独完成的部分：
+
+- **国际 Coding Plan 的实测补证**：surface/profile 已按 Z.AI 一手文档注册；仍需一把海外订阅 Key
+  验证实际模型映射、响应 usage 与错误码。缺少该 Key 不再隐藏官方已公开的国际产品，但所有未实测
+  结论保持 declared/unknown，不冒充 verified。
+- **Coding Plan 的额度类错误码**：plan expired / quota exhausted / model unavailable。触发它们
+  需要真的把一份订阅用尽，未做。
+- **阶段 3**：Kimi Code 与 MiniMax Token Plan 的国内/海外 surface 设计及公开 endpoint 已确认；仍需
+  两个产品在两个地域的真实订阅凭据验证响应、模型枚举与额度错误，之后才能注册可达 profile。
+- **运行期的替换留痕**：把上游实际应答的模型写进 attempt / usage 归因。需要改 Ledger 事件结构，
+  是一次独立的持久化格式改动，见 §5.1 实现取舍第 4 条。
+- **阶段 4**：OAuth 型订阅，还阻塞在 §7.2 的刷新语义与官方授权边界上。
+
+本次完成边界是阶段 1、国内实测支撑的 Coding profile，以及国际一手官方契约足以确定的 surface、
+path、用途边界和保守能力种子。上述未实施项需要新的上游账号、自然出现的额度错误样本或独立 OAuth
+授权决策；它们不阻塞已公开契约的国际 surface，但仍阻塞将对应运行行为标记为 verified。

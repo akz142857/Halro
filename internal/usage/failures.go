@@ -3,6 +3,9 @@ package usage
 import (
 	"errors"
 	"time"
+
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // The failed-request view. It answers a different question from QueryAttempts,
@@ -33,12 +36,15 @@ type FailureQuery struct {
 	// upstream, because those have no attempts to match. That is the honest
 	// answer to "show me this deployment's failures" and not a gap: a budget
 	// refusal did not happen at a deployment.
-	ProviderID     string
-	DeploymentID   string
-	ProviderModel  string
-	RequestedModel string
-	Start          time.Time
-	End            time.Time
+	ProviderID            string
+	OfferingID            domain.ProviderOfferingID
+	AccountRegionID       domain.ProviderRegionID
+	ProviderFailureReason provider.FailureReason
+	DeploymentID          string
+	ProviderModel         string
+	RequestedModel        string
+	Start                 time.Time
+	End                   time.Time
 }
 
 // FailureContext is the last failed attempt of a request, reduced to what
@@ -53,18 +59,25 @@ type FailureContext struct {
 	// it. The attempt row calls the same value http_status; here it is
 	// qualified because a failed request also has a status of its own that the
 	// caller saw, and the two are not the same number.
-	ProviderStatus int    `json:"provider_status,omitempty"`
-	ProviderID     string `json:"provider_id,omitempty"`
-	DeploymentID   string `json:"deployment_id,omitempty"`
-	ProviderModel  string `json:"provider_model,omitempty"`
+	ProviderStatus  int                       `json:"provider_status,omitempty"`
+	ProviderID      string                    `json:"provider_id,omitempty"`
+	OfferingID      domain.ProviderOfferingID `json:"offering_id,omitempty"`
+	ProfileID       domain.ProviderProfileID  `json:"profile_id,omitempty"`
+	AccountRegionID domain.ProviderRegionID   `json:"account_region_id,omitempty"`
+	DeploymentID    string                    `json:"deployment_id,omitempty"`
+	ProviderModel   string                    `json:"provider_model,omitempty"`
 	// What goes on a ticket to the upstream. Absent on an attempt recorded
 	// before these were kept, and absent when the upstream named none — the
 	// console distinguishes the two by the attempt's own age rather than by
 	// filling either with a placeholder.
-	ProviderCode      string    `json:"provider_code,omitempty"`
-	ProviderRequestID string    `json:"provider_request_id,omitempty"`
-	FailurePhase      string    `json:"failure_phase,omitempty"`
-	CompletedAt       time.Time `json:"completed_at"`
+	ProviderCode             string                 `json:"provider_code,omitempty"`
+	ProviderFailureReason    provider.FailureReason `json:"provider_failure_reason,omitempty"`
+	ProviderRequestID        string                 `json:"provider_request_id,omitempty"`
+	FailurePhase             string                 `json:"failure_phase,omitempty"`
+	Retryable                bool                   `json:"retryable,omitempty"`
+	Ambiguous                bool                   `json:"ambiguous,omitempty"`
+	FailureSemanticsRecorded bool                   `json:"failure_semantics_recorded,omitempty"`
+	CompletedAt              time.Time              `json:"completed_at"`
 }
 
 type RequestFailure struct {
@@ -94,6 +107,12 @@ type FailurePage struct {
 func (a *Aggregate) QueryFailedRequests(query FailureQuery) (FailurePage, error) {
 	if query.Limit < 1 || query.Limit > 100 {
 		return FailurePage{}, errors.New("usage page limit must be between 1 and 100")
+	}
+	if query.AccountRegionID != domain.RegionNone && query.AccountRegionID != domain.RegionCN && query.AccountRegionID != domain.RegionGlobal {
+		return FailurePage{}, errors.New("usage account region is invalid")
+	}
+	if !query.ProviderFailureReason.Valid() {
+		return FailurePage{}, errors.New("usage provider failure reason is invalid")
 	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -185,19 +204,24 @@ func (a *Aggregate) indexAttempts(candidates []RequestSummary, filtered bool) ma
 }
 
 func attemptFiltered(query FailureQuery) bool {
-	return query.ProviderID != "" || query.DeploymentID != "" || query.ProviderModel != ""
+	return query.ProviderID != "" || query.OfferingID != "" || query.AccountRegionID != "" ||
+		query.ProviderFailureReason != "" || query.DeploymentID != "" || query.ProviderModel != ""
 }
 
 // attemptsMatch applies the attempt-scoped filters. A query that names none of
 // them keeps every request, including the ones with no attempts at all — which
 // is what makes the unfiltered list add up to the summary card's count.
 func (a *Aggregate) attemptsMatch(indexes []int, query FailureQuery) bool {
-	if query.ProviderID == "" && query.DeploymentID == "" && query.ProviderModel == "" {
+	if query.ProviderID == "" && query.OfferingID == "" && query.AccountRegionID == "" &&
+		query.ProviderFailureReason == "" && query.DeploymentID == "" && query.ProviderModel == "" {
 		return true
 	}
 	for _, index := range indexes {
 		attempt := a.attempts[index]
 		if query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
+			query.OfferingID != "" && attempt.OfferingID != query.OfferingID ||
+			query.AccountRegionID != "" && attempt.AccountRegionID != query.AccountRegionID ||
+			query.ProviderFailureReason != "" && attempt.ProviderFailureReason != query.ProviderFailureReason ||
 			query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
 			query.ProviderModel != "" && attempt.ProviderModel != query.ProviderModel {
 			continue
@@ -235,9 +259,12 @@ func (a *Aggregate) lastFailure(indexes []int) *FailureContext {
 			AttemptID: attempt.AttemptID, AttemptNumber: attempt.AttemptNumber,
 			ErrorClass: attempt.ErrorClass, ProviderStatus: attempt.HTTPStatus,
 			ProviderID: attempt.ProviderID, DeploymentID: attempt.DeploymentID,
-			ProviderModel: attempt.ProviderModel,
-			ProviderCode:  attempt.ProviderCode, ProviderRequestID: attempt.ProviderRequestID,
-			FailurePhase: attempt.FailurePhase, CompletedAt: attempt.CompletedAt,
+			OfferingID: attempt.OfferingID, ProfileID: attempt.ProfileID,
+			AccountRegionID: attempt.AccountRegionID, ProviderModel: attempt.ProviderModel,
+			ProviderCode: attempt.ProviderCode, ProviderFailureReason: attempt.ProviderFailureReason,
+			ProviderRequestID: attempt.ProviderRequestID, FailurePhase: attempt.FailurePhase,
+			Retryable: attempt.Retryable, Ambiguous: attempt.Ambiguous,
+			FailureSemanticsRecorded: attempt.FailureSemanticsRecorded, CompletedAt: attempt.CompletedAt,
 		}
 	}
 	return nil

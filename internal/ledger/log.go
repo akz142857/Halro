@@ -505,7 +505,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 }
 
 func (l *Log) Append(ctx context.Context, event Event) (Watermark, error) {
-	if err := event.Validate(); err != nil {
+	if err := event.validateForAppend(); err != nil {
 		return Watermark{}, err
 	}
 	if err := ctx.Err(); err != nil {

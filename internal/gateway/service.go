@@ -624,8 +624,10 @@ func (s *Service) startAttempt(
 	}
 	metadata := budget.AttemptMetadata{
 		RouteID: target.ID, DeploymentID: target.DeploymentID,
-		ProviderID: target.ProviderID, ProviderModel: target.ProviderModel,
-		AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
+		ProviderID: target.ProviderID, OfferingID: target.OfferingID, ProfileID: target.ProfileID,
+		AccountRegionID: target.AccountRegionID,
+		ProviderModel:   target.ProviderModel,
+		AttemptNumber:   attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
 	}
 	var attempt budget.Attempt
 	if snapshot == nil {
@@ -774,7 +776,7 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	}
 	attempt.concurrency.Release()
 	attempt.run.recordProviderResult(providerErr, settlement)
-	enrichSettlement(&settlement, providerErr, attempt.startedAt, attempt.service.now())
+	enrichSettlement(&settlement, providerErr, attempt.pricingTarget, attempt.startedAt, attempt.service.now())
 	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
 		attempt.reportBreaker(providerErr)
 		finalizeErr := attempt.run.finalize("accounting_error")
@@ -3096,7 +3098,7 @@ func setSettlementCost(result *budget.Settlement, target provider.Target, reserv
 // `client_disconnected_or_timed_out`, so one attempt produced two different
 // answers to "what class of failure was this" depending on which record you
 // read.
-func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, completedAt time.Time) {
+func enrichSettlement(result *budget.Settlement, providerErr error, target provider.Target, startedAt, completedAt time.Time) {
 	if completedAt.After(startedAt) {
 		result.LatencyMillis = completedAt.Sub(startedAt).Milliseconds()
 	}
@@ -3116,12 +3118,16 @@ func enrichSettlement(result *budget.Settlement, providerErr error, startedAt, c
 	// The target is not needed for the fields the settlement keeps — it already
 	// carries route, deployment and provider of its own — so this asks only for
 	// the classification.
-	descriptor := describeProviderFailure(providerErr, provider.Target{})
+	descriptor := describeProviderFailure(providerErr, target)
 	result.ErrorClass = string(descriptor.Class)
 	result.HTTPStatus = descriptor.ProviderStatus
 	result.ProviderCode = descriptor.ProviderCode
+	result.ProviderFailureReason = descriptor.ProviderFailureReason
 	result.ProviderRequestID = descriptor.ProviderRequestID
 	result.FailurePhase = descriptor.Phase
+	result.Retryable = descriptor.Retryable
+	result.Ambiguous = descriptor.Ambiguous
+	result.FailureSemanticsRecorded = descriptor.FailureSemanticsRecorded
 }
 
 func embeddingSettlement(

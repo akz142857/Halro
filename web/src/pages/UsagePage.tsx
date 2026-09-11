@@ -19,7 +19,7 @@ type UsageTab = (typeof usageTabs)[number];
 // asking for the list it filters, so it opens there rather than on the summary
 // the operator would then have to leave.
 const attemptFilterParams = [
-  "request_id", "project_id", "model", "provider_id", "provider_model", "deployment_id",
+  "request_id", "project_id", "model", "provider_id", "offering_id", "provider_model", "deployment_id",
   "status", "start", "end",
 ];
 
@@ -71,6 +71,7 @@ export function UsagePage() {
   // that can be cleared: a filter with no visible control is how a table comes
   // to look empty for no reason.
   const [providerID, setProviderID] = useState(() => new URLSearchParams(window.location.search).get("provider_id") ?? "");
+  const [offeringID, setOfferingID] = useState(() => new URLSearchParams(window.location.search).get("offering_id") ?? "");
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [deploymentID, setDeploymentID] = useState(() => new URLSearchParams(window.location.search).get("deployment_id") ?? "");
@@ -84,12 +85,13 @@ export function UsagePage() {
   const [end, setEnd] = useState(() => isoToZonedInput(
     new URLSearchParams(window.location.search).get("end") ?? undefined, accountingTimeZone()));
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, providerModel, providerID, deploymentID, requestID, projectID, start, end, timeZone],
+    queryKey: ["usage", status, model, providerModel, providerID, offeringID, deploymentID, requestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
       limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
       ...(providerID ? { provider_id: providerID } : {}),
+      ...(offeringID ? { offering_id: offeringID } : {}),
       ...(deploymentID ? { deployment_id: deploymentID } : {}),
       ...(providerModel ? { provider_model: providerModel } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
@@ -120,6 +122,7 @@ export function UsagePage() {
     setModel(params.get("model") ?? "");
     setProviderModel(params.get("provider_model") ?? "");
     setProviderID(params.get("provider_id") ?? "");
+    setOfferingID(params.get("offering_id") ?? "");
     setRequestID(params.get("request_id") ?? "");
     setProjectID(params.get("project_id") ?? "");
     setDeploymentID(params.get("deployment_id") ?? "");
@@ -219,6 +222,12 @@ export function UsagePage() {
             <span aria-hidden="true"> ×</span>
           </button>
         )}
+        {offeringID && (
+          <button type="button" className="filter-chip" onClick={() => setOfferingID("")}>
+            {t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) })}
+            <span aria-hidden="true"> ×</span>
+          </button>
+        )}
         <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}
@@ -274,6 +283,9 @@ export function UsagePage() {
                         {deploymentNames[attempt.deployment_id] && <small><code>{attempt.deployment_id}</code></small>}
                       </>
                     ) : "—"}
+                    {attempt.offering_id && (
+                      <small>{t(`providers.offerings.${attempt.offering_id}`, { defaultValue: attempt.offering_id })}</small>
+                    )}
                   </td>
                   <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
                   <td><CostCell attempt={attempt} /></td>
@@ -366,9 +378,30 @@ function AttemptDetailCell({ attempt, projectName, deploymentName }: {
             { label: t("usage.project"), value: projectName || attempt.project_id },
             { label: t("usage.model"), value: attempt.requested_model },
             { label: t("usage.deployment"), value: attempt.deployment_id ? deploymentName || attempt.deployment_id : undefined },
+            {
+              label: t("providers.product"),
+              value: attempt.offering_id
+                ? t(`providers.offerings.${attempt.offering_id}`, { defaultValue: attempt.offering_id })
+                : undefined,
+            },
+            {
+              label: t("providers.capabilityImplementation"),
+              value: attempt.profile_id
+                ? t(`providers.profiles.${attempt.profile_id}`, { defaultValue: attempt.profile_id })
+                : undefined,
+            },
+            {
+              label: t("usage.failures.accountRegionLabel"),
+              value: attempt.account_region_id
+                ? t(`providers.regions.${attempt.account_region_id}`, { defaultValue: attempt.account_region_id })
+                : undefined,
+            },
             { label: t("usage.actualModel"), value: attempt.provider_model },
             { label: t("usage.status"), value: upstreamStatus(attempt.http_status) ? t("usage.httpStatus", { status: attempt.http_status }) : undefined },
             ...identifiers.facts,
+            { label: t("usage.failures.providerReasonLabel"), value: attempt.provider_failure_reason ? t(`usage.failures.providerReasons.${attempt.provider_failure_reason}`, { defaultValue: attempt.provider_failure_reason }) : undefined },
+            { label: t("usage.failures.retryabilityLabel"), value: attempt.failure_semantics_recorded ? t(attempt.retryable ? "usage.failures.retryable" : "usage.failures.notRetryable") : t("usage.failures.notRecorded") },
+            { label: t("usage.failures.ambiguityLabel"), value: attempt.failure_semantics_recorded ? t(attempt.ambiguous ? "usage.failures.ambiguous" : "usage.failures.unambiguous") : t("usage.failures.notRecorded") },
             { label: t("usage.latency"), value: `${attempt.latency_millis} ms` },
             { label: t("usage.failures.chainLabel"), value: chain },
           ]}

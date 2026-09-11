@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type {
   ProviderCapabilities,
+  ProviderOfferingDescriptor,
   ProviderProfileDescriptor,
   ProviderProfilesCatalog,
   ProviderType,
@@ -77,6 +78,146 @@ export function booleanCapabilityNames(catalog: ProviderProfilesCatalog): Boolea
 
 export function profilesForType(catalog: ProviderProfilesCatalog, type: ProviderType): ProviderProfileDescriptor[] {
   return catalog.provider_types.find((entry) => entry.type === type)?.profiles ?? [];
+}
+
+/** The upstream products of one provider type.
+ *
+ * A product is what an operator bought — a metered API, a Coding Plan — and it
+ * is the first thing a credential form has to establish, because it decides the
+ * endpoint, the key, and which capabilities the connection can carry. Served,
+ * never inferred here: deciding it in the browser from a provider name is how
+ * the console came to seal every BigModel key to the mainland surface. */
+export function offeringsForType(catalog: ProviderProfilesCatalog, type: ProviderType): ProviderOfferingDescriptor[] {
+  return catalog.provider_types.find((entry) => entry.type === type)?.offerings ?? [];
+}
+
+export function findOffering(
+  catalog: ProviderProfilesCatalog,
+  type: ProviderType,
+  offeringID: string,
+): ProviderOfferingDescriptor | undefined {
+  return offeringsForType(catalog, type).find((offering) => offering.id === offeringID);
+}
+
+export function offeringDocumentationURL(
+  offering: ProviderOfferingDescriptor | undefined,
+  regionID: string,
+): string | undefined {
+  return offeringDocumentation(offering, regionID)?.url;
+}
+
+export function offeringDocumentation(
+  offering: ProviderOfferingDescriptor | undefined,
+  regionID: string,
+) {
+  if (!offering) return undefined;
+  return offering.documentation.find((document) => document.region === regionID)
+    ?? offering.documentation.find((document) => document.region === "");
+}
+
+/** One product identity a credential of this type can be created for.
+ *
+ * A credential stores an access surface and a scheme, and that pair is what says
+ * which product it belongs to. Several profiles usually share one pair — an
+ * OpenAI key reaches chat and media, a Kimi key reaches three wire shapes — so
+ * these are the distinct pairs rather than the profiles. Mirrors
+ * domain.CredentialIdentities, which is what the Admin write path resolves
+ * against; where there is more than one, the server refuses to guess. */
+export interface CredentialIdentity {
+  accessSurface: string;
+  credentialScheme: string;
+  offeringID: string;
+  regionID: string;
+  /** The profile a credential on this identity resolves to, and the endpoint it
+   * prefills. */
+  primaryProfileID: string;
+  defaultBaseURL: string;
+}
+
+export function credentialIdentities(catalog: ProviderProfilesCatalog, type: ProviderType): CredentialIdentity[] {
+  const identities: CredentialIdentity[] = [];
+  for (const profile of profilesForType(catalog, type)) {
+    if (identities.some((identity) =>
+      identity.accessSurface === profile.access_surface && identity.credentialScheme === profile.credential_scheme)) {
+      continue;
+    }
+    identities.push({
+      accessSurface: profile.access_surface,
+      credentialScheme: profile.credential_scheme,
+      offeringID: profile.offering_id,
+      regionID: profile.region_id,
+      primaryProfileID: profile.id,
+      defaultBaseURL: profile.default_base_url,
+    });
+  }
+  return identities;
+}
+
+/** One choice a connection form offers for "which implementation".
+ *
+ * Two different things produce a choice, and both are properties of the served
+ * matrix rather than of a provider name:
+ *
+ *  - more than one credential identity, which is BigModel's two regional
+ *    products: different surfaces, different capability sets, different keys;
+ *  - distinct connection groups on one credential identity, which represent
+ *    protocol alternatives such as OpenAI versus Anthropic;
+ *  - a route-partitioned group, which is Bedrock Mantle: one credential and
+ *    models that each answer on exactly one of its routes.
+ *
+ * Where neither holds, the group's profiles ride one connection together and
+ * there is nothing to ask — which is every other provider. */
+export interface ConnectionChoice {
+  profileID: string;
+  accessSurface: string;
+  credentialScheme: string;
+  offeringID: string;
+  regionID: string;
+  defaultBaseURL: string;
+}
+
+export function connectionChoices(catalog: ProviderProfilesCatalog, type: ProviderType): ConnectionChoice[] {
+  const choices: ConnectionChoice[] = [];
+  const groupsSeen = new Set<string>();
+  for (const profile of profilesForType(catalog, type)) {
+    const group = profile.connection_group_id;
+    if (groupsSeen.has(group) && !profile.route_partitioned) continue;
+    groupsSeen.add(group);
+    choices.push({
+      profileID: profile.id,
+      accessSurface: profile.access_surface,
+      credentialScheme: profile.credential_scheme,
+      offeringID: profile.offering_id,
+      regionID: profile.region_id,
+      defaultBaseURL: profile.default_base_url,
+    });
+  }
+  return choices;
+}
+
+/** The host of an endpoint, lowercased and without its port.
+ *
+ * Mirrors domain.endpointHost: the server compares the same normalised form, so
+ * a value this recognises is a value it recognises. */
+export function endpointHost(value: string): string {
+  try {
+    return new URL(value.trim()).hostname.toLocaleLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/** Which account region an endpoint names, for a product whose region is read
+ * from the endpoint.
+ *
+ * Undefined is an ordinary answer, not a failure: an operator may front any
+ * upstream with a proxy, and the host list is recognition rather than an
+ * allowlist. The console says "unknown" and saves anyway, which is what the
+ * server does too. */
+export function regionForEndpoint(offering: ProviderOfferingDescriptor | undefined, value: string): string | undefined {
+  if (!offering || offering.region_scope !== "by_endpoint") return undefined;
+  const host = endpointHost(value);
+  return offering.region_hosts.find((entry) => entry.host === host)?.region;
 }
 
 export function findProfile(
