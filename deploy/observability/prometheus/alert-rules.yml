@@ -50,6 +50,22 @@ groups:
         annotations:
           summary: Halro WAL append errors increased
           runbook_url: /docs/observability/operations-runbook.md#halrowalappenderrors
+      - alert: HalroShutdownTruncatedAttempts
+        expr: increase(halro_shutdown_truncated_attempts_total[10m]) > 0
+        labels: {severity: critical, service: halro, owner: sre, category: accounting}
+        annotations:
+          summary: Halro exhausted its shutdown budget with Provider attempts still active
+          runbook_url: /docs/observability/operations-runbook.md#halroshutdowntruncatedattempts
+      - alert: HalroAccountingLeaseStale
+        expr: >-
+          halro_accounting_pending_leases > 0
+          and halro_accounting_oldest_pending_lease_age_seconds
+          > halro_accounting_pending_lease_normal_max_age_seconds
+        for: 2m
+        labels: {severity: critical, service: halro, owner: sre, category: accounting}
+        annotations:
+          summary: A Halro Accounting Lease exceeded the configured request or stream duration
+          runbook_url: /docs/observability/operations-runbook.md#halroaccountingleasestale
       - alert: HalroUsageAnalyticsLagging
         expr: halro_usage_analytics_lagging == 1
         for: 10m

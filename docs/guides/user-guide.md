@@ -232,7 +232,6 @@ the real Provider model name.
 | DeepSeek | `https://api.deepseek.com` | GA; does not declare embeddings by default |
 | OpenAI Compatible | A reviewed HTTPS address | Declare the capabilities the platform actually has |
 | Gemini | `https://generativelanguage.googleapis.com` | Beta, native adapter |
-| Bedrock Runtime | `https://bedrock-runtime.<region>.amazonaws.com` | Beta, Converse text, explicit static AWS credential |
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta; OpenAI Chat, stateless Responses, or Anthropic Messages |
 | BigModel (mainland China) | `https://open.bigmodel.cn` | Experimental; Chat, streaming, and embeddings through the mainland general API profile |
 | Z.AI (global) | `https://api.z.ai` | Experimental; Chat and streaming through an isolated global profile |
@@ -252,21 +251,16 @@ reverse). Save the root host shown above—the selected profile fixes the
 routes are not registered yet because their successful response and
 authentication contracts still require real-account verification.
 
-A Bedrock credential is a JSON secret:
-
-```json
-{"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}
-```
-
-`session_token` is optional and `region` must match the endpoint. Halro never
-reads IMDS and never falls back to the host's default AWS credential chain.
+Bedrock Runtime and Agent Runtime implementations are **withheld in this
+build**. They are absent from the create forms and every write path refuses
+their Profiles; only an existing stored connection can be inspected or deleted.
+Do not prepare SigV4 credentials or Runtime deployments for this release.
 
 A Mantle credential holds the Bedrock API key directly rather than that JSON.
 Choose the Mantle access surface when creating the credential, then create a
 separate Provider per protocol; one Provider binds one profile. Mantle Responses
 always calls AWS with `store:false`, so it never creates 30-day stored state
-that Halro cannot manage. Runtime and Mantle keep their credentials,
-concurrency ceilings, and capability evidence separate.
+that Halro cannot manage.
 
 ## 4. Calling the Gateway
 

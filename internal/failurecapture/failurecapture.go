@@ -259,6 +259,19 @@ func (s *Store) Put(record Record) (bool, error) {
 	return s.PutContext(context.Background(), record)
 }
 
+// PrepareRecord applies the payload byte ceiling before a record is handed to
+// an asynchronous owner. PutContext applies it again so direct Store callers
+// get the same guarantee; the operation is idempotent.
+func (s *Store) PrepareRecord(record Record) Record {
+	if s == nil {
+		return Record{}
+	}
+	record.GatewayRequest, record.GatewayRequestTruncated = truncateJSON(record.GatewayRequest, s.maxBytes)
+	record.Request, record.RequestTruncated = truncateJSON(record.Request, s.maxBytes)
+	record.Response, record.ResponseTruncated = truncateJSON(record.Response, s.maxBytes)
+	return record
+}
+
 // PutContext is Put with a shutdown boundary. Regular-file syscalls cannot be
 // interrupted once the kernel is executing them, but every user-space phase is
 // cancellable so an async capture worker does not begin another expensive step
@@ -309,9 +322,7 @@ func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
 		return false, errors.New("provider account region requires provider profile attribution")
 	}
 	record.CapturedAt = s.now().UTC()
-	record.GatewayRequest, record.GatewayRequestTruncated = truncateJSON(record.GatewayRequest, s.maxBytes)
-	record.Request, record.RequestTruncated = truncateJSON(record.Request, s.maxBytes)
-	record.Response, record.ResponseTruncated = truncateJSON(record.Response, s.maxBytes)
+	record = s.PrepareRecord(record)
 
 	day := record.CapturedAt.Format("2006-01-02")
 	if !s.reserve(day) {

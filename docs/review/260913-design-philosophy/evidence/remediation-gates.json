@@ -1,0 +1,88 @@
+{
+  "schema_version": "halro.design-assessment.remediation-gates/v1",
+  "captured_at": "2026-09-13",
+  "baseline": {
+    "tag": "v0.8.0",
+    "commit": "1d48ecde216ef40e653738f8bdc9657f88a717cc"
+  },
+  "subject": "uncommitted local working tree on the baseline commit",
+  "gates": [
+    {
+      "id": "go-full",
+      "command": "go test -count=1 ./...",
+      "result": "PASS",
+      "detail": "rerun outside the loopback-restricted sandbox completed with exit code 0"
+    },
+    {
+      "id": "go-race-affected",
+      "command": "go test -race -count=1 ./internal/gateway ./internal/failurecapture",
+      "result": "PASS"
+    },
+    {
+      "id": "go-vet",
+      "command": "go vet ./...",
+      "result": "PASS"
+    },
+    {
+      "id": "web-typecheck",
+      "command": "npm run typecheck",
+      "cwd": "web",
+      "runtime": "Node 22.18.0",
+      "result": "PASS"
+    },
+    {
+      "id": "web-tests",
+      "command": "npx vitest run --maxWorkers=1",
+      "cwd": "web",
+      "runtime": "Node 22.18.0",
+      "result": "PASS",
+      "detail": "44 of 44 files and 605 of 605 tests passed"
+    },
+    {
+      "id": "web-build",
+      "command": "npm run build",
+      "cwd": "web",
+      "runtime": "Node 22.18.0",
+      "result": "PASS",
+      "detail": "production build and artifact secret check passed; internal/webui/dist was regenerated"
+    },
+    {
+      "id": "prometheus-rules-contract",
+      "command": "go test -count=1 ./deploy/observability",
+      "result": "PASS"
+    },
+    {
+      "id": "prometheus-rules-promtool",
+      "command": "docker run --rm --entrypoint /bin/promtool -v $PWD:/workspace:ro prom/prometheus:v3.5.0 test rules /workspace/deploy/observability/prometheus/rule-tests.yml",
+      "result": "PASS",
+      "detail": "firing, non-firing, and resolved cases passed for both new accounting alerts"
+    },
+    {
+      "id": "workbench-go-snippets",
+      "command": "go test /private/tmp/halro-go-example-check/main.go",
+      "result": "PASS",
+      "detail": "non-streaming and streaming examples compiled in a temporary minimum program"
+    },
+    {
+      "id": "diff-check",
+      "command": "git diff --check",
+      "result": "PASS"
+    }
+  ],
+  "environment_observations": [
+    {
+      "id": "go-full-sandbox-first-attempt",
+      "result": "ENVIRONMENT_BLOCK",
+      "detail": "httptest listeners could not bind local loopback sockets in the restricted sandbox"
+    }
+  ],
+  "not_executed": [
+    "real provider smoke",
+    "real KMS or PKI",
+    "real Alertmanager contact point delivery",
+    "production-shaped capture RSS GC and p99",
+    "production deployment",
+    "24 hour soak",
+    "commit push or release"
+  ]
+}

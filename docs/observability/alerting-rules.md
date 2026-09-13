@@ -14,7 +14,8 @@ fields and controlled target labels only.
 
 - Availability: expected Halro target absent/down and the continuous
   `Watchdog` dead-man signal.
-- Accounting: WAL append errors, Ledger queue pressure and analytics lag.
+- Accounting: WAL append errors, Ledger queue pressure, analytics lag, shutdown-truncated
+  Provider attempts, and pending leases older than the configured request/stream ceiling.
 - Delivery: application alert failures and drops.
 - Providers: deployment unhealthy, multiple deployments unhealthy, fallback
   saturation and capacity pressure.

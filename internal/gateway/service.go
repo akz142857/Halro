@@ -1461,20 +1461,19 @@ func (s *Service) ResponsesStream(
 			emittedResponseEvent = true
 		}
 		return nil
-	})
-	if err != nil {
-		return err
-	}
-	events, err := renderer.Complete()
-	if err != nil {
-		return s.returnFailure(ctx, "responses", "provider stream cannot be completed safely", err)
-	}
-	for _, event := range events {
-		if err := emit(event); err != nil {
-			return err
+	}, func() error {
+		events, completeErr := renderer.Complete()
+		if completeErr != nil {
+			return s.returnFailure(ctx, "responses", "provider stream cannot be completed safely", completeErr)
 		}
-	}
-	return nil
+		for _, event := range events {
+			if emitErr := emit(event); emitErr != nil {
+				return emitErr
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 // Messages implements the portable tier of the Anthropic Messages facade.
@@ -1542,7 +1541,7 @@ func (s *Service) MessagesStream(
 	}
 	renderer := anthropicwire.NewStreamRenderer(request.Model)
 	emitted := false
-	err = s.ChatStream(ctx, plaintextKey, chatRequest, func(chunk openaiapi.ChatCompletionResponse) error {
+	err = s.chatStream(ctx, plaintextKey, chatRequest, func(chunk openaiapi.ChatCompletionResponse) error {
 		event, decodeErr := openaiwire.DecodeEvent(chunk)
 		if decodeErr != nil {
 			return decodeErr
@@ -1558,21 +1557,23 @@ func (s *Service) MessagesStream(
 			emitted = true
 		}
 		return nil
+	}, func() error {
+		events, completeErr := renderer.Complete()
+		if completeErr != nil {
+			return s.returnFailure(ctx, "messages", "provider stream cannot be completed safely", completeErr)
+		}
+		for _, event := range events {
+			if emitErr := emit(event); emitErr != nil {
+				return emitErr
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		if emitted {
 			return &provider.Error{Class: provider.ErrorMalformed, Ambiguous: true, Message: "Anthropic stream failed after payload", Cause: err}
 		}
 		return err
-	}
-	events, err := renderer.Complete()
-	if err != nil {
-		return s.returnFailure(ctx, "messages", "provider stream cannot be completed safely", err)
-	}
-	for _, event := range events {
-		if err := emit(event); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -2195,6 +2196,21 @@ func (s *Service) ChatStream(
 	request openaiapi.ChatCompletionRequest,
 	emit func(openaiapi.ChatCompletionResponse) error,
 ) error {
+	return s.chatStream(ctx, plaintextKey, request, emit, nil)
+}
+
+// chatStream keeps facade-specific completion inside the request lifecycle.
+// A portable facade may need to synthesize its terminal wire event after the
+// provider stream ends; that event must be delivered before RequestFinalized
+// records success, while the already-completed provider attempt keeps its real
+// settlement and is never retried.
+func (s *Service) chatStream(
+	ctx context.Context,
+	plaintextKey string,
+	request openaiapi.ChatCompletionRequest,
+	emit func(openaiapi.ChatCompletionResponse) error,
+	complete func() error,
+) error {
 	if !request.Stream {
 		return gatewayError("invalid_request_error", "stream must be true", 400, nil)
 	}
@@ -2202,7 +2218,7 @@ func (s *Service) ChatStream(
 	if err != nil {
 		return gatewayError("invalid_request_error", "request cannot be represented safely", 400, err)
 	}
-	return s.generateStream(ctx, plaintextKey, request.Model, canonical, emit)
+	return s.generateStream(ctx, plaintextKey, request.Model, canonical, emit, complete)
 }
 
 // generateStream is generate's streaming twin on the way in: every facade
@@ -2220,6 +2236,7 @@ func (s *Service) generateStream(
 	publicModel string,
 	canonical semantic.GenerateRequest,
 	emit func(openaiapi.ChatCompletionResponse) error,
+	complete func() error,
 ) error {
 	principal, targets, err := s.resolveRequest(
 		ctx, plaintextKey, publicModel, provider.OperationChatStream,
@@ -2378,6 +2395,14 @@ func (s *Service) generateStream(
 				return err
 			}
 			if providerErr == nil {
+				if complete != nil {
+					if completeErr := complete(); completeErr != nil {
+						if finalizeErr := run.finalize("provider_error"); finalizeErr != nil {
+							return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, errors.Join(completeErr, finalizeErr))
+						}
+						return completeErr
+					}
+				}
 				if err := run.finalize("success"); err != nil {
 					return gatewayError("accounting_unavailable", "request accounting could not be finalized", 503, err)
 				}

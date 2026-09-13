@@ -1,6 +1,6 @@
 # Run Governance 数据流与权威边界
 
-- 状态：S0 冻结，生产实现尚未开始
+- 状态：v0.8.0 已实现并注册 API/Admin surface；目标环境与生产准入证据仍未完成
 - 关联：[契约清单](../implementation/run-governance-s0-contracts.zh-CN.md)、
   [ADR 0025](../adr/0025-run-budget-authority-and-dual-admission.md)、
   [ADR 0026](../adr/0026-business-outcome-evidence-and-cohort-reporting.md)

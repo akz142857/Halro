@@ -1,0 +1,111 @@
+{
+  "schema_version": "halro.design-assessment.gates/v1",
+  "captured_at": "2026-09-13",
+  "target": {
+    "tag": "v0.8.0",
+    "commit": "1d48ecde216ef40e653738f8bdc9657f88a717cc"
+  },
+  "local_environment": {
+    "os": "darwin/arm64",
+    "go": "1.26.6",
+    "node": "24.18.0",
+    "npm": "11.16.0",
+    "supported_frontend_node": "22"
+  },
+  "gates": [
+    {
+      "id": "local-go-sandbox",
+      "command": "GOCACHE=/private/tmp/halro-philosophy-go-cache go test -count=1 ./...",
+      "result": "ENVIRONMENT_BLOCK",
+      "detail": "httptest could not bind [::1]:0 inside the filesystem/network sandbox"
+    },
+    {
+      "id": "local-go-full",
+      "command": "GOCACHE=/private/tmp/halro-philosophy-go-cache go test -count=1 ./...",
+      "result": "FAIL",
+      "detail": "all packages passed except internal/deadman; TestSlowReceiverDoesNotBlockProbeTick measured about 375ms against a 250ms threshold and TempDir cleanup raced"
+    },
+    {
+      "id": "local-deadman-isolated",
+      "command": "go test -count=10 ./internal/deadman -run '^TestSlowReceiverDoesNotBlockProbeTick$'",
+      "result": "PASS",
+      "detail": "10 of 10 isolated repetitions passed; the full-suite result is retained as resource-sensitive evidence instability"
+    },
+    {
+      "id": "local-web-first",
+      "command": "npm --prefix web test",
+      "result": "FAIL",
+      "detail": "while the Go full suite was running: 40 of 44 files and 598 of 604 tests passed; failures were timeouts or delayed async readiness"
+    },
+    {
+      "id": "local-web-failed-surface",
+      "command": "npx vitest run <four initially failing files> --maxWorkers=1",
+      "result": "PASS",
+      "detail": "4 of 4 files and 74 of 74 tests passed"
+    },
+    {
+      "id": "local-web-full-isolated",
+      "command": "npm --prefix web test",
+      "result": "PASS",
+      "detail": "44 of 44 files and 604 of 604 tests passed"
+    },
+    {
+      "id": "local-web-typecheck",
+      "command": "npm --prefix web run typecheck",
+      "result": "PASS"
+    },
+    {
+      "id": "local-web-build-node24",
+      "command": "npm --prefix web run build",
+      "result": "PASS_WITH_UNSUPPORTED_TOOLCHAIN",
+      "detail": "build and browser secret scan passed; output hashes differed from the committed Node 22 build. CONTRIBUTING and workflows require Node 22, so this is not used as bundle-drift evidence; generated changes were restored"
+    },
+    {
+      "id": "local-binary-schema-upgrade",
+      "command": "v0.7.1 init/bootstrap; v0.8.0 open/doctor; v0.7.1 doctor against upgraded temporary directory",
+      "result": "PARTIAL_PASS",
+      "detail": "schema 36 to 37 migration and old-reader rejection were observed directly; the temporary dataset had no realistic Ledger/Usage history and backup/restore and process kill-points were not exercised"
+    },
+    {
+      "id": "hosted-ci",
+      "url": "https://github.com/akz142857/Halro/actions/runs/34593011762",
+      "result": "PASS",
+      "detail": "ordinary CI passed for the exact commit"
+    },
+    {
+      "id": "release-dry-run",
+      "url": "https://github.com/akz142857/Halro/actions/runs/34593630337",
+      "result": "PASS",
+      "detail": "non-publishing release graph passed for the exact commit"
+    },
+    {
+      "id": "release-publishing-run",
+      "url": "https://github.com/akz142857/Halro/actions/runs/34598236997",
+      "result": "PARTIAL",
+      "detail": "quality, SDK, stress, web, artifacts, provenance, publish and container push passed; downstream package repositories failed while creating a GitHub App token because client-id was empty"
+    },
+    {
+      "id": "github-release",
+      "url": "https://github.com/akz142857/Halro/releases/tag/v0.8.0",
+      "result": "PUBLISHED"
+    },
+    {
+      "id": "homebrew-channel",
+      "result": "STALE",
+      "detail": "the public Formula snapshot still referenced v0.7.0"
+    },
+    {
+      "id": "apt-channel",
+      "result": "UNVERIFIED",
+      "detail": "the repository is private and the current credential could not read its contents"
+    }
+  ],
+  "prohibited_or_not_authorized": [
+    "real provider smoke",
+    "real KMS",
+    "external alert delivery",
+    "production deployment",
+    "24 hour soak",
+    "existing user data directory"
+  ]
+}

@@ -182,7 +182,6 @@ Provider 能力是上限，Deployment 能力只能是 Provider 能力的子集�
 | DeepSeek | `https://api.deepseek.com` | GA；默认不声明 embeddings |
 | OpenAI Compatible | 已审核的 HTTPS 地址 | 按实际平台声明能力 |
 | Gemini | `https://generativelanguage.googleapis.com` | Beta，原生适配器 |
-| Bedrock Runtime | `https://bedrock-runtime.<region>.amazonaws.com` | Beta，Converse 文本，显式静态 AWS Credential |
 | Bedrock Mantle | `https://bedrock-mantle.<region>.api.aws` | Beta，可选择 OpenAI Chat、无状态 Responses 或 Anthropic Messages |
 | BigModel（中国大陆） | `https://open.bigmodel.cn` | 实验性；中国大陆通用 API 的 Chat、流式与 Embeddings |
 | Z.AI（海外） | `https://api.z.ai` | 实验性；独立海外 profile 的 Chat 与流式 |
@@ -197,18 +196,13 @@ Coding Plan 与国内通用 API **同一个 host**，只有路径和密钥不同
 其余标识符都会被静默路由到这两个之一，因此模型部署请建在这两个上。
 BigModel 的 Anthropic 兼容路由尚未注册，因为成功响应形状与鉴权契约仍需真实账号验证。
 
-Bedrock Credential 是一个 JSON Secret：
-
-```json
-{"access_key_id":"...","secret_access_key":"...","session_token":"...","region":"us-east-1"}
-```
-
-`session_token` 可省略，`region` 必须与 endpoint 一致。系统不会访问 IMDS，也不会读取宿主机的默认 AWS Credential Chain。
+Bedrock Runtime 与 Agent Runtime 的实现当前处于 **withheld** 状态：创建表单不会列出这些
+Profile，所有写路径都会拒绝新建；已有存量连接只能查看或删除。本版本不要准备 SigV4 Credential
+或 Runtime Deployment。
 
 Mantle Credential 直接保存 Bedrock API Key，不使用上述 JSON。创建凭据时选择 Mantle 访问面，
 再为所需协议分别创建 Provider；一个 Provider 只绑定一个 Profile。Mantle Responses 始终以
-`store:false` 调用 AWS，不创建 Halro 无法管理的 30 天存储状态。Runtime 与 Mantle 的凭据、
-并发上限和能力证据相互隔离。
+`store:false` 调用 AWS，不创建 Halro 无法管理的 30 天存储状态。
 
 ## 4. 调用 Gateway
 

@@ -15,6 +15,7 @@ import (
 // disables capture entirely, which is the default and what every test that does
 // not name it gets.
 type FailureCapture interface {
+	PrepareRecord(failurecapture.Record) failurecapture.Record
 	PutContext(context.Context, failurecapture.Record) (bool, error)
 	Saturated() bool
 }
@@ -68,6 +69,13 @@ func (s *Service) storeCapture(ctx context.Context, record failurecapture.Record
 }
 
 func (s *Service) enqueueCapture(record failurecapture.Record) {
+	if s == nil || s.failureCapture == nil {
+		return
+	}
+	// The channel bounds record count, not bytes. Drop the caller's full JSON
+	// backing arrays before the record can outlive this request in the queue;
+	// PutContext repeats the same idempotent limit at the storage boundary.
+	record = s.failureCapture.PrepareRecord(record)
 	// Tests that install a capture after construction retain the direct behavior.
 	// A normally configured service is marked async by its constructor and starts
 	// its queue atomically before accepting the first record.

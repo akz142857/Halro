@@ -513,6 +513,29 @@ describe("DeveloperPage", () => {
     expect(streamingJava).toContain("HttpResponse<Stream<String>>");
   });
 
+  it("generates Go examples that handle construction, transport, status, body, and stream errors", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Go" }));
+
+    const unary = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(unary).toContain("req, err := http.NewRequest");
+    expect(unary).toContain("resp, err := http.DefaultClient.Do(req)");
+    expect(unary).toContain("defer resp.Body.Close()");
+    expect(unary).toContain("io.LimitReader(resp.Body, 1<<20)");
+    expect(unary).toContain("resp.StatusCode < 200");
+    expect(unary).toContain("fmt.Println(string(responseBody))");
+
+    fireEvent.click(screen.getByRole("button", { name: "SSE 流式" }));
+    const streaming = view.container.querySelector(".developer-code")?.textContent ?? "";
+    expect(streaming).toContain("scanner.Buffer(make([]byte, 64<<10), 1<<20)");
+    expect(streaming).toContain("if err := scanner.Err(); err != nil");
+  });
+
   it("survives a project whose allowed_models came back as null", async () => {
     // The admin API accepts projects without allowed_models and serialises them as null;
     // dereferencing it used to throw during render and blank the whole console.

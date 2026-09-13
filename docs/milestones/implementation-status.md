@@ -1,9 +1,11 @@
 # Implementation status
 
-Last updated: 2026-08-04
+Last updated: 2026-09-13
 
 This file records implementation evidence for the current source tree. Release
-scope is governed by reviewed release notes and release gates.
+scope is governed by the current served Provider Profile matrix, reviewed
+release notes, and release gates. A completed implementation row is not a claim
+that its Profile is offered by the current build.
 
 ## Completed foundation
 
@@ -40,10 +42,11 @@ scope is governed by reviewed release notes and release gates.
 | Provider profile Phase 0A | registered versioned immutable manifests bind Provider type to Access Surface, Operation Registry and Credential Scheme; scheme-specific authorizers are constructed outside adapters; capability evidence is persisted as verified/declared/legacy/unsupported, exposed in Admin, available to evidence-aware route resolution, and migrated atomically with old records kept conservatively legacy through `LegacyAdapterBridge`; normal writes are strict and Provider/Deployment capability and evidence relations are transactionally enforced |
 | Real Provider evidence | fail-closed exact-commit GA matrix runner with per-profile credential isolation, output scrubbing, chat/stream/embedding contracts, and 0600 JSON evidence; execution still requires external accounts |
 | Gemini Beta adapter | native text `generateContent`, SSE, float embeddings, usage normalization, secret-safe errors, and opt-in real smoke test |
-| Bedrock Beta adapter | fixed `bedrock.runtime.converse.text.v1` text-only Converse/ConverseStream profile; strict encrypted credential JSON, explicit-session SigV4, region binding, AWS EventStream CRC/order/truncation checks, conservative stop-reason mapping, Provider request ID/code/Retry-After extraction, secret-safe errors, Admin hot-load integration, and opt-in real smoke test |
+| Bedrock Runtime adapter (withheld) | implemented `bedrock.runtime.converse.text.v1` text-only Converse/ConverseStream profile and SigV4/stream safety tests; the current Profile row is withheld, so Admin writes and routing cannot create or serve it |
 | Bedrock Mantle Phase 1C | isolated `bedrock-mantle` surface with OpenAI Chat, stateless Responses and Anthropic Messages profiles; regional origin pinning, encrypted Bedrock API-key scheme, Bearer/x-api-key wire auth, `store:false`, native Thinking signature round-trip, Admin profile selection, and raw JSON/SSE fixtures |
-| Bedrock Invoke Phase 2A | versioned `bedrock.runtime.invoke.titan-embed-text-v2.v1` model-family schema over `/v1/embeddings`; exact Titan V2 model pin, SigV4 Runtime isolation, single-string/float/256-512-1024 contract, normalized native requests, strict vector/usage validation, and pre-I/O rejection without arbitrary JSON or batch fan-out |
-| Phase 2 media/resources | OpenAI Moderations, Images, Audio Transcription/Speech, Files and Batches; Bedrock Titan Image V2, Cohere Rerank 3.5 on isolated Agent Runtime, and Nova Reel Async; bbolt project ownership, opaque IDs, idempotency/unknown-outcome protection, owner-pinned reads, local private file objects, fixed-request pricing, redaction, TTL reaping, and fail-closed unsupported Bedrock cancellation |
+| Bedrock Invoke Phase 2A (withheld) | implemented Titan Text Embeddings V2 schema and tests; the current Runtime Profile is withheld and cannot be created or routed |
+| Phase 2 media/resources | OpenAI Moderations, Images, Audio Transcription/Speech, Files and Batches are served as Experimental; Bedrock Titan Image V2, Cohere Rerank 3.5 and Nova Reel Async are implemented but their Runtime/Agent Runtime Profiles are withheld |
+| Run Governance | implemented Work Unit, Run, Outcome Definition/recording, Accounting/Governance journals, fixed-watermark projections, Admin query/UI, and export surfaces; target-environment production evidence remains separate |
 | Runtime provider loading | audience-bound decrypt, HTTPS/host policy, SafeTransport, route snapshot |
 | Offline bootstrap | atomic Provider/Route/Project/Key creation, secret via stdin, Gateway key shown once |
 | Internal key lifecycle | offline one-time key issuance and revisioned disable with snapshot reload tests |

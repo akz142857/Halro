@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -30,6 +31,32 @@ func finalizedOutcome(t *testing.T, f fixture) string {
 		t.Fatal("no RequestFinalized event was written")
 	}
 	return outcome
+}
+
+func settledOutcome(t *testing.T, f fixture) string {
+	t.Helper()
+	settled := settledEvent(t, f)
+	if settled.Outcome == "" {
+		t.Fatal("AttemptSettled event has no outcome")
+	}
+	return settled.Outcome
+}
+
+func settledEvent(t *testing.T, f fixture) ledger.Event {
+	t.Helper()
+	var settled ledger.Event
+	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
+		if record.Event.Kind == ledger.EventAttemptSettled {
+			settled = record.Event
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if settled.Kind == 0 {
+		t.Fatal("no AttemptSettled event was written")
+	}
+	return settled
 }
 
 // An answer the caller's wire cannot carry used to be discovered by the facade,
@@ -155,5 +182,60 @@ func TestMessagesRenderFailureIsNotRecordedAsSuccess(t *testing.T) {
 	}
 	if outcome := finalizedOutcome(t, f); outcome == "success" {
 		t.Fatal("the ledger recorded success for a request the caller saw fail")
+	}
+}
+
+func TestResponsesFinalStreamEventFailureIsNotRecordedAsSuccess(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	deliveryFailure := errors.New("response.completed could not be delivered")
+	maxOutputTokens := int64(16)
+	err := f.service.ResponsesStream(context.Background(), f.plaintext, openaiapi.ResponseRequest{
+		Model: "chat", Input: json.RawMessage(`"hello"`), Stream: true, MaxOutputTokens: &maxOutputTokens,
+	}, func(event openaiapi.ResponseStreamEvent) error {
+		if event.Type == "response.completed" {
+			return deliveryFailure
+		}
+		return nil
+	})
+	if !errors.Is(err, deliveryFailure) {
+		t.Fatalf("final delivery error = %v, want %v", err, deliveryFailure)
+	}
+	if outcome := settledOutcome(t, f); outcome != "success" {
+		t.Fatalf("provider settlement = %q, want success", outcome)
+	}
+	if outcome := finalizedOutcome(t, f); outcome != "provider_error" {
+		t.Fatalf("request outcome = %q, want provider_error", outcome)
+	}
+	if f.adapter.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", f.adapter.calls)
+	}
+}
+
+func TestMessagesFinalStreamEventFailureIsNotRecordedAsSuccess(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	deliveryFailure := errors.New("message_stop could not be delivered")
+	err := f.service.MessagesStream(context.Background(), f.plaintext, anthropicapi.MessageRequest{
+		Model: "chat", MaxTokens: 16, Stream: true,
+		Messages: []anthropicapi.MessageParam{{Role: "user", Content: anthropicapi.ContentBlocks{{Type: "text", Text: "hello"}}}},
+	}, func(event anthropicapi.StreamEvent) error {
+		if event.Type == "message_stop" {
+			return deliveryFailure
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("message_stop delivery failure was not returned")
+	}
+	settled := settledEvent(t, f)
+	if settled.Outcome != "provider_error" || settled.CommittedMicrosUSD == nil || *settled.CommittedMicrosUSD <= 0 {
+		t.Fatalf("provider settlement did not retain cost: %#v", settled)
+	}
+	if outcome := finalizedOutcome(t, f); outcome != "provider_error" {
+		t.Fatalf("request outcome = %q, want provider_error", outcome)
+	}
+	if f.adapter.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", f.adapter.calls)
 	}
 }

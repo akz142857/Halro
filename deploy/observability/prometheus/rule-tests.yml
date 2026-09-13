@@ -125,6 +125,44 @@ tests:
 
   - interval: 1m
     input_series:
+      - series: 'halro_shutdown_truncated_attempts_total{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 0 1x20'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroShutdownTruncatedAttempts
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroShutdownTruncatedAttempts
+        exp_alerts:
+          - exp_labels: {alertname: HalroShutdownTruncatedAttempts, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro exhausted its shutdown budget with Provider attempts still active, runbook_url: /docs/observability/operations-runbook.md#halroshutdowntruncatedattempts}
+      - eval_time: 13m
+        alertname: HalroShutdownTruncatedAttempts
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_accounting_pending_leases{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 1 1 1 0'
+      - series: 'halro_accounting_oldest_pending_lease_age_seconds{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 70 80 90 0'
+      - series: 'halro_accounting_pending_lease_normal_max_age_seconds{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '60x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroAccountingLeaseStale
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroAccountingLeaseStale
+        exp_alerts:
+          - exp_labels: {alertname: HalroAccountingLeaseStale, category: accounting, cluster: standalone, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro Accounting Lease exceeded the configured request or stream duration, runbook_url: /docs/observability/operations-runbook.md#halroaccountingleasestale}
+      - eval_time: 4m
+        alertname: HalroAccountingLeaseStale
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
       - series: 'halro_signed_model_catalog_degraded{environment="test",region="local",cluster="standalone",instance="one"}'
         values: '1x20 0x5'
     alert_rule_test:

@@ -25,6 +25,10 @@ type recordingCapture struct {
 	err       error
 }
 
+func (c *recordingCapture) PrepareRecord(record failurecapture.Record) failurecapture.Record {
+	return record
+}
+
 func (c *recordingCapture) Put(record failurecapture.Record) (bool, error) {
 	return c.PutContext(context.Background(), record)
 }
@@ -263,6 +267,15 @@ type blockingCapture struct {
 	entered     chan struct{}
 	release     chan struct{}
 	enteredOnce sync.Once
+	maxBytes    int
+}
+
+func (c *blockingCapture) PrepareRecord(record failurecapture.Record) failurecapture.Record {
+	if c.maxBytes > 0 && len(record.GatewayRequest) > c.maxBytes {
+		record.GatewayRequest = json.RawMessage(`"bounded"`)
+		record.GatewayRequestTruncated = true
+	}
+	return record
 }
 
 func (c *blockingCapture) PutContext(ctx context.Context, _ failurecapture.Record) (bool, error) {
@@ -356,5 +369,37 @@ func TestFailureCaptureShutdownCancelsAnActiveWrite(t *testing.T) {
 	case <-f.service.captureDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the cancelled capture worker did not stop")
+	}
+}
+
+func TestFailureCaptureIsByteBoundedBeforeItWaitsInTheQueue(t *testing.T) {
+	f := newFixture(t, 1_000_000)
+	defer f.close()
+	blocking := &blockingCapture{
+		entered: make(chan struct{}), release: make(chan struct{}), maxBytes: 64,
+	}
+	f.service.failureCapture = blocking
+	f.service.startFailureCapture()
+
+	f.service.enqueueCapture(failurecapture.Record{RequestID: "active", ProjectID: "project_1"})
+	select {
+	case <-blocking.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the capture never entered the blocking store")
+	}
+	f.service.enqueueCapture(failurecapture.Record{
+		RequestID: "queued", ProjectID: "project_1",
+		GatewayRequest: json.RawMessage(`{"prompt":"` + strings.Repeat("x", 1<<20) + `"}`),
+	})
+	queued := <-f.service.captureQueue
+	if !queued.GatewayRequestTruncated || len(queued.GatewayRequest) > blocking.maxBytes {
+		t.Fatalf("queued capture retained the unbounded payload: truncated=%t bytes=%d", queued.GatewayRequestTruncated, len(queued.GatewayRequest))
+	}
+
+	close(blocking.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := f.service.ShutdownFailureCapture(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -40,9 +40,9 @@ The dependency graph then enforces these jobs and steps:
 
 There is no `environment:` on `publish`, no independent approval pause, no
 `release-governance` job, and no M11 evidence-secret check. The release graph
-also does not run the fuzz suites or compare the committed web bundle for
-drift; those checks may be required by the pre-release assessment or normal
-repository verification, but they are not current release-workflow gates.
+does not run the fuzz suites. It does rebuild the web bundle and compare
+`internal/webui/dist` with the committed artifact before release; that drift
+check is a current release-workflow gate.
 
 ## 2. Evidence emitted by every completed provenance job
 

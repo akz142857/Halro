@@ -47,6 +47,20 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Immediate: stop new Provider traffic, inspect filesystem capacity/permissions/I/O, and preserve the data directory.
 - Escalate: treat committed-data corruption or repeated fsync failure as an accounting incident; do not edit the WAL.
 
+### HalroShutdownTruncatedAttempts
+
+- Trigger: `halro_shutdown_truncated_attempts_total` increased in the last ten minutes; the process exhausted its graceful-shutdown budget and forcibly closed one or more active Provider attempts.
+- Immediate: preserve the previous process logs and data directory, run `halro doctor`, and identify the restart window and affected in-flight request/attempt IDs from the Ledger and structured attempt records. Do not retry ambiguous calls automatically.
+- Recover: confirm startup recovery settled every `AttemptStarted` lease conservatively, `halro_accounting_pending_leases` returned to zero, readiness is healthy, and Project balances include the recovered attempts before restoring ordinary traffic.
+- Escalate: page the accounting owner if recovery fails, a pending lease remains, or the configured shutdown timeout is lower than the longest permitted request/stream duration. Increase a timeout only after proving the host can drain within it.
+
+### HalroAccountingLeaseStale
+
+- Trigger: a pending Accounting Lease remains older than `max(gateway.route_total_timeout, gateway.stream_max_duration)` for two minutes. The exported `halro_accounting_pending_lease_normal_max_age_seconds` is that configured ceiling; the alert's `for` duration is scrape/jitter grace, not permission for a longer request.
+- Immediate: correlate the oldest lease with active Provider attempts and request deadlines. Check for a stuck adapter, blocked network read, stalled Ledger writer, or an incomplete startup recovery; do not delete or edit the lease.
+- Recover: cancel or drain through the normal request lifecycle, or restart only through the documented graceful-shutdown path. Require a terminal Attempt settlement, a non-success Request finalization where appropriate, zero stale leases, and a healthy `halro doctor` result.
+- Escalate: page the accounting and Provider owners when the lease cannot be closed within one additional route timeout, or immediately if WAL/readiness is degraded. Treat the Provider result as ambiguous unless the durable attempt record proves it was never sent.
+
 ### HalroUsageAnalyticsLagging
 
 - Trigger: derivative Usage aggregation has remained behind the Ledger for ten minutes.

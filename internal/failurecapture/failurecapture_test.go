@@ -152,6 +152,33 @@ func TestAnOversizedCaptureIsTruncatedAndFlagged(t *testing.T) {
 	}
 }
 
+func TestPrepareRecordAppliesTheByteCeilingBeforeAsyncOwnership(t *testing.T) {
+	const ceiling = 64
+	store, _ := newStore(t, func(options *Options) { options.MaxBytes = ceiling })
+	large := record("req_1")
+	large.GatewayRequest = json.RawMessage(`{"prompt":"` + strings.Repeat("g", 4096) + `"}`)
+	large.Request = json.RawMessage(`{"prompt":"` + strings.Repeat("x", 4096) + `"}`)
+	large.Response = json.RawMessage(`{"answer":"` + strings.Repeat("y", 4096) + `"}`)
+
+	prepared := store.PrepareRecord(large)
+	for name, side := range map[string]json.RawMessage{
+		"gateway_request": prepared.GatewayRequest,
+		"request":         prepared.Request,
+		"response":        prepared.Response,
+	} {
+		if len(side) > ceiling {
+			t.Fatalf("%s kept %d bytes before enqueue against ceiling %d", name, len(side), ceiling)
+		}
+		var decoded any
+		if err := json.Unmarshal(side, &decoded); err != nil {
+			t.Fatalf("%s is no longer valid JSON: %v", name, err)
+		}
+	}
+	if !prepared.GatewayRequestTruncated || !prepared.RequestTruncated || !prepared.ResponseTruncated {
+		t.Fatalf("prepared record did not mark every truncated side: %#v", prepared)
+	}
+}
+
 // An upstream failing everything must not be able to grow this store without
 // bound — it shares a disk with the ledger the accounting depends on.
 func TestCaptureStopsAtTheDailyCeilingAndSaysSoOnce(t *testing.T) {

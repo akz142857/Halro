@@ -1022,8 +1022,8 @@ needs it and the hostname/IP boundary has been reviewed.
 | DeepSeek | `https://api.deepseek.com` | API key | GA chat/stream profile |
 | OpenAI-compatible | reviewed HTTPS origin | API key | conservative capabilities; opt in extras |
 | Gemini | `https://generativelanguage.googleapis.com` | API key | Beta text chat/stream and float embeddings |
-| Bedrock Runtime | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | Beta Converse, Titan Embeddings/Image, or Nova Reel Async profile |
-| Bedrock Agent Runtime | `https://bedrock-agent-runtime.us-east-1.amazonaws.com` | JSON below | Beta Cohere Rerank 3.5 profile only |
+| Bedrock Runtime | `https://bedrock-runtime.us-east-1.amazonaws.com` | JSON below | **Withheld in this build**; implemented profiles cannot be created or routed |
+| Bedrock Agent Runtime | `https://bedrock-agent-runtime.us-east-1.amazonaws.com` | JSON below | **Withheld in this build**; implemented Cohere Rerank profile cannot be created or routed |
 | Bedrock Mantle | `https://bedrock-mantle.us-east-1.api.aws` | Bedrock API key | Beta OpenAI Chat, stateless Responses, or Anthropic Messages |
 | BigModel (mainland China) | `https://open.bigmodel.cn` | BigModel API key | Experimental Chat/stream/embeddings; fixed mainland general API surface |
 | Z.AI (global) | `https://api.z.ai` | Z.AI API key | Experimental Chat/stream; separate global surface and credential |
@@ -1102,6 +1102,8 @@ Halro's host allowlist and never appear in its audit trail. The profile does not
 stream and does not serve embeddings; keep the chat/embeddings connection for
 those.
 
+The following Runtime details exist for source review and for operators removing
+an old stored connection; they are not setup instructions for this build.
 Bedrock JSON is one encrypted secret. `session_token` is optional and `region`
 must match the endpoint hostname:
 

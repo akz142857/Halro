@@ -359,7 +359,7 @@ func (a *fakeAdapter) Operations() provider.OperationRegistry {
 
 func (a *fakeAdapter) CapabilityEvidence() domain.CapabilityEvidenceSet {
 	return domain.EvidenceForCapabilities(
-		domain.ProviderCapabilities{Chat: true, Streaming: true, Embeddings: true},
+		domain.ProviderCapabilities{Chat: true, Streaming: true, StreamUsage: true, Embeddings: true},
 		domain.EvidenceDeclared,
 	)
 }
@@ -550,6 +550,7 @@ func newFixtureShaped(
 		PublicModel:            "chat",
 		ProviderModel:          "provider-model",
 		Adapter:                adapter,
+		Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true, Embeddings: true},
 		InputMicrosPerMillion:  1_000_000,
 		OutputMicrosPerMillion: 2_000_000,
 	}); err != nil {

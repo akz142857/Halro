@@ -66,6 +66,15 @@
 
 ## 当前评审计划
 
+- [2026-09-13 系统设计哲学评估方案](260913/software-design-philosophy-assessment-plan.zh-CN.md) —
+  以 Google SRE、antirez/Redis、OpenAI 公开评估方法、SQLite、Linux 与 Go 的可迁移原则为参照，
+  评估 Halro 的产品边界、复杂度价值、正确性、可靠性、安全、兼容性与长期演进。第一轮多角色
+  发现与非作者反证已完成，见 [阶段性评估报告](260913-design-philosophy/assessment-report.md)、
+  [评分卡](260913-design-philosophy/scorecard.md)、[净化 findings](260913-design-philosophy/findings.md)
+  与 [30/60/90 天路线图](260913-design-philosophy/roadmap.md)。首轮建议顺序内的整改已完成，见
+  [顺序整改复评](260913-design-philosophy/remediation-report.md)；`PHIL-A04` 与 E3/E4 生产证据仍待完成。
+  当前检查覆盖仍低于方案的 80% 有效总分门槛，因此没有输出官方 100 分总分；生产与 E4 主张仍为
+  `UNVERIFIED`。
 - [2026-09-05 全面工程评审报告](260905/review-report.md) — S0–S4 已完成，确认18项问题（3 P1、14 P2、1 P3）；全部P1独立复核，建议不发布。完整Go/前端、SDK本地对照、升级/备份恢复与30分钟smoke有当前证据；真实上游/生产/24h及额外浏览器矩阵未验收。见 [计划](260905/review-plan.md)、[整改队列](260905/progress.md)、[完成核对](260905/completion-audit.md)。
 
 ## 历史评审

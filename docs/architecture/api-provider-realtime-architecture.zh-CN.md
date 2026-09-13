@@ -1,7 +1,7 @@
 # Halro 多协议 LLM API、Provider 与 Realtime 架构设计
 
-状态：设计提案 v7；Phase 0、Phase 1 与已授权的 Phase 2 范围已实现；Phase 3 及以后仍是需求门控或延期设计，不代表现有能力<br>
-最后更新：2026-08-02<br>
+状态：设计提案 v7；实现状态不等于当前 served matrix，后者以 Provider Profile 表为准<br>
+最后更新：2026-09-13<br>
 适用范围：Gateway 数据面、Provider Adapter、能力协商、实时会话和未来分布式部署
 
 ## 1. 背景
@@ -33,7 +33,8 @@ Provider、模型、协议和部署形态持续演进。
 - `POST /v1/moderations`、`POST /v1/images/generations`；
 - `POST /v1/audio/transcriptions`、`POST /v1/audio/speech`；
 - Files/Batches 的已发布 Method 子集；
-- Halro 扩展的 `POST /v1/rerank` 与 Async Invoke 资源接口。
+- Halro 扩展的 `POST /v1/rerank` 与 Async Invoke 资源代码已实现，但当前唯一后端 Profile 被
+  withheld，因此本构建不提供这两个端点的可创建 Deployment。
 
 当前 Provider 层支持请求级 Chat、SSE Streaming、Embeddings，以及已授权 Phase 2 的媒体、审核、
 重排和资源生命周期 Adapter，并已接入：
@@ -43,10 +44,11 @@ Provider、模型、协议和部署形态持续演进。
 - DeepSeek；
 - 通用 OpenAI-compatible Provider；
 - Gemini Beta 文本生成、SSE 和 Embeddings；
-- AWS Bedrock Beta Converse/ConverseStream。
 - AWS Bedrock Mantle OpenAI Chat、Stateless Responses 与 Anthropic Messages。
-- AWS Bedrock Runtime Titan Text Embeddings V2、Titan Image V2 与 Nova Reel Async；
-- AWS Bedrock Agent Runtime Cohere Rerank 3.5。
+
+Bedrock Runtime 的 Converse、Titan Text Embeddings V2、Titan Image V2、Nova Reel Async，以及
+Bedrock Agent Runtime 的 Cohere Rerank 3.5 只有实现与测试代码，当前 Profile 表将它们全部标为
+`Withheld`；Admin 创建面、写路径和路由都不提供这些能力。当前构建只通过 Mantle 提供 Bedrock。
 
 Phase 0A 已在当前代码中增加版本化 Provider Profile、Access Surface、Operation Registry、
 Credential Scheme、逐能力证据和 LegacyAdapterBridge。旧记录经原子 Schema Migration 标记为
