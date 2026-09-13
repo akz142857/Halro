@@ -288,7 +288,8 @@ func TestGatewayPersistsProviderProductAttributionOnEveryAttemptEvent(t *testing
 		}
 		wantKinds[record.Event.Kind] = true
 		if record.Event.OfferingID != domain.OfferingOpenAIAPI ||
-			record.Event.ProfileID != domain.ProfileOpenAIChatEmbeddings {
+			record.Event.ProfileID != domain.ProfileOpenAIChatEmbeddings ||
+			record.Event.ProviderPrimitive != provider.PrimitiveOpenAIChatCompletions {
 			t.Fatalf("%v lost provider product attribution: %#v", record.Event.Kind, record.Event)
 		}
 		return nil
@@ -1875,12 +1876,12 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer run.close()
-	attempt, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 1)
+	attempt, err := f.service.startAttempt(ctx, run, target, provider.OperationChat, 10, 5, 0, 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	second, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 2)
+	second, err := f.service.startAttempt(ctx, run, target, provider.OperationChat, 10, 5, 0, 0, 2)
 	if err == nil {
 		_ = second.abort("test_cleanup")
 		t.Fatal("the fixture does not actually bound concurrency, so this proves nothing")
@@ -1889,7 +1890,7 @@ func TestAbortReleasesEverythingTheAttemptTook(t *testing.T) {
 	if abortErr := attempt.abort("unsupported_feature"); abortErr != nil {
 		t.Fatalf("abort could not settle the attempt: %v", abortErr)
 	}
-	replacement, err := f.service.startAttempt(ctx, run, target, 10, 5, 0, 0, 3)
+	replacement, err := f.service.startAttempt(ctx, run, target, provider.OperationChat, 10, 5, 0, 0, 3)
 	if err != nil {
 		t.Fatalf("the aborted attempt held its concurrency slot: %v", err)
 	}

@@ -2,9 +2,9 @@
 
 > **Status.** Two things are described here, and until now the document did not
 > separate them. The **v0.x line** is what `.github/workflows/release.yml`
-> actually does today: twelve jobs — `prepare`, `quality`, `sdk-compatibility`,
+> actually does today: thirteen jobs — `prepare`, `quality`, `sdk-compatibility`,
 > `stress`, `web`, `binaries`, `container`, `debian-packages`, `provenance`,
-> `publish`, `container-push`, `downstream-package-repositories` — with the
+> `downstream-preflight`, `publish`, `container-push`, `downstream-package-repositories` — with the
 > publication preconditions being `prepare`'s CHANGELOG section check, a
 > successful ordinary `ci.yml` push run for the exact `main` commit, and a
 > manual `workflow_dispatch` from `main`. There is no environment approval, no `release-governance` preflight,
@@ -30,13 +30,14 @@ entry. It runs the full matrix, creates the annotated version tag only after all
 gates pass, publishes the immutable release and container images, then dispatches
 that exact version and full commit to both package repositories. The
 gates that genuinely hold are the exact-commit ordinary CI proof plus the ones
-inside those jobs: `go test`, `go test -race`, `go vet`, `govulncheck`, the
-ordinary-CI fuzz targets, the official-SDK compatibility and dependency audits,
+inside those jobs: `go test -count=1`, `go test -race -count=1`, `go vet`, `govulncheck`, the
+official-SDK compatibility and dependency audits,
 the SSE stress run, the frontend suite/typecheck/bundle-drift check, Trivy on
 both containers, reproducible packaging, source/binary/container SBOMs, cosign
 signatures, and `gh attestation verify` before publication. `prepare` refuses to
 start the matrix unless `CHANGELOG.md` carries a section for the version being
-tagged.
+tagged. The required exact-commit ordinary CI run separately supplies the fuzz
+jobs; the release workflow does not rerun fuzz itself.
 
 What is **not** enforced anywhere: that the CHANGELOG section is complete, that
 the pre-release assessment in `docs/verification/assessments/` has been filled
@@ -109,6 +110,12 @@ thing: run `.github/workflows/release.yml` on `main` with the new version and
 APT switches the GitOps image by digest, executes clean-host Debian/Ubuntu
 amd64/arm64 acceptance, waits for the Homebrew Formula, and only then updates
 the public install page.
+
+For a publishing run, the workflow creates a short-lived App token and verifies
+that both downstream repositories are installed and writable before it creates
+a tag or GitHub Release. This preflight is read-only; the post-publish job still
+creates a fresh token and dispatches the exact published version and commit, so
+a transient channel failure remains safely replayable.
 
 ## v0.x package release operator checklist
 

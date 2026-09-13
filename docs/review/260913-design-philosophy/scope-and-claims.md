@@ -5,7 +5,12 @@
 - 目标 tag：`v0.8.0`
 - 分支：`main`，开始时与 `origin/main` 一致
 - 方案：[`../260913/software-design-philosophy-assessment-plan.zh-CN.md`](../260913/software-design-philosophy-assessment-plan.zh-CN.md)
-- 状态：第一轮多角色发现与非作者反证完成；S3/S4 运行覆盖约 70%，专业总分暂不成立
+- 冻结状态：第一轮多角色发现与非作者反证完成；当时 S3/S4 运行覆盖约 70%，专业总分暂不成立
+
+> 后续复评（2026-09-13）：整改候选工作树的保守加权覆盖为 83.68%（展示为 84%），总分为
+> 66.5/100（展示为 67/100）；六个首轮 active P2 已在候选上关闭。候选尚未发布，真实 Provider、
+> KMS/PKI、Contact Point、clean-host v0.8.0 包渠道和 24h soak 仍为 BLOCKED/UNVERIFIED，生产准入
+> 继续 No-Go。当前状态见 [顺序整改复评](remediation-report.md) 和 [复评评分卡](scorecard.md)。
 
 ## 1. 工作区边界
 

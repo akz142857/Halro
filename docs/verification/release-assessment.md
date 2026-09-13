@@ -2,13 +2,20 @@
 
 Status: standing procedure for every v0.x tag, first applied to v0.3.0.
 
-This is an **assessment, not a gate** (owner decision 2026-08-16: the v0.x
-line has no release candidates and no CI-enforced release gates). Nothing here
-blocks a tag mechanically; the output is a filled record and an explicit
-go/no-go by the owner. The retired 1.0.0 gates (24h soak, full real-account
-Provider matrix, signed-tag governance) stay retired; where a lightweight
-descendant of one of them appears below, it is triggered by what the release
-actually changed, not run unconditionally.
+This is an **assessment, not a mechanically enforced governance gate** (owner
+decision 2026-08-16: the v0.x line has no release candidates or CI-enforced
+assessment/reviewer approval). The release workflow still has mandatory build,
+test, provenance and publication preconditions; this document itself does not
+block a tag. Its output is a filled record and an explicit go/no-go by the
+owner. The retired 1.0.0 gates (24h soak, full real-account Provider matrix,
+signed-tag governance) stay retired; where a lightweight descendant of one of
+them appears below, it is triggered by what the release actually changed, not
+run unconditionally.
+
+“Retired” only describes the v0.x tag procedure. It is not evidence that a
+deployment is production-ready: any production admission record must continue
+to mark real Provider/KMS, external Contact Point and long-soak claims
+unverified until their own target evidence exists.
 
 Run it on the exact commit the tag will point at, before pushing the tag.
 `AGENTS.md` still owns day-to-day verification scope; this document only
@@ -39,10 +46,10 @@ A release that touches none of the trigger rows still runs §1a–b, §3, §4, �
 
 ## 1. Defect pass (bugs)
 
-**a. Full gate on the release commit.** `make check` (fmt, test, race, vet,
-frontend tests, observability check), plus `git diff --exit-code -- internal/webui/dist`
-after a fresh `make frontend` — the embedded bundle must be the one `web/src`
-builds.
+**a. Full gate on the release commit.** `make full-check` is the single local
+evidence entry point: fmt, fresh Go test/race results, vet, frontend tests,
+observability validation, frontend typecheck/production build, and committed
+bundle drift. Use `make check` only as the faster non-production aggregation.
 
 **b. Range review.** A code review over `${PREV}..HEAD` as one diff — not
 per-PR, because bugs at the seams between PRs are exactly what per-PR review
@@ -172,16 +179,22 @@ The verdict is a judgement; publishing is a button. Once `chore(release): vX.Y.Z
 is on the default branch — the changelog section, the README image tags, the web
 package version, and the dependency-license drift hashes that version bump moves
 — open **Actions → release → Run workflow**, leave the branch on `main`, and type
-the version. `dry_run` runs every gate and builds, signs and attests every
-artifact while publishing nothing, which is how a release is rehearsed.
+the version. `dry_run` runs the build, test, signing and attestation graph while
+publishing nothing, which is how a release is rehearsed. It deliberately skips
+the publishing-only downstream credential preflight, so the operator must still
+verify that App setup before the formal run.
 
-The run refuses before spending the build matrix if the version is not `vX.Y.Z`,
-if that tag already exists, if the run is not on the default branch, or if
-`CHANGELOG.md` has no section for it. The tag is created in the publish job, so
-it appears only once every gate has passed and every artifact has been built,
-signed and verified — a release that fails leaves no tag to retract and none that
-a reader could mistake for a published one.
+The run refuses before spending the build matrix if the version is invalid, the
+run is not on the default branch, exact-commit ordinary CI is absent, or
+`CHANGELOG.md` has no section for it. A dry run also refuses any existing tag.
+A formal run accepts an existing tag only when it resolves to this exact commit
+and no GitHub Release exists; that is the bounded recovery path for a failure
+between tag creation and Release publication. Any other existing tag, or an
+already-published Release, is a hard failure.
 
-Pushing a `vX.Y.Z` tag publishes the same way, for a release driven from a
-terminal. Both entry points resolve the version in the same `prepare` job, so
-they cannot disagree about what is being released.
+Do not push a release tag manually. `release.yml` is triggered only through
+`workflow_dispatch` on the default branch and creates the annotated tag in its
+publish job after the build, verification and downstream preflight jobs pass.
+If a later publish step fails, the exact unpublished tag may remain; recover by
+rerunning the failed jobs or by a fresh formal dispatch at the same commit,
+never by moving or replacing the tag.

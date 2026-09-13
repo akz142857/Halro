@@ -5,6 +5,12 @@
 快照时间：2026-09-13（Asia/Singapore）。本文件区分本地、托管 CI、正式发布与下游渠道，
 不把其中任一层的结果外推为另一层。
 
+> 后续状态（2026-09-13）：本文件第 1–4 节是冻结 SHA 的首轮证据。整改工作树新增了 fresh full gate、
+> 真实 Ledger/Usage 双二进制恢复、Admin 浏览器旅程、1000 SSE cleanup 和 8 轮交替 benchstat；原始摘要
+> 与文件见 [E3 completion evidence](evidence/e3-completion/README.md)。该工作树尚未形成新的提交 SHA，
+> Homebrew 仍为 v0.7.0、APT `InRelease` 返回 503，真实 Provider/KMS/Contact Point/24h soak 未执行，
+> 因而不能把新增本地证据表述为 v0.8.0 渠道或生产证明。
+
 ## 1. 环境
 
 - 本地：macOS arm64；Go 1.26.6；Node v24.18.0；npm 11.16.0；Git 2.50.1。

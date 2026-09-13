@@ -12,6 +12,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 // testChainKey is a fixed 32-byte Ledger HMAC key for tests that append.
@@ -197,9 +198,10 @@ func TestRecoverPendingLeasePreservesFrozenProviderAttribution(t *testing.T) {
 				PriceSnapshot: testPriceSnapshot(t, domain.BillingModeMetered), PreparedInputTokens: 10, PreparedOutputTokens: 20,
 				TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			}, AttemptMetadata{
-				DeploymentID: "dep_bigmodel", ProviderID: "provider_bigmodel",
+				RouteID: "route_bigmodel", DeploymentID: "dep_bigmodel", ProviderID: "provider_bigmodel",
 				OfferingID: domain.OfferingBigModelCodingPlan, ProfileID: domain.ProfileBigModelCNCodingChat,
-				AccountRegionID: domain.RegionCN,
+				ProviderPrimitive: provider.PrimitiveBigModelChat,
+				AccountRegionID:   domain.RegionCN, ProviderModel: "glm-4.5",
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -217,10 +219,11 @@ func TestRecoverPendingLeasePreservesFrozenProviderAttribution(t *testing.T) {
 				t.Fatal("recovery did not produce a settlement")
 			}
 			got := settled.Settlement
-			if got.OfferingID != attempt.OfferingID || got.ProfileID != attempt.ProfileID || got.AccountRegionID != attempt.AccountRegionID {
-				t.Fatalf("recovered attribution=(%q,%q,%q), want (%q,%q,%q)",
-					got.OfferingID, got.ProfileID, got.AccountRegionID,
-					attempt.OfferingID, attempt.ProfileID, attempt.AccountRegionID)
+			if got.RouteID != attempt.RouteID || got.DeploymentID != attempt.DeploymentID ||
+				got.ProviderID != attempt.ProviderID || got.OfferingID != attempt.OfferingID ||
+				got.ProfileID != attempt.ProfileID || got.AccountRegionID != attempt.AccountRegionID ||
+				got.ProviderModel != attempt.ProviderModel || got.ProviderPrimitive != attempt.ProviderPrimitive {
+				t.Fatalf("recovered provider attribution=%#v, want attempt %#v", got, attempt)
 			}
 			if got.FailurePhase != "accounting" {
 				t.Fatalf("recovered failure phase=%q, want accounting", got.FailurePhase)

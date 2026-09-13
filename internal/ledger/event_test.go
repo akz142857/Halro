@@ -62,7 +62,7 @@ func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
 		OccurredAt:         time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC),
 		CommittedMicrosUSD: MicrosUSD(1),
 		OfferingID:         domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
-		AccountRegionID: domain.RegionGlobal, Outcome: "success",
+		AccountRegionID: domain.RegionGlobal, ProviderPrimitive: provider.PrimitiveKimiChat, Outcome: "success",
 	}
 	if err := event.Validate(); err != nil {
 		t.Fatalf("a region published by the by-endpoint surface was refused: %v", err)
@@ -73,6 +73,7 @@ func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
 	}
 	event.ProfileID = domain.ProfileBigModelGlobalChat
 	event.OfferingID = domain.OfferingBigModelGeneral
+	event.ProviderPrimitive = provider.PrimitiveBigModelChat
 	event.AccountRegionID = domain.RegionNone
 	if err := event.Validate(); err != nil {
 		t.Fatalf("a pre-region fixed-profile event was not backward-compatible: %v", err)
@@ -86,29 +87,84 @@ func TestProviderAccountRegionIsValidatedAtTheDurableBoundary(t *testing.T) {
 	}
 }
 
+func TestNewAttemptPrimitiveMustBelongToItsAttributedProfile(t *testing.T) {
+	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
+	base := Event{
+		EventID: "event_primitive", Kind: EventReservationCreated,
+		RequestID: "req_primitive", AttemptID: "att_primitive", ProjectID: "project_1",
+		PeriodID: "2026-09-11", OccurredAt: now, ReservationMicrosUSD: MicrosUSD(1),
+		OfferingID: domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
+		AccountRegionID: domain.RegionCN, ProviderPrimitive: provider.PrimitiveKimiChat,
+	}
+	if err := base.validateForAppend(); err != nil {
+		t.Fatalf("matching primitive was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"missing": func(event *Event) { event.ProviderPrimitive = "" },
+		"wrong profile binding": func(event *Event) {
+			event.ProviderPrimitive = provider.PrimitiveBigModelChat
+		},
+		"primitive without profile": func(event *Event) {
+			event.OfferingID, event.ProfileID, event.AccountRegionID = "", "", ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			event := base
+			mutate(&event)
+			if err := event.validateForAppend(); err == nil {
+				t.Fatal("invalid new primitive attribution was accepted")
+			}
+		})
+	}
+
+	// A recovery settlement for authenticated history written before the field
+	// existed must remain appendable without inventing an attribution.
+	legacySettlement := base
+	legacySettlement.Kind = EventAttemptSettled
+	legacySettlement.ReservationMicrosUSD = nil
+	legacySettlement.CommittedMicrosUSD = MicrosUSD(0)
+	legacySettlement.ProviderPrimitive = ""
+	legacySettlement.Outcome = "recovered_not_started"
+	legacySettlement.FailurePhase = "accounting"
+	if err := legacySettlement.validateForAppend(); err != nil {
+		t.Fatalf("pre-primitive recovery settlement was refused: %v", err)
+	}
+}
+
 func TestSettlementCannotChangeFrozenProviderAttribution(t *testing.T) {
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
 	reservation := Event{
 		EventID: "evt_reservation_attribution", Kind: EventReservationCreated,
 		RequestID: "req_attribution", AttemptID: "att_attribution", ProjectID: "project_1",
 		PeriodID: "2026-09-11", OccurredAt: now, ReservationMicrosUSD: MicrosUSD(1),
+		RouteID: "route_kimi", DeploymentID: "deployment_kimi", ProviderID: "provider_kimi",
 		OfferingID: domain.OfferingKimiOpenPlatform, ProfileID: domain.ProfileKimiChat,
-		AccountRegionID: domain.RegionCN,
+		AccountRegionID: domain.RegionCN, ProviderModel: "kimi-k2", ProviderPrimitive: provider.PrimitiveKimiChat,
 	}
 	settlement := Event{
 		EventID: "evt_settlement_attribution", Kind: EventAttemptSettled,
 		RequestID: reservation.RequestID, AttemptID: reservation.AttemptID, ProjectID: reservation.ProjectID,
 		PeriodID: reservation.PeriodID, OccurredAt: now.Add(time.Second), CommittedMicrosUSD: MicrosUSD(1),
+		RouteID: reservation.RouteID, DeploymentID: reservation.DeploymentID, ProviderID: reservation.ProviderID,
 		OfferingID: reservation.OfferingID, ProfileID: reservation.ProfileID, AccountRegionID: reservation.AccountRegionID,
-		Outcome: "success",
+		ProviderModel:     reservation.ProviderModel,
+		ProviderPrimitive: reservation.ProviderPrimitive,
+		Outcome:           "success",
 	}
 	for name, mutate := range map[string]func(*Event){
+		"route":      func(event *Event) { event.RouteID = "route_other" },
+		"deployment": func(event *Event) { event.DeploymentID = "deployment_other" },
+		"provider":   func(event *Event) { event.ProviderID = "provider_other" },
+		"model":      func(event *Event) { event.ProviderModel = "kimi-other" },
 		"product tuple": func(event *Event) {
 			event.OfferingID = domain.OfferingBigModelCodingPlan
 			event.ProfileID = domain.ProfileBigModelGlobalCodingChat
 			event.AccountRegionID = domain.RegionGlobal
 		},
-		"region":  func(event *Event) { event.AccountRegionID = domain.RegionGlobal },
+		"region": func(event *Event) { event.AccountRegionID = domain.RegionGlobal },
+		"primitive": func(event *Event) {
+			event.ProviderPrimitive = provider.PrimitiveBigModelChat
+		},
 		"removed": func(event *Event) { event.OfferingID, event.ProfileID, event.AccountRegionID = "", "", "" },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -126,13 +182,31 @@ func TestSettlementCannotChangeFrozenProviderAttribution(t *testing.T) {
 
 	legacy := NewState()
 	legacyReservation, legacySettlement := reservation, settlement
+	legacyReservation.RouteID, legacyReservation.DeploymentID, legacyReservation.ProviderID = "", "", ""
+	legacySettlement.RouteID, legacySettlement.DeploymentID, legacySettlement.ProviderID = "", "", ""
 	legacyReservation.OfferingID, legacyReservation.ProfileID, legacyReservation.AccountRegionID = "", "", ""
 	legacySettlement.OfferingID, legacySettlement.ProfileID, legacySettlement.AccountRegionID = "", "", ""
+	legacyReservation.ProviderModel, legacySettlement.ProviderModel = "", ""
+	legacyReservation.ProviderPrimitive, legacySettlement.ProviderPrimitive = "", ""
 	if err := legacy.Apply(Record{Sequence: 1, Event: legacyReservation}); err != nil {
 		t.Fatalf("legacy reservation was refused: %v", err)
 	}
 	if err := legacy.Apply(Record{Sequence: 2, Event: legacySettlement}); err != nil {
 		t.Fatalf("matching legacy settlement was refused: %v", err)
+	}
+
+	attributedLegacy := NewState()
+	attributedLegacyReservation, attributedLegacySettlement := reservation, settlement
+	attributedLegacyReservation.ProviderPrimitive = ""
+	attributedLegacySettlement.ProviderPrimitive = ""
+	if err := attributedLegacy.Apply(Record{Sequence: 1, Event: attributedLegacyReservation}); err != nil {
+		t.Fatalf("attributed pre-primitive reservation was refused: %v", err)
+	}
+	if err := attributedLegacySettlement.validateForAppend(); err != nil {
+		t.Fatalf("recovery settlement for attributed pre-primitive reservation was refused: %v", err)
+	}
+	if err := attributedLegacy.Apply(Record{Sequence: 2, Event: attributedLegacySettlement}); err != nil {
+		t.Fatalf("matching attributed pre-primitive settlement was refused: %v", err)
 	}
 }
 

@@ -25,7 +25,7 @@ func (s *Service) inferenceResourcesTarget(ctx context.Context, key, model strin
 	return principal, targets[0], "", nil
 }
 
-func (s *Service) accountedInferenceResources(ctx context.Context, principal auth.AuthResult, model string, target provider.Target, inputUnits int64, requestID *string, invoke func() error) error {
+func (s *Service) accountedInferenceResources(ctx context.Context, principal auth.AuthResult, model string, target provider.Target, operation provider.Operation, inputUnits int64, requestID *string, invoke func() error) error {
 	if inputUnits < 1 {
 		inputUnits = 1
 	}
@@ -40,7 +40,7 @@ func (s *Service) accountedInferenceResources(ctx context.Context, principal aut
 	if requestID != nil {
 		*requestID = run.requestID
 	}
-	attempt, err := s.startAttempt(ctx, run, target, inputUnits, 0, 0, 0, 1)
+	attempt, err := s.startAttempt(ctx, run, target, operation, inputUnits, 0, 0, 0, 1)
 	if err != nil {
 		return s.exhaustedAttemptsError(err)
 	}
@@ -100,7 +100,7 @@ func (s *Service) Moderations(ctx context.Context, key string, request openaiapi
 		return openaiapi.ModerationResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.ModerationResult
-	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationModerations, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Moderate(ctx, provider.ModerationCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input})
 		if callErr == nil {
@@ -124,7 +124,7 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 		return openaiapi.ImageGenerationResponse{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	if adapter, ok := target.Adapter.(provider.BedrockInferenceResourcesAdapter); ok && target.ProfileID != domain.ProfileOpenAIMediaResources {
-		err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+		err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationImages, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateBedrockImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
 			if callErr == nil {
@@ -133,7 +133,7 @@ func (s *Service) Images(ctx context.Context, key string, request openaiapi.Imag
 			return callErr
 		})
 	} else if adapter, ok := target.Adapter.(provider.StatelessInferenceResourcesAdapter); ok {
-		err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+		err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationImages, int64(len(request.Prompt))/4+1, &requestID, func() error {
 			var callErr error
 			result, callErr = adapter.GenerateImage(ctx, provider.ImageCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, Count: request.N, Quality: request.Quality, Size: request.Size, ResponseFormat: request.ResponseFormat, Style: request.Style})
 			if callErr == nil {
@@ -167,7 +167,7 @@ func (s *Service) Speech(ctx context.Context, key string, request openaiapi.Spee
 		return provider.SpeechResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.SpeechResult
-	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Input))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationSpeech, int64(len(request.Input))/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Synthesize(ctx, provider.SpeechCall{RequestID: requestID, ProviderModel: target.ProviderModel, Input: request.Input, Voice: request.Voice, ResponseFormat: request.ResponseFormat, Speed: request.Speed})
 		return callErr
@@ -195,7 +195,7 @@ func (s *Service) Transcription(ctx context.Context, key, model string, call pro
 		return provider.TranscriptionResult{}, gatewayError("sensitive_data_detected", "request contains secret material", 400, err)
 	}
 	var result provider.TranscriptionResult
-	err = s.accountedInferenceResources(ctx, principal, model, target, int64(len(call.Data))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, model, target, provider.OperationTranscriptions, int64(len(call.Data))/4+1, &requestID, func() error {
 		call.RequestID = requestID
 		var callErr error
 		result, callErr = adapter.Transcribe(ctx, call)
@@ -261,7 +261,7 @@ func (s *Service) Rerank(ctx context.Context, key string, request openaiapi.Rera
 		units += len(doc)
 	}
 	var result provider.RerankResult
-	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(units)/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationRerank, int64(units)/4+1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.Rerank(ctx, provider.RerankCall{RequestID: requestID, ProviderModel: target.ProviderModel, Query: request.Query, Documents: request.Documents, TopN: request.TopN})
 		return callErr

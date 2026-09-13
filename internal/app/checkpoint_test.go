@@ -12,6 +12,7 @@ import (
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/usage"
 )
@@ -108,7 +109,8 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 			attempt, err := runtime.accounting.ReserveAttemptDetailed(context.Background(), request, 1_000, 100, budget.AttemptMetadata{
 				RouteID: "route_recovery", DeploymentID: "deployment_recovery", ProviderID: "provider_recovery",
 				OfferingID: domain.OfferingBigModelCodingPlan, ProfileID: domain.ProfileBigModelCNCodingChat,
-				AccountRegionID: domain.RegionCN, ProviderModel: "glm-recovery", AttemptNumber: 1,
+				AccountRegionID: domain.RegionCN, ProviderPrimitive: provider.PrimitiveBigModelChat,
+				ProviderModel: "glm-recovery", AttemptNumber: 1,
 			})
 			if err != nil {
 				t.Fatal(err)

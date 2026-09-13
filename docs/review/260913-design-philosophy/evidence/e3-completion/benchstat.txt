@@ -1,0 +1,59 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+                 │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                 │                                    sec/op                                    │                             sec/op                              vs base         │
+ReplayLargeWAL-4                                                                    871.8m ± 5%                                                      870.1m ± 6%  ~ (p=0.505 n=8)
+
+                 │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                 │                                     B/op                                     │                           B/op                             vs base              │
+ReplayLargeWAL-4                                                                   269.1Mi ± 0%                                                293.6Mi ± 0%  +9.10% (p=0.000 n=8)
+
+                 │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                 │                                  allocs/op                                   │                           allocs/op                             vs base         │
+ReplayLargeWAL-4                                                                    3.000M ± 0%                                                      3.000M ± 0%  ~ (p=0.818 n=8)
+
+                 │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                 │                                     B/s                                      │                              B/s                                vs base         │
+ReplayLargeWAL-4                                                                   33.78Mi ± 4%                                                    33.84Mi ± 11%  ~ (p=0.505 n=8)
+
+pkg: github.com/akz142857/Halro/internal/provider
+                            │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                            │                                    sec/op                                    │                             sec/op                              vs base         │
+RegistryResolveCandidates-4                                                                    11.16µ ± 5%                                                     10.95µ ± 11%  ~ (p=0.645 n=8)
+
+                            │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                            │                                     B/op                                     │                           B/op                             vs base              │
+RegistryResolveCandidates-4                                                                   15.52Ki ± 0%                                                16.31Ki ± 0%  +5.14% (p=0.000 n=8)
+
+                            │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                            │                                  allocs/op                                   │                          allocs/op                            vs base           │
+RegistryResolveCandidates-4                                                                     41.00 ± 0%                                                     41.00 ± 0%  ~ (p=1.000 n=8) ¹
+¹ all samples are equal
+
+pkg: github.com/akz142857/Halro/internal/redaction
+                    │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                    │                                    sec/op                                    │                          sec/op                            vs base              │
+StandardRedaction-4                                                                    97.55µ ± 4%                                                 98.55µ ± 3%       ~ (p=0.279 n=8)
+RollingRedaction-4                                                                     32.85µ ± 7%                                                 33.02µ ± 4%       ~ (p=0.959 n=8)
+geomean                                                                                56.61µ                                                      57.04µ       +0.77%
+
+                    │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                    │                                     B/op                                     │                           B/op                             vs base              │
+StandardRedaction-4                                                                   13.51Ki ± 0%                                                13.51Ki ± 1%       ~ (p=0.328 n=8)
+RollingRedaction-4                                                                    17.53Ki ± 0%                                                17.53Ki ± 0%       ~ (p=0.959 n=8)
+geomean                                                                               15.39Ki                                                     15.39Ki       -0.00%
+
+                    │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                    │                                  allocs/op                                   │                        allocs/op                         vs base                │
+StandardRedaction-4                                                                     32.00 ± 0%                                                32.00 ± 0%       ~ (p=1.000 n=8) ¹
+RollingRedaction-4                                                                      79.00 ± 0%                                                79.00 ± 0%       ~ (p=1.000 n=8) ¹
+geomean                                                                                 50.28                                                     50.28       +0.00%
+¹ all samples are equal
+
+                    │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-v0.7.1.txt │ docs/review/260913-design-philosophy/evidence/e3-completion/bench-candidate.txt │
+                    │                                     B/s                                      │                            B/s                             vs base              │
+StandardRedaction-4                                                                  9.007Mi ±  3%                                                8.912Mi ± 5%       ~ (p=0.245 n=8)
+RollingRedaction-4                                                                   7.086Mi ± 11%                                                7.048Mi ± 4%       ~ (p=0.939 n=8)
+geomean                                                                              7.989Mi                                                      7.925Mi       -0.80%

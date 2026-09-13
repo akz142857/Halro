@@ -48,6 +48,7 @@ type Attempt struct {
 	AccountRegionID             domain.ProviderRegionID
 	RequestedModel              string
 	ProviderModel               string
+	ProviderPrimitive           provider.Primitive
 	AttemptNumber               int
 	RetryCount                  int
 	FallbackCount               int
@@ -75,16 +76,17 @@ type Request struct {
 }
 
 type AttemptMetadata struct {
-	RouteID         string
-	DeploymentID    string
-	ProviderID      string
-	OfferingID      domain.ProviderOfferingID
-	ProfileID       domain.ProviderProfileID
-	AccountRegionID domain.ProviderRegionID
-	ProviderModel   string
-	AttemptNumber   int
-	RetryCount      int
-	FallbackCount   int
+	RouteID           string
+	DeploymentID      string
+	ProviderID        string
+	OfferingID        domain.ProviderOfferingID
+	ProfileID         domain.ProviderProfileID
+	AccountRegionID   domain.ProviderRegionID
+	ProviderModel     string
+	ProviderPrimitive provider.Primitive
+	AttemptNumber     int
+	RetryCount        int
+	FallbackCount     int
 }
 
 type LeaseSpec struct {
@@ -921,7 +923,8 @@ func (m *Manager) reserveAttemptDetailed(
 		WorkUnitID: request.WorkUnitID, RunID: request.RunID,
 		RouteID: metadata.RouteID, DeploymentID: metadata.DeploymentID,
 		ProviderID: metadata.ProviderID, ProviderModel: metadata.ProviderModel,
-		OfferingID: metadata.OfferingID, ProfileID: metadata.ProfileID,
+		ProviderPrimitive: metadata.ProviderPrimitive,
+		OfferingID:        metadata.OfferingID, ProfileID: metadata.ProfileID,
 		AccountRegionID: metadata.AccountRegionID,
 		AttemptNumber:   metadata.AttemptNumber, RetryCount: metadata.RetryCount,
 		FallbackCount:       metadata.FallbackCount,
@@ -977,6 +980,7 @@ func (m *Manager) reserveAttemptDetailed(
 		AccountRegionID:      metadata.AccountRegionID,
 		RequestedModel:       request.RequestedModel,
 		ProviderModel:        metadata.ProviderModel,
+		ProviderPrimitive:    metadata.ProviderPrimitive,
 		AttemptNumber:        metadata.AttemptNumber,
 		RetryCount:           metadata.RetryCount,
 		FallbackCount:        metadata.FallbackCount,
@@ -1019,7 +1023,8 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 		OfferingID: attempt.OfferingID, ProfileID: attempt.ProfileID,
 		AccountRegionID: attempt.AccountRegionID,
 		RequestedModel:  attempt.RequestedModel, ProviderModel: attempt.ProviderModel,
-		AttemptNumber: attempt.AttemptNumber, RetryCount: attempt.RetryCount,
+		ProviderPrimitive: attempt.ProviderPrimitive,
+		AttemptNumber:     attempt.AttemptNumber, RetryCount: attempt.RetryCount,
 		FallbackCount: attempt.FallbackCount,
 		OccurredAt:    m.localNow(),
 	}
@@ -1136,6 +1141,7 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		AccountRegionID:    attempt.AccountRegionID,
 		RequestedModel:     attempt.RequestedModel,
 		ProviderModel:      attempt.ProviderModel,
+		ProviderPrimitive:  attempt.ProviderPrimitive,
 		AttemptNumber:      attempt.AttemptNumber,
 		RetryCount:         attempt.RetryCount,
 		FallbackCount:      attempt.FallbackCount,
@@ -1197,7 +1203,8 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 			ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
 			AccountRegionID: event.AccountRegionID,
 			RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
-			AttemptNumber: event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
+			ProviderPrimitive: event.ProviderPrimitive,
+			AttemptNumber:     event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
 			LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
 			PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
 			RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,

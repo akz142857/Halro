@@ -2146,6 +2146,21 @@ textarea { resize: vertical; }
 .developer-response-result pre { min-height: 184px; max-height: 520px; margin: 0; padding: 20px 22px; overflow: auto; color: var(--text); font: var(--font-size-sm)/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .developer-response-footnote { padding: 12px 18px; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); font-size: var(--font-size-xs); line-height: 1.5; }
 
+/* Between the desktop sidebar breakpoint and the old 1120px page breakpoint,
+   the Provider row was sized against the viewport instead of the remaining
+   content column. At 1440px its fixed minimum columns pushed the page 76px
+   sideways. Collapse secondary facts while the sidebar is still present; the
+   expanded detail remains the complete information surface. */
+@media (min-width: 821px) and (max-width: 1520px) {
+  .provider-row { grid-template-columns: 42px minmax(140px, 1fr) minmax(110px, .75fr) minmax(80px, .5fr) auto; }
+  .provider-fact-endpoint, .provider-fact-capabilities { display: none; }
+  .provider-expanded-content { grid-column: 2 / -1; }
+  .credential-row { grid-template-areas: "icon identity usage generation actions" "empty details details details details"; grid-template-columns: 42px minmax(170px, 1fr) minmax(130px, .8fr) minmax(100px, .6fr) auto; }
+  .credential-endpoint { display: none; }
+  .credential-identity-endpoint { display: block !important; }
+  .credential-expanded-content { grid-area: details; }
+}
+
 @media (max-width: 1120px) {
   .metric-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .dashboard-grid, .governance-lower-grid { grid-template-columns: minmax(0, 1fr); }

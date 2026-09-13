@@ -12,6 +12,11 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	anthropicprovider "github.com/akz142857/Halro/internal/provider/anthropic"
+	bedrockprovider "github.com/akz142857/Halro/internal/provider/bedrock"
+	bedrockmantleprovider "github.com/akz142857/Halro/internal/provider/bedrockmantle"
+	geminiprovider "github.com/akz142857/Halro/internal/provider/gemini"
+	openaiprovider "github.com/akz142857/Halro/internal/provider/openai"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -125,7 +130,76 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 		if adapter.Type() != string(profile.Type) {
 			t.Errorf("%s built an adapter reporting type %q, want %q", profile.ID, adapter.Type(), profile.Type)
 		}
+		if got, want := concreteAdapterFamily(adapter), expectedAdapterFamily(profile.ID); got != want {
+			t.Errorf("%s built concrete adapter %q, want %q", profile.ID, got, want)
+		}
 		adapter.Close()
+	}
+}
+
+// expectedAdapterFamily is independent from adapterBuilders. Together with the
+// provider package's independent primitive oracle, it makes a profile contract
+// check both axes: the manifest must resolve the expected primitive, and the
+// production constructor must select the expected concrete entry point.
+func expectedAdapterFamily(profileID domain.ProviderProfileID) string {
+	switch profileID {
+	case domain.ProfileAnthropicMessages,
+		domain.ProfileBedrockMantleAnthropicMessages,
+		domain.ProfileMiniMaxAnthropicMessages,
+		domain.ProfileKimiAnthropicMessages,
+		domain.ProfileKimiCodeAnthropicMessages,
+		domain.ProfileMiniMaxCNSubscriptionAnthropicMessages,
+		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages:
+		return "anthropic"
+	case domain.ProfileGeminiText:
+		return "gemini"
+	case domain.ProfileBedrockConverseText,
+		domain.ProfileBedrockInvokeTitanEmbedV2,
+		domain.ProfileBedrockInvokeTitanImageV2,
+		domain.ProfileBedrockAgentRerankCohere35,
+		domain.ProfileBedrockAsyncNovaReel:
+		return "bedrock"
+	case domain.ProfileBedrockMantleResponses, domain.ProfileBedrockMantleOpenAIResponses:
+		return "bedrock-mantle-responses"
+	case domain.ProfileOpenAIChatEmbeddings,
+		domain.ProfileOpenAIResponses,
+		domain.ProfileOpenAIMediaResources,
+		domain.ProfileAzureChatEmbeddings,
+		domain.ProfileDeepSeekChat,
+		domain.ProfileOpenAICompatible,
+		domain.ProfileBigModelCNChatEmbeddings,
+		domain.ProfileBigModelGlobalChat,
+		domain.ProfileBigModelCNCodingChat,
+		domain.ProfileBigModelGlobalCodingChat,
+		domain.ProfileBedrockMantleChat,
+		domain.ProfileBedrockMantleOpenAIChat,
+		domain.ProfileMiniMaxChat,
+		domain.ProfileMiniMaxResponses,
+		domain.ProfileKimiChat,
+		domain.ProfileKimiResponses,
+		domain.ProfileKimiCodeOpenAIChat,
+		domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
+		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat:
+		return "openai"
+	default:
+		return ""
+	}
+}
+
+func concreteAdapterFamily(adapter provider.Adapter) string {
+	switch adapter.(type) {
+	case *openaiprovider.Adapter:
+		return "openai"
+	case *anthropicprovider.Adapter:
+		return "anthropic"
+	case *geminiprovider.Adapter:
+		return "gemini"
+	case *bedrockprovider.Adapter:
+		return "bedrock"
+	case *bedrockmantleprovider.ResponsesAdapter:
+		return "bedrock-mantle-responses"
+	default:
+		return ""
 	}
 }
 

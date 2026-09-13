@@ -5,6 +5,12 @@
 本文件只保留非作者反证后的净化结论。发现过程、完整代码行号和原始命令见 `roles/`；裁决映射见
 `adversarial-verdicts.md`。`PARTIAL` 表示核心事实成立，但原范围或严重度已被反证收窄。
 
+> 状态说明：本文件是冻结基线的历史 finding 清单。顺序整改复评后，六个 P2 均已关闭，P3 中
+> `PHIL-A06`、`PHIL-E-001`、`PHIL-E-002`、`PHIL-E-003`、`PHIL-E-004` 已实现处置，
+> `PHIL-B02` 的本地恢复部分已关闭。
+> 真实 Provider、KMS/PKI、包渠道和生产 E4 仍是具名证据缺口。当前状态以
+> [顺序整改复评](remediation-report.md) 和 [复评评分卡](scorecard.md) 为准。
+
 ## 1. 总览
 
 | ID | 严重度 | 状态 | 类型 | 最终结论 |
@@ -25,7 +31,7 @@
 | PHIL-E-003 | P3 | PARTIAL | DESIGN_DEBT | 下游自动 preflight 缺失，但渠道本来就是可恢复 saga，且有人工 checklist/宣传门禁 |
 | PHIL-E-004 | P3 | CONFIRMED | DEFECT（文档） | 标为 current 的 release 证据文档错误声称 workflow 不检查 web bundle drift |
 
-## 2. P2 Findings
+## 2. 冻结基线的 P2 Findings
 
 ### PHIL-CD-001 — failure capture 队列在字节截断前持有完整请求副本
 
@@ -105,7 +111,7 @@
   promtool 验证 firing/non-firing/resolved，非作者 15 分钟找到安全动作。
 - Owner/期限：SRE + Accounting；S–M；30 天。
 
-## 3. P3 Findings
+## 3. 冻结基线的 P3 Findings
 
 ### PHIL-A02 — 缺跨能力价值、支持成本和 sunset 台账
 

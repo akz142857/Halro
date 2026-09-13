@@ -5,6 +5,18 @@
 这是评估建议，不是已授权的实施计划。owner、日期和风险接受必须由项目负责人确认；真实 Provider、
 KMS、外部告警、生产与付费运行仍需单独授权。
 
+> 执行更新（2026-09-13）：0–30 天仓库项以及 31–60 天中可在本地独立执行的 primitive contract、
+> 双二进制恢复、Admin 旅程和 paired benchmark 已完成；详见 [顺序整改复评](remediation-report.md)。
+> clean-host v0.8.0 package、真实 Provider/KMS/PKI/Contact Point、OS kill-point 与 24h soak 因外部条件
+> 保持 BLOCKED/UNVERIFIED。路线图正文保留最初建议和验收标准，不代表所有 31–90 天项目已完成。
+
+| 阶段 | 当前状态 | 说明 |
+| --- | --- | --- |
+| 0–30 天 | DONE | 两个实现 P2、current truth、告警/runbook、snippet、门禁/cache 与发布 preflight 已整改 |
+| 31–60 天本地项 | PARTIAL | primitive 独立契约、完整本地恢复、Admin/响应式、1000 SSE 与交替 benchmark 已执行；Runtime 渐进收缩和 Experimental/Preview 价值/删除台账仍未执行 |
+| 31–60 天渠道项 | BLOCKED | Homebrew 公开 Formula 为 v0.7.0；APT `InRelease` 返回 503；无有效下游 GitHub App |
+| 61–90 天 E4 | BLOCKED | 缺 disposable target、Provider/KMS/PKI/Contact Point 凭据、24h workload 和四方签署 |
+
 ## 1. 立即保留的设计
 
 - KEEP：single-binary、single-process、single-writer；内部模块化不能借机演变成微服务、共享数据库或消息队列。

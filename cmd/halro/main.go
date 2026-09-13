@@ -126,9 +126,70 @@ var (
 
 const recoveryNextStepMessage = "Recovery Slot verified and audited; rewrap and verify a replacement Primary first, then revoke temporary AWS recovery authorization before cold start."
 
+type commandDescriptor struct {
+	name        string
+	synopsis    string
+	description string
+}
+
+var topLevelCommands = []commandDescriptor{
+	{"start", "halro start [--config <path>]", "start the Gateway and Admin services"},
+	{"init", "halro init [--config <path>]", "initialize an offline data directory"},
+	{"bootstrap", "halro bootstrap [flags]", "bootstrap the first administrator"},
+	{"admin", "halro admin <bootstrap|reset-password|reset-mfa> [flags]", "manage administrator access offline"},
+	{"key", "halro key <create|disable|rotate|rewrap|recover|slot> [flags]", "manage API and Master Key state"},
+	{"backup", "halro backup <create|verify|restore> [flags]", "create, verify, or restore encrypted backups"},
+	{"restore", "halro restore [flags]", "restore an encrypted backup (legacy alias)"},
+	{"pricing", "halro pricing migrate [flags]", "inspect or apply pricing migrations"},
+	{"usage", "halro usage <compact|verify|prune|rebuild-summary> [flags]", "maintain durable usage data"},
+	{"ledger", "halro ledger <verify|seal> [flags]", "verify or seal the accounting Ledger"},
+	{"audit", "halro audit <verify|verify-anchor> [flags]", "verify the Audit chain and anchors"},
+	{"metrics", "halro metrics <token|rotate|revoke|list|verify-audit> [flags]", "manage metrics credentials and audit state"},
+	{"stats", "halro stats [--config <path>] [--interval <duration>]", "summarize the running durable write path"},
+	{"doctor", "halro doctor [flags]", "run read-only offline diagnostics"},
+	{"serve", "halro serve [flags]", "serve a prepared data directory"},
+	{"healthcheck", "halro healthcheck [flags]", "check loopback readiness"},
+	{"config", "halro config check [--config <path>]", "validate configuration without starting Halro"},
+	{"version", "halro version", "print build and time-zone database identity"},
+}
+
+func topLevelHelp(command string) (string, error) {
+	if command != "" {
+		for _, descriptor := range topLevelCommands {
+			if descriptor.name == command {
+				return fmt.Sprintf("Usage: %s\n\n%s.\n", descriptor.synopsis, descriptor.description), nil
+			}
+		}
+		return "", fmt.Errorf("unknown help topic %q", command)
+	}
+	var output strings.Builder
+	output.WriteString("Usage: halro <command> [options]\n\nCommands:\n")
+	for _, descriptor := range topLevelCommands {
+		fmt.Fprintf(&output, "  %-13s %s\n", descriptor.name, descriptor.description)
+	}
+	output.WriteString("\nRun 'halro help <command>' for a command synopsis.\n")
+	return output.String(), nil
+}
+
 func run(arguments []string, logger *slog.Logger) error {
 	if len(arguments) == 0 {
-		return errors.New("usage: halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|ledger|audit|metrics|stats|doctor|serve|healthcheck|config|version>")
+		help, _ := topLevelHelp("")
+		return errors.New(strings.TrimSpace(help))
+	}
+	if arguments[0] == "--help" || arguments[0] == "-h" || arguments[0] == "help" {
+		topic := ""
+		if arguments[0] == "help" && len(arguments) > 1 {
+			topic = arguments[1]
+		}
+		if (arguments[0] == "--help" || arguments[0] == "-h") && len(arguments) > 1 || len(arguments) > 2 {
+			return errors.New("usage: halro help [command]")
+		}
+		help, err := topLevelHelp(topic)
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(os.Stdout, help)
+		return nil
 	}
 	switch arguments[0] {
 	case "pricing":

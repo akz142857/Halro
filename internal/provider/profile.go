@@ -376,3 +376,17 @@ func (b *LegacyAdapterBridge) CountTokensNative(ctx context.Context, call Native
 func BuiltinProfile(id domain.ProviderProfileID) (ProfileManifest, bool) {
 	return builtinProfileDerived(id)
 }
+
+// ProfileBindsPrimitive reports whether the built-in profile declares the
+// concrete southbound primitive. It is intentionally narrower than resolving
+// an operation: durable attempt attribution has to validate a primitive without
+// reconstructing the request that selected it.
+func ProfileBindsPrimitive(id domain.ProviderProfileID, primitive Primitive) bool {
+	manifest, ok := BuiltinProfile(id)
+	if !ok || primitive == "" {
+		return false
+	}
+	return slices.ContainsFunc(manifest.PrimitiveBindings, func(binding PrimitiveBinding) bool {
+		return binding.Primitive == primitive
+	})
+}

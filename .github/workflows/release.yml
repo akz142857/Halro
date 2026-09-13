@@ -125,8 +125,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: go test -race ./...
+      - run: go test -count=1 ./...
+      - run: go test -race -count=1 -timeout=20m ./...
       - run: go vet ./...
       - name: Go vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
@@ -177,7 +177,7 @@ jobs:
           curl --fail --silent http://127.0.0.1:18088/healthz >/dev/null
           python tests/compatibility/python/test_sdk.py
           npm test --prefix tests/compatibility/node
-          go -C tests/compatibility/go test ./...
+          go -C tests/compatibility/go test -count=1 ./...
 
   stress:
     needs: prepare
@@ -498,8 +498,51 @@ jobs:
           path: evidence
           retention-days: 90
 
+  downstream-preflight:
+    # This is intentionally an early sibling of the expensive build/sign jobs,
+    # not a child of provenance. Missing credentials or repository permission
+    # should be known before a publish run spends time producing attestations.
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # The ambient GITHUB_TOKEN is not used. The only authority below is the
+    # short-lived, repository-scoped App token requested by the action.
+    permissions: {}
+    steps:
+      - name: Require downstream release automation credentials
+        env:
+          CLIENT_ID: ${{ vars.HALRO_RELEASE_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.HALRO_RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${CLIENT_ID}" || { echo "::error::HALRO_RELEASE_APP_CLIENT_ID is empty"; exit 1; }
+          test -n "${PRIVATE_KEY}" || { echo "::error::HALRO_RELEASE_APP_PRIVATE_KEY is empty"; exit 1; }
+      - name: Create a repository-scoped preflight token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HALRO_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HALRO_RELEASE_APP_PRIVATE_KEY }}
+          owner: halro-ai
+          repositories: |
+            homebrew-tap
+            apt-repository
+          permission-contents: write
+      - name: Verify downstream repositories and write permission without mutation
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          for repository in homebrew-tap apt-repository; do
+            permission=$(gh api "repos/halro-ai/${repository}" --jq '.permissions.push')
+            if [ "${permission}" != "true" ]; then
+              echo "::error::release App lacks contents:write on halro-ai/${repository}"
+              exit 1
+            fi
+          done
+
   publish:
-    needs: [prepare, provenance]
+    needs: [prepare, provenance, downstream-preflight]
     if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:

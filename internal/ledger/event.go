@@ -73,6 +73,7 @@ type Event struct {
 	AccountRegionID             domain.ProviderRegionID            `json:"account_region_id,omitempty"`
 	RequestedModel              string                             `json:"requested_model,omitempty"`
 	ProviderModel               string                             `json:"provider_model,omitempty"`
+	ProviderPrimitive           provider.Primitive                 `json:"provider_primitive,omitempty"`
 	AttemptNumber               int                                `json:"attempt_number,omitempty"`
 	RetryCount                  int                                `json:"retry_count,omitempty"`
 	FallbackCount               int                                `json:"fallback_count,omitempty"`
@@ -314,6 +315,19 @@ func (e Event) Validate() error {
 func (e Event) validateForAppend() error {
 	if err := e.Validate(); err != nil {
 		return err
+	}
+	// A primitive is meaningful only inside its profile contract. Settlements
+	// are also checked against their reservation in State.Apply, but rejecting
+	// an unbound primitive here keeps a bad settlement out of the durable log in
+	// the first place. An authenticated pre-field reservation may legitimately
+	// have no primitive, and recovery must be able to settle it without
+	// inventing one. Every new reservation/start is stricter and must carry one.
+	if e.ProviderPrimitive != "" && !provider.ProfileBindsPrimitive(e.ProfileID, e.ProviderPrimitive) {
+		return errors.New("attempt event requires a primitive bound by its provider profile")
+	}
+	if (e.Kind == EventReservationCreated || e.Kind == EventAttemptStarted) &&
+		e.ProfileID != "" && e.ProviderPrimitive == "" {
+		return errors.New("attempt event requires a primitive bound by its provider profile")
 	}
 	if e.ProfileID != "" {
 		identity, ok := domain.IdentityForProfile(e.ProfileID)
@@ -716,9 +730,14 @@ func (s *State) Apply(record Record) error {
 		if event.WorkUnitID != reservation.Lease.WorkUnitID || event.RunID != reservation.Lease.RunID {
 			return fmt.Errorf("attempt %q settlement changed run attribution", event.AttemptID)
 		}
-		if event.OfferingID != reservation.Lease.OfferingID ||
+		if event.RouteID != reservation.Lease.RouteID ||
+			event.DeploymentID != reservation.Lease.DeploymentID ||
+			event.ProviderID != reservation.Lease.ProviderID ||
+			event.OfferingID != reservation.Lease.OfferingID ||
 			event.ProfileID != reservation.Lease.ProfileID ||
-			event.AccountRegionID != reservation.Lease.AccountRegionID {
+			event.AccountRegionID != reservation.Lease.AccountRegionID ||
+			event.ProviderModel != reservation.Lease.ProviderModel ||
+			event.ProviderPrimitive != reservation.Lease.ProviderPrimitive {
 			return fmt.Errorf("attempt %q settlement changed provider attribution", event.AttemptID)
 		}
 		if reservation.Lease.PriceSnapshot != nil {

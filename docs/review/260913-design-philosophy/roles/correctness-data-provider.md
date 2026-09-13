@@ -146,17 +146,17 @@
 
 | 命令 / 范围 | 退出码 | 结果 |
 | --- | ---: | --- |
-| `go test -count=1 ./internal/gateway -run 'Test(Accepted|.*Ambiguous|.*Fallback|.*Stream|.*Budget|.*RunAttribution|.*Capability)'` | 0 | `ok`；覆盖 malformed / ambiguous、fallback、stream、budget、Run attribution、capability 路径。 |
-| `go test -count=1 ./internal/budget -run 'Test(Concurrent|.*Admission|.*Recover|.*Boundary|.*Overflow|.*Settlement|.*Poison|.*Run)'` | 0 | `ok`。 |
-| `go test -race -count=1 ./internal/budget -run 'Test(Concurrent.*|.*RecoverPending.*|.*Boundary.*)'` | 0 | `ok`，race detector 未报告竞争。 |
+| <code>go test -count=1 ./internal/gateway -run 'Test(Accepted&#124;.*Ambiguous&#124;.*Fallback&#124;.*Stream&#124;.*Budget&#124;.*RunAttribution&#124;.*Capability)'</code> | 0 | `ok`；覆盖 malformed / ambiguous、fallback、stream、budget、Run attribution、capability 路径。 |
+| <code>go test -count=1 ./internal/budget -run 'Test(Concurrent&#124;.*Admission&#124;.*Recover&#124;.*Boundary&#124;.*Overflow&#124;.*Settlement&#124;.*Poison&#124;.*Run)'</code> | 0 | `ok`。 |
+| <code>go test -race -count=1 ./internal/budget -run 'Test(Concurrent.*&#124;.*RecoverPending.*&#124;.*Boundary.*)'</code> | 0 | `ok`，race detector 未报告竞争。 |
 | Ledger durability / corruption / downgrade / replay 相关窄测 | 0 | `ok github.com/akz142857/Halro/internal/ledger 59.912s`。 |
 | Usage checkpoint / replay / rollup 相关窄测 | 0 | `ok github.com/akz142857/Halro/internal/usage 11.527s`。 |
 | OpenAI adapter stream / retry / ambiguous / catalog 相关窄测 | 0 | `ok .../internal/provider/openai 6.774s`。 |
 | Anthropic adapter stream / catalog / retry / ambiguous 相关窄测 | 0 | `ok .../internal/provider/anthropic 0.648s`。首次 sandbox 运行因 `httptest` 无权绑定 `[::1]:0` 退出 1；在允许本机 loopback、仍不访问外部网络的环境重跑通过，前一次不计产品失败。 |
 | `go test -count=1 ./internal/provider/gemini` | 0 | `ok .../internal/provider/gemini 0.637s`。首次 sandbox 同样因 loopback 权限退出 1，获允许后本机 fake server 重跑通过。 |
 | Bedrock Mantle adapter 窄测 | 0 | `ok .../internal/provider/bedrockmantle 6.163s`。 |
-| `go test -count=1 ./internal/provider ./internal/modelcatalog ./internal/domain -run 'Test(.*Capability.*|.*Unknown.*|.*Evidence.*|.*Catalog.*|.*Provider.*)'` | 0 | 三个 package 均 `ok`。 |
-| `go test -count=1 ./internal/app ./internal/store/bolt -run 'Test(.*InvocationTarget.*|.*HandEntered.*|.*Enumerated.*|.*Upgrade.*|.*Rollback.*|.*Backup.*|.*Restore.*|.*Migration.*|.*Schema.*|.*RunGovernance.*)'` | 0 | `internal/app` 与 `internal/store/bolt` 均 `ok`。 |
+| <code>go test -count=1 ./internal/provider ./internal/modelcatalog ./internal/domain -run 'Test(.*Capability.*&#124;.*Unknown.*&#124;.*Evidence.*&#124;.*Catalog.*&#124;.*Provider.*)'</code> | 0 | 三个 package 均 `ok`。 |
+| <code>go test -count=1 ./internal/app ./internal/store/bolt -run 'Test(.*InvocationTarget.*&#124;.*HandEntered.*&#124;.*Enumerated.*&#124;.*Upgrade.*&#124;.*Rollback.*&#124;.*Backup.*&#124;.*Restore.*&#124;.*Migration.*&#124;.*Schema.*&#124;.*RunGovernance.*)'</code> | 0 | `internal/app` 与 `internal/store/bolt` 均 `ok`。 |
 | assessment-only stream final-event repro | 0 | 明确打印 caller error 与 Ledger `success` 分叉；见 PHIL-B01。 |
 
 ## 7. 限制与未执行项

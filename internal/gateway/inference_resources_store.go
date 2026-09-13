@@ -363,7 +363,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		units = 1
 		target.FixedRequestMicrosUSD = 0
 	}
-	err = s.accountedInferenceResources(ctx, principal, route, target, units, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, route, target, provider.OperationFiles, units, &requestID, func() error {
 		call.RequestID = requestID
 		if localOnly {
 			// created_at comes from the record, the same instant the later GET
@@ -467,7 +467,7 @@ func (s *Service) localFileObject(ctx context.Context, principal auth.AuthResult
 	}
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
-	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 		return s.redactFileObject(principal.Project.RedactionPolicyID, &result)
 	}); err != nil {
 		return provider.FileObject{}, err
@@ -518,7 +518,7 @@ func (s *Service) GetFile(ctx context.Context, key, idValue string) (provider.Fi
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.FileObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -549,7 +549,7 @@ func (s *Service) DownloadFile(ctx context.Context, key, idValue string) (provid
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var data []byte
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 		var readErr error
 		data, readErr = s.readResourceObject(resource)
 		return readErr
@@ -575,7 +575,7 @@ func (s *Service) downloadUpstreamFile(ctx context.Context, principal auth.AuthR
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var content provider.FileContent
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 		var callErr error
 		content, callErr = adapter.DownloadFile(ctx, requestID, resource.UpstreamID)
 		return callErr
@@ -627,7 +627,7 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		if !freshDelete {
 			requestID := ""
 			var lookupErr error
-			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 				_, lookupErr = adapter.GetFile(ctx, requestID, resource.UpstreamID)
 				return lookupErr
 			})
@@ -643,7 +643,7 @@ func (s *Service) DeleteFile(ctx context.Context, key, idValue string) (provider
 		if shouldDelete {
 			requestID := ""
 			var deleteErr error
-			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+			accountingErr := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationFiles, 1, &requestID, func() error {
 				result, deleteErr = adapter.DeleteFile(ctx, requestID, resource.UpstreamID)
 				return deleteErr
 			})
@@ -833,7 +833,7 @@ func (s *Service) CreateBatch(ctx context.Context, key, idempotencyKey string, c
 	call.RequestID = requestID
 	var upstream provider.BatchObject
 	target, _ := s.ownedTarget(file)
-	err = s.accountedInferenceResources(ctx, principal, file.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, file.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
 		call.RequestID = requestID
 		var callErr error
 		upstream, callErr = adapter.CreateBatch(ctx, call)
@@ -908,7 +908,7 @@ func (s *Service) materialiseBatchResults(ctx context.Context, principal auth.Au
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var raw []byte
-	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	if err := s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
 		var fetchErr error
 		raw, fetchErr = fetcher.FetchBatchResults(ctx, requestID, resource.UpstreamID, result.ResultsURL)
 		return fetchErr
@@ -1091,7 +1091,7 @@ func (s *Service) GetBatch(ctx context.Context, key, idValue string) (provider.B
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -1127,7 +1127,7 @@ func (s *Service) CancelBatch(ctx context.Context, key, idValue string) (provide
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.BatchObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationBatches, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.CancelBatch(ctx, requestID, resource.UpstreamID)
 		if callErr == nil {
@@ -1224,7 +1224,7 @@ func (s *Service) StartAsyncInvoke(ctx context.Context, key, idempotencyKey stri
 	}
 	requestID := ""
 	var upstream provider.AsyncInvokeObject
-	err = s.accountedInferenceResources(ctx, principal, request.Model, target, int64(len(request.Prompt))/4+1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, request.Model, target, provider.OperationAsyncInvoke, int64(len(request.Prompt))/4+1, &requestID, func() error {
 		var callErr error
 		upstream, callErr = adapter.StartAsyncInvoke(ctx, provider.AsyncInvokeCall{RequestID: requestID, ProviderModel: target.ProviderModel, Prompt: request.Prompt, S3OutputURI: request.S3OutputURI, DurationSeconds: request.DurationSeconds, Dimension: request.Dimension, FPS: request.FPS, Seed: request.Seed})
 		return callErr
@@ -1265,7 +1265,7 @@ func (s *Service) GetAsyncInvoke(ctx context.Context, key, idValue string) (prov
 	target.FixedRequestMicrosUSD = 0
 	requestID := ""
 	var result provider.AsyncInvokeObject
-	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, 1, &requestID, func() error {
+	err = s.accountedInferenceResources(ctx, principal, resource.PublicModel, target, provider.OperationAsyncInvoke, 1, &requestID, func() error {
 		var callErr error
 		result, callErr = adapter.GetAsyncInvoke(ctx, requestID, resource.UpstreamID)
 		return callErr

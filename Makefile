@@ -31,7 +31,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.halro-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.halro-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test backup stats test cover race vet fmt-check observability-check check clean version
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version
 
 help:
 	@echo "Halro Makefile commands:"
@@ -46,6 +46,7 @@ help:
 	@echo "  deadman              Build only halro-deadman"
 	@echo "  frontend             Install dependencies and build the frontend"
 	@echo "  frontend-test        Run frontend tests"
+	@echo "  frontend-production-check  Node 22 typecheck/build and embedded bundle drift gate"
 	@echo "  backup               Create an encrypted backup"
 	@echo "  stats                Show the durable write path of a running instance"
 	@echo "  test                 Run all Go tests"
@@ -55,6 +56,7 @@ help:
 	@echo "  vet                  Run go vet"
 	@echo "  observability-check  Validate observability configuration"
 	@echo "  check                Run fmt-check, test, race, vet, frontend-test, and observability-check"
+	@echo "  full-check           Run check plus the frontend production build and bundle-drift gate"
 	@echo "  clean                Remove binaries and frontend build stamps"
 	@echo "  version              Show the release identity this build would carry"
 	@echo ""
@@ -147,12 +149,15 @@ $(WEB_BUILD_STAMP): $(WEB_DEPS_STAMP) $(WEB_SOURCES)
 frontend-test: $(WEB_DEPS_STAMP)
 	cd web && npm test
 
+frontend-production-check: $(WEB_DEPS_STAMP)
+	./scripts/check-web-bundle.sh
+
 # -shuffle catches the order dependencies a fixed order hides: shared global
 # state, one test leaving a clock or a directory another relies on. It found
 # nothing on the day it was added, which is the point at which to add it —
 # afterwards it stays cheap and only ever reports something new.
 test:
-	go test -shuffle=on ./...
+	go test -count=1 -shuffle=on ./...
 
 # Coverage is not gated on a number. It exists so "which branch has no test"
 # is a question the tooling answers rather than one somebody greps for by hand.
@@ -161,7 +166,11 @@ cover:
 	go tool cover -func=coverage.out | tail -1
 
 race:
-	go test -race ./...
+	# `internal/app` intentionally exercises Argon2-backed admin bootstrap many
+	# times. Under the race detector the package can exceed Go's 10m default on
+	# developer machines even while making progress, so the evidence gate owns
+	# an explicit package timeout instead of inheriting an accidental default.
+	go test -race -count=1 -timeout=20m ./...
 
 vet:
 	go vet ./...
@@ -170,6 +179,8 @@ observability-check:
 	./deploy/observability/validate.sh
 
 check: fmt-check test race vet frontend-test observability-check
+
+full-check: check frontend-production-check
 
 # Nothing enforced gofmt, so an unformatted file reached main and stayed there.
 # The convention in CLAUDE.md is only a convention until something fails on it.

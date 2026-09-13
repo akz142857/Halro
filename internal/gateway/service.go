@@ -559,9 +559,14 @@ func (s *Service) startAttempt(
 	ctx context.Context,
 	run *requestRun,
 	target provider.Target,
+	operation provider.Operation,
 	inputTokens, outputTokens int64,
 	targetIndex, targetTry, attemptNumber int,
 ) (*activeAttempt, error) {
+	resolved, ok := target.ResolveOperation(operation)
+	if !ok {
+		return nil, errors.New("provider operation primitive is unavailable")
+	}
 	breakerLease, err := s.breakers.Acquire(target.ID, s.now())
 	if err != nil {
 		return nil, err
@@ -638,8 +643,8 @@ func (s *Service) startAttempt(
 		RouteID: target.ID, DeploymentID: target.DeploymentID,
 		ProviderID: target.ProviderID, OfferingID: target.OfferingID, ProfileID: target.ProfileID,
 		AccountRegionID: target.AccountRegionID,
-		ProviderModel:   target.ProviderModel,
-		AttemptNumber:   attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
+		ProviderModel:   target.ProviderModel, ProviderPrimitive: resolved.ProviderPrimitive(),
+		AttemptNumber: attemptNumber, RetryCount: targetTry, FallbackCount: targetIndex,
 	}
 	var attempt budget.Attempt
 	if snapshot == nil {
@@ -1276,7 +1281,7 @@ func (s *Service) executeGenerate(
 				}
 			}
 			attempt, err := s.startAttempt(
-				ctx, run, target, inputTokens, outputTokens,
+				ctx, run, target, provider.OperationChat, inputTokens, outputTokens,
 				targetIndex, targetTry, attemptCount+1,
 			)
 			if err != nil {
@@ -1604,7 +1609,7 @@ func (s *Service) MessagesNative(ctx context.Context, plaintextKey, version stri
 		return anthropicapi.Message{}, err
 	}
 	defer run.close()
-	attempt, err := s.startAttempt(ctx, run, target, inputTokens, outputTokens, 0, 0, 1)
+	attempt, err := s.startAttempt(ctx, run, target, provider.OperationMessages, inputTokens, outputTokens, 0, 0, 1)
 	if err != nil {
 		return anthropicapi.Message{}, s.exhaustedAttemptsError(err)
 	}
@@ -1711,7 +1716,7 @@ func (s *Service) MessagesCountTokens(ctx context.Context, plaintextKey, version
 	defer run.close()
 	// Zero prepared tokens: nothing is generated, so there is no span to price.
 	// The lease still reserves the floor a metered lease requires.
-	attempt, err := s.startAttempt(ctx, run, target, 0, 0, 0, 0, 1)
+	attempt, err := s.startAttempt(ctx, run, target, provider.OperationMessages, 0, 0, 0, 0, 1)
 	if err != nil {
 		return anthropicapi.TokenCount{}, s.exhaustedAttemptsError(err)
 	}
@@ -1800,7 +1805,7 @@ func (s *Service) MessagesNativeStream(ctx context.Context, plaintextKey, versio
 		return err
 	}
 	defer run.close()
-	attempt, err := s.startAttempt(ctx, run, target, inputTokens, outputTokens, 0, 0, 1)
+	attempt, err := s.startAttempt(ctx, run, target, provider.OperationMessagesStream, inputTokens, outputTokens, 0, 0, 1)
 	if err != nil {
 		return s.exhaustedAttemptsError(err)
 	}
@@ -2308,7 +2313,7 @@ func (s *Service) generateStream(
 				}
 			}
 			attempt, err := s.startAttempt(
-				ctx, run, target, inputTokens, outputTokens,
+				ctx, run, target, provider.OperationChatStream, inputTokens, outputTokens,
 				targetIndex, targetTry, totalAttempts+1,
 			)
 			if err != nil {
@@ -2492,7 +2497,7 @@ func (s *Service) Embeddings(
 				}
 			}
 			attempt, err := s.startAttempt(
-				ctx, run, target, inputTokens, 0,
+				ctx, run, target, provider.OperationEmbeddings, inputTokens, 0,
 				targetIndex, targetTry, attemptCount+1,
 			)
 			if err != nil {

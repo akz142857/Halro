@@ -25,6 +25,47 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 	return fn(request)
 }
 
+func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
+	help, err := topLevelHelp("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool, len(topLevelCommands))
+	for _, descriptor := range topLevelCommands {
+		if seen[descriptor.name] {
+			t.Fatalf("duplicate command descriptor %q", descriptor.name)
+		}
+		seen[descriptor.name] = true
+		if strings.Count(help, "\n  "+descriptor.name) != 1 {
+			t.Fatalf("top-level help does not list %q exactly once:\n%s", descriptor.name, help)
+		}
+		topic, err := topLevelHelp(descriptor.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(topic, "Usage: "+descriptor.synopsis) || !strings.Contains(topic, descriptor.description) {
+			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
+		}
+	}
+	if len(seen) != 18 {
+		t.Fatalf("top-level command descriptor count=%d, want 18", len(seen))
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {
+		if err := run(arguments, logger); err != nil {
+			t.Fatalf("run(%q) failed: %v", arguments, err)
+		}
+	}
+	if err := run([]string{"help", "not-a-command"}, logger); err == nil {
+		t.Fatal("unknown help topic was accepted")
+	}
+	for _, arguments := range [][]string{{"--help", "backup"}, {"-h", "backup"}, {"help", "backup", "extra"}} {
+		if err := run(arguments, logger); err == nil || !strings.Contains(err.Error(), "usage: halro help [command]") {
+			t.Fatalf("run(%q) error=%v, want help usage error", arguments, err)
+		}
+	}
+}
+
 func TestRuntimeFailsClosedWhenHostHardeningFails(t *testing.T) {
 	previous := hardenRuntimeCommand
 	hardenRuntimeCommand = func() (hostsecurity.Report, error) {

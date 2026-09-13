@@ -6,9 +6,12 @@
 
 执行状态：S0–S2、S5 已完成；S3/S4 部分完成；S6/S7 形成阶段性结论。
 
-> 后续状态（2026-09-13）：首轮建议顺序内的 portable stream、capture byte bound、current truth、
-> Workbench Go 示例、release evidence 文档与 accounting alerts/runbook 已完成本地整改和复评；
-> 详见 [首轮顺序整改复评](remediation-report.md)。本文件继续保存冻结基线的历史结论。
+> 后续状态（2026-09-13）：首轮建议顺序内的仓库整改与可独立执行的本地 E3 已完成；六个 P2
+> 均已关闭，保守加权覆盖达到 84%，复评总分 67/100。当前裁决为
+> `ORDERED REMEDIATION COMPLETE / EXTERNAL EVIDENCE BLOCKED / PRODUCTION UNVERIFIED`。
+> 详见 [顺序整改复评](remediation-report.md)、[复评评分卡](scorecard.md)和
+> [E3 completion evidence](evidence/e3-completion/README.md)。以下正文继续保存冻结基线的历史结论，
+> 其中“约 70%/不计分”和活动 finding 描述不得当作当前状态引用。
 
 ## 1. 一页结论
 
@@ -17,7 +20,7 @@ Halro 的**核心设计方向应保留**。它把自己限定为自托管、单�
 窄腰；它没有滑向 Agent 编排、通用工作流、训练或“什么都做”的模型平台。单进程不是这里的落后
 设计，而是换取更强状态所有权、较小运维面和可恢复性的主动选择。
 
-当前阶段裁决是 **`REMEDIATION REQUIRED / PRODUCTION UNVERIFIED`**，原因不是核心架构失配，而是
+首轮阶段裁决是 **`REMEDIATION REQUIRED / PRODUCTION UNVERIFIED`**，原因不是核心架构失配，而是
 实现增长、能力真相和运行证据还没有形成同样成熟的反馈闭环：
 
 - 经独立反证，**没有确认 P0/P1**；最初唯一 P1 候选被降为 P2。
@@ -80,7 +83,7 @@ GitHub App client ID 缺失失败。快照时 Homebrew 仍为 v0.7.0，APT 状�
 
 ## 5. 十维成熟度
 
-详细表见 [scorecard.md](scorecard.md)。当前维度分数为：D1 2、D2 2、D3 2、D4 2、D5 2、D6 2、
+首轮维度分数为：D1 2、D2 2、D3 2、D4 2、D5 2、D6 2、
 D7 3、D8 1.5、D9 2、D10 3。由于 S3/S4 覆盖不足，禁止相加形成对外 100 分总分。
 
 整体形状很清楚：**设计与自动化基础强于目标环境和长期证据**。D7/D10 已接近可持续反馈环；D3/D5
@@ -118,7 +121,7 @@ D7 3、D8 1.5、D9 2、D10 3。由于 S3/S4 覆盖不足，禁止相加形成对
 
 ## 8. 决策与下一步
 
-具体 30/60/90 天处置见 [roadmap.md](roadmap.md)。建议先关闭两个实现级 P2 和 current truth 漂移，
+以下是首轮提出的顺序，具体 30/60/90 天处置与当前进度见 [roadmap.md](roadmap.md)：先关闭两个实现级 P2 和 current truth 漂移，
 再用 31–60 天取得升级、浏览器、package 与 target alert 的 E3；61–90 天完成 production-shaped
 capacity/soak、真实 KMS/PKI/Contact Point 与非作者恢复演练。
 

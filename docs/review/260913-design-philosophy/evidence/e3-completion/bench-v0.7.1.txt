@@ -1,0 +1,176 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   54518	     10641 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	2.357s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    8150	     98307 ns/op	   9.37 MB/s	   13804 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   15948	     36885 ns/op	   6.62 MB/s	   17983 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	3.235s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 881641917 ns/op	  35.02 MB/s	282219648 B/op	 3000044 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.833s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   56652	     10926 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.190s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    8158	     99270 ns/op	   9.28 MB/s	   13821 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   17932	     32889 ns/op	   7.42 MB/s	   17948 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	2.331s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 873315167 ns/op	  35.36 MB/s	282219312 B/op	 3000042 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.455s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   53470	     13266 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.266s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    5833	     96790 ns/op	   9.52 MB/s	   13902 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   17979	     32229 ns/op	   7.57 MB/s	   17905 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	1.915s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 892810084 ns/op	  34.58 MB/s	282219568 B/op	 3000043 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.511s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   57008	     11408 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.201s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    8104	     94445 ns/op	   9.75 MB/s	   13811 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   18462	     32897 ns/op	   7.42 MB/s	   17952 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	2.227s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 873812208 ns/op	  35.34 MB/s	282219280 B/op	 3000041 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.459s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   52183	     11689 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.282s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    7666	     96566 ns/op	   9.54 MB/s	   13844 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   19830	     32234 ns/op	   7.57 MB/s	   17903 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	2.175s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 870242333 ns/op	  35.48 MB/s	282219488 B/op	 3000043 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.505s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   57692	     10773 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.152s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    5822	     93782 ns/op	   9.82 MB/s	   13907 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   18231	     31486 ns/op	   7.75 MB/s	   17908 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	1.908s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 840429291 ns/op	  36.74 MB/s	282218960 B/op	 3000036 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.432s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   52477	     11146 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.133s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    7526	     98514 ns/op	   9.35 MB/s	   13824 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   17901	     32808 ns/op	   7.44 MB/s	   17999 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	2.101s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 832001250 ns/op	  37.11 MB/s	282218944 B/op	 3000038 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.477s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/provider
+cpu: Apple M4
+BenchmarkRegistryResolveCandidates-4   	   56212	     11165 ns/op	   15888 B/op	      41 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/provider	1.203s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/redaction
+cpu: Apple M4
+BenchmarkStandardRedaction-4   	    7791	     98556 ns/op	   9.34 MB/s	   13903 B/op	      32 allocs/op
+BenchmarkRollingRedaction-4    	   19330	     35073 ns/op	   6.96 MB/s	   18010 B/op	      79 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/redaction	2.187s
+goos: darwin
+goarch: arm64
+pkg: github.com/akz142857/Halro/internal/ledger
+cpu: Apple M4
+BenchmarkReplayLargeWAL-4   	       1	 865734875 ns/op	  35.67 MB/s	282219456 B/op	 3000042 allocs/op
+PASS
+ok  	github.com/akz142857/Halro/internal/ledger	1.445s

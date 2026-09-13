@@ -6,6 +6,10 @@
 语义误读、过宽范围与过高严重度；允许在 `/private/tmp` 的精确目标副本做故障注入或 mutation，禁止
 修改产品工作树和调用真实外部服务。
 
+> 状态说明：本文件冻结首轮非作者反证结果；下文“6 个 active P2”是整改前事实。整改候选已关闭这
+> 六项，但尚未发布；当前 finding、分数和外部证据边界以
+> [顺序整改复评](remediation-report.md) 和 [复评评分卡](scorecard.md) 为准。
+
 ## 1. 裁决总览
 
 | Finding | 发现角色 | 反证角色 | 原裁决 | 最终裁决 | 严重度变化 | 关键反证 |
@@ -36,7 +40,7 @@
 - 反证不是投票。每次降级都有入口、默认值、真实防御或新的运行证据；每次确认都有当前 SHA 的
   静态完整链、编译/故障注入/mutation 或二进制复现。
 
-最终 active P2 是：PHIL-CD-001、PHIL-B01、PHIL-A01、PHIL-A04、PHIL-A05、PHIL-CD-003。
+首轮反证结束时的 active P2 是：PHIL-CD-001、PHIL-B01、PHIL-A01、PHIL-A04、PHIL-A05、PHIL-CD-003。
 
 ## 3. 独立运行证据
 
@@ -53,7 +57,7 @@
   不进入 payload/响应/日志/Audit/磁盘。
 - PHIL-E-002：`-shuffle=on` 连跑不显示 cached；`go test -race` 第二次显示 `(cached)`。
 
-## 4. 仍未获得独立证据
+## 4. 首轮仍未获得的独立证据
 
 - capture 大请求 storm 的 peak RSS、GC pause 与 p99；这决定 PHIL-CD-001 是否需要重新升 P1。
 - portable Messages 的 handler-level disconnect 与两个 facade 修复后的端到端回归；当前时序和

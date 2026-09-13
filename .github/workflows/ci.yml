@@ -65,8 +65,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: go test -race ./...
+      - run: go test -count=1 ./...
+      - run: go test -race -count=1 -timeout=20m ./...
       - run: go vet ./...
       - name: Verify KMS dependency and spike boundaries
         run: |
@@ -84,6 +84,7 @@ jobs:
           python3 -m unittest \
             tools/modelcatalog/test_verify_publication_gate.py \
             tools/modelcatalog/test_workflow_contract.py \
+            tools/release/test_release_workflow_contract.py \
             tools/release/test_verify_environment.py \
             tools/release/test_run_evidence.py
           ./tools/m11/check-kms-boundaries.sh
@@ -384,4 +385,4 @@ jobs:
           curl --fail --silent http://127.0.0.1:18088/healthz >/dev/null
           python tests/compatibility/python/test_sdk.py
           npm test --prefix tests/compatibility/node
-          go -C tests/compatibility/go test ./...
+          go -C tests/compatibility/go test -count=1 ./...

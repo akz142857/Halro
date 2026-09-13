@@ -204,8 +204,8 @@ go test -run '^$' \
 | 命令 | 结果 | 能证明什么 |
 | --- | --- | --- |
 | `go test -count=1 ./internal/safetransport ./internal/failurecapture ./internal/deadman ./internal/backup` | 首次 mixed：SafeTransport/failurecapture 通过；backup 因只读 module-cache lock、deadman 因 sandbox 禁 loopback 失败 | 首次失败属于执行环境，不能判产品失败 |
-| 在允许 loopback/依赖缓存的隔离环境重跑 `go test -count=1 ./internal/deadman ./internal/backup ./internal/adminauth ./internal/app -run 'Test(RetainedCiphertext|Ready|Readiness|FailureCapture|FailurePayload|Metrics|Single|Lock|Backup|Restore|AdminUsageFailure|KMSSecretCanary|PrivateEndpoint|GatewayContract|Anchor)'` | PASS；deadman 2.262s，backup 0.663s，app 18.307s；adminauth 无匹配测试但编译通过 | 目标 SHA 上相关 fixture/负向路径 E2；不证明真实 PKI/KMS/告警 |
-| `go test -race -count=1 ./internal/gateway -run 'TestFailureCapture|TestShutdownFailureCapture|TestCaptureQueue'` | PASS，1.854s | capture 并发/关闭已有测试在 race 下通过；不覆盖大字节队列 |
+| 在允许 loopback/依赖缓存的隔离环境重跑 <code>go test -count=1 ./internal/deadman ./internal/backup ./internal/adminauth ./internal/app -run 'Test(RetainedCiphertext&#124;Ready&#124;Readiness&#124;FailureCapture&#124;FailurePayload&#124;Metrics&#124;Single&#124;Lock&#124;Backup&#124;Restore&#124;AdminUsageFailure&#124;KMSSecretCanary&#124;PrivateEndpoint&#124;GatewayContract&#124;Anchor)'</code> | PASS；deadman 2.262s，backup 0.663s，app 18.307s；adminauth 无匹配测试但编译通过 | 目标 SHA 上相关 fixture/负向路径 E2；不证明真实 PKI/KMS/告警 |
+| <code>go test -race -count=1 ./internal/gateway -run 'TestFailureCapture&#124;TestShutdownFailureCapture&#124;TestCaptureQueue'</code> | PASS，1.854s | capture 并发/关闭已有测试在 race 下通过；不覆盖大字节队列 |
 | `go test -count=1 ./deploy/observability` | PASS，2.714s | 随仓库规则/配置测试通过；不证明通知送达 |
 | 同机 `v0.7.1` 与目标 SHA 四项 benchmark，各 3 样本 | 全部 PASS | 局部 E3 方向性数据；不是容量曲线或统计显著结论 |
 
