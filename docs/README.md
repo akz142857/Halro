@@ -77,6 +77,10 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 
 性能基线、浸泡测试、崩溃恢复矩阵、真实服务商矩阵、安全评审、依赖与许可证评审。
 
+| 文档 | 内容 |
+| --- | --- |
+| [生产验证执行方案](verification/production-validation-plan.zh-CN.md) | 从候选冻结开始，依次完成真实 Provider、安全边界、告警与恢复、容量与 24 小时浸泡、正式发布和四方签署 |
+
 ## 评审 · [`review/`](review/)
 
 周期性多角色代码评审报告，按日期命名。[`review/README.md`](review/README.md) 定义评审框架：
