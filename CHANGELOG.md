@@ -4,6 +4,40 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [0.8.1] - 2026-09-16
+
+### Added
+
+- The `halro` CLI now provides generated top-level help through `--help`, `-h`,
+  `help`, and `help <command>`, covering every supported command from one
+  descriptor list.
+- Prometheus rules and runbooks now alert when shutdown truncates active
+  Provider attempts or an Accounting Lease remains pending beyond the maximum
+  configured request or stream duration.
+
+### Changed
+
+- Provider attempts now persist the concrete southbound primitive selected for
+  each operation through reservation, start, settlement and recovery. Ledger
+  validation rejects settlements that change any Provider attribution.
+- Release validation always uses fresh Go and SDK test results, rebuilds and
+  compares the embedded web bundle with Node 22, and checks downstream package
+  repository credentials and write permission before creating an immutable tag.
+
+### Fixed
+
+- Portable Responses and Anthropic Messages streams now finish facade-specific
+  terminal events inside the request lifecycle. If the client cannot receive
+  that terminal event, the request is recorded as failed while the completed
+  Provider attempt keeps its real settlement and is never retried.
+- Failure-capture request bodies are truncated before entering the asynchronous
+  queue, bounding queued memory by the configured capture limit as well as the
+  queue's record count.
+- Workbench Go examples now handle request construction, transport and HTTP
+  errors, close response bodies, bound response reads and report scanner errors.
+- Provider and Credential rows no longer overflow horizontally at intermediate
+  desktop widths; secondary facts collapse into the existing expanded detail.
+
 ## [0.8.0] - 2026-09-11
 
 ### Added
@@ -1609,6 +1643,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.1]: https://github.com/akz142857/Halro/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akz142857/Halro/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/akz142857/Halro/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/akz142857/Halro/compare/v0.6.0...v0.7.0
