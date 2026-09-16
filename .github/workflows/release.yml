@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      publish_packages:
+        description: "Dispatch the published release to Homebrew and APT"
+        required: false
+        default: true
+        type: boolean
 permissions:
   actions: read
   contents: read
@@ -503,7 +508,7 @@ jobs:
     # not a child of provenance. Missing credentials or repository permission
     # should be known before a publish run spends time producing attestations.
     needs: prepare
-    if: needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.publish == 'true' && inputs.publish_packages == true
     runs-on: ubuntu-latest
     # The ambient GITHUB_TOKEN is not used. The only authority below is the
     # short-lived, repository-scoped App token requested by the action.
@@ -543,7 +548,14 @@ jobs:
 
   publish:
     needs: [prepare, provenance, downstream-preflight]
-    if: needs.prepare.outputs.publish == 'true'
+    # A deliberately GitHub/GHCR-only release skips the package preflight. A
+    # requested package release still fails closed when that preflight fails.
+    if: >-
+      always()
+      && needs.prepare.outputs.publish == 'true'
+      && needs.provenance.result == 'success'
+      && (needs.downstream-preflight.result == 'success'
+          || needs.downstream-preflight.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -647,7 +659,7 @@ jobs:
 
   downstream-package-repositories:
     needs: [prepare, publish, container-push]
-    if: needs.prepare.outputs.publish == 'true'
+    if: needs.prepare.outputs.publish == 'true' && inputs.publish_packages == true
     runs-on: ubuntu-latest
     permissions:
       contents: read

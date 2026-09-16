@@ -29,8 +29,18 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("needs: prepare", preflight_block)
         self.assertNotIn("needs: [prepare, provenance]", preflight_block)
         self.assertIn("permissions: {}", preflight_block)
+        self.assertIn("inputs.publish_packages == true", preflight_block)
         publish_block = self.workflow[publish : self.workflow.index("\n  container-push:\n")]
         self.assertIn("needs: [prepare, provenance, downstream-preflight]", publish_block)
+        self.assertIn("needs.provenance.result == 'success'", publish_block)
+        self.assertIn("needs.downstream-preflight.result == 'success'", publish_block)
+        self.assertIn("needs.downstream-preflight.result == 'skipped'", publish_block)
+
+    def test_github_only_release_is_explicit_and_does_not_dispatch_packages(self):
+        self.assertIn("publish_packages:", self.workflow)
+        self.assertIn('description: "Dispatch the published release to Homebrew and APT"', self.workflow)
+        downstream = self.workflow[self.workflow.index("\n  downstream-package-repositories:\n") :]
+        self.assertIn("inputs.publish_packages == true", downstream)
 
     def test_preflight_checks_credentials_installation_and_write_permission(self):
         preflight = self.workflow[

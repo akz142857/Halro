@@ -23,6 +23,9 @@ semantic versioning.
 - Release validation always uses fresh Go and SDK test results, rebuilds and
   compares the embedded web bundle with Node 22, and checks downstream package
   repository credentials and write permission before creating an immutable tag.
+- Release operators can deliberately publish only the immutable GitHub Release
+  and GHCR images while leaving Homebrew and APT on their previously accepted
+  version; full package-channel publication remains the default.
 
 ### Fixed
 

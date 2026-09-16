@@ -134,6 +134,14 @@ that the changelog section exists and that ordinary CI passed for this exact
 assessment being complete and for recording any explicitly waived external
 acceptance, such as a real-Provider smoke.
 
+`publish_packages` defaults to `true` and preserves that complete chain. Set it
+to `false` only for an intentional GitHub/GHCR-only publication: the workflow
+still runs every artifact, signature, attestation and release gate, then creates
+the GitHub Release and multi-architecture container images, but it skips the
+Homebrew/APT credential preflight and downstream dispatch. Those package
+channels remain on their previously accepted version and must not be advertised
+as carrying the new release.
+
 Fetch the remote state, verify that the version is unused, and record the exact
 commit to be rehearsed:
 
@@ -235,7 +243,8 @@ gh workflow run release.yml \
   --repo akz142857/Halro \
   --ref main \
   -f version=v0.8.0 \
-  -f dry_run=false
+  -f dry_run=false \
+  -f publish_packages=true
 ```
 
 This run repeats the release gates, creates the annotated `v0.8.0` tag only
@@ -243,6 +252,11 @@ after they pass, publishes the immutable GitHub Release and GHCR images, and
 dispatches the exact version and full commit to Homebrew and APT. A protected
 `apt-production` Environment may pause for its configured approval; that is an
 approval inside the same release chain, not a second release trigger.
+
+For an explicitly scoped GitHub Release and GHCR publication without package
+channel updates, use `-f publish_packages=false`. In that mode the run is
+complete when `container-push` succeeds; `downstream-preflight` and
+`downstream-package-repositories` are expected to be skipped.
 
 If a transient failure occurs after the tag is created but before the GitHub
 Release exists, rerun the failed jobs. A fresh formal dispatch is also accepted
