@@ -4,6 +4,38 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [0.8.2] - 2026-09-17
+
+### Added
+
+- Provider connections can now use Admin-managed HTTP CONNECT egress proxies.
+  Proxy definitions support encrypted Basic Auth, explicit private-network and
+  cleartext acknowledgements, hot activation, safe diagnostics, and per-Provider
+  binding without silently falling back to a direct connection.
+- The Admin console now has a documented visual system with shared foundations,
+  component contracts, responsive navigation, compact settings navigation, and
+  visual-review evidence across supported routes, themes, locales and viewport
+  widths.
+
+### Changed
+
+- Bedrock Mantle regions are selected as part of the saved Credential and bound
+  to its regional endpoint instead of being taken from a global YAML default.
+- Provider, Credential and outbound-proxy resources use denser responsive rows,
+  clearer operational status, more consistent actions and accessible overflow
+  menus across desktop and narrow layouts.
+- Provider egress advances the bbolt metadata compatibility fence to schema 38.
+  Take and verify a complete backup before upgrading; rollback to v0.8.1 requires
+  restoring that pre-upgrade backup.
+
+### Fixed
+
+- v0.8.1 configuration files containing `providers.bedrock.region` remain valid
+  during an in-place upgrade. The retired key is accepted and validated for
+  compatibility, but no longer changes saved Credentials or Provider connections.
+- Admin layouts no longer overflow or lose actions at intermediate and narrow
+  widths, including the outbound-proxy row that previously collapsed its fields.
+
 ## [0.8.1] - 2026-09-16
 
 ### Added
@@ -1646,6 +1678,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.2]: https://github.com/akz142857/Halro/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akz142857/Halro/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akz142857/Halro/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/akz142857/Halro/compare/v0.7.0...v0.7.1
