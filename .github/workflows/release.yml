@@ -626,7 +626,13 @@ jobs:
 
   container-push:
     needs: [prepare, publish]
-    if: needs.prepare.outputs.publish == 'true'
+    # publish deliberately tolerates a skipped package preflight for a
+    # GitHub/GHCR-only release. Without always(), that skipped transitive
+    # dependency also skips this job even after publish succeeds.
+    if: >-
+      always()
+      && needs.prepare.outputs.publish == 'true'
+      && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -659,7 +665,12 @@ jobs:
 
   downstream-package-repositories:
     needs: [prepare, publish, container-push]
-    if: needs.prepare.outputs.publish == 'true' && inputs.publish_packages == true
+    if: >-
+      always()
+      && needs.prepare.outputs.publish == 'true'
+      && inputs.publish_packages == true
+      && needs.publish.result == 'success'
+      && needs.container-push.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read

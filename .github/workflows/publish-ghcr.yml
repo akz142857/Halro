@@ -1,0 +1,151 @@
+name: publish-ghcr
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing GitHub Release to publish, e.g. v0.8.2"
+        required: true
+        type: string
+      release_commit:
+        description: "Exact 40-character commit SHA the release tag must resolve to"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-ghcr-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify the immutable published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}" ]; then
+            echo "::error::GHCR recovery must run from ${DEFAULT_BRANCH}, got ${GITHUB_REF}"
+            exit 1
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "::error::version must look like v1.2.3 or v1.2.3-rc.1, got '${VERSION}'"
+            exit 1
+          fi
+          if ! printf '%s' "${RELEASE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::release_commit must be a full lowercase SHA"
+            exit 1
+          fi
+          git fetch --force --tags origin
+          tag_commit=$(git rev-list -n 1 "refs/tags/${VERSION}")
+          if [ "${tag_commit}" != "${RELEASE_COMMIT}" ]; then
+            echo "::error::tag ${VERSION} resolves to ${tag_commit}, expected ${RELEASE_COMMIT}"
+            exit 1
+          fi
+          release_json=$(gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+            --json tagName,isDraft)
+          if ! jq -e --arg version "${VERSION}" \
+            '.tagName == $version and .isDraft == false' <<<"${release_json}" >/dev/null; then
+            echo "::error::${VERSION} is not an existing published release"
+            exit 1
+          fi
+      - name: Download the signed container archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir artifacts
+          gh release download "${VERSION}" --repo "${GITHUB_REPOSITORY}" --dir artifacts \
+            -p checksums.txt \
+            -p checksums.txt.sigstore.json \
+            -p 'halro-container-*.tar.gz' \
+            -p 'halro-container-*.tar.gz.sigstore.json' \
+            -p 'halro-deadman-container-*.tar.gz' \
+            -p 'halro-deadman-container-*.tar.gz.sigstore.json'
+      - name: Verify checksums, provenance, and Sigstore bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ inputs.release_commit }}
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          archives=(
+            halro-container-amd64.tar.gz
+            halro-container-arm64.tar.gz
+            halro-deadman-container-amd64.tar.gz
+            halro-deadman-container-arm64.tar.gz
+          )
+          for artifact in "${archives[@]}"; do
+            test -s "${artifact}"
+            test -s "${artifact}.sigstore.json"
+            awk '{print $2}' checksums.txt | grep -Fx -- "${artifact}" >/dev/null
+          done
+          test -s checksums.txt.sigstore.json
+          sha256sum --check --ignore-missing checksums.txt
+          for artifact in "${archives[@]}"; do
+            gh attestation verify "${artifact}" --repo "${GITHUB_REPOSITORY}" \
+              --source-digest "${RELEASE_COMMIT}" \
+              --source-ref refs/heads/main \
+              --cert-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
+          done
+          for artifact in checksums.txt "${archives[@]}"; do
+            cosign verify-blob \
+              --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main" \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --bundle "${artifact}.sigstore.json" \
+              "${artifact}"
+          done
+      - name: Log in to ghcr.io
+        run: printf '%s' "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Publish the verified multi-architecture images
+        env:
+          VERSION: ${{ inputs.version }}
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          for name in halro halro-deadman; do
+            refs=()
+            for arch in amd64 arm64; do
+              docker load < "${name}-container-${arch}.tar.gz"
+              local_ref="${name}:${VERSION}-${arch}"
+              remote_ref="ghcr.io/${owner}/${name}:${VERSION}-${arch}"
+              test "$(docker image inspect "${local_ref}" --format '{{.Architecture}}')" = "${arch}"
+              test "$(docker image inspect "${local_ref}" --format '{{.Config.User}}')" = "65532:65532"
+              docker tag "${local_ref}" "${remote_ref}"
+              docker push "${remote_ref}"
+              refs+=("${remote_ref}")
+            done
+            docker buildx imagetools create -t "ghcr.io/${owner}/${name}:${VERSION}" "${refs[@]}"
+            docker buildx imagetools create -t "ghcr.io/${owner}/${name}:latest" "${refs[@]}"
+          done
+      - name: Verify published platforms
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          for name in halro halro-deadman; do
+            for tag in "${VERSION}" latest; do
+              docker buildx imagetools inspect "ghcr.io/${owner}/${name}:${tag}" --raw \
+                | jq -e '[.manifests[].platform | "\(.os)/\(.architecture)"] | sort == ["linux/amd64", "linux/arm64"]' \
+                  >/dev/null
+            done
+          done

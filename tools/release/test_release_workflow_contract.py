@@ -5,6 +5,7 @@ import unittest
 
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+GHCR_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-ghcr.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 
 
@@ -12,6 +13,7 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = WORKFLOW.read_text(encoding="utf-8")
+        cls.ghcr_workflow = GHCR_WORKFLOW.read_text(encoding="utf-8")
         cls.ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     def test_fresh_go_evidence_is_explicit(self):
@@ -41,6 +43,31 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('description: "Dispatch the published release to Homebrew and APT"', self.workflow)
         downstream = self.workflow[self.workflow.index("\n  downstream-package-repositories:\n") :]
         self.assertIn("inputs.publish_packages == true", downstream)
+
+    def test_github_only_release_still_pushes_containers(self):
+        container_push = self.workflow[
+            self.workflow.index("\n  container-push:\n") : self.workflow.index("\n  downstream-package-repositories:\n")
+        ]
+        self.assertIn("always()", container_push)
+        self.assertIn("needs.publish.result == 'success'", container_push)
+
+    def test_ghcr_recovery_uses_only_verified_published_assets(self):
+        for expected in (
+            "workflow_dispatch:",
+            "release_commit:",
+            'GITHUB_REF}" != "refs/heads/${DEFAULT_BRANCH}',
+            'tag_commit=$(git rev-list -n 1 "refs/tags/${VERSION}")',
+            "gh release view",
+            "gh release download",
+            "sha256sum --check --ignore-missing checksums.txt",
+            'gh attestation verify "${artifact}"',
+            "cosign verify-blob",
+            "packages: write",
+            'docker buildx imagetools create -t "ghcr.io/${owner}/${name}:${VERSION}"',
+        ):
+            self.assertIn(expected, self.ghcr_workflow)
+        self.assertNotIn("docker build ", self.ghcr_workflow)
+        self.assertNotIn("docker buildx build", self.ghcr_workflow)
 
     def test_preflight_checks_credentials_installation_and_write_permission(self):
         preflight = self.workflow[

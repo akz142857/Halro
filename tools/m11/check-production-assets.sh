@@ -28,11 +28,12 @@ grep -q 'cosign verify-blob' .github/workflows/release.yml
 grep -q 'tools/release/run_evidence.py create' .github/workflows/release.yml
 grep -q 'release-run-evidence.json.sigstore.json' .github/workflows/release.yml
 
-# Every action reference in both workflows must be a 40-hex commit, not a
+# Every action reference in the production workflows must be a 40-hex commit, not a
 # movable tag. A tag can be repointed at new code after review, which is the
 # supply-chain hole this release is signed to close; the check lives here so
 # adding an unpinned step fails the same gate as removing a signing step.
 unpinned=$(grep -hoE '^\s*(- )?uses: [^ ]+' .github/workflows/ci.yml .github/workflows/release.yml \
+  .github/workflows/publish-ghcr.yml \
   | grep -vE '@[0-9a-f]{40}$' || true)
 if [ -n "$unpinned" ]; then
   echo "unpinned GitHub Action references:" >&2

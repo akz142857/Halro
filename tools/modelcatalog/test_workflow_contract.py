@@ -25,9 +25,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertEqual(len(ANY_ACTION.findall(workflow)), len(FULL_SHA_ACTION.findall(workflow)))
 
     def test_release_pins_every_action(self) -> None:
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        self.assertGreater(len(ANY_ACTION.findall(workflow)), 0)
-        self.assertEqual(len(ANY_ACTION.findall(workflow)), len(FULL_SHA_ACTION.findall(workflow)))
+        for path in ("release.yml", "publish-ghcr.yml"):
+            with self.subTest(workflow=path):
+                workflow = (ROOT / ".github" / "workflows" / path).read_text()
+                self.assertGreater(len(ANY_ACTION.findall(workflow)), 0)
+                self.assertEqual(len(ANY_ACTION.findall(workflow)), len(FULL_SHA_ACTION.findall(workflow)))
 
     def test_release_has_one_entry_and_dispatches_exact_release_downstream(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
