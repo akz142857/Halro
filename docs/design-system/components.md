@@ -1,5 +1,7 @@
 # Component contracts
 
+> 本文出现的 Wide / Regular / Compact / Small 指 `foundations.md` 的响应式模式定义（> 1120 / 821–1120 / 581–820 / 320–580px），不要按其他文档的同名词理解。
+
 组件实现主要位于 `web/src/components.tsx`、`web/src/design-system/*.css` 与共享页面组件。新增页面应组合现有契约，不复制视觉规则。
 
 | 组件族 | Anatomy / variants | 状态 | Keyboard / responsive contract |

@@ -254,7 +254,7 @@ function SubscriptionUsageDisclosure({
         <p>{t("providers.usageWarningDescription")}</p>
         {identityUnverified && <p className="warning-text">{t("providers.usageIdentityUnverified")}</p>}
         {documentationURL && (
-          <a href={documentationURL} target="_blank" rel="noreferrer">
+          <a className="text-link" href={documentationURL} target="_blank" rel="noreferrer">
             {t("providers.usageWarningDocumentation")} <span aria-hidden="true">↗</span>
           </a>
         )}

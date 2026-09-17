@@ -4,7 +4,7 @@ import type { UsageAttempt } from "../../types";
 import { money } from "../../format";
 import { shortID } from "./governance-state";
 
-export function GovernanceBadge({ tone, children }: { tone: "good" | "warning" | "danger" | "neutral"; children: React.ReactNode }) {
+export function GovernanceBadge({ tone, children }: { tone: "good" | "warning" | "danger" | "neutral" | "unknown"; children: React.ReactNode }) {
   return <span className={`governance-badge ${tone}`}><span aria-hidden="true" />{children}</span>;
 }
 

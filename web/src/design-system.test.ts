@@ -77,7 +77,14 @@ describe("design system themes", () => {
     expect(light).not.toMatch(/^:root[,{\s]/m); // light only under [data-appearance="light"]
   });
 
-  it("declares the PRD minimum semantic color tokens", () => {
+  // This list is the specification in `docs/design-system/foundations.md` and
+  // the parent plan's §9.5, NOT an inventory of what happens to be declared.
+  // Written the other way round it can only catch a token being deleted; it can
+  // never report a role the specification asked for and nobody built.
+  // `--color-status-unknown-*`, `--color-action-disabled*` and
+  // `--color-text-link` arrived here when VS-13, VS-14 and VS-15 closed; they
+  // were listed as findings, not declared as unused tokens, while they waited.
+  it("declares the specified semantic color roles", () => {
     const required = [
       "--color-canvas",
       "--color-surface-default",
@@ -99,6 +106,14 @@ describe("design system themes", () => {
       "--color-status-warning-text",
       "--color-status-danger-text",
       "--color-status-info-text",
+      "--color-status-neutral-text",
+      "--color-status-neutral-surface",
+      "--color-status-neutral-border",
+      "--color-status-unknown-text",
+      "--color-status-unknown-border",
+      "--color-action-disabled",
+      "--color-action-disabled-border",
+      "--color-text-link",
       "--color-chart-series-1",
       "--color-chart-series-2",
       "--color-chart-grid",
@@ -107,6 +122,69 @@ describe("design system themes", () => {
     ];
     const darkTokens = declaredTokens(dark);
     for (const token of required) expect(darkTokens.has(token), token).toBe(true);
+  });
+
+  // A declared token nobody reads is the failure mode this system is most prone
+  // to: the specification grows a name, the gate that lists required names goes
+  // green, and no pixel on the console changed. The raw-value ratchet catches a
+  // literal arriving in business CSS; nothing caught a role arriving with no
+  // call site. This does, and it is exact in both directions — consuming one of
+  // these means deleting its line here, so the list can only shrink.
+  //
+  // Everything on it is a role the specification requires (`--color-text-inverse`,
+  // `--color-surface-overlay`, `--color-status-*-icon`, `--color-action-secondary`)
+  // or a shell constant a page has not needed yet. The status *-icon entries are
+  // the tail of the four-part status pattern: success, warning and danger draw an
+  // icon, info, neutral and unknown do not yet. None of them is licence to add
+  // another.
+  const reviewedUnconsumedRoles = [
+    "--color-action-secondary",
+    "--color-chart-tooltip",
+    "--color-status-info-icon",
+    "--color-status-neutral-icon",
+    "--color-status-unknown-icon",
+    "--color-surface-overlay",
+    "--color-text-inverse",
+    "--control-block-size",
+    "--layout-content-max-width",
+  ];
+
+  it("declares no semantic role the product never reads", () => {
+    // Held in a variable, not written as a literal: Vite rewrites a literal
+    // new URL("./x", import.meta.url) into an asset URL, which is not a path.
+    const anchor = "./styles.css";
+    const sourceRoot = dirname(fileURLToPath(new URL(anchor, import.meta.url)));
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.(css|ts|tsx)$/.test(entry) && !entry.includes(".test.")) files.push(full);
+      }
+    };
+    walk(sourceRoot);
+
+    const css = files.filter((file) => file.endsWith(".css")).map((file) => readFileSync(file, "utf8")).join("");
+    // TrendChart reads chart roles through getPropertyValue, not var(), so a
+    // bare name in a module counts as a call site.
+    const code = files.filter((file) => !file.endsWith(".css")).map((file) => readFileSync(file, "utf8")).join("");
+    const consumed = new Set([
+      ...Array.from(css.matchAll(/var\(\s*(--[a-z0-9-]+)/g), (match) => match[1]),
+      ...Array.from(code.matchAll(/(--[a-z0-9-]+)/g), (match) => match[1]),
+    ]);
+
+    const roles = new Set<string>();
+    for (const source of [read("./design-system/tokens.css"), dark, light]) {
+      for (const token of declaredTokens(source)) {
+        if (/^--(color|type|layout|control)-/.test(token)) roles.add(token);
+      }
+    }
+
+    const unconsumed = [...roles].filter((token) => !consumed.has(token)).sort();
+    expect(
+      unconsumed,
+      "a role with no call site: consume it and delete its line from reviewedUnconsumedRoles, or do not declare it",
+    ).toEqual(reviewedUnconsumedRoles);
   });
 
   it.each([
@@ -129,6 +207,9 @@ describe("design system themes", () => {
       "--color-status-warning-text",
       "--color-status-danger-text",
       "--color-status-info-text",
+      "--color-status-unknown-text",
+      "--color-action-disabled",
+      "--color-text-link",
     ];
     for (const foregroundToken of textTokens) {
       for (const backgroundToken of surfaces) {
@@ -193,7 +274,9 @@ describe("design system themes", () => {
   // hand-picking spacing and moved it onto shared layout/touch roles.
   // 693 → 692 when the Provider condition absorbed the separately spaced
   // inline test result and removed that one-off action margin.
-  const bareSizeValueBaseline = 692;
+  // 692 → 691 when the page gutter and bottom safe space became
+  // --layout-page-inline / --layout-page-block-end.
+  const bareSizeValueBaseline = 691;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
@@ -287,12 +370,9 @@ describe("design system themes", () => {
   // not a literal that can arrive unnoticed in business CSS.
   const nonScaleTypeAllowlist = new Map<string, string[]>([
     [".brand strong", ["font:var(--font-weight-bold) 14px/1.2 var(--mono)"]],
-    [".metric strong", ["font:var(--font-weight-medium) clamp(20px, 2vw, 30px)/1 var(--mono)"]],
     [".custody-summary-primary h2", ["font-size:25px"]],
     [".system-card h3", ["font-size:20px"]],
-    [".login-story h1", ["font-size:clamp(34px, 4.2vw, 46px)"]],
     [".login-story > div > p:last-child", ["font-size:16px"]],
-    [".login-panel h2", ["font-size:34px"]],
     [".count", ["font:20px var(--mono)"]],
     [".empty-mark", ["font:20px var(--mono)"]],
     [".first-run-action-arrow", ["font:var(--font-weight-medium) 1rem/1 var(--mono)"]],
@@ -322,6 +402,88 @@ describe("design system themes", () => {
   // variable, and on a Windows CJK face it snaps to 600 or 700 — a platform
   // difference nobody sees while developing. Naming the token instead means the
   // weight is a decision the design system made once.
+  // opacity fades a control against whatever it happens to sit on, so its
+  // contrast is a property of the backdrop rather than of the rule. That is how
+  // the Developer response-mode toggle reached 1.90:1 on Light and 2.66:1 on
+  // Dark while four sibling rules using the same idiom sat between 4.02 and
+  // 6.93 — nothing about the declaration says which you will get. A disabled
+  // foreground is named instead, and the contrast assertion holds it.
+  //
+  // The exception is a native checkbox: it carries no text to render illegible,
+  // and the user agent already draws its own disabled state.
+  const opacityDisabledAllowlist = [".capability-option.unavailable input:disabled"];
+
+  // The defect this guards is fall-through, not a wrong colour: the panel styled
+  // `complete` and left `partial` and `unknown` to inherit a base that was
+  // already painted warning. Two different facts about a cost figure then made
+  // the same statement. A base that carries no status treatment is what stops
+  // it happening again — a fourth state added later renders unstyled and
+  // visible, rather than silently borrowing whichever treatment the base holds.
+  it("gives each completeness state its own status treatment", () => {
+    const styles = read("./styles.css");
+    const families = (selector: string) =>
+      new Set(Array.from((ruleBody(styles, selector) ?? "").matchAll(/--color-status-([a-z]+)-/g), (match) => match[1]));
+
+    expect(families(".governance-completeness"), "the base must carry no status treatment").toEqual(new Set());
+    const states = [".governance-completeness.complete", ".governance-completeness.partial", ".governance-completeness.unknown"];
+    const seen = states.map((selector) => {
+      const family = families(selector);
+      expect(family.size, `${selector} styles no status family`).toBeGreaterThan(0);
+      return [...family].sort().join("+");
+    });
+    expect(new Set(seen).size, `three states share a treatment: ${seen.join(" | ")}`).toBe(3);
+  });
+
+  it("does not express a disabled control through opacity", () => {
+    const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
+    const offenders: string[] = [];
+    for (const rule of styles.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const selector = rule[1].trim().split("\n").pop()!.trim();
+      if (!/:disabled|\[disabled\]|\[aria-disabled|\.disabled\b|\.unavailable\b/.test(selector)) continue;
+      if (!/(?:^|;)\s*opacity\s*:/.test(rule[2])) continue;
+      if (opacityDisabledAllowlist.includes(selector)) continue;
+      offenders.push(selector);
+    }
+    expect(offenders, `disabled state carried by opacity: ${offenders.join(" | ")}`).toEqual([]);
+  });
+
+  // A link in prose that inherits body colour is discoverable only by hovering,
+  // which §8.6 does not allow. Every anchor therefore states what it is: a
+  // navigation item, a button-shaped action, the skip link, or .text-link.
+  it("gives every anchor a class that says what it is", () => {
+    const stylesPath = "./styles.css";
+    const sourceRoot = dirname(fileURLToPath(new URL(stylesPath, import.meta.url)));
+    const bare: string[] = [];
+    const visit = (path: string) => {
+      for (const entry of readdirSync(path)) {
+        const full = join(path, entry);
+        if (statSync(full).isDirectory()) {
+          visit(full);
+          continue;
+        }
+        if (!entry.endsWith(".tsx") || entry.includes(".test.")) continue;
+        const source = readFileSync(full, "utf8");
+        for (const match of source.matchAll(/<a[\s>]/g)) {
+          // Walk to the tag's own ">", ignoring any inside a JSX expression:
+          // an onClick handler spells `=>` and would end the tag early.
+          let depth = 0;
+          let end = match.index! + 2;
+          while (end < source.length) {
+            const character = source[end];
+            if (character === "{") depth += 1;
+            else if (character === "}") depth -= 1;
+            else if (character === ">" && depth === 0) break;
+            end += 1;
+          }
+          const tag = source.slice(match.index!, end);
+          if (!tag.includes("className")) bare.push(`${relative(sourceRoot, full)}: ${tag.slice(0, 60)}`);
+        }
+      }
+    };
+    visit(sourceRoot);
+    expect(bare, `anchors with no class:\n${bare.join("\n")}`).toEqual([]);
+  });
+
   it("declares no literal font weights in business CSS", () => {
     const styles = read("./styles.css");
     const literal = [

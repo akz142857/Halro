@@ -1,5 +1,12 @@
 # Visual System v0.1 Acceptance Report
 
+> Correction (2026-09-17 re-check): this report's evidence stands — the gates, the browser
+> matrix and the ten closed findings were re-verified. Its scope claim did not. What was
+> accepted is Phase 0–1 of the parent plan plus one round of P1/P2 fixes, not Phase 2–5.
+> The "explicitly accepted" raw-spacing and breakpoint debt below is the plan's Foundation and
+> migration work itself; VS-05 and VS-09 are reopened in `findings.md`. Read the "Delivered
+> system" list as what this round shipped, not as a completed visual system.
+
 Date: 2026-09-17
 
 Baseline: `364db696cd199a178d9a77d82e0ba397b23f7d1f`

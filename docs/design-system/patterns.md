@@ -1,5 +1,7 @@
 # Page patterns
 
+> 本文出现的 Wide / Regular / Compact / Small 指 `foundations.md` 的响应式模式定义（> 1120 / 821–1120 / 581–820 / 320–580px），不要按其他文档的同名词理解。
+
 ## Overview
 
 结构：PageHeader → 关键 Metric → 趋势/异常 → 次级活动。指标先回答“是否正常”，图表回答“何时变化”，明细回答“为什么”。空数据不伪装为健康。
