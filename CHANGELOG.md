@@ -6,6 +6,8 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-18
+
 ### Added
 
 - Remote first-administrator setup can consume a fixed-format token and
@@ -18,13 +20,33 @@ semantic versioning.
 
 ### Changed
 
-- `halro serve` now fails closed when a zero-administrator remote instance has
-  no configured setup-token file. Configure `admin.setup_token_file`, or run
-  the offline `halro admin bootstrap` flow before upgrading such an instance.
+- `halro serve` now fails closed when an instance that has **no administrator
+  yet** is reachable beyond loopback (a non-loopback `admin_listen`, or a
+  configured `admin.external_origin`) and has no setup-token file. Configure
+  `admin.setup_token_file`, or run the offline `halro admin bootstrap` flow,
+  before upgrading such an instance. An instance that already has an
+  administrator is unaffected, and `halro start` still prints a generated
+  one-time setup token instead of refusing, because it has a console to print
+  it to. `serve` is the container entrypoint and does not.
 - First-administrator creation, its audit intent and its operation completion
   marker now commit atomically. `admin bootstrap --if-needed --operation-id`
   safely reports a matching completed operation without replacing its password,
   and refuses completion markers without a matching authenticated Audit event.
+
+### Fixed
+
+- A disabled Admin control no longer fades the enabled one with `opacity`, which
+  made its contrast depend on whatever it sat on. The Developer response-mode
+  toggle rendered at 1.90:1 on Light; every disabled control now uses a named
+  foreground held at WCAG AA in both themes.
+- Run Governance told "outcome data is partial" and "outcome data could not be
+  read" apart in its data and not in its display: both rendered as the same
+  warning panel. An unknown cost or outcome status now has its own treatment.
+- A documentation link in the Provider pages inherited body colour with no
+  underline, so it was discoverable only by hovering. Links in prose now carry
+  both colour and underline.
+- The Admin page gutter no longer shrinks to 12.8px at the narrowest supported
+  width, nor grows past 100px on a wide monitor.
 
 ## [0.8.2] - 2026-09-17
 
@@ -1700,6 +1722,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.3]: https://github.com/akz142857/Halro/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/akz142857/Halro/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akz142857/Halro/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/akz142857/Halro/compare/v0.7.1...v0.8.0
