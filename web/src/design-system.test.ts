@@ -77,7 +77,14 @@ describe("design system themes", () => {
     expect(light).not.toMatch(/^:root[,{\s]/m); // light only under [data-appearance="light"]
   });
 
-  it("declares the PRD minimum semantic color tokens", () => {
+  // This list is the specification in `docs/design-system/foundations.md` and
+  // the parent plan's §9.5, NOT an inventory of what happens to be declared.
+  // Written the other way round it can only catch a token being deleted; it can
+  // never report a role the specification asked for and nobody built. Two roles
+  // the plan names are deliberately absent and tracked as findings instead of
+  // being declared unused: `--color-status-unknown-*` (VS-13) and
+  // `--color-action-disabled` (VS-14).
+  it("declares the specified semantic color roles", () => {
     const required = [
       "--color-canvas",
       "--color-surface-default",
@@ -99,6 +106,9 @@ describe("design system themes", () => {
       "--color-status-warning-text",
       "--color-status-danger-text",
       "--color-status-info-text",
+      "--color-status-neutral-text",
+      "--color-status-neutral-surface",
+      "--color-status-neutral-border",
       "--color-chart-series-1",
       "--color-chart-series-2",
       "--color-chart-grid",
@@ -107,6 +117,66 @@ describe("design system themes", () => {
     ];
     const darkTokens = declaredTokens(dark);
     for (const token of required) expect(darkTokens.has(token), token).toBe(true);
+  });
+
+  // A declared token nobody reads is the failure mode this system is most prone
+  // to: the specification grows a name, the gate that lists required names goes
+  // green, and no pixel on the console changed. The raw-value ratchet catches a
+  // literal arriving in business CSS; nothing caught a role arriving with no
+  // call site. This does, and it is exact in both directions — consuming one of
+  // these means deleting its line here, so the list can only shrink.
+  //
+  // Everything on it is a role the specification requires (`--color-text-inverse`,
+  // `--color-surface-overlay`, `--color-status-*-icon`, `--color-action-secondary`)
+  // or a shell constant a page has not needed yet. None of them is licence to
+  // add a twelfth.
+  const reviewedUnconsumedRoles = [
+    "--color-action-secondary",
+    "--color-chart-tooltip",
+    "--color-status-info-icon",
+    "--color-status-neutral-icon",
+    "--color-surface-overlay",
+    "--color-text-inverse",
+    "--control-block-size",
+    "--layout-content-max-width",
+  ];
+
+  it("declares no semantic role the product never reads", () => {
+    // Held in a variable, not written as a literal: Vite rewrites a literal
+    // new URL("./x", import.meta.url) into an asset URL, which is not a path.
+    const anchor = "./styles.css";
+    const sourceRoot = dirname(fileURLToPath(new URL(anchor, import.meta.url)));
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.(css|ts|tsx)$/.test(entry) && !entry.includes(".test.")) files.push(full);
+      }
+    };
+    walk(sourceRoot);
+
+    const css = files.filter((file) => file.endsWith(".css")).map((file) => readFileSync(file, "utf8")).join("");
+    // TrendChart reads chart roles through getPropertyValue, not var(), so a
+    // bare name in a module counts as a call site.
+    const code = files.filter((file) => !file.endsWith(".css")).map((file) => readFileSync(file, "utf8")).join("");
+    const consumed = new Set([
+      ...Array.from(css.matchAll(/var\(\s*(--[a-z0-9-]+)/g), (match) => match[1]),
+      ...Array.from(code.matchAll(/(--[a-z0-9-]+)/g), (match) => match[1]),
+    ]);
+
+    const roles = new Set<string>();
+    for (const source of [read("./design-system/tokens.css"), dark, light]) {
+      for (const token of declaredTokens(source)) {
+        if (/^--(color|type|layout|control)-/.test(token)) roles.add(token);
+      }
+    }
+
+    const unconsumed = [...roles].filter((token) => !consumed.has(token)).sort();
+    expect(
+      unconsumed,
+      "a role with no call site: consume it and delete its line from reviewedUnconsumedRoles, or do not declare it",
+    ).toEqual(reviewedUnconsumedRoles);
   });
 
   it.each([
@@ -193,7 +263,9 @@ describe("design system themes", () => {
   // hand-picking spacing and moved it onto shared layout/touch roles.
   // 693 → 692 when the Provider condition absorbed the separately spaced
   // inline test result and removed that one-off action margin.
-  const bareSizeValueBaseline = 692;
+  // 692 → 691 when the page gutter and bottom safe space became
+  // --layout-page-inline / --layout-page-block-end.
+  const bareSizeValueBaseline = 691;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
@@ -287,12 +359,9 @@ describe("design system themes", () => {
   // not a literal that can arrive unnoticed in business CSS.
   const nonScaleTypeAllowlist = new Map<string, string[]>([
     [".brand strong", ["font:var(--font-weight-bold) 14px/1.2 var(--mono)"]],
-    [".metric strong", ["font:var(--font-weight-medium) clamp(20px, 2vw, 30px)/1 var(--mono)"]],
     [".custody-summary-primary h2", ["font-size:25px"]],
     [".system-card h3", ["font-size:20px"]],
-    [".login-story h1", ["font-size:clamp(34px, 4.2vw, 46px)"]],
     [".login-story > div > p:last-child", ["font-size:16px"]],
-    [".login-panel h2", ["font-size:34px"]],
     [".count", ["font:20px var(--mono)"]],
     [".empty-mark", ["font:20px var(--mono)"]],
     [".first-run-action-arrow", ["font:var(--font-weight-medium) 1rem/1 var(--mono)"]],

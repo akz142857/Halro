@@ -1,8 +1,18 @@
 # Halro Admin Console 全面视觉评审与视觉系统建设方案
 
-> 执行状态（2026-09-17）：Phase 0–6 已完成，正式规范见 `docs/design-system/`，评审、发现关闭与验收证据见 `docs/review/260917-visual-system/acceptance-report.md`。
+> 执行状态（2026-09-17 评审，2026-09-17 复核修正）：
+>
+> - **已完成**：Phase 0（基线冻结）、Phase 1（全面评审），以及由评审产出的一轮 P1/P2 缺陷修复
+>   （12 项发现中 10 项关闭）。正式规范见 `docs/design-system/`，评审与验收证据见
+>   `docs/review/260917-visual-system/`。
+> - **未执行**：Phase 2（冻结 Foundation）、Phase 3（建立核心组件）、Phase 4（代表页面试点）、
+>   Phase 5（全量迁移）。§9.3 的语义间距 Token 未实现；裸值基线仅由 699 降至 692；
+>   §9.6 的断点收敛未发生；`web/src/styles.css` 自基线 2901 行仅变动至 2909 行，
+>   共享组件样式表仍为 13 行。对应未关闭发现为 VS-05 与 VS-09。
+> - 因此本文件是**进行中的方案**，不是历史档案。Phase 2–5 的条款仍然有效，未实现的规范
+>   条款不得据"已验收"删除或降级。
 
-- 状态：Completed / Visual System v0.1 accepted
+- 状态：In progress — Phase 0–1 完成 + 一轮 P1/P2 修复已落地；Phase 2–5 未执行
 - 日期：2026-09-17
 - 基线分支：`main`
 - 基线提交：`364db696`
@@ -354,26 +364,35 @@
   "Source Han Sans SC", monospace;
 ```
 
-目标文本角色：
+文本角色与承载它的 Token。"Token" 列写 `--font-size-*` 表示该角色直接由字号阶梯承担，
+不再单独造角色名——一个与阶梯值完全相同的别名是重复概念，不是角色：
 
-| 角色 | 桌面字号 / 行高 | 窄屏字号 / 行高 | 字重 | 用途 |
-| --- | --- | --- | --- | --- |
-| Page title | 32 / 1.15 | 28 / 1.2 | Semibold | 每页唯一 H1 |
-| Section title | 22 / 1.25 | 20 / 1.3 | Semibold | 一级内容分区 |
-| Card title | 18 / 1.3 | 18 / 1.3 | Semibold | Panel / Drawer 标题 |
-| Body | 15 / 1.5 | 16 / 1.5 | Regular | 正文、说明、表单值 |
-| Label | 13 / 1.4 | 14 / 1.4 | Medium | 控件标签、列表事实值 |
-| Caption | 12 / 1.45 | 12 / 1.45 | Regular | 短辅助信息、时间、元数据 |
-| Data / code | 12–13 / 1.5 | 12–13 / 1.5 | Regular/Medium | ID、代码、端点、精确数值 |
-| Metric | 22–32 / 1.0–1.15 | 22–28 / 1.1 | Medium | 关键聚合值，不用于普通字段 |
+| 角色 | Token | 值 | 用途 |
+| --- | --- | --- | --- |
+| Page title | `--type-page-title-size` / `-compact` | 32 / 28px，行高 1.08 | 每页唯一 H1 |
+| Section title | `--type-section-title-size` | 22px | 一级内容分区 |
+| Card title | `--type-card-title-size` | 18px | Panel / Drawer / 卡片标题 |
+| Body | `--type-body-size` | 15px | 正文、说明、表单值 |
+| Label | `--type-label-size` | 13px | 控件标签、列表事实值 |
+| Caption | `--type-caption-size` | 12px | 短辅助信息、时间、元数据 |
+| Data / code | `--font-size-xs`–`sm` + `--font-mono` | 12–13px | ID、代码、端点、精确数值 |
+| Metric | `--type-metric-size` | clamp(20px, 2vw, 30px) | 关键聚合值，不用于普通字段 |
+| Display | `--type-display-size` | 34px | 仅入口屏（Login / Setup）表单标题 |
+| Hero | `--type-hero-size` | clamp(34px, 4.2vw, 46px) | 仅入口屏主标题 |
 
 约束：
 
 - 12px 是绝对下限，不把正文压到下限；
-- 页面标题取消 42/46px 的营销式放大，控制台标题强调层级而不是体量；
+- **控制台页面**标题取消 42/46px 的营销式放大，强调层级而不是体量；
+- Display / Hero 是入口屏的显式例外，不是通用标题角色。任何控制台页面使用它们都是缺陷。
+  这两个角色存在的理由是把例外命名一次，而不是让两个艺术化字号散落在业务 CSS 里；
 - 中文标签默认使用 Sans，不为了技术感强制 Mono；
 - ID、路径、代码、时间戳和等宽数字才使用 Mono；
 - 字号不单独表达层级，需结合字重、颜色、间距和位置。
+
+未实现项（不是已完成，也不是已放弃）：本表不再为角色定义独立的窄屏字号。窄屏只对
+Page title 生效（32 → 28px）。Section title / Label 的窄屏档位在有证据证明必要前不实现，
+避免造出无消费点的 Token。
 
 ### 9.3 间距系统
 
@@ -383,20 +402,29 @@
 0, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64
 ```
 
-增加语义别名而不是继续在页面写裸值：
+本表原为一份未经验证的提案，2026-09-17 复核时按"每个 Token 必须有真实消费点"重新裁决。
+一个没有调用点的语义别名不会减少裸值，只会增加一个必须维护的名字：
 
-| 语义 Token | 初始映射 | 用途 |
+| 语义 Token | 值 | 裁决 |
 | --- | ---: | --- |
-| `--layout-page-inline` | clamp(16px, 4vw, 64px) | 主内容左右边距 |
-| `--layout-page-block-end` | 64px | 页面底部安全空间 |
-| `--layout-section-gap` | 32px | 一级 Section 间距 |
-| `--layout-panel-gap` | 16px | Panel / Card 网格间距 |
-| `--component-panel-padding` | 20px / 24px | Panel 纵向/横向内边距 |
-| `--component-field-gap` | 8px | Label、control、help/error 间距 |
-| `--component-row-padding` | 12px / 20px | 资源行纵向/横向内边距 |
-| `--component-action-gap` | 8px | 相邻操作 |
+| `--layout-page-inline` | clamp(16px, 4vw, 64px) | **已实现**，消费于 `.main`。原为裸 `4vw`，在 320px 下只有 12.8px，在宽屏下超过 100px |
+| `--layout-page-block-end` | 72px | **已实现**，消费于 `.main`。值取自实现而非提案的 64px，避免制造未经评审的视觉变化 |
+| `--component-row-padding` | — | **不新增**。已由 `--resource-row-padding-block` / `-inline` 承担，再造一个是重复概念 |
+| `--layout-section-gap` | — | **暂不实现**。现状是 `.section-heading` 的 22px / 24px 两个不同值，统一到单一 Token 是视觉变更，需证据支持 |
+| `--layout-panel-gap` | — | **不新增**。直接使用 `--space-4` |
+| `--component-panel-padding` | — | **不新增**。直接使用 `--space-5` / `--space-6` |
+| `--component-field-gap` | — | **不新增**。直接使用 `--space-2` |
+| `--component-action-gap` | — | **不新增**。直接使用 `--space-2` |
 
-规则：页面只能决定网格列、内容顺序和响应式折叠；组件内部节奏由组件 Token 决定。
+规则：
+
+- 页面只能决定网格列、内容顺序和响应式折叠；
+- 组件内部节奏默认直接取 `--space-*` 阶梯。**只有当一个值必须在多个组件间同步变化时**，
+  它才升格为语义 Token；否则别名只是给阶梯值换了个名字；
+- 新增任何 `--color-* / --type-* / --layout-* / --control-*` 角色必须同时有调用点，
+  由 `design-system.test.ts` 的 `declares no semantic role the product never reads` 精确断言。
+
+减少裸值的真实度量不是本表的长度，而是棘轮基线（当前 691），它仍由 VS-05 跟踪。
 
 ### 9.4 圆角、边界、阴影与层级
 
@@ -426,15 +454,25 @@ Primitive palette
   → Page layout
 ```
 
-必须具备的语义组：
+必须具备的语义组（2026-09-17 复核后的裁决状态。此清单是规范，
+`design-system.test.ts` 的 `declares the specified semantic color roles` 按它断言，
+而不是按已声明的 Token 反写）：
 
-- `canvas / surface-default / surface-subtle / surface-raised / overlay`；
-- `text-primary / secondary / tertiary / inverse / link`；
-- `border-default / strong / focus`；
-- `action-primary / hover / pressed / disabled / secondary`；
-- `status-success / warning / danger / info / neutral / unknown` 的 text/surface/border/icon；
-- `chart-series-* / grid / axis / tooltip / selection / unknown`；
-- `scrim / shadow-base`。
+| 语义组 | 状态 |
+| --- | --- |
+| `canvas / surface-default / surface-subtle / surface-raised / overlay` | 已实现 |
+| `text-primary / secondary / tertiary / inverse` | 已实现 |
+| `border-default / strong`、`focus-ring` | 已实现 |
+| `action-primary / hover / foreground / secondary` | 已实现 |
+| `status-success / warning / danger / info` 的 text/surface/border/icon | 已实现 |
+| `status-neutral` 的 text/surface/border/icon | 已实现。承载"管理员主动关闭"，此前由 `--color-text-tertiary` + `--line-strong` + `--overlay-hover` 三个不同族拼装 |
+| `chart-series-1/2 / series-1-fill / grid / axis / tooltip` | 已实现，经 `TrendChart` 读取 |
+| `scrim / shadow-base` | 已实现 |
+| `status-unknown` | **未实现，见 VS-13**。`cost_completeness` 的 unknown/partial 目前渲染为 warning，与 §9.5"不能共享同一种视觉语义"冲突。改法是产品语义决策，不在本次实现 |
+| `action-disabled` | **未实现，见 VS-14**。当前 9 处 disabled 仅靠 `opacity`，正是本节禁止的做法 |
+| `text-link` | **未实现，见 VS-15**。全局 `a { color: inherit }`，外链无链接可供性 |
+| `action-pressed` | **不实现**。全站 `:active` 只用位移表达按压，无颜色调用点 |
+| `chart-selection / chart-unknown` | **不实现**。图表无选中态与 unknown 序列，无调用点 |
 
 禁止：
 
@@ -442,20 +480,23 @@ Primitive palette
 - 业务 CSS 直接使用 `--p-*`；
 - 用 brand lime 表达 success；
 - 用 danger 红表达“管理员主动禁用”的中性状态；
-- 仅靠透明度表示 disabled，导致文本或边界不可读。
+- 仅靠透明度表示 disabled，导致文本或边界不可读（现状违反此条，见 VS-14）。
 
 ### 9.6 响应式布局模式
 
-目标断点不是替换所有现有值的机械常量，而是收敛后的布局模式：
+目标断点不是替换所有现有值的机械常量，而是收敛后的布局模式。模式名称与范围的唯一权威是
+`docs/design-system/foundations.md`；下表与其保持一致，实现以 `web/src/styles.css` 的壳层
+断点（1120 / 820 / 580）为准：
 
-| 模式 | 建议范围 | 行为 |
+| 模式 | 范围 | 行为 |
 | --- | --- | --- |
-| Wide | `>= 1120px` | 固定侧栏；多列 Dashboard；主从视图可并排 |
-| Compact | `820–1119px` | 固定/窄侧栏；两列减少；表单与详情降低列数 |
-| Narrow | `580–819px` | 侧栏切换为顶部/抽屉导航；主内容单列；操作可换行 |
-| Small | `< 580px` | 单列；Modal 近全屏；工具栏分组；卡片替代表格主视图 |
+| Wide | `> 1120px` | 固定侧栏；多列 Dashboard；主从视图可并排 |
+| Regular | `821–1120px` | 保留侧栏；两列减少；表单与详情降低列数 |
+| Compact | `581–820px` | 侧栏切换为顶部 disclosure 导航；主内容单列；交互目标 44px |
+| Small | `320–580px` | 单列；28px 标题；Modal 近全屏；卡片或局部滚动替代表格主视图 |
 
-现有 640、720、760、70rem、64rem 等局部断点在迁移时按内容失效点归并。禁止为单个文案长度新增全局断点。
+现有 640、720、760、1520、70rem、64rem 等阈值只能作为组件内容断点存在，不得再创造新的全局
+壳层模式，也不得为单个文案长度新增全局断点。
 
 ### 9.7 组件目录
 
@@ -746,17 +787,20 @@ git diff --check
 - 最终报告明确区分代码级完成、浏览器验收和任何尚未完成的真实环境验收；
 - 不把单元测试、构建成功或一张截图表述为全系统视觉验收。
 
-## 15. 决策边界与待裁决项
+## 15. 决策边界与裁决结果
 
-以下问题在 Phase 1 证据完成后裁决，不在实现中临时决定：
+以下问题原定在 Phase 1 证据完成后裁决。2026-09-17 复核时发现其中四项从未留下裁决记录，
+现一并裁定。"不做"是对 v0.1 的裁定，不是永久否决；每项写明重新打开的条件：
 
-1. 是否增加 `System` Appearance；当前继续保持服务端持久化的 Light / Dark。
-2. 是否需要 Comfortable / Compact 密度；v0.1 默认只维护一种可靠密度。
-3. 侧栏在 820px 以下采用 top navigation 还是 modal drawer，以任务走查结果决定。
-4. 表格在 Small 模式下采用卡片还是 key/value disclosure，由列语义和任务频率决定。
-5. 是否建立独立的内部组件预览页；它只能服务开发/测试，不能成为第二套产品导航。
-6. 是否增加高对比独立主题；v0.1 先保证 forced-colors 与增强对比兼容。
-7. 是否支持 RTL；当前中文/英文均为 LTR，只有产品增加 RTL locale 后才进入正式范围。
+| # | 问题 | 裁决 | 理由与重开条件 |
+| --- | --- | --- | --- |
+| 1 | 是否增加 `System` Appearance | **v0.1 不做** | Appearance 是服务端持久化的账户偏好，`System` 需要客户端媒体查询在每次加载时覆盖服务端状态，两个真相来源会让"主题等价"无法断言。重开条件：Appearance 改为客户端优先，或明确定义服务端值与系统值的优先级 |
+| 2 | 是否需要 Comfortable / Compact 密度 | **v0.1 不做** | 与 `visual-principles.md` 第 3 条"默认保持单一可靠密度"一致。两档密度会让每个组件的状态矩阵翻倍，而当前单档密度尚未在全部页面稳定 |
+| 3 | 820px 以下侧栏形态 | **已裁决：顶部 disclosure** | 见 VS-01。带 `aria-expanded` / `aria-controls`，Enter 打开、Tab 首先到达 Overview，11 个目的地与账户动作全部可达 |
+| 4 | Small 模式下表格形态 | **已裁决：两者并存，按列语义分** | 见 `patterns.md` Data table：列语义允许时转为带 `data-label` 的卡片行；高密度技术表保持容器内局部横向滚动。禁止由 body 承担横向滚动 |
+| 5 | 是否建立独立组件预览页 | **不做** | 它需要路由、权限判定和导航入口，必然成为第二套产品导航；而它要提供的证据已由 `design-system.test.ts` 的状态/对比度/角色断言与组件测试承担。重开条件：出现自动化无法表达的组件状态证据需求 |
+| 6 | 是否增加高对比独立主题 | **v0.1 不做** | 第三套主题会把"Light / Dark 键集合一致"的门禁变成三方比对，而当前 `forced-colors: active` 与 4.5:1 / 3:1 对比度断言已覆盖增强对比场景。重开条件：真实用户或合规要求证明 forced-colors 不足 |
+| 7 | 是否支持 RTL | **超出范围** | 产品当前只有 zh-CN 与 en-US，均为 LTR。为不存在的 locale 写 logical property 无法验证。重开条件：产品增加任一 RTL locale——届时 RTL 是该 locale 交付的一部分，不是补丁 |
 
 ## 16. 首轮执行建议
 

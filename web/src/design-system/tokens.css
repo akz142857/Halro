@@ -106,8 +106,17 @@
   --type-page-title-size-compact: 28px;
   --type-page-title-line-height: 1.08;
   --type-section-title-size: var(--font-size-xl);
+  --type-card-title-size: var(--font-size-lg);
   --type-body-size: var(--font-size-md);
+  --type-label-size: var(--font-size-sm);
   --type-caption-size: var(--font-size-xs);
+  /* Entry screens (Login, Setup) carry display text a console page must not.
+     Naming the two sizes keeps that exception reviewable instead of leaving
+     two art-directed literals sitting in business CSS. */
+  --type-hero-size: clamp(34px, 4.2vw, 46px);
+  --type-display-size: 34px;
+  /* Aggregate values only. An ordinary field never reaches for this. */
+  --type-metric-size: clamp(20px, 2vw, 30px);
 
   /* Spacing scale (4px base) */
   --space-0: 0;
@@ -126,6 +135,11 @@
      Apple platform guidance; desktop controls may remain denser. */
   --layout-sidebar-width: 248px;
   --layout-content-max-width: 1440px;
+  /* The page gutter was a bare 4vw, which is 12.8px at 320px and grows past
+     100px on a wide monitor. The clamp keeps a readable floor on the narrowest
+     supported page and stops the gutter eating the content on a wide one. */
+  --layout-page-inline: clamp(16px, 4vw, 64px);
+  --layout-page-block-end: 72px;
   --control-block-size: 36px;
   --control-touch-block-size: 44px;
 

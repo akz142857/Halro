@@ -6,11 +6,14 @@
 
 | 角色 | Token / 值 | 用途 |
 | --- | --- | --- |
-| Page title | `--type-page-title-size` 32px；窄屏 28px | 每页唯一 H1 |
+| Page title | `--type-page-title-size` 32px；窄屏 `-compact` 28px | 每页唯一 H1 |
 | Section title | `--type-section-title-size` / 22px | 页面一级区块 |
+| Card title | `--type-card-title-size` / 18px | Panel、Drawer、卡片标题 |
 | Body | `--type-body-size` / 15px | 描述与长文本 |
-| Compact label | `--font-size-sm` / 13px | 控件、事实值 |
+| Label | `--type-label-size` / 13px | 控件标签、事实值 |
 | Caption floor | `--type-caption-size` / 12px | 标签、时间、图表轴；禁止更小 |
+| Metric | `--type-metric-size` / clamp(20px, 2vw, 30px) | 关键聚合值，普通字段不得使用 |
+| Display / Hero | `--type-display-size` 34px、`--type-hero-size` clamp(34px, 4.2vw, 46px) | **仅** Login / Setup 入口屏；控制台页面使用即缺陷 |
 
 默认使用系统 Sans；ID、代码与数值轴使用系统 Mono。粗细仅使用 400/500/600/700。中文依赖 PingFang SC、Microsoft YaHei、Noto/Source Han 回退。
 
@@ -18,12 +21,18 @@
 
 Primitive 只定义于 `tokens.css`。组件只消费 `--color-text-*`、`--color-surface-*`、`--color-border-*`、`--color-action-*`、`--color-status-*`、`--color-chart-*` 等语义角色。Dark/Light 必须键集合一致；正文对比不低于 4.5:1，关键边界不低于 3:1。
 
+状态色共五族：`success / warning / danger / info / neutral`，各自拥有 text / surface / border / icon。`neutral` 表达"管理员主动关闭"——它是状态不是故障，不得借用 danger 或 warning 的外观。`status-unknown`、`action-disabled`、`text-link` 是规范要求但尚未实现的角色，分别由 VS-13 / VS-14 / VS-15 跟踪；在实现前不得声明占位 Token。
+
 ## Spacing、Grid 与尺寸
 
-- 4px 基础尺度：`--space-1` 至 `--space-16`。
+- 4px 基础尺度：`--space-1` 至 `--space-16`。组件内部节奏默认直接取这个阶梯。
+- 页面外框：`--layout-page-inline: clamp(16px, 4vw, 64px)`、`--layout-page-block-end: 72px`。
 - Shell 侧栏：`--layout-sidebar-width: 248px`；内容宽度按页面模式约束。
+- 资源行节奏由 `--resource-row-padding-block` / `-inline` / `--resource-cell-gap` 承担，不另造通用行内边距 Token。
 - 桌面控件可用 `--control-block-size: 36px`；820px 以下交互目标使用 `--control-touch-block-size: 44px`。
-- 页面不新增裸 spacing/radius；现有债务由 `design-system.test.ts` 的精确基线 693 约束，只能在审阅后下降或明确解释变化。
+- 页面不新增裸 spacing/radius；现有债务由 `design-system.test.ts` 的精确基线 691 约束，只能在审阅后下降或明确解释变化。
+
+**Token 升格规则**：一个值只有在**必须跨多个组件同步变化**时才升格为语义 Token。与 `--space-*` 值相同的别名是重复概念，不是角色。任何新增的 `--color-* / --type-* / --layout-* / --control-*` 角色必须同时有调用点——`declares no semantic role the product never reads` 精确断言这一点，声明一个没人读的角色会直接让门禁失败。
 
 ## Radius、Elevation、Motion
 

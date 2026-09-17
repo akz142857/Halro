@@ -51,6 +51,12 @@
   --color-status-danger-surface: rgba(194, 58, 48, 0.10);
   --color-status-danger-border: var(--p-red-600);
   --color-status-danger-icon: var(--p-red-600);
+  /* Status — neutral. An administrator switched something off. It is a state,
+     not a fault, so it must not borrow danger or warning. */
+  --color-status-neutral-text: var(--p-ink-400);
+  --color-status-neutral-surface: rgba(7, 17, 15, 0.05);
+  --color-status-neutral-border: var(--p-paper-500);
+  --color-status-neutral-icon: var(--p-ink-400);
   --color-status-info-text: var(--p-blue-600);
   --color-status-info-surface: rgba(47, 107, 194, 0.10);
   --color-status-info-border: var(--p-blue-600);
