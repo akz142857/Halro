@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -221,6 +223,79 @@ type Credential struct {
 	Revision  uint64     `json:"revision"`
 }
 
+const (
+	ProviderEgressProxyKindHTTPConnect = "http_connect"
+	ProviderEgressCredentialType       = ProviderType("provider_egress_proxy")
+	MaxProviderEgressProxies           = 32
+)
+
+// ProviderEgressProxy is an administrator-managed, explicitly selected
+// network path for Provider traffic. Authentication material lives in an
+// internal Vault credential; only its reference is stored here.
+type ProviderEgressProxy struct {
+	ID                      string     `json:"id"`
+	Name                    string     `json:"name"`
+	Kind                    string     `json:"kind"`
+	Endpoint                string     `json:"endpoint"`
+	AllowPrivateEndpoint    bool       `json:"allow_private_endpoint"`
+	AllowLoopbackEndpoint   bool       `json:"allow_loopback_endpoint"`
+	BasicAuthCredentialID   string     `json:"basic_auth_credential_id,omitempty"`
+	AllowCleartextBasicAuth bool       `json:"allow_cleartext_basic_auth"`
+	CreatedAt               time.Time  `json:"created_at"`
+	UpdatedAt               time.Time  `json:"updated_at"`
+	DeletedAt               *time.Time `json:"deleted_at,omitempty"`
+	Revision                uint64     `json:"revision"`
+}
+
+func (p *ProviderEgressProxy) GetRevision() uint64      { return p.Revision }
+func (p *ProviderEgressProxy) SetRevision(value uint64) { p.Revision = value }
+
+func (p ProviderEgressProxy) Validate() error {
+	var problems []error
+	// An empty value is meaningful only on ProviderInstance, where it selects
+	// direct egress. A proxy resource itself must always have an identity.
+	if p.ID == "" || !validEgressProxyID(p.ID) {
+		problems = append(problems, errors.New("Provider egress proxy id is invalid"))
+	}
+	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 128 {
+		problems = append(problems, errors.New("Provider egress proxy name must contain 1 to 128 bytes"))
+	}
+	if p.Kind != ProviderEgressProxyKindHTTPConnect {
+		problems = append(problems, errors.New("Provider egress proxy kind must be http_connect"))
+	}
+	endpoint, err := url.Parse(p.Endpoint)
+	if err != nil || endpoint.Scheme == "" || endpoint.Hostname() == "" {
+		problems = append(problems, errors.New("Provider egress proxy endpoint must be an absolute HTTP or HTTPS URL"))
+		return errors.Join(problems...)
+	}
+	if endpoint.Scheme != "http" && endpoint.Scheme != "https" {
+		problems = append(problems, errors.New("Provider egress proxy endpoint scheme must be http or https"))
+	}
+	if endpoint.User != nil {
+		problems = append(problems, errors.New("Provider egress proxy endpoint userinfo is not allowed"))
+	}
+	if endpoint.Path != "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		problems = append(problems, errors.New("Provider egress proxy endpoint path, query, and fragment are not allowed"))
+	}
+	port, portErr := strconv.Atoi(endpoint.Port())
+	if endpoint.Port() == "" || portErr != nil || port < 1 || port > 65535 {
+		problems = append(problems, errors.New("Provider egress proxy endpoint requires a numeric port"))
+	}
+	if strings.Contains(endpoint.Hostname(), "%") {
+		problems = append(problems, errors.New("Provider egress proxy endpoint IPv6 zone identifiers are not allowed"))
+	}
+	if p.BasicAuthCredentialID != "" && endpoint.Scheme == "http" && !p.AllowCleartextBasicAuth {
+		problems = append(problems, errors.New("allow_cleartext_basic_auth must be true to send Basic auth over HTTP"))
+	}
+	if p.BasicAuthCredentialID == "" && p.AllowCleartextBasicAuth {
+		problems = append(problems, errors.New("allow_cleartext_basic_auth requires configured Basic auth"))
+	}
+	if endpoint.Scheme != "http" && p.AllowCleartextBasicAuth {
+		problems = append(problems, errors.New("allow_cleartext_basic_auth is only valid for an HTTP endpoint"))
+	}
+	return errors.Join(problems...)
+}
+
 func (c *Credential) GetRevision() uint64      { return c.Revision }
 func (c *Credential) SetRevision(value uint64) { c.Revision = value }
 
@@ -433,6 +508,11 @@ type ProviderInstance struct {
 	// dimension an operator needs several of. Two projects are two providers,
 	// which may share one credential.
 	BedrockProjectID string `json:"bedrock_project_id,omitempty"`
+	// EgressProxyID selects one operator-approved, Admin-managed CONNECT
+	// connector. Empty selects the direct path. The value is
+	// stored on the Provider connection so every profile binding shares one
+	// network trust boundary.
+	EgressProxyID string `json:"egress_proxy_id,omitempty"`
 	// AllowedAnthropicBetas names the anthropic-beta tokens this connection may
 	// forward. Empty means none, which is also what every record written before
 	// this field existed means — no header is sent — so adding it needs no
@@ -455,6 +535,10 @@ type ProviderInstance struct {
 	LastTestLatencyMillis  int64                    `json:"last_test_latency_millis,omitempty"`
 	LastTestErrorClass     string                   `json:"last_test_error_class,omitempty"`
 	LastTestRevision       uint64                   `json:"last_test_revision,omitempty"`
+	LastTestRuntimeID      string                   `json:"last_test_runtime_id,omitempty"`
+	LastTestEgressMode     string                   `json:"last_test_egress_mode,omitempty"`
+	LastTestProxyStage     string                   `json:"last_test_proxy_stage,omitempty"`
+	LastTestProxyStatus    int                      `json:"last_test_proxy_status,omitempty"`
 	LastTestHealthyTargets int                      `json:"last_test_healthy_targets,omitempty"`
 	LastTestTotalTargets   int                      `json:"last_test_total_targets,omitempty"`
 	CreatedAt              time.Time                `json:"created_at"`
@@ -657,6 +741,9 @@ func (p ProviderInstance) Validate() error {
 	if p.CredentialID == "" {
 		problems = append(problems, errors.New("provider credential id is required"))
 	}
+	if !validEgressProxyID(p.EgressProxyID) {
+		problems = append(problems, errors.New("provider egress proxy id is invalid"))
+	}
 	if p.UsagePolicyAcknowledgement != nil {
 		if err := p.UsagePolicyAcknowledgement.ValidateForSurface(p.AccessSurface); err != nil {
 			problems = append(problems, err)
@@ -758,6 +845,12 @@ func (p ProviderInstance) Validate() error {
 	if p.LastTestLatencyMillis < 0 || p.LastTestHealthyTargets < 0 || p.LastTestTotalTargets < 0 || p.LastTestHealthyTargets > p.LastTestTotalTargets {
 		problems = append(problems, errors.New("provider test result is invalid"))
 	}
+	if p.LastTestEgressMode != "" && p.LastTestEgressMode != "direct" && p.LastTestEgressMode != "proxy" {
+		problems = append(problems, errors.New("provider test egress mode is invalid"))
+	}
+	if p.LastTestProxyStatus < 0 || p.LastTestProxyStatus > 999 {
+		problems = append(problems, errors.New("provider test proxy status is invalid"))
+	}
 	if p.LastTestStatus != "" {
 		if p.LastTestStatus != DeploymentTestHealthy && p.LastTestStatus != DeploymentTestUnhealthy {
 			problems = append(problems, errors.New("provider test status is invalid"))
@@ -767,6 +860,25 @@ func (p ProviderInstance) Validate() error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+func validEgressProxyID(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 63 {
+		return false
+	}
+	for index, character := range value {
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			continue
+		}
+		if index > 0 && (character == '.' || character == '_' || character == '-') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // DefaultProviderCapabilities is what a provider type implies before a profile
@@ -1018,6 +1130,7 @@ type Deployment struct {
 	LastTestLatencyMillis   int64                 `json:"last_test_latency_millis,omitempty"`
 	LastTestErrorClass      string                `json:"last_test_error_class,omitempty"`
 	LastTestRevision        uint64                `json:"last_test_revision,omitempty"`
+	LastTestRuntimeID       string                `json:"last_test_runtime_id,omitempty"`
 	CreatedAt               time.Time             `json:"created_at"`
 	UpdatedAt               time.Time             `json:"updated_at"`
 	Revision                uint64                `json:"revision"`
@@ -1151,6 +1264,7 @@ type Route struct {
 	LastTestLatencyMillis int64                `json:"last_test_latency_millis,omitempty"`
 	LastTestErrorClass    string               `json:"last_test_error_class,omitempty"`
 	LastTestRevision      uint64               `json:"last_test_revision,omitempty"`
+	LastTestRuntimeID     string               `json:"last_test_runtime_id,omitempty"`
 	CreatedAt             time.Time            `json:"created_at"`
 	UpdatedAt             time.Time            `json:"updated_at"`
 	Revision              uint64               `json:"revision"`

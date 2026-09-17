@@ -54,13 +54,16 @@ type providerProfileView struct {
 	// exactly one of them. It is what lets a form know whether to offer a choice
 	// among a group's profiles at all.
 	RoutePartitioned bool `json:"route_partitioned"`
-	// DefaultBaseURL is already resolved for this deployment: the region is
-	// substituted, so a caller fills a form field with it and never learns that a
-	// template existed.
-	DefaultBaseURL string                 `json:"default_base_url"`
-	Immutable      bool                   `json:"immutable"`
-	Defaults       providerCapabilityView `json:"defaults"`
-	Ceiling        providerCapabilityView `json:"ceiling"`
+	// DefaultBaseURL is the initial Admin form value. For a regional endpoint it
+	// uses the product's UI default; each Credential may choose another region.
+	DefaultBaseURL string `json:"default_base_url"`
+	// BaseURLTemplate is a literal URL for fixed endpoints and contains
+	// {region} where the Admin form must ask for a region. The resulting URL, not
+	// the region or template, is persisted as the credential audience.
+	BaseURLTemplate string                 `json:"base_url_template,omitempty"`
+	Immutable       bool                   `json:"immutable"`
+	Defaults        providerCapabilityView `json:"defaults"`
+	Ceiling         providerCapabilityView `json:"ceiling"`
 	// What a whole connection anchored on this profile may turn on, and what it
 	// starts with. One connection can span several profiles — an OpenAI key
 	// serves the chat endpoints and the media ones — and the rule for which
@@ -161,11 +164,14 @@ type providerProfilesView struct {
 	ProviderTypes        []providerTypeView          `json:"provider_types"`
 }
 
-// The view is assembled per request rather than memoised. It is fifteen rows of
-// compile-time data plus one config value on an endpoint a console reads once a
-// session, and process-wide memoisation would tie every runtime in a test binary
-// to whichever config happened to build it first.
-func buildProviderProfilesView(region string) providerProfilesView {
+// The view is assembled per request rather than memoised. It is a small table
+// of compile-time data on an endpoint a console reads once per session. The
+// optional override exists only for focused table tests.
+func buildProviderProfilesView(regionOverride ...string) providerProfilesView {
+	region := domain.DefaultProviderEndpointRegion
+	if len(regionOverride) > 0 && regionOverride[0] != "" {
+		region = regionOverride[0]
+	}
 	profilesByType := make(map[domain.ProviderType][]providerProfileView)
 	for _, profile := range domain.AllProviderProfiles() {
 		// A withheld profile is refused on every write, so offering it here would
@@ -200,6 +206,7 @@ func buildProviderProfilesView(region string) providerProfilesView {
 			SendsAnthropicBetas: domain.ProfileSendsAnthropicBetas(profile.ID),
 			RoutePartitioned:    profile.RoutePartitioned,
 			DefaultBaseURL:      domain.ResolveBaseURL(profile.ID, region),
+			BaseURLTemplate:     domain.BaseURLTemplate(profile.ID),
 			Immutable:           profile.Immutable,
 			Defaults:            profile.Defaults,
 			Ceiling:             profile.Ceiling,
@@ -230,7 +237,7 @@ func buildProviderProfilesView(region string) providerProfilesView {
 }
 
 func (r *Runtime) getAdminProviderProfiles(writer http.ResponseWriter, _ *http.Request) {
-	writeJSON(writer, http.StatusOK, buildProviderProfilesView(r.config.Providers.Bedrock.Region))
+	writeJSON(writer, http.StatusOK, buildProviderProfilesView())
 }
 
 // offeringsForProfiles assembles a type's products out of the profiles this

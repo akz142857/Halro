@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { api } from "../api";
@@ -16,10 +16,12 @@ import { MFASettings } from "./MFASettings";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
 import { UsageWindowForm } from "./UsageWindowForm";
+const MasterKeyCustodyPage = lazy(() => import("./MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
+
 // One list, in the order the nav renders them. The routing used to repeat the
 // names in a chain of comparisons and the nav in its own array, so a pane could
 // be reachable by URL and absent from the menu, or the reverse.
-const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "diagnostics"] as const;
+const SETTINGS_PANES = ["general", "security", "accounts", "instance", "config", "custody", "diagnostics"] as const;
 type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 function paneFromPath(path: string): SettingsPane {
@@ -92,6 +94,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
             {pane === "accounts" && <section aria-labelledby="accounts-title"><SettingsGroupHeader title={t("settings.panes.accounts")} description={t("settings.accountsDescription")} id="accounts-title" /><AdminUsersSection /></section>}
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
+            {pane === "custody" && <Suspense fallback={<Loading />}><MasterKeyCustodyPage embedded /></Suspense>}
             {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>

@@ -255,21 +255,19 @@ func TestAdminProviderProfilesCarriesNumericLimits(t *testing.T) {
 	}
 }
 
-// The endpoint exists to fill a form, so the endpoint it offers must be the one
-// this deployment would use — region already substituted, no placeholder left
-// for a caller to interpret.
-func TestAdminProviderProfilesResolvesTheConfiguredRegion(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Providers.Bedrock.Region = "eu-central-1"
-	runtime, cookie := providerProfilesFixtureWithConfig(t, cfg)
+// Region-parameterized endpoints are configured by the Admin form. The API
+// carries both a safe initial value and the template needed to replace it;
+// config.yaml has no Provider region setting.
+func TestAdminProviderProfilesPublishesAdminManagedRegionTemplate(t *testing.T) {
+	runtime, cookie := providerProfilesFixture(t)
 	view := fetchProviderProfiles(t, runtime, cookie)
 
 	want := map[domain.ProviderProfileID]string{
 		// No Bedrock Runtime row here: its endpoint carries the placeholder too,
 		// but the profile is withheld and never served, so naming it would assert
 		// nothing. The Mantle rows cover the substitution.
-		domain.ProfileBedrockMantleChat:       "https://bedrock-mantle.eu-central-1.api.aws",
-		domain.ProfileBedrockMantleOpenAIChat: "https://bedrock-mantle.eu-central-1.api.aws",
+		domain.ProfileBedrockMantleChat:       "https://bedrock-mantle.us-east-1.api.aws",
+		domain.ProfileBedrockMantleOpenAIChat: "https://bedrock-mantle.us-east-1.api.aws",
 		domain.ProfileOpenAIChatEmbeddings:    "https://api.openai.com",
 		// Two profiles have no endpoint to offer, and an empty field is the honest
 		// answer: an Azure OpenAI resource and a compatibility server both live
@@ -285,6 +283,10 @@ func TestAdminProviderProfilesResolvesTheConfiguredRegion(t *testing.T) {
 			}
 			if !checked && profile.DefaultBaseURL == "" {
 				t.Errorf("%s was served with no endpoint", profile.ID)
+			}
+			if (profile.ID == domain.ProfileBedrockMantleChat || profile.ID == domain.ProfileBedrockMantleOpenAIChat) &&
+				profile.BaseURLTemplate != "https://bedrock-mantle.{region}.api.aws" {
+				t.Errorf("%s template=%q", profile.ID, profile.BaseURLTemplate)
 			}
 		}
 	}

@@ -872,8 +872,7 @@ func parseRetryAfter(header http.Header) time.Duration {
 }
 
 func transportError(err error) error {
-	class := provider.TransportClass(err)
-	return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Ambiguous: !provider.Unsent(err), Message: "Anthropic request failed", Cause: err}
+	return provider.NewTransportError("Anthropic request failed", err)
 }
 func badRequest(message string, cause error) error {
 	return &provider.Error{Class: provider.ErrorBadRequest, Message: message, Cause: cause}

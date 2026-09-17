@@ -88,6 +88,68 @@ func TransportClass(err error) ErrorClass {
 	}
 }
 
+type TransportFailure struct {
+	Class     ErrorClass
+	Retryable bool
+	Ambiguous bool
+}
+
+// ClassifyTransportFailure is the single retry/accounting contract for every
+// adapter when no Provider HTTP response exists. Only a positively identified,
+// transient pre-send failure may retry. Once CONNECT succeeded, TLS/read/write
+// failures are conservatively ambiguous and non-retryable.
+func ClassifyTransportFailure(err error) TransportFailure {
+	result := TransportFailure{Class: TransportClass(err), Ambiguous: !Unsent(err)}
+	if err == nil || errors.Is(err, context.Canceled) {
+		return result
+	}
+	var proxyErr *safetransport.ProxyError
+	if errors.As(err, &proxyErr) {
+		switch proxyErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests,
+			http.StatusInternalServerError, http.StatusBadGateway,
+			http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			result.Retryable = true
+		default:
+			result.Retryable = proxyErr.StatusCode == 0 && temporaryNetworkFailure(err)
+		}
+		return result
+	}
+	if !Unsent(err) {
+		return result
+	}
+	if errors.Is(err, safetransport.ErrRefusedBeforeSend) {
+		// A policy/configuration refusal is stable. If a network error is also
+		// wrapped, it has to positively identify itself as temporary below.
+		result.Retryable = temporaryNetworkFailure(err)
+		return result
+	}
+	var operation *net.OpError
+	if errors.As(err, &operation) && operation.Op == "dial" {
+		result.Retryable = true
+		return result
+	}
+	result.Retryable = temporaryNetworkFailure(err)
+	return result
+}
+
+func temporaryNetworkFailure(err error) bool {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return dns.IsTimeout || dns.IsTemporary
+	}
+	var network net.Error
+	return errors.As(err, &network) && (network.Timeout() || network.Temporary())
+}
+
+func NewTransportError(message string, err error) *Error {
+	failure := ClassifyTransportFailure(err)
+	return &Error{
+		Class: failure.Class, Retryable: failure.Retryable, Ambiguous: failure.Ambiguous,
+		Message: message, Cause: err,
+	}
+}
+
 // RefusalKind is what a bad-request refusal says about the request, in terms
 // every profile family can answer.
 //

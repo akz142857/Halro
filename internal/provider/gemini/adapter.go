@@ -673,8 +673,7 @@ func malformed(message string, cause error) *provider.Error {
 }
 
 func transportError(message string, err error) *provider.Error {
-	class := provider.TransportClass(err)
-	return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Ambiguous: !provider.Unsent(err), Message: message, Cause: err}
+	return provider.NewTransportError(message, err)
 }
 
 func httpError(status int, body io.Reader) *provider.Error {

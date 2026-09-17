@@ -46,6 +46,8 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"GET /admin/api/v1/credentials", "POST /admin/api/v1/credentials",
 		"GET /admin/api/v1/credentials/{}", "PUT /admin/api/v1/credentials/{}", "DELETE /admin/api/v1/credentials/{}",
 		"GET /admin/api/v1/providers", "POST /admin/api/v1/providers",
+		"GET /admin/api/v1/provider-egress-proxies", "POST /admin/api/v1/provider-egress-proxies",
+		"GET /admin/api/v1/provider-egress-proxies/{}", "PUT /admin/api/v1/provider-egress-proxies/{}", "DELETE /admin/api/v1/provider-egress-proxies/{}",
 		"GET /admin/api/v1/providers/{}", "PUT /admin/api/v1/providers/{}", "DELETE /admin/api/v1/providers/{}", "POST /admin/api/v1/providers/{}/test",
 		"POST /admin/api/v1/providers/{}/model-capability-detections",
 		"GET /admin/api/v1/model-capability-detections/{}", "DELETE /admin/api/v1/model-capability-detections/{}",

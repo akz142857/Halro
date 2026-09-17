@@ -124,6 +124,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	// operator, and only one of them used to be answered.
 	chainStatus := "unverified"
 	chainDetail := "cryptographic verification was skipped; run `halro ledger verify`"
+	var doctorVault *vault.Vault
 	staticKMS := options.NoKMS && cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots
 	if staticKMS {
 		if store == nil {
@@ -152,12 +153,14 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 			} else {
 				if verifyErr := verifyVaultKeyCheck(store, secretVault); verifyErr != nil {
 					add("master_key", "fail", "master key does not decrypt the metadata key check")
+					secretVault.Close()
 				} else {
+					doctorVault = secretVault
+					defer secretVault.Close()
 					report.VaultStatus = "verified"
 					add("master_key", "pass", "mode and encrypted metadata key check are valid")
 					chainStatus, chainDetail = inspectLedgerChain(store, secretVault, masterKey, cfg.LedgerPath())
 				}
-				secretVault.Close()
 			}
 		}
 	}
@@ -263,11 +266,18 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	}
 
 	if store != nil {
+		checkDoctorProviderEgress(ctx, store, doctorVault, add)
 		checkDoctorTopology(ctx, cfg, store, add)
 		if credentials, credentialErr := store.ListCredentials(ctx); credentialErr != nil {
 			add("credential_product", "fail", credentialErr.Error())
 		} else {
-			checkDoctorCredentialProducts(credentials, add)
+			visible := credentials[:0]
+			for _, credential := range credentials {
+				if !internalCredentialType(credential.Type) {
+					visible = append(visible, credential)
+				}
+			}
+			checkDoctorCredentialProducts(visible, add)
 		}
 		if err := store.PricingReadiness(ctx); err != nil {
 			add("pricing_clock", "fail", err.Error())
@@ -280,6 +290,43 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		return report, errors.New("doctor found one or more failed checks")
 	}
 	return report, nil
+}
+
+// checkDoctorProviderEgress validates only the static inputs the serving
+// process consumes at startup. It deliberately performs no DNS lookup, TCP
+// dial, CONNECT exchange, or Provider request; live reachability belongs to the
+// authenticated Admin connection test.
+func checkDoctorProviderEgress(ctx context.Context, store *boltstore.Store, secretVault *vault.Vault, add func(string, string, string)) {
+	if secretVault == nil {
+		add("provider_egress", "unverified", "Vault authentication was unavailable; proxy credentials were not decrypted")
+		return
+	}
+	registry, err := newProviderEgressRegistry(ctx, store, secretVault)
+	if err != nil {
+		add("provider_egress", "fail", err.Error())
+		return
+	}
+	defer registry.Close()
+	providers, err := store.ListProviders(ctx)
+	if err != nil {
+		add("provider_egress", "fail", err.Error())
+		return
+	}
+	bound := 0
+	for _, item := range providers {
+		if item.DeletedAt != nil || item.EgressProxyID == "" {
+			continue
+		}
+		bound++
+		if _, ok := registry.connector(item.EgressProxyID); !ok {
+			add("provider_egress", "fail", fmt.Sprintf(
+				"provider %q is excluded from routing: egress proxy %q is not configured", item.ID, item.EgressProxyID))
+			return
+		}
+	}
+	add("provider_egress", "pass", fmt.Sprintf(
+		"%d managed proxies passed static definition and encrypted-authentication checks; %d providers are proxy-bound; network probes skipped",
+		len(registry.entries), bound))
 }
 
 func doctorDataLockFailure(dataDir string, err error) string {

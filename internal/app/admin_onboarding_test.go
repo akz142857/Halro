@@ -91,6 +91,40 @@ func TestOnboardingAcceptsADownstreamProbeAsProviderEvidence(t *testing.T) {
 	}
 }
 
+func TestOnboardingRequiresCurrentRuntimeEvidenceForProxyProvider(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	resources := readyOnboardingResources(now)
+	resources.EgressRuntimeIDs = map[string]string{"corp-egress": "runtime_new"}
+	resources.Providers[0].EgressProxyID = "corp-egress"
+	resources.Providers[0].LastTestRuntimeID = "runtime_old"
+	probed := now.Add(-time.Minute)
+	resources.Deployments[0].LastTestedAt = &probed
+	resources.Routes[0].LastTestedAt = &probed
+
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
+		t.Fatalf("stale runtime proxy test passed readiness: %#v", result)
+	}
+	resources.Providers[0].LastTestRuntimeID = resources.EgressRuntimeIDs["corp-egress"]
+	result = evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	if result.Goals[0].State != onboardingGoalComplete {
+		t.Fatalf("current runtime proxy test did not pass readiness: %#v", result.Goals[0])
+	}
+}
+
+func TestOnboardingDoesNotCountInternalProxyAuthenticationAsProviderCredential(t *testing.T) {
+	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
+	result := evaluateOnboardingReadiness(now, onboardingResources{
+		Credentials: []domain.Credential{{
+			ID: "credential_proxy", Type: providerEgressCredentialType, Ciphertext: []byte("sealed"),
+		}},
+		PriceReady: map[string]bool{},
+	}, usage.Metrics{}, usage.Snapshot{})
+	if result.Goals[0].DetailCode != "credential_missing" {
+		t.Fatalf("internal credential advanced onboarding: %#v", result.Goals[0])
+	}
+}
+
 // The probe proves the provider as it stood when the probe ran. Editing the
 // provider afterwards — a new base URL, a different credential — invalidates
 // that evidence exactly the way it invalidates the provider's own test.

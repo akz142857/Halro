@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 37
+const schemaVersion uint64 = 38
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -39,18 +39,20 @@ const (
 func CurrentSchemaVersion() uint64 { return schemaVersion }
 
 var (
-	ErrNotFound            = errors.New("record not found")
-	ErrAlreadyExists       = errors.New("record already exists")
-	ErrRevisionConflict    = errors.New("record revision conflict")
-	ErrKeyHashConflict     = errors.New("gateway key hash already exists")
-	ErrCredentialInUse     = errors.New("credential is still referenced")
-	ErrAdminInitialized    = errors.New("an admin user already exists")
-	ErrMFARequired         = errors.New("MFA is required")
-	ErrMFALimit            = errors.New("MFA authenticator limit reached")
-	ErrMFAClaimed          = errors.New("MFA challenge is already claimed")
-	ErrIdempotencyConflict = errors.New("idempotency key conflicts with another request")
-	ErrPricingQuarantined  = errors.New("deployment pricing is quarantined")
-	errStopIteration       = errors.New("stop iteration")
+	ErrNotFound                 = errors.New("record not found")
+	ErrAlreadyExists            = errors.New("record already exists")
+	ErrRevisionConflict         = errors.New("record revision conflict")
+	ErrKeyHashConflict          = errors.New("gateway key hash already exists")
+	ErrCredentialInUse          = errors.New("credential is still referenced")
+	ErrProviderEgressProxyInUse = errors.New("Provider egress proxy is still referenced")
+	ErrProviderEgressProxyLimit = errors.New("Provider egress proxy limit reached")
+	ErrAdminInitialized         = errors.New("an admin user already exists")
+	ErrMFARequired              = errors.New("MFA is required")
+	ErrMFALimit                 = errors.New("MFA authenticator limit reached")
+	ErrMFAClaimed               = errors.New("MFA challenge is already claimed")
+	ErrIdempotencyConflict      = errors.New("idempotency key conflicts with another request")
+	ErrPricingQuarantined       = errors.New("deployment pricing is quarantined")
+	errStopIteration            = errors.New("stop iteration")
 )
 
 var (
@@ -60,6 +62,7 @@ var (
 	bucketGatewayKeys                  = []byte("gateway_keys")
 	bucketGatewayKeyHash               = []byte("gateway_key_hash")
 	bucketProviders                    = []byte("providers")
+	bucketProviderEgressProxies        = []byte("provider_egress_proxies")
 	bucketDeployments                  = []byte("deployments")
 	bucketRoutes                       = []byte("routes")
 	bucketRedactionPolicies            = []byte("redaction_policies")
@@ -1059,6 +1062,19 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_usage_provider_attribution_boundary")
 	}},
+	// Provider records gain egress_proxy_id and the referenced definitions live
+	// in their own Admin-managed bucket. No Provider rewrite is needed — absence
+	// is the direct path — but a schema fence is mandatory: schema-37 binaries
+	// ignore the unknown field and would serve a proxy-bound Provider directly.
+	{version: 38, name: "provider_egress_proxy_compatibility_fence", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_provider_egress_proxy_compatibility_fence"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketProviderEgressProxies); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_provider_egress_proxy_compatibility_fence")
+	}},
 }
 
 // splitJSONModeCapabilities replaces a stored capability set's json_mode member
@@ -1929,6 +1945,7 @@ func requiredBuckets() [][]byte {
 		bucketGatewayKeys,
 		bucketGatewayKeyHash,
 		bucketProviders,
+		bucketProviderEgressProxies,
 		bucketDeployments,
 		bucketRoutes,
 		bucketRedactionPolicies,

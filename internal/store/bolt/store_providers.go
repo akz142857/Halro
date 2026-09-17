@@ -245,6 +245,19 @@ func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstanc
 		if err := validateProviderCredentialProfile(provider, credential); err != nil {
 			return err
 		}
+		if provider.EgressProxyID != "" {
+			rawProxy := tx.Bucket(bucketProviderEgressProxies).Get([]byte(provider.EgressProxyID))
+			if rawProxy == nil {
+				return fmt.Errorf("Provider egress proxy %q: %w", provider.EgressProxyID, ErrNotFound)
+			}
+			var proxy domain.ProviderEgressProxy
+			if err := json.Unmarshal(rawProxy, &proxy); err != nil {
+				return fmt.Errorf("decode Provider egress proxy %q: %w", provider.EgressProxyID, err)
+			}
+			if proxy.DeletedAt != nil {
+				return fmt.Errorf("Provider egress proxy %q: %w", provider.EgressProxyID, ErrNotFound)
+			}
+		}
 		deployments := tx.Bucket(bucketDeployments)
 		if err := deployments.ForEach(func(_, raw []byte) error {
 			if raw == nil {
@@ -370,19 +383,20 @@ func (s *Store) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 }
 
 func ensureCredentialUnreferenced(tx *bbolt.Tx, credentialID string) error {
-	for _, bucketName := range [][]byte{bucketProviders, bucketAlertWebhooks} {
+	for _, bucketName := range [][]byte{bucketProviders, bucketAlertWebhooks, bucketProviderEgressProxies} {
 		err := tx.Bucket(bucketName).ForEach(func(_, raw []byte) error {
 			if raw == nil {
 				return nil
 			}
 			var reference struct {
-				CredentialID string     `json:"credential_id"`
-				DeletedAt    *time.Time `json:"deleted_at,omitempty"`
+				CredentialID          string     `json:"credential_id"`
+				BasicAuthCredentialID string     `json:"basic_auth_credential_id"`
+				DeletedAt             *time.Time `json:"deleted_at,omitempty"`
 			}
 			if err := json.Unmarshal(raw, &reference); err != nil {
 				return err
 			}
-			if reference.CredentialID == credentialID && reference.DeletedAt == nil {
+			if (reference.CredentialID == credentialID || reference.BasicAuthCredentialID == credentialID) && reference.DeletedAt == nil {
 				return ErrCredentialInUse
 			}
 			return nil

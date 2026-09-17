@@ -16,6 +16,13 @@ workload:
   directory;
 - configuration and any referenced TLS or Metrics credential files.
 
+Provider egress proxy definitions are bbolt application data and their optional
+Basic Auth material is an internal Vault Credential. A complete encrypted backup
+therefore preserves the definition, Provider reference, and encrypted secret as
+one consistency unit. A restored host must still provide network reachability,
+DNS, firewall rules, and required system trust roots for the proxy endpoint. A
+proxy failure never makes a Provider fall back to direct egress.
+
 The data directory is one consistency unit. Never restore only `halro.db`
 or combine a database, WAL, Audit log, Usage tree, or Provider objects from
 different snapshots. Configuration and credential mounts are desired state,
@@ -293,6 +300,15 @@ After restore, run the following before accepting traffic:
 ```bash
 halro doctor --config ./config.yaml
 ```
+
+For proxy-bound Providers, also run an authenticated Provider connection test
+after every restore. A changed outbound-path fingerprint automatically marks old
+test evidence stale; an unchanged fingerprint still cannot prove that the restored
+host has the same DNS, firewall, trust store, or observed exit IP. Confirm the
+selected outbound did not use a final `DIRECT` fallback. Restoring a
+schema-v38-or-newer data directory into
+an older binary is unsupported: restore the complete pre-upgrade backup instead
+of replacing only the executable or manually editing the schema version.
 
 Then validate liveness, readiness, Audit, Admin authentication, Metrics,
 Provider connectivity, normal and streaming requests, and Usage settlement.

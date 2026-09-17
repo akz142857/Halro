@@ -725,10 +725,13 @@ Because of the rule above, this file holds fewer records than the console
 reports as failed requests. That difference is the design working, not a gap.
 
 Unknown YAML fields and invalid durations are rejected. Listener, storage,
-egress, proxy, and Metrics-auth changes require restart, as do the certificate
-*paths* — `SIGHUP` reloads the bytes behind them and the log level, and nothing
-else. The Admin Settings page only changes the explicitly writable runtime
-settings. Always run `config check` before restart.
+inbound/security egress policy, YAML proxy settings, and Metrics-auth changes
+require restart, as do the certificate *paths* — `SIGHUP` reloads the bytes behind
+them and the log level, and nothing else. This does not apply to Provider outbound
+CONNECT proxies managed under **Credentials & Providers → Outbound proxies**;
+those records live in bbolt/Vault and are applied automatically without a process
+restart. The Admin Settings page only changes the explicitly writable runtime
+settings. Always run `config check` before restarting for a YAML change.
 
 `server.shutdown_timeout` is shared by the Gateway, Admin, and Metrics
 listeners and must be at least `gateway.route_total_timeout`. When omitted by
@@ -1014,6 +1017,58 @@ Route in the Admin console. Credential audience binds provider type plus the
 normalized endpoint origin; changing either requires a matching credential
 rotation. Keep private endpoint access disabled unless the deployment genuinely
 needs it and the hostname/IP boundary has been reviewed.
+
+### Explicit Provider egress through HTTP CONNECT
+
+Open **Credentials & Providers → Outbound proxies** in the Admin console and add
+an approved HTTP CONNECT endpoint. A Provider selects one proxy by ID; an empty
+selection is direct. Definitions are stored in bbolt and optional Basic Auth is
+encrypted by the Vault. Passwords are never returned by the API. Creating,
+editing, rotating authentication, and deleting a proxy hot-loads a new runtime
+snapshot; no process restart or YAML change is required.
+
+An endpoint must be an `http://` or `https://` URL with an explicit port and no
+path, query, fragment, or embedded credentials. Private and loopback addresses
+are separate, explicit policy exceptions. Basic Auth over cleartext HTTP needs a
+second explicit acknowledgement; prefer a firewall-constrained literal private
+address or a verifiable HTTPS proxy.
+
+Inside a container, `127.0.0.1` is the container, not the host. Use an explicit
+host gateway, an approved proxy service on the overlay network, or reviewed host
+networking. Bind Mihomo only on the required interface and firewall the listener
+to Halro's container subnet. Halro sends CONNECT to the Provider's validated
+literal IP, so ordinary domain rules may not match: use a dedicated listener with
+a fixed non-`DIRECT` outbound, or separately verify SNI/IP rule behavior. Provider
+DNS inside the Halro container must return real addresses; fake-IP ranges such as
+`198.18.0.0/15` remain blocked.
+
+The proxy can see the target IP, port, and TLS SNI. Halro still establishes and
+validates Provider TLS using the original hostname and system trust store. This is
+not certificate pinning: a proxy-controlled CA already installed in that trust
+store can still issue a Provider certificate. Provider-executed tools and other
+network calls made by the upstream itself do not traverse this connector.
+
+To switch paths or change a proxy's endpoint, policy, or authentication, first
+disable or drain every enabled Deployment that uses it, edit it in Admin,
+re-confirm administrator identity, run the Provider connection test (a disabled Deployment
+may be selected as its probe model), then re-enable traffic. Existing keep-alive
+and streaming tunnels drain with the old adapter. For emergency revocation, also
+block at the network layer; do not wait for graceful drain. A proxy
+failure never makes the same Provider dial directly, but a Route containing a
+different direct Provider may still fall back across that outbound trust boundary;
+the Routes page marks this explicitly.
+
+`halro doctor` validates proxy definitions, encrypted authentication, and persisted
+Provider references without dialing the proxy. Live reachability is checked only
+through the authenticated Admin connection test. Its safe diagnostics contain
+mode, stage, and numeric proxy status, never endpoint addresses, response bodies,
+reason phrases, usernames, passwords, or internal Credential IDs.
+
+For Bedrock Mantle, enter the AWS Region while creating the Credential in Admin.
+The console expands it into the regional endpoint and the Vault binds the secret
+to that exact audience. `us-east-1` is only the new-form initial value; it is not
+a `config.yaml` setting or a global region. Create a new Credential to move a
+connection to another region.
 
 | Type | Base URL example | Secret format | Declared v1 profile |
 |---|---|---|---|

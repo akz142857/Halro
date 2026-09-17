@@ -2,6 +2,7 @@ package safetransport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -73,7 +74,8 @@ func NewClient(options Options) (*http.Client, error) {
 		IdleConnTimeout:       90 * time.Second,
 		DisableCompression:    true,
 	}
-	transport.DialContext = pinnedDialContext(options.Policy, options.Resolver, options.Dialer)
+	transport.DialContext = withSetupTimeout(options.ConnectTimeout, pinnedDialContext(options.Policy, options.Resolver, options.Dialer))
+	transport.DialTLSContext = pinnedDialTLSContext(options.Policy, options.Resolver, options.Dialer, options.ConnectTimeout)
 
 	return &http.Client{
 		Transport: &pinnedTransport{Transport: transport, policy: options.Policy},
@@ -81,6 +83,56 @@ func NewClient(options Options) (*http.Client, error) {
 			return http.ErrUseLastResponse
 		},
 	}, nil
+}
+
+var noDeadline time.Time
+
+func withSetupTimeout(timeout time.Duration, dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		setup, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return dial(setup, network, address)
+	}
+}
+
+func pinnedDialTLSContext(policy Policy, resolver Resolver, dialer Dialer, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	dialPinned := pinnedDialContext(policy, resolver, dialer)
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		setup, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		conn, err := dialPinned(setup, network, address)
+		if err != nil {
+			return nil, err
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("split TLS outbound address: %w: %w", ErrRefusedBeforeSend, err)
+		}
+		if deadline, ok := setup.Deadline(); ok {
+			if err := conn.SetDeadline(deadline); err != nil {
+				_ = conn.Close()
+				return nil, err
+			}
+		}
+		stopCancel := context.AfterFunc(setup, func() { _ = conn.Close() })
+		providerTLS := tls.Client(conn, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			ServerName: strings.Trim(host, "[]"),
+			NextProtos: []string{"h2", "http/1.1"},
+		})
+		if err := providerTLS.HandshakeContext(setup); err != nil {
+			stopCancel()
+			_ = conn.Close()
+			return nil, err
+		}
+		stopCancel()
+		if err := providerTLS.SetDeadline(noDeadline); err != nil {
+			_ = providerTLS.Close()
+			return nil, err
+		}
+		return providerTLS, nil
+	}
 }
 
 // pinnedTransport is the RoundTripper every provider and webhook call goes

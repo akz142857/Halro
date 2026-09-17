@@ -312,7 +312,7 @@ describe("SettingsPage system configuration pane", () => {
 
     // The nav entry sits between the instance pane and the diagnostics pane.
     const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
-    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "关于与诊断"]);
+    expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "根密钥状态", "关于与诊断"]);
 
     // The pane heading and the nav entry share a name, so wait on something
     // only the pane can produce rather than on the label.
@@ -620,5 +620,28 @@ describe("SettingsPage system configuration pane", () => {
     renderWithClient(<SettingsPage />);
 
     expect(screen.getByRole("link", { name: "通用" })).toHaveAttribute("aria-current", "page");
+  });
+});
+
+describe("SettingsPage root key custody pane", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/");
+  });
+
+  it("keeps the low-frequency read-only status inside Settings & Status", async () => {
+    const custody = vi.spyOn(api, "masterKeyCustody").mockResolvedValue({
+      mode: "file", local_custody_ready: true, custody_state: "healthy", production_admission: "not_applicable",
+      rotation_incomplete: false, lifecycle_operation: "none", pending_slots: 0, retiring_slots: 0,
+      recovery_verification_status: "not_applicable", degraded_reasons: [], slots: [],
+    });
+    window.history.replaceState({}, "", "/admin/settings/custody");
+
+    renderWithClient(<SettingsPage />);
+
+    expect(screen.getByRole("link", { name: "根密钥状态" })).toHaveAttribute("aria-current", "page");
+    expect(await screen.findByText("本地文件密钥已加载")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "根密钥状态" })).toBeVisible();
+    expect(custody).toHaveBeenCalledTimes(1);
   });
 });

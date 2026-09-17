@@ -54,13 +54,14 @@ type onboardingReadiness struct {
 }
 
 type onboardingResources struct {
-	Credentials []domain.Credential
-	Providers   []domain.ProviderInstance
-	Deployments []domain.Deployment
-	Routes      []domain.Route
-	Projects    []domain.Project
-	Keys        []domain.GatewayKey
-	PriceReady  map[string]bool
+	Credentials      []domain.Credential
+	Providers        []domain.ProviderInstance
+	Deployments      []domain.Deployment
+	Routes           []domain.Route
+	Projects         []domain.Project
+	Keys             []domain.GatewayKey
+	PriceReady       map[string]bool
+	EgressRuntimeIDs map[string]string
 	// EndpointPolicy is what "is this provider's endpoint usable" means for this
 	// instance. Readiness compares a derived audience against the stored one, and
 	// deriving it under a stricter policy than the one the provider was created
@@ -72,7 +73,13 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
-	resources := onboardingResources{EndpointPolicy: providerEndpointPolicy(r.config)}
+	runtimeIDs := map[string]string{}
+	if registry := r.providerEgress.Current(); registry != nil {
+		for _, proxy := range registry.descriptions() {
+			runtimeIDs[proxy.ID] = proxy.Fingerprint
+		}
+	}
+	resources := onboardingResources{EndpointPolicy: providerEndpointPolicy(r.config), EgressRuntimeIDs: runtimeIDs}
 	var err error
 	if resources.Credentials, err = r.store.ListCredentials(request.Context()); err != nil {
 		adminStoreError(writer)
@@ -125,7 +132,7 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, metrics usage.Metrics, snapshot usage.Snapshot) onboardingReadiness {
 	credentialReady := make(map[string]domain.Credential)
 	for _, credential := range resources.Credentials {
-		if len(credential.Ciphertext) > 0 && string(credential.Type) != webhookCredentialType {
+		if len(credential.Ciphertext) > 0 && !internalCredentialType(credential.Type) {
 			credentialReady[credential.ID] = credential
 		}
 	}
@@ -228,8 +235,11 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			continue
 		}
 		hasProviderBinding = true
-		if provider.LastTestStatus == domain.DeploymentTestHealthy && provider.LastTestRevision == provider.Revision {
+		if providerTestIsCurrent(provider, resources.EgressRuntimeIDs[provider.EgressProxyID]) && provider.LastTestStatus == domain.DeploymentTestHealthy {
 			readyProviders[provider.ID] = provider
+			continue
+		}
+		if provider.EgressProxyID != "" {
 			continue
 		}
 		if probedAt, proven := downstreamProbe[provider.ID]; proven && !probedAt.Before(provider.UpdatedAt) {
@@ -452,6 +462,13 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		}
 	}
 	return result
+}
+
+func providerTestIsCurrent(instance domain.ProviderInstance, runtimeID string) bool {
+	if instance.LastTestRevision != instance.Revision {
+		return false
+	}
+	return instance.EgressProxyID == "" || runtimeID != "" && instance.LastTestRuntimeID == runtimeID
 }
 
 func latestOnboardingVerification(snapshot usage.Snapshot) *onboardingVerification {

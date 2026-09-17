@@ -20,6 +20,7 @@ type adminDeploymentView struct {
 	domain.Deployment
 	CapabilityReview capabilityReview    `json:"capability_review"`
 	Probe            deploymentProbeView `json:"probe"`
+	LastTestCurrent  bool                `json:"last_test_current"`
 }
 
 // deploymentProbeView is the active probe's last word on this deployment.

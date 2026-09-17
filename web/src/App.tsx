@@ -30,7 +30,6 @@ const RoutesPage = lazy(() => import("./pages/RoutesPage").then((module) => ({ d
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const UsagePage = lazy(() => import("./pages/UsagePage").then((module) => ({ default: module.UsagePage })));
 const RunGovernancePage = lazy(() => import("./pages/RunGovernancePage").then((module) => ({ default: module.RunGovernancePage })));
-const MasterKeyCustodyPage = lazy(() => import("./pages/MasterKeyCustodyPage").then((module) => ({ default: module.MasterKeyCustodyPage })));
 const DeveloperPage = lazy(() => import("./pages/DeveloperPage").then((module) => ({ default: module.DeveloperPage })));
 
 export function App() {
@@ -167,7 +166,7 @@ function Route({ path }: { path: string }) {
     return <OperationsPage />;
   }
   if (path.startsWith("/admin/settings")) return <SettingsPage />;
-	if (path.startsWith("/admin/master-key")) return <MasterKeyCustodyPage />;
+  if (path.startsWith("/admin/master-key")) return <LegacyMasterKeyRedirect />;
   return (
     <section className="not-found">
       <p className="eyebrow">{t("app.notFoundEyebrow")}</p>
@@ -175,4 +174,15 @@ function Route({ path }: { path: string }) {
       <button className="button primary" onClick={() => navigate("/admin")}>{t("app.backOverview")}</button>
     </section>
   );
+}
+
+function LegacyMasterKeyRedirect() {
+  const { t } = useTranslation();
+  useEffect(() => {
+    // Defer until every navigation listener in the mounted shell is ready, so
+    // both the route and the sidebar observe the compatibility redirect.
+    const redirect = window.setTimeout(() => navigate("/admin/settings/custody"), 0);
+    return () => window.clearTimeout(redirect);
+  }, []);
+  return <Loading label={t("common.loading")} />;
 }

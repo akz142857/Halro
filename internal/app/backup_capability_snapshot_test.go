@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
@@ -20,7 +21,7 @@ import (
 // but "structurally" is a claim about today's implementation, not a contract,
 // and nothing asserted it. A backup that silently lost the snapshot would leave
 // every restored deployment unable to validate and unable to route.
-func TestBackupRestorePreservesTheCapabilitySnapshot(t *testing.T) {
+func TestBackupRestorePreservesCapabilitySnapshotAndManagedProxy(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -41,6 +42,18 @@ func TestBackupRestorePreservesTheCapabilitySnapshot(t *testing.T) {
 	if before.Source == "" || before.ModelRevision == "" || before.CapturedAt.IsZero() {
 		t.Fatalf("bootstrap produced no usable snapshot to test with: %+v", before)
 	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	proxy, err := store.PutProviderEgressProxy(context.Background(), domain.ProviderEgressProxy{
+		ID: "backup-egress", Name: "Backup egress", Kind: domain.ProviderEgressProxyKindHTTPConnect,
+		Endpoint: "https://proxy.example.com:8443", CreatedAt: now, UpdatedAt: now,
+	}, 0, nil, 0, "", nil)
+	if closeErr := store.Close(); err != nil || closeErr != nil {
+		t.Fatalf("store proxy err=%v close=%v", err, closeErr)
+	}
 
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
@@ -57,6 +70,17 @@ func TestBackupRestorePreservesTheCapabilitySnapshot(t *testing.T) {
 	// Move the deployment on after the backup, so a restore that quietly kept
 	// live data would be visible rather than looking like success.
 	mutateDeploymentSnapshot(t, cfg, bootstrap.DeploymentID)
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteProviderEgressProxy(context.Background(), proxy.ID, proxy.Revision, nil); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if after := readDeploymentSnapshot(t, cfg, bootstrap.DeploymentID); after.ModelRevision == before.ModelRevision {
 		t.Fatal("the mutation did not take, so the restore below would prove nothing")
 	}
@@ -68,6 +92,17 @@ func TestBackupRestorePreservesTheCapabilitySnapshot(t *testing.T) {
 	restored := readDeploymentSnapshot(t, cfg, bootstrap.DeploymentID)
 	if !reflect.DeepEqual(restored, before) {
 		t.Fatalf("restored snapshot differs:\n before=%+v\n after =%+v", before, restored)
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredProxy, proxyErr := store.GetProviderEgressProxy(context.Background(), proxy.ID)
+	if closeErr := store.Close(); proxyErr != nil || closeErr != nil {
+		t.Fatalf("restored proxy err=%v close=%v", proxyErr, closeErr)
+	}
+	if restoredProxy.Endpoint != proxy.Endpoint || restoredProxy.Revision != proxy.Revision {
+		t.Fatalf("restored proxy=%#v want=%#v", restoredProxy, proxy)
 	}
 
 	// A restored deployment must still be usable: it validates, and the runtime

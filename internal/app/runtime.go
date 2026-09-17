@@ -60,6 +60,7 @@ type Runtime struct {
 	failureCapture      *failurecapture.Store
 	auth                *auth.Snapshot
 	providers           *provider.Registry
+	providerEgress      *providerEgressManager
 	accounting          *budget.Manager
 	gateway             *gatewayapi.Handler
 	gatewayService      *gatewaycore.Service
@@ -433,7 +434,20 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		effectiveCatalog = catalogManager.Current()
 	}
 	catalogUnavailable := catalogManager == nil || catalogManager.Status().State != modelcatalog.CatalogStateCurrent
-	providerRegistry, loaded, err := loadProviderRegistryWithCatalog(ctx, cfg, metadata, secretVault, effectiveCatalog, catalogUnavailable)
+	providerEgressRegistry, err := newProviderEgressRegistry(ctx, metadata, secretVault)
+	if err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	cleanupProviderEgress := true
+	defer func() {
+		if cleanupProviderEgress {
+			providerEgressRegistry.Close()
+		}
+	}()
+	providerRegistry, loaded, err := loadProviderRegistryWithCatalogAndEgress(ctx, cfg, metadata, secretVault, effectiveCatalog, catalogUnavailable, providerEgressRegistry)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
@@ -665,6 +679,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		failureCapture:      captureStore,
 		auth:                authSnapshot,
 		providers:           providerRegistry,
+		providerEgress:      newProviderEgressManager(providerEgressRegistry),
 		accounting:          accounting,
 		gateway:             gatewayHandler,
 		gatewayService:      gatewayService,
@@ -770,6 +785,15 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		providerRegistry.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("recover pending admin audit: %w", err))
+	}
+	if err := runtime.auditProviderEgressRegistry(providerEgressRegistry); err != nil {
+		auditLog.Close()
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("audit Provider egress registry: %w", err))
 	}
 	// Emitted here rather than at the load itself: the audit log only exists
 	// once the runtime is assembled, and a deployment that came up withheld is
@@ -905,6 +929,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 			catalogWorker.Run(backgroundContext)
 		}
 	}()
+	cleanupProviderEgress = false
 	return runtime, nil
 }
 
@@ -1479,6 +1504,10 @@ func (r *Runtime) Close() error {
 				r.providers.Close()
 				return nil
 			}(),
+			func() error {
+				r.providerEgress.Close()
+				return nil
+			}(),
 			r.ledger.Close(),
 			func() error {
 				if r.governance.log != nil {
@@ -1804,6 +1833,11 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/credentials/{id}", r.updateAdminCredential)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/credentials/{id}", r.deleteAdminCredential)
 	router.With(r.requireAdmin).Get("/admin/api/v1/providers", r.listAdminProviders)
+	router.With(r.requireAdmin).Get("/admin/api/v1/provider-egress-proxies", r.listAdminProviderEgressProxies)
+	router.With(r.requireAdminMutation).Post("/admin/api/v1/provider-egress-proxies", r.createAdminProviderEgressProxy)
+	router.With(r.requireAdmin).Get("/admin/api/v1/provider-egress-proxies/{id}", r.getAdminProviderEgressProxy)
+	router.With(r.requireAdminMutation).Put("/admin/api/v1/provider-egress-proxies/{id}", r.updateAdminProviderEgressProxy)
+	router.With(r.requireAdminMutation).Delete("/admin/api/v1/provider-egress-proxies/{id}", r.deleteAdminProviderEgressProxy)
 	// Compile-time metadata about what this build can serve. Same bar as the
 	// other Admin reads — a read_only role may fetch it, since it is what any
 	// connection form needs before it can offer anything.

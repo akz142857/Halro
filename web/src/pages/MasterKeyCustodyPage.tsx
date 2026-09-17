@@ -4,7 +4,7 @@ import { api } from "../api";
 import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { useInstantFormatter } from "../format";
 
-export function MasterKeyCustodyPage() {
+export function MasterKeyCustodyPage({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const custody = useQuery({ queryKey: ["master-key-custody"], queryFn: api.masterKeyCustody });
   const formatInstant = useInstantFormatter();
@@ -19,24 +19,30 @@ export function MasterKeyCustodyPage() {
   const lastUpdated = custody.dataUpdatedAt > 0 ? date(new Date(custody.dataUpdatedAt).toISOString()) : t("common.unknown");
   const runbooksAvailable = data?.mode === "key_slots" && Boolean(data.lifecycle_runbook_url || data.recovery_runbook_url);
 
-  return <div className="custody-page">
-    <PageHeader
+  const description = isFile ? t("custody.fileDescription") : t("custody.description");
+  const refresh = data && <div className="custody-refresh">
+    <span>{t("custody.lastUpdated", { value: lastUpdated })}</span>
+    <button className="button ghost" type="button" disabled={custody.isFetching} onClick={retry}>
+      {custody.isFetching ? t("custody.refreshing") : t("custody.refresh")}
+    </button>
+  </div>;
+
+  return <div className={`custody-page${embedded ? " embedded" : ""}`}>
+    {embedded ? <header className="settings-group-header custody-section-header">
+      <div><h2 id="custody-title">{t("custody.title")}</h2><p>{description}</p></div>
+      {refresh}
+    </header> : <PageHeader
       eyebrow={t("custody.eyebrow")}
       title={t("custody.title")}
-      description={isFile ? t("custody.fileDescription") : t("custody.description")}
-      action={data && <div className="custody-refresh">
-        <span>{t("custody.lastUpdated", { value: lastUpdated })}</span>
-        <button className="button ghost" type="button" disabled={custody.isFetching} onClick={retry}>
-          {custody.isFetching ? t("custody.refreshing") : t("custody.refresh")}
-        </button>
-      </div>}
-    />
+      description={description}
+      action={refresh}
+    />}
     {custody.isPending && <Loading />}
     {custody.isError && !data && <div className="custody-load-error">
       <ErrorState error={custody.error} />
       <button className="button ghost" type="button" disabled={custody.isFetching} onClick={retry}>{t("common.retry")}</button>
     </div>}
-    {data && <div className="settings-pane custody-pane">
+    {data && <div className={`${embedded ? "" : "settings-pane "}custody-pane`}>
       {custody.isError && <div className="notice warning custody-stale-notice" role="status" aria-live="polite">
         <span><strong>{t("custody.staleTitle")}</strong>{t("custody.staleDescription", { updatedAt: lastUpdated })}</span>
         <button className="button ghost" type="button" disabled={custody.isFetching} onClick={retry}>{custody.isFetching ? t("custody.refreshing") : t("common.retry")}</button>

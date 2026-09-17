@@ -111,7 +111,7 @@ func (r *Runtime) listAdminCredentials(writer http.ResponseWriter, request *http
 	}
 	views := make([]credentialView, 0, len(items))
 	for _, item := range items {
-		if string(item.Type) == webhookCredentialType {
+		if internalCredentialType(item.Type) {
 			continue
 		}
 		views = append(views, credentialViewFrom(item))
@@ -121,7 +121,7 @@ func (r *Runtime) listAdminCredentials(writer http.ResponseWriter, request *http
 
 func (r *Runtime) getAdminCredential(writer http.ResponseWriter, request *http.Request) {
 	item, err := r.store.GetCredential(request.Context(), chi.URLParam(request, "id"))
-	if err != nil {
+	if err != nil || internalCredentialType(item.Type) {
 		adminNotFound(writer)
 		return
 	}
@@ -135,13 +135,13 @@ func (r *Runtime) listAdminProviders(writer http.ResponseWriter, request *http.R
 		adminStoreError(writer)
 		return
 	}
-	active := make([]domain.ProviderInstance, 0, len(items))
+	active := make([]providerView, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
-			active = append(active, item)
+			active = append(active, r.providerViewFrom(item))
 		}
 	}
-	writeResourcePage(writer, request, active, func(item domain.ProviderInstance) string { return item.ID })
+	writeResourcePage(writer, request, active, func(item providerView) string { return item.ID })
 }
 
 func (r *Runtime) getAdminProvider(writer http.ResponseWriter, request *http.Request) {
@@ -151,7 +151,19 @@ func (r *Runtime) getAdminProvider(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
-	writeJSON(writer, http.StatusOK, item)
+	writeJSON(writer, http.StatusOK, r.providerViewFrom(item))
+}
+
+type providerView struct {
+	domain.ProviderInstance
+	LastTestCurrent bool `json:"last_test_current"`
+}
+
+func (r *Runtime) providerViewFrom(instance domain.ProviderInstance) providerView {
+	return providerView{
+		ProviderInstance: instance,
+		LastTestCurrent:  providerTestIsCurrent(instance, r.providerEgressTestRuntimeID(instance.EgressProxyID)),
+	}
 }
 
 func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http.Request) {
@@ -177,7 +189,7 @@ func (r *Runtime) listAdminDeployments(writer http.ResponseWriter, request *http
 			item.PricingQuarantined, item.PricingQuarantineReason = quarantined, reason
 			active = append(active, adminDeploymentView{
 				Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
-				Probe: probeView(probes, item.ID),
+				Probe: probeView(probes, item.ID), LastTestCurrent: r.deploymentTestIsCurrent(request.Context(), item),
 			})
 		}
 	}
@@ -203,7 +215,7 @@ func (r *Runtime) getAdminDeployment(writer http.ResponseWriter, request *http.R
 	writer.Header().Set("ETag", revisionETag(item.Revision))
 	writeJSON(writer, http.StatusOK, adminDeploymentView{
 		Deployment: item, CapabilityReview: reviewForDeploymentWithCatalogState(instances, item, r.effectiveModelCatalog(), r.modelCatalogUnavailable()),
-		Probe: probeView(r.providers.DeploymentProbes(), item.ID),
+		Probe: probeView(r.providers.DeploymentProbes(), item.ID), LastTestCurrent: r.deploymentTestIsCurrent(request.Context(), item),
 	})
 }
 
@@ -214,11 +226,12 @@ type adminRouteView struct {
 	domain.Route
 	// Absent when the route is routing, and when it is disabled: a disabled
 	// route is not withheld, it is switched off, and the console already says so.
-	Withheld *routeWithholding `json:"withheld,omitempty"`
+	Withheld        *routeWithholding `json:"withheld,omitempty"`
+	LastTestCurrent bool              `json:"last_test_current"`
 }
 
-func routeView(item domain.Route, withheld map[string]routeWithholding) adminRouteView {
-	view := adminRouteView{Route: item}
+func routeView(item domain.Route, withheld map[string]routeWithholding, lastTestCurrent bool) adminRouteView {
+	view := adminRouteView{Route: item, LastTestCurrent: lastTestCurrent}
 	if !item.Enabled {
 		return view
 	}
@@ -238,7 +251,7 @@ func (r *Runtime) listAdminRoutes(writer http.ResponseWriter, request *http.Requ
 	active := make([]adminRouteView, 0, len(items))
 	for _, item := range items {
 		if item.DeletedAt == nil {
-			active = append(active, routeView(item, withheld))
+			active = append(active, routeView(item, withheld, r.routeTestIsCurrent(request.Context(), item)))
 		}
 	}
 	writeResourcePage(writer, request, active, func(item adminRouteView) string { return item.ID })
@@ -251,7 +264,7 @@ func (r *Runtime) getAdminRoute(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	writer.Header().Set("ETag", revisionETag(item.Revision))
-	writeJSON(writer, http.StatusOK, routeView(item, r.routeWithholdings()))
+	writeJSON(writer, http.StatusOK, routeView(item, r.routeWithholdings(), r.routeTestIsCurrent(request.Context(), item)))
 }
 
 func (r *Runtime) listAdminTokenGuardPolicies(writer http.ResponseWriter, request *http.Request) {

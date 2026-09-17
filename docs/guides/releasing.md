@@ -44,6 +44,14 @@ the pre-release assessment in `docs/verification/assessments/` has been filled
 in, or that anyone other than the tagger has looked at the release. Those are
 procedure, and the procedure is `docs/verification/release-assessment.md`.
 
+Provider-egress releases advance the bbolt metadata compatibility fence. Before
+upgrading, take and verify a complete backup. Managed proxy definitions and their
+Vault-encrypted Basic Auth credentials are part of that archive; network routes,
+firewall policy, DNS, and trust roots are still host prerequisites. After upgrade,
+run `halro doctor` and fresh Provider connection tests before restoring traffic.
+A binary rollback must restore the complete pre-upgrade backup; an older binary
+must not open a data directory already migrated by the newer release.
+
 The release workflow builds the embedded React UI once and cross-compiles
 static Halro binaries for Linux and macOS on amd64 and arm64. Windows is not
 a v1 target because the exclusive data-directory lock currently uses Unix

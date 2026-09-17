@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,6 +37,7 @@ type credentialInput struct {
 }
 
 type providerInput struct {
+	stepUpMaterial
 	Name                  string                   `json:"name"`
 	Type                  domain.ProviderType      `json:"type"`
 	BaseURL               string                   `json:"base_url"`
@@ -45,6 +47,7 @@ type providerInput struct {
 	ProfileID             domain.ProviderProfileID `json:"profile_id,omitempty"`
 	CredentialScheme      domain.CredentialScheme  `json:"credential_scheme,omitempty"`
 	BedrockProjectID      string                   `json:"bedrock_project_id,omitempty"`
+	EgressProxyID         optionalJSONString       `json:"egress_proxy_id"`
 	AllowedAnthropicBetas []string                 `json:"allowed_anthropic_betas,omitempty"`
 	// One flat set for the whole connection. Which profile ends up serving each
 	// capability is the server's answer (domain.AssignConnectionCapabilities),
@@ -58,6 +61,45 @@ type providerInput struct {
 	MaxConcurrency             int64                        `json:"max_concurrency"`
 	Enabled                    bool                         `json:"enabled"`
 	AcknowledgedPolicyRevision string                       `json:"acknowledged_policy_revision,omitempty"`
+}
+
+// optionalJSONString preserves the three JSON states the update contract
+// needs: omitted keeps the current path, an explicit string chooses a path,
+// and null is rejected instead of being confused with either one.
+type optionalJSONString struct {
+	Present bool
+	Value   string
+}
+
+func egressMode(proxyID string) string {
+	if proxyID == "" {
+		return "direct"
+	}
+	return "proxy"
+}
+
+func mergeAuditMetadata(base, extra map[string]string) map[string]string {
+	if len(extra) == 0 {
+		return base
+	}
+	if base == nil {
+		base = make(map[string]string, len(extra))
+	}
+	for key, value := range extra {
+		base[key] = value
+	}
+	return base
+}
+
+func (v *optionalJSONString) UnmarshalJSON(raw []byte) error {
+	v.Present = true
+	if string(raw) == "null" {
+		return errors.New("egress_proxy_id cannot be null")
+	}
+	if err := json.Unmarshal(raw, &v.Value); err != nil {
+		return errors.New("egress_proxy_id must be a string")
+	}
+	return nil
 }
 
 type routeInput struct {
@@ -139,6 +181,10 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 		adminMutationError(writer, err)
 		return
 	}
+	if internalCredentialType(current.Type) {
+		adminNotFound(writer)
+		return
+	}
 	if current.Revision != expected {
 		adminPreconditionFailed(writer)
 		return
@@ -214,6 +260,11 @@ func (r *Runtime) deleteAdminCredential(writer http.ResponseWriter, request *htt
 	credentialID := chi.URLParam(request, "id")
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
+	credential, credentialErr := r.store.GetCredential(request.Context(), credentialID)
+	if credentialErr != nil || internalCredentialType(credential.Type) {
+		adminNotFound(writer)
+		return
+	}
 	intent, intentErr := r.newAdminAuditIntent(request, "credential.delete", "credential", credentialID)
 	if intentErr != nil {
 		adminStoreError(writer)
@@ -237,6 +288,10 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		adminBadRequestCode(writer, "invalid_request", "invalid request")
 		return
 	}
+	if input.EgressProxyID.Present && strings.TrimSpace(input.EgressProxyID.Value) != "" &&
+		!r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
+		return
+	}
 	idempotencyKey, ok := adminCreateIdempotencyKey(writer, request)
 	if !ok {
 		return
@@ -246,7 +301,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	now := time.Now().UTC()
 	r.adminTopologyMu.Lock()
 	defer r.adminTopologyMu.Unlock()
-	instance, err := r.providerFromInput(request, providerID, input, "", nil, nil, now, now)
+	instance, err := r.providerFromInput(request, providerID, input, "", "", nil, nil, now, now)
 	if err != nil {
 		adminProviderInputError(writer, err)
 		return
@@ -258,6 +313,11 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 		return
 	}
 	instance.UsagePolicyAcknowledgement = policyAcknowledgement
+	if instance.EgressProxyID != "" {
+		auditMetadata = mergeAuditMetadata(auditMetadata, map[string]string{
+			"egress_mode_before": "none", "egress_mode_after": "proxy", "proxy_id_after": instance.EgressProxyID,
+		})
+	}
 	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "provider.create", "provider", instance.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
@@ -274,7 +334,7 @@ func (r *Runtime) createAdminProvider(writer http.ResponseWriter, request *http.
 	r.activateTopologyAfterCommit()
 	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(instance.Revision))
-	writeJSON(writer, http.StatusCreated, instance)
+	writeJSON(writer, http.StatusCreated, r.providerViewFrom(instance))
 }
 
 func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.Request) {
@@ -322,7 +382,28 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	if input.Type != current.Type || input.ProfileID != "" && input.ProfileID != current.ProfileID {
 		currentEvidence = nil
 	}
-	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, currentEvidence, current.Bindings, current.CreatedAt, time.Now().UTC())
+	desiredEgressProxyID := current.EgressProxyID
+	if input.EgressProxyID.Present {
+		desiredEgressProxyID = strings.TrimSpace(input.EgressProxyID.Value)
+	}
+	egressChanged := desiredEgressProxyID != current.EgressProxyID
+	if egressChanged {
+		deployments, listErr := r.store.ListDeployments(request.Context())
+		if listErr != nil {
+			adminStoreError(writer)
+			return
+		}
+		for _, deployment := range deployments {
+			if deployment.ProviderID == current.ID && deployment.Enabled && deployment.DeletedAt == nil {
+				adminBadRequestCode(writer, "provider_egress_change_locked_by_deployments", "disable the provider's active deployments before changing its egress path")
+				return
+			}
+		}
+		if !r.requireStepUpMaterial(writer, request, input.stepUpMaterial) {
+			return
+		}
+	}
+	instance, err := r.providerFromInput(request, current.ID, input, current.ProfileID, current.EgressProxyID, currentEvidence, current.Bindings, current.CreatedAt, time.Now().UTC())
 	if err != nil {
 		adminProviderInputError(writer, err)
 		return
@@ -343,6 +424,10 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	instance.LastTestLatencyMillis = current.LastTestLatencyMillis
 	instance.LastTestErrorClass = current.LastTestErrorClass
 	instance.LastTestRevision = current.LastTestRevision
+	instance.LastTestRuntimeID = current.LastTestRuntimeID
+	instance.LastTestEgressMode = current.LastTestEgressMode
+	instance.LastTestProxyStage = current.LastTestProxyStage
+	instance.LastTestProxyStatus = current.LastTestProxyStatus
 	instance.LastTestHealthyTargets = current.LastTestHealthyTargets
 	instance.LastTestTotalTargets = current.LastTestTotalTargets
 	instance.UsagePolicyAcknowledgement = current.UsagePolicyAcknowledgement
@@ -359,6 +444,14 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	} else {
 		auditMetadata = nil
 	}
+	if egressChanged {
+		auditMetadata = mergeAuditMetadata(auditMetadata, map[string]string{
+			"egress_mode_before": egressMode(current.EgressProxyID),
+			"egress_mode_after":  egressMode(instance.EgressProxyID),
+			"proxy_id_before":    current.EgressProxyID,
+			"proxy_id_after":     instance.EgressProxyID,
+		})
+	}
 	intent, intentErr := r.newAdminAuditIntentWithMetadata(request, "provider.update", "provider", instance.ID, auditMetadata)
 	if intentErr != nil {
 		adminStoreError(writer)
@@ -373,7 +466,7 @@ func (r *Runtime) updateAdminProvider(writer http.ResponseWriter, request *http.
 	r.clearInvocationTargetCatalog(instance.ID)
 	r.completeAdminMutation(writer, request, *intent)
 	writer.Header().Set("ETag", revisionETag(instance.Revision))
-	writeJSON(writer, http.StatusOK, instance)
+	writeJSON(writer, http.StatusOK, r.providerViewFrom(instance))
 }
 
 func (r *Runtime) deleteAdminProvider(writer http.ResponseWriter, request *http.Request) {
@@ -441,9 +534,43 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		adminBadRequestCode(writer, "provider_disabled", "provider is disabled")
 		return
 	}
+	testedEgressRuntimeID := r.providerEgressTestRuntimeID(instance.EgressProxyID)
+	if testedEgressRuntimeID == "" {
+		adminBadRequestCode(writer, "provider_egress_proxy_not_found", "provider egress proxy is unavailable")
+		return
+	}
+	explicitDeploymentID := strings.TrimSpace(request.URL.Query().Get("deployment_id"))
+	var explicitDeployment *domain.Deployment
 	bindingID := strings.TrimSpace(request.URL.Query().Get("binding_id"))
+	if explicitDeploymentID != "" {
+		deployment, deploymentErr := r.store.GetDeployment(request.Context(), explicitDeploymentID)
+		if deploymentErr != nil || deployment.DeletedAt != nil || deployment.ProviderID != providerID {
+			adminBadRequestCode(writer, "provider_test_deployment_invalid", "deployment does not belong to this provider")
+			return
+		}
+		deploymentBindingID := deployment.BindingID
+		if deploymentBindingID == "" {
+			deploymentBindingID = matchingBindingID(instance, deployment.ProfileID)
+		}
+		if deploymentBindingID == "" || bindingID != "" && bindingID != deploymentBindingID {
+			adminBadRequestCode(writer, "provider_test_deployment_invalid", "deployment does not belong to the selected provider binding")
+			return
+		}
+		bindingID = deploymentBindingID
+		explicitDeployment = &deployment
+	}
 	bindings := make([]domain.ProviderProfileBinding, 0, len(instance.EffectiveProfileBindings()))
 	if bindingID != "" {
+		enabledBindings := 0
+		for _, candidate := range instance.EffectiveProfileBindings() {
+			if candidate.Enabled {
+				enabledBindings++
+			}
+		}
+		if enabledBindings > 1 {
+			adminBadRequestCode(writer, "provider_test_requires_all_bindings", "a Provider-level test must cover every enabled capability binding")
+			return
+		}
 		selected, selectionErr := enabledProviderBinding(instance, bindingID)
 		if selectionErr != nil {
 			adminBadRequest(writer, selectionErr.Error())
@@ -462,11 +589,6 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		return
 	}
 	deployments, err := r.store.ListDeployments(request.Context())
-	if err != nil {
-		adminStoreError(writer)
-		return
-	}
-	routes, err := r.store.ListRoutes(request.Context())
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -507,7 +629,7 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 			adminBadRequestCode(writer, "provider_test_unsupported", "provider does not support connection testing")
 			return
 		}
-		providerModel := providerProbeModel(instance, providerID, binding.ID, deployments, routes)
+		providerModel := providerProbeModel(instance, providerID, binding.ID, deployments, explicitDeployment)
 		// A probe that addresses a model has nothing to address until a
 		// deployment names one. The adapters used to report that as a malformed
 		// model — "invalid Bedrock model id" for an id that was never supplied —
@@ -558,15 +680,29 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "provider changed during validation; test the current revision again"})
 		return
 	}
+	if current.EgressProxyID != instance.EgressProxyID || r.providerEgressTestRuntimeID(current.EgressProxyID) != testedEgressRuntimeID {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "provider egress changed during validation; test the current outbound path again"})
+		return
+	}
 	current.LastTestStatus = status
 	current.LastTestedAt = &testedAt
 	current.LastTestLatencyMillis = maxLatencyMS
 	current.LastTestRevision = current.Revision + 1
+	current.LastTestRuntimeID = ""
+	current.LastTestEgressMode = egressMode(current.EgressProxyID)
+	current.LastTestProxyStage = ""
+	current.LastTestProxyStatus = 0
+	if current.EgressProxyID != "" {
+		current.LastTestRuntimeID = testedEgressRuntimeID
+	}
 	current.LastTestErrorClass = ""
 	current.LastTestHealthyTargets = healthyTargets
 	current.LastTestTotalTargets = len(bindings)
 	if probeErr != nil {
 		current.LastTestErrorClass = persistedProbeClass(failure)
+		current.LastTestProxyStage = failure.ProxyStage
+		current.LastTestProxyStatus = failure.ProxyStatus
 	}
 	current.UpdatedAt = testedAt
 	action := "provider.test.success"
@@ -589,7 +725,8 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 	r.completeAdminMutation(writer, request, *intent)
 	result := map[string]any{
 		"status": status, "latency_ms": maxLatencyMS, "tested_at": testedAt, "revision": current.Revision,
-		"healthy_targets": healthyTargets, "total_targets": len(bindings),
+		"healthy_targets": healthyTargets, "total_targets": len(bindings), "runtime_id": current.LastTestRuntimeID,
+		"egress_mode": current.LastTestEgressMode,
 	}
 	writer.Header().Set("ETag", revisionETag(current.Revision))
 	if probeErr != nil {
@@ -602,16 +739,17 @@ func (r *Runtime) testAdminProvider(writer http.ResponseWriter, request *http.Re
 }
 
 // probeFailure is what a failed connection test can say about itself. The
-// stored record keeps only the class, which answers "what kind of failure" and
-// nothing about which upstream refusal produced it — so the operator was left
-// with a red "failed" and no way to tell an expired key from a wrong region.
-// These fields travel in the response and the log, and are not persisted.
+// stored record keeps the class plus the bounded proxy stage/status diagnostics,
+// but no endpoint, address, reason phrase, request ID, or upstream body. The
+// richer fields below otherwise travel only in the response and safe log.
 type probeFailure struct {
-	Class     provider.ErrorClass
-	Status    int
-	Code      string
-	RequestID string
-	Reason    string
+	Class       provider.ErrorClass
+	Status      int
+	Code        string
+	RequestID   string
+	Reason      string
+	ProxyStage  string
+	ProxyStatus int
 	// Type names the Go type of a failure that arrived unclassified, and is
 	// empty for every classified one. It exists because the absence of an
 	// upstream status means two different things on those two paths, and
@@ -659,6 +797,15 @@ func describeProbeFailure(err error) probeFailure {
 	// the provider's own error. Redacting here covers the response; the log gets
 	// this text only when Halro wrote it (see logProbeFailure).
 	failure.Reason = truncateProbeReason(safelog.Redact(probeReason(err)))
+	var proxyFailure *safetransport.ProxyError
+	if errors.As(err, &proxyFailure) {
+		failure.ProxyStage = string(proxyFailure.Stage)
+		failure.ProxyStatus = proxyFailure.StatusCode
+		// ProxyError text includes the configured proxy ID. The Admin response
+		// has dedicated bounded mode/stage/status fields, so do not duplicate
+		// topology in the free-form detail field.
+		failure.Reason = ""
+	}
 	var classified *provider.Error
 	if errors.As(err, &classified) {
 		failure.Class = classified.Class
@@ -708,6 +855,12 @@ func truncateProbeReason(reason string) string {
 // rather than sent empty, so the console can tell "the provider said nothing"
 // from "the provider said this".
 func (f probeFailure) addTo(result map[string]any) {
+	if f.ProxyStage != "" {
+		result["proxy_stage"] = f.ProxyStage
+	}
+	if f.ProxyStatus > 0 {
+		result["proxy_status"] = f.ProxyStatus
+	}
 	if f.Status > 0 {
 		result["provider_status"] = f.Status
 	}
@@ -786,6 +939,12 @@ func (r *Runtime) logProbeFailure(kind, id, bindingID string, failure probeFailu
 // classified.
 func probeFailureAttributes(failure probeFailure) []any {
 	attributes := []any{"error_class", string(failure.Class)}
+	if failure.ProxyStage != "" {
+		attributes = append(attributes, "egress_mode", "proxy", "proxy_stage", failure.ProxyStage)
+	}
+	if failure.ProxyStatus > 0 {
+		attributes = append(attributes, "proxy_status", failure.ProxyStatus)
+	}
 	if failure.Status > 0 {
 		attributes = append(attributes, "provider_status", failure.Status)
 	}
@@ -804,7 +963,17 @@ func probeFailureAttributes(failure probeFailure) []any {
 	return attributes
 }
 
-func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, routes []domain.Route) string {
+func providerProbeModel(instance domain.ProviderInstance, providerID, bindingID string, deployments []domain.Deployment, explicit *domain.Deployment) string {
+	if explicit != nil {
+		deploymentBindingID := explicit.BindingID
+		if deploymentBindingID == "" {
+			deploymentBindingID = matchingBindingID(instance, explicit.ProfileID)
+		}
+		if explicit.ProviderID == providerID && deploymentBindingID == bindingID && explicit.DeletedAt == nil {
+			return explicit.ProviderModel
+		}
+		return ""
+	}
 	for _, deployment := range deployments {
 		deploymentBindingID := deployment.BindingID
 		if deploymentBindingID == "" {
@@ -857,6 +1026,12 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		adminBadRequestCode(writer, "route_provider_unavailable", "route provider is unavailable")
 		return
 	}
+	testedProviderRevision := instance.Revision
+	testedEgressRuntimeID := r.providerEgressTestRuntimeID(instance.EgressProxyID)
+	if testedEgressRuntimeID == "" {
+		adminBadRequestCode(writer, "provider_egress_proxy_not_found", "provider egress proxy is unavailable")
+		return
+	}
 	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
 		adminBadRequestCode(writer, "route_provider_adapter_unavailable", "route provider adapter is unavailable")
@@ -899,10 +1074,19 @@ func (r *Runtime) testAdminRoute(writer http.ResponseWriter, request *http.Reque
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "route changed during validation; test the current revision again"})
 		return
 	}
+	currentDeployment, deploymentErr := r.store.GetDeployment(request.Context(), current.DeploymentID)
+	currentProvider, providerErr := r.store.GetProvider(request.Context(), currentDeployment.ProviderID)
+	if deploymentErr != nil || currentDeployment.Revision != deployment.Revision || providerErr != nil ||
+		currentProvider.Revision != testedProviderRevision || r.providerEgressTestRuntimeID(currentProvider.EgressProxyID) != testedEgressRuntimeID {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "route outbound path changed during validation; test it again"})
+		return
+	}
 	current.LastTestStatus = status
 	current.LastTestedAt = &testedAt
 	current.LastTestLatencyMillis = latencyMS
 	current.LastTestRevision = current.Revision + 1
+	current.LastTestRuntimeID = testedEgressRuntimeID
 	current.LastTestErrorClass = ""
 	if probeErr != nil {
 		current.LastTestErrorClass = persistedProbeClass(failure)
@@ -1021,6 +1205,7 @@ func (r *Runtime) updateAdminRoute(writer http.ResponseWriter, request *http.Req
 	route.LastTestLatencyMillis = current.LastTestLatencyMillis
 	route.LastTestErrorClass = current.LastTestErrorClass
 	route.LastTestRevision = current.LastTestRevision
+	route.LastTestRuntimeID = current.LastTestRuntimeID
 	if err := route.Validate(); err != nil {
 		adminBadRequest(writer, err.Error())
 		return
@@ -1414,10 +1599,21 @@ type capabilityAssignmentError struct {
 func (e capabilityAssignmentError) Error() string { return e.err.Error() }
 func (e capabilityAssignmentError) Unwrap() error { return e.err }
 
+type egressProxyInputError struct{ id string }
+
+func (e egressProxyInputError) Error() string {
+	return fmt.Sprintf("Provider egress proxy %q is not available in this Runtime", e.id)
+}
+
 // adminProviderInputError answers a rejected provider payload. Most refusals
 // are self-explanatory in context and stay code-less; the ones that are not
 // carry a stable code so the console can localise them.
 func adminProviderInputError(writer http.ResponseWriter, err error) {
+	var proxy egressProxyInputError
+	if errors.As(err, &proxy) {
+		adminBadRequestCode(writer, "provider_egress_proxy_not_found", err.Error())
+		return
+	}
 	var projectID bedrockProjectIDError
 	if errors.As(err, &projectID) {
 		adminBadRequestCode(writer, "bedrock_project_id_invalid", err.Error())
@@ -1443,6 +1639,7 @@ func (r *Runtime) providerFromInput(
 	id string,
 	input providerInput,
 	currentProfile domain.ProviderProfileID,
+	currentEgressProxyID string,
 	currentEvidence domain.CapabilityEvidenceSet,
 	currentBindings []domain.ProviderProfileBinding,
 	createdAt time.Time,
@@ -1576,6 +1773,14 @@ func (r *Runtime) providerFromInput(
 		return domain.ProviderInstance{}, errors.New(
 			"anthropic beta tokens are only valid on a connection whose implementation sends the anthropic-beta header")
 	}
+	egressProxyID := currentEgressProxyID
+	if input.EgressProxyID.Present {
+		egressProxyID = strings.TrimSpace(input.EgressProxyID.Value)
+	}
+	registry := r.providerEgress.Current()
+	if _, available := registry.connector(egressProxyID); !available {
+		return domain.ProviderInstance{}, egressProxyInputError{id: egressProxyID}
+	}
 	instance := domain.ProviderInstance{
 		ID: id, Name: input.Name, Type: input.Type, BaseURL: input.BaseURL,
 		APIVersion:            strings.TrimSpace(input.APIVersion),
@@ -1584,6 +1789,7 @@ func (r *Runtime) providerFromInput(
 		ProfileID:             profile.ProfileID,
 		CredentialScheme:      profile.CredentialScheme,
 		BedrockProjectID:      bedrockProjectID,
+		EgressProxyID:         egressProxyID,
 		AllowedAnthropicBetas: allowedBetas,
 		AllowedHosts:          []string{strings.ToLower(endpoint.Hostname())},
 		MaxConcurrency:        input.MaxConcurrency,

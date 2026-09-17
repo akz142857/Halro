@@ -1477,6 +1477,7 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .custody-section { display: grid; gap: 12px; margin-top: 12px; }
 .custody-section-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; max-width: none; margin: 0; }
 .custody-section-header > div { min-width: 0; }
+.custody-section-header > div > p { margin: 0; color: var(--muted); font-size: var(--font-size-sm); line-height: 1.65; }
 .custody-section-header .badge { flex: 0 0 auto; margin-bottom: 2px; }
 .custody-slots-empty { display: grid; gap: 6px; padding: 20px 22px; color: var(--muted); font-size: var(--font-size-sm); line-height: 1.55; }
 .custody-slots-empty strong { color: var(--text); font-size: var(--font-size-sm); }
@@ -1887,6 +1888,40 @@ textarea { resize: vertical; }
 .project-form > .notice { margin: 18px 24px 0; }
 .modal > .provider-credential-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .provider-credential-form-body { padding: var(--space-5) var(--space-6); }
+.modal:has(> .provider-egress-proxy-form) { width: min(720px, 100%); }
+.provider-egress-proxy-form-body { padding: 0; }
+.proxy-form-section { min-width: 0; padding: var(--space-5) var(--space-6); border-bottom: 1px solid var(--line); }
+.proxy-form-section > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-4); }
+.proxy-form-section > header h3 { margin: 0 0 var(--space-1); color: var(--text); font-size: var(--font-size-md); }
+.proxy-form-section > header p { max-width: 34rem; margin: 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.55; }
+.proxy-form-section > .field:last-child { margin-bottom: 0; }
+.proxy-boundary-section { background: color-mix(in srgb, var(--surface-deep) 68%, transparent); }
+.proxy-boundary-state { flex: 0 0 auto; padding: var(--space-1) var(--space-2); color: var(--color-status-success-text); background: var(--color-status-success-surface); border: 1px solid var(--color-status-success-border); border-radius: var(--radius-pill); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+.proxy-boundary-section.expanded .proxy-boundary-state { color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border-color: var(--color-status-warning-border); }
+.proxy-boundary-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); margin: 0; padding: 0; border: 0; }
+.proxy-boundary-option { display: grid; grid-template-columns: 1.125rem minmax(0, 1fr) auto; align-items: start; gap: var(--space-3); min-width: 0; padding: var(--space-4); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-lg); cursor: pointer; transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), border-color var(--motion-duration-normal) var(--motion-easing-standard); }
+.proxy-boundary-option:hover { background: var(--surface-2); border-color: var(--accent-border); }
+.proxy-boundary-option:has(input:focus-visible) { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.proxy-boundary-option.selected { background: var(--color-status-warning-surface); border-color: var(--color-status-warning-border); }
+.proxy-boundary-option input { width: 1.125rem; height: 1.125rem; min-height: 1.125rem; margin: .125rem 0 0; padding: 0; accent-color: var(--color-action-primary); }
+.proxy-boundary-option-copy { display: block; min-width: 0; }
+.proxy-boundary-option-copy strong, .proxy-boundary-option-copy small { display: block; }
+.proxy-boundary-option-copy strong { color: var(--text); font-size: var(--font-size-sm); }
+.proxy-boundary-option-copy small { margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+.proxy-boundary-option-state { align-self: start; color: var(--muted-2); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); white-space: nowrap; }
+.proxy-boundary-option.selected .proxy-boundary-option-state { color: var(--color-status-warning-text); }
+.proxy-boundary-default { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0 0; color: var(--color-status-success-text); font-size: var(--font-size-xs); }
+.proxy-boundary-default > span { display: grid; width: 1.125rem; height: 1.125rem; flex: 0 0 auto; place-items: center; color: var(--color-status-success-surface); background: var(--color-status-success-text); border-radius: 50%; font-size: var(--font-size-xs); font-weight: var(--font-weight-bold); }
+.proxy-boundary-warning { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); align-items: start; gap: var(--space-3); margin-top: var(--space-3); padding: var(--space-3) var(--space-4); color: var(--color-status-warning-text); background: var(--color-status-warning-surface); border: 1px solid var(--color-status-warning-border); border-radius: var(--radius-lg); }
+.proxy-boundary-warning-icon { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; color: var(--color-status-warning-surface); background: var(--color-status-warning-text); border-radius: 50%; font-size: var(--font-size-sm); font-weight: var(--font-weight-bold); }
+.proxy-boundary-warning strong, .proxy-boundary-warning small { display: block; }
+.proxy-boundary-warning strong { color: var(--text); font-size: var(--font-size-sm); }
+.proxy-boundary-warning small { margin-top: var(--space-1); color: var(--color-status-warning-text); font-size: var(--font-size-xs); line-height: 1.55; }
+.proxy-auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.proxy-auth-grid > .field { min-width: 0; margin-bottom: 0; }
+.proxy-auth-section > .form-inline-check { margin-top: var(--space-3); }
+.proxy-form-feedback { padding: var(--space-4) var(--space-6) 0; }
+.proxy-form-feedback > .notice { margin-bottom: 0; }
 .modal > .provider-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal > .deployment-form { display: grid; gap: 0; margin: 0; padding: 0; }
 .modal:has(> .deployment-form) { width: min(900px, 100%); scrollbar-width: none; }
@@ -2323,6 +2358,9 @@ textarea { resize: vertical; }
   .sticky-form-actions { flex-wrap: wrap; padding: var(--space-3) var(--space-4); }
   .provider-form-section { padding: 20px; }
   .provider-form-section .form-grid > .field { grid-column: 1; }
+  .proxy-form-section { padding: var(--space-5); }
+  .proxy-form-section > header { flex-direction: column; }
+  .proxy-boundary-options, .proxy-auth-grid { grid-template-columns: minmax(0, 1fr); }
   .capability-grid { grid-template-columns: 1fr 1fr; }
   .settings-nav { margin-right: -20px; margin-left: -20px; padding-right: 20px; padding-left: 20px; border-right: 0; border-left: 0; border-radius: 0; }
   .settings-overview-facts { grid-template-columns: 1fr; }

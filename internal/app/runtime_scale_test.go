@@ -72,7 +72,9 @@ const (
 	// 74: governanceLimiter. The public Work Unit and Run control plane needs
 	// an instance-scoped, bounded key/project rate limiter. Keeping its mutexes
 	// and maps behind one value avoids scattering lifecycle state across Runtime.
-	runtimeFieldBudget = 74
+	// 75: providerEgress. Provider connectors and their runtime epoch are one
+	// hot-swapped manager shared by every Provider registry.
+	runtimeFieldBudget = 75
 	runtimeMutexBudget = 10
 )
 

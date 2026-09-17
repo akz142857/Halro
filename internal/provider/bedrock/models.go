@@ -99,8 +99,7 @@ func (a *Adapter) ListInvocationTargets(ctx context.Context, query domain.Target
 	}
 	response, err := a.client.Do(request)
 	if err != nil {
-		class := provider.TransportClass(err)
-		return nil, &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Message: "Bedrock model catalog request failed", Cause: err}
+		return nil, provider.NewTransportError("Bedrock model catalog request failed", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

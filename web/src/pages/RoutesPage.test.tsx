@@ -153,6 +153,43 @@ describe("RoutesPage", () => {
     expect(screen.getByText("2 个目标 · 顺序回退")).toBeVisible();
   });
 
+  it("warns when fallback crosses direct and proxied Provider trust boundaries", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_proxy", public_model: "chat", deployment_id: "deployment_proxy", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+      { id: "rte_direct", public_model: "chat", deployment_id: "deployment_direct", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_proxy", name: "Proxied", provider_id: "provider_proxy", provider_model: "m", enabled: true },
+      { id: "deployment_direct", name: "Direct", provider_id: "provider_direct", provider_model: "m", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [
+      { id: "provider_proxy", name: "Proxy Provider", egress_proxy_id: "corp-egress" },
+      { id: "provider_direct", name: "Direct Provider" },
+    ] as Provider[], next_cursor: "" });
+    renderPage();
+
+    const warning = await screen.findByText("混合出站信任边界");
+	expect(warning).toHaveAttribute("title", expect.stringContaining("不同出站信任边界"));
+  });
+
+	it("warns when fallback crosses two distinct outbound proxies", async () => {
+		vi.spyOn(api, "routes").mockResolvedValue({ items: [
+			{ id: "rte_a", public_model: "chat", deployment_id: "deployment_a", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+			{ id: "rte_b", public_model: "chat", deployment_id: "deployment_b", priority: 10, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+		] as Route[], next_cursor: "" });
+		vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+			{ id: "deployment_a", name: "A", provider_id: "provider_a", provider_model: "m", enabled: true },
+			{ id: "deployment_b", name: "B", provider_id: "provider_b", provider_model: "m", enabled: true },
+		] as Deployment[], next_cursor: "" });
+		vi.spyOn(api, "providers").mockResolvedValue({ items: [
+			{ id: "provider_a", name: "Provider A", egress_proxy_id: "proxy-a" },
+			{ id: "provider_b", name: "Provider B", egress_proxy_id: "proxy-b" },
+		] as Provider[], next_cursor: "" });
+		renderPage();
+
+		expect(await screen.findByText("混合出站信任边界")).toBeVisible();
+	});
+
   // The group summary derives from the deployments read, so a failed one must
   // not be reported as "no usable target" — the same rule the project form got.
   it("does not report a failed deployments read as a group with no target", async () => {

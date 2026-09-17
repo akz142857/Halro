@@ -126,7 +126,7 @@ function ladder({ deployment, testState, priceMissing, priceUnknown, activeRoute
  * the same vocabulary to rank a record it is only filtering.
  */
 export function recordedTestState(deployment: Deployment): DeploymentTestState {
-  const current = deployment.last_test_revision === deployment.revision;
+  const current = deployment.last_test_current ?? deployment.last_test_revision === deployment.revision;
   if (current && deployment.last_test_status === "healthy") return "success";
   if (current && deployment.last_test_status === "unhealthy") return "failure";
   return deployment.last_test_status === "healthy" ? "stale" : "idle";

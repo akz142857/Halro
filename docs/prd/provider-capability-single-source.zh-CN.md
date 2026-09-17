@@ -10,6 +10,12 @@
 `capability_opt_in_warnings`，`capabilities_ambiguous` / `capabilities_unservable` /
 `capabilities_limit_too_large` / `capabilities_limit_unavailable` 四个具名拒绝均在代码与测试里。
 正文其余部分保留实施当时的原文，不随后续改动更新——它记的是决定过程。
+
+> **2026-09-17 后续决策**：本文关于“Bedrock region 进入 `config.yaml`”的内容已由
+> [Provider 显式出站代理与区域化端点方案](provider-egress-proxy-plan.zh-CN.md) 取代。
+> 当前实现仍由声明式表提供 `base_url_template`，但区域由 Admin 在创建 Bedrock
+> Credential 时填写并固化到该 Credential 的 endpoint/audience；`config.yaml` 不再有
+> `providers` 段。下文相关文字仅是历史实施记录，不是当前操作说明。
 本文关闭了 [`adaptation-open-items`](adaptation-open-items.zh-CN.md) §2 的「能力上限有三份真相」。
 建立日期：2026-08-16
 修订日期：2026-08-17（第二稿：权威数据的存储形态定为 Go 声明式表；Base URL / region 进 `config.yaml`）
@@ -854,4 +860,3 @@ review 还指出 Bedrock「能力实现」选择器不再决定连接声明什�
 仍是 4096；converse 的 `connection_defaults` 只有 chat/streaming/stream_usage 而 ceiling 仍offer
 嵌入与图像；`connection_ceiling` 的 ctx 为 0；选 Titan Image 却只勾 chat 被具名拒绝；
 上限填 100000 返回 `capabilities_limit_too_large`；端点下发的 `stream_usage` 依赖为 `["streaming"]`。
-

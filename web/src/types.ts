@@ -575,9 +575,8 @@ export interface ProviderCapabilities {
 /** One profile as the server describes it, from GET /provider-profiles.
  *
  * `ceiling` is what an operator may turn on; `defaults` is what a new connection
- * starts with. `default_base_url` arrives already resolved for this deployment —
- * the region is substituted server-side, so this is a value to put straight into
- * the form. */
+ * starts with. `default_base_url` is the form's initial value, while
+ * `base_url_template` exposes an Admin-selectable regional segment. */
 export interface ProviderProfileDescriptor {
   id: string;
   /** Permanent grouping for profiles that ride one connection together. */
@@ -601,6 +600,9 @@ export interface ProviderProfileDescriptor {
    * of them, so an operator picks a route; where it is false they ride one
    * connection together and there is nothing to pick. */
   route_partitioned: boolean;
+  /** Endpoint pattern used for Admin-entered regional endpoints. A literal URL
+   * has no editable region; `{region}` marks the segment the form owns. */
+  base_url_template?: string;
   default_base_url: string;
   immutable: boolean;
   defaults: ProviderCapabilities;
@@ -728,6 +730,8 @@ export interface Provider {
   credential_id: string;
   /** Empty or absent means the account's default Bedrock project. */
   bedrock_project_id?: string;
+  /** Empty or absent means the explicit direct connector. */
+  egress_proxy_id?: string;
   allowed_anthropic_betas?: string[];
   allowed_hosts: string[];
   capabilities: ProviderCapabilities;
@@ -741,11 +745,38 @@ export interface Provider {
   last_test_latency_millis?: number;
   last_test_error_class?: string;
   last_test_revision?: number;
+  last_test_current?: boolean;
+  last_test_runtime_id?: string;
+  last_test_egress_mode?: "direct" | "proxy";
+  last_test_proxy_stage?: string;
+  last_test_proxy_status?: number;
   last_test_healthy_targets?: number;
   last_test_total_targets?: number;
   revision: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProviderEgressProxy {
+  id: string;
+  name: string;
+  kind: "http_connect";
+  endpoint: string;
+  endpoint_scheme: "http" | "https";
+  endpoint_host: string;
+  endpoint_port: number;
+  allow_private_endpoint: boolean;
+  allow_loopback_endpoint: boolean;
+  allow_cleartext_basic_auth: boolean;
+  authenticated: boolean;
+  /** The durable save succeeded, but the fail-closed runtime is still retrying activation. */
+  activation_pending?: boolean;
+  revision: number;
+}
+
+export interface ProviderEgressCatalog {
+  runtime_id: string;
+  items: ProviderEgressProxy[];
 }
 
 export type ModelCapabilityStatus = "known" | "partial" | "unknown" | "conflicting";
@@ -976,11 +1007,13 @@ export interface Deployment {
   last_test_latency_millis?: number;
   last_test_error_class?: string;
   last_test_revision?: number;
+  last_test_runtime_id?: string;
+  last_test_current?: boolean;
   revision: number;
   created_at: string;
   updated_at: string;
-	pricing_quarantined?: boolean;
-	pricing_quarantine_reason?: string;
+  pricing_quarantined?: boolean;
+  pricing_quarantine_reason?: string;
   capability_review: CapabilityReview;
   /** What the active probe last said. `not_probed` is its own state: a
    * deployment stays eligible for routing until a probe has actually failed. */
@@ -1026,6 +1059,8 @@ export interface Route {
   last_test_latency_millis?: number;
   last_test_error_class?: string;
   last_test_revision?: number;
+  last_test_runtime_id?: string;
+  last_test_current?: boolean;
   /** Present only when the route is enabled and the live registry refused it.
    * `enabled` alone cannot say this: it is what the operator asked for, not
    * what the gateway is doing. */

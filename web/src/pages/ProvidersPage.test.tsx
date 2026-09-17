@@ -31,6 +31,8 @@ describe("ProvidersPage profile and credential bindings", () => {
   beforeEach(() => {
     vi.spyOn(api, "credentials").mockResolvedValue({ items: [openAICredential], next_cursor: "" });
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "providerEgressProxies").mockResolvedValue({ runtime_id: "runtime_test", items: [] });
   });
 
   afterEach(() => {
@@ -48,19 +50,64 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
   });
 
-  it("wraps keyboard focus around both resource tabs", async () => {
+  it("wraps keyboard focus around all resource tabs", async () => {
     renderPage();
     const providers = await screen.findByRole("tab", { name: /服务商/ });
     const credentials = screen.getByRole("tab", { name: /凭据库/ });
+    const proxies = screen.getByRole("tab", { name: /出站代理/ });
 
     providers.focus();
     fireEvent.keyDown(providers, { key: "ArrowLeft" });
-    expect(credentials).toHaveFocus();
-    expect(credentials).toHaveAttribute("aria-selected", "true");
+    expect(proxies).toHaveFocus();
+    expect(proxies).toHaveAttribute("aria-selected", "true");
 
-    fireEvent.keyDown(credentials, { key: "ArrowRight" });
+    fireEvent.keyDown(proxies, { key: "ArrowRight" });
     expect(providers).toHaveFocus();
     expect(providers).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.keyDown(providers, { key: "ArrowRight" });
+    expect(credentials).toHaveFocus();
+    expect(credentials).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("creates an Admin-managed outbound proxy and reports pending runtime activation honestly", async () => {
+    const create = vi.spyOn(api, "createProviderEgressProxy").mockResolvedValue({ activation_pending: true } as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
+    fireEvent.change(screen.getByLabelText("代理名称"), { target: { value: "公司出口" } });
+    fireEvent.change(screen.getByLabelText(/^HTTP CONNECT 代理地址/), { target: { value: "https://proxy.example.com:8443" } });
+    fireEvent.change(screen.getByLabelText("Basic Auth 用户名"), { target: { value: "halro" } });
+    fireEvent.change(screen.getByLabelText(/^Basic Auth 密码/), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建并应用" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      name: "公司出口", kind: "http_connect", endpoint: "https://proxy.example.com:8443",
+      username: "halro", password: "secret", allow_private_endpoint: false,
+      allow_loopback_endpoint: false, allow_cleartext_basic_auth: false,
+    });
+    await waitFor(() => expect(api.providers).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("出站代理已保存；运行时仍在重试应用，数据面保持拒绝流量")).toBeVisible();
+  });
+
+  it("shows internal address access as an explicit least-privilege exception", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /出站代理/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 出站代理" }));
+
+    const boundary = screen.getByRole("group", { name: "网络访问例外" });
+    expect(boundary).toBeVisible();
+    expect(screen.getByText("默认保护已开启")).toBeVisible();
+    expect(screen.getByText("私网与回环地址均保持阻止。")).toBeVisible();
+    expect(screen.queryByText("网络信任范围扩大")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /私有网络地址/ }));
+    expect(screen.getByText("已开启 1 项例外")).toBeVisible();
+    expect(screen.getByText("网络信任范围扩大")).toBeVisible();
+    expect(screen.getByText(/最小权限/)).toBeVisible();
   });
 
   it("reports and focuses each locally invalid credential field", async () => {
@@ -263,7 +310,7 @@ describe("ProvidersPage profile and credential bindings", () => {
       id: "provider_toggle", name: "Toggle provider", type: "openai", base_url: "https://api.openai.com",
       access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", credential_scheme: "bearer.static",
       capability_evidence: {}, credential_id: openAICredential.id, capabilities: { chat: true },
-      max_concurrency: 4, enabled: true, revision: 7,
+      max_concurrency: 4, enabled: true, revision: 7, egress_proxy_id: "corp-egress",
       bindings: [{ id: "binding_chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: { chat: true } }],
     } as never;
     vi.mocked(api.providers).mockResolvedValue({ items: [provider], next_cursor: "" });
@@ -285,6 +332,32 @@ describe("ProvidersPage profile and credential bindings", () => {
     // Nothing about the profile split travels back: the server refuses a
     // bindings array, so sending one would turn every row toggle into a 400.
     expect((update.mock.calls[0][1] as Record<string, unknown>).bindings).toBeUndefined();
+    expect((update.mock.calls[0][1] as Record<string, unknown>).egress_proxy_id).toBeUndefined();
+  });
+
+  it("shows proxy state, stales an earlier runtime test, and locks switching while a deployment is enabled", async () => {
+    vi.mocked(api.providerEgressProxies).mockResolvedValue({
+      runtime_id: "runtime_new",
+      items: [{ id: "corp-egress", name: "Corporate egress", kind: "http_connect", endpoint: "https://proxy.example:8443", endpoint_scheme: "https", endpoint_host: "proxy.example", endpoint_port: 8443, allow_private_endpoint: false, allow_loopback_endpoint: false, allow_cleartext_basic_auth: false, authenticated: true, revision: 1 }],
+    });
+    vi.mocked(api.providers).mockResolvedValue({ items: [{
+      id: "provider_proxy", name: "Proxied provider", type: "openai", base_url: "https://api.openai.com",
+      access_surface: "openai-api", profile_id: "openai.chat-embeddings.v1", credential_scheme: "bearer.static",
+      capability_evidence: {}, credential_id: openAICredential.id, capabilities: { chat: true },
+      max_concurrency: 0, enabled: true, revision: 3, egress_proxy_id: "corp-egress",
+      last_test_status: "healthy", last_test_revision: 3, last_test_runtime_id: "runtime_old", last_tested_at: "2026-08-02T12:00:00Z",
+      bindings: [{ id: "binding_chat", profile_id: "openai.chat-embeddings.v1", enabled: true, capabilities: { chat: true } }],
+    } as never], next_cursor: "" });
+    vi.mocked(api.deployments).mockResolvedValue({ items: [{ id: "deployment_1", provider_id: "provider_proxy", enabled: true } as never], next_cursor: "" });
+    renderPage();
+
+    expect(await screen.findByText("Corporate egress")).toBeVisible();
+    expect(screen.getByText("需重测")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    const egress = screen.getByRole("combobox", { name: /出站路径/ });
+    expect(egress).toBeDisabled();
+    expect(screen.getByText(/先停用或排空/)).toBeVisible();
+    expect(screen.getByText(/代理能够看到目标 IP、端口和 TLS 服务器名称/)).toBeVisible();
   });
 
   it("requires a credential before a provider can be created", async () => {
@@ -511,6 +584,8 @@ describe("ProvidersPage profile and credential bindings", () => {
     fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Mantle credential" } });
     fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "bedrock" } });
     expect(screen.queryByRole("combobox", { name: /^Bedrock 访问面/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^AWS 区域/)).toHaveValue("us-east-1");
+    fireEvent.change(screen.getByLabelText(/^AWS 区域/), { target: { value: "ap-southeast-1" } });
     fireEvent.change(await screen.findByLabelText(/^服务商密钥/), { target: { value: "bedrock-api-key" } });
     fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
 
@@ -519,7 +594,7 @@ describe("ProvidersPage profile and credential bindings", () => {
       type: "bedrock",
       access_surface: "bedrock-mantle",
       scheme: "aws.bedrock.api-key",
-      base_url: "https://bedrock-mantle.us-east-1.api.aws",
+      base_url: "https://bedrock-mantle.ap-southeast-1.api.aws",
     });
   });
 

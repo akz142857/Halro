@@ -87,6 +87,10 @@ export function RoutesPage() {
     () => new Map(providers.data?.items.map((item) => [item.id, item.name]) ?? []),
     [providers.data],
   );
+  const providerByID = useMemo(
+    () => new Map(providers.data?.items.map((item) => [item.id, item]) ?? []),
+    [providers.data],
+  );
   // A failed deployments read cannot be reported as "no usable target": that is
   // a claim about the configuration, and this is a claim about one request.
   const targetStateUnknown = deployments.isError;
@@ -116,9 +120,14 @@ export function RoutesPage() {
       // says so when the others disagree, since editing them changes nothing.
       const strategy = candidates[0]?.strategy || "ordered";
       const mixed = candidates.some((route) => (route.strategy || "ordered") !== strategy);
-      return { alias, ordered, candidates, strategy, mixed };
+      const egressModes = new Set(candidates.map((route) => {
+        const providerID = deploymentByID.get(route.deployment_id)?.provider_id;
+		const proxyID = providerID ? providerByID.get(providerID)?.egress_proxy_id : undefined;
+		return proxyID ? `proxy:${proxyID}` : "direct";
+      }));
+      return { alias, ordered, candidates, strategy, mixed, mixedEgress: egressModes.size > 1 };
     }).sort((left, right) => left.alias.localeCompare(right.alias));
-  }, [routes.data, deploymentByID, targetStateUnknown]);
+  }, [routes.data, deploymentByID, providerByID, targetStateUnknown]);
   const pending = routes.isPending || deployments.isPending || providers.isPending;
   const error = routes.error || deployments.error || providers.error;
   return (
@@ -179,6 +188,7 @@ export function RoutesPage() {
                   <strong>{group.alias}</strong>
                   <span>{summary}</span>
                   {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
+                  {group.mixedEgress && <span className="badge warning" title={t("routes.mixedEgressTitle")}>{t("routes.mixedEgress")}</span>}
                 </th>
               </tr>
               {group.ordered.map((route) => {
@@ -300,7 +310,7 @@ export function RoutesPage() {
 function RouteTestAction({ route }: { route: Route }) {
   const queryClient = useQueryClient();
   const test = useMutation({ mutationFn: () => api.testRoute(route.id), onSettled: () => queryClient.invalidateQueries({ queryKey: ["routes"] }) });
-  const persistedTestIsCurrent = route.last_test_revision === route.revision;
+  const persistedTestIsCurrent = route.last_test_current ?? route.last_test_revision === route.revision;
   const state: InlineTestState = test.isPending
     ? "running"
     : test.isError

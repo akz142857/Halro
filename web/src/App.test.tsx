@@ -12,6 +12,7 @@ describe("App first-run routing", () => {
     cleanup();
     vi.restoreAllMocks();
     document.documentElement.removeAttribute("data-appearance");
+    window.history.replaceState({}, "", "/");
   });
 
   it("shows setup before attempting a login session", async () => {
@@ -65,6 +66,25 @@ describe("App first-run routing", () => {
     expect(await screen.findByRole("heading", { name: "必须设置二次验证" })).toBeVisible();
     expect(screen.queryByRole("link", { name: /服务商/ })).not.toBeInTheDocument();
     expect(screen.queryByText("更改登录密码")).not.toBeInTheDocument();
+  });
+
+  it("redirects the former root-key URL into Settings & Status", async () => {
+    window.history.replaceState({}, "", "/admin/master-key");
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockResolvedValue({ username: "admin", role: "administrator", locale: "system", appearance: "dark", csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x" });
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ time_context: { accounting_timezone: "UTC" } } as never);
+    vi.spyOn(api, "masterKeyCustody").mockResolvedValue({
+      mode: "file", local_custody_ready: true, custody_state: "healthy", production_admission: "not_applicable",
+      rotation_incomplete: false, lifecycle_operation: "none", pending_slots: 0, retiring_slots: 0,
+      recovery_verification_status: "not_applicable", degraded_reasons: [], slots: [],
+    });
+
+    renderApp();
+
+    await waitFor(() => expect(window.location.pathname).toBe("/admin/settings/custody"));
+    expect(await screen.findByRole("heading", { name: "根密钥状态" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("link", { name: "设置与状态" })).toHaveAttribute("aria-current", "page"));
+    expect(screen.getByRole("link", { name: "根密钥状态" })).toHaveAttribute("aria-current", "page");
   });
 });
 

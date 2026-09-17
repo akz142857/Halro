@@ -89,8 +89,8 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer migrated.Close()
-	if version, err := migrated.SchemaVersion(); err != nil || version != 37 {
-		t.Fatalf("schema=%d err=%v, want 37", version, err)
+	if version, err := migrated.SchemaVersion(); err != nil || version != schemaVersion {
+		t.Fatalf("schema=%d err=%v, want %d", version, err, schemaVersion)
 	}
 	if _, _, err := migrated.UsageCheckpoint(); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("schema-13 usage checkpoint survived migration: %v", err)

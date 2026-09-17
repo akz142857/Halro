@@ -18,6 +18,8 @@ import type {
 	Outcome,
 	GovernanceSummary,
   Provider,
+  ProviderEgressCatalog,
+  ProviderEgressProxy,
   ProviderCapabilities,
   InvocationTargetCatalog,
   ResolvedInvocationTarget,
@@ -265,11 +267,29 @@ export const api = {
     request<SystemStatus>("/system/status").then((value) => value.data),
   systemConfig: () =>
     request<SystemConfig>("/system/config").then((value) => value.data),
-  /** What this build can serve: capability keys, and per profile the defaults, the
-   * ceiling and the endpoint to offer. Compile-time data plus one config value, so
-   * it never changes while a session is open — fetch it once and keep it. */
+  /** What this build can serve: capability keys, and per profile the defaults,
+   * ceiling, endpoint template and initial endpoint. Compile-time data, so it
+   * never changes while a session is open — fetch it once and keep it. */
   providerProfiles: () =>
     request<ProviderProfilesCatalog>("/provider-profiles").then((value) => value.data),
+  providerEgressProxies: () =>
+    request<ProviderEgressCatalog>("/provider-egress-proxies").then((value) => value.data),
+  createProviderEgressProxy: (value: object, idempotencyKey: string, reauth: Reauth) =>
+    request<ProviderEgressProxy>("/provider-egress-proxies", {
+      ...json("POST", { ...value, ...stepUpBody(reauth) }), headers: { "Idempotency-Key": idempotencyKey },
+    }).then((result) => result.data),
+  updateProviderEgressProxy: (id: string, value: object, revision: number, reauth: Reauth) =>
+    request<ProviderEgressProxy>(
+      `/provider-egress-proxies/${encodeURIComponent(id)}`,
+      json("PUT", { ...value, ...stepUpBody(reauth) }),
+      `"${revision}"`,
+    ).then((result) => result.data),
+  deleteProviderEgressProxy: (id: string, revision: number, reauth: Reauth) =>
+    request<void>(
+      `/provider-egress-proxies/${encodeURIComponent(id)}`,
+      json("DELETE", stepUpBody(reauth)),
+      `"${revision}"`,
+    ).then((result) => result.data),
   modelCatalog: () => request<ModelCatalogInfo>("/model-catalog").then((value) => value.data),
   refreshModelCatalog: () => request<{ status: ModelCatalogInfo["status"] }>("/model-catalog/refresh", json("POST")).then((value) => value.data),
   settings: () => request<RuntimeSettings>("/settings"),
@@ -398,19 +418,24 @@ export const api = {
     request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`).then((result) => result.data),
   cancelModelCapabilityDetection: (id: string, revision: number) =>
     request<ModelCapabilityDetection>(`/model-capability-detections/${encodeURIComponent(id)}`, json("DELETE"), `"${revision}"`).then((result) => result.data),
-  createProvider: (value: unknown, idempotencyKey: string) =>
-    request<Provider>("/providers", { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }),
-  updateProvider: (id: string, value: unknown, revision: number) =>
+  createProvider: (value: object, idempotencyKey: string, reauth: Reauth = { currentPassword: "", totpCode: "" }) =>
+    request<Provider>("/providers", { ...json("POST", { ...value, ...stepUpBody(reauth) }), headers: { "Idempotency-Key": idempotencyKey } }),
+  updateProvider: (id: string, value: object, revision: number, reauth: Reauth = { currentPassword: "", totpCode: "" }) =>
     request<Provider>(
       `/providers/${encodeURIComponent(id)}`,
-      json("PUT", value),
+      json("PUT", { ...value, ...stepUpBody(reauth) }),
       `"${revision}"`,
     ),
-  testProvider: (id: string, bindingID?: string) =>
-    request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number; healthy_targets: number; total_targets: number }>(
-      `/providers/${encodeURIComponent(id)}/test${bindingID ? `?binding_id=${encodeURIComponent(bindingID)}` : ""}`,
+  testProvider: (id: string, bindingID?: string, deploymentID?: string) => {
+    const query = new URLSearchParams();
+    if (bindingID) query.set("binding_id", bindingID);
+    if (deploymentID) query.set("deployment_id", deploymentID);
+    const encoded = query.toString();
+    return request<{ status: "healthy"; latency_ms: number; tested_at: string; revision: number; healthy_targets: number; total_targets: number; runtime_id?: string; egress_mode?: "direct" | "proxy"; proxy_stage?: string; proxy_status?: number }>(
+      `/providers/${encodeURIComponent(id)}/test${encoded ? `?${encoded}` : ""}`,
       json("POST"),
-    ).then((value) => value.data),
+    ).then((value) => value.data);
+  },
   deleteProvider: (id: string, revision: number, reauth: Reauth) =>
     request<void>(
       `/providers/${encodeURIComponent(id)}`,

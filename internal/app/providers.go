@@ -95,14 +95,16 @@ func (r *Runtime) activateTopology() error {
 // activateTopologyAfterCommit carries an already-committed topology mutation
 // into the live registry.
 //
-// The error is deliberately not returned to the Admin caller. Under the commit
+// The error is deliberately not returned as a failed Admin request. Under the commit
 // protocol the store commit is the commit point, so a failed activation means
 // the mutation happened and is not yet in force — reporting it as a failed
 // request would describe a change that did take effect as one that did not.
 // The runtime is marked stale instead, which refuses data-plane traffic until
-// the snapshots catch up, and the recovery loop retries.
-func (r *Runtime) activateTopologyAfterCommit() {
-	_ = r.activateTopology()
+// the snapshots catch up, and the recovery loop retries. The boolean lets a
+// response describe that committed-but-pending state without changing the
+// mutation's HTTP success semantics.
+func (r *Runtime) activateTopologyAfterCommit() bool {
+	return r.activateTopology() == nil
 }
 
 // prepareModelCatalogActivation serializes a signed-catalog commit with every
@@ -165,25 +167,39 @@ func reasonsUnasked(catalog *modelcatalog.Catalog, instance domain.ProviderInsta
 }
 
 func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog *modelcatalog.Catalog, unavailable bool) (func(bool), error) {
-	next, report, err := loadProviderRegistryWithCatalog(ctx, r.config, r.store, r.vault, catalog, unavailable)
+	nextEgress, err := newProviderEgressRegistry(ctx, r.store, r.vault)
 	if err != nil {
+		return nil, err
+	}
+	next, report, err := loadProviderRegistryWithCatalogAndEgress(ctx, r.config, r.store, r.vault, catalog, unavailable, nextEgress)
+	if err != nil {
+		nextEgress.Close()
 		return nil, err
 	}
 	return func(activate bool) {
 		if !activate {
 			next.Close()
+			nextEgress.Close()
 			return
 		}
 		logCapabilityWithholdings(r.logger, report)
 		r.auditCapabilityWithholdings(ctx, report)
 		r.publishRouteWithholdings(report)
 		retired := r.providers.Replace(next)
+		retiredEgress := r.providerEgress.Replace(nextEgress)
+		if retiredEgress == nil || retiredEgress.runtimeID != nextEgress.runtimeID {
+			if auditErr := r.auditProviderEgressRegistry(nextEgress); auditErr != nil {
+				r.logger.Error("Provider egress registry activation audit failed", "error", auditErr)
+			}
+		}
 		if len(retired) == 0 {
+			retiredEgress.Close()
 			return
 		}
 		grace := max(
 			r.config.Gateway.RouteTotalTimeout.Value(),
 			r.config.Gateway.StreamMaxDuration.Value(),
+			r.config.Admin.ModelCapabilityDetection.TotalTimeout.Value(),
 		) + time.Second
 		r.backgroundWait.Add(1)
 		go func() {
@@ -197,6 +213,7 @@ func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog
 			for _, adapter := range retired {
 				adapter.Close()
 			}
+			retiredEgress.Close()
 		}()
 	}, nil
 }
@@ -246,6 +263,7 @@ const (
 	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
 	excludedUsagePolicyRequired        = "usage_policy_acknowledgement_required"
 	excludedUsagePolicyRevisionChanged = "usage_policy_revision_mismatch"
+	excludedEgressProxyUnavailable     = "egress_proxy_unavailable"
 	// Not a load-time reason: what a probe reports when no adapter exists and
 	// the active load's exclusions do not account for it — a registry replaced
 	// between the lookup and the read, or a binding this build never loaded.
@@ -418,6 +436,18 @@ func loadProviderRegistryWithCatalog(
 	catalog *modelcatalog.Catalog,
 	catalogUnavailable bool,
 ) (*provider.Registry, loadReport, error) {
+	return loadProviderRegistryWithCatalogAndEgress(ctx, cfg, store, secretVault, catalog, catalogUnavailable, nil)
+}
+
+func loadProviderRegistryWithCatalogAndEgress(
+	ctx context.Context,
+	cfg config.Config,
+	store *boltstore.Store,
+	secretVault *vault.Vault,
+	catalog *modelcatalog.Catalog,
+	catalogUnavailable bool,
+	egress *providerEgressRegistry,
+) (*provider.Registry, loadReport, error) {
 	var report loadReport
 	instances, err := store.ListProviders(ctx)
 	if err != nil {
@@ -471,6 +501,10 @@ func loadProviderRegistryWithCatalog(
 	}
 	for _, instance := range instances {
 		if !instance.Enabled || instance.DeletedAt != nil {
+			continue
+		}
+		if _, available := egress.connector(instance.EgressProxyID); !available {
+			excludeProvider(instance, excludedEgressProxyUnavailable)
 			continue
 		}
 		credential, err := store.GetCredential(ctx, instance.CredentialID)
@@ -543,7 +577,7 @@ func loadProviderRegistryWithCatalog(
 				// neither is a state to keep serving other providers through.
 				return refuse(fmt.Errorf("provider %q binding %q decrypt credential: %w", instance.ID, binding.ID, decryptErr))
 			}
-			adapter, adapterErr := newProviderBindingAdapter(cfg, instance, binding, endpoint, policy, plaintext)
+			adapter, adapterErr := newProviderBindingAdapterWithEgress(cfg, instance, binding, endpoint, policy, egress, plaintext)
 			clear(plaintext)
 			if adapterErr != nil {
 				excludeBinding(instance, binding.ID, excludedAdapterUnavailable)
@@ -759,7 +793,11 @@ func usagePolicyExclusionReason(profileID domain.ProviderProfileID, endpoint str
 }
 
 func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, plaintext []byte) (provider.Adapter, error) {
-	client, err := newBindingClient(cfg, binding, endpoint, policy)
+	return newProviderBindingAdapterWithEgress(cfg, instance, binding, endpoint, policy, nil, plaintext)
+}
+
+func newProviderBindingAdapterWithEgress(cfg config.Config, instance domain.ProviderInstance, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, egress *providerEgressRegistry, plaintext []byte) (provider.Adapter, error) {
+	client, err := newBindingClientWithEgress(cfg, binding, endpoint, policy, egress, instance.EgressProxyID)
 	if err != nil {
 		return nil, err
 	}
@@ -782,15 +820,24 @@ func newProviderBindingAdapter(cfg config.Config, instance domain.ProviderInstan
 // PrivateLink or agent-runtime endpoint derives none — so this widens the policy
 // by exactly the host the adapter's own signer is already pinned to.
 func newBindingClient(cfg config.Config, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy) (*http.Client, error) {
+	return newBindingClientWithEgress(cfg, binding, endpoint, policy, nil, "")
+}
+
+func newBindingClientWithEgress(cfg config.Config, binding domain.ProviderProfileBinding, endpoint *url.URL, policy safetransport.Policy, egress *providerEgressRegistry, proxyID string) (*http.Client, error) {
 	if binding.AccessSurface == domain.SurfaceBedrockRuntime && endpoint != nil {
 		if controlPlaneHost, _, ok := bedrockprovider.ControlPlaneHostFor(endpoint.Hostname()); ok &&
 			!slices.Contains(policy.AllowedHosts, controlPlaneHost) {
 			policy.AllowedHosts = append(slices.Clone(policy.AllowedHosts), controlPlaneHost)
 		}
 	}
+	dialer, available := egress.connector(proxyID)
+	if !available {
+		return nil, fmt.Errorf("Provider egress proxy %q is unavailable", proxyID)
+	}
 	return safetransport.NewClient(safetransport.Options{
 		Policy: policy, ConnectTimeout: cfg.Gateway.AttemptConnectTimeout.Value(),
 		ResponseHeaderTimeout: cfg.Gateway.AttemptResponseHeaderTimeout.Value(),
+		Dialer:                dialer,
 	})
 }
 

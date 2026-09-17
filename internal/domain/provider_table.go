@@ -36,8 +36,8 @@ import "strings"
 // BaseURLTemplate is the endpoint a new connection on this profile is offered.
 // It is a prefill, not a bound: an operator may enter any endpoint, and the
 // outbound host allowlist is derived from the saved connection rather than from
-// this. RegionPlaceholder, where present, is substituted from configuration —
-// the region is a deployment choice, unlike everything else in this row.
+// this. RegionPlaceholder, where present, is substituted by the Admin form —
+// the selected endpoint is then persisted and audience-bound to the Credential.
 //
 // Withheld says this build does not offer the profile: it is absent from the
 // served matrix and refused on every write, so no connection or credential can
@@ -77,6 +77,12 @@ type profileRow struct {
 // unchanged.
 const RegionPlaceholder = "{region}"
 
+// DefaultProviderEndpointRegion is only the initial value shown by the Admin
+// form for a region-parameterized endpoint. The operator chooses the actual
+// region in the form and the resulting endpoint is persisted with the
+// Credential and Provider; it is not instance configuration.
+const DefaultProviderEndpointRegion = "us-east-1"
+
 // The three Bedrock access surfaces are addressed by different hosts, which is
 // why the endpoint belongs to the profile rather than to the provider type: one
 // value per type cannot say all three.
@@ -98,6 +104,14 @@ func ResolveBaseURL(profileID ProviderProfileID, region string) string {
 		return ""
 	}
 	return strings.ReplaceAll(row.BaseURLTemplate, RegionPlaceholder, region)
+}
+
+func BaseURLTemplate(profileID ProviderProfileID) string {
+	row, ok := profileIndex[profileID]
+	if !ok {
+		return ""
+	}
+	return row.BaseURLTemplate
 }
 
 var (

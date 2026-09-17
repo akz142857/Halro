@@ -24,7 +24,7 @@ import type { InlineTestState } from "../components";
 import { useInstantFormatter } from "../format";
 import { isoToZonedInput, useAccountingTimeZone, zonedInputToISO } from "../timezone";
 import { useNotify } from "../notifications";
-import type { AccessSurface, Credential, CredentialScheme, Provider, ProviderCapabilities, ProviderProfilesCatalog, ProviderType } from "../types";
+import type { AccessSurface, Credential, CredentialScheme, Deployment, Provider, ProviderCapabilities, ProviderEgressCatalog, ProviderEgressProxy, ProviderProfilesCatalog, ProviderType } from "../types";
 import {
   anyCapabilityEnabled,
   booleanCapabilityNames,
@@ -82,6 +82,35 @@ function validProviderEndpoint(value: string) {
     return false;
   }
 }
+
+function regionFromEndpointTemplate(template: string | undefined, endpoint: string) {
+  if (!template?.includes("{region}")) return undefined;
+  const [prefix, suffix] = template.split("{region}");
+  if (!endpoint.startsWith(prefix) || !endpoint.endsWith(suffix)) return "";
+  return endpoint.slice(prefix.length, endpoint.length - suffix.length);
+}
+
+function endpointFromRegion(template: string, region: string) {
+  return template.replace("{region}", region);
+}
+
+function validProviderRegion(region: string) {
+  return /^[a-z0-9]+(?:-[a-z0-9]+)+$/.test(region);
+}
+
+function validProxyEndpoint(value: string) {
+  try {
+    const parsed = new URL(value.trim());
+    return (parsed.protocol === "http:" || parsed.protocol === "https:")
+      && Boolean(parsed.hostname) && Boolean(parsed.port)
+      && !parsed.username && !parsed.password
+      && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+type ProviderView = "providers" | "credentials" | "proxies";
 
 function fixedRegionEndpointStatus(
   catalog: ProviderProfilesCatalog,
@@ -254,23 +283,27 @@ function SubscriptionUsageDisclosure({
 export function ProvidersPage() {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
-  const [activeView, setActiveView] = useState<"providers" | "credentials">(() => providerViewFromURL());
+  const [activeView, setActiveView] = useState<ProviderView>(() => providerViewFromURL());
   const [focusedCredentialID, setFocusedCredentialID] = useState("");
   const [focusedProviderCredentialID, setFocusedProviderCredentialID] = useState("");
   const createFromOnboarding = hasOnboardingCreateIntent();
   const [credentialDialog, setCredentialDialog] = useState(() => !readOnly && createFromOnboarding && providerViewFromURL() === "credentials");
   const [providerDialog, setProviderDialog] = useState(() => !readOnly && createFromOnboarding && providerViewFromURL() === "providers");
   const [editingProvider, setEditingProvider] = useState<Provider>();
+  const [proxyDialog, setProxyDialog] = useState(false);
+  const [editingProxy, setEditingProxy] = useState<ProviderEgressProxy>();
   const [providerQuery, setProviderQuery] = useState("");
   const [providerStatus, setProviderStatus] = useState<"all" | "enabled" | "disabled">("all");
   const [credentialQuery, setCredentialQuery] = useState("");
   const credentials = useQuery({ queryKey: ["credentials"], queryFn: api.credentials });
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
+  const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
+  const egress = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies });
   // What this build can serve. The forms cannot decide what to offer without it,
   // so they wait for it; the listing below does not, and stays readable either
   // way.
   const catalog = useProviderProfiles();
-  const pending = credentials.isPending || providers.isPending || catalog.isPending;
+  const pending = credentials.isPending || providers.isPending || deployments.isPending || egress.isPending || catalog.isPending;
   const credentialItems = credentials.data?.items ?? [];
   const providerItems = providers.data?.items ?? [];
   const filteredProviders = useMemo(() => {
@@ -291,7 +324,7 @@ export function ProvidersPage() {
     window.addEventListener("popstate", syncView);
     return () => window.removeEventListener("popstate", syncView);
   }, []);
-  const selectView = (view: "providers" | "credentials") => {
+  const selectView = (view: ProviderView) => {
     if (view === activeView) return;
     setActiveView(view);
     const url = new URL(window.location.href);
@@ -302,11 +335,11 @@ export function ProvidersPage() {
   const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === "Home" ? "providers"
-      : event.key === "End" ? "credentials"
-        : event.key === "ArrowLeft"
-          ? activeView === "providers" ? "credentials" : "providers"
-          : activeView === "credentials" ? "providers" : "credentials";
+    const views: ProviderView[] = ["providers", "credentials", "proxies"];
+    const current = views.indexOf(activeView);
+    const next = event.key === "Home" ? views[0]
+      : event.key === "End" ? views[views.length - 1]
+        : views[(current + (event.key === "ArrowLeft" ? -1 : 1) + views.length) % views.length];
     selectView(next);
     document.getElementById(`${next}-tab`)?.focus();
   };
@@ -319,7 +352,9 @@ export function ProvidersPage() {
         action={
           activeView === "providers"
             ? <button className="button primary" disabled={readOnly || catalog.isError || (!pending && !canCreateProvider)} title={catalog.isError ? t("providers.matrixUnavailable") : !pending && !canCreateProvider ? t("providers.createCredentialFirst") : undefined} onClick={() => setProviderDialog(true)}>{t("providers.addProvider")}</button>
-            : <button className="button primary" disabled={readOnly || catalog.isError} title={catalog.isError ? t("providers.matrixUnavailable") : undefined} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
+            : activeView === "credentials"
+              ? <button className="button primary" disabled={readOnly || catalog.isError} title={catalog.isError ? t("providers.matrixUnavailable") : undefined} onClick={() => setCredentialDialog(true)}>{t("providers.addCredential")}</button>
+              : <button className="button primary" disabled={readOnly} onClick={() => setProxyDialog(true)}>{t("providers.addProxy")}</button>
         }
       />
       <OnboardingContextBanner />
@@ -329,16 +364,18 @@ export function ProvidersPage() {
           That makes a retry part of the message rather than something the
           operator has to reload the page to reach — a session that expired
           mid-visit comes back on one click. */}
-      {(credentials.isError || providers.isError || catalog.isError) && (
+      {(credentials.isError || providers.isError || deployments.isError || egress.isError || catalog.isError) && (
         <ErrorState
-          error={credentials.error || providers.error || catalog.error}
+          error={credentials.error || providers.error || deployments.error || egress.error || catalog.error}
           action={
             <button
               className="button ghost"
-              disabled={credentials.isFetching || providers.isFetching || catalog.isFetching}
+              disabled={credentials.isFetching || providers.isFetching || deployments.isFetching || egress.isFetching || catalog.isFetching}
               onClick={() => {
                 if (credentials.isError) credentials.refetch();
                 if (providers.isError) providers.refetch();
+                if (deployments.isError) deployments.refetch();
+                if (egress.isError) egress.refetch();
                 if (catalog.isError) catalog.refetch();
               }}
             >
@@ -352,10 +389,11 @@ export function ProvidersPage() {
           <div className="provider-tabs" role="tablist" aria-label={t("providers.resourceViews")}>
             <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span></button>
             <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span></button>
+            <button id="proxies-tab" role="tab" tabIndex={activeView === "proxies" ? 0 : -1} aria-selected={activeView === "proxies"} aria-controls="proxies-panel" onKeyDown={handleTabKey} onClick={() => selectView("proxies")}>{t("providers.egressProxies")} <span>{egress.data?.items.length ?? 0}</span></button>
           </div>
           {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">
             {!canCreateProvider && (
-              <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong><span>{t("providers.providerDependencyHint")}</span></div><button className="button secondary" onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
+			  <div className="dependency-notice"><div><strong>{t("providers.credentialRequired")}</strong><span>{t("providers.providerDependencyHint")}</span></div><button className="button secondary" disabled={readOnly} title={readOnly ? t("navigation.readOnlyAction") : undefined} onClick={() => { selectView("credentials"); setCredentialDialog(true); }}>{t("providers.openCredentialVault")}</button></div>
             )}
             {providerItems.length === 0 && canCreateProvider && (
               <EmptyState title={t("providers.noProviders")}>{t("providers.noProvidersDescription")}</EmptyState>
@@ -363,7 +401,17 @@ export function ProvidersPage() {
             {!!providerItems.length && <ResourceToolbar query={providerQuery} onQueryChange={setProviderQuery} queryPlaceholder={t("providers.searchProviders")} count={t("providers.resultCount", { visible: filteredProviders.length, total: providerItems.length })} status={providerStatus} onStatusChange={setProviderStatus} />}
             {!!providerItems.length && !filteredProviders.length && <EmptyState title={t("providers.noMatches")}>{t("providers.noMatchesDescription")}</EmptyState>}
             {filteredProviders.map((provider) => (
-              <ProviderRow provider={provider} credential={credentialItems.find((credential) => credential.id === provider.credential_id)} catalog={catalog.data} highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)} key={provider.id} onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }} onEdit={() => setEditingProvider(provider)} />
+              <ProviderRow
+                provider={provider}
+                credential={credentialItems.find((credential) => credential.id === provider.credential_id)}
+                catalog={catalog.data}
+                egress={egress.data}
+				probeDeploymentID={providerProbeDeploymentID(provider, deployments.data?.items ?? [])}
+                highlighted={Boolean(focusedProviderCredentialID && provider.credential_id === focusedProviderCredentialID)}
+                key={provider.id}
+                onCredentialClick={() => { setFocusedCredentialID(provider.credential_id); selectView("credentials"); }}
+                onEdit={() => setEditingProvider(provider)}
+              />
             ))}
           </section>}
           {activeView === "credentials" && <section id="credentials-panel" role="tabpanel" aria-labelledby="credentials-tab" className="panel provider-resource-panel">
@@ -376,6 +424,12 @@ export function ProvidersPage() {
               <CredentialRow key={credential.id} credential={credential} catalog={catalog.data} highlighted={focusedCredentialID === credential.id} useCount={providerItems.filter((provider) => provider.credential_id === credential.id).length} onUsageClick={() => { setFocusedProviderCredentialID(credential.id); selectView("providers"); }} />
             ))}
           </section>}
+          {activeView === "proxies" && egress.isSuccess && <section id="proxies-panel" role="tabpanel" aria-labelledby="proxies-tab" className="panel provider-resource-panel">
+            {egress.data.items.length === 0 && <EmptyState title={t("providers.noProxies")}>{t("providers.noProxiesDescription")}</EmptyState>}
+            {egress.data.items.map((proxy) => (
+              <ProviderEgressProxyRow key={proxy.id} proxy={proxy} providers={providerItems} onEdit={() => setEditingProxy(proxy)} />
+            ))}
+          </section>}
         </div>
       )}
       {/* The forms decide what to offer from the served matrix, and their initial
@@ -385,30 +439,202 @@ export function ProvidersPage() {
       {credentialDialog && catalog.isSuccess && (
         <CredentialForm catalog={catalog.data} onClose={() => setCredentialDialog(false)} />
       )}
-      {providerDialog && credentials.isSuccess && catalog.isSuccess && (
+      {providerDialog && credentials.isSuccess && deployments.isSuccess && egress.isSuccess && catalog.isSuccess && (
         <ProviderForm
           credentials={credentials.data?.items ?? []}
           catalog={catalog.data}
+          egress={egress.data}
+          enabledDeploymentCount={0}
           onClose={() => setProviderDialog(false)}
         />
       )}
-      {editingProvider && catalog.isSuccess && (
+      {editingProvider && deployments.isSuccess && egress.isSuccess && catalog.isSuccess && (
         <ProviderForm
           current={editingProvider}
           credentials={credentials.data?.items ?? []}
           catalog={catalog.data}
+          egress={egress.data}
+          enabledDeploymentCount={(deployments.data?.items ?? []).filter((deployment) => deployment.provider_id === editingProvider.id && deployment.enabled).length}
           onClose={() => setEditingProvider(undefined)}
         />
       )}
+      {proxyDialog && <ProviderEgressProxyForm onClose={() => setProxyDialog(false)} />}
+      {editingProxy && <ProviderEgressProxyForm current={editingProxy} onClose={() => setEditingProxy(undefined)} />}
     </div>
   );
 }
 
-function providerViewFromURL(): "providers" | "credentials" {
-  return new URLSearchParams(window.location.search).get("view") === "credentials" ? "credentials" : "providers";
+function providerViewFromURL(): ProviderView {
+  const view = new URLSearchParams(window.location.search).get("view");
+  return view === "credentials" || view === "proxies" ? view : "providers";
 }
 
-function ProviderRow({ provider, credential, catalog, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; catalog?: ProviderProfilesCatalog; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
+function providerProbeDeploymentID(provider: Provider, deployments: Deployment[]) {
+  const bindings = provider.bindings?.filter((binding) => binding.enabled) ?? [];
+  if (bindings.length > 1) return undefined;
+  const binding = bindings[0];
+  return deployments.find((deployment) => deployment.provider_id === provider.id
+    && !deployment.enabled
+    && (!binding || deployment.binding_id === binding.id || !deployment.binding_id && deployment.profile_id === binding.profile_id))?.id;
+}
+
+function ProviderEgressProxyRow({ proxy, providers, onEdit }: { proxy: ProviderEgressProxy; providers: Provider[]; onEdit: () => void }) {
+  const { t } = useTranslation();
+  const readOnly = useIsReadOnly();
+  const queryClient = useQueryClient();
+  const { notify } = useNotify();
+  const useCount = providers.filter((provider) => provider.egress_proxy_id === proxy.id).length;
+  const deletion = useMutation({
+    mutationFn: (reauth: ReauthValues) => api.deleteProviderEgressProxy(proxy.id, proxy.revision, reauth),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["provider-egress-proxies"] });
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      notify({ tone: "success", title: t("providers.notifyProxyDeleted"), description: proxy.name });
+    },
+  });
+  return (
+    <article className="credential-row">
+      <div><span><StatusDot ok /><strong>{proxy.name}</strong></span><small>{proxy.kind}</small></div>
+      <div className="resource-fact"><small>{t("providers.proxyEndpoint")}</small><strong>{proxy.endpoint}</strong></div>
+      <div className="resource-fact"><small>{t("providers.proxyAuthentication")}</small><strong>{proxy.authenticated ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")}</strong></div>
+      <div className="resource-fact"><small>{t("providers.usage")}</small><strong>{t("providers.proxyUsage", { count: useCount })}</strong></div>
+      <div className="row-actions">
+        <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
+        <ConfirmButton
+          className="button ghost"
+          label={t("common.delete")}
+          confirmLabel={t("providers.deleteProxy", { name: proxy.name })}
+          disabled={readOnly || useCount > 0 || deletion.isPending}
+          requireStepUp
+          onConfirm={(reauth) => deletion.mutateAsync(reauth)}
+        />
+      </div>
+      {deletion.isError && <ErrorState error={deletion.error} />}
+    </article>
+  );
+}
+
+function ProviderEgressProxyForm({ current, onClose }: { current?: ProviderEgressProxy; onClose: () => void }) {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const { notify } = useNotify();
+  const stepUp = useStepUpPrompt();
+  const idempotencyKey = useRef(`provider-egress-${crypto.randomUUID()}`);
+  const [name, setName] = useState(current?.name ?? "");
+  const [endpoint, setEndpoint] = useState(current?.endpoint ?? "https://");
+  const [allowPrivate, setAllowPrivate] = useState(current?.allow_private_endpoint ?? false);
+  const [allowLoopback, setAllowLoopback] = useState(current?.allow_loopback_endpoint ?? false);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [clearAuth, setClearAuth] = useState(false);
+  const [allowCleartextAuth, setAllowCleartextAuth] = useState(current?.allow_cleartext_basic_auth ?? false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const authWillExist = !clearAuth && Boolean(current?.authenticated || username || password);
+  const mutation = useMutation({
+    mutationFn: () => {
+      const value = {
+        name,
+        kind: "http_connect",
+        endpoint,
+        allow_private_endpoint: allowPrivate,
+        allow_loopback_endpoint: allowLoopback,
+        allow_cleartext_basic_auth: authWillExist && allowCleartextAuth,
+        ...(username || password ? { username, password } : {}),
+        ...(clearAuth ? { clear_basic_auth: true } : {}),
+      };
+      return current
+        ? api.updateProviderEgressProxy(current.id, value, current.revision, stepUp.values)
+        : api.createProviderEgressProxy(value, idempotencyKey.current, stepUp.values);
+    },
+    onMutate: stepUp.begin,
+    onError: (error) => {
+      if (stepUp.absorb(error)) return;
+      setPassword("");
+    },
+    onSuccess: (saved) => {
+      setPassword("");
+      queryClient.invalidateQueries({ queryKey: ["provider-egress-proxies"] });
+      // A runtime-changing proxy edit invalidates the connection-test evidence
+      // returned with every bound Provider. Refresh both resources together so
+      // the row cannot keep showing a pre-change test as current.
+      queryClient.invalidateQueries({ queryKey: ["providers"] });
+      notify({
+        tone: saved.activation_pending ? "warning" : "success",
+        title: t(saved.activation_pending ? "providers.notifyProxySavedPending" : current ? "providers.notifyProxyUpdated" : "providers.notifyProxyCreated"),
+        description: name,
+      });
+      onClose();
+    },
+  });
+  const dirty = useDirty({ name, endpoint, allowPrivate, allowLoopback, username, password, clearAuth, allowCleartextAuth });
+  return (
+    <Modal title={t(current ? "providers.editProxy" : "providers.createProxy")} dirty={dirty} closeDisabled={mutation.isPending} onClose={onClose}>
+      <form className="provider-credential-form provider-egress-proxy-form" onSubmit={(event) => {
+        event.preventDefault();
+        const nextErrors: Record<string, string> = {};
+        if (!name.trim()) nextErrors.name = t("providers.validationProxyNameRequired");
+        if (!validProxyEndpoint(endpoint)) nextErrors.endpoint = t("providers.validationProxyEndpoint");
+        if (Boolean(username) !== Boolean(password)) nextErrors.authentication = t("providers.validationProxyAuthPair");
+        else if (username.includes(":") || username.length > 1024 || password.length > 4096) nextErrors.authentication = t("providers.validationProxyAuthFormat");
+        if (endpoint.trim().startsWith("http://") && authWillExist && !allowCleartextAuth) nextErrors.authentication = t("providers.validationProxyCleartextAuth");
+        setErrors(nextErrors);
+        if (!Object.keys(nextErrors).length && (!stepUp.asked || stepUp.values.currentPassword)) mutation.mutate();
+      }} autoComplete="off">
+        <div className="provider-credential-form-body provider-egress-proxy-form-body">
+          <section className="proxy-form-section" aria-labelledby="proxy-connection-title">
+            <header><h3 id="proxy-connection-title">{t("providers.proxyConnectionTitle")}</h3><p>{t("providers.proxyConnectionDescription")}</p></header>
+            <Field label={t("providers.proxyName")} error={errors.name}><input autoFocus value={name} onChange={(event) => { setName(event.target.value); setErrors((previous) => omitError(previous, "name")); }} /></Field>
+            <Field label={t("providers.proxyEndpointInput")} hint={`${t("providers.proxyEndpointInputHint")} ${t("providers.proxyEndpointHint")}`} error={errors.endpoint}><input inputMode="url" value={endpoint} onChange={(event) => { setEndpoint(event.target.value); setErrors((previous) => omitError(previous, "endpoint")); }} /></Field>
+          </section>
+
+          <section className={`proxy-form-section proxy-boundary-section${allowPrivate || allowLoopback ? " expanded" : ""}`} aria-labelledby="proxy-boundary-title">
+            <header>
+              <div><h3 id="proxy-boundary-title">{t("providers.proxyBoundarySectionTitle")}</h3><p id="proxy-boundary-description">{t("providers.proxyBoundarySectionDescription")}</p></div>
+              <span className="proxy-boundary-state" aria-live="polite">{allowPrivate || allowLoopback
+                ? t("providers.proxyBoundaryExceptions", { count: Number(allowPrivate) + Number(allowLoopback) })
+                : t("providers.proxyBoundaryProtected")}</span>
+            </header>
+            <fieldset className="proxy-boundary-options" aria-describedby="proxy-boundary-description">
+              <legend className="visually-hidden">{t("providers.proxyBoundarySectionTitle")}</legend>
+              <label className={`proxy-boundary-option${allowPrivate ? " selected" : ""}`}>
+                <input type="checkbox" checked={allowPrivate} onChange={(event) => setAllowPrivate(event.target.checked)} />
+                <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyPrivateTitle")}</strong><small>{t("providers.proxyPrivateDescription")}</small></span>
+                <span className="proxy-boundary-option-state">{t(allowPrivate ? "providers.proxyExceptionAllowed" : "providers.proxyExceptionBlocked")}</span>
+              </label>
+              <label className={`proxy-boundary-option${allowLoopback ? " selected" : ""}`}>
+                <input type="checkbox" checked={allowLoopback} onChange={(event) => setAllowLoopback(event.target.checked)} />
+                <span className="proxy-boundary-option-copy"><strong>{t("providers.proxyLoopbackTitle")}</strong><small>{t("providers.proxyLoopbackDescription")}</small></span>
+                <span className="proxy-boundary-option-state">{t(allowLoopback ? "providers.proxyExceptionAllowed" : "providers.proxyExceptionBlocked")}</span>
+              </label>
+            </fieldset>
+            {allowPrivate || allowLoopback ? <div className="proxy-boundary-warning" role="status">
+              <span className="proxy-boundary-warning-icon" aria-hidden="true">!</span>
+              <span><strong>{t("providers.proxyBoundaryTitle")}</strong><small>{t("providers.proxyBoundaryDescription")}</small></span>
+            </div> : <p className="proxy-boundary-default"><span aria-hidden="true">✓</span>{t("providers.proxyBoundaryDefault")}</p>}
+          </section>
+
+          <section className="proxy-form-section proxy-auth-section" aria-labelledby="proxy-auth-title">
+            <header><h3 id="proxy-auth-title">{t("providers.proxyAuthenticationTitle")}</h3><p>{t("providers.proxyAuthenticationDescription")}</p></header>
+            <div className="proxy-auth-grid">
+              <Field label={t("providers.proxyUsername")}><input value={username} disabled={clearAuth} autoComplete="username" onChange={(event) => { setUsername(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
+              <Field label={t("providers.proxyPassword")} hint={current?.authenticated ? t("providers.proxyPasswordPreserveHint") : undefined} error={errors.authentication}><input type="password" value={password} disabled={clearAuth} autoComplete="new-password" onChange={(event) => { setPassword(event.target.value); setErrors((previous) => omitError(previous, "authentication")); }} /></Field>
+            </div>
+            {current?.authenticated && <label className="form-inline-check"><input type="checkbox" checked={clearAuth} onChange={(event) => { setClearAuth(event.target.checked); if (event.target.checked) { setUsername(""); setPassword(""); } }} /><span>{t("providers.proxyClearAuth")}</span></label>}
+            {endpoint.trim().startsWith("http://") && authWillExist && <label className="form-inline-check warning-text"><input type="checkbox" checked={allowCleartextAuth} onChange={(event) => { setAllowCleartextAuth(event.target.checked); setErrors((previous) => omitError(previous, "authentication")); }} /><span>{t("providers.proxyAllowCleartextAuth")}</span></label>}
+          </section>
+          {mutation.isError && !stepUp.probing && <div className="proxy-form-feedback"><ErrorState error={mutation.error} /></div>}
+          {stepUp.asked && <div className="proxy-form-feedback"><ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} /></div>}
+        </div>
+        <div className="form-actions sticky-form-actions">
+          <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
+          <button className="button primary" disabled={mutation.isPending || (stepUp.asked && !stepUp.values.currentPassword)}>{t(current ? "providers.saveProxy" : "providers.createProxyAndLoad")}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function ProviderRow({ provider, credential, catalog, egress, probeDeploymentID, highlighted, onCredentialClick, onEdit }: { provider: Provider; credential?: Credential; catalog?: ProviderProfilesCatalog; egress?: ProviderEgressCatalog; probeDeploymentID?: string; highlighted: boolean; onCredentialClick: () => void; onEdit: () => void }) {
   const { t } = useTranslation();
   const readOnly = useIsReadOnly();
   const [expanded, setExpanded] = useState(false);
@@ -417,6 +643,8 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
   const profile = catalog ? findProfile(catalog, provider.type, provider.profile_id) : undefined;
   const withdrawn = Boolean(catalog && !profile);
   const editable = Boolean(catalog && profile);
+  const selectedEgress = egress?.items.find((proxy) => proxy.id === provider.egress_proxy_id);
+  const egressMissing = Boolean(provider.egress_proxy_id && !selectedEgress);
   const product = profile
     ? productLabel(
         t,
@@ -427,7 +655,9 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
       )
     : "";
   const testMutation = useMutation({
-    mutationFn: () => api.testProvider(provider.id),
+    mutationFn: () => probeDeploymentID
+      ? api.testProvider(provider.id, undefined, probeDeploymentID)
+      : api.testProvider(provider.id),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["providers"] }),
   });
   const deleteMutation = useMutation({
@@ -465,7 +695,9 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
     // reason. A second copy in the notification column says less and, on the
     // confirm-gated path, appears above a modal whose Tab trap cannot reach it.
   });
-  const persistedTestIsCurrent = provider.last_test_revision === provider.revision;
+  const persistedTestIsCurrent = provider.last_test_current ?? (
+    provider.last_test_revision === provider.revision && !provider.egress_proxy_id
+  );
   const testState: InlineTestState = testMutation.isPending
     ? "running"
     : testMutation.isError
@@ -478,6 +710,11 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
             ? "stale"
             : "idle";
   const testFailureReason = useTestFailureReason(testMutation.error, persistedTestIsCurrent ? provider.last_test_error_class : undefined);
+  const liveTestFailure = testMutation.error instanceof ApiError
+    ? testMutation.error.payload as { proxy_stage?: string; proxy_status?: number } | undefined
+    : undefined;
+  const testProxyStage = liveTestFailure?.proxy_stage || (persistedTestIsCurrent ? provider.last_test_proxy_stage : undefined);
+  const testProxyStatus = liveTestFailure?.proxy_status || (persistedTestIsCurrent ? provider.last_test_proxy_status : undefined);
   const testLatency = testMutation.data?.latency_ms ?? provider.last_test_latency_millis;
   const healthyTargets = testMutation.data?.healthy_targets ?? provider.last_test_healthy_targets;
   const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
@@ -488,22 +725,25 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
         <div className="resource-identity"><span><StatusDot ok={provider.enabled && !withdrawn} /><strong>{provider.name}</strong></span><small>{product || t(`providers.types.${provider.type}`)}</small>{withdrawn && <small className="warning-text">{t("providers.productWithdrawn")}</small>}</div>
         <div className="resource-fact provider-fact-endpoint"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
         <div className="resource-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name}</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
-        <div className="resource-fact provider-fact-capabilities"><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
+        <div className="resource-fact provider-fact-capabilities"><small>{t("providers.egressPath")}</small><strong className={egressMissing ? "warning-text" : ""}>{provider.egress_proxy_id ? selectedEgress?.name ?? t("providers.egressMissing") : t("providers.egressDirect")}</strong></div>
         <div className="resource-row-state provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
         <div className="row-actions provider-compact-actions">
-          <InlineTestControl state={testState} latency={testLatency} disabled={!provider.enabled || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
+		  <InlineTestControl state={testState} latency={testLatency} disabled={readOnly || !provider.enabled || !editable} title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
           {/* Editing opens a form built from the served matrix. Without it the
               click would set state and render nothing, so the reason is on the
               button — the same treatment the create and rotate buttons get. */}
           <button className="button ghost" disabled={readOnly || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
-          {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={withdrawn ? t("providers.productWithdrawnAction") : t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending || !editable} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" title={withdrawn ? t("providers.productWithdrawnAction") : undefined} disabled={stateMutation.isPending || !editable} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
+		  {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={withdrawn ? t("providers.productWithdrawnAction") : t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending || !editable} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : undefined} disabled={readOnly || stateMutation.isPending || !editable} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} /></OverflowMenu>
         </div>
         {/* The reason belongs in the row that failed, not behind an expander:
             the operator is looking at the button they just pressed. */}
         {testState === "failure" && testFailureReason && (
-          <p className="row-test-failure" role="status">{testFailureReason}</p>
+          <p className="row-test-failure" role="status">
+            {testFailureReason}
+            {testProxyStage && ` · ${t("testControl.proxyDiagnostic", { stage: testProxyStage, status: testProxyStatus ? ` · HTTP ${testProxyStatus}` : "" })}`}
+          </p>
         )}
         {expanded && <div id={`provider-details-${provider.id}`} className="provider-row-content provider-expanded-content">
           <div className="provider-facts">
@@ -519,6 +759,7 @@ function ProviderRow({ provider, credential, catalog, highlighted, onCredentialC
               <div><dt>{t("providers.capabilityInterfaces")}</dt><dd><code>{provider.bindings?.filter((binding) => binding.enabled).map((binding) => binding.profile_id).join(" · ") || provider.profile_id}</code></dd></div>
               <div><dt>{t("providers.surface")}</dt><dd>{provider.access_surface}</dd></div>
               <div><dt>{t("providers.evidence")}</dt><dd>{evidenceSummary(provider.capability_evidence)}</dd></div>
+              <div><dt>{t("providers.egressPath")}</dt><dd>{provider.egress_proxy_id ? selectedEgress?.name ?? provider.egress_proxy_id : t("providers.egressDirect")}</dd></div>
               <div><dt>ID</dt><dd><code>{provider.id}</code></dd></div>
             </dl>
           </div>
@@ -539,6 +780,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
   const displayBaseURL = displayBoundBaseURL(credential.bound_base_url);
   const expiry = credentialExpiry(credential.expires_at);
   const { notify } = useNotify();
+	const readOnly = useIsReadOnly();
   const identityAvailable = Boolean(catalog && credentialIdentities(catalog, credential.type).some((identity) =>
     identity.accessSurface === credential.access_surface && identity.credentialScheme === credential.scheme));
   const withdrawn = Boolean(catalog && !identityAvailable);
@@ -576,7 +818,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
           {/* Rotating opens the same form, which needs the matrix; without it the
               click would set state and render nothing. Say so on the button
               rather than letting it look broken. */}
-          <button className="button ghost" disabled={!identityAvailable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
+		  <button className="button ghost" disabled={readOnly || !identityAvailable} title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={() => setRotating(true)}>{t("providers.rotate")}</button>
           <button className="button ghost credential-expand" aria-expanded={expanded} aria-controls={`credential-details-${credential.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
           <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={useCount > 0
               ? t("providers.deleteCredentialInUse", { name: credential.name, count: useCount })
@@ -758,6 +1000,9 @@ function CredentialForm({
     if (submissionPending.current || mutation.isPending) return;
     const nextErrors: Record<string, string> = {};
     if (!name.trim()) nextErrors.name = t("providers.validationCredentialNameRequired");
+    if (identity?.baseURLTemplate?.includes("{region}") && !validProviderRegion(regionFromEndpointTemplate(identity.baseURLTemplate, baseURL) ?? "")) {
+      nextErrors.region = t("providers.validationProviderRegion");
+    }
     if (!baseURL.trim()) nextErrors.baseURL = t("providers.validationBaseURLRequired");
     else if (!validProviderEndpoint(baseURL)) nextErrors.baseURL = t("providers.validationBaseURLInvalid");
     else if (fixedRegionMismatch) nextErrors.baseURL = t("providers.validationFixedRegionMismatch");
@@ -788,6 +1033,7 @@ function CredentialForm({
     : "match";
   const fixedRegionUnverified = fixedRegionStatus === "unknown";
   const fixedRegionMismatch = fixedRegionStatus === "cross_region";
+  const configuredRegion = regionFromEndpointTemplate(identity?.baseURLTemplate, baseURL);
   // The control names what it actually chooses: a product where the type sells
   // more than one, and otherwise the region, which is what the identities of a
   // single-product type differ by.
@@ -873,6 +1119,20 @@ function CredentialForm({
             </select>
           </Field>
         )}
+        {identity?.baseURLTemplate?.includes("{region}") && (
+          <Field label={t("providers.providerRegion")} hint={current ? t("providers.providerRegionLockedHint") : t("providers.providerRegionHint")} error={errors.region}>
+            <input
+              autoComplete="off"
+              value={configuredRegion ?? ""}
+              disabled={Boolean(current)}
+              placeholder="us-east-1"
+              onChange={(event) => {
+                setBaseURL(endpointFromRegion(identity.baseURLTemplate!, event.target.value.trim().toLocaleLowerCase()));
+                setErrors((previous) => omitError(omitError(previous, "region"), "baseURL"));
+              }}
+            />
+          </Field>
+        )}
         <Field label={t("providers.boundURL")} hint={t("providers.boundURLHint")} error={fixedRegionMismatch ? t("providers.validationFixedRegionMismatch") : errors.baseURL}>
           <input autoComplete="off" inputMode="url" value={baseURL} onChange={(event) => { setBaseURL(event.target.value); setErrors((previous) => omitError(previous, "baseURL")); }} />
         </Field>
@@ -918,11 +1178,15 @@ function ProviderForm({
   current,
   credentials,
   catalog,
+  egress,
+  enabledDeploymentCount,
   onClose,
 }: {
   current?: Provider;
   credentials: Credential[];
   catalog: ProviderProfilesCatalog;
+  egress: ProviderEgressCatalog;
+  enabledDeploymentCount: number;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -947,6 +1211,7 @@ function ProviderForm({
   const [anthropicBetas, setAnthropicBetas] = useState((current?.allowed_anthropic_betas ?? []).join(", "));
   const [maxConcurrency, setMaxConcurrency] = useState(current?.max_concurrency ?? 0);
   const [enabled, setEnabled] = useState(current?.enabled ?? true);
+  const [egressProxyID, setEgressProxyID] = useState(current?.egress_proxy_id ?? "");
   const [usageWarningAcknowledged, setUsageWarningAcknowledged] = useState(false);
   const [capabilities, setCapabilities] = useState<ProviderCapabilities>(
     current?.capabilities ?? connectionDefaults(catalog, initialType, defaultProfileID(catalog, initialType)),
@@ -992,6 +1257,7 @@ function ProviderForm({
       "",
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const stepUp = useStepUpPrompt();
   // A credential is encrypted against the endpoint it was saved for, so editing
   // the base URL afterwards silently invalidates the pairing. The server refuses
   // the save; without this the operator only learns that after a round-trip, and
@@ -1065,13 +1331,16 @@ function ProviderForm({
       credential_id: credentialID,
       capabilities: { ...capabilities, max_context_tokens: 0, max_output_tokens: 0 },
       max_concurrency: maxConcurrency, enabled,
+      egress_proxy_id: egressProxyID,
       ...(supportsAnthropicBetas ? { allowed_anthropic_betas: parseBetaTokens(anthropicBetas) } : {}),
       };
       return current
-        ? api.updateProvider(current.id, value, current.revision)
-        : api.createProvider(value, idempotencyKey.current);
+        ? api.updateProvider(current.id, value, current.revision, stepUp.values)
+        : api.createProvider(value, idempotencyKey.current, stepUp.values);
     },
+    onMutate: stepUp.begin,
     onError: (error) => {
+      if (stepUp.absorb(error)) return;
       if (error instanceof ApiError && error.code === "usage_policy_revision_mismatch") {
         setUsageWarningAcknowledged(false);
         setPolicyAttention((value) => value + 1);
@@ -1093,7 +1362,7 @@ function ProviderForm({
     },
     onSettled: () => { submissionPending.current = false; },
   });
-  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, capabilities, credentialID, usageWarningAcknowledged });
+  const dirty = useDirty({ name, type, profileID, baseURL, apiVersion, bedrockProjectID, anthropicBetas, maxConcurrency, enabled, egressProxyID, capabilities, credentialID, usageWarningAcknowledged });
   // The save button sits in a sticky footer while the form scrolls behind it,
   // so a rejection renders into the part of the modal the operator is not
   // looking at: the click appears to do nothing and they click again. Bring the
@@ -1225,6 +1494,26 @@ function ProviderForm({
             }} />
           </Field>
           {fixedRegionUnverified && <p className="field-hint warning-text">{t("providers.fixedRegionUnverified")}</p>}
+          <Field label={t("providers.egressPath")} hint={t("providers.egressHint")}>
+            <select
+              value={egressProxyID}
+              disabled={Boolean(current && enabledDeploymentCount > 0)}
+              onChange={(event) => setEgressProxyID(event.target.value)}
+            >
+              <option value="">{t("providers.egressDirect")}</option>
+              {current?.egress_proxy_id && !egress.items.some((proxy) => proxy.id === current.egress_proxy_id) && (
+                <option value={current.egress_proxy_id}>{t("providers.egressMissing")} · {current.egress_proxy_id}</option>
+              )}
+              {egress.items.map((proxy) => (
+                <option value={proxy.id} key={proxy.id}>{proxy.name} · {proxy.endpoint_host}:{proxy.endpoint_port}</option>
+              ))}
+            </select>
+          </Field>
+          {current && enabledDeploymentCount > 0 && <p className="field-hint warning-text">{t("providers.egressLocked", { count: enabledDeploymentCount })}</p>}
+          <div className="notice warning">
+            <strong>{t("providers.egressTrustTitle")}</strong>
+            <span>{t("providers.egressTrustDescription")}</span>
+          </div>
           {type === "azure_openai" && (
             <Field label={t("providers.apiVersion")} hint={t("providers.apiVersionHint")}>
               <input autoComplete="off" value={apiVersion} onChange={(event) => setAPIVersion(event.target.value)} required />
@@ -1299,13 +1588,14 @@ function ProviderForm({
           </Field>
             </div>
           </section>
-          {(mutation.isError || errors.capabilities) && (
+          {((mutation.isError && !stepUp.probing) || errors.capabilities) && (
             <div ref={submitError} tabIndex={-1} className="form-submit-error">
               {/* The one refusal with no field of its own to carry it. */}
               {errors.capabilities && <p role="alert">{errors.capabilities}</p>}
-              {mutation.isError && <ErrorState error={mutation.error} />}
+              {mutation.isError && !stepUp.probing && <ErrorState error={mutation.error} />}
             </div>
           )}
+          {stepUp.asked && <ReauthFields values={stepUp.values} onChange={stepUp.setValues} description={t("auth.stepUpSecurityControl")} />}
           {/* Whether deployments may use this upstream is the state the save
               commits, so it belongs in the bar that commits it. */}
           <div className="form-actions sticky-form-actions">
@@ -1321,7 +1611,7 @@ function ProviderForm({
             <button type="button" className="button ghost" disabled={mutation.isPending} onClick={onClose}>{t("common.cancel")}</button>
             {/* Every refusal reason is reported by the submit path rather than
                 by a disabled button, which states nothing about why. */}
-            <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
+            <button className="button primary" disabled={mutation.isPending || policyRefreshPending || policyRefreshFailed || fixedRegionMismatch || (stepUp.asked && !stepUp.values.currentPassword)}>{current ? t("providers.save") : t("providers.createAndLoad")}</button>
           </div>
         </form>
       )}

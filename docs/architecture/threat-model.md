@@ -48,7 +48,8 @@ rewrite detectable by someone other than the rewriter.
 |---|---|
 | Provider credential theft | AEAD + audience binding, no reveal, safe logs |
 | Gateway key theft | one-time display, SHA-256 storage, TLS, no browser persistence |
-| SSRF/credential exfiltration | SafeTransport resolve/validate/pinned dial, no env proxy, host allowlist |
+| SSRF/credential exfiltration | SafeTransport resolves and validates every target address, then sends a literal-IP CONNECT authority or performs a pinned direct dial; no environment proxy; host allowlist |
+| Outbound proxy observes or redirects Provider traffic | step-up protected Admin-managed proxy registry with Vault-encrypted authentication and atomic hot activation; independently validated proxy addresses; Provider TLS still verifies the original hostname; no same-Provider direct fallback; mixed direct/proxy Routes are surfaced as a trust-boundary crossing |
 | Public plaintext Admin | loopback default; never allowed by insecure Gateway override |
 | Budget overspend | per-attempt durable reservation and atomic settlement |
 | Crash undercount | one Ledger WAL and conservative orphan reconciliation |
@@ -85,11 +86,18 @@ rewrite detectable by someone other than the rewriter.
   who declared a value but does not attest that the business judgment is true.
 - The Accounting Ledger is the only budget authority. Governance state cannot
   release budget, alter Attempt history, or trigger a Provider call.
+- An approved CONNECT proxy is trusted to connect the literal IP and port Halro
+  requests. It can observe that address, port, and TLS SNI. Halro does not add a
+  proxy CA or disable Provider certificate validation, but this is not certificate
+  pinning: a CA already trusted by the host may still issue for the Provider name.
+- Provider-level fail-closed does not make a Route proxy-only. Another candidate
+  under the same public model may use direct egress and receive retryable fallback.
 
 ## Required security tests
 
 - default listener and insecure-override matrix;
-- DNS rebinding, mixed A/AAAA, redirect, proxy, mapped-IP and metadata tests;
+- DNS rebinding, mixed A/AAAA, redirect, literal-IP CONNECT, proxy DNS rebinding,
+  mapped-IP, header-limit, buffered-tunnel and metadata tests;
 - credential audience tampering;
 - stream redaction byte-boundary and Unicode fuzzing;
 - secret canary scanning across logs, errors, heap diagnostics, WAL, bbolt, Parquet, and browser artifacts;

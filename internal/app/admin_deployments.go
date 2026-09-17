@@ -268,6 +268,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	deployment.LastTestLatencyMillis = current.LastTestLatencyMillis
 	deployment.LastTestErrorClass = current.LastTestErrorClass
 	deployment.LastTestRevision = current.LastTestRevision
+	deployment.LastTestRuntimeID = current.LastTestRuntimeID
 	// Legacy fields remain readable for migration compatibility, but price writes
 	// are exclusively handled by DeploymentPriceVersion endpoints.
 	deployment.InputMicrosPerMillion = current.InputMicrosPerMillion
@@ -300,7 +301,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 		deployment.Enabled = false
 	}
 	if deployment.Enabled && !current.Enabled &&
-		(current.LastTestStatus != domain.DeploymentTestHealthy || current.LastTestRevision != current.Revision) {
+		(current.LastTestStatus != domain.DeploymentTestHealthy || !r.deploymentTestIsCurrent(request.Context(), current)) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment must pass a current validation test before enable"})
 		return
 	}
@@ -323,7 +324,7 @@ func (r *Runtime) updateAdminDeployment(writer http.ResponseWriter, request *htt
 	// The enable direction does carry forward: it only reaches this line by
 	// presenting a current healthy test to the gate above, so the result is still
 	// evidence about the revision being stored.
-	if current.LastTestStatus != "" && current.LastTestRevision == current.Revision &&
+	if current.LastTestStatus != "" && r.deploymentTestIsCurrent(request.Context(), current) &&
 		!capabilityChanged(current, deployment) && !(current.Enabled && !deployment.Enabled) {
 		deployment.LastTestRevision = current.Revision + 1
 	}
@@ -439,6 +440,12 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		adminBadRequestCode(writer, "deployment_provider_unavailable", "deployment provider is unavailable")
 		return
 	}
+	testedProviderRevision := instance.Revision
+	testedEgressRuntimeID := r.providerEgressTestRuntimeID(instance.EgressProxyID)
+	if testedEgressRuntimeID == "" {
+		adminBadRequestCode(writer, "provider_egress_proxy_not_found", "provider egress proxy is unavailable")
+		return
+	}
 	adapter, ok := adapterForDeployment(r.providers, instance, deployment)
 	if !ok {
 		adminBadRequestCode(writer, "deployment_provider_adapter_unavailable", "deployment provider adapter is unavailable")
@@ -491,10 +498,18 @@ func (r *Runtime) testAdminDeployment(writer http.ResponseWriter, request *http.
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment changed during validation; test the current revision again"})
 		return
 	}
+	currentProvider, providerErr := r.store.GetProvider(request.Context(), current.ProviderID)
+	if providerErr != nil || currentProvider.Revision != testedProviderRevision ||
+		r.providerEgressTestRuntimeID(currentProvider.EgressProxyID) != testedEgressRuntimeID {
+		r.adminTopologyMu.Unlock()
+		writeJSON(writer, http.StatusConflict, map[string]string{"error": "deployment outbound path changed during validation; test it again"})
+		return
+	}
 	current.LastTestStatus = status
 	current.LastTestedAt = &testedAt
 	current.LastTestLatencyMillis = latencyMS
 	current.LastTestRevision = current.Revision + 1
+	current.LastTestRuntimeID = testedEgressRuntimeID
 	current.LastTestErrorClass = ""
 	if probeErr != nil {
 		current.LastTestErrorClass = persistedProbeClass(failure)

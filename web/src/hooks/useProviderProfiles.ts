@@ -10,8 +10,8 @@ import type {
 
 /** The provider matrix, fetched once and kept.
  *
- * It is compile-time data on the server plus one config value, so it cannot
- * change while a session is open. There is deliberately no fallback: a form
+ * It is compile-time data on the server, so it cannot change while a session is
+ * open. There is deliberately no fallback: a form
  * built from a guess is how the console and the server drifted apart in the
  * first place, and a wrong ceiling either hides a capability that works or
  * offers one whose save is refused without saying which. Callers wait, or show
@@ -132,6 +132,7 @@ export interface CredentialIdentity {
    * prefills. */
   primaryProfileID: string;
   defaultBaseURL: string;
+  baseURLTemplate?: string;
 }
 
 export function credentialIdentities(catalog: ProviderProfilesCatalog, type: ProviderType): CredentialIdentity[] {
@@ -148,6 +149,7 @@ export function credentialIdentities(catalog: ProviderProfilesCatalog, type: Pro
       regionID: profile.region_id,
       primaryProfileID: profile.id,
       defaultBaseURL: profile.default_base_url,
+      baseURLTemplate: profile.base_url_template,
     });
   }
   return identities;

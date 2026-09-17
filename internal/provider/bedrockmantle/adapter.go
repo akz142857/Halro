@@ -511,8 +511,10 @@ func malformed(message string, cause error, ambiguous bool) error {
 	return &provider.Error{Class: provider.ErrorMalformed, Message: message, Cause: cause, Ambiguous: ambiguous}
 }
 func transportError(message string, err error, ambiguous bool) error {
-	class := provider.TransportClass(err)
-	// A caller claiming ambiguity is still bounded by whether the request could
-	// have reached Mantle at all; a failed dial ran nothing.
-	return &provider.Error{Class: class, Retryable: class != provider.ErrorCanceled, Ambiguous: ambiguous && !provider.Unsent(err), Message: message, Cause: err}
+	failure := provider.NewTransportError(message, err)
+	// Some read-only catalogue calls historically opted out of ambiguity. Keep
+	// that narrower statement while sharing the retry decision with every other
+	// adapter; mutating calls pass true.
+	failure.Ambiguous = ambiguous && failure.Ambiguous
+	return failure
 }
