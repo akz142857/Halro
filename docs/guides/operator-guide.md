@@ -1070,6 +1070,12 @@ to that exact audience. `us-east-1` is only the new-form initial value; it is no
 a `config.yaml` setting or a global region. Create a new Credential to move a
 connection to another region.
 
+Configurations created by v0.8.1 may still contain
+`providers.bedrock.region`. v0.8.2 accepts and validates that retired key so an
+in-place upgrade can start, but it no longer changes a saved Credential or
+Provider connection. After confirming the Admin-managed Bedrock Credential has
+the intended regional endpoint, the obsolete `providers` block may be removed.
+
 | Type | Base URL example | Secret format | Declared v1 profile |
 |---|---|---|---|
 | OpenAI | `https://api.openai.com` | API key | GA chat/embeddings, GA Responses, or isolated Phase 2 media/resources profile |
