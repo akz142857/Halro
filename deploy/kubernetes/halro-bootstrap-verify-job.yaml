@@ -1,0 +1,61 @@
+# Install-only offline verification after halro-bootstrap-install-id completes.
+# Delete the completed bootstrap Job/Pod first so this Job is the only PVC user.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: halro-bootstrap-verify-install-id
+  namespace: halro
+  labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: bootstrap-verify}
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: bootstrap-verify}
+    spec:
+      serviceAccountName: halro-bootstrap
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: doctor
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["doctor", "--config", "/etc/halro/config.yaml"]
+          env:
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          securityContext: &restricted
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources: &verification-resources
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts: &verification-mounts
+            - {name: config, mountPath: /etc/halro, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: verify-audit
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["audit", "verify", "--config", "/etc/halro/config.yaml"]
+          env:
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          securityContext: *restricted
+          resources: *verification-resources
+          volumeMounts: *verification-mounts
+      volumes:
+        - name: config
+          secret: {secretName: halro-config, defaultMode: 0440}
+        - name: data
+          persistentVolumeClaim: {claimName: halro-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

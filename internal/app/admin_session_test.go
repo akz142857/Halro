@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,8 +18,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 func TestAdminBootstrapLoginCSRFAndLogout(t *testing.T) {
@@ -122,6 +126,232 @@ func TestAdminBootstrapLoginCSRFAndLogout(t *testing.T) {
 	}
 	if summary.Records < 5 {
 		t.Fatalf("expected bootstrap/start/login/logout/shutdown audit events, got %d", summary.Records)
+	}
+}
+
+func TestAdminBootstrapOperationIsIdempotentWithoutReplacingPassword(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	operation := "install-production-20260917"
+	oldPassword := []byte("correct horse battery staple")
+	newPassword := []byte("a different correct horse battery staple")
+	result, err := BootstrapAdminWithOptions(ctx, cfg, "admin", oldPassword, BootstrapAdminOptions{
+		OperationID: operation, IfNeeded: true,
+	})
+	if err != nil || result != BootstrapAdminCreated {
+		t.Fatalf("first result=%q err=%v", result, err)
+	}
+	result, err = BootstrapAdminWithOptions(ctx, cfg, "admin", newPassword, BootstrapAdminOptions{
+		OperationID: operation, IfNeeded: true,
+	})
+	if err != nil || result != BootstrapAdminAlreadyCompleted {
+		t.Fatalf("retry result=%q err=%v", result, err)
+	}
+	if _, err := BootstrapAdminWithOptions(ctx, cfg, "admin", newPassword, BootstrapAdminOptions{
+		OperationID: "another-install", IfNeeded: true,
+	}); !errors.Is(err, ErrAdminBootstrapConflict) {
+		t.Fatalf("different operation id error=%v", err)
+	}
+	if _, err := BootstrapAdminWithOptions(ctx, cfg, "other", newPassword, BootstrapAdminOptions{
+		OperationID: operation, IfNeeded: true,
+	}); !errors.Is(err, ErrAdminBootstrapConflict) {
+		t.Fatalf("different username error=%v", err)
+	}
+
+	runtime, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	login := func(password []byte) int {
+		response := httptest.NewRecorder()
+		runtime.adminRouter().ServeHTTP(response, adminRequest(t, http.MethodPost,
+			"/admin/api/v1/session/login", map[string]string{"username": "admin", "password": string(password)}))
+		return response.Code
+	}
+	if status := login(oldPassword); status != http.StatusOK {
+		t.Fatalf("original password status=%d", status)
+	}
+	if status := login(newPassword); status != http.StatusUnauthorized {
+		t.Fatalf("retry password status=%d", status)
+	}
+}
+
+func TestAdminBootstrapReplayFailsWhenCompletionLostItsAuditEvidence(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	user, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, now)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	defer clear(user.PasswordHash)
+	defer clear(user.PasswordSalt)
+	intent := domain.AdminAuditIntent{
+		EventID: "aud_missing_bootstrap_evidence", OccurredAt: now,
+		ActorType: "local_cli", ActorID: "admin", Action: "admin.bootstrap",
+		TargetType: "admin_user", TargetID: "admin",
+		Metadata: map[string]string{"operation_id": "install-missing-audit", "source": "offline"},
+	}
+	completion := boltstore.AdminBootstrapCompletion{
+		OperationID: "install-missing-audit", Username: "admin",
+		AuditEventID: intent.EventID, CommittedAt: now,
+	}
+	if _, _, created, err := store.CreateFirstAdminWithAuditIntent(ctx, user, completion, intent); err != nil || !created {
+		store.Close()
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	// Simulate corruption/unsupported manual intervention after the atomic
+	// metadata commit: neither the pending intent nor its audit record remains.
+	if err := store.DeleteAdminAuditIntent(ctx, intent.EventID); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BootstrapAdminWithOptions(ctx, cfg, "admin", []byte("a different correct horse battery staple"), BootstrapAdminOptions{
+		OperationID: completion.OperationID, IfNeeded: true,
+	}); !errors.Is(err, ErrAdminBootstrapAmbiguous) {
+		t.Fatalf("replay error=%v, want ambiguous partial bootstrap", err)
+	}
+	if _, err := VerifyAudit(ctx, cfg); err == nil || !strings.Contains(err.Error(), "no matching audit event") {
+		t.Fatalf("audit verification error=%v", err)
+	}
+}
+
+func TestAdminBootstrapReplayRecoversPendingAuditAfterCommitCrash(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	user, err := adminauth.NewUser("admin", []byte("correct horse battery staple"), domain.AdminRoleAdministrator, now)
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	originalHash := append([]byte(nil), user.PasswordHash...)
+	defer clear(originalHash)
+	defer clear(user.PasswordHash)
+	defer clear(user.PasswordSalt)
+	intent := domain.AdminAuditIntent{
+		EventID: "aud_pending_bootstrap_recovery", OccurredAt: now,
+		ActorType: "local_cli", ActorID: "admin", Action: "admin.bootstrap",
+		TargetType: "admin_user", TargetID: "admin",
+		Metadata: map[string]string{"operation_id": "install-crash-recovery", "source": "offline"},
+	}
+	completion := boltstore.AdminBootstrapCompletion{
+		OperationID: "install-crash-recovery", Username: "admin",
+		AuditEventID: intent.EventID, CommittedAt: now,
+	}
+	if _, _, created, err := store.CreateFirstAdminWithAuditIntent(ctx, user, completion, intent); err != nil || !created {
+		store.Close()
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := BootstrapAdminWithOptions(ctx, cfg, "admin", []byte("a different correct horse battery staple"), BootstrapAdminOptions{
+		OperationID: completion.OperationID, IfNeeded: true,
+	})
+	if err != nil || result != BootstrapAdminAlreadyCompleted {
+		t.Fatalf("result=%q err=%v", result, err)
+	}
+	if _, err := VerifyAudit(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+	store, err = boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if pending, err := store.PendingAdminAuditIntentCount(ctx); err != nil || pending != 0 {
+		t.Fatalf("pending=%d err=%v", pending, err)
+	}
+	persisted, err := store.GetAdminUser(ctx, "admin")
+	if err != nil || !bytes.Equal(persisted.PasswordHash, originalHash) {
+		t.Fatalf("retry changed administrator password: err=%v", err)
+	}
+}
+
+func TestOfflineBootstrapAuditDeliveryRecoversEveryDurableBoundary(t *testing.T) {
+	intent := domain.AdminAuditIntent{
+		EventID: "aud_boundary_recovery", OccurredAt: time.Now().UTC(),
+		ActorType: "local_cli", ActorID: "admin", Action: "admin.bootstrap",
+		TargetType: "admin_user", TargetID: "admin",
+		Metadata: map[string]string{"operation_id": "install-boundary-recovery", "source": "offline"},
+	}
+	for _, failAt := range []string{"append", "checkpoint", "delete"} {
+		t.Run(failAt, func(t *testing.T) {
+			pending := true
+			checkpointed := false
+			appended := map[string]domain.AdminAuditIntent{}
+			failed := false
+			deliver := func() error {
+				if !pending {
+					return nil
+				}
+				return deliverOfflineAdminAuditIntentsWith(context.Background(), []domain.AdminAuditIntent{intent},
+					func(_ context.Context, current domain.AdminAuditIntent) error {
+						if failAt == "append" && !failed {
+							failed = true
+							return errors.New("injected append failure")
+						}
+						if existing, ok := appended[current.EventID]; ok && !reflect.DeepEqual(existing, current) {
+							return errors.New("event id payload conflict")
+						}
+						appended[current.EventID] = current
+						return nil
+					},
+					func() error {
+						if failAt == "checkpoint" && !failed {
+							failed = true
+							return errors.New("injected checkpoint failure")
+						}
+						checkpointed = true
+						return nil
+					},
+					func(_ context.Context, eventID string) error {
+						if failAt == "delete" && !failed {
+							failed = true
+							return errors.New("injected intent delete failure")
+						}
+						if eventID != intent.EventID {
+							return errors.New("wrong intent deleted")
+						}
+						pending = false
+						return nil
+					},
+				)
+			}
+			if err := deliver(); err == nil || !pending {
+				t.Fatalf("first delivery err=%v pending=%v", err, pending)
+			}
+			if err := deliver(); err != nil {
+				t.Fatalf("recovery: %v", err)
+			}
+			if pending || !checkpointed || len(appended) != 1 {
+				t.Fatalf("pending=%v checkpointed=%v appended=%d", pending, checkpointed, len(appended))
+			}
+		})
 	}
 }
 

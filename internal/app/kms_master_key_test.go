@@ -258,6 +258,22 @@ func TestKeySlotStartDoesNotAutoInitializeOrTrustFilePresence(t *testing.T) {
 	}
 }
 
+func TestExplicitIfNeededInitializesAnEmptyKeySlotInstance(t *testing.T) {
+	cfg := kmsAppTestConfig(t)
+	harness := newKMSAppHarness(t)
+	previousFactory := defaultKMSWrapperFactory
+	defaultKMSWrapperFactory = harness.factory
+	t.Cleanup(func() { defaultKMSWrapperFactory = previousFactory })
+	created, err := InitializeExplicitIfNeeded(cfg)
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	created, err = InitializeExplicitIfNeeded(cfg)
+	if err != nil || created {
+		t.Fatalf("second created=%v err=%v", created, err)
+	}
+}
+
 func TestKMSBootstrapAndRuntimeUsePrimaryOnlyOutsideRequestPath(t *testing.T) {
 	cfg := kmsAppTestConfig(t)
 	harness := newKMSAppHarness(t)

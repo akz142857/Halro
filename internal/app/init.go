@@ -114,6 +114,30 @@ func InitializeIfNeeded(cfg config.Config) (bool, error) {
 	}
 }
 
+// InitializeExplicitIfNeeded is the idempotent form used by an explicit
+// operator command. Unlike the runtime convenience path above, it may
+// initialize an empty key_slots instance because the operator deliberately
+// invoked `halro init` and the configured KMS is available to that process.
+func InitializeExplicitIfNeeded(cfg config.Config) (bool, error) {
+	state, err := InspectInitialization(cfg)
+	if err != nil {
+		return false, err
+	}
+	switch state {
+	case InitializationSystemReady:
+		return false, nil
+	case InitializationInconsistent:
+		return false, errors.New("Halro initialization is incomplete; restore the matching master key and data directory or move the partial state aside")
+	case InitializationEmpty:
+		if err := Initialize(cfg); err != nil {
+			return false, err
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("unknown initialization state %q", state)
+	}
+}
+
 func pathExists(path string) (bool, error) {
 	_, err := os.Lstat(path)
 	if err == nil {

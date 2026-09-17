@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 )
 
@@ -141,6 +143,87 @@ func TestDoctorIsReadOnlyAndDetectsPartialWALTail(t *testing.T) {
 	if after.Size() != before.Size() {
 		t.Fatalf("doctor repaired or mutated WAL: before=%d after=%d", before.Size(), after.Size())
 	}
+}
+
+func TestDoctorReportsDurableAdminBootstrapCompletion(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	const operationID = "install-production-20260917"
+	if result, err := BootstrapAdminWithOptions(context.Background(), cfg, "admin", []byte("correct horse battery staple"), BootstrapAdminOptions{
+		OperationID: operationID,
+		IfNeeded:    true,
+	}); err != nil || result != BootstrapAdminCreated {
+		t.Fatalf("bootstrap result=%q err=%v", result, err)
+	}
+	report, err := Doctor(context.Background(), cfg)
+	if err != nil || !report.Healthy {
+		t.Fatalf("doctor report=%#v err=%v", report, err)
+	}
+	for _, check := range report.Checks {
+		if check.Name != "admin_bootstrap_completion" {
+			continue
+		}
+		if check.Status != "pass" || !strings.Contains(check.Detail, "operation_id="+operationID) || !strings.Contains(check.Detail, "target=admin") {
+			t.Fatalf("completion check=%#v", check)
+		}
+		return
+	}
+	t.Fatal("doctor did not report admin bootstrap completion")
+}
+
+func TestDoctorAcceptsAuditedAdministratorRotationAfterBootstrap(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BootstrapAdminWithOptions(context.Background(), cfg, "bootstrap-admin", []byte("correct horse battery staple"), BootstrapAdminOptions{
+		OperationID: "install-production-rotation",
+		IfNeeded:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store, err := boltstore.Open(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := adminauth.NewUser("replacement-admin", []byte("another correct horse battery staple"), domain.AdminRoleAdministrator, time.Now().UTC())
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	defer clear(replacement.PasswordHash)
+	defer clear(replacement.PasswordSalt)
+	if _, err := store.PutAdminUser(context.Background(), replacement, 0); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	original, err := store.GetAdminUser(context.Background(), "bootstrap-admin")
+	if err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.DeleteAdminUser(context.Background(), original.Username, original.Revision); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Doctor(context.Background(), cfg)
+	if err != nil || !report.Healthy {
+		t.Fatalf("doctor report=%#v err=%v", report, err)
+	}
+	for _, check := range report.Checks {
+		if check.Name == "admin_bootstrap_completion" {
+			if check.Status != "warn" || !strings.Contains(check.Detail, "replacement full administrator") {
+				t.Fatalf("completion check=%#v", check)
+			}
+			return
+		}
+	}
+	t.Fatal("doctor did not report rotated bootstrap administrator")
 }
 
 func doctorTree(t *testing.T, root string) map[string][32]byte {

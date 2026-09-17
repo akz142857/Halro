@@ -1,0 +1,17 @@
+# Safe baseline for install-only Jobs. Apply a separate, cluster-specific
+# additive egress policy for DNS, the selected workload-identity endpoint and
+# the exact KMS endpoint before creating any Job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: halro-bootstrap-default-deny
+  namespace: halro
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [init, bootstrap, bootstrap-verify]
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress: []

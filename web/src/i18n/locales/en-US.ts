@@ -411,7 +411,7 @@ export const enUS = {
     confirmPassword: "Confirm password",
     passwordHint: "At least 8 characters; a memorable passphrase is recommended",
     setupToken: "Setup token",
-    setupTokenHint: "Copy it from the terminal running Halro",
+    setupTokenHint: "Get it from the startup terminal or your deployment administrator's secure channel.",
     setupSubmit: "Create administrator and open console",
     settingUp: "Initializing securely…",
     setupSecurity: "Protected by origin checks, rate limits, Argon2id, and the trusted audit chain",
@@ -434,7 +434,7 @@ export const enUS = {
     passwordMax: "Password is too long",
     confirmRequired: "Enter the password again",
     passwordMismatch: "Passwords do not match",
-    tokenRequired: "Enter the one-time setup token shown in the startup terminal",
+    tokenRequired: "Enter the one-time setup token.",
     serviceUnavailable: "The setup service is temporarily unavailable",
   },
   settings: {

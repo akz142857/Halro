@@ -118,7 +118,7 @@ type Runtime struct {
 	// breadth this type is allowed, rather than two.
 	adminElevation   adminElevationState
 	setupMu          sync.Mutex
-	setupToken       string
+	setupToken       setupTokenState
 	setupTokenNeeded bool
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
@@ -160,7 +160,15 @@ type capabilityResolutionRuntime struct {
 	catalog           *modelcatalog.Manager
 }
 
+type OpenOptions struct {
+	AllowGeneratedSetupToken bool
+}
+
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
+	return OpenWithOptions(ctx, cfg, logger, OpenOptions{AllowGeneratedSetupToken: true})
+}
+
+func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, err
@@ -225,15 +233,49 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		secretVault.Close()
 		return fail(fmt.Errorf("inspect admin setup state: %w", err))
 	}
-	setupToken := ""
-	if adminCount == 0 {
-		setupToken, err = id.New("setup")
-		if err != nil {
+	setupTokenNeeded := adminCount == 0 && setupRequiresToken(cfg)
+	var setupToken setupTokenState
+	if setupTokenNeeded {
+		var token []byte
+		var source setupTokenSource
+		var expiresAt time.Time
+		if cfg.Admin.SetupTokenFile != "" {
+			token, expiresAt, err = readSetupTokenFile(cfg.Admin.SetupTokenFile)
+			source = setupTokenSourceFile
+			if err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("load admin setup token from configured file: %w", err))
+			}
+		} else if options.AllowGeneratedSetupToken {
+			token, err = generateSetupToken()
+			source = setupTokenSourceGenerated
+			expiresAt = time.Now().Add(cfg.Admin.SetupTokenTTL.Value())
+			if err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(err)
+			}
+		} else {
 			metadata.Close()
 			secretVault.Close()
-			return fail(err)
+			return fail(errors.New("admin setup requires admin.setup_token_file or an offline administrator bootstrap"))
 		}
+		if source == setupTokenSourceFile && expiresAt.After(time.Now().Add(cfg.Admin.SetupTokenTTL.Value())) {
+			clear(token)
+			metadata.Close()
+			secretVault.Close()
+			return fail(errors.New("load admin setup token from configured file: expiry exceeds admin.setup_token_ttl"))
+		}
+		setupToken = newSetupTokenState(source, token, expiresAt)
+		logger.Info("admin setup token configured", "setup_token_source", source.String())
 	}
+	setupTokenOwned := true
+	defer func() {
+		if setupTokenOwned {
+			setupToken.clear()
+		}
+	}()
 	adminSessions, err := adminauth.NewManager(
 		metadata,
 		adminSessionKey,
@@ -702,7 +744,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		adminStepUp:         make(map[string]adminLoginWindow),
 		adminElevation:      adminElevationState{grants: make(map[[32]byte]adminElevationGrant)},
 		setupToken:          setupToken,
-		setupTokenNeeded:    setupRequiresToken(cfg),
+		setupTokenNeeded:    setupTokenNeeded,
 		usage:               usageAggregate,
 		usageCollector:      usageCollector,
 		usageExporter:       usageExporter,
@@ -930,6 +972,7 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 		}
 	}()
 	cleanupProviderEgress = false
+	setupTokenOwned = false
 	return runtime, nil
 }
 
@@ -1486,6 +1529,7 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		r.draining.Store(true)
+		r.clearSetupToken()
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()

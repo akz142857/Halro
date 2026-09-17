@@ -47,9 +47,28 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 		return audit.Summary{}, err
 	}
 	defer clear(auditKey)
-	summary, err := audit.Verify(cfg.AuditPath(), auditKey)
+	completion, completionErr := store.AdminBootstrapCompletion(ctx)
+	if completionErr != nil && !errors.Is(completionErr, boltstore.ErrNotFound) {
+		return audit.Summary{}, fmt.Errorf("load administrator bootstrap completion: %w", completionErr)
+	}
+	foundBootstrap := false
+	summary, err := audit.VerifyWithVisitor(cfg.AuditPath(), auditKey, func(record audit.Record) error {
+		if completionErr != nil || record.Event.EventID != completion.AuditEventID {
+			return nil
+		}
+		if record.Event.Action != "admin.bootstrap" || record.Event.TargetType != "admin_user" ||
+			record.Event.TargetID != completion.Username || record.Event.Outcome != "success" ||
+			record.Event.Metadata["operation_id"] != completion.OperationID {
+			return errors.New("administrator bootstrap completion points to a mismatched audit event")
+		}
+		foundBootstrap = true
+		return nil
+	})
 	if err != nil {
 		return audit.Summary{}, err
+	}
+	if completionErr == nil && !foundBootstrap {
+		return audit.Summary{}, errors.New("administrator bootstrap completion has no matching audit event")
 	}
 	checkpoint, err := store.AuditCheckpoint()
 	if err != nil {

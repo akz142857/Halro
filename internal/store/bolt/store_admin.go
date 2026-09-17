@@ -7,12 +7,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	bbolt "go.etcd.io/bbolt"
 )
+
+var ErrAdminBootstrapConflict = errors.New("administrator bootstrap operation conflicts with existing state")
+
+var adminBootstrapOperationIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+
+type AdminBootstrapCompletion struct {
+	OperationID  string    `json:"operation_id"`
+	Username     string    `json:"username"`
+	AuditEventID string    `json:"audit_event_id"`
+	CommittedAt  time.Time `json:"committed_at"`
+}
+
+func (completion AdminBootstrapCompletion) validate() error {
+	if strings.TrimSpace(completion.OperationID) != completion.OperationID || !adminBootstrapOperationIDPattern.MatchString(completion.OperationID) {
+		return errors.New("administrator bootstrap operation id is invalid")
+	}
+	if strings.TrimSpace(completion.Username) == "" || strings.TrimSpace(completion.AuditEventID) == "" || completion.CommittedAt.IsZero() {
+		return errors.New("administrator bootstrap completion is invalid")
+	}
+	return nil
+}
 
 func (s *Store) ListAllAdminMFAAuthenticators(ctx context.Context) ([]domain.AdminMFAAuthenticator, error) {
 	if err := ctx.Err(); err != nil {
@@ -85,6 +108,95 @@ func (s *Store) CreateFirstAdmin(
 		return putVersioned(bucket, user.Username, 0, &user)
 	})
 	return user, err
+}
+
+// CreateFirstAdminWithAuditIntent makes the first administrator, its durable
+// audit record, and its idempotency completion one bbolt commit. A retry is a
+// no-op only when it carries the same operation id and target username.
+func (s *Store) CreateFirstAdminWithAuditIntent(
+	ctx context.Context,
+	user domain.AdminUser,
+	completion AdminBootstrapCompletion,
+	intent domain.AdminAuditIntent,
+) (domain.AdminUser, AdminBootstrapCompletion, bool, error) {
+	if err := user.Validate(); err != nil {
+		return domain.AdminUser{}, AdminBootstrapCompletion{}, false, err
+	}
+	if err := completion.validate(); err != nil {
+		return domain.AdminUser{}, AdminBootstrapCompletion{}, false, err
+	}
+	if err := intent.Validate(); err != nil {
+		return domain.AdminUser{}, AdminBootstrapCompletion{}, false, err
+	}
+	if completion.Username != user.Username || completion.AuditEventID != intent.EventID {
+		return domain.AdminUser{}, AdminBootstrapCompletion{}, false, errors.New("administrator bootstrap completion does not match its user and audit intent")
+	}
+	if err := ctx.Err(); err != nil {
+		return domain.AdminUser{}, AdminBootstrapCompletion{}, false, err
+	}
+	created := false
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		if raw := meta.Get(keyAdminBootstrapCompletion); raw != nil {
+			var stored AdminBootstrapCompletion
+			if err := json.Unmarshal(raw, &stored); err != nil {
+				return err
+			}
+			if err := stored.validate(); err != nil {
+				return err
+			}
+			if stored.OperationID != completion.OperationID || stored.Username != completion.Username {
+				return ErrAdminBootstrapConflict
+			}
+			completion = stored
+			rawUser := tx.Bucket(bucketAdminUsers).Get([]byte(stored.Username))
+			if rawUser == nil {
+				return errors.New("administrator bootstrap completion exists without its user")
+			}
+			if err := json.Unmarshal(rawUser, &user); err != nil {
+				return err
+			}
+			return user.Validate()
+		}
+		bucket := tx.Bucket(bucketAdminUsers)
+		if bucket.Stats().KeyN != 0 {
+			return ErrAdminInitialized
+		}
+		if err := putVersioned(bucket, user.Username, 0, &user); err != nil {
+			return err
+		}
+		if err := putAdminAuditIntentTx(tx, &intent); err != nil {
+			return err
+		}
+		encoded, err := json.Marshal(completion)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(keyAdminBootstrapCompletion, encoded); err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	return user, completion, created, err
+}
+
+func (s *Store) AdminBootstrapCompletion(ctx context.Context) (AdminBootstrapCompletion, error) {
+	if err := ctx.Err(); err != nil {
+		return AdminBootstrapCompletion{}, err
+	}
+	var completion AdminBootstrapCompletion
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyAdminBootstrapCompletion)
+		if raw == nil {
+			return ErrNotFound
+		}
+		return json.Unmarshal(raw, &completion)
+	})
+	if err != nil {
+		return AdminBootstrapCompletion{}, err
+	}
+	return completion, completion.validate()
 }
 
 func (s *Store) GetAdminUser(ctx context.Context, username string) (domain.AdminUser, error) {

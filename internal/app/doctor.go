@@ -268,6 +268,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 	if store != nil {
 		checkDoctorProviderEgress(ctx, store, doctorVault, add)
 		checkDoctorTopology(ctx, cfg, store, add)
+		checkDoctorAdminBootstrap(ctx, store, add)
 		if credentials, credentialErr := store.ListCredentials(ctx); credentialErr != nil {
 			add("credential_product", "fail", credentialErr.Error())
 		} else {
@@ -290,6 +291,48 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		return report, errors.New("doctor found one or more failed checks")
 	}
 	return report, nil
+}
+
+// checkDoctorAdminBootstrap exposes the durable completion marker to offline
+// operators. In particular, a Kubernetes Job being Complete is not evidence
+// that its intended administrator transaction committed; the marker and its
+// target identity are the evidence. Older installations can legitimately have
+// administrators without a marker, so that state is a warning rather than a
+// fabricated success or an upgrade-blocking failure.
+func checkDoctorAdminBootstrap(ctx context.Context, store *boltstore.Store, add func(string, string, string)) {
+	users, err := store.ListAdminUsers(ctx)
+	if err != nil {
+		add("admin_bootstrap_completion", "fail", err.Error())
+		return
+	}
+	completion, err := store.AdminBootstrapCompletion(ctx)
+	if errors.Is(err, boltstore.ErrNotFound) {
+		if len(users) == 0 {
+			add("admin_bootstrap_completion", "pass", "bootstrap has not completed and no administrator exists")
+		} else {
+			add("admin_bootstrap_completion", "warn", fmt.Sprintf("%d administrator(s) exist without a bootstrap completion marker; treat this as legacy or manually created state", len(users)))
+		}
+		return
+	}
+	if err != nil {
+		add("admin_bootstrap_completion", "fail", err.Error())
+		return
+	}
+	fullAdministrators := 0
+	for _, user := range users {
+		if user.Role == domain.AdminRoleAdministrator {
+			fullAdministrators++
+		}
+		if user.Username == completion.Username && user.Role == domain.AdminRoleAdministrator {
+			add("admin_bootstrap_completion", "pass", fmt.Sprintf("operation_id=%s target=%s committed_at=%s", completion.OperationID, completion.Username, completion.CommittedAt.UTC().Format(time.RFC3339Nano)))
+			return
+		}
+	}
+	if fullAdministrators > 0 {
+		add("admin_bootstrap_completion", "warn", fmt.Sprintf("operation_id=%s is durable but original target %q is no longer a full administrator; %d replacement full administrator(s) remain, so review the audit chain for the rotation", completion.OperationID, completion.Username, fullAdministrators))
+		return
+	}
+	add("admin_bootstrap_completion", "fail", fmt.Sprintf("operation_id=%s is durable but no full administrator remains", completion.OperationID))
 }
 
 // checkDoctorProviderEgress validates only the static inputs the serving
@@ -547,7 +590,7 @@ func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstor
 	} else if pending > 0 {
 		add("admin_audit_backlog", "warn", fmt.Sprintf("%d admin mutations are durable with audit records not yet in the log", pending))
 	} else {
-		add("admin_audit_backlog", "pass", "every admin mutation's audit record is in the log")
+		add("admin_audit_backlog", "pass", "no administrator audit intents await delivery; run `halro audit verify` to authenticate the chain and checkpoint")
 	}
 }
 

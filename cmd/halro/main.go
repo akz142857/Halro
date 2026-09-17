@@ -71,6 +71,54 @@ func reportCommandFailure(out io.Writer, err error) {
 	}
 }
 
+const adminPasswordInputLimit = 1024
+
+// readPasswordInput reads exactly one bounded password source. A file-backed
+// invocation never probes stdin, which keeps unattended Jobs from hanging.
+// Only a conventional final line ending is removed; spaces are password data.
+func readPasswordInput(input io.Reader, passwordFile string) ([]byte, error) {
+	var reader io.Reader = input
+	var file *os.File
+	if passwordFile != "" {
+		if !filepath.IsAbs(passwordFile) {
+			return nil, errors.New("--password-file must be an absolute path")
+		}
+		opened, err := os.Open(passwordFile)
+		if err != nil {
+			return nil, errors.New("administrator password file is not readable")
+		}
+		file = opened
+		defer file.Close()
+		reader = file
+	}
+	payload, err := io.ReadAll(io.LimitReader(reader, adminPasswordInputLimit+3))
+	if err != nil {
+		clear(payload)
+		if passwordFile != "" {
+			return nil, errors.New("administrator password file is not readable")
+		}
+		return nil, errors.New("administrator password could not be read from stdin")
+	}
+	if passwordFile == "" {
+		// Preserve the historical stdin contract for interactive callers and
+		// pipelines. File input is deliberately stricter so an accidentally
+		// multi-line projected Secret cannot silently change meaning.
+		payload = bytes.TrimRight(payload, "\r\n")
+	} else if len(payload) >= 2 && payload[len(payload)-2] == '\r' && payload[len(payload)-1] == '\n' {
+		payload = payload[:len(payload)-2]
+	} else if len(payload) >= 1 && payload[len(payload)-1] == '\n' {
+		payload = payload[:len(payload)-1]
+	}
+	if len(payload) > adminPasswordInputLimit {
+		clear(payload)
+		return nil, errors.New("administrator password exceeds 1024 bytes")
+	}
+	if len(payload) == 0 {
+		return nil, errors.New("administrator password is empty")
+	}
+	return payload, nil
+}
+
 // versionReport extends the build stamp with the time zone rules this process
 // resolves against. Both belong to the same question — "which artefact is this
 // node running" — and tzdata drift between nodes is otherwise invisible.
@@ -135,8 +183,8 @@ type commandDescriptor struct {
 var topLevelCommands = []commandDescriptor{
 	{"start", "halro start [--config <path>]", "start the Gateway and Admin services"},
 	{"init", "halro init [--config <path>]", "initialize an offline data directory"},
-	{"bootstrap", "halro bootstrap [flags]", "bootstrap the first administrator"},
-	{"admin", "halro admin <bootstrap|reset-password|reset-mfa> [flags]", "manage administrator access offline"},
+	{"bootstrap", "halro bootstrap [flags]", "bootstrap the first provider, route, project, and Gateway key"},
+	{"admin", "halro admin <bootstrap|reset-password|reset-mfa|setup-token> [flags]", "manage administrator access offline"},
 	{"key", "halro key <create|disable|rotate|rewrap|recover|slot> [flags]", "manage API and Master Key state"},
 	{"backup", "halro backup <create|verify|restore> [flags]", "create, verify, or restore encrypted backups"},
 	{"restore", "halro restore [flags]", "restore an encrypted backup (legacy alias)"},
@@ -331,6 +379,7 @@ func run(arguments []string, logger *slog.Logger) error {
 	case "init":
 		flags := flag.NewFlagSet("init", flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
+		ifNeeded := flags.Bool("if-needed", false, "succeed without changes when initialization is already complete")
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
@@ -338,7 +387,19 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := initializeCommand(cfg); err != nil {
+		if err := hardenSecretHandlingCommand(); err != nil {
+			return err
+		}
+		if *ifNeeded {
+			initialized, err := app.InitializeExplicitIfNeeded(cfg)
+			if err != nil {
+				return err
+			}
+			if !initialized {
+				fmt.Fprintln(os.Stdout, "Halro is already initialized; unchanged")
+				return nil
+			}
+		} else if err := initializeCommand(cfg); err != nil {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, "Halro initialized")
@@ -380,6 +441,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+		if err := hardenSecretHandlingCommand(); err != nil {
+			return err
+		}
 		secret, err := io.ReadAll(io.LimitReader(os.Stdin, (16<<10)+1))
 		if err != nil {
 			return fmt.Errorf("read provider key from stdin: %w", err)
@@ -401,13 +465,35 @@ func run(arguments []string, logger *slog.Logger) error {
 		fmt.Fprintln(os.Stderr, "Gateway key is shown once; store it securely.")
 		return json.NewEncoder(os.Stdout).Encode(result)
 	case "admin":
+		if len(arguments) >= 3 && arguments[1] == "setup-token" && arguments[2] == "generate" {
+			flags := flag.NewFlagSet("admin setup-token generate", flag.ContinueOnError)
+			output := flags.String("output", "", "absolute output path for a new 0600 token file")
+			ttl := flags.Duration("ttl", 30*time.Minute, "absolute validity window written into the token file (maximum 24h)")
+			if err := flags.Parse(arguments[3:]); err != nil {
+				return err
+			}
+			if *output == "" || !filepath.IsAbs(*output) {
+				return errors.New("admin setup-token generate requires an absolute --output path")
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			if err := app.GenerateSetupTokenFileWithTTL(*output, *ttl); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "Setup token file created")
+			return nil
+		}
 		if len(arguments) < 2 || (arguments[1] != "bootstrap" && arguments[1] != "reset-password" && arguments[1] != "reset-mfa") {
-			return errors.New("usage: halro admin <bootstrap|reset-password|reset-mfa> --config <path> --username <name>")
+			return errors.New("usage: halro admin <bootstrap|reset-password|reset-mfa|setup-token> [flags]")
 		}
 		command := arguments[1]
 		flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
 		username := flags.String("username", "admin", "local admin username")
+		passwordFile := flags.String("password-file", "", "absolute path to the administrator password")
+		ifNeeded := flags.Bool("if-needed", false, "succeed only when the same bootstrap operation already completed")
+		operationID := flags.String("operation-id", "", "stable non-secret bootstrap operation identifier")
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
 		}
@@ -416,23 +502,38 @@ func run(arguments []string, logger *slog.Logger) error {
 			return err
 		}
 		if command == "reset-mfa" {
+			if *passwordFile != "" || *ifNeeded || *operationID != "" {
+				return errors.New("reset-mfa does not accept password or bootstrap flags")
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
 			if err := app.ResetAdminMFA(context.Background(), cfg, *username); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stdout, "Admin MFA reset; all existing sessions invalidated")
 			return nil
 		}
-		password, err := io.ReadAll(io.LimitReader(os.Stdin, 1025))
-		if err != nil {
-			return fmt.Errorf("read admin password from stdin: %w", err)
+		if command != "bootstrap" && (*ifNeeded || *operationID != "") {
+			return errors.New("--if-needed and --operation-id are valid only for admin bootstrap")
 		}
-		password = bytes.TrimRight(password, "\r\n")
+		if err := hardenSecretHandlingCommand(); err != nil {
+			return err
+		}
+		password, err := readPasswordInput(os.Stdin, *passwordFile)
+		if err != nil {
+			return err
+		}
 		defer clear(password)
 		if command == "bootstrap" {
-			if err := app.BootstrapAdmin(context.Background(), cfg, *username, password); err != nil {
+			result, err := app.BootstrapAdminWithOptions(context.Background(), cfg, *username, password, app.BootstrapAdminOptions{
+				OperationID: *operationID,
+				IfNeeded:    *ifNeeded,
+			})
+			if err != nil {
 				return err
 			}
-			fmt.Fprintln(os.Stdout, "Admin user created")
+			fmt.Fprintln(os.Stdout, adminBootstrapResultLine(result, *operationID))
 			return nil
 		}
 		if err := app.ResetAdminPassword(context.Background(), cfg, *username, password); err != nil {
@@ -766,6 +867,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
 			summary, err := app.VerifyAudit(context.Background(), cfg)
 			if err != nil {
 				return err
@@ -783,6 +887,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
 				return err
 			}
 			anchors, err := app.LoadAuditAnchorsFile(*anchorsPath)
@@ -841,6 +948,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
+			return err
+		}
+		if err := hardenSecretHandlingCommand(); err != nil {
 			return err
 		}
 		report, doctorErr := doctorCommand(context.Background(), cfg, app.DoctorOptions{NoKMS: *noKMS})
@@ -931,6 +1041,21 @@ func run(arguments []string, logger *slog.Logger) error {
 	}
 }
 
+func adminBootstrapResultLine(result app.BootstrapAdminResult, operationID string) string {
+	line := "Admin bootstrap result: " + string(result)
+	if operationID != "" {
+		line += " (operation_id=" + operationID + ")"
+	}
+	return line
+}
+
+func hardenSecretHandlingCommand() error {
+	if _, err := hardenRuntimeCommand(); err != nil {
+		return fmt.Errorf("apply host hardening before handling administrator secrets: %w", err)
+	}
+	return nil
+}
+
 func writeRestoreStatus(output io.Writer, result app.RestoreResult) {
 	if result.SchemaVersionBefore != result.SchemaVersionAfter {
 		fmt.Fprintf(output, "Restored metadata schema migrated from v%d to v%d.\n", result.SchemaVersionBefore, result.SchemaVersionAfter)
@@ -994,7 +1119,7 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	runtime, err := app.Open(ctx, cfg, logger)
+	runtime, err := app.OpenWithOptions(ctx, cfg, logger, app.OpenOptions{AllowGeneratedSetupToken: printGuide})
 	if err != nil {
 		return err
 	}
@@ -1035,9 +1160,9 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 			if cfg.Metrics.Enabled {
 				fmt.Fprintf(os.Stdout, "Metrics: %s://%s\n", scheme, cfg.Server.MetricsListen)
 			}
-			if token, required, err := runtime.SetupToken(ctx); err != nil {
+			if token, display, err := runtime.TakeGeneratedSetupToken(ctx); err != nil {
 				return err
-			} else if required {
+			} else if display {
 				// This is deliberately written directly to the controlling process,
 				// not through structured application logging.
 				fmt.Fprintf(os.Stderr, "One-time setup token: %s\n", token)

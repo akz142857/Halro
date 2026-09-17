@@ -320,12 +320,14 @@ const (
 )
 
 type Admin struct {
-	SessionTTL         Duration `yaml:"session_ttl"`
-	IdleTimeout        Duration `yaml:"idle_timeout"`
-	LoginRPM           int      `yaml:"login_rpm"`
-	ExternalOrigin     string   `yaml:"external_origin"`
-	MFAPolicy          string   `yaml:"mfa_policy"`
-	DeveloperWorkbench string   `yaml:"developer_workbench"`
+	SessionTTL         Duration  `yaml:"session_ttl"`
+	IdleTimeout        Duration  `yaml:"idle_timeout"`
+	LoginRPM           int       `yaml:"login_rpm"`
+	ExternalOrigin     string    `yaml:"external_origin"`
+	SetupTokenFile     string    `yaml:"setup_token_file"`
+	SetupTokenTTL      *Duration `yaml:"setup_token_ttl"`
+	MFAPolicy          string    `yaml:"mfa_policy"`
+	DeveloperWorkbench string    `yaml:"developer_workbench"`
 	// ReauthElevationWindow is how long one proven re-authentication keeps
 	// letting the same admin session perform step-up-guarded actions without
 	// proving itself again.
@@ -356,6 +358,11 @@ const (
 	AdminMFAPolicyOptional               = "optional"
 	AdminMFAPolicyRequired               = "required"
 	AdminMFAPolicyAdministratorsRequired = "administrators_required"
+)
+
+const (
+	DefaultAdminSetupTokenTTL = 30 * time.Minute
+	MaxAdminSetupTokenTTL     = 24 * time.Hour
 )
 
 // MFARequiredForRole resolves the instance policy for one Admin-console role.
@@ -893,6 +900,10 @@ func (c *Config) Normalize() error {
 	if c.Admin.LoginRPM == 0 {
 		c.Admin.LoginRPM = 5
 	}
+	if c.Admin.SetupTokenTTL == nil {
+		value := Duration(DefaultAdminSetupTokenTTL)
+		c.Admin.SetupTokenTTL = &value
+	}
 	if c.Admin.MFAPolicy == "" {
 		c.Admin.MFAPolicy = "optional"
 	}
@@ -1238,6 +1249,12 @@ func (c Config) Validate(opts LoadOptions) error {
 		problems = append(problems, errors.New(
 			"admin session TTL, idle timeout, and login RPM must be positive; idle timeout cannot exceed TTL",
 		))
+	}
+	if c.Admin.SetupTokenFile != "" && !filepath.IsAbs(c.Admin.SetupTokenFile) {
+		problems = append(problems, errors.New("admin.setup_token_file must be an absolute path"))
+	}
+	if c.Admin.SetupTokenTTL == nil || *c.Admin.SetupTokenTTL <= 0 || *c.Admin.SetupTokenTTL > Duration(MaxAdminSetupTokenTTL) {
+		problems = append(problems, errors.New("admin.setup_token_ttl must be positive and no greater than 24h"))
 	}
 	if c.Admin.DeveloperWorkbench != "enabled" && c.Admin.DeveloperWorkbench != "disabled" {
 		return errors.New("admin.developer_workbench must be enabled or disabled")

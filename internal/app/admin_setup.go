@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -22,9 +24,9 @@ type SetupStatus struct {
 	TokenRequired       bool `json:"token_required"`
 }
 
-// SetupToken returns the transient token only while a first administrator is
-// still required. Callers should display it to an operator, never log it.
-func (r *Runtime) SetupToken(ctx context.Context) (string, bool, error) {
+// TakeGeneratedSetupToken returns a generated token exactly once for the
+// interactive start command. File-backed tokens are never exposed here.
+func (r *Runtime) TakeGeneratedSetupToken(ctx context.Context) (string, bool, error) {
 	count, err := r.store.AdminUserCount(ctx)
 	if err != nil {
 		return "", false, err
@@ -34,7 +36,13 @@ func (r *Runtime) SetupToken(ctx context.Context) (string, bool, error) {
 	}
 	r.setupMu.Lock()
 	defer r.setupMu.Unlock()
-	return r.setupToken, r.setupToken != "", nil
+	if r.setupToken.source != setupTokenSourceGenerated || len(r.setupToken.generated) == 0 {
+		return "", false, nil
+	}
+	token := string(r.setupToken.generated)
+	clear(r.setupToken.generated)
+	r.setupToken.generated = nil
+	return token, true, nil
 }
 
 func (r *Runtime) SetupStatus(ctx context.Context) (SetupStatus, error) {
@@ -116,8 +124,28 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 	defer clear(user.PasswordSalt)
 	r.adminIdentityMu.Lock()
 	defer r.adminIdentityMu.Unlock()
-	createdUser, err := r.store.CreateFirstAdmin(request.Context(), user)
-	if errors.Is(err, boltstore.ErrAdminInitialized) {
+	operationID, err := id.New("setupop")
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "administrator setup unavailable"})
+		return
+	}
+	eventID, err := id.New("aud")
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "administrator setup unavailable"})
+		return
+	}
+	source := r.setupTokenSource()
+	intent := domain.AdminAuditIntent{
+		EventID: eventID, OccurredAt: r.clockNow().UTC(), ActorType: "local_web",
+		ActorID: user.Username, Action: "admin.bootstrap", TargetType: "admin_user", TargetID: user.Username,
+		CorrelationID: strings.TrimSpace(request.Header.Get("X-Request-ID")),
+		Metadata:      map[string]string{"operation_id": operationID, "source": source},
+	}
+	completion := boltstore.AdminBootstrapCompletion{
+		OperationID: operationID, Username: user.Username, AuditEventID: eventID, CommittedAt: intent.OccurredAt,
+	}
+	createdUser, _, _, err := r.store.CreateFirstAdminWithAuditIntent(request.Context(), user, completion, intent)
+	if errors.Is(err, boltstore.ErrAdminInitialized) || errors.Is(err, boltstore.ErrAdminBootstrapConflict) {
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": "administrator setup is already complete"})
 		return
 	}
@@ -125,21 +153,16 @@ func (r *Runtime) setupAdmin(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "administrator setup unavailable"})
 		return
 	}
-	if err := r.appendAdminAudit(
-		"local_web", createdUser.Username, "admin.bootstrap", "admin_user", createdUser.Username,
-		"success", "",
-	); err != nil {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "audit unavailable"})
-		return
-	}
+	r.clearSetupToken()
+	r.completeAdminMutation(writer, request, intent)
 	created, err := r.adminSessions.Create(request.Context(), createdUser, time.Now())
 	if err != nil {
-		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "session unavailable"})
+		writeJSON(writer, http.StatusConflict, map[string]string{
+			"error": "administrator setup is complete; sign in",
+			"code":  "setup_committed_login_required",
+		})
 		return
 	}
-	r.setupMu.Lock()
-	r.setupToken = ""
-	r.setupMu.Unlock()
 	r.setAdminCookie(writer, created.Token, created.Session.AbsoluteExpiresAt)
 	writeJSON(writer, http.StatusCreated, map[string]any{
 		"username": createdUser.Username, "csrf_token": created.CSRFToken,
@@ -167,13 +190,29 @@ func (r *Runtime) adminSetupSameOrigin(request *http.Request) bool {
 func (r *Runtime) verifySetupToken(candidate string) bool {
 	r.setupMu.Lock()
 	defer r.setupMu.Unlock()
-	if r.setupToken == "" || len(candidate) != len(r.setupToken) {
+	if !r.setupToken.present || len(candidate) > setupTokenInputLimit || !r.clockNow().Before(r.setupToken.expiresAt) {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(candidate), []byte(r.setupToken)) == 1
+	candidateHash := sha256.Sum256([]byte(candidate))
+	return subtle.ConstantTimeCompare(candidateHash[:], r.setupToken.hash[:]) == 1
+}
+
+func (r *Runtime) setupTokenSource() string {
+	r.setupMu.Lock()
+	defer r.setupMu.Unlock()
+	return r.setupToken.source.String()
+}
+
+func (r *Runtime) clearSetupToken() {
+	r.setupMu.Lock()
+	defer r.setupMu.Unlock()
+	r.setupToken.clear()
 }
 
 func setupRequiresToken(cfg config.Config) bool {
+	if cfg.Admin.SetupTokenFile != "" {
+		return true
+	}
 	if cfg.Admin.ExternalOrigin != "" {
 		return true
 	}

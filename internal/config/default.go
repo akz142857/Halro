@@ -45,6 +45,7 @@ func Default() Config {
 			SessionTTL:            Duration(8 * time.Hour),
 			IdleTimeout:           Duration(30 * time.Minute),
 			LoginRPM:              5,
+			SetupTokenTTL:         durationPointer(DefaultAdminSetupTokenTTL),
 			MFAPolicy:             AdminMFAPolicyOptional,
 			DeveloperWorkbench:    "enabled",
 			ReauthElevationWindow: durationPointer(defaultReauthElevationWindow),

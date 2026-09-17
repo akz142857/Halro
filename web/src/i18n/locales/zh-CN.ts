@@ -419,7 +419,7 @@ export const zhCN = {
     confirmPassword: "确认密码",
     passwordHint: "至少 8 个字符，建议使用易记的长密码短语",
     setupToken: "初始化令牌",
-    setupTokenHint: "从启动 Halro 的终端复制",
+    setupTokenHint: "从启动终端或部署管理员提供的安全通道获取。",
     setupSubmit: "创建管理员并进入控制台",
     settingUp: "正在安全初始化…",
     setupSecurity: "受来源校验、限速、Argon2id 与可信审计链保护",
@@ -442,7 +442,7 @@ export const zhCN = {
     passwordMax: "密码过长，请缩短后重试",
     confirmRequired: "请再次输入密码",
     passwordMismatch: "两次输入的密码不一致",
-    tokenRequired: "请输入启动终端显示的一次性初始化令牌",
+    tokenRequired: "请输入一次性初始化令牌。",
     serviceUnavailable: "初始化服务暂时不可用",
   },
   settings: {

@@ -102,13 +102,9 @@ func TestFirstRunSetupPayloadCarriesTheRole(t *testing.T) {
 	}
 	defer runtime.Close()
 
-	runtime.setupMu.Lock()
-	token := runtime.setupToken
-	runtime.setupMu.Unlock()
-
 	setup := adminRequest(t, http.MethodPost, "/admin/api/v1/setup/admin", map[string]string{
 		"username": "admin", "password": "correct horse battery staple",
-		"password_confirmation": "correct horse battery staple", "setup_token": token,
+		"password_confirmation": "correct horse battery staple",
 	})
 	response := httptest.NewRecorder()
 	runtime.adminRouter().ServeHTTP(response, setup)

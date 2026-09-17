@@ -4,6 +4,28 @@ All notable user-visible changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and releases use
 semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Remote first-administrator setup can consume a fixed-format token and
+  absolute expiry envelope from `admin.setup_token_file`; the CLI can generate
+  a new private token file without printing the secret, and restarting a Pod
+  cannot renew an expired file.
+- Explicit Kubernetes Init and idempotent administrator Bootstrap Job examples
+  plus an offline Doctor/Audit verification Job avoid requiring production Pod
+  log or exec access for first installation.
+
+### Changed
+
+- `halro serve` now fails closed when a zero-administrator remote instance has
+  no configured setup-token file. Configure `admin.setup_token_file`, or run
+  the offline `halro admin bootstrap` flow before upgrading such an instance.
+- First-administrator creation, its audit intent and its operation completion
+  marker now commit atomically. `admin bootstrap --if-needed --operation-id`
+  safely reports a matching completed operation without replacing its password,
+  and refuses completion markers without a matching authenticated Audit event.
+
 ## [0.8.2] - 2026-09-17
 
 ### Added

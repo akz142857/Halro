@@ -1,12 +1,16 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,7 +113,7 @@ func TestAdminSetupRequiresTransientTokenForPublicAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	token, required, err := runtime.SetupToken(context.Background())
+	token, required, err := runtime.TakeGeneratedSetupToken(context.Background())
 	if err != nil || !required || token == "" {
 		t.Fatalf("token=%q required=%v err=%v", token, required, err)
 	}
@@ -152,7 +156,7 @@ func TestAdminSetupRequiresTransientTokenForPublicAdmin(t *testing.T) {
 			t.Fatalf("invalid token status=%d body=%s", response.Code, response.Body.String())
 		}
 	}
-	if token, required, err := runtime.SetupToken(context.Background()); err != nil || required || token != "" {
+	if token, required, err := runtime.TakeGeneratedSetupToken(context.Background()); err != nil || required || token != "" {
 		t.Fatalf("token survived setup: %q required=%v err=%v", token, required, err)
 	}
 }
@@ -225,4 +229,189 @@ func TestAdminSetupRejectsDNSRebindingHost(t *testing.T) {
 	if err != nil || count != 0 {
 		t.Fatalf("admin count=%d err=%v", count, err)
 	}
+}
+
+func TestAdminSetupUsesFileTokenWithoutExposingIt(t *testing.T) {
+	cfg := testConfig(t)
+	path := filepath.Join(t.TempDir(), "setup-token")
+	if err := GenerateSetupTokenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.SplitN(string(payload), "\n", 2)[0]
+	cfg.Admin.SetupTokenFile = path
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(&logs, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if exposed, available, err := runtime.TakeGeneratedSetupToken(context.Background()); err != nil || available || exposed != "" {
+		t.Fatalf("file token exposed=%q available=%v err=%v", exposed, available, err)
+	}
+	if strings.Contains(logs.String(), token) || strings.Contains(logs.String(), path) {
+		t.Fatalf("setup-token log disclosed secret material: %s", logs.String())
+	}
+	if runtime.verifySetupToken(strings.Repeat("x", setupTokenInputLimit+1)) {
+		t.Fatal("oversized setup token was accepted")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.verifySetupToken(token) {
+		t.Fatal("running process did not retain the token it loaded before Secret deletion")
+	}
+
+	response := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(response, adminRequest(t, http.MethodPost, "/admin/api/v1/setup/admin", map[string]string{
+		"username": "admin", "password": "correct horse battery staple",
+		"password_confirmation": "correct horse battery staple", "setup_token": token,
+	}))
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if runtime.verifySetupToken(token) {
+		t.Fatal("setup token remained valid after the administrator commit")
+	}
+}
+
+type cancelOnHeaderWriter struct {
+	header http.Header
+	cancel context.CancelFunc
+	once   sync.Once
+	status int
+}
+
+func (writer *cancelOnHeaderWriter) Header() http.Header {
+	writer.once.Do(writer.cancel)
+	return writer.header
+}
+
+func (writer *cancelOnHeaderWriter) Write(payload []byte) (int, error) {
+	return len(payload), nil
+}
+
+func (writer *cancelOnHeaderWriter) WriteHeader(status int) {
+	writer.status = status
+}
+
+func TestAdminSetupCommitClosesSetupEvenWhenSessionCreationFails(t *testing.T) {
+	cfg := testConfig(t)
+	path := filepath.Join(t.TempDir(), "setup-token")
+	if err := GenerateSetupTokenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.SplitN(string(payload), "\n", 2)[0]
+	cfg.Admin.SetupTokenFile = path
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	request := adminRequest(t, http.MethodPost, "/admin/api/v1/setup/admin", map[string]string{
+		"username": "admin", "password": "correct horse battery staple",
+		"password_confirmation": "correct horse battery staple", "setup_token": token,
+	}).WithContext(ctx)
+	writer := &cancelOnHeaderWriter{header: make(http.Header), cancel: cancel}
+	runtime.setupAdmin(writer, request)
+	if writer.status != http.StatusConflict {
+		t.Fatalf("status=%d, want committed-login response", writer.status)
+	}
+	count, err := runtime.store.AdminUserCount(context.Background())
+	if err != nil || count != 1 {
+		t.Fatalf("admin count=%d err=%v", count, err)
+	}
+	if runtime.verifySetupToken(token) {
+		t.Fatal("setup reopened after post-commit session failure")
+	}
+}
+
+func TestAdminSetupTokenExpires(t *testing.T) {
+	cfg := testConfig(t)
+	path := filepath.Join(t.TempDir(), "setup-token")
+	if err := GenerateSetupTokenFile(path); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.SplitN(string(payload), "\n", 2)[0]
+	cfg.Admin.SetupTokenFile = path
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	runtime.setupMu.Lock()
+	expiresAt := runtime.setupToken.expiresAt
+	runtime.setupMu.Unlock()
+	runtime.now = func() time.Time { return expiresAt }
+	if runtime.verifySetupToken(token) {
+		t.Fatal("expired setup token was accepted")
+	}
+}
+
+func TestServeRequiresAProvisionedTokenForRemoteFirstSetup(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Server.AdminListen = "0.0.0.0:18081"
+	cfg.TLS.Enabled = true
+	cfg.TLS.Certificates = []halroconfig.TLSCertificate{{CertFile: "/tmp/cert.pem", KeyFile: "/tmp/key.pem"}}
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err == nil || !strings.Contains(err.Error(), "admin.setup_token_file") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestConfiguredSetupTokenFileMustBeReadableForFirstSetup(t *testing.T) {
+	cfg := testConfig(t)
+	path := filepath.Join(t.TempDir(), "missing-setup-token")
+	cfg.Admin.SetupTokenFile = path
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	_, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err == nil || !strings.Contains(err.Error(), "file is not readable") {
+		t.Fatalf("error=%v", err)
+	}
+	if strings.Contains(err.Error(), path) {
+		t.Fatalf("error disclosed configured secret path: %v", err)
+	}
+}
+
+func TestInitializedInstanceDoesNotReadMissingSetupTokenFile(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Admin.SetupTokenFile = filepath.Join(t.TempDir(), "deleted-token")
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatalf("initialized instance depended on deleted token file: %v", err)
+	}
+	defer runtime.Close()
 }

@@ -1,0 +1,61 @@
+# Install-only system initialization for storage.master_key.mode=key_slots.
+# Associate this ServiceAccount with the temporary KMS lifecycle identity
+# outside Kubernetes. Apply this file before the Runtime Deployment, wait for
+# Complete, then revoke that identity after bootstrap is finished.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: halro-init
+  namespace: halro
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: halro-init
+  namespace: halro
+  labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: init}
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 2
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: init}
+    spec:
+      serviceAccountName: halro-init
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: init
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["init", "--if-needed", "--config", "/etc/halro/config.yaml"]
+          env:
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/halro, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          secret: {secretName: halro-config, defaultMode: 0440}
+        - name: data
+          persistentVolumeClaim: {claimName: halro-data}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

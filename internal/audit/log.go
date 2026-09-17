@@ -156,6 +156,14 @@ func Open(path string, key []byte) (*Log, error) {
 }
 
 func Verify(path string, key []byte) (Summary, error) {
+	return VerifyWithVisitor(path, key, nil)
+}
+
+// VerifyWithVisitor authenticates the complete chain and visits each verified
+// record. It is used when a caller must prove that a trusted checkpoint also
+// contains a particular durable intent, rather than merely proving that the
+// file is internally well formed.
+func VerifyWithVisitor(path string, key []byte, visit func(Record) error) (Summary, error) {
 	if len(key) != auditHMACKeySize {
 		return Summary{}, fmt.Errorf("audit HMAC key must be %d bytes", auditHMACKeySize)
 	}
@@ -164,7 +172,7 @@ func Verify(path string, key []byte) (Summary, error) {
 		return Summary{}, err
 	}
 	defer file.Close()
-	summary, partial, err := scan(file, key, nil)
+	summary, partial, err := scan(file, key, visit)
 	if err != nil {
 		return Summary{}, err
 	}

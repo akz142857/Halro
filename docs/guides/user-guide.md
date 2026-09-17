@@ -90,9 +90,13 @@ overwrites configuration, the Master Key, or data. If the state is partial —
 only the Master Key, or only the metadata — Halro refuses to repair it
 automatically and asks for the matching files to be restored by hand.
 
-If Admin listens on a non-loopback address over TLS, startup also prints a
-one-time Setup Token that the page must submit alongside the form. It exists
-only in the running process and rotates on restart.
+If Admin listens on a non-loopback address over TLS, the page also requires a
+one-time Setup Token. Local interactive `halro start` shows its generated token
+once in the startup terminal. In a remote production deployment, obtain the
+file-backed token from the deployment administrator through the approved secure
+channel; ordinary users and application engineers should not need Pod log or
+exec access. The token expires, and setup closes permanently after the first
+administrator is committed.
 
 ### 2.3 Starting it again
 

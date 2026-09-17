@@ -74,8 +74,10 @@ Master Key 必须与数据目录分开备份。丢失 Master Key 后，Provider 
 重复执行 `make start` 不会覆盖配置、Master Key 或数据。如果只剩 Master Key 或
 只剩元数据等残缺状态，Halro 会拒绝自动修复并要求人工恢复匹配的文件。
 
-如果 Admin 通过 TLS 监听非回环地址，启动终端还会显示一次性 Setup Token，
-页面必须同时提交该 Token。它只保存在当前进程内，重启后自动轮换。
+如果 Admin 通过 TLS 监听非回环地址，页面还会要求一次性 Setup Token。本地交互式
+`halro start` 会在启动终端仅显示一次自动生成的 Token；远程生产部署应由部署管理员
+通过组织批准的安全通道交付文件来源的 Token，普通使用者和应用工程师不需要 Pod
+日志或 exec 权限。Token 会过期；首个管理员提交成功后，初始化入口永久关闭。
 
 ### 2.3 后续启动
 

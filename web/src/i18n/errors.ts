@@ -85,6 +85,7 @@ export function localizedError(t: TFunction, error: unknown) {
   const capabilities = capabilityRefusal(t, error);
   if (capabilities) return capabilities;
   const codeMessages: Record<string, string> = {
+    setup_committed_login_required: "errors.conflict",
     run_governance_active_runs: "errors.runGovernanceActiveRuns",
     governance_unavailable: "errors.governanceUnavailable",
     run_governance_unavailable: "errors.runGovernanceUnavailable",

@@ -116,6 +116,7 @@ var (
 	keyInstanceUsageSettings           = []byte("instance_usage_settings")
 	keyInstanceAccountingSettings      = []byte("instance_accounting_settings")
 	keyInstanceID                      = []byte("instance_id")
+	keyAdminBootstrapCompletion        = []byte("admin_bootstrap_completion")
 	keyMinimumLedgerReaderVersion      = []byte("minimum_ledger_reader_version")
 	keyLedgerFeatureEpoch              = []byte("ledger_feature_epoch")
 )

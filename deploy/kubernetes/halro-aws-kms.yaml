@@ -38,18 +38,34 @@ spec:
           # archive, push it to an operator-controlled registry, and replace
           # both OWNER and REPLACE_WITH_REVIEWED_DIGEST before deployment.
           image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
-          args: ["start", "--config", "/etc/halro/config.yaml"]
+          # Apply deploy/kubernetes/halro-init-job.yaml first and wait for its
+          # Complete condition. Runtime never initializes a new production PVC.
+          args: ["serve", "--config", "/etc/halro/config.yaml"]
+          env:
+            # Never fall back from the intended Pod identity to an EC2 node role.
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
           ports:
             - {name: gateway, containerPort: 8080}
             - {name: admin, containerPort: 8081}
             - {name: metrics, containerPort: 9090}
-          readinessProbe:
-            exec: {command: ["/usr/local/bin/halro", "healthcheck", "--url", "http://127.0.0.1:8080/health/ready"]}
+          # This production example assumes tls.enabled=true on the gateway.
+          # Kubernetes HTTPS probes do not validate the serving certificate.
+          # Change all three schemes to HTTP only when TLS is deliberately
+          # terminated before Halro and the Pod listener is configured HTTP.
+          startupProbe:
+            httpGet: {path: /health/live, port: gateway, scheme: HTTPS}
             periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: {path: /health/ready, port: gateway, scheme: HTTPS}
+            periodSeconds: 5
+            timeoutSeconds: 2
             failureThreshold: 12
           livenessProbe:
-            exec: {command: ["/usr/local/bin/halro", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]}
+            httpGet: {path: /health/live, port: gateway, scheme: HTTPS}
             periodSeconds: 10
+            timeoutSeconds: 2
             failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
@@ -75,11 +91,20 @@ spec:
             limits: {memory: 1Gi}
           volumeMounts:
             - {name: config, mountPath: /etc/halro, readOnly: true}
+            # The Secret is optional only so an already initialized instance
+            # can be rescheduled after bootstrap cleanup. With zero admins,
+            # Halro still fails closed when this configured file is absent.
+            - {name: admin-bootstrap, mountPath: /run/secrets/halro, readOnly: true}
             - {name: data, mountPath: /var/lib/halro}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - name: config
-          secret: {secretName: halro-config, defaultMode: 0400}
+          secret: {secretName: halro-config, defaultMode: 0440}
+        - name: admin-bootstrap
+          secret:
+            secretName: halro-bootstrap
+            optional: true
+            defaultMode: 0440
         - name: data
           persistentVolumeClaim: {claimName: halro-data}
         - name: tmp

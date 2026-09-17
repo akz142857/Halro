@@ -63,10 +63,11 @@ describe("first-run setup", () => {
   it("requires the transient token when the admin listener is public", async () => {
     const setup = vi.spyOn(api, "setupAdmin");
     render(<Setup tokenRequired onSuccess={vi.fn()} onAlreadyComplete={vi.fn()} />);
+    expect(screen.getByText("从启动终端或部署管理员提供的安全通道获取。")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/^管理员密码/), { target: { value: "a strong local password" } });
     fireEvent.change(screen.getByLabelText(/^确认密码/), { target: { value: "a strong local password" } });
     fireEvent.click(screen.getByRole("button", { name: /创建管理员/ }));
-    expect(await screen.findByText(/请输入启动终端显示/)).toBeInTheDocument();
+    expect(await screen.findByText("请输入一次性初始化令牌。")).toBeInTheDocument();
     expect(setup).not.toHaveBeenCalled();
   });
 

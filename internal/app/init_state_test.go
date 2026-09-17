@@ -89,3 +89,26 @@ func TestInspectInitializationRejectsMissingDurableFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestInitializeExplicitIfNeededInitializesAndThenIsIdempotent(t *testing.T) {
+	cfg := testConfig(t)
+	created, err := InitializeExplicitIfNeeded(cfg)
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	created, err = InitializeExplicitIfNeeded(cfg)
+	if err != nil || created {
+		t.Fatalf("second created=%v err=%v", created, err)
+	}
+
+	partial := testConfig(t)
+	if err := os.MkdirAll(partial.Storage.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(partial.MetadataPath(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InitializeExplicitIfNeeded(partial); err == nil {
+		t.Fatal("partial initialization was accepted")
+	}
+}

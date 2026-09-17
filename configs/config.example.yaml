@@ -97,6 +97,16 @@ admin:
   # @description.zh-CN 每分钟允许的管理员登录尝试数。
   # @description.en-US Administrator login attempts allowed per minute.
   login_rpm: 5
+  # @title.zh-CN 初始化令牌文件
+  # @title.en-US Setup token file
+  # @description.zh-CN 生产环境挂载的一次性初始化令牌绝对路径；已有管理员后不再读取。
+  # @description.en-US Absolute path to a mounted one-time setup token; ignored after an administrator exists.
+  setup_token_file: ""
+  # @title.zh-CN 初始化令牌有效期
+  # @title.en-US Setup token lifetime
+  # @description.zh-CN 生成令牌的有效期或文件绝对过期时间在加载时允许的最大剩余时间，最大 24 小时；重启不续期。
+  # @description.en-US Generated-token lifetime or maximum remaining lifetime accepted from a file's absolute expiry, capped at 24 hours; restart does not renew it.
+  setup_token_ttl: "30m"
   # @title.zh-CN MFA 策略
   # @title.en-US MFA policy
   # @description.zh-CN 多因素认证策略：optional 不强制，administrators_required 仅强制 administrator 角色，required 强制所有控制台账户。

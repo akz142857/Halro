@@ -1,0 +1,97 @@
+# Install-only, non-interactive first-administrator bootstrap for
+# storage.master_key.mode=key_slots. Never commit the referenced Secret value.
+# The operation id is non-secret but must be stable across retries of one
+# installation and unique across installations.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: halro-bootstrap
+  namespace: halro
+automountServiceAccountToken: false
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Replace the suffix with a lowercase DNS-safe install identifier.
+  name: halro-bootstrap-install-id
+  namespace: halro
+  labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: bootstrap}
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: bootstrap}
+    spec:
+      serviceAccountName: halro-bootstrap
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: init
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["init", "--if-needed", "--config", "/etc/halro/config.yaml"]
+          env:
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/halro, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
+            - {name: tmp, mountPath: /tmp}
+      containers:
+        - name: bootstrap-admin
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args:
+            - admin
+            - bootstrap
+            - --if-needed
+            - --operation-id
+            - REPLACE_WITH_APPROVED_INSTALL_ID
+            - --config
+            - /etc/halro/config.yaml
+            - --username
+            - admin
+            - --password-file
+            - /run/secrets/halro/admin-password
+          env:
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 100m, memory: 192Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/halro, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
+            - {name: admin-password, mountPath: /run/secrets/halro, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          secret: {secretName: halro-config, defaultMode: 0440}
+        - name: data
+          persistentVolumeClaim: {claimName: halro-data}
+        - name: admin-password
+          secret:
+            secretName: halro-admin-bootstrap
+            defaultMode: 0440
+            items:
+              - {key: admin-password, path: admin-password}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}

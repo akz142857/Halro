@@ -18,9 +18,15 @@ the command never replaces existing configuration, the Master Key, or data.
 If initialization is partial, startup fails closed and requires restoration of
 the matching files.
 
-When Admin is configured on a non-loopback TLS listener, startup also prints a
-one-time setup token. The token exists only in process memory, changes after a
-restart, and is required by the setup form to prevent first-user takeover.
+When Admin is configured on a non-loopback TLS listener, interactive `start`
+prints a one-time setup token unless `admin.setup_token_file` is configured.
+The generated token exists only in process memory, expires after
+`admin.setup_token_ttl`, changes after a restart, and is required by the setup
+form to prevent first-user takeover. A file-backed token is never printed; give
+the first line of its two-line Token/absolute-expiry envelope to the initialization
+approver through the organization's secret-sharing channel. Its absolute
+expiry survives Pod restarts. Production `serve` never generates a token and refuses a zero-admin
+remote instance that has neither a token file nor an offline administrator.
 
 For headless and automated installation, use a release binary and retain the
 explicit offline flow below.
@@ -33,8 +39,10 @@ directory on persistent storage with different backup handling for the key.
 cp configs/config.example.yaml ./config.yaml
 ./halro config check --config ./config.yaml
 ./halro init --config ./config.yaml
-printf '%s' "$ADMIN_PASSWORD" | ./halro admin bootstrap \
-  --config ./config.yaml --username admin
+./halro admin bootstrap \
+  --config ./config.yaml --username admin \
+  --password-file /run/secrets/halro/admin-password \
+  --if-needed --operation-id install-production-20260917
 printf '%s' "$PROVIDER_SECRET" | ./halro bootstrap \
   --config ./config.yaml \
   --provider-type openai \
@@ -51,6 +59,21 @@ From a source checkout, the equivalent explicit initialization helper is
 `make init CONFIG=./config.yaml`. Initialization is offline and fail-closed:
 stop the running Halro process first, and do not use it to reset or overwrite
 an existing data directory.
+
+`halro init --if-needed` is the idempotent form for an explicit install Job. It
+initializes only an empty instance, returns unchanged for a complete instance,
+and refuses partial state. `admin bootstrap --if-needed` is a no-op only for the
+same stable operation ID and username; a different operation or an existing
+administrator without a matching completion marker fails closed. Stdin remains
+supported for attended use, but automation should use an absolute
+`--password-file` path so it can never wait on an absent pipe.
+
+For Kubernetes with KMS-backed key slots, follow the install-only Init Job,
+interactive Secret, or automated Bootstrap Job sequence in
+[`deploy/kubernetes/README.md`](../../deploy/kubernetes/README.md). Application
+engineers do not need production log, exec, or Secret permissions to complete
+the browser flow. A suspected leak is handled by the
+[administrator bootstrap secret compromise runbook](../runbooks/admin-bootstrap-secret-compromise.md).
 
 The bootstrap response contains the Gateway Key once. Move it directly to the
 workload secret store; do not put it in shell history, source control, logs, or
@@ -86,7 +109,8 @@ out. Important groups are:
 - `server`: three listener addresses, HTTP size/time limits, and graceful-shutdown budget;
 - `tls`: certificate and private-key paths shared by enabled listeners;
 - `storage`: data directory, bbolt filename, and Master Key path;
-- `admin`: session/idle limits, login rate, and external origin;
+- `admin`: session/idle limits, login rate, external origin, setup-token file,
+  and setup-token TTL;
 - `usage`: timezone, WAL batching, checkpoint/Parquet cadence, retention, and the
   console window's initial length (`console_window_days`, owned by Settings →
   Instance after the first start);
@@ -199,8 +223,11 @@ when Halro serves 8081 itself.
 
 Setting `admin.external_origin` also makes the one-time setup token mandatory
 for first-run initialization; the loopback shortcut applies only to an instance
-that is not reachable by name. Plan for it on a first deployment rather than
-discovering it at the console.
+that is not reachable by name. For local `start`, use the generated token shown
+once in its terminal. For remote production, configure an absolute
+`admin.setup_token_file`, or create the administrator offline before `serve`.
+Plan the secure delivery channel before the first deployment rather than
+discovering the requirement at the console.
 
 `trusted_proxy_cidrs` must contain the address the proxy actually connects
 from. In a container network that is rarely `127.0.0.1`. Get it wrong and CIDR

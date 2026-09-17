@@ -129,6 +129,54 @@ func TestAdminMFAPolicyValidationAndRoleResolution(t *testing.T) {
 	}
 }
 
+func TestAdminSetupTokenConfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{name: "default", mutate: func(*Config) {}},
+		{name: "absolute file", mutate: func(cfg *Config) { cfg.Admin.SetupTokenFile = "/run/secrets/halro/setup-token" }},
+		{name: "relative file", mutate: func(cfg *Config) { cfg.Admin.SetupTokenFile = "setup-token" }, wantErr: "admin.setup_token_file must be an absolute path"},
+		{name: "zero ttl", mutate: func(cfg *Config) { value := Duration(0); cfg.Admin.SetupTokenTTL = &value }, wantErr: "admin.setup_token_ttl"},
+		{name: "negative ttl", mutate: func(cfg *Config) { value := Duration(-time.Second); cfg.Admin.SetupTokenTTL = &value }, wantErr: "admin.setup_token_ttl"},
+		{name: "too long ttl", mutate: func(cfg *Config) { value := Duration(25 * time.Hour); cfg.Admin.SetupTokenTTL = &value }, wantErr: "admin.setup_token_ttl"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			test.mutate(&cfg)
+			err := cfg.Validate(LoadOptions{})
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("error=%v, want %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestExplicitZeroSetupTokenTTLIsNotDefaulted(t *testing.T) {
+	payload := bytes.Replace(defaultTemplate, []byte("setup_token_ttl: 30m0s"), []byte("setup_token_ttl: 0s"), 1)
+	if bytes.Equal(payload, defaultTemplate) {
+		t.Fatal("default template no longer contains the expected setup token TTL")
+	}
+	cfg, err := Decode(bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "admin.setup_token_ttl") {
+		t.Fatalf("explicit zero TTL error=%v", err)
+	}
+}
+
 func TestModelCatalogConfigurationIsBounded(t *testing.T) {
 	valid := Default()
 	valid.ModelCatalog.Enabled = true

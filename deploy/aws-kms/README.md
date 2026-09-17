@@ -11,6 +11,10 @@ VPC endpoint policy, and any explicit deny together.
   time-bounded, approved break-glass action and must be revoked afterward.
 - The lifecycle role is offline and separately approved. It receives
   `Encrypt`/`Decrypt` only for initialization, verification, rewrap, and rotate.
+  In the Kubernetes examples it is associated temporarily with the
+  `halro-init` or `halro-bootstrap` ServiceAccount (the latter also runs the
+  offline verification Job), never with the normal
+  `halro` runtime ServiceAccount, and is revoked after the install-only Job.
 - Key administrators are not application runtime roles. Keep Recovery Key
   administration in an independent policy/identity failure domain.
 - Encryption Context values are non-secret SHA-256 bindings. Policies require
@@ -29,3 +33,5 @@ cannot obtain the node role. AWS references:
 
 Do not run `PutKeyPolicy`, create a Grant, or schedule Key deletion from
 Halro. Those are external administrative operations with separate approval.
+The exact Job/Deployment order and secret-removal state machine are documented
+in [`deploy/kubernetes/README.md`](../kubernetes/README.md).
