@@ -191,7 +191,9 @@ describe("design system themes", () => {
   // it is a border expressed as a gap rather than a spacing decision.
   // 699 → 693 when the responsive shell, tabs and page header stopped
   // hand-picking spacing and moved it onto shared layout/touch roles.
-  const bareSizeValueBaseline = 693;
+  // 693 → 692 when the Provider condition absorbed the separately spaced
+  // inline test result and removed that one-off action margin.
+  const bareSizeValueBaseline = 692;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");

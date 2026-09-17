@@ -6,7 +6,6 @@ import {
   EmptyState,
   ErrorState,
   Field,
-  InlineTestControl,
   isStepUpPrompt,
   Loading,
   Modal,
@@ -493,12 +492,12 @@ function ProviderEgressProxyRow({ proxy, providers, onEdit }: { proxy: ProviderE
     },
   });
   return (
-    <article className="credential-row">
-      <div><span><StatusDot ok /><strong>{proxy.name}</strong></span><small>{proxy.kind}</small></div>
-      <div className="resource-fact"><small>{t("providers.proxyEndpoint")}</small><strong>{proxy.endpoint}</strong></div>
-      <div className="resource-fact"><small>{t("providers.proxyAuthentication")}</small><strong>{proxy.authenticated ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")}</strong></div>
-      <div className="resource-fact"><small>{t("providers.usage")}</small><strong>{t("providers.proxyUsage", { count: useCount })}</strong></div>
-      <div className="row-actions">
+    <article className="provider-egress-proxy-row">
+      <div className="resource-identity proxy-identity"><span><StatusDot ok /><strong>{proxy.name}</strong></span><small>HTTP CONNECT</small></div>
+      <div className="resource-fact proxy-endpoint"><small>{t("providers.proxyEndpoint")}</small><code title={proxy.endpoint}>{proxy.endpoint}</code></div>
+      <div className="resource-fact proxy-authentication"><small>{t("providers.proxyAuthentication")}</small><strong>{proxy.authenticated ? t("providers.proxyBasicAuth") : t("providers.proxyNoAuth")}</strong></div>
+      <div className="resource-fact proxy-usage"><small>{t("providers.usage")}</small><strong>{t("providers.proxyUsage", { count: useCount })}</strong></div>
+      <div className="row-actions proxy-actions">
         <button className="button ghost" disabled={readOnly} onClick={onEdit}>{t("common.edit")}</button>
         <ConfirmButton
           className="button ghost"
@@ -509,7 +508,7 @@ function ProviderEgressProxyRow({ proxy, providers, onEdit }: { proxy: ProviderE
           onConfirm={(reauth) => deletion.mutateAsync(reauth)}
         />
       </div>
-      {deletion.isError && <ErrorState error={deletion.error} />}
+      {deletion.isError && <div className="proxy-feedback"><ErrorState error={deletion.error} /></div>}
     </article>
   );
 }
@@ -718,24 +717,49 @@ function ProviderRow({ provider, credential, catalog, egress, probeDeploymentID,
   const testLatency = testMutation.data?.latency_ms ?? provider.last_test_latency_millis;
   const healthyTargets = testMutation.data?.healthy_targets ?? provider.last_test_healthy_targets;
   const totalTargets = testMutation.data?.total_targets ?? provider.last_test_total_targets;
+  const testVerdict = testState === "success"
+    ? testLatency === undefined ? t("testControl.successPlain") : `${t("testControl.successPlain")} ${testLatency}ms`
+    : t(`testControl.${testState}`);
+  const conditionTone = withdrawn
+    ? "danger"
+    : !provider.enabled
+      ? "muted"
+      : testState === "failure"
+        ? "danger"
+        : testState === "success"
+          ? "good"
+          : "warning";
+  const conditionLabel = withdrawn
+    ? t("providers.productWithdrawn")
+    : provider.enabled
+      ? `${t("providers.enabled")}${t("common.dotSeparator")}${testVerdict}`
+      : t("providers.off");
   return (
     <>
       <article id={`provider-${provider.id}`} className={`provider-row ${highlighted ? "resource-highlight" : ""}`}>
-        <span className="provider-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
-        <div className="resource-identity"><span><StatusDot ok={provider.enabled && !withdrawn} /><strong>{provider.name}</strong></span><small>{product || t(`providers.types.${provider.type}`)}</small>{withdrawn && <small className="warning-text">{t("providers.productWithdrawn")}</small>}</div>
+        <span className="provider-icon provider-compact-icon">{provider.type === "openai" ? "OA" : "AI"}</span>
+        <div className="resource-identity provider-compact-identity"><strong>{provider.name}</strong><small>{product || t(`providers.types.${provider.type}`)}</small></div>
         <div className="resource-fact provider-fact-endpoint"><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
-        <div className="resource-fact"><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name}</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
-        <div className="resource-fact provider-fact-capabilities"><small>{t("providers.egressPath")}</small><strong className={egressMissing ? "warning-text" : ""}>{provider.egress_proxy_id ? selectedEgress?.name ?? t("providers.egressMissing") : t("providers.egressDirect")}</strong></div>
-        <div className="resource-row-state provider-compact-status"><span className={`resource-state ${provider.enabled ? "enabled" : ""}`}>{provider.enabled ? t("providers.enabled") : t("providers.off")}</span></div>
+        <div className="resource-fact provider-fact-trust">
+          <small>{t("providers.connectionPolicy")}</small>
+          <div className="provider-trust-value">
+            {credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name}</button> : <span>{t("providers.missingCredential")}</span>}
+            <span className="provider-trust-separator" aria-hidden="true">·</span>
+            <span className={`provider-egress-summary ${egressMissing ? "warning-text" : ""}`}>{provider.egress_proxy_id ? selectedEgress?.name ?? t("providers.egressMissing") : t("providers.egressDirect")}</span>
+          </div>
+        </div>
+        <div className="resource-row-state provider-compact-status"><small>{t("common.status")}</small><span className="provider-condition" data-tone={conditionTone} role="status" aria-live="polite" aria-atomic="true"><span aria-hidden="true" />{conditionLabel}</span></div>
         <div className="row-actions provider-compact-actions">
-		  <InlineTestControl state={testState} latency={testLatency} disabled={readOnly || !provider.enabled || !editable} title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onTest={() => testMutation.mutate()} />
-          {/* Editing opens a form built from the served matrix. Without it the
-              click would set state and render nothing, so the reason is on the
-              button — the same treatment the create and rotate buttons get. */}
-          <button className="button ghost" disabled={readOnly || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
+          <button className="button secondary provider-test-action" disabled={readOnly || !provider.enabled || !editable || testMutation.isPending} title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : totalTargets ? t("providers.testSummary", { healthy: healthyTargets ?? 0, total: totalTargets, latency: testLatency ?? 0 }) : undefined} onClick={() => testMutation.mutate()}>{t("common.test")}</button>
           <button className="button ghost provider-expand" aria-expanded={expanded} aria-controls={`provider-details-${provider.id}`} onClick={() => setExpanded((value) => !value)}>{expanded ? t("providers.collapseDetails") : t("providers.expandDetails")}</button>
-		  {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} title={withdrawn ? t("providers.productWithdrawnAction") : t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending || !editable} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : undefined} disabled={readOnly || stateMutation.isPending || !editable} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
-          <OverflowMenu label={t("providers.moreActions")}><ConfirmButton label={t("common.delete")} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} /></OverflowMenu>
+          <OverflowMenu label={t("providers.moreActionsFor", { name: provider.name })}>
+            {/* Editing opens a form built from the served matrix. Without it the
+                click would set state and render nothing, so the reason is on the
+                button — the same treatment the create and rotate buttons get. */}
+            <button className="button ghost" aria-label={t("providers.actionFor", { action: t("common.edit"), name: provider.name })} disabled={readOnly || !editable} title={withdrawn ? t("providers.productWithdrawnAction") : !catalog ? t("providers.matrixUnavailable") : undefined} onClick={onEdit}>{t("common.edit")}</button>
+            {provider.enabled ? <ConfirmButton className="button ghost" label={t("common.disable")} ariaLabel={t("providers.actionFor", { action: t("common.disable"), name: provider.name })} title={withdrawn ? t("providers.productWithdrawnAction") : t("providers.disableTitle")} confirmLabel={t("providers.disableConfirm", { name: provider.name })} disabled={stateMutation.isPending || !editable} onConfirm={() => stateMutation.mutateAsync()} /> : <button className="button ghost" aria-label={t("providers.actionFor", { action: t("common.enable"), name: provider.name })} title={readOnly ? t("navigation.readOnlyAction") : withdrawn ? t("providers.productWithdrawnAction") : undefined} disabled={readOnly || stateMutation.isPending || !editable} onClick={() => stateMutation.mutate()}>{t("common.enable")}</button>}
+            <ConfirmButton label={t("common.delete")} ariaLabel={t("providers.actionFor", { action: t("common.delete"), name: provider.name })} confirmLabel={t("providers.deleteProvider", { name: provider.name })} disabled={deleteMutation.isPending} requireStepUp onConfirm={(reauth) => deleteMutation.mutateAsync(reauth)} />
+          </OverflowMenu>
         </div>
         {/* The reason belongs in the row that failed, not behind an expander:
             the operator is looking at the button they just pressed. */}
@@ -747,8 +771,6 @@ function ProviderRow({ provider, credential, catalog, egress, probeDeploymentID,
         )}
         {expanded && <div id={`provider-details-${provider.id}`} className="provider-row-content provider-expanded-content">
           <div className="provider-facts">
-            <div><small>{t("providers.endpoint")}</small><strong>{provider.base_url}</strong></div>
-            <div><small>{t("providers.boundCredential")}</small>{credential ? <button className="resource-link" onClick={onCredentialClick}>{credential.name}</button> : <strong>{t("providers.missingCredential")}</strong>}</div>
             <div><small>{t("providers.capabilities")}</small><strong>{t("providers.capabilityCount", { count: enabledCapabilities(provider).length })}</strong></div>
             <div><small>{t("providers.capacity")}</small><strong>{provider.max_concurrency || t("common.unlimited")}</strong></div>
           </div>

@@ -195,7 +195,7 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     await waitFor(() => expect(testProvider).toHaveBeenCalledOnce());
     expect(testProvider).toHaveBeenCalledWith("provider_openai");
-    expect(await screen.findByText("通过 · 12ms")).toBeInTheDocument();
+    expect(await screen.findByText("已启用 · 通过 12ms")).toBeInTheDocument();
   });
 
   it("restores a persisted provider test result and marks an older revision stale", async () => {
@@ -211,9 +211,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
     renderPage();
 
-    const staleResult = await screen.findByText("需重测");
+    const staleResult = await screen.findByText("已启用 · 需重测");
     expect(staleResult).toBeInTheDocument();
-    expect(staleResult.closest(".inline-test-control")).toHaveAttribute("title", "1/1 个接口正常 · 18ms");
+    expect(screen.getByRole("button", { name: "测试" })).toHaveAttribute("title", "1/1 个接口正常 · 18ms");
   });
 
   // A failed test used to be a red word with nothing behind it: the console
@@ -317,7 +317,8 @@ describe("ProvidersPage profile and credential bindings", () => {
     const update = vi.spyOn(api, "updateProvider").mockResolvedValue({} as never);
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "禁用" }));
+    fireEvent.click(await screen.findByLabelText("更多操作 — Toggle provider"));
+    fireEvent.click(await screen.findByRole("button", { name: "禁用 — Toggle provider" }));
     const dialog = screen.getByRole("alertdialog", { name: "禁用服务商？" });
     expect(dialog).toHaveTextContent("确认禁用服务商“Toggle provider”？依赖该连接的模型部署将无法继续调用上游。");
     expect(update).not.toHaveBeenCalled();
@@ -352,8 +353,9 @@ describe("ProvidersPage profile and credential bindings", () => {
     renderPage();
 
     expect(await screen.findByText("Corporate egress")).toBeVisible();
-    expect(screen.getByText("需重测")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByText("已启用 · 需重测")).toBeVisible();
+    fireEvent.click(screen.getByLabelText("更多操作 — Proxied provider"));
+    fireEvent.click(screen.getByRole("button", { name: "编辑 — Proxied provider" }));
     const egress = screen.getByRole("combobox", { name: /出站路径/ });
     expect(egress).toBeDisabled();
     expect(screen.getByText(/先停用或排空/)).toBeVisible();
@@ -470,9 +472,14 @@ describe("ProvidersPage profile and credential bindings", () => {
     renderPage();
 
     expect(await screen.findByText("显示 1 / 1 项")).toBeVisible();
+    const providerRow = screen.getByText("Compact upstream").closest<HTMLElement>(".provider-row");
+    expect(providerRow).not.toBeNull();
+    expect(within(providerRow!).getByText("凭据与出站")).toBeVisible();
+    expect(within(providerRow!).getByText("已启用 · 尚未测试")).toBeVisible();
     expect(screen.queryByText("能力接口")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "查看详情" }));
+    fireEvent.click(within(providerRow!).getByRole("button", { name: "查看详情" }));
     expect(screen.getByText("能力接口")).toBeVisible();
+    expect(within(providerRow!).getAllByText("https://api.openai.com")).toHaveLength(1);
     fireEvent.change(screen.getByPlaceholderText("搜索名称、类型或 API 地址"), { target: { value: "missing" } });
     expect(screen.getByText("没有匹配结果")).toBeVisible();
 
@@ -1012,7 +1019,8 @@ describe("ProvidersPage profile and credential bindings", () => {
     const update = vi.spyOn(api, "updateProvider").mockResolvedValue({} as never);
     renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+    fireEvent.click(await screen.findByLabelText("更多操作 — Coding Plan"));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 — Coding Plan" }));
     expect(screen.getByText("该订阅产品有专门使用条款")).toBeVisible();
     fireEvent.click(screen.getByRole("checkbox", { name: /我已阅读当前地域的官方说明/ }));
     fireEvent.click(screen.getByRole("button", { name: "保存并热加载" }));

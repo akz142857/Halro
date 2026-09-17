@@ -504,6 +504,7 @@ export function Modal({
 
 export function ConfirmButton({
   label,
+  ariaLabel,
   confirmLabel,
   title,
   className = "button danger",
@@ -514,6 +515,7 @@ export function ConfirmButton({
   requireStepUp = false,
 }: {
   label: string;
+  ariaLabel?: string;
   confirmLabel: string;
   title?: string;
   className?: string;
@@ -584,7 +586,7 @@ export function ConfirmButton({
           it is in, so opening the confirmation also saved the form behind it.
           The dialog then confirmed an action whose consequence had already
           happened. */}
-      <button type="button" className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-describedby={blocked ? reasonID : undefined} onClick={() => { onOpen?.(); setOpen(true); }}>{label}</button>
+      <button type="button" className={className} disabled={unavailable} title={blocked ? reason : undefined} aria-label={ariaLabel} aria-describedby={blocked ? reasonID : undefined} onClick={() => { onOpen?.(); setOpen(true); }}>{label}</button>
       {blocked && <span id={reasonID} className="sr-only">{reason}</span>}
       {open && (
         <Modal
