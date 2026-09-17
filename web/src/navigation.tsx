@@ -1,6 +1,7 @@
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
 
 const navigationEvent = "halro:navigate";
+export const navigationConfirmationEvent = "halro:navigation-confirm";
 let navigationBlocked = false;
 let blockedPath = "";
 let blockedMessage = "";
@@ -11,22 +12,28 @@ export function setNavigationBlocked(blocked: boolean, message = "") {
   blockedMessage = blocked ? message : "";
 }
 
-export function confirmNavigation() {
+export type NavigationConfirmation = { message: string; onConfirm: () => void };
+
+export function confirmNavigation(onConfirm: () => void = () => {}) {
   if (!navigationBlocked) return true;
-  if (!window.confirm(blockedMessage)) return false;
-  setNavigationBlocked(false);
-  return true;
+  window.dispatchEvent(new CustomEvent<NavigationConfirmation>(navigationConfirmationEvent, {
+    detail: { message: blockedMessage, onConfirm },
+  }));
+  return false;
 }
 
 export function navigate(path: string) {
-  if (!confirmNavigation()) return;
-  // Compared against the query too, not the path alone. Several destinations carry
-  // their subject in the query — a request ID, a project — so comparing only the
-  // path made "go to this page filtered differently" a no-op whenever the reader
-  // was already on that page, including clearing a filter back to the plain list.
-  if (window.location.pathname + window.location.search === path) return;
-  window.history.pushState({}, "", path);
-  window.dispatchEvent(new Event(navigationEvent));
+  const commit = () => {
+    // Compared against the query too, not the path alone. Several destinations carry
+    // their subject in the query — a request ID, a project — so comparing only the
+    // path made "go to this page filtered differently" a no-op whenever the reader
+    // was already on that page, including clearing a filter back to the plain list.
+    if (window.location.pathname + window.location.search === path) return;
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new Event(navigationEvent));
+  };
+  if (!confirmNavigation(commit)) return;
+  commit();
 }
 
 export function useNavigationLocation() {
@@ -35,12 +42,13 @@ export function useNavigationLocation() {
   useEffect(() => {
     const update = () => {
       if (navigationBlocked && blockedPath && current() !== blockedPath) {
-        if (confirmNavigation()) {
-          setLocation(current());
-          return;
-        }
+        const target = current();
         window.history.pushState({}, "", blockedPath);
         setLocation(blockedPath);
+        confirmNavigation(() => {
+          window.history.pushState({}, "", target);
+          window.dispatchEvent(new Event(navigationEvent));
+        });
         return;
       }
       setLocation(current());

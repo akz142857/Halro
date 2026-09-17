@@ -81,6 +81,12 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
       />
       {mfaSetupRequired ? <div className="settings-pane"><MFASettings /></div> : (
         <div className="settings-shell">
+          <label className="settings-section-select">
+            <span>{t("settings.sectionNavigation")}</span>
+            <select value={pane} onChange={(event) => navigate(`/admin/settings/${event.target.value}`)}>
+              {SETTINGS_PANES.map((item) => <option value={item} key={item}>{t(`settings.panes.${item}`)}</option>)}
+            </select>
+          </label>
           <nav className="settings-nav" aria-label={t("settings.sectionNavigation")}>
             {SETTINGS_PANES.map((item) => (
               <a key={item} href={`/admin/settings/${item}`} className={pane === item ? "active" : ""} aria-current={pane === item ? "page" : undefined} onClick={(event) => { event.preventDefault(); navigate(`/admin/settings/${item}`); }}>{t(`settings.panes.${item}`)}</a>

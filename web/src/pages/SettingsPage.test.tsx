@@ -143,6 +143,7 @@ describe("LanguageSettingsForm", () => {
     const saveInstance = screen.getByRole("button", { name: "保存实例默认语言" });
     fireEvent.change(screen.getByLabelText("界面语言"), { target: { value: "en-US" } });
     await waitFor(() => expect(updatePreferences).toHaveBeenCalledWith({ locale: "en-US", appearance: "dark" }, 3));
+    expect(await screen.findByText("Your language preference was saved")).toBeVisible();
     fireEvent.change(instanceLocale, { target: { value: "en-US" } });
     expect(updateUISettings).not.toHaveBeenCalled();
 
@@ -313,6 +314,9 @@ describe("SettingsPage system configuration pane", () => {
     // The nav entry sits between the instance pane and the diagnostics pane.
     const entries = [...screen.getByRole("navigation", { name: "设置分区" }).querySelectorAll("a")].map((a) => a.textContent);
     expect(entries).toEqual(["通用", "登录与安全", "管理员账户", "实例配置", "系统配置", "根密钥状态", "关于与诊断"]);
+    const compactNavigation = screen.getByRole("combobox", { name: "设置分区" });
+    expect(compactNavigation).toHaveValue("config");
+    expect([...compactNavigation.querySelectorAll("option")].map((option) => option.textContent)).toEqual(entries);
 
     // The pane heading and the nav entry share a name, so wait on something
     // only the pane can produce rather than on the label.

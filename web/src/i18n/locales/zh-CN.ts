@@ -207,6 +207,11 @@ export const zhCN = {
     localControl: "本地控制 | 无云端依赖",
     timeZoneLabel: "时区：",
     productSubtitle: "LLM 控制平面",
+    openMenu: "打开菜单",
+    closeMenu: "关闭菜单",
+    leavePageTitle: "离开当前页面？",
+    stayOnPage: "留在此页",
+    leavePage: "离开页面",
   },
   app: {
     checkingSetup: "正在检查初始化状态",

@@ -37,7 +37,7 @@
  */
 .resource-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(clamp(17rem, 26vw, 22rem), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(clamp(17rem, 26vw, 22rem), 100%), 1fr));
   /* The row gutter is the parent's, and a card's own slots are parent rows now,
      so this is also what separates one band of cards from the next. It is wider
      than the gap between a card's slots (below) — a tile has to read as one

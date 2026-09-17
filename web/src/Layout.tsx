@@ -1,10 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { api, clearSensitiveClientState } from "./api";
-import { confirmNavigation, Link, navigate, setNavigationBlocked, usePathname } from "./navigation";
+import { Modal } from "./components";
+import { confirmNavigation, Link, navigate, navigationConfirmationEvent, setNavigationBlocked, usePathname, type NavigationConfirmation } from "./navigation";
 import { useIsReadOnly } from "./session";
 import { resetAppearance } from "./theme";
 import { useAccountingTimeZone } from "./timezone";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 const navigation = [
@@ -44,9 +45,16 @@ export function Layout({
   const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
   const [loggingOut, setLoggingOut] = useState(false);
-  const logout = async () => {
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const [navigationConfirmation, setNavigationConfirmation] = useState<NavigationConfirmation | null>(null);
+  useEffect(() => {
+    const receiveConfirmation = (event: Event) => setNavigationConfirmation((event as CustomEvent<NavigationConfirmation>).detail);
+    window.addEventListener(navigationConfirmationEvent, receiveConfirmation);
+    return () => window.removeEventListener(navigationConfirmationEvent, receiveConfirmation);
+  }, []);
+  useEffect(() => setMobileNavigationOpen(false), [path]);
+  const completeLogout = async () => {
     if (loggingOut) return;
-    if (!confirmNavigation()) return;
     setLoggingOut(true);
     try {
       await api.logout();
@@ -58,18 +66,28 @@ export function Layout({
       navigate("/admin/login");
     }
   };
+  const logout = () => {
+    if (!confirmNavigation(() => { void completeLogout(); })) return;
+    void completeLogout();
+  };
   return (
     <div className="shell">
       <a className="skip-link" href="#main-content">{t("navigation.skip")}</a>
-      <aside className="sidebar">
-        <Link href="/admin" className="brand" aria-label={`Halro ${t("navigation.overview")}`}>
-          <span className="brand-mark">H</span>
-          <span>
-            <strong>HALRO</strong>
-            <small>{t("navigation.productSubtitle")}</small>
-          </span>
-        </Link>
-        <nav aria-label={t("navigation.label")}>
+      <aside className={`sidebar${mobileNavigationOpen ? " mobile-open" : ""}`}>
+        <div className="sidebar-header">
+          <Link href="/admin" className="brand" aria-label={`Halro ${t("navigation.overview")}`}>
+            <span className="brand-mark">H</span>
+            <span>
+              <strong>HALRO</strong>
+              <small>{t("navigation.productSubtitle")}</small>
+            </span>
+          </Link>
+          <button type="button" className="mobile-navigation-toggle" aria-controls="primary-navigation" aria-expanded={mobileNavigationOpen} onClick={() => setMobileNavigationOpen((open) => !open)}>
+            <span>{mobileNavigationOpen ? t("navigation.closeMenu") : t("navigation.openMenu")}</span>
+            <span aria-hidden="true">{mobileNavigationOpen ? "×" : "☰"}</span>
+          </button>
+        </div>
+        <nav id="primary-navigation" aria-label={t("navigation.label")}>
           {navigation.filter(([href]) => !restricted || href === "/admin/settings").map(([href, key, icon]) => {
             const active = href === "/admin"
               ? path === href
@@ -108,6 +126,22 @@ export function Layout({
         {readOnly ? <div className="notice info" role="status">{t("navigation.readOnlyNotice")}</div> : null}
         {children}
       </main>
+      {navigationConfirmation ? (
+        <Modal title={t("navigation.leavePageTitle")} onClose={() => setNavigationConfirmation(null)} dangerous describedBy="navigation-leave-description">
+          <div className="confirmation-dialog">
+            <p id="navigation-leave-description">{navigationConfirmation.message}</p>
+            <div className="form-actions">
+              <button type="button" className="button ghost" data-modal-initial onClick={() => setNavigationConfirmation(null)}>{t("navigation.stayOnPage")}</button>
+              <button type="button" className="button danger" onClick={() => {
+                const action = navigationConfirmation.onConfirm;
+                setNavigationConfirmation(null);
+                setNavigationBlocked(false);
+                action();
+              }}>{t("navigation.leavePage")}</button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }

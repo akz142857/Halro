@@ -17,3 +17,5 @@
 - [ ] Documentation and contracts updated
 - [ ] No credentials, private data, local artifacts, or planning documents added
 - [ ] Embedded `internal/webui/dist` matches `web/src` (when applicable)
+- [ ] UI changes follow `docs/design-system/`; Light/Dark, zh-CN/en-US, keyboard, and affected responsive modes were checked (or N/A)
+- [ ] No new raw color, primitive-token use, sub-12px text, native confirm, or unexplained global breakpoint (or N/A)

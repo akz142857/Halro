@@ -199,6 +199,11 @@ export const enUS = {
     localControl: "Local control | no cloud dependency",
     timeZoneLabel: "Time zone: ",
     productSubtitle: "LLM control plane",
+    openMenu: "Open menu",
+    closeMenu: "Close menu",
+    leavePageTitle: "Leave this page?",
+    stayOnPage: "Stay on this page",
+    leavePage: "Leave page",
   },
   app: {
     checkingSetup: "Checking setup status",

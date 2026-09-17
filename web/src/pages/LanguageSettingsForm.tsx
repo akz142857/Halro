@@ -13,7 +13,7 @@ export function LanguageSettingsForm(props: { ui: InstanceUISettings; preference
 }
 
 export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const { notify } = useNotify();
   const [locale, setLocale] = useState<LocalePreference>(preferences.locale);
@@ -22,7 +22,7 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
     mutationFn: (value: LocalePreference) => api.updatePreferences({ locale: value, appearance: preferences.appearance }, preferences.revision),
     onSuccess: async (_, value) => {
       await applyPreference(value, ui.default_locale);
-      notify({ tone: "success", title: t("settings.preferenceSaved") });
+      notify({ tone: "success", title: i18n.t("settings.preferenceSaved") });
     },
     onSettled: async () => {
       await Promise.all([
@@ -53,7 +53,7 @@ export function PersonalLanguageForm({ ui, preferences }: { ui: InstanceUISettin
 }
 
 export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettings; preferences: AdminPreferences }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const readOnly = useIsReadOnly();
   const queryClient = useQueryClient();
   const { notify } = useNotify();
@@ -63,7 +63,7 @@ export function InstanceLanguageForm({ ui, preferences }: { ui: InstanceUISettin
     mutationFn: () => api.updateUISettings(defaultLocale, ui.revision),
     onSuccess: async () => {
       if (preferences.locale === "system") await applyPreference(preferences.locale, defaultLocale);
-      notify({ tone: "success", title: t("settings.instanceLanguageSaved") });
+      notify({ tone: "success", title: i18n.t("settings.instanceLanguageSaved") });
     },
     onSettled: async () => { await Promise.all([queryClient.invalidateQueries({ queryKey: ["ui-settings"] }), queryClient.invalidateQueries({ queryKey: ["ui-bootstrap"] })]); },
   });

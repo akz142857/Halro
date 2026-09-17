@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { act, render } from "@testing-library/react";
-import { navigate, setNavigationBlocked, useNavigationLocation, usePathname } from "./navigation";
+import { navigate, navigationConfirmationEvent, setNavigationBlocked, useNavigationLocation, usePathname, type NavigationConfirmation } from "./navigation";
 
 function PathObserver() {
   return createElement("span", null, usePathname());
@@ -19,18 +19,22 @@ describe("guarded navigation", () => {
 
   it("explains one-time recovery code risk and allows the user to stay", () => {
     window.history.replaceState({}, "", "/admin/settings");
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const confirm = vi.fn();
+    window.addEventListener(navigationConfirmationEvent, confirm, { once: true });
     setNavigationBlocked(true, "Save the one-time recovery codes before leaving.");
     navigate("/admin");
-    expect(confirm).toHaveBeenCalledWith("Save the one-time recovery codes before leaving.");
+    expect((confirm.mock.calls[0][0] as CustomEvent<NavigationConfirmation>).detail.message).toBe("Save the one-time recovery codes before leaving.");
     expect(window.location.pathname).toBe("/admin/settings");
   });
 
   it("continues navigation after explicit confirmation", () => {
     window.history.replaceState({}, "", "/admin/settings");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    let confirmation!: NavigationConfirmation;
+    window.addEventListener(navigationConfirmationEvent, (event) => { confirmation = (event as CustomEvent<NavigationConfirmation>).detail; }, { once: true });
     setNavigationBlocked(true, "Save first");
     navigate("/admin");
+    setNavigationBlocked(false);
+    confirmation.onConfirm();
     expect(window.location.pathname).toBe("/admin");
   });
 
@@ -56,7 +60,6 @@ describe("guarded navigation", () => {
   it("keeps the guarded page when browser history navigation is cancelled", () => {
     window.history.replaceState({}, "", "/admin/settings");
     render(createElement(PathObserver));
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     setNavigationBlocked(true, "Save first");
     window.history.pushState({}, "", "/admin");
     window.dispatchEvent(new PopStateEvent("popstate"));

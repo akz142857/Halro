@@ -16,6 +16,7 @@ function readChartTokens(host: HTMLElement) {
     fill: read("--color-chart-series-1-fill", "transparent"),
     grid: read("--color-chart-grid", "currentColor"),
     axis: read("--color-chart-axis", "currentColor"),
+    font: `${style.fontSize || "12px"} ${style.fontFamily || "ui-monospace"}`,
   };
 }
 
@@ -75,9 +76,9 @@ export default function TrendChart({ points, metric }: { points: TrendPoint[]; m
           y: metric === "success_rate" ? { range: [0, 100] } : {},
         },
         axes: [
-          { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace" },
+          { stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: tokens.font },
           {
-            stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: "11px ui-monospace",
+            stroke: tokens.axis, grid: { stroke: tokens.grid }, ticks: { stroke: tokens.grid }, font: tokens.font,
             values: (_chart, values) => values.map((value) => formatValue(metric, value)),
             size: (_chart, values) => axisGutter(values),
           },

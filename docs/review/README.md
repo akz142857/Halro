@@ -66,6 +66,10 @@
 
 ## 当前评审计划
 
+- [2026-09-17 Admin 全面视觉评审与视觉系统建设](260917-visual-system/review-plan.md) —
+  对 11 个主路由、认证前后壳层、Light/Dark、中英文和 320–1440px 进行代码与真实浏览器双向评审，
+  并按 Apple HIG 的清晰、层级、语义颜色、适配和无障碍原则建设 Halro Visual System。
+  当前基线、页面矩阵、findings 与评分见同目录文档；实现完成后以 acceptance report 关闭。
 - [2026-09-13 系统设计哲学评估方案](260913/software-design-philosophy-assessment-plan.zh-CN.md) —
   以 Google SRE、antirez/Redis、OpenAI 公开评估方法、SQLite、Linux 与 Go 的可迁移原则为参照，
   评估 Halro 的产品边界、复杂度价值、正确性、可靠性、安全、兼容性与长期演进。第一轮多角色

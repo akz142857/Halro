@@ -189,7 +189,9 @@ describe("design system themes", () => {
   // already use — a one-pixel gap over a border-coloured background draws the
   // rules between cells — and there is no spacing token for a hairline, because
   // it is a border expressed as a gap rather than a spacing decision.
-  const bareSizeValueBaseline = 699;
+  // 699 → 693 when the responsive shell, tabs and page header stopped
+  // hand-picking spacing and moved it onto shared layout/touch roles.
+  const bareSizeValueBaseline = 693;
 
   it("does not add bare spacing or radius values beyond the current baseline", () => {
     const styles = read("./styles.css") + read("./design-system/resource-list.css") + read("./design-system/resource-card.css");
@@ -263,6 +265,9 @@ describe("design system themes", () => {
   it("declares the type floor as a token so business CSS has something to reach for", () => {
     const tokens = tokenValues(read("./design-system/tokens.css"));
     expect(tokens.get("--font-size-xs")).toBe(`${typeFloorPx}px`);
+    expect(tokens.get("--type-page-title-size")).toBe("32px");
+    expect(tokens.get("--type-page-title-size-compact")).toBe("28px");
+    expect(tokens.get("--control-touch-block-size")).toBe("44px");
   });
 
   it("declares no visible text below the type floor in business CSS", () => {
@@ -279,7 +284,6 @@ describe("design system themes", () => {
   // Adding an exception is therefore a design-system decision in this test,
   // not a literal that can arrive unnoticed in business CSS.
   const nonScaleTypeAllowlist = new Map<string, string[]>([
-    ["h1", ["font-size:clamp(32px, 4vw, 42px)"]],
     [".brand strong", ["font:var(--font-weight-bold) 14px/1.2 var(--mono)"]],
     [".metric strong", ["font:var(--font-weight-medium) clamp(20px, 2vw, 30px)/1 var(--mono)"]],
     [".custody-summary-primary h2", ["font-size:25px"]],
@@ -300,7 +304,7 @@ describe("design system themes", () => {
       for (const declaration of rule[2].matchAll(/(?:^|;)\s*(font(?:-size)?)\s*:\s*([^;]+)/g)) {
         const property = declaration[1];
         const value = declaration[2].trim();
-        if (value === "inherit" || value.includes("var(--font-size-")) continue;
+        if (value === "inherit" || value.includes("var(--font-size-") || value.includes("var(--type-")) continue;
         const normalized = `${property}:${value}`;
         if (!(nonScaleTypeAllowlist.get(selector) ?? []).includes(normalized)) {
           offenders.push(`${selector} { ${normalized} }`);

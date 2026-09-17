@@ -87,6 +87,12 @@ require isolated, budget-limited credentials.
 - Maintain keyboard operation, visible labels, focus management, and the bundle
   size/artifact gates.
 - Rebuild the embedded production bundle with `npm run build`.
+- Follow `docs/design-system/` for Foundation, component and page-pattern contracts.
+- Do not add raw colors, primitive-token use, sub-12px text, native `window.confirm`,
+  or a new global breakpoint. Reuse semantic tokens and shared components.
+- For visual changes, record the affected theme, locale and viewport; verify the
+  nearest breakpoint on both sides and test keyboard focus. CSS-only changes run
+  `src/design-system.test.ts`; behavior changes run their directly affected test.
 
 ## Commits and pull requests
 

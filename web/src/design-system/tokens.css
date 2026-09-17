@@ -100,6 +100,15 @@
   --line-height-normal: 1.5;
   --line-height-relaxed: 1.7;
 
+  /* Semantic type roles. Components consume these roles instead of inventing
+     responsive display sizes page by page. */
+  --type-page-title-size: 32px;
+  --type-page-title-size-compact: 28px;
+  --type-page-title-line-height: 1.08;
+  --type-section-title-size: var(--font-size-xl);
+  --type-body-size: var(--font-size-md);
+  --type-caption-size: var(--font-size-xs);
+
   /* Spacing scale (4px base) */
   --space-0: 0;
   --space-1: 4px;
@@ -112,6 +121,13 @@
   --space-10: 40px;
   --space-12: 48px;
   --space-16: 64px;
+
+  /* Layout and interaction roles. 44px is the compact/touch target used by
+     Apple platform guidance; desktop controls may remain denser. */
+  --layout-sidebar-width: 248px;
+  --layout-content-max-width: 1440px;
+  --control-block-size: 36px;
+  --control-touch-block-size: 44px;
 
   /* Radius */
   --radius-sm: 3px;
