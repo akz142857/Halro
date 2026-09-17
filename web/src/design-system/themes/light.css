@@ -35,6 +35,9 @@
   --color-action-primary-foreground: var(--p-white);
   --color-action-secondary: var(--p-paper-200);
   --color-accent: var(--p-green-700);
+  --color-action-disabled: var(--p-ink-400);
+  --color-action-disabled-border: var(--p-paper-300);
+  --color-text-link: var(--p-blue-600);
   --color-focus-ring: var(--p-lime-700);
   --color-shadow-base: var(--p-ink-950);
 
@@ -57,6 +60,11 @@
   --color-status-neutral-surface: rgba(7, 17, 15, 0.05);
   --color-status-neutral-border: var(--p-paper-500);
   --color-status-neutral-icon: var(--p-ink-400);
+  /* Status — unknown. See dark.css for why it is told apart by structure. */
+  --color-status-unknown-text: var(--p-ink-400);
+  --color-status-unknown-surface: transparent;
+  --color-status-unknown-border: var(--p-paper-500);
+  --color-status-unknown-icon: var(--p-ink-400);
   --color-status-info-text: var(--p-blue-600);
   --color-status-info-surface: rgba(47, 107, 194, 0.10);
   --color-status-info-border: var(--p-blue-600);

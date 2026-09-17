@@ -21,7 +21,15 @@
 
 Primitive 只定义于 `tokens.css`。组件只消费 `--color-text-*`、`--color-surface-*`、`--color-border-*`、`--color-action-*`、`--color-status-*`、`--color-chart-*` 等语义角色。Dark/Light 必须键集合一致；正文对比不低于 4.5:1，关键边界不低于 3:1。
 
-状态色共五族：`success / warning / danger / info / neutral`，各自拥有 text / surface / border / icon。`neutral` 表达"管理员主动关闭"——它是状态不是故障，不得借用 danger 或 warning 的外观。`status-unknown`、`action-disabled`、`text-link` 是规范要求但尚未实现的角色，分别由 VS-13 / VS-14 / VS-15 跟踪；在实现前不得声明占位 Token。
+状态色共六族：`success / warning / danger / info / neutral / unknown`，各自拥有 text / surface / border / icon。
+
+- `neutral` 表达"管理员主动关闭"——它是状态不是故障，不得借用 danger 或 warning 的外观。
+- `unknown` 表达"读不出来"，与 `neutral` 的区分是结构：虚线边界 + 无填充，对应 `neutral` 的实线边界 + 底色。状态本就不允许只靠颜色表达，所以结构差异是区分本身，不是替代品。
+- 三值状态必须为每个值写出各自的处理，基础规则不得携带任何状态处理——否则新增第四个值会静默继承其中一种。
+
+**Disabled**：使用 `--color-action-disabled` / `--color-action-disabled-border`，不用 `opacity`。透明度让对比度取决于控件恰好叠在什么背景上，同一写法在本仓库曾散落在 1.90:1 到 6.93:1 之间。唯一例外是原生复选框（不承载文本，UA 自绘 disabled）。
+
+**链接**：正文链接使用 `.text-link`（`--color-text-link` + 下划线）。颜色是扫读可供性，下划线是 forced-colors 与色觉差异下仍然存在的那一半。全局 `a { color: inherit }` 保持不变——导航、设置分区与按钮型锚点依赖继承。每个锚点都必须有一个说明它是什么的 class。
 
 ## Spacing、Grid 与尺寸
 

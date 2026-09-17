@@ -468,9 +468,9 @@ Primitive palette
 | `status-neutral` 的 text/surface/border/icon | 已实现。承载"管理员主动关闭"，此前由 `--color-text-tertiary` + `--line-strong` + `--overlay-hover` 三个不同族拼装 |
 | `chart-series-1/2 / series-1-fill / grid / axis / tooltip` | 已实现，经 `TrendChart` 读取 |
 | `scrim / shadow-base` | 已实现 |
-| `status-unknown` | **未实现，见 VS-13**。`cost_completeness` 的 unknown/partial 目前渲染为 warning，与 §9.5"不能共享同一种视觉语义"冲突。改法是产品语义决策，不在本次实现 |
-| `action-disabled` | **未实现，见 VS-14**。当前 9 处 disabled 仅靠 `opacity`，正是本节禁止的做法 |
-| `text-link` | **未实现，见 VS-15**。全局 `a { color: inherit }`，外链无链接可供性 |
+| `status-unknown` 的 text/surface/border/icon | 已实现（VS-13）。`partial` 保留 warning，`unknown` 用虚线边界 + 无填充；与 `neutral` 的区分是结构而非色相，因为状态本就不允许只靠颜色表达 |
+| `action-disabled` + `-border` | 已实现（VS-14）。取代 4 处 `opacity`——透明度让对比度取决于背景，同一写法曾散落在 1.90:1 到 6.93:1 之间 |
+| `text-link` | 已实现（VS-15）。颜色 + 下划线，`.text-link` 用于正文链接；全局 `a` 规则保持不变，导航与按钮型锚点依赖继承 |
 | `action-pressed` | **不实现**。全站 `:active` 只用位移表达按压，无颜色调用点 |
 | `chart-selection / chart-unknown` | **不实现**。图表无选中态与 unknown 序列，无调用点 |
 
@@ -480,7 +480,9 @@ Primitive palette
 - 业务 CSS 直接使用 `--p-*`；
 - 用 brand lime 表达 success；
 - 用 danger 红表达“管理员主动禁用”的中性状态；
-- 仅靠透明度表示 disabled，导致文本或边界不可读（现状违反此条，见 VS-14）。
+- 仅靠透明度表示 disabled，导致文本或边界不可读。`opacity` 的对比度是背景的函数而不是规则的
+  属性，因此 disabled 必须命名前景色，由对比度断言持有。唯一例外是原生复选框：它不承载文本，
+  且 UA 自己绘制 disabled 外观。
 
 ### 9.6 响应式布局模式
 

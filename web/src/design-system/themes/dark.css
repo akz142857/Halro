@@ -32,6 +32,17 @@
   --color-action-primary-foreground: var(--p-ink-950);
   --color-action-secondary: var(--p-ink-850);
   --color-accent: var(--p-mint-400);
+  /* A disabled control used to be the enabled one at 40-62% opacity, which
+     makes its contrast a function of whatever it happens to sit on. That is
+     how the Developer response-mode toggle reached 1.90:1 on Light without
+     anyone seeing it. Naming the foreground makes the ratio computable, and
+     the contrast assertion holds it at AA in both themes. */
+  --color-action-disabled: var(--p-ink-300);
+  --color-action-disabled-border: var(--p-ink-700);
+  /* Links. Underlined as well as coloured: the colour is the scan affordance,
+     the underline is what survives forced-colors and colour vision
+     deficiency. */
+  --color-text-link: var(--p-blue-400);
   --color-focus-ring: var(--p-lime-400);
   --color-shadow-base: var(--p-black);
 
@@ -56,6 +67,16 @@
   --color-status-neutral-surface: rgba(255, 255, 255, 0.035);
   --color-status-neutral-border: var(--p-ink-350);
   --color-status-neutral-icon: var(--p-ink-300);
+  /* Status — unknown. Not "off" and not "wrong": the value could not be read.
+     It shares neutral's ink because both are quiet, and is told apart by
+     structure — a dashed boundary over no fill, where neutral is a solid
+     boundary over a tint. Colour alone was never allowed to carry a status
+     here (§8.4), so the structural difference is the distinction, not a
+     substitute for one. */
+  --color-status-unknown-text: var(--p-ink-300);
+  --color-status-unknown-surface: transparent;
+  --color-status-unknown-border: var(--p-ink-350);
+  --color-status-unknown-icon: var(--p-ink-300);
   /* Status — info */
   --color-status-info-text: var(--p-blue-400);
   --color-status-info-surface: rgba(116, 185, 255, 0.10);
