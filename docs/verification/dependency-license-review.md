@@ -185,8 +185,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `89c91b3130972bc2b5c676e9e93266c1721fb9a8`
 - `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
-- `web/package.json`: `50d8613c9e0be947d0d3995b665f04778d2bef66`
-- `web/package-lock.json`: `5c757a8160b2de494ebe6342a5675d7cac1c1aa6`
+- `web/package.json`: `00b690ac09576ce419d75d8cd14fc2a3104bb308`
+- `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
 - `tests/compatibility/go/go.mod`: `877e27308fd60916f0a462a88d301355fc66e084`
 - `tests/compatibility/go/go.sum`: `930d790a4f664ad7a0ee641d22db7debb6c3ded5`
 - `tests/compatibility/node/package.json`: `035be267a4afb3a23a447b7c95e963a82d9bd8db`
@@ -200,7 +200,7 @@ recorded above, before that for the 2026-09-05 seven-direct-package Admin UI
 refresh, and before that for the nine-package Admin UI bump,
 and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
-for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, and now `v0.8.0`, each of which bumped the
+for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, and now `v0.8.3`, each of which bumped the
 `version`
 field in both files and changed nothing else.
 Nothing in any of it added, removed, or relicensed a dependency, so the
