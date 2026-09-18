@@ -53,7 +53,10 @@ local storage, and starts the service. The React assets are embedded in the
 binary, so there is no separate frontend process at runtime.
 
 The `config.yaml` written on first run is annotated: every setting that has a
-consequence says what it decides. Deleting a key restores its default.
+consequence says what it decides. It is a complete file, not a sparse override —
+edit values in place rather than deleting keys. Some omitted settings do fall
+back to a default, but a required one fails validation and refuses to start, and
+a deleted boolean silently turns off.
 
 ### 2.2 First-time setup in the browser
 

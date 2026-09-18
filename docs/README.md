@@ -80,6 +80,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | 文档 | 内容 |
 | --- | --- |
 | [生产验证执行方案](verification/production-validation-plan.zh-CN.md) | 从候选冻结开始，依次完成真实 Provider、安全边界、告警与恢复、容量与 24 小时浸泡、正式发布和四方签署 |
+| [生产验证执行记录 · 2026-09-18](verification/production-validation-run-260918.zh-CN.md) | 在候选 `f09ed2d` 上执行该方案中不需要外部授权的部分（G0 条件通过、G1/G3/G4 的本机 E3 子集）。首轮 22 条发现修掉 10 条，对修复本身的第二轮评审再出 13 条（含一条把 fail-closed 放行的自造回归，已回退）；G2/G5/G6/G7 因缺真实账户、生产形态环境与四方签署而 `BLOCKED`，结论维持 `NO-GO / PRODUCTION UNVERIFIED` |
 
 ## 评审 · [`review/`](review/)
 
@@ -90,8 +91,14 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 记录，回答"哪里还不够好"。评审结论会随修复推进而过时，读的时候以文中 `文件:行号`
 索引回代码为准。
 
+跨产品、工程、数据、安全、运维和发布的里程碑评审，使用
+[《Halro 里程碑专业评审计划》](review/milestone-professional-review-plan.zh-CN.md) 作为常设程序
+与实例化模板：范围冻结、RACI、分层裁剪、阶段门禁、严重度、评分与 GO/NO-GO 决策规则。它的证据
+分级沿用 `verification/production-validation-plan.zh-CN.md`，角色定义沿用 `review/README.md`。
+
 | 评审 | 对象 | 结论 |
 | --- | --- | --- |
+| [里程碑专业评审计划](review/milestone-professional-review-plan.zh-CN.md) | 常设程序与模板 | 待具体里程碑实例化后执行 |
 | [Provider 到 Project API 全链路](review/260811/provider-to-project-api-chain.zh-CN.md) | 管理面配置链与数据面调用链 | 7 条 finding 与 3 项子项全部关闭，无未尽项 |
 
 ## 可观测性 · [`observability/`](observability/)

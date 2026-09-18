@@ -78,17 +78,21 @@
 下表必须在首次测量前填写，禁止看到结果后调整阈值。若暂时没有业务 SLO，应由四方共同签署
 临时准入阈值及有效期。
 
-| 指标 | 目标值 | 负责人 |
-| --- | --- | --- |
-| 同步请求吞吐与 p50/p95/p99 | TBD | Application / SRE |
-| 流式首字节与完整响应 p95/p99 | TBD | Application / SRE |
-| 允许错误率、超时率和限流率 | TBD | Application / SRE |
-| CPU、RSS/heap、goroutine、FD 上限 | TBD | SRE |
-| 队列、重试、failure capture 和 WAL 上限 | TBD | Application / SRE |
-| Ledger、Audit、Parquet、TSDB 增长预算 | TBD | SRE / Platform |
-| Provider 费用和 token 预算 | TBD | Product / Application |
-| RPO / RTO | TBD | SRE / Platform |
-| 24 小时浸泡允许事件预算 | TBD | 四方签署 |
+下表的「状态」列是 2026-09-18 执行记录产出的草案结论，完整取值、依据 `path:line` 与推导见
+[生产验证执行记录 · 2026-09-18](production-validation-run-260918.zh-CN.md) 第 4 节。草案不等于
+签署：正式执行前四方必须逐行确认或改写，并在此处填入最终值。
+
+| 指标 | 目标值 | 状态（2026-09-18 草案） | 负责人 |
+| --- | --- | --- | --- |
+| 同步请求吞吐与 p50/p95/p99 | 待签署 | 有参考主机基准可依据；延迟必须落在 12 个直方图桶边界上 | Application / SRE |
+| 流式首字节与完整响应 p95/p99 | 待签署 | **首字节当前不可测量**：Halro 没有 TTFB 指标，必须先解决 | Application / SRE |
+| 允许错误率、超时率和限流率 | 待签署 | 错误率有依据（告警 5% / 浸泡 1%）；超时率与限流率无依据 | Application / SRE |
+| CPU、RSS/heap、goroutine、FD 上限 | 待签署 | 增长容差有依据；绝对值需外部采集器，构成 G1 硬前置 | SRE |
+| 队列、重试、failure capture 和 WAL 上限 | 待签署 | 全部为代码中生效的硬上限，可直接签署 | Application / SRE |
+| Ledger、Audit、Parquet、TSDB 增长预算 | 待签署 | TSDB 有模板阈值（假设 5 GiB 卷）；应用侧每日字节数无依据，须在 G5 实测 | SRE / Platform |
+| Provider 费用和 token 预算 | 待签署 | 无依据，且当前没有任何费用/token 告警规则 | Product / Application |
+| RPO / RTO | 待签署 | RPO=0 仅在 `usage.durability: strict` 下成立；RTO 参考值来自 opt-in 测试 | SRE / Platform |
+| 24 小时浸泡允许事件预算 | 待签署 | 门禁已在 `tests/soak` 中固化，可直接签署 | 四方签署 |
 
 ## 6. 分阶段执行门禁
 
@@ -286,7 +290,8 @@ artifacts:
 
 ## 11. 当前启动清单
 
-在实际执行前，负责人先完成以下空项：
+在实际执行前，负责人先完成以下空项。2026-09-18 的核实结果是 **0/9 就绪**，逐项理由见
+[执行记录](production-validation-run-260918.zh-CN.md) 第 7 节：
 
 - [ ] 冻结 `CANDIDATE_SHA`、候选版本和制品 digest
 - [ ] 填写全部服务目标、容量阈值、费用上限和 RPO/RTO

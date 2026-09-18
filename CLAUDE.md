@@ -52,7 +52,7 @@ cd web && npx vitest run <path/to/file.test.ts>
 It says which changes justify which scope, and it is the single source for that
 decision. Re-running a suite that cannot see the change is not thoroughness: a
 CSS-only edit is answered by one vitest file in under a second, where the whole
-frontend suite takes 276 tests and the whole Go suite takes minutes. Anything the
+frontend suite takes 618 tests and the whole Go suite takes minutes. Anything the
 change genuinely could affect still gets run, and the full gate still runs before
 the push that publishes the work — a series of commits earns one gate, not one
 each.
@@ -156,7 +156,10 @@ Key `internal/` packages and what owns what:
   table plus an optional signed dynamic snapshot, off by default. The production artifact is
   produced only by the protected `.github/workflows/model-catalog-publish.yml`; see
   `docs/runbooks/model-catalog-publishing.md` and ADR 0020.
-- `failurecapture` — the one place Halro stores what a caller wrote (see the invariant below).
+- `failurecapture` — where a *failed* call's request and answer are kept (see the invariant
+  below); `data/provider-objects/`, written by `gateway`, is the other place caller bodies
+  land, and they are there because the caller asked Halro to hold them (Files, batch results,
+  deferred Responses).
 - `sourcelimit`, `hostsecurity`, `bearercred`, `alert` — pre-auth per-source request bounding
   ahead of the project limiter, core-dump/host hardening, rotatable bearer-token credential
   files (`/metrics`, audit anchor), and outbound alert webhooks.
@@ -205,11 +208,21 @@ and why a merge conflict in it is resolved by rebuilding rather than by hand.
   everywhere: auth, budget, redaction, transport.
 - **No secrets in logs, errors, metrics, or audit records**: authorization headers,
   Provider/Gateway keys, prompts, response bodies, raw source IPs never get logged or
-  persisted outside their one-time-response path. The single deliberate exception is
-  `internal/failurecapture`: a failed call's request and upstream answer, encrypted under the
-  master key, bound to its request and project, bounded in size and count, expiring on a
-  clock, and readable only as an audited admin action. Extending that exception anywhere
-  else is a design decision, not a convenience.
+  persisted outside their one-time-response path. Two stores deliberately hold caller bodies,
+  both sealed. `internal/failurecapture` keeps a *failed* call's request and upstream answer:
+  encrypted under the master key, bound to its request and project, bounded in size and count,
+  expiring on a clock, readable only as an audited admin action, and deliberately not archived.
+  `data/provider-objects/` keeps what a caller asked Halro to hold — Files (batch inputs among
+  them), the batch results Halro materialises, and deferred Responses, where the request object
+  is erased once the answer arrives — sealed per resource and project (ADR 0024), mode 0600,
+  and carried in backups (ADR 0021 authorises the store; 0024 is what seals and bounds it).
+  Bounded there means size and lifetime: a Files upload is capped by `max_request_bytes`, is
+  sealed locally whether or not the upstream also holds it, and expires in 30 days — but
+  nothing caps how many a Project may hold, which only the deferred tier does
+  (`max_deferred_queue`). Caller-supplied *metadata* is a third case and is stored in the clear:
+  an upload's filename, purpose and content-type in `halro.db`, and an Outcome's
+  `evidence_ref` in the governance journal and its exports. Adding a fourth place, or putting
+  a body anywhere else, is a design decision, not a convenience.
 - **Determinism on replay**: random IDs, wall-clock reads, and external results must be
   captured before replay, not regenerated during it.
 - **Retry/fallback is bounded** and stops being invisible once downstream response bytes
@@ -264,7 +277,7 @@ commit. This is not a style preference; it is where the expensive mistakes come 
 
 ## Pre-1.0.0: fix in place, do not accumulate compatibility
 
-Releases `v0.1.0` through `v0.5.0` are published (latest `v0.5.0`, 2026-09-01), and every
+Releases `v0.1.0` through `v0.8.3` are published (latest `v0.8.3`, 2026-09-17), and every
 one of them is below 1.0.0 — which is the whole point: while the version stays under
 1.0.0 there is no compatibility promise to keep, and an operator re-initialises their own
 instance rather than being migrated. Check `gh release list` before assuming what exists.
