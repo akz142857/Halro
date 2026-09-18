@@ -153,7 +153,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Go | `github.com/openai/openai-go/v3` 3.56.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
 | Node | `openai` 7.10.0 | Apache-2.0 |
-| Python | `anthropic` 1.4.0 | MIT |
+| Python | `anthropic` 1.5.0 | MIT |
 | Python | `openai` 3.8.0 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
@@ -179,6 +179,11 @@ The 2026-09-18 Python tooling refresh moved `pip-audit` from 2.9.0 to
 `pip` and `toml` entries with the MIT-licensed `tomli` and `tomli-w` entries,
 and adds no new license family or distribution obligation. This tooling remains
 confined to compatibility CI and is not included in Halro release artifacts.
+
+The 2026-09-18 Python compatibility refresh moved `anthropic` from 1.4.0 to
+1.5.0. The package remains MIT licensed, and applying the reviewed wheel hashes
+to the `pip-audit` 2.10.1 lock leaves the 42-package transitive set unchanged.
+The client remains test-only and is not distributed in Halro artifacts.
 
 ## Distribution requirements
 
@@ -206,8 +211,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `724e9c903bdb166a314c237f7de1ff2b6d4df76b`
 - `tests/compatibility/node/package.json`: `5f7994470dc2189d9890759bf785e3d613577852`
 - `tests/compatibility/node/package-lock.json`: `914360873d0a71c797e1991310128eae1095146c`
-- `tests/compatibility/python/requirements.in`: `eb57f4472bdb960cfedd9997062de02be1e4429a`
-- `tests/compatibility/python/requirements.txt`: `4822b17b8685be772e1fd1d8cd9fccac1bbdf2f5`
+- `tests/compatibility/python/requirements.in`: `3fb8ef914a5e55c54b8347ee988f1d59979bb5f7`
+- `tests/compatibility/python/requirements.txt`: `d345898bdd9918f4dda60ef554cc9c0f79e017cb`
 
 The Go hashes last moved for the 2026-09-11 Go refresh recorded
 above. The two web hashes last moved for the 2026-09-11 Admin UI refresh
