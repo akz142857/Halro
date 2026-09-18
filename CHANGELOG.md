@@ -6,6 +6,73 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-09-18
+
+### Added
+
+- `halro-deadman` now carries build identity in every shape it ships — tarball,
+  `.deb` and container — and answers `-version`. It was released with
+  `-ldflags "-s -w"` and no buildinfo, so a probe that stopped reporting could
+  not be asked which build it was. `-check-config` still wins when both flags
+  are given, so a deployment gate that composes its flag list cannot be
+  satisfied by a run that validated nothing.
+
+### Changed
+
+- Token windows (`max_context_tokens`, `max_output_tokens`) are now owned by the
+  Deployment alone. Provider and catalog numbers described an upstream and were
+  being applied as a hidden minimum at routing time, copied into the immutable
+  capability snapshot, and able to raise a capability review on their own. They
+  are still served as metadata, a Deployment's own guards are still enforced, and
+  a newly published model's window no longer has to reach Halro's bundled catalog
+  before an operator can configure it. An unset guard means the upstream's own
+  limit applies, which is what the console has always called it; a Deployment
+  created without one no longer inherits a catalog number in its place.
+  Capability snapshots taken before this release keep their stored numbers;
+  nothing reads them as a claim any more.
+- Saving a Deployment from a capability detection must name the detected
+  capabilities it retains. Omitting them used to be reported as a target
+  mismatch, which described the wrong problem; it now answers
+  `capability_detection_capabilities_required`. On an update through the Admin
+  API, omitting `capabilities` means "leave them unchanged" rather than
+  restoring catalog defaults — the console always sends the complete set, but
+  the API is a public contract and other clients were being silently widened.
+- `halro ledger verify` and `halro usage verify` now say which state they found
+  when a directory has not billed a request or exported usage yet. Both used to
+  answer a bare "chain could not be authenticated" or an `open …/manifest.json:
+  no such file or directory`, which reads as corruption on a fresh install.
+  Neither gate was relaxed: the empty case is byte-identical on disk to an
+  erased one, so both still exit non-zero — they now name both possibilities.
+- Shutdown is bracketed in the log. A log that stopped after "listener started"
+  was indistinguishable from a kill; draining, closing and the outcome of the
+  close each have a line now.
+- Dependency refresh: the AWS SDK group and eight Admin UI packages, plus the
+  official SDKs and tooling the compatibility suites pin. No dependency was
+  added, removed or relicensed (`docs/verification/dependency-license-review.md`).
+
+### Fixed
+
+- Every published release artifact is now checksummed and signed. Debian names
+  the gateway package `halro_<version>-1_<arch>.deb` with an underscore, so the
+  `halro-*` globs in the checksum, cosign and verify steps matched only
+  `halro-deadman_*.deb`: both `halro_*.deb` reached every release from v0.7.1
+  through v0.8.3 with no entry in `checksums.txt` and no Sigstore bundle. SLSA
+  provenance covered them throughout and was the single surviving binding.
+  Downstream, `verify-release.sh` relied on `sha256sum --check
+  --ignore-missing`, which exits zero as long as something verified; it and
+  `container-push` now assert membership per artifact before trusting it.
+- A prerelease version no longer corrupts its Debian package name. Bash 5
+  expands a bare `~` in a pattern replacement to `$HOME`, so `v1.2.3-rc.1`
+  produced `1.2.3/home/runnerrc.1` instead of `1.2.3~rc.1`.
+- Enabling the first authenticator no longer risks losing its recovery codes.
+  The session gate opens the moment the factor is enabled, so a focus refresh
+  could replace the one screen those codes are shown on; the restricted surface
+  now stays mounted until they have been saved. The sign-in form also says that
+  a code already used to sign in cannot be reused.
+- `usage verify` no longer certifies an empty ledger sitting under a surviving
+  usage tree, and the backup restore report that names every Gateway Key whose
+  enabled flag it restored now has a test for the case it exists for.
+
 ## [0.8.3] - 2026-09-18
 
 ### Added
@@ -1722,6 +1789,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.4]: https://github.com/akz142857/Halro/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/akz142857/Halro/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/akz142857/Halro/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/akz142857/Halro/compare/v0.8.0...v0.8.1

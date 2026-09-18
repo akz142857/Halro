@@ -235,8 +235,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `d424d793437ee2b237f9c9861deaea5e76a8bd76`
 - `go.sum`: `b2b51b4b4ab3cb03f792df71afa520d1b936ce43`
-- `web/package.json`: `15a3a6172c845c8a9ecc647fa556817e62fd80c0`
-- `web/package-lock.json`: `0a007504ef575ee75b04f1194a6051c6519458d6`
+- `web/package.json`: `5becd20cd2fb43666cbe94185736aa15ede7893f`
+- `web/package-lock.json`: `9344452342f3f55834d7c8aa32c751b822dc7195`
 - `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
 - `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
 - `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
@@ -244,13 +244,14 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/python/requirements.in`: `a6f9953e62dbbe7f15f4fbc7b920868882b0834b`
 - `tests/compatibility/python/requirements.txt`: `49f7bf5e4c9d7ab8845e2d18a35a01cef71b0e37`
 
-The Go hashes last moved for the 2026-09-11 Go refresh recorded
-above. The two web hashes last moved for the 2026-09-11 Admin UI refresh
-recorded above, before that for the 2026-09-05 seven-direct-package Admin UI
-refresh, and before that for the nine-package Admin UI bump,
+The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
+web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before
+that for the 2026-09-11 Admin UI refresh, before that for the 2026-09-05
+seven-direct-package Admin UI refresh, and before that for the nine-package
+Admin UI bump,
 and before that only
 for `chore(release): v0.2.0`, again for `v0.3.0`, again for `v0.4.0`, and again
-for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, and now `v0.8.3`, each of which bumped the
+for `v0.5.0`, `v0.6.0`, `v0.7.0`, `v0.7.1`, `v0.8.0`, `v0.8.3`, and now `v0.8.4`, each of which bumped the
 `version`
 field in both files and changed nothing else.
 Nothing in any of it added, removed, or relicensed a dependency, so the
