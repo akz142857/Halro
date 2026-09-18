@@ -61,7 +61,12 @@ done
 upstream_version="${version#v}"
 # Debian sorts '~' before the final version, which preserves SemVer prerelease
 # order (0.8.0~rc.1 < 0.8.0). A release revision changes packaging only.
-debian_upstream="${upstream_version/-/~}"
+debian_upstream=$upstream_version
+if [[ "$debian_upstream" == *-* ]]; then
+  # Do not use pattern replacement with a bare tilde: Bash 5 expands that
+  # replacement to $HOME, producing versions like 1.2.3/home/runnerrc.1 in CI.
+  debian_upstream="${debian_upstream%%-*}~${debian_upstream#*-}"
+fi
 package_version="${debian_upstream}-${revision}"
 source_date_epoch="${SOURCE_DATE_EPOCH:-$(git -C "$repo_root" show -s --format=%ct HEAD)}"
 

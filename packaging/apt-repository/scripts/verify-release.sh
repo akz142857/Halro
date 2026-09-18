@@ -25,7 +25,9 @@ gh release download "$version" --repo "$repository" --dir "$download_dir" \
 # release workflow promises both products for both supported architectures, so
 # make completeness part of the trust boundary before checking signatures.
 debian_upstream=${version#v}
-debian_upstream="${debian_upstream/-/~}"
+if [[ "$debian_upstream" == *-* ]]; then
+  debian_upstream="${debian_upstream%%-*}~${debian_upstream#*-}"
+fi
 package_version=${debian_upstream}-1
 expected_packages=()
 for package_name in halro halro-deadman; do

@@ -407,7 +407,9 @@ jobs:
               --output release
           done
           debian_upstream=${VERSION#v}
-          debian_upstream="${debian_upstream/-/~}"
+          if [[ "${debian_upstream}" == *-* ]]; then
+            debian_upstream="${debian_upstream%%-*}~${debian_upstream#*-}"
+          fi
           package_version=${debian_upstream}-1
           for package_name in halro halro-deadman; do
             for arch in amd64 arm64; do

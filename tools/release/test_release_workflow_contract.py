@@ -13,6 +13,7 @@ WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "rele
 GHCR_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish-ghcr.yml"
 CI_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 VERIFY_RELEASE = Path(__file__).resolve().parents[2] / "packaging" / "apt-repository" / "scripts" / "verify-release.sh"
+BUILD_DEB = Path(__file__).resolve().parents[2] / "tools" / "release" / "build_deb.sh"
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -125,6 +126,19 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn("for arch in amd64 arm64; do", package_build)
         self.assertIn('test -f "release/${package_name}_${package_version}_${arch}.deb"', package_build)
 
+    def test_debian_prerelease_conversion_cannot_expand_home(self):
+        sources = {
+            "release workflow": self.workflow,
+            "package builder": BUILD_DEB.read_text(encoding="utf-8"),
+            "release verifier": VERIFY_RELEASE.read_text(encoding="utf-8"),
+        }
+        for name, source in sources.items():
+            with self.subTest(source=name):
+                # In Bash 5, using an unescaped tilde as the replacement in
+                # ${value/-/~} expands it to $HOME even inside double quotes.
+                self.assertNotIn("/-/~}", source)
+                self.assertIn('~${debian_upstream#*-}', source)
+
     def test_both_released_binaries_carry_the_same_build_identity(self):
         # The dead-man ships in the same archive and runs outside Halro's
         # failure domain; a probe that cannot say which build it is cannot be
@@ -187,7 +201,9 @@ if [ "$1" = release ] && [ "$2" = download ]; then
   done
   mkdir -p "$output"
   version=${MOCK_VERSION#v}
-  version="${version/-/~}"
+  if [[ "$version" == *-* ]]; then
+    version="${version%%-*}~${version#*-}"
+  fi
   package_version=${version}-1
   for product in halro halro-deadman; do
     for architecture in amd64 arm64; do
