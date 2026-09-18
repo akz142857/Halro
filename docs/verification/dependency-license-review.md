@@ -17,16 +17,16 @@ module and lock files.
 
 | Module | Version | License | Distribution scope |
 |---|---:|---|---|
-| `github.com/aws/aws-sdk-go-v2` | 1.46.0 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/config` | 1.33.3 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.3 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.59.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2` | 1.47.0 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/config` | 1.33.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.5 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.60.0 | Apache-2.0 | runtime |
 | `github.com/aws/smithy-go` | 1.28.1 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.2 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
 | `go.etcd.io/bbolt` | 1.5.0 | MIT | runtime |
-| `golang.org/x/crypto` | 0.56.0 | BSD-3-Clause | runtime |
+| `golang.org/x/crypto` | 0.57.0 | BSD-3-Clause | runtime |
 | `golang.org/x/sys` | 0.48.0 | BSD-3-Clause | runtime |
 | `gopkg.in/yaml.v3` | 3.0.1 | MIT and Apache-2.0 | runtime |
 
@@ -64,6 +64,14 @@ Apache-2.0, while the two Go subrepositories remain BSD-3-Clause. The KMS
 custody path, credential discovery boundary, cryptographic helpers, and
 platform syscall surface remain covered by the full Go and compatibility test
 suites.
+
+The 2026-09-18 Go refresh moved the same four direct AWS SDK modules, nine
+version-pinned AWS transitive modules, and `golang.org/x/crypto`. It again
+added, removed, and relicensed nothing: the module path sets in `go.mod` and
+`go.sum` are unchanged. The AWS modules remain Apache-2.0 and `x/crypto`
+remains BSD-3-Clause. The KMS custody path, Bedrock SigV4 vectors, and Argon2
+administrator password path remain covered by focused tests and the full CI
+gate.
 
 The AWS KMS custody path is part of this review. The linked AWS SDK config and
 credential modules can resolve environment, shared-file, web-identity,
@@ -225,8 +233,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `89c91b3130972bc2b5c676e9e93266c1721fb9a8`
-- `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
+- `go.mod`: `d424d793437ee2b237f9c9861deaea5e76a8bd76`
+- `go.sum`: `b2b51b4b4ab3cb03f792df71afa520d1b936ce43`
 - `web/package.json`: `15a3a6172c845c8a9ecc647fa556817e62fd80c0`
 - `web/package-lock.json`: `0a007504ef575ee75b04f1194a6051c6519458d6`
 - `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
