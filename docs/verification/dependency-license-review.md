@@ -150,7 +150,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
 | Go | `github.com/anthropics/anthropic-sdk-go` 1.72.0 | MIT |
-| Go | `github.com/openai/openai-go/v3` 3.56.0 | Apache-2.0 |
+| Go | `github.com/openai/openai-go/v3` 3.61.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
 | Node | `openai` 7.10.0 | Apache-2.0 |
 | Python | `anthropic` 1.5.0 | MIT |
@@ -168,6 +168,11 @@ through an unreviewed side channel during the job.
 The 2026-09-18 Go compatibility refresh moved
 `github.com/anthropics/anthropic-sdk-go` from 1.71.0 to 1.72.0. The module
 remains MIT licensed, the resolved module-path set is unchanged, and this SDK
+is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-18 OpenAI Go compatibility refresh moved
+`github.com/openai/openai-go/v3` from 3.56.0 to 3.61.0. The module remains
+Apache-2.0 licensed, the resolved module-path set is unchanged, and this SDK
 is used only by the compatibility contracts rather than the shipped runtime.
 
 The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
@@ -207,8 +212,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
 - `web/package.json`: `00b690ac09576ce419d75d8cd14fc2a3104bb308`
 - `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
-- `tests/compatibility/go/go.mod`: `801543aa3cd4fc84df9f466cc157170e52016dc9`
-- `tests/compatibility/go/go.sum`: `724e9c903bdb166a314c237f7de1ff2b6d4df76b`
+- `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
+- `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
 - `tests/compatibility/node/package.json`: `5f7994470dc2189d9890759bf785e3d613577852`
 - `tests/compatibility/node/package-lock.json`: `914360873d0a71c797e1991310128eae1095146c`
 - `tests/compatibility/python/requirements.in`: `3fb8ef914a5e55c54b8347ee988f1d59979bb5f7`
