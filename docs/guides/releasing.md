@@ -78,7 +78,11 @@ Every release run produces:
 - a Sigstore keyless bundle for each binary archive, the SBOM, and checksum file;
 - a GitHub build-provenance attestation for every archive and SBOM, verified
   with `gh attestation verify` before publication;
-- workflow artifacts, an annotated version tag, and an immutable GitHub Release.
+- workflow artifacts, an annotated version tag, and an immutable GitHub Release
+  whose notes are the version's own `CHANGELOG.md` section, rendered by
+  `tools/release/release_notes.sh` with the install and verification pointers
+  appended. The publish step refuses rather than publishing empty notes, so the
+  section prepare checked for has to carry content as well as a heading.
 
 The GitHub Release is the source of truth for downstream package channels.
 `halro-ai/homebrew-tap` pins its Formula URLs and SHA-256 values to those immutable
@@ -136,9 +140,10 @@ branch other than `main`.
 Merge every intended change before starting the release. A local working tree,
 an unmerged pull request, or a commit on another branch is not part of the
 release. Add a complete `## [0.8.0]` section to `CHANGELOG.md` and fill a
-release assessment under `docs/verification/assessments/`. The workflow checks
-that the changelog section exists and that ordinary CI passed for this exact
-`main` commit; the owner remains responsible for the
+release assessment under `docs/verification/assessments/`. That changelog section
+is what the GitHub Release will say, so write it for a reader arriving at the
+Release page. The workflow checks that the section exists and that ordinary CI
+passed for this exact `main` commit; the owner remains responsible for the
 assessment being complete and for recording any explicitly waived external
 acceptance, such as a real-Provider smoke.
 

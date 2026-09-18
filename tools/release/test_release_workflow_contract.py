@@ -14,6 +14,8 @@ GHCR_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / 
 CI_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
 VERIFY_RELEASE = Path(__file__).resolve().parents[2] / "packaging" / "apt-repository" / "scripts" / "verify-release.sh"
 BUILD_DEB = Path(__file__).resolve().parents[2] / "tools" / "release" / "build_deb.sh"
+RELEASE_NOTES = Path(__file__).resolve().parents[2] / "tools" / "release" / "release_notes.sh"
+CHANGELOG = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -151,6 +153,78 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertEqual(build.count("internal/buildinfo.Version=${RELEASE_VERSION}"), 2)
         self.assertEqual(build.count("internal/buildinfo.Commit=${RELEASE_COMMIT}"), 2)
         self.assertEqual(build.count("internal/buildinfo.Date=${RELEASE_DATE}"), 2)
+
+    def test_release_notes_come_from_the_changelog(self):
+        # --generate-notes writes the merged-pull-request list, which describes
+        # how the work arrived rather than what the release is. v0.8.4 published
+        # with its eleven dependency bumps above its one substantive change.
+        publish = self.workflow[
+            self.workflow.index("- name: Publish GitHub release") : self.workflow.index("\n  container-push:\n")
+        ]
+        self.assertNotIn("--generate-notes", publish)
+        self.assertIn('tools/release/release_notes.sh "${VERSION}"', publish)
+        self.assertIn('--notes-file "${RUNNER_TEMP}/release-notes.md"', publish)
+
+    def test_release_notes_render_the_requested_section_and_refuse_a_missing_one(self):
+        changelog = (
+            "# Changelog\n\n"
+            "## [Unreleased]\n\n"
+            "## [1.2.3] - 2026-01-01\n\n"
+            "### Fixed\n\n- the thing this release fixed\n\n"
+            "## [1.2.2] - 2025-12-01\n\n"
+            "### Fixed\n\n- an older release nobody asked for\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "CHANGELOG.md"
+            path.write_text(changelog, encoding="utf-8")
+
+            rendered = subprocess.run(
+                [str(RELEASE_NOTES), "v1.2.3", str(path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                env={**os.environ, "GITHUB_REPOSITORY": "owner/Halro"},
+            ).stdout
+            self.assertIn("- the thing this release fixed", rendered)
+            self.assertNotIn("an older release nobody asked for", rendered)
+            self.assertNotIn("## [1.2.2]", rendered)
+            self.assertIn("ghcr.io/owner/halro:v1.2.3", rendered)
+            self.assertIn("ghcr.io/owner/halro-deadman:v1.2.3", rendered)
+
+            # A version with no section must not publish empty notes under an
+            # immutable tag that already exists by the time this runs.
+            missing = subprocess.run(
+                [str(RELEASE_NOTES), "v9.9.9", str(path)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("no content under", missing.stderr)
+
+            # An empty section is the same failure as an absent one.
+            empty = Path(directory) / "EMPTY.md"
+            empty.write_text("## [1.2.3] - 2026-01-01\n\n## [1.2.2] - 2025-12-01\n\n- older\n", encoding="utf-8")
+            blank = subprocess.run(
+                [str(RELEASE_NOTES), "v1.2.3", str(empty)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(blank.returncode, 0)
+
+    def test_the_published_changelog_section_renders_for_the_current_version(self):
+        # The renderer is only as good as the section it reads: a heading style
+        # the extractor cannot match would fail at publish time, after the tag.
+        changelog = CHANGELOG.read_text(encoding="utf-8")
+        latest = re.search(r"^## \[(\d+\.\d+\.\d+)\]", changelog, re.MULTILINE).group(1)
+        rendered = subprocess.run(
+            [str(RELEASE_NOTES), f"v{latest}", str(CHANGELOG)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertIn("## Install", rendered)
+        self.assertNotIn("## [", rendered)
+        self.assertGreater(len(rendered.splitlines()), 20)
 
     def test_every_fuzz_target_in_the_tree_is_listed_in_ci(self):
         # ci.yml already fails when a listed target no longer exists. The other

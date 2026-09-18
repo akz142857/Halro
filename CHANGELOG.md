@@ -6,6 +6,14 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- A release's GitHub Release notes are now the version's own `CHANGELOG.md`
+  section rather than GitHub's generated pull-request list. v0.8.4 published
+  with its eleven dependency bumps listed above its one substantive change,
+  which described how the work arrived rather than what the release is. The
+  publish step refuses rather than publishing empty notes.
+
 ## [0.8.4] - 2026-09-18
 
 ### Added
