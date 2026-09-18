@@ -578,7 +578,11 @@ jobs:
       actions: read
       contents: write
     steps:
+      # Full history: the tag step reads the existing tags, and the notes step
+      # resolves the previous one for the compare link.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets
@@ -629,6 +633,10 @@ jobs:
             git tag -a "${VERSION}" -m "Halro ${VERSION}" "${GITHUB_SHA}"
             git push origin "refs/tags/${VERSION}"
           fi
+      # Notes come from the CHANGELOG section prepare already required, not from
+      # --generate-notes: the merged-pull-request list describes how the work
+      # arrived rather than what the release is, and v0.8.4 shipped with its
+      # eleven dependency bumps above its one substantive change.
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -638,7 +646,9 @@ jobs:
           if gh release view "${VERSION}" >/dev/null 2>&1; then
             echo "release ${VERSION} already exists; skipping creation"
           else
-            gh release create "${VERSION}" release/* --verify-tag --generate-notes --title "Halro ${VERSION}"
+            tools/release/release_notes.sh "${VERSION}" > "${RUNNER_TEMP}/release-notes.md"
+            gh release create "${VERSION}" release/* --verify-tag \
+              --notes-file "${RUNNER_TEMP}/release-notes.md" --title "Halro ${VERSION}"
           fi
 
   container-push:
