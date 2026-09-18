@@ -85,12 +85,12 @@ is linked into the Go runtime.
 | `@tanstack/react-query` | 5.102.8 | MIT |
 | `i18next` | 26.4.2 | MIT |
 | `qrcode` | 1.5.4 | MIT |
-| `react` | 19.2.8 | MIT |
-| `react-dom` | 19.2.8 | MIT |
-| `react-hook-form` | 7.87.0 | MIT |
-| `react-i18next` | 17.0.13 | MIT |
+| `react` | 19.3.0 | MIT |
+| `react-dom` | 19.3.0 | MIT |
+| `react-hook-form` | 7.88.0 | MIT |
+| `react-i18next` | 17.0.14 | MIT |
 | `uplot` | 1.6.32 | MIT |
-| `zod` | 4.5.4 | MIT |
+| `zod` | 4.6.5 | MIT |
 
 The same 2026-08-28 refresh moved five of the rows above — `@hookform/resolvers`
 5.7.1 to 5.9.1, `@tanstack/react-query` 5.101.4 to 5.102.3, `i18next` 26.3.6 to
@@ -125,6 +125,14 @@ major update changes only test tooling; its lockfile adds the MIT-licensed
 four dev-only MIT packages. No runtime package was added, removed, or
 relicensed, and the embedded Admin UI bundle was rebuilt from the updated
 lockfile.
+
+The 2026-09-18 Admin UI refresh moved the runtime `react` and `react-dom`
+packages from 19.2.8 to 19.3.0, `react-hook-form` from 7.87.0 to 7.88.0,
+`react-i18next` from 17.0.13 to 17.0.14, and `zod` from 4.5.4 to 4.6.5. It also
+moved the dev-only `@types/react` from 19.2.18 to 19.3.0,
+`@types/react-dom` from 19.2.7 to 19.3.0, and `vite` from 8.2.2 to 8.3.0. All
+eight remain MIT licensed, the 193-node lockfile package set is unchanged, and
+the embedded Admin UI bundle was rebuilt from the reviewed lockfile.
 
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
@@ -219,8 +227,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `89c91b3130972bc2b5c676e9e93266c1721fb9a8`
 - `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
-- `web/package.json`: `00b690ac09576ce419d75d8cd14fc2a3104bb308`
-- `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
+- `web/package.json`: `15a3a6172c845c8a9ecc647fa556817e62fd80c0`
+- `web/package-lock.json`: `0a007504ef575ee75b04f1194a6051c6519458d6`
 - `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
 - `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
 - `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
