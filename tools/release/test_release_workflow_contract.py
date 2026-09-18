@@ -134,12 +134,22 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "package builder": BUILD_DEB.read_text(encoding="utf-8"),
             "release verifier": VERIFY_RELEASE.read_text(encoding="utf-8"),
         }
+        # The three copies name the variable differently; what has to hold is the
+        # idiom, not the name. verify-release.sh is a copy of the script that
+        # runs in the private control plane, so this assertion says nothing
+        # about production on its own — see packaging/apt-repository/README.md.
+        variables = {
+            "release workflow": "debian_upstream",
+            "package builder": "debian_upstream",
+            "release verifier": "expected_package_version",
+        }
         for name, source in sources.items():
             with self.subTest(source=name):
                 # In Bash 5, using an unescaped tilde as the replacement in
                 # ${value/-/~} expands it to $HOME even inside double quotes.
                 self.assertNotIn("/-/~}", source)
-                self.assertIn('~${debian_upstream#*-}', source)
+                variable = variables[name]
+                self.assertIn(f"${{{variable}%%-*}}~${{{variable}#*-}}", source)
 
     def test_both_released_binaries_carry_the_same_build_identity(self):
         # The dead-man ships in the same archive and runs outside Halro's
@@ -254,16 +264,39 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             listed.add((match.group(1), match.group(2)))
         self.assertEqual(listed, declared, f"ci.yml fuzz target set differs: missing={sorted(declared - listed)}, stale={sorted(listed - declared)}")
 
+    @staticmethod
+    def _bash_has_associative_arrays():
+        probe = subprocess.run(["bash", "-c", "declare -A x 2>/dev/null"], capture_output=True)
+        return probe.returncode == 0
+
     @unittest.skipUnless(shutil.which("sha256sum"), "sha256sum is required by the release verifier")
-    def test_apt_verifier_requires_the_complete_product_architecture_matrix(self):
+    def test_apt_verifier_refuses_an_incomplete_or_unchecksummed_release(self):
+        # verify-release.sh here is a copy of the script that runs in the private
+        # halro-ai/apt-repository. Running the copy is the only check available:
+        # the control plane is private, so nothing can compare the two
+        # automatically. packaging/apt-repository/README.md says so out loud.
+        if not self._bash_has_associative_arrays():
+            self.skipTest("the verifier's package matrix needs bash 4+; macOS ships 3.2")
+        commit = "a" * 40
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binaries = root / "bin"
             binaries.mkdir()
+
+            # gh: resolves the tag, then materialises a release whose shape the
+            # environment chooses — complete, missing one package, or with one
+            # package left out of checksums.txt.
             gh = binaries / "gh"
             gh.write_text(
                 """#!/usr/bin/env bash
 set -eu
+if [ "$1" = api ]; then
+  printf '%s\\n' "${MOCK_COMMIT}"
+  exit 0
+fi
+if [ "$1" = attestation ]; then
+  exit 0
+fi
 if [ "$1" = release ] && [ "$2" = download ]; then
   shift 2
   output=""
@@ -282,7 +315,7 @@ if [ "$1" = release ] && [ "$2" = download ]; then
   for product in halro halro-deadman; do
     for architecture in amd64 arm64; do
       package=${product}_${package_version}_${architecture}.deb
-      if [ "${MOCK_COMPLETE:-0}" != 1 ] && [ "$package" = "halro_${package_version}_arm64.deb" ]; then
+      if [ "${MOCK_DROP_PACKAGE:-}" = "$package" ]; then
         continue
       fi
       printf '%s\\n' "$package" >"$output/$package"
@@ -290,29 +323,76 @@ if [ "$1" = release ] && [ "$2" = download ]; then
     done
   done
   (cd "$output" && sha256sum *.deb >checksums.txt)
+  if [ -n "${MOCK_UNLISTED_PACKAGE:-}" ]; then
+    grep -v -- "${MOCK_UNLISTED_PACKAGE}" "$output/checksums.txt" >"$output/checksums.tmp"
+    mv "$output/checksums.tmp" "$output/checksums.txt"
+  fi
   : >"$output/checksums.txt.sigstore.json"
 fi
 """,
                 encoding="utf-8",
             )
             gh.chmod(0o755)
-            cosign = binaries / "cosign"
-            cosign.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-            cosign.chmod(0o755)
-            environment = {**os.environ, "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}", "MOCK_VERSION": "v1.2.3-rc.1"}
-
-            incomplete = subprocess.run(
-                ["bash", str(VERIFY_RELEASE), "v1.2.3-rc.1", str(root / "incomplete")],
-                check=False, capture_output=True, text=True, env=environment,
+            for name in ("cosign",):
+                stub = binaries / name
+                stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                stub.chmod(0o755)
+            # dpkg-deb answers from the filename, which is what the release
+            # workflow builds the name from in the first place.
+            dpkg = binaries / "dpkg-deb"
+            dpkg.write_text(
+                """#!/usr/bin/env bash
+set -eu
+# dpkg-deb --field <archive> <field-name>
+package=$(basename "$2" .deb)
+field=$3
+name=${package%%_*}
+rest=${package#*_}
+version=${rest%%_*}
+architecture=${rest#*_}
+case "$field" in
+  Package) printf '%s\\n' "$name" ;;
+  Version) printf '%s\\n' "$version" ;;
+  Architecture) printf '%s\\n' "$architecture" ;;
+esac
+""",
+                encoding="utf-8",
             )
-            self.assertNotEqual(incomplete.returncode, 0)
-            self.assertIn("missing halro_1.2.3~rc.1-1_arm64.deb", incomplete.stderr)
+            dpkg.chmod(0o755)
 
-            complete = subprocess.run(
-                ["bash", str(VERIFY_RELEASE), "v1.2.3-rc.1", str(root / "complete")],
-                check=False, capture_output=True, text=True, env={**environment, "MOCK_COMPLETE": "1"},
-            )
+            version = "v1.2.3-rc.1"
+            environment = {
+                **os.environ,
+                "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}",
+                "MOCK_VERSION": version,
+                "MOCK_COMMIT": commit,
+            }
+
+            def run(name, extra=None):
+                return subprocess.run(
+                    ["bash", str(VERIFY_RELEASE), version, commit, str(root / name)],
+                    check=False, capture_output=True, text=True, env={**environment, **(extra or {})},
+                )
+
+            # A prerelease tag must accept packages named 1.2.3~rc.1-1. Under
+            # Bash 5 the old derivation produced 1.2.3/home/runnerrc.1-1 here and
+            # rejected every one of them.
+            complete = run("complete")
             self.assertEqual(complete.returncode, 0, complete.stderr)
+
+            missing = run("missing", {"MOCK_DROP_PACKAGE": "halro_1.2.3~rc.1-1_arm64.deb"})
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("halro and halro-deadman for amd64 and arm64", missing.stderr)
+
+            # sha256sum --check --ignore-missing passes a package it was never
+            # told about; only the membership assertion refuses it.
+            unlisted = run("unlisted", {"MOCK_UNLISTED_PACKAGE": "halro_1.2.3~rc.1-1_amd64.deb"})
+            self.assertNotEqual(unlisted.returncode, 0)
+            self.assertIn("is not listed in checksums.txt", unlisted.stderr)
+
+            wrong_commit = run("wrong-commit", {"MOCK_COMMIT": "b" * 40})
+            self.assertNotEqual(wrong_commit.returncode, 0)
+            self.assertIn("resolves to", wrong_commit.stderr)
 
 
 if __name__ == "__main__":
