@@ -85,12 +85,12 @@ is linked into the Go runtime.
 | `@tanstack/react-query` | 5.102.8 | MIT |
 | `i18next` | 26.4.2 | MIT |
 | `qrcode` | 1.5.4 | MIT |
-| `react` | 19.2.8 | MIT |
-| `react-dom` | 19.2.8 | MIT |
-| `react-hook-form` | 7.87.0 | MIT |
-| `react-i18next` | 17.0.13 | MIT |
+| `react` | 19.3.0 | MIT |
+| `react-dom` | 19.3.0 | MIT |
+| `react-hook-form` | 7.88.0 | MIT |
+| `react-i18next` | 17.0.14 | MIT |
 | `uplot` | 1.6.32 | MIT |
-| `zod` | 4.5.4 | MIT |
+| `zod` | 4.6.5 | MIT |
 
 The same 2026-08-28 refresh moved five of the rows above — `@hookform/resolvers`
 5.7.1 to 5.9.1, `@tanstack/react-query` 5.101.4 to 5.102.3, `i18next` 26.3.6 to
@@ -126,6 +126,14 @@ four dev-only MIT packages. No runtime package was added, removed, or
 relicensed, and the embedded Admin UI bundle was rebuilt from the updated
 lockfile.
 
+The 2026-09-18 Admin UI refresh moved the runtime `react` and `react-dom`
+packages from 19.2.8 to 19.3.0, `react-hook-form` from 7.87.0 to 7.88.0,
+`react-i18next` from 17.0.13 to 17.0.14, and `zod` from 4.5.4 to 4.6.5. It also
+moved the dev-only `@types/react` from 19.2.18 to 19.3.0,
+`@types/react-dom` from 19.2.7 to 19.3.0, and `vite` from 8.2.2 to 8.3.0. All
+eight remain MIT licensed, the 193-node lockfile package set is unchanged, and
+the embedded Admin UI bundle was rebuilt from the reviewed lockfile.
+
 The Admin UI lockfile contains no CC-BY package. Its 12 MPL-2.0 entries are
 `lightningcss` 1.33.0 plus eleven platform-specific optional binaries. They are
 dev-only CSS build tooling and are not present in the generated Admin UI bundle
@@ -149,13 +157,13 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
-| Go | `github.com/anthropics/anthropic-sdk-go` 1.71.0 | MIT |
-| Go | `github.com/openai/openai-go/v3` 3.56.0 | Apache-2.0 |
-| Node | `@anthropic-ai/sdk` 0.124.0 | MIT |
-| Node | `openai` 7.10.0 | Apache-2.0 |
-| Python | `anthropic` 1.4.0 | MIT |
-| Python | `openai` 3.8.0 | Apache-2.0 |
-| Python tooling | `pip-audit` 2.9.0 | Apache-2.0 |
+| Go | `github.com/anthropics/anthropic-sdk-go` 1.72.0 | MIT |
+| Go | `github.com/openai/openai-go/v3` 3.61.0 | Apache-2.0 |
+| Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
+| Node | `openai` 7.15.0 | Apache-2.0 |
+| Python | `anthropic` 1.5.0 | MIT |
+| Python | `openai` 3.14.0 | Apache-2.0 |
+| Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
 The resolved Go compatibility graph is MIT, BSD-3-Clause, or Apache-2.0. The
 Node lock contains MIT, Apache-2.0, and Unlicense packages. The 42-package
@@ -164,6 +172,40 @@ and one MPL-2.0 certificate bundle (`certifi`); all are test-only and none are
 distributed in Halro artifacts. The `pip-audit` tool and its transitive packages
 are deliberately in the same hash-checked lock, so the scanner is not fetched
 through an unreviewed side channel during the job.
+
+The 2026-09-18 Go compatibility refresh moved
+`github.com/anthropics/anthropic-sdk-go` from 1.71.0 to 1.72.0. The module
+remains MIT licensed, the resolved module-path set is unchanged, and this SDK
+is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-18 OpenAI Go compatibility refresh moved
+`github.com/openai/openai-go/v3` from 3.56.0 to 3.61.0. The module remains
+Apache-2.0 licensed, the resolved module-path set is unchanged, and this SDK
+is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
+0.124.0 to 0.125.0. The package remains MIT licensed, the lockfile package set
+is unchanged, and the SDK remains confined to compatibility CI.
+
+The 2026-09-18 OpenAI Node compatibility refresh moved `openai` from 7.10.0
+to 7.15.0. The package remains Apache-2.0 licensed, the lockfile package set is
+unchanged, and the SDK remains confined to compatibility CI.
+
+The 2026-09-18 Python tooling refresh moved `pip-audit` from 2.9.0 to
+2.10.1. The resolved lock remains 42 packages: it replaces the MIT-licensed
+`pip` and `toml` entries with the MIT-licensed `tomli` and `tomli-w` entries,
+and adds no new license family or distribution obligation. This tooling remains
+confined to compatibility CI and is not included in Halro release artifacts.
+
+The 2026-09-18 Python compatibility refresh moved `anthropic` from 1.4.0 to
+1.5.0. The package remains MIT licensed, and applying the reviewed wheel hashes
+to the `pip-audit` 2.10.1 lock leaves the 42-package transitive set unchanged.
+The client remains test-only and is not distributed in Halro artifacts.
+
+The 2026-09-18 OpenAI Python compatibility refresh moved `openai` from 3.8.0
+to 3.14.0. The package remains Apache-2.0 licensed, and the 42-package
+transitive set is unchanged. The client remains test-only and is not
+distributed in Halro artifacts.
 
 ## Distribution requirements
 
@@ -185,14 +227,14 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `89c91b3130972bc2b5c676e9e93266c1721fb9a8`
 - `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
-- `web/package.json`: `00b690ac09576ce419d75d8cd14fc2a3104bb308`
-- `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
-- `tests/compatibility/go/go.mod`: `877e27308fd60916f0a462a88d301355fc66e084`
-- `tests/compatibility/go/go.sum`: `930d790a4f664ad7a0ee641d22db7debb6c3ded5`
-- `tests/compatibility/node/package.json`: `035be267a4afb3a23a447b7c95e963a82d9bd8db`
-- `tests/compatibility/node/package-lock.json`: `c2498763cfbc484745d67b84f179a891c2ff42f7`
-- `tests/compatibility/python/requirements.in`: `951765ed632ee780f88b1f49cd7f12ab3441a67e`
-- `tests/compatibility/python/requirements.txt`: `f4a5887a32bcf876cafad3eb22b7fbe3bbf63dcf`
+- `web/package.json`: `15a3a6172c845c8a9ecc647fa556817e62fd80c0`
+- `web/package-lock.json`: `0a007504ef575ee75b04f1194a6051c6519458d6`
+- `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
+- `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
+- `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
+- `tests/compatibility/node/package-lock.json`: `530d2b6425cfcfa22c95161739e133329721fa8b`
+- `tests/compatibility/python/requirements.in`: `a6f9953e62dbbe7f15f4fbc7b920868882b0834b`
+- `tests/compatibility/python/requirements.txt`: `49f7bf5e4c9d7ab8845e2d18a35a01cef71b0e37`
 
 The Go hashes last moved for the 2026-09-11 Go refresh recorded
 above. The two web hashes last moved for the 2026-09-11 Admin UI refresh
