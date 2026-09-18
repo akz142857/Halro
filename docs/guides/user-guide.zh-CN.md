@@ -173,7 +173,10 @@ Bootstrap 不会把两个零价字段自动解释为免费。只有确认该 Dep
 5. **Projects**：配置允许的模型别名、RPM、TPM、最大并发、每日预算、CIDR 和安全 Policy。
 6. **Projects → Keys**：为应用创建 Gateway Key。Key 只显示一次；确认已经安全保存后关闭弹窗。
 
-Provider 能力是上限，Deployment 能力只能是 Provider 能力的子集。Route 中使用的是公开别名；SDK 请求不应使用真实 Provider 模型名称。
+Provider 的操作与协议能力是上限，Deployment 只能选择其中的子集。两个 Token 数值是
+Deployment 自己的运行时保护阈值：`0` 表示不在部署层限制；当上游能力已经领先于内置目录时，
+管理员也可以填写高于目录元数据的值，但上游仍可拒绝真正超出其限制的请求。Route 中使用的是
+公开别名；SDK 请求不应使用真实 Provider 模型名称。
 
 ### 3.3 Provider 基础参数
 

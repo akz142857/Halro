@@ -130,6 +130,8 @@ func (r *Runtime) adminDeploymentInputError(writer http.ResponseWriter, request 
 		writeJSON(writer, http.StatusConflict, map[string]string{"error": err.Error(), "code": "capability_detection_changed"})
 	case errors.Is(err, errCapabilitiesExceedDetection):
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "capabilities_exceed_detection"})
+	case errors.Is(err, errCapabilityDetectionCapabilitiesRequired):
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "capability_detection_capabilities_required"})
 	case errors.Is(err, errCapabilityDetectionTargetMismatch):
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "capability_detection_target_mismatch"})
 	default:
@@ -603,9 +605,11 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, err
 	}
 	binding, capabilities := resolution.binding, resolution.capabilities
-	// A create request that omits capabilities accepts the resolved operation
-	// and protocol features, but token guards default to zero. Catalogue and
-	// provider metadata describe the upstream; they are not deployment defaults.
+	// A catalog- or variant-resolved create request that omits capabilities
+	// accepts the resolved operation and protocol features, but token guards
+	// default to zero. A detection result is different: the operator must submit
+	// the retained detected set explicitly. Catalogue and provider metadata
+	// describe the upstream; they are not deployment defaults.
 	if prior == nil && input.Capabilities == nil {
 		capabilities = domain.ProviderCapabilitiesWithoutTokenLimits(capabilities)
 	}
@@ -630,6 +634,7 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		ProviderModel:      model,
 		CanonicalModelRef:  resolution.canonicalModelRef,
 		ModelRevision:      resolution.entry.Revision(),
+		FeatureRevision:    resolution.entry.FeatureRevision(),
 		ResolutionRevision: resolution.resolutionRevision,
 		ProviderRevision:   instance.Revision,
 		Source:             string(resolution.entry.Source),
@@ -715,15 +720,19 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 }
 
 var (
-	errCapabilityDetectionStale          = errors.New("capability detection is incomplete or expired")
-	errCapabilityDetectionChanged        = errors.New("capability detection changed since it was read")
-	errCapabilitiesExceedDetection       = errors.New("deployment capabilities exceed the verified detection result")
-	errCapabilityDetectionTargetMismatch = errors.New("capability detection does not match the current target")
+	errCapabilityDetectionStale                = errors.New("capability detection is incomplete or expired")
+	errCapabilityDetectionChanged              = errors.New("capability detection changed since it was read")
+	errCapabilitiesExceedDetection             = errors.New("deployment capabilities exceed the verified detection result")
+	errCapabilityDetectionCapabilitiesRequired = errors.New("capability detection requires an explicit retained capability selection")
+	errCapabilityDetectionTargetMismatch       = errors.New("capability detection does not match the current target")
 )
 
 func (r *Runtime) resolveDeploymentDetection(ctx context.Context, instance domain.ProviderInstance, input deploymentInput, model, region string) (deploymentResolution, *domain.ModelCapabilityDetection, error) {
-	if input.Mode != "" || input.CapabilityDetectionRevision == 0 || input.Capabilities == nil {
+	if input.Mode != "" || input.CapabilityDetectionRevision == 0 {
 		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
+	}
+	if input.Capabilities == nil {
+		return deploymentResolution{}, nil, errCapabilityDetectionCapabilitiesRequired
 	}
 	detection, err := r.store.GetModelCapabilityDetection(ctx, input.CapabilityDetectionID)
 	if err != nil {

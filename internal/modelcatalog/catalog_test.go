@@ -291,6 +291,25 @@ func TestRevisionsAreDeterministicAndPerModel(t *testing.T) {
 	}
 }
 
+func TestFeatureRevisionIgnoresOnlyTokenWindowMetadata(t *testing.T) {
+	entry := Builtin().Entries()[0]
+	metadataOnly := entry
+	metadataOnly.Capabilities.MaxContextTokens++
+	metadataOnly.Capabilities.MaxOutputTokens++
+	if entry.Revision() == metadataOnly.Revision() {
+		t.Fatal("full revision ignored changed token-window metadata")
+	}
+	if entry.FeatureRevision() != metadataOnly.FeatureRevision() {
+		t.Fatal("feature revision changed with deployment-independent token metadata")
+	}
+
+	featureChange := entry
+	featureChange.Capabilities.Chat = !featureChange.Capabilities.Chat
+	if entry.FeatureRevision() == featureChange.FeatureRevision() {
+		t.Fatal("feature revision ignored a boolean capability change")
+	}
+}
+
 func TestMergeFailsClosedOnConflict(t *testing.T) {
 	key := Key{ProviderType: domain.ProviderOpenAI, Profile: domain.ProfileOpenAIChatEmbeddings, Model: "conflicted"}
 	entry := Merge(key,

@@ -406,10 +406,16 @@ jobs:
               --archive "release-input/halro-linux-${arch}.tar.gz" \
               --output release
           done
-          halro_deb=$(find release -maxdepth 1 -name 'halro_*_amd64.deb' -print)
-          deadman_deb=$(find release -maxdepth 1 -name 'halro-deadman_*_amd64.deb' -print)
-          test "$(printf '%s\n' "${halro_deb}" | grep -c .)" -eq 1
-          test "$(printf '%s\n' "${deadman_deb}" | grep -c .)" -eq 1
+          debian_upstream=${VERSION#v}
+          debian_upstream="${debian_upstream/-/~}"
+          package_version=${debian_upstream}-1
+          for package_name in halro halro-deadman; do
+            for arch in amd64 arm64; do
+              test -f "release/${package_name}_${package_version}_${arch}.deb"
+            done
+          done
+          halro_deb="release/halro_${package_version}_amd64.deb"
+          deadman_deb="release/halro-deadman_${package_version}_amd64.deb"
           tools/release/test_deb.sh "${halro_deb}" "${deadman_deb}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

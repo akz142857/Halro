@@ -226,8 +226,12 @@ In this order:
 6. **Projects → Keys**: create a Gateway Key for the application. It is shown
    once; close the dialog only after storing it safely.
 
-Provider capabilities are a ceiling and a deployment's capabilities can only be
-a subset of them. Routes carry the public alias; SDK requests should never use
+Provider operation and protocol capabilities are a ceiling, and a deployment
+can only select a subset of them. The deployment's numeric token guards are
+different: `0` leaves that deployment-layer guard disabled, and an operator may
+enter a value above catalog metadata when the upstream has moved ahead of the
+bundled catalog. The upstream remains authoritative and can still reject an
+over-limit request. Routes carry the public alias; SDK requests should never use
 the real Provider model name.
 
 ### 3.3 Provider basics

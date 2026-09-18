@@ -141,7 +141,8 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	candidateIDs := make([]string, 0, len(resolved))
 	for _, item := range resolved {
 		candidates = append(candidates, domain.DetectionBindingCandidate{BindingID: item.binding.ID, ProfileID: item.binding.ProfileID,
-			AccessSurface: item.binding.AccessSurface, ModelRevision: item.entry.Revision(), Verifiable: item.verifiable, Status: domain.ProbeNotProbed})
+			AccessSurface: item.binding.AccessSurface, ModelRevision: item.entry.Revision(), FeatureRevision: item.entry.FeatureRevision(),
+			Verifiable: item.verifiable, Status: domain.ProbeNotProbed})
 		candidateIDs = append(candidateIDs, item.binding.ID)
 	}
 	now := r.now().UTC()
@@ -194,7 +195,7 @@ func (r *Runtime) createAdminModelCapabilityDetection(writer http.ResponseWriter
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	detection := domain.ModelCapabilityDetection{ID: detectionID, ProviderID: providerID, ProviderRevision: instance.Revision,
 		CredentialRevision: credential.Revision, CredentialKeyVersion: credential.KeyVersion, ProviderModel: input.ProviderModel,
-		ModelRevision: candidates[0].ModelRevision, Candidates: candidates,
+		ModelRevision: candidates[0].ModelRevision, FeatureRevision: candidates[0].FeatureRevision, Candidates: candidates,
 		TargetKind: targetKind, CanonicalTarget: input.ProviderModel, Region: region, SelectionFingerprint: fingerprint,
 		DetectorVersion: provider.CapabilityDetectorContractVersion, RiskTier: input.RiskTier, Status: domain.DetectionQueued,
 		Source: string(modelcatalog.SourceVerifiedProbe), Results: map[string]domain.CapabilityProbeResult{},
@@ -706,7 +707,7 @@ func (r *Runtime) resolveDetectionBinding(ctx context.Context, d domain.ModelCap
 		return d, false
 	}
 	d.BindingID, d.ProfileID, d.AccessSurface = binding.ID, binding.ProfileID, binding.AccessSurface
-	d.ModelRevision = candidate.ModelRevision
+	d.ModelRevision, d.FeatureRevision = candidate.ModelRevision, candidate.FeatureRevision
 	d.TargetFingerprint = detectionTargetFingerprint(d.ProviderID, d.ProviderRevision, d.CredentialRevision, d.CredentialKeyVersion,
 		binding.ID, binding.ProfileID, binding.AccessSurface, d.ProviderModel, d.TargetKind, d.Region, d.RiskTier)
 	d.Recommended.MaxContextTokens, d.Recommended.MaxOutputTokens = binding.Capabilities.MaxContextTokens, binding.Capabilities.MaxOutputTokens

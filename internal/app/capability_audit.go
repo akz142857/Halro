@@ -46,6 +46,9 @@ func capabilitySnapshotMetadata(deployment domain.Deployment) map[string]any {
 	if deployment.BindingID != "" {
 		metadata["binding_id"] = deployment.BindingID
 	}
+	if snapshot.FeatureRevision != "" {
+		metadata["feature_revision"] = snapshot.FeatureRevision
+	}
 	if snapshot.CatalogRevision != "" {
 		metadata["catalog_revision"] = snapshot.CatalogRevision
 	}
@@ -93,9 +96,16 @@ func enabledCapabilityNames(capabilities domain.ProviderCapabilities) []string {
 // the former is a capability review.
 func capabilityChanged(before, after domain.Deployment) bool {
 	return !sameCapabilityFeatures(before.Capabilities, after.Capabilities) ||
-		before.ModelCapabilitySnapshot.ModelRevision != after.ModelCapabilitySnapshot.ModelRevision ||
+		capabilitySnapshotRevisionChanged(before.ModelCapabilitySnapshot, after.ModelCapabilitySnapshot) ||
 		before.ModelCapabilitySnapshot.Source != after.ModelCapabilitySnapshot.Source ||
 		!sameCapabilityFeatures(before.ModelCapabilitySnapshot.Capabilities, after.ModelCapabilitySnapshot.Capabilities)
+}
+
+func capabilitySnapshotRevisionChanged(before, after domain.ModelCapabilitySnapshot) bool {
+	if before.FeatureRevision != "" && after.FeatureRevision != "" {
+		return before.FeatureRevision != after.FeatureRevision
+	}
+	return before.ModelRevision != after.ModelRevision
 }
 
 func sameCapabilityFeatures(left, right domain.ProviderCapabilities) bool {

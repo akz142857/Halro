@@ -565,6 +565,18 @@ func TestCapabilityDetectionAPIIsExplicitCachedAndCreatesUntestedSnapshot(t *tes
 		deployment.LastTestRevision != 0 || deployment.LastTestStatus != "" {
 		t.Fatalf("deployment=%#v", deployment)
 	}
+	if deployment.ModelCapabilitySnapshot.FeatureRevision == "" {
+		t.Fatal("detected deployment snapshot omitted its feature revision")
+	}
+
+	omittedCapabilities := performAdminMutation(t, runtime, session.cookie, session.csrf, http.MethodPost, "/admin/api/v1/deployments", "", map[string]any{
+		"name": "Detected without a retained selection", "provider_id": instance.ID, "provider_model": "unlisted-model", "target_kind": "model_id",
+		"capability_detection_id": completed.ID, "capability_detection_revision": completed.Revision, "enabled": false,
+	})
+	if omittedCapabilities.Code != http.StatusBadRequest ||
+		!strings.Contains(omittedCapabilities.Body.String(), `"code":"capability_detection_capabilities_required"`) {
+		t.Fatalf("omitted capabilities status=%d body=%s", omittedCapabilities.Code, omittedCapabilities.Body.String())
+	}
 
 	if completed.ExpiresAt == nil {
 		t.Fatal("completed detection has no expiry")

@@ -175,6 +175,7 @@ func TestReviewOffersTheCapabilitiesTheCatalogNowEstablishes(t *testing.T) {
 	deployment, binding := catalogueDeployment(t)
 	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceOperatorDeclared)
 	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:when-nothing-was-known"
+	deployment.ModelCapabilitySnapshot.FeatureRevision = "sha256:when-nothing-was-known"
 	// The operator declared no operation; the catalog establishes embeddings. The
 	// token limits stay as declared — dropping those too would read as exceeding
 	// the profile's bounded limits, which is a different state entirely.

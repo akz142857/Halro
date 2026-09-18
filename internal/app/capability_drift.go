@@ -118,6 +118,13 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 	if entry.Revision() == snapshot.ModelRevision {
 		return review
 	}
+	// A full entry revision also covers provider/catalog token-window metadata so
+	// clients can detect a stale editor. Those numbers are not part of the saved
+	// feature claim, however, and must not manufacture a capability review when
+	// they are the only fields that moved.
+	if snapshot.FeatureRevision != "" && entry.FeatureRevision() == snapshot.FeatureRevision {
+		return review
+	}
 
 	// The catalog moved. An operator declaration that the catalog has since
 	// started covering is not drift — it is a claim that can now be checked

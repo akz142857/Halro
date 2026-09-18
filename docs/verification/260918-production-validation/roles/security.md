@@ -1,7 +1,7 @@
 # Security role — E1/E2 evidence survey
 
 - **Candidate SHA**: `f09ed2d768bf2cd335478223beb4d57af326013b`
-- **Plan**: `/Users/ziy/Code/ClayCosmos/Halro/docs/verification/production-validation-plan.zh-CN.md`
+- **Plan**: `docs/verification/production-validation-plan.zh-CN.md`
 - **Scope**: G3 in full (§138-149); security half of G1 (§116) and G4 (§155/§159/§162).
 - **Method**: read-only source survey plus narrow `go test -run <Name> -count=1` re-runs of the
   load-bearing tests. No repo mutation, no `data/`, no `master.key`, no network, no full gate.
@@ -10,7 +10,7 @@
   demonstrable in the target environment.
 
 > **Scope correction that governs everything below.** Plan §140 delegates G3 to
-> `/Users/ziy/Code/ClayCosmos/Halro/docs/observability/admission-checklist.md`, whose rows are
+> `docs/observability/admission-checklist.md`, whose rows are
 > about the **Prometheus/Alertmanager Core** (`admission-checklist.md:13`), not about Halro's own
 > data plane. Four of G3's six items therefore split into a Halro half that is testable in-repo
 > and a Core half with no Halro code at all. Reporting a Halro-half PASS as the whole item is the
@@ -24,10 +24,10 @@
 
 **Scope finding first: mTLS exists on the `/metrics` listener only.** The only
 `RequireAndVerifyClientCert` in the tree is
-`/Users/ziy/Code/ClayCosmos/Halro/internal/app/tlsreload.go:299-300`, inside
+`internal/app/tlsreload.go:299-300`, inside
 `metricsTLSHolder.reload`. The Gateway data plane and the Admin plane are **not** mTLS-protected;
 they authenticate with Gateway Keys (`internal/auth`) and admin sessions (`internal/adminauth`).
-`/Users/ziy/Code/ClayCosmos/Halro/internal/app/runtime.go:1355` states outright that this path is
+`internal/app/runtime.go:1355` states outright that this path is
 not covered by listener-level controls (firewall, WAF, mTLS, IP allowlists).
 
 | Sub-case | Enforcing code | Automated test | Level |
@@ -45,10 +45,10 @@ not covered by listener-level controls (firewall, WAF, mTLS, IP allowlists).
 **Re-run at this SHA**: `go test ./internal/app/ -run 'TestMetricsTLSConfigRequiresAndVerifiesClientCertificates|TestMetricsTLSHolderRotatesCertificateAndClientCATogether' -count=1` → both PASS.
 
 **Runbook/code divergence (documentation defect, G-7).**
-`/Users/ziy/Code/ClayCosmos/Halro/docs/observability/operations-runbook.md:271-272` instructs:
+`docs/observability/operations-runbook.md:271-272` instructs:
 *"Perform a controlled Halro restart; Metrics TLS material is intentionally loaded at listener
 startup, so replacing files alone is not a reload."* That is **false at this SHA**: SIGHUP reloads
-metrics TLS via `/Users/ziy/Code/ClayCosmos/Halro/internal/app/reload.go:153-154` and `:170`
+metrics TLS via `internal/app/reload.go:153-154` and `:170`
 (`apply(ReloadMetricsTLS, reloadMetricsTLS)`), and the capability is reported back to the operator
 at `internal/app/reload.go:278`. An operator following the runbook takes two unnecessary restarts
 per rotation. The runbook step is **stale E1**, not the procedure to execute in G3.
@@ -84,7 +84,7 @@ Two halves with very different evidence.
 | **Revocation survives a backup restore** | **NO MECHANISM.** A Gateway Key's revocation is only `Enabled bool` / `DeletedAt *time.Time` inside the bbolt metadata store (`internal/domain/models.go:462-474`). There is no revocation ledger, no revocation watermark and no anti-rollback check in restore — `grep -n 'monotonic\|anti-roll\|newer' internal/app/backup.go` returns only filesystem-rename rollback at `:267-290`, nothing about identity. Restoring a backup taken before a revocation re-enables the key. | **none.** `internal/app/backup_test.go:818` `TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges` covers admin *sessions* only — nothing for Gateway Keys, provider credentials or KMS slots | **GAP — G-1, a plan §162/§218 red line** |
 
 The compensating control exists only in prose:
-`/Users/ziy/Code/ClayCosmos/Halro/docs/observability/operations-runbook.md:280-283` tells the
+`docs/observability/operations-runbook.md:280-283` tells the
 operator to "restore credential lifecycle state from a snapshot at or after the latest revocation
 watermark; otherwise keep credentials revoked and rotate anew." That watermark exists for
 `bearercred` and **does not exist for Gateway Keys** — the instruction is unexecutable for them.
@@ -95,7 +95,7 @@ watermark; otherwise keep credentials revoked and rotate anew." That watermark e
 
 #### (c.1) Halro Admin plane — deny matrix exceptionally well covered, audit completeness is not
 
-Role model is deliberately two-valued (`/Users/ziy/Code/ClayCosmos/Halro/internal/domain/admin.go:9-21`):
+Role model is deliberately two-valued (`internal/domain/admin.go:9-21`):
 `administrator` and `read_only`, with an explicit design note that a per-endpoint permission matrix
 was **rejected** in favour of one middleware rule the sweep can enforce. Enforcement:
 `requireAdministratorRole` at `internal/app/admin_session.go:352-357`, reached through
@@ -189,7 +189,7 @@ and the repo already ships the opt-in harness for exactly that.
 
 **Mechanism.** `internal/audit` is a framed append-only log: header `HAUD`/v1 with big-endian
 sequence, payload length, and the **SHA-256 of the previous frame**, plus a trailing
-**HMAC-SHA256** over header+payload (`/Users/ziy/Code/ClayCosmos/Halro/internal/audit/log.go:20-36`,
+**HMAC-SHA256** over header+payload (`internal/audit/log.go:20-36`,
 `:307-319`). The chain is verified in exactly one function, `scan`
 (`internal/audit/log.go:321-383`), reached by `Verify`/`VerifyWithVisitor` (`:158-183`), `Replay`
 (`:251-286`) and `Open` (`:120-156`). Two anchors sit on top: a **bbolt checkpoint** of
@@ -247,7 +247,7 @@ named in the G3/G4 evidence so a reviewer does not read them as defects):
 
 ### 2.1 Frontend bundle scan
 
-**`/Users/ziy/Code/ClayCosmos/Halro/web/scripts/check-artifacts.mjs`.**
+**`web/scripts/check-artifacts.mjs`.**
 - Scan root `web/scripts/check-artifacts.mjs:4` → `../../internal/webui/dist` (the **embedded**
   bundle, not `web/dist`). Walks **every file** recursively as UTF-8 (`:7-14`, `:33-39`) — JS
   chunks, CSS, `index.html`, SVG, fonts, everything; no extension filter.
@@ -270,7 +270,7 @@ named in the G3/G4 evidence so a reviewer does not read them as defects):
 ### 2.2 Go side — the same scan, re-implemented
 
 `TestEmbeddedBrowserArtifactsContainNoSecretOrPersistenceCanaries` —
-`/Users/ziy/Code/ClayCosmos/Halro/internal/app/secret_canary_test.go:225`. Walks `../webui/dist`
+`internal/app/secret_canary_test.go:225`. Walks `../webui/dist`
 (`:230`), fails on any `.map` (`:246-248`), checks the same 13 literals (`:231-236`), and guards
 against vacuity with an emptiness check (`:259-261`). CI at `.github/workflows/ci.yml:68-69`.
 
@@ -366,7 +366,7 @@ The only production producers of those clients are `internal/app/providers.go:83
 
 ### 4.1 `needs review` — one hit
 
-**`/Users/ziy/Code/ClayCosmos/Halro/internal/kms/awskms/adapter.go:31-47`, `func New`.**
+**`internal/kms/awskms/adapter.go:31-47`, `func New`.**
 `awsconfig.LoadDefaultConfig` (`:31`) plus `servicekms.NewFromConfig` (`:42`) build an AWS SDK v2
 HTTP client for which Halro supplies **no transport**. It therefore honours
 `HTTP_PROXY`/`HTTPS_PROXY`/`AWS_CA_BUNDLE`, follows the SDK's own redirect policy, resolves and
@@ -438,7 +438,7 @@ all Go-tooling / `lsof` / `ps`, never a network client.
 
 ### 5.1 What failurecapture stores and how it is bounded
 
-Package doc `/Users/ziy/Code/ClayCosmos/Halro/internal/failurecapture/failurecapture.go:1-28`:
+Package doc `internal/failurecapture/failurecapture.go:1-28`:
 the request a failed call carried plus a structured description of the upstream answer.
 
 | Property | Mechanism | Test |

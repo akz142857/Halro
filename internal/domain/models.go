@@ -964,7 +964,11 @@ type ModelCapabilitySnapshot struct {
 	CanonicalModelRef string `json:"canonical_model_ref,omitempty"`
 	// ModelRevision is the per-model catalog digest this snapshot was taken
 	// from. Drift is detected by comparing it, not the catalog-wide digest.
-	ModelRevision      string               `json:"model_revision"`
+	ModelRevision string `json:"model_revision"`
+	// FeatureRevision excludes numeric token-window metadata. The full model
+	// revision still protects edits from stale metadata; this narrower digest is
+	// what decides whether an immutable capability claim actually moved.
+	FeatureRevision    string               `json:"feature_revision,omitempty"`
 	CatalogRevision    string               `json:"catalog_revision,omitempty"`
 	ResolutionRevision string               `json:"resolution_revision,omitempty"`
 	ProviderRevision   uint64               `json:"provider_revision,omitempty"`

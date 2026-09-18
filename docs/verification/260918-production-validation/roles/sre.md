@@ -302,4 +302,4 @@ Skips unless `HALRO_STRESS=1` (`tests/stress/stream_test.go:61-63`). Opens `conc
 
 ### Compliance note
 
-No file under `/Users/ziy/Code/ClayCosmos/Halro` was created, modified or deleted. No build, `go test ./...`, `npm ci` or `npm run build` was run. No network call was made; Halro was not started; `data/` and `master.key` were not touched. The single command run against the tree was `make observability-check` (exit 0), as authorized.
+No repository file was created, modified or deleted. No build, `go test ./...`, `npm ci` or `npm run build` was run. No network call was made; Halro was not started; `data/` and `master.key` were not touched. The single command run against the tree was `make observability-check` (exit 0), as authorized.

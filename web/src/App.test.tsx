@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "./api";
 import { App } from "./App";
@@ -68,6 +68,55 @@ describe("App first-run routing", () => {
     expect(screen.queryByText("更改登录密码")).not.toBeInTheDocument();
   });
 
+  it("keeps one-time recovery codes visible until the operator saves them", async () => {
+    window.history.replaceState({}, "", "/admin/settings/security");
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    const requiredSession = {
+      username: "new-admin", role: "administrator" as const, locale: "system" as const, appearance: "dark" as const,
+      csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x", mfa_setup_required: true,
+    };
+    const session = vi.spyOn(api, "session")
+      .mockResolvedValueOnce(requiredSession)
+      .mockResolvedValue({ ...requiredSession, mfa_setup_required: false });
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ time_context: { accounting_timezone: "UTC" } } as never);
+    vi.spyOn(api, "mfaStatus").mockResolvedValue({ enabled: false, policy: "required", required: true, authenticators: [] });
+    vi.spyOn(api, "createMFAAuthenticator").mockResolvedValue({
+      id: "mfa-new", name: "Phone", secret: "ABCDEFGHIJKLMNOP",
+      otpauth_uri: "otpauth://totp/Halro:new-admin?secret=ABCDEFGHIJKLMNOP",
+      expires_at: new Date(Date.now() + 60_000).toISOString(), revision: 1,
+    });
+    vi.spyOn(api, "confirmMFAAuthenticator").mockResolvedValue({
+      status: "enabled", recovery_codes: ["RECOVERY-ONE", "RECOVERY-TWO"],
+    });
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: copy } });
+
+    const { client } = renderApp();
+    expect(await screen.findByRole("heading", { name: "必须设置二次验证" })).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "添加…" }));
+    fireEvent.change(screen.getByLabelText("身份验证器名称"), { target: { value: "Phone" } });
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: /验证码/ }), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "验证" }));
+
+    expect(await screen.findByText(/RECOVERY-ONE/)).toBeVisible();
+    // Simulate the focus/background refresh that used to observe the now-open
+    // session and unmount this one-time response before it could be saved.
+    await client.invalidateQueries({ queryKey: ["session"] });
+    await waitFor(() => expect(session).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/RECOVERY-ONE/)).toBeVisible();
+    expect(screen.getByRole("heading", { name: "必须设置二次验证" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制" }));
+    await waitFor(() => expect(copy).toHaveBeenCalledWith("RECOVERY-ONE\nRECOVERY-TWO"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /我已将这些恢复码安全保存/ }));
+    fireEvent.click(screen.getByRole("button", { name: "我已保存恢复码" }));
+
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "必须设置二次验证" })).not.toBeInTheDocument());
+    expect(await screen.findByRole("button", { name: "更改登录密码" })).toBeVisible();
+  });
+
   it("redirects the former root-key URL into Settings & Status", async () => {
     window.history.replaceState({}, "", "/admin/master-key");
     vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
@@ -92,9 +141,10 @@ function renderApp() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <App />
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }

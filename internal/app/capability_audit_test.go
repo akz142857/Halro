@@ -229,6 +229,25 @@ func TestTokenGuardChangeIsNotACapabilityReview(t *testing.T) {
 	}
 }
 
+func TestTokenMetadataRevisionChangeIsNotACapabilityReview(t *testing.T) {
+	before := domain.Deployment{
+		Capabilities: domain.ProviderCapabilities{Chat: true},
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ModelRevision: "sha256:full-before", FeatureRevision: "sha256:feature",
+			Source: "builtin_catalog", Capabilities: domain.ProviderCapabilities{Chat: true},
+		},
+	}
+	after := before
+	after.ModelCapabilitySnapshot.ModelRevision = "sha256:full-after"
+	if capabilityChanged(before, after) {
+		t.Fatal("a metadata-only model revision change became a capability review")
+	}
+	after.ModelCapabilitySnapshot.FeatureRevision = "sha256:feature-after"
+	if !capabilityChanged(before, after) {
+		t.Fatal("a feature revision change was not treated as a capability review")
+	}
+}
+
 // §4.4: the reconciliation result must reach the audit trail, not only doctor.
 func TestDriftDetectionIsAudited(t *testing.T) {
 	runtime, bootstrap := bootstrapForCapabilityTest(t)

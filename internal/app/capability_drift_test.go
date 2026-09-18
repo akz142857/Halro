@@ -26,7 +26,7 @@ func catalogueDeployment(t *testing.T) (domain.Deployment, domain.ProviderProfil
 		TargetKind:   domain.TargetBedrockFoundationModel,
 		Capabilities: entry.Capabilities,
 		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
-			ProviderModel: titanEmbedModel, ModelRevision: entry.Revision(),
+			ProviderModel: titanEmbedModel, ModelRevision: entry.Revision(), FeatureRevision: entry.FeatureRevision(),
 			Source: string(entry.Source), Status: string(entry.Status),
 			CapturedAt: time.Now().UTC(), Capabilities: entry.Capabilities,
 		},
@@ -41,6 +41,31 @@ func TestUnchangedCatalogAndProfileStaysCurrent(t *testing.T) {
 	}
 	if !capabilityReviewAdmitsTraffic(domain.CapabilityReviewCurrent) {
 		t.Fatal("a current deployment was refused traffic")
+	}
+}
+
+func TestTokenMetadataOnlyCatalogChangeStaysCurrent(t *testing.T) {
+	deployment, binding := catalogueDeployment(t)
+	entry, found := modelcatalog.Builtin().Lookup(modelcatalog.Key{
+		ProviderType: domain.ProviderBedrock, Profile: binding.ProfileID,
+		TargetKind: deployment.TargetKind, Model: deployment.ProviderModel,
+	})
+	if !found || entry.Capabilities.MaxContextTokens < 2 {
+		t.Fatal("token-window catalog fixture is missing")
+	}
+	updated := entry
+	updated.Capabilities.MaxContextTokens--
+	catalog, err := modelcatalog.New(updated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Revision() == deployment.ModelCapabilitySnapshot.ModelRevision ||
+		updated.FeatureRevision() != deployment.ModelCapabilitySnapshot.FeatureRevision {
+		t.Fatal("fixture did not isolate a token-metadata-only revision change")
+	}
+	review := reviewCapabilitiesWithCatalogState(deployment, binding, domain.ProviderBedrock, catalog, false)
+	if review.State != domain.CapabilityReviewCurrent {
+		t.Fatalf("token metadata created a capability review: %#v", review)
 	}
 }
 
@@ -151,6 +176,7 @@ func TestSnapshotClaimingMoreThanTheCatalogIsDrift(t *testing.T) {
 	// The snapshot claims chat as well; the catalog establishes embeddings only.
 	deployment.ModelCapabilitySnapshot.Capabilities.Chat = true
 	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:older"
+	deployment.ModelCapabilitySnapshot.FeatureRevision = "sha256:older-feature"
 	binding.Capabilities.Chat = true // the profile allows it, so only the catalog objects
 	if state := evaluateCapabilityReview(deployment, binding, domain.ProviderBedrock); state != domain.CapabilityReviewDrifted {
 		t.Fatalf("state=%q", state)
@@ -163,6 +189,7 @@ func TestDeclaredModelTheCatalogNowCoversIsOfferedForReview(t *testing.T) {
 	deployment, binding := catalogueDeployment(t)
 	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceOperatorDeclared)
 	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:when-nothing-was-known"
+	deployment.ModelCapabilitySnapshot.FeatureRevision = "sha256:when-nothing-was-known"
 	state := evaluateCapabilityReview(deployment, binding, domain.ProviderBedrock)
 	if state != domain.CapabilityReviewAvailable {
 		t.Fatalf("state=%q", state)
@@ -288,6 +315,7 @@ func TestACapabilityTheOperatorSwitchedOffIsNotOfferedAgain(t *testing.T) {
 	// The catalog has moved on and now establishes more than this deployment
 	// uses, which is what puts anything on offer at all.
 	deployment.ModelCapabilitySnapshot.ModelRevision = "sha256:before-the-catalog-grew"
+	deployment.ModelCapabilitySnapshot.FeatureRevision = "sha256:before-the-catalog-grew"
 	deployment.Capabilities.Embeddings = false
 	deployment.ModelCapabilitySnapshot.Capabilities.Embeddings = false
 
@@ -359,6 +387,7 @@ func TestDoctorReportsDriftAsFailAndReviewAsWarn(t *testing.T) {
 	declared := deployment
 	declared.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceOperatorDeclared)
 	declared.ModelCapabilitySnapshot.ModelRevision = "sha256:before-the-catalog-knew"
+	declared.ModelCapabilitySnapshot.FeatureRevision = "sha256:before-the-catalog-knew"
 	if status, _ := collect([]domain.ProviderInstance{instance}, []domain.Deployment{declared}); status != "warn" {
 		t.Fatalf("review status=%q", status)
 	}

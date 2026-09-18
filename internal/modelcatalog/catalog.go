@@ -293,11 +293,36 @@ func (e Entry) Revision() string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// FeatureRevision is the part of an entry revision that can change what a
+// deployment claims it is able to do. Numeric token windows remain in Revision
+// because clients use that digest to detect any metadata change while editing,
+// but they are deployment-owned runtime guards rather than feature evidence and
+// must not create capability-review churn on their own.
+func (e Entry) FeatureRevision() string {
+	sum := sha256.Sum256([]byte(e.canonicalFeatures()))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func (e Entry) canonical() string {
 	fields := []string{e.Key.canonical(), string(e.Status), string(e.Source)}
 	for _, name := range CapabilityNames {
 		fields = append(fields, name+"="+capabilityValue(e.Capabilities, name))
 	}
+	return e.finishCanonical(fields)
+}
+
+func (e Entry) canonicalFeatures() string {
+	fields := []string{e.Key.canonical(), string(e.Status), string(e.Source)}
+	for _, name := range CapabilityNames {
+		if isLimit(name) {
+			continue
+		}
+		fields = append(fields, name+"="+capabilityValue(e.Capabilities, name))
+	}
+	return e.finishCanonical(fields)
+}
+
+func (e Entry) finishCanonical(fields []string) string {
 	conflicts := slices.Clone(e.Conflicts)
 	slices.Sort(conflicts)
 	conflicts = slices.Compact(conflicts)

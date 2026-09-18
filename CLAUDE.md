@@ -52,7 +52,7 @@ cd web && npx vitest run <path/to/file.test.ts>
 It says which changes justify which scope, and it is the single source for that
 decision. Re-running a suite that cannot see the change is not thoroughness: a
 CSS-only edit is answered by one vitest file in under a second, where the whole
-frontend suite takes 618 tests and the whole Go suite takes minutes. Anything the
+frontend suite contains hundreds of tests and the whole Go suite takes minutes. Anything the
 change genuinely could affect still gets run, and the full gate still runs before
 the push that publishes the work — a series of commits earns one gate, not one
 each.
