@@ -149,13 +149,13 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
-| Go | `github.com/anthropics/anthropic-sdk-go` 1.71.0 | MIT |
+| Go | `github.com/anthropics/anthropic-sdk-go` 1.72.0 | MIT |
 | Go | `github.com/openai/openai-go/v3` 3.56.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.124.0 | MIT |
 | Node | `openai` 7.10.0 | Apache-2.0 |
 | Python | `anthropic` 1.4.0 | MIT |
 | Python | `openai` 3.8.0 | Apache-2.0 |
-| Python tooling | `pip-audit` 2.9.0 | Apache-2.0 |
+| Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
 The resolved Go compatibility graph is MIT, BSD-3-Clause, or Apache-2.0. The
 Node lock contains MIT, Apache-2.0, and Unlicense packages. The 42-package
@@ -164,6 +164,17 @@ and one MPL-2.0 certificate bundle (`certifi`); all are test-only and none are
 distributed in Halro artifacts. The `pip-audit` tool and its transitive packages
 are deliberately in the same hash-checked lock, so the scanner is not fetched
 through an unreviewed side channel during the job.
+
+The 2026-09-18 Go compatibility refresh moved
+`github.com/anthropics/anthropic-sdk-go` from 1.71.0 to 1.72.0. The module
+remains MIT licensed, the resolved module-path set is unchanged, and this SDK
+is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-18 Python tooling refresh moved `pip-audit` from 2.9.0 to
+2.10.1. The resolved lock remains 42 packages: it replaces the MIT-licensed
+`pip` and `toml` entries with the MIT-licensed `tomli` and `tomli-w` entries,
+and adds no new license family or distribution obligation. This tooling remains
+confined to compatibility CI and is not included in Halro release artifacts.
 
 ## Distribution requirements
 
@@ -187,12 +198,12 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `b0ef94c14373b0cdb85a832fc1374dbdfe20820f`
 - `web/package.json`: `00b690ac09576ce419d75d8cd14fc2a3104bb308`
 - `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
-- `tests/compatibility/go/go.mod`: `877e27308fd60916f0a462a88d301355fc66e084`
-- `tests/compatibility/go/go.sum`: `930d790a4f664ad7a0ee641d22db7debb6c3ded5`
+- `tests/compatibility/go/go.mod`: `801543aa3cd4fc84df9f466cc157170e52016dc9`
+- `tests/compatibility/go/go.sum`: `724e9c903bdb166a314c237f7de1ff2b6d4df76b`
 - `tests/compatibility/node/package.json`: `035be267a4afb3a23a447b7c95e963a82d9bd8db`
 - `tests/compatibility/node/package-lock.json`: `c2498763cfbc484745d67b84f179a891c2ff42f7`
-- `tests/compatibility/python/requirements.in`: `951765ed632ee780f88b1f49cd7f12ab3441a67e`
-- `tests/compatibility/python/requirements.txt`: `f4a5887a32bcf876cafad3eb22b7fbe3bbf63dcf`
+- `tests/compatibility/python/requirements.in`: `eb57f4472bdb960cfedd9997062de02be1e4429a`
+- `tests/compatibility/python/requirements.txt`: `4822b17b8685be772e1fd1d8cd9fccac1bbdf2f5`
 
 The Go hashes last moved for the 2026-09-11 Go refresh recorded
 above. The two web hashes last moved for the 2026-09-11 Admin UI refresh
