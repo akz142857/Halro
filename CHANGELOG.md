@@ -8,6 +8,12 @@ semantic versioning.
 
 ### Changed
 
+- `packaging/apt-repository/` now mirrors what actually runs in the private APT
+  control plane, and says so: that repository is authoritative, this copy exists
+  because it is private and the verification procedure should be publicly
+  readable. The two had drifted in both directions — the control plane had the
+  release-commit argument and the `dpkg-deb` field matrix, this copy had the
+  `checksums.txt` membership assertion and the prerelease tilde fix.
 - A release's GitHub Release notes are now the version's own `CHANGELOG.md`
   section rather than GitHub's generated pull-request list. v0.8.4 published
   with its eleven dependency bumps listed above its one substantive change,

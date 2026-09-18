@@ -17,9 +17,11 @@ jobs:
       - name: Validate shell entrypoints
         run: |
           set -euo pipefail
-          bash -n scripts/verify-release.sh scripts/import-release.sh
-          shellcheck scripts/verify-release.sh scripts/import-release.sh
+          bash -n scripts/verify-release.sh scripts/import-release.sh scripts/smoke-public-repository.sh
+          shellcheck scripts/verify-release.sh scripts/import-release.sh scripts/smoke-public-repository.sh
       - name: Confirm bootstrap signing state
         run: |
           set -euo pipefail
           grep -Fx 'SignWith: HALRO_ARCHIVE_SIGNING_KEY_FINGERPRINT' conf/distributions
+      - name: Validate the publication workflow contract
+        run: python3 -m unittest scripts/test_publish_contract.py
