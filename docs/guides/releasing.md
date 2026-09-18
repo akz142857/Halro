@@ -139,13 +139,31 @@ branch other than `main`.
 
 Merge every intended change before starting the release. A local working tree,
 an unmerged pull request, or a commit on another branch is not part of the
-release. Add a complete `## [0.8.0]` section to `CHANGELOG.md` and fill a
-release assessment under `docs/verification/assessments/`. That changelog section
-is what the GitHub Release will say, so write it for a reader arriving at the
-Release page. The workflow checks that the section exists and that ordinary CI
-passed for this exact `main` commit; the owner remains responsible for the
-assessment being complete and for recording any explicitly waived external
-acceptance, such as a real-Provider smoke.
+release.
+
+Then move the mechanical half from a clean `main`:
+
+```bash
+python3 tools/release/prepare_release.py v0.8.0
+```
+
+It moves the `## [Unreleased]` entries into a dated section and adds its compare
+link, the README image tags and download line, the `web/` package version and
+lock, and the two dependency-license drift hashes the version bump displaces —
+the surfaces v0.8.1 and v0.8.2 both shipped without. It scaffolds
+`docs/verification/assessments/vX.Y.Z.md` with the range, the commit list and the
+§0 trigger table computed from the paths the range touched. It refuses rather
+than guesses: an existing tag, an existing section, an empty `## [Unreleased]`,
+or any surface it cannot find is a hard failure, and every edit asserts that it
+applied.
+
+What it deliberately does not do is the judgement. The changelog prose is written
+per pull request under `## [Unreleased]`, because that section is what the GitHub
+Release will say and it should read for someone arriving at the Release page. The
+assessment's every `TODO` is the owner's: the trigger rows, the gate evidence,
+the real-binary smoke, the invariants, the verdict, and any explicitly waived
+external acceptance such as a real-Provider smoke. The workflow only checks that
+the section exists and that ordinary CI passed for this exact `main` commit.
 
 `publish_packages` defaults to `true` and preserves that complete chain. Set it
 to `false` only for an intentional GitHub/GHCR-only publication: the workflow
