@@ -152,7 +152,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Go | `github.com/anthropics/anthropic-sdk-go` 1.72.0 | MIT |
 | Go | `github.com/openai/openai-go/v3` 3.61.0 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
-| Node | `openai` 7.10.0 | Apache-2.0 |
+| Node | `openai` 7.15.0 | Apache-2.0 |
 | Python | `anthropic` 1.5.0 | MIT |
 | Python | `openai` 3.8.0 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
@@ -178,6 +178,10 @@ is used only by the compatibility contracts rather than the shipped runtime.
 The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
 0.124.0 to 0.125.0. The package remains MIT licensed, the lockfile package set
 is unchanged, and the SDK remains confined to compatibility CI.
+
+The 2026-09-18 OpenAI Node compatibility refresh moved `openai` from 7.10.0
+to 7.15.0. The package remains Apache-2.0 licensed, the lockfile package set is
+unchanged, and the SDK remains confined to compatibility CI.
 
 The 2026-09-18 Python tooling refresh moved `pip-audit` from 2.9.0 to
 2.10.1. The resolved lock remains 42 packages: it replaces the MIT-licensed
@@ -214,8 +218,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `39485186d21d627599cdfe467d135aa931445c94`
 - `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
 - `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
-- `tests/compatibility/node/package.json`: `5f7994470dc2189d9890759bf785e3d613577852`
-- `tests/compatibility/node/package-lock.json`: `914360873d0a71c797e1991310128eae1095146c`
+- `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
+- `tests/compatibility/node/package-lock.json`: `530d2b6425cfcfa22c95161739e133329721fa8b`
 - `tests/compatibility/python/requirements.in`: `3fb8ef914a5e55c54b8347ee988f1d59979bb5f7`
 - `tests/compatibility/python/requirements.txt`: `d345898bdd9918f4dda60ef554cc9c0f79e017cb`
 
