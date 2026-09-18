@@ -917,19 +917,13 @@ func deploymentCapabilities(deployment domain.Deployment, adapter provider.Adapt
 		Reasoning:             available.Reasoning && declared.Reasoning,
 		StreamUsage:           available.StreamUsage && declared.StreamUsage,
 		ProviderExecutedTools: available.ProviderExecutedTools && declared.ProviderExecutedTools,
-		MaxContextTokens:      minimumCapabilityLimit(available.MaxContextTokens, declared.MaxContextTokens),
-		MaxOutputTokens:       minimumCapabilityLimit(available.MaxOutputTokens, declared.MaxOutputTokens),
+		// The deployment is the only owner of runtime token guards. Provider and
+		// catalogue values are metadata about an upstream that may change before
+		// Halro's bundled catalogue does; using their minimum here made a stored
+		// zero or larger operator value behave as an unrelated hidden limit.
+		MaxContextTokens: declared.MaxContextTokens,
+		MaxOutputTokens:  declared.MaxOutputTokens,
 	}
-}
-
-func minimumCapabilityLimit(left, right int64) int64 {
-	if left == 0 {
-		return right
-	}
-	if right == 0 || left < right {
-		return left
-	}
-	return right
 }
 
 func adapterCapabilitiesFor(adapter provider.Adapter) provider.Capabilities {

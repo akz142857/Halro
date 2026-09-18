@@ -101,8 +101,15 @@ Guard cannot silently lose their source-IP signal.
 
 `halro start` writes an annotated `config.yaml` when none exists, carrying
 the built-in defaults with a comment on each setting that has a consequence.
-Deleting a key restores its default; a test keeps that file and the built-in
-defaults from drifting apart. `configs/config.example.yaml` remains the
+Do not delete a key to request a default. The loader decodes the file into a
+zero `Config` and then normalizes it, so most omitted scalars do take their
+built-in default — `logging`, `retry`, `alerts`, `circuit_breaker`, `admin`,
+`model_catalog` and most of `usage` — but the required ones under `server`,
+`storage`, `gateway`, plus `usage.durability` and `usage.timezone`, fail
+validation and Halro refuses to start, and an omitted boolean such as
+`metrics.require_auth` silently becomes `false` rather than the shipped `true`.
+Keep the generated value and edit it, then run `halro config check`. A test
+keeps that file and the built-in defaults from drifting apart. `configs/config.example.yaml` remains the
 canonical complete v1 example, including the settings the default file leaves
 out. Important groups are:
 

@@ -172,7 +172,7 @@ func validateDeploymentProviderProfile(deployment domain.Deployment, instance do
 	if deployment.AccessSurface != binding.AccessSurface || deployment.ProfileID != binding.ProfileID {
 		return errors.New("deployment access surface or profile does not match provider")
 	}
-	if !domain.ProviderCapabilitiesSubset(deployment.Capabilities, binding.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.Capabilities, binding.Capabilities) {
 		return errors.New("deployment capabilities exceed provider capabilities")
 	}
 	for name, value := range deployment.CapabilityEvidence {

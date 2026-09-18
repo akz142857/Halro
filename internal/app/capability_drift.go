@@ -94,8 +94,8 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 
 	// The profile ceiling is the harder constraint: a snapshot that exceeds it
 	// describes something this build can no longer do, whatever the catalog says.
-	if !domain.ProviderCapabilitiesSubset(snapshot.Capabilities, binding.Capabilities) ||
-		!domain.ProviderCapabilitiesSubset(deployment.Capabilities, binding.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(snapshot.Capabilities, binding.Capabilities) ||
+		!domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.Capabilities, binding.Capabilities) {
 		review.State = domain.CapabilityReviewDrifted
 		review.Reason = reviewReasonProfileNarrowed
 		review.NoLongerSupported = modelcatalog.LostCapabilities(
@@ -118,6 +118,13 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 	if entry.Revision() == snapshot.ModelRevision {
 		return review
 	}
+	// A full entry revision also covers provider/catalog token-window metadata so
+	// clients can detect a stale editor. Those numbers are not part of the saved
+	// feature claim, however, and must not manufacture a capability review when
+	// they are the only fields that moved.
+	if snapshot.FeatureRevision != "" && entry.FeatureRevision() == snapshot.FeatureRevision {
+		return review
+	}
 
 	// The catalog moved. An operator declaration that the catalog has since
 	// started covering is not drift — it is a claim that can now be checked
@@ -136,7 +143,7 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 		review.Reason = reviewReasonCatalogAdvanced
 		return review
 	}
-	if !domain.ProviderCapabilitiesSubset(snapshot.Capabilities, entry.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(snapshot.Capabilities, entry.Capabilities) {
 		// The catalog now establishes less than the snapshot claims. Whether that
 		// is drift depends on where the snapshot came from.
 		//

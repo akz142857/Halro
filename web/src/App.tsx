@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { api, ApiError } from "./api";
 import { Layout } from "./Layout";
@@ -36,6 +36,11 @@ export function App() {
   const { t } = useTranslation();
   const path = usePathname();
   const queryClient = useQueryClient();
+  // Enabling the first authenticator changes the server-side session gate
+  // immediately, but its recovery codes are returned only once. Keep the
+  // restricted surface mounted while those codes are pending even if a focus
+  // refresh observes mfa_setup_required=false before the operator saves them.
+  const [mfaRecoveryCodesPending, setMFARecoveryCodesPending] = useState(false);
   const uiBootstrap = useQuery({
     queryKey: ["ui-bootstrap"],
     queryFn: api.uiBootstrap,
@@ -130,14 +135,15 @@ export function App() {
     return (
       <Login
         onSuccess={() => {
+          setMFARecoveryCodesPending(false);
           queryClient.invalidateQueries({ queryKey: ["session"] });
           navigate("/admin");
         }}
       />
     );
   }
-  if (session.data.mfa_setup_required) {
-    return <Layout username={session.data.username} restricted><PageChunk><SettingsPage mfaSetupRequired /></PageChunk></Layout>;
+  if (session.data.mfa_setup_required || mfaRecoveryCodesPending) {
+    return <Layout username={session.data.username} restricted><PageChunk><SettingsPage mfaSetupRequired onRecoveryCodesPendingChange={setMFARecoveryCodesPending} /></PageChunk></Layout>;
   }
   // Keyed by path so navigating away from a crashed page recovers on its own.
   return <Layout username={session.data.username}><ErrorBoundary key={path}><PageChunk><Route path={path} /></PageChunk></ErrorBoundary></Layout>;

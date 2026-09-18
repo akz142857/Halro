@@ -167,3 +167,24 @@ func TestMasterKeyRotationPreservesVerificationOfPriorFrames(t *testing.T) {
 		t.Fatalf("verification under the wrong key: err=%v, want ErrTampered", err)
 	}
 }
+
+func TestChainReportHoldsFramesSeparatesAnEmptyLogFromAnUnauthenticatedOne(t *testing.T) {
+	if (ChainReport{}).HoldsFrames() {
+		t.Fatal("a zero report describes a log that was never written to")
+	}
+	// Each of these on its own is a log with history, and an unverified chain
+	// over any of them is the state the verify command exists to catch.
+	for name, report := range map[string]ChainReport{
+		"authenticated":        {Authenticated: 1},
+		"checksum only":        {ChecksumOnly: 1},
+		"sealed authenticated": {SealedAuthenticated: 1},
+		"sealed generations":   {SealedGenerations: 1},
+		"chain sequence":       {ChainSequence: 1},
+		"head sequence":        {Head: Watermark{Sequence: 1}},
+		"head offset":          {Head: Watermark{Offset: 1}},
+	} {
+		if !report.HoldsFrames() {
+			t.Fatalf("%s: report with history reported as empty", name)
+		}
+	}
+}

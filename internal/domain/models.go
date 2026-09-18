@@ -964,7 +964,11 @@ type ModelCapabilitySnapshot struct {
 	CanonicalModelRef string `json:"canonical_model_ref,omitempty"`
 	// ModelRevision is the per-model catalog digest this snapshot was taken
 	// from. Drift is detected by comparing it, not the catalog-wide digest.
-	ModelRevision      string               `json:"model_revision"`
+	ModelRevision string `json:"model_revision"`
+	// FeatureRevision excludes numeric token-window metadata. The full model
+	// revision still protects edits from stale metadata; this narrower digest is
+	// what decides whether an immutable capability claim actually moved.
+	FeatureRevision    string               `json:"feature_revision,omitempty"`
 	CatalogRevision    string               `json:"catalog_revision,omitempty"`
 	ResolutionRevision string               `json:"resolution_revision,omitempty"`
 	ProviderRevision   uint64               `json:"provider_revision,omitempty"`
@@ -1041,7 +1045,7 @@ func DeclaredCapabilitySnapshot(model, revision string, capabilities ProviderCap
 	snapshot := ModelCapabilitySnapshot{
 		ProviderModel: model, ModelRevision: revision,
 		Source: "operator_declared", Status: "partial",
-		CapturedAt: at, Capabilities: capabilities,
+		CapturedAt: at, Capabilities: ProviderCapabilitiesWithoutTokenLimits(capabilities),
 	}
 	snapshot.Evidence = SnapshotEvidence(snapshot)
 	return snapshot
@@ -1064,8 +1068,11 @@ func (s ModelCapabilitySnapshot) Validate(deployment Deployment) error {
 	if s.CapturedAt.IsZero() {
 		problems = append(problems, errors.New("capability snapshot requires a capture time"))
 	}
-	// The deployment may narrow what was established, never exceed it.
-	if !ProviderCapabilitiesSubset(deployment.Capabilities, s.Capabilities) {
+	// The deployment may narrow the operations and protocol features that were
+	// established, never exceed them. Token limits are deployment-owned runtime
+	// guards rather than evidence-backed model capabilities, so they are allowed
+	// to differ from the immutable capability snapshot.
+	if !ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.Capabilities, s.Capabilities) {
 		problems = append(problems, errors.New("deployment capabilities exceed the capability snapshot"))
 	}
 	// §5.2: evidence may not exceed the level its source is allowed to claim,

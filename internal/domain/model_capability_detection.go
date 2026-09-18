@@ -119,10 +119,11 @@ type DetectionProviderCall struct {
 // the model answers on that Access Surface at all, and the winning candidate's
 // probe is carried into Results so the capability pass never pays for it twice.
 type DetectionBindingCandidate struct {
-	BindingID     string            `json:"binding_id"`
-	ProfileID     ProviderProfileID `json:"profile_id"`
-	AccessSurface AccessSurface     `json:"access_surface"`
-	ModelRevision string            `json:"model_revision"`
+	BindingID       string            `json:"binding_id"`
+	ProfileID       ProviderProfileID `json:"profile_id"`
+	AccessSurface   AccessSurface     `json:"access_surface"`
+	ModelRevision   string            `json:"model_revision"`
+	FeatureRevision string            `json:"feature_revision,omitempty"`
 	// Verifiable names the capabilities this interface can establish by probing
 	// at all. It is usually smaller than what the interface offers: generating
 	// an image or transcribing audio costs real money and leaves artefacts, so
@@ -148,6 +149,7 @@ type ModelCapabilityDetection struct {
 	CredentialKeyVersion uint16                      `json:"credential_key_version"`
 	ProviderModel        string                      `json:"provider_model"`
 	ModelRevision        string                      `json:"model_revision"`
+	FeatureRevision      string                      `json:"feature_revision,omitempty"`
 	Candidates           []DetectionBindingCandidate `json:"binding_candidates"`
 	BindingID            string                      `json:"binding_id,omitempty"`
 	ProfileID            ProviderProfileID           `json:"profile_id,omitempty"`
@@ -425,7 +427,8 @@ func setCapability(c *ProviderCapabilities, name string, value bool) {
 // capabilities no probe is allowed to reach.
 func DetectionCapabilitySnapshot(d ModelCapabilityDetection, retained ProviderCapabilities, at time.Time) ModelCapabilitySnapshot {
 	snapshot := ModelCapabilitySnapshot{ProviderModel: d.ProviderModel, ModelRevision: d.ModelRevision,
-		Source: "verified_probe", Status: "known", CapturedAt: at, Capabilities: retained}
+		FeatureRevision: d.FeatureRevision, Source: "verified_probe", Status: "known", CapturedAt: at,
+		Capabilities: ProviderCapabilitiesWithoutTokenLimits(retained)}
 	snapshot.Evidence = DetectionSnapshotEvidence(snapshot, d)
 	return snapshot
 }

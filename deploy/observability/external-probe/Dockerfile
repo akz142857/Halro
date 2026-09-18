@@ -10,10 +10,19 @@ RUN go mod download
 # silently acquire the gateway's dependencies. A test asserts this list still
 # matches the binary's actual import graph.
 COPY cmd/halro-deadman ./cmd/halro-deadman
+COPY internal/buildinfo ./internal/buildinfo
 COPY internal/deadman ./internal/deadman
 COPY internal/safelog ./internal/safelog
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w" -o /out/halro-deadman ./cmd/halro-deadman
+# The same identity the tarball and .deb carry. A probe deployed as a container
+# is the common case, and one that cannot say which build it is cannot be tied
+# back to the release it came from.
+ARG RELEASE_VERSION=dev
+ARG RELEASE_COMMIT=unknown
+ARG RELEASE_DATE=unknown
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+    -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
+    -o /out/halro-deadman ./cmd/halro-deadman
 RUN mkdir -p /rootfs/var/lib/halro-deadman /rootfs/var/log/halro-deadman
 
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35

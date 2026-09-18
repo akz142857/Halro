@@ -53,7 +53,10 @@ local storage, and starts the service. The React assets are embedded in the
 binary, so there is no separate frontend process at runtime.
 
 The `config.yaml` written on first run is annotated: every setting that has a
-consequence says what it decides. Deleting a key restores its default.
+consequence says what it decides. It is a complete file, not a sparse override —
+edit values in place rather than deleting keys. Some omitted settings do fall
+back to a default, but a required one fails validation and refuses to start, and
+a deleted boolean silently turns off.
 
 ### 2.2 First-time setup in the browser
 
@@ -223,8 +226,12 @@ In this order:
 6. **Projects → Keys**: create a Gateway Key for the application. It is shown
    once; close the dialog only after storing it safely.
 
-Provider capabilities are a ceiling and a deployment's capabilities can only be
-a subset of them. Routes carry the public alias; SDK requests should never use
+Provider operation and protocol capabilities are a ceiling, and a deployment
+can only select a subset of them. The deployment's numeric token guards are
+different: `0` leaves that deployment-layer guard disabled, and an operator may
+enter a value above catalog metadata when the upstream has moved ahead of the
+bundled catalog. The upstream remains authoritative and can still reject an
+over-limit request. Routes carry the public alias; SDK requests should never use
 the real Provider model name.
 
 ### 3.3 Provider basics

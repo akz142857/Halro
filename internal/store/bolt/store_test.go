@@ -1050,7 +1050,7 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	if err == nil {
 		t.Fatal("profile-aware provider received implicit default capabilities")
 	}
-	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	providerCapabilities := domain.ProviderCapabilities{Chat: true, Streaming: true, MaxContextTokens: 8192}
 	instance, err := store.PutProvider(ctx, domain.ProviderInstance{
 		ID: "provider_profile", Name: "OpenAI", Type: domain.ProviderOpenAI,
 		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
@@ -1080,6 +1080,28 @@ func TestStoreRejectsProfileAwareDefaultGrantsAndDeploymentEscalation(t *testing
 	}, 0, nil)
 	if err == nil {
 		t.Fatal("deployment exceeded provider capability evidence")
+	}
+	for _, test := range []struct {
+		name  string
+		limit int64
+	}{
+		{name: "unrestricted", limit: 0},
+		{name: "wider_than_provider_metadata", limit: 15_000},
+	} {
+		t.Run("deployment_token_guard_"+test.name, func(t *testing.T) {
+			capabilities := providerCapabilities
+			capabilities.MaxContextTokens = test.limit
+			_, err := store.PutDeployment(ctx, domain.Deployment{
+				ID: "deployment_guard_" + test.name, Name: test.name, ProviderID: instance.ID, ProviderModel: "model",
+				AccessSurface: instance.AccessSurface, ProfileID: instance.ProfileID, Capabilities: capabilities,
+				CapabilityEvidence:      domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+				ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("model", "sha256:"+test.name, providerCapabilities, now),
+				CreatedAt:               now, UpdatedAt: now,
+			}, 0, nil)
+			if err != nil {
+				t.Fatalf("store rejected deployment-owned token guard %d: %v", test.limit, err)
+			}
+		})
 	}
 	validDeployment, err := store.PutDeployment(ctx, domain.Deployment{
 		ID: "deployment_valid", Name: "Valid", ProviderID: instance.ID, ProviderModel: "model",

@@ -389,6 +389,38 @@ func ProviderCapabilitiesSubset(candidate, available ProviderCapabilities) bool 
 		capabilityLimitSubset(candidate.MaxOutputTokens, available.MaxOutputTokens)
 }
 
+// ProviderCapabilitiesSubsetIgnoringTokenLimits compares the capabilities a
+// model or interface can perform without treating deployment token limits as
+// provider capability claims. A deployment's max_context_tokens and
+// max_output_tokens are operator-configured runtime guards: zero disables the
+// deployment-layer guard, and a positive value may deliberately be wider than
+// a model catalogue's documented window. The upstream remains authoritative
+// and may still reject a request that exceeds its own limit.
+//
+// Provider and catalogue definitions still use ProviderCapabilitiesSubset,
+// because their numeric limits describe the provider-side ceiling. Deployment
+// admission, immutable capability snapshots, and drift review use this helper
+// so adding a newly published model never requires Halro to hard-code its token
+// window before an operator can configure it.
+func ProviderCapabilitiesSubsetIgnoringTokenLimits(candidate, available ProviderCapabilities) bool {
+	for _, field := range capabilityFields {
+		if *field.Value(&candidate) && !*field.Value(&available) {
+			return false
+		}
+	}
+	return true
+}
+
+// ProviderCapabilitiesWithoutTokenLimits returns only the operation and wire
+// feature claims. Token limits on a Deployment are operator-owned routing
+// guards, so capability evidence and immutable snapshots must not copy a
+// catalogue's numeric metadata into those fields.
+func ProviderCapabilitiesWithoutTokenLimits(capabilities ProviderCapabilities) ProviderCapabilities {
+	capabilities.MaxContextTokens = 0
+	capabilities.MaxOutputTokens = 0
+	return capabilities
+}
+
 func capabilityLimitSubset(candidate, available int64) bool {
 	if available == 0 {
 		return candidate >= 0

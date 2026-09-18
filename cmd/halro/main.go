@@ -932,10 +932,24 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
 			return err
 		}
-		// The report is the answer; the exit status is what a monitor reads.
-		// A chain that could not be authenticated is not a pass, even when it
-		// is the honest state of a ledger that predates epoch 4.
+		// The report is the answer; the exit status is what a monitor reads. A
+		// chain that could not be authenticated is never a pass — not for a
+		// ledger that predates epoch 4, and not for one holding no frames at
+		// all. The empty case is tempting to pass, because a freshly
+		// initialized directory reports it and an operator meets it on the
+		// first command the runbook names. It stays a failure because the two
+		// states are byte-identical on disk: truncating a billed WAL to zero
+		// and overwriting the bbolt chain checkpoint with the zero value every
+		// `init` writes produces exactly the report a new install produces.
+		// Passing "no frames" would hand that wipe a clean bill of health from
+		// the one command an operator runs when they suspect it. What the
+		// empty case gets instead is an answer that says which state it is.
 		if !report.ChainVerified {
+			if !report.HoldsFrames() {
+				return errors.New(
+					"ledger holds no authenticated frames: expected on a directory that has not billed a request yet, " +
+						"and indistinguishable from one whose WAL and chain checkpoint were erased")
+			}
 			return errors.New("ledger chain could not be authenticated")
 		}
 		return nil

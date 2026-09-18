@@ -175,6 +175,36 @@ describe("deployment invocation target workflow", () => {
     expect(screen.queryByText("0 为自动")).not.toBeInTheDocument();
   });
 
+  it("starts token guards at zero and submits values wider than model metadata", async () => {
+    const catalogued = {
+      ...chatCapabilities,
+      max_context_tokens: 272_000,
+      max_output_tokens: 128_000,
+    };
+    const limitedTarget = target("catalogued-model", [variant("catalogued-model", "b-chat", catalogued)], "resolved", "Catalogued Model");
+    vi.mocked(api.invocationTargets).mockResolvedValue(catalog([limitedTarget]));
+    const create = vi.spyOn(api, "createDeployment").mockResolvedValue({} as never);
+
+    await openCreate();
+    fireEvent.change(screen.getByLabelText("部署名称"), { target: { value: "Wide runtime guard" } });
+    await choose("Catalogued Model");
+
+    const context = screen.getByLabelText(/^最大上下文词元/);
+    const output = screen.getByLabelText(/^最大输出词元/);
+    expect(context).toHaveValue(0);
+    expect(output).toHaveValue(0);
+
+    fireEvent.change(context, { target: { value: "1500000" } });
+    fireEvent.change(output, { target: { value: "1250000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存为停用" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      capabilities: expect.objectContaining({ max_context_tokens: 1_500_000, max_output_tokens: 1_250_000 }),
+    }), expect.any(String));
+    expect(create.mock.calls[0][0]).not.toHaveProperty("mode");
+  });
+
   it("names every unmet condition next to a disabled save button", async () => {
     await openCreate();
     expect(screen.getByRole("button", { name: "保存为停用" })).toBeDisabled();

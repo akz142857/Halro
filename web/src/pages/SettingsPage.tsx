@@ -29,7 +29,13 @@ function paneFromPath(path: string): SettingsPane {
   return SETTINGS_PANES.find((candidate) => candidate === pane) ?? "general";
 }
 
-export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: boolean }) {
+export function SettingsPage({
+  mfaSetupRequired = false,
+  onRecoveryCodesPendingChange,
+}: {
+  mfaSetupRequired?: boolean;
+  onRecoveryCodesPendingChange?: (pending: boolean) => void;
+}) {
   const { t } = useTranslation();
   const session = useSession();
   const path = usePathname();
@@ -79,7 +85,7 @@ export function SettingsPage({ mfaSetupRequired = false }: { mfaSetupRequired?: 
         title={mfaSetupRequired?t("settings.mfaRequiredTitle"):t("settings.title")}
         description={mfaSetupRequired?t("settings.mfaRequiredDescription"):t("settings.description")}
       />
-      {mfaSetupRequired ? <div className="settings-pane"><MFASettings /></div> : (
+      {mfaSetupRequired ? <div className="settings-pane"><MFASettings onRecoveryCodesPendingChange={onRecoveryCodesPendingChange} /></div> : (
         <div className="settings-shell">
           <label className="settings-section-select">
             <span>{t("settings.sectionNavigation")}</span>

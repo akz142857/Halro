@@ -264,7 +264,7 @@ jobs:
             -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
             -o "${package_dir}/halro" ./cmd/halro
           go build -trimpath \
-            -ldflags "-s -w" \
+            -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
             -o "${package_dir}/halro-deadman" ./cmd/halro-deadman
           cp deploy/observability/external-probe/config.example.yaml \
             deploy/observability/external-probe/config.schema.json \
@@ -324,8 +324,12 @@ jobs:
               --platform linux/${arch} \
               --load \
               -f deploy/observability/external-probe/Dockerfile \
+              --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
+              --build-arg RELEASE_COMMIT=${RELEASE_COMMIT} \
+              --build-arg RELEASE_DATE=${RELEASE_DATE} \
               --build-arg SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
               --tag halro-deadman:${IMAGE_TAG}-${arch} .
+            docker run --rm --platform linux/${arch} halro-deadman:${IMAGE_TAG}-${arch} -version
             test "$(docker image inspect halro-deadman:${IMAGE_TAG}-${arch} --format '{{.Config.User}}')" = "65532:65532"
             test "$(docker image inspect halro-deadman:${IMAGE_TAG}-${arch} --format '{{.Architecture}}')" = "${arch}"
             docker save halro-deadman:${IMAGE_TAG}-${arch} | gzip -n > halro-deadman-container-${arch}.tar.gz
@@ -402,10 +406,18 @@ jobs:
               --archive "release-input/halro-linux-${arch}.tar.gz" \
               --output release
           done
-          halro_deb=$(find release -maxdepth 1 -name 'halro_*_amd64.deb' -print)
-          deadman_deb=$(find release -maxdepth 1 -name 'halro-deadman_*_amd64.deb' -print)
-          test "$(printf '%s\n' "${halro_deb}" | grep -c .)" -eq 1
-          test "$(printf '%s\n' "${deadman_deb}" | grep -c .)" -eq 1
+          debian_upstream=${VERSION#v}
+          if [[ "${debian_upstream}" == *-* ]]; then
+            debian_upstream="${debian_upstream%%-*}~${debian_upstream#*-}"
+          fi
+          package_version=${debian_upstream}-1
+          for package_name in halro halro-deadman; do
+            for arch in amd64 arm64; do
+              test -f "release/${package_name}_${package_version}_${arch}.deb"
+            done
+          done
+          halro_deb="release/halro_${package_version}_amd64.deb"
+          deadman_deb="release/halro-deadman_${package_version}_amd64.deb"
           tools/release/test_deb.sh "${halro_deb}" "${deadman_deb}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -459,15 +471,20 @@ jobs:
             release/halro-*.tar.gz
             release/*.deb
             release/halro*.spdx.json
+      # Debian names the main package halro_<version>-1_<arch>.deb with an
+      # underscore, so halro-* alone silently leaves it out of the checksum file
+      # and out of the signing loop below — which is how it stayed missing from
+      # every release since v0.7.1 without this job ever failing. The verify job
+      # reads the same three lists, so all three name both shapes.
       - name: Generate checksums
         working-directory: release
-        run: sha256sum halro-* halro.spdx.json > checksums.txt
+        run: sha256sum halro-* halro_*.deb halro.spdx.json > checksums.txt
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Keyless sign release blobs
         working-directory: release
         run: |
-          for artifact in halro-* halro.spdx.json checksums.txt; do
+          for artifact in halro-* halro_*.deb halro.spdx.json checksums.txt; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "${artifact}"
           done
       # The manifest pins the version tag this run releases, which on a dispatch
@@ -579,7 +596,7 @@ jobs:
               --source-ref refs/heads/main \
               --cert-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@refs/heads/main"
           done
-          for artifact in release/halro-* release/halro.spdx.json release/checksums.txt; do
+          for artifact in release/halro-* release/halro_*.deb release/halro.spdx.json release/checksums.txt; do
             case "${artifact}" in
               *.sigstore.json) continue ;;
             esac
@@ -649,6 +666,13 @@ jobs:
           tag="${VERSION}"
           gh release download "${tag}" --repo "${GITHUB_REPOSITORY}" \
             -p 'halro-container-*.tar.gz' -p 'halro-deadman-container-*.tar.gz' -p checksums.txt
+          # --ignore-missing passes as long as something verified, so assert
+          # membership first: an archive absent from checksums.txt would
+          # otherwise be pushed unverified, which is the shape of the bug the
+          # main .deb had. publish-ghcr.yml already does this.
+          for archive in halro-container-*.tar.gz halro-deadman-container-*.tar.gz; do
+            awk '{print $2}' checksums.txt | grep -Fx -- "${archive}" >/dev/null
+          done
           sha256sum --check --ignore-missing checksums.txt
           owner=$(printf '%s' "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
           for name in halro halro-deadman; do

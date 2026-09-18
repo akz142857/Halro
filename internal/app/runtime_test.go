@@ -149,6 +149,29 @@ func TestRuntimeWritesVerifiableStartupAndShutdownAuditEvents(t *testing.T) {
 	}
 }
 
+func TestRuntimeLogsTheBoundariesOfClosingDurableState(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	var logs strings.Builder
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Without these, a log that simply stops after "listener started" reads the
+	// same whether the process drained or was killed. Serve logs the listener
+	// drain; this pair brackets closing the durable state after it.
+	for _, expected := range []string{"closing runtime", "runtime closed"} {
+		if !strings.Contains(logs.String(), expected) {
+			t.Fatalf("shutdown log %q does not contain %q", logs.String(), expected)
+		}
+	}
+}
+
 func TestMetricsRequireDerivedBearerToken(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Metrics.Enabled = true
