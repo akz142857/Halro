@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -42,9 +43,37 @@ func VerifyUsage(ctx context.Context, cfg config.Config) (usage.ReconciliationRe
 	snapshot := aggregate.Snapshot()
 	report, err := exporter.Reconcile(snapshot)
 	if err != nil {
+		// A directory that has not exported yet has no manifest, and the bare
+		// "open .../manifest.json: no such file or directory" this used to
+		// print reads as data loss on an install that has none. It is still a
+		// failure — an absent manifest under a ledger that was erased looks the
+		// same — but the answer now says which state it cannot tell apart.
+		//
+		// The distinction is taken from the filesystem, not from the error:
+		// Verify hashes every partition the manifest lists and returns the same
+		// *os.PathError when one of those files is gone, which is exactly the
+		// divergence this command exists to catch.
+		if manifestAbsent(cfg) && !snapshotHoldsUsage(snapshot) {
+			return usage.ReconciliationReport{}, errors.New(
+				"usage holds no manifest: expected on a directory that has not exported usage yet, " +
+					"and indistinguishable from one whose usage tree was erased")
+		}
 		return usage.ReconciliationReport{}, fmt.Errorf("verify usage: %w", err)
 	}
 	return report, nil
+}
+
+func manifestAbsent(cfg config.Config) bool {
+	_, err := os.Stat(filepath.Join(cfg.UsagePath(), "manifest.json"))
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// snapshotHoldsUsage reports whether the aggregate has anything a manifest
+// could have been expected to cover. The watermark is the authority: Apply
+// advances it for every record it applies, and retention only ever raises the
+// floor above records that were once there.
+func snapshotHoldsUsage(snapshot usage.Snapshot) bool {
+	return snapshot.Watermark.Sequence > 0 || snapshot.Floor > 0
 }
 
 func PruneUsage(

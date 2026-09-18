@@ -332,6 +332,22 @@ type ChainReport struct {
 	ChainVerified       bool
 }
 
+// HoldsFrames reports whether the log contains anything a chain could have
+// covered. A report with everything at zero describes a directory that was
+// initialized and never written to, which is the one case where an
+// unauthenticated chain is the honest answer rather than a missing one.
+//
+// It answers for the report it is given, not for the log: VerifyChain fills in
+// the active generation only, and the sealed counts are added by the caller
+// that also ran VerifySegments (internal/app.VerifyLedger, internal/app's
+// doctor). Asking a bare VerifyChain report about a sealed-only log therefore
+// answers false, so call it on a report that has both halves.
+func (r ChainReport) HoldsFrames() bool {
+	return r.Authenticated > 0 || r.ChecksumOnly > 0 ||
+		r.SealedAuthenticated > 0 || r.SealedGenerations > 0 ||
+		r.ChainSequence > 0 || r.Head.Sequence > 0 || r.Head.Offset > 0
+}
+
 // VerifyChain walks the active generation and authenticates every epoch-4 frame
 // in it against key. Unlike Inspect/InspectReplay (used on the hot startup path
 // without redoing work OpenWithOptions already did), this is for offline

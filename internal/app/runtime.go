@@ -1460,6 +1460,9 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	}
 
 	r.draining.Store(true)
+	// Startup logs a line per listener. Without its counterpart, a log that
+	// simply stops reads the same whether the process drained or was killed.
+	r.logger.Info("draining listeners", "drain_budget", r.config.Server.ShutdownTimeout.Value().String())
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
@@ -1528,6 +1531,11 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		// Listeners have already drained by the time Close runs — Serve does
+		// that and logs it. This pair brackets the rest: the ledger, audit,
+		// vault and data lock being closed in order, which is what decides
+		// whether the next start finds a clean directory.
+		r.logger.Info("closing runtime")
 		r.draining.Store(true)
 		r.clearSetupToken()
 		r.backgroundCancel()
@@ -1571,6 +1579,11 @@ func (r *Runtime) Close() error {
 			}(),
 			r.lock.Close(),
 		)
+		if r.closeErr != nil {
+			r.logger.Error("runtime closed with errors", "error", r.closeErr.Error())
+		} else {
+			r.logger.Info("runtime closed")
+		}
 	})
 	return r.closeErr
 }

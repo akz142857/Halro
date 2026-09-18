@@ -281,6 +281,39 @@ func TestInitDoesNotValidateListenersItNeverBinds(t *testing.T) {
 	}
 }
 
+func TestLedgerVerifySaysWhichUnauthenticatedStateItFound(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(root, "data")
+	cfg.Storage.MasterKey.File = filepath.Join(root, "master.key")
+	contents, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"init", "--config", path}, logger); err != nil {
+		t.Fatal(err)
+	}
+	// An operator meets this on the first command the runbook names, and the
+	// bare "ledger chain could not be authenticated" read as corruption on a
+	// directory that simply has not billed anything. It still fails — the same
+	// report is what a wiped WAL and a zeroed chain checkpoint produce — but it
+	// now says which of the two states it cannot tell apart.
+	err = run([]string{"ledger", "verify", "--config", path}, logger)
+	if err == nil {
+		t.Fatal("verify passed a chain it never authenticated")
+	}
+	for _, expected := range []string{"holds no authenticated frames", "has not billed a request yet", "erased"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("verify error %q does not contain %q", err, expected)
+		}
+	}
+}
+
 func TestRestoreStatusReportsSchemaMigration(t *testing.T) {
 	var output strings.Builder
 	writeRestoreStatus(&output, app.RestoreResult{SchemaVersionBefore: 23, SchemaVersionAfter: 27})
