@@ -25,15 +25,29 @@ them because it is a copy of the real one.
 
 Before first publication:
 
-1. replace `HALRO_ARCHIVE_SIGNING_KEY_FINGERPRINT` with the dedicated online
-   archive-signing subkey fingerprint;
-2. configure a protected publishing environment and secret manager;
+1. create the protected `apt-production` Environment and store the dedicated
+   online archive-signing private key as `HALRO_APT_ARCHIVE_SIGNING_KEY`. It is
+   imported with `gpg --batch --import` and reprepro signs unattended, so the key
+   carries **no passphrase** and must be exported **armored** — the secret is a
+   text value and a binary export cannot survive it;
+2. store the uppercase full fingerprint of its **primary key** as
+   `HALRO_APT_ARCHIVE_SIGNING_FINGERPRINT` in the same Environment. The check
+   reads the first `fpr` from `gpg --with-colons --list-secret-keys`, which is the
+   primary; a subkey fingerprint fails closed there. The workflow replaces the
+   `conf/distributions` placeholder only in its ephemeral workspace;
 3. import only `.deb` files whose checksums, GitHub attestation, and Sigstore
    bundles have been verified against the immutable Halro GitHub Release;
-4. upload immutable pool/index objects first and publish `dists/stable/InRelease`
-   last;
+4. build and push the signed public tree as an immutable multi-architecture
+   `ghcr.io/halro-ai/apt-repository@sha256:...` snapshot, publishing immutable
+   pool and index objects before `dists/stable/InRelease`;
 5. complete clean-host amd64 and arm64 `apt update`, install, upgrade, remove,
    and retained-data acceptance before advertising the channel on halro.ai.
+
+The public halves are not published by hand: the workflow exports the binary and
+armored public key and its fingerprint, and hands them to the website, which
+serves them under `/keys/`. Acceptance then compares the served keyring's SHA-256
+against the one it exported, so **rotating the key is a coordinated change across
+both repositories**, not a key swap.
 
 `scripts/verify-release.sh VERSION EXPECTED_COMMIT DIRECTORY` downloads and
 independently verifies the Debian release assets: it refuses a tag that resolves
