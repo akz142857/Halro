@@ -8,6 +8,13 @@ semantic versioning.
 
 ### Changed
 
+- `tools/release/prepare_release.py` moves the mechanical half of a release
+  preparation: the `## [Unreleased]` entries into a dated section with its
+  compare link, the README image tags, the `web/` package version and lock, and
+  the two dependency-license drift hashes the bump displaces — the surfaces
+  v0.8.1 and v0.8.2 both shipped without. It scaffolds the assessment record
+  with the range and a trigger table computed from the paths the range touched,
+  and refuses rather than guesses when a surface is missing.
 - `packaging/apt-repository/` now mirrors what actually runs in the private APT
   control plane, and says so: that repository is authoritative, this copy exists
   because it is private and the verification procedure should be publicly
