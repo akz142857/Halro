@@ -573,6 +573,14 @@ func (p *priorDeployment) Declaration() domain.ProviderCapabilities {
 }
 
 func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string, input deploymentInput, prior *priorDeployment, createdAt, updatedAt time.Time) (domain.Deployment, error) {
+	// Omitting capabilities on an update means "leave them unchanged". The Web
+	// console always sends the complete set, but the Admin API is also a public
+	// contract and must not silently restore catalogue defaults for other
+	// clients.
+	if prior != nil && input.Capabilities == nil {
+		retained := prior.Capabilities
+		input.Capabilities = &retained
+	}
 	instance, err := r.store.GetProvider(request.Context(), input.ProviderID)
 	if err != nil || instance.DeletedAt != nil || (input.Enabled && !instance.Enabled) {
 		return domain.Deployment{}, errors.New("deployment provider is unavailable")
@@ -595,7 +603,13 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		return domain.Deployment{}, err
 	}
 	binding, capabilities := resolution.binding, resolution.capabilities
-	if !domain.ProviderCapabilitiesSubset(capabilities, binding.Capabilities) {
+	// A create request that omits capabilities accepts the resolved operation
+	// and protocol features, but token guards default to zero. Catalogue and
+	// provider metadata describe the upstream; they are not deployment defaults.
+	if prior == nil && input.Capabilities == nil {
+		capabilities = domain.ProviderCapabilitiesWithoutTokenLimits(capabilities)
+	}
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(capabilities, binding.Capabilities) {
 		return domain.Deployment{}, errors.New("deployment capabilities exceed provider capabilities")
 	}
 	if input.AccessSurface != "" && input.AccessSurface != binding.AccessSurface {
@@ -651,13 +665,18 @@ func (r *Runtime) deploymentFromInput(request *http.Request, deploymentID string
 		// would erase the very difference OperatorDisabled is read from, and the
 		// capability would be offered again as though it had never been declined.
 		if !resolution.mapped && input.Mode != deploymentModeOperatorDeclared &&
-			domain.ProviderCapabilitiesSubset(capabilities, prior.Declaration()) {
+			domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(capabilities, prior.Declaration()) {
 			snapshot.Capabilities = prior.Declaration()
 		}
 	} else {
 		snapshot.CatalogRevision = r.effectiveModelCatalog().Revision()
 		snapshot.Capabilities = modelcatalog.Clamp(resolution.entry.Capabilities, resolution.binding.Capabilities)
 	}
+	// Numeric token windows remain available on catalogue/detection responses,
+	// but are not part of the immutable feature claim. Keeping them out of the
+	// snapshot prevents one field from simultaneously meaning upstream metadata
+	// and the deployment's live routing guard.
+	snapshot.Capabilities = domain.ProviderCapabilitiesWithoutTokenLimits(snapshot.Capabilities)
 	if detected != nil {
 		snapshot.Evidence = domain.DetectionSnapshotEvidence(snapshot, *detected)
 	} else {
@@ -742,19 +761,13 @@ func (r *Runtime) resolveDeploymentDetection(ctx context.Context, instance domai
 		return deploymentResolution{}, nil, errCapabilityDetectionTargetMismatch
 	}
 	retained := *input.Capabilities
-	if retained.MaxContextTokens == 0 {
-		retained.MaxContextTokens = detection.Recommended.MaxContextTokens
-	}
-	if retained.MaxOutputTokens == 0 {
-		retained.MaxOutputTokens = detection.Recommended.MaxOutputTokens
-	}
-	if !domain.ProviderCapabilitiesSubset(retained, detection.Recommended) || !domain.ProviderCapabilitiesSubset(retained, binding.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(retained, detection.Recommended) ||
+		!domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(retained, binding.Capabilities) {
 		return deploymentResolution{}, nil, errCapabilitiesExceedDetection
 	}
 	if err := modelcatalog.ValidateDependencies(retained); err != nil {
 		return deploymentResolution{}, nil, err
 	}
-	input.Capabilities.MaxContextTokens, input.Capabilities.MaxOutputTokens = retained.MaxContextTokens, retained.MaxOutputTokens
 	entry := modelcatalog.Unknown(modelcatalog.Key{ProviderType: instance.Type, Profile: binding.ProfileID, TargetKind: input.TargetKind, Model: model, Region: region})
 	return deploymentResolution{binding: binding, capabilities: retained, entry: entry}, &detection, nil
 }
@@ -1021,7 +1034,7 @@ func (r *Runtime) resolveDeploymentVariant(ctx context.Context, instance domain.
 	}
 	retained := selected.Capabilities
 	if input.Capabilities != nil {
-		if !domain.ProviderCapabilitiesSubset(*input.Capabilities, selected.Capabilities) {
+		if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(*input.Capabilities, selected.Capabilities) {
 			return deploymentResolution{}, errors.New("deployment capabilities exceed the selected deployment variant")
 		}
 		retained = *input.Capabilities
@@ -1171,7 +1184,7 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 
 	// A known model narrows to what the catalog established for it.
 	for _, resolution := range known {
-		if retained == nil || domain.ProviderCapabilitiesSubset(*retained, resolution.capabilities) {
+		if retained == nil || domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(*retained, resolution.capabilities) {
 			if retained != nil {
 				resolution.capabilities = *retained
 			}
@@ -1201,7 +1214,7 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 	// an existing declaration is not a new claim, and narrowing one is a
 	// reduction — neither should demand the word again. Anything wider does.
 	declaration := prior.Declaration()
-	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubset(*retained, declaration)
+	covered := prior != nil && retained != nil && domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(*retained, declaration)
 	if input.Mode != deploymentModeOperatorDeclared && !covered {
 		if len(known) > 0 {
 			return deploymentResolution{}, errModelCapabilitiesExceedCatalog
@@ -1218,7 +1231,7 @@ func resolveDeploymentTargetWithCatalog(instance domain.ProviderInstance, input 
 	// them, that is still the binding it belongs on, even though the operator is
 	// claiming more than the catalog does.
 	for _, resolution := range append(known, unknown...) {
-		if domain.ProviderCapabilitiesSubset(*retained, resolution.binding.Capabilities) {
+		if domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(*retained, resolution.binding.Capabilities) {
 			resolution.capabilities = *retained
 			resolution.declared = true
 			return resolution, checkModelRevision(input.ModelRevision, resolution.entry)

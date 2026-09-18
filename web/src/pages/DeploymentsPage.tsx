@@ -1218,6 +1218,16 @@ export const deploymentCapabilityGroupsForTest = deploymentCapabilityGroups;
 // which meant a capability could be in one and not the other.
 const deploymentCapabilityNames = deploymentCapabilityGroups.flatMap((group) => group.capabilities);
 
+// Model catalogues and provider metadata may report token windows, but the two
+// deployment fields are operator-owned runtime guards rather than capability
+// claims. New deployments therefore start unrestricted even when the selected
+// model has a documented window. The operator may enter any non-negative guard;
+// the upstream remains authoritative and can reject a request beyond its own
+// limit.
+function deploymentCapabilitiesFromClaims(capabilities: ProviderCapabilities): ProviderCapabilities {
+  return { ...capabilities, max_context_tokens: 0, max_output_tokens: 0 };
+}
+
 /**
  * The order the model catalogue is banded in, by what the operator does next.
  *
@@ -1410,7 +1420,7 @@ function DeploymentForm({
     if (variants.length === 1 && !resolutionRequiresConfirmation) {
       setSelectedVariant(variants[0]);
       setBindingID(variants[0].binding_id);
-      setCapabilities({ ...variants[0].capabilities });
+      setCapabilities(deploymentCapabilitiesFromClaims(variants[0].capabilities));
     } else if (!variants.some((variant) => variant.revision === selectedVariant?.revision)) {
       setSelectedVariant(null);
       setBindingID("");
@@ -1459,7 +1469,7 @@ function DeploymentForm({
     // Only a completed detection has resolved an interface; an ambiguous one
     // deliberately has not, and must not pin the deployment to anything.
     if (detection.status === "completed" && detection.binding_id) {
-      setCapabilities({ ...detection.recommended_capabilities });
+      setCapabilities(deploymentCapabilitiesFromClaims(detection.recommended_capabilities));
       setBindingID(detection.binding_id);
       setManualDeclaration(false);
     }
@@ -2157,7 +2167,7 @@ function DeploymentForm({
                     setSelectedVariant(variant);
                     setResolutionRequiresConfirmation(false);
                     setBindingID(variant.binding_id);
-                    setCapabilities({ ...variant.capabilities });
+                    setCapabilities(deploymentCapabilitiesFromClaims(variant.capabilities));
                   }}
                 />
                 <span>{variantLabel(variant, resolvedTarget.variants, index, t)}</span>
@@ -2478,7 +2488,7 @@ function DeploymentForm({
                       resetDetection();
                       setManualDeclaration(true);
                       setBindingID(next);
-                      setCapabilities(nextBinding ? { ...nextBinding.capabilities } : emptyCapabilities());
+                      setCapabilities(nextBinding ? deploymentCapabilitiesFromClaims(nextBinding.capabilities) : emptyCapabilities());
                   }}>
                     <option value="">{t("deployments.interfaceRequired")}</option>
                     {selectableBindings.map((binding) => <option value={binding.id} key={binding.id}>{bindingLabel(binding, t)}</option>)}

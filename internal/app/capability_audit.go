@@ -92,10 +92,15 @@ func enabledCapabilityNames(capabilities domain.ProviderCapabilities) []string {
 // claims about its model, as opposed to its name, weight or concurrency. Only
 // the former is a capability review.
 func capabilityChanged(before, after domain.Deployment) bool {
-	return before.Capabilities != after.Capabilities ||
+	return !sameCapabilityFeatures(before.Capabilities, after.Capabilities) ||
 		before.ModelCapabilitySnapshot.ModelRevision != after.ModelCapabilitySnapshot.ModelRevision ||
 		before.ModelCapabilitySnapshot.Source != after.ModelCapabilitySnapshot.Source ||
-		before.ModelCapabilitySnapshot.Capabilities != after.ModelCapabilitySnapshot.Capabilities
+		!sameCapabilityFeatures(before.ModelCapabilitySnapshot.Capabilities, after.ModelCapabilitySnapshot.Capabilities)
+}
+
+func sameCapabilityFeatures(left, right domain.ProviderCapabilities) bool {
+	return domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(left, right) &&
+		domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(right, left)
 }
 
 // auditCapabilityWithholdings records each deployment the reconciliation took

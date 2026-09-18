@@ -535,6 +535,7 @@ func TestAdminUsesInvocationTargetRouteAndRemovesLegacyModelsRoute(t *testing.T)
 		t.Fatalf("conflict=%#v err=%v body=%s", conflict, err, stale.Body.String())
 	}
 	deploymentInput["resolution_revision"] = variant.Revision
+	delete(deploymentInput, "capabilities")
 	created := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/deployments", "", deploymentInput)
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
@@ -545,6 +546,9 @@ func TestAdminUsesInvocationTargetRouteAndRemovesLegacyModelsRoute(t *testing.T)
 	}
 	if deployment.ModelCapabilitySnapshot.ResolutionRevision != variant.Revision || len(deployment.ModelCapabilitySnapshot.ClaimRevisions) == 0 {
 		t.Fatalf("snapshot did not bind the reviewed variant: %#v", deployment.ModelCapabilitySnapshot)
+	}
+	if deployment.Capabilities.MaxContextTokens != 0 || deployment.Capabilities.MaxOutputTokens != 0 {
+		t.Fatalf("omitted variant token guards did not default to zero: %#v", deployment.Capabilities)
 	}
 	runtime.clearInvocationTargetCatalog(instance.ID)
 	stored, err := runtime.store.GetDeployment(context.Background(), deployment.ID)

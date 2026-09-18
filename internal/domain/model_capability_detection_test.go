@@ -52,6 +52,19 @@ func TestDetectionCapabilitySnapshotIsVerifiedAndDoesNotMarkDeploymentTested(t *
 	}
 }
 
+func TestCapabilitySnapshotAllowsIndependentDeploymentTokenGuards(t *testing.T) {
+	now := time.Now().UTC()
+	snapshot := DeclaredCapabilitySnapshot("model", "sha256:model", ProviderCapabilities{
+		Chat: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000,
+	}, now)
+	deployment := Deployment{ProviderModel: "model", Capabilities: ProviderCapabilities{
+		Chat: true, MaxContextTokens: 1_500_000, MaxOutputTokens: 1_250_000,
+	}}
+	if err := snapshot.Validate(deployment); err != nil {
+		t.Fatalf("deployment-owned token guards were rejected by the capability snapshot: %v", err)
+	}
+}
+
 // A verification measures what it is allowed to measure and carries the rest of
 // the catalog's claim through. Recording that carried half as verified would
 // state a measurement that never happened — images cannot be probed at all, and

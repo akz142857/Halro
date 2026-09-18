@@ -1041,7 +1041,7 @@ func DeclaredCapabilitySnapshot(model, revision string, capabilities ProviderCap
 	snapshot := ModelCapabilitySnapshot{
 		ProviderModel: model, ModelRevision: revision,
 		Source: "operator_declared", Status: "partial",
-		CapturedAt: at, Capabilities: capabilities,
+		CapturedAt: at, Capabilities: ProviderCapabilitiesWithoutTokenLimits(capabilities),
 	}
 	snapshot.Evidence = SnapshotEvidence(snapshot)
 	return snapshot
@@ -1064,8 +1064,11 @@ func (s ModelCapabilitySnapshot) Validate(deployment Deployment) error {
 	if s.CapturedAt.IsZero() {
 		problems = append(problems, errors.New("capability snapshot requires a capture time"))
 	}
-	// The deployment may narrow what was established, never exceed it.
-	if !ProviderCapabilitiesSubset(deployment.Capabilities, s.Capabilities) {
+	// The deployment may narrow the operations and protocol features that were
+	// established, never exceed them. Token limits are deployment-owned runtime
+	// guards rather than evidence-backed model capabilities, so they are allowed
+	// to differ from the immutable capability snapshot.
+	if !ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.Capabilities, s.Capabilities) {
 		problems = append(problems, errors.New("deployment capabilities exceed the capability snapshot"))
 	}
 	// §5.2: evidence may not exceed the level its source is allowed to claim,

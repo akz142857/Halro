@@ -94,8 +94,8 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 
 	// The profile ceiling is the harder constraint: a snapshot that exceeds it
 	// describes something this build can no longer do, whatever the catalog says.
-	if !domain.ProviderCapabilitiesSubset(snapshot.Capabilities, binding.Capabilities) ||
-		!domain.ProviderCapabilitiesSubset(deployment.Capabilities, binding.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(snapshot.Capabilities, binding.Capabilities) ||
+		!domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.Capabilities, binding.Capabilities) {
 		review.State = domain.CapabilityReviewDrifted
 		review.Reason = reviewReasonProfileNarrowed
 		review.NoLongerSupported = modelcatalog.LostCapabilities(
@@ -136,7 +136,7 @@ func reviewCapabilitiesWithCatalogState(deployment domain.Deployment, binding do
 		review.Reason = reviewReasonCatalogAdvanced
 		return review
 	}
-	if !domain.ProviderCapabilitiesSubset(snapshot.Capabilities, entry.Capabilities) {
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(snapshot.Capabilities, entry.Capabilities) {
 		// The catalog now establishes less than the snapshot claims. Whether that
 		// is drift depends on where the snapshot came from.
 		//

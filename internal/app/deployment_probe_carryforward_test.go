@@ -197,4 +197,26 @@ func TestDeploymentUpdateCarriesAProbeForwardOnlyWhenNothingItValidatedChanged(t
 			t.Fatalf("a rename made the probe stale: %#v", after)
 		}
 	})
+
+	t.Run("a token guard edit keeps the probe current", func(t *testing.T) {
+		runtime, bootstrap, _ := openBootstrappedRuntime(t)
+		cookie, csrf := loginAdminForTest(t, runtime)
+		deployment := newProbedDeploymentForTest(t, runtime, cookie, csrf, bootstrap.ProviderID, "gpt-token-guard",
+			map[string]any{"chat": true})
+		updated := updateDeploymentForTest(t, runtime, cookie, csrf, deployment, map[string]any{
+			"name": "gpt-token-guard", "provider_id": bootstrap.ProviderID, "provider_model": "gpt-token-guard",
+			"target_kind": "model_id",
+			"capabilities": map[string]any{
+				"chat": true, "max_context_tokens": int64(1_500_000), "max_output_tokens": int64(1_250_000),
+			},
+			"max_concurrency": int64(2), "enabled": false,
+		})
+		if updated.Code != http.StatusOK {
+			t.Fatalf("token guard edit status=%d body=%s", updated.Code, updated.Body.String())
+		}
+		after := decodeProbedDeployment(t, updated)
+		if !after.validated() {
+			t.Fatalf("a token guard edit made the probe stale: %#v", after)
+		}
+	})
 }

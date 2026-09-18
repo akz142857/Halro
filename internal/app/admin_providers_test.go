@@ -909,6 +909,9 @@ func TestAdminBedrockTitanEmbeddingProfilePinsModelFamily(t *testing.T) {
 	if deploymentResponse.Code != http.StatusCreated || json.Unmarshal(deploymentResponse.Body.Bytes(), &deployment) != nil {
 		t.Fatalf("deployment status=%d body=%s", deploymentResponse.Code, deploymentResponse.Body.String())
 	}
+	if deployment.Capabilities.MaxContextTokens != 0 || deployment.Capabilities.MaxOutputTokens != 0 {
+		t.Fatalf("omitted deployment token guards did not default to zero: %#v", deployment.Capabilities)
+	}
 	enableStoredDeploymentForTest(t, runtime, deployment.ID)
 	routeResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/routes", "", map[string]any{
 		"public_model": "embedding", "deployment_id": deployment.ID, "strategy": "ordered", "enabled": true,
@@ -917,7 +920,7 @@ func TestAdminBedrockTitanEmbeddingProfilePinsModelFamily(t *testing.T) {
 		t.Fatalf("route status=%d body=%s", routeResponse.Code, routeResponse.Body.String())
 	}
 	target, ok := runtime.providers.Resolve("embedding")
-	if !ok || target.ProfileID != domain.ProfileBedrockInvokeTitanEmbedV2 || !target.Capabilities.Embeddings || target.Capabilities.Chat {
+	if !ok || target.ProfileID != domain.ProfileBedrockInvokeTitanEmbedV2 || !target.Capabilities.Embeddings || target.Capabilities.Chat || target.Capabilities.MaxContextTokens != 0 {
 		t.Fatalf("unexpected Titan target: %#v", target)
 	}
 }

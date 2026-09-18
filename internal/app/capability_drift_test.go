@@ -192,21 +192,22 @@ func declaredOpenAIDeployment() (domain.Deployment, domain.ProviderProfileBindin
 	}, binding
 }
 
-// Growing the catalog must not silently stop traffic. An operator who declared
-// a model before the catalog covered it stops being a subset of the entry on
-// any point where the two disagree — token limits especially, since a
-// declaration that left them open is not inside an entry that fills them in.
-// That is a disagreement between two claims, not a capability that stopped
-// being supported, and the create path lets exactly this declaration through:
-// a deployment that can be created must not be withheld by the next restart.
+// Growing the catalog must not silently stop traffic. Deployment token guards
+// are independent from capability evidence, so a declaration that left them
+// open remains a feature subset of an entry that later publishes numeric
+// limits. The new catalog revision is reviewable, not drift and not a
+// disagreement with the operator's feature claim.
 func TestCatalogGrowingUnderADeclarationIsReviewableNotDrift(t *testing.T) {
 	deployment, binding := declaredOpenAIDeployment()
 	if domain.ProviderCapabilitiesSubset(deployment.ModelCapabilitySnapshot.Capabilities, catalogueEntryFor(t, deployment, binding).Capabilities) {
 		t.Fatal("this test needs a snapshot the catalog entry does not cover")
 	}
+	if !domain.ProviderCapabilitiesSubsetIgnoringTokenLimits(deployment.ModelCapabilitySnapshot.Capabilities, catalogueEntryFor(t, deployment, binding).Capabilities) {
+		t.Fatal("token limits were not the only difference from the catalog entry")
+	}
 
 	review := reviewCapabilities(deployment, binding, domain.ProviderOpenAI)
-	if review.State != domain.CapabilityReviewAvailable || review.Reason != reviewReasonCatalogDisagrees {
+	if review.State != domain.CapabilityReviewAvailable || review.Reason != reviewReasonCatalogNowCovers {
 		t.Fatalf("state=%q reason=%q", review.State, review.Reason)
 	}
 	if !capabilityReviewAdmitsTraffic(review.State) {
@@ -247,12 +248,15 @@ func TestSignedRevocationMakesItsOwnSavedSnapshotDrift(t *testing.T) {
 	}
 }
 
-// The same disagreement under a snapshot the catalog itself produced is drift:
-// that snapshot rested on the catalog, and the basis is gone.
+// A feature disagreement under a snapshot the catalog itself produced is
+// drift: that snapshot rested on the catalog, and the basis is gone. Numeric
+// token guards are deliberately excluded from this decision.
 func TestCatalogNarrowingUnderItsOwnSnapshotIsStillDrift(t *testing.T) {
 	deployment, binding := declaredOpenAIDeployment()
 	deployment.ModelCapabilitySnapshot.Source = string(modelcatalog.SourceBuiltin)
 	deployment.ModelCapabilitySnapshot.Status = string(modelcatalog.StatusKnown)
+	deployment.Capabilities.Reasoning = true
+	deployment.ModelCapabilitySnapshot.Capabilities.Reasoning = true
 
 	review := reviewCapabilities(deployment, binding, domain.ProviderOpenAI)
 	if review.State != domain.CapabilityReviewDrifted || review.Reason != reviewReasonCatalogNarrowed {

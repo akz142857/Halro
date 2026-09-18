@@ -57,6 +57,26 @@ func TestProviderCapabilitiesSubsetCoversEveryOperation(t *testing.T) {
 	}
 }
 
+func TestProviderCapabilitiesSubsetIgnoringTokenLimitsKeepsFeatureBoundary(t *testing.T) {
+	available := ProviderCapabilities{Chat: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000}
+	candidate := ProviderCapabilities{Chat: true, MaxContextTokens: 1_500_000, MaxOutputTokens: 1_250_000}
+	if !ProviderCapabilitiesSubsetIgnoringTokenLimits(candidate, available) {
+		t.Fatal("operator token guards were treated as provider capability claims")
+	}
+	candidate.Tools = true
+	if ProviderCapabilitiesSubsetIgnoringTokenLimits(candidate, available) {
+		t.Fatal("an unsupported protocol feature escaped the capability boundary")
+	}
+}
+
+func TestProviderCapabilitiesWithoutTokenLimitsPreservesFeatureClaims(t *testing.T) {
+	capabilities := ProviderCapabilities{Chat: true, Tools: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000}
+	got := ProviderCapabilitiesWithoutTokenLimits(capabilities)
+	if !got.Chat || !got.Tools || got.MaxContextTokens != 0 || got.MaxOutputTokens != 0 {
+		t.Fatalf("unexpected feature-only capabilities: %#v", got)
+	}
+}
+
 func TestDeploymentValidationRejectsDetachedChatFeatures(t *testing.T) {
 	deployment := Deployment{
 		ID: "dep_1", Name: "invalid", ProviderID: "prv_1", ProviderModel: "model",

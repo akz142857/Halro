@@ -79,6 +79,68 @@ func TestCreatingADeploymentAuditsTheCapabilitySnapshotAndDeclaration(t *testing
 	}
 }
 
+func TestKnownDeploymentTokenGuardsDefaultToZeroAndAcceptWiderValues(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	cookie, csrf := loginAdminForTest(t, runtime)
+	base := map[string]any{
+		"name": "Default token guards", "provider_id": bootstrap.ProviderID,
+		"provider_model": "gpt-4o-mini", "target_kind": "model_id", "enabled": false,
+	}
+	createdResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
+		"/admin/api/v1/deployments", "", base)
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created domain.Deployment
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !created.Capabilities.Chat || created.Capabilities.MaxContextTokens != 0 || created.Capabilities.MaxOutputTokens != 0 {
+		t.Fatalf("omitted token guards did not default to zero: %#v", created.Capabilities)
+	}
+	if created.ModelCapabilitySnapshot.Capabilities.MaxContextTokens != 0 || created.ModelCapabilitySnapshot.Capabilities.MaxOutputTokens != 0 {
+		t.Fatalf("catalogue token metadata leaked into the feature snapshot: %#v", created.ModelCapabilitySnapshot.Capabilities)
+	}
+
+	wider := created.Capabilities
+	wider.MaxContextTokens = 1_500_000
+	wider.MaxOutputTokens = 1_250_000
+	base["name"] = "Wider token guards"
+	base["capabilities"] = wider
+	widerResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost,
+		"/admin/api/v1/deployments", "", base)
+	if widerResponse.Code != http.StatusCreated {
+		t.Fatalf("wider create status=%d body=%s", widerResponse.Code, widerResponse.Body.String())
+	}
+	var saved domain.Deployment
+	if err := json.Unmarshal(widerResponse.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Capabilities.MaxContextTokens != 1_500_000 || saved.Capabilities.MaxOutputTokens != 1_250_000 {
+		t.Fatalf("wider token guards were not persisted: %#v", saved.Capabilities)
+	}
+	stored, err := runtime.store.GetDeployment(context.Background(), saved.ID)
+	if err != nil || stored.Capabilities != saved.Capabilities {
+		t.Fatalf("stored token guards=%#v err=%v", stored.Capabilities, err)
+	}
+	updateResponse := performAdminMutation(t, runtime, cookie, csrf, http.MethodPut,
+		"/admin/api/v1/deployments/"+saved.ID, revisionETag(saved.Revision), map[string]any{
+			"name": "Wider token guards renamed", "provider_id": saved.ProviderID,
+			"provider_model": saved.ProviderModel, "target_kind": saved.TargetKind,
+			"max_concurrency": saved.MaxConcurrency, "enabled": false,
+		})
+	if updateResponse.Code != http.StatusOK {
+		t.Fatalf("capabilities-omitted update status=%d body=%s", updateResponse.Code, updateResponse.Body.String())
+	}
+	var updated domain.Deployment
+	if err := json.Unmarshal(updateResponse.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Capabilities != saved.Capabilities {
+		t.Fatalf("capabilities-omitted update changed token guards: before=%#v after=%#v", saved.Capabilities, updated.Capabilities)
+	}
+}
+
 // Editing a deployment's capabilities is a review; editing its concurrency is
 // not, and recording both the same way would bury the events that matter.
 func TestOnlyACapabilityChangeAuditsAReview(t *testing.T) {
@@ -142,6 +204,28 @@ func TestOnlyACapabilityChangeAuditsAReview(t *testing.T) {
 	disabled, _ := metadata["disabled"].([]any)
 	if len(disabled) != 1 || disabled[0] != "stream_usage" {
 		t.Fatalf("the review did not name what was turned off: %v", metadata)
+	}
+}
+
+func TestTokenGuardChangeIsNotACapabilityReview(t *testing.T) {
+	before := domain.Deployment{
+		Capabilities: domain.ProviderCapabilities{Chat: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000},
+		ModelCapabilitySnapshot: domain.ModelCapabilitySnapshot{
+			ModelRevision: "sha256:model", Source: "builtin_catalog",
+			Capabilities: domain.ProviderCapabilities{Chat: true, MaxContextTokens: 1_000_000, MaxOutputTokens: 128_000},
+		},
+	}
+	after := before
+	after.Capabilities.MaxContextTokens = 1_500_000
+	after.Capabilities.MaxOutputTokens = 1_250_000
+	after.ModelCapabilitySnapshot.Capabilities.MaxContextTokens = 0
+	after.ModelCapabilitySnapshot.Capabilities.MaxOutputTokens = 0
+	if capabilityChanged(before, after) {
+		t.Fatal("a token-guard-only edit was treated as a capability review")
+	}
+	after.Capabilities.Tools = true
+	if !capabilityChanged(before, after) {
+		t.Fatal("a protocol feature change was not treated as a capability review")
 	}
 }
 

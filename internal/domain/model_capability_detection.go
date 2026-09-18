@@ -425,7 +425,7 @@ func setCapability(c *ProviderCapabilities, name string, value bool) {
 // capabilities no probe is allowed to reach.
 func DetectionCapabilitySnapshot(d ModelCapabilityDetection, retained ProviderCapabilities, at time.Time) ModelCapabilitySnapshot {
 	snapshot := ModelCapabilitySnapshot{ProviderModel: d.ProviderModel, ModelRevision: d.ModelRevision,
-		Source: "verified_probe", Status: "known", CapturedAt: at, Capabilities: retained}
+		Source: "verified_probe", Status: "known", CapturedAt: at, Capabilities: ProviderCapabilitiesWithoutTokenLimits(retained)}
 	snapshot.Evidence = DetectionSnapshotEvidence(snapshot, d)
 	return snapshot
 }

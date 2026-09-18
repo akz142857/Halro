@@ -71,6 +71,52 @@ func TestDeploymentOnTheRightMantleRouteResolves(t *testing.T) {
 	}
 }
 
+func TestMantleDeploymentTokenGuardsAreNotBoundByTheModelCatalog(t *testing.T) {
+	instance := mantleInstance(mantleBinding("b-openai-chat", domain.ProfileBedrockMantleOpenAIChat))
+	baseline, err := resolveDeploymentTarget(instance, deploymentInput{BindingID: "b-openai-chat"}, mantleOpenAIRouteModel, "us-east-2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.capabilities.MaxContextTokens != 272_000 {
+		t.Fatalf("fixture catalog context=%d, want 272000", baseline.capabilities.MaxContextTokens)
+	}
+
+	requested := baseline.capabilities
+	requested.MaxContextTokens = 1_500_000
+	requested.MaxOutputTokens = 1_250_000
+	resolution, err := resolveDeploymentTarget(instance, deploymentInput{
+		BindingID: "b-openai-chat", Capabilities: &requested,
+	}, mantleOpenAIRouteModel, "us-east-2", nil)
+	if err != nil {
+		t.Fatalf("operator token guards were bounded by the model catalog: %v", err)
+	}
+	if resolution.declared {
+		t.Fatal("changing only deployment token guards became a capability declaration")
+	}
+	if resolution.capabilities.MaxContextTokens != 1_500_000 || resolution.capabilities.MaxOutputTokens != 1_250_000 {
+		t.Fatalf("token guards were not retained: %#v", resolution.capabilities)
+	}
+}
+
+type tokenGuardAdapter struct {
+	canaryAdapter
+	capabilities provider.Capabilities
+}
+
+func (a *tokenGuardAdapter) Capabilities() provider.Capabilities { return a.capabilities }
+
+func TestDeploymentTokenGuardsAreNotClampedByAdapterMetadata(t *testing.T) {
+	adapter := &tokenGuardAdapter{capabilities: provider.Capabilities{Embeddings: true, MaxContextTokens: 8192}}
+	for _, limit := range []int64{0, 15_000} {
+		got := deploymentCapabilities(domain.Deployment{Capabilities: domain.ProviderCapabilities{
+			Embeddings: true, MaxContextTokens: limit,
+		}}, adapter)
+		if got.MaxContextTokens != limit {
+			t.Fatalf("runtime context guard=%d, want deployment value %d", got.MaxContextTokens, limit)
+		}
+	}
+}
+
 // The refusal excludes a binding rather than ending the resolution, so a
 // connection holding both routes still resolves to the one that serves the
 // model instead of reporting a failure the operator did not cause.
