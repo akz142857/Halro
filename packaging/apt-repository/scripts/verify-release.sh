@@ -32,6 +32,15 @@ found=0
 for package in "$download_dir"/*.deb; do
   [ -e "$package" ] || continue
   found=1
+  # --ignore-missing above exits zero as long as *some* listed file verified, so
+  # a package absent from checksums.txt is skipped rather than refused. That is
+  # how the main .deb went unchecksummed from v0.7.1 to v0.8.3 without this
+  # script failing. Membership is asserted here, per package, before anything
+  # trusts it.
+  if ! awk '{print $2}' "$download_dir/checksums.txt" | grep -Fx -- "$(basename "$package")" >/dev/null; then
+    echo "release $version: $(basename "$package") is not listed in checksums.txt" >&2
+    exit 1
+  fi
   gh attestation verify "$package" --repo "$repository"
   cosign verify-blob --certificate-identity "$identity" \
     --certificate-oidc-issuer "$issuer" \

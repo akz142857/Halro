@@ -82,6 +82,65 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(expected, preflight)
 
+    def test_every_published_artifact_shape_is_checksummed_signed_and_verified(self):
+        # build_deb.sh emits halro_<version>-1_<arch>.deb and
+        # halro-deadman_<version>-1_<arch>.deb. Only the second one starts with
+        # "halro-", so a list written as "halro-*" alone covers the deadman
+        # package and silently drops the main one: it reaches the release
+        # unchecksummed and unsigned, and the verify job — reading the same
+        # list — never notices. Every list that names artifacts must name both
+        # shapes.
+        checksums = self.workflow[
+            self.workflow.index("- name: Generate checksums") : self.workflow.index("- name: Install Cosign")
+        ]
+        self.assertIn("sha256sum halro-* halro_*.deb halro.spdx.json > checksums.txt", checksums)
+
+        signing = self.workflow[
+            self.workflow.index("- name: Keyless sign release blobs") : self.workflow.index(
+                "- name: Generate and sign release-run evidence manifest"
+            )
+        ]
+        self.assertIn("for artifact in halro-* halro_*.deb halro.spdx.json checksums.txt; do", signing)
+
+        verify = self.workflow[
+            self.workflow.index("- name: Verify release blobs") : self.workflow.index("- name: Create the release tag")
+        ]
+        self.assertIn(
+            "for artifact in release/halro-* release/halro_*.deb release/halro.spdx.json release/checksums.txt; do",
+            verify,
+        )
+        self.assertIn("(cd release && sha256sum --check checksums.txt)", verify)
+
+    def test_both_released_binaries_carry_the_same_build_identity(self):
+        # The dead-man ships in the same archive and runs outside Halro's
+        # failure domain; a probe that cannot say which build it is cannot be
+        # tied to the release it came from.
+        build = self.workflow[
+            self.workflow.index("package_dir=\"release/halro-${GOOS}-${GOARCH}\"") : self.workflow.index(
+                "cp deploy/observability/external-probe/config.example.yaml"
+            )
+        ]
+        self.assertEqual(build.count("internal/buildinfo.Version=${RELEASE_VERSION}"), 2)
+        self.assertEqual(build.count("internal/buildinfo.Commit=${RELEASE_COMMIT}"), 2)
+        self.assertEqual(build.count("internal/buildinfo.Date=${RELEASE_DATE}"), 2)
+
+    def test_every_fuzz_target_in_the_tree_is_listed_in_ci(self):
+        # ci.yml already fails when a listed target no longer exists. The other
+        # direction had no guard: `go test -fuzz` exits 0 when its pattern
+        # matches nothing, so a target added under a name nobody listed is
+        # never fuzzed and the job stays green either way.
+        # Scoped to internal/, which is what the ci.yml fuzz list covers.
+        # tests/compatibility/go is a separate module that job never fuzzes.
+        internal = Path(__file__).resolve().parents[2] / "internal"
+        declared = set()
+        for path in internal.rglob("*_test.go"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("func Fuzz") and "(" in line:
+                    declared.add(line[len("func ") : line.index("(")])
+        self.assertTrue(declared, "no fuzz targets found; this check would pass vacuously")
+        unlisted = sorted(name for name in declared if f":{name} " not in self.ci_workflow and f":{name}\n" not in self.ci_workflow)
+        self.assertEqual(unlisted, [], f"fuzz targets missing from the ci.yml list: {unlisted}")
+
 
 if __name__ == "__main__":
     unittest.main()
