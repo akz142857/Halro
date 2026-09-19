@@ -55,8 +55,37 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("npm run typecheck", workflow)
         self.assertIn("git diff --exit-code -- internal/webui/dist", workflow)
         self.assertIn("python -m pip_audit", workflow)
-        self.assertIn("npm audit --audit-level=moderate", workflow)
+        # The npm audit gate goes through scripts/npm-audit-gate.sh so an unreachable
+        # advisory endpoint stops being indistinguishable from a finding. A release
+        # must not publish on "the gate did not run", so both of its call sites carry
+        # --require-endpoint; CI deliberately does not.
+        for directory in ("web", "tests/compatibility/node"):
+            self.assertIn(
+                f"./scripts/npm-audit-gate.sh {directory} moderate --require-endpoint",
+                workflow,
+            )
         self.assertIn("go -C tests/compatibility/go run golang.org/x/vuln", workflow)
+
+    def test_every_npm_audit_goes_through_the_gate(self) -> None:
+        """No workflow may call `npm audit` directly.
+
+        A bare call cannot tell "found vulnerabilities" from "could not reach the
+        advisory endpoint" — it exits 1 for both, which is how a registry incident
+        turned main red on a docs-only commit (2026-09-19). scripts/npm-audit-gate.sh
+        separates the two; a future edit that reaches past it would silently restore
+        the conflation, so the absence is asserted rather than left to review.
+        """
+        for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+            with self.subTest(workflow=path.name):
+                for line in path.read_text().splitlines():
+                    stripped = line.strip()
+                    if "npm audit" not in stripped or stripped.startswith("#"):
+                        continue
+                    self.assertIn(
+                        "npm-audit-gate.sh",
+                        stripped,
+                        f"{path.name} calls npm audit outside the gate: {stripped}",
+                    )
 
     def test_sdk_dependency_inputs_are_locked_audited_and_reviewed(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -64,7 +93,7 @@ class WorkflowContractTest(unittest.TestCase):
         license_gate = (ROOT / "scripts/check-dependency-license-review.sh").read_text()
         self.assertIn("--require-hashes", ci)
         self.assertIn("python -m pip_audit", ci)
-        self.assertIn("npm audit --audit-level=moderate --prefix tests/compatibility/node", ci)
+        self.assertIn("./scripts/npm-audit-gate.sh tests/compatibility/node moderate", ci)
         self.assertIn("go -C tests/compatibility/go run golang.org/x/vuln", ci)
         self.assertIn("pip-audit==", requirements)
         self.assertIn("--hash=sha256:", requirements)
