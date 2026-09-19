@@ -71,7 +71,7 @@ class Halro < Formula
     assert_predicate bin/"halro-deadman", :executable?
     # The caveats tell an operator to copy this file; a formula that ships the
     # instruction without the file is worse than one that says nothing.
-    assert_predicate pkgshare/"halro.config.example.yaml", :exist?
+    assert_path_exists pkgshare/"halro.config.example.yaml"
     cp pkgshare/"halro.config.example.yaml", testpath/"config.yaml"
     assert_match "configuration valid",
                  shell_output("#{bin}/halro config check --config #{testpath}/config.yaml")
