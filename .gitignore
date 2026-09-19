@@ -38,3 +38,4 @@ __pycache__/
 /.claude/
 skills-lock.json
 .vscode/*
+artifacts/*
