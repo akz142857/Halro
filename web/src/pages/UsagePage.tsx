@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
 import { api } from "../api";
-import { EmptyState, ErrorState, Loading, LoadMore, PageHeader, StatusDot } from "../components";
+import { EmptyState, ErrorState, Loading, LoadMore, Modal, PageHeader, StatusDot } from "../components";
 import { compactNumber, money, useInstantFormatter } from "../format";
 import { Link, navigate, useNavigationLocation } from "../navigation";
 import { useTranslation } from "react-i18next";
@@ -10,10 +10,24 @@ import { FailureDetailDrawer, providerAttributionFacts, providerIdentifierFacts 
 import { UsageFailuresPanel } from "./UsageFailuresPanel";
 import { UsageSummaryPanel } from "./UsageSummaryPanel";
 import { attemptFailureLabel, errorClassAdvice, upstreamStatus } from "../failure";
-import type { PriceScheduleTier, UsageAttempt } from "../types";
+import type { Deployment, PriceScheduleTier, Project, UsageAttempt } from "../types";
 
 const usageTabs = ["summary", "failures", "attempts"] as const;
 type UsageTab = (typeof usageTabs)[number];
+type UsageTimeRange = "all" | "1h" | "24h" | "7d" | "custom";
+
+function useDebouncedValue<T>(value: T, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [delay, value]);
+  return debounced;
+}
+
+function hasAbsoluteRange(params: URLSearchParams) {
+  return Boolean(params.get("start") || params.get("end"));
+}
 
 // Which filters a drill-down link can carry. A link that names one of them is
 // asking for the list it filters, so it opens there rather than on the summary
@@ -75,6 +89,8 @@ export function UsagePage() {
   const [requestID, setRequestID] = useState(() => new URLSearchParams(window.location.search).get("request_id") ?? "");
   const [projectID, setProjectID] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [deploymentID, setDeploymentID] = useState(() => new URLSearchParams(window.location.search).get("deployment_id") ?? "");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [timeRange, setTimeRange] = useState<UsageTimeRange>(() => hasAbsoluteRange(new URLSearchParams(window.location.search)) ? "custom" : "all");
   const timeZone = useAccountingTimeZone();
   // A summary row links here with the absolute interval it covered. The inputs
   // are wall-clock in the accounting zone, so the instants are converted once
@@ -84,16 +100,18 @@ export function UsagePage() {
     new URLSearchParams(window.location.search).get("start") ?? undefined, accountingTimeZone()));
   const [end, setEnd] = useState(() => isoToZonedInput(
     new URLSearchParams(window.location.search).get("end") ?? undefined, accountingTimeZone()));
+  const debouncedRequestID = useDebouncedValue(requestID);
+  const debouncedProviderModel = useDebouncedValue(providerModel);
   const usage = useInfiniteQuery({
-    queryKey: ["usage", status, model, providerModel, providerID, offeringID, deploymentID, requestID, projectID, start, end, timeZone],
+    queryKey: ["usage", status, model, debouncedProviderModel, providerID, offeringID, deploymentID, debouncedRequestID, projectID, start, end, timeZone],
     initialPageParam: "",
     queryFn: ({ pageParam }) => api.usage(`?${new URLSearchParams({
-      limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(requestID ? { request_id: requestID } : {}),
+      limit: "100", ...(status ? { status } : {}), ...(model ? { model } : {}), ...(debouncedRequestID ? { request_id: debouncedRequestID } : {}),
       ...(projectID ? { project_id: projectID } : {}),
       ...(providerID ? { provider_id: providerID } : {}),
       ...(offeringID ? { offering_id: offeringID } : {}),
       ...(deploymentID ? { deployment_id: deploymentID } : {}),
-      ...(providerModel ? { provider_model: providerModel } : {}),
+      ...(debouncedProviderModel ? { provider_model: debouncedProviderModel } : {}),
       ...(start ? { start: zonedInputToISO(start, timeZone) } : {}),
       ...(end ? { end: zonedInputToISO(end, timeZone) } : {}),
       ...(pageParam ? { cursor: pageParam } : {}),
@@ -101,6 +119,34 @@ export function UsagePage() {
     getNextPageParam: (page) => page.next_cursor || undefined,
   });
   const attempts = usage.data?.pages.flatMap((page) => page.items) ?? [];
+  const activeFilterCount = [requestID, projectID, model, deploymentID, providerModel, status, providerID, offeringID]
+    .filter(Boolean).length + (start || end ? 1 : 0);
+  const clearFilters = () => {
+    setRequestID("");
+    setProjectID("");
+    setModel("");
+    setDeploymentID("");
+    setProviderModel("");
+    setStatus("");
+    setStart("");
+    setEnd("");
+    setTimeRange("all");
+    setProviderID("");
+    setOfferingID("");
+  };
+  const selectTimeRange = (next: UsageTimeRange) => {
+    setTimeRange(next);
+    if (next === "custom") return;
+    if (next === "all") {
+      setStart("");
+      setEnd("");
+      return;
+    }
+    const duration = next === "1h" ? 60 * 60 * 1000 : next === "24h" ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    setStart(isoToZonedInput(new Date(now - duration).toISOString(), timeZone));
+    setEnd(isoToZonedInput(new Date(now).toISOString(), timeZone));
+  };
   // A route that has since been deleted still has history, and its alias would
   // otherwise be unreachable from here — the same reason the project list above
   // is left unfiltered. The models actually present in the loaded rows are
@@ -128,6 +174,7 @@ export function UsagePage() {
     setDeploymentID(params.get("deployment_id") ?? "");
     setStart(isoToZonedInput(params.get("start") ?? undefined, accountingTimeZone()));
     setEnd(isoToZonedInput(params.get("end") ?? undefined, accountingTimeZone()));
+    setTimeRange(hasAbsoluteRange(params) ? "custom" : "all");
   }, [navigationLocation]);
   const selectTab = (next: UsageTab) => {
     if (next === tab) return;
@@ -147,6 +194,41 @@ export function UsagePage() {
     selectTab(usageTabs[next]);
     document.getElementById(usageTabID(usageTabs[next]))?.focus();
   };
+  const renderFilterFields = (showAdvanced: boolean) => (
+    <UsageAttemptFilterFields
+      projects={projects.data?.items ?? []}
+      deployments={deployments.data?.items ?? []}
+      models={models}
+      requestID={requestID} setRequestID={setRequestID}
+      projectID={projectID} setProjectID={setProjectID}
+      model={model} setModel={setModel}
+      status={status} setStatus={setStatus}
+      timeRange={timeRange} setTimeRange={selectTimeRange}
+      start={start} setStart={setStart}
+      end={end} setEnd={setEnd}
+      deploymentID={deploymentID} setDeploymentID={setDeploymentID}
+      providerModel={providerModel} setProviderModel={setProviderModel}
+      deploymentNames={deploymentNames}
+      showAdvanced={showAdvanced}
+    />
+  );
+  const appliedFilters = [
+    requestID ? { key: "request", label: `${t("usage.requestID")}: ${requestID}`, clear: () => setRequestID("") } : null,
+    projectID ? { key: "project", label: `${t("usage.project")}: ${projectNames[projectID] || projectID}`, clear: () => setProjectID("") } : null,
+    model ? { key: "model", label: `${t("usage.model")}: ${model}`, clear: () => setModel("") } : null,
+    status ? { key: "status", label: `${t("usage.status")}: ${status === "success" ? t("usage.success") : t("usage.error")}`, clear: () => setStatus("") } : null,
+    start || end ? {
+      key: "time", label: `${t("usage.timeRange")}: ${timeRange === "custom" ? `${start || "…"} – ${end || "…"}` : t(`usage.timeRanges.${timeRange}`)}`,
+      clear: () => { setStart(""); setEnd(""); setTimeRange("all"); },
+    } : null,
+    deploymentID ? { key: "deployment", label: `${t("usage.deployment")}: ${deploymentNames[deploymentID] || deploymentID}`, clear: () => setDeploymentID("") } : null,
+    providerModel ? { key: "provider-model", label: `${t("usage.actualModel")}: ${providerModel}`, clear: () => setProviderModel("") } : null,
+    providerID ? { key: "provider", label: t("usage.providerFilter", { provider: providerID }), clear: () => setProviderID("") } : null,
+    offeringID ? {
+      key: "offering", label: t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) }),
+      clear: () => setOfferingID(""),
+    } : null,
+  ].filter((filter): filter is { key: string; label: string; clear: () => void } => filter !== null);
   return (
     <>
       <PageHeader
@@ -180,55 +262,38 @@ export function UsagePage() {
         </section>
       )}
       {tab === "attempts" && (
-      <section role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
-      <div className="filter-bar">
-        <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
-        <label>
-          <span>{t("usage.project")}</span>
-          <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            {(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name || project.id}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>{t("usage.model")}</span>
-          <select value={model} onChange={(event) => setModel(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>{t("usage.deployment")}</span>
-          <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            {(deployments.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
-            {deploymentID && !deploymentNames[deploymentID] && <option value={deploymentID}>{deploymentID}</option>}
-          </select>
-        </label>
-        <label><span>{t("usage.actualModel")}</span><input autoComplete="off" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
-        <label>
-          <span>{t("usage.status")}</span>
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            <option value="success">{t("usage.success")}</option>
-            <option value="error">{t("usage.error")}</option>
-          </select>
-        </label>
-        <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-        <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
-        {providerID && (
-          <button type="button" className="filter-chip" onClick={() => setProviderID("")}>
-            {t("usage.providerFilter", { provider: providerID })}
-            <span aria-hidden="true"> ×</span>
-          </button>
+      <section className="usage-attempts-panel" role="tabpanel" id={usagePanelID("attempts")} aria-labelledby={usageTabID("attempts")}>
+      <div className="usage-filter-panel">
+        <div className="usage-filter-content" id="usage-attempt-filters">
+          <div className="usage-filter-toolbar">
+            {renderFilterFields(false)}
+            <button type="button" className="button ghost usage-filter-open" onClick={() => setMobileFiltersOpen(true)}>
+              {t("usage.filtersTitle")}{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            </button>
+          </div>
+          {appliedFilters.length > 0 && (
+            <div className="usage-applied-filters" aria-label={t("usage.appliedFilters")}>
+              {appliedFilters.map((filter) => <button type="button" className="filter-chip" key={filter.key} onClick={filter.clear}>{filter.label}<span aria-hidden="true"> ×</span></button>)}
+            </div>
+          )}
+        </div>
+        {mobileFiltersOpen && (
+          <Modal drawer title={t("usage.filtersTitle")} onClose={() => setMobileFiltersOpen(false)}>
+            <div className="usage-filter-drawer">
+              <div className="usage-filter-drawer-summary">
+                <span>{activeFilterCount > 0 ? t("usage.activeFilters", { count: activeFilterCount }) : t("usage.noActiveFilters")}</span>
+                {activeFilterCount > 0 && <button type="button" className="button ghost" onClick={clearFilters}>{t("usage.clearFilters")}</button>}
+              </div>
+              {renderFilterFields(true)}
+              {appliedFilters.length > 0 && (
+                <div className="usage-applied-filters" aria-label={t("usage.appliedFilters")}>
+                  {appliedFilters.map((filter) => <button type="button" className="filter-chip" key={filter.key} onClick={filter.clear}>{filter.label}<span aria-hidden="true"> ×</span></button>)}
+                </div>
+              )}
+              <div className="form-actions"><button type="button" className="button primary" onClick={() => setMobileFiltersOpen(false)}>{t("usage.done")}</button></div>
+            </div>
+          </Modal>
         )}
-        {offeringID && (
-          <button type="button" className="filter-chip" onClick={() => setOfferingID("")}>
-            {t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) })}
-            <span aria-hidden="true"> ×</span>
-          </button>
-        )}
-        <span className="filter-count">{t("usage.records", { count: attempts.length })}</span>
       </div>
       {usage.isPending && <Loading />}
       {usage.isError && <ErrorState error={usage.error} />}
@@ -239,60 +304,71 @@ export function UsagePage() {
         <EmptyState title={t("usage.emptyTitle")}>{t("usage.emptyDescription")}</EmptyState>
       )}
       {usage.data && attempts.length > 0 && (
-        <div className="table-shell">
+        <div className="usage-results-panel">
+          <header className="usage-results-header">
+            <div>
+              <h2>{t("usage.attemptsTitle")}</h2>
+              <p>{t("usage.attemptsDescription")}</p>
+            </div>
+            <span className="usage-result-count" aria-live="polite">{t("usage.records", { count: attempts.length })}</span>
+          </header>
+          <div className="table-shell usage-table-shell">
           <table className="usage-table">
-            {/* Sized to the longest thing each column actually holds. Three of
-                them carry a 24-character identifier under their name — the
-                request, the project and the deployment — and those, not the
-                headings, are what decides the width. Cost had the widest share
-                and the narrowest content: a money value, a badge and a
-                disclosure, none of which grow. */}
             <colgroup>
-              <col style={{ width: "14%" }} /><col style={{ width: "13%" }} /><col style={{ width: "9%" }} /><col style={{ width: "14%" }} />
-              <col style={{ width: "10%" }} /><col style={{ width: "8%" }} /><col style={{ width: "6%" }} /><col style={{ width: "11%" }} />
-              <col style={{ width: "9%" }} /><col style={{ width: "6%" }} />
+              <col style={{ width: "25%" }} /><col style={{ width: "31%" }} />
+              <col style={{ width: "20%" }} /><col style={{ width: "24%" }} />
             </colgroup>
-            <thead><tr><th>{t("usage.request")}</th><th>{t("usage.project")}</th><th>{t("usage.model")}</th><th>{t("usage.deployment")}</th><th>{t("usage.tokens")}</th><th>{t("usage.cost")}</th><th>{t("usage.latency")}</th><th>{t("usage.status")}</th><th>{t("usage.time")}</th>{/* The action column carries no heading, like the failed-request list's. Its button names itself. */}<th /></tr></thead>
+            <thead><tr><th scope="col">{t("usage.request")}</th><th scope="col">{t("usage.route")}</th><th scope="col">{t("usage.result")}</th><th scope="col">{t("usage.usageAndCost")}</th></tr></thead>
             <tbody>
               {attempts.map((attempt) => (
                 <tr key={attempt.event_id}>
-                  <td><code>{attempt.request_id}</code><small>{t("usage.attempt", { count: attempt.attempt })}</small></td>
-                  <td>
-                    <Link className="resource-link" href={`/admin/projects?project_id=${encodeURIComponent(attempt.project_id)}`}>{projectNames[attempt.project_id] || attempt.project_id}</Link>
-                    {projectNames[attempt.project_id] && <small><code>{attempt.project_id}</code></small>}
+                  <td className="usage-request-cell" data-label={t("usage.request")}>
+                    <code className="usage-request-id" title={attempt.request_id}>{attempt.request_id}</code>
+                    <div className="usage-request-context">
+                      <Link className="resource-link" href={`/admin/projects?project_id=${encodeURIComponent(attempt.project_id)}`}>{projectNames[attempt.project_id] || attempt.project_id}</Link>
+                      <span aria-hidden="true">·</span>
+                      <span>{t("usage.attempt", { count: attempt.attempt })}</span>
+                    </div>
                   </td>
-                  {/* The alias is what the caller asked for; it is the same on
-                      every attempt of a fallback chain, which is why it cannot
-                      be the only thing this row identifies the target by. */}
-                  <td>
-                    {attempt.requested_model || "—"}
-                    <small>{attempt.provider_model}</small>
-                  </td>
-                  {/* Which deployment actually served this attempt. Without it
-                      two targets of one alias on the same upstream model — the
-                      safest way to configure redundancy — are indistinguishable
-                      here, and a fallback cannot be verified from the console at
-                      all. The ID is shown as well as the name because the ID is
-                      what the ledger and the usage partitions carry. */}
-                  <td>
-                    {attempt.deployment_id ? (
-                      <>
+                  <td className="usage-route-cell" data-label={t("usage.route")}>
+                    <div className="usage-route-primary">
+                      <strong>{attempt.requested_model || "—"}</strong>
+                      <span aria-hidden="true">→</span>
+                      {attempt.deployment_id ? (
                         <Link className="resource-link" href={`/admin/deployments?q=${encodeURIComponent(attempt.deployment_id)}`}>
                           {deploymentNames[attempt.deployment_id] || attempt.deployment_id}
                         </Link>
-                        {deploymentNames[attempt.deployment_id] && <small><code>{attempt.deployment_id}</code></small>}
-                      </>
-                    ) : "—"}
-                    {attempt.offering_id && (
-                      <small>{t(`providers.offerings.${attempt.offering_id}`, { defaultValue: attempt.offering_id })}</small>
-                    )}
+                      ) : <span>—</span>}
+                    </div>
+                    <div className="usage-route-meta">
+                      {attempt.deployment_id && deploymentNames[attempt.deployment_id] && <code>{attempt.deployment_id}</code>}
+                      <span>{attempt.provider_model || "—"}</span>
+                      {attempt.offering_id && <> · <span>{t(`providers.offerings.${attempt.offering_id}`, { defaultValue: attempt.offering_id })}</span></>}
+                    </div>
                   </td>
-                  <td>{attempt.tokens_estimated ? t("usage.estimated") : ""}{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}<small>{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</small></td>
-                  <td><CostCell attempt={attempt} /></td>
-                  <td>{attempt.latency_millis} ms</td>
-                  <td><AttemptStatusCell attempt={attempt} /></td>
-                  <td>{dateTime(attempt.completed_at, "dateTimeYear")}</td>
-                  <td><AttemptDetailCell attempt={attempt} projectName={projectNames[attempt.project_id]} deploymentName={attempt.deployment_id ? deploymentNames[attempt.deployment_id] : undefined} /></td>
+                  <td className="usage-result-cell" data-label={t("usage.result")}>
+                    <AttemptStatusCell attempt={attempt} />
+                    <div className="usage-result-meta">
+                      <strong>{attempt.latency_millis} ms</strong>
+                      <span aria-hidden="true">·</span>
+                      <time dateTime={attempt.completed_at}>{dateTime(attempt.completed_at, "dateTimeYear")}</time>
+                    </div>
+                    <AttemptDetailCell attempt={attempt} projectName={projectNames[attempt.project_id]} deploymentName={attempt.deployment_id ? deploymentNames[attempt.deployment_id] : undefined} />
+                  </td>
+                  <td className="usage-accounting-cell" data-label={t("usage.usageAndCost")}>
+                    <div className="usage-accounting-summary">
+                      <div className="usage-accounting-metric">
+                        <span>{t("usage.tokens")}</span>
+                        <strong>{compactNumber(attempt.provider_input_tokens + attempt.provider_output_tokens)}</strong>
+                      </div>
+                      <div className="usage-accounting-metric">
+                        <span>{t("usage.cost")}</span>
+                        <div className="usage-cost-value"><CostValue attempt={attempt} /></div>
+                      </div>
+                    </div>
+                    <p className="usage-token-breakdown">{t("usage.inputOutput", { input: compactNumber(attempt.provider_input_tokens), output: compactNumber(attempt.provider_output_tokens) })} · {attempt.tokens_estimated ? t("usage.conservative") : t("usage.reported")}</p>
+                    <CostEvidence attempt={attempt} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -302,11 +378,96 @@ export function UsagePage() {
           {usage.hasNextPage && (
             <LoadMore label={t("common.loadMore")} busy={usage.isFetchingNextPage} onLoad={() => usage.fetchNextPage()} />
           )}
+          </div>
         </div>
       )}
       </section>
       )}
     </>
+  );
+}
+
+function UsageAttemptFilterFields({
+  projects, deployments, models,
+  requestID, setRequestID, projectID, setProjectID, model, setModel, status, setStatus,
+  timeRange, setTimeRange, start, setStart, end, setEnd,
+  deploymentID, setDeploymentID, providerModel, setProviderModel, deploymentNames,
+  showAdvanced,
+}: {
+  projects: Project[];
+  deployments: Deployment[];
+  models: string[];
+  requestID: string; setRequestID: Dispatch<SetStateAction<string>>;
+  projectID: string; setProjectID: Dispatch<SetStateAction<string>>;
+  model: string; setModel: Dispatch<SetStateAction<string>>;
+  status: string; setStatus: Dispatch<SetStateAction<string>>;
+  timeRange: UsageTimeRange; setTimeRange: (range: UsageTimeRange) => void;
+  start: string; setStart: Dispatch<SetStateAction<string>>;
+  end: string; setEnd: Dispatch<SetStateAction<string>>;
+  deploymentID: string; setDeploymentID: Dispatch<SetStateAction<string>>;
+  providerModel: string; setProviderModel: Dispatch<SetStateAction<string>>;
+  deploymentNames: Record<string, string>;
+  showAdvanced: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="usage-filter-fields">
+      <div className="usage-filter-grid usage-filter-primary">
+        <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
+        <label>
+          <span>{t("usage.project")}</span>
+          <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>
+            <option value="">{t("usage.all")}</option>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name || project.id}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>{t("usage.model")}</span>
+          <select value={model} onChange={(event) => setModel(event.target.value)}>
+            <option value="">{t("usage.all")}</option>
+            {models.map((alias) => <option key={alias} value={alias}>{alias}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>{t("usage.status")}</span>
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">{t("usage.all")}</option>
+            <option value="success">{t("usage.success")}</option>
+            <option value="error">{t("usage.error")}</option>
+          </select>
+        </label>
+        <label>
+          <span>{t("usage.timeRange")}</span>
+          <select value={timeRange} onChange={(event) => setTimeRange(event.target.value as UsageTimeRange)}>
+            <option value="all">{t("usage.timeRanges.all")}</option>
+            <option value="1h">{t("usage.timeRanges.1h")}</option>
+            <option value="24h">{t("usage.timeRanges.24h")}</option>
+            <option value="7d">{t("usage.timeRanges.7d")}</option>
+            <option value="custom">{t("usage.timeRanges.custom")}</option>
+          </select>
+        </label>
+      </div>
+      {timeRange === "custom" && (
+        <div className="usage-custom-range">
+          <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+          <span aria-hidden="true">–</span>
+          <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+        </div>
+      )}
+      {showAdvanced && (
+        <div className="usage-filter-grid usage-filter-advanced">
+          <label>
+            <span>{t("usage.deployment")}</span>
+            <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
+              <option value="">{t("usage.all")}</option>
+              {deployments.map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
+              {deploymentID && !deploymentNames[deploymentID] && <option value={deploymentID}>{deploymentID}</option>}
+            </select>
+          </label>
+          <label><span>{t("usage.actualModel")}</span><input autoComplete="off" value={providerModel} onChange={(event) => setProviderModel(event.target.value)} /></label>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -411,15 +572,29 @@ export function billedTierLabel(tier: PriceScheduleTier, t: (key: string, values
   return t("usage.billedZoneUnavailable", { timezone: tier.timezone });
 }
 
-// The pricing evidence disclosure shows how a settled attempt's cost was
-// reached: the price snapshot it billed against and the input/output/fixed
-// components that summed to it.
-function CostCell({ attempt }: { attempt: UsageAttempt }) {
+// The amount and its classification belong in the scan line. The arithmetic
+// that produced it is evidence, not another metric, so it remains in a separate
+// disclosure below the token and cost summary.
+function CostValue({ attempt }: { attempt: UsageAttempt }) {
   const { t } = useTranslation();
   return (
     <>
       <strong>{attempt.cost_micros_usd == null ? t("usage.unknownCost") : money(attempt.cost_micros_usd)}</strong>
-      {!!attempt.tags?.length && <small>{attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}</small>}
+      {!!attempt.tags?.length && (
+        <span className="usage-cost-tags">
+          {attempt.tags.map((tag) => <span className="badge" key={tag}>{tag}</span>)}
+        </span>
+      )}
+    </>
+  );
+}
+
+// The pricing evidence disclosure shows how a settled attempt's cost was
+// reached: the price snapshot it billed against and the input/output/fixed
+// components that summed to it.
+function CostEvidence({ attempt }: { attempt: UsageAttempt }) {
+  const { t } = useTranslation();
+  return (
       <details className="cost-evidence">
         <summary>{t("usage.costEvidence")}</summary>
         <small>
@@ -431,6 +606,5 @@ function CostCell({ attempt }: { attempt: UsageAttempt }) {
           {attempt.input_cost_micros_usd == null ? "" : t("usage.formulaComponents", { input: money(attempt.input_cost_micros_usd), output: money(attempt.output_cost_micros_usd ?? 0), fixed: money(attempt.fixed_cost_micros_usd ?? 0) })}
         </small>
       </details>
-    </>
   );
 }

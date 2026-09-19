@@ -106,6 +106,62 @@ describe("UsagePage model filter", () => {
   });
 });
 
+describe("UsagePage filter hierarchy", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts");
+    vi.spyOn(api, "usage").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+
+  function renderUsage() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+  }
+
+  it("keeps common filters visible and opens the complete set from the trailing filter button", async () => {
+    renderUsage();
+    expect(await screen.findByRole("textbox", { name: "Request ID" })).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "时间范围" })).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "模型部署" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "实际模型" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    const drawer = await screen.findByRole("dialog", { name: "筛选" });
+    expect(within(drawer).getByRole("combobox", { name: "模型部署" })).toBeVisible();
+    expect(within(drawer).getByRole("textbox", { name: "实际模型" })).toBeVisible();
+  });
+
+  it("turns a relative time preset into one absolute query interval", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-19T12:00:00Z"));
+    renderUsage();
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByRole("combobox", { name: "时间范围" }), { target: { value: "24h" } });
+    await waitFor(() => {
+      const calls = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls;
+      const params = new URLSearchParams((calls.at(-1)?.[0] ?? "").slice(1));
+      expect(Date.parse(params.get("end") ?? "") - Date.parse(params.get("start") ?? "")).toBe(24 * 60 * 60 * 1000);
+    });
+  });
+
+  it("debounces free-text correlation filters", async () => {
+    renderUsage();
+    await waitFor(() => expect(api.usage).toHaveBeenCalled());
+    fireEvent.change(screen.getByRole("textbox", { name: "Request ID" }), { target: { value: "req_debounced" } });
+
+    const immediate = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls.at(-1)?.[0] ?? "";
+    expect(new URLSearchParams(immediate.slice(1)).get("request_id")).toBeNull();
+    await waitFor(() => {
+      const latest = (api.usage as unknown as { mock: { calls: [string][] } }).mock.calls.at(-1)?.[0] ?? "";
+      expect(new URLSearchParams(latest.slice(1)).get("request_id")).toBe("req_debounced");
+    });
+  });
+
+});
+
 // The provider filter was a free-text box wanting an opaque `provider_...` ID
 // that nobody has to hand. It is gone; the summary's provider row still links
 // here with one, and an applied filter with no control to clear it is how a
@@ -237,6 +293,43 @@ describe("UsagePage deployment column", () => {
 
     expect(await screen.findByRole("link", { name: "Bedrock 主" }))
       .toHaveAttribute("href", "/admin/deployments?q=dep_primary");
+  });
+});
+
+describe("UsagePage attempt list hierarchy", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState({}, "", "/admin/usage?tab=attempts");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [{ id: "p", name: "Demo" }] as never, next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [{ id: "dep_1", name: "Kimi3" }] as never, next_cursor: "" });
+    vi.spyOn(api, "usage").mockResolvedValue({
+      items: [{
+        event_id: "e1", request_id: "req_1", attempt: 1, project_id: "p", requested_model: "chat",
+        deployment_id: "dep_1", provider_model: "kimi-k3", provider_input_tokens: 26, provider_output_tokens: 14,
+        cost_micros_usd: 0, tags: ["FREE"], price_evidence_status: "confirmed", latency_millis: 1892,
+        status: "success", completed_at: "2026-09-06T06:44:00Z",
+      }] as never,
+      next_cursor: "",
+    });
+  });
+
+  it("groups identity, route, result, and accounting into four scan columns", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent))
+      .toEqual(["请求", "调用路径", "结果", "用量与成本"]);
+
+    const row = within(table).getAllByRole("row")[1];
+    expect(within(row).getByText("词元")).toBeVisible();
+    expect(within(row).getByText("40")).toBeVisible();
+    expect(within(row).getByText("成本")).toBeVisible();
+    expect(within(row).getByText("FREE")).toBeVisible();
+    expect(within(row).getByText("26 输入 / 14 输出 · 服务商报告")).toBeVisible();
+    expect(within(row).getByText("计价证据")).toBeVisible();
+    expect(within(row).getByText("1892 ms")).toBeVisible();
   });
 });
 

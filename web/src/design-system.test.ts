@@ -145,7 +145,6 @@ describe("design system themes", () => {
     "--color-status-unknown-icon",
     "--color-surface-overlay",
     "--color-text-inverse",
-    "--control-block-size",
     "--layout-content-max-width",
   ];
 
