@@ -63,6 +63,11 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [BigModel / Z.AI 适配方案](prd/bigmodel-adaptation-plan.zh-CN.md) | 中国大陆 Chat/Stream/Embeddings 与海外 Z.AI Chat/Stream 首期代码已实施：地域 profile/凭据隔离、严格方言渲染、模型目录、目标级推理约束、控制台与契约快照均已落地。当前标记为实验性；真实账号验证未运行，Anthropic 兼容 profile 仍按方案保持未注册 |
 | [Provider Offering 与订阅接入统一方案](prd/provider-offering-subscription-access-plan.zh-CN.md) | 阶段 1 + 国内阶段 0/2 已实施：Offering 与产品地域声明在 Access Surface 层（凭据的解析键），Profile 派生；控制台凭据与连接表单改为元数据驱动，`type === "bedrock"` 分支清除；GLM Coding Plan 作为首个 subscription Offering 落地（独立 surface/scheme/profile 与 `/api/coding/paas/v4`）。真实账号实测推翻了"上游 /models 即权威"这条前提——该 endpoint 列 10 个模型只服务 2 个，其余静默替换，故枚举保持动态、目录只承担能力证据，并新增 `model_substituted` 护栏（该文 §5.1、§14）。同时修掉一处存量缺陷：凭据创建不发 access_surface，海外 BigModel 凭据一律落在 CN surface 上。海外 Coding Plan、Kimi Code、MiniMax Token Plan 与 OAuth 仍缺真实账号证据，未实施 |
 | [开发者文档站方案](prd/docs-site-plan.zh-CN.md) | P0 已实施在网站仓库 `Halro-website`（`d6db4de`）：Starlight + 13 页，API 参考由契约生成，link checker 进构建。英文 locale 被实现推翻（只声明不写正文会让 Pagefind 把中文按英文索引）；§5.1 的契约补字段、§5.2 的同步门禁、§8 的 CI 与域名、P1 六页均未做，逐条见该文「归档说明」 |
+| [异步提交与延迟取回（Deferred Response）](prd/deferred-response-plan.zh-CN.md) | S0–S9 全部落地（2026-09-03），见 [ADR 0024](adr/0024-deferred-response-tier.md)。`POST /v1/responses` 的 `background` 由该 ADR 解禁，对象目录改为按资源与 Project 密封；提案正文与实现不一致之处在该文「实施记录」逐条订正 |
+| [请求失败诊断与错误专用日志](prd/request-failure-diagnostics-plan.zh-CN.md) | S0–S5 全部已实施（2026-09-02）。`internal/failurecapture`（默认关闭、加密、限时限量）、独立轮转的 ERROR 文件（`logging.error_file`）、Ledger 增加受约束的 `provider_code`/`provider_request_id`/`failure_phase` 三字段。正文两处偏差已就地订正：非 success 终态是六种，`accounting_error` 也写 ERROR |
+| [数据保留与压缩](prd/data-retention-plan.zh-CN.md) | 四个阶段全部收口。S0–S5 裁剪与口径、S7 WAL 封存（`internal/ledger/seal.go`，默认关闭）、S8 窗口交设置中心（`PUT /admin/api/v1/settings/usage`，缩短需 `acknowledge_trim`）、S9 增量 checkpoint 均已落地；S6 checkpoint 压缩已量并否决。归档时订正了过期的状态行 |
+| [TLS 部署形态与证书热重载](prd/tls-acme-plan.zh-CN.md) | §6 全部落地：多证书配置、SNI 选择与热重载（`internal/app` 的 tlsreload）。§7 的内置 ACME **维持不做**——那是决定，不是遗漏 |
+| [控制台无法创建 `openai.responses.v1` 连接](prd/console-profile-anchor-plan.zh-CN.md) | 纯前端修复已落地：`ProvidersPage.tsx` 里三处把「能力实现」选择器锁死在 `type === "bedrock"` 的条件已移除，`connectionChoices` 对所有服务商类型返回选项，Responses profile 可作为 anchor 选择。服务端与持久化未变。归档时订正了过期的状态行 |
 
 ## 里程碑与证据 · [`milestones/`](milestones/)
 
@@ -127,10 +132,9 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
-| [请求失败诊断与错误专用日志](todo/request-failure-diagnostics-plan.zh-CN.md) | 最终失败下钻、错误分类展示、请求级结构化 ERROR 与独立轮转错误文件 | 提案待评审 |
-| [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审 |
-| [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审 |
-| [Halro Redis-like HA 架构提案](todo/halro-ha-architecture.zh-CN.md) | Standalone 向 Primary/Replica HA 的演进 | 目标 1.1.0，未实现 |
+| [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审；`internal/alert` 今天只有 dispatcher |
+| [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
+| [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 提案待评审，未实现 |
 
 ## 草稿 · `drafts/`
 

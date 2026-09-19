@@ -1,6 +1,10 @@
 # 控制台无法创建 `openai.responses.v1` 连接：修复方案
 
-状态：**待实施**
+状态：**已实施**（归档时于 2026-09-20 按代码核对：`web/src/pages/ProvidersPage.tsx` 中
+三处 `type === "bedrock"` 门禁已移除，`connectionChoices(catalog, type)` 对所有服务商类型
+返回连接选项，表单提交 `profile_id: selectedChoice.profileID`；`openai.responses.v1`
+（`internal/domain/provider_table.go:185` 的 `ProfileOpenAIResponses`）因此可作为 anchor 选择。
+正文保留提案时的判断。）
 更新日期：2026-08-27
 范围：`web/src/pages/ProvidersPage.tsx`、`web/src/hooks/useProviderProfiles.ts`、`web/src/i18n/locales/{zh-CN,en-US}.ts`、`web/src/pages/ProvidersPage.test.tsx`
 前置：PR #231（`fix(domain): stop offering a connection tick whose save is always refused`）

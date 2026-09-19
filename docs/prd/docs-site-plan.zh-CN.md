@@ -326,7 +326,7 @@ alerts  security  metrics  audit  model_catalog  providers  logging
 | 我拿到了一个 Key | **无现成来源** | 从零写：拿 Key → 发第一个 curl → 读懂响应 → 4xx 自救 |
 | 我要装一套 | `user-guide.zh-CN.md` §2、§3.1 | 重排 |
 | 安装与首次初始化 | `operator-guide.md` Clean install / 容器形态 | 译中 |
-| TLS 与反向代理 | `docs/todo/tls-acme-plan.zh-CN.md` §4/§5 + operator-guide | 形态 A/B |
+| TLS 与反向代理 | `docs/prd/tls-acme-plan.zh-CN.md` §4/§5 + operator-guide | 形态 A/B |
 | config.yaml 参考 | `default.yaml` + operator-guide | §6 |
 | 认证、请求头与错误 | **全仓无权威清单** | 错误码今天只在 `user-guide.zh-CN.md` 的排障表和 `operator-guide.md` 各存一份、彼此不同且都不完整（见 §0.2 的 `price_unavailable`）。必须从 `internal/gateway*` 现提：同一个 error code 可能对应多个状态码，清单要按「code × 状态码 × 触发条件」三列写，这是写作不是重排 |
 | 五个核心端点 + 实验性一览 | 契约 | §5 |
