@@ -106,11 +106,21 @@ as `HALRO_RELEASE_APP_PRIVATE_KEY` in every participating repository. The App
 token is required: pull requests created by the default workflow token do not
 start the downstream validation workflows.
 
-In `halro-ai/apt-repository`, create the protected `apt-production` Environment.
-Store an unencrypted, dedicated online OpenPGP archive-signing private key as the
-Environment secret `HALRO_APT_ARCHIVE_SIGNING_KEY`; store its uppercase full
-fingerprint as `HALRO_APT_ARCHIVE_SIGNING_FINGERPRINT`. Keep the private key out
-of every repository and log. The cluster's existing `ghcr-credentials` pull
+In `halro-ai/apt-repository`, create the `apt-production` Environment. Store a
+passphrase-less, armored, dedicated online OpenPGP archive-signing private key as
+the Environment secret `HALRO_APT_ARCHIVE_SIGNING_KEY`; store the uppercase full
+fingerprint of its **primary** key as `HALRO_APT_ARCHIVE_SIGNING_FINGERPRINT` —
+the check reads the first `fpr`, so a subkey fingerprint fails closed after the
+Environment is already provisioned. Keep the private key out of every repository
+and log; the Environment secret cannot be read back, so the operator's offline
+copy is the only readable one.
+
+The key signing the channel today **expires 2028-09-17**. Its identity, the
+reason rotation spans two repositories, and both rotation paths are in
+[`docs/runbooks/apt-archive-key-rotation.md`](../runbooks/apt-archive-key-rotation.md).
+That Environment carries a branch policy allowing `main` only; required reviewers
+and wait timers are refused for a private repository on the current billing plan,
+so there is no human approval pause despite what §4 below anticipates. The cluster's existing `ghcr-credentials` pull
 secret must be authorized to read `halro-ai/apt-repository`; the snapshot image
 remains private while `packages.halro.ai/apt` is the public package surface.
 
@@ -165,8 +175,22 @@ the real-binary smoke, the invariants, the verdict, and any explicitly waived
 external acceptance such as a real-Provider smoke. The workflow only checks that
 the section exists and that ordinary CI passed for this exact `main` commit.
 
-`publish_packages` defaults to `true` and preserves that complete chain. Set it
-to `false` only for an intentional GitHub/GHCR-only publication: the workflow
+`publish_packages` defaults to `true` and preserves that complete chain.
+
+**The job it enables had still never run as of v0.8.4.** Every release from
+v0.7.0 through v0.8.4 was dispatched with `false`, so
+`downstream-package-repositories` — the step that sends `halro-release-published`
+to Homebrew and APT — has never executed. Both downstream workflows themselves
+were exercised on 2026-09-18 through their own `workflow_dispatch` entries and
+both work end to end; the untested part is exactly the dispatch seam between
+them. Its payload (`client_payload.version` / `.commit`) matches what both
+downstream workflows read, but that is a reading, not a run. Watch the first
+release that sets this `true`, and delete this paragraph once it has succeeded.
+Failure there is bounded by design: the tag and Release are already published
+before it runs, and a downstream failure delays a channel without retracting
+anything.
+
+Set it to `false` only for an intentional GitHub/GHCR-only publication: the workflow
 still runs every artifact, signature, attestation and release gate, then creates
 the GitHub Release and multi-architecture container images, but it skips the
 Homebrew/APT credential preflight and downstream dispatch. Those package

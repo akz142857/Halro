@@ -134,3 +134,27 @@ The rule that follows:
   against a shape inferred from documentation is a fixture of your own mental
   model. Capture the body first — the MiniMax smoke has a subtest that does
   exactly this and nothing else — and write against what came back.
+
+## A path that only runs once is a path nothing has tested
+
+The APT channel's first publication failed after signing the archive and serving
+it, because `previous-packages` — the directory holding the upgrade baseline — is
+empty on a first publication, an empty directory does not survive an artifact
+round trip, and the marker placed to keep it alive was named `.artifact-present`.
+`actions/upload-artifact` defaults `include-hidden-files` to false, so it was
+dropped; the upload log said "there will be 3 files uploaded" where four were
+intended, the acceptance job downloaded no directory at all, and the smoke script
+died on `cd` before reaching the branch that already handled a first publication
+correctly.
+
+Two things generalise from it.
+
+- **A hidden file does not survive `upload-artifact`.** Anything that exists to
+  keep an otherwise-empty directory alive has to be visible, and is worth naming
+  after what it records rather than being a zero-byte sentinel.
+- **The first-run branch of a pipeline is the least tested code in the
+  repository**, because every rehearsal starts from a state that already exists.
+  When a workflow has a "no previous version yet" path, assume it has never
+  executed and read it line by line before the run that will execute it —
+  especially the steps *before* the one that handles the case, which is where
+  this failed.
