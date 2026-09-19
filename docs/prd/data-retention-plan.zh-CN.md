@@ -1,6 +1,9 @@
 # 数据保留与压缩：设计与实施方案
 
-- 状态：第一、二阶段已实施（S0–S6）；第三、四阶段待实施
+- 状态：**四个阶段全部收口**（归档时于 2026-09-20 按代码核对订正——原状态行写的
+  「第三、四阶段待实施」已过期）。S0–S5 第一、二阶段已实施；S6 已量并否决（见该节）；
+  S7 WAL 封存（`internal/ledger/seal.go`、`config.LedgerSeal`）、S8 窗口交设置中心
+  （`internal/app/admin_usage_settings.go`）、S9 增量 checkpoint 均于 2026-09-02 完成
 - 日期：2026-09-02
 - 文档语言：中文
 - 适用范围：Ledger WAL、Usage Aggregate 与 checkpoint、Parquet 导出、日 rollup、控制台「用量与调用」、设置中心

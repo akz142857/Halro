@@ -1,832 +1,1137 @@
-# Halro Redis-like HA 架构提案
+# Halro HA 架构设计
 
-- 状态：Proposed / 目标版本 1.1.0
-- 生产就绪：否
-- 适用范围：Standalone 向 Primary/Replica HA 的演进
-- 当前实现：仅 Standalone；本文出现的 `cluster` 配置和命令均未实现
-- 相关决策：[ADR 0001](../adr/0001-single-process-architecture.md)、[ADR 0004](../adr/0004-distributed-evolution.md)、
-  [ADR 0012](../adr/0012-pricing-selection-cross-store-consistency.md)、
-  [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md)、
-  [Distributed State Ownership](../architecture/distributed-state-ownership.md)
+- 状态：Proposed（2026-09-20）。**未实现**——本文的 `replication` 配置、`halro cluster` 子命令、
+  复制协议与 metadata journal 在当前代码里都不存在
+- 适用范围：Standalone 向 Primary/Replica 的演进
+- 目标版本：不绑定。进入条件是 §1.3 列出的证据，不是某个 tag
+- 追踪：[#105](https://github.com/akz142857/Halro/issues/105) Epic、
+  [#106](https://github.com/akz142857/Halro/issues/106)–[#109](https://github.com/akz142857/Halro/issues/109) 阶段、
+  [#12](https://github.com/akz142857/Halro/issues/12) 调用方幂等
+- 由来与本文引用的全部实测事实：见[附录 A](#附录-a这份设计的由来) 与[附录 B](#附录-b核实过的事实索引)
 
-## 0. 版本定位
+---
 
-**1.0.0 先发布并在生产环境验证，HA 属于 1.1.0。**
+## 1. 这是什么
 
-这个顺序不是排期偏好，而是这份文档自己的要求决定的：§19 的发布门禁要证明"已确认的权威 mutation 不丢失"和"至多一个节点有资格启动 Provider 副作用"，
-而这两条的判据都来自 Standalone 已经建立的账务不变量。没有真实负载跑过的 Standalone，
-HA 的故障注入只能证明副本之间彼此一致，不能证明它们一致地保持了正确的账。
+### 1.1 一句话
 
-1.0.0 期间要从生产用量中收集、并作为 1.1.0 输入的：
+三个独立的 Halro 进程，各自独占一个数据目录。Primary 把各权威存储**已经写下的字节**按持久顺序
+同步给 Replica；一次请求里只有两个点等待副本确认；Primary 故障时由运维提升一个 Replica，而协议
+保证不会有第二个节点确认写。
 
-- 单实例真实吞吐与 fsync 成本（`halro stats`、`halro_wal_sync_seconds`）；
-- 峰值并发与在飞请求数——它决定多数派提交的额外延迟是否可接受；
-- 实际的 Project 数与每 Project 速率分布；
-- 崩溃/重启后 `RecoverPendingLeases` 的真实发生率与保守结算比例。
+```
+                          客户端 / SDK
+                               │
+                    ┌──────────┴──────────┐
+                    │   客户端 Service     │  全部 Ready 成员进 endpoints
+                    └──┬────────┬─────────┘
+          ┌────────────┘        └────────────┐
+          ▼                                  ▼
+┌─────────────────────────┐        ┌─────────────────────┐
+│  Primary   halro-0      │        │ Replica  halro-1/2  │
+│                         │        │                     │
+│ Gateway→准入→账务→Provider│       │ 写请求一律           │
+│                         │        │ 503 not_primary     │
+│ 权威存储（已成帧的字节）  │        │ + Retry-After       │
+│  ledger.wal             │        │                     │
+│  audit.log              │ 帧流   │ 落盘 → fsync        │
+│  governance.journal     │ +index │ → ack(index, term)  │
+│  metadata.journal ──────┼───────►│ → 异步 apply        │
+│         └→ halro.db     │  mTLS  │    ↳ halro.db 投影  │
+│            （投影）      │        │    ↳ ledger.State   │
+└─────────────────────────┘        └─────────────────────┘
+     独占 PVC + 目录锁                  各自独占 PVC
+```
 
-## 1. 目标与设计 DNA
+### 1.2 什么时候**不该**上 HA
 
-Halro 保持与 Redis 相近的产品和运维形态：
+放在最前面，因为它决定要不要读下去。Standalone 加一份可验证的离线备份在这些情况下就够了：
 
-- 单二进制；
-- 本地持久化；
-- Standalone 默认可用；
-- HA 由多个 Halro 进程组成；
-- 不强制依赖 PostgreSQL、Redis、S3、KMS、Etcd 或 Consul；
-- 外部存储和 KMS 只能是可选增强。
+1. **你的故障场景不是磁盘丢失。** Standalone 今天对进程崩溃、OOM、`kill -9`、主机断电的 RPO
+   **已经是 0**：`Log.Append` 排队后等的是 `writeFull` 加 `Sync()` 都成功才返回
+   （`internal/ledger/log.go:558-562, 880-898`），`usage.durability` 的 `strict` 与 `balanced`
+   只差合批，不差"是否 fsync 后才返回"（`internal/config/default.yaml:104-105` 的注释亦如此）。
+   HA 买的是**盘丢了之后还有一份**。盘在云上已多副本（EBS、Ceph）时，这一项价值有限。
+2. **没有人值班。** RTO = 人工响应 + apply 追平 + 提升耗时。无人响应时 RTO 无界，HA 的可用性
+   收益归零，只剩 RPO 收益。
+3. **你只有两台机器。** 见 §6.4：2 节点不提供故障切换后的可用性。
+4. **你不需要 per-Project 的账在节点丢失后仍然完整。** 这是 HA 在本产品里唯一不可替代的收益：
+   Credential/Provider/Deployment/Route 都是**无 `ProjectID` 的全局资源**，
+   `Registry.ResolveCandidatesFor`（`internal/provider/provider.go:733`）不接受 Project 参数，
+   多 Project 共用一套上游凭证是**唯一模式**；上游按凭证出账，收到零个 Halro Project 标识。
+   **per-Project 归因只存在于 Halro 自己的 Ledger 里，丢了没有上游可以对账回来。**
+   如果 chargeback 只是内部观测而非合同义务，这一项也可以不买。
 
-Redis-like 对齐的是单二进制、本地持久化和 Primary/Replica 运维体验，
-不是照搬 Redis 异步复制的数据丢失语义。Halro 会在调用外部 Provider
-前产生预算和费用副作用，因此权威状态必须使用多数派提交。
+四条都不成立时——本地 NVMe、有 oncall、三台机器、chargeback 对外——HA 值这个工程。
 
-HA 只提高可用性，不增加单个 Project 的权威写吞吐；并且**会降低它**——见 §1.1。
-多分片 Cluster、active-active、多 Primary 和按 Project 横向扩容不属于本文范围。
+### 1.3 进入条件
 
-### 1.1 吞吐预算
+**Phase 0a（metadata journal）是一个独立的 Standalone 变更**，不受下列条件约束：它改的是
+Standalone 的写路径，由 Standalone 自己的门禁验证，要求重新初始化数据目录。把它拆出来，是为了
+避免"先验证 Standalone、再改 Standalone 写路径、再验证"的咬尾。
 
-多数派提交把每条权威 mutation 的成本从"一次本地 fsync"变成
-"一次本地 fsync + 一次网络往返 + 多数派远端 fsync"。这必须在 Phase 0 就作为设计预算，
-而不是等 Phase 3 压测时才发现。
+**Phase 0b 及之后**开工前必须拿到：
 
-参考主机（Apple M4 Pro / APFS，`F_FULLFSYNC`，属悲观下界）当前的 Standalone 实测：
+1. Standalone 已按[生产验证方案](../verification/production-validation-plan.zh-CN.md)走完 G0–G7
+   至少一次。2026-09-18 的执行只完成 E1–E3，4 项 BLOCKED、3 项 PARTIAL
+   （[记录](../verification/production-validation-run-260918.zh-CN.md)）。HA 的门禁要证明"已确认的
+   账务 mutation 在切换后不丢"，判据来自 Standalone 已建立的账务不变量；没被生产验证过的
+   Standalone 做 HA 故障注入，只能证明副本彼此一致，不能证明它们一致地保持了正确的账。
+2. 一段生产窗口内的五类数据：`halro_wal_sync_seconds` 分布与 `halro stats` 吞吐；峰值并发与在飞数；
+   Project 数与每 Project 速率分布；崩溃后 `RecoverPendingLeases` 的真实触发率与保守结算比例；
+   **CPU 余量与 `ledger.State.Apply` 速率**（Linux 基线表明瓶颈在 apply 而非 fsync，而 Replica 侧
+   apply 与 Primary 争同一种资源）。
+3. 决定是否需要自动故障切换的三个数字：实际需要切换几次、每次人工响应多久、损失是否大于工程成本
+   与新增失败模式（见 §19）。
 
-| 量 | 值 | 来源 |
-|---|---:|---|
-| 单次 Ledger fsync | ~4.7 ms | 运行实例的 `halro_wal_sync_seconds` |
-| 每请求账务记录数 | 5 | 实测三次独立确认 |
-| 单 Project 上限（1 个在飞） | ~28 请求/秒 | 串行实测 |
-| 单 Project 上限（64 个在飞） | ~1011 请求/秒 | [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md) 落地后 |
-
-ADR 0018 之前，单 Project 无论多少并发都恒定在 ~45 请求/秒。**那时 HA 是不可行的**：
-多数派提交会把它压到十几，而那已经低于很多单应用的需求。现在有了 22 倍的余量，
-HA 的额外延迟才有地方可吃。
-
-因此本文必须回答而尚未回答的问题是：**每条 mutation 增加一次 RTT + 远端 fsync 之后，
-上表最后一行还剩多少。** §18 的目标表只有 RPO/RTO，没有吞吐行；发布前必须补上，
-并且和 RPO/RTO 一样，未验证的数字只能标记为目标。
-
-## 2. 非目标
-
-本文不承诺：
+### 1.4 非目标
 
 - Provider exactly-once；
 - 活跃 HTTP/SSE 连接跨节点迁移；
-- 丢失多数派后继续产生新的 Provider 副作用；
-- 共享 PVC 上的多写者；
-- 跨集群双向复制；
-- 在线动态增加或移除 voting member；
-- 通过增加 Replica 提升单 Project 吞吐；
-- 当前版本已经实现本文配置、命令或协议。
+- 通过增加 Replica 提升单 Project 或整体写吞吐——HA 会**降低**它；
+- 共享 PVC 多写者；跨集群双向复制；多 Primary / active-active；按 Project 分片的 Cluster 模式
+  （ADR 0004 保留该名，本文不设计也不占用）；
+- 在线增减成员；
+- 不停机的 Master Key 代数轮换。
 
-## 3. 术语
+---
+
+## 2. 术语
 
 | 术语 | 定义 |
 |---|---|
-| Primary | 当前唯一允许提交权威 mutation 和启动 Provider 副作用的节点 |
-| Replica | 复制并回放权威日志、可作为候选节点的 Halro 进程 |
-| Leader | 共识协议内部名称；在用户层等同于 Primary |
-| term | 一次 Primary 任期；每次合法选举单调增加 |
-| index | 复制日志中的单调位置 |
-| durable index | 已在本节点稳定存储并完成 `fsync` 的最高 index |
-| commit index | 已被多数 voting members 持久化、不可被合法新 Primary 覆盖的最高 index |
-| applied index | 已确定性应用到本节点本地状态的最高 committed index |
-| ownership epoch | 对 Project 权威所有权的 fencing 代数；首版与 term 绑定 |
-| write lease | 由多数派支持、具有明确期限的 Primary 写权限 |
-| cluster incarnation | 一次集群生命期的唯一标识；灾备恢复时必须更换 |
+| Primary | 当前唯一允许确认权威写、发起 Provider 副作用的进程 |
+| Replica | 按持久顺序接收并落盘 Primary 写下的字节、随时可被提升的进程 |
+| term | 一次 Primary 任期；每次提升（含 `stepdown` 的接收方）单调 +1，持久化在每个节点 |
+| promised_term | 节点在 prepare 阶段承诺过的最高 term；承诺后拒绝 ack 任何更低 term 的帧 |
+| cluster incarnation | 一次集群生命期的唯一标识；从备份恢复、灾备重建时必须更换 |
+| replication index | Primary 为每批已持久化的存储帧分配的全局单调序号 |
+| durable index | 本节点存储帧**与 ordering 记录**都已 `fsync` 的最高 index |
+| confirmed index | 已满足提交规则、Primary 可据以向调用方确认的最高 index |
+| applied index | Replica 已把帧落到文件、把 metadata 帧应用到 bbolt、推进 `ledger.State` 的最高 index |
+| 投影 | `halro.db` 中由 metadata journal 决定的那部分；可从 journal 重建 |
+| journal epoch | metadata journal 的一段连续历史；每次离线整文件发布开新 epoch |
 
-## 4. 运行模式和进程模型
+---
 
-### 4.1 Standalone
+## 3. 不变量
 
-Standalone 的外部部署契约保持不变：
+实现与门禁必须持续证明：
 
-```text
-一个 Halro 进程
-一个 data_dir
-一个 master.key 或 Key Slot descriptor
-一个本地 Ledger
-无集群端口
-无 Replica ACK 等待
-```
+1. **任意时刻至多一个进程确认权威写。** 由 term + promise 保证：Primary 只有在本 term 收到 ack
+   才能确认，而承诺了更高 term 的 Replica 永远不 ack 旧 term。
+   "至多一个进程**写入**本地存储"是过程保证而非协议保证——物理复制没有存储层 fencing，被隔离的
+   旧 Primary 可以在本地写下永不被确认的帧，它们按 §11.2 截断。
+2. **至多一个进程发起新的 Provider 副作用。** 检查与 socket 写出之间的残余竞态**不由上游幂等键
+   收敛**——Halro 不向任何 Provider 发送幂等键（`internal/provider/` 无 `Idempotency-Key`），
+   也不假设哪个 Provider 的推理端点接受它。残余只靠 `recovered_started_unknown_result` 与保守结算
+   收敛，其余靠 Provider 账单对账与人工调整。**这是公开的边界，不是待补的缺口。**
+3. **只有两类写必须在生效前达到 confirmed**（§6.3）：
+   - (a) `ReservationCreated` 与 `AttemptStarted`，在 Provider I/O 之前；
+   - (b) **吊销与降权类元数据写**：Gateway Key 撤销、Credential 删除或轮换、Project 停用、Admin
+     权限下调、MFA 吊销。这类写的丢失方向是 fail **open**（已撤销的凭据在切换后复活），与账务写的
+     保守多计方向相反，不能异步。
+
+   其余权威写本地持久后即向调用方确认，异步复制。
+4. **异步帧的丢失只能导致保守多计的可归因行，不能导致行缺失或权限恢复。** Provider I/O 之后丢失的
+   Settlement/Finalize 帧，其 reservation 与 attempt 已 confirmed，新 Primary 的
+   `RecoverPendingLeases` 会把它们恢复成带 Project、带金额上界、带机器可读终态的
+   `recovered_started_unknown_result` 行（ADR 0011）。
+5. 已确认的权威 mutation 在合法切换后不丢失，无例外。
+6. **帧级前缀**：Replica 上每个追加式权威存储（Ledger、Audit、Governance、metadata journal）的
+   明文帧序列，在任意时刻都是 Primary 曾经经历过的某个持久前缀；`halro.db` 是 journal 前缀的投影
+   加节点本地键（§5.2）。因此提升等价于"Primary 在那一刻崩溃后重启"——对账务恢复严格成立，对派生
+   存储与投影由 §11.2 的回退协议补齐。
+7. 同一 replication index 不能对应不同字节；同一 Ledger/Audit sequence 不能对应不同帧。
+8. Provider 结果不明确时不自动重放，保守结算。`recovered_started_unknown_result` 只表示外部调用
+   是否执行或结果不可信；它与 Pricing 的"价格未知"状态不同，二者不得复用枚举、指标或自动处置逻辑。
+9. 已提交的对象元数据不能引用合法候选节点缺失的对象（§9）。
+10. 备份 manifest 中的所有存储对应同一 applied index（§12）。
+11. 角色、term、incarnation、schema、密钥或存储状态不明确时一律 fail closed。
+12. 活跃流在 Primary 丢失后终止；不宣称透明迁移。
+13. 复制不得成为泄露渠道：Credential 密文、对象字节、密钥材料、Audit payload 只以既有封装形态在
+    成员间流动，复制层不解密、不记录、不进 Metrics label。播种是例外，按高危动作对待（§11.1）。
+14. **协议假设成员诚实。** ack、durable/applied index、receipt 都是成员的声明，Primary 无法验证
+    远端 fsync。成员诚实的保证来自 §14 的身份与主机边界，不来自协议——这与第 2 条拿掉幂等键是
+    同一种诚实。
+
+---
+
+## 4. 拓扑与配置
+
+2 或 3 个节点。3 节点时"本地持久 + 1 个 Replica 持久 ack"等于多数派；2 节点时等于全部，且**不提供
+故障切换后的可用性**（§6.4）。
+
+Kubernetes 中每 Pod 一个进程、一个 `ReadWriteOncePod` PVC。不能在同一 Pod 里跑多个进程冒充 HA，
+也不能让多个 Pod 写同一个数据目录。
 
 ```yaml
-cluster:
-  mode: standalone
-```
-
-引入 HA 基础后，Standalone 内部允许经过兼容迁移复用统一 mutation 和
-snapshot 结构，但不得增加必需外部服务或默认网络监听。
-
-### 4.2 HA
-
-HA 使用三个独立 Halro 进程。Kubernetes 中每个 Pod 只运行一个
-Halro 进程，每个 Pod 使用独立的 `ReadWriteOnce` PVC：
-
-```text
-halro-0 → PVC 0
-halro-1 → PVC 1
-halro-2 → PVC 2
-```
-
-不能在同一 Pod 中启动多个 Halro 进程冒充 HA，也不能让多个 Pod
-共同写入同一个数据目录。
-
-用户配置表达集群成员身份，而不是永久 Primary/Replica 角色：
-
-```yaml
-cluster:
-  mode: ha
-  node_id: halro-0
+# 没有 replication 块就是 Standalone，部署契约一个字节都不变
+replication:
   cluster_id: production-a
-  listen: 0.0.0.0:9910
-  members:
-    - halro-0.halro-internal:9910
-    - halro-1.halro-internal:9910
-    - halro-2.halro-internal:9910
+  node_id: halro-0
+  listen: 0.0.0.0:9910        # 复制与集群管理端口；仅成员可达
+  peers:
+    - name: halro-1
+      address: halro-1.halro-internal:9910
+      spki_sha256: "…"        # 每成员公钥 pin：单成员证书泄露可改配置吊销而不换 CA
+    - name: halro-2
+      address: halro-2.halro-internal:9910
+      spki_sha256: "…"
+  tls:                        # 集群 CA + 本节点证书；无明文 fallback
+    ca_file: /run/secrets/halro-cluster/ca.crt
+    cert_file: /run/secrets/halro-cluster/tls.crt
+    key_file: /run/secrets/halro-cluster/tls.key
 ```
 
-Primary/Replica 是运行时角色，不能固定绑定到 StatefulSet ordinal。
-首版只支持固定三 voting members；在线成员变更在单独协议完成前禁止。
+块名是 `replication` 而不是 `cluster`：它描述的就是复制；ADR 0004 的 "Cluster" 专指多 HA 分片。
+不设置只有一个合法取值的键。`replication` 块不存在时 `config check` 拒绝任何 `halro cluster`
+子命令——Standalone 不得悄悄多出一个监听端口。2 节点配置输出一条 warning（§6.4），不是 error。
 
-## 5. 安全与一致性不变量
+---
 
-实现和发布测试必须持续证明：
+## 5. 复制什么，不复制什么
 
-1. 任意时刻至多一个节点可以提交新的权威 mutation。
-2. 在经过证明的 lease 安全裕量内，至多一个节点有资格启动新的 Provider
-   副作用；检查到系统调用之间的残余竞态必须由 fencing token、Provider
-   幂等键和 `provider_unknown_outcome` 协议收敛。
+### 5.1 数据目录
 
-   > **前置缺口（2026-08-08 核实）**：Halro 目前**不向任何 Provider 发送幂等键**。
-   > `internal/provider/` 中没有 `Idempotency-Key`；`internal/idempotency` 处理的是
-   > *调用方发给 Halro* 的头，方向相反。各 Provider 的支持程度也不一致。
-   > 因此这条不变量的三个收敛机制里，第二个对部分 Provider 不可用，残余竞态只能
-   > 落到保守结算。发布前必须按 Provider 逐一限定这条的措辞，或先补齐上游幂等键；
-   > 笼统假设它可用会让故障切换时的重复消费无人负责。
-3. Budget Reservation 和 `attempt_started` 在 Provider I/O 前完成多数派提交。
-4. 已向客户端或管理员确认成功的权威 mutation 不会在合法故障切换后丢失。
-5. 只有日志足够新、完成当前任期领导权确认、追平已知 `commit index`，且本地
-   状态完整的节点可以晋升并接收写流量。
-6. 同一个 mutation ID 不能对应不同内容。
-7. 回放相同 committed mutation 必须产生相同权威状态。
-8. Provider 结果不明确时不能自动重放，必须保守结算。
-9. 已提交对象元数据不能引用合法候选节点缺失的对象。
-10. Backup manifest 中的所有状态必须对应同一 `applied index`。
-11. 不明确的角色、term、lease、schema、密钥或存储状态一律 fail closed。
-12. 活跃流在 Owner 丢失后终止，不宣称透明迁移。
+```text
+data/
+├── .halro.lock            节点本地
+├── halro.db               bbolt：投影（A/B/D 类键）+ 节点本地键（C/E 类），见 §5.2
+├── metadata.journal       新增：bbolt 投影的 write-ahead 日志，权威，复制
+├── cluster/               新增，节点本地：state.json、ordering.journal、totp-watermark、maintenance
+├── ledger/                Ledger WAL + 封存代 segments.json
+├── audit/                 HMAC 链 Audit
+├── governance/            Governance journal
+├── provider-objects/      调用方要求 Halro 保管的对象（ADR 0024）
+├── usage/                 Parquet/NDJSON 分区（Ledger 派生；checkpoint 在 halro.db 的 meta 里）
+├── logs/                  进程日志
+└── failures/              failurecapture（默认关闭，仅诊断）
+```
 
-### 5.1 不变量兑现矩阵
+### 5.2 `halro.db` 按 `(bucket, key)` 分类
 
-| 不变量 | 主要机制 | 必须覆盖的验证 |
+`internal/store/bolt/store.go:59-121` 静态枚举 **40 个 bucket 与 `meta` 下 23 个 key**；另有两个在
+别处：`bucketPricingMigrationResolutions`（`pricing_migration.go:19`，A 类）与
+`keyShutdownTruncatedAttempts`（`operational_counters.go:11`，E 类）。**分类粒度必须到 key**，因为
+`meta` 同时装着四类。Phase 0a 把这张表落成代码里的一张静态表，journal 入口按它决定记不记，并
+**拒绝一个事务同时写复制集与本地集**。
+
+| 类 | 内容 | 处理 |
 |---|---|---|
-| 单一权威 writer、已确认 mutation 不丢失 | §7–§9 term/vote、多数派 durable commit、当前任期提交限制 | §19 Raft Figure 8、旧 Primary 回归、响应前崩溃 |
-| Provider 副作用收敛 | §8–§9 write lease、安全裕量、内部 fencing token、幂等键、保守未知终态 | §19 分区、进程暂停、lease 到期边界、发送前崩溃 |
-| 候选状态完整 | §10–§12 apply 水位、对象 receipt、按需补对象、Master Key/schema gate | §19 缺对象、损坏、落后节点竞选、全量 re-seed |
-| 备份单点一致 | §13 snapshot barrier、不可变 staging、统一 applied index、状态根 | §19 并发写入、GC/轮换、staging 崩溃、隔离恢复演练 |
+| **A 权威元数据** | `credentials` `projects` `gateway_keys` `gateway_key_hash` `providers` `provider_egress_proxies` `deployments` `routes` `redaction_policies` `token_guard_policies` `alert_webhooks` `admin_users` `admin_mfa_*` `provider_resources` `deployment_price_*`（含嵌套 `deployment_price_timeline/<id>`）`deployment_price_pin_intents` `pricing_*` `admin_audit_intents` `cost_adjustment_intents` `model_capability_*` `outcome_definitions` `run_governance_*` `migration_history` `pricing_migration_resolutions`；`meta` 中 `schema_version` `runtime_settings` `instance_*_settings` `instance_id` `admin_bootstrap_completion` `*_audit_intent` `minimum_ledger_reader_version` `ledger_feature_epoch` | 经 journal 复制 |
+| **B 会话** | `admin_sessions` | 经 journal 复制；提升时全部失效。刷新至多每会话每分钟一次（`internal/adminauth/session.go:118-128`） |
+| **C 节点派生** | `meta/usage_checkpoint` `meta/usage_rollup_state` `usage_checkpoint_segments` `usage_daily_rollup` `meta/token_guard_checkpoint` `meta/audit_checkpoint` `meta/ledger_chain_checkpoint` `meta/governance_checkpoint` `governance_checkpoint_segments` `meta/governance_journal_anchor` `audit_anchors` | **不进 journal**；每节点从自己的 Ledger/Audit/Governance 推进，Replica 只推进到 confirmed index（§6.2）。`token_guard_checkpoint` 含 `BlockedUntil` 封禁状态：它是派生的，但 Replica 上必须禁用 `runUsageMaintenance` 对它的写，否则提升后会被空 manager 覆盖 |
+| **D 密钥信封与格式门** | `meta/vault_keyring` `key_slot_descriptor` `audit_hmac_envelope` `ledger_hmac_envelope` `vault_key_check` | 经 journal 复制（Replica 打开 Ledger/Audit MAC 需要它们）；Master Key 本身带外（§10）；轮换 bridge 见 §6.1.4 |
+| **E 节点本地运营计数** | `meta/shutdown_truncated_attempts_total` | **不进 journal**。它是本节点 telemetry 的持久化背板（`internal/app/metrics.go:281`），不是账也不派生自任何日志 |
 
-## 6. 权威状态和本地状态
+### 5.3 其它状态
 
-HA 模式下，replicated mutation log 是权威修改顺序。现有持久状态按以下
-方式处理：
+| 状态 | HA 处理 |
+|---|---|
+| Ledger / Audit / Governance / metadata journal 帧 | 物理复制，明文帧相同 |
+| Ledger 封存代滚动 | 作为结构事件进流，携带整条 `Segment`；压缩形态节点本地（§6.2.3） |
+| Provider object 字节 | 独立对象通道 + receipt，manifest 提交前置（§9） |
+| Master Key / Key Slot descriptor | 不经复制流；所有节点持同一密钥（§10） |
+| Usage 分区 | 不复制；只有 Primary 导出 Parquet |
+| failurecapture | 节点本地；切换后不承诺可读 |
+| 进程日志、Metrics、circuit breaker、连接池、告警队列 | 节点本地；只有 Primary 发告警与 Audit 锚点 |
+| 活跃 HTTP/SSE | 不复制；Primary 丢失即终止 |
+| 限流窗口、并发计数、Token Guard EWMA | 不复制；提升后从零开始，与重启一致 |
+| `cluster/*` | 节点本地；`state.json` 与 `ordering.journal` 带 MAC（§8.1） |
 
-| 状态 | HA 权威来源 | 本地形态 | 故障切换要求 |
-|---|---|---|---|
-| Credential、Provider、Deployment、Route | committed mutation | bbolt projection | 必须应用到 commit index |
-| Project、Gateway Key、Policy | committed mutation | bbolt projection/cache | 必须应用到 commit index |
-| Budget Reservation、Attempt、Settlement | committed Ledger mutation | Ledger WAL + bbolt intent | Provider I/O 前提交 |
-| Admin、MFA、Session | committed mutation | bbolt projection | 恢复时失效敏感会话 |
-| Pricing 和调整事件 | committed mutation | bbolt + Ledger projection | 不允许时间线回退 |
-| Audit | committed mutation 的确定性投影 | 本地 HMAC chain | 绑定 applied index |
-| Provider object manifest | committed mutation | bbolt projection | 对象 durability receipt 前置 |
-| Provider object bytes | 对象复制协议 | 本地不可变文件 | 候选节点必须完整拥有 |
-| Usage checkpoint、Parquet | Ledger 派生 | 本地可重建文件 | 允许从 Ledger 重建 |
-| Circuit breaker、连接池 | 节点本地 | 内存 | 不复制 |
-| Metrics | 节点本地派生 | 内存 | 聚合展示 |
+---
 
-权威 mutation 不能与 Ledger、bbolt 或 Audit 进行没有恢复协议的普通双写。
-节点必须保存每个本地 projection 的 `last_applied_term/index`。应用流程必须：
+## 6. 复制模型
 
-- 使用唯一 mutation ID；
-- 确定性执行；
-- 重放幂等；
-- 在崩溃后从最后完整 applied index 继续；
-- 不在回放期间重新生成时间、随机 ID 或 Provider 结果。
+### 6.1 metadata journal：让 bbolt 成为投影
 
-时间、随机 ID、定价证据和外部返回值必须作为 mutation fact 写入规范化
-payload。`internal/authority` 曾为此预留过一组 Mutation/Commit 类型，但它们在
-v1 期间没有任何调用方，长期以不可执行的形式留在树里，已经删除（提交历史中可查）。
-真正开工时应从本文与 ADR 0004 的契约出发重新定义，并新增 term、index、
-cluster identity 和 commit/apply 语义，通过新的 ADR 冻结格式。
+#### 6.1.1 为什么需要
 
-## 7. 复制日志与多数派提交
+bbolt 没有日志，无法直接复制。`internal/store/bolt` 里的写事务全部在包内（`db.Update` 94 处 +
+`db.Batch` 1 处，包外无调用），Phase 0a 把它们收敛到**一个**会记录操作的事务入口。这条路径在
+**Standalone 也启用**——只在 HA 里存在的写路径永远得不到 Standalone 每天的测试覆盖。它要求
+bbolt schema bump 并**重新初始化数据目录**（pre-1.0.0 允许）。
 
-### 7.1 日志记录
+#### 6.1.2 事务入口
 
-每条记录至少包含：
+bbolt 只有 post-commit 钩子（`Tx.OnCommit`），没有 pre-commit 钩子；但 `DB.Begin(true)` 与
+`Tx.Commit()` 是公开 API，`DB.Update` 只是两者加一个回调。入口自己持有事务：
+
+```text
+Begin(true)
+→ 回调在 recorder 上写（Put / Delete / CreateBucketIfNotExists / DeleteBucket；bucket 以路径表示）
+   recorder 按 §5.2 分类：C/E 类直通不记录；A/B/D 类记录；同一事务混写两类 → 拒绝
+→ 回调全部成功
+→ journal 追加一帧 {epoch, sequence, prev_hash, ops, MAC} 并 fsync
+→ 同一事务内 Put meta/applied_journal_sequence
+→ Commit()
+```
+
+打开时若 journal 尾部超过 bbolt 的 `applied_journal_sequence`，重放缺失事务（put/delete/建删 bucket
+天然幂等）；若 bbolt 领先 journal，fail closed（唯一例外见 §6.1.4）。
+
+**`db.Batch` 被替换。** `db.Batch` 内部调用 `db.Update`，回调可能跑多次、失败时整批回滚再逐个重跑，
+"回调后、commit 前"的位置在它里面不存在。替代是入口之上的自建合并层：排队 → 一个事务顺序跑每个
+回调 → 任一失败：Rollback、剔除它、幸存者在新事务重跑 → 全部成功：journal 一帧 + fsync →
+`applied_journal_sequence` → Commit。失败尝试的 ops 从未到达 journal。
+
+ADR 0012 Amendment 的三条重跑前提（期望结果不当 error 返回、每次进入重置捕获变量、回调幂等）
+原样保留；`TestPricePinPreparationSurvivesBatchSiblingFailures`、`halro_metadata_*` 的 batch 指标、
+`BenchmarkMetadataBatchDelay` 的 250 µs 调参迁到新层。
+
+**成本**：bbolt 一次 commit 已是两次 `fdatasync`（脏页、meta），加 journal 是三次。
+
+#### 6.1.3 谁在写 bbolt
+
+不是"只有 Admin"。每个带 Deployment 的 Attempt 在上游调用前有两次 bbolt 写——
+`PrepareDeploymentPricePin` 与 `CommitDeploymentPricePin`（`internal/gateway/service.go:599,693`，
+走 `s.batch`，`internal/store/bolt/store.go:1380`）。`provider_resources` 在 Files/batch/deferred 的
+请求路径上每资源一次；C 类每分钟一次。
+
+所以 metadata journal 在 HA 下是**请求路径**上的帧流。但因为 §6.3 只让两类写等 ACK，pin 帧不在
+等待之列，**price pin 保持在 bbolt A 类即可，ADR 0012 不必修订**。若将来 journal 的字节量成为
+问题，"pin 归本地集、取消判断改查已复制的 Ledger 状态"是一个独立的收缩选项，不该藏在 HA 文档里。
+
+#### 6.1.4 journal epoch、密钥域、保留
+
+- **每次离线整文件发布开新 epoch。** File 模式 Master Key 轮换把"用旧 Key 加密的新 Key"（bridge）
+  写在离线快照副本里、整文件 rename 发布、再两次 compaction 抹残留
+  （`internal/app/key_rotation.go`）；`restore` 与 `CompactSnapshot` 同样是整文件发布。发布之后旧
+  journal 不再是投影。规则：发布的 `halro.db` 成为新 epoch 起点（`applied_journal_sequence` 归零、
+  epoch +1 写入 `meta`），旧 epoch 文件删除并目录 fsync，删除给出与 `CompactSnapshot` 同等的残留
+  保证。**这一条同时封死"旧 Master Key + journal ⇒ 新 Key"的路径：旧 epoch 不存在。**
+- **MAC 密钥域** `halro:metadata:v1`，信封在 D 类。帧本身不加密——bbolt 今天也是明文元数据，
+  journal 的数据分类与 bbolt 相同（Credential 是 AEAD 密文、口令是 Argon2id 哈希、无调用方正文）。
+  **journal 不是第四个存放调用方正文的地方。**
+- **保留与裁剪**：只保留 `≥ 上一次投影快照点` 的尾巴（§11.2 路径 A），或在 re-seed 一律走 bbolt
+  快照时只保留 `≥ 所有成员 applied_index` 的尾巴，加一个带 MAC 的裁剪锚点记录"裁到哪、链头是什么"。
+  Standalone 下的裁剪触发点与 Ledger seal 相同（字节阈值），否则每次 Admin 写都让一个永不收缩的
+  文件长大。
+- **备份**：journal 的当前 epoch 进 `.hmbk` 的 `files`（§12）。
+- **离线 CLI 直写**（`admin reset-password|reset-mfa`、`key rotate|rewrap`、`usage rebuild-summary`）
+  全部经过同一入口；不存在绕过 journal 的 bbolt 写。
+
+### 6.2 复制流
+
+#### 6.2.1 index 分配与 ordering journal
+
+Primary 为每个权威存储完成 `fsync` 的每一批帧分配 replication index。**分配点在各存储的提交路径
+内部同步完成**（Ledger 在 `l.mu` 下、`respondBatch` 之前；Audit/Governance 在 `AppendBatch` 返回前；
+metadata journal 在入口 fsync 后 Commit 前），因此帧之间的依赖（pin commit 帧引用它之前的 Ledger
+reservation 帧；checkpoint 引用 Ledger 序号）在 index 顺序里保持。
+
+`(index, store, first_seq, last_seq, digest)` 写入 `cluster/ordering.journal`。**ordering 记录的 fsync
+是 durable index 定义的一部分**：存储 fsync 与 ordering fsync 都完成，index 才算本地 durable，才能
+被计入 confirmed。ordering fsync 可与下一批存储写合并，但确认要等它。这样 Primary 崩溃后重启，
+任何被确认过的 index 在本地都有记录，不需要"补分配"。
+
+#### 6.2.2 帧
 
 ```json
-{
-  "cluster_id": "production-a",
-  "cluster_incarnation": "inc_...",
-  "term": 7,
-  "index": 10241,
-  "previous_term": 7,
-  "mutation_id": "mut_...",
-  "schema_version": 1,
-  "scope": "project",
-  "project_id": "prj_...",
-  "operation": "budget.reserve",
-  "payload": {},
-  "checksum": "sha256:..."
-}
+{"index": 10241, "term": 7, "incarnation": "inc_…", "store": "ledger",
+ "store_sequence_first": 88120, "store_sequence_last": 88151,
+ "structural": null, "frames": "<原始字节>", "digest": "sha256:…"}
 ```
 
-Checksum 用于检测损坏，不替代节点身份认证和传输完整性。
+`store ∈ {ledger, audit, governance, metadata}`。`payload` 是各存储**今天已经在写的那些字节**
+——Ledger 的 epoch-4/5 帧（自带 CRC、MAC、哈希链）、Audit 与 Governance 的 HMAC 链帧、metadata
+journal 帧。格式一个字节都不改，ADR 0014/0016 的帧契约与其崩溃测试原样有效。Replica 用共享密钥
+校验后才落盘。任意 index 前缀都是 Primary 各存储在某一时刻共同处于的持久状态。
 
-### 7.2 提交规则
+#### 6.2.3 结构事件
 
-固定三 voting members 时，Primary 本地 `fsync` 加任意一个 Replica 的
-相同 `term/index` 持久 ACK 构成多数派。安全语义使用多数派公式，而不是
-把 `minimum_replicas_to_write: 1` 当成通用规则：
+Ledger 封存代滚动（Roll）是结构事件：`structural` 携带**整条 `Segment`**（`generation`、
+`first/last_sequence`、`length`、`start_hash`/`end_hash`、`end_epoch`、`plain_checksum`、`sealed_at`），
+Replica 校验本地 `offset == length`、`plain digest == plain_checksum`、链头 `== end_hash` 后再执行
+rename 与 manifest 写入。`compressed`、`stored_length`、`stored_checksum`、文件名后缀是**节点本地**
+形态：压缩留在各节点自己的维护 tick 上（gzip 输出不跨 Go 版本稳定），Replica 应用 Roll 时忽略它们。
+不变量 6 因此是**帧级**前缀，不是文件字节级。
+
+**Roll 结构事件只在该代最后一帧 `≤ confirmed_index` 之后发出**，使 Roll 永远不落在未确认后缀里
+——否则 §11.2 的截断会需要"撤销 Roll"，而实测表明截断点跨过一次 Roll 时 Ledger 直接拒绝打开
+（附录 B 第 12 条）。Replica 自己的 seal tick 按角色禁用。
+
+#### 6.2.4 Replica 的落盘、ACK 与 apply
+
+- 按 index 严格顺序落盘，缺口即停止并请求重传；
+- 每个存储追加到与 Primary 相同路径、相同偏移的文件；
+- 每批落盘并 `fsync` 后回 `ack(index, term)`，ACK 表示稳定存储不是收到；**ACK 在 apply 之前**，
+  apply 异步于 ACK；
+- apply：Ledger 帧推进本地 `ledger.State` 与内存 Usage 聚合；metadata 帧**批量**应用到 bbolt（与
+  Primary 的合并层同宽，否则逐帧 `db.Update` 约 830 tx/s 会比 Primary 慢一个数量级），且**只应用
+  `index ≤ confirmed_index` 的帧**（Primary 在帧流里携带当前 confirmed）；
+- Replica 周期性向 Primary 报告 `applied_index`；`durable − applied` 超阈值即 `not_candidate` 并告警；
+- Replica 上**禁用**：seal/compact tick、`exportUsageParquet`、Audit 锚点发送、告警投递、
+  `runUsageMaintenance` 对 `token_guard_checkpoint` 的写；C 类 checkpoint 只推进到 confirmed index。
+  实测 Replica apply 链（帧校验 189k/s、`State.Apply` 602k/s、Usage 聚合 4.2M/s，darwin）高于
+  Primary 生成速率，稳态 lag 有界；bbolt 侧的界由批量应用保证。
+
+### 6.3 提交规则：谁等 ACK
 
 ```text
-required durable members = floor(voting_members / 2) + 1
+confirmed_index = max{ i : 本地 durable_index ≥ i
+                          且 至少 1 个 Replica 回了 ack(≥ i, 当前 term) }
 ```
 
-首版配置固定 `voting_members = 3`，因此提交要求固定为 2；保留通用公式只是为了
-明确多数派安全语义，不表示首版支持其他成员数或动态 membership。
+所有帧都会被复制、都会推进 `confirmed_index`。差别在**谁要等它**。
 
-Primary 只能在 mutation 达到 `commit index` 后向调用方确认成功。
-Replica ACK 必须表示记录已经写入稳定存储，而不是仅收到或写入 OS cache。
+#### 6.3.1 必须等
 
-Primary 不能仅凭多数派复制来直接提交旧任期记录。它必须先通过多数派复制一条
-**当前任期**记录，再由该记录的提交连带确认此前的完整 prefix；这是防止新
-Primary 错误提交或覆盖历史记录的必要限制。每届新 Primary 在接受业务写入前，
-必须提交当前任期的 `leadership_established` no-op，并完成本地 apply。
+| 帧 | 为什么 |
+|---|---|
+| `ReservationCreated` | 日预算与 Run cap 的凭据。丢了，新 Primary 的余额偏小，贴着上限的 Project 会被多放行 |
+| `AttemptStarted` | "这次调用可能已经花了钱"的唯一记录。丢了，新 Primary 连保守结算的对象都不知道存在——这是**行缺失**，不是金额偏差 |
+| 吊销与降权类元数据帧 | Gateway Key 撤销、Credential 删除/轮换、Project 停用、Admin 权限下调、MFA 吊销。丢失方向是 fail **open**：已撤销的凭据在切换后复活（墓碑写与 `gateway_key_hash` 都走同一条流）。这是安全事件，不是账务缺口 |
 
-所有权威 mutation 都使用相同的多数派提交规则，包括配置、Credential、
-Route、Project、Gateway Key、Admin/MFA、Pricing、Policy、Reservation、
-Attempt 和 Settlement。只有可重建派生数据、缓存和 telemetry 可以异步。
+#### 6.3.2 不必等
 
-节点分别暴露和持久化：
+其余全部：`AttemptSettled`、`RequestFinalized`、price pin 的 prepare/commit、非吊销类 Admin 写、
+Audit 帧、Governance 帧。本地 fsync 后即向调用方确认，异步复制。
+
+**为什么安全**：Provider I/O 之后丢失的帧，其 reservation 与 attempt 已经 confirmed，所以新 Primary
+的 `RecoverPendingLeases` 会把该 Attempt 恢复成一条**带 Project、带金额上界、带机器可读终态**的
+`recovered_started_unknown_result` 行。方向是保守多计而非行缺失——与仓库既有的全部不确定性构造
+一致（这也是为什么"记一条空白行"式的方案不可接受：Ledger 的 `Validate` 无条件要求 `ProjectID` 与
+`PeriodID`，`internal/ledger/event.go:147-152`，而能说出受影响 Project 的正是丢掉的那些字节）。
+
+#### 6.3.3 其余规则
+
+- 等待发生在本地 `State.Apply` 之后、响应之前，不阻塞其它请求的 append/apply（ADR 0018 的锁外
+  append 结构不变）。
+- Ledger 已有的群提交（`usage.wal_max_batch` / `wal_flush_interval`）天然成为复制的批次。由于只有
+  两个事件等待，一次 Attempt 的额外延迟是 2 次往返 + 远端 fsync。
+- **新任期的第一帧是 `leadership_established` no-op**（Ledger structural 帧，带 term）。它被 ack
+  之前 `confirmed_index` 在新 term 内未定义，Primary 不确认任何需要等待的写；它是 §11.2 截断判据
+  的锚点。
+- **ACK 超时不是每请求错误。** 超时让 Primary 进入可恢复的 `ReplicationUnavailable` 状态（需要等待
+  的写在 admission 处返回 503，不必等待的写继续；已 append 的帧保留，等 ACK 或截断），不是
+  `MarkUnavailable` 的终态——否则帧 N 已持久未 apply、帧 N+1 在 `applyCond` 上永远等待。
+
+### 6.4 Replica 丢失时
+
+"Replica 丢失"只指**不可达**；"可达但因 term 拒绝 ACK"永远不算丢失（它意味着有人在提升，§8.4）。
+**只有一种语义**：不静默继续，也不降级为单写。
+
+| 节点数 | Replica 停机（备份/升级/重启） | Primary 重启（Replica 全在） | Replica 全部不可达 |
+|---|---|---|---|
+| 3 | 另一个 Replica 继续 ACK，无影响 | §8.2 行 3，自动恢复 | §6.3.1 的写不可用：admission 处 503 `replication_unavailable`；readiness **保持就绪**（客户端拿到 503 而不是拒连）；§6.3.2 的写继续 |
+| 2 | **§6.3.1 的写停机**；用 `stepdown`（§8.5）或维护哨兵（§12.3）把窗口缩到最短 | 若 Replica 不可达 → §8.2 行 4 等待运维 | 同上 |
+
+#### 2 节点部署的真实语义
+
+**2 节点在 Primary 死亡后，提升出的实例在第二个节点回来之前不可写。** 提升时 `--no-peer-promise`
+拿不到任何 promise（唯一的 peer 就是死掉的那个），新 Primary 也就没有任何 Replica 可以 ACK，
+§6.3.1 的写全部 503。恢复路径：起一个新节点 → 从幸存者播种（§11.1）→ 可写。
+
+所以 **2 节点不是一个提供故障切换可用性的部署**。它提供的是 RPO=0 的热副本、盘丢失时的快速重建、
+以及可以在副本上做备份。要切换后立刻可写，需要 3 个节点。`config check` 对 2 节点输出 warning
+说明这一点（不是 error——2 节点合法且有用，只是它买到的东西和运维的直觉不同）。
+
+---
+
+## 7. Provider 副作用与切换
 
 ```text
-received_index
-durable_index
-commit_index
-applied_index
+PricePin prepare（metadata 帧）        → 本地持久即可
+ReservationCreated 帧                  → **等 confirmed**
+AttemptStarted 帧                      → **等 confirmed**
+PricePin commit（metadata 帧）         → 本地持久即可
+再次核对：本进程仍是 Primary、term 未变、没有收到更高 term / promise
+Provider I/O
+AttemptSettled / recovered_started_unknown_result 帧 → 本地持久即可
+RequestFinalized 帧 → 本地持久即可 → 向客户端完成
 ```
 
-候选节点必须同时满足：
+六个持久事件里只有两个等待。"再次核对"是一个**本地布尔检查**，发生在 SafeTransport 建立连接前的
+最后可控点：它挡住的是本进程已经知道自己被取代的情况；**分区期间它永远通过**。挡不住的是"核对
+通过后进程被暂停、随后其它节点被提升"——这个窗口由 §8.3 的 promise（旧 Primary 收到 propose 即
+停止确认）与运维断言共同关闭，窗口外的残余只落到 `recovered_started_unknown_result`。
 
-- 日志不旧于投票者；
-- 获得固定成员多数派选票，并提交当前任期的领导权确认记录；
-- 在接收写流量前，`applied_index` 追平其已知 `commit_index`；
-- 所有引用的 Provider objects 完整；
-- Master Key generation 和 mutation schema 兼容；
-- 本地完整性检查通过。
+切换后新 Primary 启动时执行的正是 Standalone 的 `RecoverPendingLeases`：所有处于 `attempt_started`
+且无可信终态的 Attempt 标记为 `recovered_started_unknown_result`，保留保守费用，不自动重放。
+recovery event ID 由 `attempt_id + outcome` 派生，旧 Primary 若也曾做过保守结算而未确认，其后缀被
+截断而不是冲突。
 
-首版不支持在线扩缩 voting members，避免在 joint-consensus 协议完成前破坏
-多数派交集。
-
-## 8. Provider 请求和外部副作用
-
-每个 Provider Attempt 必须遵循：
-
-```text
-多数派提交 Budget Reservation
-        ↓
-多数派提交 attempt_started(request_id, attempt_id, owner term/epoch)
-        ↓
-重新验证 Primary write lease 和 fencing token
-        ↓
-调用 Provider
-        ↓
-多数派提交 Settlement 或 provider_unknown_outcome
-        ↓
-向客户端完成响应
-```
-
-Provider 支持幂等键时，Adapter 必须使用稳定的 `attempt_id`。不支持幂等键时，
-故障切换后不得自动重放处于 `attempt_started` 且没有可信终态的调用。
-
-`attempt_started` 必须携带由 `cluster_incarnation + term + lease_epoch` 派生的内部
-fencing token。Adapter/SafeTransport 必须在建立连接或写出请求字节的最后可控点
-再次校验该 token；Provider 支持幂等键时，还必须把稳定 `attempt_id` 映射为其
-幂等键。第三方 Provider 通常不会理解 Halro 的 fencing token，因此该 token
-只能封锁 Halro 内部旧 Owner，不能物理撤回已发到第三方的请求。
-
-若发生以下情况：
-
-```text
-Provider 可能已接受请求
-→ Primary 未取得可信结果或 Settlement 未提交
-→ Primary 故障
-```
-
-新 Primary 必须把 Attempt 视为 `provider_unknown_outcome`，保留保守费用，不得假设
-Provider 未执行。后续通过超时、Provider 账单对账或人工调整完成处理。
-
-`provider_unknown_outcome` 只表示外部调用是否执行或执行结果不可信；它与
-Pricing 中“价格未知”的状态不同，二者不得复用枚举、指标或自动处置逻辑。
-
-客户端重试只有在携带稳定 idempotency key 且其记录仍在保留期内时，才可
-确定性返回已有状态。没有幂等键的客户端重试可能形成新的 Provider 调用，
-这属于明确公开的边界。
-
-Settlement 无法形成多数派时，不能静默释放 Reservation。活跃 SSE 在 Owner
-丢失后终止，客户端可以按幂等契约重连，但 Halro 不宣称迁移连接或
-Provider exactly-once。
-
-关键失败分支必须确定性落到以下状态：
-
-| 失败点 | 已提交事实 | 恢复处置 |
+| 失败点 | 已确认的事实 | 新 Primary 的处置 |
 |---|---|---|
-| Reservation 提交前 | 无 | 不调用 Provider，安全重试 |
-| Reservation 后、Attempt 前 | reservation | 超时释放或由 committed mutation 关闭 |
-| `attempt_started` 后、写出请求前 | reservation + attempt | 证明未写出后可按同一 attempt 恢复；不能证明则标记未知 |
-| Provider 可能已接收、Settlement 前 | reservation + attempt | `provider_unknown_outcome`，禁止自动重放 |
-| Settlement 已提交、响应前 | 完整终态 | 通过客户端幂等键返回已有终态 |
+| Reservation 确认前 | 无 | 未调用 Provider；客户端可安全重试 |
+| Reservation 后、Attempt 前 | reservation | 超时释放 |
+| `attempt_started` 后、写出前 | reservation + attempt | 无法证明未写出 → 标记未知 |
+| Provider 可能已收到、Settlement 前 | reservation + attempt | `recovered_started_unknown_result`，保守结算 |
+| Settlement 已持久但未复制、响应前 | reservation + attempt | 新 Primary 看不到 Settlement → 保守行；**保守多计，不是行缺失** |
+| Settlement 已复制、响应前 | 完整终态 | 携带幂等键的客户端重试返回既有终态（依赖 #12） |
 
-## 9. Primary 选举、租约与 fencing
+最后一行是 [#12](https://github.com/akz142857/Halro/issues/12) 仍 open 的原因：Chat/Embeddings 今天
+没有幂等契约，`internal/idempotency` 只校验资源类与治理类请求的键，键挂在 ProviderResource / Run
+记录上（A 类，随 journal 复制）。#12 的 lifecycle 记录若要落地也落在 A 类 bucket 里。没有它，切换
+后客户端重试可能形成第二次 Provider 调用——已公开的边界。
 
-### 9.1 共识状态
+---
 
-每个 voting member 必须持久化：
+## 8. 角色、term 与提升
 
-- `current_term`；
-- `voted_for`；
-- membership；
-- log term/index；
-- `commit_index`；
-- 当前 cluster incarnation。
+### 8.1 持久化的集群状态
 
-候选节点只有在日志不旧于投票者时才能获得选票。新 Primary 不得覆盖任何
-committed prefix；任何在先任期已提交的记录都必须存在于后续 Primary 的日志中，
-这是 Leader Completeness 的硬性选举门禁。
+`cluster/state.json`：`cluster_id`、`incarnation`、`term`、`promised_term`、`role`（每次角色变更时
+写并 fsync，不是关闭时写）、`durable_index`、`applied_index`、`node_id`、`peers` 快照、投影快照点。
+文件带 MAC（Vault 域密钥 `halro:cluster:v1`），`cluster/ordering.journal` 同样带 MAC；文件写权限
+攻击者（ADR 0016 定义的对手）不能伪造角色或 term。
 
-### 9.2 写租约
+### 8.2 启动裁决：没有节点自动成为 Primary
 
-Primary 必须持有多数派支持的有期限 write lease。实现必须使用单调时钟计算
-本地有效期，并设置安全裕量；不得通过比较节点 wall clock 判断租约。
+节点启动后先联系全部 peers，得到每个 peer 的 `(term, promised_term, role, incarnation, durable_index)`：
 
-实现和部署必须给出可测量的时间约束，而不是只声明“租约不重叠”：
+| # | 本地 | peers 报告 | 结果 |
+|---|---|---|---|
+| 1 | incarnation 与任一可达 peer 不同 | — | fail closed，等待运维（灾备恢复后的旧节点） |
+| 2 | 任意 | 任一 peer 的 `term` **或 `promised_term`** 高于本地 term | 降为 Replica；接入时按 §11.2 截断 |
+| 3 | `role=primary` | 全部 peers 可达、term 与 promised_term 都等于本地、无 peer 自称 Primary | **恢复 Primary**：干净重启，没有人被提升过（promise 会留下脚印） |
+| 4 | `role=primary` | 任一 peer 不可达 | **停在不可写状态**等待；readiness 不就绪。运维用 `promote --self` 恢复（走 §8.3 的 prepare，term +1） |
+| 5 | `role=replica` | 某 peer 是 Primary 且 term ≥ 本地 | 以 Replica 接入 |
+| 6 | `role=replica` | 无 peer 自称 Primary | 停在 Replica 状态等待提升；readiness 就绪但不收客户端流量 |
+| 7 | 任意 | 本地 term 高于所有可达 peer | 不自动成为 Primary；停在不可写状态，报告"term 领先"，等待运维 |
+| 8 | 任意 | 两个 peer 同 term 且都自称 Primary | fail closed，告警 `HalroMultiplePrimaries`（协议上不应发生） |
 
-```text
-heartbeat_interval < renewal_deadline < lease_duration
-election_min_timeout >= lease_duration + 2 * clock_drift_bound + pause_margin
-provider_fence_margin >= clock_drift_bound + scheduler_pause_bound
-```
+**行 4 是可用性的代价，要写在 runbook 最前面**：Primary 重启时只要任一 Replica 也不可达，它不会
+自己恢复服务。提升后直到旧 Primary 回归之前，新 Primary 的任何重启都落在这一行。
 
-在环境无法给出可信的 `clock_drift_bound` 和 `scheduler_pause_bound` 时，自动 write
-lease 必须禁用，只能使用带外人工 fencing 完成切换。这些参数必须来自故障测试，
-并作为发布门禁和运行时配置校验的一部分。
-
-新 Primary 的 lease 生效前必须保证旧 lease 不再有效。失去多数派、租约续约
-失败、进程长暂停或本地单调时钟有效期到达时，节点必须在期限内：
-
-- 从业务流量入口摘除；
-- 拒绝新 Reservation 和 Attempt；
-- 不启动新的 Provider I/O；
-- 对不能确认的在途调用记录 `provider_unknown_outcome`；
-- readiness 进入不可写状态。
-
-每个 Provider I/O 前必须重新验证 lease 和 fencing token，而不是依赖较早的
-Replica ACK。校验与实际 socket connect/write 之间仍存在不可消除的竞态窗口；
-进程暂停也可能跨过租约边界。因此架构承诺的是在经过证明的时间界限内停止新
-副作用，并以内部 fencing、Provider 幂等键和 `provider_unknown_outcome` 收敛，
-而不是声称能绝对保证第三方只看到一个发起者。已经进入第三方 Provider 的连接
-无法被 Halro epoch 物理撤销。
-
-### 9.3 人工切换
-
-第一阶段只支持 operator-managed failover。示例命令属于未来接口：
+### 8.3 提升
 
 ```bash
-halro cluster promote \
-  --cluster-id production-a \
-  --confirm-term 7 \
-  --confirm-commit-index 10241 \
-  --fencing-proof OLD_PRIMARY_ISOLATED
+halro cluster status
+halro cluster promote --node halro-1 \
+  --expect-term 7 --expect-index 10241 \
+  --old-primary halro-0 --old-primary-fenced-by pod-deleted-pvc-retained
 ```
 
-提升前必须通过 STONITH 或等价手段证明旧 Primary 已经终止、断电或被网络
-隔离。`--confirm-sequence` 或人工口头确认不能代替 fencing。落后或不完整节点
-默认拒绝提升。任何允许数据丢失的强制恢复必须使用独立高危流程，显示预计
-丢失范围并写入 Audit。
+0. **prepare。** 目标选定 `T' = max(term, promised_term) + 1`，向**全部** peers（含被指名的旧
+   Primary）发送 `propose(T')`。peer 把 `promised_term = T'` 写入 `state.json` 并 fsync 后才应答，
+   应答携带自己的 durable/applied index 与当前角色。从应答起 peer (a) 拒绝 ack 任何 term < T' 的帧，
+   (b) 在 §8.2 中把 `promised_term` 当作自己的 term 报告，(c) 拒绝任何 ≤ T' 的后续 propose。发起
+   节点自身从此停止 ack 旧 term。需要 ≥ 1 个 promise 才能继续；**任一应答者自称 Primary → 拒绝**。
+   旧 Primary 若可达，收到 propose 的那一刻就按 §8.4 退位。
+1. 校验 `--expect-term/--expect-index` 与本地一致。
+2. **fencing 断言。** `--old-primary-fenced-by` 只接受两种值：`pod-deleted-pvc-retained`（Pod 已删除
+   且其 PVC 不会被自动重新挂到新 Pod）与 `node-isolated`（节点断网/断电）。**"进程已 kill"不是
+   fencing**：kubelet 会拉起它。断言连同 actor、探测结果写入 Audit（§8.7）。协议内的 promise 已经
+   保证旧 Primary 不能再**确认**任何写；断言负责的是它不再向 Provider **发出**新请求。
+3. **候选判据比 `(last_frame_term, applied_index)` 字典序，不比裸 index。** 目标的
+   `(last_frame_term, applied_index)` 不得小于任一应答 peer 的 `(last_frame_term, durable_index)`；
+   若小于，先等本地 apply 追平（时间计入 RTO）或改提别的节点。
+   > 缺了这条 up-to-date 规则，可以提升出一个位置更大但属于**旧分叉**的节点，静默丢弃另一支已确认
+   > 写。promise 保证的是"没有第二个 Primary"，不是"选中的这个最新"。
+4. term = T'，写入 `state.json` 并 fsync。**从这一步起提升不可撤销**：之后失败/崩溃的节点重启时落在
+   §8.2 行 7，运维再次 promote 即可继续。
+5. 开始接受 Replica 连接、主动连接全部 peers（含旧 Primary——它不会以 Replica 身份来连）通告新
+   term，重试直到对方确认或运维显式放弃；让已接入的 Replica 追平到本地 durable index。
+6. 写 `leadership_established` no-op 并等它 confirmed。
+7. 走 Standalone 启动恢复：Ledger 链校验、`RecoverPendingLeases`（恢复帧走提交规则）、Audit 链校验、
+   Admin 会话失效。
+8. readiness 就绪，开始收客户端流量。
 
-### 9.4 自动切换
+**`promote --self` 就是对自己执行的 promote**（旧称 resume）：同样 prepare、同样 term +1、同样进
+Audit。§8.2 行 4 的节点用它恢复。
 
-自动切换只有在持久化 term/vote、日志新鲜度、多数派 commit、量化 lease 边界、
-内部 fencing、故障矩阵和发布门禁全部通过后才能启用。三个 Halro 进程可以在单二进制内
-完成投票，不要求部署独立 Sentinel、Etcd 或 Consul。
+**2 节点。** 旧 Primary 死亡时 prepare 永远拿不到 promise，promote 必须允许显式 `--no-peer-promise`；
+它是纯粹的人工断言。这没有安全后果：新 Primary 没有 Replica 就确认不了 §6.3.1 的写，所以断言错误
+的最坏结果是**两个都不可写**，不是两个都在写。代价见 §6.4。
 
-## 10. Provider object 复制
+### 8.4 运行期退位
 
-Provider object bytes 不进入权威 mutation log，避免大对象阻塞共识日志。
-对象使用独立、经过认证的分块复制通道。
+任何携带 `term > 本地 term` 或 `promised_term > 本地 term` 的消息——propose、帧、ACK 拒绝、握手、
+通告——到达运行中的 Primary，它立即：进入 `ReplicationUnavailable`、停止确认、关闭 Gateway/Admin
+listener、以非零码退出；重启走 §8.2 行 2。在飞的 Provider 调用按不变量 12 终止，其结算落在未确认
+后缀，由新 Primary 的 `RecoverPendingLeases` 保守结算。Ledger 打开态不可截断
+（`internal/ledger/log.go:665`），退位只能是退出后截断。
 
-创建协议：
+### 8.5 计划内交接 `stepdown`
+
+```bash
+halro cluster stepdown --to halro-1
+```
+
+1. Primary 撤销客户端 readiness，drain 在飞请求到最后一帧 confirmed（超过 `shutdown_timeout` 的
+   Provider 调用按不变量 12 终止并保守结算——但这是运维选的时刻，不是凌晨三点）；
+2. 等目标 Replica `applied_index == confirmed_index`；
+3. 目标执行 §8.3（prepare 在 Primary 自己参与下必然拿到 promise；旧 Primary 收到 propose 即退位）；
+4. 旧 Primary 以 Replica 接入，没有需要截断的后缀。
+
+**升级（§15）、2 节点的备份窗口（§12.3）、节点维护都用它，不走崩溃式切换。**
+
+### 8.6 Replica 上的 Admin 鉴权
+
+登录、MFA 完成、会话续期、step-up、其 Audit checkpoint 在 Standalone 全是 bbolt 写；Replica 不可写
+A/B 类键。Replica 的 Admin 面因此：
+
+- 会话存储换成**内存实现**（`adminauth.SessionStore` 是 5 个方法的接口，CSRF 不依赖 store）；
+  口令与 TOTP secret 从复制来的 bbolt **只读**校验；
+- TOTP 防重放水位写到节点本地文件 `cluster/totp-watermark`（不进 journal、不复制）；跨节点重放因此
+  退化为"per-node、≤ 90 s、需口令 + 活码"，与 Standalone 单机的重放窗口同量级；
+- `promote` / `stepdown` 属于 Admin 的"总是重新验证"类，不吃会话缓存的 step-up；
+- Replica 上登录/step-up 的 Audit 事件不进 Replica 自己的 Audit 链（那是 Primary 的前缀）；它们作为
+  promote 事件的一部分，由**新 Primary 在新 term 内**写入，错误的 promote 也因此留下不会被截断的证据。
+
+Replica 只放行：`cluster status`、`promote`、`stepdown`（作为目标）、只读健康端点。其它 Admin 与
+全部 Gateway 请求返回 503 `not_primary` + `Retry-After`（不带成员名，避免向 Gateway 客户端泄露拓扑）。
+
+### 8.7 高危动作矩阵
+
+| 动作 | 执行位置 | 鉴权 | Audit 事件（写入者 / term） | 可撤销性 |
+|---|---|---|---|---|
+| `promote` | 目标 Replica | 本地会话 + 总是重新验证 | `cluster.promote`（新 Primary，新 term；含 actor、expect_term/index、old_primary、fenced_by、promise 应答摘要） | 步 4 后不可撤销 |
+| `promote --self` | 本节点 | 同上 | `cluster.promote`（self=true） | 同上 |
+| `promote --no-peer-promise` | 目标 | 同上 | 同上 + `no_peer_promise=true` | 同上；2 节点专用 |
+| `stepdown` | Primary | 总是重新验证 | `cluster.stepdown`（旧 Primary 在旧 term 写 requested；新 Primary 在新 term 写 completed） | 步 3 前可中止 |
+| `leave --confirm` | 本节点，离线 | 目录锁 + 口令 | `cluster.leave`（写入该目录自己的 Audit 链尾，含 cluster_id/incarnation/term/applied_index） | 不可撤销 |
+| 播种 | Primary 侧 | 集群身份 + 可选运维审批 | `cluster.seed.requested/served`（含 node_id、index、字节数） | — |
+| `backup create --replica` | Replica，离线 | 目录锁 + Backup Key | 事实由 Primary 记：`cluster.backup.reported` | — |
+
+事件名进 `docs/contracts/audit-integrity.md` 的固定 schema。没有 `state.json` 的 `replication` 目录
+以 replicated 模式启动时视为首次接入，只允许 re-seed，不允许凭旧数据声称任何 index。
+
+---
+
+## 9. Provider object
+
+对象字节不进帧流：
 
 ```text
-Primary 写临时文件
-→ fsync 文件
-→ 计算 size + SHA-256
-→ 原子 rename
-→ fsync 父目录
-→ 向 voting members 发送 object_prepare
-→ Replica 校验、fsync、rename、fsync 父目录
-→ Replica 返回 durability receipt(node_id, digest, size, term)
-→ durability set 满足多数派交集
-→ 多数派提交 object manifest mutation
+Primary 写临时文件 → fsync → 计算 size + SHA-256 → rename → fsync 父目录
+→ 向 Replica 发送 object_put(digest, size, bytes)
+→ Replica 校验 digest、fsync、rename、fsync 父目录 → 回 receipt(node_id, digest)
+→ 收到 ≥ 1 个 receipt
+→ 对象的 ProviderResource 元数据写入 metadata journal（普通帧流）
 → 对外返回成功
 ```
 
-最简单的首版规则是对象在多数 voting members 上持久化后才提交 manifest。
-缺少 committed manifest 引用对象的节点不得晋升到对应 index。
+**注意这里有一个等待**（receipt），它不在 §6.3.1 的两类之列，但它是对象协议自身的前置条件：元数据
+提交前对象必须已在副本上。删除先写 tombstone，对象字节只在 tombstone 达到所有**仍具增量追赶资格**
+成员的 applied index 后 GC。长期离线成员不因"不可达"而从水位里消失：Primary 先写一条
+`member_requires_full_reseed(node_id)` 元数据帧，GC 才可忽略它的旧水位；它回来时只能 re-seed。
 
-对象删除必须先提交 tombstone。只有在以下条件全部满足后才能 GC：
+Replica 应用引用某对象的元数据帧时若本地缺该对象，不得推进 applied index，按 digest 向 Primary
+拉取；拉不到则 fail closed 进入 re-seed，不创建占位文件。对象封装（ADR 0024 按资源与 Project 派生
+的 AEAD）不变；复制层看到的是密文。
 
-- 所有已知且仍具增量追赶资格的 voting members 都越过 tombstone 安全水位；
-- 没有全量同步依赖该对象；
-- 没有 Backup pin；
-- 保留期和审计要求满足。
+---
 
-长期离线成员不能仅因“不再是合法候选”就从 GC 水位计算中消失。系统必须先以
-committed mutation 将其标记为 `requires_full_reseed`，再允许 GC 忽略它的旧水位；
-未来若支持成员驱逐，则驱逐本身必须是经过共识提交的 membership change。
+## 10. Master Key
 
-应用 committed object manifest 时若本地缺少对象，节点不得推进对应
-`applied_index`。它应按 digest 从 Primary 或其他持有 durability receipt 的成员
-按需拉取，完成 checksum、`fsync`、原子 rename 和父目录 `fsync` 后再继续 apply；
-若对象在所有合格来源都已丢失，则节点 fail closed，并进入全量 re-seed 或灾备
-恢复，不能创建空占位文件或跳过该 mutation。
+**所有成员持有相同的 Master Key（File 模式）或指向相同 Key Slot 的描述符（KMS 模式），复制层不传输
+密钥。** 握手用 Master Key 派生的域密钥做**挑战-响应**（HMAC 覆盖 mTLS 导出的 transcript +
+`cluster_id/incarnation` + 双方 nonce），**不是交换指纹**——指纹是 `sha256(key)`，写在每份备份
+manifest 里，可回显。校验失败的节点拒绝接入。
 
-断线续传、重复分片、对象大小上限、digest 不一致、临时文件清理和 orphan
-清理必须 fail closed，且不能让元数据引用缺失对象。
+Replica 需要密钥做两件事：校验 Ledger epoch-4/5 帧与 Audit 帧的 MAC（不校验就落盘是把篡改复制到
+全集群），以及在提升后解密 Credential。它不需要密钥来落盘 metadata journal 帧。
 
-## 11. File Master Key
+轮换沿用离线流程（[File 模式 runbook](../runbooks/file-master-key-rotation.md)）：停整个集群，在
+Primary 的数据目录上 `halro key rotate`（整文件发布，journal 开新 epoch，§6.1.4），分发新密钥，
+启动 Primary，**Replica 全部 re-seed**。Kubernetes projected Secret 是只读的，"分发新密钥"意味着
+换 Secret + 重启，不是进程原地覆盖文件。`retained_ciphertext_rotation` 对 `failures/`、
+`provider-objects/` 非空时 fail closed 的规则不变。
 
-HA 不强制 KMS。File 模式继续是一等运行模式，但所有仍具增量追赶和晋升资格的
-voting members 必须持有相同的已激活 Master Key generation，并通过真实 Vault
-Key Check 验证。
+KMS 模式下建议每节点独立的 KMS 身份（同一 Key Slot，不同调用者），使 KMS 审计能区分节点、被攻陷
+节点可按身份吊销。`hostsecurity`（禁 core dump、`PR_SET_DUMPABLE`）在**每个节点**生效——每个节点
+内存里都有 Master Key。
 
-Kubernetes projected Secret 是只读的，不能沿用“进程原地覆盖 Secret 文件”
-的轮换方式。HA File-mode 使用版本化 keyring：
+---
+
+## 11. 播种、追赶与投影回退
+
+### 11.1 播种（高危动作）
+
+1. Primary 侧写 Audit `cluster.seed.requested`；可配置 `seed_requires_approval: true`，运维在
+   Primary 上 `halro cluster seed approve <node_id>` 后才继续——**播种是一次绕过 Backup Key 的全量
+   数据目录导出**，集群证书 + 这一步等于一把数据钥匙（§14.1）；
+2. Primary 在 confirmed index `N` 处锁定快照：bbolt 一致读事务导出、Ledger/Audit/Governance/metadata
+   journal 固定前缀、被元数据引用的全部对象；
+3. Replica 下载到 `data_dir` 内的 `staging/`（0700，文件 0600，完成前不可读，失败即删除）；
+4. 校验 cluster identity、schema、密钥挑战、每个文件的 digest；
+5. 原子发布为本地数据目录，Primary 写 `cluster.seed.served`；
+6. 从 `N+1` 增量追赶；applied 追平且对象完整后才成为提升候选。
+
+### 11.2 截断与投影回退
+
+一个曾任 Primary 而被取代的节点可能持有 `> 新 Primary confirmed_index` 或 term 更低的后缀：
+
+1. **截断点 C** = 新 Primary 的 `leadership_established` 帧之前的 confirmed index，由新 Primary 在
+   握手中给出；截断只在 `Log`/`audit.Log`/`governance.Log`/journal 全部关闭时执行。
+2. **追加式存储**截到 C 的帧边界。Ledger 文件层接受任意截断；拦截截断的是 bbolt 里的派生 checkpoint
+   （下一条）。截断点跨越 Roll 按 §6.2.3 不可能发生；实现上仍要检查并在发生时走 Ledger re-seed。
+3. **bbolt 不截断，重建到 C**，二选一（Phase 0b 定）：
+   - **路径 A′（推荐）**：只从新 Primary 拉一份 bbolt@C′（C′ ≥ C；本机 `halro.db` 524 KiB，与历史
+     不是一个量级），然后从 C+1 正常追赶；
+   - **路径 A**：节点周期性在某个已确认 index S 处做 bbolt 快照（`Store.Snapshot`）并记进
+     `state.json`，journal 至少保留 `(S, …]`；回退时用快照 S 替换 `halro.db`、重放 journal `(S, C]`。
+
+   两条路径对现有 fail-closed 门**改动为零**：重建出的就是 bbolt@C，而 checkpoint/pin 帧必然排在它
+   引用的 Ledger 帧之后，`reconcileLedgerChainCheckpoint`（`internal/app/runtime.go:1647`）、
+   `reconcileAuditCheckpoint`（`:1615`）、`restoreGovernanceState`、`RecoverDeploymentPricePins`
+   逐条通过。**原地回退 checkpoint 的路径不可行**：需绕过 5 处 "cannot move backwards" 门
+   （`store_audit.go:411`、`store_outcomes.go:222,315`、`store_usage.go:93`、`store_settings.go:206`），
+   且不充分——被截断的 journal 帧里还有普通权威写（Route、Key、Credential），journal 没有 before-image。
+4. **Replica 的 bbolt 应用上限是 confirmed index**（§6.2.4），所以 Replica 侧的截断退化为纯文件尾截断，
+   只有曾任 Primary 的节点需要第 3 条。
+5. Replica 上**没有绕过 journal 的本地 bbolt 写**（§6.2.4 禁用清单、§12.1 的 `--replica`）——这是
+   路径 A/A′ 正确性的前提。
+6. usage checkpoint 领先 Ledger 头时现有守门直接丢弃并全量重建，不需要新逻辑；这意味着"提升后不需要
+   重建 Usage"只在**未截断**时成立。
+
+Primary 只在所有仍具增量追赶资格成员的 applied index 越过后才裁剪 Ledger 日志与 journal。
+
+---
+
+## 12. 备份与恢复
+
+### 12.1 在 Replica 上做备份
+
+`halro backup create` 会向**被备份目录**追加两条 `backup.create` Audit 帧（归档前 `requested`、归档后
+`success|failure`）并推进 bbolt 的 `audit_checkpoint`（`internal/app/backup.go:101,116,815`；真实二进制
+实测每次 Audit 记录 +2、bbolt txid +3）。在 Replica 上原样跑会让它的 Audit 链与 Primary 分叉。因此：
 
 ```text
-Operator 分发 next key generation
-→ 节点通过认证通道报告 Vault Key Check 结果
-→ quorum ready
-→ committed activate(new generation)
-→ 重加密/迁移
-→ 创建并演练新备份
-→ committed retire(old generation)
+Replica 进程停止（§12.3 的序列）
+→ 停止前 drain apply 到 durable（applied == durable），记录 applied_index
+→ halro backup create --replica --config … --output …
+     --replica：不追加 backup.create 帧、不推进 audit_checkpoint、不写任何 A/B/D 类键；
+                由 cluster/state.json 的 role=replica 交叉校验，二进制版本必须与 Replica 相同
+→ halro backup verify …
+→ 启动 Replica，从 applied index 追赶
+→ 在 Primary 上 halro cluster report-backup --backup-id … --node halro-1 --applied-index …
 ```
 
-Secret 使用不同名称或挂载路径保存 `current` 与 `next` generation。离线 Replica
-不能永久阻止轮换；它必须先被 committed 标记为 `requires_full_reseed`，并在重新
-加入时完成全量同步。备份创建时必须登记 `key_generation_backup_pin`；旧 Key 必须
-保留到所有数据、增量合格成员以及仍在保留期内的备份 pin 都不再依赖它。
+`--replica` 之外剩余的写（`.halro.lock` 的 pid、`boltstore.Open` 的空事务、`governance.Open` 的
+0 字节文件、半帧尾修复、checkpoint 落后时追平）都不破坏帧级前缀。
 
-Master Key 不通过普通复制日志传输。节点只通过已认证通道交换 generation 和
-验证结果，不能把明文 Key、完整 fingerprint 或 Secret 放入日志、Metrics 标签
-或普通 Audit payload。Secret 仍需独立离线备份和最小 RBAC；KMS 保持可选。
+> **"只读命令"在本文里定义为"不追加权威帧"。** `audit verify` / `ledger verify` 今天也走写锁并改
+> `.halro.lock` 与 `halro.db` 字节；`doctor` 是唯一真正不写目录的命令。
 
-## 12. Replica 全量同步和追赶
-
-Replica 加入或落后超过增量日志保留范围时：
-
-1. Primary 在 committed index `N` 建立一致 snapshot；
-2. 固定对象 manifest、Ledger/Audit prefix 和必要日志段；
-3. Replica 下载到私有 staging；
-4. 验证 cluster identity、schema、Master Key、checksum 和状态根；
-5. 原子发布本地数据目录；
-6. 从 `N+1` 增量追赶；
-7. 完整 applied/object 检查通过后才获得候选资格。
-
-增量追赶期间遇到缺失对象时使用第 10 节的按 digest 补对象协议；如果所需日志、
-对象或 Key generation 已越过安全保留水位，Replica 必须放弃增量追赶并重新执行
-完整 re-seed，不能靠跳过缺口恢复候选资格。
-
-旧 Primary 重新加入时必须作为 Replica，丢弃未提交的冲突 suffix。日志只有在
-所有必要恢复水位、快照和备份 pin 允许后才能裁剪。快照安装中断不得改变当前
-可用数据目录，重试必须幂等。
-
-## 13. Replica 在线一致性备份
-
-日常备份优先由健康 Replica 完成，但不是“暂停回放后复制整个目录”。备份由
-运行中的 Replica 进程内部协调：
-
-```text
-从 Primary 捕获 committed target index N
-→ Replica 等待 applied_index >= N
-→ 获取本地 snapshot barrier
-→ 固定 bbolt、Ledger、Audit、Usage 和对象 manifest 水位
-→ 对日志段、Usage 文件和对象建立 pin
-→ 在同一文件系统生成不可变 staging snapshot
-→ 释放 barrier 并立即恢复 apply
-→ 后台从 staging 加密、验证和发布 .hmbk
-→ 成功或失败后释放 pin
-```
-
-staging 不能通过对仍会变化的源文件创建硬链接来“快照”。bbolt 必须从一致读事务
-导出副本；Ledger 和 Audit 必须复制已固定的 prefix；Usage、对象和封闭日志段只有
-在已经不可变并受 pin 保护时才可直接复用。可验证具有 copy-on-write 隔离语义的
-reflink 可以作为优化，但必须在不支持或验证失败时回退到真实复制。释放 barrier
-前应完成 staging 文件及目录的 `fsync`；之后源文件的写入、rename、truncate 或
-GC 都不得改变 staging 内容。
-
-整个加密过程不得持续暂停 Replica apply。备份调度器只能选择：
-
-- 健康且完整的 Replica；
-- 不是当前唯一 durable ACK 来源的 Replica；
-- staging 空间、CPU、I/O 和 lag 预算足够的 Replica。
-
-备份期间若另一 Replica 故障，Primary 根据 quorum 和 ACK freshness 继续或
-fail closed。在线备份不要求停止 Primary，但可能影响复制冗余和延迟，不能
-宣称业务完全不受影响。
-
-未来接口必须明确它调用运行中 Replica 的管理 API，而不是让离线 CLI 抢占
-`data_dir` 锁：
-
-```bash
-halro backup create-online \
-  --replica https://halro-1:8081 \
-  --output /secure-backups/halro.hmbk \
-  --key-file /secure-secrets/backup.key
-```
-
-HA backup manifest 必须保留当前 Standalone manifest 的全部字段和语义，包括：
-`format_version`、`backup_id`、`created_at`、`encrypted`、`metadata`、
-`ledger_watermark`、`checkpoint_watermark`、`usage_manifest_version`、
-`adjustment_manifest_version`、`adjustment_manifest_watermark`、
-`ledger_feature_epoch`、`minimum_ledger_reader_version`、`pricing_state_sha256`、
-`pending_intent_sha256`、`pending_intents`、`master_key_fingerprint`、
-`key_slot_descriptor_sha256`、`restore_drill_verified`、`build` 和 `files`。HA 不能用
-一份更短的新 manifest 替换这些已有恢复证据，只能在兼容版本中增加以下字段：
+归档的 `files` 在现有清单（config、metadata.db、ledger.wal、audit.log、governance.journal、sealed
+segments、usage 分区、provider-objects）上增加 `metadata.journal`（当前 epoch）与 `cluster/state.json`、
+`cluster/ordering.journal`（作为证据文件，恢复时不复用）。manifest 保留现有全部字段
+（`format_version`、`backup_id`、`created_at`、`encrypted`、`metadata{schema_version,txid,…}`、
+`ledger_watermark`、`checkpoint_watermark`、`usage_manifest_version`、`ledger_feature_epoch`、
+`minimum_ledger_reader_version`、`ledger_chain_head_*`、`ledger_chain_verified`、`governance_*`、
+`pricing_state_sha256`、`pending_intent*`、`master_key_fingerprint`、`key_slot_descriptor_sha256`、
+`restore_drill_verified`、`build`、`files`），新增：
 
 ```json
-{
-  "cluster_id": "production-a",
-  "cluster_incarnation": "inc_...",
-  "source_node_id": "halro-1",
-  "term": 7,
-  "commit_index": 10241,
-  "applied_index": 10241,
-  "mutation_schema_version": 1,
-  "minimum_ha_reader_version": "...",
-  "state_root_sha256": "sha256:...",
-  "object_manifest_sha256": "sha256:...",
-  "master_key_generation": 3,
-  "audit_checkpoint": {
-    "applied_index": 10241,
-    "chain_head_sha256": "sha256:..."
-  }
-}
+{"cluster_id": "production-a", "cluster_incarnation": "inc_…",
+ "source_node_id": "halro-1", "source_role": "replica", "term": 7, "applied_index": 10241,
+ "metadata_journal_epoch": 3, "metadata_journal_sequence": 5120,
+ "per_store_head": {"ledger": {"sequence": 88151, "offset": …}, "audit": {…}, "governance": {…}}}
 ```
 
-`state_root_sha256` 的规范化输入 schema 必须由 ADR 冻结，至少覆盖 bbolt metadata、
-Ledger/Checkpoint 水位、Usage/Adjustment manifest、Pricing 与 Pending Intent 摘要、
-Audit checkpoint、Provider object manifest、Key generation 和 mutation schema。
-上述每个组成部分都必须显式绑定同一个 `applied_index`，不能只依赖文件创建时间
-推断一致性。`restore_drill_verified` 只能由隔离环境中的真实恢复、完整校验和结果
-回写流程置为 true，创建 archive 或仅执行 checksum 验证不得自动置位。
+`per_store_head` 让 `validateRestoreStage` 能把 `applied_index` 对到各存储的序号；没有它不变量 10 在
+restore 时只能相信写入者。`restore_drill_verified` 的语义不变：只有隔离环境的真实恢复能置为 true；
+HA 下"真实恢复"指恢复为新 incarnation、播种一个 Replica、并验证旧节点被拒。
 
-`.hmbk` 必须复制到该节点/PVC以外的故障域，Backup Key 继续与 archive 和
-Master Key 分开保管；不限定必须使用 S3。
+### 12.2 恢复
 
-## 14. 恢复模型
+- **单个 Replica 或其 PVC 丢失**：按 §11.1 从 Primary 重新播种。不从旧 `.hmbk` 直接加入。
+- **整个集群丢失**：隔离旧网络与流量；校验 `.hmbk`、Backup Key、Master Key；`halro restore` 到一个
+  节点——restore 是整文件发布，journal 开新 epoch（归档里的 journal 只用于校验
+  `applied_journal_sequence`，不复用）——并赋予**新的 incarnation**；从它播种其它节点；校验后切流量。
+  旧节点即使上线也因 incarnation 不匹配被拒（§8.2 行 1）。
+- **从 HA 退回 Standalone**：在选定节点上删除 `replication` 块并显式执行 `halro cluster leave --confirm`
+  ——它写 `cluster.leave` Audit、清除 `cluster/`，目录作为普通 Standalone 目录打开；其它节点的目录
+  **必须销毁或以新 incarnation 隔离**，scale-down 后 Retain 的 PVC 同样。两个"退回 Standalone"的
+  节点各自继续写，就是两个持有全部 Credential 的 Halro。
 
-### 14.1 Replica re-seed
+### 12.3 Kubernetes 上停一个 Replica
 
-单个 Replica 或 PVC 丢失时，从健康 Primary 的一致 snapshot 重新播种，再追赶
-增量日志。不能从旧 `.hmbk` 直接加入并假设其成员身份仍有效。
+删 Pod 会被秒级重建并抢锁，所以：
 
-### 14.2 全集群灾备恢复
+- **S1 维护哨兵（推荐，Phase 2 交付）**：`halro serve` 在 `replication` 块存在时若发现
+  `cluster/maintenance` 文件（`kubectl exec halro-1 -- halro cluster maintenance on` 写入），保持进程
+  存活、liveness 通过、**不取目录锁**、readiness 不就绪；备份用 `kubectl exec` 在同一 Pod 内跑；
+  `maintenance off` 后取锁、以 Replica 接入追赶。它是"进程在、锁不在"，不引入新的复制状态。
+- **S2 `OnDelete` + 模板 patch（不需要新代码）**：patch StatefulSet 模板 `args` 为维护态 → 只删
+  `halro-1` → 它持 PVC 不取锁 → `kubectl exec` 跑备份 → patch 回 → 再删一次。**互斥**：模板是维护态
+  期间任何别的 Pod 被删（包括为 failover 删 Primary）都会以维护态回来，runbook 必须写死。
+- **S3 scale 最高序号**：只能备份最高序号，且须先确认它不是 Primary。
 
-多数派和全部可用成员丢失时：
+**备份窗口的代价**：3 节点下另一个 Replica 继续 ACK，Primary 写不受影响；2 节点下按 §6.4 写停机，
+时长 = 备份 + verify + Replica 启动 + 追赶——运维在窗口前知道这一点，并可先 `stepdown` 让备份落在
+非 Primary 上。
 
-1. 隔离旧集群网络和流量；
-2. 验证 `.hmbk`、Backup Key 和 Master Key generation；
-3. 使用新的 `cluster_incarnation` 恢复一个初始节点；
-4. 清除或重新签发旧 lease、vote 和成员运行身份；
-5. 从初始节点全量同步两个新 Replica；
-6. 完整验证 DB、Ledger、Audit、Usage 和 Provider objects；
-7. 完成恢复演练和审批后切换业务流量；
-8. 旧 Primary 即使重新上线也不得加入或写入新 incarnation。
+---
 
-恢复到 Standalone 也必须显式选择新身份，不能携带旧 Primary lease 自动启动。
+## 13. 流量入口与 Kubernetes
 
-## 15. Kubernetes 拓扑与流量入口
+### 13.1 探针
 
-基础部署使用：
+Kubernetes 只有三种探针，一个 Pod 只有一个 `Ready` 条件：
 
-- 一个三副本 StatefulSet；
-- 每 Pod 一个 RWO PVC；
-- 一个 Headless Service 用于成员发现和复制；
-- 一个客户端 Service 用于 Gateway/Admin 流量；
-- Pod anti-affinity 和 topology spread；
-- PodDisruptionBudget 保持多数派；
-- PVC retention policy 防止 scale down 或卸载误删；
-- NetworkPolicy 只允许成员访问复制端口。
-
-普通 Kubernetes Service 不知道哪个 Pod 是 Primary。为了避免依赖外部
-controller，推荐所有节点都可接收客户端连接：
-
-- Primary 本地处理；
-- Replica 通过认证的内部通道代理，但每次转发前必须实时取得当前 term、Primary
-  identity 和有效 lease 证明；缓存的角色标签或地址不能单独授权转发；
-- 目标 Primary 在提交 mutation 和发起 Provider I/O 前，仍必须独立复核 term、
-  lease 与 fencing token，不能信任 Replica 的代理判断；
-- 角色不明确、lease 无效或 Primary 不可达时 fail closed；
-- 请求 body 一旦可能转发，不得由 Replica 自动重试到另一个 Primary；
-- SSE 连接不迁移，承载连接的 Pod 故障时客户端重连。
-
-如果未来采用 Primary-only EndpointSlice/role label，则必须单独证明 endpoint
-更新延迟、旧连接、kube-proxy 缓存和旧 Primary fencing 的安全性，不能仅依赖
-selector 声称完成切换。
-
-探针必须区分：
-
-| 探针/状态 | Primary | Replica |
+| 探针 | Primary | Replica |
 |---|---|---|
-| process liveness | 进程和本地存储可运行 | 进程和本地存储可运行 |
-| startup | 恢复完成、密钥有效 | snapshot/apply 初始化完成 |
-| client readiness | lease/quorum 可写 | 可安全代理到有效 Primary |
-| replication readiness | 多数派和 ACK freshness 正常 | 复制通道正常 |
-| backup eligibility | false | applied/object/空间均满足 |
+| liveness | 进程与本地存储可运行 | 同；**播种/追赶中不被 liveness 重启**（liveness 不看 lag） |
+| startup | §8.2 裁决完成、密钥有效、恢复完成 | 播种/追赶初始化完成；预算必须容纳播种时长（10 GiB 级数据目录不是 180 s 能播完的，按数据规模给 `failureThreshold`） |
+| readiness | 进程健康、账务可用、§8.2 裁决完成 | **同样就绪**（在同步且 lag 在阈值内） |
 
-慢速全量同步不能被 liveness 反复重启。节点 SIGTERM 后先撤销 client readiness，
-再 drain 在途请求；计划内退出 Primary 前先转移角色。超过 deadline 的 Provider
-调用进入 `provider_unknown_outcome`。
+Headless Service 加 `publishNotReadyAddresses: true`（成员发现不依赖就绪）。PDB `minAvailable: 2`
+（3 节点）按 Ready Pod 计数。
 
-## 16. 集群通信安全
+### 13.2 客户端流量归属
 
-复制、对象、投票、ACK、快照和内部代理协议必须：
+Ready 不表达角色，客户端 Service 要靠别的机制只把流量给 Primary。三种，Phase 2 定一种：
 
-- 强制加密和双向节点身份认证，不提供明文 fallback；
-- 绑定 cluster ID、cluster incarnation 和 node ID；
-- 校验成员 allowlist；
-- 每帧绑定协议版本、term、index、nonce 和完整性；
-- 拒绝跨集群消息、旧 term、重放 ACK、重放选票和重放 object receipt；
-- 设置连接、帧、对象、并发、速率和 deadline 上限；
-- 支持双信任窗口下的证书或集群密钥轮换；
-- 不在复制错误、日志或 Metrics 中泄露 Credential、对象内容或密钥。
+| 机制 | 做法 | 代价 |
+|---|---|---|
+| **(a) Replica 进 endpoints 并回 503**（默认） | 客户端 Service 选全部 Ready 成员；Replica 对写请求返回 503 `not_primary` + `Retry-After` | 不需要 RBAC/controller/label；稳态下 1/N 的请求先吃一个 503 再由 SDK 重试，p99 多一次往返 |
+| (b) Primary 给自己的 Pod 打 label | Service selector 含 `halro.io/role=primary` | 需要 `pods/patch` RBAC——`deploy/kubernetes/README.md` 刻意不给 Halro 任何 API 权限，这是要重新做的决定 |
+| (c) 外部 LB 主动健康检查 `/cluster/primary` | 云 LB 只把回 200 的当作健康 | 依赖部署环境；NGINX ingress 等无主动探测 |
 
-可以使用本地 Secret 提供集群 CA/节点身份，不要求外部 PKI 服务。认证材料
-轮换、成员加入和移除必须有独立 runbook 和故障测试。
+**无论哪种，切换期间客户端经历的不是"503 重试"而是整个人工 RTO 内的失败**：Primary 节点失联时
+keep-alive 连接没有 RST，客户端先等超时；SDK 的重试地平线（10–20 s）远小于人工 RTO。只有
+`stepdown` 与「Replica 全部不可达」这两种情况下客户端才看到带 `Retry-After` 的 503。
 
-## 17. 滚动升级
+### 13.3 拓扑
 
-节点握手必须声明支持的 binary、replication protocol、mutation schema、snapshot
-和 Ledger reader feature 范围。不兼容节点不得进入 voting quorum。
+- StatefulSet，`replicas: 2` 或 `3`，`podManagementPolicy: Parallel`，`updateStrategy: OnDelete`；
+- 每 Pod 一个 `ReadWriteOncePod` PVC，`persistentVolumeClaimRetentionPolicy: Retain`；
+  **PVC 退役流程**：scale-down 后的 PVC 必须显式销毁或以新 incarnation 隔离（§14.1）；
+- Headless Service（`publishNotReadyAddresses: true`）供成员发现，客户端 Service 按 §13.2；
+- anti-affinity / topology spread；PDB `minAvailable: 2`（3 节点）；2 节点不设 PDB；
+- NetworkPolicy 只允许成员访问 `replication.listen`（今天的 Standalone 清单没有 NetworkPolicy 对象，
+  这是新增承诺）；
+- SIGTERM：先撤 readiness、再 drain、再退出；Primary 的计划内退出先 `stepdown`。
 
-升级顺序：
+现有 `deploy/kubernetes/halro-aws-kms.yaml`（Deployment、`replicas: 1`、`Recreate`）是 Standalone 的
+部署，不变；HA 提供一份独立的 StatefulSet 清单，`manifests_test.go` 同样覆盖它。
+
+---
+
+## 14. 集群通信安全
+
+- mTLS，集群 CA 由本地 Secret 提供，不要求外部 PKI；无明文 fallback；`peers[].spki_sha256` 对每个
+  成员 pin 公钥，单成员证书泄露可改配置吊销；**CA 轮换走双信任窗口**（新旧 CA 同时受信一个窗口，
+  逐节点换证书，再撤旧 CA），有独立 runbook 与门禁用例；
+- 每帧绑定 `cluster_id`、`incarnation`、`term`、`index`、digest；跨集群、旧 term、重放 ACK 与重放
+  receipt 一律拒绝；
+- 握手：mTLS 之上再做 Master Key 域密钥的挑战-响应（§10），证明持有而非回显指纹；
+- 成员 allowlist 来自 `peers`，握手校验证书主体与 `node_id` 对应；
+- 连接数、帧大小、对象大小、并发、速率、deadline 都有上限；
+- 复制错误、日志、Metrics 不含 Credential 密文、对象字节、密钥指纹全文或 Project ID。
+
+`replication.listen` 是 Halro 除 Gateway/Admin/Metrics 之外的第四个监听，只在 `replication` 块存在时
+存在；SafeTransport 的出站规则不适用于它，但它遵守同一份 allowlist 思路：只接受 `peers` 里的主体。
+
+### 14.1 威胁模型的变化
+
+Standalone 的信任边界是"一台主机独占一个目录"。HA 把它变成"N 台主机各持同一 Master Key 与同一份
+数据"。以下条目要写进 `docs/architecture/threat-model.md`：
+
+| 条目 | Standalone | HA |
+|---|---|---|
+| *The host root account is trusted* | 一台主机的 root | N 台主机的 root、N 个 PVC 的存储管理员、能读集群证书 Secret 与 Master Key Secret 的每个 RBAC 主体 |
+| *One active writer* | 由目录锁保证 | 由 term + promise 保证**确认**唯一；本地写入唯一是过程保证（不变量 1） |
+| 数据导出需要 `.hmbk` + Backup Key 或主机文件访问 | — | **播种是第三条路**：集群证书 + 通过挑战-响应（即持有 Master Key）= 全量数据目录；因此播种是高危动作（§11.1） |
+| 任一成员失陷 = 全集群失陷 | 不适用 | 成立：`data/` + `master.key` + `cluster leave` = 一个能解密全部 Credential 并调用 Provider 的 Standalone。缓解只有 §8.7 的 Audit 来历、PVC 退役流程、每节点 `hostsecurity` |
+| 集群证书的价值 | 不存在 | ≈ 未加密备份钥匙的一半（另一半是 Master Key）；泄露补救 = SPKI pin 吊销或 CA 轮换 |
+
+---
+
+## 15. 升级
+
+`boltstore.Open` 会在每个节点本地跑 schema 迁移（38 条，其中 7 处 `rewriteBucket` 改 value 编码），
+所以"先升 Replica"会让新 Replica 本地迁到 N+1 后仍收旧 Primary 的 N 形态 put——既不是投影也不是
+合法新库。把迁移的执行点对齐到流的 schema 边界：
+
+- **Replica 不迁移。** `replication` 块存在且 `role=replica` 的节点以第三种模式打开 bbolt：不迁移、
+  也不因 schema 落后于二进制而拒绝（今天 `Open` 必迁、`OpenReadOnly` 精确相等门拒绝，需新增）；
+  它声明的是"能应用的最高 schema"。
+- **迁移只由 Primary 执行**，在它以新二进制打开时，作为一个带 `schema_boundary(N→N+1)` 标记的
+  metadata journal 事务（可跨多帧，op 词表含建删 bucket）发出；Replica 应用它。迁移是 bbolt 内容的
+  纯函数（无 `time.Now/rand/os`），Primary 在同一前缀上跑，字节一致。
+- **握手声明范围**：binary、复制协议、`能应用的最高 bbolt schema`、Ledger reader 范围、journal 版本。
+  Primary 不得向声明范围低于自己**当前 schema** 的 Replica 发送 boundary 之后的帧。
 
 ```text
-升级一个 Replica
-→ 等待 applied/object 完整并重新获得候选资格
-→ 升级第二个 Replica
-→ 确认多数成员支持新 feature
-→ 转移 Primary
-→ 升级旧 Primary
-→ 单独提交 feature activation mutation
+逐个升级 Replica 的二进制（以第三种模式打开，继续应用 schema N 的帧）
+→ 确认全部 Replica 追平
+→ stepdown 到一个已升级的 Replica
+→ 它以 Primary 打开：迁移 → schema_boundary 事务 → 其余 Replica 应用
+→ 升级旧 Primary 的二进制，它以 Replica 接入并应用 boundary
 ```
 
-二进制 rollout 与新 mutation feature activation 必须分离。StatefulSet 使用受控
-partition 或 `OnDelete` 策略，不能让默认滚动更新首先杀死当前 Primary。已经迁移
-且不可降级的数据不能由旧二进制原地打开；失败回滚使用升级前完整备份。
+`OnDelete` 下每一步就是 `kubectl delete pod <name>` 一次。**回滚**：boundary 之前的 Replica（旧二进制、
+schema N）是即时回滚目标——`stepdown` 回去即可；boundary 之后回滚用升级前的备份恢复为新 incarnation。
 
-## 18. 可观测性与目标
+---
 
-至少提供以下有限基数指标和告警。**其中与持久化写入路径相关的部分已在 Standalone 落地**
-（`halro_wal_sync_seconds`、`halro_wal_append_{records,batches}_total`、
-`halro_accounting_project_lock_{wait,held}_seconds`、`halro_metadata_*`，以及
-`halro stats` 与控制台的"请求速率上限"卡片）；HA 阶段是在其上增加 term/index 维度，
-而不是从零开始。剩余项：
+## 16. 可观测性、目标与损失
 
-- runtime role、term、ownership epoch；
-- received/durable/commit/applied index；
-- Replica lag records/bytes/seconds；
-- ACK 与 `fsync` latency；
-- quorum、lease 和 write availability；
-- election、promotion、fencing 和 role change；
-- object missing/corrupt/sync backlog；
-- full sync、snapshot、backup 状态和时长；
-- WAL/PVC/staging 使用量和 pin 水位；
-- key generation 或节点身份不一致。
+### 16.1 指标（全部低基数）
 
-Secret、完整 fingerprint、证书主体、Project ID 和高基数对象 ID 不得成为
-Metrics label。
+Standalone 已有的写路径指标（`halro_wal_sync_seconds`、`halro_wal_append_{records,batches}_total`、
+`halro_accounting_project_lock_{wait,held}_seconds`、`halro_metadata_*`、`halro stats`）保留，复制层增加：
 
-正式发布前必须冻结并测试以下目标；未验证的数字只能标记为目标，不能作为
-产品承诺：
+- `halro_cluster_role{role}`、`halro_cluster_term`、`halro_cluster_promised_term`、`halro_cluster_incarnation_info`；
+- `halro_replication_index{kind=durable|confirmed|applied}`（Replica 自报 applied，Primary 汇总按 peer）；
+- `halro_replication_lag_seconds` / `_frames` / `_bytes`、`halro_replication_apply_backlog_frames`；
+  **lag 是运维能直接读的那个数**：在 RPO=0 下它不是"会丢多少"，而是"**提升时要等多久追平**"
+  （§8.3 步 3 要求候选 applied 追平），也就是 RTO 里可被监控的那一段。告警阈值即"你愿意让切换多花
+  多少时间"；
+- `halro_replication_ack_seconds`、`halro_replication_batch_frames`、`halro_metadata_journal_bytes`；
+- `halro_replication_state{state=replicating|unavailable}`、进入/退出 unavailable 的计数；
+- 对象缺失/校验失败/待同步计数；播种与追赶状态与耗时；`halro_cluster_maintenance`；
+- 密钥挑战失败、schema 不兼容、SPKI 不匹配的成员计数。
 
-| 场景 | RPO | RTO/行为 |
+### 16.2 告警与 runbook（Phase 2 交付）
+
+| 告警 | 条件 | runbook |
 |---|---|---|
-| 单节点故障，仍有多数派 | 已提交权威 mutation 为 0 | 目标由故障测试确定 |
-| Provider 已执行但结果不明 | 不承诺结果 RPO | `provider_unknown_outcome`，禁止自动重放 |
-| 丢失多数派 | 在已验证的 lease/fence 边界内停止新副作用 | 等待成员恢复或人工灾备 |
-| 全集群从 `.hmbk` 恢复 | 备份 commit index 之后的数据不保证 | 目标由数据规模演练确定 |
+| `HalroNoPrimary` | 无成员 `role=primary` 超过 N s | §8.3 promote |
+| `HalroMultiplePrimaries` | ≥ 2 成员同 incarnation 自称 Primary | §8.2 行 8；隔离、核对 Audit |
+| `HalroAwaitingOperator` | 任一成员停在 §8.2 行 4/7 | `promote --self` / promote |
+| `HalroReplicationUnavailable` | Primary `state=unavailable` | 查 Replica；§6.3.1 的写已停（503） |
+| `HalroReplicaNotCandidate` | `durable − applied` 超阈值 | 查 apply backlog / bbolt |
+| `HalroMemberIncompatible` | schema/协议/密钥不兼容 | §15 |
+| 现有 `HalroTargetDown`、`AccountingLeaseStale` 等 | 改为 role 感知；recording rules 加 `instance`/`role` 维度 | — |
 
-## 19. 发布门禁与故障矩阵
+告警**只由 Primary 发**；提升瞬间新旧 Primary 的去重靠 `(cluster_id, term)` 标签；`alert_webhooks`
+的内存队列在 Primary 丢失时丢弃（Standalone 今天就有的语义）。
 
-HA 不得只通过普通单元测试宣称完成。发布门禁至少覆盖：
+**deadman**：探测**客户端 Service**（跟随 Primary）作为"服务在"的信号，加每节点 liveness；它是
+§1.3 第 3 条 RTO 数据的来源。**Audit 外部锚点**（ADR 0015）增加 `node_id` 与 `term`，只有 Primary 发；
+witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间两个节点用同一 `instance_id` 发出
+`Records` 相同但 `LastHash` 不同的锚点，witness 会判为篡改——设计上承认它是一个 split-brain 探测器，
+不是误报源。
 
-- Primary 在本地 append、`fsync`、Replica ACK、commit advance、apply 和响应
-  客户端各点崩溃；
-- 覆盖 Raft Figure 8 类场景：旧任期记录即使已复制到多数派，也不能在缺少当前
-  任期 committed entry 时被直接认定提交；
-- Reservation、Attempt、Provider 接收、首个流 token、Settlement 各点崩溃；
-- 双向和单向网络分区、长进程暂停、DNS 黑洞、时钟跳变；
-- 落后 Replica 竞选、旧 Primary 重新加入、冲突 suffix 截断；
-- 对象临时写、rename、目录 `fsync`、receipt、manifest commit 和 GC 各点故障；
-- 长期离线成员只有在 committed `requires_full_reseed` 后才能移出 GC/Key
-  安全水位，并验证其不能以增量方式重新获得候选资格；
-- 磁盘满、只读、慢盘、日志损坏和 checksum 不一致；
-- Replica backup 与持续流量、GC、日志轮转、Key rotation 并发；
-- Backup staging、加密、发布和 unpin 各点崩溃；
-- HA manifest 保留全部 Standalone 恢复字段，且 Ledger、Audit、对象、Pricing、
-  Pending Intent 和 Key generation 均能验证绑定同一 `applied_index`；
-- 对可变 bbolt/WAL/Audit 源文件执行写入、rename 和 truncate，证明硬链接 staging
-  被拒绝，reflink 具备 CoW 隔离，复制回退不会随源文件变化；
-- 错误 Master Key generation、节点证书和跨集群重放；
-- Pod eviction、SIGTERM、SSE drain、PDB 和节点故障；
-- 相邻版本混合复制、角色转移、备份和恢复；
-- 单 PVC 丢失 re-seed，以及全部 PVC 丢失后新 incarnation 灾备恢复。
+### 16.3 目标
 
-测试必须证明：
+发布前必须冻结、测试并以"目标"而非"承诺"发布：
 
-- 在已声明的 lease/暂停/时钟边界内至多一个节点有资格启动新的 Provider
-  副作用，边界外残余竞态能被 fencing、幂等与保守未知终态收敛；
-- 已确认的权威 mutation 不丢失；
-- 不明确 Attempt 不会自动重复执行；
-- 合法候选节点不存在已提交元数据引用的缺失对象；
-- 任意成功发布的备份都能在隔离环境完整恢复。
+| 场景 | 目标 | 推导 |
+|---|---|---|
+| 单 Project 吞吐（3 节点，LAN，NVMe，64 在飞） | **Phase 1 实测后冻结，不预设数字** | 分母是**含 bbolt 写的端到端基线**（pin 路径 + lifecycle 的组合基准；`BenchmarkRequestLifecycle` 的 7051/s 不含 bbolt 写，不能单独当分母）。只有 2 个事件等待，真正的风险在 4 核参考机的 CPU 而非等待次数 |
+| 每请求额外延迟 | **2** 次等待 ACK 的持久事件 × (RTT + 远端 fsync + ordering fsync 摊销)，LAN + NVMe 下估 **+0.5–1.5 ms** | 与 Provider 数百毫秒相比可忽略；仍需实测 p99 |
+| 单节点故障、仍有 ≥ 1 Replica | RPO = 0；RTO = 人工响应 + 剩余 apply + 提升耗时 | 提升耗时目标：≤ 同规模 Standalone 冷启动（10 GiB WAL、近 1 MiB 帧 profile：68.578 s） |
+| `stepdown` | RPO = 0；客户端可见中断 = drain 时长 + endpoints 翻转 | 实测 |
+| Provider 已执行、结果不明 | 不承诺结果 RPO；`recovered_started_unknown_result` | ADR 0011 |
+| Replica 全部丢失 | §6.3.1 的写不可用（503），其余写继续；RPO = 0 | §6.4 |
+| 全集群从 `.hmbk` 恢复 | applied index 之后的数据不保证 | §12 |
 
-## 20. 实施阶段
+### 16.4 会丢什么
 
-### Phase 0：规范与 Standalone 基础
+**这一节必须进用户文档，不进附录。** RPO=0 是对"已确认的权威 mutation"说的，不是对一切说的：
 
-进入条件：1.0.0 已发布并在生产环境运行过一段时间，§0 列出的四类数据已经收集到。
+| 场景 | 损失 |
+|---|---|
+| 进程崩溃、OOM、断电（盘还在） | **0**。与今天的 Standalone 相同 |
+| 计划内 `stepdown` | **0** |
+| Primary 节点故障 + 人工提升（3 节点） | 已确认的权威 mutation：**0**。未确认的异步帧按 §7 的失败点表恢复成可归因的保守行——**金额保守多计，不是行缺失** |
+| 同上，2 节点 | 同上，但提升出的实例在第二个节点回来之前**不可写**（§6.4） |
+| Provider 已执行、结果不明 | 不承诺结果 RPO。**这是 HA 也消除不了的**——Halro 不向任何 Provider 发幂等键（不变量 2） |
+| 活跃 HTTP/SSE 连接 | 全部终止，不迁移 |
+| 限流窗口、并发计数、Token Guard EWMA | 归零重算，与重启一致 |
+| failurecapture 的诊断记录 | 节点本地，不复制；切换后不承诺可读 |
+| 尚未复制的 Provider object 字节 | 元数据帧在 receipt 之后才提交（§9），所以**已提交的对象不会缺**；上传中的会失败并由调用方重试 |
+| 全集群从 `.hmbk` 恢复 | 备份 applied index 之后的一切 |
+| Replica 全部不可达期间 | §6.3.1 的写返回 503（拒绝，不是丢）；§6.3.2 的写继续且本地持久 |
 
-0. 补齐 Provider 幂等键，或按 Provider 限定 §5 不变量 2 的措辞（见该处的前置缺口）。
-1. 冻结 mutation、term/index、commit/apply 和状态分类 ADR。
-2. 保持 Standalone 部署契约与默认配置不变。
-3. 让权威 mutation 可确定性重放并完成 crash-point 测试。
-   （账务写入路径的并发结构已由 [ADR 0018](../adr/0018-project-admission-and-the-accounting-write-path.md) 定型，
-   预留何时变持久相对于准入决策的时序已经冻结，不会在 Phase 0 之后再变。）
-4. 定义内部认证协议、版本协商和 cluster identity。
+---
 
-### Phase 1：固定成员复制
+## 17. 发布门禁
 
-1. 实现三节点固定成员复制日志。
-2. 实现多数派 durable commit。
-3. 实现全量 snapshot、增量追赶和冲突 suffix 恢复。
-4. 实现对象 prepare/receipt/manifest 协议。
-5. 完成状态根一致性和故障注入测试。
+不得只靠单元测试宣称完成。每条带**可观测的 oracle**：
 
-这一阶段没有安全自动选举时，只能称为 replicated warm standby。人工提升必须
-完成外部 fencing；如果尚未实现多数派提交，必须明确可能的数据丢失，不能
-宣称零 RPO。
+| 门禁 | oracle | 单机可做？ |
+|---|---|---|
+| Primary 在 append / fsync / ordering fsync / 发送 / 收 ACK / 推进 confirmed / 响应 各点崩溃；Replica 在收到 / 落盘 / fsync / ACK / apply 各点崩溃 | 重开后各追加文件帧级前缀关系成立；`confirmed` 单调 | 是：kill-point 钩子 + `WrapDurability`（需为 Audit/Governance/bbolt/journal 新增注入缝）+ 进程内双 Runtime + 可控传输（需新建） |
+| Reservation / Attempt / Provider 接收 / 首 token / Settlement 各点 Primary 崩溃后提升 | 新 Primary 的账 = 保守结算规则；无重复 Provider 调用（httptest 上游计数） | 是：Attempt 路径需新增 step 钩子 |
+| **已确认的 mutation 不丢** | **客户端确认历史记录器**：测试客户端记录每个 200 响应对应的 request_id，提升后逐一在新 Primary 查到终态 | 是（需新建记录器） |
+| **至多一个进程确认权威写** | 双 Runtime 分区 + promote，任何时刻 `confirmed` 只在一个 term 内推进；§8.2 表每一行都有用例 | 是 |
+| 提升到落后节点被拒绝（含 `(term, index)` 字典序反例：位置更大但 term 更旧的旧分叉节点必须被拒）；旧 Primary 回归被降级、后缀截断、投影重建 | 截断后重开：`reconcileLedgerChainCheckpoint`、`reconcileAuditCheckpoint`、`restoreGovernanceState`、`RecoverDeploymentPricePins` 全部通过；`halro doctor` / `ledger verify` / `audit verify` 与 Standalone 相同 | 是 |
+| 吊销类写在切换后不复活 | 撤销一个 Gateway Key → 杀 Primary → 提升 → 该 Key 仍被拒 | 是 |
+| 对象：临时写、rename、目录 fsync、receipt、元数据帧各点故障；缺对象节点不推进 applied | 无占位文件；applied 停在引用帧之前 | 是 |
+| 磁盘满、只读、慢盘、帧损坏、MAC 不匹配、密钥挑战失败、SPKI 不匹配 | fail closed 且原因可见 | 部分：真实 ENOSPC/慢盘需目标环境 |
+| Replica `--replica` 备份 + 启动追赶，与 Primary 持续写、Roll 并发 | 备份前后 Replica 各权威文件的明文帧与 Primary 同偏移前缀相同；`audit verify` 记录数不变；隔离环境完整恢复为新 incarnation | 恢复演练是人工 |
+| 播种中断不改变现有目录，重试幂等；staging 权限 | — | 是 |
+| Pod 删除、SIGTERM、SSE drain、PDB、节点故障、维护哨兵 | — | 否：需 kind 集群 |
+| 相邻版本混合：§15 每一步；boundary 之前的 Replica 拒绝其后帧 | — | 需第二个二进制的 `tests/` harness |
+| 单 PVC 丢失 re-seed；全部 PVC 丢失后新 incarnation 恢复；旧节点被拒 | — | 否：需 kind |
+| §16.3 的吞吐与延迟 | 同主机 Standalone vs 3 节点对照 | Linux 参考机 |
 
-### Phase 2：人工 HA 与在线备份
+不变量 7（index↔字节分叉检测）、10（manifest 跨存储一致，靠 `per_store_head`）、13（复制层不泄露：
+复制连接上的字节做 secret canary 扫描）各需要新建观测手段，列入 Phase 1。
 
-1. 实现 term/commit 验证和安全人工 promote。
-2. 实现客户端代理或经过证明的 Primary Service 路由。
-3. 实现 Replica 进程内 snapshot barrier 和在线备份。
-4. 实现 re-seed、灾备恢复和新 cluster incarnation。
-5. 完成 Key generation 两阶段轮换。
+---
 
-### Phase 3：自动故障切换
+## 18. 实施阶段
 
-1. 实现持久化投票、日志新鲜度和多数派选举。
-2. 实现具有量化时钟/暂停边界的 write lease 和旧 Primary 内部 fencing。
-3. 完成网络分区、进程暂停、Provider 幂等和 `provider_unknown_outcome` 门禁。
-4. 达到并发布经过验证的 RPO/RTO。
+### Phase 0a：metadata journal（独立的 Standalone 变更）
 
-## 20.1 1.1.0 的范围决定点
+1. `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务；
+2. 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2），ADR 0012 前提与测试迁移；
+3. journal 帧格式、MAC 域、epoch 规则（§6.1.4）、保留/裁剪、Standalone 崩溃恢复矩阵新增行；
+   schema bump，**要求重新初始化**；
+4. `doctor` / `backup create|verify|restore` / `config check` 认识 `metadata.journal`；journal↔bbolt
+   分歧诊断；
+5. 端到端基线基准（§16.3 分母）。
 
-Phase 1 结束时必须做一次显式决定，而不是默认走完 Phase 3。
+### Phase 0b：复制格式（[#106](https://github.com/akz142857/Halro/issues/106)）
 
-Phase 1 自己的注写着：没有安全自动选举时，那个阶段"只能称为 replicated warm
-standby"。对 1.1.0 来说，**带明确 RPO 的 warm standby 有可能就是终点**：
+进入条件：§1.3 全部满足。
 
-- Phase 2–3 是自研 Raft + 对象复制 + 在线备份 + 写租约 fencing，
-  §19 的门禁本身就是数月量级的验证工程；
-- 绝大多数自托管 LLM 网关部署会接受一个文档化的 RPO，换取现在就能拿到的可用性；
-- 而"人工提升 + 外部 fencing"的运维复杂度，远低于"自动故障切换但边界未经证明"。
+1. 复制帧、ordering journal、`cluster/state.json`（含 MAC）的格式 ADR；term / promised_term /
+   incarnation / index 语义；`leadership_established`；
+2. 握手协议：mTLS + SPKI pin + Master Key 挑战-响应 + 版本范围声明；
+3. 投影回退路径 A′/A 二选一（§11.2）；
+4. #12 的调用方幂等契约（Chat/Embeddings），记录落 A 类 bucket；
+5. `config check` 对 `replication` 块的校验（2 节点 warning）；无块时零变化用测试钉死；
+6. 格式 ADR 明确取代 §20 列出的条款。
 
-判据(在 1.0.0 的生产数据里找)：真实发生过几次需要故障切换的事件、
-每次的人工响应时间是多少、以及那段时间的业务损失是否大于 Phase 2–3 的工程成本与
-新增的失败模式。这三个数字拿不到之前，不要开始 Phase 2。
+### Phase 1：复制流与 Replica（[#107](https://github.com/akz142857/Halro/issues/107)）
 
-## 21. 最终边界
+1. Primary 侧：提交路径内的 index 分配、ordering journal、批次发送、ACK 聚合、`confirmed_index`、
+   `ReplicationUnavailable` 状态、§6.3.1/§6.3.2 的两类写；
+2. Replica 侧：顺序落盘、校验、ACK、异步批量 apply（bbolt 上限 confirmed）、apply 自报、禁用清单；
+   第三种 bbolt 打开模式（§15）；
+3. 结构事件（整条 `Segment`）、Roll 只在 confirmed 后；
+4. 播种（含审批、staging）、追赶、`member_requires_full_reseed`、对象通道（§9）；
+5. §17 前六项门禁 + 可控传输 + 新增注入缝 + 客户端确认历史记录器。
 
-Halro HA 是多个独立 Halro 进程；Kubernetes 中是多个 Pod、每 Pod
-一个进程和一个独立 PVC。整体采用 Redis 风格的 Primary/Replica 运维模型，
-但权威费用和安全状态使用多数派提交、term/lease fencing 和确定性回放。
+### Phase 2：提升、备份与部署（[#108](https://github.com/akz142857/Halro/issues/108)）
 
-Standalone 继续保持单二进制、本地文件和无必需外部依赖。S3、KMS 和外部
-数据库只能是可选增强，不能成为基础 HA 的前置条件。
+1. §8.2 启动裁决（8 行）、§8.3 prepare/promise 提升、`promote --self`、§8.4 运行期退位、§8.5
+   `stepdown`、§8.6 Replica Admin 鉴权、§8.7 矩阵与 Audit 事件 schema、`cluster status` 规定字段；
+2. §12 `backup create --replica`、`report-backup`、归档清单与 manifest、restore 的 epoch 规则、
+   `leave`、维护哨兵；
+3. §13 StatefulSet 清单与客户端路由三选一；§15 升级顺序与 `schema_boundary` 事务；
+4. §16 指标、告警规则与 runbook、deadman 目标、锚点字段；§17 其余门禁；发布目标表；
+5. 集群 CA 轮换 runbook；`threat-model.md` 修订（§14.1）。
+
+**Phase 2 完成即交付。**
+
+### 需要顺手修的
+
+#105–#109 正文的设计链接指向 `docs/todo/heimdall-ha-architecture.zh-CN.md`（项目改名后失效），
+正文里的 "Heimdall" 同样要改；#105 的"1.0.0 ships first"段落与 §1.3 冲突，需重写为证据条件；
+#107 正文里的 Raft Figure 8、当前任期提交限制等条目属于 §19，移到 #109；#108 标题里的
+"online backup" 不再是目标。
+
+---
+
+## 19. 自动故障切换：一个未决的问题
+
+**当前设计是人工提升。** 这一条是从 2026-08 的初版继承下来的，理由是：安全的自动选举需要写租约，
+而租约需要量化的时钟漂移界与进程暂停界，那套验证是数月工程。
+
+**但这个理由在本文的提交规则下可能已经不成立，这个问题必须在 Phase 2 之前回答。**
+
+推理：租约要买的唯一东西是"至多一个节点有资格发起新的 Provider 调用"。而 §6.3.1 已经要求
+`ReservationCreated` 与 `AttemptStarted` 达到 confirmed 才能进 Provider I/O，所以**一个被隔离的旧
+Primary 拿不到任何 ACK ⇒ confirmed 不推进 ⇒ 它根本走不到 Provider I/O**。三节点下的分区：
+
+| 分区 | 旧 Primary P | 另一侧 |
+|---|---|---|
+| `{P, R1} \| {R2}` | P+R1 = 多数派，可以继续确认 | R2 孤立，拿不到 promise，提升不了 |
+| `{P} \| {R1, R2}` | P 孤立，确认不了，走不到 Provider | R1 拿 R2 的 promise = 多数派，安全提升 |
+
+两边不可能同时确认——这不是新性质，是 `required_acks=1` 在三节点里本来就等于多数派。
+
+**租约还能多买一样**：已经确认过 reservation、然后进程被暂停、醒来直接调 Provider 的那个残余，租约
+会因过期而拦住。但这个残余在**人工切换里同样存在**（§7 已公开），所以它不是"手动 vs 自动"的差别。
+
+若上述推理成立，自动切换需要的只有三样：失败检测器 + 迟滞（防抖，不是正确性机制）；promise 要求
+显式写成**多数派**（三节点下恰好等价于现在的"≥1"，但五节点就错）；把 `promote` 自动调一次。
+
+**开工前必须先证伪这四条**：
+1. 三节点分区表是否穷尽（非对称分区、级联分区、成员数 ≠ 3）；
+2. "隔离的 Primary 走不到 Provider I/O"在**已经在飞**的请求上覆盖多少；
+3. 提升的抖动代价（会话作废、在飞 Attempt 保守结算、客户端断连）会不会让自动切换在实践中比人工更糟；
+4. 自动化拿不到 `--old-primary-fenced-by` 断言，在"旧 Primary 还活着但只是网络慢"的场景下会发生什么。
+
+扛住了就把它作为 `failover: manual | automatic` 的可选开关（默认 manual）放进 Phase 2.5；扛不住，
+人工的结论是对的，但理由要重写成真的那个。
+
+**失败检测放在哪个失败域**是同一个问题的另一半。仓库已有 `halro-deadman`——独立部署、刻意在 Halro
+失败域之外。倾向把判定做在它里面，不往 Halro 二进制里塞选举。诚实的边界：deadman 今天只有
+`http.MethodGet` 探测加一个 POST 事件（`internal/deadman/http.go:106,124`、`anchor.go:153`），
+`Checker` 签名无动作位，无 Halro Admin 凭证，单实例、无 peer、无仲裁。所以这**不是**更便宜的选择，
+而是一份尚未启动的独立设计：它要长出仲裁、要持有能调用 `promote` 的凭据、要变成多实例——每一条都
+把它推向它今天刻意不是的那个东西。
+
+---
+
+## 20. 取代的既有契约
+
+pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文与以下已 Accepted 的文本冲突，Phase 0b 的格式
+ADR 必须写明 `Supersedes`：
+
+| 文档 | 被取代的部分 | 本文的替代 |
+|---|---|---|
+| ADR 0004 | *Phase 0 constraints*（versioned mutation、ownership epoch、replay 契约）；*Consequences* 第 2–4 条 | 物理复制；term/promised_term；无语义 mutation。ADR 0004 状态改为 Superseded-in-part；三种模式的命名保留 |
+| ADR 0004 | "an old leader must be unable to commit mutations or start new Provider calls after a higher ownership epoch exists" | 前半句由 promise 保证（不变量 1）；后半句是运维断言 + `recovered_started_unknown_result`（不变量 2）——**这是实质偏离，本文承认它** |
+| distributed-state-ownership.md | Invariants 1（ownership epoch 按 Project）、3（stale ownership token）、5（replaying canonical mutations） | term 是集群级不是 Project 级；promise 替代 token；帧级前缀替代回放等价 |
+| ADR 0001 | "bbolt stores transactional metadata" | "bbolt is a projection of the metadata journal plus node-local derived keys" |
+| threat-model.md | §14.1 表列的条目 | §14.1 |
+
+**Standalone 的最终边界不变**：单二进制、本地文件、无必需外部依赖。S3、KMS、外部数据库只能是可选
+增强，不能成为 HA 的前置条件。
+
+---
+
+## 附录 A：这份设计的由来
+
+2026-08-16 的初版是"三节点自研 Raft + 语义 mutation 日志 + 写租约 + Replica 进程内在线备份"。
+2026-09-19–20 期间它经过两轮多角色评审（第一轮 5 个发现型 + 6 个证伪型角色，第二轮与一份"单流
+异步复制"并列方案做 6 角色取舍），最终形态是本文。三处结构性改变：
+
+1. **物理复制替代语义复制。** Replica 不重跑业务逻辑，因此不需要确定性回放、不需要冻结一套语义
+   mutation schema。
+2. **同步等待从"每条账务事件"收缩到"Provider I/O 前的两个事件 + 吊销类写"。** 这是本文与初版在
+   成本上的主要差别，也是 `degrade` 一类降级模式失去存在理由的原因。
+3. **上游幂等键从安全论证中移除。** 它在代码里不存在，不该出现在论证里。
+
+被否决的"单流异步 + 账本空白记录"方案的失败原因值得记在这里，因为它们是本文若干选择的反面论据：
+bbolt `NoSync` 崩溃后没有可补齐的起点（bbolt 上游注释写明 `THIS IS UNSAFE`）；一条"这里有个洞"的
+账务记录按现有 Ledger schema **写不出来**（`Validate` 无条件要求 `ProjectID`，而能说出受影响
+Project 的正是丢掉的那些字节）；"分叉恢复 ≡ 崩溃恢复"经实测证伪。
+
+评审的方法记录：**一份新方案不会因为更短或设计取向更有吸引力，而继承前一份方案的评审成果。**
+并列方案必须各自过同一道门。
+
+---
+
+## 附录 B：核实过的事实索引
+
+本文的论证依赖这些事实。它们在 2026-09-19/20 于基线 `e59da1c4` 核实过，其中标「实测」的是运行
+代码或真实二进制得到的。**任何一条在实施时都应重新验证，而不是引用本表。**
+
+| # | 事实 | 证据 |
+|---|---|---|
+| 1 | `Log.Append` 等 `writeFull` + `Sync()` 都成功才返回；`strict`/`balanced` 只差合批 | `internal/ledger/log.go:558-562,880-898`；`internal/config/default.yaml:104-105` |
+| 2 | Halro 不向任何 Provider 发送幂等键 | `internal/provider/` 无 `Idempotency-Key`（grep） |
+| 3 | `halro.db` = 40 bucket + 23 meta key（`store.go:59-121`），另 2 个在别处 | `store.go:59-121`；`pricing_migration.go:19`；`operational_counters.go:11` |
+| 4 | `store/bolt` 写事务 94 `db.Update` + 1 `db.Batch`，包外无调用 | grep；`store.go:1380` |
+| 5 | bbolt 无 pre-commit 钩子（只有 `Tx.OnCommit`）；`Begin/Commit` 公开可用 | bbolt v1.5.0 `tx.go:163`、`db.go:767,905` |
+| 6 | **实测**：自建合并层原型 16 并发 + 4 失败回调，bbolt 与 journal 各 12 key、2 帧、`applied == seq` | 会话内原型 |
+| 7 | **实测**：bbolt 一次 commit = 2 次 fdatasync；加 journal 为 3 次；单写者 106.7 → 73.2 tx/s（darwin） | bbolt `tx.go:566,613`；原型基准 |
+| 8 | **实测**：每 Attempt 2 次 bbolt 写（price pin），真实屏障 9 次（5 Ledger fsync + 4 bbolt fdatasync）；Audit/Governance **不在** Attempt 路径 | `internal/gateway/service.go:599,693`；grep |
+| 9 | **实测**：同主机 darwin pin 路径 473 attempts/s vs Ledger 1049 lifecycles/s | `BenchmarkDeploymentPricePinCeiling` / `BenchmarkRequestLifecycle` |
+| 10 | Linux/NVMe 基线 7051 lifecycles/s（64 在飞，**不含 bbolt 写**），raw append 116k events/s | `docs/verification/standalone-capacity-baseline.md:99-122` |
+| 11 | 10 GiB WAL 冷启动 68.578 s（近 1 MiB 帧 profile，opt-in 测试） | `docs/verification/performance-baseline.md:79` |
+| 12 | **实测**：截断点跨过一次 Roll 时 Ledger 拒绝打开：`ledger is corrupt: generation 1 is 744 bytes, manifest says 1488`，状态 `AccountingRecoveryRequired` | 会话内复现 |
+| 13 | 5 处 checkpoint "cannot move backwards" 单向门 | `store_audit.go:411`；`store_outcomes.go:222,315`；`store_usage.go:93`；`store_settings.go:206` |
+| 14 | 启动 reconcile 门 | `internal/app/runtime.go:1615`（audit）、`:1647`（ledger chain） |
+| 15 | **实测**：`backup create` 向被备份目录追加 2 条 Audit 帧、bbolt txid +3，`ledger.wal` 不动 | `internal/app/backup.go:101,116,815`；真实二进制对 `halro init` 新目录 |
+| 16 | Ledger `Validate` 无条件要求 `ProjectID` + `PeriodID` | `internal/ledger/event.go:147-152` |
+| 17 | Credential/Provider/Deployment/Route 无 `ProjectID`；`ResolveCandidatesFor` 不接受 Project 参数 | `internal/provider/provider.go:733` |
+| 18 | `ledger verify` / `usage verify` / `doctor` 对 Ledger 尾部空白全部 pass；`ledger seal` 假定连续 | `internal/app/ledger_verify.go:107-114`；`internal/ledger/seal.go:193` |
+| 19 | ADR 0013 的 `CostAdjusted` 已于 `8868e85` 整体撤除 | git |
+| 20 | **实测**：bbolt `NoSync` 下 `db.Sync()` 检查点（txid 2）在 200 事务后被覆盖（meta 页 201/202）；上游注释 `THIS IS UNSAFE` | bbolt v1.5.0 `db.go:44-55`；会话内复现 |
+| 21 | **实测**：Replica apply 链 帧校验 189k/s、`State.Apply` 602k/s、Usage 聚合 4.2M/s（darwin） | `-overlay` 注入基准 |
+| 22 | `boltstore.Open` 每次打开跑迁移（38 条，7 处 `rewriteBucket`）；`OpenReadOnly` 精确相等门 | `store.go:1493,1526-1542,1805-1833` |
+| 23 | Ledger 打开态不可截断 | `internal/ledger/log.go:665` |
+| 24 | Admin 会话刷新至多每会话每分钟一次 | `internal/adminauth/session.go:118-128` |
+| 25 | **实测**：TOTP 节点本地水位把跨节点重放限在 ±1 步（+35 s 接受、+65 s 拒绝） | `internal/adminauth/totp.go`；会话内测试 |
+| 26 | Master Key 轮换 bridge 写在离线快照副本、整文件 rename 发布、两次 compaction 抹残留 | `internal/app/key_rotation.go`；`vault_material.go:113-125` |
+| 27 | deadman 只有 GET 探测 + 一个 POST 事件，无 Admin 凭证，单实例无仲裁 | `internal/deadman/http.go:106,124`；`anchor.go:153`；`cmd/halro-deadman/main.go` |
+| 28 | 现有 K8s 清单是 Deployment / `replicas: 1` / `Recreate`，无 NetworkPolicy 对象 | `deploy/kubernetes/halro-aws-kms.yaml:9,14,16` |
+| 29 | 观测门禁要求 runbook 链接指向 `/docs/` 下真实文件的 `### <AlertName>` 小节 | `deploy/observability/runbook_links_test.go:13-63` |
+| 30 | Ledger 帧 epoch 4/5 带 MAC 与哈希链；`usage.wal_max_batch` 默认 128、`wal_flush_interval` 2 ms | `internal/ledger/log.go:30-42,97-99`；`internal/config/config.go:249-250` |

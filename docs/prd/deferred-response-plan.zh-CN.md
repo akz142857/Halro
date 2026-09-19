@@ -271,7 +271,7 @@ provider / deployment / profile / region 写进记录（`ProviderResource` 上�
 ledger。
 
 **必须避开的反例。** 不要照抄 `GetBatch` 对轮询走全套账务的做法（2.3 节）。业务方每 2 秒轮一次，
-一小时就是 1800 组 WAL 帧，全是噪音，而且直接加速 `docs/todo/data-retention-plan.zh-CN.md` 描述
+一小时就是 1800 组 WAL 帧，全是噪音，而且直接加速 `docs/prd/data-retention-plan.zh-CN.md` 描述
 的那两条增长曲线。
 
 ### D5：RPM 在提交时扣，TPM 与并发在出队时扣
@@ -488,7 +488,7 @@ S1 与 S2 是独立的前置改动，可以先合入而不依赖本方案其余�
    分布需要用真实数据校准。
 4. **用量页与审计如何呈现。** 一次 background 请求在 ledger 里与同步请求无异，但它的墙钟时长包含
    排队时间。用量页要不要区分排队与执行，需要与
-   `docs/todo/request-failure-diagnostics-plan.zh-CN.md` 的口径统一。
+   `docs/prd/request-failure-diagnostics-plan.zh-CN.md` 的口径统一。
 5. **是否顺带修正 `GetBatch` 的轮询账务。** 2.3 节指出的问题在 batch 上是既有行为。它是否算 bug、
    要不要在本方案内一并修，需要单独判断——改动会影响既有的用量读数。
 

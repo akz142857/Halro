@@ -182,7 +182,7 @@ ERROR。
 
 > **2026-09-02 订正**：本节说「可见窗口等于 Aggregate 保留窗口」，当时的隐含前提是 Aggregate
 > 有一个保留窗口。它没有——`attempts` 与 `summaries` 只 append、从不裁剪，可见窗口实际上是无限的，
-> 而 `usage.retention_days` 只管 Parquet。窗口是 `docs/todo/data-retention-plan.zh-CN.md` 加上去的
+> 而 `usage.retention_days` 只管 Parquet。窗口是 `docs/prd/data-retention-plan.zh-CN.md` 加上去的
 > （`usage.console_window_days`）。下面这段在那之后才成立。
 
 **但要限定「历史」有多长。** `RequestSummary` 今天只存在于内存 Aggregate（`internal/usage/aggregate.go`）
