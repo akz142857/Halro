@@ -1,0 +1,81 @@
+halro for Debian
+================
+
+Installing this package does not initialize configuration and does not start a
+service. Nothing below happens on its own.
+
+What the package placed
+-----------------------
+
+  /usr/bin/halro                        the gateway binary
+  /usr/share/halro/config.example.yaml  an example configuration, not active
+  /usr/lib/systemd/system/halro.service a unit, installed but not enabled
+  /var/lib/halro                        the data directory, mode 0700,
+                                        owned by the system user `halro`
+
+The system user and group `halro` were created without a password and without a
+login shell. The unit runs as that user and reads /etc/halro/config.yaml, which
+this package deliberately does not create: a configuration that appeared by
+itself would be one nobody reviewed.
+
+First run
+---------
+
+  sudo install -d -m 0700 -o halro -g halro /etc/halro
+  sudo install -m 0600 -o halro -g halro \
+    /usr/share/halro/config.example.yaml /etc/halro/config.yaml
+
+Now edit /etc/halro/config.yaml. Two of its values have to change before the
+unit can work, because the example is written for running Halro from a
+directory of your own rather than under systemd:
+
+  storage.data_dir           ./data        ->  /var/lib/halro/data
+  storage.master_key.file    ./master.key  ->  /var/lib/halro/master.key
+
+The unit runs with ProtectSystem=strict and ReadWritePaths=/var/lib/halro, so a
+relative path resolves somewhere the service cannot write and the start fails.
+
+The data directory is a *subdirectory* of /var/lib/halro on purpose. Halro takes
+an exclusive lock beside its data directory, in the parent — one process, one
+data directory, enforced by the filesystem. Setting data_dir to /var/lib/halro
+itself puts that lock in /var/lib, which the halro user cannot write, and `halro
+init` stops with:
+
+  open publication lock: open /var/lib/.halro-publication-....lock: permission denied
+
+The example's three listeners are on loopback; that is a decision to review, not
+a default to accept without reading.
+
+  sudo -u halro halro config check --config /etc/halro/config.yaml
+  sudo -u halro halro init --config /etc/halro/config.yaml
+  sudo systemctl enable --now halro
+
+`halro init` creates the master key. It is not recoverable if it is lost, and a
+backup of it belongs somewhere other than the data directory it protects. See
+the backup and restore guide before putting real traffic through the instance.
+
+The Admin Console
+-----------------
+
+`halro start` prints a one-time Admin setup token on stdout. Under systemd that
+stdout is the journal, where the token persists and is readable by anyone who
+can read the journal. Prefer configuring `admin.setup_token_file` before
+enabling the unit, or complete the offline `halro admin bootstrap` flow, rather
+than harvesting the token from `journalctl -u halro`.
+
+An instance that is reachable beyond loopback, has no administrator yet, and has
+no setup-token file refuses to serve. That refusal is the fail-closed outcome,
+not a fault.
+
+The dead-man watchdog
+---------------------
+
+`halro-deadman` is a separate package, deployed outside Halro's own failure
+domain — ideally on a different host. Installing it beside the gateway defeats
+its purpose.
+
+Documentation
+-------------
+
+  https://halro.ai/docs/guides/quickstart-install/
+  https://halro.ai/docs/

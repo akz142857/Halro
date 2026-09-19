@@ -122,6 +122,10 @@ install_common_docs() {
 halro_root="$work/pkg-halro"
 install_file 0755 "$archive_root/halro" "$halro_root/usr/bin/halro"
 install_file 0644 "$repo_root/configs/config.example.yaml" "$halro_root/usr/share/halro/config.example.yaml"
+# The package ships the materials for a first run; without this it shipped no
+# way to find out that it had. Debian's convention for packaging-specific
+# getting-started notes is README.Debian, not a chatty postinst.
+install_file 0644 "$repo_root/packaging/debian/halro.README.Debian" "$halro_root/usr/share/doc/halro/README.Debian"
 install_file 0644 "$repo_root/packaging/debian/halro.service" "$halro_root/usr/lib/systemd/system/halro.service"
 install_file 0755 "$repo_root/packaging/debian/halro.postinst" "$halro_root/DEBIAN/postinst"
 install_file 0755 "$repo_root/packaging/debian/package.postrm" "$halro_root/DEBIAN/postrm"
