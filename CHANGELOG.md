@@ -8,6 +8,19 @@ semantic versioning.
 
 ### Changed
 
+- A Homebrew install now ships the gateway's own example configuration and says
+  what to do with it. `halro.config.example.yaml` was in every release archive
+  but not in the formula's install list, so `brew install` produced a binary
+  whose `halro init` refused with "open config: no such file or directory" and
+  no file to copy. The caveats now carry the first-run commands, the fact that
+  the example keeps its data directory and master key relative to the working
+  directory, and where the one-time Admin setup token appears.
+- The Debian package explains itself in `README.Debian`. It already shipped the
+  example configuration, the systemd unit and a locked-down `halro` user, and
+  said none of it: the unit is installed but not enabled, `/etc/halro/config.yaml`
+  is deliberately not created, and the example's relative `data_dir` has to
+  become `/var/lib/halro/data` — a subdirectory, because the exclusive lock is
+  taken in the parent — before the unit can start under `ProtectSystem=strict`.
 - `tools/release/prepare_release.py` moves the mechanical half of a release
   preparation: the `## [Unreleased]` entries into a dated section with its
   compare link, the README image tags, the `web/` package version and lock, and
