@@ -159,7 +159,7 @@ jobs:
       - name: Audit compatibility SDK dependencies
         run: |
           python -m pip_audit --requirement tests/compatibility/python/requirements.txt --no-deps
-          npm audit --audit-level=moderate --prefix tests/compatibility/node
+          ./scripts/npm-audit-gate.sh tests/compatibility/node moderate --require-endpoint
           go -C tests/compatibility/go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Run official SDK black-box contracts
         shell: bash
@@ -210,8 +210,8 @@ jobs:
         working-directory: web
       - run: npm test
         working-directory: web
-      - run: npm audit --audit-level=moderate
-        working-directory: web
+      # A release must not publish on "the gate did not run"; see the script's header.
+      - run: ./scripts/npm-audit-gate.sh web moderate --require-endpoint
       - run: npm run typecheck
         working-directory: web
       - run: npm run build

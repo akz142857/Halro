@@ -49,8 +49,8 @@ jobs:
         working-directory: web
       - run: npm test
         working-directory: web
-      - run: npm audit --audit-level=moderate
-        working-directory: web
+      # Separated from the registry's availability; see the script's header.
+      - run: ./scripts/npm-audit-gate.sh web moderate
       - run: npm run typecheck
         working-directory: web
       - run: npm run build
@@ -75,6 +75,7 @@ jobs:
           sh -n packaging/debian/halro.postinst
           sh -n packaging/debian/halro-deadman.postinst
           sh -n packaging/debian/package.postrm
+          sh -n scripts/npm-audit-gate.sh
           sh -n tools/m11/aws-sdk-spike/run.sh
           sh -n tools/m11/aws-kms-smoke/run.sh
           sh -n tools/m11/aws-kms-dual-slot-smoke/run.sh
@@ -362,7 +363,7 @@ jobs:
       - name: Audit compatibility SDK dependencies
         run: |
           python -m pip_audit --requirement tests/compatibility/python/requirements.txt --no-deps
-          npm audit --audit-level=moderate --prefix tests/compatibility/node
+          ./scripts/npm-audit-gate.sh tests/compatibility/node moderate
           go -C tests/compatibility/go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Run official SDK black-box contracts
         shell: bash
