@@ -486,6 +486,7 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
    seen against — are detail under the answer, not the answer, so they take the
    same muted small type the rest of the console gives that role. Scoped to the
    panel: a bare class here would be a fourth near-identical global. */
+.route-suspensions-panel { margin-bottom: var(--space-6); }
 .route-suspensions-panel .suspension-detail {
   display: block; margin-top: var(--space-1);
   color: var(--muted); font-size: var(--font-size-xs); white-space: normal;

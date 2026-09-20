@@ -1379,7 +1379,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     // to this upstream" — rather than naming what the gate did internally.
     suspensions: {
       title: "Currently refused by the upstream",
-      description: "The upstream refused these, so the gateway is not sending requests to them for now. Each row says why, and what ends it.",
+      description: "The gateway does not send requests to anything the upstream has refused. Each row says why, and what ends it.",
       subject: "Subject",
       cause: "What the upstream said",
       recovery: "When it comes back",

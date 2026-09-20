@@ -99,6 +99,15 @@ export function RouteSuspensionsPanel({
       </div>
       <div className="table-shell usage-table-shell">
         <table>
+          {/* Without fixed widths four columns divide a wide viewport evenly,
+              and the two that carry a sentence get the same room as a
+              timestamp. The cause column is the one that runs long — a reason,
+              a status and an upstream code joined together — so it takes the
+              share the fixed-shape columns do not need. */}
+          <colgroup>
+            <col style={{ width: "26%" }} /><col style={{ width: "34%" }} />
+            <col style={{ width: "24%" }} /><col style={{ width: "16%" }} />
+          </colgroup>
           <thead>
             <tr>
               <th>{t("providers.suspensions.subject")}</th>

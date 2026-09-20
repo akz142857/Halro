@@ -1386,7 +1386,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     // 标题用前者的说法。
     suspensions: {
       title: "正在被上游拒绝",
-      description: "上游拒绝过下面这些对象，网关暂时不会把请求发给它们。每一行都写明原因和恢复条件。",
+      description: "被上游拒绝过的对象，网关暂时不会把请求发给它们。每一行写明原因和恢复条件。",
       subject: "对象",
       cause: "上游怎么说的",
       recovery: "什么时候恢复",
