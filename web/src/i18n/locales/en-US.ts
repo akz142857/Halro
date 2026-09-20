@@ -1384,9 +1384,12 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
       cause: "What the upstream said",
       recovery: "When it comes back",
       observed: "First seen",
-      empty: "Nothing is being refused right now.",
-      loading: "Reading…",
+      // With nothing refused the panel does not render, so there is no empty
+      // state to word. An unreadable gate is the other case and has to say so
+      // out loud, or a missing panel would read as an answer.
       unavailable: "Admission state could not be read. This is not the same as nothing being refused.",
+      tabMark_one: "{{count}} of these is being refused by the upstream",
+      tabMark_other: "{{count}} of these are being refused by the upstream",
       scopes: {
         credential: "Credential",
         credential_model: "Credential and model",

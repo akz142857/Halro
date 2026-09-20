@@ -73,11 +73,46 @@ function scopeSubject(
   }
 }
 
-// The panel renders in every state, including the two where it has nothing to
-// show. An absent panel and an empty one answer differently: "nothing is being
-// refused" is the answer an operator came for, and a read that failed must not
-// be able to impersonate it.
+// The panel is an exception list, so it renders only when there is an
+// exception: a band of em dashes above every tab on every visit is the page
+// telling an operator nothing, in the space where the connections are. What a
+// panel may not do is disappear because the read failed — an absent panel would
+// then read as "nothing is being refused", which is the one thing an unreadable
+// gate cannot promise. That state keeps a line of its own.
 export type SuspensionReadState = "loading" | "ready" | "unavailable";
+
+// Which tab carries a marker for a refusal. A credential-scoped refusal is the
+// credential vault's to answer, whichever connections it happens to back, and
+// the model half of a credential_model scope narrows the same credential. A
+// deployment-scoped one has no tab here at all — deployments are another page —
+// so it is counted nowhere and stays visible only in the panel itself.
+export function refusalCountsByTab(suspensions: RouteSuspension[]): {
+  providers: number;
+  credentials: number;
+} {
+  let providers = 0;
+  let credentials = 0;
+  for (const suspension of suspensions) {
+    if (suspension.scope_kind === "provider") providers += 1;
+    else if (suspension.scope_kind === "credential" || suspension.scope_kind === "credential_model") credentials += 1;
+  }
+  return { providers, credentials };
+}
+
+// The mark a tab wears while something under it is refused. The number beside
+// it is how many, not which — the panel above says which, and two numbers on
+// one tab need telling apart, so this one is the coloured one and carries its
+// own sentence for a reader who cannot see the colour.
+export function TabRefusalMark({ count }: { count: number }) {
+  const { t } = useTranslation();
+  if (count <= 0) return null;
+  return (
+    <span className="tab-refusal-mark">
+      ●{count}
+      <span className="visually-hidden">{t("providers.suspensions.tabMark", { count })}</span>
+    </span>
+  );
+}
 
 export function RouteSuspensionsPanel({
   suspensions, state, credentials, providers, deployments,
@@ -89,6 +124,13 @@ export function RouteSuspensionsPanel({
   deployments: Deployment[];
 }) {
   const { t } = useTranslation();
+  if (suspensions.length === 0) {
+    // Read and answered: there is nothing to show, so nothing is shown.
+    // Still reading: nothing yet either, and a table of dashes that turns into
+    // rows a moment later is worse than the rows arriving on their own.
+    if (state !== "unavailable") return null;
+    return <p className="notice warning route-suspensions-unavailable">{t("providers.suspensions.unavailable")}</p>;
+  }
   return (
     <section className="panel route-suspensions-panel" aria-labelledby="route-suspensions-heading">
       <div className="panel-header">
@@ -117,12 +159,6 @@ export function RouteSuspensionsPanel({
             </tr>
           </thead>
           <tbody>
-            {/* The row renders even with nothing in it. An absent table cannot
-                be told apart from a panel that failed to load, and "nothing is
-                being refused" is the answer an operator came here for. */}
-            {suspensions.length === 0 && (
-              <tr><td>—</td><td>—</td><td>—</td><td>—</td></tr>
-            )}
             {suspensions.map((suspension) => {
               const subject = scopeSubject(suspension, credentials, providers, deployments);
               const cause = [
@@ -166,15 +202,6 @@ export function RouteSuspensionsPanel({
           </tbody>
         </table>
       </div>
-      {suspensions.length === 0 && (
-        <p className="suspension-empty">
-          {state === "unavailable"
-            ? t("providers.suspensions.unavailable")
-            : state === "loading"
-              ? t("providers.suspensions.loading")
-              : t("providers.suspensions.empty")}
-        </p>
-      )}
     </section>
   );
 }

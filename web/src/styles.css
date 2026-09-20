@@ -491,10 +491,10 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
   display: block; margin-top: var(--space-1);
   color: var(--muted); font-size: var(--font-size-xs); white-space: normal;
 }
-.route-suspensions-panel .suspension-empty {
-  margin: 0; padding: var(--space-3) var(--space-5);
-  color: var(--muted); font-size: var(--font-size-xs);
-}
+/* The panel renders only while something is refused, so the one state that
+   still needs a line without a table is the gate that could not be read. It
+   keeps the panel's slot above the tabs, at the width of the page. */
+.route-suspensions-unavailable { margin: 0 0 var(--space-6); }
 .resource-meta { display: block; margin: 10px 0; color: var(--muted); font-size: var(--font-size-xs); }
 .detail-panel { --card-inset: 22px; min-width: 0; background: var(--surface-panel); border: 1px solid var(--line); }
 .detail-title h2 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 5px; }
@@ -562,6 +562,10 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .provider-tabs > button[aria-selected="true"]::after { background: var(--lime); }
 .provider-tabs > button:focus-visible { z-index: 1; outline: 2px solid var(--color-focus-ring); outline-offset: -3px; }
 .provider-tabs > button span { margin-left: 8px; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); }
+/* The second number a tab can carry. It sits in the same mono row as the item
+   count and must not be mistaken for it, which is what the colour and the dot
+   are for — the count is how many exist, this is how many are refused. */
+.provider-tabs > button span.tab-refusal-mark { color: var(--color-status-warning-text); font-weight: var(--font-weight-semibold); }
 .provider-resource-panel { overflow: visible; background: linear-gradient(180deg, var(--surface-overlay-solid), var(--surface-overlay-solid)); border-top-left-radius: 0; border-top-right-radius: 0; }
 .provider-resource-panel > .panel-header { align-items: flex-end; }
 .provider-resource-panel > .panel-header { padding: 22px 26px; }

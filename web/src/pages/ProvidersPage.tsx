@@ -55,7 +55,7 @@ const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
 
-import { RouteSuspensionsPanel } from "./RouteSuspensionsPanel";
+import { RouteSuspensionsPanel, TabRefusalMark, refusalCountsByTab } from "./RouteSuspensionsPanel";
 
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
@@ -308,6 +308,11 @@ export function ProvidersPage() {
   // so they wait for it; the listing below does not, and stays readable either
   // way.
   const catalog = useProviderProfiles();
+  // The panel only exists while something is refused, so the tabs carry the
+  // count that says a tab is worth opening — otherwise an operator reading the
+  // credential vault has no way to know the panel above it is about a row in
+  // front of them.
+  const refusalCounts = refusalCountsByTab(suspensions.data?.items ?? []);
   const pending = credentials.isPending || providers.isPending || deployments.isPending || egress.isPending || catalog.isPending;
   const credentialItems = credentials.data?.items ?? [];
   const providerItems = providers.data?.items ?? [];
@@ -404,8 +409,8 @@ export function ProvidersPage() {
       {!pending && (
         <div className="provider-tabs-shell">
           <div className="provider-tabs" role="tablist" aria-label={t("providers.resourceViews")}>
-            <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span></button>
-            <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span></button>
+            <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span><TabRefusalMark count={refusalCounts.providers} /></button>
+            <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span><TabRefusalMark count={refusalCounts.credentials} /></button>
             <button id="proxies-tab" role="tab" tabIndex={activeView === "proxies" ? 0 : -1} aria-selected={activeView === "proxies"} aria-controls="proxies-panel" onKeyDown={handleTabKey} onClick={() => selectView("proxies")}>{t("providers.egressProxies")} <span>{egress.data?.items.length ?? 0}</span></button>
           </div>
           {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">

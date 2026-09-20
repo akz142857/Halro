@@ -67,6 +67,18 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(await screen.findByRole("heading", { name: "正在被上游拒绝" })).toBeVisible();
     expect(screen.getByText("OpenAI production")).toBeVisible();
     expect(screen.getByText("需更换凭据")).toBeVisible();
+    // The panel is above the tabs and an operator opening the vault reads the
+    // rows, not the panel, so the tab says how many of them are refused.
+    expect(screen.getByRole("tab", { name: /凭据库 1.*●1/ })).toBeVisible();
+  });
+
+  // The panel is an exception list: with no exception it takes no space at the
+  // top of the page it shares with the connections themselves.
+  it("renders nothing about refusals while nothing is refused", async () => {
+    renderPage();
+    expect(await screen.findByRole("tab", { name: "服务商 0" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "正在被上游拒绝" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/正在被上游拒绝/)).not.toBeInTheDocument();
   });
 
   // A page whose connection list waits on an unrelated read has turned a
@@ -75,7 +87,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     vi.spyOn(api, "routeSuspensions").mockRejectedValue(new Error("unreachable"));
     renderPage();
     expect(await screen.findByRole("tab", { name: /凭据库/ })).toBeVisible();
-    expect(await screen.findByText("读不到准入状态，这一栏不代表没有被拒绝的对象。")).toBeVisible();
+    expect(await screen.findByText("读不到准入状态，这不等于没有被拒绝的对象。")).toBeVisible();
   });
 
   it("wraps keyboard focus around all resource tabs", async () => {

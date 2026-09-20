@@ -1391,9 +1391,11 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
       cause: "上游怎么说的",
       recovery: "什么时候恢复",
       observed: "发现时间",
-      empty: "当前没有被拒绝的对象。",
-      loading: "正在读取…",
-      unavailable: "读不到准入状态，这一栏不代表没有被拒绝的对象。",
+      // 没有被拒绝的对象时整块不出现，所以这里不再有「空」的说法；读不到准入
+      // 状态是另一回事，它必须自己说出来，否则一块消失的面板就成了「没事」。
+      unavailable: "读不到准入状态，这不等于没有被拒绝的对象。",
+      tabMark_one: "其中 {{count}} 个正在被上游拒绝",
+      tabMark_other: "其中 {{count}} 个正在被上游拒绝",
       scopes: {
         credential: "凭据",
         credential_model: "凭据与模型",

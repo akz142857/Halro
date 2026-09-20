@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import i18n from "../i18n";
 import type { Credential, Deployment, Provider, RouteSuspension } from "../types";
-import { RouteSuspensionsPanel } from "./RouteSuspensionsPanel";
+import { RouteSuspensionsPanel, TabRefusalMark, refusalCountsByTab } from "./RouteSuspensionsPanel";
 
 const credential = {
   id: "credential_openai", name: "OpenAI production", type: "openai",
@@ -108,18 +108,52 @@ describe("route suspensions panel", () => {
     expect(screen.getByText(/HTTP 401 · invalid_api_key/)).toBeVisible();
   });
 
-  // Rows render with nothing in them rather than the table being replaced.
-  it("keeps the table when nothing is suspended, and says so in one line", () => {
-    renderPanel([]);
-    const rows = within(screen.getByRole("table")).getAllByRole("row");
-    expect(rows).toHaveLength(2);
-    expect(screen.getByText(i18n.t("providers.suspensions.empty"))).toBeVisible();
+  // An exception list with no exception is not a table of em dashes above the
+  // page; it is nothing at all.
+  it("renders nothing at all while nothing is suspended", () => {
+    const { container } = renderPanel([]);
+    expect(container).toBeEmptyDOMElement();
   });
 
-  // A read that failed must not be able to look like an answer.
-  it("does not let an unreadable gate claim that nothing is refused", () => {
+  // The one state that still needs a line: an absent panel would otherwise be
+  // read as the answer the gate could not give.
+  it("does not let an unreadable gate disappear like an answer", () => {
     renderPanel([], "unavailable");
     expect(screen.getByText(i18n.t("providers.suspensions.unavailable"))).toBeVisible();
-    expect(screen.queryByText(i18n.t("providers.suspensions.empty"))).not.toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  // Still loading is not an answer either, but it is also not a warning: the
+  // rows arrive on their own a moment later.
+  it("shows nothing while the gate is still being read", () => {
+    const { container } = renderPanel([], "loading");
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("refusal counts per tab", () => {
+  // A credential backs several connections, and the model half of a
+  // credential_model scope narrows that same credential — both are the vault's
+  // to answer. A deployment has no tab on this page and is counted nowhere.
+  it("attributes each scope to the tab that can act on it", () => {
+    expect(refusalCountsByTab([
+      suspension(),
+      suspension({ scope_kind: "credential_model", scope_key: "credential_openai/gpt-4o" }),
+      suspension({ scope_kind: "provider", scope_key: "provider_main" }),
+      suspension({ scope_kind: "deployment", scope_key: "deployment_mini" }),
+    ])).toEqual({ providers: 1, credentials: 2 });
+  });
+});
+
+describe("tab refusal mark", () => {
+  it("says in words what the dot says in colour", () => {
+    render(<TabRefusalMark count={2} />);
+    expect(screen.getByText("●2", { exact: false })).toBeVisible();
+    expect(screen.getByText(i18n.t("providers.suspensions.tabMark", { count: 2 }))).toBeInTheDocument();
+  });
+
+  it("is absent rather than zero when nothing under the tab is refused", () => {
+    const { container } = render(<TabRefusalMark count={0} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
