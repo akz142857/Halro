@@ -6,7 +6,31 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `halro_provider_failure_reason_total{reason, provider_status}` counts upstream
+  refusals by the canonical reason Halro reached and the status it was looking at.
+  The interesting cell is not a recognised reason, which only appears once
+  something already classifies it; it is `{reason="unclassified",
+  provider_status="402"}` — a refusal Halro took no meaning from. Only Kimi Code's
+  402 has vendor-specific status semantics in the tree today, so for every other
+  upstream "out of quota" and "subscription lapsed" currently arrive with no
+  reason attached and nobody knows which status carries them. The five named
+  reasons are published at zero until they happen, because an absent series and a
+  series at zero read differently to an alert. The counter caps its own tracked
+  label set and reports what it dropped as
+  `halro_provider_failure_reason_dropped_total`.
+
 ### Changed
+
+- A route target now carries the credential it authenticates with and that
+  credential's revision. The scope of an upstream refusal is not always the
+  target — "out of quota", "subscription lapsed" and "this key is no longer
+  valid" are properties of the credential, and one credential commonly backs
+  several deployments. Nothing acts on this yet; it is what lets a later change
+  attribute such a refusal once instead of rediscovering it per deployment, and
+  the revision is what lets that knowledge go stale on its own when an operator
+  replaces the secret.
 
 - The default attempt budget reaches every target of a modest fallback chain.
   `gateway.max_total_attempts` moves from 3 to 4 and `retry.max_attempts_per_target`

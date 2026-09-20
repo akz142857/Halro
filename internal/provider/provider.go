@@ -478,16 +478,33 @@ const (
 )
 
 type Target struct {
-	ID                          string
-	DeploymentID                string
-	ProviderID                  string
-	BindingID                   string
-	PublicModel                 string
-	ProviderModel               string
-	AccessSurface               domain.AccessSurface
-	ProfileID                   domain.ProviderProfileID
-	OfferingID                  domain.ProviderOfferingID
-	AccountRegionID             domain.ProviderRegionID
+	ID              string
+	DeploymentID    string
+	ProviderID      string
+	BindingID       string
+	PublicModel     string
+	ProviderModel   string
+	AccessSurface   domain.AccessSurface
+	ProfileID       domain.ProviderProfileID
+	OfferingID      domain.ProviderOfferingID
+	AccountRegionID domain.ProviderRegionID
+	// CredentialID and CredentialRevision identify the secret this target
+	// authenticates with, and which version of it was in force when the registry
+	// was built.
+	//
+	// They are here because the scope of an upstream refusal is not always the
+	// target. "Out of quota", "subscription lapsed" and "this key is no longer
+	// valid" are properties of the credential, and one credential commonly backs
+	// several deployments — so a refusal learned from one of them is knowledge
+	// about all of them, and rediscovering it once per deployment is waste an
+	// operator sees as repeated upstream errors.
+	//
+	// The revision is what lets that knowledge expire on its own: an operator who
+	// replaces a dead key advances it, and anything remembered against the old
+	// revision is stale by construction rather than by a second step somebody has
+	// to remember to take.
+	CredentialID                string
+	CredentialRevision          uint64
 	Region                      string
 	Adapter                     Adapter
 	InputMicrosPerMillion       int64

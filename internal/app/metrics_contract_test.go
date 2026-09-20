@@ -29,6 +29,11 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		"provider_id": {}, "deployment_id": {}, "version": {}, "commit": {},
 		"operation": {}, "error_class": {}, "purpose": {}, "state": {}, "capability": {},
 		"target_kind": {},
+		// The upstream's HTTP status on a refusal. Unbounded by contract and
+		// bounded in practice: it is whatever an upstream answered, and the
+		// counter that carries it caps its own tracked label set and reports
+		// what it dropped rather than growing without limit.
+		"provider_status": {},
 		// Capability profile IDs are a fixed set compiled into the binary.
 		"profile": {},
 		// Constant for the life of a process; they identify the node's time
