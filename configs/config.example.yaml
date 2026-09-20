@@ -298,9 +298,14 @@ gateway:
   stream_max_duration: 10m
   # @title.zh-CN 最大总尝试次数
   # @title.en-US Maximum total attempts
-  # @description.zh-CN 一次请求跨路由目标允许的尝试总数。
-  # @description.en-US Total attempts allowed across route targets for one request.
-  max_total_attempts: 3
+  # @description.zh-CN 一次请求跨路由目标允许的尝试总数。能触及的候选数是
+  # @description.zh-CN ceil(max_total_attempts / retry.max_attempts_per_target)，
+  # @description.zh-CN 小于最长回退链时，最后一个目标配了也永远不会被调用。
+  # @description.en-US Total attempts allowed across route targets for one request. The number of
+  # @description.en-US candidates a request can reach is
+  # @description.en-US ceil(max_total_attempts / retry.max_attempts_per_target); set it below the
+  # @description.en-US longest fallback chain and the last target is configured and never called.
+  max_total_attempts: 4
   # @title.zh-CN 延迟取回工作线程数
   # @title.en-US Deferred response workers
   # @description.zh-CN 同时执行延迟提交的工作线程数,整个实例共用。队列上限是按项目的,
@@ -358,9 +363,12 @@ gateway:
 retry:
   # @title.zh-CN 单目标最大尝试次数
   # @title.en-US Maximum attempts per target
-  # @description.zh-CN 对同一上游目标允许的最大尝试次数。
-  # @description.en-US Maximum attempts allowed against one upstream target.
-  max_attempts_per_target: 2
+  # @description.zh-CN 对同一上游目标允许的最大尝试次数。默认 1：再问同一家只对瞬时抖动有用，
+  # @description.zh-CN 却花掉了下一家本可以用的名额。只配了单个目标的 alias 可以调高。
+  # @description.en-US Maximum attempts allowed against one upstream target. One by default: asking
+  # @description.en-US the same upstream again helps only a transient blip and spends an attempt the
+  # @description.en-US next provider could have had. Raise it for an alias with a single target.
+  max_attempts_per_target: 1
   # @title.zh-CN 重试基础延迟
   # @title.en-US Retry base delay
   # @description.zh-CN 计算退避时间使用的初始延迟。

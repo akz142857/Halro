@@ -165,7 +165,11 @@ gateway:
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s
   stream_max_duration: 10m0s
-  max_total_attempts: 3
+  # Shared by the whole request, across retries and fallbacks. The number of
+  # distinct candidates a request can reach is ceil(max_total_attempts /
+  # retry.max_attempts_per_target), so this has to be at least as large as the
+  # longest route fan-out or the last target is configured and never called.
+  max_total_attempts: 4
   # Shared by the whole instance, while the queue ceiling is per Project.
   # Dequeuing takes one submission from each Project in turn.
   deferred_response_workers: 4
@@ -208,7 +212,10 @@ gateway:
     retain: 24h
 
 retry:
-  max_attempts_per_target: 2
+  # One, not two: asking the same upstream again helps only a transient blip,
+  # and it spends an attempt the next provider could have had. Raise it for a
+  # single-target alias, which has nowhere to fall back to.
+  max_attempts_per_target: 1
   base_delay: 100ms
   max_delay: 2s
   jitter: true

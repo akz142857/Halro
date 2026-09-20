@@ -790,7 +790,7 @@ func (c *Config) Normalize() error {
 		}
 	}
 	if c.Retry.MaxAttemptsPerTarget == 0 {
-		c.Retry.MaxAttemptsPerTarget = 2
+		c.Retry.MaxAttemptsPerTarget = 1
 	}
 	if c.Retry.BaseDelay == 0 {
 		c.Retry.BaseDelay = Duration(100 * time.Millisecond)

@@ -83,7 +83,7 @@ func Default() Config {
 			AttemptResponseHeaderTimeout:  Duration(time.Minute),
 			DownstreamWriteTimeout:        Duration(15 * time.Second),
 			StreamMaxDuration:             Duration(10 * time.Minute),
-			MaxTotalAttempts:              3,
+			MaxTotalAttempts:              4,
 			DeferredResponseWorkers:       4,
 			HealthProbeInterval:           Duration(30 * time.Second),
 			PricingClockRollbackTolerance: Duration(DefaultPricingClockRollbackTolerance),
@@ -111,7 +111,7 @@ func Default() Config {
 			},
 		},
 		Retry: Retry{
-			MaxAttemptsPerTarget: 2,
+			MaxAttemptsPerTarget: 1,
 			BaseDelay:            Duration(100 * time.Millisecond),
 			MaxDelay:             Duration(2 * time.Second),
 			Jitter:               true,
