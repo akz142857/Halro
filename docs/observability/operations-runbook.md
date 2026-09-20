@@ -96,7 +96,7 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Trigger: an upstream refused a credential with 401 or a lapsed subscription, and the gate has taken it out of service.
 - Why it is critical rather than a warning: this suspension has no window. A dead key does not heal, so nothing in Halro will end it — it clears only when the credential's revision advances, which means somebody replacing the secret. Until then every route on that credential is refused, and the only signal is this alert.
 - Immediate: `GET /admin/api/v1/route-suspensions` names the scope; the metric deliberately carries no credential id. Confirm upstream-side: expired key, revoked key, cancelled subscription, wrong account.
-- Act: replace the credential. Saving it advances its revision, which is what clears the suspension on the next registry reload — no second step, and nothing to remember.
+- Act: replace the credential. Saving it advances its revision, and the topology activation that a credential mutation already runs drops the suspension then and there — no second step, no waiting for traffic. The alert clears on the next scrape.
 - If the refusal was resolved upstream without touching the stored secret, re-saving the credential unchanged still advances its revision and is the supported way to clear it. There is deliberately no "just clear it" action: every administrative change here commits its audit record with the change itself, and a clear that wrote nothing would have nowhere to commit one.
 - Escalate: if the credential is shared by several Deployments, all of them are down together — check whether an approved fallback on a different credential exists before repointing traffic.
 

@@ -186,6 +186,13 @@ func (r *Runtime) prepareProviderRegistryActivation(ctx context.Context, catalog
 		r.auditCapabilityWithholdings(ctx, report)
 		r.publishRouteWithholdings(report)
 		retired := r.providers.Replace(next)
+		// Before the new topology serves anything: a credential the operator has
+		// replaced is not suspended any more, and saying so here is what makes
+		// that the whole of the fix. Left to the request path, the clear would
+		// wait for traffic the suspension itself discouraged.
+		if r.routes != nil {
+			r.routes.ForgetOutdatedCredentials(report.CredentialRevisions)
+		}
 		retiredEgress := r.providerEgress.Replace(nextEgress)
 		if retiredEgress == nil || retiredEgress.runtimeID != nextEgress.runtimeID {
 			if auditErr := r.auditProviderEgressRegistry(nextEgress); auditErr != nil {
@@ -323,6 +330,10 @@ type loadReport struct {
 	Drifted  []capabilityWithholding
 	Dangling []referenceWithholding
 	Excluded []providerExclusion
+	// CredentialRevisions is every credential the new topology can reach, and
+	// which revision it is on. The admission gate reads it to drop suspensions
+	// an operator has already answered by replacing the secret.
+	CredentialRevisions map[string]uint64
 }
 
 // logCapabilityWithholdings names the routes that are up but not routing. IDs
@@ -478,6 +489,10 @@ func loadProviderRegistryWithCatalogAndEgress(
 	// built. Read in the instance loop below, where the record is already loaded,
 	// and stamped onto every target the provider serves.
 	credentialRevisions := make(map[string]uint64)
+	// The same figures keyed by credential rather than by provider, for the gate:
+	// a suspension is recorded against a credential, and this is what tells it
+	// which ones the operator has moved past.
+	revisionsByCredential := make(map[string]uint64)
 	// Integrity and vault-trust failures still refuse the load, and the adapters
 	// built so far are closed rather than leaked. This is the narrow answer to
 	// "should any load failure stop the process": yes — the ones that say the
@@ -539,6 +554,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 		}
 		providerLimits[instance.ID] = instance.MaxConcurrency
 		credentialRevisions[instance.ID] = credential.Revision
+		revisionsByCredential[credential.ID] = credential.Revision
 		for _, binding := range instance.EffectiveProfileBindings() {
 			if !binding.Enabled {
 				continue
@@ -782,6 +798,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 			continue
 		}
 	}
+	report.CredentialRevisions = revisionsByCredential
 	return registry, report, nil
 }
 

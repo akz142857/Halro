@@ -396,3 +396,103 @@ func TestRetainDeploymentsForgetsProbesAndSuspensionsAlike(t *testing.T) {
 		}
 	}
 }
+
+// Every suspension has to reach the transitions counter, including the ones the
+// probe loop opens.
+//
+// Counting in the request path alone left the health loop's main lever out: a
+// probe suspends at threshold one, and a 30-second window opened and closed
+// between two scrapes is exactly the event a gauge cannot show and this counter
+// exists for.
+func TestEverySuspensionIsCountedIncludingProbeDriven(t *testing.T) {
+	gate := New(Config{AvailabilityThreshold: 1})
+	gate.ObserveProbe("dep_1", DeploymentProbe{ObservedAt: base, ErrorClass: "connect"}, base)
+
+	counts := gate.Counts(base)
+	if counts.Transitions[""] != 1 {
+		t.Fatalf("a probe-driven suspension was not counted: %+v", counts.Transitions)
+	}
+	// And it counts the transition, not the observations: a scope already out of
+	// service that fails again has not gone out of service twice.
+	gate.ObserveProbe("dep_1", DeploymentProbe{ObservedAt: base, ErrorClass: "connect"}, base)
+	if counts := gate.Counts(base); counts.Transitions[""] != 1 {
+		t.Fatalf("a second failure against an already-suspended scope was counted again: %+v", counts.Transitions)
+	}
+}
+
+// Replacing the credential has to be the whole of the fix.
+//
+// A credential refusal has no window and no Retry-After, deliberately — so
+// callers are being told not to come back. If the clear waited for a request to
+// trip the staleness check on its way through, an operator who replaced the
+// secret would watch a critical alert keep firing on a quiet alias, forever.
+func TestReplacingACredentialClearsItWithoutWaitingForTraffic(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 4)
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
+	}, base)
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonSubscriptionQuotaExhausted, Status: 402,
+	}, base)
+	if len(gate.Snapshot(base)) != 2 {
+		t.Fatalf("expected the credential and credential/model scopes out: %+v", gate.Snapshot(base))
+	}
+
+	// The reload that a durable credential mutation already triggers. No request
+	// happens at any point in this test.
+	gate.ForgetOutdatedCredentials(map[string]uint64{"cred_1": 5})
+
+	if suspensions := gate.Snapshot(base); len(suspensions) != 0 {
+		t.Fatalf("replacing the credential left it suspended: %+v", suspensions)
+	}
+	if counts := gate.Counts(base); len(counts.Current) != 0 {
+		t.Fatalf("the gauge still reports a replaced credential: %+v", counts.Current)
+	}
+}
+
+// A revision that has not moved is not a clear. Otherwise every reload — and
+// they happen on any route or price change — would wipe the gate.
+func TestAReloadDoesNotClearASuspensionTheOperatorHasNotAnswered(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 4)
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
+	}, base)
+
+	gate.ForgetOutdatedCredentials(map[string]uint64{"cred_1": 4})
+
+	if len(gate.Snapshot(base)) != 1 {
+		t.Fatal("an unchanged credential was cleared by a reload")
+	}
+}
+
+// A credential that has left the topology takes its suspension with it, or the
+// gate leaks one scope per deleted credential for the life of the process.
+func TestACredentialRemovedFromTheTopologyTakesItsSuspensionWithIt(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_gone", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
+	}, base)
+
+	gate.ForgetOutdatedCredentials(map[string]uint64{"cred_other": 1})
+
+	if suspensions := gate.Snapshot(base); len(suspensions) != 0 {
+		t.Fatalf("a deleted credential kept its suspension: %+v", suspensions)
+	}
+}
+
+// Deployment and provider scopes are not the operator's to answer by saving a
+// credential, and a reload must not quietly re-admit an upstream that is down.
+func TestAReloadLeavesAvailabilitySuspensionsAlone(t *testing.T) {
+	gate := New(Config{AvailabilityThreshold: 1})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{Status: 503, Class: provider.ErrorProvider5xx}, base)
+
+	gate.ForgetOutdatedCredentials(map[string]uint64{"cred_1": 9})
+
+	if len(gate.Snapshot(base)) != 1 {
+		t.Fatal("a reload cleared a deployment that is still failing")
+	}
+}
