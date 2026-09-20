@@ -91,14 +91,27 @@ type Gate struct {
 	// is known about upstream health — carrying it across a swap was extra
 	// machinery that a gate outside the registry simply does not need.
 	probes map[string]DeploymentProbe
+	// transitions and probeOutcomes are counters rather than derived from
+	// scopes, because both describe events the snapshot cannot: a suspension
+	// that came and went between two scrapes happened, and a gauge that never
+	// saw it reads as a quiet period.
+	transitions   map[provider.FailureReason]uint64
+	probeOutcomes map[probeOutcomeKey]uint64
+}
+
+type probeOutcomeKey struct {
+	reason  provider.FailureReason
+	outcome string
 }
 
 func New(config Config) *Gate {
 	return &Gate{
-		config:   config.withDefaults(),
-		policies: DefaultPolicies(),
-		scopes:   make(map[Scope]*scopeState),
-		probes:   make(map[string]DeploymentProbe),
+		config:        config.withDefaults(),
+		policies:      DefaultPolicies(),
+		scopes:        make(map[Scope]*scopeState),
+		probes:        make(map[string]DeploymentProbe),
+		transitions:   make(map[provider.FailureReason]uint64),
+		probeOutcomes: make(map[probeOutcomeKey]uint64),
 	}
 }
 
@@ -162,12 +175,18 @@ func (g *Gate) observeReporting(target provider.Target, observation Observation,
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	before := g.scopes[scope] != nil && g.scopes[scope].suspended()
-	g.observeLocked(scope, policy, observation, now)
+	g.observeLocked(scope, policy, observation, now, target.CredentialRevision)
 	state := g.scopes[scope]
-	return state != nil && state.suspended() && !before
+	suspended := state != nil && state.suspended() && !before
+	if suspended {
+		g.transitions[observation.Reason]++
+	}
+	return suspended
 }
 
-func (g *Gate) observeLocked(scope Scope, policy Policy, observation Observation, now time.Time) {
+func (g *Gate) observeLocked(
+	scope Scope, policy Policy, observation Observation, now time.Time, credentialRevision uint64,
+) {
 	state := g.scopes[scope]
 	if state == nil {
 		state = &scopeState{}
@@ -178,9 +197,14 @@ func (g *Gate) observeLocked(scope Scope, policy Policy, observation Observation
 	if state.failures < policy.Threshold && !state.suspended() {
 		return
 	}
+	// The revision comes from the target, not from the caller's description of
+	// the failure. It is a property of the thing being suspended rather than of
+	// what went wrong, and an observation that forgot to carry it would record a
+	// suspension against revision zero — which every live credential is already
+	// ahead of, so it would read as stale the moment it was written.
 	state.evidence = Evidence{
 		Reason: observation.Reason, Status: observation.Status, Code: observation.Code,
-		ObservedAt: now, CredentialRevision: observation.CredentialRevision,
+		ObservedAt: now, CredentialRevision: credentialRevision,
 	}
 	if policy.Recovery == RecoverOnCredentialRevision {
 		state.indefinite = true
@@ -354,9 +378,11 @@ func (l *Lease) Done(observation *Observation, now time.Time) bool {
 	suspended := false
 	l.once.Do(func() {
 		if observation == nil {
+			l.gate.recordProbeOutcome(l.claimed, "recovered")
 			l.gate.ObserveSuccess(l.target, now)
 			return
 		}
+		l.gate.recordProbeOutcome(l.claimed, "still_failing")
 		l.gate.releaseClaims(l.claimed)
 		suspended = l.gate.observeReporting(l.target, *observation, now)
 	})
@@ -425,4 +451,71 @@ func (g *Gate) Clear(scope Scope) bool {
 	}
 	delete(g.scopes, scope)
 	return true
+}
+
+// recordProbeOutcome counts what the requests admitted through an expired window
+// found. It is the figure that says whether the windows are set anywhere near
+// right: a scope that recovers on nearly every probe is being suspended for too
+// long, and one that almost never does is being probed too eagerly.
+func (g *Gate) recordProbeOutcome(claimed []Scope, outcome string) {
+	if len(claimed) == 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, scope := range claimed {
+		state := g.scopes[scope]
+		if state == nil {
+			continue
+		}
+		g.probeOutcomes[probeOutcomeKey{reason: state.evidence.Reason, outcome: outcome}]++
+	}
+}
+
+// SuspensionCounts is what the metrics endpoint renders: how many scopes are out
+// right now, how many suspensions have begun, and what the probes found.
+type SuspensionCounts struct {
+	// Current is keyed by scope kind and reason, both enumerations. Identity
+	// stays out of it — a Prometheus label carrying a credential id is a label
+	// set that grows with the operator's account list and a secret-adjacent
+	// identifier in a file everyone scrapes.
+	Current     map[ScopeReason]int
+	Transitions map[provider.FailureReason]uint64
+	Probes      map[ProbeOutcome]uint64
+}
+
+// ScopeReason is one cell of the current-suspension gauge.
+type ScopeReason struct {
+	Kind   ScopeKind
+	Reason provider.FailureReason
+}
+
+// ProbeOutcome is one cell of the probe-result counter.
+type ProbeOutcome struct {
+	Reason  provider.FailureReason
+	Outcome string
+}
+
+// Counts snapshots everything the metrics endpoint needs in one lock.
+func (g *Gate) Counts(now time.Time) SuspensionCounts {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	counts := SuspensionCounts{
+		Current:     make(map[ScopeReason]int),
+		Transitions: make(map[provider.FailureReason]uint64, len(g.transitions)),
+		Probes:      make(map[ProbeOutcome]uint64, len(g.probeOutcomes)),
+	}
+	for scope, state := range g.scopes {
+		if !state.suspended() {
+			continue
+		}
+		counts.Current[ScopeReason{Kind: scope.Kind, Reason: state.evidence.Reason}]++
+	}
+	for reason, count := range g.transitions {
+		counts.Transitions[reason] = count
+	}
+	for key, count := range g.probeOutcomes {
+		counts.Probes[ProbeOutcome{Reason: key.reason, Outcome: key.outcome}] = count
+	}
+	return counts
 }

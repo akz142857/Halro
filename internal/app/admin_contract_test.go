@@ -52,6 +52,10 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"POST /admin/api/v1/providers/{}/model-capability-detections",
 		"GET /admin/api/v1/model-capability-detections/{}", "DELETE /admin/api/v1/model-capability-detections/{}",
 		"GET /admin/api/v1/deployments", "POST /admin/api/v1/deployments",
+		// Read-only, and the only surface that names which credential an
+		// upstream refused: the caller-facing 503 and the metrics both carry
+		// enumerations alone, on purpose.
+		"GET /admin/api/v1/route-suspensions",
 		"GET /admin/api/v1/deployments/{}", "PUT /admin/api/v1/deployments/{}", "DELETE /admin/api/v1/deployments/{}", "POST /admin/api/v1/deployments/{}/test",
 		"POST /admin/api/v1/deployments/{}/capabilities/preflight",
 		"GET /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices/preview", "POST /admin/api/v1/deployments/{}/prices/restore-confirm", "POST /admin/api/v1/deployments/{}/prices/{}/cancel",

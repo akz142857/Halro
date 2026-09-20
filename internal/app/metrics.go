@@ -20,6 +20,8 @@ import (
 	"github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/modelcatalog"
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/timezone"
 	"github.com/akz142857/Halro/internal/usage"
 	"github.com/akz142857/Halro/internal/vault"
@@ -405,6 +407,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 			strconv.Quote(item.reason), item.value)
 	}
 	writeProviderFailureReasons(output, r.gatewayService.ProviderFailureReasons())
+	writeRouteSuspensions(output, r.routes.Counts(time.Now()))
 	metricHeader(output, "halro_provider_active_requests", "gauge", "Current in-flight requests by Provider instance.")
 	activeProviders := r.gatewayService.ActiveProviderRequests()
 	providerIDs := r.providers.ProviderIDs()
@@ -860,4 +863,99 @@ func writeProviderFailureReasons(output *bufio.Writer, reasons gateway.ProviderF
 	metricHeader(output, "halro_provider_failure_reason_dropped_total", "counter",
 		"Failure classifications not counted because the tracked label set was full.")
 	fmt.Fprintf(output, "halro_provider_failure_reason_dropped_total %d\n", reasons.Overflow)
+}
+
+// writeRouteSuspensions renders what the admission gate is holding out of
+// service.
+//
+// Three figures, because they answer three different questions. The gauge says
+// what is down now. The transition counter says how often it happens, which a
+// gauge cannot: a suspension that came and went between two scrapes is invisible
+// to one and reads as a quiet period. The probe counter says whether the windows
+// are set anywhere near right — a scope that recovers on nearly every probe is
+// being held down too long, and one that almost never does is being probed too
+// eagerly.
+//
+// Labels are enumerations only. Which credential ran dry belongs in the console
+// and the Admin API: a Prometheus label carrying one grows with the operator's
+// account list and puts a secret-adjacent identifier in a file everyone scrapes.
+func writeRouteSuspensions(output *bufio.Writer, counts routegate.SuspensionCounts) {
+	metricHeader(output, "halro_route_suspended", "gauge",
+		"Route scopes currently held out of service, by scope kind and reason.")
+	type currentRow struct {
+		kind   string
+		reason string
+		value  int
+	}
+	current := make([]currentRow, 0, len(counts.Current))
+	for key, value := range counts.Current {
+		current = append(current, currentRow{
+			kind: string(key.Kind), reason: failureReasonLabel(key.Reason), value: value,
+		})
+	}
+	sort.Slice(current, func(left, right int) bool {
+		if current[left].kind != current[right].kind {
+			return current[left].kind < current[right].kind
+		}
+		return current[left].reason < current[right].reason
+	})
+	if len(current) == 0 {
+		// Nothing suspended is a fact worth publishing. An absent family reads
+		// as "the exporter is broken" to anything alerting on it.
+		fmt.Fprintf(output, "halro_route_suspended{scope_kind=\"\",reason=\"\"} 0\n")
+	}
+	for _, row := range current {
+		fmt.Fprintf(output, "halro_route_suspended{scope_kind=%s,reason=%s} %d\n",
+			strconv.Quote(row.kind), strconv.Quote(row.reason), row.value)
+	}
+
+	metricHeader(output, "halro_route_suspension_transitions_total", "counter",
+		"Suspensions begun, by the reason that began them.")
+	for _, reason := range gateway.KnownFailureReasons() {
+		fmt.Fprintf(output, "halro_route_suspension_transitions_total{reason=%s} %d\n",
+			strconv.Quote(reason), counts.Transitions[failureReasonFromLabel(reason)])
+	}
+
+	metricHeader(output, "halro_route_probe_admitted_total", "counter",
+		"Requests admitted through an expired suspension window, by what they found.")
+	type probeRow struct {
+		reason  string
+		outcome string
+		value   uint64
+	}
+	probes := make([]probeRow, 0, len(counts.Probes))
+	for key, value := range counts.Probes {
+		probes = append(probes, probeRow{
+			reason: failureReasonLabel(key.Reason), outcome: key.Outcome, value: value,
+		})
+	}
+	sort.Slice(probes, func(left, right int) bool {
+		if probes[left].reason != probes[right].reason {
+			return probes[left].reason < probes[right].reason
+		}
+		return probes[left].outcome < probes[right].outcome
+	})
+	if len(probes) == 0 {
+		fmt.Fprintf(output, "halro_route_probe_admitted_total{reason=\"\",outcome=\"\"} 0\n")
+	}
+	for _, row := range probes {
+		fmt.Fprintf(output, "halro_route_probe_admitted_total{reason=%s,outcome=%s} %d\n",
+			strconv.Quote(row.reason), strconv.Quote(row.outcome), row.value)
+	}
+}
+
+// failureReasonLabel keeps the empty reason out of the label values. An
+// unclassified refusal is a finding, not a blank.
+func failureReasonLabel(reason provider.FailureReason) string {
+	if reason == "" {
+		return "unclassified"
+	}
+	return string(reason)
+}
+
+func failureReasonFromLabel(label string) provider.FailureReason {
+	if label == "unclassified" {
+		return ""
+	}
+	return provider.FailureReason(label)
 }

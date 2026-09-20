@@ -101,6 +101,20 @@ groups:
         annotations:
           summary: Multiple Halro deployments are unhealthy
           runbook_url: /docs/observability/operations-runbook.md#halromultipledeploymentsunhealthy
+      - alert: HalroCredentialUnusable
+        expr: halro_route_suspended{reason=~"invalid_credential|subscription_inactive"} > 0
+        for: 1m
+        labels: {severity: critical, service: halro, owner: sre, category: provider}
+        annotations:
+          summary: A Halro Provider credential is refused upstream and will not recover on its own
+          runbook_url: /docs/observability/operations-runbook.md#halrocredentialunusable
+      - alert: HalroProviderQuotaExhausted
+        expr: halro_route_suspended{reason="subscription_quota_exhausted"} > 0
+        for: 5m
+        labels: {severity: warning, service: halro, owner: sre, category: provider}
+        annotations:
+          summary: A Halro upstream has exhausted its quota
+          runbook_url: /docs/observability/operations-runbook.md#halroproviderquotaexhausted
       - alert: HalroFallbackSaturation
         expr: halro:fallbacks:ratio5m > 0.25 and on (environment, region, cluster) increase(halro_requests_total[10m]) >= 20
         for: 5m

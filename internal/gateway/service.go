@@ -346,6 +346,14 @@ func (s *Service) resolveRequest(
 		// finds anything. It is the same condition an open circuit reports, so
 		// it gets the same shape.
 		if s.registry.SupportsOperation(model, operation, "") {
+			// Why it is unavailable, where the gate knows. "Out of quota" and
+			// "this key is dead" send an operator to the billing page and the
+			// credential store, and a caller to very different conclusions about
+			// whether waiting helps — where one sentence for all three teaches
+			// them to retry through an outage nothing is going to end.
+			if refusal, explained := s.routes.Explain(s.registry.ResolveAll(model), s.now()); explained {
+				return auth.AuthResult{}, nil, suspendedAliasError(refusal)
+			}
 			return auth.AuthResult{}, nil, gatewayError("provider_unavailable", "no healthy deployment is available for this model; retry shortly", 503, nil)
 		}
 		if len(s.registry.ResolveAll(model)) > 0 {
@@ -553,6 +561,29 @@ func (s *Service) exhaustedAttemptsError(lastErr error) error {
 	default:
 		return gatewayError("provider_unavailable", "no provider attempt was available", 503, nil)
 	}
+}
+
+// suspendedAliasError turns a gate refusal into the caller's answer.
+//
+// It names no upstream, credential or deployment. The caller is on the other
+// side of a trust boundary, and which of an operator's accounts ran dry is not
+// something a Gateway key should be able to enumerate by watching error bodies.
+// Identity goes to the console and the Admin API, which are on this side.
+//
+// A dead credential carries no Retry-After at all. Nothing is scheduled to fix
+// it, and a hint that says otherwise is an invitation to a retry loop that
+// cannot succeed.
+func suspendedAliasError(refusal routegate.Refusal) *Error {
+	message := "every provider for this model is temporarily out of service; retry shortly"
+	switch refusal.Kind {
+	case routegate.RefusalQuotaExhausted:
+		message = "every provider for this model has exhausted its quota"
+	case routegate.RefusalCredentialUnusable:
+		message = "every provider for this model has an unusable credential; an operator must act"
+	}
+	err := gatewayError("all_candidates_suspended", message, 503, nil)
+	err.RetryAfter = refusal.RetryAfter
+	return err
 }
 
 func terminalProviderError(err error) error {
@@ -910,7 +941,7 @@ func (attempt *activeAttempt) reportGate(providerErr error) {
 		attempt.gate.Done(nil, attempt.service.now())
 		return
 	}
-	observation := observationFor(attempt.run.failure, providerErr, attempt.pricingTarget)
+	observation := observationFor(attempt.run.failure, providerErr)
 	attempt.suspendedScope = attempt.gate.Done(&observation, attempt.service.now())
 }
 
@@ -919,16 +950,13 @@ func (attempt *activeAttempt) reportGate(providerErr error) {
 // from, so the two cannot disagree about what happened, and it carries only
 // identifiers and enumerations — an upstream's own sentence never reaches the
 // gate.
-func observationFor(
-	descriptor FailureDescriptor, providerErr error, target provider.Target,
-) routegate.Observation {
+func observationFor(descriptor FailureDescriptor, providerErr error) routegate.Observation {
 	observation := routegate.Observation{
-		Reason:             descriptor.ProviderFailureReason,
-		Class:              descriptor.Class,
-		Status:             descriptor.ProviderStatus,
-		Code:               descriptor.ProviderCode,
-		CredentialRevision: target.CredentialRevision,
-		Malformed:          descriptor.Class == provider.ErrorMalformed,
+		Reason:    descriptor.ProviderFailureReason,
+		Class:     descriptor.Class,
+		Status:    descriptor.ProviderStatus,
+		Code:      descriptor.ProviderCode,
+		Malformed: descriptor.Class == provider.ErrorMalformed,
 	}
 	var classified *provider.Error
 	if errors.As(providerErr, &classified) {

@@ -49,7 +49,7 @@ func TestOneCredentialRefusalRemovesEveryDeploymentBehindIt(t *testing.T) {
 	all := []provider.Target{first, second, third}
 
 	gate.Observe(first, Observation{
-		Reason: provider.FailureReasonInvalidCredential, Status: 401, CredentialRevision: 3,
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
 	}, base)
 
 	if got := ids(gate.Filter(all, base)); !equal(got, []string{"route_3"}) {
@@ -67,7 +67,7 @@ func TestACredentialSuspensionEndsOnlyWhenTheSecretIsReplaced(t *testing.T) {
 	gate := New(Config{})
 	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 3)
 	gate.Observe(target, Observation{
-		Reason: provider.FailureReasonSubscriptionInactive, Status: 403, CredentialRevision: 3,
+		Reason: provider.FailureReasonSubscriptionInactive, Status: 403,
 	}, base)
 
 	// No amount of time is enough.
@@ -327,7 +327,7 @@ func TestClearRemovesASuspension(t *testing.T) {
 	gate := New(Config{})
 	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
 	gate.Observe(target, Observation{
-		Reason: provider.FailureReasonInvalidCredential, Status: 401, CredentialRevision: 1,
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
 	}, base)
 	scope := Scope{Kind: ScopeCredential, Key: "cred_1"}
 	if !gate.Clear(scope) {

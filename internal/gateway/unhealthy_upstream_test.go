@@ -23,7 +23,10 @@ func TestChatReportsUnhealthyUpstreamAsUnavailableNotUnsupported(t *testing.T) {
 
 	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
 	var gatewayErr *Error
-	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "provider_unavailable" || gatewayErr.HTTPStatus != 503 {
+	// The refusal is typed now: an operator reading "temporarily out of service"
+	// looks for an outage, and that is the right place to look for this one.
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "all_candidates_suspended" ||
+		gatewayErr.HTTPStatus != 503 || gatewayErr.RetryAfter <= 0 {
 		t.Fatalf("unexpected error: %#v", err)
 	}
 	if f.adapter.calls != 0 {
