@@ -550,15 +550,35 @@ jobs:
             homebrew-tap
             apt-repository
           permission-contents: write
-      - name: Verify downstream repositories and write permission without mutation
+      # contents:write is proven by the step above, not here. The token is
+      # requested with `permission-contents: write`, and GitHub refuses to mint
+      # an installation token whose permissions exceed what the installation
+      # grants — so a token at all means the App holds contents:write on every
+      # repository it was scoped to.
+      #
+      # What this step adds is reachability: that the installation actually
+      # covers both repositories, read from the endpoint that answers exactly
+      # that question for the token holding it.
+      #
+      # It used to assert `.permissions.push` on GET /repos instead. That field
+      # is the user-shaped admin/push/pull triad; for an installation token
+      # narrowed to one permission it is not a reliable rendering of
+      # contents:write, and on this preflight's first ever execution (v0.7.0
+      # through v0.8.4 all dispatched publish_packages=false, so it had only
+      # ever been skipped) it read false for a token that had just been minted
+      # with contents:write on that very repository, and failed a release whose
+      # credentials were correct.
+      - name: Verify the preflight token reaches both downstream repositories
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
+          reachable=$(gh api /installation/repositories --jq '.repositories[].full_name' | sort)
+          echo "preflight token reaches:"
+          echo "${reachable}" | sed 's/^/  /'
           for repository in homebrew-tap apt-repository; do
-            permission=$(gh api "repos/halro-ai/${repository}" --jq '.permissions.push')
-            if [ "${permission}" != "true" ]; then
-              echo "::error::release App lacks contents:write on halro-ai/${repository}"
+            if ! printf '%s\n' "${reachable}" | grep -qx "halro-ai/${repository}"; then
+              echo "::error::the release App installation does not cover halro-ai/${repository}"
               exit 1
             fi
           done

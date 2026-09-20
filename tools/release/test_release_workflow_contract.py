@@ -86,10 +86,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             "HALRO_RELEASE_APP_CLIENT_ID is empty",
             "HALRO_RELEASE_APP_PRIVATE_KEY is empty",
             "actions/create-github-app-token@",
-            "repos/halro-ai/${repository}",
-            ".permissions.push",
+            # contents:write is asserted by requesting it. GitHub refuses to
+            # mint an installation token whose permissions exceed the grant, so
+            # this input is the write check; the step that follows only proves
+            # reachability. Asserting `.permissions.push` on GET /repos instead
+            # failed a correct release on this preflight's first execution —
+            # that field is the user-shaped triad and does not render a narrowed
+            # installation token's contents:write.
+            "permission-contents: write",
+            "/installation/repositories",
         ):
             self.assertIn(expected, preflight)
+        # Both downstream repositories must be named in the token request and in
+        # the reachability check, or a channel silently drops out of the gate.
+        for repository in ("homebrew-tap", "apt-repository"):
+            self.assertIn(repository, preflight)
+            self.assertIn(f'"halro-ai/${{repository}}"', preflight)
+        # Comments are allowed to name it — this one explains why it went. The
+        # assertion is about code, so read only the non-comment lines.
+        executable = "\n".join(
+            line for line in preflight.splitlines() if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn(".permissions.push", executable)
 
     def test_every_published_artifact_shape_is_checksummed_signed_and_verified(self):
         # build_deb.sh emits halro_<version>-1_<arch>.deb and
