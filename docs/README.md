@@ -86,6 +86,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | --- | --- |
 | [生产验证执行方案](verification/production-validation-plan.zh-CN.md) | 从候选冻结开始，依次完成真实 Provider、安全边界、告警与恢复、容量与 24 小时浸泡、正式发布和四方签署 |
 | [生产验证执行记录 · 2026-09-18](verification/production-validation-run-260918.zh-CN.md) | 在候选 `f09ed2d` 上执行该方案中不需要外部授权的部分（G0 条件通过、G1/G3/G4 的本机 E3 子集）。首轮 22 条发现修掉 10 条，对修复本身的第二轮评审再出 13 条（含一条把 fail-closed 放行的自造回归，已回退）；G2/G5/G6/G7 因缺真实账户、生产形态环境与四方签署而 `BLOCKED`，结论维持 `NO-GO / PRODUCTION UNVERIFIED` |
+| [上游拒绝形态取证矩阵](verification/route-eligibility-refusal-matrix.zh-CN.md) | Route eligibility（#318/#319）定参数所依赖的上游取证记录：额度耗尽、普通限流、凭证失效、订阅未开通四种拒绝各自的状态码与 `Retry-After`，以及**耗尽与限流是否同码**——那一格决定 `FailureReason` 要不要进路由路径。九个入口目前只有 MiniMax 一行有内容，且其中额度那格仍是第三方报告等级 |
 
 ## 评审 · [`review/`](review/)
 
