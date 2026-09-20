@@ -30,9 +30,6 @@ type Observation struct {
 	Code string
 	// RetryAfter is what the upstream asked for, when it asked. Zero otherwise.
 	RetryAfter time.Duration
-	// CredentialRevision is the revision in force when this was observed, so a
-	// credential suspension can tell itself apart from a later one.
-	CredentialRevision uint64
 	// Malformed marks a response Halro could not read as the protocol it claims.
 	// It is an availability signal rather than a refusal, and it carries a
 	// status, so it needs saying separately.

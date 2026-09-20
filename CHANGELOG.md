@@ -41,6 +41,36 @@ semantic versioning.
 
 ### Added
 
+- An alias with nothing left to try now says which kind of nothing. Where every
+  candidate is suspended, the refusal is `all_candidates_suspended` (503) and its
+  sentence separates an exhausted quota from an unusable credential from an
+  ordinary outage — because those send an operator to the billing page, the
+  credential store, and the status page respectively, and send a caller to
+  different conclusions about whether waiting helps. A dead credential carries no
+  `Retry-After` at all: nothing is scheduled to fix it, and a hint saying
+  otherwise invites a retry loop that cannot succeed. The refusal names no
+  upstream, credential or deployment — a Gateway key must not be able to
+  enumerate an operator's accounts by reading error bodies.
+
+- `halro_route_suspended{scope_kind, reason}`, plus
+  `halro_route_suspension_transitions_total{reason}` and
+  `halro_route_probe_admitted_total{reason, outcome}`. Three figures because they
+  answer three questions: what is out now, how often it happens — which a gauge
+  cannot show, since a suspension that begins and ends between two scrapes reads
+  as a quiet period — and whether the windows are set anywhere near right, since
+  a scope that recovers on nearly every probe is being held down too long.
+
+- Two alerts with runbooks. `HalroCredentialUnusable` is critical because that
+  suspension has no window: a dead key does not heal, so nothing in Halro ends
+  it, and the alert is the only signal until somebody replaces the secret.
+  `HalroProviderQuotaExhausted` is a warning.
+
+- `GET /admin/api/v1/route-suspensions` is where identity lives. The
+  caller-facing refusal names nothing and the metrics carry enumerations only,
+  so an operator answering either alert has exactly one place to learn which
+  credential — including the revision the refusal was recorded against, which is
+  what they are comparing against when they wonder why it is still there.
+
 - `halro_provider_failure_reason_total{reason, provider_status}` counts upstream
   refusals by the canonical reason Halro reached and the status it was looking at.
   The interesting cell is not a recognised reason, which only appears once

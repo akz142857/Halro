@@ -28,7 +28,7 @@ func assertMetricsExpositionContract(t *testing.T, body string) {
 		"le": {}, "status": {}, "direction": {}, "reason": {}, "provider_type": {},
 		"provider_id": {}, "deployment_id": {}, "version": {}, "commit": {},
 		"operation": {}, "error_class": {}, "purpose": {}, "state": {}, "capability": {},
-		"target_kind": {},
+		"target_kind": {}, "scope_kind": {}, "outcome": {},
 		// The upstream's HTTP status on a refusal. Unbounded by contract and
 		// bounded in practice: it is whatever an upstream answered, and the
 		// counter that carries it caps its own tracked label set and reports

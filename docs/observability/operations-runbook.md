@@ -91,6 +91,22 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Immediate: look for a shared Provider, credential, network, DNS or regional dependency before changing routes.
 - Escalate: invoke the provider-outage plan and preserve budget/accounting controls while shifting approved traffic.
 
+### HalroCredentialUnusable
+
+- Trigger: an upstream refused a credential with 401 or a lapsed subscription, and the gate has taken it out of service.
+- Why it is critical rather than a warning: this suspension has no window. A dead key does not heal, so nothing in Halro will end it — it clears only when the credential's revision advances, which means somebody replacing the secret. Until then every route on that credential is refused, and the only signal is this alert.
+- Immediate: `GET /admin/api/v1/route-suspensions` names the scope; the metric deliberately carries no credential id. Confirm upstream-side: expired key, revoked key, cancelled subscription, wrong account.
+- Act: replace the credential. Saving it advances its revision, and the topology activation that a credential mutation already runs drops the suspension then and there — no second step, no waiting for traffic. The alert clears on the next scrape.
+- If the refusal was resolved upstream without touching the stored secret, re-saving the credential unchanged still advances its revision and is the supported way to clear it. There is deliberately no "just clear it" action: every administrative change here commits its audit record with the change itself, and a clear that wrote nothing would have nowhere to commit one.
+- Escalate: if the credential is shared by several Deployments, all of them are down together — check whether an approved fallback on a different credential exists before repointing traffic.
+
+### HalroProviderQuotaExhausted
+
+- Trigger: an upstream answered that its quota is spent, for five minutes.
+- Immediate: `GET /admin/api/v1/route-suspensions` names the scope; confirm the billing state upstream. Halro cannot tell a monthly allowance from a prepaid balance.
+- Note: the suspension ends on its own window and is retried with a real request, because no model-list probe consumes quota and therefore none can prove it came back. Expect recovery to lag a top-up by up to the current window, which doubles to six hours if the upstream keeps refusing.
+- Escalate: if this alias has no unaffected fallback, the caller-facing answer is a 503 `all_candidates_suspended` naming quota — route traffic elsewhere or raise the account limit.
+
 ### HalroFallbackSaturation
 
 - Trigger: fallback exceeds 25 percent with at least 20 recent requests for five minutes.

@@ -54,7 +54,7 @@ func (g *Gate) ObserveProbe(deploymentID string, probe DeploymentProbe, now time
 		ScopeDeployment, 1,
 		g.config.AvailabilityWindow, g.config.MaxAvailabilityWindow,
 	)
-	g.observeLocked(scope, policy, Observation{Code: probe.ErrorClass}, now)
+	_ = g.observeLocked(scope, policy, Observation{Code: probe.ErrorClass}, now, 0)
 }
 
 // DeploymentProbes is the last verdict for every deployment still known, for the

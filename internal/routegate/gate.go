@@ -2,6 +2,7 @@ package routegate
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,14 +92,27 @@ type Gate struct {
 	// is known about upstream health — carrying it across a swap was extra
 	// machinery that a gate outside the registry simply does not need.
 	probes map[string]DeploymentProbe
+	// transitions and probeOutcomes are counters rather than derived from
+	// scopes, because both describe events the snapshot cannot: a suspension
+	// that came and went between two scrapes happened, and a gauge that never
+	// saw it reads as a quiet period.
+	transitions   map[provider.FailureReason]uint64
+	probeOutcomes map[probeOutcomeKey]uint64
+}
+
+type probeOutcomeKey struct {
+	reason  provider.FailureReason
+	outcome string
 }
 
 func New(config Config) *Gate {
 	return &Gate{
-		config:   config.withDefaults(),
-		policies: DefaultPolicies(),
-		scopes:   make(map[Scope]*scopeState),
-		probes:   make(map[string]DeploymentProbe),
+		config:        config.withDefaults(),
+		policies:      DefaultPolicies(),
+		scopes:        make(map[Scope]*scopeState),
+		probes:        make(map[string]DeploymentProbe),
+		transitions:   make(map[provider.FailureReason]uint64),
+		probeOutcomes: make(map[probeOutcomeKey]uint64),
 	}
 }
 
@@ -161,31 +175,49 @@ func (g *Gate) observeReporting(target provider.Target, observation Observation,
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	before := g.scopes[scope] != nil && g.scopes[scope].suspended()
-	g.observeLocked(scope, policy, observation, now)
-	state := g.scopes[scope]
-	return state != nil && state.suspended() && !before
+	return g.observeLocked(scope, policy, observation, now, target.CredentialRevision)
 }
 
-func (g *Gate) observeLocked(scope Scope, policy Policy, observation Observation, now time.Time) {
+// observeLocked is the one place a scope is suspended, and therefore the one
+// place the transition is counted.
+//
+// Counting in observeReporting instead left every probe-driven suspension out:
+// ObserveProbe reaches here directly, at threshold one, so the health loop's
+// main lever never appeared in a counter whose stated purpose is catching
+// suspensions a between-scrapes gauge misses — and a 30-second window opened by
+// a probe is exactly that kind.
+//
+// It reports whether this observation is what took the scope out of service.
+func (g *Gate) observeLocked(
+	scope Scope, policy Policy, observation Observation, now time.Time, credentialRevision uint64,
+) bool {
 	state := g.scopes[scope]
 	if state == nil {
 		state = &scopeState{}
 		g.scopes[scope] = state
 	}
+	wasSuspended := state.suspended()
 	state.policy = policy
 	state.failures++
-	if state.failures < policy.Threshold && !state.suspended() {
-		return
+	if state.failures < policy.Threshold && !wasSuspended {
+		return false
 	}
+	// The revision comes from the target, not from the caller's description of
+	// the failure. It is a property of the thing being suspended rather than of
+	// what went wrong, and an observation that forgot to carry it would record a
+	// suspension against revision zero — which every live credential is already
+	// ahead of, so it would read as stale the moment it was written.
 	state.evidence = Evidence{
 		Reason: observation.Reason, Status: observation.Status, Code: observation.Code,
-		ObservedAt: now, CredentialRevision: observation.CredentialRevision,
+		ObservedAt: now, CredentialRevision: credentialRevision,
 	}
 	if policy.Recovery == RecoverOnCredentialRevision {
 		state.indefinite = true
 		state.suspendedUntil = time.Time{}
-		return
+		if !wasSuspended {
+			g.transitions[observation.Reason]++
+		}
+		return !wasSuspended
 	}
 	// A probe that failed doubles the window it just served; a first suspension
 	// takes the policy's opening figure, or the upstream's own if it gave one.
@@ -202,6 +234,10 @@ func (g *Gate) observeLocked(scope Scope, policy Policy, observation Observation
 		state.window = policy.MaxWindow
 	}
 	state.suspendedUntil = now.Add(state.window)
+	if !wasSuspended {
+		g.transitions[observation.Reason]++
+	}
+	return !wasSuspended
 }
 
 // ObserveSuccess clears every scope this target belongs to.
@@ -354,9 +390,11 @@ func (l *Lease) Done(observation *Observation, now time.Time) bool {
 	suspended := false
 	l.once.Do(func() {
 		if observation == nil {
+			l.gate.recordProbeOutcome(l.claimed, "recovered")
 			l.gate.ObserveSuccess(l.target, now)
 			return
 		}
+		l.gate.recordProbeOutcome(l.claimed, "still_failing")
 		l.gate.releaseClaims(l.claimed)
 		suspended = l.gate.observeReporting(l.target, *observation, now)
 	})
@@ -425,4 +463,113 @@ func (g *Gate) Clear(scope Scope) bool {
 	}
 	delete(g.scopes, scope)
 	return true
+}
+
+// recordProbeOutcome counts what the requests admitted through an expired window
+// found. It is the figure that says whether the windows are set anywhere near
+// right: a scope that recovers on nearly every probe is being suspended for too
+// long, and one that almost never does is being probed too eagerly.
+func (g *Gate) recordProbeOutcome(claimed []Scope, outcome string) {
+	if len(claimed) == 0 {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, scope := range claimed {
+		state := g.scopes[scope]
+		if state == nil {
+			continue
+		}
+		g.probeOutcomes[probeOutcomeKey{reason: state.evidence.Reason, outcome: outcome}]++
+	}
+}
+
+// SuspensionCounts is what the metrics endpoint renders: how many scopes are out
+// right now, how many suspensions have begun, and what the probes found.
+type SuspensionCounts struct {
+	// Current is keyed by scope kind and reason, both enumerations. Identity
+	// stays out of it — a Prometheus label carrying a credential id is a label
+	// set that grows with the operator's account list and a secret-adjacent
+	// identifier in a file everyone scrapes.
+	Current     map[ScopeReason]int
+	Transitions map[provider.FailureReason]uint64
+	Probes      map[ProbeOutcome]uint64
+}
+
+// ScopeReason is one cell of the current-suspension gauge.
+type ScopeReason struct {
+	Kind   ScopeKind
+	Reason provider.FailureReason
+}
+
+// ProbeOutcome is one cell of the probe-result counter.
+type ProbeOutcome struct {
+	Reason  provider.FailureReason
+	Outcome string
+}
+
+// Counts snapshots everything the metrics endpoint needs in one lock.
+func (g *Gate) Counts(now time.Time) SuspensionCounts {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	counts := SuspensionCounts{
+		Current:     make(map[ScopeReason]int),
+		Transitions: make(map[provider.FailureReason]uint64, len(g.transitions)),
+		Probes:      make(map[ProbeOutcome]uint64, len(g.probeOutcomes)),
+	}
+	for scope, state := range g.scopes {
+		if !state.suspended() {
+			continue
+		}
+		counts.Current[ScopeReason{Kind: scope.Kind, Reason: state.evidence.Reason}]++
+	}
+	for reason, count := range g.transitions {
+		counts.Transitions[reason] = count
+	}
+	for key, count := range g.probeOutcomes {
+		counts.Probes[ProbeOutcome{Reason: key.reason, Outcome: key.outcome}] = count
+	}
+	return counts
+}
+
+// ForgetOutdatedCredentials drops suspensions recorded against a credential
+// revision the operator has already moved past.
+//
+// Without it the clear is traffic-dependent, and the traffic is exactly what the
+// suspension stopped. A credential refusal has no window and no Retry-After —
+// deliberately, since nothing is scheduled to fix it — so callers are being told
+// not to come back. An operator who then replaces the secret would see
+// halro_route_suspended and a critical HalroCredentialUnusable go on firing
+// until some request happened to arrive for that scope and trip the staleness
+// check on the way through. On a quiet alias that is never.
+//
+// Called on every registry reload, which is what a durable credential mutation
+// already triggers. So replacing the secret really is the whole of the fix, in
+// the way the runbook says it is.
+func (g *Gate) ForgetOutdatedCredentials(revisions map[string]uint64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for scope, state := range g.scopes {
+		credentialID := ""
+		switch scope.Kind {
+		case ScopeCredential:
+			credentialID = scope.Key
+		case ScopeCredentialModel:
+			credentialID, _, _ = strings.Cut(scope.Key, "\x00")
+		default:
+			continue
+		}
+		current, known := revisions[credentialID]
+		if !known {
+			// The credential is gone from the topology entirely — deleted, or
+			// its provider disabled. Nothing it was suspended for can matter,
+			// and keeping the entry would leak one scope per deleted credential
+			// for the life of the process.
+			delete(g.scopes, scope)
+			continue
+		}
+		if current > state.evidence.CredentialRevision {
+			delete(g.scopes, scope)
+		}
+	}
 }

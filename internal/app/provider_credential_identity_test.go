@@ -5,6 +5,10 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
+
+	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
 // A target has to know which secret it authenticates with, and which version of
@@ -69,5 +73,53 @@ func TestTargetsCarryTheCredentialTheyAuthenticateWith(t *testing.T) {
 	if reloaded.CredentialRevision <= before {
 		t.Fatalf("credential revision did not advance across an update: before=%d after=%d",
 			before, reloaded.CredentialRevision)
+	}
+}
+
+// Replacing a refused credential has to be the whole of the fix, and the reload
+// a credential mutation already triggers is where that happens.
+//
+// Left to the request path, the clear would wait for traffic — and a credential
+// refusal deliberately carries no window and no Retry-After, so callers have
+// been told not to come back. An operator who replaced the secret would watch a
+// critical alert keep firing on a quiet alias.
+func TestReplacingARefusedCredentialClearsItOnTheReloadItTriggers(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	seedProvider(t, cfg, false)
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+
+	target, ok := runtime.providers.Resolve("chat")
+	if !ok {
+		t.Fatal("the seeded route resolved to no target")
+	}
+	runtime.routes.Observe(target, routegate.Observation{
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
+	}, time.Now())
+	if len(runtime.routes.Snapshot(time.Now())) != 1 {
+		t.Fatal("the refused credential was not suspended")
+	}
+
+	credential, err := runtime.store.GetCredential(context.Background(), "cred_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential.Name = "OpenAI (rotated)"
+	if _, err := runtime.store.PutCredential(context.Background(), credential, credential.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The activation a durable credential mutation runs. No request is made.
+	if err := runtime.reloadProviderRegistry(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if suspensions := runtime.routes.Snapshot(time.Now()); len(suspensions) != 0 {
+		t.Fatalf("the replaced credential is still suspended after its reload: %+v", suspensions)
 	}
 }

@@ -122,6 +122,9 @@ an authentication boundary.
 | `halro_policy_rejections_total` | counter | `reason` |
 | `halro_provider_failure_reason_total` | counter | `reason`, `provider_status` |
 | `halro_provider_failure_reason_dropped_total` | counter | none |
+| `halro_route_suspended` | gauge | `scope_kind`, `reason` |
+| `halro_route_suspension_transitions_total` | counter | `reason` |
+| `halro_route_probe_admitted_total` | counter | `reason`, `outcome` |
 | `halro_provider_active_requests` | gauge | `provider_id` |
 | `halro_provider_concurrency_limit` | gauge | `provider_id` |
 | `halro_deployment_active_requests` | gauge | `deployment_id` |
