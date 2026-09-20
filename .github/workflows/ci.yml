@@ -72,6 +72,7 @@ jobs:
         run: |
           bash -n tools/release/build_deb.sh
           bash -n tools/release/test_deb.sh
+          bash -n tests/refusal-probe/probe.sh
           sh -n packaging/debian/halro.postinst
           sh -n packaging/debian/halro-deadman.postinst
           sh -n packaging/debian/package.postrm

@@ -56,7 +56,16 @@ Bedrock Runtime 五行 withheld，不在内；Kimi Code（`api.kimi.com`）同�
 A 命中后再叠两问确定 scope 宽窄：**同 key 换一个模型**再打（per-credential 还是 per-model）、
 **换一个 key 打同模型**（是否账号级）。
 
-统一模板，响应头必须留（`Retry-After` 在头里）：
+C 列（凭证失效）已经有脚本，零 token 成本，把 key 写在命令前面即可，没填的厂商自动跳过：
+
+```bash
+KIMI_KEY=sk-xxx MINIMAX_KEY=xxx tests/refusal-probe/probe.sh
+```
+
+它只打印状态码、`type`/`code` 这类枚举字段和 `Retry-After` 有无——不打印 key，
+也不打印响应体全文。要取 D 列（订阅未开通），换成真 key 加一个未订阅的模型再跑一遍。
+
+其余各列用统一模板，响应头必须留（`Retry-After` 在头里）：
 
 ```bash
 curl -sS -D - -o body.json -w '\n%{http_code} %{time_total}s\n' \
