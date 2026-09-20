@@ -1382,6 +1382,37 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     notifyCreated: "服务商已创建并热加载", notifyUpdated: "服务商已保存", notifyDeleted: "服务商已删除", notifyEnabled: "服务商已启用", notifyDisabled: "服务商已禁用",
     notifyCredentialSaved: "凭据已加密保存", notifyCredentialRotated: "凭据已轮换", notifyCredentialDeleted: "凭据已删除",
     types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI 兼容服务" },
+    // 这一块回答的是运维的问题——"我的请求为什么没走这个上游"，不是"网关内部把什么挂起了"。
+    // 标题用前者的说法。
+    suspensions: {
+      title: "正在被上游拒绝",
+      description: "上游拒绝过下面这些对象，网关暂时不会把请求发给它们。每一行都写明原因和恢复条件。",
+      subject: "对象",
+      cause: "上游怎么说的",
+      recovery: "什么时候恢复",
+      observed: "发现时间",
+      empty: "当前没有被拒绝的对象。",
+      loading: "正在读取…",
+      unavailable: "读不到准入状态，这一栏不代表没有被拒绝的对象。",
+      scopes: {
+        credential: "凭据",
+        credential_model: "凭据与模型",
+        deployment: "部署",
+        provider: "服务商",
+      },
+      untilReplaced: "需更换凭据",
+      untilTime: "至 {{time}}",
+      untilNextAttempt: "下一次请求时重试",
+      observedRevision: "拒绝发生在凭据版本 {{revision}}",
+      // 这三条是 error class 表达不了的区分：额度用尽不是限流，也不是凭据失效。
+      // 其余两种（凭据被拒、上游限流）复用 testControl.reasons，不另起一套说法。
+      reasons: {
+        subscription_quota_exhausted: "上游说额度已经用尽",
+        subscription_inactive: "上游说这个订阅没有生效",
+        entitlement_verification_unavailable: "上游无法确认这份凭据的权益",
+        unclassified: "上游拒绝了请求，原因未分类",
+      },
+    },
     eyebrow: "上游信任", title: "凭据与服务商", description: "服务商密钥加密保存在本机密钥库；运行时只按绑定的受众解密。",
     connectionSection: "连接与能力", connectionSectionDescription: "服务商类型决定 API 家族、认证方式和推荐能力；你可以选择这个连接实际开放的能力。", capacitySection: "凭据与容量", capacitySectionDescription: "绑定加密凭据并限制服务商级并发。", enableDescription: "启用后，模型部署可以使用这个上游连接。", disabledImpact: "模型部署无法使用这个上游连接", capabilitySectionDescription: "选择此连接开放的适用能力；具体模型只能再从中选择子集。", fixedCapabilityDescription: "该能力实现使用固定协议，无需额外配置。", capabilitySummary: "已选能力", advancedCapabilities: "适用能力", advancedCapabilitiesHint: "服务商类型提供推荐预设；未实现或不适用的能力不可选择。", selectedCapabilities: "已启用 {{count}} 项",
     addCredential: "＋ 凭据", addProvider: "＋ 服务商", addProxy: "＋ 出站代理",

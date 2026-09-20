@@ -481,6 +481,19 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .resource-list > button:hover, .resource-list > button.selected { border-color: var(--color-border-strong); background: var(--surface-2); }
 .resource-list > button.selected { box-shadow: inset 3px 0 var(--lime); }
 .resource-title { display: flex; align-items: center; gap: 9px; }
+/* The admission gate's panel on the Providers page. Its two secondary lines —
+   which kind of thing a row is about, and the credential revision a refusal was
+   seen against — are detail under the answer, not the answer, so they take the
+   same muted small type the rest of the console gives that role. Scoped to the
+   panel: a bare class here would be a fourth near-identical global. */
+.route-suspensions-panel .suspension-detail {
+  display: block; margin-top: var(--space-1);
+  color: var(--muted); font-size: var(--font-size-xs); white-space: normal;
+}
+.route-suspensions-panel .suspension-empty {
+  margin: 0; padding: var(--space-3) var(--space-5);
+  color: var(--muted); font-size: var(--font-size-xs);
+}
 .resource-meta { display: block; margin: 10px 0; color: var(--muted); font-size: var(--font-size-xs); }
 .detail-panel { --card-inset: 22px; min-width: 0; background: var(--surface-panel); border: 1px solid var(--line); }
 .detail-title h2 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 5px; }

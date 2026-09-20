@@ -55,6 +55,8 @@ const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
 
+import { RouteSuspensionsPanel } from "./RouteSuspensionsPanel";
+
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
 }
@@ -298,6 +300,10 @@ export function ProvidersPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const egress = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies });
+  // Read on its own rather than folded into `pending`: the gate is live state,
+  // and a page that will not render its connection list until it has heard
+  // about suspensions has made an unrelated read into a dependency of editing.
+  const suspensions = useQuery({ queryKey: ["route-suspensions"], queryFn: api.routeSuspensions });
   // What this build can serve. The forms cannot decide what to offer without it,
   // so they wait for it; the listing below does not, and stays readable either
   // way.
@@ -381,6 +387,18 @@ export function ProvidersPage() {
               {t("common.retry")}
             </button>
           }
+        />
+      )}
+      {/* Above the tabs, because a refusal is not about one of them: it can be
+          a credential, a connection, or one deployment, and an operator reading
+          any tab wants to know before they start editing. */}
+      {!pending && (
+        <RouteSuspensionsPanel
+          suspensions={suspensions.data?.items ?? []}
+          state={suspensions.isError ? "unavailable" : suspensions.data ? "ready" : "loading"}
+          credentials={credentialItems}
+          providers={providerItems}
+          deployments={deployments.data?.items ?? []}
         />
       )}
       {!pending && (
