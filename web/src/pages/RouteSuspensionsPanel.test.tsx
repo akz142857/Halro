@@ -1,5 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatInstant } from "../format";
+import { resetAccountingTimeZone, setAccountingTimeZone } from "../timezone";
 import i18n from "../i18n";
 import type { Credential, Deployment, Provider, RouteSuspension } from "../types";
 import { RouteSuspensionsPanel, TabRefusalMark, refusalCountsByTab } from "./RouteSuspensionsPanel";
@@ -22,7 +24,11 @@ function suspension(overrides: Partial<RouteSuspension> = {}): RouteSuspension {
   };
 }
 
-function renderPanel(items: RouteSuspension[], state: "loading" | "ready" | "unavailable" = "ready") {
+function renderPanel(
+  items: RouteSuspension[],
+  state: "loading" | "ready" | "unavailable" = "ready",
+  onRetry?: () => void,
+) {
   return render(
     <RouteSuspensionsPanel
       suspensions={items}
@@ -30,9 +36,12 @@ function renderPanel(items: RouteSuspension[], state: "loading" | "ready" | "una
       credentials={[credential]}
       providers={[provider]}
       deployments={[deployment]}
+      onRetry={onRetry}
     />,
   );
 }
+
+afterEach(() => resetAccountingTimeZone());
 
 describe("route suspensions panel", () => {
   it("names the credential rather than printing its identifier", () => {
@@ -86,7 +95,7 @@ describe("route suspensions panel", () => {
     // column carries a timestamp too, and a bare year matches both.
     const cells = within(screen.getByRole("table")).getAllByRole("cell");
     expect(cells[2]).toHaveTextContent(
-      i18n.t("providers.suspensions.untilTime", { time: new Date("2026-09-20T14:05:00Z").toLocaleString() }),
+      i18n.t("providers.suspensions.untilTime", { time: formatInstant("2026-09-20T14:05:00Z", "UTC") }),
     );
   });
 
@@ -106,6 +115,33 @@ describe("route suspensions panel", () => {
   it("puts the upstream status and code beside the reason", () => {
     renderPanel([suspension({ provider_status: 401, provider_code: "invalid_api_key" })]);
     expect(screen.getByText(/HTTP 401 · invalid_api_key/)).toBeVisible();
+  });
+
+  // Both timestamps here are read against another screen — "first seen" against
+  // a request on the usage page, "until" against a window someone else is
+  // watching — so the browser's zone is the one thing they must not be in.
+  it("renders its instants in the console's accounting zone, not the browser's", () => {
+    setAccountingTimeZone("Asia/Tokyo");
+    // 22:00 UTC is the next day in Tokyo, so a panel still reading the browser
+    // zone cannot accidentally agree with one that is not.
+    const instant = "2026-09-20T22:00:00Z";
+    renderPanel([suspension({ indefinite: false, until: instant, observed_at: instant })]);
+    const cells = within(screen.getByRole("table")).getAllByRole("cell");
+    expect(cells[3]).toHaveTextContent(formatInstant(instant, "Asia/Tokyo"));
+    expect(cells[3]).not.toHaveTextContent(formatInstant(instant, "UTC"));
+    expect(cells[2]).toHaveTextContent(
+      i18n.t("providers.suspensions.untilTime", { time: formatInstant(instant, "Asia/Tokyo") }),
+    );
+  });
+
+  // Nothing else on the page offers to try this read again: it is deliberately
+  // kept out of the page-level error state so the connection list never waits
+  // on it, which also leaves it without that error state's retry.
+  it("offers to read the gate again when it could not be read", () => {
+    const retry = vi.fn();
+    renderPanel([], "unavailable", retry);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("common.retry") }));
+    expect(retry).toHaveBeenCalledOnce();
   });
 
   // An exception list with no exception is not a table of em dashes above the

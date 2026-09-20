@@ -90,6 +90,24 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(await screen.findByText("读不到准入状态，这不等于没有被拒绝的对象。")).toBeVisible();
   });
 
+  // The panel names re-saving the credential as what ends an indefinite
+  // suspension. Nothing invalidated the gate read, so an operator did exactly
+  // that and the screen went on telling them to do it — until they navigated
+  // away and back.
+  it("re-reads the admission gate after the remedy it advertises", async () => {
+    vi.spyOn(api, "rotateCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "轮换" }));
+    const before = vi.mocked(api.routeSuspensions).mock.calls.length;
+    fireEvent.change(screen.getByLabelText(/新密钥/), { target: { value: "sk-replacement-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.routeSuspensions).mock.calls.length).toBeGreaterThan(before));
+  });
+
   it("wraps keyboard focus around all resource tabs", async () => {
     renderPage();
     const providers = await screen.findByRole("tab", { name: /服务商/ });

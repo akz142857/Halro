@@ -12,6 +12,7 @@
 // unexplained failures where there is one cause, which is why this reads the
 // gate's own scopes rather than the deployment list.
 import { useTranslation } from "react-i18next";
+import { useInstantFormatter } from "../format";
 import type { Credential, Deployment, Provider, RouteSuspension } from "../types";
 
 // suspensionReasonLabel turns a provider.FailureReason into a sentence.
@@ -115,21 +116,41 @@ export function TabRefusalMark({ count }: { count: number }) {
 }
 
 export function RouteSuspensionsPanel({
-  suspensions, state, credentials, providers, deployments,
+  suspensions, state, credentials, providers, deployments, onRetry, retrying,
 }: {
   suspensions: RouteSuspension[];
   state: SuspensionReadState;
   credentials: Credential[];
   providers: Provider[];
   deployments: Deployment[];
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   const { t } = useTranslation();
+  // Every instant in the console is rendered in the server's accounting zone,
+  // and this panel was reading the browser's. The two timestamps here are the
+  // ones an operator carries to another screen — "first seen" is matched
+  // against a request on Usage, "until" against a window someone else is
+  // watching — so an hour of disagreement here is worse than elsewhere.
+  const dateTime = useInstantFormatter();
   if (suspensions.length === 0) {
     // Read and answered: there is nothing to show, so nothing is shown.
     // Still reading: nothing yet either, and a table of dashes that turns into
     // rows a moment later is worse than the rows arriving on their own.
     if (state !== "unavailable") return null;
-    return <p className="notice warning route-suspensions-unavailable">{t("providers.suspensions.unavailable")}</p>;
+    // The read is the only one on this page that is deliberately not folded
+    // into the page-level error state — the connection list must not wait on
+    // it — which also means nothing else offers to try it again.
+    return (
+      <div className={`notice warning route-suspensions-unavailable${onRetry ? " has-action" : ""}`}>
+        <div className="notice-copy"><span>{t("providers.suspensions.unavailable")}</span></div>
+        {onRetry && (
+          <div className="notice-action">
+            <button className="button ghost" disabled={retrying} onClick={onRetry}>{t("common.retry")}</button>
+          </div>
+        )}
+      </div>
+    );
   }
   return (
     <section className="panel route-suspensions-panel" aria-labelledby="route-suspensions-heading">
@@ -183,7 +204,7 @@ export function RouteSuspensionsPanel({
                     {suspension.indefinite
                       ? <strong>{t("providers.suspensions.untilReplaced")}</strong>
                       : suspension.until
-                        ? t("providers.suspensions.untilTime", { time: new Date(suspension.until).toLocaleString() })
+                        ? t("providers.suspensions.untilTime", { time: dateTime(suspension.until) })
                         : t("providers.suspensions.untilNextAttempt")}
                     {/* The revision answers the question an operator asks after
                         they have already replaced the key: this is the one the
@@ -195,7 +216,7 @@ export function RouteSuspensionsPanel({
                       </span>
                     ) : null}
                   </td>
-                  <td>{new Date(suspension.observed_at).toLocaleString()}</td>
+                  <td>{dateTime(suspension.observed_at)}</td>
                 </tr>
               );
             })}

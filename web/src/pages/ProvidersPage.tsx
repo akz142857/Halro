@@ -303,7 +303,15 @@ export function ProvidersPage() {
   // Read on its own rather than folded into `pending`: the gate is live state,
   // and a page that will not render its connection list until it has heard
   // about suspensions has made an unrelated read into a dependency of editing.
-  const suspensions = useQuery({ queryKey: ["route-suspensions"], queryFn: api.routeSuspensions });
+  // Polled, unlike every other read on this page. The others change only when
+  // someone on this screen changes them; this one changes when an upstream
+  // refuses something or when a suspension window expires, neither of which
+  // this browser is party to. Without it a parked page keeps asserting a
+  // refusal that ended minutes ago — and the panel only renders while there is
+  // one, so a stale read is a panel that should not be on the screen at all.
+  const suspensions = useQuery({
+    queryKey: ["route-suspensions"], queryFn: api.routeSuspensions, refetchInterval: 30_000,
+  });
   // What this build can serve. The forms cannot decide what to offer without it,
   // so they wait for it; the listing below does not, and stays readable either
   // way.
@@ -404,6 +412,8 @@ export function ProvidersPage() {
           credentials={credentialItems}
           providers={providerItems}
           deployments={deployments.data?.items ?? []}
+          onRetry={() => { void suspensions.refetch(); }}
+          retrying={suspensions.isFetching}
         />
       )}
       {!pending && (
@@ -833,6 +843,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
     mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["route-suspensions"] });
       notify({ tone: "success", title: t("providers.notifyCredentialDeleted"), description: credential.name });
     },
   });
@@ -1017,6 +1028,11 @@ function CredentialForm({
     onSuccess: () => {
       setSecret("");
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      // The remedy the refusal panel points at. Saving advances the
+      // credential's revision, which is the one thing that ends an indefinite
+      // suspension — so the row it names has to be re-read here, or the
+      // operator does the fix and the screen keeps telling them to do it.
+      queryClient.invalidateQueries({ queryKey: ["route-suspensions"] });
       notify({ tone: "success", title: t(current ? "providers.notifyCredentialRotated" : "providers.notifyCredentialSaved"), description: name });
       onClose();
     },
