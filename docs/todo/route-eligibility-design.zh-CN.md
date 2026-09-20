@@ -84,8 +84,16 @@ target[1] try0 → count=3
 target[1] try1 → 3 < 3 为假，内层退出 → 外层 break
 ```
 
-**第三个候选永远试不到。** 配三个上游做跨平台回退时，第三个是摆设。本文不靠改这两个数字解决
-§1.2/§1.3，但阶段 1 要把默认值订正过来（§8）。
+**最坏情况下第三个候选不保证被尝试。** 「最坏情况」是每次尝试都真正发出并收到可重试错误；被
+断路器或并发闸门挡住的目标消耗 0 次预算，此时更靠后的目标仍然可达。所以 `⌈⌉` 是保证可达数的
+**下界**。
+
+这套算术不是本文发现的，[`docs/guides/alias-failover.zh-CN.md`](../guides/alias-failover.zh-CN.md) §三
+早就写着，包括这里的下界/上界之分。本文只是指出默认值把下界压到了 2。
+
+**已修正**：默认改为 `max_total_attempts: 4` + `max_attempts_per_target: 1`（下界 4），
+两组取值各有一个用例钉住。**既有 `config.yaml` 不受影响**——两个键已经写在文件里，新默认只对
+新装实例生效。这解决不了 §1.2/§1.3，那两条要靠 §2 之后的设计。
 
 ### 1.5 非目标
 
@@ -362,8 +370,8 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
    credential 在手）；
 2. `halro_provider_failure_reason_total{reason}` 上线，**先观察一段真实流量**；
 3. 按 §7 第 1、2、3 条跑上游取证矩阵，把 reason 分类表建起来；
-4. 订正 §1.4 的默认值：`retry.max_attempts_per_target: 1` + `gateway.max_total_attempts` 至少覆盖
-   常见候选数。跨平台回退的价值在"换一家"，不在"同一家再试一次"；
+4. ~~订正 §1.4 的默认值~~ **已完成**：`max_total_attempts: 4` + `max_attempts_per_target: 1`，
+   `TestOrderedFallbackReachesEveryCandidate` 与 `TestDefaultAttemptBudgetReachesAFanOut` 钉住；
 5. 把 §4.3 的时窗数字按 2、3 的结果复核后再冻结。
 
 **阶段 1 不依赖任何结构决定，且它的产出正是决定阶段 2 数字的依据。**
@@ -412,7 +420,8 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 |---|---|---|
 | 1 | `Route.Strategy` 只有 `ordered` 与 `round_robin` 两个合法值，空串按 ordered | `internal/domain/models.go:1298-1299` |
 | 2 | 候选按 `Priority` 升序、同 priority 按 ID 排 | `internal/provider/provider.go:698-709` |
-| 3 | round_robin 只旋转起点，且要求 `len(targets) >= 2` 且 `targets[0].Strategy == "round_robin"`——**同一 alias 下多条 route 策略不一致时，优先级最高那条说了算** | `internal/provider/provider.go:741-758` |
+| 3 | round_robin 只旋转起点，且要求 `len(targets) >= 2` 且 `targets[0].Strategy == "round_robin"` | `internal/provider/provider.go:741-758` |
+| 3b | 同一 alias 下策略不一致时**不是「谁优先谁说了算」**：`Register` 直接拒绝后注册的目标（`all targets for a public model must use the same strategy`），它被记为 withheld/`Dangling`；空策略先归一为 `ordered`，因此不构成不一致 | `internal/provider/provider.go:658-659,686-689`；`internal/app/providers.go:621` |
 | 4 | 候选解析先删 probe 不健康的 deployment，再按 operation 过滤 | `internal/provider/provider.go:760-767` |
 | 5 | `Target` 没有 `CredentialID`；`ProviderInstance.CredentialID` 有 | `internal/provider/provider.go:480-522`；`internal/domain/models.go:491` |
 | 6 | registry 构建时已经 `GetCredential` | `internal/app/providers.go:510` |
@@ -426,7 +435,7 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 | 14 | OpenAI 的 `Probe` 是 `GET /v1/models`（Azure 例外，走 chat/completions 路径） | `internal/provider/openai/adapter.go:371-392` |
 | 15 | 探针默认 30 s 一次，`Healthy = (err == nil)` | `internal/config/default.yaml:172`；`internal/app/health.go:115-125` |
 | 16 | `Retry-After` 已解析，今天只用于调退避 | `internal/provider/anthropic/adapter.go:860`；`internal/gateway/service.go:2659-2662` |
-| 17 | 默认 `gateway.max_total_attempts: 3` + `retry.max_attempts_per_target: 2` ⇒ **第三个候选永远试不到** | `internal/config/default.yaml:168,211`；`internal/gateway/service.go:1271-1380` |
+| 17 | 保证可达的候选数 = `⌈max_total_attempts / max_attempts_per_target⌉`，是**下界**（被断路器/并发挡住的目标消耗 0 次预算）。2026-09-20 前的默认 `3`+`2` 把下界压到 2；现默认 `4`+`1`，下界 4 | `internal/config/default.yaml`；`internal/gateway/service.go:1271-1380`；`docs/guides/alias-failover.zh-CN.md` §三 |
 | 18 | 零候选已分三种答案（unhealthy / unsupported / not found），注释写明为什么不能报 400 | `internal/gateway/service.go:334-348` |
 | 19 | 拒绝计数结构已存在 | `internal/gateway/service.go:898` |
 | 20 | console 措辞表 | `internal/app/admin_providers.go:777` |

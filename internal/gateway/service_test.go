@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -459,6 +460,20 @@ func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger
 	return newFixtureAt(t, dailyBudget, options, nil)
 }
 
+// newFixtureRetryingSameTarget is for the tests whose subject needs a second
+// attempt against the same target.
+//
+// One attempt per target is the default, because switching upstream is what
+// another candidate is for and a second try spends an attempt the next provider
+// could have had. A test that needs two therefore says so here, rather than
+// inheriting it from a default and failing the day that default moves — which is
+// how this helper came to exist.
+func newFixtureRetryingSameTarget(t *testing.T, dailyBudget int64, options ledger.Options) fixture {
+	return newFixtureShaped(t, dailyBudget, options, nil, nil, func(serviceOptions *ServiceOptions) {
+		serviceOptions.MaxAttemptsPerTarget = 2
+	})
+}
+
 // newFixtureAt wires one clock through both the accounting manager and the service. The
 // manager buckets a request into its accounting period using its own clock, so a test that
 // only overrode service.now would still write into the real current day and its assertion
@@ -676,7 +691,7 @@ func TestDurabilityFailurePreventsCurrentAndFutureProviderCalls(t *testing.T) {
 }
 
 func TestChatRetriesThenFallsBackInPriorityOrder(t *testing.T) {
-	f := newFixture(t, 10_000)
+	f := newFixtureRetryingSameTarget(t, 10_000, ledger.Options{})
 	defer f.close()
 	f.adapter.err = &provider.Error{
 		Class: provider.ErrorProvider5xx, Retryable: true, Message: "primary unavailable",
@@ -1622,7 +1637,7 @@ func TestProjectLimiterRejectionMetricsByReason(t *testing.T) {
 }
 
 func TestEmbeddingsRetriesAndFallsBack(t *testing.T) {
-	f := newFixture(t, 10_000)
+	f := newFixtureRetryingSameTarget(t, 10_000, ledger.Options{})
 	defer f.close()
 	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Message: "unavailable"}
 	fallback := &fakeAdapter{embeddingResponse: openaiapi.EmbeddingResponse{
@@ -1727,7 +1742,7 @@ func toolArgumentChunk(index int, arguments string) openaiapi.ChatCompletionResp
 }
 
 func TestChatStreamFallsBackOnlyBeforeFirstPayload(t *testing.T) {
-	f := newFixture(t, 10_000)
+	f := newFixtureRetryingSameTarget(t, 10_000, ledger.Options{})
 	defer f.close()
 	f.adapter.streamChunks = nil
 	f.adapter.streamUsage = nil
@@ -2377,5 +2392,85 @@ func TestACallerCancelIsNotAnAvailabilityFailure(t *testing.T) {
 	}
 	if retryable(canceled) {
 		t.Fatal("a canceled request must not be retried")
+	}
+}
+
+// TestOrderedFallbackReachesEveryCandidate pins the interaction between the two
+// attempt ceilings, because getting it wrong is silent: a configured fallback is
+// simply never called, and nothing in a log or a metric says so.
+//
+// The budget is shared. MaxAttemptsPerTarget decides how much of it one target
+// may spend before the loop moves on, so the number of candidates a request can
+// reach is ceil(MaxAttempts / MaxAttemptsPerTarget) — not the number of
+// candidates configured. At the 3-and-2 this repository shipped, a third route
+// could not be reached however it was configured, which is the second case here.
+func TestOrderedFallbackReachesEveryCandidate(t *testing.T) {
+	for _, testCase := range []struct {
+		name                 string
+		maxAttempts          int
+		maxAttemptsPerTarget int
+		wantCalls            [3]int
+	}{
+		{
+			name: "shipped defaults reach all three", maxAttempts: 4, maxAttemptsPerTarget: 1,
+			wantCalls: [3]int{1, 1, 1},
+		},
+		{
+			// The regression this change exists to prevent, in the worst case
+			// this test constructs: every attempt is really dispatched and
+			// really fails. A target refused before dispatch — an open breaker,
+			// a full concurrency gate — spends no budget, so the arithmetic is a
+			// floor on reachable candidates rather than a ceiling. Kept as a
+			// case rather than a comment so that restoring either number fails
+			// here with the third target's call count, which names the cost.
+			name: "three-and-two strands the third target", maxAttempts: 3, maxAttemptsPerTarget: 2,
+			wantCalls: [3]int{2, 1, 0},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			f := newFixture(t, 10_000_000)
+			defer f.close()
+			down := func() error {
+				return &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Message: "down"}
+			}
+			f.adapter.err = down()
+			second := &fakeAdapter{response: f.adapter.response, err: down()}
+			third := &fakeAdapter{response: f.adapter.response, err: down()}
+			for index, adapter := range []*fakeAdapter{second, third} {
+				if err := f.registry.Register(provider.Target{
+					ID:           fmt.Sprintf("target_%d", index+2),
+					DeploymentID: fmt.Sprintf("dep_target_%d", index+2),
+					PublicModel:  "chat", ProviderModel: "provider-model",
+					Adapter:                adapter,
+					Priority:               index + 1,
+					Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true},
+					InputMicrosPerMillion:  1_000_000,
+					OutputMicrosPerMillion: 2_000_000,
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{
+				MaxAttempts: testCase.maxAttempts, MaxAttemptsPerTarget: testCase.maxAttemptsPerTarget,
+				RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
+				// Out of the way: this test is about the attempt ceilings, and a
+				// breaker that opened partway through would change the walk for
+				// a reason of its own.
+				CircuitFailureThreshold: 1000, CircuitOpenDuration: time.Minute,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+				t.Fatal("every target failed but the request succeeded")
+			}
+			got := [3]int{f.adapter.calls, second.calls, third.calls}
+			if got != testCase.wantCalls {
+				t.Fatalf("calls=%v want=%v", got, testCase.wantCalls)
+			}
+			if f.state.PendingReservations() != 0 {
+				t.Fatalf("walking the candidates left %d pending reservations", f.state.PendingReservations())
+			}
+		})
 	}
 }

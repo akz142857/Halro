@@ -469,7 +469,10 @@ func TestARenderFailureAfterAFallbackDoesNotReportTheEarlierAttempt(t *testing.T
 // to say "the ledger could not take this" was written as a provider 5xx,
 // sending an operator upstream over a disk that could not be written.
 func TestAnAccountingFailureIsNotReportedAsAnEarlierProviderFailure(t *testing.T) {
-	f := newFixtureWithLedgerOptions(t, 1_000_000, ledger.Options{
+	// Two attempts per target, because the scenario is what happens on the
+	// second one: with the default single attempt there is no next reservation
+	// for the fault to land on.
+	f := newFixtureRetryingSameTarget(t, 1_000_000, ledger.Options{
 		MaxBatch: 1,
 		WrapDurability: func(file *os.File) ledger.DurabilityWriter {
 			// Enough writes for the request to be accepted and one attempt to

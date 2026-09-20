@@ -6,6 +6,25 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The default attempt budget reaches every target of a modest fallback chain.
+  `gateway.max_total_attempts` moves from 3 to 4 and `retry.max_attempts_per_target`
+  from 2 to 1. The budget is shared across the whole request, so the number of
+  candidates a request can reach in the worst case is
+  `ceil(max_total_attempts / max_attempts_per_target)` — at 3 and 2 that was two,
+  and an alias with a third route had it configured, enabled, healthy, and never
+  called unless something refused an earlier target before dispatch. One attempt
+  per target is also the better default on its own terms: asking the same upstream
+  again helps only a transient blip, and it spends an attempt the next provider
+  could have had. An alias with a single target has nowhere to fall back to and is
+  the case for raising it again.
+
+  **An existing `config.yaml` is not rewritten and keeps its current values** —
+  both keys are already written in the file, so this changes new installs only.
+  `docs/guides/alias-failover.zh-CN.md` has the arithmetic, including why the
+  figure is a floor rather than a ceiling.
+
 ## [0.8.5] - 2026-09-20
 
 ### Changed

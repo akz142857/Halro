@@ -939,8 +939,13 @@ func NewServiceWithOptions(
 	if authSnapshot == nil || registry == nil || accounting == nil {
 		return nil, errors.New("auth snapshot, provider registry, and accounting manager are required")
 	}
+	// These two are the library's fallback for a caller that supplies neither.
+	// Production always supplies both, from gateway.max_total_attempts and
+	// retry.max_attempts_per_target, and internal/config is where the numbers
+	// are chosen and explained; they are mirrored here so a Service built
+	// without options behaves the way a configured one does.
 	if options.MaxAttempts <= 0 {
-		options.MaxAttempts = 3
+		options.MaxAttempts = 4
 	}
 	if options.CircuitFailureThreshold <= 0 {
 		options.CircuitFailureThreshold = 5
@@ -952,7 +957,7 @@ func NewServiceWithOptions(
 		options.CircuitHalfOpenMaxRequests = 1
 	}
 	if options.MaxAttemptsPerTarget <= 0 {
-		options.MaxAttemptsPerTarget = 2
+		options.MaxAttemptsPerTarget = 1
 	}
 	if options.RetryBaseDelay <= 0 {
 		options.RetryBaseDelay = 100 * time.Millisecond

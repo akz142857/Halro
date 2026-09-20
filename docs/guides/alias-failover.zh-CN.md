@@ -65,17 +65,20 @@ accidentally inherit portable fallback behavior」。
 
 ```yaml
 gateway:
-  max_total_attempts: 3        # 整个请求的尝试总数上限
+  max_total_attempts: 4        # 整个请求的尝试总数上限
 retry:
-  max_attempts_per_target: 2   # 单个目标最多重试几次
+  max_attempts_per_target: 1   # 单个目标最多重试几次
 ```
 
 循环结构是 `for target { for targetTry }`，`attemptCount++` 在 `startAttempt` **成功之后**。
 所以：
 
 - **最坏情况**下（每次尝试都真正发出并返回可重试错误），保证可达的目标数是
-  `⌈max_total_attempts / max_attempts_per_target⌉`。默认值下是 **2**：目标一用掉 2 次，
-  目标二用掉第 3 次，目标三不会被尝试。
+  `⌈max_total_attempts / max_attempts_per_target⌉`。当前默认值下是 **4**。
+  2026-09-20 之前的默认是 `3` 与 `2`，算出来只有 **2**：目标一用掉 2 次，目标二用掉第 3 次，
+  目标三在最坏情况下不会被尝试。**升级不会改写已有的 `config.yaml`**——那两个键已经写在文件里，
+  新默认只影响新装实例，既有实例得自己改。两组取值各有一个用例钉住，见
+  `TestOrderedFallbackReachesEveryCandidate`（`internal/gateway/service_test.go`）。
 - 但被断路器或并发闸门挡住的目标**消耗 0 次预算**，此时更靠后的目标仍可达。
   `TestOpenCircuitSkipsFailedTarget`（`internal/gateway/service_test.go:623`）就是这个情形：
   `MaxAttempts: 3, MaxAttemptsPerTarget: 2`，主目标断路器打开，备目标拿到 2 次调用。
@@ -85,7 +88,8 @@ retry:
 
 `gateway.max_total_attempts` 是**启动期设置**，控制台只读。改它要编辑 `config.yaml`
 并重启进程——在单写者/单副本约束下，这是一次数据面中断，不是一次热更新。省略该键不会
-默认成 3，而是启动校验失败（`gateway.max_total_attempts must be at least 1`）。
+默认成 4，而是启动校验失败（`gateway.max_total_attempts must be at least 1`）——与
+`retry.max_attempts_per_target` 不同，那个键省略时会被补成默认值。
 
 ## 四、候选集是怎么算出来的
 

@@ -107,8 +107,13 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 		// dailyBudget is the fixture's, because one scenario needs a budget too
 		// small to reserve an attempt against.
 		dailyBudget int64
-		scenario    func(t *testing.T, f *fixture) func() error
-		want        failureCounts
+		// retriesSameTarget is set by the two cases whose expected warning count
+		// includes an attempt the primary spent on itself. The default is one
+		// attempt per target, so those cases have to ask for the second rather
+		// than inherit it.
+		retriesSameTarget bool
+		scenario          func(t *testing.T, f *fixture) func() error
+		want              failureCounts
 	}{
 		{
 			// The baseline. Without it every assertion below is satisfied by a
@@ -161,7 +166,8 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 			},
 			// Two warnings: the primary is retried against itself once before
 			// the fallback is reached.
-			want: failureCounts{outcome: "success", attemptWarnings: 2},
+			retriesSameTarget: true,
+			want:              failureCounts{outcome: "success", attemptWarnings: 2},
 		},
 		{
 			name:        "every target fails",
@@ -178,7 +184,11 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 					return err
 				}
 			},
-			want: failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 3, finalFailureErrors: 1},
+			// Four warnings: two targets at two attempts each. The three this
+			// expected before was the old total-attempt ceiling truncating the
+			// walk, not a property of the taxonomy.
+			retriesSameTarget: true,
+			want:              failureCounts{outcome: "provider_error", requestErrors: 1, attemptWarnings: 4, finalFailureErrors: 1},
 		},
 		{
 			// The upstream answered; the answer could not be put on the
@@ -237,6 +247,10 @@ func TestFailureTaxonomyIsTheSameInEveryView(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			f := newFixture(t, testCase.dailyBudget)
+			if testCase.retriesSameTarget {
+				f.close()
+				f = newFixtureRetryingSameTarget(t, testCase.dailyBudget, ledger.Options{})
+			}
 			defer f.close()
 			call := testCase.scenario(t, &f)
 			got := runFailureScenario(t, &f, call)

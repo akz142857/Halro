@@ -54,3 +54,36 @@ func TestWriteDefaultDoesNotReplaceExistingConfig(t *testing.T) {
 		t.Fatal("existing config was replaced")
 	}
 }
+
+// TestDefaultAttemptBudgetReachesAFanOut states the relation between the two
+// attempt ceilings as a property, because the numbers on their own do not show
+// it and getting it wrong is silent.
+//
+// The budget is shared across the whole request. max_attempts_per_target decides
+// how much of it one target may spend before the loop moves on, so the number of
+// distinct candidates a request can reach is
+// ceil(max_total_attempts / max_attempts_per_target) — not the number of routes
+// configured, and it is a floor: a target refused before dispatch (an open
+// breaker, a full concurrency gate) spends no budget, so later targets can still
+// be reached. Shipping 3 and 2 put that floor at two, which meant a third route
+// could be configured, enabled and healthy and still never called.
+func TestDefaultAttemptBudgetReachesAFanOut(t *testing.T) {
+	cfg := Default()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	total, perTarget := cfg.Gateway.MaxTotalAttempts, cfg.Retry.MaxAttemptsPerTarget
+	if perTarget < 1 {
+		t.Fatalf("retry.max_attempts_per_target=%d", perTarget)
+	}
+	reachable := (total + perTarget - 1) / perTarget
+	// Four rather than two: a default that cannot walk a modest fan-out turns
+	// configuration into decoration, and the operator has no signal that it did.
+	if reachable < 4 {
+		t.Fatalf(
+			"the default attempt budget reaches %d candidates (max_total_attempts=%d, max_attempts_per_target=%d); "+
+				"a route beyond that is configured and never called",
+			reachable, total, perTarget,
+		)
+	}
+}
