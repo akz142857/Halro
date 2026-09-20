@@ -326,6 +326,12 @@ reservation 帧；checkpoint 引用 Ledger 序号）在 index 顺序里保持。
 被计入 confirmed。ordering fsync 可与下一批存储写合并，但确认要等它。这样 Primary 崩溃后重启，
 任何被确认过的 index 在本地都有记录，不需要"补分配"。
 
+**为什么不是一条统一日志。** dqlite 式的做法是所有内容进同一条物理日志，全序天然存在，一次 fsync
+就够——本文付的第二次 fsync（ordering）正是四个存储换来的。否决它的理由不是工程量：统一日志要求
+Ledger/Audit/Governance 的盘上格式变成它的视图，而"复制各存储今天已经在写的那些字节"（§6.2.2）
+最大的省钱项恰恰是 ADR 0014/0016 的帧契约与其崩溃测试**一个字节都不用改**。用一次可与下一批合并的
+fsync，换掉三套格式的重写与重新验证，是划算的。
+
 #### 6.2.2 帧
 
 ```json
@@ -339,6 +345,10 @@ reservation 帧；checkpoint 引用 Ledger 序号）在 index 顺序里保持。
 journal 帧。格式一个字节都不改，ADR 0014/0016 的帧契约与其崩溃测试原样有效。Replica 用共享密钥
 校验后才落盘。任意 index 前缀都是 Primary 各存储在某一时刻共同处于的持久状态。
 
+**因此不需要跨存储的 commit marker。** SQLite WAL 帧末位带提交标记，dqlite 的 follower 只应用到
+提交边界；本文没有跨存储的原子单元，也不需要——"应用了 Ledger 的 reservation 帧、还没应用引用它的
+pin commit 帧"是 Primary 自己也经过的状态（不变量 6）。单个 metadata 事务仍是单帧原子的（§6.1.2）。
+
 #### 6.2.3 结构事件
 
 Ledger 封存代滚动（Roll）是结构事件：`structural` 携带**整条 `Segment`**（`generation`、
@@ -347,6 +357,15 @@ Replica 校验本地 `offset == length`、`plain digest == plain_checksum`、链
 rename 与 manifest 写入。`compressed`、`stored_length`、`stored_checksum`、文件名后缀是**节点本地**
 形态：压缩留在各节点自己的维护 tick 上（gzip 输出不跨 Go 版本稳定），Replica 应用 Roll 时忽略它们。
 不变量 6 因此是**帧级**前缀，不是文件字节级。
+
+**但 Replica 上压缩的门槛要重定义，否则上面这句话在 Replica 上是空的。**
+`compactLedgerSegments` 今天的门是 `ledgerArchivedThrough = min(Parquet manifest LastSequence,
+usage checkpoint Sequence)`（`internal/app/ledger_seal.go:86,119-138`），而 §6.2.4 在 Replica 上
+禁用 `exportUsageParquet`——manifest 读不到就 `return 0, false`，**Replica 会永远不压缩任何一代**。
+那道门的目的是"这一代可以搬下机器了"（同文件注释），不是正确性，所以 Replica 侧去掉 Parquet 项、
+只留 usage checkpoint（C 类，只推进到 confirmed index）。压缩只改节点本地的 `segments.json` 与
+文件名，不写 A/B/D 类键、不产生权威帧，因此不威胁帧级前缀。不重定义的代价是 Replica 的封存归档
+保持未压缩、约为 Primary 的 5 倍（压缩"takes the archive to roughly a fifth"，`ledger_seal.go:32`）。
 
 **Roll 结构事件只在该代最后一帧 `≤ confirmed_index` 之后发出**，使 Roll 永远不落在未确认后缀里
 ——否则 §11.2 的截断会需要"撤销 Roll"，而实测表明截断点跨过一次 Roll 时 Ledger 直接拒绝打开
@@ -362,10 +381,16 @@ rename 与 manifest 写入。`compressed`、`stored_length`、`stored_checksum`�
   Primary 的合并层同宽，否则逐帧 `db.Update` 约 830 tx/s 会比 Primary 慢一个数量级），且**只应用
   `index ≤ confirmed_index` 的帧**（Primary 在帧流里携带当前 confirmed）；
 - Replica 周期性向 Primary 报告 `applied_index`；`durable − applied` 超阈值即 `not_candidate` 并告警；
-- Replica 上**禁用**：seal/compact tick、`exportUsageParquet`、Audit 锚点发送、告警投递、
+- Replica 上**禁用**：seal tick（compact **不**禁用，但门槛按 §6.2.3 重定义）、
+  `exportUsageParquet`、Audit 锚点发送、告警投递、
   `runUsageMaintenance` 对 `token_guard_checkpoint` 的写；C 类 checkpoint 只推进到 confirmed index。
   实测 Replica apply 链（帧校验 189k/s、`State.Apply` 602k/s、Usage 聚合 4.2M/s，darwin）高于
   Primary 生成速率，稳态 lag 有界；bbolt 侧的界由批量应用保证。
+
+**为什么 Replica 要派生。** dqlite 式的 follower 什么都不派生，回退因此只是截断文件。本文让 Replica
+推进 `ledger.State`、内存 Usage 聚合与 C 类 checkpoint，代价就是 §11.2 的投影回退与
+`token_guard_checkpoint` 这类坑。买到的是 RTO：一个不派生的 Replica 在提升那一刻要付满一次冷重放，
+而那正是 §16.3 的提升耗时目标要跑赢的数（10 GiB WAL、近 1 MiB 帧 profile：68.578 s）。
 
 ### 6.3 提交规则：谁等 ACK
 
@@ -793,6 +818,8 @@ keep-alive 连接没有 RST，客户端先等超时；SDK 的重试地平线（1
 - StatefulSet，`replicas: 2` 或 `3`，`podManagementPolicy: Parallel`，`updateStrategy: OnDelete`；
 - 每 Pod 一个 `ReadWriteOncePod` PVC，`persistentVolumeClaimRetentionPolicy: Retain`；
   **PVC 退役流程**：scale-down 后的 PVC 必须显式销毁或以新 incarnation 隔离（§14.1）；
+  **容量**：Replica 的压缩落后于 Primary（一个 tick 一代，播种后还有一段未压缩积压），PVC 按积压
+  定容而不是按 Primary 当前占用；若不做 §6.2.3 的门槛重定义，按 5 倍封存归档定容；
 - Headless Service（`publishNotReadyAddresses: true`）供成员发现，客户端 Service 按 §13.2；
 - anti-affinity / topology spread；PDB `minAvailable: 2`（3 节点）；2 节点不设 PDB；
 - NetworkPolicy 只允许成员访问 `replication.listen`（今天的 Standalone 清单没有 NetworkPolicy 对象，
@@ -947,6 +974,7 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 | **至多一个进程确认权威写** | 双 Runtime 分区 + promote，任何时刻 `confirmed` 只在一个 term 内推进；§8.2 表每一行都有用例 | 是 |
 | 提升到落后节点被拒绝（含 `(term, index)` 字典序反例：位置更大但 term 更旧的旧分叉节点必须被拒）；旧 Primary 回归被降级、后缀截断、投影重建 | 截断后重开：`reconcileLedgerChainCheckpoint`、`reconcileAuditCheckpoint`、`restoreGovernanceState`、`RecoverDeploymentPricePins` 全部通过；`halro doctor` / `ledger verify` / `audit verify` 与 Standalone 相同 | 是 |
 | 吊销类写在切换后不复活 | 撤销一个 Gateway Key → 杀 Primary → 提升 → 该 Key 仍被拒 | 是 |
+| **Replica 的本地维护不得触碰被复制的字节** | 在 Replica 上把每个维护 tick 强制触发一遍（seal、`exportUsageParquet`、Audit 锚点、告警投递、`runUsageMaintenance`），四个权威存储的明文帧与 Primary 同偏移前缀仍相同，`token_guard_checkpoint` 未被空 manager 覆盖 | 是 |
 | 对象：临时写、rename、目录 fsync、receipt、元数据帧各点故障；缺对象节点不推进 applied | 无占位文件；applied 停在引用帧之前 | 是 |
 | 磁盘满、只读、慢盘、帧损坏、MAC 不匹配、密钥挑战失败、SPKI 不匹配 | fail closed 且原因可见 | 部分：真实 ENOSPC/慢盘需目标环境 |
 | Replica `--replica` 备份 + 启动追赶，与 Primary 持续写、Roll 并发 | 备份前后 Replica 各权威文件的明文帧与 Primary 同偏移前缀相同；`audit verify` 记录数不变；隔离环境完整恢复为新 incarnation | 恢复演练是人工 |
@@ -989,11 +1017,11 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 1. Primary 侧：提交路径内的 index 分配、ordering journal、批次发送、ACK 聚合、`confirmed_index`、
    `ReplicationUnavailable` 状态、§6.3.1/§6.3.2 的两类写；
-2. Replica 侧：顺序落盘、校验、ACK、异步批量 apply（bbolt 上限 confirmed）、apply 自报、禁用清单；
-   第三种 bbolt 打开模式（§15）；
+2. Replica 侧：顺序落盘、校验、ACK、异步批量 apply（bbolt 上限 confirmed）、apply 自报、禁用清单
+   与压缩门槛重定义（§6.2.3）；第三种 bbolt 打开模式（§15）；
 3. 结构事件（整条 `Segment`）、Roll 只在 confirmed 后；
 4. 播种（含审批、staging）、追赶、`member_requires_full_reseed`、对象通道（§9）；
-5. §17 前六项门禁 + 可控传输 + 新增注入缝 + 客户端确认历史记录器。
+5. §17 前七项门禁 + 可控传输 + 新增注入缝 + 客户端确认历史记录器。
 
 ### Phase 2：提升、备份与部署（[#108](https://github.com/akz142857/Halro/issues/108)）
 
@@ -1093,6 +1121,16 @@ bbolt `NoSync` 崩溃后没有可补齐的起点（bbolt 上游注释写明 `THI
 账务记录按现有 Ledger schema **写不出来**（`Validate` 无条件要求 `ProjectID`，而能说出受影响
 Project 的正是丢掉的那些字节）；"分叉恢复 ≡ 崩溃恢复"经实测证伪。
 
+2026-09-20 又做过一次与 dqlite（SQLite WAL 帧物理复制 + Raft）的对照评估。结论是本文的分层是对的
+而且理由可以说得更准：物理复制在**自己拥有的格式**上便宜，在**别人的引擎**上昂贵——ledger/audit/
+governance 是 Halro 自己的成帧日志所以走物理，bbolt 是唯一一个不是 Halro 写的存储，所以 metadata
+journal 走 op 级。页级复制 bbolt 被否决的三条已核实理由：524 KiB 的库上每事务约 5 个脏页（页大小
+= `os.Getpagesize()`，darwin/arm64 是 16 KiB），在 250 µs 合批下等于每秒复制整库上百遍；脏页集与
+写出口在 bbolt 里都未导出，拿到 delta 要永久自养一个 fork；C/E 类节点本地键与 A/B/D 类同住一个
+文件，页级复制无法容纳它们。这一轮的产出是 §6.2.1、§6.2.2、§6.2.4 的三段理由，§6.2.3 的压缩门槛
+修正，以及 §17 那条"本地维护不得触碰被复制字节"的门禁——它正是 dqlite 的经典崩法（follower 自己
+checkpoint）在本文里的对应物。
+
 评审的方法记录：**一份新方案不会因为更短或设计取向更有吸引力，而继承前一份方案的评审成果。**
 并列方案必须各自过同一道门。
 
@@ -1135,3 +1173,6 @@ Project 的正是丢掉的那些字节）；"分叉恢复 ≡ 崩溃恢复"经�
 | 28 | 现有 K8s 清单是 Deployment / `replicas: 1` / `Recreate`，无 NetworkPolicy 对象 | `deploy/kubernetes/halro-aws-kms.yaml:9,14,16` |
 | 29 | 观测门禁要求 runbook 链接指向 `/docs/` 下真实文件的 `### <AlertName>` 小节 | `deploy/observability/runbook_links_test.go:13-63` |
 | 30 | Ledger 帧 epoch 4/5 带 MAC 与哈希链；`usage.wal_max_batch` 默认 128、`wal_flush_interval` 2 ms | `internal/ledger/log.go:30-42,97-99`；`internal/config/config.go:249-250` |
+| 31 | seal 与 compact 是同一 tick 上的两次独立调用，可分别禁用 | `internal/app/runtime.go:1177-1178`；`ledger_seal.go:10-32` |
+| 32 | `compactLedgerSegments` 的门是 `min(Parquet manifest LastSequence, usage checkpoint Sequence)`，manifest 读不到即 `return 0, false`；压缩把归档降到约五分之一 | `internal/app/ledger_seal.go:86,119-138,32` |
+| 33 | bbolt 页大小 = `os.Getpagesize()`（`Options.PageSize` 全仓未设）；脏页集 `tx.pages` 与写出口 `db.ops.writeAt` 均未导出 | bbolt v1.5.0 `internal/common/types.go:34`、`tx.go:520-546`；`internal/store/bolt/` grep |
