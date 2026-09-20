@@ -538,9 +538,24 @@ type Target struct {
 	operations            OperationRegistry
 }
 
+// Eligibility answers whether targets may be used right now.
+//
+// The interface is declared here, and implemented in internal/routegate, so the
+// registry can ask without depending on the thing that decides. What it replaced
+// was a probe verdict map on the registry and a circuit breaker in the gateway,
+// each keyed differently and neither able to see the other — which is how a
+// target could be filtered out by one and admitted by the other.
+type Eligibility interface {
+	Filter(targets []Target, now time.Time) []Target
+}
+
 type Registry struct {
-	mu      sync.RWMutex
-	targets map[string][]Target
+	mu sync.RWMutex
+	// eligibility is nil until wired, and a nil gate admits everything: a
+	// registry built in a test has no upstream health to know about, and
+	// refusing every target would be a worse default than admitting them.
+	eligibility Eligibility
+	targets     map[string][]Target
 	// next holds one rotation counter per public model, created when the alias
 	// is first registered so the resolve path never has to insert into the map.
 	next map[string]*atomic.Uint64
@@ -548,7 +563,6 @@ type Registry struct {
 	// Provider ID as their binding identity.
 	adapters         map[string]Adapter
 	providerBindings map[string][]string
-	health           map[string]DeploymentProbe
 	// Why a provider or binding has no adapter here, keyed by binding identity
 	// and by Provider ID for a provider-wide exclusion. It lives beside the
 	// adapters rather than next to the load report so it swaps with them: a
@@ -562,7 +576,6 @@ func NewRegistry() *Registry {
 		targets: make(map[string][]Target), next: make(map[string]*atomic.Uint64),
 		adapters:         make(map[string]Adapter),
 		providerBindings: make(map[string][]string),
-		health:           make(map[string]DeploymentProbe),
 		unavailable:      make(map[string]string),
 	}
 }
@@ -754,7 +767,13 @@ func (r *Registry) ResolveCandidatesFor(publicModel string, operation Operation)
 func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	targets := r.resolveCandidatesLocked(publicModel, operation, minimum)
+	// The wall clock, read here rather than injected. Resolution is not on a
+	// replayed path — nothing it decides is written to the ledger — and the
+	// gateway's own injectable clock still governs everything that is. A second
+	// clock threaded through every resolve call site would buy testability for
+	// the one caller that does not need it.
+	now := time.Now()
+	targets := r.resolveCandidatesLocked(publicModel, operation, minimum, now)
 	if len(targets) < 2 || targets[0].Strategy != "round_robin" {
 		return targets
 	}
@@ -774,12 +793,16 @@ func (r *Registry) ResolveCandidatesForEvidence(publicModel string, operation Op
 	return append(targets[offset:], targets[:offset]...)
 }
 
-func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence) []Target {
+func (r *Registry) resolveCandidatesLocked(publicModel string, operation Operation, minimum domain.CapabilityEvidence, now time.Time) []Target {
 	targets := cloneTargets(r.targets[publicModel])
-	targets = slices.DeleteFunc(targets, func(target Target) bool {
-		probe, probed := r.health[target.DeploymentID]
-		return target.DeploymentID != "" && probed && !probe.Healthy
-	})
+	// Eligibility first, then capability. The order is the same one the probe
+	// filter had, and resolveRequest's triage depends on it: an alias whose
+	// every deployment is refused resolves to zero candidates for every
+	// operation, and saying "unsupported" there would blame the request for an
+	// upstream state.
+	if r.eligibility != nil {
+		targets = r.eligibility.Filter(targets, now)
+	}
 	return filterByOperation(targets, operation, minimum)
 }
 
@@ -885,65 +908,13 @@ func cloneTargets(targets []Target) []Target {
 	return result
 }
 
-// DeploymentProbe is the last active probe result for one deployment.
-//
-// It carries why as well as whether, because the verdict alone leaves an
-// operator with a deployment that is enabled, tested and priced and still takes
-// no traffic. The reason is the classified error only: a probe failure's
-// sentence is the upstream's prose about the request, and it stays inside the
-// error rather than being copied into state the console and the logs read.
-type DeploymentProbe struct {
-	Healthy    bool
-	ObservedAt time.Time
-	// Empty when healthy. The classified form the console already has wording
-	// for, so a probe failure and a manual test failure read the same way.
-	ErrorClass string
-}
-
-// SetDeploymentProbe records an active-probe result. Unknown deployments remain
-// eligible so startup and transient probe scheduling cannot black-hole traffic.
-func (r *Registry) SetDeploymentProbe(deploymentID string, probe DeploymentProbe) {
-	if deploymentID == "" {
-		return
-	}
+// SetEligibility installs the gate candidate resolution asks. It survives
+// Replace, because a reload changes which targets exist and not what is known
+// about the upstreams behind them.
+func (r *Registry) SetEligibility(eligibility Eligibility) {
 	r.mu.Lock()
-	r.health[deploymentID] = probe
+	r.eligibility = eligibility
 	r.mu.Unlock()
-}
-
-// RetainDeploymentProbes drops the probe result of every deployment not named.
-//
-// Nothing else removes one. Replace carries forward whatever it does not
-// overwrite, which is right — a reload must not report a healthy deployment as
-// unprobed — but it means a deleted deployment kept its last verdict for the
-// life of the process, and the metrics exporter kept emitting
-// halro_deployment_up for an ID that no longer exists. A label set that only
-// ever grows is the shape this repo bans by name.
-//
-// The caller is the probe loop, which reads the deployment list from the store
-// and is therefore the only place that knows which IDs are still real.
-func (r *Registry) RetainDeploymentProbes(deploymentIDs []string) {
-	live := make(map[string]struct{}, len(deploymentIDs))
-	for _, id := range deploymentIDs {
-		live[id] = struct{}{}
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for id := range r.health {
-		if _, ok := live[id]; !ok {
-			delete(r.health, id)
-		}
-	}
-}
-
-func (r *Registry) DeploymentProbes() map[string]DeploymentProbe {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make(map[string]DeploymentProbe, len(r.health))
-	for deploymentID, probe := range r.health {
-		result[deploymentID] = probe
-	}
-	return result
 }
 
 func (r *Registry) ProviderTypes() []string {
@@ -1078,31 +1049,22 @@ func (r *Registry) Replace(next *Registry) []Adapter {
 	replacementNext := next.next
 	replacementAdapters := next.adapters
 	replacementProviderBindings := next.providerBindings
-	replacementHealth := next.health
 	replacementUnavailable := next.unavailable
 	next.targets = make(map[string][]Target)
 	next.next = make(map[string]*atomic.Uint64)
 	next.adapters = make(map[string]Adapter)
 	next.providerBindings = make(map[string][]string)
-	next.health = make(map[string]DeploymentProbe)
 	next.unavailable = make(map[string]string)
 	next.mu.Unlock()
 
 	r.mu.Lock()
 	oldTargets := r.targets
 	oldAdapters := r.adapters
-	oldHealth := r.health
 	r.targets = replacementTargets
 	r.next = replacementNext
 	r.adapters = replacementAdapters
 	r.providerBindings = replacementProviderBindings
-	r.health = replacementHealth
 	r.unavailable = replacementUnavailable
-	for deploymentID, probe := range oldHealth {
-		if _, exists := r.health[deploymentID]; !exists {
-			r.health[deploymentID] = probe
-		}
-	}
 	r.mu.Unlock()
 
 	active := make(map[Adapter]struct{})
@@ -1150,7 +1112,6 @@ func (r *Registry) Close() {
 	r.next = make(map[string]*atomic.Uint64)
 	r.adapters = make(map[string]Adapter)
 	r.providerBindings = make(map[string][]string)
-	r.health = make(map[string]DeploymentProbe)
 	for adapter := range adapters {
 		adapter.Close()
 	}

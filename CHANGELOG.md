@@ -6,6 +6,39 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking configuration change.** The `circuit_breaker` section is replaced by
+  `routing`, and an instance that still has the old section refuses to start with
+  a message naming the three keys that moved. It is a refusal rather than a
+  silent default because the two are not the same control: the breaker counted
+  only upstreams that stopped answering, and counted an upstream that answered
+  and refused — a 429, a 401, a spent quota — as a *success* that cleared its
+  failure streak.
+
+  `consecutive_failures` becomes `routing.availability_failures`, `open_duration`
+  becomes `routing.suspend_for` (with a new `routing.max_suspend_for` ceiling it
+  doubles towards), and `half_open_max_requests` becomes
+  `routing.probe_requests`.
+
+- An upstream that refuses to serve is now remembered, and remembered against
+  the thing the refusal was actually about. A dead credential behind five
+  deployments is discovered once rather than five times; a spent quota stops
+  collecting a failed attempt from every request; and a refusal the gate has
+  recorded no longer ends the request that found it, so a 401 falls over to the
+  next provider instead of failing the caller. Ambiguous failures still stop the
+  walk, because a 5xx that may already be billing must not be duplicated
+  elsewhere.
+
+  Credential refusals do not expire on a clock — a dead key does not heal — and
+  clear when the operator replaces the secret, so fixing it is the whole of the
+  fix. Everything else uses a doubling window that honours the upstream's own
+  `Retry-After` where it gave one.
+
+  This replaces the circuit breaker and the registry's probe-health map, which
+  were two answers to one question, keyed differently and unable to see each
+  other. `internal/circuit` is removed.
+
 ### Added
 
 - `halro_provider_failure_reason_total{reason, provider_status}` counts upstream

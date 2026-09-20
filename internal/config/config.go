@@ -21,21 +21,25 @@ import (
 const SchemaVersion = 1
 
 type Config struct {
-	Version        int            `yaml:"version"`
-	Server         Server         `yaml:"server"`
-	TLS            TLS            `yaml:"tls"`
-	Storage        Storage        `yaml:"storage"`
-	Admin          Admin          `yaml:"admin"`
-	Usage          Usage          `yaml:"usage"`
-	Ledger         Ledger         `yaml:"ledger"`
-	Gateway        Gateway        `yaml:"gateway"`
-	Retry          Retry          `yaml:"retry"`
-	CircuitBreaker CircuitBreaker `yaml:"circuit_breaker"`
-	Alerts         Alerts         `yaml:"alerts"`
-	Security       Security       `yaml:"security"`
-	Metrics        Metrics        `yaml:"metrics"`
-	Audit          Audit          `yaml:"audit"`
-	ModelCatalog   ModelCatalog   `yaml:"model_catalog"`
+	Version int     `yaml:"version"`
+	Server  Server  `yaml:"server"`
+	TLS     TLS     `yaml:"tls"`
+	Storage Storage `yaml:"storage"`
+	Admin   Admin   `yaml:"admin"`
+	Usage   Usage   `yaml:"usage"`
+	Ledger  Ledger  `yaml:"ledger"`
+	Gateway Gateway `yaml:"gateway"`
+	Retry   Retry   `yaml:"retry"`
+	Routing Routing `yaml:"routing"`
+	// omitempty so a retired section is only ever read, never written: without
+	// it the console enumerates three unlabelled knobs that do nothing, and
+	// `halro config` would offer an operator the very section it refuses.
+	CircuitBreaker RetiredCircuitBreaker `yaml:"circuit_breaker,omitempty"`
+	Alerts         Alerts                `yaml:"alerts"`
+	Security       Security              `yaml:"security"`
+	Metrics        Metrics               `yaml:"metrics"`
+	Audit          Audit                 `yaml:"audit"`
+	ModelCatalog   ModelCatalog          `yaml:"model_catalog"`
 	// LegacyProviders keeps v0.8.1 configuration files readable. Provider
 	// connection defaults moved into the Admin-managed credential workflow in
 	// v0.8.2, so this section is validated but no longer drives runtime state.
@@ -575,10 +579,44 @@ type Retry struct {
 	Jitter               bool     `yaml:"jitter"`
 }
 
-type CircuitBreaker struct {
+// Routing is when a route target stops being offered and when it is tried
+// again.
+//
+// Only the availability figures are here. What to do about an upstream that
+// stated its refusal — out of quota, subscription lapsed, key revoked — is not
+// configurable: those windows follow from who said what, and inviting an
+// operator to tune them before anyone has measured the distribution is asking
+// the wrong person. The distribution is what
+// halro_provider_failure_reason_total is collecting.
+type Routing struct {
+	// AvailabilityFailures is how many consecutive failures with no stated
+	// reason take a target out. More than one, because a single 5xx is noise.
+	AvailabilityFailures int `yaml:"availability_failures"`
+	// SuspendFor is the first suspension, doubling to MaxSuspendFor each time a
+	// probe fails again.
+	SuspendFor    Duration `yaml:"suspend_for"`
+	MaxSuspendFor Duration `yaml:"max_suspend_for"`
+	// ProbeRequests is how many requests may test a suspended target once its
+	// window is up.
+	ProbeRequests int `yaml:"probe_requests"`
+}
+
+// RetiredCircuitBreaker exists only to be refused.
+//
+// Configuration decodes with KnownFields, so deleting the section outright would
+// stop an existing instance with `field circuit_breaker not found` — accurate,
+// and no help at all to the operator holding the file. Keeping the shape lets
+// Validate say what replaced it. It is not a second implementation and nothing
+// reads these values; the moment one did, this would be the compatibility layer
+// pre-1.0.0 exists to avoid.
+type RetiredCircuitBreaker struct {
 	ConsecutiveFailures int      `yaml:"consecutive_failures"`
 	OpenDuration        Duration `yaml:"open_duration"`
 	HalfOpenMaxRequests int      `yaml:"half_open_max_requests"`
+}
+
+func (c RetiredCircuitBreaker) present() bool {
+	return c.ConsecutiveFailures != 0 || c.OpenDuration != 0 || c.HalfOpenMaxRequests != 0
 }
 
 type Alerts struct {
@@ -798,9 +836,6 @@ func (c *Config) Normalize() error {
 	if c.Retry.MaxDelay == 0 {
 		c.Retry.MaxDelay = Duration(2 * time.Second)
 	}
-	if c.CircuitBreaker.ConsecutiveFailures == 0 {
-		c.CircuitBreaker.ConsecutiveFailures = 5
-	}
 	if c.Metrics.MaxConcurrentScrapes == 0 {
 		c.Metrics.MaxConcurrentScrapes = 2
 	}
@@ -827,11 +862,17 @@ func (c *Config) Normalize() error {
 	if c.Gateway.HealthProbeInterval == 0 {
 		c.Gateway.HealthProbeInterval = Duration(30 * time.Second)
 	}
-	if c.CircuitBreaker.OpenDuration == 0 {
-		c.CircuitBreaker.OpenDuration = Duration(30 * time.Second)
+	if c.Routing.AvailabilityFailures == 0 {
+		c.Routing.AvailabilityFailures = 5
 	}
-	if c.CircuitBreaker.HalfOpenMaxRequests == 0 {
-		c.CircuitBreaker.HalfOpenMaxRequests = 1
+	if c.Routing.SuspendFor == 0 {
+		c.Routing.SuspendFor = Duration(30 * time.Second)
+	}
+	if c.Routing.MaxSuspendFor == 0 {
+		c.Routing.MaxSuspendFor = Duration(5 * time.Minute)
+	}
+	if c.Routing.ProbeRequests == 0 {
+		c.Routing.ProbeRequests = 1
 	}
 	if c.Alerts.QueueCapacity == 0 {
 		c.Alerts.QueueCapacity = 1024
@@ -1181,9 +1222,18 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Retry.BaseDelay <= 0 || c.Retry.MaxDelay < c.Retry.BaseDelay {
 		problems = append(problems, errors.New("retry delays must be positive and max_delay must be at least base_delay"))
 	}
-	if c.CircuitBreaker.ConsecutiveFailures < 1 || c.CircuitBreaker.OpenDuration <= 0 ||
-		c.CircuitBreaker.HalfOpenMaxRequests < 1 {
-		problems = append(problems, errors.New("circuit_breaker values must be positive"))
+	if c.CircuitBreaker.present() {
+		problems = append(problems, errors.New(
+			"circuit_breaker has been replaced by routing: consecutive_failures is now "+
+				"routing.availability_failures, open_duration is routing.suspend_for, and "+
+				"half_open_max_requests is routing.probe_requests. Remove the circuit_breaker "+
+				"section. It covered only upstreams that stopped answering; routing also covers "+
+				"upstreams that answer and refuse, which the breaker counted as success"))
+	}
+	if c.Routing.AvailabilityFailures < 1 || c.Routing.SuspendFor <= 0 ||
+		c.Routing.MaxSuspendFor < c.Routing.SuspendFor || c.Routing.ProbeRequests < 1 {
+		problems = append(problems, errors.New(
+			"routing values must be positive and max_suspend_for must be at least suspend_for"))
 	}
 	if c.Alerts.QueueCapacity < 1 || c.Alerts.Workers < 1 || c.Alerts.Timeout <= 0 ||
 		c.Alerts.MaxAttempts < 1 || c.Alerts.BaseDelay <= 0 ||

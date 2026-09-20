@@ -85,6 +85,12 @@ type Gate struct {
 	config   Config
 	policies map[provider.FailureReason]Policy
 	scopes   map[Scope]*scopeState
+	// probes is the last active-probe verdict per deployment, kept for the
+	// console and the metrics endpoint. It lives here rather than on the
+	// registry because a reload replaces the registry and must not replace what
+	// is known about upstream health — carrying it across a swap was extra
+	// machinery that a gate outside the registry simply does not need.
+	probes map[string]DeploymentProbe
 }
 
 func New(config Config) *Gate {
@@ -92,24 +98,27 @@ func New(config Config) *Gate {
 		config:   config.withDefaults(),
 		policies: DefaultPolicies(),
 		scopes:   make(map[Scope]*scopeState),
+		probes:   make(map[string]DeploymentProbe),
 	}
 }
 
 // policyFor maps one observation onto the treatment its reason earns.
 //
 // An observation with no canonical reason is still evidence that something is
-// not serving, and which thing depends on whether an upstream answered at all: a
-// status means the upstream spoke, so the failure is about the deployment that
-// spoke badly; no status means nothing was reached, which is about the endpoint.
-// Collapsing the two would suspend a whole provider because one model returned
-// a 500, and on a large provider that is routine.
+// not serving, and which thing depends on whether an upstream answered at all.
+// A refused dial or a timeout before headers is about the endpoint; anything
+// else — a 5xx, a body that would not parse — is one deployment answering badly,
+// which on a large provider is routine and says nothing about the other models
+// behind the same address. Collapsing the two would suspend a whole provider
+// because one model returned a 500.
 func (g *Gate) policyFor(observation Observation) (Policy, bool) {
 	if policy, known := g.policies[observation.Reason]; known && observation.Reason != "" {
 		return policy, true
 	}
-	scope := ScopeProvider
-	if observation.Status > 0 || observation.Malformed {
-		scope = ScopeDeployment
+	scope := ScopeDeployment
+	if observation.Status == 0 && !observation.Malformed &&
+		(observation.Class == provider.ErrorConnect || observation.Class == provider.ErrorTimeout) {
+		scope = ScopeProvider
 	}
 	return availabilityPolicy(
 		scope, g.config.AvailabilityThreshold,
@@ -140,13 +149,22 @@ func (g *Gate) scopeAndPolicy(observation Observation, target provider.Target) (
 // through its Lease instead, which gives back the half-open slot it claimed
 // before recording what it learned.
 func (g *Gate) Observe(target provider.Target, observation Observation, now time.Time) {
+	g.observeReporting(target, observation, now)
+}
+
+// observeReporting is Observe, and says whether the scope came out of service as
+// a result.
+func (g *Gate) observeReporting(target provider.Target, observation Observation, now time.Time) bool {
 	scope, policy, ok := g.scopeAndPolicy(observation, target)
 	if !ok {
-		return
+		return false
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	before := g.scopes[scope] != nil && g.scopes[scope].suspended()
 	g.observeLocked(scope, policy, observation, now)
+	state := g.scopes[scope]
+	return state != nil && state.suspended() && !before
 }
 
 func (g *Gate) observeLocked(scope Scope, policy Policy, observation Observation, now time.Time) {
@@ -231,10 +249,9 @@ func staleLocked(scope Scope, state *scopeState, target provider.Target) bool {
 	return target.CredentialRevision > state.evidence.CredentialRevision
 }
 
-// blockingScopes lists the scopes that would refuse this target, and whether
-// every one of them would tolerate a probe if nothing else were available.
-func (g *Gate) blockingScopes(target provider.Target, now time.Time) (blocked []Scope, probeable bool) {
-	probeable = true
+// blockingScopes lists the scopes that would refuse this target.
+func (g *Gate) blockingScopes(target provider.Target, now time.Time) []Scope {
+	var blocked []Scope
 	for _, scope := range scopesOf(target) {
 		state := g.scopes[scope]
 		if state == nil || !state.suspended() {
@@ -248,11 +265,8 @@ func (g *Gate) blockingScopes(target provider.Target, now time.Time) (blocked []
 			continue
 		}
 		blocked = append(blocked, scope)
-		if !state.policy.ProbeWhenNothingElseIsLeft {
-			probeable = false
-		}
 	}
-	return blocked, probeable
+	return blocked
 }
 
 // Filter removes targets that are suspended, preserving order.
@@ -262,11 +276,11 @@ func (g *Gate) blockingScopes(target provider.Target, now time.Time) (blocked []
 // deleted, no upstream round trip. Admit still checks, because resolution and
 // dispatch are not the same instant and the probe slot has to be claimed once.
 //
-// When filtering would leave nothing, one dropped target is handed back if every
-// scope blocking it is the kind that might be wrong — availability, a rate limit
-// that may have lifted. Reasons the upstream stated outright are not: an account
-// with no quota answers the same way to the next request, so a refusal that
-// costs no round trip is both faster for the caller and cheaper for everyone.
+// Filtering everything away is a real answer, not a failure of nerve. The
+// suspension window is what bounds how often a failing upstream is retried, and
+// letting a request through because nothing else is left would remove that bound
+// exactly when the upstream is least likely to answer. The caller is better
+// served by a fast refusal that says why, and the window ends in a probe anyway.
 func (g *Gate) Filter(targets []provider.Target, now time.Time) []provider.Target {
 	if len(targets) == 0 {
 		return targets
@@ -274,19 +288,10 @@ func (g *Gate) Filter(targets []provider.Target, now time.Time) []provider.Targe
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	admitted := make([]provider.Target, 0, len(targets))
-	var fallback []provider.Target
 	for _, target := range targets {
-		blocked, probeable := g.blockingScopes(target, now)
-		if len(blocked) == 0 {
+		if len(g.blockingScopes(target, now)) == 0 {
 			admitted = append(admitted, target)
-			continue
 		}
-		if probeable {
-			fallback = append(fallback, target)
-		}
-	}
-	if len(admitted) == 0 && len(fallback) > 0 {
-		return fallback[:1]
 	}
 	return admitted
 }
@@ -332,20 +337,30 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 	return &Lease{gate: g, target: target, claimed: claimed}, nil
 }
 
-// Done reports what the attempt learned. A nil observation means the upstream
-// answered; anything else is the refusal it answered with.
-func (l *Lease) Done(observation *Observation, now time.Time) {
+// Done reports what the attempt learned, and says whether that took something
+// out of service.
+//
+// The caller needs the answer. A refusal the gate now remembers is one the next
+// candidate can be tried against, because the cost of that discovery has been
+// paid once and will not be paid again until the suspension lifts — which is
+// what makes walking on after a stated refusal safe, where without a memory it
+// meant every request paying the same failed round trip.
+//
+// A nil observation means the upstream answered.
+func (l *Lease) Done(observation *Observation, now time.Time) bool {
 	if l == nil {
-		return
+		return false
 	}
+	suspended := false
 	l.once.Do(func() {
 		if observation == nil {
 			l.gate.ObserveSuccess(l.target, now)
 			return
 		}
 		l.gate.releaseClaims(l.claimed)
-		l.gate.Observe(l.target, *observation, now)
+		suspended = l.gate.observeReporting(l.target, *observation, now)
 	})
+	return suspended
 }
 
 // Abandon releases the claim without letting the attempt speak for anything.

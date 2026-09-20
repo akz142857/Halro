@@ -220,10 +220,20 @@ retry:
   max_delay: 2s
   jitter: true
 
-circuit_breaker:
-  consecutive_failures: 5
-  open_duration: 30s
-  half_open_max_requests: 1
+# When a route target stops being offered, and when it is tried again. Only the
+# availability figures are here: what to do about an upstream that stated its
+# refusal — out of quota, subscription lapsed, key revoked — follows from who
+# said what, and is not a dial.
+routing:
+  # Consecutive failures with no stated reason before a target is taken out.
+  # More than one, because a single 5xx is noise.
+  availability_failures: 5
+  # The first suspension, doubling up to max_suspend_for each time a probe finds
+  # the upstream still failing.
+  suspend_for: 30s
+  max_suspend_for: 5m0s
+  # How many requests may test a suspended target once its window is up.
+  probe_requests: 1
 
 alerts:
   queue_capacity: 1024

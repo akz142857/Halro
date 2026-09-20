@@ -115,7 +115,8 @@ target[1] try1 → 3 < 3 为假，内层退出 → 外层 break
 
 | 失败 | 真实作用域 |
 |---|---|
-| 连接失败 / 超时 / 5xx | provider instance（端点 + region） |
+| 连接失败 / 超时（**没拿到回应**） | provider instance（端点 + region） |
+| 5xx / 响应无法解析（**上游答了**） | deployment |
 | 429 rate limit | credential × model，有时 credential |
 | 额度用尽 | **credential**（余额）或 credential × model（配额） |
 | 订阅停用 / 凭据失效 | **credential** |
@@ -138,6 +139,13 @@ target 可用 ⟺ 它所属的每个 scope 都没被挂起。第一个 401 挂�
 
 **方向性原则：搞错窄方向只是少救一点，搞错宽方向会误伤**——一个模型的配额用尽不该让整个
 credential 下线。**默认取最窄的 scope，只在有证据时放宽**（§7 第 2 条）。
+
+> **实现时按这条原则劈开了 availability。** 初稿把 connect / timeout / 5xx / malformed 整类
+> 映射到 provider。对"没拿到任何回应"（拒绝连接、headers 前超时）是对的——那是端点的事;对 5xx
+> 不对——那是**某一个模型答得不好**，在大厂上游属于常态，说明不了同一地址后面其它模型有问题。
+> 整类映射到 provider 意味着一个模型返回 500 就让整个 provider 下的所有 deployment 下线，正是这条
+> 原则要防的宽方向错误。判据用 **`ErrorClass`** 而不是状态码：adapter 可能分类了 5xx 却没填状态码，
+> 靠"状态码为 0"去判端点会判错。
 
 前置改动：`Target`（`provider.go:480-522`）今天**没有** `CredentialID`。registry 构建时
 `internal/app/providers.go:510` 已经 `GetCredential` 了，把 `CredentialID` 与 credential 的
@@ -255,13 +263,26 @@ observed-at、以及（credential scope）观察时的 credential `Revision`。�
 
 ### 4.3 每个 reason 的时窗与阈值
 
-| reason | 阈值 | 初始窗口 | 扩展 | 上限 | 恢复判据 | 候选清空时 |
-|---|---|---|---|---|---|---|
-| availability（connect / timeout / 5xx / malformed） | 连续 5 次 | 30 s | ×2 | 5 min | 主动探针**或**真实请求 | 放一个探针 |
-| `rate_limited` | 1 次 | `Retry-After`，无则 1 s | ×2 | 60 s | 真实请求 | 放一个探针 |
-| `subscription_quota_exhausted` | 1 次 | `Retry-After`，无则 15 min | ×2 | 6 h | **仅真实请求** | **直接 503** |
-| `subscription_inactive` / `invalid_credential` | 1 次 | **无限期** | — | — | **credential revision 前进** | **直接 503** |
-| `entitlement_verification_unavailable` | 1 次 | 30 s | ×2 | 5 min | 真实请求 | 放一个探针 |
+| reason | 阈值 | 初始窗口 | 扩展 | 上限 | 恢复判据 |
+|---|---|---|---|---|---|
+| availability（无 reason 的失败） | 连续 5 次（**主动探针失败 1 次**） | 30 s | ×2 | 5 min | 主动探针**或**真实请求 |
+| `rate_limited` | 1 次 | `Retry-After`，无则 1 s | ×2 | 60 s | 真实请求 |
+| `subscription_quota_exhausted` | 1 次 | `Retry-After`，无则 15 min | ×2 | 6 h | **仅真实请求** |
+| `subscription_inactive` / `invalid_credential` | 1 次 | **无限期** | — | — | **credential revision 前进** |
+| `entitlement_verification_unavailable` | 1 次 | 30 s | ×2 | 5 min | 真实请求 |
+
+> **"候选清空时"那一列没有实现，理由在推演后反转了。** 初稿让 availability 类在"全部候选都挂起"时
+> 放一个请求进去，而不是直接拒。但**挂起窗口是唯一限制"多久重试一次失败上游"的东西**，因为没有别的
+> 选择就越过它，等于在上游最不可能应答的时刻取消这个限制;而 half-open 名额限的是并发不是速率，所以
+> 繁忙 alias 上换来的是"一串调用方各拿一个慢失败"，而不是"所有调用方拿一个快的 503 + `Retry-After`"。
+> 默认窗口 30 s，到期照样会放探针,所以这个越权买到的只是窗口内那批调用方更差的答案。
+>
+> 这个区分真正该体现的地方是**答案的形状而不是多一次尝试**:因配额而下线的 alias 要说出是配额，
+> 不能读起来像一次瞬时故障。那属于 §5.1 的 503 分型。
+>
+> **主动探针失败按 1 次即挂起**，不走 availability 阈值:那个阈值的存在理由是"真实流量里单次 5xx
+> 是噪声"，而探针是一次专门为回答这个问题而发的检查。让它再等四次，等于让一个已死的 deployment
+> 继续吃好几个探测周期的流量。
 
 两点说明：
 

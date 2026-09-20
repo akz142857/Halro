@@ -16,9 +16,14 @@ type Observation struct {
 	// Reason is the canonical cross-provider conclusion, empty when the
 	// classifier reached none.
 	Reason provider.FailureReason
+	// Class is how the adapter classified the failure. It is what decides
+	// whether an upstream answered at all, and therefore whether the failure is
+	// about one deployment or about the endpoint. The status alone cannot: an
+	// adapter may classify a 5xx without filling one in, and a scope chosen from
+	// a missing number would be the endpoint's by accident.
+	Class provider.ErrorClass
 	// Status is the upstream's HTTP status, or 0 for a failure that never got
-	// one. The zero is load-bearing: it is how a refused dial is told apart from
-	// a 500, and those are facts about different things.
+	// one. Kept as evidence rather than as a signal.
 	Status int
 	// Code is the upstream's machine-readable code, already narrowed through
 	// provider.SafeProviderIdentifier by the caller.
@@ -64,17 +69,24 @@ type Policy struct {
 	// HonourRetryAfter takes the upstream's own number as the first window when
 	// it gave one. It is the only case where the window is not Halro's guess.
 	HonourRetryAfter bool
-	// ProbeWhenNothingElseIsLeft admits one request through a suspended scope
-	// when every candidate is suspended, rather than refusing outright.
-	//
-	// True where the suspension is a guess about availability — the upstream may
-	// well be back, and a caller waiting is better served by one attempt than by
-	// a certain refusal. False where the upstream stated the refusal: sending a
-	// request to an account with no quota buys a round trip and the same answer,
-	// so a 503 with no upstream call at all is strictly better for the caller
-	// and strictly cheaper for everyone.
-	ProbeWhenNothingElseIsLeft bool
 }
+
+// The design this implements had one more field here: whether to let a request
+// through a suspended scope when every candidate was suspended, rather than
+// refusing outright. It is not implemented, because working it through turned it
+// into the opposite of a favour.
+//
+// The suspension window is the only thing bounding how often a failing upstream
+// is retried. Overriding it because nothing else is available removes that bound
+// exactly when the upstream is least likely to answer, and the half-open slot
+// caps concurrency rather than rate — so a busy alias would hand a steady stream
+// of callers a slow failure instead of handing all of them a fast 503 with a
+// Retry-After. The window is 30 seconds by default and ends in a probe either
+// way, so what the override buys is a worse answer for the callers inside it.
+//
+// What the distinction does earn is the answer's shape rather than an extra
+// attempt: an alias that is down because its quota is spent says so, and does
+// not read as a transient outage. That belongs in the refusal, not here.
 
 // DefaultPolicies is the table §4.3 of the design specifies.
 //
@@ -89,24 +101,16 @@ func DefaultPolicies() map[provider.FailureReason]Policy {
 			Scope: ScopeCredentialModel, Threshold: 1,
 			Window: time.Second, MaxWindow: time.Minute,
 			Recovery: RecoverAfterWindow, HonourRetryAfter: true,
-			ProbeWhenNothingElseIsLeft: true,
 		},
 		provider.FailureReasonSubscriptionQuotaExhausted: {
 			Scope: ScopeCredentialModel, Threshold: 1,
 			Window: 15 * time.Minute, MaxWindow: 6 * time.Hour,
 			Recovery: RecoverAfterWindow, HonourRetryAfter: true,
-			// No probe when nothing is left: a quota that is spent answers the
-			// same way to the next request, so the caller pays a round trip for
-			// a refusal they were going to get anyway.
-			ProbeWhenNothingElseIsLeft: false,
 		},
 		provider.FailureReasonEntitlementVerificationUnavailable: {
 			Scope: ScopeCredential, Threshold: 1,
 			Window: 30 * time.Second, MaxWindow: 5 * time.Minute,
 			Recovery: RecoverAfterWindow, HonourRetryAfter: true,
-			// Unlike the two above, this one says the upstream could not tell —
-			// so it may be able to next time, and a probe is worth it.
-			ProbeWhenNothingElseIsLeft: true,
 		},
 		provider.FailureReasonInvalidCredential: {
 			Scope: ScopeCredential, Threshold: 1,
@@ -127,7 +131,6 @@ func availabilityPolicy(scope ScopeKind, threshold int, window, maxWindow time.D
 	return Policy{
 		Scope: scope, Threshold: threshold,
 		Window: window, MaxWindow: maxWindow,
-		Recovery:                   RecoverAfterWindow,
-		ProbeWhenNothingElseIsLeft: true,
+		Recovery: RecoverAfterWindow,
 	}
 }

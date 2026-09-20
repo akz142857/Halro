@@ -20,6 +20,15 @@ var consumedByAccessor = map[string]string{
 	"RequestsPerMinute": "SourceRateLimit.SourceRequestsPerMinute",
 }
 
+// refusedOnSight names sections that exist only so an operator who still has
+// them gets a sentence instead of a bare decoding error. Nothing reads their
+// values and nothing should: the whole section is rejected. Each entry carries
+// the text Validate must produce, so an exemption cannot outlive the refusal it
+// claims to stand for — delete the check and this test says so.
+var refusedOnSight = map[string]string{
+	"CircuitBreaker": "circuit_breaker has been replaced by routing",
+}
+
 // TestEveryConfigFieldIsReadSomewhere refuses a setting the binary does not
 // act on. gateway.stream_idle_timeout survived for a long time as a field that
 // was declared, defaulted, validated as positive and documented in the
@@ -38,6 +47,15 @@ func TestEveryConfigFieldIsReadSomewhere(t *testing.T) {
 		for index := range typ.NumField() {
 			field := typ.Field(index)
 			if strings.Split(field.Tag.Get("yaml"), ",")[0] == "" {
+				continue
+			}
+			if refusal, retired := refusedOnSight[field.Name]; retired {
+				// Against this package's own source: the refusal is Validate's
+				// job, and the module scan deliberately skips internal/config.
+				if !strings.Contains(configPackageSource(t), refusal) {
+					t.Errorf("%s%s is exempted as a section that is refused, but nothing refuses it",
+						path, field.Name)
+				}
 				continue
 			}
 			if field.Type.Kind() == reflect.Struct && field.Type.Name() != "Duration" {
@@ -63,6 +81,30 @@ func TestEveryConfigFieldIsReadSomewhere(t *testing.T) {
 // readModuleSource returns every non-test Go file outside this package. Tests
 // are excluded on purpose: a field only a test sets is still a field nothing
 // acts on.
+// configPackageSource is this package's own non-test source, for the one check
+// that is about what internal/config does rather than about what reads it.
+func configPackageSource(t *testing.T) string {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var builder strings.Builder
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		payload, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		builder.Write(payload)
+		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
 func readModuleSource(t *testing.T) string {
 	t.Helper()
 	root, err := filepath.Abs("../..")

@@ -385,22 +385,27 @@ retry:
   # @description.en-US Adds randomized jitter to retry backoff.
   jitter: true
 
-circuit_breaker:
-  # @title.zh-CN 连续失败阈值
-  # @title.en-US Consecutive failure threshold
-  # @description.zh-CN 触发断路器打开所需的连续失败次数。
-  # @description.en-US Consecutive failures required to open the circuit breaker.
-  consecutive_failures: 5
-  # @title.zh-CN 断路器打开时间
-  # @title.en-US Circuit open duration
-  # @description.zh-CN 断路器进入半开状态前保持打开的时间。
-  # @description.en-US Time the circuit remains open before entering half-open state.
-  open_duration: 30s
-  # @title.zh-CN 半开探测请求数
-  # @title.en-US Half-open probe requests
-  # @description.zh-CN 半开状态允许同时执行的探测请求数。
-  # @description.en-US Probe requests allowed concurrently in half-open state.
-  half_open_max_requests: 1
+routing:
+  # @title.zh-CN 可用性失败阈值
+  # @title.en-US Availability failure threshold
+  # @description.zh-CN 连续多少次“没有明确理由”的失败后，把一个目标移出候选。大于 1，因为单次 5xx 是噪声。
+  # @description.en-US Consecutive failures with no stated reason before a target is taken out of service. More than one, because a single 5xx is noise.
+  availability_failures: 5
+  # @title.zh-CN 首次挂起时长
+  # @title.en-US Initial suspension
+  # @description.zh-CN 第一次挂起的时长；每当探测发现上游仍在失败，就翻倍，直到上限。
+  # @description.en-US The first suspension, doubling each time a probe finds the upstream still failing, up to the maximum.
+  suspend_for: 30s
+  # @title.zh-CN 挂起时长上限
+  # @title.en-US Maximum suspension
+  # @description.zh-CN 挂起时长翻倍的上限。
+  # @description.en-US Ceiling the suspension window doubles towards.
+  max_suspend_for: 5m0s
+  # @title.zh-CN 探测请求数
+  # @title.en-US Probe requests
+  # @description.zh-CN 挂起窗口结束后，允许多少个请求去试探这个目标。
+  # @description.en-US How many requests may test a suspended target once its window is up.
+  probe_requests: 1
 
 alerts:
   # @title.zh-CN 告警队列容量

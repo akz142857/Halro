@@ -89,33 +89,33 @@ func TestACredentialSuspensionEndsOnlyWhenTheSecretIsReplaced(t *testing.T) {
 	}
 }
 
-// An upstream that stated the refusal will state it again. Spending a round trip
-// to hear the same answer costs the caller latency and buys nothing, so a
-// quota-suspended alias answers without calling anyone. Availability is the
-// opposite case: the guess may be wrong, and one attempt is better than a
-// certain refusal.
-func TestNothingLeftAdmitsAProbeOnlyWhereTheRefusalMightBeWrong(t *testing.T) {
+// Filtering everything away is the answer, not a failure of nerve: the window is
+// what bounds how often a failing upstream is retried, and overriding it because
+// nothing else is left removes the bound exactly when the upstream is least
+// likely to answer. A fast refusal beats a slow one, and the window ends in a
+// probe regardless.
+func TestEverySuspendedCandidateLeavesNothing(t *testing.T) {
 	for _, testCase := range []struct {
-		name      string
-		reason    provider.FailureReason
-		status    int
-		wantProbe bool
+		name   string
+		reason provider.FailureReason
+		status int
 	}{
-		{name: "quota exhausted answers the same way", reason: provider.FailureReasonSubscriptionQuotaExhausted, status: 402},
-		{name: "a rate limit may have lifted", reason: provider.FailureReasonRateLimited, status: 429, wantProbe: true},
-		{name: "availability is a guess", status: 503, wantProbe: true},
+		{name: "quota exhausted", reason: provider.FailureReasonSubscriptionQuotaExhausted, status: 402},
+		{name: "rate limited", reason: provider.FailureReasonRateLimited, status: 429},
+		{name: "availability", status: 503},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			gate := New(Config{AvailabilityThreshold: 1})
 			target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
-			gate.Observe(target, Observation{Reason: testCase.reason, Status: testCase.status}, base)
+			gate.Observe(target, Observation{
+				Reason: testCase.reason, Status: testCase.status, Class: provider.ErrorProvider5xx,
+			}, base)
 
-			got := gate.Filter([]provider.Target{target}, base)
-			if testCase.wantProbe && len(got) != 1 {
-				t.Fatalf("no probe was offered with nothing else left: %v", ids(got))
+			if got := gate.Filter([]provider.Target{target}, base); len(got) != 0 {
+				t.Fatalf("a suspended candidate was offered anyway: %v", ids(got))
 			}
-			if !testCase.wantProbe && len(got) != 0 {
-				t.Fatalf("a stated refusal was probed anyway: %v", ids(got))
+			if _, err := gate.Admit(target, base); err != ErrSuspended {
+				t.Fatalf("admit = %v, want ErrSuspended", err)
 			}
 		})
 	}
@@ -152,8 +152,16 @@ func TestAvailabilityScopeFollowsWhetherTheUpstreamAnswered(t *testing.T) {
 		},
 		{
 			name:         "a failure with no answer is about the endpoint",
-			observation:  Observation{},
+			observation:  Observation{Class: provider.ErrorConnect},
 			wantSurvivor: "",
+		},
+		{
+			// The status is evidence, not the signal. An adapter that classified
+			// a 5xx without filling one in must not have the endpoint suspended
+			// on its behalf.
+			name:         "a 5xx with no status is still about the deployment",
+			observation:  Observation{Class: provider.ErrorProvider5xx},
+			wantSurvivor: "route_2",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -330,5 +338,61 @@ func TestClearRemovesASuspension(t *testing.T) {
 	}
 	if _, err := gate.Admit(target, base); err != nil {
 		t.Fatalf("admit after clear: %v", err)
+	}
+}
+
+// The probe endpoint is a model listing. It consumes no quota, so an account at
+// zero balance answers it perfectly well — and if a passing probe cleared a
+// credential suspension, traffic would go back to an upstream that is still
+// refusing, once every probe interval, forever.
+func TestAPassingProbeDoesNotClearACredentialSuspension(t *testing.T) {
+	gate := New(Config{})
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonSubscriptionQuotaExhausted, Status: 402,
+	}, base)
+
+	gate.ObserveProbe("dep_1", DeploymentProbe{Healthy: true, ObservedAt: base}, base)
+
+	if _, err := gate.Admit(target, base); err != ErrSuspended {
+		t.Fatalf("a model-list probe cleared a quota suspension: %v", err)
+	}
+}
+
+// A probe is evidence about the deployment it probed and nothing wider: it asked
+// about one model, so it cannot tell an endpoint outage from one model
+// misbehaving.
+func TestAFailingProbeSuspendsOnlyItsOwnDeployment(t *testing.T) {
+	gate := New(Config{AvailabilityThreshold: 1})
+	first := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	sibling := targetOn("route_2", "dep_2", "cred_1", "model-b", "provider_1", 1)
+	gate.ObserveProbe("dep_1", DeploymentProbe{ObservedAt: base, ErrorClass: "connect"}, base)
+
+	if got := ids(gate.Filter([]provider.Target{first, sibling}, base)); !equal(got, []string{"route_2"}) {
+		t.Fatalf("filtered = %v, want the sibling deployment to survive", got)
+	}
+	probes := gate.DeploymentProbes()
+	if probe, ok := probes["dep_1"]; !ok || probe.Healthy || probe.ErrorClass != "connect" {
+		t.Fatalf("probe verdict not readable for the console: %+v", probes)
+	}
+}
+
+// State outliving its deployment is how a metrics exporter came to emit a series
+// for an ID that no longer exists.
+func TestRetainDeploymentsForgetsProbesAndSuspensionsAlike(t *testing.T) {
+	gate := New(Config{AvailabilityThreshold: 1})
+	gone := targetOn("route_1", "dep_gone", "cred_1", "model-a", "provider_1", 1)
+	gate.ObserveProbe("dep_gone", DeploymentProbe{ObservedAt: base, ErrorClass: "connect"}, base)
+	gate.Observe(gone, Observation{Status: 500}, base)
+
+	gate.RetainDeployments([]string{"dep_still_here"})
+
+	if probes := gate.DeploymentProbes(); len(probes) != 0 {
+		t.Fatalf("a deleted deployment kept its probe verdict: %+v", probes)
+	}
+	for _, suspension := range gate.Snapshot(base) {
+		if suspension.Scope.Kind == ScopeDeployment && suspension.Scope.Key == "dep_gone" {
+			t.Fatalf("a deleted deployment kept its suspension: %+v", suspension)
+		}
 	}
 }

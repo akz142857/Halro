@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
 func (r *Runtime) runActiveDeploymentProbes(ctx context.Context) {
@@ -44,7 +45,7 @@ func (r *Runtime) probeDeployments(ctx context.Context) {
 	// caught. Collected before the probes run and applied after, so a record
 	// written during this pass is not pruned by a list read before it.
 	live := make([]string, 0, len(deployments))
-	defer func() { r.providers.RetainDeploymentProbes(live) }()
+	defer func() { r.routes.RetainDeployments(live) }()
 	for _, deployment := range deployments {
 		if !deployment.Enabled || deployment.DeletedAt != nil {
 			continue
@@ -113,13 +114,14 @@ var errProviderUnavailable = &provider.Error{Class: provider.ErrorBadRequest, Me
 // the failure without describing the error a second time — and so the stored
 // class and the logged one can never disagree about the same probe.
 func (r *Runtime) recordDeploymentProbe(deploymentID string, err error) probeFailure {
-	probe := provider.DeploymentProbe{Healthy: err == nil, ObservedAt: r.clockNow().UTC()}
+	now := r.clockNow().UTC()
+	probe := routegate.DeploymentProbe{Healthy: err == nil, ObservedAt: now}
 	if err == nil {
-		r.providers.SetDeploymentProbe(deploymentID, probe)
+		r.routes.ObserveProbe(deploymentID, probe, now)
 		return probeFailure{}
 	}
 	failure := describeProbeFailure(err)
 	probe.ErrorClass = persistedProbeClass(failure)
-	r.providers.SetDeploymentProbe(deploymentID, probe)
+	r.routes.ObserveProbe(deploymentID, probe, now)
 	return failure
 }
