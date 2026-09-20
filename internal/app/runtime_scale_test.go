@@ -74,7 +74,14 @@ const (
 	// and maps behind one value avoids scattering lifecycle state across Runtime.
 	// 75: providerEgress. Provider connectors and their runtime epoch are one
 	// hot-swapped manager shared by every Provider registry.
-	runtimeFieldBudget = 75
+	// 76: routes. Raised deliberately, and it nets out at zero subsystems: the
+	// gate replaces a probe-verdict map the registry carried and a circuit
+	// breaker the gateway carried, which were two answers to one question that
+	// could disagree. It is on Runtime because the registry filters with it and
+	// the gateway admits with it, and both must hold the same one — and because
+	// it has to outlive a registry reload, which the probe map only managed
+	// through carry-forward code that no longer exists.
+	runtimeFieldBudget = 76
 	runtimeMutexBudget = 10
 )
 

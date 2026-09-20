@@ -34,6 +34,7 @@ import (
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
+	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/sourcelimit"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -60,6 +61,7 @@ type Runtime struct {
 	failureCapture      *failurecapture.Store
 	auth                *auth.Snapshot
 	providers           *provider.Registry
+	routes              *routegate.Gate
 	providerEgress      *providerEgressManager
 	accounting          *budget.Manager
 	gateway             *gatewayapi.Handler
@@ -543,6 +545,17 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
+	// One gate, two faces: candidate resolution asks it to filter, and the
+	// gateway asks it to admit. It is built before either so both hold the same
+	// one, and it deliberately outlives a registry reload — a reload changes
+	// which targets exist, not what is known about the upstreams behind them.
+	routeGate := routegate.New(routegate.Config{
+		AvailabilityThreshold: cfg.Routing.AvailabilityFailures,
+		AvailabilityWindow:    cfg.Routing.SuspendFor.Value(),
+		MaxAvailabilityWindow: cfg.Routing.MaxSuspendFor.Value(),
+		HalfOpenMaxRequests:   cfg.Routing.ProbeRequests,
+	})
+	providerRegistry.SetEligibility(routeGate)
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
 		providerRegistry,
@@ -553,9 +566,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			RetryBaseDelay:                cfg.Retry.BaseDelay.Value(),
 			RetryMaxDelay:                 cfg.Retry.MaxDelay.Value(),
 			RetryJitter:                   cfg.Retry.Jitter,
-			CircuitFailureThreshold:       cfg.CircuitBreaker.ConsecutiveFailures,
-			CircuitOpenDuration:           cfg.CircuitBreaker.OpenDuration.Value(),
-			CircuitHalfOpenMaxRequests:    cfg.CircuitBreaker.HalfOpenMaxRequests,
+			RouteGate:                     routeGate,
 			TokenGuard:                    tokenGuard,
 			Redactor:                      redactor,
 			Resources:                     metadata,
@@ -721,6 +732,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		failureCapture:      captureStore,
 		auth:                authSnapshot,
 		providers:           providerRegistry,
+		routes:              routeGate,
 		providerEgress:      newProviderEgressManager(providerEgressRegistry),
 		accounting:          accounting,
 		gateway:             gatewayHandler,

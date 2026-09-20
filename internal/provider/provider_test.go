@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -300,14 +301,48 @@ func TestRegistryExcludesActivelyUnhealthyDeploymentAndRecovers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: false})
+	// A stub rather than the real gate: what is under test here is that the
+	// registry asks and obeys, and the package that decides imports this one.
+	excluded := &stubEligibility{excludeDeployment: "dep_primary"}
+	registry.SetEligibility(excluded)
 	candidates := registry.ResolveCandidates("chat")
 	if len(candidates) != 1 || candidates[0].DeploymentID != "dep_fallback" {
 		t.Fatalf("unhealthy deployment was not excluded: %#v", candidates)
 	}
-	registry.SetDeploymentProbe("dep_primary", DeploymentProbe{Healthy: true})
+	excluded.excludeDeployment = ""
 	if candidates = registry.ResolveCandidates("chat"); len(candidates) != 2 || candidates[0].DeploymentID != "dep_primary" {
 		t.Fatalf("healthy deployment did not recover: %#v", candidates)
+	}
+}
+
+type stubEligibility struct{ excludeDeployment string }
+
+func (s *stubEligibility) Filter(targets []Target, _ time.Time) []Target {
+	if s.excludeDeployment == "" {
+		return targets
+	}
+	kept := make([]Target, 0, len(targets))
+	for _, target := range targets {
+		if target.DeploymentID != s.excludeDeployment {
+			kept = append(kept, target)
+		}
+	}
+	return kept
+}
+
+// A registry with no gate admits everything. A registry built without one — a
+// test, an embedder — has no upstream health to know about, and refusing every
+// target would be a worse default than offering them.
+func TestRegistryWithoutAGateAdmitsEveryTarget(t *testing.T) {
+	registry := NewRegistry()
+	adapter := &registryAdapter{}
+	if err := registry.Register(Target{
+		ID: "only", DeploymentID: "dep_only", PublicModel: "chat", ProviderModel: "a", Adapter: adapter,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if candidates := registry.ResolveCandidates("chat"); len(candidates) != 1 {
+		t.Fatalf("a registry with no gate refused a target: %#v", candidates)
 	}
 }
 
@@ -581,34 +616,5 @@ func TestRoundRobinCounterResetsWithTheRegistry(t *testing.T) {
 	live.Replace(build())
 	if got := live.ResolveCandidates("chat")[0].ID; got != "route_0" {
 		t.Fatalf("start after reload %q; the counter did not come with the new target set", got)
-	}
-}
-
-// Nothing used to remove a probe result. Replace carries forward what it does
-// not overwrite — correct, or a reload would report every healthy deployment as
-// unprobed — so a deleted deployment kept its last verdict for the life of the
-// process, and the metrics exporter went on emitting halro_deployment_up for an
-// ID that no longer exists. An ever-growing label set is the shape this repo
-// bans by name.
-func TestProbeResultsDoNotOutliveTheirDeployments(t *testing.T) {
-	registry := NewRegistry()
-	registry.SetDeploymentProbe("dep_live", DeploymentProbe{Healthy: true})
-	registry.SetDeploymentProbe("dep_deleted", DeploymentProbe{Healthy: false, ErrorClass: string(ErrorConnect)})
-
-	registry.RetainDeploymentProbes([]string{"dep_live"})
-
-	probes := registry.DeploymentProbes()
-	if _, kept := probes["dep_deleted"]; kept {
-		t.Fatal("a deleted deployment kept its probe result")
-	}
-	live, found := probes["dep_live"]
-	if !found || !live.Healthy {
-		t.Fatalf("pruning dropped a live deployment's result: %#v", probes)
-	}
-	// Naming nothing prunes everything: an empty deployment list is a real
-	// state, not a signal to skip.
-	registry.RetainDeploymentProbes(nil)
-	if len(registry.DeploymentProbes()) != 0 {
-		t.Fatalf("probes survived an empty deployment list: %#v", registry.DeploymentProbes())
 	}
 }

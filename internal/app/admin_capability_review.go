@@ -10,7 +10,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
-	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
 // adminDeploymentView is a deployment as the console reads it: the stored record
@@ -47,7 +47,7 @@ const (
 	deploymentProbeUnhealthy = "unhealthy"
 )
 
-func probeView(probes map[string]provider.DeploymentProbe, deploymentID string) deploymentProbeView {
+func probeView(probes map[string]routegate.DeploymentProbe, deploymentID string) deploymentProbeView {
 	probe, probed := probes[deploymentID]
 	if !probed {
 		return deploymentProbeView{State: deploymentProbeNotProbed}

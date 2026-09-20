@@ -4,19 +4,22 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
-// Candidate resolution drops probe-unhealthy targets before the operation
-// filter, so an alias whose every deployment is unhealthy used to fall into
-// the "operation unsupported" branch and answer 400 — blaming the request for
-// an upstream state. It is the same condition an open circuit reports, and it
-// gets the same shape now.
+// Candidate resolution drops ineligible targets before the operation filter, so
+// an alias whose every deployment is refused used to fall into the "operation
+// unsupported" branch and answer 400 — blaming the request for an upstream
+// state. It is the same condition a suspension reports, and it gets the same
+// shape now.
 func TestChatReportsUnhealthyUpstreamAsUnavailableNotUnsupported(t *testing.T) {
 	f := newFixture(t, 1_000)
 	defer f.close()
-	f.registry.SetDeploymentProbe("dep_target_1", provider.DeploymentProbe{Healthy: false})
+	now := time.Now()
+	f.gate.ObserveProbe("dep_target_1", routegate.DeploymentProbe{Healthy: false, ObservedAt: now}, now)
 
 	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
 	var gatewayErr *Error
@@ -34,13 +37,13 @@ func TestChatReportsUnhealthyUpstreamAsUnavailableNotUnsupported(t *testing.T) {
 	}
 
 	// Recovery is symmetric: a healthy probe restores ordinary resolution.
-	f.registry.SetDeploymentProbe("dep_target_1", provider.DeploymentProbe{Healthy: true})
+	f.gate.ObserveProbe("dep_target_1", routegate.DeploymentProbe{Healthy: true, ObservedAt: now}, now)
 	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
 		t.Fatalf("healthy target refused: %v", err)
 	}
 }
 
-func TestSupportsOperationIgnoresProbeHealth(t *testing.T) {
+func TestSupportsOperationIgnoresEligibility(t *testing.T) {
 	registry := provider.NewRegistry()
 	adapter := &fakeAdapter{}
 	if err := registry.Register(provider.Target{
@@ -49,12 +52,15 @@ func TestSupportsOperationIgnoresProbeHealth(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	registry.SetDeploymentProbe("dep_h", provider.DeploymentProbe{Healthy: false})
+	gate := routegate.New(routegate.Config{AvailabilityThreshold: 1})
+	registry.SetEligibility(gate)
+	probeAt := time.Now()
+	gate.ObserveProbe("dep_h", routegate.DeploymentProbe{Healthy: false, ObservedAt: probeAt}, probeAt)
 	if candidates := registry.ResolveCandidatesFor("alias", provider.OperationChat); len(candidates) != 0 {
 		t.Fatalf("unhealthy target still resolved: %#v", candidates)
 	}
 	if !registry.SupportsOperation("alias", provider.OperationChat, "") {
-		t.Fatal("supported operation was hidden by probe health")
+		t.Fatal("supported operation was hidden by a suspension")
 	}
 	if registry.SupportsOperation("alias", provider.OperationEmbeddings, "") {
 		t.Fatal("unsupported operation was reported as supported")

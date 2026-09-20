@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
 // Not probed and unhealthy are different states, and reporting the first as the
 // second would have the console claim an outage on every restart — the registry
 // deliberately keeps an unprobed deployment eligible for routing.
 func TestProbeViewSeparatesNotProbedFromUnhealthy(t *testing.T) {
-	view := probeView(map[string]provider.DeploymentProbe{}, "dep_1")
+	view := probeView(map[string]routegate.DeploymentProbe{}, "dep_1")
 
 	if view.State != deploymentProbeNotProbed {
 		t.Fatalf("state=%q, want %q", view.State, deploymentProbeNotProbed)
@@ -26,7 +27,7 @@ func TestProbeViewSeparatesNotProbedFromUnhealthy(t *testing.T) {
 // browser; the class is what the console already has wording for.
 func TestProbeViewCarriesTheClassifiedReason(t *testing.T) {
 	observed := time.Date(2026, 8, 25, 2, 0, 0, 0, time.UTC)
-	probes := map[string]provider.DeploymentProbe{
+	probes := map[string]routegate.DeploymentProbe{
 		"dep_1": {Healthy: false, ObservedAt: observed, ErrorClass: string(provider.ErrorConnect)},
 	}
 
@@ -44,7 +45,7 @@ func TestProbeViewCarriesTheClassifiedReason(t *testing.T) {
 }
 
 func TestProbeViewReportsAHealthyProbeWithoutAReason(t *testing.T) {
-	probes := map[string]provider.DeploymentProbe{"dep_1": {Healthy: true, ObservedAt: time.Now().UTC()}}
+	probes := map[string]routegate.DeploymentProbe{"dep_1": {Healthy: true, ObservedAt: time.Now().UTC()}}
 
 	view := probeView(probes, "dep_1")
 

@@ -26,6 +26,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/semantic"
 	"github.com/akz142857/Halro/internal/tokenguard"
 )
@@ -444,6 +445,7 @@ type fixture struct {
 	state      *ledger.State
 	adapter    *fakeAdapter
 	registry   *provider.Registry
+	gate       *routegate.Gate
 	close      func()
 	project    domain.Project
 	key        domain.GatewayKey
@@ -563,8 +565,14 @@ func newFixtureShaped(
 	registry := provider.NewRegistry()
 	if err := registry.Register(provider.Target{
 		ID: "target_1", DeploymentID: "dep_target_1",
-		PublicModel:            "chat",
-		ProviderModel:          "provider-model",
+		PublicModel:   "chat",
+		ProviderModel: "provider-model",
+		// Production targets carry the credential they authenticate with, and
+		// the scope of a refusal depends on it. A fixture without one cannot be
+		// suspended for anything credential-shaped, which is a different gateway
+		// from the one under test.
+		CredentialID:           "cred_fixture",
+		CredentialRevision:     1,
 		Adapter:                adapter,
 		Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true, Embeddings: true},
 		InputMicrosPerMillion:  1_000_000,
@@ -572,7 +580,9 @@ func newFixtureShaped(
 	}); err != nil {
 		t.Fatal(err)
 	}
-	serviceOptions := ServiceOptions{Now: clock}
+	gate := routegate.New(routegate.Config{})
+	registry.SetEligibility(gate)
+	serviceOptions := ServiceOptions{Now: clock, RouteGate: gate}
 	if shapeOptions != nil {
 		shapeOptions(&serviceOptions)
 	}
@@ -586,6 +596,7 @@ func newFixtureShaped(
 		state:      state,
 		adapter:    adapter,
 		registry:   registry,
+		gate:       gate,
 		close:      func() { _ = log.Close() },
 		project:    project,
 		key:        key,
@@ -739,7 +750,11 @@ func TestChatDoesNotFallbackForNonRetryableProviderError(t *testing.T) {
 	}
 }
 
-func TestOpenCircuitSkipsFailedTarget(t *testing.T) {
+// A target the gate has taken out of service is skipped, and — the part that
+// matters for the attempt budget — it spends none of it, so a later candidate
+// is still reachable. That is why the reachable-candidate arithmetic is a floor
+// rather than a ceiling.
+func TestASuspendedTargetIsSkippedAndSpendsNoAttempts(t *testing.T) {
 	f := newFixture(t, 10_000)
 	defer f.close()
 	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Message: "down"}
@@ -751,10 +766,14 @@ func TestOpenCircuitSkipsFailedTarget(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	gate := routegate.New(routegate.Config{
+		AvailabilityThreshold: 1, AvailabilityWindow: time.Minute, MaxAvailabilityWindow: time.Minute,
+	})
+	f.registry.SetEligibility(gate)
 	service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{
 		MaxAttempts: 3, MaxAttemptsPerTarget: 2,
 		RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
-		CircuitFailureThreshold: 1, CircuitOpenDuration: time.Minute,
+		RouteGate: gate,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2027,36 +2046,81 @@ func TestInterruptedStreamIsBilledForWhatItDelivered(t *testing.T) {
 // would read an empty balance and quietly assert nothing.
 const testTimezoneVersion = 1
 
-// An expired or wrong-project Bedrock API key answers 401 or 403, which every
-// adapter classifies as ErrorAuthentication with Retryable false. That must
-// stop the request rather than move it to a standby deployment: falling back
-// would hide a credential the operator has to rotate, and spend the fallback's
-// budget doing it.
-func TestChatDoesNotFallbackForProviderAuthenticationFailure(t *testing.T) {
-	for _, status := range []int{401, 403} {
-		f := newFixture(t, 10_000)
-		f.adapter.err = &provider.Error{
-			Class: provider.ErrorAuthentication, StatusCode: status, Retryable: false, Message: "denied",
+// An expired or wrong-project Bedrock API key answers 401 or 403.
+//
+// This used to stop the request outright, and the reason given was that falling
+// back would hide a credential the operator has to rotate, and spend the
+// fallback's budget hiding it. The first half of that was true while nothing
+// remembered the refusal: the dying request was the only signal anyone got.
+//
+// It is no longer the only signal. A 401 suspends the credential — indefinitely,
+// since a dead key does not heal, and clearing only when the operator advances
+// its revision — so the rotation is if anything harder to miss than it was. With
+// the refusal recorded, holding the caller's request hostage to it buys nothing,
+// and the fallback's budget is spent on serving rather than on hiding.
+//
+// So the assertion is now both halves: the request is served, and the credential
+// is out of service. Losing the second half would be the regression.
+func TestAnAuthenticationFailureFallsOverAndTakesTheCredentialOutOfService(t *testing.T) {
+	f := newFixture(t, 10_000_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorAuthentication, StatusCode: 401, Retryable: false, Message: "denied",
+	}
+	fallback := &fakeAdapter{response: f.adapter.response}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: fallback, Priority: 1, CredentialID: "cred_other", CredentialRevision: 1,
+		Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true},
+		InputMicrosPerMillion:  1_000_000,
+		OutputMicrosPerMillion: 2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("the request was not served by the fallback: %v", err)
+	}
+	if f.adapter.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("primary_calls=%d fallback_calls=%d", f.adapter.calls, fallback.calls)
+	}
+	suspensions := f.gate.Snapshot(time.Now())
+	if len(suspensions) != 1 || !suspensions[0].Indefinite ||
+		suspensions[0].Scope.Key != "cred_fixture" {
+		t.Fatalf("the dead credential was not taken out of service: %+v", suspensions)
+	}
+}
+
+// 403 is not 401, and the difference is deliberate. "Your key is not valid" is
+// about the credential; "your account may not use this model" is about the
+// deployment, and a 403 can be either depending on the vendor. Mapping it to a
+// credential refusal would take out routes that work, in the wide direction the
+// scope rules exist to avoid, so it stays an availability signal until an
+// adapter says otherwise for its own upstream.
+func TestA403IsNotTreatedAsADeadCredential(t *testing.T) {
+	f := newFixture(t, 10_000_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorAuthentication, StatusCode: 403, Retryable: false, Message: "denied",
+	}
+	fallback := &fakeAdapter{response: f.adapter.response}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
+		Adapter: fallback, Priority: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
+	var classified *Error
+	if !errors.As(err, &classified) || classified.Code != "provider_authentication_error" {
+		t.Fatalf("403 surfaced as %v", err)
+	}
+	if f.adapter.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("primary_calls=%d fallback_calls=%d", f.adapter.calls, fallback.calls)
+	}
+	for _, suspension := range f.gate.Snapshot(time.Now()) {
+		if suspension.Scope.Kind == routegate.ScopeCredential {
+			t.Fatalf("a 403 took a credential out of service: %+v", suspension)
 		}
-		fallback := &fakeAdapter{response: f.adapter.response}
-		if err := f.registry.Register(provider.Target{
-			ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat", ProviderModel: "provider-model",
-			Adapter: fallback, Priority: 1,
-		}); err != nil {
-			t.Fatal(err)
-		}
-		_, err := f.service.Chat(context.Background(), f.plaintext, chatRequest())
-		var classified *Error
-		if !errors.As(err, &classified) {
-			t.Fatalf("status %d produced an unclassified error: %v", status, err)
-		}
-		if classified.Code != "provider_authentication_error" {
-			t.Fatalf("status %d surfaced as %q", status, classified.Code)
-		}
-		if f.adapter.calls != 1 || fallback.calls != 0 {
-			t.Fatalf("status %d primary_calls=%d fallback_calls=%d", status, f.adapter.calls, fallback.calls)
-		}
-		f.close()
 	}
 }
 
@@ -2375,22 +2439,22 @@ func TestChatSettlesDeepSeekCachePromptCountersAtTheCacheReadRate(t *testing.T) 
 }
 
 // A caller's own cancel must not count against the deployment's availability:
-// classified as "connect" it fed the circuit breaker, so a client that hung up
-// early could mark a healthy upstream unhealthy for everyone else.
+// classified as "connect" it fed the old circuit breaker, so a client that hung
+// up early could mark a healthy upstream unhealthy for everyone else. The gate
+// inherits the rule, so the assertion is now on what it remembers.
 func TestACallerCancelIsNotAnAvailabilityFailure(t *testing.T) {
-	canceled := &provider.Error{
-		Class:     provider.ErrorCanceled,
-		Ambiguous: true,
-		Cause:     context.Canceled,
+	f := newFixture(t, 10_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorCanceled, Ambiguous: true, Cause: context.Canceled,
 	}
-	if err := availabilityFailure(canceled); err != nil {
-		t.Fatalf("a caller cancel was counted as an availability failure: %v", err)
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the caller cancelled but the request succeeded")
 	}
-	connect := &provider.Error{Class: provider.ErrorConnect, Retryable: true}
-	if err := availabilityFailure(connect); err == nil {
-		t.Fatal("a genuine connect failure must still count")
+	if suspensions := f.gate.Snapshot(time.Now()); len(suspensions) != 0 {
+		t.Fatalf("a caller hanging up suspended an upstream: %+v", suspensions)
 	}
-	if retryable(canceled) {
+	if retryable(f.adapter.err) {
 		t.Fatal("a canceled request must not be retried")
 	}
 }
@@ -2454,9 +2518,9 @@ func TestOrderedFallbackReachesEveryCandidate(t *testing.T) {
 				MaxAttempts: testCase.maxAttempts, MaxAttemptsPerTarget: testCase.maxAttemptsPerTarget,
 				RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond,
 				// Out of the way: this test is about the attempt ceilings, and a
-				// breaker that opened partway through would change the walk for
-				// a reason of its own.
-				CircuitFailureThreshold: 1000, CircuitOpenDuration: time.Minute,
+				// suspension partway through would change the walk for a reason
+				// of its own.
+				RouteGate: routegate.New(routegate.Config{AvailabilityThreshold: 1000}),
 			})
 			if err != nil {
 				t.Fatal(err)

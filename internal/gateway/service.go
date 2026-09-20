@@ -23,7 +23,6 @@ import (
 	"github.com/akz142857/Halro/internal/anthropicapi"
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/budget"
-	"github.com/akz142857/Halro/internal/circuit"
 	"github.com/akz142857/Halro/internal/compatibility"
 	anthropicwire "github.com/akz142857/Halro/internal/compatibility/anthropic"
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
@@ -37,6 +36,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/semantic"
 	"github.com/akz142857/Halro/internal/tokenguard"
 )
@@ -78,7 +78,7 @@ type Service struct {
 	accounting            *budget.Manager
 	limiter               *limiter.Manager
 	redactor              *redaction.Engine
-	breakers              *circuit.Manager
+	routes                *routegate.Gate
 	failureReasons        failureReasonCounters
 	maxAttempts           int
 	maxAttemptsPerTarget  int
@@ -160,19 +160,20 @@ func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accoun
 }
 
 type ServiceOptions struct {
-	MaxAttempts                int
-	CircuitFailureThreshold    int
-	CircuitOpenDuration        time.Duration
-	CircuitHalfOpenMaxRequests int
-	MaxAttemptsPerTarget       int
-	RetryBaseDelay             time.Duration
-	RetryMaxDelay              time.Duration
-	RetryJitter                bool
-	TokenGuard                 *tokenguard.Manager
-	Redactor                   *redaction.Engine
-	Resources                  InferenceResourcesResourceStore
-	ResourceObjectDir          string
-	ResourceObjectSealer       ResourceObjectSealer
+	MaxAttempts int
+	// RouteGate decides whether a target may be used. Required: a Service
+	// without one would offer every target unconditionally, including ones an
+	// upstream has plainly refused.
+	RouteGate            *routegate.Gate
+	MaxAttemptsPerTarget int
+	RetryBaseDelay       time.Duration
+	RetryMaxDelay        time.Duration
+	RetryJitter          bool
+	TokenGuard           *tokenguard.Manager
+	Redactor             *redaction.Engine
+	Resources            InferenceResourcesResourceStore
+	ResourceObjectDir    string
+	ResourceObjectSealer ResourceObjectSealer
 	// DeferredResponseWorkers bounds how many deferred submissions this
 	// instance executes at once, above and beyond each Project's own
 	// concurrency limit. Zero takes the default.
@@ -271,10 +272,15 @@ type activeAttempt struct {
 	service       *Service
 	run           *requestRun
 	accounting    budget.Attempt
-	breaker       *circuit.Lease
+	gate          *routegate.Lease
 	concurrency   *targetConcurrencyLease
 	startedAt     time.Time
 	pricingTarget provider.Target
+	// suspendedScope records that this attempt's failure took something out of
+	// service. The loop reads it: a refusal the gate now remembers is one the
+	// next candidate can be tried against, which is not true of a refusal
+	// nothing remembers (see the walk rule at the end of the attempt loop).
+	suspendedScope bool
 }
 
 // assertPolicySnapshotsCoverProject refuses a request whose Project names a
@@ -538,8 +544,8 @@ func (s *Service) exhaustedAttemptsError(lastErr error) error {
 		err := gatewayError("provider_concurrency_limit_exceeded", "all eligible providers are at their concurrency limit", 429, lastErr)
 		err.RetryAfter = time.Second
 		return err
-	case errors.Is(lastErr, circuit.ErrOpen):
-		return gatewayError("provider_unavailable", "all provider circuits are open", 503, lastErr)
+	case errors.Is(lastErr, routegate.ErrSuspended):
+		return gatewayError("provider_unavailable", "every provider for this model is suspended", 503, lastErr)
 	case errors.Is(lastErr, context.Canceled), errors.Is(lastErr, context.DeadlineExceeded):
 		return lastErr
 	case lastErr != nil:
@@ -568,13 +574,13 @@ func (s *Service) startAttempt(
 	if !ok {
 		return nil, errors.New("provider operation primitive is unavailable")
 	}
-	breakerLease, err := s.breakers.Acquire(target.ID, s.now())
+	gateLease, err := s.routes.Admit(target, s.now())
 	if err != nil {
 		return nil, err
 	}
 	providerLease, err := s.acquireTargetConcurrency(target)
 	if err != nil {
-		breakerLease.Abandon()
+		gateLease.Abandon()
 		if errors.Is(err, errDeploymentConcurrency) {
 			s.rejections.deploymentConcurrency.Add(1)
 		} else {
@@ -620,7 +626,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Abandon()
+		gateLease.Abandon()
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
@@ -635,7 +641,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Abandon()
+		gateLease.Abandon()
 		s.rejections.tokenGuard.Add(1)
 		finalizeErr := run.finalize("token_guard_rejected")
 		return nil, gatewayError("token_guard_blocked", "the current attempt price exceeds Token Guard cost limits", http.StatusForbidden, finalizeErr)
@@ -668,7 +674,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 		}
 		providerLease.Release()
-		breakerLease.Abandon()
+		gateLease.Abandon()
 		if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 			return nil, err
 		}
@@ -694,7 +700,7 @@ func (s *Service) startAttempt(
 		if _, err := pinStore.CommitDeploymentPricePin(ctx, attempt.AttemptID, pinIntent.SnapshotSHA256, attempt.ReservationSequence, s.now().UTC()); err != nil {
 			pricingUnlock()
 			providerLease.Release()
-			breakerLease.Abandon()
+			gateLease.Abandon()
 			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed", FailurePhase: phaseAccounting})
 			finalizeErr := run.finalize("accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
@@ -705,7 +711,7 @@ func (s *Service) startAttempt(
 	}
 	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
 		providerLease.Release()
-		breakerLease.Abandon()
+		gateLease.Abandon()
 		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed", FailurePhase: phaseAccounting})
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
@@ -723,7 +729,7 @@ func (s *Service) startAttempt(
 	}
 	run.lastTarget = pricedTarget
 	return &activeAttempt{
-		service: s, run: run, accounting: attempt, breaker: breakerLease,
+		service: s, run: run, accounting: attempt, gate: gateLease,
 		concurrency: providerLease, startedAt: s.now(), pricingTarget: pricedTarget,
 	}, nil
 }
@@ -796,14 +802,14 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	attempt.run.recordProviderResult(providerErr, settlement)
 	enrichSettlement(&settlement, providerErr, attempt.pricingTarget, attempt.startedAt, attempt.service.now())
 	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
-		attempt.reportBreaker(providerErr)
+		attempt.reportGate(providerErr)
 		finalizeErr := attempt.run.finalize("accounting_error")
 		return gatewayError(
 			"accounting_unavailable", "request accounting could not be finalized", 503,
 			errors.Join(err, finalizeErr),
 		)
 	}
-	attempt.reportBreaker(providerErr)
+	attempt.reportGate(providerErr)
 	return nil
 }
 
@@ -867,14 +873,14 @@ func providerFailureReason(classified *provider.Error) string {
 // abort releases everything startAttempt took, for a request that fails after
 // the attempt exists but before the provider is ever called. finish is the wrong
 // tool there: it judges the target, and a local failure says nothing about the
-// upstream's health — so the breaker is abandoned, which returns a half-open
-// probe slot without counting as either a success or a failure.
+// upstream's health — so the gate claim is abandoned, which returns a probe slot
+// without counting as either a success or a failure.
 //
 // Every caller of startAttempt needs this on its local-failure paths. Writing it
 // out five times is how three of them came to be missing it.
 func (attempt *activeAttempt) abort(outcome string) error {
 	attempt.concurrency.Release()
-	attempt.breaker.Abandon()
+	attempt.gate.Abandon()
 	// phasePreProvider, because that is what abort is for: the attempt exists
 	// and the upstream was never called. Leaving it blank made the record
 	// indistinguishable from one written before the field existed, which the
@@ -886,17 +892,49 @@ func (attempt *activeAttempt) abort(outcome string) error {
 	return errors.Join(cleanupErr, finalizeErr)
 }
 
-// reportBreaker judges the target on the attempt's outcome, except when the
-// caller went away. A cancelled read surfaces from the transport as a truncated
-// response, which is indistinguishable from the provider cutting the stream, so
-// without this a wave of client disconnects — a frontend deploy, a gateway
-// restart — would open circuits on providers that never faltered.
-func (attempt *activeAttempt) reportBreaker(providerErr error) {
+// reportGate tells the gate what this attempt learned, except when the caller
+// went away. A cancelled read surfaces from the transport as a truncated
+// response, indistinguishable from the provider cutting the stream, so without
+// this a wave of client disconnects — a frontend deploy, a gateway restart —
+// would suspend upstreams that never faltered.
+//
+// It records whether anything was suspended, because that is what the attempt
+// loop needs: a refusal the gate now remembers is one the next candidate can be
+// tried against without the request paying for that discovery again.
+func (attempt *activeAttempt) reportGate(providerErr error) {
 	if providerErr != nil && errors.Is(providerErr, context.Canceled) {
-		attempt.breaker.Abandon()
+		attempt.gate.Abandon()
 		return
 	}
-	attempt.breaker.Done(availabilityFailure(providerErr), attempt.service.now())
+	if providerErr == nil {
+		attempt.gate.Done(nil, attempt.service.now())
+		return
+	}
+	observation := observationFor(attempt.run.failure, providerErr, attempt.pricingTarget)
+	attempt.suspendedScope = attempt.gate.Done(&observation, attempt.service.now())
+}
+
+// observationFor is the one place a classified failure becomes something the
+// gate can act on. It is built from the descriptor the attempt log was written
+// from, so the two cannot disagree about what happened, and it carries only
+// identifiers and enumerations — an upstream's own sentence never reaches the
+// gate.
+func observationFor(
+	descriptor FailureDescriptor, providerErr error, target provider.Target,
+) routegate.Observation {
+	observation := routegate.Observation{
+		Reason:             descriptor.ProviderFailureReason,
+		Class:              descriptor.Class,
+		Status:             descriptor.ProviderStatus,
+		Code:               descriptor.ProviderCode,
+		CredentialRevision: target.CredentialRevision,
+		Malformed:          descriptor.Class == provider.ErrorMalformed,
+	}
+	var classified *provider.Error
+	if errors.As(providerErr, &classified) {
+		observation.RetryAfter = classified.RetryAfter
+	}
+	return observation
 }
 
 type RejectionMetrics struct {
@@ -951,15 +989,6 @@ func NewServiceWithOptions(
 	if options.MaxAttempts <= 0 {
 		options.MaxAttempts = 4
 	}
-	if options.CircuitFailureThreshold <= 0 {
-		options.CircuitFailureThreshold = 5
-	}
-	if options.CircuitOpenDuration <= 0 {
-		options.CircuitOpenDuration = 30 * time.Second
-	}
-	if options.CircuitHalfOpenMaxRequests <= 0 {
-		options.CircuitHalfOpenMaxRequests = 1
-	}
 	if options.MaxAttemptsPerTarget <= 0 {
 		options.MaxAttemptsPerTarget = 1
 	}
@@ -981,13 +1010,12 @@ func NewServiceWithOptions(
 	if options.PricingUnknownPolicy != "reject" && options.PricingUnknownPolicy != "allow_without_cost_governance" {
 		return nil, errors.New("pricing unknown policy must be reject or allow_without_cost_governance")
 	}
-	breakers, err := circuit.New(circuit.Config{
-		FailureThreshold:    options.CircuitFailureThreshold,
-		OpenDuration:        options.CircuitOpenDuration,
-		HalfOpenMaxRequests: options.CircuitHalfOpenMaxRequests,
-	})
-	if err != nil {
-		return nil, err
+	var err error
+	if options.RouteGate == nil {
+		// A default rather than a refusal: a Service built without one is a test
+		// or an embedder, and an empty gate admits everything, which is what
+		// they meant. Production always supplies the shared one.
+		options.RouteGate = routegate.New(routegate.Config{})
 	}
 	if options.TokenGuard == nil {
 		options.TokenGuard, err = tokenguard.New(nil)
@@ -1045,7 +1073,7 @@ func NewServiceWithOptions(
 		accounting:                    accounting,
 		limiter:                       limiter.New(),
 		redactor:                      options.Redactor,
-		breakers:                      breakers,
+		routes:                        options.RouteGate,
 		maxAttempts:                   options.MaxAttempts,
 		maxAttemptsPerTarget:          options.MaxAttemptsPerTarget,
 		retryBaseDelay:                options.RetryBaseDelay,
@@ -1377,7 +1405,7 @@ func (s *Service) executeGenerate(
 				return semanticResponse, nil
 			}
 			lastErr = providerErr
-			if !retryable(providerErr) {
+			if !walkOn(providerErr, attempt) {
 				if err := run.finalize("provider_error"); err != nil {
 					return semantic.GenerateResult{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
@@ -2550,7 +2578,7 @@ func (s *Service) Embeddings(
 				return response, nil
 			}
 			lastErr = providerErr
-			if !retryable(providerErr) {
+			if !walkOn(providerErr, attempt) {
 				if err := run.finalize("provider_error"); err != nil {
 					return openaiapi.EmbeddingResponse{}, gatewayError(
 						"accounting_unavailable", "request accounting could not be finalized", 503, err,
@@ -2618,6 +2646,33 @@ func estimateReservation(inputTokens, outputTokens int64, target provider.Target
 	return reservation, nil
 }
 
+// walkOn decides whether the loop should try the next candidate after a failure.
+//
+// Retryable answers a different question — may this same call be re-issued —
+// and it is an execution and billing judgement the adapter owns. Whether another
+// upstream may be tried is not that question, and it was bound to Retryable only
+// because, with nothing remembering a refusal, walking on after a 401 or a 402
+// meant every subsequent request paid the same failed round trip to the same
+// dead upstream. A suspension collapses that cost to once per window, so the
+// binding can come off: a failure the gate has just taken a target out of
+// service for is one the request may walk past.
+//
+// Ambiguous still stops the walk, unchanged. A 5xx that may already be billing
+// must not be duplicated somewhere else, whatever else is known about it.
+func walkOn(providerErr error, attempt *activeAttempt) bool {
+	if retryable(providerErr) {
+		return true
+	}
+	if attempt == nil || !attempt.suspendedScope {
+		return false
+	}
+	var classified *provider.Error
+	if errors.As(providerErr, &classified) && classified.Ambiguous {
+		return false
+	}
+	return true
+}
+
 func retryable(err error) bool {
 	var classified *provider.Error
 	if !errors.As(err, &classified) {
@@ -2629,22 +2684,6 @@ func retryable(err error) bool {
 	return classified.Retryable ||
 		classified.Class == provider.ErrorMalformed ||
 		classified.Class == provider.ErrorProvider5xx
-}
-
-func availabilityFailure(err error) error {
-	if err == nil {
-		return nil
-	}
-	var classified *provider.Error
-	if !errors.As(err, &classified) {
-		return nil
-	}
-	switch classified.Class {
-	case provider.ErrorConnect, provider.ErrorTimeout, provider.ErrorProvider5xx, provider.ErrorMalformed:
-		return err
-	default:
-		return nil
-	}
 }
 
 func (s *Service) waitRetry(ctx context.Context, retryIndex int, previous error) error {

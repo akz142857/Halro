@@ -116,10 +116,11 @@ func Default() Config {
 			MaxDelay:             Duration(2 * time.Second),
 			Jitter:               true,
 		},
-		CircuitBreaker: CircuitBreaker{
-			ConsecutiveFailures: 5,
-			OpenDuration:        Duration(30 * time.Second),
-			HalfOpenMaxRequests: 1,
+		Routing: Routing{
+			AvailabilityFailures: 5,
+			SuspendFor:           Duration(30 * time.Second),
+			MaxSuspendFor:        Duration(5 * time.Minute),
+			ProbeRequests:        1,
 		},
 		Alerts: Alerts{
 			QueueCapacity: 1024,
