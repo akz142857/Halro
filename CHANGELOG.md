@@ -6,8 +6,29 @@ semantic versioning.
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-09-20
+
 ### Changed
 
+- The console's attempt log under Usage was redesigned. A row is now one real
+  Provider attempt — a request's retries and fallbacks appear as separate rows —
+  carrying the request, deployment, route, result, tokens and cost, latency and
+  completion time, with cost distinguishing a conservative upper bound from what
+  the Provider reported. It adds filtering by time range (last hour, 24 hours, 7
+  days, or a custom range) and by status, a count of the filters in effect, and
+  an empty state that says how to widen the range rather than only that nothing
+  matched.
+- The `npm audit` gate no longer treats "could not reach the registry's advisory
+  endpoint" as "found vulnerabilities". Both made the command exit 1, so an npm
+  incident turned a commit that touched no dependency red — on 2026-09-19 the
+  registry retired `/security/audits/quick` while `/advisories/bulk` answered
+  503, and main went red on a docs-only change whose PR had passed eleven
+  minutes earlier. `scripts/npm-audit-gate.sh` separates the two structurally: a
+  completed audit always carries a per-severity count, an endpoint error carries
+  none. Only the latter earns a retry and, if it never lands, a warning stating
+  that the gate did not run; an audit that reports vulnerabilities still fails on
+  its first run. The release workflow passes `--require-endpoint`, so a release
+  stops rather than publishing an artifact on "the gate did not run".
 - A Homebrew install now ships the gateway's own example configuration and says
   what to do with it. `halro.config.example.yaml` was in every release archive
   but not in the formula's install list, so `brew install` produced a binary
@@ -1823,6 +1844,7 @@ to act on.
 - A file, batch or async creation interrupted before the provider was called can
   be retried after a restart, instead of holding its idempotency key for days.
 
+[0.8.5]: https://github.com/akz142857/Halro/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/akz142857/Halro/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/akz142857/Halro/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/akz142857/Halro/compare/v0.8.1...v0.8.2
