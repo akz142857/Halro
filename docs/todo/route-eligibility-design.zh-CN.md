@@ -97,8 +97,9 @@ target[1] try1 → 3 < 3 为假，内层退出 → 外层 break
 
 ### 1.5 非目标
 
-- 不改 `Retryable` / `Ambiguous` 的含义。它们是**执行与计费语义**，由 adapter 声明，本文一个字
-  不动（`internal/gateway/failure.go:165-172` 的立场保留）；
+- 不改 `Retryable` / `Ambiguous` 的**含义**。它们是**执行与计费语义**，由 adapter 声明，本文一个字
+  不动（`internal/gateway/failure.go:165-172` 的立场保留）。但回退循环的分叉今天只看 `Retryable`，
+  本文给它加第二个输入（§4.5）——改的是循环，不是字段；
 - 不做跨 Project 的配额调度。Halro 自己的预算与 Token Guard 是 per-Project 的另一根轴，
   上游额度是 per-credential 的，两者不得混在一个机制里；
 - 不预测配额重置时刻。"OpenAI 每月 1 号重置"这类知识不该硬编码在 Halro 里（§4.4）；
@@ -203,6 +204,8 @@ credential 下线。**默认取最窄的 scope，只在有证据时放宽**（§
 6. **挂起状态是节点本地的派生态**，不进 metadata journal、不复制（§6）。
 7. **指标不得带身份。** scope 的 ID、credential 名一律不进 Prometheus label；只有枚举进 label。
 8. **reason 的分类来自实测的上游响应**，不来自推断（§7）。
+9. **触发挂起的失败让当次请求换下一个候选**，除非它 `Ambiguous`（§4.5）。`Retryable` 的含义不变；
+   变的是循环多了一个输入。
 
 ---
 
@@ -274,6 +277,27 @@ observed-at、以及（credential scope）观察时的 credential `Revision`。�
 配额什么时候恢复，只有三种信号：上游说的（`Retry-After`）、按计划的（月初、UTC 零点）、和试出来的。
 **中间那种不要猜**：各家规则不同、会变、且猜错的方向是"在配额还没回来时反复试"或者更糟的
 "配额回来了却继续挂着"。Halro 只用第一种和第三种。
+
+### 4.5 触发挂起的那一次请求
+
+§4.1–4.3 说的都是**后续**请求：scope 一旦挂起，`Filter` 就把它剪掉。但**造成挂起的那一次请求**
+呢？它刚从上游拿回 401/402，按今天的循环（`service.go:1370-1378`）`retryable()` 为 false 就当场
+返回——挂起帮不到它。
+
+**规则：一次失败若使某个 scope 进入 suspended，且失败不是 `Ambiguous`，循环继续走下一个候选，
+不再看 `Retryable`。**
+
+为什么这不是在改 `Retryable` 的语义：`Retryable` 回答的是"**同一个调用**能不能再发一次"——那是
+执行与计费问题。"能不能换一个 target"是另一个问题，它过去被绑在 `Retryable` 上只有一个原因：
+没有挂起机制时，401 之后继续往下走等于每个请求都白付一次往返（§1.2 的税）。挂起把这笔税收敛成
+每个窗口一次，"换一家"就安全了。`Ambiguous` 仍然拦住——一个可能已经在计费的 5xx 不能换地方再来
+一次，这与 §1.3 的立场一致。
+
+**这条规则就是"402 要不要回退"那个决定的答案**：回退，但**只在挂起存在之后**。在挂起机制之前
+单独把 402 改成可回退，拿到的是静默税；把它作为挂起的推论，拿到的是正确行为。
+
+对门禁的要求：§9 第一行（一次 401 挂起整个 credential）要同时断言**那一次请求本身**落到了下一个
+候选上，而不只是"另外两个 deployment 在下一次请求就不在候选里"。
 
 ---
 
@@ -381,8 +405,9 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 1. scope 模型与 key 派生；状态机与 per-reason 时窗；
 2. `Filter` / `Admit` 两个面，分别接到 `resolveCandidatesLocked` 与 `startAttempt`；
 3. credential revision 自愈；
-4. 吸收 `internal/circuit` 与 `Registry.health`，删除被取代的四项（§6）；
-5. `routing:` 配置块与 `config check` 校验。
+4. 回退循环的第二个输入（§4.5）：失败触发挂起且非 `Ambiguous` 时继续下一个候选；
+5. 吸收 `internal/circuit` 与 `Registry.health`，删除被取代的四项（§6）；
+6. `routing:` 配置块与 `config check` 校验。
 
 ### 阶段 3：面向人的部分
 
@@ -400,7 +425,8 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 
 | 门禁 | oracle |
 |---|---|
-| 一次 401 挂起整个 credential | 一把 credential 挂 3 个 deployment，其中一个收到 401；**另外两个在下一次请求就已不在候选里**，且没有各自再撞一次 |
+| 一次 401 挂起整个 credential | 一把 credential 挂 3 个 deployment，其中一个收到 401；**那一次请求本身落到了 credential 之外的下一个候选上**（§4.5），另外两个在下一次请求就已不在候选里，且没有各自再撞一次 |
+| `Ambiguous` 不因挂起而换地方 | 一个 502 使 provider scope 挂起；当次请求**不**继续到下一个候选，按保守结算收尾 |
 | credential revision 自愈 | 挂起后更新 credential，registry 重建，挂起自动解除，无需任何显式清除 |
 | 额度类不放兜底请求 | 全部候选因 `subscription_quota_exhausted` 挂起时，请求在**零次上游往返**内拿到 503 `all_candidates_suspended` |
 | 可用性类放一个探针 | 同上但 reason 是 availability 时，恰好一个请求被放行，其余拿 503 |
