@@ -5,7 +5,11 @@
 - 适用范围：Standalone 向 Primary/Replica 的演进
 - 目标版本：不绑定。进入条件是 §1.3 列出的证据，不是某个 tag
 - 追踪：[#105](https://github.com/akz142857/Halro/issues/105) Epic、
-  [#106](https://github.com/akz142857/Halro/issues/106)–[#109](https://github.com/akz142857/Halro/issues/109) 阶段、
+  [#315](https://github.com/akz142857/Halro/issues/315) Phase 0a、
+  [#106](https://github.com/akz142857/Halro/issues/106) Phase 0b、
+  [#107](https://github.com/akz142857/Halro/issues/107) Phase 1、
+  [#108](https://github.com/akz142857/Halro/issues/108) Phase 2、
+  [#109](https://github.com/akz142857/Halro/issues/109) §19 的未决问题、
   [#12](https://github.com/akz142857/Halro/issues/12) 调用方幂等
 - 由来与本文引用的全部实测事实：见[附录 A](#附录-a这份设计的由来) 与[附录 B](#附录-b核实过的事实索引)
 
@@ -963,7 +967,7 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 ## 18. 实施阶段
 
-### Phase 0a：metadata journal（独立的 Standalone 变更）
+### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）
 
 1. `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务；
 2. 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2），ADR 0012 前提与测试迁移；
@@ -1006,13 +1010,6 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 5. 集群 CA 轮换 runbook；`threat-model.md` 修订（§14.1）。
 
 **Phase 2 完成即交付。**
-
-### 需要顺手修的
-
-#105–#109 正文的设计链接指向 `docs/todo/heimdall-ha-architecture.zh-CN.md`（项目改名后失效），
-正文里的 "Heimdall" 同样要改；#105 的"1.0.0 ships first"段落与 §1.3 冲突，需重写为证据条件；
-#107 正文里的 Raft Figure 8、当前任期提交限制等条目属于 §19，移到 #109；#108 标题里的
-"online backup" 不再是目标。
 
 ---
 
