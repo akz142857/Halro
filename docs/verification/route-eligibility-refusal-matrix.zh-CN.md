@@ -10,7 +10,7 @@ Route eligibility（[设计](../todo/route-eligibility-design.zh-CN.md)，Epic #
 1. 额度耗尽长什么样（状态码、`code`/`type` 字段、有无 `Retry-After`）；
 2. **它与普通限流是否同码**——这一条决定 Phase 2 要不要把 `FailureReason` 引进路由路径。
    若每家都用不同状态码，状态码本身就够判，设计可以更便宜；**只要有一家把两者压在同一个码上，
-   基于 reason 的路由就是必需的**；
+   基于 reason 的路由就是必需的**。**这一条已有答案，见 §3.0：九家里六家同码，答案是必需**；
 3. 额度是 per-credential 还是 per-model（决定 scope 宽窄，取不到证据按窄的来）；
 4. `Retry-After` 给不给、给的值可不可信（假值比不给更糟）。
 
@@ -74,21 +74,58 @@ curl -sS -D - -o body.json -w '\n%{http_code} %{time_total}s\n' \
 
 ## 3. 记录
 
+### 3.0 核心问题已有答案：**耗尽与限流普遍同码，reason 必须进路由路径**
+
+2026-09-20 扫官方文档得到的结论，等级 **B**：**九个入口里有六个把额度耗尽与普通限流压在
+HTTP 429 上**，只能靠响应体里的 `code`/`type` 区分。Kimi 的文档把这件事说得最直白——
+"429 is not a single cause. Check the `error.type` in the response first"。
+
+这直接回答了 §0 的问题 2，答案是**不能只看状态码**，§8 阶段 2 选的 reason-based routing
+是必需的而不是可选的更贵方案。
+
+**对 Halro 的直接后果**：`internal/gateway/failure.go:145` 把 429 无条件映射成
+`rate_limited`。对下面五家（OpenAI、Anthropic、Gemini、Kimi、BigModel），额度耗尽因此会拿到
+`rate_limited` 策略（`internal/routegate/policy.go:97`：1 s 起、翻倍至 60 s、半开探针反复再撞），
+**而那是一个不会在 60 秒内自愈的状态**。Anthropic 的文档还专门点出这一种 429
+"has no `retry-after` header and keeps failing until access resumes"。
+
 ### 3.1 矩阵
 
-`—` = 未取证。填入时标证据等级。
+`—` = 未取证。当前所有非空格子均为等级 **B（官方文档）**，无一为 A；C 的来源单独标注。
 
-| 厂商 | A 额度耗尽 | B 普通限流 | A/B 同码？ | C 凭证失效 | D 订阅未开通 | `Retry-After` | scope |
-|---|---|---|---|---|---|---|---|
-| OpenAI | — | — | — | — | — | — | — |
-| Anthropic | — | — | — | — | — | — | — |
-| Azure OpenAI | — | — | — | — | — | — | — |
-| DeepSeek | — | — | — | — | — | — | — |
-| MiniMax | **C**：`500` + `{"type":"error","error":{"type":"api_error","message":"insufficient balance (1008)"}}`（Anthropic 面）<br>**B**：码表 1008 = insufficient balance，2056 = usage limit exceeded | **B**：码表 1002 = rate limit | 否（按 C/B：1008 与 1002 是不同码），但**两者的 HTTP 状态均未实测** | **A**：`401` + `{"type":"error"}`，两张兼容面一致 | — | **B**：官方码表不写 HTTP 状态，也不写 `Retry-After` | — |
-| Kimi / Moonshot | — | — | — | — | — | — | — |
-| BigModel | — | — | — | — | — | — | — |
-| Gemini | — | — | — | — | — | — | — |
-| Bedrock Mantle | — | — | — | — | — | — | — |
+| 厂商 | A 额度耗尽 | B 普通限流 | **A/B 同码？** | C 凭证失效 | `Retry-After` |
+|---|---|---|---|---|---|
+| **OpenAI** | `429` `credit_balance_exhausted`；另有 `organization_spend_limit_exceeded` / `project_spend_limit_exceeded` | `429` 速率类 code | **是** | `401` | 限流类给；计费类给了也无用（充值前不会好） |
+| **Anthropic** | `402` `billing_error`（付款问题）**与** `429` `rate_limit_error`（月度消费上限） | `429` `rate_limit_error` | **是**（消费上限与限流同为 429 同 type） | `401` `authentication_error`；`403` `permission_error` | 限流给；**消费上限那种明确不给**，且会持续失败 |
+| **Azure OpenAI** | — | `429` | — （文档未区分配额耗尽与 TPM/RPM 限流） | `401` | `retry-after` / `retry-after-ms` |
+| **DeepSeek** | **`402`** Insufficient Balance | **`429`** Rate Limit Reached | **否** | `401` | 文档未提 |
+| **MiniMax** | 体内 `1008`；HTTP 状态**未实测**（等级 C 的三份报告指向 `500`） | 体内 `1002` | 体内码不同；**HTTP 状态未知** | **A**：`401` + `{"type":"error"}`，两面一致 | 文档不写 |
+| **Kimi / Moonshot** | `429` `exceeded_current_quota_error`（余额不足/欠费/代金券过期） | `429` `rate_limit_reached_error`；另有 `429` `engine_overloaded_error` | **是**（三种语义同压 429） | `401` `invalid_authentication_error` | 仅 `engine_overloaded_error` 提到按 `Retry-After` 等 |
+| **BigModel** | `429` + 业务码 `1113`（账户已欠费） | `429` + `1302`（速率）／`1305`（模型过载） | **是** | `401` + `1000`/`1001`/`1003` | 文档未提 |
+| **Gemini** | `429` `quota_exceeded`（日配额） | `429` `rate_limit_exceeded`（每分钟/每秒） | **是** | `401` `authentication`；`403` `permission_denied` | 文档未提 |
+| **Bedrock Mantle** | — | — | — | — | — |
+
+两处必须说清楚的边界：
+
+- **Bedrock Mantle 那一行仍然是空的，不能用 AWS 的 Converse 文档去填。** Converse 的
+  `ThrottlingException`（`429`，措辞是 "exceeding the account quotas"，同样把限流与账户配额
+  压在一个异常里）属于 **withheld 的 Runtime profile**；Mantle 走的是另一张面
+  （`internal/app/provider_adapters.go:419-434`，OpenAI 形状或自有 Responses 适配器），
+  错误信封大概率不是 AWS 形状。拿 Runtime 的证据去填 Mantle，就是"适配器的沉默不是上游的答案"
+  那条规则的反向版本。
+  （顺带：AWS 自己的 CommonErrors 页把 `ThrottlingException` 记作 `400`，Converse 页记作 `429`，
+  两页不一致——这也是为什么它只能算线索。）
+- **Azure 的耗尽那一格是真的没查到**，不是"没有"。它的文档只讲 429 与重试，未把配额耗尽与
+  TPM/RPM 限流分开描述，甚至专门有一节解释"用量低于配额也可能收到 429"。
+
+来源：[OpenAI](https://developers.openai.com/api/docs/guides/error-codes) ·
+[Anthropic](https://platform.claude.com/docs/en/api/errors) ·
+[DeepSeek](https://api-docs.deepseek.com/quick_start/error_codes) ·
+[Gemini](https://ai.google.dev/gemini-api/docs/api-errors) ·
+[Kimi](https://www.kimi.ai/help/kimi-api/api-troubleshooting) ·
+[BigModel](https://docs.bigmodel.cn/cn/api/api-code) ·
+[Azure](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/quotas-limits) ·
+[Bedrock Converse](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
 
 ### 3.2 MiniMax：已知的三条，以及它们今天在 Halro 里的下场
 
@@ -134,3 +171,23 @@ OpenAI 是否如此，正是 §3.1 第一行 A/B 两格要回答的。
 
 把观察到的矩阵并回 reason 分类表，**然后才**冻结设计 §4.3 的窗口与阈值——
 `DefaultPolicies()` 里的数字自带注释说明它们是起点而非结论。
+
+§3.0 已经解锁了其中一件不必再等的事：**429 需要按响应体的 `code`/`type` 分流**，
+这不是从某一家的实测推出来的，而是六家文档一致的结论。剩下仍然要等真实响应的是**窗口数字**
+（`Retry-After` 在额度场景下给不给、值可不可信）与 **scope 宽窄**（per-credential 还是
+per-model），这两项文档都不回答，只有打出来才知道。
+
+分流要认的 code 至少包括（全部等级 B，拼写以各家文档为准）：
+
+| 厂商 | 判为 `subscription_quota_exhausted` 的 code |
+|---|---|
+| OpenAI | `credit_balance_exhausted`、`organization_spend_limit_exceeded`、`project_spend_limit_exceeded` |
+| Kimi | `exceeded_current_quota_error` |
+| Gemini | `quota_exceeded` |
+| BigModel | 业务码 `1113` |
+| MiniMax | 业务码 `1008`（另有 `2056` usage limit exceeded，是 Token Plan 的 5 小时窗口） |
+| Anthropic | 402 `billing_error`；429 的消费上限那种**无 code 可认**，只能靠"429 且无 `retry-after`"这个弱信号，**不要据此下判断** |
+
+最后一行是这张表里唯一不该照做的一格：拿"没有某个头"当分类依据，是把一次瞬时限流误判成
+无限期挂起的做法，而那个方向的错误代价最大（`RecoverOnCredentialRevision` 意味着要人来清）。
+Anthropic 这一格留给真实响应。
