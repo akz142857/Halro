@@ -170,3 +170,115 @@ func TestAnUnrememberedRefusalStillEndsTheRequest(t *testing.T) {
 		t.Fatalf("a refusal nothing remembers was walked past: %d fallback calls", fallback.calls)
 	}
 }
+
+// Streaming was the path where this mattered most and the last one to get it.
+//
+// A caller that asked for a stream and was refused before a single byte came
+// back is in exactly the position a unary caller is in: nothing has been
+// delivered, nothing downstream has been committed to, and the next upstream can
+// serve the request whole. The loop used to answer that with Retryable alone —
+// so the one shape almost every SDK sends by default was also the one shape a
+// dead credential could not fall over from.
+func TestAStatedRefusalFallsOverOnAStreamThatHasSaidNothingYet(t *testing.T) {
+	f := newFixture(t, 10_000_000)
+	defer f.close()
+	// No chunks: the refusal arrives instead of a first token, which is what
+	// makes this a fallback rather than a truncation.
+	f.adapter.streamChunks = nil
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorBadRequest, StatusCode: 401,
+		FailureReason: provider.FailureReasonInvalidCredential, Message: "refused",
+	}
+	fallback := &fakeAdapter{
+		streamChunks: []openaiapi.ChatCompletionResponse{{
+			ID: "chunk_fallback", Object: "chat.completion.chunk", Model: "provider-model",
+			Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{
+				Role: "assistant", Content: openaiapi.TextContent("served by the fallback"),
+			}}},
+		}},
+		streamUsage: &openaiapi.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat",
+		ProviderModel: "provider-model", Adapter: fallback, Priority: 1,
+		CredentialID: "cred_other", CredentialRevision: 1,
+		Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true},
+		InputMicrosPerMillion:  1_000_000,
+		OutputMicrosPerMillion: 2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := chatRequest()
+	request.Stream = true
+	var delivered []openaiapi.ChatCompletionResponse
+	err := f.service.ChatStream(context.Background(), f.plaintext, request, func(chunk openaiapi.ChatCompletionResponse) error {
+		delivered = append(delivered, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("a stated refusal ended the stream instead of falling over: %v", err)
+	}
+	if len(delivered) == 0 || delivered[0].ID != "chunk_fallback" {
+		t.Fatalf("the stream was not served by the fallback: %#v", delivered)
+	}
+	if f.adapter.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("primary_calls=%d fallback_calls=%d", f.adapter.calls, fallback.calls)
+	}
+	if len(f.gate.Snapshot(time.Now())) == 0 {
+		t.Fatal("the refusal was walked past but nothing was suspended, which is the tax this rule exists to avoid")
+	}
+}
+
+// The line the walk rule does not cross, and the reason `emitted` is tested
+// before anything else is asked.
+//
+// Once chunks have reached the client, the answer has started being told. A
+// second upstream would tell a different one from the middle, and no framing
+// makes that coherent — so a refusal this late ends the request even though the
+// gate remembers it and even though a fallback is sitting right there. What the
+// caller keeps is the truncated stream it already has.
+func TestAStreamThatHasAlreadySpokenNeverWalksOn(t *testing.T) {
+	f := newFixture(t, 10_000_000)
+	defer f.close()
+	f.adapter.err = &provider.Error{
+		Class: provider.ErrorBadRequest, StatusCode: 401,
+		FailureReason: provider.FailureReasonInvalidCredential, Message: "refused mid-stream",
+	}
+	fallback := &fakeAdapter{
+		streamChunks: []openaiapi.ChatCompletionResponse{{
+			ID: "chunk_fallback", Object: "chat.completion.chunk", Model: "provider-model",
+			Choices: []openaiapi.Choice{{Index: 0, Delta: &openaiapi.Message{
+				Role: "assistant", Content: openaiapi.TextContent("a second answer"),
+			}}},
+		}},
+		streamUsage: &openaiapi.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+	}
+	if err := f.registry.Register(provider.Target{
+		ID: "target_2", DeploymentID: "dep_target_2", PublicModel: "chat",
+		ProviderModel: "provider-model", Adapter: fallback, Priority: 1,
+		CredentialID: "cred_other", CredentialRevision: 1,
+		Capabilities:           provider.Capabilities{Chat: true, Streaming: true, StreamUsage: true},
+		InputMicrosPerMillion:  1_000_000,
+		OutputMicrosPerMillion: 2_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := chatRequest()
+	request.Stream = true
+	var delivered []openaiapi.ChatCompletionResponse
+	err := f.service.ChatStream(context.Background(), f.plaintext, request, func(chunk openaiapi.ChatCompletionResponse) error {
+		delivered = append(delivered, chunk)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("a refusal after the first byte was expected to end the request")
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("a stream that had already spoken was continued by another upstream: %d calls", fallback.calls)
+	}
+	if len(delivered) == 0 {
+		t.Fatal("the chunks the primary did deliver were lost, which is not what the caller saw")
+	}
+}

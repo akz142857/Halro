@@ -2479,7 +2479,12 @@ func (s *Service) generateStream(
 				return nil
 			}
 			lastErr = providerErr
-			if emitted || !retryable(providerErr) {
+			// `emitted` first, and it is not a performance shortcut: once the
+			// client has seen response bytes, no failure whatsoever moves this
+			// request to another upstream. Everything after it is the same walk
+			// rule the unary paths use — a streaming caller that was refused
+			// before the first byte is in exactly the position a unary one is.
+			if emitted || !walkOn(providerErr, attempt) {
 				outcome := "provider_error"
 				if errors.Is(providerErr, redaction.ErrPolicyRejected) {
 					outcome = "policy_rejected"
