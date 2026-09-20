@@ -63,11 +63,14 @@ if !retryable(providerErr) {
 | 其它 5xx | 500/502/504 | provider5xx（`Ambiguous`） | **不会**（可能已计费，不重放） |
 | 凭据失效 / 订阅停用 | 401/403 | authentication | **不会** |
 | 余额 / 额度用尽 | 402 | bad_request | **不会** |
-| OpenAI `insufficient_quota` | **429** | rate_limit | 会 |
-| Kimi Code 402（已特例） | 402 | unknown | 会 |
+| 额度用尽，而上游用 429 表达 | 429 | rate_limit | 会 |
+| Kimi Code 402（已特例，**本表唯一有代码依据的厂商行为**） | 402 | unknown | 会 |
 
 > **"订阅用尽能不能自动切换"完全取决于上游选了哪个状态码。** 用 429 表达的会切，用 402 或
 > 401 表达的整个请求当场失败。这不是一个可以靠调参数绕开的行为。
+>
+> **哪一家用哪个状态码，本文不作断言**——除 Kimi Code 外，仓库里没有任何厂商级的取证，
+> 而这正是 §7 第 1 条与阶段 1 要解决的事。
 
 ### 1.4 顺带的一个配置陷阱
 
@@ -141,8 +144,12 @@ credential 下线。**默认取最窄的 scope，只在有证据时放宽**（§
 那句话对那两个字段仍然成立。但**"要不要挂起这个 scope、挂多久"是第三个维度**，它正应该由 reason
 决定。这是一次有意的立场扩展，要写进那段注释。
 
-收益是具体的：`insufficient_quota` 与普通限流都是 429、`Retryable` 都是 true，**只有 reason 能区分
-"等 3 秒"和"等到下个月"**。
+收益的前提是：**存在上游把"额度用尽"和"普通限流"压在同一个状态码上**（典型是都用 429、
+`Retryable` 都是 true），此时**只有 reason 能区分"等 3 秒"和"等到下个月"**。
+
+**这个前提本身要在阶段 1 证伪。** 如果取证发现每一家都用互不相同的状态码表达额度用尽，那么状态码
+本身就够用，判断 2 可以退化成一张状态码表，`FailureReason` 不必进路由路径——那会是更便宜的设计。
+反过来只要有一家把两种情况压在同一个码上，就必须按 reason 判。
 
 ### 2.3 401/403 不退避——绑 credential revision 自愈
 
@@ -332,10 +339,14 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 整个设计押在 `FailureReason` 准确上，而它今天只从一小把字符串码推出来
 （`internal/gateway/failure.go:126-150`）。
 
-1. **各上游到底怎么表达"额度用尽"，必须从真实响应取证，不能猜。** OpenAI 是 429 +
-   `insufficient_quota`；DeepSeek 用 402；Anthropic、MiniMax、Kimi、Gemini、Bedrock Mantle 各是
-   什么，要用 `docs/verification/provider-real-matrix.md` 那条计费取证通道跑出来。
-   **"Halro 没枚举过"是关于 Halro 的事实，不是关于上游的答案。**
+1. **各上游到底怎么表达"额度用尽"，必须从真实响应取证，不能猜。**
+   **仓库今天对此只有一条厂商级依据：Kimi Code 的 402**（`internal/provider/openai/adapter.go:1034-1044`）。
+   OpenAI、Anthropic、Azure、DeepSeek、MiniMax、Gemini、Bedrock Mantle 一家都没有——没有 adapter
+   分支、没有测试、没有 verification 记录。所以本文**不对它们中任何一家的状态码作断言**，全部列为
+   待取证项，用 `docs/verification/provider-real-matrix.md` 那条计费取证通道跑出来，按每家记录：
+   状态码、`code` 字段、有无 `Retry-After`、以及它与普通限流是否同码。
+   **"Halro 没枚举过"是关于 Halro 的事实，不是关于上游的答案**——这条规则在 MiniMax 的模型列表上
+   栽过一次，本文初稿又在这里栽了第二次（把一条凭印象写下的厂商映射放进了专讲取证的小节）。
 2. **额度是 per-credential 还是 per-model**，每家不同，决定 scope 宽窄。取不到证据就按窄的来。
 3. **`Retry-After` 在额度场景下上游到底给不给**，给的话值是否可信。给了假值比不给更糟。
 4. **半开探针用真实请求，意味着一个调用者被当成探针。** 要确认这在目标 SLA 里可接受，否则
@@ -420,3 +431,4 @@ pre-1.0.0 规则是"错误的构造不得与替代品并存"。本文取代：
 | 19 | 拒绝计数结构已存在 | `internal/gateway/service.go:898` |
 | 20 | console 措辞表 | `internal/app/admin_providers.go:777` |
 | 21 | 观测门禁要求 runbook 链接指向真实文件的 `### <AlertName>` 小节 | `deploy/observability/runbook_links_test.go` |
+| 22 | **仓库里唯一有依据的"厂商如何表达额度/权益问题"是 Kimi Code 的 402。** `insufficient_quota` 等字符串在全仓零命中（本文自身除外），其余厂商无 adapter 分支、无测试、无 verification 记录 | grep `insufficient_quota`；`internal/provider/openai/adapter.go:1034-1044` |
