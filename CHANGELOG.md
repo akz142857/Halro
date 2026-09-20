@@ -18,6 +18,14 @@ semantic versioning.
   days, or a custom range) and by status, a count of the filters in effect, and
   an empty state that says how to widen the range rather than only that nothing
   matched.
+- The release workflow's downstream preflight proves what it claims. It verified
+  the release App's write access by reading `.permissions.push` from `GET /repos`,
+  which is the user-shaped admin/push/pull triad and does not render a narrowed
+  installation token's `contents:write`; on its first ever execution it failed a
+  release whose credentials were correct. The write proof is now the token request
+  itself — GitHub refuses to mint an installation token exceeding its grant — and
+  the step checks reachability against `/installation/repositories` and prints what
+  it found.
 - The `npm audit` gate no longer treats "could not reach the registry's advisory
   endpoint" as "found vulnerabilities". Both made the command exit 1, so an npm
   incident turned a commit that touched no dependency red — on 2026-09-19 the
