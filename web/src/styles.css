@@ -1282,9 +1282,21 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
 .route-primary-tag::before { content: "["; }
 .route-primary-tag::after { content: "]"; }
-.route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
-.route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
-.route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+/* The group band reads left to right: the alias names the rows under it, the
+   facts about the set sit at the far end. It used to be one run of inline text
+   that `.route-table th:last-child` then pushed to the right edge — the only th
+   in its row is also the last one — so the alias ended up as far from the
+   targets it heads as the table allows. */
+.route-group-heading th {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3); text-align: left; font-weight: var(--font-weight-regular);
+}
+/* Sized as a heading rather than as a label, and left in the mono face the rest
+   of the console gives identifiers: this is the string a caller puts in its
+   `model` field, not prose. */
+.route-group-alias { color: var(--text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); letter-spacing: -.01em; }
+.route-group-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.route-group-heading span { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join { grid-column: 1 / -1; padding: var(--space-3) var(--space-4); background: var(--overlay-hover); border-radius: var(--radius-lg); }
 .route-join-lede { margin: 0 0 var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .route-join-targets { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
@@ -1294,7 +1306,9 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-join-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join-refusal { margin: var(--space-3) 0 0; padding-left: var(--space-3); color: var(--color-status-warning-text); border-left: 2px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
-.route-table th:last-child, .route-table td:last-child { text-align: right; }
+/* The actions column, not the group band: a group heading is a single th that
+   spans the table and is therefore also a last child. */
+.route-table thead th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
 .filter-bar {
