@@ -343,12 +343,13 @@ jobs:
           set -euo pipefail
           for name in halro halro-deadman; do
             for arch in amd64 arm64; do
-              docker run --rm \
-                -v "$PWD:/output" \
-                -v /var/run/docker.sock:/var/run/docker.sock \
-                anchore/syft@sha256:bd5357d2cd087f03af748dac24df48bfbc1723080d78f75f69aca1f2d429060e \
+              # --require-registry: a released artifact does not ship without its
+              # SBOM, so a registry incident waits here rather than being warned
+              # past, which is the opposite of the branch-CI answer.
+              ./scripts/sbom-gate.sh \
                 "docker:${name}:${IMAGE_TAG}-${arch}" \
-                -o "spdx-json=/output/${name}-container-${arch}.spdx.json"
+                "${name}-container-${arch}.spdx.json" \
+                --require-registry
             done
           done
       - name: Scan release gateway image

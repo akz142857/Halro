@@ -8,6 +8,25 @@ semantic versioning.
 
 ### Changed
 
+- The SBOM steps no longer treat "could not reach the registry" as "the SBOM is
+  bad". Each `docker run` of the digest-pinned Syft was one step, so every reason
+  it could not finish looked identical — and on 2026-09-20 Docker Hub's auth
+  endpoint reset the connection while pulling Syft itself, turning a
+  documentation-only commit red in eight seconds. That is the same shape as the
+  npm advisory incident the day before, and `scripts/sbom-gate.sh` carries the
+  same reasoning: a red main everybody knows to ignore is worse than no gate.
+
+  The discriminator is structural rather than a match on error text. A completed
+  run leaves a parseable SPDX document naming at least one package; a run that
+  never reached a registry leaves none. Only the second earns a retry, and after
+  the retries branch CI warns and carries on. **A document that is not usable
+  SPDX still fails immediately and is not retried** — that is a corrupt artifact
+  rather than a busy registry, and retrying would only publish it later. The
+  release workflow passes `--require-registry`, so a released artifact still
+  never ships without its SBOM.
+
+### Changed
+
 - **Breaking configuration change.** The `circuit_breaker` section is replaced by
   `routing`, and an instance that still has the old section refuses to start with
   a message naming the three keys that moved. It is a refusal rather than a
