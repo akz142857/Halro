@@ -17,6 +17,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/timezone"
@@ -403,6 +404,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		fmt.Fprintf(output, "halro_policy_rejections_total{reason=%s} %d\n",
 			strconv.Quote(item.reason), item.value)
 	}
+	writeProviderFailureReasons(output, r.gatewayService.ProviderFailureReasons())
 	metricHeader(output, "halro_provider_active_requests", "gauge", "Current in-flight requests by Provider instance.")
 	activeProviders := r.gatewayService.ActiveProviderRequests()
 	providerIDs := r.providers.ProviderIDs()
@@ -818,4 +820,44 @@ func writeCapabilityMetrics(output *bufio.Writer, snapshot capabilityMetricsSnap
 	metricHeader(output, "halro_operator_declared_deployments", "gauge",
 		"Deployments whose capabilities an administrator declared rather than the catalog establishing them.")
 	fmt.Fprintf(output, "halro_operator_declared_deployments %d\n", gauges.OperatorDeclared)
+}
+
+// writeProviderFailureReasons renders how upstream refusals classified.
+//
+// Two labels, because one of them is the whole point. `reason` says whether the
+// classifier reached a conclusion; `provider_status` says what it was looking at
+// when it did not. The pair {reason="unclassified", provider_status="402"} is a
+// refusal Halro took no meaning from, and it is the observation that turns a
+// vendor classification table from recollection into a record.
+//
+// The five named reasons are always printed, at zero if they have not happened.
+// An absent series and a series at zero read very differently to an alert, and a
+// reason that has never fired is exactly the case somebody wants to graph.
+func writeProviderFailureReasons(output *bufio.Writer, reasons gateway.ProviderFailureReasons) {
+	metricHeader(output, "halro_provider_failure_reason_total", "counter",
+		"Upstream refusals by canonical failure reason and the status they carried.")
+	seen := make(map[string]struct{}, len(reasons.Counts))
+	sort.Slice(reasons.Counts, func(left, right int) bool {
+		if reasons.Counts[left].Reason != reasons.Counts[right].Reason {
+			return reasons.Counts[left].Reason < reasons.Counts[right].Reason
+		}
+		return reasons.Counts[left].Status < reasons.Counts[right].Status
+	})
+	for _, item := range reasons.Counts {
+		seen[item.Reason] = struct{}{}
+		fmt.Fprintf(output, "halro_provider_failure_reason_total{reason=%s,provider_status=%s} %d\n",
+			strconv.Quote(item.Reason), strconv.Quote(strconv.Itoa(item.Status)), item.Count)
+	}
+	for _, reason := range gateway.KnownFailureReasons() {
+		if _, already := seen[reason]; already {
+			continue
+		}
+		// No status is asserted for a reason that has not been observed: "0"
+		// would claim a transport failure that never happened.
+		fmt.Fprintf(output, "halro_provider_failure_reason_total{reason=%s,provider_status=\"\"} 0\n",
+			strconv.Quote(reason))
+	}
+	metricHeader(output, "halro_provider_failure_reason_dropped_total", "counter",
+		"Failure classifications not counted because the tracked label set was full.")
+	fmt.Fprintf(output, "halro_provider_failure_reason_dropped_total %d\n", reasons.Overflow)
 }

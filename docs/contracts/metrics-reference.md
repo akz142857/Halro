@@ -120,6 +120,8 @@ an authentication boundary.
 | `halro_kms_slot_verified_timestamp_seconds` | gauge | `purpose` |
 | `halro_provider_up` | gauge | `provider_type` |
 | `halro_policy_rejections_total` | counter | `reason` |
+| `halro_provider_failure_reason_total` | counter | `reason`, `provider_status` |
+| `halro_provider_failure_reason_dropped_total` | counter | none |
 | `halro_provider_active_requests` | gauge | `provider_id` |
 | `halro_provider_concurrency_limit` | gauge | `provider_id` |
 | `halro_deployment_active_requests` | gauge | `deployment_id` |

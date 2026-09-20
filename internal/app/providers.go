@@ -474,6 +474,10 @@ func loadProviderRegistryWithCatalogAndEgress(
 	adapters := make(map[string]provider.Adapter)
 	providerBindingIDs := make(map[string][]string)
 	providerLimits := make(map[string]int64)
+	// The revision each provider's credential carried when this registry was
+	// built. Read in the instance loop below, where the record is already loaded,
+	// and stamped onto every target the provider serves.
+	credentialRevisions := make(map[string]uint64)
 	// Integrity and vault-trust failures still refuse the load, and the adapters
 	// built so far are closed rather than leaked. This is the narrow answer to
 	// "should any load failure stop the process": yes — the ones that say the
@@ -534,6 +538,7 @@ func loadProviderRegistryWithCatalogAndEgress(
 			return refuse(fmt.Errorf("provider %q credential audience mismatch", instance.ID))
 		}
 		providerLimits[instance.ID] = instance.MaxConcurrency
+		credentialRevisions[instance.ID] = credential.Revision
 		for _, binding := range instance.EffectiveProfileBindings() {
 			if !binding.Enabled {
 				continue
@@ -752,6 +757,8 @@ func loadProviderRegistryWithCatalogAndEgress(
 			AccessSurface:               deploymentByID[deploymentID].AccessSurface,
 			ProfileID:                   deploymentByID[deploymentID].ProfileID,
 			AccountRegionID:             accountRegion,
+			CredentialID:                instanceByID[providerID].CredentialID,
+			CredentialRevision:          credentialRevisions[providerID],
 			Region:                      deploymentByID[deploymentID].Region,
 			Adapter:                     adapter,
 			InputMicrosPerMillion:       inputPrice,

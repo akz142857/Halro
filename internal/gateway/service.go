@@ -79,6 +79,7 @@ type Service struct {
 	limiter               *limiter.Manager
 	redactor              *redaction.Engine
 	breakers              *circuit.Manager
+	failureReasons        failureReasonCounters
 	maxAttempts           int
 	maxAttemptsPerTarget  int
 	retryBaseDelay        time.Duration
@@ -834,6 +835,9 @@ func (attempt *activeAttempt) logProviderFailure(providerErr error) {
 	}
 	descriptor := describeProviderFailure(providerErr, attempt.pricingTarget)
 	attempt.run.failure = descriptor
+	// Counted from the same descriptor the log is written from, so the metric
+	// and the record can never disagree about how one failure classified.
+	attempt.service.failureReasons.observe(descriptor)
 	attributes := append([]any{"request_id", attempt.run.requestID}, descriptor.attributes()...)
 	attributes = append(attributes, "retryable", descriptor.Retryable)
 	if descriptor.Ambiguous {
