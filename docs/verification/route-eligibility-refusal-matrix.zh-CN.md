@@ -22,7 +22,7 @@ Route eligibility（[设计](../todo/route-eligibility-design.zh-CN.md)，Epic #
 
 | 等级 | 含义 |
 |---|---|
-| **A** | 本仓库对真实账号实测，记录在案（文件:行号 或本文 §3 的执行记录） |
+| **A** | 本仓库对真实账号实测，记录在案（文件:行号 或本文 §3 的执行记录）。当前只有 §3.1.1 的四条 |
 | **B** | 上游官方文档 |
 | **C** | 第三方报告（用户 issue、社区帖），只作线索，不作结论 |
 | **—** | 无任何依据。**"Halro 没枚举过"是关于 Halro 的事实，不是上游的答案** |
@@ -99,8 +99,8 @@ HTTP 429 上**，只能靠响应体里的 `code`/`type` 区分。Kimi 的文档�
 | **Anthropic** | `402` `billing_error`（付款问题）**与** `429` `rate_limit_error`（月度消费上限） | `429` `rate_limit_error` | **是**（消费上限与限流同为 429 同 type） | `401` `authentication_error`；`403` `permission_error` | 限流给；**消费上限那种明确不给**，且会持续失败 |
 | **Azure OpenAI** | — | `429` | — （文档未区分配额耗尽与 TPM/RPM 限流） | `401` | `retry-after` / `retry-after-ms` |
 | **DeepSeek** | **`402`** Insufficient Balance | **`429`** Rate Limit Reached | **否** | `401` | 文档未提 |
-| **MiniMax** | 体内 `1008`；HTTP 状态**未实测**（等级 C 的三份报告指向 `500`） | 体内 `1002` | 体内码不同；**HTTP 状态未知** | **A**：`401` + `{"type":"error"}`，两面一致 | 文档不写 |
-| **Kimi / Moonshot** | `429` `exceeded_current_quota_error`（余额不足/欠费/代金券过期） | `429` `rate_limit_reached_error`；另有 `429` `engine_overloaded_error` | **是**（三种语义同压 429） | `401` `invalid_authentication_error` | 仅 `engine_overloaded_error` 提到按 `Retry-After` 等 |
+| **MiniMax** | 体内 `1008`；HTTP 状态**未实测**（等级 C 的三份报告指向 `500`） | 体内 `1002` | 体内码不同；**HTTP 状态未知** | **A**：`401`，两面均无 `Retry-After`；OpenAI 面 `error.type=authorized_error`，Anthropic 面 `error.type=authentication_error` | 401 无；额度场景文档不写 |
+| **Kimi / Moonshot** | `429` `exceeded_current_quota_error`（余额不足/欠费/代金券过期） | `429` `rate_limit_reached_error`；另有 `429` `engine_overloaded_error` | **是**（三种语义同压 429） | **A**：`401` `error.type=invalid_authentication_error`，两面一致，无 `Retry-After` | 401 无；仅 `engine_overloaded_error` 提到按 `Retry-After` 等 |
 | **BigModel** | `429` + 业务码 `1113`（账户已欠费） | `429` + `1302`（速率）／`1305`（模型过载） | **是** | `401` + `1000`/`1001`/`1003` | 文档未提 |
 | **Gemini** | `429` `quota_exceeded`（日配额） | `429` `rate_limit_exceeded`（每分钟/每秒） | **是** | `401` `authentication`；`403` `permission_denied` | 文档未提 |
 | **Bedrock Mantle** | — | — | — | — | — |
@@ -126,6 +126,38 @@ HTTP 429 上**，只能靠响应体里的 `code`/`type` 区分。Kimi 的文档�
 [BigModel](https://docs.bigmodel.cn/cn/api/api-code) ·
 [Azure](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/quotas-limits) ·
 [Bedrock Converse](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html)
+
+### 3.1.1 C 列实测（2026-09-20，等级 A）
+
+坏 key 打四条路由，零 token 成本。四条全部 `401`、全部没有 `Retry-After`：
+
+| 路由 | HTTP | 响应体枚举字段 |
+|---|---|---|
+| MiniMax `/v1/chat/completions` | `401` | 顶层 `type="error"`；`error.type="authorized_error"` |
+| MiniMax `/anthropic/v1/messages` | `401` | 顶层 `type="error"`；`error.type="authentication_error"` |
+| Kimi `/v1/chat/completions` | `401` | `error.type="invalid_authentication_error"` |
+| Kimi `/anthropic/v1/messages` | `401` | `error.type="invalid_authentication_error"` |
+
+把这四个响应体喂回适配器实跑（`limitedErrorMessage` → `classifyHTTPError` →
+`canonicalProviderFailureReason`），四条都落到
+`class=authentication` → `FailureReason=invalid_credential` →
+`ScopeCredential` + `RecoverOnCredentialRevision`。**凭证失效这一路今天是对的**，
+而这是实测确认的，不是读代码推的。
+
+两点是新知识，文档里没有：
+
+- **MiniMax 的 OpenAI 面用的是 Anthropic 形状的错误信封**——顶层带 `type="error"`，
+  而 OpenAI 自己的信封没有这一层。两张面对同一种情况还给了**不同的** `error.type`
+  （`authorized_error` / `authentication_error`），两个都不是 OpenAI 的词汇
+  （OpenAI 用 `invalid_api_key`）。
+  这对将来那个 1008 分支是直接约束：**MiniMax 的 OpenAI 面不能按 OpenAI 的词汇去认**，
+  它的额度拒绝大概率也是 Anthropic 形状。
+- **`limitedErrorMessage` 里 `code` 为空时回落到 `type` 的那一步是承重的**
+  （`internal/provider/openai/adapter.go:1094-1097`）。MiniMax 和 Kimi 都不填 `code`，
+  没有这一步两家的 `ProviderCode` 都会是空串，操作台和日志上只剩一个裸状态码。
+- Kimi 实测到的 `invalid_authentication_error` 与它文档写的**完全一致**，
+  这让它文档里另一条——`429` 上的 `exceeded_current_quota_error`——可信度相应提高，
+  但仍然是 B，不会因此变成 A。
 
 ### 3.2 MiniMax：已知的三条，以及它们今天在 Halro 里的下场
 
