@@ -1375,6 +1375,41 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     notifyCreated: "Provider created and hot loaded", notifyUpdated: "Provider saved", notifyDeleted: "Provider deleted", notifyEnabled: "Provider enabled", notifyDisabled: "Provider disabled",
     notifyCredentialSaved: "Credential saved encrypted", notifyCredentialRotated: "Credential rotated", notifyCredentialDeleted: "Credential deleted",
     types: { openai: "OpenAI", anthropic: "Anthropic", azure_openai: "Azure OpenAI", deepseek: "DeepSeek", gemini: "Gemini", bedrock: "AWS Bedrock", minimax: "MiniMax", kimi: "Kimi", bigmodel: "BigModel / Z.AI", openai_compatible: "OpenAI-compatible" },
+    // This block answers the operator's question — "why did my request not go
+    // to this upstream" — rather than naming what the gate did internally.
+    suspensions: {
+      title: "Currently refused by the upstream",
+      description: "The gateway does not send requests to anything the upstream has refused. Each row says why, and what ends it.",
+      subject: "Subject",
+      cause: "What the upstream said",
+      recovery: "When it comes back",
+      observed: "First seen",
+      // With nothing refused the panel does not render, so there is no empty
+      // state to word. An unreadable gate is the other case and has to say so
+      // out loud, or a missing panel would read as an answer.
+      unavailable: "Admission state could not be read. This is not the same as nothing being refused.",
+      tabMark_one: "{{count}} of these is being refused by the upstream",
+      tabMark_other: "{{count}} of these are being refused by the upstream",
+      scopes: {
+        credential: "Credential",
+        credential_model: "Credential and model",
+        deployment: "Deployment",
+        provider: "Provider",
+      },
+      untilReplaced: "Replace the credential",
+      untilTime: "Until {{time}}",
+      untilNextAttempt: "Retried on the next request",
+      observedRevision: "Refused at credential revision {{revision}}",
+      // The three distinctions an error class cannot make: an exhausted quota
+      // is neither a rate limit nor a dead key. The other two conditions reuse
+      // testControl.reasons rather than saying the same thing twice.
+      reasons: {
+        subscription_quota_exhausted: "The upstream says the quota is used up",
+        subscription_inactive: "The upstream says the subscription is not active",
+        entitlement_verification_unavailable: "The upstream could not confirm what this credential is entitled to",
+        unclassified: "The upstream refused the request, with no classified reason",
+      },
+    },
     eyebrow: "Upstream trust", title: "Credentials & Providers", description: "Provider secrets remain encrypted in the local vault and are decrypted only for their bound audience at runtime.",
     connectionSection: "Connection & capabilities", connectionSectionDescription: "Provider type determines the API family, authentication, and recommended capabilities; choose which capabilities this connection exposes.", capacitySection: "Credential & capacity", capacitySectionDescription: "Bind an encrypted credential and limit provider-level concurrency.", enableDescription: "When enabled, model deployments may use this upstream connection.", disabledImpact: "Model deployments cannot use this upstream connection", capabilitySectionDescription: "Choose the applicable capabilities exposed by this connection; each model may select only a subset.", fixedCapabilityDescription: "This capability implementation uses a fixed protocol and needs no further configuration.", capabilitySummary: "Selected capabilities", advancedCapabilities: "Applicable capabilities", advancedCapabilitiesHint: "Provider type supplies a recommended preset; capabilities that are unavailable or not implemented cannot be selected.", selectedCapabilities: "{{count}} enabled",
     addCredential: "＋ Credential", addProvider: "＋ Provider", addProxy: "＋ Outbound proxy",

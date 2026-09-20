@@ -33,6 +33,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
     vi.spyOn(api, "providerEgressProxies").mockResolvedValue({ runtime_id: "runtime_test", items: [] });
+    vi.spyOn(api, "routeSuspensions").mockResolvedValue({ items: [] });
   });
 
   afterEach(() => {
@@ -48,6 +49,63 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.queryByRole("heading", { name: "服务商 0" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "凭据库 1" }));
     expect(screen.queryByRole("heading", { name: "凭据 1" })).not.toBeInTheDocument();
+  });
+
+  // The gate's own state, on the page where the remedy is. Re-saving the
+  // credential advances its revision, which is what clears an indefinite
+  // suspension — so this belongs beside the credential, not on a page of its
+  // own that an operator has to think to open.
+  it("shows what the upstream is refusing, above the resource tabs", async () => {
+    vi.spyOn(api, "routeSuspensions").mockResolvedValue({
+      items: [{
+        scope_kind: "credential", scope_key: "credential_openai",
+        reason: "invalid_credential", provider_status: 401,
+        observed_at: "2026-09-20T10:00:00Z", indefinite: true, credential_revision: 1,
+      }],
+    });
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "正在被上游拒绝" })).toBeVisible();
+    expect(screen.getByText("OpenAI production")).toBeVisible();
+    expect(screen.getByText("需更换凭据")).toBeVisible();
+    // The panel is above the tabs and an operator opening the vault reads the
+    // rows, not the panel, so the tab says how many of them are refused.
+    expect(screen.getByRole("tab", { name: /凭据库 1.*●1/ })).toBeVisible();
+  });
+
+  // The panel is an exception list: with no exception it takes no space at the
+  // top of the page it shares with the connections themselves.
+  it("renders nothing about refusals while nothing is refused", async () => {
+    renderPage();
+    expect(await screen.findByRole("tab", { name: "服务商 0" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "正在被上游拒绝" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/正在被上游拒绝/)).not.toBeInTheDocument();
+  });
+
+  // A page whose connection list waits on an unrelated read has turned a
+  // diagnostic into a dependency of editing.
+  it("still lists connections when the admission gate cannot be read", async () => {
+    vi.spyOn(api, "routeSuspensions").mockRejectedValue(new Error("unreachable"));
+    renderPage();
+    expect(await screen.findByRole("tab", { name: /凭据库/ })).toBeVisible();
+    expect(await screen.findByText("读不到准入状态，这不等于没有被拒绝的对象。")).toBeVisible();
+  });
+
+  // The panel names re-saving the credential as what ends an indefinite
+  // suspension. Nothing invalidated the gate read, so an operator did exactly
+  // that and the screen went on telling them to do it — until they navigated
+  // away and back.
+  it("re-reads the admission gate after the remedy it advertises", async () => {
+    vi.spyOn(api, "rotateCredential").mockResolvedValue({} as never);
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "轮换" }));
+    const before = vi.mocked(api.routeSuspensions).mock.calls.length;
+    fireEvent.change(screen.getByLabelText(/新密钥/), { target: { value: "sk-replacement-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "安全轮换" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.routeSuspensions).mock.calls.length).toBeGreaterThan(before));
   });
 
   it("wraps keyboard focus around all resource tabs", async () => {

@@ -774,6 +774,35 @@ export interface ProviderEgressProxy {
   revision: number;
 }
 
+// One thing the admission gate is holding out of service.
+//
+// `scope_kind` says what the refusal was about, and `scope_key` is that thing's
+// identifier — a deployment, a credential, a provider, or a credential and one
+// model joined by "/". The console resolves those against the lists it already
+// loads, because an identifier is not an answer to "which credential".
+export interface RouteSuspension {
+  scope_kind: "deployment" | "credential_model" | "credential" | "provider";
+  scope_key: string;
+  // A provider.FailureReason, or "unclassified". Turned into a sentence by
+  // suspensionReasonLabel, never rendered raw.
+  reason: string;
+  provider_status?: number;
+  provider_code?: string;
+  observed_at: string;
+  // Absent when no clock ends this. `indefinite` states that rather than
+  // leaving it to be inferred from the absence.
+  until?: string;
+  indefinite: boolean;
+  // The revision the refusal was seen against. Saving new secret material
+  // advances it and clears the suspension, so this is what an operator who has
+  // already replaced the key is comparing against.
+  credential_revision?: number;
+}
+
+export interface RouteSuspensionCatalog {
+  items: RouteSuspension[];
+}
+
 export interface ProviderEgressCatalog {
   runtime_id: string;
   items: ProviderEgressProxy[];

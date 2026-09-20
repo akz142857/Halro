@@ -19,6 +19,7 @@ import type {
 	GovernanceSummary,
   Provider,
   ProviderEgressCatalog,
+  RouteSuspensionCatalog,
   ProviderEgressProxy,
   ProviderCapabilities,
   InvocationTargetCatalog,
@@ -274,6 +275,13 @@ export const api = {
     request<ProviderProfilesCatalog>("/provider-profiles").then((value) => value.data),
   providerEgressProxies: () =>
     request<ProviderEgressCatalog>("/provider-egress-proxies").then((value) => value.data),
+  // What the admission gate is refusing to route to right now. Read-only: there
+  // is no clear action yet, deliberately — clearing one is an administrative act
+  // that has to commit with an audit record, and a suspension is not a stored
+  // thing to commit against. The console must not grow a button the API has not
+  // got.
+  routeSuspensions: () =>
+    request<RouteSuspensionCatalog>("/route-suspensions").then((value) => value.data),
   createProviderEgressProxy: (value: object, idempotencyKey: string, reauth: Reauth) =>
     request<ProviderEgressProxy>("/provider-egress-proxies", {
       ...json("POST", { ...value, ...stepUpBody(reauth) }), headers: { "Idempotency-Key": idempotencyKey },

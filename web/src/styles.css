@@ -481,6 +481,20 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .resource-list > button:hover, .resource-list > button.selected { border-color: var(--color-border-strong); background: var(--surface-2); }
 .resource-list > button.selected { box-shadow: inset 3px 0 var(--lime); }
 .resource-title { display: flex; align-items: center; gap: 9px; }
+/* The admission gate's panel on the Providers page. Its two secondary lines —
+   which kind of thing a row is about, and the credential revision a refusal was
+   seen against — are detail under the answer, not the answer, so they take the
+   same muted small type the rest of the console gives that role. Scoped to the
+   panel: a bare class here would be a fourth near-identical global. */
+.route-suspensions-panel { margin-bottom: var(--space-6); }
+.route-suspensions-panel .suspension-detail {
+  display: block; margin-top: var(--space-1);
+  color: var(--muted); font-size: var(--font-size-xs); white-space: normal;
+}
+/* The panel renders only while something is refused, so the one state that
+   still needs a line without a table is the gate that could not be read. It
+   keeps the panel's slot above the tabs, at the width of the page. */
+.route-suspensions-unavailable { margin: 0 0 var(--space-6); }
 .resource-meta { display: block; margin: 10px 0; color: var(--muted); font-size: var(--font-size-xs); }
 .detail-panel { --card-inset: 22px; min-width: 0; background: var(--surface-panel); border: 1px solid var(--line); }
 .detail-title h2 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 5px; }
@@ -548,6 +562,10 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .provider-tabs > button[aria-selected="true"]::after { background: var(--lime); }
 .provider-tabs > button:focus-visible { z-index: 1; outline: 2px solid var(--color-focus-ring); outline-offset: -3px; }
 .provider-tabs > button span { margin-left: 8px; color: var(--color-text-tertiary); font: var(--font-size-xs) var(--mono); }
+/* The second number a tab can carry. It sits in the same mono row as the item
+   count and must not be mistaken for it, which is what the colour and the dot
+   are for — the count is how many exist, this is how many are refused. */
+.provider-tabs > button span.tab-refusal-mark { color: var(--color-status-warning-text); font-weight: var(--font-weight-semibold); }
 .provider-resource-panel { overflow: visible; background: linear-gradient(180deg, var(--surface-overlay-solid), var(--surface-overlay-solid)); border-top-left-radius: 0; border-top-right-radius: 0; }
 .provider-resource-panel > .panel-header { align-items: flex-end; }
 .provider-resource-panel > .panel-header { padding: 22px 26px; }
@@ -1264,9 +1282,21 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
 .route-primary-tag::before { content: "["; }
 .route-primary-tag::after { content: "]"; }
-.route-group-heading th { padding: var(--space-3) var(--space-2) var(--space-2); text-align: left; font-weight: var(--font-weight-regular); }
-.route-group-heading strong { margin-right: var(--space-2); font-size: var(--font-size-sm); }
-.route-group-heading span { margin-right: var(--space-2); color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+/* The group band reads left to right: the alias names the rows under it, the
+   facts about the set sit at the far end. It used to be one run of inline text
+   that `.route-table th:last-child` then pushed to the right edge — the only th
+   in its row is also the last one — so the alias ended up as far from the
+   targets it heads as the table allows. */
+.route-group-heading th {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-3); text-align: left; font-weight: var(--font-weight-regular);
+}
+/* Sized as a heading rather than as a label, and left in the mono face the rest
+   of the console gives identifiers: this is the string a caller puts in its
+   `model` field, not prose. */
+.route-group-alias { color: var(--text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); letter-spacing: -.01em; }
+.route-group-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
+.route-group-heading span { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join { grid-column: 1 / -1; padding: var(--space-3) var(--space-4); background: var(--overlay-hover); border-radius: var(--radius-lg); }
 .route-join-lede { margin: 0 0 var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .route-join-targets { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
@@ -1276,7 +1306,9 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-join-meta { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join-refusal { margin: var(--space-3) 0 0; padding-left: var(--space-3); color: var(--color-status-warning-text); border-left: 2px solid var(--color-status-warning-border); font-size: var(--font-size-xs); line-height: var(--line-height-normal); }
 .route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
-.route-table th:last-child, .route-table td:last-child { text-align: right; }
+/* The actions column, not the group band: a group heading is a single th that
+   spans the table and is therefore also a last child. */
+.route-table thead th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
 .filter-bar {

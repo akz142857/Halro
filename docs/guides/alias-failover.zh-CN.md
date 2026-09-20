@@ -7,8 +7,9 @@
 一句话结论：
 
 > 多目标别名的自动切换**只在 OpenAI 兼容的 Chat、流式 Chat、Embeddings 三条路径上生效**，
-> 且**只对可证明未产生上游计费的失败**换目标。凭据失效、请求被拒、上游 5xx
-> 都不会换目标。Phase 2 资源类操作在多目标别名上**直接返回 409**。
+> 且**只对不会重复计费的失败**换目标：要么可证明未产生上游计费，要么这次失败已经被准入门
+> 记成了挂起。**凭据失效（401）和被识别出的额度耗尽（402）现在会换目标**；请求本身被拒
+> （400）和可能已在计费的 5xx 不会。Phase 2 资源类操作在多目标别名上**直接返回 409**。
 
 下面是这句话的每一部分的依据。
 
@@ -16,13 +17,17 @@
 
 | 协议面 | 入口 | 多目标行为 |
 |---|---|---|
-| Chat Completions（含 Responses、可移植 Anthropic Messages） | `generate()` `internal/gateway/service.go:975` | **逐目标回退**，双层循环 `:1030` |
-| 流式 Chat（含 ResponsesStream、可移植 MessagesStream） | `generateStream()` `service.go:1968` | **逐目标回退**，`:2031`；首字节吐出后停止 |
-| Embeddings | `service.go:2207` | **逐目标回退** |
-| Anthropic **原生** Messages / MessagesStream / CountTokens | `prepareNativeMessages()` `service.go:1688` | **无回退**，固定取 `targets[0]` |
-| images / speech / transcriptions / moderations / rerank / batches | `inferenceResourcesTarget()` `internal/gateway/inference_resources.go:22` | **候选数 ≠ 1 时返回 409 `ambiguous_resource_route`** |
-| files 创建 | `inference_resources_store.go:217` | 同上，409 |
-| async invoke | `inference_resources_store.go:1113` | 同上，409 |
+| Chat Completions（含 Responses、可移植 Anthropic Messages） | `generate()` `internal/gateway/service.go:1249` | **逐目标回退**，双层循环 `:1336`，判定在 `:1436` |
+| 流式 Chat（含 ResponsesStream、可移植 MessagesStream） | `generateStream()` `service.go:2303` | **逐目标回退**，`:2368`，判定在 `:2487`；首字节吐出后停止 |
+| Embeddings | `service.go:2514` | **逐目标回退**，判定在 `:2614` |
+| Anthropic **原生** Messages / MessagesStream / CountTokens | `prepareNativeMessages()` `service.go:1972` | **无回退**，固定取 `targets[0]`（`:2006`） |
+| images / speech / transcriptions / moderations / rerank / batches | `inferenceResourcesTarget()` `internal/gateway/inference_resources.go:23` | **候选数 ≠ 1 时返回 409 `ambiguous_resource_route`** |
+| files 创建 | `inference_resources_store.go:297` | 同上，409 |
+| async invoke | `inference_resources_store.go:1187` | 同上，409 |
+
+三条回退路径用的是同一个判定函数。流式曾经是例外——它只看 `retryable()`，于是几乎每个 SDK
+默认发出的那种请求，恰好是凭据失效换不了目标的那一种。现在三条路径都走 `walkOn()`，流式额外
+多一条前置条件：**已经吐给客户端的字节，谁也换不了目标**。
 
 原生 Messages 不回退是有意的——它走 profile 固定的热路径，代码注释写明「so it cannot
 accidentally inherit portable fallback behavior」。
@@ -32,8 +37,18 @@ accidentally inherit portable fallback behavior」。
 
 ## 二、哪些失败会换目标
 
-判定在 `retryable()`（`internal/gateway/service.go:2332`）：非 `*provider.Error` 一律不换；
-`Ambiguous` 直接短路为否；其余取 `Retryable || ErrorMalformed || ErrorProvider5xx`。
+判定是两层，都在 `walkOn()`（`internal/gateway/service.go:2690`）里：
+
+1. `retryable()`（`:2704`）：非 `*provider.Error` 一律不换；`Ambiguous` 直接短路为否；
+   其余取 `Retryable || ErrorMalformed || ErrorProvider5xx`。这一层回答的是「**同一个调用**
+   能不能再发一次」——执行与计费语义，由 adapter 声明。
+2. 第一层为否时，再问一次：**这次失败是不是让准入门（`internal/routegate`）真的把某个 scope
+   挂起了**？挂起了、且失败不是 `Ambiguous`，就继续走下一个候选。
+
+第二层是 #324 加的，它才是「主目标的密钥过期了，自动切到备用服务商」成立的原因。这不是在改
+`Retryable` 的含义：「能不能换一家」是另一个问题，过去被绑在 `Retryable` 上只有一个理由——没有
+挂起机制时，401 之后继续往下走等于**每个**请求都白付一次往返。挂起把这笔开销收敛成每个窗口
+一次，绑定就可以解开了。
 
 | 主目标的失败 | 换下一个目标？ | 依据 |
 |---|---|---|
@@ -41,10 +56,12 @@ accidentally inherit portable fallback behavior」。
 | 429 限流、408 超时 | **是** | `Retryable: true` |
 | 可证明未发出的连接/DNS/拨号错误 | **是** | `provider.Unsent(err)` ⇒ `Ambiguous: false` |
 | 响应无法解析（`ErrorMalformed`） | **是** | 在 `retryable` 白名单内 |
-| 断路器打开 | **是**，且**不消耗尝试预算** | `startAttempt` 在计数前返回 |
+| 该候选已被准入门挂起 | **是**，且**不消耗尝试预算** | `s.routes.Admit` 在 `startAttempt` 里、计数之前就拒掉（`service.go:608`）。这里过去写的是「断路器」，断路器已被准入门取代 |
 | 部署/服务商并发额度耗尽 | **是**，且**不消耗尝试预算** | 同上 |
-| **401 / 403 凭据失效** | **否**，直接终止 | `ErrorAuthentication`，`Retryable` 未置位 |
-| **400 及其他 4xx** | **否**，直接终止 | `ErrorBadRequest` |
+| **401 凭据失效** | **是**（第二层） | 归一成 `invalid_credential`，门限 1，立刻挂起整个 credential（`internal/routegate/policy.go`），本次请求走下一个候选。**Kimi Code 例外**：它的 401 不归一（`failure.go:141-143`），按下面的可用性路径处理 |
+| **额度耗尽 / 订阅未生效**（`subscription_quota_exhausted`、`subscription_inactive`、Kimi Code 的 402） | **是**（第二层） | 同样门限 1。前提是拿得到 canonical reason——由 adapter 声明，或由上游的 `code` 字段归一 |
+| **没有 canonical reason 的失败**（403、adapter 没教过的 402…） | **前 4 次否；第 5 次挂起，且失败非 `Ambiguous` 时才换** | 走可用性策略，门限 `routing.availability_failures`（默认 5）。普通 5xx 也一样计数，但它通常 `Ambiguous`，所以即便凑满也不换——它只让**后续**请求不再撞上这个候选 |
+| **400 及其他「请求本身被拒」** | **否**，直接终止 | `ErrorBadRequest` 不说明任何上游不可用，挂不起任何 scope；换一家只会把同一个 400 再收一遍 |
 | **500 / 502 / 504** | **否**，直接终止 | `Ambiguous: true`——请求已到达上游，可能已经产生计费 |
 | 传输错误但无法证明未发出 | **否** | `Ambiguous: !provider.Unsent(err)` |
 | 输出被脱敏策略拒绝 | **否**，422 | 策略属于项目，换目标不改变结论 |
@@ -55,9 +72,16 @@ accidentally inherit portable fallback behavior」。
 5xx 不回退是**账务保守性的刻意选择**，不是缺陷：一个 500 可能是生成进行到一半才抛出的，
 502/504 来自边缘而源站可能仍在运行并计费。重发会重复这次生成，按免费结算会隐藏这笔开销。
 
-**运维要记住的一条**：「主目标的密钥过期了，自动切到备用服务商」——**这个场景今天不成立**。
-401 直接终止，后面的目标一次都不会试。恢复靠主动探活把该部署移出候选集（默认探活间隔
-30 秒），而探活覆盖不了「只有特定请求形状会被拒」的 400。
+**运维要记住的两条**：
+
+1. 「主目标的密钥过期了，自动切到备用服务商」——**这个场景今天成立**，三条回退路径（含流式）
+   都成立。代价是那一次请求付掉的一次失败往返；挂起窗口内的后续请求连这一次都不付。
+   2026-09 之前不成立，若你读过旧版本的这份文档，结论已经反了。
+2. 但「**流式请求吐出第一个字节之后**主目标才挂」仍然不切换，客户端拿到的是被截断的流。
+   这不是遗漏：换一家等于从中途开始讲另一个答案，没有任何封装方式能让它自洽。
+
+挂不起来的失败靠什么恢复，没有变：主动探活把该部署移出候选集（默认探活间隔 30 秒），
+而探活覆盖不了「只有特定请求形状会被拒」的 400。
 
 ## 三、尝试预算怎么算
 
@@ -97,20 +121,23 @@ retry:
 连续通过（控制台的路由列表按别名分组，组标题给出的就是下面前四项算出来的有效候选数，
 组内行序即引擎的尝试顺序；第 5 项起随请求形状变化，界面无法预先呈现）：
 
-1. **路由已启用**且未删除 —— 否则根本不注册进 Registry（`internal/app/providers.go:531`）。
-2. **部署已启用**、未删除、能力校验通过 —— 否则注册时被扣留（`providers.go:552`、`:565`）。
+1. **路由已启用**且未删除 —— 否则根本不注册进 Registry（`internal/app/providers.go:624`）。
+2. **部署已启用**、未删除、能力校验通过 —— 否则注册时被扣留（`providers.go:649`、`:658`）。
 3. **策略与同别名的其他启用路由一致** —— 指 `ordered` 与 `round_robin` 不能并存；空策略
-   两侧都归一为 `ordered`（`provider.go:539-541`），不构成不一致。真正混合时 Registry
+   两侧都归一为 `ordered`（`provider.go:688`），不构成不一致。真正混合时 Registry
    拒绝注册该目标，它会被记为 `Dangling` 并写日志；路由列表把这类路由显示为**已扣留**
    并给出原因（`/admin/api/v1/routes` 的 `withheld` 字段），不再显示成 Enabled。
-4. **探活未失败** —— `probed && !probe.Healthy` 的目标在候选解析阶段被剔除
-   （`internal/provider/provider.go:645`）。注意「从未探活」不会被剔除。
-5. **支持该操作** —— `filterByOperation`（`provider.go:663`），按 chat / streaming /
+4. **没有被准入门挡住** —— 候选解析先过准入门再过能力过滤
+   （`resolveCandidatesLocked`，`internal/provider/provider.go:796`；`Gate.Filter`，
+   `internal/routegate/gate.go:320`）。它一处挡两类：探活失败的部署，以及上游拒绝挂起的
+   credential / credential+model / provider / deployment。注意「从未探活」不会被挡。
+   这里过去写的是独立的探活过滤，#324 之后两者合并在门里。
+5. **支持该操作** —— `filterByOperation`（`provider.go:822`），按 chat / streaming /
    embeddings / images … 粒度过滤，并校验能力证据等级。
 6. **满足细粒度能力** —— 视觉、工具、结构化输出、profile 兼容性由
    `filterSemanticCapabilities`、`filterGenerateProfileCompatibility`、
-   `filterPrimitiveTargets`（`service.go:2622-2650`）在发起前过滤。
-7. **token 上限装得下** —— `filterTokenCapabilities`（`service.go:2652`）。
+   `filterPrimitiveTargets`（`service.go:2991`、`:3002`、`:3039`）在发起前过滤。
+7. **token 上限装得下** —— `filterTokenCapabilities`（`service.go:3046`）。
 
 结论：一个「3 个目标」的别名，对一个带图片的请求可能只有 1 个有效候选；对一个探活失败
 两个部署的时刻只有 1 个。**判断冗余度时要按请求形状看，不能只看路由条数。**
@@ -121,7 +148,7 @@ retry:
 包括那些从来不会用到新目标的请求。
 
 **1. Token Guard 按候选集的最高价准入。**
-`captureTokenGuardPricingView`（`service.go:2439`）遍历全部候选取 `maximumCost`，作为本次
+`captureTokenGuardPricingView`（`service.go:2800`）遍历全部候选取 `maximumCost`，作为本次
 请求的预估成本喂给 Token Guard；`RecheckCost` 只上调、不下调，`Complete` 也不按实际
 成本回冲。所以给 `chat` 加一个贵的兜底目标之后，**每一个** `chat` 请求都按最贵单价消耗
 `cost_per_minute` 窗口，哪怕它全程由最便宜的目标服务。配了成本维度的项目会在比原先低
@@ -129,7 +156,7 @@ retry:
 
 **2. 任一候选缺少价格版本 ⇒ 整个别名 409。**
 同一个函数里，任何候选取不到覆盖的价格版本就走 `unknownPricePolicyEvidence`
-（`service.go:2506`），除非实例策略是 `allow_without_cost_governance` **且**项目日预算为 0
+（`service.go:2867`），除非实例策略是 `allow_without_cost_governance` **且**项目日预算为 0
 **且**项目没有 Token Guard 成本维度。对任何有日预算的项目，**加一条没配价（或定价被隔离）
 的兜底路由，会让该别名的全部请求 409**，包括健康主目标本来能服务的那些。加兜底目标在
 这种情况下降低可用性。
@@ -143,7 +170,7 @@ retry:
 
 ## 六、授权语义
 
-数据面授权只有一处，`internal/gateway/service.go:231`：
+数据面授权只有一处，`internal/gateway/service.go:330`：
 
 ```go
 if !slices.Contains(principal.Project.AllowedModels, model) { … 403 … }
@@ -155,8 +182,8 @@ if !slices.Contains(principal.Project.AllowedModels, model) { … 403 … }
 > 授权过的凭据、服务商和区域。
 
 这一点在删除方向上有护栏而创建方向上没有：`validateAliasKeepsServingProjects`
-（`internal/app/admin_providers.go:1746`）阻止删掉某个项目仍在使用的最后一条路由，而
-`validateAdminRoute`（`:1562`）在创建路由时**完全不查询项目**——它只校验部署/服务商可用、
+（`internal/app/admin_providers.go:2181`）阻止删掉某个项目仍在使用的最后一条路由，而
+`validateAdminRoute`（`:1997`）在创建路由时**完全不查询项目**——它只校验部署/服务商可用、
 profile 模型合法、同别名启用路由不得重复指向同一部署、同别名启用路由策略一致。
 
 实际后果：今天 `chat-aws` / `chat-deepseek` 这种一别名一服务商的配法，事实上就是按服务商
@@ -168,7 +195,7 @@ profile 模型合法、同别名启用路由不得重复指向同一部署、同
 目标的策略不一致，都会在保存前给出提示——但它们只是提示，真正的拒绝仍在 Admin API。
 
 另外，**同一别名下两条已启用路由指向同一个部署会被拒绝**
-（`validateAdminRoute`，`admin_providers.go:1603`）。这种配法过去可以建，它显示成两个目标，
+（`validateAdminRoute`，`admin_providers.go:2038`）。这种配法过去可以建，它显示成两个目标，
 实际共用一份价格、一次探活、一个能力快照和一个并发上限；断路器按路由 ID 分键，也不会把
 它们合并。禁用状态的重复路由仍可保存——那是维护状态，而把它启用会走同一条校验并被拒绝。
 

@@ -55,6 +55,8 @@ const providerTypes: ProviderType[] = [
   "openai", "anthropic", "azure_openai", "deepseek", "gemini", "bedrock", "minimax", "kimi", "bigmodel", "openai_compatible",
 ];
 
+import { RouteSuspensionsPanel, TabRefusalMark, refusalCountsByTab } from "./RouteSuspensionsPanel";
+
 function ProviderTypeOptions({ t }: { t: ReturnType<typeof useTranslation>["t"] }) {
   return providerTypes.map((type) => <option key={type} value={type}>{t(`providers.types.${type}`)}</option>);
 }
@@ -298,10 +300,27 @@ export function ProvidersPage() {
   const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
   const egress = useQuery({ queryKey: ["provider-egress-proxies"], queryFn: api.providerEgressProxies });
+  // Read on its own rather than folded into `pending`: the gate is live state,
+  // and a page that will not render its connection list until it has heard
+  // about suspensions has made an unrelated read into a dependency of editing.
+  // Polled, unlike every other read on this page. The others change only when
+  // someone on this screen changes them; this one changes when an upstream
+  // refuses something or when a suspension window expires, neither of which
+  // this browser is party to. Without it a parked page keeps asserting a
+  // refusal that ended minutes ago — and the panel only renders while there is
+  // one, so a stale read is a panel that should not be on the screen at all.
+  const suspensions = useQuery({
+    queryKey: ["route-suspensions"], queryFn: api.routeSuspensions, refetchInterval: 30_000,
+  });
   // What this build can serve. The forms cannot decide what to offer without it,
   // so they wait for it; the listing below does not, and stays readable either
   // way.
   const catalog = useProviderProfiles();
+  // The panel only exists while something is refused, so the tabs carry the
+  // count that says a tab is worth opening — otherwise an operator reading the
+  // credential vault has no way to know the panel above it is about a row in
+  // front of them.
+  const refusalCounts = refusalCountsByTab(suspensions.data?.items ?? []);
   const pending = credentials.isPending || providers.isPending || deployments.isPending || egress.isPending || catalog.isPending;
   const credentialItems = credentials.data?.items ?? [];
   const providerItems = providers.data?.items ?? [];
@@ -383,11 +402,25 @@ export function ProvidersPage() {
           }
         />
       )}
+      {/* Above the tabs, because a refusal is not about one of them: it can be
+          a credential, a connection, or one deployment, and an operator reading
+          any tab wants to know before they start editing. */}
+      {!pending && (
+        <RouteSuspensionsPanel
+          suspensions={suspensions.data?.items ?? []}
+          state={suspensions.isError ? "unavailable" : suspensions.data ? "ready" : "loading"}
+          credentials={credentialItems}
+          providers={providerItems}
+          deployments={deployments.data?.items ?? []}
+          onRetry={() => { void suspensions.refetch(); }}
+          retrying={suspensions.isFetching}
+        />
+      )}
       {!pending && (
         <div className="provider-tabs-shell">
           <div className="provider-tabs" role="tablist" aria-label={t("providers.resourceViews")}>
-            <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span></button>
-            <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span></button>
+            <button id="providers-tab" role="tab" tabIndex={activeView === "providers" ? 0 : -1} aria-selected={activeView === "providers"} aria-controls="providers-panel" onKeyDown={handleTabKey} onClick={() => selectView("providers")}>{t("providers.providerConnections")} <span>{providerItems.length}</span><TabRefusalMark count={refusalCounts.providers} /></button>
+            <button id="credentials-tab" role="tab" tabIndex={activeView === "credentials" ? 0 : -1} aria-selected={activeView === "credentials"} aria-controls="credentials-panel" onKeyDown={handleTabKey} onClick={() => selectView("credentials")}>{t("providers.credentialVault")} <span>{credentialItems.length}</span><TabRefusalMark count={refusalCounts.credentials} /></button>
             <button id="proxies-tab" role="tab" tabIndex={activeView === "proxies" ? 0 : -1} aria-selected={activeView === "proxies"} aria-controls="proxies-panel" onKeyDown={handleTabKey} onClick={() => selectView("proxies")}>{t("providers.egressProxies")} <span>{egress.data?.items.length ?? 0}</span></button>
           </div>
           {activeView === "providers" && <section id="providers-panel" role="tabpanel" aria-labelledby="providers-tab" className="panel provider-resource-panel">
@@ -810,6 +843,7 @@ function CredentialRow({ credential, useCount, highlighted, catalog, onUsageClic
     mutationFn: (reauth: ReauthValues) => api.deleteCredential(credential.id, credential.revision, reauth),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["route-suspensions"] });
       notify({ tone: "success", title: t("providers.notifyCredentialDeleted"), description: credential.name });
     },
   });
@@ -994,6 +1028,11 @@ function CredentialForm({
     onSuccess: () => {
       setSecret("");
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      // The remedy the refusal panel points at. Saving advances the
+      // credential's revision, which is the one thing that ends an indefinite
+      // suspension — so the row it names has to be re-read here, or the
+      // operator does the fix and the screen keeps telling them to do it.
+      queryClient.invalidateQueries({ queryKey: ["route-suspensions"] });
       notify({ tone: "success", title: t(current ? "providers.notifyCredentialRotated" : "providers.notifyCredentialSaved"), description: name });
       onClose();
     },
