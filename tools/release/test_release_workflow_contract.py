@@ -233,7 +233,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
             check=True,
         ).stdout
         self.assertIn("## Install", rendered)
-        self.assertNotIn("## [", rendered)
+        # A leaked version heading is a heading: it starts a line. Matching the
+        # bare substring also matched prose — the v0.8.5 entry for
+        # prepare_release.py names `## [Unreleased]` in backticks, which is what
+        # that tool moves — and would have failed a release whose notes were
+        # correct. Anchoring keeps what the comment above actually guards.
+        self.assertNotRegex(rendered, r"(?m)^## \[")
         self.assertGreater(len(rendered.splitlines()), 20)
 
     def test_every_fuzz_target_in_the_tree_is_listed_in_ci(self):
