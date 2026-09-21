@@ -127,14 +127,18 @@ func canonicalProviderFailureReason(classified *provider.Error, target provider.
 	if classified.FailureReason.Valid() && classified.FailureReason != "" {
 		return classified.FailureReason
 	}
-	switch provider.SafeProviderIdentifier(classified.ProviderCode) {
-	case "subscription_inactive":
+	if provider.SafeProviderIdentifier(classified.ProviderCode) == "subscription_inactive" {
 		return provider.FailureReasonSubscriptionInactive
-	case "subscription_quota_exhausted", "token_plan_quota_exhausted":
-		return provider.FailureReasonSubscriptionQuotaExhausted
 	}
 	if isKimiCodeOffering(target) && classified.StatusCode == 402 {
 		return provider.FailureReasonEntitlementVerificationUnavailable
+	}
+	// Before the status is read, not after. Most upstreams carry an exhausted
+	// allowance on the same 429 as an ordinary rate limit, so a status-first
+	// reading answers rate_limited for every one of them and the quota policy
+	// is never reached. See refusal_codes.go.
+	if reason := quotaExhaustionReason(classified, target); reason != "" {
+		return reason
 	}
 	switch classified.StatusCode {
 	case 401:
@@ -143,6 +147,11 @@ func canonicalProviderFailureReason(classified *provider.Error, target provider.
 		}
 		return provider.FailureReasonInvalidCredential
 	case 429:
+		// A 429 that named no code Halro recognises. It is the ordinary
+		// reading, and it stays the ordinary reading: the one documented case
+		// that hides behind it — Anthropic's spend cap — is separable only by a
+		// missing header, and inferring an indefinite suspension from an
+		// absence is the expensive way to be wrong.
 		return provider.FailureReasonRateLimited
 	default:
 		return ""

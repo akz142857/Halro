@@ -78,6 +78,16 @@ func TestMiniMaxInsufficientBalanceIsNeverRetried(t *testing.T) {
 	}
 }
 
+// The two quota codes carried no reason until there was evidence for one.
+// There is now: MiniMax's published error table gives 1008 as an insufficient
+// balance and 2056 as the Token Plan's own window, recorded as grade B in
+// docs/verification/route-eligibility-refusal-matrix.zh-CN.md §4.
+//
+// The reason has to be stated here rather than in the gateway's classifier,
+// because these arrive as business codes inside a body nothing else parses — a
+// 200 or a 500 with the real refusal in the envelope. Left unclassified they
+// earn the availability policy, which suspends one deployment and says nothing
+// about the credential every other deployment shares.
 func TestMiniMaxStructuredFailuresCarryCanonicalReasons(t *testing.T) {
 	if got := classifyMiniMaxStatus(1002).FailureReason; got != provider.FailureReasonRateLimited {
 		t.Fatalf("1002 reason = %q, want %q", got, provider.FailureReasonRateLimited)
@@ -85,7 +95,23 @@ func TestMiniMaxStructuredFailuresCarryCanonicalReasons(t *testing.T) {
 	if got := classifyMiniMaxStatus(1004).FailureReason; got != provider.FailureReasonInvalidCredential {
 		t.Fatalf("1004 reason = %q, want %q", got, provider.FailureReasonInvalidCredential)
 	}
-	if got := classifyMiniMaxStatus(1008).FailureReason; got != "" {
-		t.Fatalf("1008 invented an unsupported subscription reason: %q", got)
+	for _, code := range []int64{1008, 2056} {
+		if got := classifyMiniMaxStatus(code).FailureReason; got != provider.FailureReasonSubscriptionQuotaExhausted {
+			t.Fatalf("code %d reason = %q, want %q", code, got, provider.FailureReasonSubscriptionQuotaExhausted)
+		}
+	}
+	// A stated refusal ran nothing, so neither may be settled as a call that
+	// might have been billed. 2056 used to fall to the default branch and was
+	// marked ambiguous, which is exactly that.
+	for _, code := range []int64{1008, 2056} {
+		classified := classifyMiniMaxStatus(code)
+		if classified.Retryable || classified.Ambiguous {
+			t.Fatalf("code %d is retryable=%v ambiguous=%v; an exhausted allowance is neither",
+				code, classified.Retryable, classified.Ambiguous)
+		}
+	}
+	// A code nothing establishes still invents nothing.
+	if got := classifyMiniMaxStatus(9999).FailureReason; got != "" {
+		t.Fatalf("an unlisted code invented a reason: %q", got)
 	}
 }
