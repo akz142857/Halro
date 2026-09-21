@@ -219,6 +219,13 @@ Histogram buckets are 10, 25, 50, 100, 250, and 500 milliseconds, then 1,
 events and persisted in the Usage checkpoint, so replay and catch-up preserve
 the exact distribution.
 
+`halro_policy_rejections_total{reason="key_rate"}` counts requests shed by the
+built-in per-Key ceiling — the bound on what one authenticated caller may ask
+Halro to answer from its own state, which has no configuration surface. It rises
+where the Project limiter cannot: discovery, deferred polling, and the resource
+plane's lookups reach no provider, so `reason="rpm"` stays flat while this one
+moves. A caller seeing it is looping something that costs nothing upstream.
+
 `halro_source_rate_limited_total` counts requests shed by the per-source
 Gateway limiter. It carries no source label for the same reason a source IP is
 excluded everywhere else here: that label is both unbounded and a disclosure of

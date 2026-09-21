@@ -423,21 +423,21 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 			ResponseFields: []string{"id", "object", "created_at", "completed_at", "status", "background", "error", "model", "output", "usage"},
 			StateSemantics: "project-owned deferred record; polling is authoritative and writes no accounting events",
 			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental,
-			DocumentedDeviations: []string{"only a submission made with background=true is retrievable; a synchronous response is never stored", "the polling cadence is carried in the Retry-After header rather than as a non-standard member of the Response object", "retrieval makes no upstream call and writes no ledger events", "the record is reaped 15 minutes after its first successful retrieval, or at its 24 hour TTL, whichever comes first"},
+			DocumentedDeviations: []string{"only a submission made with background=true is retrievable; a synchronous response is never stored", "the polling cadence is carried in the Retry-After header rather than as a non-standard member of the Response object", "retrieval makes no upstream call, writes no ledger events, and consumes no per-Project rate limit or budget; polling is bounded by the fixed per-minute ceiling on the calling Key and on its Project, refused as 429 rate_limit_exceeded with Retry-After", "the record is reaped 15 minutes after its first successful retrieval, or at its 24 hour TTL, whichever comes first"},
 			ProviderProfiles:     responseProfiles, ProfileCoverage: deferredCoverage},
 		EndpointCompatibilityManifest{ID: "openai.responses.cancel.v1", NorthboundProfile: ProfileOpenAIResponses, ProfileRevision: 2, Protocol: "openai", Method: "POST", Path: "/v1/responses/{id}/cancel", SemanticOperation: semantic.OperationGenerate,
 			RequestFields: []string{"id"}, RequestHeaders: []string{"Authorization"},
 			ResponseFields: []string{"id", "object", "created_at", "completed_at", "status", "background", "error", "model", "output", "usage"},
 			StateSemantics: "project-owned deferred record",
 			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental,
-			DocumentedDeviations: []string{"cancelling a queued submission is determinate; cancelling one already running is best-effort and is settled conservatively, so the record says plainly that it may have been billed upstream", "a request that has already finished answers 409 rather than pretending to cancel"},
+			DocumentedDeviations: []string{"cancelling a queued submission is determinate; cancelling one already running is best-effort and is settled conservatively, so the record says plainly that it may have been billed upstream", "a request that has already finished answers 409 rather than pretending to cancel", "cancellation reaches no upstream and consumes no per-Project rate limit; it is bounded by the same fixed per-minute ceiling as retrieval"},
 			ProviderProfiles:     responseProfiles, ProfileCoverage: deferredCoverage},
 		EndpointCompatibilityManifest{ID: "openai.responses.delete.v1", NorthboundProfile: ProfileOpenAIResponses, ProfileRevision: 2, Protocol: "openai", Method: "DELETE", Path: "/v1/responses/{id}", SemanticOperation: semantic.OperationGenerate,
 			RequestFields: []string{"id"}, RequestHeaders: []string{"Authorization"},
 			ResponseFields: []string{"id", "object", "deleted"},
 			StateSemantics: "project-owned deferred record",
 			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental,
-			DocumentedDeviations: []string{"deletion removes the record and both of its sealed objects; it does not undo accounting for work that already happened", "a submission still owed an answer answers 409: cancel it first"},
+			DocumentedDeviations: []string{"deletion removes the record and both of its sealed objects; it does not undo accounting for work that already happened", "a submission still owed an answer answers 409: cancel it first", "deletion consumes no per-Project rate limit; it is bounded by the same fixed per-minute ceiling as retrieval"},
 			ProviderProfiles:     responseProfiles, ProfileCoverage: deferredCoverage},
 	)
 	expandCodeSubscriptionProfiles(manifests)
@@ -471,7 +471,7 @@ func modelsEndpointManifests() []EndpointCompatibilityManifest {
 		"owned_by is always halro: the object's owner is the gateway, which is the truest statement the OpenAI model shape can carry about an alias",
 		"the answer is ordered by alias and carries no duplicates; no other order is promised",
 		"an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
-		"no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
+		"no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the bound is a fixed per-minute ceiling on the calling Key and on its Project that no configuration can disable, refused as 429 rate_limit_exceeded with Retry-After",
 		"a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it",
 	}
 	listDeviations := append([]string{
@@ -643,6 +643,16 @@ func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
 		if manifests[index].ID == "openai.batches.create.v1" {
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
 				"every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself")
+		}
+		// Files, batches and async invocations authenticate through the
+		// project resource plane, which charges the built-in per-Key ceiling
+		// before it looks the record up. The other endpoints here reach
+		// resolveRequest instead and are bounded by the Project limiter alone.
+		if strings.HasPrefix(manifests[index].ID, "openai.files.") ||
+			strings.HasPrefix(manifests[index].ID, "openai.batches.") ||
+			strings.HasPrefix(manifests[index].ID, "halro.async.") {
+			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
+				"an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited")
 		}
 		if manifests[index].ID == "openai.images.generations.v1" {
 			manifests[index].RejectedRequestFields = []string{"user"}

@@ -1914,7 +1914,7 @@
     "documented_deviations": [
       "only a submission made with background=true is retrievable; a synchronous response is never stored",
       "the polling cadence is carried in the Retry-After header rather than as a non-standard member of the Response object",
-      "retrieval makes no upstream call and writes no ledger events",
+      "retrieval makes no upstream call, writes no ledger events, and consumes no per-Project rate limit or budget; polling is bounded by the fixed per-minute ceiling on the calling Key and on its Project, refused as 429 rate_limit_exceeded with Retry-After",
       "the record is reaped 15 minutes after its first successful retrieval, or at its 24 hour TTL, whichever comes first"
     ],
     "provider_profiles": [
@@ -2121,7 +2121,8 @@
     "status": "experimental",
     "documented_deviations": [
       "cancelling a queued submission is determinate; cancelling one already running is best-effort and is settled conservatively, so the record says plainly that it may have been billed upstream",
-      "a request that has already finished answers 409 rather than pretending to cancel"
+      "a request that has already finished answers 409 rather than pretending to cancel",
+      "cancellation reaches no upstream and consumes no per-Project rate limit; it is bounded by the same fixed per-minute ceiling as retrieval"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
@@ -2320,7 +2321,8 @@
     "status": "experimental",
     "documented_deviations": [
       "deletion removes the record and both of its sealed objects; it does not undo accounting for work that already happened",
-      "a submission still owed an answer answers 409: cancel it first"
+      "a submission still owed an answer answers 409: cancel it first",
+      "deletion consumes no per-Project rate limit; it is bounded by the same fixed per-minute ceiling as retrieval"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
@@ -2720,7 +2722,8 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2772,7 +2775,8 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2817,7 +2821,8 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2864,7 +2869,8 @@
     "status": "experimental",
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
-      "resource identifiers are opaque Halro identifiers scoped to one project"
+      "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2931,7 +2937,8 @@
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
       "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
-      "every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself"
+      "every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -2994,7 +3001,8 @@
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
-      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
+      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -3057,7 +3065,8 @@
       "resource identifiers are opaque Halro identifiers scoped to one project",
       "a batch served by the Anthropic profile has its requests carried inline: the input file is stored by Halro and never uploaded, so its identifier names a Halro object rather than one the upstream also holds",
       "results collected from a provider that does not return them as a file are bounded by the gateway's response ceiling; a batch whose results exceed it is reported as undeliverable rather than truncated",
-      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value"
+      "completion_window is honored only where the provider has one; the Anthropic profile expires a batch 24 hours after creation and accepts no other value",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited"
     ],
     "provider_profiles": [
       "openai.media-resources.v1",
@@ -3158,6 +3167,7 @@
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited",
       "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
@@ -3204,6 +3214,7 @@
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited",
       "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
@@ -3245,6 +3256,7 @@
     "documented_deviations": [
       "unknown fields and unsupported profile fields are rejected before provider I/O",
       "resource identifiers are opaque Halro identifiers scoped to one project",
+      "an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited",
       "this is a Halro extension and has no OpenAI official SDK surface"
     ],
     "provider_profiles": [
@@ -3294,7 +3306,7 @@
       "owned_by is always halro: the object's owner is the gateway, which is the truest statement the OpenAI model shape can carry about an alias",
       "the answer is ordered by alias and carries no duplicates; no other order is promised",
       "an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
-      "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
+      "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the bound is a fixed per-minute ceiling on the calling Key and on its Project that no configuration can disable, refused as 429 rate_limit_exceeded with Retry-After",
       "a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it"
     ],
     "provider_profiles": null,
@@ -3336,7 +3348,7 @@
       "owned_by is always halro: the object's owner is the gateway, which is the truest statement the OpenAI model shape can carry about an alias",
       "the answer is ordered by alias and carries no duplicates; no other order is promised",
       "an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
-      "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
+      "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the bound is a fixed per-minute ceiling on the calling Key and on its Project that no configuration can disable, refused as 429 rate_limit_exceeded with Retry-After",
       "a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it"
     ],
     "provider_profiles": null,

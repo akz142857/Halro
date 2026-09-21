@@ -252,6 +252,13 @@ func (s *Service) resourcePrincipal(ctx context.Context, key string) (auth.AuthR
 	if s.resources == nil {
 		return auth.AuthResult{}, gatewayError("resource_store_unavailable", "resource storage is unavailable", 503, nil)
 	}
+	// Charged before the record is looked up, so the answers that never reach
+	// an upstream are bounded too: a retrieval, a cancellation, and above all
+	// the 404 for an identifier that names nothing, which is otherwise the
+	// cheapest request on this plane and the one worth repeating.
+	if err := s.admitKeyRate(principal); err != nil {
+		return auth.AuthResult{}, err
+	}
 	return principal, nil
 }
 func (s *Service) ownedTarget(resource domain.ProviderResource) (provider.Target, error) {

@@ -30,6 +30,13 @@ func newDeferredFixture(t *testing.T) deferredFixture {
 }
 
 func newDeferredFixtureWith(t *testing.T, shape func(*domain.Project)) deferredFixture {
+	return newDeferredFixtureAt(t, nil, shape)
+}
+
+// newDeferredFixtureAt is newDeferredFixtureWith for a test whose subject is
+// timing — a per-minute window, a TTL, a cool-off — and which must not be left
+// to decide it against the wall clock.
+func newDeferredFixtureAt(t *testing.T, clock func() time.Time, shape func(*domain.Project)) deferredFixture {
 	t.Helper()
 	store := newInferenceResourcesMemoryStore()
 	objectDir := filepath.Join(t.TempDir(), "objects")
@@ -38,7 +45,7 @@ func newDeferredFixtureWith(t *testing.T, shape func(*domain.Project)) deferredF
 		t.Fatal(err)
 	}
 	t.Cleanup(sealer.Close)
-	f := newFixtureShaped(t, 1_000_000, ledger.Options{}, nil,
+	f := newFixtureShaped(t, 1_000_000, ledger.Options{}, clock,
 		func(project *domain.Project) {
 			project.DeferredResponses = true
 			project.MaxOutputTokens = 0
