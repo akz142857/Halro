@@ -2,26 +2,79 @@
 
 ## Data-plane requests
 
-`Idempotency-Key` is an optional future-safe retry contract for chat completions
-and embeddings. Data-plane clients that omit it retain existing behavior.
+`Idempotency-Key` is optional on `POST /v1/chat/completions` and
+`POST /v1/embeddings`. A client that omits it keeps exactly the behaviour it had
+and Halro writes nothing durable for the request.
 
-- Keys are scoped to the authenticated Project, not globally.
+**What the key buys is at-most-once execution upstream. It does not buy response
+replay, and it never will by accident.** Replaying a completed answer would mean
+storing it, and this gateway keeps caller content in exactly two places, both
+because the caller asked it to (ADR 0021, ADR 0024). A generation nobody asked
+to be stored does not become the third. A caller who needs an answer they can
+come back for has `background: true`, which stores the answer because that is
+what it was asked to do.
+
+- Keys are scoped to the authenticated Project, not globally, so two Projects
+  may use the same external key.
 - A key is 1 to 128 visible ASCII characters and must not contain whitespace.
-- Identity stores a SHA-256 fingerprint of the canonical operation and request;
-  request bodies and Provider credentials are never stored as identity.
-- Reusing a key with a different fingerprint is a deterministic conflict.
-- States are `reserved`, `in_progress`, `completed`, and `unknown`.
-- Terminal records are bounded by an explicit expiry. Expiry permits a later new
-  execution and therefore must be longer than the advertised retry window.
-- `unknown` means the Provider may have executed but no final result is known.
-  It is never silently converted to a retryable or refunded result.
-- Streaming response bodies are not retained by the Phase 0 primitive. A retry
-  may observe lifecycle state, but Halro does not promise replay of an SSE
-  byte stream.
+  A malformed key is `400 invalid_idempotency_key`, refused before anything is
+  written and before any upstream call.
+- Identity is a SHA-256 of the key and a SHA-256 fingerprint of the public model
+  and the request. Neither the key, the request, nor the answer is stored.
+- The record carries the lifecycle and the route it was first sent to, and never
+  an object. That is enforced by validation rather than by convention.
+- States are the resource plane's: `reserved`, `in_flight`, `unknown` and
+  `completed`. The key moves to `in_flight` in the instruction before the
+  Provider call and nowhere earlier, so an interruption from that point on is
+  remembered as possibly served — and everything that refuses a request without
+  the upstream hearing of it stays on the `reserved` side of that line.
+- A repeat is answered, never awaited — Halro does not hold a socket open
+  against another request's outcome:
 
-The initial durable store is a Standalone primitive. Runtime endpoint adoption
-requires a separately reviewed API change so the current OpenAI compatibility
-contract does not change accidentally before v1.
+  | The key has | Answer |
+  |---|---|
+  | a different request fingerprint | `409 idempotency_conflict` |
+  | a request still running, or one whose outcome is unknown | `409 idempotency_in_progress` |
+  | a request that completed | `409 idempotency_completed` |
+  | a reservation from a process that is gone | admitted; it never reached the upstream |
+  | a record past its 24 hours | admitted, whatever the first request's outcome was, and whatever the new request is |
+
+- A failed request still spends its key **when the upstream was reached**: a
+  retry after one is the second call the key was sent to prevent, so it settles
+  as `unknown`, the existing vocabulary for an outcome nobody can determine, and
+  is never silently converted into a retryable or refunded result.
+- A request Halro refuses **on its own** — a capability filter, redaction, a
+  token limit, a Project budget, a per-attempt reservation, or the failure to
+  record the dispatch itself — gets its key back. Nothing was billed and nothing
+  is ambiguous, so the reservation is released and the caller's own retry is
+  answered by the limit it broke rather than by a conflict about a call that was
+  never made.
+- If the reservation cannot be written, the answer says which of the two things
+  happened: `409 idempotency_in_progress` when the key is genuinely held by
+  another request, and `503 resource_store_unavailable` when the store could not
+  record it. A store that cannot answer whether a key has been used is
+  `503`, never read as a free key.
+- A streaming repeat is refused **before the stream opens**, as an ordinary HTTP
+  error rather than an event inside a stream the caller has been told is
+  starting. Halro does not retain SSE bodies and promises no replay of one.
+- A record expires 24 hours after it is written, in **every** state it can be
+  in. Expiry permits a later new execution — including one carrying a different
+  request, because a key nobody remembers issuing is free for whatever it is
+  next used for — and is longer than any client retry window. This is the one
+  resource kind whose expired record is reaped whatever its creation status:
+  every other kind withholds an ambiguous record because something may still
+  exist upstream, and this one owns nothing at all.
+- An instance with no resource store refuses the header with `503
+  idempotency_unavailable` rather than accepting a durable promise it cannot
+  keep.
+
+The mechanism is the resource plane's, under a `ProviderResource` kind of its
+own (`inference_call`) and the same revision checks every other resource gets.
+It is deliberately not a second implementation: an earlier standalone lifecycle
+store was written, never reached, and removed for exactly that reason. Lookup is
+by index — `(project, kind, key hash)` in its own bucket — because this is the
+first kind whose population scales with inference traffic rather than with how
+many files and batches a Project keeps.
 
 ## Admin create requests
 

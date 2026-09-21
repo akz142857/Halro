@@ -185,6 +185,7 @@ func (h *Handler) responsesStream(writer http.ResponseWriter, request *http.Requ
 
 func (h *Handler) Embeddings(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
+	request = withIdempotencyKey(request)
 	request, ok := withOpenAIRequestID(writer, request)
 	if !ok {
 		return
@@ -758,6 +759,7 @@ func writeAnthropicError(writer http.ResponseWriter, status int, kind, message, 
 
 func (h *Handler) ChatCompletions(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
+	request = withIdempotencyKey(request)
 	request, ok := withOpenAIRequestID(writer, request)
 	if !ok {
 		return
@@ -817,6 +819,21 @@ func setRetryAfter(writer http.ResponseWriter, duration time.Duration) {
 		seconds = 1
 	}
 	writer.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+}
+
+// withIdempotencyKey carries the caller's key into the request context, where
+// the service reads it.
+//
+// It is attached at the facade rather than read in the service because the
+// header belongs to the HTTP surface, and trimmed here so that a header sent as
+// whitespace is the same as one not sent at all — an empty key is not a key,
+// and treating it as one would reserve a record nobody can retry against.
+func withIdempotencyKey(request *http.Request) *http.Request {
+	key := strings.TrimSpace(request.Header.Get("Idempotency-Key"))
+	if key == "" {
+		return request
+	}
+	return request.WithContext(requestmeta.WithIdempotencyKey(request.Context(), key))
 }
 
 func withOpenAIRequestID(writer http.ResponseWriter, request *http.Request) (*http.Request, bool) {

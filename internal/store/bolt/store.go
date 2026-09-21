@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 39
+const schemaVersion uint64 = 40
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -75,6 +75,7 @@ var (
 	bucketAdminMFAChallenges           = []byte("admin_mfa_challenges")
 	bucketMigrationHistory             = []byte("migration_history")
 	bucketProviderResources            = []byte("provider_resources")
+	bucketProviderResourceIdem         = []byte("provider_resource_idempotency")
 	bucketDeploymentPriceVersions      = []byte("deployment_price_versions")
 	bucketDeploymentPriceTimeline      = []byte("deployment_price_timeline")
 	bucketDeploymentPriceNext          = []byte("deployment_price_next_version")
@@ -1086,6 +1087,39 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_route_suspensions")
 	}},
+	// Idempotency-keyed resource lookup stops walking the whole resource bucket
+	// and reads an index instead. The index is built here from the records that
+	// already exist rather than lazily: an empty index would read as "this key
+	// is free" and admit exactly the duplicate upstream call the key was sent to
+	// prevent.
+	{version: 40, name: "provider_resource_idempotency_index", up: migrateProviderResourceIdempotencyIndex},
+}
+
+func migrateProviderResourceIdempotencyIndex(tx *bbolt.Tx, step func(string) error) error {
+	if err := migrationStep(step, "before_provider_resource_idempotency_index"); err != nil {
+		return err
+	}
+	index, err := tx.CreateBucketIfNotExists(bucketProviderResourceIdem)
+	if err != nil {
+		return err
+	}
+	resources := tx.Bucket(bucketProviderResources)
+	if resources == nil {
+		return migrationStep(step, "after_provider_resource_idempotency_index")
+	}
+	if err := resources.ForEach(func(_, raw []byte) error {
+		var resource domain.ProviderResource
+		if err := json.Unmarshal(raw, &resource); err != nil {
+			return err
+		}
+		if resource.IdempotencyKeyHash == ([32]byte{}) {
+			return nil
+		}
+		return index.Put(providerResourceIdemKey(resource.ProjectID, resource.Kind, resource.IdempotencyKeyHash), []byte(resource.ID))
+	}); err != nil {
+		return err
+	}
+	return migrationStep(step, "after_provider_resource_idempotency_index")
 }
 
 // splitJSONModeCapabilities replaces a stored capability set's json_mode member

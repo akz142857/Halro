@@ -6,6 +6,64 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `Idempotency-Key` on `POST /v1/chat/completions` and `POST /v1/embeddings`.
+
+  A client that times out does not know whether the upstream ran. Retrying was
+  a second billed call, because the gateway had no way to recognise the retry:
+  the key was already honoured on files, batches, async invocations, deferred
+  submissions and Run Governance, and on none of the endpoints most traffic
+  actually uses.
+
+  **The key buys at-most-once execution upstream. It does not buy response
+  replay.** Replaying a completed answer means storing it, and this gateway
+  keeps caller content in exactly two places, both because the caller asked it
+  to. A generation nobody asked to be stored does not become the third — and a
+  caller who wants an answer they can come back for already has
+  `background: true`, which stores it because that is what it was asked to do.
+
+  So a repeat is answered rather than awaited: a different request body under
+  the same key is `409 idempotency_conflict`, a request still running or whose
+  outcome nobody can determine is `409 idempotency_in_progress`, and one that
+  finished is `409 idempotency_completed`. A streaming repeat is refused before
+  the stream opens, as an HTTP error rather than an event inside a stream the
+  caller has been told is starting.
+
+  A failed request spends its key when the upstream was reached, because a retry
+  after one is the second call the key exists to prevent. Whether the upstream
+  was reached is recorded in the instruction before the Provider call and
+  nowhere earlier, so everything that refuses a request on this side of it — a
+  capability filter, a token limit, a Project budget, a per-attempt reservation
+  — gives the key back instead, and the caller's retry is answered by the limit
+  it broke rather than by a conflict about a call that was never made. A
+  reservation left by a process that is gone is likewise reclaimable.
+
+  A key that cannot be *checked* is `503`, not a free key: a store that will not
+  say whether a key has been used has not said no. That applies to every keyed
+  resource, not only the two new endpoints — a Files or Batch create whose
+  lookup failed used to be admitted as though the key were free. A reservation that cannot be
+  written says which of the two things happened — `409` for a key another
+  request holds, `503` for a store that could not record it.
+
+  The record holds the key's hash, the request's fingerprint, the route it was
+  first sent to, and how far it got. It holds no part of the request and no part
+  of the answer, and validation refuses one that acquires an object. It expires
+  after 24 hours in every state it can be in, including the ambiguous one:
+  alone among resource kinds it owns nothing upstream, so there is nothing for
+  withholding an expired record to protect, and withholding it would refuse its
+  key for the life of the install. **A request with no key writes nothing and
+  behaves exactly as before.**
+
+  It is the resource plane's own mechanism under a kind of its own, not a second
+  implementation beside it — an earlier standalone lifecycle store was written,
+  never reached, and removed for that reason. Keyed lookup moves to an index
+  bucket keyed by Project, kind and key hash (**metadata schema 40**, built from
+  the records already on disk on first start; no re-initialisation): this is the
+  first kind whose population scales with inference traffic, and the full-bucket
+  scan that served files and batches would have run on every keyed request,
+  once inside the write transaction.
+
 ### Fixed
 
 - A row in the usage summary said how many tokens were reported and not how
