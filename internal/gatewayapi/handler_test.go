@@ -26,6 +26,8 @@ type fakeService struct {
 	calls     int
 	requestID string
 	inbound   any
+	lastAlias string
+	empty     bool
 }
 
 func (s *fakeService) Messages(_ context.Context, key string, request anthropicapi.MessageRequest) (anthropicapi.Message, error) {

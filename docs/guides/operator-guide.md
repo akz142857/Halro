@@ -286,6 +286,7 @@ base URL and nothing else.
 | Gateway | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/moderations`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/rerank` |
 | Gateway (async and batch) | `/v1/files`, `/v1/batches`, `/v1/async/invocations` and their GET and cancel sub-paths |
 | Gateway (Anthropic) | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
+| Gateway (discovery) | `GET /v1/models`, `GET /v1/models/{id}` — the aliases the calling key may name. A path allow-list that omits them leaves `models.list()` answering 404, which reads to an application team as "my Project has no models" |
 | Gateway | `GET /health/live`, `GET /health/ready`, `GET /` |
 | Admin | `/admin`, `/admin/*` (the console), `/admin/api/v1/*`, `GET /health/live`, `GET /health/ready` |
 | Metrics | `GET /metrics`, `GET /health/live`, and `GET /audit/anchors` when the dead-man anchor sink is enabled |

@@ -53,9 +53,9 @@ Gateway Key 的保管规则：
 | `POST /v1/messages/count_tokens` | Anthropic Token 计数 |
 
 以下端点为 **experimental**，接入前请与管理员单独确认是否对你的 Project 开放、
-以及当前的能力边界：`/v1/moderations`、`/v1/images/generations`、
-`/v1/audio/transcriptions`、`/v1/audio/speech`、`/v1/files*`、`/v1/batches*`、
-`/v1/rerank`、`/v1/async/invocations*`。其中 `/v1/rerank` 与
+以及当前的能力边界：`GET /v1/models*`（见 3.2）、`/v1/moderations`、
+`/v1/images/generations`、`/v1/audio/transcriptions`、`/v1/audio/speech`、
+`/v1/files*`、`/v1/batches*`、`/v1/rerank`、`/v1/async/invocations*`。其中 `/v1/rerank` 与
 `/v1/async/invocations` 是 Halro 扩展接口，不是 OpenAI 端点，OpenAI SDK 没有
 对应方法，需要直接发 HTTP 请求。
 
@@ -72,6 +72,37 @@ Gateway Key 的保管规则：
 `POST /v1/responses` 只提供显式无状态层：省略 `store` 视为 `store: false`，
 所有有状态 / 资源引用字段（如 `previous_response_id`）会在请求阶段被拒绝。
 需要多轮对话时由应用自行携带完整上下文。
+
+### 3.2 用 `GET /v1/models` 查自己能填哪些别名
+
+`GET /v1/models` 与 `GET /v1/models/{别名}` 回答的是"我这把 Key 能在 `model`
+字段里填哪些值"，返回你的 Project 被授权、且当前有 Route 承接的别名清单。它不
+访问上游、不计费，`owned_by` 恒为 `halro`，`created` 恒为 `0`，不会透露别名背后
+的 Provider 或真实模型名。**只有 OpenAI SDK 的 `client.models.list()` 可用**：
+这条端点只接受 `Authorization: Bearer`，且返回的是 OpenAI 的 model 对象形状；
+Anthropic SDK 的 `client.models.list()` 打的是同一个路径但发 `x-api-key`，会被拒。
+这是刻意的——即便放行，它也读不懂 OpenAI 形状的响应体，拿到一个解析失败比拿到
+一个明确的 401 更难排查。
+
+**列出不等于此刻可用**，这是接入时最容易误判的一点。列出只保证这个别名不会答
+`404 model_not_found`，不保证下一次调用成功，有两种情况是长期存在而非瞬时的：
+
+- 别名背后的 Deployment 只支持别的操作（比如只支持 embeddings），用它发 chat
+  请求会得到 `400 unsupported_feature`。一个扁平的列表无法按操作区分——你要用
+  哪个操作，要到你调用时才知道。
+- 别名背后的 Deployment 全部不健康或被暂停，调用会得到 503。这是瞬时状态，所以
+  仍然列出：把它藏起来会让你看到一个空列表且没有任何解释。
+
+因此**不要用这个列表当能力矩阵**。某个别名支不支持工具调用、视觉输入、某个
+embedding 维度，以管理员提供的接入信息为准。
+
+别名是运维侧的一个指针，运维可以在两次调用之间把它重新指向另一个 Deployment 而
+别名本身不变——这正是网关存在的意义，也意味着别名不等价于"一个模型"。
+
+这条端点和推理端点受同一层保护：管理员刚改完配置、运行快照还没跟上时，它同样
+返回 `503 configuration_stale` 并带 `Retry-After`，不会因为"只是读配置"就放行。
+
+状态为 experimental，只因尚未纳入 SDK 黑盒矩阵。
 
 ## 4. 快速开始
 

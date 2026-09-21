@@ -1771,6 +1771,8 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Post("/v1/responses/{responseID}/cancel", r.gateway.CancelDeferredResponse)
 		guarded.Delete("/v1/responses/{responseID}", r.gateway.DeleteDeferredResponse)
 		guarded.Post("/v1/embeddings", r.gateway.Embeddings)
+		guarded.Get("/v1/models", r.gateway.ListModels)
+		guarded.Get("/v1/models/*", r.gateway.GetModel)
 		guarded.Post("/v1/moderations", r.gateway.Moderations)
 		guarded.Post("/v1/images/generations", r.gateway.Images)
 		guarded.Post("/v1/audio/speech", r.gateway.Speech)

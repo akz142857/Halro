@@ -91,10 +91,27 @@ type EndpointCompatibilityManifest struct {
 }
 
 func (manifest EndpointCompatibilityManifest) Validate() error {
-	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 {
+	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.ResponseFields) == 0 {
 		return errors.New("endpoint compatibility manifest is incomplete")
 	}
-	if manifest.SemanticOperation != semantic.OperationGovernance && len(manifest.ProviderProfiles) == 0 {
+	// An endpoint with no request fields has under-declared them (see the Kimi
+	// note on RequestFields in adding-a-northbound-endpoint.md), with one
+	// exception: a collection read that takes no parameters at all has none to
+	// declare.
+	//
+	// The exemption is written against that shape rather than against an
+	// operation or a category, because both wider readings let a real
+	// declaration go missing. Deriving it from ProviderBacked would take the
+	// guard off Run Governance, whose endpoints accept request bodies. Naming
+	// OperationDiscovery would take it off the retrieve endpoint beside the
+	// list, whose id is a path parameter it must still declare. What earns the
+	// exemption is having nowhere for a parameter to be: a discovery read whose
+	// path carries none.
+	if len(manifest.RequestFields) == 0 &&
+		!(manifest.SemanticOperation == semantic.OperationDiscovery && !strings.Contains(manifest.Path, "{")) {
+		return errors.New("endpoint compatibility manifest declares no request fields")
+	}
+	if manifest.SemanticOperation.ProviderBacked() && len(manifest.ProviderProfiles) == 0 {
 		return errors.New("provider-backed endpoint compatibility manifest has no provider profiles")
 	}
 	switch manifest.Status {
@@ -426,7 +443,55 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 	expandCodeSubscriptionProfiles(manifests)
 	setProfileCompatibilityStatuses(manifests)
 	manifests = append(manifests, inferenceResourcesEndpointManifests()...)
+	manifests = append(manifests, modelsEndpointManifests()...)
 	return append(manifests, governanceEndpointManifests()...)
+}
+
+// modelsEndpointManifests describe the one OpenAI surface Halro answers from
+// its own configuration. models.list() is the first call many SDK clients make,
+// and until this existed it was the one that failed.
+//
+// The endpoint answers "what may this key put in the model field", which is what
+// OpenAI's id means, rather than "what models exist" — Halro has no such thing
+// to enumerate. Saying so precisely is most of the work here, because the object
+// shape is OpenAI's and promises more about an id than an alias can keep.
+func modelsEndpointManifests() []EndpointCompatibilityManifest {
+	// What an id is, and what it is not. An OpenAI model object implies a thing
+	// with a stable identity and stable capabilities; an id here is a public
+	// alias, which is a pointer an operator may repoint between two calls and
+	// whose capabilities are whatever the deployments behind it declare right
+	// now. Every deviation below exists because that difference is observable,
+	// and the shared wording is what both endpoints owe an integrator.
+	shared := []string{
+		"every id is a public model alias, not a model identifier: the upstream provider and model behind it are never disclosed, an operator may repoint it at another deployment at any time without the id changing, and the alias namespace is the instance's rather than the Project's — a Project is granted aliases from it, and is listed only the ones it was granted",
+		"listing means the alias will not answer 404 model_not_found; it does not mean the next call succeeds, and two cases are permanent rather than transient: an alias whose deployments support a different operation is listed here and answers 400 unsupported_feature on use, because one flat list cannot be per-operation — the caller's operation is not known until they call",
+		"an alias whose every deployment is unhealthy or suspended is also listed, and the call answers 503: that state is a moment rather than a configuration, and omitting it would restore the empty model list with no explanation this endpoint exists to end",
+		"an alias disappears from the answer while the route table itself excludes it — a reload that drops a provider whose egress proxy is unreachable, or a deployment withheld for capability drift — because in that state the alias answers 404 on every endpoint",
+		"created is always 0: an alias is a name on a route, not a versioned object, and Halro does not invent a timestamp for it",
+		"owned_by is always halro: the object's owner is the gateway, which is the truest statement the OpenAI model shape can carry about an alias",
+		"the answer is ordered by alias and carries no duplicates; no other order is promised",
+		"an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
+		"no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
+		"a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it",
+	}
+	listDeviations := append([]string{
+		"the answer is the caller's Project's allowed aliases intersected with the aliases the route table serves; an alias the Project may name but no enabled route carries is omitted rather than listed as callable",
+		"query parameters are ignored rather than refused: this endpoint models none, and OpenAI's own takes none",
+	}, shared...)
+	getDeviations := append([]string{
+		"retrieving an alias the Project may not name answers 404 rather than 403, and so does one that does not exist anywhere, so the endpoint cannot be used to test whether an alias exists on another Project",
+	}, shared...)
+	fields := []string{"id", "object", "created", "owned_by"}
+	return []EndpointCompatibilityManifest{
+		{ID: "openai.models.list.v1", NorthboundProfile: ProfileOpenAIModels, ProfileRevision: 1, Protocol: "openai", Method: "GET", Path: "/v1/models", SemanticOperation: semantic.OperationDiscovery,
+			RequestHeaders: []string{"Authorization"}, ResponseFields: []string{"object", "data", "data[].id", "data[].object", "data[].created", "data[].owned_by"},
+			StateSemantics: "read of the caller's Project configuration and the live route table; no provider I/O",
+			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental, DocumentedDeviations: listDeviations},
+		{ID: "openai.models.get.v1", NorthboundProfile: ProfileOpenAIModels, ProfileRevision: 1, Protocol: "openai", Method: "GET", Path: "/v1/models/{id}", SemanticOperation: semantic.OperationDiscovery,
+			RequestFields: []string{"id"}, RequestHeaders: []string{"Authorization"}, ResponseFields: fields,
+			StateSemantics: "read of the caller's Project configuration and the live route table; no provider I/O",
+			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental, DocumentedDeviations: getDeviations},
+	}
 }
 
 // expandCodeSubscriptionProfiles keeps northbound compatibility attached to

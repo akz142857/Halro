@@ -211,3 +211,61 @@ func TestEveryEndpointDeclaresItsEvidence(t *testing.T) {
 		}
 	}
 }
+
+// The two rules that decide which manifests owe request fields and provider
+// profiles. Both were rewritten when discovery arrived and shipped with nothing
+// watching them: deleting either clause outright left this package green.
+//
+// The pair is asymmetric on purpose, and the asymmetry is the thing under test.
+// Run Governance touches no provider, so it owes no profiles — but it does
+// accept a request body, so it still owes request fields. Only a discovery read
+// that takes no parameters at all is excused from those, and widening either
+// exemption to "not provider-backed" takes a live guard off Run Governance.
+func TestManifestRejectsAnEndpointThatDeclaresNeitherRequestFieldsNorAReasonToHaveNone(t *testing.T) {
+	byID := func(id string) EndpointCompatibilityManifest {
+		t.Helper()
+		for _, candidate := range BuiltinEndpointManifests() {
+			if candidate.ID == id {
+				return CloneEndpointManifest(candidate)
+			}
+		}
+		t.Fatalf("no manifest %q", id)
+		return EndpointCompatibilityManifest{}
+	}
+	tests := []struct {
+		name     string
+		id       string
+		mutate   func(*EndpointCompatibilityManifest)
+		accepted bool
+	}{
+		{name: "provider-backed endpoint with no request fields", id: "openai.chat-completions.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil; m.ProfileCoverage = nil }},
+		{name: "governance endpoint with no request fields", id: "halro.runs.create.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil }},
+		{name: "provider-backed endpoint with no provider profiles", id: "openai.chat-completions.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.ProviderProfiles = nil; m.ProfileCoverage = nil }},
+		{name: "discovery collection read with no request fields", id: "openai.models.list.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil }, accepted: true},
+		// The retrieve endpoint beside the list is the reason the exemption is
+		// written against the path rather than against the operation: its id is
+		// a path parameter, so it has somewhere for a parameter to be and must
+		// still declare one. Keying on OperationDiscovery accepted this.
+		{name: "discovery retrieve with no request fields", id: "openai.models.get.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil }},
+		{name: "governance endpoint with no provider profiles", id: "halro.runs.create.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.ProviderProfiles = nil }, accepted: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := byID(test.id)
+			test.mutate(&manifest)
+			err := manifest.Validate()
+			if test.accepted && err != nil {
+				t.Fatalf("rejected what it must accept: %v", err)
+			}
+			if !test.accepted && err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
+}

@@ -19,7 +19,24 @@ const (
 	OperationFile          Operation = "file"
 	OperationBatch         Operation = "batch"
 	OperationGovernance    Operation = "governance"
+	// OperationDiscovery answers a question about the gateway's own
+	// configuration — which aliases a Project may name — and makes no provider
+	// call. It is an operation rather than a bare route so the compatibility
+	// manifest can say what the endpoint does without pretending a provider
+	// profile serves it.
+	OperationDiscovery Operation = "discovery"
 )
+
+// ProviderBacked reports whether the operation reaches an upstream. The two
+// that do not are answered from Halro's own state, so an endpoint manifest for
+// them declares no provider profiles and no coverage.
+func (operation Operation) ProviderBacked() bool {
+	switch operation {
+	case OperationGovernance, OperationDiscovery:
+		return false
+	}
+	return true
+}
 
 func (operation Operation) Validate() error {
 	switch operation {
@@ -27,7 +44,7 @@ func (operation Operation) Validate() error {
 		OperationTranscribe, OperationSynthesize, OperationRerank,
 		OperationAsyncGenerate, OperationFile, OperationBatch:
 		return nil
-	case OperationGovernance:
+	case OperationGovernance, OperationDiscovery:
 		return nil
 	default:
 		return errors.New("semantic operation is invalid")

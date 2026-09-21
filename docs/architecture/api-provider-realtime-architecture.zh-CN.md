@@ -1858,7 +1858,7 @@ Manifest；其余记录在对应 Phase 获得真实需求、负责人和预算�
 | Broker Mode 是否等价于完整 Gateway | 否，使用独立 Assurance Profile，强治理 Project 默认拒绝 |
 | 故障时是否允许从 Gateway Terminated 静默降级到 Provider Direct | 否，连接模式和最低 Assurance 必须由 Project/Route 显式授权 |
 | Halro 是否最终自行终止 WebRTC | 未决定；自建、独立/第三方 Media Service 和 Direct Broker 都是候选终态 |
-| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 尚未实现，Anthropic `count_tokens` 已实现（仅直连 Anthropic Messages Profile，零成本结算但仍进 ledger 与审计）；Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
+| 当前优先级 | Phase 1A/1B/1C 与已授权 Phase 2 实现范围完成；Phase 2 仍为 Experimental，须通过第 17.4 节门槛后才能标 Compatible/GA；`/v1/models` 已实现为别名发现端点（Experimental，不透露上游），Anthropic `count_tokens` 已实现（仅直连 Anthropic Messages Profile，零成本结算但仍进 ledger 与审计）；Realtime 与 WebRTC 仍暂缓；后续新模型族继续按独立 Profile 和真实需求准入 |
 
 ## 21. 协议与内部契约参考
 

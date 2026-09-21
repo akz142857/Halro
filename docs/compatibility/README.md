@@ -48,6 +48,22 @@ I/O; see [ADR 0005](../adr/0005-stateless-responses-facade.md). Future API
 families and any stored Responses tier must add separate, versioned manifests
 before they can be described as compatible.
 
+`GET /v1/models` and `GET /v1/models/{id}` are published as `experimental` on
+gateway contract evidence alone. They are answered from the caller's Project
+configuration and the live route table — no provider profile serves them, which
+is why their manifests declare none — and their SDK matrix stays empty until the
+black-box suite calls `models.list()` against the stub.
+
+Their `documented_deviations` are unusually long, and deliberately so. The
+response shape is OpenAI's model object, which implies a thing with a stable
+identity and stable capabilities; a Halro `id` is a public alias, which is a
+pointer an operator may repoint between two calls. Adding a non-standard field
+to say so is not available — an SDK-contracted object with an extra member is a
+member somebody's client chokes on — so every place the shape promises more than
+an alias keeps is discharged in the deviations instead. Reading them is the only
+way to know what a listed id is worth: chiefly that listing guarantees the alias
+will not answer `404 model_not_found`, and nothing beyond that.
+
 The Phase 2 media and resource endpoints are published as `experimental`.
 Gateway contract tests and provider transport fixtures do not substitute for an
 official SDK black-box matrix or real-provider release gates. In particular,
