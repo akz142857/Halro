@@ -303,6 +303,7 @@ type Handler struct {
 	messages           MessagesService
 	inferenceResources InferenceResourcesService
 	deferredResponses  DeferredResponsesService
+	models             ModelsService
 	maxRequestBytes    int64
 	routeTimeout       time.Duration
 	streamTimeout      time.Duration
@@ -381,6 +382,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 	handler.messages, _ = service.(MessagesService)
 	handler.inferenceResources, _ = service.(InferenceResourcesService)
 	handler.deferredResponses, _ = service.(DeferredResponsesService)
+	handler.models, _ = service.(ModelsService)
 	return handler, nil
 }
 
@@ -1048,27 +1050,14 @@ func (h *Handler) guardKey(next http.Handler, deny http.HandlerFunc) http.Handle
 	})
 }
 
-// unimplementedHints name the endpoints callers most often probe for, so the
-// answer says what to reach for instead of only what is missing. An SDK calling
-// models.list() is the common case: it is the first thing many clients do, and
-// a bare 404 tells the operator nothing about why their model list is empty.
-var unimplementedHints = map[string]string{
-	"/v1/models": "Halro does not implement /v1/models. " +
-		"Applications address models by the public alias configured on their Project.",
-}
-
 // NotFound answers an unrouted path with the envelope every other error uses.
 // The router's default is plain text, which an SDK's error type cannot parse,
 // so a caller probing an endpoint Halro does not serve gets an opaque
 // transport failure rather than the reason for it.
 func (h *Handler) NotFound(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	message := "this endpoint is not implemented by Halro; " +
-		"see docs/compatibility for the supported surface"
-	if hint, ok := unimplementedHints[strings.TrimSuffix(request.URL.Path, "/")]; ok {
-		message = hint
-	}
-	writeError(writer, http.StatusNotFound, "endpoint_not_implemented", message, nil)
+	writeError(writer, http.StatusNotFound, "endpoint_not_implemented",
+		"this endpoint is not implemented by Halro; see docs/compatibility for the supported surface", nil)
 }
 
 // MethodNotAllowed answers a known path reached with the wrong verb, for the

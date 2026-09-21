@@ -91,10 +91,16 @@ type EndpointCompatibilityManifest struct {
 }
 
 func (manifest EndpointCompatibilityManifest) Validate() error {
-	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.RequestFields) == 0 || len(manifest.ResponseFields) == 0 {
+	if manifest.ID == "" || manifest.NorthboundProfile == "" || manifest.ProfileRevision == 0 || manifest.Protocol == "" || manifest.Method == "" || !strings.HasPrefix(manifest.Path, "/") || manifest.SemanticOperation.Validate() != nil || manifest.StateSemantics == "" || len(manifest.ResponseFields) == 0 {
 		return errors.New("endpoint compatibility manifest is incomplete")
 	}
-	if manifest.SemanticOperation != semantic.OperationGovernance && len(manifest.ProviderProfiles) == 0 {
+	// A provider-backed endpoint with no request fields has under-declared them
+	// (see the Kimi note on RequestFields in adding-a-northbound-endpoint.md).
+	// A list served from Halro's own state can genuinely take none.
+	if manifest.SemanticOperation.ProviderBacked() && len(manifest.RequestFields) == 0 {
+		return errors.New("endpoint compatibility manifest is incomplete")
+	}
+	if manifest.SemanticOperation.ProviderBacked() && len(manifest.ProviderProfiles) == 0 {
 		return errors.New("provider-backed endpoint compatibility manifest has no provider profiles")
 	}
 	switch manifest.Status {
@@ -426,7 +432,37 @@ func BuiltinEndpointManifests() []EndpointCompatibilityManifest {
 	expandCodeSubscriptionProfiles(manifests)
 	setProfileCompatibilityStatuses(manifests)
 	manifests = append(manifests, inferenceResourcesEndpointManifests()...)
+	manifests = append(manifests, modelsEndpointManifests()...)
 	return append(manifests, governanceEndpointManifests()...)
+}
+
+// modelsEndpointManifests describe the one OpenAI surface Halro answers from
+// its own configuration. models.list() is the first call many SDK clients make,
+// and until this existed it was the one that failed: the answer is the caller's
+// Project's allowed aliases, filtered to the ones a route actually serves, so
+// what is listed is what a request may name — no more, because another
+// Project's aliases are not this caller's business, and no less, because an
+// alias with no route behind it answers 404 on every other endpoint.
+func modelsEndpointManifests() []EndpointCompatibilityManifest {
+	deviations := []string{
+		"the list is the caller's Project's allowed aliases intersected with the aliases the route table serves; an alias the Project may name but no enabled route carries is omitted rather than listed as callable",
+		"an alias whose every deployment is unhealthy or suspended is still listed: that state is transient and the inference call reports it",
+		"created is always 0: an alias is a name on a Project, not a versioned object, and Halro does not invent a timestamp for it",
+		"owned_by is always halro: the upstream provider and model behind an alias are never disclosed to an application",
+		"retrieving an alias the Project may not name answers 404 rather than 403, so the endpoint cannot be used to test whether an alias exists on another Project",
+		"no upstream call is made and no ledger event is written",
+	}
+	fields := []string{"id", "object", "created", "owned_by"}
+	return []EndpointCompatibilityManifest{
+		{ID: "openai.models.list.v1", NorthboundProfile: ProfileOpenAIModels, ProfileRevision: 1, Protocol: "openai", Method: "GET", Path: "/v1/models", SemanticOperation: semantic.OperationDiscovery,
+			RequestHeaders: []string{"Authorization"}, ResponseFields: []string{"object", "data", "data[].id", "data[].object", "data[].created", "data[].owned_by"},
+			StateSemantics: "read of the caller's Project configuration and the live route table; no provider I/O",
+			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental, DocumentedDeviations: deviations},
+		{ID: "openai.models.get.v1", NorthboundProfile: ProfileOpenAIModels, ProfileRevision: 1, Protocol: "openai", Method: "GET", Path: "/v1/models/{id}", SemanticOperation: semantic.OperationDiscovery,
+			RequestFields: []string{"id"}, RequestHeaders: []string{"Authorization"}, ResponseFields: fields,
+			StateSemantics: "read of the caller's Project configuration and the live route table; no provider I/O",
+			Evidence:       []EvidenceKind{EvidenceGatewayContract}, Status: StatusExperimental, DocumentedDeviations: deviations},
+	}
 }
 
 // expandCodeSubscriptionProfiles keeps northbound compatibility attached to

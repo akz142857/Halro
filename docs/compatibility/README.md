@@ -48,6 +48,12 @@ I/O; see [ADR 0005](../adr/0005-stateless-responses-facade.md). Future API
 families and any stored Responses tier must add separate, versioned manifests
 before they can be described as compatible.
 
+`GET /v1/models` and `GET /v1/models/{id}` are published as `experimental` on
+gateway contract evidence alone. They are answered from the caller's Project
+configuration and the live route table — no provider profile serves them, which
+is why their manifests declare none — and their SDK matrix stays empty until the
+black-box suite calls `models.list()` against the stub.
+
 The Phase 2 media and resource endpoints are published as `experimental`.
 Gateway contract tests and provider transport fixtures do not substitute for an
 official SDK black-box matrix or real-provider release gates. In particular,

@@ -21,6 +21,7 @@ const (
 	ProfileOpenAIMediaResources    NorthboundProfileID = "openai.media-resources.v1"
 	ProfileHalroInferenceResources NorthboundProfileID = "halro.inference-resources.v1"
 	ProfileHalroRunGovernance      NorthboundProfileID = "halro.run-governance.v1"
+	ProfileOpenAIModels            NorthboundProfileID = "openai.models.v1"
 )
 
 type NorthboundProfile struct {
@@ -45,6 +46,7 @@ func (profile NorthboundProfile) Validate() error {
 var builtinNorthboundProfiles = []NorthboundProfile{
 	{ID: ProfileOpenAIChatCompletions, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/chat/completions"}},
 	{ID: ProfileOpenAIEmbeddings, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/embeddings"}},
+	{ID: ProfileOpenAIModels, Revision: 1, Protocol: "openai", Methods: []string{"GET /v1/models", "GET /v1/models/{id}"}},
 	{ID: ProfileOpenAIResponses, Revision: 2, Protocol: "openai", Methods: []string{"POST /v1/responses", "GET /v1/responses/{id}", "POST /v1/responses/{id}/cancel", "DELETE /v1/responses/{id}"}},
 	{ID: ProfileAnthropicMessages, Revision: 1, Protocol: "anthropic", Methods: []string{"POST /v1/messages", "POST /v1/messages/count_tokens"}},
 	{ID: ProfileOpenAIMediaResources, Revision: 1, Protocol: "openai", Methods: []string{"POST /v1/moderations", "POST /v1/images/generations", "POST /v1/audio/transcriptions", "POST /v1/audio/speech", "POST /v1/files", "GET /v1/files/{id}", "GET /v1/files/{id}/content", "DELETE /v1/files/{id}", "POST /v1/batches", "GET /v1/batches/{id}", "POST /v1/batches/{id}/cancel"}},

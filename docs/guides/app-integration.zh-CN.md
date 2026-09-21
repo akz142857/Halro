@@ -52,6 +52,11 @@ Gateway Key 的保管规则：
 | `POST /v1/messages` | Anthropic Messages |
 | `POST /v1/messages/count_tokens` | Anthropic Token 计数 |
 
+`GET /v1/models`（以及 `GET /v1/models/{id}`）回答"我的 Key 能填哪些别名"：返回
+你的 Project 被允许、且当前有 Route 承接的别名清单。它不访问上游、不计费，
+`owned_by` 恒为 `halro`，不会透露别名背后的 Provider 或真实模型。SDK 的
+`client.models.list()` 直接可用；状态为 experimental，只因尚未纳入 SDK 黑盒矩阵。
+
 以下端点为 **experimental**，接入前请与管理员单独确认是否对你的 Project 开放、
 以及当前的能力边界：`/v1/moderations`、`/v1/images/generations`、
 `/v1/audio/transcriptions`、`/v1/audio/speech`、`/v1/files*`、`/v1/batches*`、

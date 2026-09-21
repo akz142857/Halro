@@ -104,38 +104,6 @@ func TestIsFieldPathAcceptsOnlyPathCharacters(t *testing.T) {
 	}
 }
 
-// An SDK calling models.list() against a gateway that does not implement it was
-// getting the router's plain-text 404, which its error type cannot parse — so
-// the caller saw an opaque transport failure rather than the reason, and an
-// operator saw an empty model list with no explanation.
-func TestUnimplementedEndpointAnswersInTheEnvelopeSDKsParse(t *testing.T) {
-	handler, err := New(&fakeService{}, 1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	response := httptest.NewRecorder()
-	handler.NotFound(response, request)
-
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404", response.Code)
-	}
-	if contentType := response.Header().Get("Content-Type"); contentType != "application/json" {
-		t.Fatalf("Content-Type = %q, want application/json", contentType)
-	}
-	var envelope openaiapi.ErrorEnvelope
-	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("response is not a parsable error envelope: %v (%s)", err, response.Body)
-	}
-	if envelope.Error.Code != "endpoint_not_implemented" {
-		t.Fatalf("code = %q, want endpoint_not_implemented", envelope.Error.Code)
-	}
-	// The generic message names no remedy; models.list() deserves the specific one.
-	if !strings.Contains(envelope.Error.Message, "public alias") {
-		t.Fatalf("message does not say what to use instead: %q", envelope.Error.Message)
-	}
-}
-
 func TestUnroutedPathStillExplainsItself(t *testing.T) {
 	handler, err := New(&fakeService{}, 1024)
 	if err != nil {
