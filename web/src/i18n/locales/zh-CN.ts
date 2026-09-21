@@ -922,6 +922,7 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       attempts: "尝试次数",
       attemptSuccessRate: "尝试成功率",
       unknownAttempts: "{{count}} 次未计价",
+      estimatedTokens: "另有 {{count}} 个保守估算词元",
       viewAttempts: "查看明细",
       viewFailedRequests: "查看最终失败",
       others: "其余合计",

@@ -8,6 +8,21 @@ semantic versioning.
 
 ### Fixed
 
+- A row in the usage summary said how many tokens were reported and not how
+  many were estimated, so a row could sit visibly below a provider's own figure
+  with nothing on screen explaining the difference.
+
+  The figure has always been the accounting total minus the part that came from
+  a conservative upper bound rather than from what the provider said. The tile
+  above the table says so whenever there is a remainder; the rows did not, which
+  is exactly where an operator reconciles against an upstream console. A gap of
+  a few per cent between the two reads as lost data when it is a column
+  definition.
+
+  Each row now carries the same note the tile does, and only when there is
+  something to note — a row with nothing estimated stays quiet rather than
+  showing a zero that reads as a qualification.
+
 - An upstream that answered "your allowance is spent" was routed as though it
   had answered "you are going too fast".
 

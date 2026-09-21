@@ -273,8 +273,14 @@ function SummaryGroupTable({ dimension, groups, labels, range, sort, ascending, 
             const total = requestLevel ? group.requests ?? 0 : group.attempts;
             const failed = requestLevel ? group.request_errors ?? 0 : group.errors;
             const rate = total ? (total - failed) / total : 1;
-            const tokens = Math.max(0, group.input_tokens + group.output_tokens
-              - group.estimated_input_tokens - group.estimated_output_tokens);
+            // Reported tokens are the accounting total minus the part that
+            // came from a conservative upper bound rather than from what the
+            // provider said. The tile above says so when there is a remainder;
+            // a row that stayed silent about it read as the whole total, which
+            // is how a row can sit visibly below a provider's own figure with
+            // nothing on screen explaining the difference.
+            const estimated = group.estimated_input_tokens + group.estimated_output_tokens;
+            const tokens = Math.max(0, group.input_tokens + group.output_tokens - estimated);
             // The folded tail is many keys at once, so there is nothing single
             // to filter the detail list by. Offering the link anyway would send
             // the operator to a list that answers a different question.
@@ -287,7 +293,10 @@ function SummaryGroupTable({ dimension, groups, labels, range, sort, ascending, 
                 </td>
                 <td>{compactNumber(total)}</td>
                 <td>{`${(rate * 100).toFixed(1)}%`}</td>
-                <td>{compactNumber(tokens)}</td>
+                <td>
+                  {compactNumber(tokens)}
+                  {estimated > 0 && <small>{t("usage.summary.estimatedTokens", { count: compactNumber(estimated) })}</small>}
+                </td>
                 <td>{money(group.cost_micros_usd)}{group.unknown_attempts > 0 && <small>{t("usage.summary.unknownAttempts", { count: group.unknown_attempts })}</small>}</td>
                 <td>
                   {!folded && range && (
