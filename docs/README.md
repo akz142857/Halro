@@ -137,6 +137,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
 | [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 提案待评审，未实现 |
+| [实例自述文档与 Agent 操作通道](todo/agent-self-description-plan.zh-CN.md) | 实例把「我是什么、我能做什么、怎么配置我」服务出去：网关口的 `.well-known` 北向自述与 `GET /v1/models`，管理口登录后的 `GET /admin/api/v1/skill.md`；路由表由 `chi.Walk` 从同一棵树生成 | 提案待评审；`internal/selfdescribe` 不存在。不引入机器凭据，MCP 执行通道留待自述文档落地后单独评审 |
 
 ## 草稿 · `drafts/`
 
