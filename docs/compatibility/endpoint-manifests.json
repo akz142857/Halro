@@ -31,7 +31,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "id",
@@ -46,7 +47,7 @@
       "[DONE]",
       "error"
     ],
-    "state_semantics": "stateless",
+    "state_semantics": "stateless; an Idempotency-Key adds a 24 hour record of the key, its request fingerprint and how far the request got, and no part of the request or the answer",
     "sdk_matrix": [
       "openai-go",
       "openai-node",
@@ -61,7 +62,13 @@
     "documented_deviations": [
       "gateway routes model names; provider-owned chat state is not exposed",
       "unknown request fields are rejected before provider I/O",
-      "provider-specific unsupported fields are rejected before provider I/O"
+      "provider-specific unsupported fields are rejected before provider I/O",
+      "Idempotency-Key is optional and buys at-most-once execution upstream, not response replay: a repeat of a key whose request finished answers 409 idempotency_completed rather than the original answer, because the answer is not stored",
+      "a repeat while the first request is still running, or after one whose outcome nobody can determine, answers 409 idempotency_in_progress; it is a refusal rather than a wait, because holding a socket against another request's outcome is not something this gateway does",
+      "the same key with a different request body answers 409 idempotency_conflict, and keys are scoped to one Project so two Projects may use the same external key",
+      "a request with no Idempotency-Key behaves exactly as before and writes nothing durable; the key is what buys the record",
+      "a key is remembered for 24 hours",
+      "a streaming repeat is refused before the stream opens, as an ordinary HTTP error rather than an event inside a stream the caller has been told is starting"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",
@@ -609,7 +616,8 @@
     ],
     "request_headers": [
       "Authorization",
-      "Content-Type"
+      "Content-Type",
+      "Idempotency-Key"
     ],
     "response_fields": [
       "object",
@@ -617,7 +625,7 @@
       "model",
       "usage"
     ],
-    "state_semantics": "stateless",
+    "state_semantics": "stateless; an Idempotency-Key adds a 24 hour record of the key, its request fingerprint and how far the request got, and no part of the request or the answer",
     "sdk_matrix": [
       "openai-go",
       "openai-node",
@@ -632,7 +640,12 @@
     "documented_deviations": [
       "gateway routes model names",
       "unknown request fields are rejected before provider I/O",
-      "provider-specific unsupported fields are rejected before provider I/O"
+      "provider-specific unsupported fields are rejected before provider I/O",
+      "Idempotency-Key is optional and buys at-most-once execution upstream, not response replay: a repeat of a key whose request finished answers 409 idempotency_completed rather than the original answer, because the answer is not stored",
+      "a repeat while the first request is still running, or after one whose outcome nobody can determine, answers 409 idempotency_in_progress; it is a refusal rather than a wait, because holding a socket against another request's outcome is not something this gateway does",
+      "the same key with a different request body answers 409 idempotency_conflict, and keys are scoped to one Project so two Projects may use the same external key",
+      "a request with no Idempotency-Key behaves exactly as before and writes nothing durable; the key is what buys the record",
+      "a key is remembered for 24 hours"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",

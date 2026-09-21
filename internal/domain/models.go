@@ -29,9 +29,19 @@ const (
 type ProviderResourceKind string
 
 const (
-	ResourceFile        ProviderResourceKind = "file"
-	ResourceBatch       ProviderResourceKind = "batch"
-	ResourceAsyncInvoke ProviderResourceKind = "async_invoke"
+	ResourceFile ProviderResourceKind = "file"
+	// ResourceInferenceCall is one synchronous generation or embedding the
+	// caller gave an Idempotency-Key.
+	//
+	// It is the odd one here: every other kind exists because the caller asked
+	// Halro to hold something, and this one holds nothing at all — no object
+	// path, ever. What it records is that a key was used, what request it was
+	// used for, and how far that request got, so a blind retry cannot become a
+	// second billed call upstream. The answer is not kept, which is why a
+	// repeat is refused rather than replayed.
+	ResourceInferenceCall ProviderResourceKind = "inference_call"
+	ResourceBatch         ProviderResourceKind = "batch"
+	ResourceAsyncInvoke   ProviderResourceKind = "async_invoke"
 	// ResourceDeferredResponse is one generation that was submitted on one
 	// connection and collected on another. Unlike the three above it has no
 	// upstream twin at all (ADR 0021): the upstream sees an ordinary
@@ -151,9 +161,15 @@ func (r ProviderResource) Validate() error {
 		problems = append(problems, errors.New("resource identity and owner are required"))
 	}
 	switch r.Kind {
-	case ResourceFile, ResourceBatch, ResourceAsyncInvoke, ResourceDeferredResponse:
+	case ResourceFile, ResourceBatch, ResourceAsyncInvoke, ResourceDeferredResponse, ResourceInferenceCall:
 	default:
 		problems = append(problems, errors.New("resource kind is invalid"))
+	}
+	if r.Kind == ResourceInferenceCall && (r.ObjectPath != "" || r.InputObjectPath != "") {
+		// The whole point of the kind is that it stores no caller content. A
+		// record that acquired an object would be a third place bodies live,
+		// added by accident rather than by decision.
+		problems = append(problems, errors.New("an inference call record cannot carry an object"))
 	}
 	if r.Kind == ResourceDeferredResponse {
 		switch r.Status {

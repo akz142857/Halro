@@ -1076,3 +1076,15 @@ func TestSealedObjectDoesNotOpenUnderAnotherRecord(t *testing.T) {
 		}
 	}
 }
+
+// all is the whole store, for a test whose subject is what was written rather
+// than what one lookup answers.
+func (s *inferenceResourcesMemoryStore) all() []domain.ProviderResource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records := make([]domain.ProviderResource, 0, len(s.resources))
+	for _, resource := range s.resources {
+		records = append(records, resource)
+	}
+	return records
+}
