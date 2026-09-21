@@ -40,16 +40,18 @@ var quotaExhaustionCodes = map[string]provider.FailureReason{
 	"subscription_quota_exhausted": provider.FailureReasonSubscriptionQuotaExhausted,
 	"token_plan_quota_exhausted":   provider.FailureReasonSubscriptionQuotaExhausted,
 	// OpenAI: a spent balance and the two spend ceilings an organization or a
-	// project can be given.
+	// project can be given. `insufficient_quota` is the older spelling of the
+	// first and is very likely the one a real spent account still answers with
+	// — it predates the current error-codes page and is what the ecosystem
+	// documents — so leaving it out would have meant the most common OpenAI
+	// case going on being read as a rate limit.
+	"insufficient_quota":                provider.FailureReasonSubscriptionQuotaExhausted,
 	"credit_balance_exhausted":          provider.FailureReasonSubscriptionQuotaExhausted,
 	"organization_spend_limit_exceeded": provider.FailureReasonSubscriptionQuotaExhausted,
 	"project_spend_limit_exceeded":      provider.FailureReasonSubscriptionQuotaExhausted,
 	// Kimi / Moonshot: insufficient balance, arrears, or an expired voucher,
 	// all under one 429 alongside rate_limit_reached_error.
 	"exceeded_current_quota_error": provider.FailureReasonSubscriptionQuotaExhausted,
-	// Gemini: the daily quota, as against rate_limit_exceeded for the
-	// per-minute one.
-	"quota_exceeded": provider.FailureReasonSubscriptionQuotaExhausted,
 	// Anthropic: a payment problem, which arrives as 402 rather than 429. The
 	// other Anthropic case — a monthly spend cap — is deliberately absent; see
 	// below.
@@ -78,19 +80,35 @@ var quotaExhaustionStatusByType = map[domain.ProviderType]map[int]provider.Failu
 	},
 }
 
-// The one cell of the matrix that is deliberately not implemented: Anthropic's
-// monthly spend cap arrives as 429 rate_limit_error, the same status and the
-// same type as an ordinary rate limit, and is distinguishable only by the
-// absence of a retry-after header. Inferring an indefinite condition from a
-// missing header would turn a transient limit into a suspension a human has to
-// clear — the most expensive direction to be wrong in. That cell waits for a
-// real response.
+// Two cells of the matrix are deliberately not implemented, and both wait for a
+// real response rather than for a cleverer guess.
+//
+// Anthropic's monthly spend cap arrives as 429 rate_limit_error, the same
+// status and the same type as an ordinary rate limit, and is distinguishable
+// only by the absence of a retry-after header. Inferring an indefinite
+// condition from a missing header would turn a transient limit into a
+// suspension a human has to clear — the most expensive direction to be wrong
+// in.
+//
+// Gemini's daily quota is the same shape one level down. The adapter surfaces
+// error.status (internal/provider/gemini/adapter.go), which for a 429 is the
+// RPC name RESOURCE_EXHAUSTED — the same value for the daily quota and for the
+// per-minute limit, which is precisely the ambiguity the matrix was written
+// about. The distinguishing text lives somewhere this adapter does not read,
+// and inventing an extraction from a structure nobody here has observed would
+// be the same mistake as reading Anthropic's missing header. An entry for a
+// spelling no Gemini path produces is worse than no entry: it reads as
+// coverage. So the cell is empty, and what would fill it is one real Gemini
+// quota refusal showing which field carries the distinction.
 
 // quotaExhaustionReason reads one classified refusal for a statement that the
 // account's allowance is spent. An empty answer means the refusal said nothing
 // of the kind, not that it was a rate limit.
 func quotaExhaustionReason(classified *provider.Error, target provider.Target) provider.FailureReason {
-	code := provider.SafeProviderIdentifier(classified.ProviderCode)
+	// The code half alone. An upstream that names the field it refused arrives
+	// as "code:param", and a table keyed on the whole identifier would miss
+	// every refusal that happened to carry one.
+	code := provider.RefusalCode(classified.ProviderCode)
 	if reason, known := quotaExhaustionCodes[code]; known {
 		return reason
 	}
