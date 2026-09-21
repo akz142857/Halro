@@ -3295,7 +3295,7 @@
       "the answer is ordered by alias and carries no duplicates; no other order is promised",
       "an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
       "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
-      "the answer is served while the Project's redaction or Token Guard policy snapshot is still loading, where an inference call would answer 503 configuration_stale: nothing is generated here, so no policy governs it"
+      "a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it"
     ],
     "provider_profiles": null,
     "profile_coverage": null
@@ -3337,7 +3337,7 @@
       "the answer is ordered by alias and carries no duplicates; no other order is promised",
       "an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
       "no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
-      "the answer is served while the Project's redaction or Token Guard policy snapshot is still loading, where an inference call would answer 503 configuration_stale: nothing is generated here, so no policy governs it"
+      "a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it"
     ],
     "provider_profiles": null,
     "profile_coverage": null

@@ -97,10 +97,18 @@ func (manifest EndpointCompatibilityManifest) Validate() error {
 	// An endpoint with no request fields has under-declared them (see the Kimi
 	// note on RequestFields in adding-a-northbound-endpoint.md), with one
 	// exception: a collection read that takes no parameters at all has none to
-	// declare. The exemption is named rather than derived from ProviderBacked,
-	// which would have quietly taken this guard off Run Governance too — those
-	// endpoints all declare request fields today and must keep having to.
-	if manifest.SemanticOperation != semantic.OperationDiscovery && len(manifest.RequestFields) == 0 {
+	// declare.
+	//
+	// The exemption is written against that shape rather than against an
+	// operation or a category, because both wider readings let a real
+	// declaration go missing. Deriving it from ProviderBacked would take the
+	// guard off Run Governance, whose endpoints accept request bodies. Naming
+	// OperationDiscovery would take it off the retrieve endpoint beside the
+	// list, whose id is a path parameter it must still declare. What earns the
+	// exemption is having nowhere for a parameter to be: a discovery read whose
+	// path carries none.
+	if len(manifest.RequestFields) == 0 &&
+		!(manifest.SemanticOperation == semantic.OperationDiscovery && !strings.Contains(manifest.Path, "{")) {
 		return errors.New("endpoint compatibility manifest declares no request fields")
 	}
 	if manifest.SemanticOperation.ProviderBacked() && len(manifest.ProviderProfiles) == 0 {
@@ -464,7 +472,7 @@ func modelsEndpointManifests() []EndpointCompatibilityManifest {
 		"the answer is ordered by alias and carries no duplicates; no other order is promised",
 		"an alias containing a slash or a character needing percent-encoding is served at both spellings, escaped and unescaped, because a public alias is operator-supplied free text",
 		"no upstream call is made, no ledger event is written, and no per-Project rate limit or budget is consumed; the per-source limiter is the only bound",
-		"the answer is served while the Project's redaction or Token Guard policy snapshot is still loading, where an inference call would answer 503 configuration_stale: nothing is generated here, so no policy governs it",
+		"a durable configuration change that has not yet reached the running snapshots refuses this endpoint with 503 configuration_stale exactly as it refuses an inference call: the gate is the listener's, ahead of the handler, and discovery is not exempt from it",
 	}
 	listDeviations := append([]string{
 		"the answer is the caller's Project's allowed aliases intersected with the aliases the route table serves; an alias the Project may name but no enabled route carries is omitted rather than listed as callable",

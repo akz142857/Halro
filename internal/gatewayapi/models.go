@@ -45,18 +45,35 @@ func (h *Handler) GetModel(writer http.ResponseWriter, request *http.Request) {
 	})
 }
 
-// pathAlias reads the alias out of the request path.
+// pathAlias reads the alias out of the request path, decoding it exactly once.
 //
 // A public alias is operator-supplied free text — nothing in domain validation
 // constrains its character set, and vendor-prefixed names like "openai/gpt-4o"
 // are a common convention — so it is neither a single path segment nor
-// necessarily URL-safe. A {modelID} parameter answered 404
-// endpoint_not_implemented for the unescaped spelling an SDK actually sends,
-// and handed the service a still-encoded string for the escaped one. The route
-// is a wildcard for the same reason the admin invocation-target route is.
+// necessarily URL-safe. Hence the wildcard route, for the same reason the admin
+// invocation-target route is one: a {modelID} parameter answered 404
+// endpoint_not_implemented for the unescaped spelling an SDK actually sends.
+//
+// Once is the whole difficulty. net/url populates RawPath only where the
+// escaped form differs from re-encoding the decoded one, and chi hands back
+// RawPath when it has one and the already-decoded Path when it does not. So
+// unescaping unconditionally decodes twice for every request whose escaping
+// round-trips, and that is not a rare shape: "/v1/models/rate%25" arrives with
+// an empty RawPath, chi yields "rate%", and a second unescape fails on the
+// trailing percent — an alias the list had just advertised, unretrievable. The
+// worse half is silent: "/v1/models/literal%252Fname" yields "literal%2Fname",
+// which a second unescape turns into "literal/name", answering for a different
+// alias the caller never asked for and may separately hold.
 func pathAlias(request *http.Request) (string, bool) {
-	alias, err := url.PathUnescape(chi.URLParam(request, "*"))
-	if err != nil || strings.TrimSpace(alias) == "" {
+	alias := chi.URLParam(request, "*")
+	if request.URL.RawPath != "" {
+		decoded, err := url.PathUnescape(alias)
+		if err != nil {
+			return "", false
+		}
+		alias = decoded
+	}
+	if strings.TrimSpace(alias) == "" {
 		return "", false
 	}
 	return alias, true

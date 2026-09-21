@@ -11,6 +11,11 @@
   not name answers 404, never 403, so the endpoint cannot probe what other
   Projects were given.
 
+  These sit in the same guarded group as the inference routes: a durable
+  configuration change that has not reached the running snapshots refuses them
+  with `503 configuration_stale` too. Skipping the Project's policy-snapshot
+  check inside the service is not an exemption from the listener's gate.
+
   An `id` here is a public alias, not a model identifier: an operator may repoint
   it at another deployment between two calls without the id changing. Listing an
   alias guarantees only that it will not answer `404 model_not_found` — one whose

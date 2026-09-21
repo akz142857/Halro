@@ -246,6 +246,12 @@ func TestManifestRejectsAnEndpointThatDeclaresNeitherRequestFieldsNorAReasonToHa
 			mutate: func(m *EndpointCompatibilityManifest) { m.ProviderProfiles = nil; m.ProfileCoverage = nil }},
 		{name: "discovery collection read with no request fields", id: "openai.models.list.v1",
 			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil }, accepted: true},
+		// The retrieve endpoint beside the list is the reason the exemption is
+		// written against the path rather than against the operation: its id is
+		// a path parameter, so it has somewhere for a parameter to be and must
+		// still declare one. Keying on OperationDiscovery accepted this.
+		{name: "discovery retrieve with no request fields", id: "openai.models.get.v1",
+			mutate: func(m *EndpointCompatibilityManifest) { m.RequestFields = nil }},
 		{name: "governance endpoint with no provider profiles", id: "halro.runs.create.v1",
 			mutate: func(m *EndpointCompatibilityManifest) { m.ProviderProfiles = nil }, accepted: true},
 	}

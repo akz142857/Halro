@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/openaiapi"
 )
@@ -65,5 +66,41 @@ func TestModelsRefusesAnUnknownKeyBeforeTheService(t *testing.T) {
 	var envelope openaiapi.ErrorEnvelope
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || response.Code != http.StatusUnauthorized || envelope.Error.Code != "invalid_api_key" {
 		t.Fatalf("status=%d body=%s err=%v", response.Code, response.Body.String(), err)
+	}
+}
+
+// Discovery is not exempt from the listener's staleness gate, and the manifest
+// says so because it briefly said the opposite.
+//
+// The service deliberately skips assertPolicySnapshotsCoverProject — that check
+// asks whether a Project's redaction and Token Guard policies are loaded, and
+// nothing here generates anything for them to govern. It is easy to read that
+// skip as "discovery answers while policy state is unsettled" and write it into
+// the published contract, which is a promise about the HTTP path that the
+// service level cannot make: the route sits in the same guarded group as every
+// inference route, behind refuseWhileSnapshotsStale, and a durable change that
+// has not reached the running snapshots refuses it identically.
+//
+// Fail-closed is the right answer here. The point of this test is that the
+// contract must describe it rather than the reverse, and that nobody reaches for
+// the outer gate to make an inaccurate deviation come true.
+func TestModelsIsRefusedWhileTheSnapshotsAreStale(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	runtime.activation.markStale(activationDomainRedaction, "injected for this test", time.Now().UTC())
+	if !runtime.activation.status().Stale {
+		t.Fatal("the runtime did not start stale, so this test asserts nothing")
+	}
+
+	for _, path := range []string{"/v1/models", "/v1/models/chat"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+bootstrap.GatewayKey)
+		response := httptest.NewRecorder()
+		runtime.gatewayRouter().ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s answered %d while the snapshots were stale, want 503", path, response.Code)
+		}
+		if !strings.Contains(response.Body.String(), "configuration_stale") {
+			t.Fatalf("%s: body=%s", path, response.Body.String())
+		}
 	}
 }

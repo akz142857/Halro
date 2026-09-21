@@ -146,6 +146,42 @@ func TestAnAliasContainingASlashIsRetrievableAtEitherSpelling(t *testing.T) {
 	}
 }
 
+// The alias reaches the service decoded exactly once, whichever spelling the
+// caller used.
+//
+// net/url populates RawPath only where the escaped form differs from
+// re-encoding the decoded one, and chi returns RawPath when it has one and the
+// already-decoded Path when it does not. Unescaping unconditionally therefore
+// decodes twice for every request whose escaping round-trips — which is not an
+// exotic shape, and the two failures it produces are of different kinds: one
+// alias becomes unretrievable, and another silently resolves to a second alias
+// the caller never named.
+func TestAnAliasIsDecodedExactlyOnce(t *testing.T) {
+	tests := []struct {
+		name  string
+		path  string
+		alias string
+	}{
+		{name: "percent in the alias", path: "/v1/models/rate%25", alias: "rate%"},
+		{name: "the escape sequence is itself the alias", path: "/v1/models/literal%252Fname", alias: "literal%2Fname"},
+		{name: "slash escaped", path: "/v1/models/openai%2Fgpt-4o", alias: "openai/gpt-4o"},
+		{name: "slash literal", path: "/v1/models/openai/gpt-4o", alias: "openai/gpt-4o"},
+		{name: "space escaped", path: "/v1/models/a%20b", alias: "a b"},
+		{name: "plain", path: "/v1/models/chat", alias: "chat"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeService{}
+			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request.Header.Set("Authorization", "Bearer gw_test")
+			modelsRouter(t, service).ServeHTTP(httptest.NewRecorder(), request)
+			if service.lastAlias != test.alias {
+				t.Fatalf("the service saw %q, want %q", service.lastAlias, test.alias)
+			}
+		})
+	}
+}
+
 // An empty alias reaches no service call and is refused as any unavailable
 // alias is, so the two are indistinguishable from outside.
 func TestAnEmptyAliasIsRefusedWithoutReachingTheService(t *testing.T) {
