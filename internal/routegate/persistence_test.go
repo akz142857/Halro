@@ -293,3 +293,251 @@ func TestAGateWithNoStoreStillSuspends(t *testing.T) {
 		t.Fatal("a gate without persistence stopped suspending")
 	}
 }
+
+// blockingStore holds a write until the test lets it finish, so an interleaving
+// that is otherwise a matter of scheduling can be asserted.
+type blockingStore struct {
+	*recordingStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newBlockingStore() *blockingStore {
+	return &blockingStore{
+		recordingStore: newRecordingStore(),
+		entered:        make(chan struct{}, 8),
+		release:        make(chan struct{}),
+	}
+}
+
+func (s *blockingStore) PutRouteSuspension(ctx context.Context, suspension domain.RouteSuspension) error {
+	s.entered <- struct{}{}
+	<-s.release
+	return s.recordingStore.PutRouteSuspension(ctx, suspension)
+}
+
+// Concurrent attempts against one scope all report, and once it is suspended
+// the second and third move only the observation timestamp. Writing the row
+// again for each would put a bbolt commit on the request path for a suspension
+// that already says everything it will say.
+func TestRepeatedRefusalsAgainstASuspendedScopeWriteOnce(t *testing.T) {
+	store := newRecordingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	for attempt := range 20 {
+		gate.Observe(target, invalidCredential(401), base.Add(time.Duration(attempt)*time.Second))
+	}
+	puts, deletes := store.counts()
+	if puts != 1 || deletes != 0 {
+		t.Fatalf("store calls = %d puts, %d deletes; the suspension never changed after the first", puts, deletes)
+	}
+	// A window is different: every observation against a suspended one doubles
+	// it, and a longer suspension is a real change the row has to carry. What
+	// must not write is an observation that moves nothing — which is where a
+	// window that has reached its ceiling ends up.
+	quota := targetOn("route_2", "dep_2", "cred_2", "model-b", "provider_1", 1)
+	policy := DefaultPolicies()[provider.FailureReasonSubscriptionQuotaExhausted]
+	capped := base
+	for gate.windowOf(Scope{Kind: ScopeCredentialModel, Key: credentialModelKey("cred_2", "model-b")}) < policy.MaxWindow {
+		gate.Observe(quota, quotaExhausted(), capped)
+	}
+	atCeiling, _ := store.counts()
+	for range 10 {
+		gate.Observe(quota, quotaExhausted(), capped)
+	}
+	puts, _ = store.counts()
+	if puts != atCeiling {
+		t.Fatalf("puts = %d, want %d: a window at its ceiling, re-observed at the same instant, moves nothing", puts, atCeiling)
+	}
+}
+
+// The ordering the clear depends on: a row queued by a failed attempt is
+// written before the durable removal runs, never after it. Without that the
+// operator's clear commits, the late row lands, and the next start restores a
+// suspension there is an audit record for having cleared.
+func TestClearWaitsForAWriteAlreadyInFlight(t *testing.T) {
+	store := newBlockingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	scope := Scope{Kind: ScopeCredential, Key: "cred_1"}
+
+	observed := make(chan struct{})
+	go func() {
+		gate.Observe(target, invalidCredential(401), base)
+		close(observed)
+	}()
+	<-store.entered // the suspension's row is mid-write
+
+	cleared := make(chan error, 1)
+	go func() {
+		cleared <- gate.ClearDurable(scope, func() error {
+			return store.DeleteRouteSuspension(context.Background(), string(scope.Kind), scope.Key)
+		})
+	}()
+	// The clear must not have run yet: the write it has to come after is still
+	// in flight.
+	select {
+	case err := <-cleared:
+		t.Fatalf("the clear ran while a row was still being written: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(store.release)
+	<-observed
+	if err := <-cleared; err != nil {
+		t.Fatal(err)
+	}
+	if rows := store.list(); len(rows) != 0 {
+		t.Fatalf("stored rows after the clear = %+v, want none", rows)
+	}
+	if len(gate.Snapshot(base)) != 0 {
+		t.Fatal("the gate still holds a suspension the operator cleared")
+	}
+}
+
+// A refusal that arrives while the clear is committing is dropped with the
+// scope rather than written back. The upstream refusing again suspends it
+// again, which is an honest new suspension rather than a resurrected row.
+func TestAQueuedRowForAClearedScopeIsDropped(t *testing.T) {
+	store := newRecordingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+	scope := Scope{Kind: ScopeCredential, Key: "cred_1"}
+	if err := gate.ClearDurable(scope, func() error {
+		// Queued from inside the durable half: the same window a late attempt
+		// reporting concurrently would land in.
+		gate.mu.Lock()
+		gate.scopes[scope] = &scopeState{
+			policy:     DefaultPolicies()[provider.FailureReasonInvalidCredential],
+			indefinite: true, persisted: true,
+			evidence: Evidence{Reason: provider.FailureReasonInvalidCredential, ObservedAt: base},
+		}
+		gate.pending = append(gate.pending, persistAction{
+			kind: string(scope.Kind), key: scope.Key,
+			record: recordFor(scope, gate.scopes[scope]),
+		})
+		gate.mu.Unlock()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gate.Filter([]provider.Target{target}, base) // drives a flush
+	if rows := store.list(); len(rows) != 0 {
+		t.Fatalf("a row queued for the cleared scope was written anyway: %+v", rows)
+	}
+}
+
+// The store and the gate must agree once the traffic stops, whatever order the
+// failures and successes arrived in. This is the shape the reordering bug took:
+// a row outliving the memory that would have removed it.
+func TestStoreAgreesWithTheGateUnderConcurrentTraffic(t *testing.T) {
+	store := newRecordingStore()
+	gate := gateWithStore(store)
+	targets := []provider.Target{
+		targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1),
+		targetOn("route_2", "dep_2", "cred_2", "model-b", "provider_1", 1),
+		targetOn("route_3", "dep_3", "cred_3", "model-c", "provider_2", 1),
+	}
+	var waiting sync.WaitGroup
+	for worker := range 12 {
+		waiting.Add(1)
+		go func() {
+			defer waiting.Done()
+			target := targets[worker%len(targets)]
+			for round := range 40 {
+				now := base.Add(time.Duration(round) * time.Second)
+				if (worker+round)%3 == 0 {
+					gate.ObserveSuccess(target, now)
+					continue
+				}
+				gate.Observe(target, invalidCredential(401), now)
+			}
+		}()
+	}
+	waiting.Wait()
+	// One last pass with no concurrency, so every queued write has been applied.
+	gate.Filter(targets, base)
+
+	live := make(map[string]bool)
+	for _, suspension := range gate.Snapshot(base) {
+		live[suspension.Scope.String()] = true
+	}
+	for _, row := range store.list() {
+		if !live[row.ScopeKind+":"+row.ScopeKey] {
+			t.Fatalf("stored %s/%s outlived the gate's own memory of it", row.ScopeKind, row.ScopeKey)
+		}
+	}
+	for scope := range live {
+		found := false
+		for _, row := range store.list() {
+			if row.ScopeKind+":"+row.ScopeKey == scope {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the gate holds %s with nothing stored for it", scope)
+		}
+	}
+}
+
+// windowOf reads one scope's current window, for a test that has to drive a
+// policy to its ceiling without hardcoding how many doublings that takes.
+func (g *Gate) windowOf(scope Scope) time.Duration {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if state := g.scopes[scope]; state != nil {
+		return state.window
+	}
+	return 0
+}
+
+func (g *Gate) pendingLen() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.pending)
+}
+
+// The queue is taken inside the store lock, not before it.
+//
+// That is the whole of the ordering fix, and it is a property of the mechanism
+// rather than of any single outcome: the bad interleaving needs one flush to be
+// descheduled between taking the queue and acquiring the lock, which no test
+// can schedule. What a test can pin is that the window does not exist — while a
+// write is in flight, a second flush has not taken anything, so it cannot
+// afterwards apply an older decision on top of a newer one.
+func TestAFlushTakesTheQueueOnlyWithTheStoreLockHeld(t *testing.T) {
+	store := newBlockingStore()
+	gate := gateWithStore(store)
+	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
+
+	observed := make(chan struct{})
+	go func() {
+		gate.Observe(target, invalidCredential(401), base)
+		close(observed)
+	}()
+	<-store.entered // the row is mid-write, so the store lock is held
+
+	succeeded := make(chan struct{})
+	go func() {
+		gate.ObserveSuccess(target, base.Add(time.Second))
+		close(succeeded)
+	}()
+	// Give the second flush every chance to take the queue if it is able to.
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if gate.pendingLen() == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if queued := gate.pendingLen(); queued != 1 {
+		t.Fatalf("pending = %d while a write is in flight; the delete was taken out of the queue ahead of its turn", queued)
+	}
+
+	close(store.release)
+	<-observed
+	<-succeeded
+	if rows := store.list(); len(rows) != 0 {
+		t.Fatalf("stored rows = %+v, want none: the success ended the suspension", rows)
+	}
+}

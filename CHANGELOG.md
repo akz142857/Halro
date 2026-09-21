@@ -47,7 +47,8 @@ semantic versioning.
   is longer, and counters resetting on restart is ordinary — none of those earn
   a write. Rows are written on state transition only, never on the request path:
   a request that merely fails against an already-suspended scope opens no
-  transaction at all.
+  transaction at all, and neither does a second concurrent failure against a
+  scope that has already said everything its row will say.
 
   A credential replaced while the process was down still clears itself on the
   first resolve after start, because the registry stamps current revisions onto
@@ -58,9 +59,12 @@ semantic versioning.
   The clear arrives with it, and that is why it waited: `DELETE
   /admin/api/v1/route-suspensions/{scope_id}` removes the stored row and commits
   its audit record (`route_suspension.clear`) in the same transaction, the way
-  every administrative mutation here does. A clear that wrote nothing would have
-  had nowhere to commit one. The listing gains `scope_id` — an opaque handle,
-  because a scope is a pair and one half of one kind carries a NUL — and
+  every administrative mutation here does, while the gate holds its own store
+  writes still — so a failed attempt already in flight cannot land its row after
+  the delete and hand the next start a suspension the operator has a record for
+  having cleared. A clear that wrote nothing would have had nowhere to commit
+  one. The listing gains `scope_id` — an opaque handle, because a scope is a
+  pair and one half of one kind carries a NUL — and
   `clearable`, so an operator can tell the durable suspensions from the
   short-lived ones that end on their own.
 

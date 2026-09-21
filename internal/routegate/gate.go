@@ -206,6 +206,9 @@ func (g *Gate) observeLocked(
 		g.scopes[scope] = state
 	}
 	wasSuspended := state.suspended()
+	// What the store already believes, so an observation that changes nothing
+	// about when this scope comes back does not rewrite its row.
+	heldUntil, heldWindow, heldIndefinite := state.suspendedUntil, state.window, state.indefinite
 	state.policy = policy
 	state.failures++
 	if state.failures < policy.Threshold && !wasSuspended {
@@ -223,7 +226,7 @@ func (g *Gate) observeLocked(
 	if policy.Recovery == RecoverOnCredentialRevision {
 		state.indefinite = true
 		state.suspendedUntil = time.Time{}
-		g.notePersistLocked(scope, state)
+		g.notePersistIfMovedLocked(scope, state, heldUntil, heldWindow, heldIndefinite)
 		if !wasSuspended {
 			g.transitions[observation.Reason]++
 		}
@@ -244,10 +247,10 @@ func (g *Gate) observeLocked(
 		state.window = policy.MaxWindow
 	}
 	state.suspendedUntil = now.Add(state.window)
-	// Written here rather than only on the first suspension: a failed probe
-	// doubles the window, and a row still naming the old one would restore a
-	// suspension that ends earlier than the gate decided it should.
-	g.notePersistLocked(scope, state)
+	// Written on more than the first suspension: a failed probe doubles the
+	// window, and a row still naming the old one would restore a suspension
+	// that ends earlier than the gate decided it should.
+	g.notePersistIfMovedLocked(scope, state, heldUntil, heldWindow, heldIndefinite)
 	if !wasSuspended {
 		g.transitions[observation.Reason]++
 	}
@@ -464,26 +467,6 @@ func (g *Gate) Snapshot(now time.Time) []SuspensionSnapshot {
 		})
 	}
 	return result
-}
-
-// Clear removes one suspension from the live gate, and only from there.
-//
-// It is the operator's escape hatch for a scope being held down over something
-// already dealt with upstream, which makes it an administrative action: the
-// caller owes an audit record and owes the stored row's removal, and owes them
-// in one transaction, because a clear whose record and whose removal could
-// disagree is the thing the …WithAuditIntent pairing exists to prevent. The
-// gate can write neither, so it does not try — and it does not queue a store
-// delete of its own, which would be a second uncommitted write racing the
-// audited one.
-func (g *Gate) Clear(scope Scope) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if _, present := g.scopes[scope]; !present {
-		return false
-	}
-	delete(g.scopes, scope)
-	return true
 }
 
 // recordProbeOutcome counts what the requests admitted through an expired window

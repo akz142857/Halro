@@ -1,6 +1,7 @@
 package routegate
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -321,8 +322,9 @@ func TestATargetWithoutACredentialSuspendsNothingWider(t *testing.T) {
 	}
 }
 
-// Clear is the operator's escape hatch for a suspension dealt with outside
-// Halro's view.
+// ClearDurable is the operator's escape hatch for a suspension dealt with
+// outside Halro's view. The durable half is the caller's, and a gate with no
+// store still has to clear the memory half.
 func TestClearRemovesASuspension(t *testing.T) {
 	gate := New(Config{})
 	target := targetOn("route_1", "dep_1", "cred_1", "model-a", "provider_1", 1)
@@ -330,14 +332,30 @@ func TestClearRemovesASuspension(t *testing.T) {
 		Reason: provider.FailureReasonInvalidCredential, Status: 401,
 	}, base)
 	scope := Scope{Kind: ScopeCredential, Key: "cred_1"}
-	if !gate.Clear(scope) {
-		t.Fatal("Clear reported nothing to clear")
-	}
-	if gate.Clear(scope) {
-		t.Fatal("Clear reported a second removal of the same scope")
+	if err := gate.ClearDurable(scope, func() error { return nil }); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := gate.Admit(target, base); err != nil {
 		t.Fatalf("admit after clear: %v", err)
+	}
+	// A second clear of a scope that is no longer suspended is not an error:
+	// what decides whether there was anything to clear is the durable half, and
+	// that is the caller's to report.
+	if err := gate.ClearDurable(scope, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// A refused durable removal leaves the gate exactly as it was, so an
+	// operator who is told the clear failed is not looking at a gate that
+	// quietly performed half of it.
+	gate.Observe(target, Observation{
+		Reason: provider.FailureReasonInvalidCredential, Status: 401,
+	}, base)
+	refused := errors.New("the row could not be removed")
+	if err := gate.ClearDurable(scope, func() error { return refused }); !errors.Is(err, refused) {
+		t.Fatalf("err = %v, want the durable half's own error", err)
+	}
+	if _, err := gate.Admit(target, base); !errors.Is(err, ErrSuspended) {
+		t.Fatalf("a failed clear released the suspension anyway: %v", err)
 	}
 }
 

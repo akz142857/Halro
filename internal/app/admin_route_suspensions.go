@@ -122,11 +122,16 @@ func routeSuspensionKey(scope routegate.Scope) string {
 // also end on their own inside five minutes, which is faster than an operator
 // can reach them.
 //
-// The stored row and the audit record commit together; the live gate is cleared
-// after. A crash between the two leaves the suspension in memory until it ends
-// or the process restarts, which is the safe direction: the gate is the
-// authority while it is running, and the row it would have been restored from
-// is already gone.
+// The stored row and the audit record commit together, and the live gate is
+// cleared in the same ordered step — the gate holds its own store writes still
+// for the whole of it. Without that, a failed attempt already queued could land
+// its row after the delete committed, and the next start would restore a
+// suspension the operator has an audit record for having cleared.
+//
+// A crash between the commit and the memory clear leaves the suspension in
+// memory until it ends or the process restarts, which is the safe direction:
+// the gate is the authority while it is running, and the row it would have been
+// restored from is already gone.
 func (r *Runtime) clearAdminRouteSuspension(writer http.ResponseWriter, request *http.Request) {
 	kind, key, ok := domain.DecodeRouteScopeID(chi.URLParam(request, "scopeID"))
 	if !ok {
@@ -142,7 +147,9 @@ func (r *Runtime) clearAdminRouteSuspension(writer http.ResponseWriter, request 
 		adminStoreError(writer)
 		return
 	}
-	err := r.store.DeleteRouteSuspensionWithAuditIntent(request.Context(), kind, key, intent)
+	err := r.routes.ClearDurable(scope, func() error {
+		return r.store.DeleteRouteSuspensionWithAuditIntent(request.Context(), kind, key, intent)
+	})
 	switch {
 	case errors.Is(err, boltstore.ErrNotFound):
 		// A suspension the gate is holding but never stored is a live one an
@@ -161,7 +168,6 @@ func (r *Runtime) clearAdminRouteSuspension(writer http.ResponseWriter, request 
 		adminMutationError(writer, err)
 		return
 	}
-	r.routes.Clear(scope)
 	r.completeAdminMutation(writer, request, *intent)
 	writer.WriteHeader(http.StatusNoContent)
 }

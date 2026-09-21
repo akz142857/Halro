@@ -113,6 +113,27 @@ func (g *Gate) notePersistLocked(scope Scope, state *scopeState) {
 	}
 }
 
+// notePersistIfMovedLocked is notePersistLocked for an observation that may
+// have changed nothing.
+//
+// Concurrent attempts against one scope all report, and once the scope is
+// suspended the second and third of them move only the observation timestamp.
+// Writing the row again for each would put a bbolt commit on the request path
+// for a suspension that already says what it will say — which is the cost this
+// design promised not to pay. A row is rewritten only when what it restores
+// moves: the suspension began, its window doubled, or it turned indefinite.
+func (g *Gate) notePersistIfMovedLocked(
+	scope Scope, state *scopeState, heldUntil time.Time, heldWindow time.Duration, heldIndefinite bool,
+) {
+	moved := state.indefinite != heldIndefinite ||
+		state.window != heldWindow ||
+		!state.suspendedUntil.Equal(heldUntil)
+	if !moved && state.persisted {
+		return
+	}
+	g.notePersistLocked(scope, state)
+}
+
 // forgetPersistedLocked queues the removal of a row for a scope leaving the map.
 func (g *Gate) forgetPersistedLocked(scope Scope) {
 	g.pending = append(g.pending, persistAction{
@@ -137,20 +158,31 @@ func (g *Gate) dropLocked(scope Scope) {
 // flush performs the queued writes with the admission mutex released.
 //
 // Called through a deferred call registered before the one that unlocks, so it
-// runs after it. A write failure is reported and dropped: the gate's own state
-// is already correct, and the only thing lost is that this suspension will not
-// survive a restart.
+// runs after it, holding no lock of its own on entry.
 func (g *Gate) flush() {
+	g.persist.mu.Lock()
+	defer g.persist.mu.Unlock()
+	g.drainLocked()
+}
+
+// drainLocked takes the queue and applies it, with the store lock already held.
+//
+// Taking the queue *inside* that lock is what keeps the writes in the order
+// they were decided. Draining first and locking afterwards let two flushes swap
+// places: one queues a suspension's row and is descheduled, another drops the
+// scope and deletes, and the first then writes the row back — a suspension a
+// success had ended, restored on the next start, and for a credential refusal
+// restored indefinitely. Nothing would re-queue its removal, because the gate's
+// own memory was already correct.
+//
+// A write failure is reported and dropped: the gate's state is right either
+// way, and what is lost is that this suspension will not survive a restart.
+func (g *Gate) drainLocked() {
 	g.mu.Lock()
 	actions := g.pending
 	g.pending = nil
 	g.mu.Unlock()
-	if len(actions) == 0 {
-		return
-	}
-	g.persist.mu.Lock()
-	defer g.persist.mu.Unlock()
-	if g.persist.store == nil {
+	if len(actions) == 0 || g.persist.store == nil {
 		return
 	}
 	for _, action := range actions {
@@ -164,6 +196,43 @@ func (g *Gate) flush() {
 			g.persist.onError(err)
 		}
 	}
+}
+
+// ClearDurable removes one suspension from the gate and from the store as one
+// ordered step, with the durable half performed by the caller.
+//
+// The caller owns that half because it owes an audit record, and here a record
+// commits with the change it describes. What it cannot own is the ordering: the
+// gate writes rows of its own from failed attempts, and a clear that simply
+// committed its delete and then wiped memory could be overtaken by one. A
+// failure already queued lands after the delete, the row comes back, and the
+// gate no longer remembers it — so the next start restores a suspension the
+// operator has an audit record for having cleared.
+//
+// So the clear holds the store lock for the whole of it: everything already
+// decided is written first, remove runs with no gate write able to interleave,
+// and anything still queued for this scope is dropped with the scope itself. A
+// fresh refusal afterwards suspends it again, which is the honest answer rather
+// than a resurrected row.
+func (g *Gate) ClearDurable(scope Scope, remove func() error) error {
+	g.persist.mu.Lock()
+	defer g.persist.mu.Unlock()
+	g.drainLocked()
+	if err := remove(); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.scopes, scope)
+	kept := g.pending[:0]
+	for _, action := range g.pending {
+		if action.kind == string(scope.Kind) && action.key == scope.Key {
+			continue
+		}
+		kept = append(kept, action)
+	}
+	g.pending = kept
+	return nil
 }
 
 // Restore loads the stored suspensions back into the gate.
