@@ -186,17 +186,19 @@ export function RoutesPage() {
               <tr className="route-group-heading">
                 {/* The alias is the heading of the rows under it, so it sits
                     where a heading sits — at the left edge, above the target
-                    column it governs, in type large enough to be read as the
-                    name of the group rather than as one more annotation. The
-                    group's own facts ride the far end of the same band: they
-                    describe the set, not any one row. */}
+                    column it governs. The group's own facts ride the far right
+                    of the same band: they describe the set, not any one row.
+                    The band spans the table, so the div carries the flex and
+                    the th stays a table cell (see the note in styles.css). */}
                 <th colSpan={4} scope="colgroup">
-                  <strong className="route-group-alias">{group.alias}</strong>
-                  <span className="route-group-meta">
-                    <span>{summary}</span>
-                    {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
-                    {group.mixedEgress && <span className="badge warning" title={t("routes.mixedEgressTitle")}>{t("routes.mixedEgress")}</span>}
-                  </span>
+                  <div className="route-group-band">
+                    <strong className="route-group-alias">{group.alias}</strong>
+                    <span className="route-group-meta">
+                      <span>{summary}</span>
+                      {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
+                      {group.mixedEgress && <span className="badge warning" title={t("routes.mixedEgressTitle")}>{t("routes.mixedEgress")}</span>}
+                    </span>
+                  </div>
                 </th>
               </tr>
               {group.ordered.map((route) => {

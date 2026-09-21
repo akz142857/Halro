@@ -1282,15 +1282,13 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
 .route-primary-tag::before { content: "["; }
 .route-primary-tag::after { content: "]"; }
-/* The group band reads left to right: the alias names the rows under it, the
-   facts about the set sit at the far end. It used to be one run of inline text
-   that `.route-table th:last-child` then pushed to the right edge — the only th
-   in its row is also the last one — so the alias ended up as far from the
-   targets it heads as the table allows. */
-.route-group-heading th {
-  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3);
-  padding: var(--space-4) var(--space-4) var(--space-3); text-align: left; font-weight: var(--font-weight-regular);
-}
+/* The band reads left to right: the alias names the rows under it, the facts
+   about the set sit at the far end. The flex box is the div inside, not the
+   th — a th that is itself `display: flex` stops being a table cell, so its
+   colSpan is dropped and the band gets squeezed back into the width of the
+   first column instead of spanning the table. */
+.route-group-heading th { padding: var(--space-4) var(--space-4) var(--space-3); text-align: left; font-weight: var(--font-weight-regular); }
+.route-group-band { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3); }
 /* Sized as a heading rather than as a label, and left in the mono face the rest
    of the console gives identifiers: this is the string a caller puts in its
    `model` field, not prose. */
