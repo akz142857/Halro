@@ -11,10 +11,18 @@
   not name answers 404, never 403, so the endpoint cannot probe what other
   Projects were given.
 
+  Enumeration is granted per key: the Gateway Key must carry the `discovery`
+  scope as well as `inference`, and one without it answers `403
+  gateway_key_scope_denied` while remaining able to call the aliases it was
+  given. Being able to call an alias and being told the whole menu are different
+  disclosures, and the second is the operator's decision.
+
   These sit in the same guarded group as the inference routes: a durable
   configuration change that has not reached the running snapshots refuses them
   with `503 configuration_stale` too. Skipping the Project's policy-snapshot
-  check inside the service is not an exemption from the listener's gate.
+  check inside the service is not an exemption from the listener's gate. They
+  consume no per-Project rate limit or budget and are bounded instead by the
+  built-in per-Key ceiling, which refuses with `429 rate_limit_exceeded`.
 
   An `id` here is a public alias, not a model identifier: an operator may repoint
   it at another deployment between two calls without the id changing. Listing an

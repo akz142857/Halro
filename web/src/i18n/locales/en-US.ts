@@ -1363,7 +1363,7 @@ save: "Save and hot-reload", saveWithDeclaration: "Declare and save",  saveDisab
     saveKey: "Save this gateway key", oneTime: "Shown only once", oneTimeDescription: "Halro cannot recover the plaintext after you leave. Do not save it in a browser or chat history.",
     copyKey: "Copy key", keyStored: "I saved the key in a secure secret manager", finish: "Finish and clear plaintext", createKeyTitle: "Create gateway key",
     keyName: "Key name", keyNameHint: "Use a workload or service name so it can be revoked independently", generateKey: "Generate key",
-    keyScopes: "Scopes", keyScopesHint: "inference allows model calls. The remaining scopes separately control Work Unit creation, Run creation, Run attachment, governance reads, and business outcome reports.",
+    keyScopes: "Scopes", keyScopesHint: "inference allows model calls. discovery additionally lets the key list the Project's aliases through GET /v1/models; without it the key calls the alias it was given and is told nothing about the others. The remaining scopes separately control Work Unit creation, Run creation, Run attachment, governance reads, and business outcome reports.",
     nameTooLong: "A project name cannot exceed 128 characters", cidrInvalid: "One or more entries is not a valid IP or CIDR range",
     noKeysTitle: "No gateway keys yet", copyFailed: "The clipboard is unavailable (this may not be a secure context). Select the plaintext above and copy it manually.",
     keyExpiry: "Expiry (optional)", keyExpiryHint: "The key stops authenticating the moment it expires. Leave empty for no expiry.",

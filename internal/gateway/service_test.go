@@ -517,6 +517,10 @@ func newFixtureShaped(
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Both scopes, so the fixture's key is the ordinary application key rather
+	// than the narrowest one. A test whose subject is the discovery scope takes
+	// it away again.
+	key.Scopes = []domain.GatewayScope{domain.GatewayScopeInference, domain.GatewayScopeDiscovery}
 	snapshot := auth.NewSnapshot()
 	if err := snapshot.Refresh(context.Background(), source{
 		keys:     []domain.GatewayKey{key},

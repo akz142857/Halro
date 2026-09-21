@@ -32,6 +32,29 @@ semantic versioning.
   Marked `experimental`: the endpoint has gateway contract tests, and the
   official SDK black-box matrix does not yet call it.
 
+- A `discovery` scope on Gateway Keys, required alongside `inference` by
+  `GET /v1/models` and `GET /v1/models/{id}`. A key without it calls the aliases
+  it was given exactly as before and answers `403 gateway_key_scope_denied` when
+  it tries to list them.
+
+  The endpoint grants no authority a key did not already have — budget, RPM/TPM,
+  concurrency and Token Guard still bound what it can spend, and nothing about
+  the upstream is disclosed. What it changes is what a **stolen** key reveals.
+  An application is handed one alias by its operator; before this endpoint
+  existed, a key committed to a public repository had to guess a name to reach
+  anything else its Project allows. Listing hands the finder the whole menu at
+  once, including the expensive alias the application was never told about. That
+  is an operator's decision per key rather than an implication of being able to
+  call, so it is now one.
+
+  The unset-scope default stays `inference` alone: a key that names no scopes is
+  the narrowest key there is, and widening what that means would have granted
+  enumeration to every existing key without anyone deciding to. The bootstrap
+  key is granted `discovery` explicitly, so the first-run checklist still proves
+  `models.list()` end to end. `halro key create` mints an inference-only key, as
+  it already does for every other scope; scopes are chosen in the console's key
+  dialog or through the Admin API.
+
 - A built-in per-minute ceiling on the requests one authenticated caller may ask
   Halro to answer from its own state: 600 per Gateway Key and 5,000 per Project,
   refused as `429 rate_limit_exceeded` with a `Retry-After`. It has no

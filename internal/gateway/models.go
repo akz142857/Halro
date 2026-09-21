@@ -64,8 +64,9 @@ func (s *Service) Model(ctx context.Context, plaintextKey, alias string) (openai
 }
 
 // authenticateForDiscovery is the front of resolveRequest without the alias:
-// the key must authenticate, carry the inference scope the listed aliases are
-// for, and arrive from a source the Project admits. The policy-snapshot check is
+// the key must authenticate, carry both the inference scope the listed aliases
+// are for and the discovery scope that permits enumerating them, and arrive
+// from a source the Project admits. The policy-snapshot check is
 // not applied — it guards the redaction and Token Guard a generation runs under,
 // and no generation runs here.
 //
@@ -80,6 +81,15 @@ func (s *Service) authenticateForDiscovery(ctx context.Context, plaintextKey str
 	}
 	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
 		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
+	}
+	// Both scopes, because the answer is "the aliases this key may call": a key
+	// without inference names nothing, and a key with inference but without
+	// discovery may call the alias it was handed without being told the rest of
+	// the menu.
+	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeDiscovery) {
+		return auth.AuthResult{}, gatewayError(
+			"gateway_key_scope_denied", "gateway key does not allow model discovery", 403, nil,
+		)
 	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return auth.AuthResult{}, err

@@ -1370,7 +1370,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     saveKey: "保存这个网关密钥", oneTime: "只显示这一次", oneTimeDescription: "离开后 Halro 无法恢复明文。不要将它保存到浏览器或聊天记录。",
     copyKey: "复制密钥", keyStored: "我已将密钥保存到安全的密钥管理器", finish: "完成并清除明文", createKeyTitle: "创建网关密钥",
     keyName: "密钥名称", keyNameHint: "使用工作负载或服务名称，便于单独撤销", generateKey: "生成密钥",
-    keyScopes: "权限范围", keyScopesHint: "inference 允许模型调用；其余权限分别控制创建 Work Unit、创建 Run、附加 Run、读取运行治理和上报业务结果。",
+    keyScopes: "权限范围", keyScopesHint: "inference 允许模型调用；discovery 额外允许该 Key 通过 GET /v1/models 列出本项目的别名，不授予时该 Key 只能调用已告知的别名，看不到其余别名。其余权限分别控制创建 Work Unit、创建 Run、附加 Run、读取运行治理和上报业务结果。",
     nameTooLong: "项目名称不能超过 128 个字符", cidrInvalid: "存在无法解析的 IP 或 CIDR，请检查每一项",
     noKeysTitle: "还没有网关密钥", copyFailed: "无法写入剪贴板（可能不是安全上下文）。请手动选中上方明文复制。",
     keyExpiry: "过期时间（可选）", keyExpiryHint: "到期后该密钥立即停止鉴权；留空表示长期有效。",
