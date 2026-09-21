@@ -30,6 +30,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/keylimit"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/limiter"
 	"github.com/akz142857/Halro/internal/openaiapi"
@@ -89,7 +90,10 @@ type Service struct {
 	providerConcurrency   *provider.ConcurrencyManager
 	deploymentConcurrency *provider.ConcurrencyManager
 	rejections            rejectionCounters
-	sourceHashKey         [32]byte
+	// keyRate is the ceiling under every authenticated request Halro may
+	// answer without reaching beginRequestRun. See admitKeyRate.
+	keyRate       keylimit.Limiter
+	sourceHashKey [32]byte
 	// instanceID identifies this process. It is what tells a reservation left
 	// behind by a crash apart from one another request is holding right now.
 	instanceID                    string
@@ -977,7 +981,13 @@ type RejectionMetrics struct {
 	// carry it, and creating one would mean writing a request that never
 	// started — changing what the ledger means by "request" and opening a cheap
 	// write path for anything holding a valid key.
-	RouteCapability       uint64
+	RouteCapability uint64
+	// KeyRate counts requests refused by the built-in per-Key ceiling — the
+	// bound on what one authenticated caller may ask Halro to answer from its
+	// own state. A rising count with no matching RPM rejections means a caller
+	// is polling something that costs no provider call, which the Project
+	// limiter never sees.
+	KeyRate               uint64
 	RPM                   uint64
 	TPM                   uint64
 	ProjectConcurrency    uint64
@@ -990,6 +1000,7 @@ type RejectionMetrics struct {
 
 type rejectionCounters struct {
 	routeCapability       atomic.Uint64
+	keyRate               atomic.Uint64
 	rpm                   atomic.Uint64
 	tpm                   atomic.Uint64
 	projectConcurrency    atomic.Uint64
@@ -1135,6 +1146,7 @@ func NewServiceWithOptions(
 func (s *Service) RejectionMetrics() RejectionMetrics {
 	return RejectionMetrics{
 		RouteCapability: s.rejections.routeCapability.Load(),
+		KeyRate:         s.rejections.keyRate.Load(),
 		RPM:             s.rejections.rpm.Load(), TPM: s.rejections.tpm.Load(),
 		ProjectConcurrency:    s.rejections.projectConcurrency.Load(),
 		ProviderConcurrency:   s.rejections.providerConcurrency.Load(),

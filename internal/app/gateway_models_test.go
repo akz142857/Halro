@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
+	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/openaiapi"
 )
 
@@ -102,5 +104,63 @@ func TestModelsIsRefusedWhileTheSnapshotsAreStale(t *testing.T) {
 		if !strings.Contains(response.Body.String(), "configuration_stale") {
 			t.Fatalf("%s: body=%s", path, response.Body.String())
 		}
+	}
+}
+
+// The configuration this bound exists for: an install behind a proxy that does
+// its own shedding sets gateway.source_rate_limit.requests_per_minute to 0,
+// which is supported and tested. Discovery takes no Project RPM slot, so in that
+// configuration the built-in per-Key ceiling is the only thing between an
+// authenticated caller and an unbounded loop — and it must answer through the
+// real router, with the Retry-After the published manifest promises.
+func TestDiscoveryStaysBoundedWithTheSourceLimiterTurnedOff(t *testing.T) {
+	disabled := 0
+	runtime, bootstrap, _ := openBootstrappedRuntimeShaped(t, "gpt-test", func(cfg *config.Config) {
+		cfg.Gateway.SourceRateLimit.RequestsPerMinute = &disabled
+	})
+	if runtime.sourceLimiter.Enabled() {
+		t.Fatal("the per-source limiter is still on; this test would be asserting the wrong bound")
+	}
+	router := runtime.gatewayRouter()
+
+	list := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		request.Header.Set("Authorization", "Bearer "+bootstrap.GatewayKey)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		return response
+	}
+	// The window is fixed and this loop is not clocked, so it is sized to
+	// outlast one rollover rather than assuming it lands inside a single
+	// minute: two full budgets plus one must contain a refusal wherever the
+	// boundary falls.
+	var refusal *httptest.ResponseRecorder
+	for attempt := 0; attempt < 2*gatewaycore.KeyCeilingRPM+1 && refusal == nil; attempt++ {
+		response := list()
+		switch response.Code {
+		case http.StatusOK:
+		case http.StatusTooManyRequests:
+			refusal = response
+		default:
+			t.Fatalf("request %d: status=%d body=%s", attempt, response.Code, response.Body.String())
+		}
+	}
+	if refusal == nil {
+		t.Fatalf("%d discovery requests were served with no bound at all", 2*gatewaycore.KeyCeilingRPM+1)
+	}
+	if retryAfter := refusal.Header().Get("Retry-After"); retryAfter == "" || retryAfter == "0" {
+		t.Fatalf("Retry-After = %q, want the seconds left in the window", retryAfter)
+	}
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(refusal.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Error.Code != "rate_limit_exceeded" {
+		t.Fatalf("refusal envelope = %s, want an SDK-parseable rate_limit_exceeded", refusal.Body.String())
 	}
 }

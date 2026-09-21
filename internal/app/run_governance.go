@@ -7,6 +7,7 @@ import (
 	"errors"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,14 +84,15 @@ func (r *Runtime) governancePrincipal(writer http.ResponseWriter, request *http.
 		writeGovernanceGatewayError(writer, err)
 		return auth.AuthResult{}, false
 	}
-	write := scope != domain.GatewayScopeGovernanceRead
-	keyLimit, projectLimit := governanceReadKeyRPM, governanceReadProjectRPM
-	if write {
-		keyLimit, projectLimit = governanceWriteKeyRPM, governanceWriteProjectRPM
+	class, keyLimit, projectLimit := governanceReadClass, governanceReadKeyRPM, governanceReadProjectRPM
+	if scope != domain.GatewayScopeGovernanceRead {
+		class, keyLimit, projectLimit = governanceWriteClass, governanceWriteKeyRPM, governanceWriteProjectRPM
 	}
-	allowed, retryAfter := r.governance.rate.allow(r.clockNow(), principal.Key.ID, principal.Project.ID, write, keyLimit, projectLimit)
+	allowed, retryAfter := r.governance.rate.Allow(
+		r.clockNow(), class, principal.Key.ID, principal.Project.ID, keyLimit, projectLimit,
+	)
 	if !allowed {
-		writer.Header().Set("Retry-After", retryAfter)
+		writer.Header().Set("Retry-After", strconv.FormatInt(int64(retryAfter/time.Second), 10))
 		writeGovernanceError(writer, http.StatusTooManyRequests, "governance_rate_limited", "governance request rate exceeded")
 		return auth.AuthResult{}, false
 	}

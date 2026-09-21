@@ -30,6 +30,7 @@ import (
 	"github.com/akz142857/Halro/internal/gatewayapi"
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/keylimit"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
@@ -153,7 +154,7 @@ type Runtime struct {
 type governanceRuntime struct {
 	log     *governance.Log
 	manager *governance.Manager
-	rate    governanceRateState
+	rate    keylimit.Limiter
 }
 
 type capabilityResolutionRuntime struct {

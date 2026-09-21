@@ -319,6 +319,39 @@ Provider credential behind either. Where Halro terminates TLS on its own port,
 the base URL carries that port — `https://halro.example.com:8080/v1`. The
 path-split proxy above is how a deployment avoids a port number in the URL.
 
+### What bounds a request
+
+Three bounds stand between a caller and the work Halro does, and they answer
+different questions. Reading them as one list is how an install ends up with a
+plane that has none.
+
+| Bound | Applies to | Who sets it |
+| --- | --- | --- |
+| `gateway.source_rate_limit` | every request, before authentication | the operator, and `requests_per_minute: 0` disables it |
+| Project RPM / TPM / concurrency | a request that is about to reach a provider | the operator, per Project, and `0` means unlimited |
+| The built-in per-Key ceiling | an authenticated request Halro answers from its own state | nobody: it is a constant |
+
+The per-source limiter counts addresses rather than callers, and turning it off
+is a supported choice for an install behind a proxy that sheds for it. The
+Project limiter is a bound on **spending**: it charges RPM, TPM and concurrency
+for work that costs a provider call, which is why a Project may legitimately set
+RPM to `0` and mean it.
+
+Neither one covers the requests Halro answers without calling a provider — the
+model list, a deferred response being polled, a file identifier that names
+nothing, a governance read. Those cost no money, so the Project limiter is the
+wrong budget to charge them against; but they are not free, and with the source
+limiter off there was nothing left. The built-in ceiling is that floor: 600
+requests per minute per Gateway Key and 5,000 per minute per Project, refused
+with `429 rate_limit_exceeded` and a `Retry-After`. It has no configuration
+surface on purpose — an operator who could set it to zero could assemble a
+deployment in which an authenticated caller has no bound at all.
+
+A call that does reach a provider still passes the Project limiter, which is the
+bound that belongs to it. On the files, batches and async invocation paths both
+apply, so a `429` there is possible even where the Project's RPM is unlimited;
+`halro_policy_rejections_total{reason="key_rate"}` is what separates the two.
+
 ### Reloading without a restart
 
 `SIGHUP` replaces a fixed set of material in place. It is not "re-read the
@@ -1351,7 +1384,9 @@ a WAL/Audit/Parquet set from another epoch.
 - Requests return 403: check Project enabled state, key revocation, allowed
   routes/CIDRs, daily budget, Token Guard block, and redaction reject policy.
 - Requests return 429: distinguish Project RPM/TPM/concurrency, Provider or
-  Deployment concurrency, Token Guard, and upstream rate limits using metrics.
+  Deployment concurrency, Token Guard, the built-in per-Key ceiling
+  (`reason="key_rate"`, see "What bounds a request"), and upstream rate limits
+  using metrics.
 - Restore fails before switch: use the exact backup key, live Master Key, and
   verified Backup ID. The live directory remains unchanged on preflight failure.
 - Disk usage grows: inspect retention settings, Parquet manifest verification,

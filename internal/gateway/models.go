@@ -68,6 +68,11 @@ func (s *Service) Model(ctx context.Context, plaintextKey, alias string) (openai
 // for, and arrive from a source the Project admits. The policy-snapshot check is
 // not applied — it guards the redaction and Token Guard a generation runs under,
 // and no generation runs here.
+//
+// What replaces the Project limiter here is admitKeyRate. Discovery reaches no
+// provider, so there is no reservation to make and no RPM slot that would mean
+// anything; the built-in ceiling is what stops one key from asking for the list
+// without end.
 func (s *Service) authenticateForDiscovery(ctx context.Context, plaintextKey string) (auth.AuthResult, error) {
 	principal, err := s.auth.Authenticate(plaintextKey, s.now())
 	if err != nil {
@@ -77,6 +82,9 @@ func (s *Service) authenticateForDiscovery(ctx context.Context, plaintextKey str
 		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
 	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {
+		return auth.AuthResult{}, err
+	}
+	if err := s.admitKeyRate(principal); err != nil {
 		return auth.AuthResult{}, err
 	}
 	return principal, nil

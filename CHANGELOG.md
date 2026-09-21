@@ -32,6 +32,36 @@ semantic versioning.
   Marked `experimental`: the endpoint has gateway contract tests, and the
   official SDK black-box matrix does not yet call it.
 
+- A built-in per-minute ceiling on the requests one authenticated caller may ask
+  Halro to answer from its own state: 600 per Gateway Key and 5,000 per Project,
+  refused as `429 rate_limit_exceeded` with a `Retry-After`. It has no
+  configuration surface.
+
+  Halro's two other bounds both leave this ground uncovered. The per-source
+  limiter runs before authentication, counts addresses rather than callers, and
+  `gateway.source_rate_limit.requests_per_minute: 0` is a supported setting an
+  install behind a shedding proxy may legitimately choose. The Project limiter
+  charges RPM, TPM and concurrency for work that is about to reach a provider —
+  it is a bound on spending, which is why a Project may set RPM to `0` and mean
+  it. A request Halro answers without a provider call spends nothing, so neither
+  is the right budget to charge it against, and until now the two together could
+  be configured down to nothing at all for model discovery, deferred polling, and
+  the resource plane's `404` for an identifier that names nothing.
+
+  It applies to discovery and to the whole resource plane — files, batches, async
+  invocations and deferred responses — where a retrieval, a cancellation or a
+  miss returns before any accounting is opened. A call on that plane that does go
+  on to reach an upstream still passes the Project limiter, so a `429` there is
+  now possible where the Project's own RPM is unlimited; the new
+  `halro_policy_rejections_total{reason="key_rate"}` separates the two. The
+  inference path is deliberately untouched: every request that proceeds on it
+  reaches the Project limiter, and the refusals that come earlier are strictly
+  less work than this bound would add to the hottest path in the gateway.
+
+  The control plane has had a ceiling of exactly this shape since Run Governance
+  shipped; it now shares the implementation (`internal/keylimit`) rather than
+  owning a second copy of it.
+
 ### Changed
 
 - The SBOM steps no longer treat "could not reach the registry" as "the SBOM is

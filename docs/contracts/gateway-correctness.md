@@ -18,6 +18,27 @@ This contract is normative for v1.
 - Explicitly classified pre-execution failures and safe provider failures may
   retry or fall back within the configured attempt limits.
 
+## Admission
+
+Every authenticated request passes at least one bound that no configuration can
+disable.
+
+- A request that is about to reach a provider passes the Project limiter: RPM,
+  TPM and concurrency, charged once per request for RPM and concurrency. A
+  Project may set any of them to `0`, which means unlimited; that is a decision
+  about its own spending.
+- A request Halro answers from its own state — model discovery, a deferred
+  response being retrieved, cancelled or deleted, a resource identifier that
+  names nothing, a governance read — reaches no provider and consumes no Project
+  rate limit or budget. It passes a fixed per-minute ceiling on the calling
+  Gateway Key and on its Project instead. That ceiling is a constant: it has no
+  configuration surface, so no deployment can be assembled in which an
+  authenticated principal has no bound.
+- The per-source limiter is ahead of both and is not one of them. It counts
+  addresses rather than principals, applies before authentication, and an
+  operator may set it to `0`.
+- Requests on the resource plane pass both bounds. Nothing else passes two.
+
 ## Delivery boundary
 
 The delivery boundary is the first response payload successfully written to the client.

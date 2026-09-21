@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
@@ -31,8 +32,25 @@ func openBootstrappedRuntime(t *testing.T) (*Runtime, BootstrapResult, func() *R
 }
 
 func openBootstrappedRuntimeForModel(t *testing.T, providerModel string) (*Runtime, BootstrapResult, func() *Runtime) {
+	return openBootstrappedRuntimeShaped(t, providerModel, nil)
+}
+
+// openBootstrappedRuntimeShaped is openBootstrappedRuntimeForModel for a test
+// whose subject is the configuration itself — a listener setting, a limiter an
+// operator may turn off — rather than what the instance holds.
+func openBootstrappedRuntimeShaped(
+	t *testing.T,
+	providerModel string,
+	shape func(*config.Config),
+) (*Runtime, BootstrapResult, func() *Runtime) {
 	t.Helper()
 	cfg := testConfig(t)
+	if shape != nil {
+		shape(&cfg)
+		if err := cfg.Normalize(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
