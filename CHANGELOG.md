@@ -26,10 +26,18 @@ semantic versioning.
   A timeout is now recognised by reporting itself as one, and only when the
   request had already gone out: a dial or a resolution that ran out of time
   never reached the upstream, and stays `connect`, because "the connection was
-  not made" is the true thing to say about it. Retry and accounting semantics
-  are unchanged — both follow from whether anything was sent, not from the
-  class — and `internal/routegate` already treated the two classes alike, so
-  nothing about routing or suspension moves.
+  not made" is the true thing to say about it.
+
+  **The status a caller receives changes with the class.** A response-header
+  timeout answered `502 provider_error` and now answers `504 provider_timeout`,
+  which is the status the condition has always deserved — a gateway whose
+  upstream did not answer in time is what 504 is for. Clients that switch on the
+  status or the code see the new pair. Retry and accounting semantics do not
+  move: both follow from whether anything was sent rather than from the class,
+  and the attempt stays ambiguous and non-retryable. Routing does not move
+  either — `internal/routegate` already widened the suspension scope identically
+  for both classes — and the Ledger already held both as valid classes.
+
 ### Added
 
 - `Idempotency-Key` on `POST /v1/chat/completions` and `POST /v1/embeddings`.

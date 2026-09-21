@@ -6,10 +6,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/safetransport"
 )
 
 // The real error, produced by the real transport, because the defect was
@@ -86,5 +90,97 @@ func TestATimeoutBeforeAnythingWasSentStaysAConnectionFailure(t *testing.T) {
 				t.Fatalf("Class = %q, want %q", class, ErrorConnect)
 			}
 		})
+	}
+}
+
+type stalledResolver struct{ addr netip.Addr }
+
+func (r stalledResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr, error) {
+	return []netip.Addr{r.addr}, nil
+}
+
+// stalledDialer answers the address the policy validated with a connection to a
+// local listener that never speaks, so the real pinnedDialTLSContext runs
+// against a handshake that cannot complete. The policy refuses loopback even
+// with AllowPrivate, so the address it validates and the address dialled have
+// to be separated for this path to be reachable at all.
+type stalledDialer struct{ target string }
+
+func (d stalledDialer) DialContext(ctx context.Context, network, _ string) (net.Conn, error) {
+	var dialer net.Dialer
+	return dialer.DialContext(ctx, network, d.target)
+}
+
+// A stalled TLS handshake is decided before the timeout rule this change added,
+// and this pins that rather than leaving it to be reasoned about.
+//
+// The concern it answers is real in the abstract: the handshake runs after the
+// dial, so Unsent is false, and a conn-deadline read error would report
+// Timeout() — the shape the new rule matches. What the transport actually
+// produces is context.DeadlineExceeded, because pinnedDialTLSContext bounds the
+// handshake with a context and crypto/tls returns that context's error. So the
+// switch answers one case earlier, the class was already timeout before this
+// change, and nothing here moved.
+//
+// Which also settles the question the other way round: this failure reports
+// itself as a timeout on the path that produces it, so making the rarer shape
+// of the same failure say "connect" would leave one stall reporting two
+// different classes depending on which of two same-instant deadlines won a
+// race. Calling the connect timeout a connection failure instead is a separate
+// decision about every connect timeout, not a detail of this one.
+func TestAStalledTLSHandshakeIsDecidedBeforeTheNewRule(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held struct {
+		sync.Mutex
+		conns []net.Conn
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		held.Lock()
+		defer held.Unlock()
+		for _, conn := range held.conns {
+			_ = conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			// Held, never spoken to: the handshake waits for a ServerHello that
+			// is never sent.
+			held.Lock()
+			held.conns = append(held.conns, conn)
+			held.Unlock()
+		}
+	}()
+
+	client, err := safetransport.NewClient(safetransport.Options{
+		Policy: safetransport.Policy{
+			RequireHTTPS: true, AllowedHosts: []string{"stalled.example"},
+		},
+		Resolver:              stalledResolver{addr: netip.MustParseAddr("203.0.113.10")},
+		Dialer:                stalledDialer{target: listener.Addr().String()},
+		ConnectTimeout:        300 * time.Millisecond,
+		ResponseHeaderTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, requestErr := client.Get("https://stalled.example/")
+	if requestErr == nil {
+		t.Fatal("the stalled handshake completed")
+	}
+	// The assertion that makes this a boundary and not a tautology: the error is
+	// answered by the context case, so the rule added here never sees it.
+	if !errors.Is(requestErr, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the handshake's own context deadline: this test only pins the boundary while that holds", requestErr)
+	}
+	if class := TransportClass(requestErr); class != ErrorTimeout {
+		t.Fatalf("Class = %q, want %q unchanged", class, ErrorTimeout)
 	}
 }
