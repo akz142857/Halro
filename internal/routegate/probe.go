@@ -35,6 +35,7 @@ func (g *Gate) ObserveProbe(deploymentID string, probe DeploymentProbe, now time
 		return
 	}
 	scope := Scope{Kind: ScopeDeployment, Key: deploymentID}
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.probes == nil {
@@ -42,7 +43,7 @@ func (g *Gate) ObserveProbe(deploymentID string, probe DeploymentProbe, now time
 	}
 	g.probes[deploymentID] = probe
 	if probe.Healthy {
-		delete(g.scopes, scope)
+		g.dropLocked(scope)
 		return
 	}
 	// Threshold one, not the availability threshold. That threshold exists
@@ -82,6 +83,7 @@ func (g *Gate) RetainDeployments(deploymentIDs []string) {
 	for _, id := range deploymentIDs {
 		live[id] = struct{}{}
 	}
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for id := range g.probes {
@@ -94,7 +96,7 @@ func (g *Gate) RetainDeployments(deploymentIDs []string) {
 			continue
 		}
 		if _, ok := live[scope.Key]; !ok {
-			delete(g.scopes, scope)
+			g.dropLocked(scope)
 		}
 	}
 }

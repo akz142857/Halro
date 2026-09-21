@@ -556,6 +556,19 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		MaxAvailabilityWindow: cfg.Routing.MaxSuspendFor.Value(),
 		HalfOpenMaxRequests:   cfg.Routing.ProbeRequests,
 	})
+	// The long refusals outlive the process. A write failure here is logged and
+	// dropped rather than failing anything: the gate's own state is already
+	// correct, and what is lost is one suspension's survival across a restart.
+	routeGate.UsePersistence(metadata, func(err error) {
+		logger.Error("a route suspension could not be made durable", "error", err)
+	})
+	if stored, err := metadata.ListRouteSuspensions(ctx); err != nil {
+		// Derived, node-local state: an unreadable bucket costs one relearned
+		// refusal per target, which is not worth refusing to start over.
+		logger.Error("stored route suspensions could not be read", "error", err)
+	} else {
+		routeGate.Restore(stored)
+	}
 	providerRegistry.SetEligibility(routeGate)
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
@@ -1933,6 +1946,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/model-capability-detections/{id}", r.cancelAdminModelCapabilityDetection)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments", r.listAdminDeployments)
 	router.With(r.requireAdmin).Get("/admin/api/v1/route-suspensions", r.listAdminRouteSuspensions)
+	router.With(r.requireAdminMutation).Delete("/admin/api/v1/route-suspensions/{scopeID}", r.clearAdminRouteSuspension)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments", r.createAdminDeployment)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments/{id}", r.getAdminDeployment)
 	router.With(r.requireAdminMutation).Put("/admin/api/v1/deployments/{id}", r.updateAdminDeployment)

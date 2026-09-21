@@ -56,6 +56,10 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		// upstream refused: the caller-facing 503 and the metrics both carry
 		// enumerations alone, on purpose.
 		"GET /admin/api/v1/route-suspensions",
+		// The clear, added deliberately: an administrative mutation whose
+		// removal and whose audit record commit in one transaction. It acts on
+		// the stored suspensions only — the short ones end on their own.
+		"DELETE /admin/api/v1/route-suspensions/{}",
 		"GET /admin/api/v1/deployments/{}", "PUT /admin/api/v1/deployments/{}", "DELETE /admin/api/v1/deployments/{}", "POST /admin/api/v1/deployments/{}/test",
 		"POST /admin/api/v1/deployments/{}/capabilities/preflight",
 		"GET /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices", "POST /admin/api/v1/deployments/{}/prices/preview", "POST /admin/api/v1/deployments/{}/prices/restore-confirm", "POST /admin/api/v1/deployments/{}/prices/{}/cancel",

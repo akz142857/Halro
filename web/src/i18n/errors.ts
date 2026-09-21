@@ -159,6 +159,7 @@ export function localizedError(t: TFunction, error: unknown) {
     route_deployment_unavailable: "errors.routeDeploymentUnavailable",
     route_provider_unavailable: "errors.routeProviderUnavailable",
     route_provider_adapter_unavailable: "errors.routeProviderAdapterUnavailable",
+    route_suspension_not_clearable: "errors.routeSuspensionNotClearable",
     preview_values_negative: "errors.previewValuesNegative",
     admin_role_invalid: "errors.adminRoleInvalid",
     idempotency_key_required: "errors.idempotencyKeyRequired",

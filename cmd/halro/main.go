@@ -191,6 +191,7 @@ var topLevelCommands = []commandDescriptor{
 	{"pricing", "halro pricing migrate [flags]", "inspect or apply pricing migrations"},
 	{"usage", "halro usage <compact|verify|prune|rebuild-summary> [flags]", "maintain durable usage data"},
 	{"ledger", "halro ledger <verify|seal> [flags]", "verify or seal the accounting Ledger"},
+	{"route", "halro route <suspensions|clear-suspension> [flags]", "inspect or clear durable route suspensions"},
 	{"audit", "halro audit <verify|verify-anchor> [flags]", "verify the Audit chain and anchors"},
 	{"metrics", "halro metrics <token|rotate|revoke|list|verify-audit> [flags]", "manage metrics credentials and audit state"},
 	{"stats", "halro stats [--config <path>] [--interval <duration>]", "summarize the running durable write path"},
@@ -801,6 +802,43 @@ func run(arguments []string, logger *slog.Logger) error {
 			return json.NewEncoder(os.Stdout).Encode(result)
 		default:
 			return fmt.Errorf("unknown backup command %q", arguments[1])
+		}
+	case "route":
+		// The admission gate's durable half, offline. A running instance holds
+		// short availability windows this never sees; those are the Admin API's
+		// to show, and they end on their own. What is here is what the gate
+		// would be restored from.
+		if len(arguments) < 2 {
+			return errors.New("usage: halro route <suspensions|clear-suspension> --config <path> [--scope-id <id>]")
+		}
+		flags := flag.NewFlagSet("route "+arguments[1], flag.ContinueOnError)
+		configPath := flags.String("config", "config.yaml", "configuration file")
+		scopeID := flags.String("scope-id", "", "scope handle from `halro route suspensions`")
+		if err := flags.Parse(arguments[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*configPath, config.LoadOptions{})
+		if err != nil {
+			return err
+		}
+		switch arguments[1] {
+		case "suspensions":
+			items, err := app.ListStoredRouteSuspensions(context.Background(), cfg)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{"items": items})
+		case "clear-suspension":
+			if *scopeID == "" {
+				return errors.New("--scope-id is required; take it from `halro route suspensions`")
+			}
+			if err := app.ClearStoredRouteSuspension(context.Background(), cfg, *scopeID); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Suspension cleared and recorded in the audit chain.")
+			return nil
+		default:
+			return fmt.Errorf("unknown route command %q", arguments[1])
 		}
 	case "usage":
 		if len(arguments) < 2 {

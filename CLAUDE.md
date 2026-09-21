@@ -94,10 +94,11 @@ and safe against a real data directory; their siblings (`ledger seal`, `usage co
 ./bin/halro audit verify --config config.yaml       # also: audit verify-anchor
 ./bin/halro usage verify --config config.yaml       # also: usage compact|prune|rebuild-summary
 ./bin/halro config check --config config.yaml
+./bin/halro route suspensions --config config.yaml      # also: route clear-suspension
 ./bin/halro backup verify ...                       # also: backup create|restore
 ./bin/halro stats                                   # reads the metrics endpoint of a running instance
 ```
-Full surface: `halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|stats|doctor|serve|healthcheck|config|version>`.
+Full surface: `halro <start|init|bootstrap|admin|key|backup|restore|pricing|usage|audit|metrics|route|stats|doctor|serve|healthcheck|config|version>`.
 
 ## Architecture
 

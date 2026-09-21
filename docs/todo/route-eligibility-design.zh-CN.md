@@ -379,6 +379,12 @@ console 复用 `persistedProbeClass`（`internal/app/admin_providers.go:777`）�
 
 ### 5.5 持久化与 HA
 
+> 已实现（#326）。落地时收窄了一处：只有**长时**挂起落库——`RecoverOnCredentialRevision` 的
+> 无限期挂起，以及窗口超过 `routegate.PersistWindowThreshold`（5 分钟）的。可用性窗口默认
+> 30 秒、重启比它长，存它买不到任何东西；探针结论一个探测周期就重新填满。bucket 为
+> `route_suspensions`，schema 39。清除动作是 `DELETE /admin/api/v1/route-suspensions/{scope_id}`
+> 与离线的 `halro route clear-suspension`，两者都写 Audit `route_suspension.clear`。
+
 写 bbolt，**只在状态迁移时写**，不在请求路径上写——一个周期只迁移一次，成本可忽略。
 
 归 HA 设计 §5.2 的**节点本地类**，**不进 metadata journal、不复制**。理由：Replica 没有流量、学不到

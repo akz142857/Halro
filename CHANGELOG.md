@@ -32,6 +32,45 @@ semantic versioning.
   Marked `experimental`: the endpoint has gateway contract tests, and the
   official SDK black-box matrix does not yet call it.
 
+- Long route suspensions now survive a restart, and an operator can clear one.
+
+  The admission gate learns that an upstream will not serve a credential — a
+  dead key, an exhausted quota — and stops sending it traffic. Until now that
+  knowledge died with the process, so every restart handed the refusing upstream
+  a request from every caller again, which is the exact tax the gate exists to
+  remove.
+
+  Only the long refusals are stored, in a new `route_suspensions` bucket
+  (**metadata schema 39**): the indefinite credential suspensions, and windows
+  longer than five minutes, which in practice means quota. Probe verdicts refill
+  within one interval, an availability window is thirty seconds where a restart
+  is longer, and counters resetting on restart is ordinary — none of those earn
+  a write. Rows are written on state transition only, never on the request path:
+  a request that merely fails against an already-suspended scope opens no
+  transaction at all.
+
+  A credential replaced while the process was down still clears itself on the
+  first resolve after start, because the registry stamps current revisions onto
+  targets and the suspension records the revision it saw. Persistence composes
+  with the healing that already existed rather than needing a reconciliation
+  pass.
+
+  The clear arrives with it, and that is why it waited: `DELETE
+  /admin/api/v1/route-suspensions/{scope_id}` removes the stored row and commits
+  its audit record (`route_suspension.clear`) in the same transaction, the way
+  every administrative mutation here does. A clear that wrote nothing would have
+  had nowhere to commit one. The listing gains `scope_id` — an opaque handle,
+  because a scope is a pair and one half of one kind carries a NUL — and
+  `clearable`, so an operator can tell the durable suspensions from the
+  short-lived ones that end on their own.
+
+  Offline, `halro route suspensions` lists what the gate would be restored from
+  and `halro route clear-suspension --scope-id <id>` removes one, both holding
+  the data lock and both writing the same audit action.
+
+  Replacing the credential remains the first-choice remedy for a credential
+  refusal — it is the action that also fixes what the upstream was refusing.
+
 - A `discovery` scope on Gateway Keys, required alongside `inference` by
   `GET /v1/models` and `GET /v1/models/{id}`. A key without it calls the aliases
   it was given exactly as before and answers `403 gateway_key_scope_denied` when

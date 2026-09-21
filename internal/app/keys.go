@@ -45,7 +45,7 @@ func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name st
 	if err != nil {
 		return CreatedGatewayKey{}, fmt.Errorf("store gateway key: %w", err)
 	}
-	if err := appendOfflineKeyAudit(ctx, cfg, store, "gateway_key.create", key.ID); err != nil {
+	if err := appendOfflineAudit(ctx, cfg, store, "gateway_key.create", "gateway_key", key.ID); err != nil {
 		return CreatedGatewayKey{}, err
 	}
 	return CreatedGatewayKey{KeyID: key.ID, ProjectID: projectID, GatewayKey: plaintext}, nil
@@ -70,13 +70,25 @@ func DisableProjectKey(ctx context.Context, cfg config.Config, keyID string) err
 	if _, err := store.PutGatewayKey(ctx, key, key.Revision, nil); err != nil {
 		return fmt.Errorf("disable gateway key: %w", err)
 	}
-	return appendOfflineKeyAudit(ctx, cfg, store, "gateway_key.disable", key.ID)
+	return appendOfflineAudit(ctx, cfg, store, "gateway_key.disable", "gateway_key", key.ID)
 }
 
-// appendOfflineKeyAudit records a CLI key mutation in the same trusted chain the admin
-// API writes to. Issuing or revoking a gateway credential must leave a trace no matter
-// which surface performed it, so a failure here fails the command.
-func appendOfflineKeyAudit(ctx context.Context, cfg config.Config, store *boltstore.Store, action, keyID string) error {
+// appendOfflineAudit records a CLI mutation in the same trusted chain the admin
+// API writes to. An administrative action must leave a trace no matter which
+// surface performed it, so a failure here fails the command.
+//
+// It appends directly rather than through an audit intent, and that is not the
+// online path being skipped. The intent machinery exists because an HTTP
+// mutation commits to bbolt and appends to the audit log as two steps that a
+// crash could separate, leaving a change no record describes. An offline
+// command holds the data lock for the whole of its work, so there is no
+// response whose success could disagree with what was recorded.
+func appendOfflineAudit(
+	ctx context.Context,
+	cfg config.Config,
+	store *boltstore.Store,
+	action, targetType, targetID string,
+) error {
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return err
@@ -109,7 +121,7 @@ func appendOfflineKeyAudit(ctx context.Context, cfg config.Config, store *boltst
 	}
 	if _, err := auditLog.Append(ctx, audit.Event{
 		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: "local_cli",
-		Action: action, TargetType: "gateway_key", TargetID: keyID, Outcome: "success",
+		Action: action, TargetType: targetType, TargetID: targetID, Outcome: "success",
 	}); err != nil {
 		return err
 	}

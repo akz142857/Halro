@@ -215,7 +215,7 @@ data/
 
 ### 5.2 `halro.db` 按 `(bucket, key)` 分类
 
-`internal/store/bolt/store.go:59-121` 静态枚举 **40 个 bucket 与 `meta` 下 23 个 key**；另有两个在
+`internal/store/bolt/store.go:59-121` 静态枚举 **41 个 bucket 与 `meta` 下 23 个 key**；另有两个在
 别处：`bucketPricingMigrationResolutions`（`pricing_migration.go:19`，A 类）与
 `keyShutdownTruncatedAttempts`（`operational_counters.go:11`，E 类）。**分类粒度必须到 key**，因为
 `meta` 同时装着四类。Phase 0a 把这张表落成代码里的一张静态表，journal 入口按它决定记不记，并
@@ -228,6 +228,7 @@ data/
 | **C 节点派生** | `meta/usage_checkpoint` `meta/usage_rollup_state` `usage_checkpoint_segments` `usage_daily_rollup` `meta/token_guard_checkpoint` `meta/audit_checkpoint` `meta/ledger_chain_checkpoint` `meta/governance_checkpoint` `governance_checkpoint_segments` `meta/governance_journal_anchor` `audit_anchors` | **不进 journal**；每节点从自己的 Ledger/Audit/Governance 推进，Replica 只推进到 confirmed index（§6.2）。`token_guard_checkpoint` 含 `BlockedUntil` 封禁状态：它是派生的，但 Replica 上必须禁用 `runUsageMaintenance` 对它的写，否则提升后会被空 manager 覆盖 |
 | **D 密钥信封与格式门** | `meta/vault_keyring` `key_slot_descriptor` `audit_hmac_envelope` `ledger_hmac_envelope` `vault_key_check` | 经 journal 复制（Replica 打开 Ledger/Audit MAC 需要它们）；Master Key 本身带外（§10）；轮换 bridge 见 §6.1.4 |
 | **E 节点本地运营计数** | `meta/shutdown_truncated_attempts_total` | **不进 journal**。它是本节点 telemetry 的持久化背板（`internal/app/metrics.go:281`），不是账也不派生自任何日志 |
+| **C 节点派生（续）** | `route_suspensions` | **不进 journal、不复制**。准入挂起派生自本节点的流量：Replica 没有流量可学，提升后每个 target 用一次失败请求重新学到，代价是一次请求。复制它反而会把 Primary 观测到的拒绝当成 Replica 的事实。清除挂起是管理动作、与 `admin_audit_intents`（A 类）同事务提交——**这是唯一一处跨类同事务写**，Phase 0a 的 recorder 必须按"记录 A 类那一半、直通 C 类那一半"处理，而不是按混写拒绝 |
 
 ### 5.3 其它状态
 
@@ -239,7 +240,8 @@ data/
 | Master Key / Key Slot descriptor | 不经复制流；所有节点持同一密钥（§10） |
 | Usage 分区 | 不复制；只有 Primary 导出 Parquet |
 | failurecapture | 节点本地；切换后不承诺可读 |
-| 进程日志、Metrics、circuit breaker、连接池、告警队列 | 节点本地；只有 Primary 发告警与 Audit 锚点 |
+| 进程日志、Metrics、连接池、告警队列 | 节点本地；只有 Primary 发告警与 Audit 锚点 |
+| 准入挂起（`internal/routegate`） | 短时的（探针、可用性窗口）只在内存，重启即忘；长时的（凭证失效、额度用尽）落 `route_suspensions`，节点本地不复制，见 §5.2 |
 | 活跃 HTTP/SSE | 不复制；Primary 丢失即终止 |
 | 限流窗口、并发计数、Token Guard EWMA | 不复制；提升后从零开始，与重启一致 |
 | `cluster/*` | 节点本地；`state.json` 与 `ordering.journal` 带 MAC（§8.1） |
@@ -266,6 +268,8 @@ bbolt 只有 post-commit 钩子（`Tx.OnCommit`），没有 pre-commit 钩子；
 Begin(true)
 → 回调在 recorder 上写（Put / Delete / CreateBucketIfNotExists / DeleteBucket；bucket 以路径表示）
    recorder 按 §5.2 分类：C/E 类直通不记录；A/B/D 类记录；同一事务混写两类 → 拒绝
+   例外一处：`route_suspensions`（C）的清除与 `admin_audit_intents`（A）必须同事务，
+   见 §5.2 该行——recorder 记录 A 类那一半，C 类那一半直通
 → 回调全部成功
 → journal 追加一帧 {epoch, sequence, prev_hash, ops, MAC} 并 fsync
 → 同一事务内 Put meta/applied_journal_sequence

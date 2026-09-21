@@ -21,7 +21,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 38
+const schemaVersion uint64 = 39
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -96,6 +96,7 @@ var (
 	bucketRunGovernanceIdempotency     = []byte("run_governance_idempotency")
 	bucketRunGovernanceIndex           = []byte("run_governance_index")
 	bucketGovernanceCheckpointSegments = []byte("governance_checkpoint_segments")
+	bucketRouteSuspensions             = []byte("route_suspensions")
 	keySchemaVersion                   = []byte("schema_version")
 	keyVaultCheck                      = []byte("vault_key_check")
 	keyUsageCheckpoint                 = []byte("usage_checkpoint")
@@ -1076,6 +1077,15 @@ var migrations = []migration{
 		}
 		return migrationStep(step, "after_provider_egress_proxy_compatibility_fence")
 	}},
+	{version: 39, name: "route_suspensions", up: func(tx *bbolt.Tx, step func(string) error) error {
+		if err := migrationStep(step, "before_route_suspensions"); err != nil {
+			return err
+		}
+		if _, err := tx.CreateBucketIfNotExists(bucketRouteSuspensions); err != nil {
+			return err
+		}
+		return migrationStep(step, "after_route_suspensions")
+	}},
 }
 
 // splitJSONModeCapabilities replaces a stored capability set's json_mode member
@@ -1979,6 +1989,7 @@ func requiredBuckets() [][]byte {
 		bucketRunGovernanceIdempotency,
 		bucketRunGovernanceIndex,
 		bucketGovernanceCheckpointSegments,
+		bucketRouteSuspensions,
 	}
 }
 
