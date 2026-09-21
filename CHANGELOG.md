@@ -28,6 +28,17 @@ semantic versioning.
   never reached the upstream, and stays `connect`, because "the connection was
   not made" is the true thing to say about it.
 
+  That also ends a disagreement a stalled TLS handshake had with itself. The
+  handshake is bounded by a context and by the same deadline on the connection,
+  so which error surfaces is a race: the context's
+  `context.DeadlineExceeded`, or a read returning `*net.OpError`. The first was
+  already `timeout` and the second was `connect`, so one stall reported two
+  classes — and two statuses, `504` and `502` — depending on which deadline
+  fired first. Both now say `timeout`. Making them agree the other way would
+  mean deciding that every expired `attempt_connect_timeout` is a connection
+  failure rather than a timeout, which is a larger change than this one and has
+  not been made.
+
   **The status a caller receives changes with the class.** A response-header
   timeout answered `502 provider_error` and now answers `504 provider_timeout`,
   which is the status the condition has always deserved — a gateway whose

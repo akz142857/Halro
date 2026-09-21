@@ -111,24 +111,18 @@ func (d stalledDialer) DialContext(ctx context.Context, network, _ string) (net.
 	return dialer.DialContext(ctx, network, d.target)
 }
 
-// A stalled TLS handshake is decided before the timeout rule this change added,
-// and this pins that rather than leaving it to be reasoned about.
+// A stalled TLS handshake produces one of two errors, and which one is a race
+// between two deadlines set to the same instant: pinnedDialTLSContext bounds the
+// handshake with a context and also puts that same deadline on the conn. If the
+// context wins, crypto/tls returns context.DeadlineExceeded; if the conn wins, a
+// read returns *net.OpError{Op: "read"} carrying os.ErrDeadlineExceeded.
 //
-// The concern it answers is real in the abstract: the handshake runs after the
-// dial, so Unsent is false, and a conn-deadline read error would report
-// Timeout() — the shape the new rule matches. What the transport actually
-// produces is context.DeadlineExceeded, because pinnedDialTLSContext bounds the
-// handshake with a context and crypto/tls returns that context's error. So the
-// switch answers one case earlier, the class was already timeout before this
-// change, and nothing here moved.
-//
-// Which also settles the question the other way round: this failure reports
-// itself as a timeout on the path that produces it, so making the rarer shape
-// of the same failure say "connect" would leave one stall reporting two
-// different classes depending on which of two same-instant deadlines won a
-// race. Calling the connect timeout a connection failure instead is a separate
-// decision about every connect timeout, not a detail of this one.
-func TestAStalledTLSHandshakeIsDecidedBeforeTheNewRule(t *testing.T) {
+// Before this change the two disagreed — the first was already a timeout, the
+// second a connection failure — so the same stall reported two different classes
+// depending on which deadline fired first. This asserts they now agree, and it
+// asserts the invariant rather than the coin flip, because a test that pinned
+// one shape passed locally and failed in CI for no reason but timing.
+func TestAStalledTLSHandshakeIsATimeoutWhicheverDeadlineWins(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -175,12 +169,34 @@ func TestAStalledTLSHandshakeIsDecidedBeforeTheNewRule(t *testing.T) {
 	if requestErr == nil {
 		t.Fatal("the stalled handshake completed")
 	}
-	// The assertion that makes this a boundary and not a tautology: the error is
-	// answered by the context case, so the rule added here never sees it.
-	if !errors.Is(requestErr, context.DeadlineExceeded) {
-		t.Fatalf("err = %v, want the handshake's own context deadline: this test only pins the boundary while that holds", requestErr)
+	// Named so a failure says which shape it saw, since that is the one thing
+	// this test cannot control.
+	shape := "conn deadline (*net.OpError)"
+	if errors.Is(requestErr, context.DeadlineExceeded) {
+		shape = "handshake context"
+	}
+	t.Logf("shape = %s: %v", shape, requestErr)
+	// Not a tautology: whichever shape arrived has to actually be a timeout, or
+	// the stall was something else and this proves nothing about it.
+	if !errors.Is(requestErr, context.DeadlineExceeded) && !timedOut(requestErr) {
+		t.Fatalf("the stall was not a timeout in either shape: %v", requestErr)
 	}
 	if class := TransportClass(requestErr); class != ErrorTimeout {
-		t.Fatalf("Class = %q, want %q unchanged", class, ErrorTimeout)
+		t.Fatalf("Class = %q for the %s shape, want %q: both shapes of one stall must agree", class, shape, ErrorTimeout)
+	}
+}
+
+// The same invariant without the race, so the behaviour is pinned even on a
+// machine where one deadline always wins.
+func TestBothShapesOfAStalledHandshakeClassifyAlike(t *testing.T) {
+	for name, err := range map[string]error{
+		"handshake context": context.DeadlineExceeded,
+		"conn deadline":     &net.OpError{Op: "read", Net: "tcp", Err: os.ErrDeadlineExceeded},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if class := TransportClass(err); class != ErrorTimeout {
+				t.Fatalf("Class = %q, want %q", class, ErrorTimeout)
+			}
+		})
 	}
 }
