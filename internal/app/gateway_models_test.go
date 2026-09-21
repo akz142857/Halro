@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
 	"github.com/akz142857/Halro/internal/openaiapi"
 )
@@ -162,5 +164,45 @@ func TestDiscoveryStaysBoundedWithTheSourceLimiterTurnedOff(t *testing.T) {
 	}
 	if envelope.Error.Code != "rate_limit_exceeded" {
 		t.Fatalf("refusal envelope = %s, want an SDK-parseable rate_limit_exceeded", refusal.Body.String())
+	}
+}
+
+// The scope through the real router: a key minted without discovery calls the
+// alias it was handed and is told nothing about the rest of the Project's menu,
+// in the envelope an SDK parses.
+func TestModelsRefusesAKeyWithoutTheDiscoveryScope(t *testing.T) {
+	runtime, bootstrap := bootstrapForCapabilityTest(t)
+	narrowed, err := runtime.store.GetGatewayKey(context.Background(), bootstrap.KeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrowed.Scopes = []domain.GatewayScope{domain.GatewayScopeInference}
+	if _, err := runtime.store.PutGatewayKey(context.Background(), narrowed, narrowed.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.reloadAdminAuth(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	router := runtime.gatewayRouter()
+
+	for _, path := range []string{"/v1/models", "/v1/models/chat"} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer "+bootstrap.GatewayKey)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("%s: status=%d body=%s, want 403", path, response.Code, response.Body.String())
+		}
+		var envelope struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Error.Code != "gateway_key_scope_denied" {
+			t.Fatalf("%s: envelope = %s", path, response.Body.String())
+		}
 	}
 }

@@ -29,7 +29,14 @@ func validGovernanceID(value, prefix string) bool {
 type GatewayScope string
 
 const (
-	GatewayScopeInference      GatewayScope = "inference"
+	GatewayScopeInference GatewayScope = "inference"
+	// GatewayScopeDiscovery lets a key enumerate the aliases its Project was
+	// granted. It is separate from inference because the two are different
+	// disclosures: inference says which alias a key may call, and a key that
+	// was handed one alias by its operator had to guess to reach another.
+	// Listing hands the whole menu over in one call, which is a change to what
+	// a leaked key reveals rather than to what it may do.
+	GatewayScopeDiscovery      GatewayScope = "discovery"
 	GatewayScopeWorkUnitCreate GatewayScope = "work_unit:create"
 	GatewayScopeRunCreate      GatewayScope = "run:create"
 	GatewayScopeRunAttach      GatewayScope = "run:attach"
@@ -39,6 +46,7 @@ const (
 
 var gatewayScopes = []GatewayScope{
 	GatewayScopeInference,
+	GatewayScopeDiscovery,
 	GatewayScopeWorkUnitCreate,
 	GatewayScopeRunCreate,
 	GatewayScopeRunAttach,
@@ -48,6 +56,12 @@ var gatewayScopes = []GatewayScope{
 
 func ValidGatewayScope(scope GatewayScope) bool { return slices.Contains(gatewayScopes, scope) }
 
+// EffectiveGatewayScopes reads a key's scopes, defaulting an unset list to
+// inference alone.
+//
+// The default stays at inference and does not acquire discovery: a key that
+// names no scopes is the narrowest key, and widening what that means would
+// grant the enumeration to every existing key without anyone deciding to.
 func EffectiveGatewayScopes(scopes []GatewayScope) []GatewayScope {
 	if len(scopes) == 0 {
 		return []GatewayScope{GatewayScopeInference}

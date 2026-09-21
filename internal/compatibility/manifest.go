@@ -463,6 +463,7 @@ func modelsEndpointManifests() []EndpointCompatibilityManifest {
 	// now. Every deviation below exists because that difference is observable,
 	// and the shared wording is what both endpoints owe an integrator.
 	shared := []string{
+		"the key must carry the discovery scope as well as inference, and a key without it answers 403 gateway_key_scope_denied while still being able to call the aliases it was given: enumeration is granted per key rather than implied by the ability to call",
 		"every id is a public model alias, not a model identifier: the upstream provider and model behind it are never disclosed, an operator may repoint it at another deployment at any time without the id changing, and the alias namespace is the instance's rather than the Project's — a Project is granted aliases from it, and is listed only the ones it was granted",
 		"listing means the alias will not answer 404 model_not_found; it does not mean the next call succeeds, and two cases are permanent rather than transient: an alias whose deployments support a different operation is listed here and answers 400 unsupported_feature on use, because one flat list cannot be per-operation — the caller's operation is not known until they call",
 		"an alias whose every deployment is unhealthy or suspended is also listed, and the call answers 503: that state is a moment rather than a configuration, and omitting it would restore the empty model list with no explanation this endpoint exists to end",

@@ -373,7 +373,7 @@ export interface RunGovernanceConfig {
   max_open_work_units: number;
 }
 
-export type GatewayScope = "inference" | "work_unit:create" | "run:create" | "run:attach" | "governance:read" | "outcome:write";
+export type GatewayScope = "inference" | "discovery" | "work_unit:create" | "run:create" | "run:attach" | "governance:read" | "outcome:write";
 
 export interface GatewayKey {
   id: string;

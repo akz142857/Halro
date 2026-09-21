@@ -120,6 +120,12 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	if err != nil {
 		return BootstrapResult{}, err
 	}
+	// The bootstrap key exists so an operator can prove the instance serves
+	// their application, and the first call most SDK clients make is
+	// models.list(). It is granted discovery explicitly rather than by widening
+	// the unset-scope default, so every key an operator mints afterwards is
+	// still a deliberate choice about what it may enumerate.
+	gatewayKey.Scopes = []domain.GatewayScope{domain.GatewayScopeInference, domain.GatewayScopeDiscovery}
 	ciphertext, err := secretVault.EncryptCredential(
 		credentialID,
 		string(options.ProviderType),

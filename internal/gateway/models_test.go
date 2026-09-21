@@ -219,3 +219,49 @@ func TestModelsAnswersAnEmptyListRatherThanNothing(t *testing.T) {
 		t.Fatalf("serialized as %s", body)
 	}
 }
+
+// Enumeration is its own grant. Before this endpoint existed an application
+// knew only the alias its operator handed it, and a leaked key had to guess to
+// reach anything else the Project allows; listing hands over the whole menu at
+// once. That is a change to what a stolen key reveals rather than to what it
+// may do — the budget, the rate limits and Token Guard all still bound it — so
+// the operator decides per key, and a key that may call "chat" is not thereby
+// told that "reasoning-expensive" exists.
+func TestListingRequiresTheDiscoveryScopeSeparatelyFromInference(t *testing.T) {
+	f := newFixture(t, 0)
+	defer f.close()
+	f.key.Scopes = []domain.GatewayScope{domain.GatewayScopeInference}
+	if err := f.service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project}}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, call := range map[string]func() error{
+		"list":     func() error { _, err := f.service.Models(context.Background(), f.plaintext); return err },
+		"retrieve": func() error { _, err := f.service.Model(context.Background(), f.plaintext, "chat"); return err },
+	} {
+		var failure *Error
+		if err := call(); !errors.As(err, &failure) || failure.HTTPStatus != 403 || failure.Code != "gateway_key_scope_denied" {
+			t.Fatalf("%s: err = %v, want 403 gateway_key_scope_denied", name, err)
+		}
+	}
+	// The key it refuses is a working inference key: the scope withholds the
+	// menu, not the call.
+	if _, err := f.service.Chat(context.Background(), f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("the inference the key does hold was refused: %v", err)
+	}
+}
+
+// A key with no scopes at all is the narrowest key there is, and the unset
+// default must not quietly widen to include enumeration.
+func TestAKeyWithNoScopesCannotEnumerate(t *testing.T) {
+	f := newFixture(t, 0)
+	defer f.close()
+	f.key.Scopes = nil
+	if err := f.service.auth.Refresh(context.Background(), source{keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project}}); err != nil {
+		t.Fatal(err)
+	}
+	var failure *Error
+	if _, err := f.service.Models(context.Background(), f.plaintext); !errors.As(err, &failure) || failure.HTTPStatus != 403 {
+		t.Fatalf("err = %v, want 403: the unset default is inference alone", err)
+	}
+}

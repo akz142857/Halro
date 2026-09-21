@@ -286,7 +286,7 @@ base URL and nothing else.
 | Gateway | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, `/v1/moderations`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/rerank` |
 | Gateway (async and batch) | `/v1/files`, `/v1/batches`, `/v1/async/invocations` and their GET and cancel sub-paths |
 | Gateway (Anthropic) | `POST /v1/messages`, `POST /v1/messages/count_tokens` |
-| Gateway (discovery) | `GET /v1/models`, `GET /v1/models/{id}` — the aliases the calling key may name. A path allow-list that omits them leaves `models.list()` answering 404, which reads to an application team as "my Project has no models" |
+| Gateway (discovery) | `GET /v1/models`, `GET /v1/models/{id}` — the aliases the calling key may name, for a key granted the `discovery` scope. A path allow-list that omits them leaves `models.list()` answering 404, which reads to an application team as "my Project has no models" |
 | Gateway | `GET /health/live`, `GET /health/ready`, `GET /` |
 | Admin | `/admin`, `/admin/*` (the console), `/admin/api/v1/*`, `GET /health/live`, `GET /health/ready` |
 | Metrics | `GET /metrics`, `GET /health/live`, and `GET /audit/anchors` when the dead-man anchor sink is enabled |
@@ -318,6 +318,32 @@ identifier: an application holds a Gateway Key and an alias and never sees the
 Provider credential behind either. Where Halro terminates TLS on its own port,
 the base URL carries that port — `https://halro.example.com:8080/v1`. The
 path-split proxy above is how a deployment avoids a port number in the URL.
+
+### Who may enumerate a Project's aliases
+
+`GET /v1/models` answers with the aliases the calling key may put in a request's
+`model` field. That is a different disclosure from being able to call one: an
+application is handed the alias its operator chose for it, and before this
+endpoint existed a leaked key had to guess a name to reach anything else the
+Project allows. Listing hands over the whole menu in one call — including the
+expensive alias the application was never told about.
+
+It grants no authority the key did not already have. Budget, RPM/TPM,
+concurrency and Token Guard all still bound what it can spend, and nothing about
+the upstream is disclosed. What changes is what a stolen key reveals, so it is
+an operator's decision per key rather than an implication of being able to call:
+a Gateway Key enumerates only when it carries the **`discovery`** scope
+alongside `inference`. Without it the key calls the alias it was given and is
+told nothing about the others, answering `403 gateway_key_scope_denied`.
+
+Scopes are chosen when the key is minted, in the console's key dialog or through
+the Admin API; `halro key create` mints an inference-only key, as it does for
+every other scope. The bootstrap key is granted `discovery` so the first-run
+checklist can prove the instance answers `models.list()`.
+
+If alias names are not sensitive in your deployment, granting `discovery` to
+every application key is a legitimate choice — it is the one this instance will
+not make for you.
 
 ### What bounds a request
 
