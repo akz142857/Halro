@@ -6,6 +6,30 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- A response-header timeout was reported as a connection that could not be
+  established, which sent operators to check DNS, TLS and the egress proxy for
+  an upstream that had been reachable the whole time.
+
+  `TransportClass` recognised exactly one timeout, `context.DeadlineExceeded`.
+  Both HTTP transports answer an expired `gateway.attempt_response_header_timeout`
+  with a `net.Error` of their own instead — `http2: timeout awaiting response
+  headers`, and the HTTP/1 equivalent — which reports `Timeout()` and wraps no
+  sentinel, so it fell through to `connect`. The console then showed "无法建立
+  安全连接" beside "上游可能已执行或计费", which cannot both be true, and the
+  advice attached to that class pointed at the network rather than at the
+  timeout the operator had configured. It is the failure a slow reasoning model
+  produces on a long prompt, so the class was wrong exactly where it was most
+  consulted.
+
+  A timeout is now recognised by reporting itself as one, and only when the
+  request had already gone out: a dial or a resolution that ran out of time
+  never reached the upstream, and stays `connect`, because "the connection was
+  not made" is the true thing to say about it. Retry and accounting semantics
+  are unchanged — both follow from whether anything was sent, not from the
+  class — and `internal/routegate` already treated the two classes alike, so
+  nothing about routing or suspension moves.
 ### Added
 
 - `Idempotency-Key` on `POST /v1/chat/completions` and `POST /v1/embeddings`.
