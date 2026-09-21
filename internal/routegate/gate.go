@@ -66,6 +66,10 @@ type scopeState struct {
 	window         time.Duration
 	probing        int
 	evidence       Evidence
+	// persisted says a row for this scope is in the store, so a deletion has
+	// something to remove and a probe-driven clear does not open a transaction
+	// for a row that was never written.
+	persisted bool
 }
 
 func (s *scopeState) suspended() bool { return s.indefinite || !s.suspendedUntil.IsZero() }
@@ -98,6 +102,10 @@ type Gate struct {
 	// saw it reads as a quiet period.
 	transitions   map[provider.FailureReason]uint64
 	probeOutcomes map[probeOutcomeKey]uint64
+	// pending is what the current locked section decided the store owes,
+	// applied by flush once the mutex is released.
+	pending []persistAction
+	persist persistence
 }
 
 type probeOutcomeKey struct {
@@ -173,6 +181,7 @@ func (g *Gate) observeReporting(target provider.Target, observation Observation,
 	if !ok {
 		return false
 	}
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.observeLocked(scope, policy, observation, now, target.CredentialRevision)
@@ -197,6 +206,9 @@ func (g *Gate) observeLocked(
 		g.scopes[scope] = state
 	}
 	wasSuspended := state.suspended()
+	// What the store already believes, so an observation that changes nothing
+	// about when this scope comes back does not rewrite its row.
+	heldUntil, heldWindow, heldIndefinite := state.suspendedUntil, state.window, state.indefinite
 	state.policy = policy
 	state.failures++
 	if state.failures < policy.Threshold && !wasSuspended {
@@ -214,6 +226,7 @@ func (g *Gate) observeLocked(
 	if policy.Recovery == RecoverOnCredentialRevision {
 		state.indefinite = true
 		state.suspendedUntil = time.Time{}
+		g.notePersistIfMovedLocked(scope, state, heldUntil, heldWindow, heldIndefinite)
 		if !wasSuspended {
 			g.transitions[observation.Reason]++
 		}
@@ -234,6 +247,10 @@ func (g *Gate) observeLocked(
 		state.window = policy.MaxWindow
 	}
 	state.suspendedUntil = now.Add(state.window)
+	// Written on more than the first suspension: a failed probe doubles the
+	// window, and a row still naming the old one would restore a suspension
+	// that ends earlier than the gate decided it should.
+	g.notePersistIfMovedLocked(scope, state, heldUntil, heldWindow, heldIndefinite)
 	if !wasSuspended {
 		g.transitions[observation.Reason]++
 	}
@@ -247,12 +264,11 @@ func (g *Gate) observeLocked(
 // only the narrowest would leave a credential suspended by an earlier refusal
 // while requests using it are visibly succeeding.
 func (g *Gate) ObserveSuccess(target provider.Target, now time.Time) {
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, scope := range scopesOf(target) {
-		if state := g.scopes[scope]; state != nil {
-			delete(g.scopes, scope)
-		}
+		g.dropLocked(scope)
 	}
 }
 
@@ -294,7 +310,7 @@ func (g *Gate) blockingScopes(target provider.Target, now time.Time) []Scope {
 			continue
 		}
 		if staleLocked(scope, state, target) {
-			delete(g.scopes, scope)
+			g.dropLocked(scope)
 			continue
 		}
 		if state.probeable(now, g.config.HalfOpenMaxRequests) {
@@ -321,6 +337,7 @@ func (g *Gate) Filter(targets []provider.Target, now time.Time) []provider.Targe
 	if len(targets) == 0 {
 		return targets
 	}
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	admitted := make([]provider.Target, 0, len(targets))
@@ -345,6 +362,7 @@ type Lease struct {
 // Admit is the last check before an upstream call, and the one that claims a
 // probe slot. It returns ErrSuspended for a target the gate will not serve.
 func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var claimed []Scope
@@ -354,7 +372,7 @@ func (g *Gate) Admit(target provider.Target, now time.Time) (*Lease, error) {
 			continue
 		}
 		if staleLocked(scope, state, target) {
-			delete(g.scopes, scope)
+			g.dropLocked(scope)
 			continue
 		}
 		if !state.probeable(now, g.config.HalfOpenMaxRequests) {
@@ -451,20 +469,6 @@ func (g *Gate) Snapshot(now time.Time) []SuspensionSnapshot {
 	return result
 }
 
-// Clear removes one suspension. It is the operator's escape hatch for a scope
-// the gate is holding down for a reason that has been dealt with outside Halro's
-// view, and it is an administrative action: whoever wires it up owes an audit
-// record, which the gate itself cannot write.
-func (g *Gate) Clear(scope Scope) bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if _, present := g.scopes[scope]; !present {
-		return false
-	}
-	delete(g.scopes, scope)
-	return true
-}
-
 // recordProbeOutcome counts what the requests admitted through an expired window
 // found. It is the figure that says whether the windows are set anywhere near
 // right: a scope that recovers on nearly every probe is being suspended for too
@@ -547,6 +551,7 @@ func (g *Gate) Counts(now time.Time) SuspensionCounts {
 // already triggers. So replacing the secret really is the whole of the fix, in
 // the way the runbook says it is.
 func (g *Gate) ForgetOutdatedCredentials(revisions map[string]uint64) {
+	defer g.flush()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for scope, state := range g.scopes {
@@ -565,11 +570,11 @@ func (g *Gate) ForgetOutdatedCredentials(revisions map[string]uint64) {
 			// its provider disabled. Nothing it was suspended for can matter,
 			// and keeping the entry would leak one scope per deleted credential
 			// for the life of the process.
-			delete(g.scopes, scope)
+			g.dropLocked(scope)
 			continue
 		}
 		if current > state.evidence.CredentialRevision {
-			delete(g.scopes, scope)
+			g.dropLocked(scope)
 		}
 	}
 }

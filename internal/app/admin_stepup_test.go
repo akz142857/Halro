@@ -63,6 +63,14 @@ func TestEveryDestructiveDeleteRequiresStepUp(t *testing.T) {
 		"DELETE /admin/api/v1/security/mfa/authenticators/{}/pending": true,
 		"DELETE /admin/api/v1/settings/accounting/pending":            true,
 		"DELETE /admin/api/v1/model-capability-detections/{}":         true,
+		// Derived from traffic rather than authored: clearing a route
+		// suspension re-admits a target the gate stopped using, and the gate
+		// suspends it again on the next refusal. A wrongful clear costs one
+		// failed upstream request per scope, where every other delete here
+		// removes something an operator created. It is still an administrative
+		// action and still writes Audit; what it does not earn is a password
+		// prompt during the incident it is used in.
+		"DELETE /admin/api/v1/route-suspensions/{}": true,
 	}
 	parameter := regexp.MustCompile(`\{[^}]+\}`)
 	routes, ok := runtime.adminRouter().(chi.Routes)

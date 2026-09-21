@@ -1,11 +1,15 @@
 package app
 
 import (
+	"errors"
 	"net/http"
 	"sort"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/routegate"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/go-chi/chi/v5"
 )
 
 // routeSuspensionView is one scope the admission gate is holding out of service.
@@ -29,6 +33,16 @@ type routeSuspensionView struct {
 	// stated rather than inferred from an absent Until, because "no end time"
 	// and "ends at a time nobody recorded" would otherwise read the same.
 	Indefinite bool `json:"indefinite"`
+	// ScopeID is the handle the clear takes. A scope is a pair rather than an
+	// identifier, and one half of one kind of pair carries a NUL byte, so the
+	// listing hands out an opaque handle instead of asking a caller to spell a
+	// composite key into a URL.
+	ScopeID string `json:"scope_id"`
+	// Clearable says whether this suspension is one the clear can act on.
+	// Only the long refusals are stored, and only a stored row has somewhere to
+	// commit the clear's audit record; a thirty-second availability window ends
+	// on its own well before an operator could reach it.
+	Clearable bool `json:"clearable"`
 	// CredentialRevision is the revision the refusal was observed against.
 	// Saving a new secret advances it and clears the suspension, so this is the
 	// number an operator is comparing against when they wonder why it is still
@@ -39,9 +53,21 @@ type routeSuspensionView struct {
 func (r *Runtime) listAdminRouteSuspensions(writer http.ResponseWriter, request *http.Request) {
 	now := r.clockNow().UTC()
 	suspensions := r.routes.Snapshot(now)
+	stored := make(map[string]struct{})
+	if rows, err := r.store.ListRouteSuspensions(request.Context()); err == nil {
+		for _, row := range rows {
+			stored[row.ScopeID()] = struct{}{}
+		}
+	} else {
+		r.logger.Error("stored route suspensions could not be read", "error", err)
+	}
 	items := make([]routeSuspensionView, 0, len(suspensions))
 	for _, suspension := range suspensions {
+		scopeID := domain.EncodeRouteScopeID(string(suspension.Scope.Kind), suspension.Scope.Key)
+		_, clearable := stored[scopeID]
 		view := routeSuspensionView{
+			ScopeID:            scopeID,
+			Clearable:          clearable,
 			ScopeKind:          string(suspension.Scope.Kind),
 			ScopeKey:           routeSuspensionKey(suspension.Scope),
 			Reason:             failureReasonLabel(suspension.Reason),
@@ -81,4 +107,76 @@ func routeSuspensionKey(scope routegate.Scope) string {
 		}
 	}
 	return string(key)
+}
+
+// clearAdminRouteSuspension is the operator's escape hatch for a scope the gate
+// is still holding over something already dealt with upstream.
+//
+// It acts on stored suspensions only, and that is the whole reason this action
+// waited for persistence. Clearing is an administrative mutation, and here an
+// administrative record commits *with* the change it describes — every
+// …WithAuditIntent method pairs the two so they cannot diverge. A clear that
+// wrote nothing would have had nowhere to commit its record, and inventing a
+// standalone intent path would weaken exactly the property that pairing exists
+// for. The short suspensions are not stored, so they are not clearable; they
+// also end on their own inside five minutes, which is faster than an operator
+// can reach them.
+//
+// The stored row and the audit record commit together, and the live gate is
+// cleared in the same ordered step — the gate holds its own store writes still
+// for the whole of it. Without that, a failed attempt already queued could land
+// its row after the delete committed, and the next start would restore a
+// suspension the operator has an audit record for having cleared.
+//
+// A crash between the commit and the memory clear leaves the suspension in
+// memory until it ends or the process restarts, which is the safe direction:
+// the gate is the authority while it is running, and the row it would have been
+// restored from is already gone.
+func (r *Runtime) clearAdminRouteSuspension(writer http.ResponseWriter, request *http.Request) {
+	kind, key, ok := domain.DecodeRouteScopeID(chi.URLParam(request, "scopeID"))
+	if !ok {
+		adminNotFound(writer)
+		return
+	}
+	scope := routegate.Scope{Kind: routegate.ScopeKind(kind), Key: key}
+	intent, intentErr := r.newAdminAuditIntent(
+		request, "route_suspension.clear", "route_suspension",
+		domain.EncodeRouteScopeID(kind, key),
+	)
+	if intentErr != nil {
+		adminStoreError(writer)
+		return
+	}
+	err := r.routes.ClearDurable(scope, func() error {
+		return r.store.DeleteRouteSuspensionWithAuditIntent(request.Context(), kind, key, intent)
+	})
+	switch {
+	case errors.Is(err, boltstore.ErrNotFound):
+		// A suspension the gate is holding but never stored is a live one an
+		// operator can see and cannot clear. Saying so is better than a 404,
+		// which would read as "no such suspension" while the listing shows it.
+		if r.routeScopeIsSuspended(scope) {
+			writeJSON(writer, http.StatusConflict, map[string]string{
+				"code":  "route_suspension_not_clearable",
+				"error": "this suspension is not durable and ends on its own; only the long refusals can be cleared",
+			})
+			return
+		}
+		adminNotFound(writer)
+		return
+	case err != nil:
+		adminMutationError(writer, err)
+		return
+	}
+	r.completeAdminMutation(writer, request, *intent)
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Runtime) routeScopeIsSuspended(scope routegate.Scope) bool {
+	for _, suspension := range r.routes.Snapshot(r.clockNow().UTC()) {
+		if suspension.Scope == scope {
+			return true
+		}
+	}
+	return false
 }

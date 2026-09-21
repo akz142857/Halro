@@ -166,6 +166,7 @@ export const zhCN = {
     routeDeploymentUnavailable: "这条路由指向的模型部署不可用，请先检查该部署。",
     routeProviderUnavailable: "这条路由依赖的服务商连接不可用，请先检查该连接。",
     routeProviderAdapterUnavailable: "这条路由依赖的服务商能力接口不可用，请重新选择接口。",
+    routeSuspensionNotClearable: "这条挂起是短时的，会自行结束；只有长时拒绝（凭证失效、额度用尽）可以手动清除。",
     previewValuesNegative: "预演数值不能为负数。",
     adminRoleInvalid: "账户角色只能是管理员或只读。",
     idempotencyKeyRequired: "这次操作缺少幂等键，请关闭后重新开始。",

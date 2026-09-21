@@ -97,7 +97,9 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Why it is critical rather than a warning: this suspension has no window. A dead key does not heal, so nothing in Halro will end it — it clears only when the credential's revision advances, which means somebody replacing the secret. Until then every route on that credential is refused, and the only signal is this alert.
 - Immediate: `GET /admin/api/v1/route-suspensions` names the scope; the metric deliberately carries no credential id. Confirm upstream-side: expired key, revoked key, cancelled subscription, wrong account.
 - Act: replace the credential. Saving it advances its revision, and the topology activation that a credential mutation already runs drops the suspension then and there — no second step, no waiting for traffic. The alert clears on the next scrape.
-- If the refusal was resolved upstream without touching the stored secret, re-saving the credential unchanged still advances its revision and is the supported way to clear it. There is deliberately no "just clear it" action: every administrative change here commits its audit record with the change itself, and a clear that wrote nothing would have nowhere to commit one.
+- If the refusal was resolved upstream without touching the stored secret, re-saving the credential unchanged still advances its revision and remains the first-choice way to clear it: it is the action that also fixes what the upstream was refusing.
+- A direct clear exists for the case where the secret is right and the gate is holding a refusal already dealt with upstream: `DELETE /admin/api/v1/route-suspensions/{scope_id}`, where `scope_id` comes from the listing, or `halro route clear-suspension --scope-id <id>` while the instance is stopped. It is an administrative action and writes Audit (`route_suspension.clear`) in the same transaction that removes the stored row. The gate re-suspends on the next refusal, so clearing a credential that is still dead costs one request and tells you so.
+- This suspension survives a restart. It is one of the two kinds Halro stores — the other is quota — precisely so that a restart does not hand a dead key a request from every caller again.
 - Escalate: if the credential is shared by several Deployments, all of them are down together — check whether an approved fallback on a different credential exists before repointing traffic.
 
 ### HalroProviderQuotaExhausted
@@ -105,6 +107,8 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - Trigger: an upstream answered that its quota is spent, for five minutes.
 - Immediate: `GET /admin/api/v1/route-suspensions` names the scope; confirm the billing state upstream. Halro cannot tell a monthly allowance from a prepaid balance.
 - Note: the suspension ends on its own window and is retried with a real request, because no model-list probe consumes quota and therefore none can prove it came back. Expect recovery to lag a top-up by up to the current window, which doubles to six hours if the upstream keeps refusing.
+- After a top-up, the window is the only thing still holding the route out. `DELETE /admin/api/v1/route-suspensions/{scope_id}` ends it immediately — the same audited clear as for a credential — and the gate re-suspends if the upstream is still refusing.
+- This suspension survives a restart, so restarting Halro is not a way to shorten the window. That is deliberate: re-admitting every exhausted account on restart is the tax the admission gate exists to remove.
 - Escalate: if this alias has no unaffected fallback, the caller-facing answer is a 503 `all_candidates_suspended` naming quota — route traffic elsewhere or raise the account limit.
 
 ### HalroFallbackSaturation

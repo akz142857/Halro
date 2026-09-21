@@ -47,8 +47,8 @@ func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
 			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
 		}
 	}
-	if len(seen) != 18 {
-		t.Fatalf("top-level command descriptor count=%d, want 18", len(seen))
+	if len(seen) != 19 {
+		t.Fatalf("top-level command descriptor count=%d, want 19", len(seen))
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {

@@ -158,6 +158,7 @@ export const enUS = {
     routeDeploymentUnavailable: "The deployment this route points at is unavailable. Check that deployment first.",
     routeProviderUnavailable: "The provider connection this route depends on is unavailable. Check that connection first.",
     routeProviderAdapterUnavailable: "The capability interface this route depends on is unavailable. Choose the interface again.",
+    routeSuspensionNotClearable: "This suspension is short-lived and ends on its own; only the long refusals — a dead credential, an exhausted quota — can be cleared.",
     previewValuesNegative: "Preview values cannot be negative.",
     adminRoleInvalid: "An account is either an administrator or read-only.",
     idempotencyKeyRequired: "This operation needs an idempotency key. Close it and start again.",
