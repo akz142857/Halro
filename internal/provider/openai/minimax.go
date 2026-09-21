@@ -80,8 +80,26 @@ func classifyMiniMaxStatus(code int64) *provider.Error {
 		// Not retryable and not a rate limit, though it arrives looking like one.
 		// Retrying an insufficient balance cannot succeed and each attempt is
 		// another call on the operator's credential.
+		//
+		// The reason is what routing reads, and it has to be stated here: the
+		// gateway classifier works from status and code, and this arrives as a
+		// business code inside a body the rest of Halro does not parse. Without
+		// it an exhausted MiniMax account is an unclassified failure, which
+		// earns the availability policy — a deployment-scoped window that says
+		// nothing about the credential every other deployment shares.
 		result.Class = provider.ErrorAuthentication
+		result.FailureReason = provider.FailureReasonSubscriptionQuotaExhausted
 		result.Message = "MiniMax account balance is insufficient"
+	case 2056:
+		// The Token Plan's own ceiling, which is a second quota semantics: a
+		// five-hour window rather than a balance. It is the same conclusion for
+		// routing — the allowance is spent and no retry inside it can succeed —
+		// and it was previously falling to the default branch, where it was
+		// treated as an ambiguous 5xx and therefore as a call that may have
+		// been billed. A stated refusal ran nothing.
+		result.Class = provider.ErrorAuthentication
+		result.FailureReason = provider.FailureReasonSubscriptionQuotaExhausted
+		result.Message = "MiniMax usage limit for the current window is exhausted"
 	case 1001:
 		result.Class = provider.ErrorTimeout
 		result.Retryable = true

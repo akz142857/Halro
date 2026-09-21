@@ -197,7 +197,7 @@ ambiguous。OpenAI 面的 1008 形态无任何证据。
 [MiniMax-M2 #62](https://github.com/MiniMax-AI/MiniMax-M2/issues/62)、
 [kilocode #5047](https://github.com/Kilo-Org/kilocode/issues/5047)。
 
-### 3.3 429 今天被无条件判成限流
+### 3.3 429 曾被无条件判成限流（已修）
 
 `internal/gateway/failure.go:145` 把 429 无条件映射到 `rate_limited`，`insufficient_quota`
 在全仓零命中。任何用 429 承载额度耗尽的厂商，现在会按 `rate_limited` 策略
@@ -207,6 +207,25 @@ OpenAI 是否如此，正是 §3.1 第一行 A/B 两格要回答的。
 
 （#324 已把 `internal/circuit` 从 gateway 移走，`availabilityFailure` 不复存在；
 早期描述中"429 把断路器按住不开"的那半句已随之过时，分类这半句仍然成立。）
+
+**2026-09-21 已按 §4 的表落地**（`internal/gateway/refusal_codes.go`）。分流发生在读状态码
+**之前**，否则状态码优先的读法会把六家的耗尽一律答成 `rate_limited`。落地的范围与本文件的
+证据等级一致——全部是 **B（官方文档）**，一格没有往前多走：
+
+- 无需厂商上下文的 code（拼写本身足够独特）：OpenAI 的 `credit_balance_exhausted` /
+  `organization_spend_limit_exceeded` / `project_spend_limit_exceeded`、Kimi 的
+  `exceeded_current_quota_error`、Gemini 的 `quota_exceeded`、Anthropic 的 402 `billing_error`
+- 需要厂商上下文的业务码：BigModel `1113`（按 `ProviderBigModel` 门控——裸数字离开厂商就没有意义）
+- 按状态码区分的：DeepSeek 402（九家里唯一把两种条件分到两个状态码的）
+- MiniMax 的 `1008` 与 `2056` 在适配器里判（`internal/provider/openai/minimax.go`）：它们是
+  包在响应体里的业务码，网关的分类器只看状态码与 code，看不到它们。`2056` 此前落在 `default`
+  分支被判成 ambiguous 5xx，即"可能已计费"——而一次明确的拒绝什么都没跑
+
+**Anthropic 的 429 消费上限那一格仍然空着**，与 §4 最后一行的结论一致：它与普通限流同状态同
+type，唯一差别是缺 `retry-after`，用"缺一个头"当分类依据会把瞬时限流变成要人工清的无限期挂起。
+那一格等真实响应。
+
+仍未解锁的两项没有变：**窗口数值**与 **scope 宽窄**，两者都只有打真实请求才知道。
 
 ## 4. 取证之后
 

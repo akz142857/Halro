@@ -6,6 +6,48 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- An upstream that answered "your allowance is spent" was routed as though it
+  had answered "you are going too fast".
+
+  Six of the nine upstreams Halro speaks to put both on HTTP 429 and separate
+  them only by the code in the body — Kimi's own troubleshooting page says it
+  outright: *"429 is not a single cause. Check the `error.type` in the response
+  first."* Halro read the status and stopped, so every one of them was
+  classified `rate_limited`, which probes again after a second and doubles to a
+  minute. An exhausted balance does not clear on that timescale; Anthropic
+  documents its spend-cap refusal as carrying no `retry-after` and failing until
+  access resumes.
+
+  The consequences were the ones the admission gate was built to prevent.
+  `subscription_quota_exhausted` was produced by nothing in the tree, so the
+  quota policy — fifteen minutes doubling to six hours, the centrepiece of the
+  route-eligibility design — was unreachable on live traffic, and
+  `HalroProviderQuotaExhausted` watched a series that could never appear.
+
+  Refusals are now read for the code before the status. What landed is exactly
+  what each vendor publishes, and no further: OpenAI's `credit_balance_exhausted`
+  and its two spend-limit codes, Kimi's `exceeded_current_quota_error`, Gemini's
+  `quota_exceeded`, Anthropic's `402 billing_error`, BigModel's `1113` and
+  DeepSeek's `402`, with the two that need to know who said them gated on the
+  provider type — a bare number means nothing without its vendor. MiniMax's
+  `1008` and `2056` are classified in its adapter, because they arrive as
+  business codes inside a body the gateway's classifier never sees; `2056` was
+  previously read as an ambiguous 5xx, which is to say as a call that might have
+  been billed.
+
+  **One documented case is deliberately not detected.** Anthropic's monthly
+  spend cap arrives as `429 rate_limit_error` — the same status and the same
+  type as an ordinary rate limit — distinguishable only by a missing
+  `retry-after` header. Reading an indefinite condition out of an absent header
+  would turn a transient limit into a suspension a human has to clear, which is
+  the most expensive direction to be wrong in. It stays a rate limit until a
+  real response says otherwise.
+
+  The window lengths and whether a quota is metered per credential or per model
+  still wait on real refusals; the design takes the conservative side of both.
+
 ### Added
 
 - `GET /v1/models` and `GET /v1/models/{id}` on the Gateway listener. An

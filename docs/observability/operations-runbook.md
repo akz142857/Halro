@@ -104,12 +104,13 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 
 ### HalroProviderQuotaExhausted
 
-- Trigger: an upstream answered that its quota is spent, for five minutes.
+- Trigger: an upstream answered that its quota is spent, for five minutes. Halro reads that from the code in the refusal body rather than from the status: six of the nine upstreams put an exhausted allowance and an ordinary rate limit on the same 429, and the code is the only thing that separates them (`internal/gateway/refusal_codes.go`).
 - Immediate: `GET /admin/api/v1/route-suspensions` names the scope; confirm the billing state upstream. Halro cannot tell a monthly allowance from a prepaid balance.
 - Note: the suspension ends on its own window and is retried with a real request, because no model-list probe consumes quota and therefore none can prove it came back. Expect recovery to lag a top-up by up to the current window, which doubles to six hours if the upstream keeps refusing.
 - After a top-up, the window is the only thing still holding the route out. `DELETE /admin/api/v1/route-suspensions/{scope_id}` ends it immediately — the same audited clear as for a credential — and the gate re-suspends if the upstream is still refusing.
 - This suspension survives a restart, so restarting Halro is not a way to shorten the window. That is deliberate: re-admitting every exhausted account on restart is the tax the admission gate exists to remove.
 - Escalate: if this alias has no unaffected fallback, the caller-facing answer is a 503 `all_candidates_suspended` naming quota — route traffic elsewhere or raise the account limit.
+- One case is deliberately not detected: Anthropic's monthly spend cap answers with the same status and the same `rate_limit_error` type as an ordinary rate limit, and is separable only by the absence of a `retry-after` header. Halro reads it as a rate limit, so an Anthropic account that has hit its spend cap never reaches this alert: it shows as `halro_route_suspended{reason="rate_limited"}` on the Anthropic credential, retried on a one-second-to-one-minute window that cannot succeed until the cap is raised. Inferring an indefinite suspension from a missing header would be the expensive way to be wrong, so the signal to watch for is a rate-limit suspension that never clears.
 
 ### HalroFallbackSaturation
 
