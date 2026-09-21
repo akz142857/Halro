@@ -248,14 +248,6 @@ func SafeProviderIdentifier(value string) string {
 	return code + ":" + parameter
 }
 
-// RefusalParameter is the parameter half of a narrowed provider identifier, or
-// empty when the upstream named no parameter.
-//
-// It exists so a caller can be told which field of their own request was
-// refused. The code half stays behind: it is the upstream's vocabulary, and
-// naming it to an application would publish which provider is behind a public
-// model alias. The parameter is the caller's own field path — they wrote it —
-// so returning it discloses nothing they do not already have.
 // RefusalCode is the code half of a narrowed provider identifier, which is the
 // half that names what went wrong.
 //
@@ -270,6 +262,14 @@ func RefusalCode(value string) string {
 	return boundedIdentifier(code)
 }
 
+// RefusalParameter is the parameter half of a narrowed provider identifier, or
+// empty when the upstream named no parameter.
+//
+// It exists so a caller can be told which field of their own request was
+// refused. The code half stays behind: it is the upstream's vocabulary, and
+// naming it to an application would publish which provider is behind a public
+// model alias. The parameter is the caller's own field path — they wrote it —
+// so returning it discloses nothing they do not already have.
 func RefusalParameter(value string) string {
 	_, parameter, joined := strings.Cut(strings.TrimSpace(value), ":")
 	if !joined {
