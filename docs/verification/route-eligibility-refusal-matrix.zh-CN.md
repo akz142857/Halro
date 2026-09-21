@@ -212,18 +212,31 @@ OpenAI 是否如此，正是 §3.1 第一行 A/B 两格要回答的。
 **之前**，否则状态码优先的读法会把六家的耗尽一律答成 `rate_limited`。落地的范围与本文件的
 证据等级一致——全部是 **B（官方文档）**，一格没有往前多走：
 
-- 无需厂商上下文的 code（拼写本身足够独特）：OpenAI 的 `credit_balance_exhausted` /
-  `organization_spend_limit_exceeded` / `project_spend_limit_exceeded`、Kimi 的
-  `exceeded_current_quota_error`、Gemini 的 `quota_exceeded`、Anthropic 的 402 `billing_error`
+- 无需厂商上下文的 code（拼写本身足够独特）：OpenAI 的 `insufficient_quota` /
+  `credit_balance_exhausted` / `organization_spend_limit_exceeded` /
+  `project_spend_limit_exceeded`、Kimi 的 `exceeded_current_quota_error`、
+  Anthropic 的 402 `billing_error`。`insufficient_quota` 是 §3.1 那一行没列、但真实耗尽账户
+  最可能返回的那个旧拼写——本文件此前只在 §3.3 提到"它在全仓零命中"，把它当成缺席而不是遗漏
 - 需要厂商上下文的业务码：BigModel `1113`（按 `ProviderBigModel` 门控——裸数字离开厂商就没有意义）
 - 按状态码区分的：DeepSeek 402（九家里唯一把两种条件分到两个状态码的）
 - MiniMax 的 `1008` 与 `2056` 在适配器里判（`internal/provider/openai/minimax.go`）：它们是
   包在响应体里的业务码，网关的分类器只看状态码与 code，看不到它们。`2056` 此前落在 `default`
   分支被判成 ambiguous 5xx，即"可能已计费"——而一次明确的拒绝什么都没跑
 
-**Anthropic 的 429 消费上限那一格仍然空着**，与 §4 最后一行的结论一致：它与普通限流同状态同
-type，唯一差别是缺 `retry-after`，用"缺一个头"当分类依据会把瞬时限流变成要人工清的无限期挂起。
-那一格等真实响应。
+**两格刻意空着**，都在等真实响应而不是等更聪明的猜法：
+
+- **Anthropic 的 429 消费上限**，与 §4 最后一行的结论一致：它与普通限流同状态同 type，唯一差别
+  是缺 `retry-after`，用"缺一个头"当分类依据会把瞬时限流变成要人工清的无限期挂起。
+- **Gemini 的日配额**，这一格是落地时才查出来的：`internal/provider/gemini/adapter.go` 的
+  `refusalCode` 取的是 `error.status`，429 时那是 RPC 名 `RESOURCE_EXHAUSTED`，**日配额与每分钟
+  限流取到同一个值** —— 正是本文件要说的那种歧义。§3.1 里写的 `quota_exceeded` /
+  `rate_limit_exceeded` 落在这个适配器读不到的地方。按那个拼写建表会得到一条永不命中的死条目，
+  而"读起来像有覆盖、其实没有"正是这次要修的病本身。填上它需要的是**一次真实的 Gemini 配额
+  拒绝**，看清楚区分信息在哪个字段（多半是 `error.details[].reason`，但没观测到就不能写）。
+
+另有一处落地时加固的：上游若点名了被拒的字段，code 会以 `code:param` 形式到达
+（`limitedErrorMessage` 在解析时就拼好），因此查表只比对 **code 那一半**
+（`provider.RefusalCode`）。按整串比对会漏掉每一条顺带点名了参数的拒绝。
 
 仍未解锁的两项没有变：**窗口数值**与 **scope 宽窄**，两者都只有打真实请求才知道。
 

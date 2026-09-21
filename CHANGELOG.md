@@ -26,24 +26,31 @@ semantic versioning.
   route-eligibility design — was unreachable on live traffic, and
   `HalroProviderQuotaExhausted` watched a series that could never appear.
 
-  Refusals are now read for the code before the status. What landed is exactly
-  what each vendor publishes, and no further: OpenAI's `credit_balance_exhausted`
-  and its two spend-limit codes, Kimi's `exceeded_current_quota_error`, Gemini's
-  `quota_exceeded`, Anthropic's `402 billing_error`, BigModel's `1113` and
-  DeepSeek's `402`, with the two that need to know who said them gated on the
-  provider type — a bare number means nothing without its vendor. MiniMax's
+  Refusals are now read for the code before the status, and on the code half
+  alone: an upstream that names the field it refused arrives as `code:param`,
+  and a table keyed on the whole identifier would miss it. What landed is
+  exactly what each vendor publishes, and no further: OpenAI's
+  `insufficient_quota`, `credit_balance_exhausted` and its two spend-limit
+  codes, Kimi's `exceeded_current_quota_error`, Anthropic's `402 billing_error`,
+  BigModel's `1113` and DeepSeek's `402`, with the two that need to know who
+  said them gated on the provider type — a bare number means nothing without its
+  vendor. MiniMax's
   `1008` and `2056` are classified in its adapter, because they arrive as
   business codes inside a body the gateway's classifier never sees; `2056` was
   previously read as an ambiguous 5xx, which is to say as a call that might have
   been billed.
 
-  **One documented case is deliberately not detected.** Anthropic's monthly
-  spend cap arrives as `429 rate_limit_error` — the same status and the same
-  type as an ordinary rate limit — distinguishable only by a missing
-  `retry-after` header. Reading an indefinite condition out of an absent header
-  would turn a transient limit into a suspension a human has to clear, which is
-  the most expensive direction to be wrong in. It stays a rate limit until a
-  real response says otherwise.
+  **Two documented cases are deliberately not detected**, and both wait for a
+  real response rather than a cleverer guess. Anthropic's monthly spend cap
+  arrives as `429 rate_limit_error` — the same status and the same type as an
+  ordinary rate limit — distinguishable only by a missing `retry-after` header;
+  reading an indefinite condition out of an absent header would turn a transient
+  limit into a suspension a human has to clear. Gemini's daily quota is the same
+  shape one level down: its adapter surfaces `error.status`, which for a 429 is
+  the RPC name `RESOURCE_EXHAUSTED` for both the daily quota and the per-minute
+  limit, so the distinction lives somewhere the adapter does not read. An entry
+  for a spelling no Gemini path produces would be unreachable code that reads as
+  coverage, which is the failure being fixed here.
 
   The window lengths and whether a quota is metered per credential or per model
   still wait on real refusals; the design takes the conservative side of both.

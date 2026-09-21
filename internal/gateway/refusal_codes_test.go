@@ -22,6 +22,7 @@ func refusal(status int, code string) *provider.Error {
 func TestAnExhaustedAllowanceIsNotReadAsARateLimit(t *testing.T) {
 	openAI := provider.Target{ProfileID: domain.ProfileOpenAIChatEmbeddings}
 	for _, code := range []string{
+		"insufficient_quota",
 		"credit_balance_exhausted",
 		"organization_spend_limit_exceeded",
 		"project_spend_limit_exceeded",
@@ -34,10 +35,6 @@ func TestAnExhaustedAllowanceIsNotReadAsARateLimit(t *testing.T) {
 	if got := canonicalProviderFailureReason(refusal(429, "exceeded_current_quota_error"), kimi); got != provider.FailureReasonSubscriptionQuotaExhausted {
 		t.Fatalf("Kimi reason = %q, want quota", got)
 	}
-	gemini := provider.Target{ProfileID: domain.ProfileGeminiText}
-	if got := canonicalProviderFailureReason(refusal(429, "quota_exceeded"), gemini); got != provider.FailureReasonSubscriptionQuotaExhausted {
-		t.Fatalf("Gemini daily quota reason = %q, want quota", got)
-	}
 	// The same vendors' rate limits keep the reason they had.
 	for _, item := range []struct {
 		target provider.Target
@@ -45,7 +42,6 @@ func TestAnExhaustedAllowanceIsNotReadAsARateLimit(t *testing.T) {
 	}{
 		{kimi, "rate_limit_reached_error"},
 		{kimi, "engine_overloaded_error"},
-		{gemini, "rate_limit_exceeded"},
 		{openAI, "rate_limit_exceeded"},
 	} {
 		if got := canonicalProviderFailureReason(refusal(429, item.code), item.target); got != provider.FailureReasonRateLimited {
@@ -185,5 +181,36 @@ func TestAQuotaRefusalEarnsTheQuotaPolicyEndToEnd(t *testing.T) {
 	remaining := time.Until(suspension.Until)
 	if remaining < 14*time.Minute || remaining > 15*time.Minute {
 		t.Fatalf("window = %s, want the quota policy's 15 minutes rather than the rate limiter's second", remaining)
+	}
+}
+
+// An upstream that names the field it refused arrives as "code:param", and a
+// table keyed on the whole identifier would miss every refusal that carries
+// one. OpenAI joins the two halves at the point it decodes the body, so this is
+// the ordinary shape rather than an exotic one.
+func TestAQuotaCodeIsReadEvenWhenItNamesAParameter(t *testing.T) {
+	openAI := provider.Target{ProfileID: domain.ProfileOpenAIChatEmbeddings}
+	if got := canonicalProviderFailureReason(refusal(429, "insufficient_quota:model"), openAI); got != provider.FailureReasonSubscriptionQuotaExhausted {
+		t.Fatalf("reason = %q, want quota: the parameter half must not defeat the table", got)
+	}
+	bigModel := provider.Target{ProfileID: domain.ProfileBigModelCNChatEmbeddings}
+	if got := canonicalProviderFailureReason(refusal(429, "1113:model"), bigModel); got != provider.FailureReasonSubscriptionQuotaExhausted {
+		t.Fatalf("reason = %q, want quota", got)
+	}
+}
+
+// Gemini's cell is empty on purpose, and this is the guard that keeps it from
+// being filled by a spelling no Gemini path produces.
+//
+// The adapter surfaces error.status, which for a 429 is the RPC name
+// RESOURCE_EXHAUSTED — the same value for the daily quota and for the
+// per-minute limit. An entry keyed on anything else would be unreachable code
+// that reads as coverage, which is the failure this whole change was fixing.
+func TestGeminiHasNoQuotaEntryUntilARealRefusalShowsOne(t *testing.T) {
+	gemini := provider.Target{ProfileID: domain.ProfileGeminiText}
+	for _, code := range []string{"RESOURCE_EXHAUSTED", "quota_exceeded", "rate_limit_exceeded"} {
+		if got := canonicalProviderFailureReason(refusal(429, code), gemini); got != provider.FailureReasonRateLimited {
+			t.Fatalf("Gemini %s reason = %q; the cell is deliberately unimplemented", code, got)
+		}
 	}
 }

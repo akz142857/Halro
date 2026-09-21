@@ -256,6 +256,20 @@ func SafeProviderIdentifier(value string) string {
 // naming it to an application would publish which provider is behind a public
 // model alias. The parameter is the caller's own field path — they wrote it —
 // so returning it discloses nothing they do not already have.
+// RefusalCode is the code half of a narrowed provider identifier, which is the
+// half that names what went wrong.
+//
+// The two halves are joined when an upstream names the field it refused, so a
+// caller matching a code against a known set has to ask for this rather than
+// comparing the whole identifier: "insufficient_quota" and
+// "insufficient_quota:model" are the same conclusion about the account, and a
+// set that only held the first would miss every refusal that happened to name a
+// parameter.
+func RefusalCode(value string) string {
+	code, _, _ := strings.Cut(strings.TrimSpace(value), ":")
+	return boundedIdentifier(code)
+}
+
 func RefusalParameter(value string) string {
 	_, parameter, joined := strings.Cut(strings.TrimSpace(value), ":")
 	if !joined {
