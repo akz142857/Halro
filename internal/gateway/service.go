@@ -1272,7 +1272,7 @@ func (s *Service) generate(
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
-	claim, err := s.admitInferenceIdempotency(ctx, principal, targets, publicModel, canonical)
+	ctx, claim, err := s.admitInferenceIdempotency(ctx, principal, targets, publicModel, canonical)
 	if err != nil {
 		return semantic.GenerateResult{}, err
 	}
@@ -1387,6 +1387,10 @@ func (s *Service) executeGenerate(
 			if resolveErr != nil {
 				abortErr := attempt.abort("unsupported_feature")
 				return semantic.GenerateResult{}, gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
+			}
+			if markErr := noteInferenceDispatch(ctx); markErr != nil {
+				abortErr := attempt.abort("resource_store_unavailable")
+				return semantic.GenerateResult{}, errors.Join(markErr, abortErr)
 			}
 			semanticResponse, providerErr := generation.Generate(ctx, provider.GenerateCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
 			settlement := settlementForResult(
@@ -2340,7 +2344,7 @@ func (s *Service) generateStream(
 	// Before a single byte is written, so a repeat is an ordinary HTTP refusal
 	// rather than an error event inside a stream the caller has already been
 	// told is starting.
-	claim, err := s.admitInferenceIdempotency(ctx, principal, targets, publicModel, canonical)
+	ctx, claim, err := s.admitInferenceIdempotency(ctx, principal, targets, publicModel, canonical)
 	if err != nil {
 		return err
 	}
@@ -2441,6 +2445,10 @@ func (s *Service) generateStream(
 			if resolveErr != nil {
 				abortErr := attempt.abort("unsupported_feature")
 				return gatewayError("unsupported_feature", "generation primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
+			}
+			if markErr := noteInferenceDispatch(ctx); markErr != nil {
+				abortErr := attempt.abort("resource_store_unavailable")
+				return errors.Join(markErr, abortErr)
 			}
 			semanticUsage, providerErr := generation.GenerateStream(ctx, provider.GenerateCall{
 				RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical,
@@ -2556,7 +2564,7 @@ func (s *Service) Embeddings(
 	// Fingerprinted on the request as the caller sent it, before redaction: two
 	// bodies that differ only in what a policy rewrites are still two different
 	// requests, and a key reused across them has to be refused.
-	claim, err := s.admitInferenceIdempotency(ctx, principal, targets, request.Model, request)
+	ctx, claim, err := s.admitInferenceIdempotency(ctx, principal, targets, request.Model, request)
 	if err != nil {
 		return openaiapi.EmbeddingResponse{}, err
 	}
@@ -2624,6 +2632,10 @@ func (s *Service) Embeddings(
 			if resolveErr != nil {
 				abortErr := attempt.abort("unsupported_feature")
 				return openaiapi.EmbeddingResponse{}, gatewayError("unsupported_feature", "embedding primitive is unavailable", 400, errors.Join(resolveErr, abortErr))
+			}
+			if markErr := noteInferenceDispatch(ctx); markErr != nil {
+				abortErr := attempt.abort("resource_store_unavailable")
+				return openaiapi.EmbeddingResponse{}, errors.Join(markErr, abortErr)
 			}
 			semanticResponse, providerErr := embedding.EmbedSemantic(ctx, provider.EmbedCall{RequestID: requestID, ProviderModel: target.ProviderModel, Request: canonical})
 			response := openaiapi.EmbeddingResponse{}

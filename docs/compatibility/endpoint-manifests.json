@@ -67,7 +67,8 @@
       "a repeat while the first request is still running, or after one whose outcome nobody can determine, answers 409 idempotency_in_progress; it is a refusal rather than a wait, because holding a socket against another request's outcome is not something this gateway does",
       "the same key with a different request body answers 409 idempotency_conflict, and keys are scoped to one Project so two Projects may use the same external key",
       "a request with no Idempotency-Key behaves exactly as before and writes nothing durable; the key is what buys the record",
-      "a key is remembered for 24 hours",
+      "a request the gateway refuses on its own — a capability filter, a token limit, a Project budget — never reached the upstream and gives its key back, so a retry is answered by the limit it broke rather than by a conflict about a call nobody made",
+      "a key is remembered for 24 hours, whatever state its request ended in, after which the same key is free again — including for a different request",
       "a streaming repeat is refused before the stream opens, as an ordinary HTTP error rather than an event inside a stream the caller has been told is starting"
     ],
     "provider_profiles": [
@@ -645,7 +646,8 @@
       "a repeat while the first request is still running, or after one whose outcome nobody can determine, answers 409 idempotency_in_progress; it is a refusal rather than a wait, because holding a socket against another request's outcome is not something this gateway does",
       "the same key with a different request body answers 409 idempotency_conflict, and keys are scoped to one Project so two Projects may use the same external key",
       "a request with no Idempotency-Key behaves exactly as before and writes nothing durable; the key is what buys the record",
-      "a key is remembered for 24 hours"
+      "a request the gateway refuses on its own — a capability filter, a token limit, a Project budget — never reached the upstream and gives its key back, so a retry is answered by the limit it broke rather than by a conflict about a call nobody made",
+      "a key is remembered for 24 hours, whatever state its request ended in, after which the same key is free again — including for a different request"
     ],
     "provider_profiles": [
       "openai.chat-embeddings.v1",

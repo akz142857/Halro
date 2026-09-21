@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/auth"
 	"github.com/akz142857/Halro/internal/domain"
@@ -208,13 +210,23 @@ func TestAStreamingRepeatIsRefusedBeforeTheStreamOpens(t *testing.T) {
 // dispatching would freeze the key until it expired.
 func TestAReservationFromADeadProcessIsReclaimed(t *testing.T) {
 	f := newDeferredFixture(t)
+	// Two injections, because a crash is both of them at once: the in-flight
+	// write never lands, and nothing afterwards gets to tidy up. Failing only
+	// the first would leave a request that releases its own unused reservation,
+	// which is the other fix and has its own test.
 	f.store.failInFlightWrite = true
+	f.store.failReservationDelete = true
 	ctx := keyed("crashed-before-dispatch")
 	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err == nil {
 		t.Fatal("the injected write failure did not surface")
 	}
 	if f.adapter.calls != 0 {
 		t.Fatalf("the upstream was called before the reservation was in flight: %d", f.adapter.calls)
+	}
+	if !slices.ContainsFunc(f.store.all(), func(record domain.ProviderResource) bool {
+		return record.Kind == domain.ResourceInferenceCall
+	}) {
+		t.Fatal("no reservation survived, so this test would pass without reclaiming anything")
 	}
 	// Another process's reservation: the data directory is exclusive, so a
 	// reservation naming an instance that is not this one belongs to a process
@@ -233,5 +245,167 @@ func TestAReservationFromADeadProcessIsReclaimed(t *testing.T) {
 	}
 	if f.adapter.calls != 1 {
 		t.Fatalf("calls = %d, want the reclaimed key to reach the upstream once", f.adapter.calls)
+	}
+}
+
+// A request this gateway refuses on its own never reached the upstream, so it
+// has nothing to protect: the key goes back, and the caller's retry gets the
+// same reason again rather than a conflict about a call nobody made.
+func TestARefusalBeforeDispatchGivesTheKeyBack(t *testing.T) {
+	f := newDeferredFixtureWith(t, func(project *domain.Project) { project.MaxInputTokens = 1 })
+	ctx := keyed("refused-before-dispatch")
+
+	_, err := f.service.Chat(ctx, f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.Code != "token_limit_exceeded" {
+		t.Fatalf("err = %v, want 400 token_limit_exceeded", err)
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("a refused request reached the upstream: %d calls", f.adapter.calls)
+	}
+	for _, record := range f.store.all() {
+		if record.Kind == domain.ResourceInferenceCall {
+			t.Fatalf("an undispatched request kept its key: %+v", record)
+		}
+	}
+	// The retry is answered by the limit it broke, not by the key it reused.
+	_, err = f.service.Chat(ctx, f.plaintext, chatRequest())
+	if !errors.As(err, &refusal) || refusal.Code != "token_limit_exceeded" {
+		t.Fatalf("retry err = %v, want the same refusal rather than a conflict", err)
+	}
+}
+
+// The same at the innermost stage there is: the request got as far as the write
+// that records the dispatch, and failed on it. Nothing was sent, so the key is
+// still the caller's — the only reason it would be kept is a call that was
+// never made.
+func TestAFailureAtTheDispatchMarkGivesTheKeyBack(t *testing.T) {
+	f := newDeferredFixture(t)
+	f.store.failInFlightWrite = true
+	ctx := keyed("failed-to-record-the-dispatch")
+
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the injected write failure did not surface")
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("the upstream was called without the dispatch being recorded: %d calls", f.adapter.calls)
+	}
+	for _, record := range f.store.all() {
+		if record.Kind == domain.ResourceInferenceCall {
+			t.Fatalf("an undispatched request kept its key: %+v", record)
+		}
+	}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("the released key was still refused: %v", err)
+	}
+}
+
+// The contract says a record expires in 24 hours and that expiry permits a new
+// execution. This is that sentence.
+func TestAnExpiredKeyIsUsableAgain(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("expires-and-comes-back")
+
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the key was not spent while it was still live")
+	}
+	now = now.Add(inferenceIdempotencyTTL + time.Minute)
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatalf("an expired key was still refused: %v", err)
+	}
+	if f.adapter.calls != 2 {
+		t.Fatalf("calls = %d, want 2: the expired key must reach the upstream again", f.adapter.calls)
+	}
+}
+
+// A key nobody remembers issuing is free for whatever it is next used for, so
+// expiry is decided ahead of the fingerprint rather than after it.
+func TestAnExpiredKeyMayBeUsedForADifferentRequest(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("expires-then-reused")
+
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(inferenceIdempotencyTTL + time.Minute)
+	other := chatRequest()
+	other.Messages[0].Content = json.RawMessage(`"a different question entirely"`)
+	if _, err := f.service.Chat(ctx, f.plaintext, other); err != nil {
+		t.Fatalf("an expired key was refused for a new request: %v", err)
+	}
+}
+
+// A failed call spends its key, and the record that spends it has to leave when
+// the key does. Every other resource kind withholds a record in this state
+// because something may still exist upstream; this one owns nothing, and
+// withholding it would refuse the key for the life of the install.
+func TestAFailedKeyedRecordIsReleasedByTheReaper(t *testing.T) {
+	now := frozen()
+	f := newDeferredFixtureAt(t, func() time.Time { return now }, nil)
+	ctx := keyed("failed-then-reaped")
+	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Ambiguous: true, StatusCode: 500, Message: "upstream failed"}
+	if _, err := f.service.Chat(ctx, f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the failure did not reach the caller")
+	}
+	f.adapter.err = nil
+
+	var spent domain.ProviderResource
+	for _, record := range f.store.all() {
+		if record.Kind == domain.ResourceInferenceCall {
+			spent = record
+		}
+	}
+	if spent.ID == "" {
+		t.Fatal("the failed call did not record its key")
+	}
+	if spent.CreationStatus != creationUnknown {
+		t.Fatalf("CreationStatus = %q, want the ambiguous outcome", spent.CreationStatus)
+	}
+	if !spent.ExpiryReapable() {
+		t.Fatal("a failed call's record is not reapable, so its key is spent for good")
+	}
+	now = now.Add(inferenceIdempotencyTTL + time.Minute)
+	if err := f.service.CleanupExpiredProviderResource(context.Background(), spent); err != nil {
+		t.Fatalf("the reaper refused the expired record: %v", err)
+	}
+	if _, err := f.store.ProviderResource(context.Background(), spent.ProjectID, spent.ID); err == nil {
+		t.Fatal("the expired record survived the reaper")
+	}
+}
+
+// The one question this machinery answers is "has this key been used", and a
+// store that cannot answer it has not answered "no". Reading the failure as a
+// free key would admit the duplicate billed call the header was sent to stop.
+func TestAKeyThatCannotBeCheckedIsRefusedRatherThanAdmitted(t *testing.T) {
+	f := newDeferredFixture(t)
+	f.store.failIdempotencyLookup = true
+	_, err := f.service.Chat(keyed("store-cannot-say"), f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != 503 {
+		t.Fatalf("err = %v, want 503: an unreadable store must not be read as a free key", err)
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("an unverified key reached the upstream: %d calls", f.adapter.calls)
+	}
+}
+
+// A store that cannot write and a key another request holds are two different
+// operational facts, and an operator reading a 409 storm needs to know which
+// one they have.
+func TestAReservationOutageIsNotReportedAsARace(t *testing.T) {
+	f := newDeferredFixture(t)
+	f.store.failReservationWrite = true
+	_, err := f.service.Chat(keyed("store-cannot-write"), f.plaintext, chatRequest())
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != 503 || refusal.Code != "resource_store_unavailable" {
+		t.Fatalf("err = %v, want 503 resource_store_unavailable rather than a conflict", err)
+	}
+	if f.adapter.calls != 0 {
+		t.Fatalf("an unrecorded key reached the upstream: %d calls", f.adapter.calls)
 	}
 }

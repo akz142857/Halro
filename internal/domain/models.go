@@ -198,6 +198,16 @@ func (r ProviderResource) Validate() error {
 // ExpiryReapable prevents TTL maintenance from discarding the only owner
 // mapping for an operation that may still be running upstream.
 func (r ProviderResource) ExpiryReapable() bool {
+	if r.Kind == ResourceInferenceCall {
+		// The one kind with nothing upstream to strand: no object, no upstream
+		// identifier, nobody who can come back for it. The record exists only
+		// to refuse a retry while the key is live, so once the key has expired
+		// there is nothing left for keeping it to protect — and the records a
+		// caller most needs released are exactly the ones every other kind
+		// withholds here, because a failed or interrupted call is what a retry
+		// follows.
+		return true
+	}
 	if r.CreationStatus != "completed" {
 		return false
 	}

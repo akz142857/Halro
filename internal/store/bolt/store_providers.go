@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -446,23 +447,51 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 			return err
 		}
 		bucket := tx.Bucket(bucketProviderResources)
-		if expectedRevision == 0 && resource.IdempotencyKeyHash != ([32]byte{}) {
-			if err := bucket.ForEach(func(key, raw []byte) error {
-				var existing domain.ProviderResource
-				if err := json.Unmarshal(raw, &existing); err != nil {
-					return err
-				}
-				if existing.ProjectID == resource.ProjectID && existing.Kind == resource.Kind && existing.IdempotencyKeyHash == resource.IdempotencyKeyHash {
+		keyed := resource.IdempotencyKeyHash != ([32]byte{})
+		var indexKey []byte
+		if keyed {
+			indexKey = providerResourceIdemKey(resource.ProjectID, resource.Kind, resource.IdempotencyKeyHash)
+		}
+		if expectedRevision == 0 && keyed {
+			// The index answers "is this key taken" with one Get. It used to be
+			// a decode of every record in the bucket, inside this write
+			// transaction — affordable while only files and batches carried
+			// keys, and no longer so now that a synchronous inference call can.
+			if holder := tx.Bucket(bucketProviderResourceIdem).Get(indexKey); holder != nil {
+				if bucket.Get(holder) != nil {
 					return ErrAlreadyExists
 				}
-				return nil
-			}); err != nil {
-				return err
+				// The record the index names is gone, so the key is free. The
+				// stale entry is about to be overwritten by this one.
 			}
 		}
-		return putVersioned(bucket, resource.ID, expectedRevision, &resource)
+		if err := putVersioned(bucket, resource.ID, expectedRevision, &resource); err != nil {
+			return err
+		}
+		if !keyed {
+			return nil
+		}
+		// An update refreshes the entry it already owns, because a record's key
+		// hash is written once and never rewritten — a reclaim reuses the record
+		// for the same key, and nothing clears the field. A change here would
+		// strand the old entry, which the reader refuses rather than
+		// misinterprets; keep the field immutable and it cannot arise.
+		return tx.Bucket(bucketProviderResourceIdem).Put(indexKey, []byte(resource.ID))
 	})
 	return resource, err
+}
+
+// providerResourceIdemKey is the index entry for one key's use within one
+// Project and one kind. NUL separates the parts because neither a project ID
+// nor a resource kind can contain one, so no two different triples can collide
+// on the same entry.
+func providerResourceIdemKey(projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) []byte {
+	key := make([]byte, 0, len(projectID)+len(kind)+len(keyHash)+2)
+	key = append(key, projectID...)
+	key = append(key, 0)
+	key = append(key, kind...)
+	key = append(key, 0)
+	return append(key, keyHash[:]...)
 }
 
 func (s *Store) ProviderResource(ctx context.Context, projectID, id string) (domain.ProviderResource, error) {
@@ -592,31 +621,44 @@ func (s *Store) PendingDeferredResponses(ctx context.Context, projectID string) 
 	return pending, nil
 }
 
-func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) (domain.ProviderResource, error) {
+// ProviderResourceByIdempotency answers whether a key has been used, and by
+// what, in two Gets.
+//
+// Absence is reported as found=false rather than as an error, because the
+// caller's next move depends on telling "this key is free" apart from "the
+// store could not say" — and folding them into one error value is how a read
+// failure becomes a second billed upstream call.
+func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID string, kind domain.ProviderResourceKind, keyHash [32]byte) (domain.ProviderResource, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.ProviderResource{}, false, err
+	}
 	var found domain.ProviderResource
+	var exists bool
 	err := s.db.View(func(tx *bbolt.Tx) error {
-		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			var resource domain.ProviderResource
-			if err := json.Unmarshal(raw, &resource); err != nil {
-				return err
-			}
-			if resource.ProjectID == projectID && resource.Kind == kind && resource.IdempotencyKeyHash == keyHash {
-				found = resource
-				return errStopIteration
-			}
+		holder := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(projectID, kind, keyHash))
+		if holder == nil {
 			return nil
-		})
+		}
+		raw := tx.Bucket(bucketProviderResources).Get(holder)
+		if raw == nil {
+			// The index outlived its record. The key is free; saying so is the
+			// same answer a never-used key gets.
+			return nil
+		}
+		var resource domain.ProviderResource
+		if err := json.Unmarshal(raw, &resource); err != nil {
+			return err
+		}
+		if resource.ProjectID != projectID || resource.Kind != kind || resource.IdempotencyKeyHash != keyHash {
+			return errors.New("provider resource idempotency index names a record it does not match")
+		}
+		found, exists = resource, true
+		return nil
 	})
-	if errors.Is(err, errStopIteration) {
-		return found, nil
-	}
 	if err != nil {
-		return found, err
+		return domain.ProviderResource{}, false, err
 	}
-	return found, ErrNotFound
+	return found, exists, nil
 }
 
 func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string) error {
@@ -632,6 +674,18 @@ func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string
 		}
 		if resource.ProjectID != projectID {
 			return ErrNotFound
+		}
+		if resource.IdempotencyKeyHash != ([32]byte{}) {
+			indexKey := providerResourceIdemKey(resource.ProjectID, resource.Kind, resource.IdempotencyKeyHash)
+			index := tx.Bucket(bucketProviderResourceIdem)
+			// Only if it still names this record: a key reclaimed by a later
+			// request points at that one, and deleting the entry here would
+			// free a key that is in use.
+			if holder := index.Get(indexKey); bytes.Equal(holder, []byte(id)) {
+				if err := index.Delete(indexKey); err != nil {
+					return err
+				}
+			}
 		}
 		return bucket.Delete([]byte(id))
 	})

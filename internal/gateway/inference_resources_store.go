@@ -27,7 +27,7 @@ type InferenceResourcesResourceStore interface {
 	PutProviderResource(context.Context, domain.ProviderResource, uint64) (domain.ProviderResource, error)
 	ProviderResource(context.Context, string, string) (domain.ProviderResource, error)
 	DeleteProviderResource(context.Context, string, string) error
-	ProviderResourceByIdempotency(context.Context, string, domain.ProviderResourceKind, [32]byte) (domain.ProviderResource, error)
+	ProviderResourceByIdempotency(context.Context, string, domain.ProviderResourceKind, [32]byte) (domain.ProviderResource, bool, error)
 	PendingDeferredResponses(context.Context, string) ([]domain.ProviderResource, error)
 	// CountPendingDeferredResponses answers admission's only question without
 	// decoding the queue it is counting.
@@ -75,9 +75,29 @@ func (s *Service) classifyIdempotency(
 	kind domain.ProviderResourceKind,
 	keyHash, fingerprint [32]byte,
 ) (domain.ProviderResource, idempotencyVerdict, error) {
-	existing, err := s.resources.ProviderResourceByIdempotency(ctx, projectID, kind, keyHash)
+	existing, found, err := s.resources.ProviderResourceByIdempotency(ctx, projectID, kind, keyHash)
 	if err != nil {
+		// A store that cannot say whether the key has been used is not evidence
+		// that it has not. Reading the failure as "fresh" would admit the second
+		// billed call the key was sent to prevent, which is the fail-open
+		// direction on the one question this function exists to answer.
+		return domain.ProviderResource{}, idempotencyFresh,
+			gatewayError("resource_store_unavailable", "idempotency could not be checked", 503, err)
+	}
+	if !found {
 		return domain.ProviderResource{}, idempotencyFresh, nil
+	}
+	if kind == domain.ResourceInferenceCall && !existing.ExpiresAt.After(s.now()) {
+		// The key's lifetime has run out, so it is free again — including for a
+		// different request, which is why this is decided before the
+		// fingerprint. The record is reclaimed in place rather than treated as
+		// absent: it still holds this key's index entry until the reaper gets
+		// to it, and a fresh verdict would collide with itself on the write.
+		//
+		// Only this kind: every other one names something that may still exist
+		// upstream after its record expires, and handing its key to a retry
+		// would create a second one.
+		return existing, idempotencyReclaim, nil
 	}
 	if existing.RequestFingerprint != fingerprint {
 		return existing, idempotencyInProgress,

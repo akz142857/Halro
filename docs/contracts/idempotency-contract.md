@@ -24,8 +24,10 @@ what it was asked to do.
 - The record carries the lifecycle and the route it was first sent to, and never
   an object. That is enforced by validation rather than by convention.
 - States are the resource plane's: `reserved`, `in_flight`, `unknown` and
-  `completed`. The key moves to `in_flight` **before** anything is dispatched,
-  so an interruption from that point on is remembered as possibly served.
+  `completed`. The key moves to `in_flight` in the instruction before the
+  Provider call and nowhere earlier, so an interruption from that point on is
+  remembered as possibly served — and everything that refuses a request without
+  the upstream hearing of it stays on the `reserved` side of that line.
 - A repeat is answered, never awaited — Halro does not hold a socket open
   against another request's outcome:
 
@@ -35,16 +37,33 @@ what it was asked to do.
   | a request still running, or one whose outcome is unknown | `409 idempotency_in_progress` |
   | a request that completed | `409 idempotency_completed` |
   | a reservation from a process that is gone | admitted; it never reached the upstream |
+  | a record past its 24 hours | admitted, whatever the first request's outcome was, and whatever the new request is |
 
-- A failed request still spends its key. The upstream was reached, so a retry
-  is the second call the key was sent to prevent; it settles as `unknown`,
-  which is the existing vocabulary for an outcome nobody can determine and is
-  never silently converted into a retryable or refunded result.
+- A failed request still spends its key **when the upstream was reached**: a
+  retry after one is the second call the key was sent to prevent, so it settles
+  as `unknown`, the existing vocabulary for an outcome nobody can determine, and
+  is never silently converted into a retryable or refunded result.
+- A request Halro refuses **on its own** — a capability filter, redaction, a
+  token limit, a Project budget, a per-attempt reservation, or the failure to
+  record the dispatch itself — gets its key back. Nothing was billed and nothing
+  is ambiguous, so the reservation is released and the caller's own retry is
+  answered by the limit it broke rather than by a conflict about a call that was
+  never made.
+- If the reservation cannot be written, the answer says which of the two things
+  happened: `409 idempotency_in_progress` when the key is genuinely held by
+  another request, and `503 resource_store_unavailable` when the store could not
+  record it. A store that cannot answer whether a key has been used is
+  `503`, never read as a free key.
 - A streaming repeat is refused **before the stream opens**, as an ordinary HTTP
   error rather than an event inside a stream the caller has been told is
   starting. Halro does not retain SSE bodies and promises no replay of one.
-- A record expires 24 hours after it is written. Expiry permits a later new
-  execution and is longer than any client retry window.
+- A record expires 24 hours after it is written, in **every** state it can be
+  in. Expiry permits a later new execution — including one carrying a different
+  request, because a key nobody remembers issuing is free for whatever it is
+  next used for — and is longer than any client retry window. This is the one
+  resource kind whose expired record is reaped whatever its creation status:
+  every other kind withholds an ambiguous record because something may still
+  exist upstream, and this one owns nothing at all.
 - An instance with no resource store refuses the header with `503
   idempotency_unavailable` rather than accepting a durable promise it cannot
   keep.
@@ -52,7 +71,10 @@ what it was asked to do.
 The mechanism is the resource plane's, under a `ProviderResource` kind of its
 own (`inference_call`) and the same revision checks every other resource gets.
 It is deliberately not a second implementation: an earlier standalone lifecycle
-store was written, never reached, and removed for exactly that reason.
+store was written, never reached, and removed for exactly that reason. Lookup is
+by index — `(project, kind, key hash)` in its own bucket — because this is the
+first kind whose population scales with inference traffic rather than with how
+many files and batches a Project keeps.
 
 ## Admin create requests
 

@@ -31,6 +31,9 @@ type inferenceResourcesMemoryStore struct {
 	failCleanupPendingWrite bool
 	failInFlightWrite       bool
 	failOutcomeWrite        bool
+	failIdempotencyLookup   bool
+	failReservationWrite    bool
+	failReservationDelete   bool
 }
 
 func newInferenceResourcesMemoryStore(resources ...domain.ProviderResource) *inferenceResourcesMemoryStore {
@@ -48,6 +51,12 @@ func (s *inferenceResourcesMemoryStore) PutProviderResource(_ context.Context, r
 	if s.failCleanupPendingWrite && resource.CleanupStatus == "pending" {
 		s.failCleanupPendingWrite = false
 		return domain.ProviderResource{}, errors.New("injected cleanup state write failure")
+	}
+	// Refuses the reservation itself, so the caller's refusal has to be told
+	// apart from a key another request genuinely holds.
+	if s.failReservationWrite && !exists && resource.CreationStatus == creationReserved {
+		s.failReservationWrite = false
+		return domain.ProviderResource{}, errors.New("injected reservation write failure")
 	}
 	// Stops a request between reserving the key and calling the provider, which
 	// is the window a crash used to make unrecoverable.
@@ -92,6 +101,12 @@ func (s *inferenceResourcesMemoryStore) ProviderResource(_ context.Context, proj
 func (s *inferenceResourcesMemoryStore) DeleteProviderResource(_ context.Context, projectID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Leaves an unused reservation behind exactly as a crash between reserving
+	// the key and answering the caller would.
+	if s.failReservationDelete {
+		s.failReservationDelete = false
+		return errors.New("injected reservation delete failure")
+	}
 	resource, ok := s.resources[id]
 	if !ok || resource.ProjectID != projectID {
 		return errInferenceResourcesResourceNotFound
@@ -100,15 +115,18 @@ func (s *inferenceResourcesMemoryStore) DeleteProviderResource(_ context.Context
 	return nil
 }
 
-func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.Context, projectID string, kind domain.ProviderResourceKind, hash [32]byte) (domain.ProviderResource, error) {
+func (s *inferenceResourcesMemoryStore) ProviderResourceByIdempotency(_ context.Context, projectID string, kind domain.ProviderResourceKind, hash [32]byte) (domain.ProviderResource, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failIdempotencyLookup {
+		return domain.ProviderResource{}, false, errors.New("injected idempotency lookup failure")
+	}
 	for _, resource := range s.resources {
 		if resource.ProjectID == projectID && resource.Kind == kind && resource.IdempotencyKeyHash == hash {
-			return resource, nil
+			return resource, true, nil
 		}
 	}
-	return domain.ProviderResource{}, errInferenceResourcesResourceNotFound
+	return domain.ProviderResource{}, false, nil
 }
 
 // Counting through the listing keeps the fake honest about the two answers
