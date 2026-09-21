@@ -16,12 +16,12 @@ semantic versioning.
   Both HTTP transports answer an expired `gateway.attempt_response_header_timeout`
   with a `net.Error` of their own instead — `http2: timeout awaiting response
   headers`, and the HTTP/1 equivalent — which reports `Timeout()` and wraps no
-  sentinel, so it fell through to `connect`. The console then showed "无法建立
-  安全连接" beside "上游可能已执行或计费", which cannot both be true, and the
-  advice attached to that class pointed at the network rather than at the
-  timeout the operator had configured. It is the failure a slow reasoning model
-  produces on a long prompt, so the class was wrong exactly where it was most
-  consulted.
+  sentinel, so it fell through to `connect`. The console then showed "No secure
+  connection could be established" beside "The upstream may have executed or
+  billed the request", which cannot both be true, and the advice attached to that
+  class pointed at the network rather than at the timeout the operator had
+  configured. It is the failure a slow reasoning model produces on a long
+  prompt, so the class was wrong exactly where it was most consulted.
 
   A timeout is now recognised by reporting itself as one, and only when the
   request had already gone out: a dial or a resolution that ran out of time
