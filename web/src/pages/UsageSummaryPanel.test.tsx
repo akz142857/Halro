@@ -147,6 +147,45 @@ describe("UsageSummaryPanel", () => {
     expect(table.getByText("80.0%")).toBeVisible();
   });
 
+  // A row's token figure is the accounting total minus the part that came from
+  // a conservative upper bound, and a row that did not say so read as the whole
+  // total — which is how a row sits visibly below a provider's own figure with
+  // nothing on screen explaining the difference. Reconciling against an upstream
+  // console is exactly what this table is for.
+  it("says how many of a row's tokens were estimated rather than reported", async () => {
+    vi.spyOn(api, "usageSummary").mockResolvedValue(summary({
+      group_by: "provider_model",
+      groups: [
+        {
+          key: "openai.gpt-5.6-sol",
+          ...metrics({
+            attempts: 2418, errors: 19,
+            input_tokens: 3_500_000, output_tokens: 343_000,
+            estimated_input_tokens: 640_000, estimated_output_tokens: 20_000,
+            cost_micros_usd: 35_180_000,
+          }),
+        } as SummaryGroup,
+        {
+          key: "openai.gpt-5.6-luna",
+          ...metrics({ attempts: 13_000, input_tokens: 18_700_000, output_tokens: 1_200_000 }),
+        } as SummaryGroup,
+      ],
+    }));
+    renderPanel();
+
+    const table = within(await screen.findByRole("table"));
+    const estimatedRow = table.getByRole("row", { name: /gpt-5\.6-sol/ });
+    // 3,843,000 accounted minus 660,000 estimated. Both forms are allowed
+    // because the figure is locale-compacted and the suite's locale is not the
+    // subject here.
+    expect(within(estimatedRow).getByText(/318\.3万|3\.18M/)).toBeVisible();
+    expect(within(estimatedRow).getByText(/66万|660(\.0)?K/)).toBeVisible();
+    // A row with nothing estimated says nothing, rather than carrying a zero
+    // that reads as a qualification.
+    const reportedRow = table.getByRole("row", { name: /gpt-5\.6-luna/ });
+    expect(within(reportedRow).queryByText(/保守估算/)).toBeNull();
+  });
+
   // Two generations of the accounting timezone give the same date label two
   // different intervals. Summing them without saying so produces a month
   // nobody can reconcile against the ledger.

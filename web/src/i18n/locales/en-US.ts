@@ -921,6 +921,7 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       attempts: "Attempts",
       attemptSuccessRate: "Attempt success rate",
       unknownAttempts: "Unpriced attempts: {{count}}",
+      estimatedTokens: "Additional conservatively estimated tokens: {{count}}",
       viewAttempts: "View attempts",
       viewFailedRequests: "View failed requests",
       others: "Everything else",
