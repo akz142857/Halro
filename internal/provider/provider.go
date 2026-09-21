@@ -750,6 +750,17 @@ func (r *Registry) Resolve(publicModel string) (Target, bool) {
 	return cloneTarget(targets[0]), true
 }
 
+// Serves answers whether the route table carries this alias at all, without
+// building the answer it would take to call it. ResolveAll clones every Target
+// for the alias — capability evidence map included — which is a deep copy per
+// alias to answer a question about presence, and the model list asks it once
+// per alias a Project allows.
+func (r *Registry) Serves(publicModel string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.targets[publicModel]) > 0
+}
+
 func (r *Registry) ResolveAll(publicModel string) []Target {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

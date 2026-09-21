@@ -48,7 +48,7 @@ Two corollaries worth stating before the steps:
    not change when the operator repoints an alias. The right fix was the house
    rule the DeepSeek renderer already followed: unspecified means off.
 
-## Three classes of work, and they differ by an order of magnitude
+## Four classes of work, and they differ by an order of magnitude
 
 Before the checklist, decide which of these you are doing. Most requests to
 "support X" are not the third kind, and the first kind needs no new endpoint at
@@ -93,7 +93,32 @@ parsing — is written for HTTP plus SSE. A new transport means a new northbound
 profile, a new connection lifecycle, and new retry and accounting semantics for
 a request that outlives a single HTTP exchange.
 
-Only B and C are "add a northbound endpoint". A is "widen one".
+**D. A read answered from Halro's own configuration.** `GET /v1/models` is the
+one of these: it consults no provider, writes no ledger event, and its answer is
+the caller's Project and the live route table. It is much cheaper than B or C —
+there is no semantic mapping, no renderer, no provider coverage, and the two
+incidents above cannot happen to it, because nothing upstream produces anything
+for it to fail to represent.
+
+Two things about it are not cheap, and they are where the work goes.
+
+The first is that such an endpoint is still an API face with a published
+contract, a frozen route and a compatibility manifest; skipping steps 3 and 5
+does not mean skipping 1, 4, 6 and 7.
+
+The second is the hard part, and it is a documentation problem rather than a
+code one. The wire shape belongs to the API being imitated, and it carries
+promises Halro's domain does not keep. An OpenAI model object implies a thing
+with a stable identity and stable capabilities; a Halro `id` is a public alias,
+which is a pointer an operator may repoint between two calls. Non-standard
+fields are not the way out — an SDK-contracted object with an extra member is a
+member somebody's client chokes on, which is why the deferred tier put its
+polling cadence in a header. So the gap between what the shape implies and what
+the value is has to be discharged in `DocumentedDeviations`, exhaustively.
+Under-stating it there is this class's version of the DeepSeek and Kimi
+failures: a promise the endpoint cannot keep, made where nobody looks for it.
+
+Only B, C and D are "add a northbound endpoint". A is "widen one".
 
 ## The steps
 
@@ -161,14 +186,30 @@ being asked to*. Reasoning is the one that has caught this codebase twice.
   under-declaring `RequestFields` silently hides a real refusal: the Kimi work
   found `reasoning` missing from the Responses endpoint's list while
   `responses.go` had been reading it all along.
+- `RequestFields` must be non-empty, with one named exception: a class D
+  collection read that takes no parameters at all — `semantic.OperationDiscovery`
+  — has none to declare. The exemption is written against that one operation
+  rather than derived from "does not reach a provider", because the wider
+  predicate would also take the rule off Run Governance, which accepts request
+  bodies and must keep owing a declaration for them.
+- Provider profiles and their coverage rows are required of every endpoint that
+  reaches an upstream — `semantic.Operation.ProviderBacked()`, which is false for
+  Run Governance and for discovery. An endpoint answered from Halro's own state
+  declares neither, and `ProviderBacked` is the right predicate here precisely
+  because it is the wrong one above.
 
 Guarded by `TestBuiltinEndpointManifestsAreValidImmutableAndGolden`,
-`TestEveryEndpointDeclaresItsEvidence`, and
-`TestEndpointEvidenceCannotDriftFromTheSDKMatrix`. The golden file is
+`TestEveryEndpointDeclaresItsEvidence`,
+`TestEndpointEvidenceCannotDriftFromTheSDKMatrix`, and — for the two rules above,
+which were once rewritten and shipped with nothing watching them —
+`TestManifestRejectsAnEndpointThatDeclaresNeitherRequestFieldsNorAReasonToHaveNone`. The golden file is
 `docs/compatibility/endpoint-manifests.json`; regenerate with
 `HALRO_UPDATE_GOLDEN=1` and **read the diff** — it is the published contract.
 
 ### 5. Provider coverage, in both directions
+
+**Class D skips this step entirely**: an endpoint that reaches no upstream has no
+profile to cover, declares none, and `Validate` requires none of it.
 
 Every provider profile that may serve this endpoint needs a coverage row, and
 every member it cannot carry needs a declaration in
@@ -233,7 +274,8 @@ schema in `internal/compatibility/<protocol>/native.go` and a gate in
 ### 9. The console, if the endpoint should be offered
 
 `web/src/pages/DeveloperPage.tsx` carries the code-sample protocol selector. It
-is **not** the list of endpoints Halro serves — it covers three of twenty, and
+is **not** the list of endpoints Halro serves — it covers three of the
+twenty-three routes the gateway carries, and
 `/v1/messages` is not among them. Adding an endpoint does not require adding it
 here, and adding it here does not make it served.
 

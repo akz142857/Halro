@@ -99,10 +99,18 @@ func walkGatewayRoutes(t *testing.T) ([]string, map[string]int) {
 		t.Fatal("gateway router does not expose chi route metadata")
 	}
 	parameter := regexp.MustCompile(`\{[^}]+\}`)
+	// A wildcard is a third spelling of the same thing. GET /v1/models/* takes
+	// a wildcard because a public alias is operator-supplied free text that can
+	// contain a slash, but what the published contract promises an integrator
+	// is one identifier in one position — "{id}" — so the two are normalised
+	// together. This only rewrites how a route is spelled; it does not let an
+	// undeclared route through, because the rewritten form still has to appear
+	// in a northbound profile's method list.
+	wildcard := regexp.MustCompile(`/\*$`)
 	served := make([]string, 0)
 	middlewares := make(map[string]int)
 	if err := chi.Walk(routes, func(method, path string, _ http.Handler, chain ...func(http.Handler) http.Handler) error {
-		route := method + " " + parameter.ReplaceAllString(path, "{id}")
+		route := method + " " + wildcard.ReplaceAllString(parameter.ReplaceAllString(path, "{id}"), "/{id}")
 		middlewares[route] = len(chain)
 		switch route {
 		case "GET /health/live", "GET /health/ready", "GET /":

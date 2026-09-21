@@ -259,7 +259,7 @@ identity.
 |---|---|---|
 | `POST /v1/chat/completions` | Compatible | JSON and SSE; OpenAI Go/Node/Python SDK matrix |
 | `POST /v1/embeddings` | Compatible | Per-Profile coverage applies: OpenAI, Azure OpenAI, Gemini Beta, and the OpenAI-compatible Profile |
-| `GET /v1/models`, `GET /v1/models/{id}` | Experimental | The aliases the key's Project may name and a Route serves; answered from Halro's own configuration, no upstream call, `owned_by` is always `halro` |
+| `GET /v1/models`, `GET /v1/models/{id}` | Experimental | The aliases the key's Project may name and a Route serves; answered from Halro's own configuration, no upstream call, `owned_by` is always `halro`. An id is an alias an operator may repoint, so listing one promises only that it will not answer `model_not_found` |
 | `POST /v1/responses` | Compatible subset | Stateless Create and text SSE, plus `background: true` deferred submission; `store:true` and stateful fields are rejected |
 | `GET`/`POST .../cancel`/`DELETE /v1/responses/{id}` | Experimental | Deferred retrieval, cancel, and delete for `background: true`; per-Project opt-in, answers sealed and retained at most 24 h ([ADR 0024](docs/adr/0024-deferred-response-tier.md)) |
 | `POST /v1/messages` | Compatible | Anthropic JSON/SSE; portable or exact native Profile routing |

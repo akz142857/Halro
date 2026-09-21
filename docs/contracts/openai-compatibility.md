@@ -4,11 +4,21 @@
 
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
-- `GET /v1/models`, `GET /v1/models/{id}` (`openai.models.v1`) — the aliases the
-  caller's Project may name, kept to the ones a Route serves. Answered from
-  Halro's configuration: no upstream call, no ledger event, `owned_by` is always
-  `halro` and `created` is always 0. An alias the caller may not name answers
-  404, never 403, so the endpoint cannot probe what other Projects were given.
+- `GET /v1/models`, `GET /v1/models/{id}` (`openai.models.v1`, **experimental**)
+  — the aliases the caller's Project may name, kept to the ones a Route serves.
+  Answered from Halro's configuration: no upstream call, no ledger event,
+  `owned_by` is always `halro` and `created` is always 0. An alias the caller may
+  not name answers 404, never 403, so the endpoint cannot probe what other
+  Projects were given.
+
+  An `id` here is a public alias, not a model identifier: an operator may repoint
+  it at another deployment between two calls without the id changing. Listing an
+  alias guarantees only that it will not answer `404 model_not_found` — one whose
+  deployments serve a different operation is listed and answers `400
+  unsupported_feature`, and one whose deployments are all unhealthy or suspended
+  is listed and answers 503. The manifests carry the full set of deviations; this
+  gap between what the OpenAI model shape implies and what an alias is, is the
+  endpoint's whole contract surface.
 - `POST /v1/responses` (`openai.responses.deferrable.v1`)
 - `GET /v1/responses/{id}`, `POST /v1/responses/{id}/cancel`, `DELETE /v1/responses/{id}`
   — the deferred tier only: they address a submission made with `background: true`

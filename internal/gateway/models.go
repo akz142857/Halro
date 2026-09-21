@@ -17,12 +17,16 @@ const modelOwner = "halro"
 // Models answers which public aliases the caller may put in a request's model
 // field: the Project's allowed aliases, kept to the ones the route table serves.
 //
-// The two halves are the same two checks resolveRequest applies to a request,
-// in the same order, so the list agrees with what a call would meet. An alias
-// the Project may name but no route carries is left out rather than listed —
-// listing it would advertise a model that answers model_not_found. An alias
-// whose deployments are all unhealthy or suspended stays in: that is a moment,
-// not a configuration, and the inference call is where it is reported.
+// The guarantee is exactly this: a listed alias will not answer 404
+// model_not_found. It is deliberately weaker than "a listed alias is callable",
+// because resolveRequest's route check is ResolveCandidatesFor — it drops
+// probe-unhealthy targets and then filters by operation — while this asks only
+// whether the alias is carried at all. The list is therefore a superset of what
+// is callable now, and the manifest's deviations say what an integrator should
+// make of that.
+//
+// The one direction that cannot happen is the dangerous one: candidates are
+// filtered out of the same slice this reads, so nothing callable is unlisted.
 //
 // No provider is consulted and nothing is accounted. The registry is the live
 // one, so a route the operator added is listed as soon as it is served.
@@ -36,7 +40,7 @@ func (s *Service) Models(ctx context.Context, plaintextKey string) ([]openaiapi.
 	aliases = slices.Compact(aliases)
 	models := make([]openaiapi.Model, 0, len(aliases))
 	for _, alias := range aliases {
-		if len(s.registry.ResolveAll(alias)) == 0 {
+		if !s.registry.Serves(alias) {
 			continue
 		}
 		models = append(models, openaiapi.Model{ID: alias, Object: "model", Created: 0, OwnedBy: modelOwner})
@@ -53,7 +57,7 @@ func (s *Service) Model(ctx context.Context, plaintextKey, alias string) (openai
 	if err != nil {
 		return openaiapi.Model{}, err
 	}
-	if !slices.Contains(principal.Project.AllowedModels, alias) || len(s.registry.ResolveAll(alias)) == 0 {
+	if !slices.Contains(principal.Project.AllowedModels, alias) || !s.registry.Serves(alias) {
 		return openaiapi.Model{}, gatewayError("model_not_found", "model is not available to this project", 404, nil)
 	}
 	return openaiapi.Model{ID: alias, Object: "model", Created: 0, OwnedBy: modelOwner}, nil

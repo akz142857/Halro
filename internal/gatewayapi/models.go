@@ -2,8 +2,9 @@ package gatewayapi
 
 import (
 	"context"
-	"errors"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -34,8 +35,31 @@ func (h *Handler) ListModels(writer http.ResponseWriter, request *http.Request) 
 
 func (h *Handler) GetModel(writer http.ResponseWriter, request *http.Request) {
 	h.modelsAction(writer, request, func(ctx context.Context, key string) (any, error) {
-		return h.models.Model(ctx, key, chi.URLParam(request, "modelID"))
+		alias, ok := pathAlias(request)
+		if !ok {
+			// Refused the way an alias the caller may not name is, because the
+			// caller cannot tell the two apart and must not be able to.
+			return nil, &gateway.Error{Code: "model_not_found", Message: "model is not available to this project", HTTPStatus: http.StatusNotFound}
+		}
+		return h.models.Model(ctx, key, alias)
 	})
+}
+
+// pathAlias reads the alias out of the request path.
+//
+// A public alias is operator-supplied free text — nothing in domain validation
+// constrains its character set, and vendor-prefixed names like "openai/gpt-4o"
+// are a common convention — so it is neither a single path segment nor
+// necessarily URL-safe. A {modelID} parameter answered 404
+// endpoint_not_implemented for the unescaped spelling an SDK actually sends,
+// and handed the service a still-encoded string for the escaped one. The route
+// is a wildcard for the same reason the admin invocation-target route is.
+func pathAlias(request *http.Request) (string, bool) {
+	alias, err := url.PathUnescape(chi.URLParam(request, "*"))
+	if err != nil || strings.TrimSpace(alias) == "" {
+		return "", false
+	}
+	return alias, true
 }
 
 // modelsAction is deferredAction's shape for a read that reaches no upstream:
@@ -63,12 +87,7 @@ func (h *Handler) modelsAction(writer http.ResponseWriter, request *http.Request
 	}
 	result, err := act(request.Context(), key)
 	if err != nil {
-		var failure *gateway.Error
-		if errors.As(err, &failure) {
-			writeGatewayError(writer, failure)
-			return
-		}
-		writeError(writer, http.StatusInternalServerError, "internal_error", "internal server error", nil)
+		writeServiceError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, result)

@@ -44,7 +44,7 @@ func (h *Handler) submitDeferredResponse(writer http.ResponseWriter, request *ht
 		ctx, key, request.Header.Get("Idempotency-Key"), decoded,
 	)
 	if err != nil {
-		h.writeDeferredError(writer, err)
+		writeServiceError(writer, err)
 		return
 	}
 	writeJSON(writer, http.StatusOK, response)
@@ -99,7 +99,7 @@ func (h *Handler) deferredAction(
 	defer cancel()
 	result, retryAfter, err := act(ctx, key, chi.URLParam(request, "responseID"))
 	if err != nil {
-		h.writeDeferredError(writer, err)
+		writeServiceError(writer, err)
 		return
 	}
 	// The polling cadence is the server's to set. It goes in a header rather
@@ -111,7 +111,10 @@ func (h *Handler) deferredAction(
 	writeJSON(writer, http.StatusOK, result)
 }
 
-func (h *Handler) writeDeferredError(writer http.ResponseWriter, err error) {
+// writeServiceError renders what the gateway service returned. A *gateway.Error
+// already carries the status and code the caller should see; anything else is a
+// fault of ours and says so without describing itself.
+func writeServiceError(writer http.ResponseWriter, err error) {
 	var failure *gateway.Error
 	if errors.As(err, &failure) {
 		writeGatewayError(writer, failure)

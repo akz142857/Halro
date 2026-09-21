@@ -6,6 +6,32 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `GET /v1/models` and `GET /v1/models/{id}` on the Gateway listener. An
+  application had no way to find out which aliases its own Gateway Key may put
+  in a request's `model` field, and `models.list()` — the first call many SDK
+  clients make — answered a 404 whose whole remedy was a sentence telling the
+  caller to ask their operator.
+
+  The answer is the caller's Project's allowed aliases, kept to the ones the
+  route table serves, and it is answered from Halro's own configuration: no
+  upstream call, no ledger event. Nothing about the upstream is disclosed —
+  `owned_by` is always `halro`, `created` is always `0`, and an alias the caller
+  may not name answers 404 rather than 403, so the endpoint cannot be used to
+  find out what another Project was granted.
+
+  What an `id` is worth knowing about: it is a public alias, not a model
+  identifier. An operator may repoint it at another deployment between two calls
+  without the id changing, and listing an alias means only that it will not
+  answer `404 model_not_found` — an alias whose deployments serve a different
+  operation is listed and answers `400 unsupported_feature` on use, and one
+  whose deployments are all unhealthy or suspended is listed and answers 503.
+  The published manifests carry the full list.
+
+  Marked `experimental`: the endpoint has gateway contract tests, and the
+  official SDK black-box matrix does not yet call it.
+
 ### Changed
 
 - The SBOM steps no longer treat "could not reach the registry" as "the SBOM is

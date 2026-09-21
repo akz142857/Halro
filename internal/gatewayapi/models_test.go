@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,9 @@ func (s *fakeService) Models(_ context.Context, key string) ([]openaiapi.Model, 
 	if s.err != nil {
 		return nil, s.err
 	}
+	if s.empty {
+		return []openaiapi.Model{}, nil
+	}
 	return []openaiapi.Model{{ID: "chat", Object: "model", OwnedBy: "halro"}}, nil
 }
 
@@ -28,6 +32,7 @@ func (s *fakeService) Model(_ context.Context, key, alias string) (openaiapi.Mod
 	if s.err != nil {
 		return openaiapi.Model{}, s.err
 	}
+	s.lastAlias = alias
 	if alias != "chat" {
 		return openaiapi.Model{}, &gateway.Error{Code: "model_not_found", Message: "model is not available to this project", HTTPStatus: http.StatusNotFound}
 	}
@@ -43,8 +48,9 @@ func modelsRouter(t *testing.T, service Service) http.Handler {
 		t.Fatal(err)
 	}
 	router := chi.NewRouter()
+	router.NotFound(handler.NotFound)
 	router.Get("/v1/models", handler.ListModels)
-	router.Get("/v1/models/{modelID}", handler.GetModel)
+	router.Get("/v1/models/*", handler.GetModel)
 	return router
 }
 
@@ -105,5 +111,72 @@ func TestListModelsRequiresABearerToken(t *testing.T) {
 	}
 	if service.calls != 0 {
 		t.Fatalf("service was reached without a bearer token")
+	}
+}
+
+// A public alias is operator-supplied free text: nothing in domain validation
+// forbids a slash, and vendor-prefixed names like "openai/gpt-4o" are a common
+// convention. Both spellings have to reach the service as the same alias —
+// before the wildcard route, the unescaped one fell through to the router's
+// NotFound as endpoint_not_implemented (an id models.list() had just
+// advertised), and the escaped one arrived at the service still encoded and so
+// matched nothing.
+func TestAnAliasContainingASlashIsRetrievableAtEitherSpelling(t *testing.T) {
+	for _, path := range []string{"/v1/models/openai/gpt-4o", "/v1/models/openai%2Fgpt-4o"} {
+		service := &fakeService{}
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer gw_test")
+		response := httptest.NewRecorder()
+		modelsRouter(t, service).ServeHTTP(response, request)
+
+		if service.lastAlias != "openai/gpt-4o" {
+			t.Fatalf("%s: the service saw %q", path, service.lastAlias)
+		}
+		// The fake serves only "chat", so the answer is the endpoint's own
+		// 404 rather than the router's — which is the distinction that was
+		// wrong: a caller must not be able to tell "no such alias" from "no
+		// such endpoint".
+		var envelope openaiapi.ErrorEnvelope
+		if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+			t.Fatalf("%s: %v (%s)", path, err, response.Body)
+		}
+		if response.Code != http.StatusNotFound || envelope.Error.Code != "model_not_found" {
+			t.Fatalf("%s: status=%d code=%q", path, response.Code, envelope.Error.Code)
+		}
+	}
+}
+
+// An empty alias reaches no service call and is refused as any unavailable
+// alias is, so the two are indistinguishable from outside.
+func TestAnEmptyAliasIsRefusedWithoutReachingTheService(t *testing.T) {
+	service := &fakeService{}
+	request := httptest.NewRequest(http.MethodGet, "/v1/models/", nil)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	modelsRouter(t, service).ServeHTTP(response, request)
+
+	var envelope openaiapi.ErrorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("%v (%s)", err, response.Body)
+	}
+	if response.Code != http.StatusNotFound || envelope.Error.Code != "model_not_found" {
+		t.Fatalf("status=%d code=%q", response.Code, envelope.Error.Code)
+	}
+	if service.calls != 0 {
+		t.Fatal("an empty alias reached the service")
+	}
+}
+
+// The empty list has to serialize as [] rather than null: the OpenAI SDKs type
+// `data` as a required array, so a null is a client-side deserialization
+// failure rather than an empty page.
+func TestListModelsSerializesAnEmptyProjectAsAnEmptyArray(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	request.Header.Set("Authorization", "Bearer gw_test")
+	response := httptest.NewRecorder()
+	modelsRouter(t, &fakeService{empty: true}).ServeHTTP(response, request)
+
+	if body := strings.TrimSpace(response.Body.String()); body != `{"object":"list","data":[]}` {
+		t.Fatalf("body=%s", body)
 	}
 }

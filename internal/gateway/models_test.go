@@ -2,11 +2,18 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/routegate"
 )
 
 // The list is what a request may name: the Project's allowed aliases, kept to
@@ -82,5 +89,133 @@ func TestModelsRefusesAKeyThatCannotAuthenticate(t *testing.T) {
 	var failure *Error
 	if !errors.As(err, &failure) || failure.HTTPStatus != 401 || failure.Code != "invalid_api_key" {
 		t.Fatalf("err=%v, want 401 invalid_api_key", err)
+	}
+}
+
+// The load-bearing deviation: an alias every deployment of which the gate has
+// suspended stays listed, and the call is where the caller learns it is out.
+//
+// Without this, swapping ResolveAll for ResolveCandidates in Models — which
+// inverts the published contract — is a green change: the fixture installs no
+// eligibility gate, so nothing else in this package can tell the two apart.
+func TestASuspendedAliasIsStillListedAndSaysSoOnlyWhenCalled(t *testing.T) {
+	f := newFixture(t, 10_000)
+	defer f.close()
+	gate := routegate.New(routegate.Config{
+		AvailabilityThreshold: 1, AvailabilityWindow: time.Minute, MaxAvailabilityWindow: time.Minute,
+	})
+	f.registry.SetEligibility(gate)
+	service, err := NewServiceWithOptions(f.service.auth, f.registry, f.accounting, ServiceOptions{
+		MaxAttempts: 1, RetryBaseDelay: time.Millisecond, RetryMaxDelay: time.Millisecond, RouteGate: gate,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Suspend every target behind "chat" by failing the one deployment it has.
+	f.adapter.err = &provider.Error{Class: provider.ErrorProvider5xx, Retryable: true, Message: "down"}
+	if _, err := service.Chat(context.Background(), f.plaintext, chatRequest()); err == nil {
+		t.Fatal("the provider failure did not reach the caller")
+	}
+	if len(f.registry.ResolveCandidates("chat")) != 0 {
+		t.Fatal("the gate did not suspend the alias, so this test proves nothing")
+	}
+
+	models, err := service.Models(context.Background(), f.plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID != "chat" {
+		t.Fatalf("a fully suspended alias was hidden from the list: %+v", models)
+	}
+	if _, err := service.Model(context.Background(), f.plaintext, "chat"); err != nil {
+		t.Fatalf("a fully suspended alias was not retrievable: %v", err)
+	}
+
+	// And the call is where it is reported, which is the half that makes
+	// listing it honest rather than misleading.
+	_, err = service.Chat(context.Background(), f.plaintext, chatRequest())
+	var failure *Error
+	if !errors.As(err, &failure) || failure.HTTPStatus != 503 {
+		t.Fatalf("calling the listed-but-suspended alias gave %v, want a 503", err)
+	}
+}
+
+// A key an operator scoped away from inference does not get handed the
+// Project's alias menu. EffectiveGatewayScopes treats an empty list as
+// inference, so the only keys this turns away are ones scoped deliberately.
+func TestModelsRefusesAKeyScopedAwayFromInference(t *testing.T) {
+	f := newFixture(t, 0)
+	defer f.close()
+	key := f.key
+	key.Scopes = []domain.GatewayScope{domain.GatewayScopeGovernanceRead}
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range []func() error{
+		func() error { _, err := f.service.Models(context.Background(), f.plaintext); return err },
+		func() error { _, err := f.service.Model(context.Background(), f.plaintext, "chat"); return err },
+	} {
+		var failure *Error
+		if err := call(); !errors.As(err, &failure) || failure.HTTPStatus != 403 || failure.Code != "gateway_key_scope_denied" {
+			t.Fatalf("err=%v, want 403 gateway_key_scope_denied", err)
+		}
+	}
+}
+
+// The Project's CIDR allow-list governs this read as it governs an inference
+// call: a Project that admits only one network does not answer its alias list
+// to a request arriving from outside it, or from a request carrying no source
+// at all.
+func TestModelsHonoursTheProjectSourcePolicy(t *testing.T) {
+	f := newFixtureShaped(t, 0, ledger.Options{}, nil, func(project *domain.Project) {
+		project.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	}, nil)
+	defer f.close()
+
+	var failure *Error
+	if _, err := f.service.Models(context.Background(), f.plaintext); !errors.As(err, &failure) ||
+		failure.HTTPStatus != 403 || failure.Code != "source_not_allowed" {
+		t.Fatalf("a request with no source was answered: %v", err)
+	}
+	outside := requestmeta.WithSourceIP(context.Background(), netip.MustParseAddr("203.0.113.9"))
+	if _, err := f.service.Models(outside, f.plaintext); !errors.As(err, &failure) ||
+		failure.Code != "source_not_allowed" {
+		t.Fatalf("a request from outside the allow-list was answered: %v", err)
+	}
+	inside := requestmeta.WithSourceIP(context.Background(), netip.MustParseAddr("10.1.2.3"))
+	models, err := f.service.Models(inside, f.plaintext)
+	if err != nil || len(models) != 1 {
+		t.Fatalf("a request from inside the allow-list was refused: models=%+v err=%v", models, err)
+	}
+}
+
+// A Project whose every alias is unrouted lists nothing — and the nothing has
+// to be an empty list rather than a nil one, because the OpenAI SDKs type
+// `data` as a required array and a null is a deserialization failure at the
+// client, not an empty page.
+func TestModelsAnswersAnEmptyListRatherThanNothing(t *testing.T) {
+	f := newFixture(t, 0)
+	defer f.close()
+	f.project.AllowedModels = []string{"unrouted"}
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	models, err := f.service.Models(context.Background(), f.plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if models == nil || len(models) != 0 {
+		t.Fatalf("models=%#v, want a non-nil empty slice", models)
+	}
+	body, err := json.Marshal(openaiapi.ModelList{Object: "list", Data: models})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"object":"list","data":[]}` {
+		t.Fatalf("serialized as %s", body)
 	}
 }

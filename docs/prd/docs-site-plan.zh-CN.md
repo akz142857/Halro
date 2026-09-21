@@ -338,12 +338,12 @@ alerts  security  metrics  audit  model_catalog  providers  logging
 
 **必须显式回答、而契约里一条都没有的四件事**（第一次调用就会撞上）：
 
-1. `/v1/models` —— SDK 初始化后第一个动作常是 `models.list()`，Halro 对它有专门提示（`internal/gatewayapi/handler.go` 的 `unimplementedHints`），但**它不在 20 条 manifest 里**。契约作为「唯一事实源」在结构上生不出这一页，必须手写。
+1. ~~`/v1/models`~~ —— 已于 2026-09-21 实现（`openai.models.list.v1` / `openai.models.get.v1`），两条 manifest 在契约里，此条不再成立。
 2. **429 的六个成因**：Project RPM / TPM / 并发、Provider 或 Deployment 并发、Token Guard、上游限流。
 3. **404 `model_not_found`（Route 不存在）与 403 `model_not_allowed`（Route 存在但 Project 未授权）的区分** —— 只存在于代码里（`internal/gateway/service.go:226`、`:249`），契约里没有。
 4. `Retry-After` 与 `WWW-Authenticate` 响应头 —— 代码会返回，契约里没有。
 
-**「某个模型支不支持工具调用」在文档里走不通**，要直说：Gateway 不暴露 `GET /v1/models`，读者不知道自己的别名解析到哪个 Provider Profile，`profile_coverage` 是按 profile 组织的。文档必须明写「这个问题只能问管理员」，否则读者会在树里绕。
+**「某个模型支不支持工具调用」在文档里走不通**，要直说：`GET /v1/models` 只回答「我能填哪些别名」，不回答别名背后是什么——它刻意不透露别名解析到哪个 Provider Profile，而 `profile_coverage` 是按 profile 组织的。文档必须明写「这个问题只能问管理员」，否则读者会在树里绕。
 
 **截图**：现有 4 张（`01-dashboard-overview`、`02-project-attribution`、`03-usage-details`、`04-token-guard-policy`）**一张都不覆盖** Credential/Provider/Deployment/Route/Key 主链路，v1 写的「4 张可复用」是错的。近 90 天有 148 个 commit 动了 `web/src`，截图腐化的表现是「照着文档点，找不到那个按钮」。取舍：**第一版尽量不用截图**，改用文字步骤 + 对象模型图；确实需要的在专用演示实例上拍，用固定 fixture 数据，发布前逐张人工确认无真实密钥/凭据/用量/主机名 —— 图片过不了任何 grep 门禁，是唯一必须靠人的环节。
 
