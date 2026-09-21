@@ -77,15 +77,40 @@ const (
 // let a caller's own cancel count against the deployment's availability
 // breaker. It says nothing about ambiguity — a cancel mid-response may still
 // have been served upstream, so callers keep deriving that from Unsent.
+//
+// Timeouts are recognised by what they are rather than by which sentinel
+// produced them. `context.DeadlineExceeded` is one of them and is not the only
+// one: the HTTP/1 and HTTP/2 transports both answer an expired
+// ResponseHeaderTimeout with a net.Error of their own — "net/http: timeout
+// awaiting response headers", "http2: timeout awaiting response headers" —
+// that reports Timeout() and wraps no sentinel at all. Those arrived here as
+// ErrorConnect, so a request the upstream simply took too long to answer was
+// shown to an operator as a connection that could not be established, with
+// advice to go and check DNS, TLS and the egress proxy. None of which had
+// failed.
+//
+// The timeout must also be one that happened after the request went out.
+// Unsent is the same question ambiguity is decided by, and it separates the
+// two honestly: a dial or a resolution that ran out of time never reached the
+// upstream, and "the connection was not made" is the true thing to say about
+// it.
 func TransportClass(err error) ErrorClass {
 	switch {
 	case errors.Is(err, context.Canceled):
 		return ErrorCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return ErrorTimeout
+	case !Unsent(err) && timedOut(err):
+		return ErrorTimeout
 	default:
 		return ErrorConnect
 	}
+}
+
+// timedOut reports a transport error that says of itself that it is a timeout.
+func timedOut(err error) bool {
+	var network net.Error
+	return errors.As(err, &network) && network.Timeout()
 }
 
 type TransportFailure struct {

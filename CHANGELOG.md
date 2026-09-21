@@ -6,6 +6,49 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- A response-header timeout was reported as a connection that could not be
+  established, which sent operators to check DNS, TLS and the egress proxy for
+  an upstream that had been reachable the whole time.
+
+  `TransportClass` recognised exactly one timeout, `context.DeadlineExceeded`.
+  Both HTTP transports answer an expired `gateway.attempt_response_header_timeout`
+  with a `net.Error` of their own instead — `http2: timeout awaiting response
+  headers`, and the HTTP/1 equivalent — which reports `Timeout()` and wraps no
+  sentinel, so it fell through to `connect`. The console then showed "No secure
+  connection could be established" beside "The upstream may have executed or
+  billed the request", which cannot both be true, and the advice attached to that
+  class pointed at the network rather than at the timeout the operator had
+  configured. It is the failure a slow reasoning model produces on a long
+  prompt, so the class was wrong exactly where it was most consulted.
+
+  A timeout is now recognised by reporting itself as one, and only when the
+  request had already gone out: a dial or a resolution that ran out of time
+  never reached the upstream, and stays `connect`, because "the connection was
+  not made" is the true thing to say about it.
+
+  That also ends a disagreement a stalled TLS handshake had with itself. The
+  handshake is bounded by a context and by the same deadline on the connection,
+  so which error surfaces is a race: the context's
+  `context.DeadlineExceeded`, or a read returning `*net.OpError`. The first was
+  already `timeout` and the second was `connect`, so one stall reported two
+  classes — and two statuses, `504` and `502` — depending on which deadline
+  fired first. Both now say `timeout`. Making them agree the other way would
+  mean deciding that every expired `attempt_connect_timeout` is a connection
+  failure rather than a timeout, which is a larger change than this one and has
+  not been made.
+
+  **The status a caller receives changes with the class.** A response-header
+  timeout answered `502 provider_error` and now answers `504 provider_timeout`,
+  which is the status the condition has always deserved — a gateway whose
+  upstream did not answer in time is what 504 is for. Clients that switch on the
+  status or the code see the new pair. Retry and accounting semantics do not
+  move: both follow from whether anything was sent rather than from the class,
+  and the attempt stays ambiguous and non-retryable. Routing does not move
+  either — `internal/routegate` already widened the suspension scope identically
+  for both classes — and the Ledger already held both as valid classes.
+
 ### Added
 
 - `Idempotency-Key` on `POST /v1/chat/completions` and `POST /v1/embeddings`.
