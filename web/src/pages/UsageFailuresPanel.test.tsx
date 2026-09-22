@@ -63,6 +63,45 @@ describe("UsageFailuresPanel", () => {
     expect(url.searchParams.get("request_id")).toBe("req_failed");
   });
 
+  // Three tabs, three filter bars, and two of them were built on a different
+  // shell than the third — so switching tabs moved the table by the difference
+  // in their heights.
+  it("builds its filter bar on the shell the other usage tabs use", async () => {
+    renderPanel([providerFailure]);
+    await screen.findByText("服务商认证或权限被拒");
+
+    const panel = document.querySelector(".usage-filter-panel");
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector(".usage-filter-content > .usage-filter-row > .usage-filter-fields")).not.toBeNull();
+    expect(panel!.querySelector(".usage-filter-grid.usage-filter-failures")).not.toBeNull();
+    // The console's older bar, which is a different height, is gone from here.
+    expect(document.querySelector(".filter-bar")).toBeNull();
+  });
+
+  // Seven thin columns broke a Request ID mid-token, split a timestamp over two
+  // lines and ellipsised the row's one action to "失败…". The row carries the
+  // same facts in four composed cells now, the shape the attempt list uses.
+  it("lays the row out as four cells that keep every value on one line", async () => {
+    renderPanel([providerFailure]);
+    await screen.findByText("服务商认证或权限被拒");
+
+    const row = screen.getByRole("link", { name: /req_failed/ }).closest("tr")!;
+    const cells = row.querySelectorAll("td");
+    expect(cells).toHaveLength(4);
+    expect(Array.from(cells, (cell) => cell.getAttribute("data-label")))
+      .toEqual(["请求", "失败原因", "模型部署", "完成时间"]);
+
+    // The whole ID is recoverable even when the column ellipsises it.
+    expect(row.querySelector(".usage-request-id code")).toHaveAttribute("title", "req_failed");
+    // Project and alias ride with the ID rather than owning columns of their own.
+    expect(within(cells[0]).getByRole("link", { name: "Alpha" })).toBeVisible();
+    // Attempts and HTTP status are facts about the failure, so they sit in its
+    // cell — and the detail control is no longer squeezed into a 6% column.
+    expect(within(cells[1]).getByText("HTTP 401")).toBeVisible();
+    expect(within(cells[1]).getByText("2 次尝试")).toBeVisible();
+    expect(within(cells[1]).getByRole("button", { name: "失败详情" })).toBeVisible();
+  });
+
   // The row with nothing upstream to blame. Naming a class or a deployment here
   // would send the operator to audit a provider that was never called.
   it("names a policy rejection as one, with no provider context", async () => {

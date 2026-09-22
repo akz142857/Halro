@@ -85,7 +85,7 @@ describe("projects page", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
 
-    expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
+    expect(await screen.findByText("允许的公共模型别名")).toBeVisible();
     expect(screen.queryByRole("searchbox", { name: "搜索模型别名或路由 ID" })).not.toBeInTheDocument();
     expect(await screen.findAllByRole("checkbox", { name: /chat/ })).toHaveLength(1);
     expect(screen.getByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标/);
@@ -109,7 +109,7 @@ describe("projects page", () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: "创建第一个项目" }));
 
-    expect(await screen.findByText("允许的模型别名（路由入口）")).toBeVisible();
+    expect(await screen.findByText("允许的公共模型别名")).toBeVisible();
     expect(await screen.findByRole("checkbox", { name: /chat/ })).toHaveAccessibleName(/2 个目标 · 轮询/);
   });
 
@@ -247,7 +247,7 @@ describe("projects page", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: /NoRoutes/ })).toBeVisible();
-    expect(screen.getByText("允许的模型别名").nextSibling).toHaveTextContent("无");
+    expect(screen.getByText("允许的公共模型别名").nextSibling).toHaveTextContent("无");
   });
 
   it("keeps the policies page working after the project form filled the shared cache", async () => {

@@ -7,6 +7,8 @@ import { OnboardingContextBanner } from "../OnboardingContext";
 import { api } from "../api";
 import { ConfirmButton, EmptyState, ErrorState, Field, Loading, PageHeader, type ReauthValues } from "../components";
 import { navigate } from "../navigation";
+import { money, useInstantFormatter } from "../format";
+import type { UsageRequestSummary } from "../types";
 
 type Endpoint = "responses" | "chat" | "embeddings";
 type Language = "curl" | "javascript" | "python" | "go" | "java";
@@ -26,6 +28,39 @@ interface ExecutionState {
   streaming?: boolean;
   latency?: number;
   error?: string;
+  // The gateway's own refusal code, which says what to change; the HTTP status
+  // alone puts a capability rejection and a malformed body in one bucket.
+  errorCode?: string;
+  // What the ledger settled this request as. It is the only place the two
+  // questions an HTTP status cannot answer are answered: which project was
+  // billed, and what the call cost.
+  settlement?: UsageRequestSummary;
+  // Whether those numbers are the provider's own or Halro's conservative
+  // stand-in. The summary does not carry the flags; its attempts do.
+  estimated?: EstimationFlags;
+  // The reads are done and no record exists. Different from "not yet": a
+  // refusal before accounting never produces one.
+  settlementUnavailable?: boolean;
+}
+
+interface EstimationFlags {
+  tokens: boolean;
+  cost: boolean;
+}
+
+/** One entry of this session's request history. Held in memory only, like the key. */
+interface HistoryEntry {
+  id: string;
+  at: number;
+  endpoint: Endpoint;
+  model: string;
+  body: Record<string, unknown>;
+  status?: number;
+  outcome: ExecutionOutcome;
+  latency?: number;
+  requestID: string;
+  settlement?: UsageRequestSummary;
+  estimated?: EstimationFlags;
 }
 
 /** An image the request carries. An inline image travels as a data URL built in this
@@ -47,19 +82,57 @@ const copyStatusTimeoutMillis = 4000;
 // Debug keys expire on their own so a forgotten one cannot stay usable.
 const debugKeyLifetimeMillis = 24 * 60 * 60 * 1000;
 const emptyExecution: ExecutionState = { outcome: "idle", headers: "", body: "", requestID: "" };
+const historyLimit = 12;
+// Two megabytes of kept request bodies, after which the oldest stop being held.
+const historyBodyBudget = 2 << 20;
+// Settlement lands after the answer does. Six reads over ~1.8s is long enough
+// for the ledger to finalize an ordinary call and short enough that a request
+// which will never have a record says so rather than spinning.
+const settlementAttempts = 6;
+const settlementRetryMillis = 300;
 
 export function DeveloperPage() {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const readOnly = useIsReadOnly();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const developerConfig = useQuery({ queryKey: ["developer-config"], queryFn: api.developerConfig });
+  // The alias picker used to list bare names, so the one screen where a caller
+  // is about to send one said nothing about what answers it. These three reads
+  // are the same ones the routes page makes; a failure leaves the line unsaid
+  // rather than blocking the request.
+  const routes = useQuery({ queryKey: ["routes"], queryFn: api.routes });
+  const deployments = useQuery({ queryKey: ["deployments"], queryFn: api.deployments });
+  const providers = useQuery({ queryKey: ["providers"], queryFn: api.providers });
   const availableProjects = useMemo(
     () => (projects.data?.items ?? []).filter((project) => project.enabled && (project.allowed_models ?? []).length > 0),
     [projects.data?.items],
   );
+  // The routes page hands the alias over rather than making the reader retype
+  // it; the project is then whichever enabled one authorizes that alias.
+  const requestedAlias = useMemo(() => new URLSearchParams(window.location.search).get("model") ?? "", []);
   const [projectID, setProjectID] = useState("");
-  const selectedProject = availableProjects.find((project) => project.id === projectID) ?? availableProjects[0];
-  const [model, setModel] = useState("");
+  const selectedProject = availableProjects.find((project) => project.id === projectID)
+    // A deep link names an alias, not a project: open on one that can send it.
+    ?? (requestedAlias ? availableProjects.find((project) => (project.allowed_models ?? []).includes(requestedAlias)) : undefined)
+    ?? availableProjects[0];
+  const [model, setModel] = useState(requestedAlias);
+  const aliasTarget = useMemo(() => {
+    if (!model || !routes.data || !deployments.data) return "";
+    const deploymentByID = new Map(deployments.data.items.map((item) => [item.id, item]));
+    const providerNames = new Map((providers.data?.items ?? []).map((item) => [item.id, item.name]));
+    const candidates = routes.data.items
+      .filter((route) => route.public_model === model && route.enabled && !route.withheld)
+      .sort((left, right) => left.priority - right.priority || left.id.localeCompare(right.id));
+    const first = candidates[0];
+    if (!first) return "";
+    const deployment = deploymentByID.get(first.deployment_id);
+    const target = [providerNames.get(deployment?.provider_id ?? "") || deployment?.provider_id, deployment?.provider_model]
+      .filter(Boolean).join(" · ") || first.deployment_id;
+    return candidates.length > 1
+      ? t("developer.aliasTargetMulti", { target, count: candidates.length })
+      : t("developer.aliasTarget", { target });
+  }, [deployments.data, model, providers.data, routes.data, t]);
   const [endpoint, setEndpoint] = useState<Endpoint>("responses");
   const [input, setInput] = useState(() => t("developer.defaultInput"));
   const [images, setImages] = useState<ImageInput[]>([]);
@@ -77,15 +150,47 @@ export function DeveloperPage() {
   const [responseView, setResponseView] = useState<ResponseView>("body");
   const [codeExpanded, setCodeExpanded] = useState(false);
   const [execution, setExecution] = useState<ExecutionState>(emptyExecution);
+  // This session's calls. A debugging tool that forgets the previous request
+  // cannot answer "what did I change", which is most of what debugging is.
+  // Memory only, like the key: nothing here reaches browser storage.
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const executionController = useRef<AbortController | null>(null);
+  const recordSettlement = (requestID: string, settlement: UsageRequestSummary, estimated: EstimationFlags) =>
+    setHistory((entries) => entries.map((entry) => entry.requestID === requestID ? { ...entry, settlement, estimated } : entry));
+  // Newest first, and bounded twice over: by count, and by the bytes the kept
+  // bodies add up to. An inline image is base64, so twelve of them can be the
+  // better part of the instance's request ceiling held in memory.
+  const pushHistory = (entry: HistoryEntry) => setHistory((entries) => {
+    const kept: HistoryEntry[] = [];
+    let bytes = 0;
+    for (const candidate of [entry, ...entries].slice(0, historyLimit)) {
+      bytes += byteLength(JSON.stringify(candidate.body));
+      if (kept.length && bytes > historyBodyBudget) break;
+      kept.push(candidate);
+    }
+    return kept;
+  });
+  // Loading an earlier call back into the editor is the point of keeping them:
+  // it lands in JSON mode because that is the body that was actually sent,
+  // fields the form cannot express included.
+  const replay = (entry: HistoryEntry) => {
+    setEndpoint(entry.endpoint);
+    setRawJSON(JSON.stringify(entry.body, null, 2));
+    setJSONEdited(true);
+    setRequestMode("json");
+  };
 
   useEffect(() => {
     if (selectedProject && selectedProject.id !== projectID) setProjectID(selectedProject.id);
   }, [projectID, selectedProject]);
   useEffect(() => {
+    // Not while the projects query is still in flight: the alias list is empty
+    // then, so this would throw away a deep-linked alias before it could ever
+    // be valid and silently select a different one.
+    if (!projects.data) return;
     const routes = selectedProject?.allowed_models ?? [];
     if (!routes.includes(model)) setModel(routes[0] ?? "");
-  }, [model, selectedProject]);
+  }, [model, projects.data, selectedProject]);
   // Seed the URL once. Reacting to gatewayURL would refill the field the moment the
   // user clears it to type a different one.
   const gatewayURLSeeded = useRef(false);
@@ -94,7 +199,20 @@ export function DeveloperPage() {
     gatewayURLSeeded.current = true;
     setGatewayURL(developerConfig.data.gateway_base_url);
   }, [developerConfig.data?.gateway_base_url]);
-  useEffect(() => () => executionController.current?.abort(), []);
+  // The settlement read outlives the response, and by then `finally` has
+  // already cleared the controller the unmount cleanup aborts — so an unmounted
+  // page kept polling for a request nobody is looking at any more.
+  const mounted = useRef(true);
+  // The mount half is not optional: StrictMode mounts, runs the cleanup, and
+  // mounts again, so an effect that only clears this latches it false for the
+  // life of the page and the settlement read never runs at all.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      executionController.current?.abort();
+    };
+  }, []);
 
   // Embeddings cannot stream, but the preference survives so switching back restores it.
   const streamRequested = stream && endpoint !== "embeddings";
@@ -103,6 +221,11 @@ export function DeveloperPage() {
   const formImages = useMemo(() => endpoint === "embeddings" ? [] : images, [endpoint, images]);
   const formBody = useMemo(() => requestBody(endpoint, model, input, streamRequested, formImages), [endpoint, formImages, input, model, streamRequested]);
   const [rawJSON, setRawJSON] = useState(() => JSON.stringify(requestBody("responses", "", t("developer.defaultInput"), false, []), null, 2));
+  // Whether the JSON on screen is the operator's own. Switching modes used to
+  // regenerate it from the form unconditionally, so a hand-written body — the
+  // only way to send a field the form has no control for — was destroyed by a
+  // click on the tab it was written under, with nothing said.
+  const [jsonEdited, setJSONEdited] = useState(false);
   const parsedJSON = useMemo(() => parseJSON(rawJSON), [rawJSON]);
   const body = requestMode === "json" ? parsedJSON.value : formBody;
   const isStreaming = endpoint !== "embeddings" && body?.stream === true;
@@ -156,10 +279,25 @@ export function DeveloperPage() {
         execution.outcome === "cancelled" ? t("developer.requestCancelled") :
           execution.outcome === "truncated" ? t("developer.responseTruncated") :
             execution.outcome === "failed" ? t("developer.requestFailed") : "";
+  // The gateway names what it refused; the status code only says which bucket
+  // the refusal fell in. A capability rejection and a malformed body are both
+  // 400, and they are repaired in different places.
+  const codeHint = execution.errorCode ? t(`developer.hintCodes.${execution.errorCode}`, { defaultValue: "" }) : "";
   const executionHint = execution.outcome !== "httpError" ? "" :
     execution.adminRejected ? t("developer.hintSessionExpired") :
-      execution.status === 401 || execution.status === 403 ? t("developer.hintUnauthorized") :
-        execution.status === 429 ? t("developer.hintRateLimited") : "";
+      codeHint ? codeHint :
+        // Only when the envelope carried no code of its own. 401 and 403 are
+        // different refusals: the first is about the key itself, the second
+        // about what that key, that project or that source may reach.
+        execution.status === 401 ? t("developer.hintCodes.invalid_api_key") :
+          execution.status === 403 ? t("developer.hintUnauthorized") :
+            execution.status === 429 ? t("developer.hintRateLimited") : "";
+  // Which project the ledger actually charged. The picker above only filters
+  // the alias list — the Gateway Key decides the project — so the two can name
+  // different projects and nothing used to say so.
+  const settlement = execution.settlement;
+  const billedProject = settlement ? projects.data?.items.find((project) => project.id === settlement.project_id) : undefined;
+  const billedElsewhere = !!settlement && !!selectedProject && settlement.project_id !== selectedProject.id;
   const copy = async () => {
     if (!code) return;
     try {
@@ -185,13 +323,17 @@ export function DeveloperPage() {
     setCopyStatus("");
     setCodeExpanded(true);
   };
+  const fillJSONFromForm = () => {
+    setRawJSON(JSON.stringify(formBody, null, 2));
+    setJSONEdited(false);
+  };
   const selectRequestMode = (mode: RequestMode) => {
-    if (mode === "json" && requestMode !== "json") setRawJSON(JSON.stringify(formBody, null, 2));
+    if (mode === "json" && requestMode !== "json" && !jsonEdited) setRawJSON(JSON.stringify(formBody, null, 2));
     setRequestMode(mode);
   };
   const selectEndpoint = (next: Endpoint) => {
     setEndpoint(next);
-    if (requestMode === "json") {
+    if (requestMode === "json" && !jsonEdited) {
       setRawJSON(JSON.stringify(requestBody(next, model, input, stream && next !== "embeddings", next === "embeddings" ? [] : images), null, 2));
     }
   };
@@ -313,34 +455,80 @@ export function DeveloperPage() {
         if (truncated) break;
       }
       received += decoder.decode();
+      // A 4xx/5xx body still reads cleanly off the wire; only response.ok separates
+      // "the gateway answered" from "the gateway accepted".
+      const finalOutcome: ExecutionOutcome = truncated ? "truncated" : response.ok ? "completed" : "httpError";
+      const latency = Math.round(performance.now() - startedAt);
       setExecution((current) => ({
         ...current,
-        // A 4xx/5xx body still reads cleanly off the wire; only response.ok separates
-        // "the gateway answered" from "the gateway accepted".
-        outcome: truncated ? "truncated" : response.ok ? "completed" : "httpError",
+        outcome: finalOutcome,
         body: isStreaming ? received : formatResponseBody(received),
-        latency: Math.round(performance.now() - startedAt),
+        latency,
         // The admin layer and the Gateway both answer 401 here; only the error envelope
         // shape says whether the session lapsed or the Gateway Key was refused.
         adminRejected: !response.ok && adminEnvelopeError(received),
+        errorCode: response.ok ? "" : gatewayErrorCode(received),
       }));
+      pushHistory({
+        id: crypto.randomUUID(), at: Date.now(), endpoint, model: requestModel(body, model),
+        body, status: response.status, outcome: finalOutcome, latency, requestID,
+      });
     } catch (error) {
       const cancelled = controller.signal.aborted;
+      const latency = Math.round(performance.now() - startedAt);
       setExecution((current) => ({
         ...current,
         outcome: cancelled ? "cancelled" : "failed",
-        latency: Math.round(performance.now() - startedAt),
+        latency,
         error: cancelled ? t("developer.requestCancelled") : error instanceof Error ? error.message : t("developer.requestFailed"),
       }));
+      pushHistory({
+        id: crypto.randomUUID(), at: Date.now(), endpoint, model: requestModel(body, model),
+        body, outcome: cancelled ? "cancelled" : "failed", latency, requestID: correlatedRequestID,
+      });
     } finally {
       if (executionController.current === controller) executionController.current = null;
       // A cancelled or unmounted execution must not keep probing after the user moved on.
-      if (correlatedRequestID && !controller.signal.aborted) {
-        try {
-          await api.usageRequest(correlatedRequestID);
-          setExecution((current) => current.requestID === correlatedRequestID ? { ...current, usageAvailable: true } : current);
-        } catch {
-          // Authentication and request-validation failures legitimately have no Usage record.
+      if (correlatedRequestID && mounted.current && !controller.signal.aborted) {
+        // Settlement is committed after the answer is on the wire, so the first
+        // read can legitimately miss. A bounded retry is the difference between
+        // "this call cost nothing" and "the cost has not landed yet".
+        let settled = false;
+        for (let attempt = 0; attempt < settlementAttempts && mounted.current && !controller.signal.aborted; attempt++) {
+          try {
+            const detail = await api.usageRequest(correlatedRequestID);
+            // A 200 is not a settlement. The aggregate answers with the
+            // in-flight accumulator for a request it has seen but not
+            // finalized, and that record carries no outcome and zeros
+            // throughout — which rendered as "this call cost $0.00" and stayed
+            // that way, because nothing threw and the loop stopped.
+            if (!detail.summary.outcome) {
+              if (attempt < settlementAttempts - 1) await new Promise((resolve) => setTimeout(resolve, settlementRetryMillis));
+              continue;
+            }
+            const estimated = {
+              tokens: detail.attempts.some((event) => event.tokens_estimated),
+              cost: detail.attempts.some((event) => event.cost_estimated),
+            };
+            setExecution((current) => current.requestID === correlatedRequestID
+              ? { ...current, usageAvailable: true, settlement: detail.summary, estimated }
+              : current);
+            recordSettlement(correlatedRequestID, detail.summary, estimated);
+            settled = true;
+            break;
+          } catch {
+            // Authentication and request-validation failures legitimately have no Usage record.
+            // No sleep after the last read: it would hold the page open for a
+            // retry that is not going to happen.
+            if (attempt < settlementAttempts - 1) await new Promise((resolve) => setTimeout(resolve, settlementRetryMillis));
+          }
+        }
+        // Those refusals never produce one, so "awaiting settlement" would be a
+        // promise the page cannot keep. Say the record is not coming instead.
+        if (!settled && mounted.current && !controller.signal.aborted) {
+          setExecution((current) => current.requestID === correlatedRequestID
+            ? { ...current, settlementUnavailable: true }
+            : current);
         }
       }
     }
@@ -352,7 +540,6 @@ export function DeveloperPage() {
         eyebrow={t("developer.eyebrow")}
         title={t("developer.title")}
         description={t("developer.description")}
-        action={<span className="badge developer-preview-badge">{t("developer.previewBadge")}</span>}
       />
       <OnboardingContextBanner />
       {developerConfig.data?.enabled === false && (
@@ -371,6 +558,9 @@ export function DeveloperPage() {
           <section className="developer-config-panel" aria-labelledby="developer-request-setup">
             <header className="developer-panel-header">
               <div><p className="eyebrow">{t("developer.stepRequest")}</p><h2 id="developer-request-setup">{t("developer.requestSetup")}</h2></div>
+              {/* A state label, not an action: in the page header's action slot
+                  it occupied the place a control belongs. */}
+              <span className="badge developer-preview-badge">{t("developer.previewBadge")}</span>
             </header>
             <div className="developer-mode-tabs" role="tablist" aria-label={t("developer.requestMode")}>
               <button id="developer-request-tab-form" type="button" role="tab" tabIndex={requestMode === "form" ? 0 : -1} aria-selected={requestMode === "form"} aria-controls={requestMode === "form" ? "developer-request-panel-form" : undefined} onKeyDown={(event) => moveTab(event, ["form", "json"], requestMode, selectRequestMode, "developer-request-tab")} onClick={() => selectRequestMode("form")}>{t("developer.formMode")}</button>
@@ -385,7 +575,7 @@ export function DeveloperPage() {
               </Field>
               {/* In JSON mode the body below is the source of truth; leaving the picker live
                   would show one model while sending — and billing — another. */}
-              <Field label={t("developer.publicModel")} hint={requestMode === "json" ? t("developer.jsonModeOverride") : undefined}>
+              <Field label={t("developer.publicModel")} hint={requestMode === "json" ? t("developer.jsonModeOverride") : aliasTarget || undefined}>
                 <select value={model} disabled={requestMode === "json"} onChange={(event) => setModel(event.target.value)}>
                   {(selectedProject.allowed_models ?? []).map((route) => <option value={route} key={route}>{route}</option>)}
                 </select>
@@ -432,6 +622,7 @@ export function DeveloperPage() {
                   />
                 </div>
                 <small id="developer-gateway-key-hint">{t("developer.gatewayKeyHint")}</small>
+                <small className="developer-key-stepup">{t("developer.debugKeyStepUpHint")}</small>
                 {createDebugKey.isError && <ErrorState error={createDebugKey.error} />}
                 {createdKeyName && (
                   <p className="developer-created-key" role="status">
@@ -518,9 +709,19 @@ export function DeveloperPage() {
                   </div>
                 </>
               ) : (
-                <Field label={t("developer.rawJSON")} hint={t("developer.rawJSONHint")} error={parsedJSON.error ? t("developer.invalidJSON") : undefined}>
-                  <textarea autoComplete="off" className="developer-json-editor" rows={14} value={rawJSON} spellCheck={false} onChange={(event) => setRawJSON(event.target.value)} />
-                </Field>
+                <>
+                  <Field label={t("developer.rawJSON")} hint={t("developer.rawJSONHint")} error={parsedJSON.error ? t("developer.invalidJSON") : undefined}>
+                    <textarea autoComplete="off" className="developer-json-editor" rows={14} value={rawJSON} spellCheck={false} onChange={(event) => { setRawJSON(event.target.value); setJSONEdited(true); }} />
+                  </Field>
+                  {/* The form's own body is one click away rather than applied
+                      on top of what was typed here. */}
+                  {jsonEdited && (
+                    <p className="developer-json-sync">
+                      <span>{t("developer.jsonEdited")}</span>
+                      <button type="button" className="resource-link inline" onClick={fillJSONFromForm}>{t("developer.fillFromForm")}</button>
+                    </p>
+                  )}
+                </>
               )}
             </div>
             <div className="developer-request-summary" role="group" aria-label={t("developer.requestDetails")}>
@@ -555,7 +756,10 @@ export function DeveloperPage() {
           <div className="developer-output-column">
             <section className="developer-code-panel" aria-labelledby="developer-code-heading">
               <header className="developer-panel-header compact">
-                <div><p className="eyebrow">{t("developer.stepCode")}</p><h2 id="developer-code-heading">{t("developer.integrationCode")}</h2></div>
+                {/* Numbered 02 once, between the request and its response,
+                    while defaulting to collapsed — the sample is a by-product
+                    of the request, not a step on the way to sending it. */}
+                <div><h2 id="developer-code-heading">{t("developer.integrationCode")}</h2></div>
                 <button className="button ghost" disabled={!code} onClick={copy}>{t("developer.copyCode")}</button>
               </header>
               {/* The toggle sits beside the tablist, not inside it: a tablist may only contain tabs. */}
@@ -593,7 +797,42 @@ export function DeveloperPage() {
                 <div><small>{t("developer.requestID")}</small><code>{execution.requestID || "—"}</code></div>
                 <div><small>{t("developer.latency")}</small><strong>{execution.latency == null ? running ? "…" : "—" : `${execution.latency} ms`}</strong></div>
                 <div><small>{t("developer.delivery")}</small><strong>{responseStreaming ? "SSE" : t("developer.standardResponse")}</strong></div>
+                {/* What the call cost and who paid for it. The workbench sends
+                    billable traffic, and until the ledger answered here the
+                    only way to learn either was to leave the page. */}
+                <div>
+                  <small>{t("developer.billedProject")}</small>
+                  <strong>{settlement
+                    ? billedProject?.name || settlement.project_id
+                    : execution.outcome === "idle" ? "—"
+                      : execution.settlementUnavailable ? t("developer.settlementMissing") : t("developer.settlementPending")}</strong>
+                </div>
+                <div>
+                  <small>{t("developer.tokens")}</small>
+                  <strong>{settlement ? `${settlement.input_tokens} / ${settlement.output_tokens}` : "—"}</strong>
+                  {/* Whose count this is. Every other usage surface says so,
+                      and a conservative stand-in read as a measurement is the
+                      one reading that cannot be corrected later. */}
+                  {settlement && <small className="developer-settlement-note">{t(execution.estimated?.tokens ? "usage.conservative" : "usage.reported")}</small>}
+                </div>
+                <div>
+                  <small>{t("developer.cost")}</small>
+                  <strong>{settlement
+                    ? settlement.unknown_attempts > 0
+                      ? t("developer.costPartial", { amount: money(settlement.cost_micros_usd), count: settlement.unknown_attempts })
+                      : money(settlement.cost_micros_usd)
+                    : "—"}</strong>
+                  {settlement && execution.estimated?.cost && <small className="developer-settlement-note">{t("developer.costEstimated")}</small>}
+                </div>
               </div>
+              {billedElsewhere && (
+                <p className="developer-billing-mismatch" role="status">
+                  {t("developer.billedElsewhere", {
+                    billed: billedProject?.name || settlement.project_id,
+                    selected: selectedProject.name,
+                  })}
+                </p>
+              )}
               <div className="developer-response-tabs" role="tablist" aria-label={t("developer.responseViews")}>
                 <button id="developer-response-tab-body" type="button" role="tab" tabIndex={responseView === "body" ? 0 : -1} aria-selected={responseView === "body"} aria-controls={responseView === "body" ? "developer-response-panel-body" : undefined} onKeyDown={(event) => moveTab(event, ["body", "headers"], responseView, setResponseView, "developer-response-tab")} onClick={() => setResponseView("body")}>{t("developer.responseBody")}</button>
                 <button id="developer-response-tab-headers" type="button" role="tab" tabIndex={responseView === "headers" ? 0 : -1} aria-selected={responseView === "headers"} aria-controls={responseView === "headers" ? "developer-response-panel-headers" : undefined} onKeyDown={(event) => moveTab(event, ["body", "headers"], responseView, setResponseView, "developer-response-tab")} onClick={() => setResponseView("headers")}>{t("developer.responseHeaders")}</button>
@@ -642,6 +881,65 @@ export function DeveloperPage() {
               </div>
               <footer className="developer-response-footnote">{t("developer.responseDescription")}</footer>
             </section>
+
+            {/* Debugging is comparing one call against the last one, and the
+                page used to forget it the moment the next was sent. */}
+            {history.length > 0 && (
+              <section className="developer-history-panel" aria-labelledby="developer-history-heading">
+                <header className="developer-panel-header compact">
+                  <div><p className="eyebrow">{t("developer.stepHistory")}</p><h2 id="developer-history-heading">{t("developer.history")}</h2></div>
+                  <button className="button ghost" onClick={() => setHistory([])}>{t("developer.clearHistory")}</button>
+                </header>
+                <ul className="developer-history-list">
+                  {history.map((entry) => (
+                    <li key={entry.id}>
+                      <div className="developer-history-head">
+                        <span className={`developer-history-outcome ${entry.outcome}`}>
+                          {entry.status ?? t(entry.outcome === "cancelled" ? "developer.historyCancelled" : "developer.historyFailed")}
+                        </span>
+                        <strong>{entry.model}</strong>
+                        <span>{t(`developer.endpoint${entry.endpoint === "chat" ? "Chat" : entry.endpoint === "embeddings" ? "Embeddings" : "Responses"}`)}</span>
+                      </div>
+                      <div className="developer-history-meta">
+                        {/* Through the console's formatter, which is where the
+                            accounting time zone is decided — not the browser's,
+                            which would disagree with the usage record this row
+                            links to. */}
+                        <span>{dateTime(new Date(entry.at).toISOString(), "dateTime")}</span>
+                        {entry.latency != null && <span>{entry.latency} ms</span>}
+                        {/* Absent rather than zero while settlement has not
+                            landed: a blank cost is unknown, not free. A cost
+                            with attempts of unknown cost behind it is not a
+                            complete figure either, and says so here as it does
+                            in the panel above. */}
+                        {entry.settlement && (
+                          <span>{entry.settlement.unknown_attempts > 0
+                            ? t("developer.costPartial", { amount: money(entry.settlement.cost_micros_usd), count: entry.settlement.unknown_attempts })
+                            : money(entry.settlement.cost_micros_usd)}
+                            {entry.estimated?.cost ? ` · ${t("developer.costEstimated")}` : ""}</span>
+                        )}
+                      </div>
+                      <div className="developer-history-actions">
+                        <button type="button" className="resource-link inline" onClick={() => replay(entry)}>{t("developer.replayRequest")}</button>
+                        {/* The ID rides the link rather than being reprinted:
+                            the response panel above already shows the current
+                            one, and two copies of the same string read as two
+                            different requests. */}
+                        {entry.settlement && (
+                          <button
+                            type="button"
+                            className="resource-link inline"
+                            title={entry.requestID}
+                            onClick={() => navigate(`/admin/usage?request_id=${encodeURIComponent(entry.requestID)}`)}
+                          >{t("developer.historyUsage")}</button>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <footer className="developer-history-footnote">{t("developer.historyBoundary")}</footer>
+              </section>
+            )}
           </div>
         </div>
       )}
@@ -674,6 +972,25 @@ function responseHeaders(headers: Headers) {
     if (!adminEnvelopeHeaders.has(name.toLowerCase())) rows.push(`${name}: ${value}`);
   });
   return rows.sort((left, right) => left.localeCompare(right)).join("\n");
+}
+
+// The Gateway names its own refusal in `error.code` — model_not_found,
+// unsupported_feature, budget_exceeded, token_guard_blocked and the rest. It is
+// what decides where the repair is, and it is more specific than the status.
+function gatewayErrorCode(raw: string) {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const error = (parsed as { error?: unknown })?.error;
+    const code = (error as { code?: unknown })?.code;
+    return typeof code === "string" ? code : "";
+  } catch {
+    return "";
+  }
+}
+
+/** What the sent body asked for, which in JSON mode is not what the picker shows. */
+function requestModel(body: Record<string, unknown> | undefined, fallback: string) {
+  return typeof body?.model === "string" && body.model ? body.model : fallback;
 }
 
 // Admin errors are {"error": "..."} while the Gateway answers with OpenAI's
@@ -813,6 +1130,10 @@ function curlExample(url: string, json: string, streaming: boolean) {
     `curl${streaming ? " -N" : ""} ${shellQuote(url)}`,
     "  -H \"Authorization: Bearer $HALRO_API_KEY\"",
     "  -H \"Content-Type: application/json\"",
+    // Halro does not negotiate on Accept, but a client that asks for the
+    // stream it is about to read is the shape every official SDK sends, and it
+    // is what keeps working if negotiation is ever added.
+    ...(streaming ? ["  -H \"Accept: text/event-stream\""] : []),
     `  --data-binary ${shellQuote(json)}`,
   ].join(" \\\n");
 }
@@ -822,13 +1143,13 @@ function codeExample(language: Language, baseURL: string, path: string, body: ob
   const json = JSON.stringify(body, null, 2);
   const streaming = "stream" in body && body.stream === true;
   if (language === "curl") return curlExample(url, json, streaming);
-  if (language === "javascript" && streaming) return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nconst reader = response.body.getReader();\nconst decoder = new TextDecoder();\nwhile (true) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  console.log(decoder.decode(value, { stream: true }));\n}`;
-  if (language === "python" && streaming) return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HALRO_API_KEY']}",\n        "Content-Type": "application/json",\n    },\n    json=payload,\n    stream=True,\n)\nresponse.raise_for_status()\nfor line in response.iter_lines():\n    if line:\n        print(line.decode("utf-8"))`;
-  if (language === "go" && streaming) return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, err := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nif err != nil { log.Fatal(err) }\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HALRO_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\nif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n    responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))\n    log.Fatalf("Halro returned %s: %s", resp.Status, responseBody)\n}\n\nscanner := bufio.NewScanner(resp.Body)\nscanner.Buffer(make([]byte, 64<<10), 1<<20)\nfor scanner.Scan() {\n    fmt.Println(scanner.Text())\n}\nif err := scanner.Err(); err != nil { log.Fatal(err) }`;
-  if (language === "java" && streaming) return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<Stream<String>> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofLines());\nresponse.body().forEach(System.out::println);`;
-  if (language === "javascript") return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nconsole.log(await response.json());`;
+  if (language === "javascript" && streaming) return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n    "Accept": "text/event-stream",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\nif (!response.ok) {\n  throw new Error(\`Halro returned \${response.status}: \${await response.text()}\`);\n}\n\nconst reader = response.body.getReader();\nconst decoder = new TextDecoder();\nwhile (true) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  console.log(decoder.decode(value, { stream: true }));\n}`;
+  if (language === "python" && streaming) return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HALRO_API_KEY']}",\n        "Content-Type": "application/json",\n        "Accept": "text/event-stream",\n    },\n    json=payload,\n    stream=True,\n)\nresponse.raise_for_status()\nfor line in response.iter_lines():\n    if line:\n        print(line.decode("utf-8"))`;
+  if (language === "go" && streaming) return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, err := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nif err != nil { log.Fatal(err) }\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HALRO_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\nreq.Header.Set("Accept", "text/event-stream")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\nif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n    responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))\n    log.Fatalf("Halro returned %s: %s", resp.Status, responseBody)\n}\n\nscanner := bufio.NewScanner(resp.Body)\nscanner.Buffer(make([]byte, 64<<10), 1<<20)\nfor scanner.Scan() {\n    fmt.Println(scanner.Text())\n}\nif err := scanner.Err(); err != nil { log.Fatal(err) }`;
+  if (language === "java" && streaming) return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .header("Accept", "text/event-stream")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<Stream<String>> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofLines());\nif (response.statusCode() < 200 || response.statusCode() >= 300) {\n    throw new IllegalStateException("Halro returned " + response.statusCode() + ": "\n        + response.body().collect(java.util.stream.Collectors.joining("\\n")));\n}\nresponse.body().forEach(System.out::println);`;
+  if (language === "javascript") return `const response = await fetch(${JSON.stringify(url)}, {\n  method: "POST",\n  headers: {\n    "Authorization": \`Bearer \${process.env.HALRO_API_KEY}\`,\n    "Content-Type": "application/json",\n  },\n  body: JSON.stringify(${json.replace(/\n/g, "\n  ")}),\n});\n\n// A refusal is a perfectly readable JSON body, so without this the gateway's\n// error envelope is printed as if it were an answer.\nif (!response.ok) {\n  throw new Error(\`Halro returned \${response.status}: \${await response.text()}\`);\n}\n\nconsole.log(await response.json());`;
   if (language === "python") return `import json\nimport os\nimport requests\n\npayload = json.loads(${JSON.stringify(JSON.stringify(body))})\nresponse = requests.post(\n    ${JSON.stringify(url)},\n    headers={\n        "Authorization": f"Bearer {os.environ['HALRO_API_KEY']}",\n        "Content-Type": "application/json",\n    },\n    json=payload,\n)\nresponse.raise_for_status()\nprint(response.json())`;
   if (language === "go") return `payload := []byte(${JSON.stringify(JSON.stringify(body))})\nreq, err := http.NewRequest(http.MethodPost, ${JSON.stringify(url)}, bytes.NewReader(payload))\nif err != nil { log.Fatal(err) }\nreq.Header.Set("Authorization", "Bearer "+os.Getenv("HALRO_API_KEY"))\nreq.Header.Set("Content-Type", "application/json")\n\nresp, err := http.DefaultClient.Do(req)\nif err != nil { log.Fatal(err) }\ndefer resp.Body.Close()\n\nresponseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))\nif err != nil { log.Fatal(err) }\nif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n    log.Fatalf("Halro returned %s: %s", resp.Status, responseBody)\n}\nfmt.Println(string(responseBody))`;
-  if (language === "java") return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<String> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofString());\nSystem.out.println(response.body());`;
+  if (language === "java") return `String payload = ${javaTextBlock(json)};\n\nHttpRequest request = HttpRequest.newBuilder()\n    .uri(URI.create(${JSON.stringify(url)}))\n    .header("Authorization", "Bearer " + System.getenv("HALRO_API_KEY"))\n    .header("Content-Type", "application/json")\n    .POST(HttpRequest.BodyPublishers.ofString(payload))\n    .build();\n\nHttpResponse<String> response = HttpClient.newHttpClient()\n    .send(request, HttpResponse.BodyHandlers.ofString());\nif (response.statusCode() < 200 || response.statusCode() >= 300) {\n    throw new IllegalStateException("Halro returned " + response.statusCode() + ": " + response.body());\n}\nSystem.out.println(response.body());`;
   throw new Error("unsupported code language");
 }

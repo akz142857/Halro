@@ -448,6 +448,12 @@ h3 { margin-bottom: 0; font-size: var(--type-card-title-size); }
 .button.secondary { color: var(--color-action-primary); border-color: var(--accent-border); }
 .button.ghost { color: var(--muted); border-color: transparent; }
 .button.danger { min-height: 44px; padding: 0 14px; color: var(--color-status-danger-text); border-color: var(--color-status-danger-border); background: var(--color-status-danger-surface); font-size: var(--font-size-xs); }
+/* A destructive action's trigger, quiet until it is aimed at. Focus counts as
+   aiming: a keyboard operator never hovers, and would otherwise never see the
+   colour that says what this button does. */
+.button.quiet-danger:hover:not(:disabled), .button.quiet-danger:focus-visible:not(:disabled) {
+  color: var(--color-status-danger-text); border-color: var(--color-status-danger-border); background: var(--color-status-danger-surface);
+}
 .button.danger-text { color: var(--color-status-danger-text); border-color: transparent; background: transparent; }
 .button.danger-text:hover:not(:disabled) { border-color: var(--color-status-danger-border); background: var(--color-status-danger-surface); }
 .button.wide { width: 100%; }
@@ -1131,13 +1137,20 @@ button.deployment-condition-text:hover { text-decoration-style: solid; }
   max-width: min(46rem, 100%);
   margin: 4px 0 0; padding-left: 10px; border-left: 2px solid var(--danger);
   color: var(--danger); font-size: var(--font-size-xs); line-height: 1.4; overflow-wrap: anywhere;
+  /* Tables set nowrap for their cells, and this sentence is the one thing in a
+     row that has to wrap: held on one line it either widens the column or
+     overflows it, and the point of bounding it is that it does neither. */
+  white-space: normal;
 }
 /* Only the provider row places it on a grid; everywhere else it is a block that
    follows the control and reads from the left edge like the rest of the row. */
 .provider-row > .row-test-failure { grid-area: failure; justify-self: end; }
 /* The route table puts the control in a cell, so the sentence stacks under it
-   instead of joining the flex line of buttons beside it. */
-.inline-test-cell { display: flex; flex-direction: column; align-items: flex-start; }
+   instead of joining the flex line of buttons beside it. The cell it sits in is
+   the actions cell, which is right-aligned for its row of buttons — inherited
+   by a sentence that wraps, that ragged the second line against the right
+   edge while the first started at the left. */
+.inline-test-cell { display: flex; flex-direction: column; align-items: flex-start; text-align: left; }
 .provider-expanded-content { grid-area: details; padding: 18px 0 6px; border-top: 1px solid var(--line); }
 .provider-row, .credential-row { overflow-anchor: none; }
 .provider-expanded-content .provider-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0; }
@@ -1233,10 +1246,10 @@ td small, td code { display: block; margin-top: 4px; color: var(--muted); }
    table; the gap is the same rhythm the rest of the console puts between
    sections, so the tab does not read as a denser page than the log beside it. */
 .usage-summary { display: flex; flex-direction: column; gap: var(--space-4); }
-.usage-summary-controls { flex-wrap: wrap; }
 /* Export is the only action in a bar of filters, so it sits at the far end
-   rather than in the middle of them. */
-.usage-summary-controls .button { margin-left: auto; }
+   rather than in the middle of them — and at the height of the controls it
+   stands beside, not the 44px of a page action. */
+.usage-summary-export { min-height: 0; height: calc(var(--control-block-size) - .125rem); flex: 0 0 auto; }
 /* One control made of segments, not three loose buttons: joined, the same
    height as the inputs beside it, and carrying its own caption like every
    other field in the bar. */
@@ -1278,7 +1291,10 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-target-head { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .route-target-name { overflow: hidden; font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); text-overflow: ellipsis; white-space: nowrap; }
 .route-target-meta { overflow: hidden; color: var(--color-text-tertiary); text-overflow: ellipsis; white-space: nowrap; }
-.route-target-meta code { display: inline; }
+/* Plain text, not the mono face the console gives identifiers a reader is meant
+   to type: this one is an internal handle, and set as code it read as the
+   payload of the row while the alias above it read as a label. */
+.route-id { font: inherit; }
 .route-primary-tag { flex: 0 0 auto; color: var(--color-text-secondary); font-size: var(--font-size-xs); letter-spacing: .04em; }
 .route-primary-tag::before { content: "["; }
 .route-primary-tag::after { content: "]"; }
@@ -1288,13 +1304,42 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
    in its row is also the last one — so the alias ended up as far from the
    targets it heads as the table allows. */
 .route-group-heading th {
-  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-3); text-align: left; font-weight: var(--font-weight-regular);
+}
+/* The flex run lives on a wrapper, not on the th: a table cell told to lay out
+   as flex stops being a table cell, and the browser then drops its colSpan and
+   sizes the band to the first column alone. */
+.route-group-band {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-3);
 }
 /* Sized as a heading rather than as a label, and left in the mono face the rest
    of the console gives identifiers: this is the string a caller puts in its
    `model` field, not prose. */
 .route-group-alias { color: var(--text); font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); letter-spacing: -.01em; }
+/* The alias, what it is for, and the control that hands it over: one run, so
+   the name is read as the string it is rather than as a section label. */
+.route-alias-identity { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.route-alias-copy { display: inline-flex; align-items: center; }
+/* The shared icon button is a 44px touch target sized for a row of actions; at
+   the end of a name it would outweigh the name. */
+.route-alias-copy .icon-button { width: var(--space-6); height: var(--space-6); font-size: var(--font-size-md); line-height: 1; }
+/* The touch breakpoint raises min-height globally but nothing raises the
+   width, which left this a 24×44 target on a phone. */
+@media (max-width: 51.25rem) {
+  .route-alias-copy .icon-button { min-width: var(--control-touch-block-size); min-height: var(--control-touch-block-size); }
+}
+.route-alias-copy .icon-button:hover { color: var(--text); }
+.route-alias-usage { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
+.route-alias-state.serving { color: var(--color-status-success-text); }
+.route-alias-state.dark { color: var(--color-status-warning-text); }
+.route-alias-projects { color: var(--color-text-tertiary); }
+/* A real control in the band: sized down from the 44px row button, because it
+   sits in a heading beside text rather than in a row of actions. */
+.route-alias-try {
+  display: inline-flex; align-items: center; gap: var(--space-1); flex: 0 0 auto;
+  min-height: 0; height: var(--space-8); padding: 0 var(--space-3); white-space: nowrap;
+}
+.route-alias-try-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .route-group-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); }
 .route-group-heading span { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-join { grid-column: 1 / -1; padding: var(--space-3) var(--space-4); background: var(--overlay-hover); border-radius: var(--radius-lg); }
@@ -1308,6 +1353,18 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .route-withheld-cell { display: flex; flex-direction: column; align-items: flex-start; }
 /* The actions column, not the group band: a group heading is a single th that
    spans the table and is therefore also a last child. */
+/* Fixed, with the three right-hand columns sized in rem and the target column
+   taking what is left: a row that gains a failure sentence then grows taller,
+   never wider, and nothing beside it moves. */
+/* The three sized columns must leave the unsized one something to live on: in
+   fixed layout the target column gets only the leftover, so 6+22+38 against a
+   66rem floor left it exactly 0 and ellipsised the provider · model line to
+   nothing on any viewport under ~1700px. 5+15+29 = 49rem against a 62rem floor
+   keeps at least 13rem for the column the row is about. */
+.route-table { table-layout: fixed; min-width: 62rem; }
+.route-col-priority { width: 5rem; }
+.route-col-status { width: 15rem; }
+.route-col-actions { width: 29rem; }
 .route-table thead th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
@@ -1366,6 +1423,19 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
   color: var(--color-text-tertiary); font-size: var(--font-size-xs); font-weight: var(--font-weight-medium); white-space: nowrap;
 }
 .usage-filter-content { padding: var(--space-3); }
+/* One row: the fields take the width, the one thing that is not a field — an
+   export button, a record count — sits at the end on the controls' baseline.
+   It is what makes all three usage tabs the same height, which is what stops
+   the table moving when the reader switches between them. */
+.usage-filter-row { display: flex; min-width: 0; align-items: end; gap: var(--space-3); }
+.usage-filter-row > .usage-filter-fields { min-width: 0; flex: 1 1 auto; }
+.usage-filter-row > .usage-result-count { flex: 0 0 auto; padding-bottom: .65rem; }
+/* Five fields, two of them datetime pickers that need the room. */
+.usage-filter-failures { grid-template-columns: minmax(13rem, 1.4fr) repeat(2, minmax(9rem, 1fr)) repeat(2, minmax(12rem, 1.2fr)); }
+/* A segmented control, two dates and a dimension. */
+.usage-filter-summary { grid-template-columns: minmax(14rem, 1.2fr) repeat(2, minmax(9rem, 1fr)) minmax(10rem, 1fr); }
+.usage-filter-summary .filter-field { display: grid; min-width: 0; align-content: start; gap: var(--space-1); }
+.usage-filter-summary .filter-field > span { color: var(--muted-2); font: var(--font-size-xs) var(--mono); }
 .usage-filter-toolbar { display: flex; min-width: 0; align-items: end; gap: var(--space-3); }
 .usage-filter-toolbar > .usage-filter-fields { min-width: 0; flex: 1 1 auto; }
 .usage-filter-open { min-width: 4.5rem; min-height: 0; height: calc(var(--control-block-size) - .125rem); flex: 0 0 auto; }
@@ -1413,12 +1483,20 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 }
 .usage-table tbody tr { transition: background var(--motion-duration-fast) var(--motion-easing-standard); }
 .usage-table tbody tr:hover { background: var(--overlay-hover); }
-.usage-table .resource-link { color: var(--color-text-link); font-weight: var(--font-weight-semibold); text-decoration: none; }
-.usage-table .resource-link:hover { text-decoration: underline; text-underline-offset: .2em; }
+/* No colour of its own: a link to a project, a deployment or another list in
+   this console is a .resource-link and wears the console's accent, here as
+   everywhere else. These two tables painted theirs in --color-text-link, the
+   blue that marks a link OUT of the console — so the one screen where every
+   link is internal was the one screen that said they were not. */
 .usage-request-id {
-  display: block; margin: 0; overflow: hidden; color: var(--color-text-primary); font: var(--font-weight-semibold) var(--font-size-sm) var(--mono);
+  display: block; margin: 0; overflow: hidden; font: var(--font-weight-semibold) var(--font-size-sm) var(--mono);
   text-overflow: ellipsis; white-space: nowrap;
 }
+/* Only where the ID is plain text. On the failed-request list it is an anchor
+   carrying .resource-link too, and this colour — later in the file, same
+   specificity — was painting a link in body colour, leaving it identical to
+   the non-link ID one tab over. */
+code.usage-request-id { color: var(--color-text-primary); }
 .usage-request-context {
   display: flex; min-width: 0; align-items: baseline; gap: var(--space-2); margin-top: var(--space-2);
   overflow: hidden; color: var(--color-text-tertiary); font-size: var(--font-size-xs); white-space: nowrap;
@@ -1459,9 +1537,26 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 .usage-result-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); color: var(--color-text-secondary); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
 .usage-result-meta strong { color: inherit; font-size: inherit; font-weight: var(--font-weight-medium); }
 .usage-result-cell .failure-detail-open { margin-top: var(--space-3); font-size: var(--font-size-xs); white-space: nowrap; }
+/* The failed-request list, set in the same type as the attempt list beside it.
+   The ID is a token: one line, ellipsised, whole value in the title. */
+.usage-request-cell .usage-request-id { display: block; max-width: 100%; }
+.usage-request-cell .usage-request-id code {
+  display: block; overflow: hidden; color: inherit;
+  font: var(--font-weight-semibold) var(--font-size-sm) var(--mono);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* A timestamp is read as a figure, not as prose: it lines up digit for digit
+   with the rows above and below, and never breaks across two lines. */
+/* Qualified with td: `.usage-table td` is (0,1,1) and set colour, size and
+   white-space, so a bare class here lost every declaration it existed for —
+   the timestamp went on wrapping. */
+.usage-table td.usage-failure-time {
+  color: var(--color-text-secondary); font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
 
 @media (max-width: 1120px) {
-  .usage-filter-primary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .usage-filter-primary, .usage-filter-failures, .usage-filter-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 820px) {
@@ -2320,7 +2415,7 @@ textarea { resize: vertical; }
    one left a dead gutter on wide screens. */
 .developer-preview-badge { border-color: var(--accent-border); color: var(--lime); letter-spacing: .08em; text-transform: uppercase; }
 .developer-workbench { display: grid; grid-template-columns: minmax(320px, .74fr) minmax(0, 1.26fr); gap: 18px; align-items: start; }
-.developer-config-panel, .developer-code-panel, .developer-response-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-panel); }
+.developer-config-panel, .developer-code-panel, .developer-response-panel, .developer-history-panel { overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-panel); }
 .developer-config-panel { overflow: clip; }
 .developer-output-column { display: grid; gap: 18px; }
 .developer-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 22px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
@@ -2393,9 +2488,13 @@ textarea { resize: vertical; }
 .developer-code-footnote { display: flex; justify-content: space-between; gap: 20px; min-height: 50px; padding: 14px 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.45; }
 .developer-code-footnote span:first-child { max-width: 560px; }
 .developer-code-footnote span:last-child { flex: 0 0 auto; color: var(--lime); }
-.developer-response-meta { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1.4fr) minmax(0, .7fr) minmax(0, .8fr); border-bottom: 1px solid var(--line); background: var(--surface-inset); }
+/* Seven facts now, not four: the ledger's answer — who was billed, how many
+   tokens, what it cost — belongs beside the HTTP status, so the row wraps
+   instead of being sized column by column. */
+.developer-response-meta { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 1px solid var(--line); background: var(--surface-inset); }
 .developer-response-meta > div { display: grid; gap: 6px; min-width: 0; padding: 14px 16px; border-right: 1px solid var(--line); }
-.developer-response-meta > div:last-child { border-right: 0; }
+.developer-response-meta > div:nth-child(4n), .developer-response-meta > div:last-child { border-right: 0; }
+.developer-response-meta > div:nth-child(n+5) { border-top: 1px solid var(--line); }
 .developer-response-meta small { color: var(--muted); font: var(--font-size-xs)/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; }
 .developer-response-meta strong, .developer-response-meta code { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .developer-response-empty { display: flex; align-items: center; gap: 18px; min-height: 180px; padding: 28px; }
@@ -2420,6 +2519,32 @@ textarea { resize: vertical; }
 .developer-execution-status.cancelled, .developer-execution-status.truncated { color: var(--color-status-warning-text); }
 .developer-execution-status:empty { display: none; }
 .developer-response-result pre { min-height: 184px; max-height: 520px; margin: 0; padding: 20px 22px; overflow: auto; color: var(--text); font: var(--font-size-sm)/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* Said where the consequence is, not only in a hint above the picker: the
+   project selector filters aliases, the Gateway Key decides the bill. */
+.developer-billing-mismatch { margin: 0; padding: var(--space-3) var(--space-4); color: var(--color-status-warning-text); border-bottom: 1px solid var(--color-status-warning-border); background: var(--color-status-warning-surface); font-size: var(--font-size-xs); line-height: 1.5; }
+.developer-json-sync { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+.developer-json-sync .resource-link { color: var(--mint); font-weight: var(--font-weight-semibold); }
+/* Qualified against `.developer-response-meta small`, which is (0,1,1) and
+   would otherwise set this note in the uppercase mono the tile labels use. */
+.developer-response-meta small.developer-settlement-note {
+  display: block; margin-top: var(--space-1); color: var(--muted-2);
+  font: var(--font-size-xs)/1.4 var(--font-sans); letter-spacing: 0; text-transform: none;
+}
+.developer-key-stepup { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
+
+.developer-history-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.developer-history-list > li { display: grid; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
+.developer-history-list > li:last-child { border-bottom: 0; }
+.developer-history-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.developer-history-head strong { overflow: hidden; color: var(--text); font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+.developer-history-head > span:last-child { color: var(--muted); font-size: var(--font-size-xs); }
+.developer-history-outcome { min-width: 3.2rem; color: var(--color-status-success-text); font: var(--font-size-xs) var(--mono); }
+.developer-history-outcome.httpError, .developer-history-outcome.failed { color: var(--color-status-danger-text); }
+.developer-history-outcome.cancelled, .developer-history-outcome.truncated { color: var(--color-status-warning-text); }
+.developer-history-meta { display: flex; flex-wrap: wrap; gap: var(--space-3); color: var(--muted); font-size: var(--font-size-xs); }
+.developer-history-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.developer-history-actions .resource-link { color: var(--mint); font-weight: var(--font-weight-semibold); }
+.developer-history-footnote { padding: var(--space-3) var(--space-4); color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); font-size: var(--font-size-xs); line-height: 1.5; }
 .developer-response-footnote { padding: 12px 18px; color: var(--muted); border-top: 1px solid var(--line); background: var(--surface); font-size: var(--font-size-xs); line-height: 1.5; }
 
 /* Between the desktop sidebar breakpoint and the old 1120px page breakpoint,
@@ -2539,8 +2664,9 @@ textarea { resize: vertical; }
   .custody-runbook-bar { align-items: flex-start; flex-direction: column; }
   .developer-panel-header, .developer-panel-header.compact { align-items: flex-start; flex-direction: column; }
   .developer-response-meta { grid-template-columns: 1fr 1fr; }
-  .developer-response-meta > div:nth-child(2) { border-right: 0; }
-  .developer-response-meta > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+  .developer-response-meta > div:nth-child(2n) { border-right: 0; }
+  .developer-response-meta > div:nth-child(odd) { border-right: 1px solid var(--line); }
+  .developer-response-meta > div:nth-child(n+3) { border-top: 1px solid var(--line); }
   .redaction-rules-layout { grid-template-columns: minmax(0, 1fr); }
   .redaction-rule-browser { border-right: 0; border-bottom: 1px solid var(--line); }
   .redaction-rule-summaries { max-height: 16rem; }
@@ -3087,6 +3213,11 @@ textarea { resize: vertical; }
 }
 
 @media (max-width: 36.25rem) {
+  /* One field per row, and a segmented control that wraps instead of
+     overflowing its grid track — the flex-wrap that used to do this went with
+     the old .filter-bar. */
+  .usage-filter-failures, .usage-filter-summary, .usage-filter-primary { grid-template-columns: minmax(0, 1fr); }
+  .usage-filter-summary .segmented-choice { max-width: 100%; height: auto; flex-wrap: wrap; }
   .governance-context-bar { display: flex; align-items: stretch; flex-direction: column; padding: var(--space-4); }
   .governance-context-bar label { width: 100%; }
   .governance-project-status { order: initial; }

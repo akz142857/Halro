@@ -288,4 +288,19 @@ describe("UsageSummaryPanel", () => {
     expect(query.get("granularity")).toBe("month");
     expect(query.get("group_by")).toBe("project");
   });
+
+  // Three tabs, one filter shell: the summary was on the console's older
+  // .filter-bar, which is a different height, so arriving here from either of
+  // the other tabs shifted the page.
+  it("builds its filter bar on the shell the other usage tabs use", async () => {
+    vi.spyOn(api, "usageSummary").mockResolvedValue(summary({ totals: metrics({ requests: 1, attempts: 1 }) }));
+    renderPanel();
+    await screen.findByRole("button", { name: "导出 CSV" });
+
+    const panel = document.querySelector(".usage-filter-panel");
+    expect(panel).not.toBeNull();
+    expect(panel!.querySelector(".usage-filter-content > .usage-filter-row > .usage-filter-fields")).not.toBeNull();
+    expect(panel!.querySelector(".usage-filter-grid.usage-filter-summary")).not.toBeNull();
+    expect(document.querySelector(".filter-bar")).toBeNull();
+  });
 });

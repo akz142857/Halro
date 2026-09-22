@@ -707,6 +707,54 @@ describe("component styling reaches the markup", () => {
     expect(checked, "no .deployment-compact-actions rules were found to check").toBeGreaterThan(0);
   });
 
+  // A table cell told to lay out as flex stops being a table cell: the browser
+  // drops its colSpan and sizes it to the first column. The band's flex run
+  // therefore belongs to a wrapper inside the cell, and no rendering test can
+  // see this — styles.css is never loaded by jsdom.
+  it("keeps the route alias band's flex run off the table cell", () => {
+    const css = read("./styles.css");
+    expect(ruleBody(css, ".route-group-band"), ".route-group-band rule not found").toMatch(/display:\s*flex/);
+    expect(ruleBody(css, ".route-group-heading th"), ".route-group-heading th rule not found").not.toMatch(/display:\s*(flex|grid)/);
+  });
+
+  // In fixed layout the unsized column gets only what the sized ones leave. The
+  // three widths summed to the table's own min-width once, which left the
+  // target column — the one the row is about — exactly zero pixels.
+  it("leaves the route table's target column room to exist", () => {
+    const css = read("./styles.css");
+    const rem = (selector: string, property: string) => {
+      const body = ruleBody(css, selector);
+      expect(body, `${selector} rule not found`).toBeDefined();
+      const value = body!.match(new RegExp(`${property}:\\s*([0-9.]+)rem`))?.[1];
+      expect(value, `${selector} declares no ${property} in rem`).toBeDefined();
+      return Number(value);
+    };
+    const floor = rem(".route-table", "min-width");
+    const sized = rem(".route-col-priority", "width") + rem(".route-col-status", "width") + rem(".route-col-actions", "width");
+    expect(floor - sized, "the sized columns leave the target column less than 10rem").toBeGreaterThanOrEqual(10);
+  });
+
+  // `.usage-table td` is (0,1,1) and sets colour, size and white-space, so a
+  // bare class on the same cell loses every declaration it exists for.
+  it("qualifies the failed-request timestamp cell against the table's own td rule", () => {
+    const css = read("./styles.css");
+    expect(ruleBody(css, ".usage-failure-time"), "an unqualified .usage-failure-time rule is inert").toBeUndefined();
+    expect(ruleBody(css, ".usage-table td.usage-failure-time")).toMatch(/white-space:\s*nowrap/);
+  });
+
+  // The trigger of a destructive action is drawn like its neighbours and states
+  // what it is on hover and on focus — a keyboard operator never hovers. The
+  // class name is in components.tsx, so a rename in one file alone leaves the
+  // button with no danger affordance at all and every test still green.
+  it("keeps a danger treatment on the quiet destructive trigger", () => {
+    const css = read("./styles.css");
+    const rule = css.match(/^\.button\.quiet-danger:hover:not\(:disabled\)[^{]*\{([^}]*)\}/m)?.[1];
+    expect(rule, ".button.quiet-danger hover/focus rule not found").toBeDefined();
+    expect(rule).toMatch(/--color-status-danger/);
+    expect(css).toMatch(/\.button\.quiet-danger:focus-visible/);
+    expect(read("./components.tsx")).toMatch(/className = "button ghost quiet-danger"/);
+  });
+
   // A length flex-basis binds to the parent's main axis, so one declaration is a
   // width inside a row and a height inside a column. This control is used in
   // both: a row of buttons on the provider and deployment lists, and
