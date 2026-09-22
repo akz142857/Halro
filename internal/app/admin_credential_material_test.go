@@ -209,3 +209,87 @@ func TestProviderTestNamesWhyTheBindingHasNoAdapter(t *testing.T) {
 		})
 	}
 }
+
+// Claude Code's OAuth token and an Anthropic Console API key are both `sk-ant-`
+// secrets, they go in the same field, and only one of them may be there:
+// Anthropic's terms forbid a third-party service storing or routing through a
+// Claude.ai credential at all. Before this, the paste saved cleanly and the
+// boundary was expressed as a 401 on the operator's first real request.
+func TestAnthropicCredentialRefusesAClaudeSubscriptionToken(t *testing.T) {
+	cfg := testConfig(t)
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	cookie, csrf := loginAdminForTest(t, runtime)
+
+	const anthropicEndpoint = "https://api.anthropic.com"
+	create := func(providerType, endpoint, name, secret string) *httptest.ResponseRecorder {
+		t.Helper()
+		return performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+			"name": name, "type": providerType, "base_url": endpoint, "secret": secret,
+		})
+	}
+
+	// The two shapes a Claude Code sign-in produces, read first-hand from a live
+	// credential on 2026-09-22. The version digits are carried here and matched
+	// nowhere, so a future `oat02` is still refused.
+	for _, test := range []struct{ name, secret string }{
+		{"an OAuth access token", "sk-ant-oat01-" + strings.Repeat("A", 95)},
+		{"an OAuth refresh token", "sk-ant-ort01-" + strings.Repeat("A", 95)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := create("anthropic", anthropicEndpoint, "Claude Max", test.secret)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("a subscription token was stored as an API key: status=%d body=%s",
+					response.Code, response.Body.String())
+			}
+			var refusal map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &refusal); err != nil {
+				t.Fatal(err)
+			}
+			// A stable code, or the console has nothing to translate and prints
+			// the English sentence to every reader.
+			if refusal["code"] != "anthropic_subscription_token_refused" {
+				t.Fatalf("refused without a usable code: %s", response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), test.secret) {
+				t.Fatalf("the refusal echoed credential material: %s", response.Body.String())
+			}
+		})
+	}
+
+	// The refusal earns its place only if a Console key still saves. This is the
+	// shape it must never reach for.
+	consoleKey := create("anthropic", anthropicEndpoint, "Claude Console", "sk-ant-api03-"+strings.Repeat("A", 93)+"AA")
+	if consoleKey.Code != http.StatusCreated {
+		t.Fatalf("a Console API key was refused: status=%d body=%s", consoleKey.Code, consoleKey.Body.String())
+	}
+	var credential struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(consoleKey.Body.Bytes(), &credential); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotation reaches the same check. A credential that starts legitimate must
+	// not be walked onto a subscription token by an edit.
+	rotated := performAdminMutation(t, runtime, cookie, csrf,
+		http.MethodPut, "/admin/api/v1/credentials/"+credential.ID, `"1"`,
+		map[string]any{
+			"name": "Claude Console", "type": "anthropic", "base_url": anthropicEndpoint,
+			"secret":           "sk-ant-oat01-" + strings.Repeat("A", 95),
+			"current_password": stepUpTestPassword,
+		},
+	)
+	if rotated.Code != http.StatusBadRequest {
+		t.Fatalf("a rotation walked the credential onto a subscription token: status=%d body=%s",
+			rotated.Code, rotated.Body.String())
+	}
+
+	// Narrowness, which is the whole design of this check: it is bound to the
+	// Anthropic Console scheme and says nothing about anyone else's secrets. An
+	// upstream that chose a colliding prefix is not Halro's business to police.
+	elsewhere := create("deepseek", "https://api.deepseek.com", "DeepSeek", "sk-ant-oat01-not-anthropics-token")
+	if elsewhere.Code != http.StatusCreated {
+		t.Fatalf("the check leaked onto another provider's secret: status=%d body=%s",
+			elsewhere.Code, elsewhere.Body.String())
+	}
+}

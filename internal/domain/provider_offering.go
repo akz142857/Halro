@@ -93,6 +93,45 @@ const (
 // when they gain a surface, not before: a row no surface references is a
 // constant nothing can resolve, and the invariant tests below would have to
 // carry an exception for it.
+//
+// Those two are not the same kind of absence, and reading them as one costs the
+// next person the re-derivation this comment exists to prevent.
+//
+//   - `openai.codex-subscription` is waiting on work: an OAuth credential
+//     scheme this build does not have, and a first-hand reading of OpenAI's
+//     terms. That one may still arrive.
+//   - `anthropic.claude-subscription` is excluded by the upstream's own terms,
+//     not by Halro's roadmap. Read 2026-09-22 at
+//     https://code.claude.com/docs/en/legal-and-compliance, under "Usage policy
+//     → Authentication and credential use": OAuth authentication "is intended
+//     exclusively for purchasers of Claude Free, Pro, Max, Team, and Enterprise
+//     subscription plans and is designed to support ordinary use of Claude Code
+//     and other native Anthropic applications", while developers building
+//     products or services "should use API key authentication through Claude
+//     Console or a supported cloud provider". Two sentences there decide it for
+//     Halro specifically: Anthropic "does not permit third-party developers to
+//     offer Claude.ai login into their own applications, or to route requests
+//     through Free, Pro, or Max plan credentials on behalf of their users", and
+//     "developers may not collect, store, or intermediate Claude.ai credentials
+//     or session tokens — sign-in to a Claude account must complete through
+//     Anthropic's own flow."
+//
+// The second sentence is the one that closes the single-operator reading too.
+// Halro's whole credential model is to collect a secret, seal it and present it
+// upstream on someone's behalf, so even an operator serving only themselves
+// lands on the prohibited side; the carve-out the same page grants is for an end
+// user signing in to the *unmodified Claude Code binary*, which Halro is not.
+// So there is nothing here to withhold and nothing to schedule: the supported
+// path is `anthropic.console-api` with `anthropic.x-api-key`, plus Bedrock
+// Mantle for the cloud route, and both already ship. See
+// validateCredentialMaterial for the refusal that says so at save time, and
+// issue #351 for the reopening condition.
+//
+// docs/verification/anthropic-claude-subscription-evidence.md measured what the
+// upstream does rather than what it permits, and the two differ: presented as
+// `x-api-key` the token is refused "API key is invalid.", presented as a Bearer
+// token it is served. So nothing upstream enforces this boundary on every path,
+// and the refusal here is Halro's own rather than a report of the upstream's.
 
 // Region is a product boundary — which account, balance and model catalogue a
 // credential reaches — and never a cloud region. Bedrock's us-east-1 is a

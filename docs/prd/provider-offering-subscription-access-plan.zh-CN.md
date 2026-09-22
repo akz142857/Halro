@@ -136,6 +136,7 @@ Runtime / Agent Runtime profile——都要能解析出一个 Offering。
 
 反过来也成立：**没有 surface 引用的 Offering 不注册。**`openai.codex-subscription` 与
 `anthropic.claude-subscription` 在本方案里被命名，但它们要等到拿到 surface（阶段 4）才进表——
+（这两条不是同一种"没有"：前者等工程与条款复核，后者已被上游条款排除，见 §5.5）
 一个没有任何东西能解析到的常量，只会逼不变量测试为它写例外。首批常量：
 
 ```go
@@ -775,18 +776,83 @@ Codex 才消耗订阅/agentic usage。ChatGPT credits 也不是 API credits。
 
 ### 5.5 Anthropic
 
-Anthropic Console API 使用 API 账单与 API Key；Claude Pro/Max 可由 Claude Code 通过 Claude 账号
-OAuth 使用。两者不是同一个 Credential Scheme。
+Anthropic Console API 使用 API 账单与 API Key；Claude Pro/Max 由 Claude Code 通过 Claude 账号
+OAuth 使用。两者不是同一个 Credential Scheme——但本方案原文假设的阻塞项（OAuth 生命周期、
+workspace 绑定、"官方授权边界"）是工程量，而第一手复核的结论是：**阻塞项是上游的条款本身，
+不是 Halro 的代码。**
 
-因此：
+#### 条款复核（2026-09-22，第一手）
+
+来源：<https://code.claude.com/docs/en/legal-and-compliance>，"Usage policy → Authentication and
+credential use"。原文（英文，逐字）：
+
+> **OAuth authentication** is intended exclusively for purchasers of Claude Free, Pro, Max, Team,
+> and Enterprise subscription plans and is designed to support ordinary use of Claude Code and
+> other native Anthropic applications.
+>
+> **Developers** building products or services that interact with Claude's capabilities, including
+> those using the Agent SDK, should use API key authentication through Claude Console or a
+> supported cloud provider. Anthropic does not permit third-party developers to offer Claude.ai
+> login into their own applications, or to route requests through Free, Pro, or Max plan
+> credentials on behalf of their users. Moreover, developers may not collect, store, or
+> intermediate Claude.ai credentials or session tokens — sign-in to a Claude account must complete
+> through Anthropic's own flow.
+
+同页给出的唯一豁免是终端用户用自己的订阅登录**未经修改的 Claude Code 二进制**（包括平台托管
+Claude Code 的情形）。Consumer Terms（生效日 2025-10-08）本身不含这段措辞，它把 Claude Code
+的使用指回上面这一页，所以这一页才是要引的出处。
+
+#### 对 Halro 的结论
+
+- 多租户的那一半由第二句直接否掉：Halro 就是"代其用户转发请求"。
+- **单操作者自用的那一半由第三句否掉**，这是容易被读漏的一条：Halro 的凭据模型本身就是
+  收集密钥、封存、代为出示，即"collect, store, or intermediate"。所以"我只服务自己"不是一个
+  更宽松的情形，它落在同一句禁令里；豁免只给未经修改的 Claude Code，而 Halro 不是它。
+- 因此这不是 Kimi Code 那种"实现已在、等证据解锁 withheld"的状态——**没有可 withhold 的东西**。
+- 受支持的路径已经在售且早已发布：`anthropic.console-api` + `anthropic.x-api-key`，云上走
+  Bedrock Mantle。
+
+#### 实测（2026-09-22，操作者自己的订阅）
+
+条款是一回事，上游实际怎么答是另一回事，后者本节原先只有二手报道。实测见
+[`docs/verification/anthropic-claude-subscription-evidence.md`](../verification/anthropic-claude-subscription-evidence.md)：
+
+| 送法 | 结果 |
+|---|---|
+| `x-api-key: sk-ant-oat01-…` | **401** `{"type":"authentication_error","message":"API key is invalid."}` |
+| `Authorization: Bearer sk-ant-oat01-…` | **200**，正常出答案 |
+
+两条都直接用 curl、在 Claude Code 之外、不带任何客户端身份。含义：
+
+- 第一行是操作者真会撞上的那条——`ProfileAnthropicMessages` 送的就是 `x-api-key`
+  并抹掉 `Authorization`。而 "API key is invalid." 把人引去查错别字、换密钥或怀疑
+  Halro，三个都不是问题所在。这是"在保存时就拒绝"的体验理由，现在是实测而非推测。
+- 第二行推翻了二手报道所称的服务端封锁：**上游并没有在拦。**所以边界是条款而不是机制，
+  由此得到本节最要紧的一条工程结论——**拒绝不能以"上游会拒"为条件**，否则它永远不会在
+  真正能跑通的那个形状上触发。`refuseClaudeSubscriptionToken` 因此是 Halro 自己的
+  fail-closed 决定，即使 Anthropic 从不执法也不变。
+- "它其实能跑" **不是**重开条件。重开条件仍然是 Anthropic 发布第一方 delegated access
+  契约；这份记录讲的是机制，不讲许可，也不得被当作用法指引。
+
+#### 落到实现上
 
 - 现有 Anthropic profile 归属 `anthropic.console-api`；
-- `anthropic.claude-subscription` 需要 OAuth 生命周期、workspace 绑定和官方授权边界；
-- 不能让操作者把 Claude OAuth token 粘贴到 `x-api-key` 字段；
-- 首期不注册可达订阅 profile，因而同样不出现在元数据里。
+- `anthropic.claude-subscription` 不注册：无常量、无 surface、控制台也不出现"禁用态"选项；
+- **服务端拒绝把 Claude 订阅 OAuth token 存成 Anthropic API Key。**按 §7.2，产品身份不能在
+  浏览器里从密钥内容推断，所以判定在 Admin handler（`validateCredentialMaterial` →
+  `refuseClaudeSubscriptionToken`），控制台只负责把具名错误
+  `anthropic_subscription_token_refused` 翻译出来。这条刻意做窄：只匹配
+  `sk-ant-oat` / `sk-ant-ort` 两个前缀，不含版本位（`oat01` 是格式版本，写死它就是本仓库
+  反复吃亏的精确等值检查），也只挂在 `anthropic.x-api-key` 这一个 scheme 上——Bedrock Mantle
+  的 Anthropic profile 拿的是 AWS key，Kimi 与 MiniMax 的 Anthropic 面各有自己的 scheme。
+  识别不是安全控制：前缀若变，只是退回到今天的行为，不会误拒合法 Console Key。
+  形状取自本机真实 Claude Code 凭据（2026-09-22）：access token `sk-ant-oat01-…`、
+  refresh token `sk-ant-ort01-…`，各 108 字符。
 
-官方资料（未复核）：Claude Code 认证文档，现址为 `docs.claude.com` 下的 Claude Code 章节；旧的
-`docs.anthropic.com` 路径需在阶段 0 复核后再写入。
+#### 重开条件
+
+Anthropic 若发布面向订阅计划的第一方 delegated access / gateway 契约，本节重开，并复用
+`openai.codex-subscription` 的 OAuth 工作。在此之前答案是一个**有出处的"不做"**。
 
 ---
 
@@ -1269,7 +1335,8 @@ git diff --exit-code -- internal/webui/dist
    `DocumentationURL` 与稳定 `UsagePolicyRevision` 在 surface 表声明；阶段 1 的按量产品不携带
    无意义空文档和 revision，理由见 §2.2。
 3. **候选 Offering 不注册。**`openai.codex-subscription` / `anthropic.claude-subscription` 要等到
-   有 surface 才进表，否则不变量测试要为它们写例外（§2.1）。
+   有 surface 才进表，否则不变量测试要为它们写例外（§2.1）。后续复核把这两条分开了：
+   `anthropic.claude-subscription` 不是"等 surface"，是被上游条款排除，§5.5 记了出处与日期。
 4. **`Hosts` 挂在所有 surface 上，不只 by_endpoint。**`fixed` 的 surface 也列 host，供
    `SurfaceForEndpoint` 支撑 doctor 的存量检查（§2.6、§8.3）。
 5. **anthropic-beta 的接受条件收窄到 profile。**写路径原先按 surface 判断，比事实宽；改用与控制台

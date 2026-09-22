@@ -1235,6 +1235,28 @@ Kimi Open Platform; it does not expose a speculative Kimi Code region or key
 choice. DeepSeek remains API Platform only because no first-party independent
 Code subscription credential contract is published.
 
+**Claude Pro and Max cannot be used through Halro**, and unlike the two above,
+that is not something a future release changes. Anthropic's Claude Code legal and
+compliance page — read 2026-09-22, under "Authentication and credential use" —
+reserves OAuth sign-in for Claude Code and other native Anthropic applications,
+does not permit a third party to route requests through Free, Pro or Max
+credentials on behalf of its users, and does not permit a developer to collect,
+store or intermediate a Claude.ai credential at all. That last clause is the one
+that also answers "but I am the only user": holding a secret and presenting it
+upstream on someone's behalf is Halro's entire credential model, so a
+single-operator install is not a looser case. Use a Console API key from
+platform.claude.com, or Bedrock Mantle for the cloud route.
+
+Pasting a Claude Code token into the provider secret field is refused when you
+save it, naming the reason. Without that, the save succeeded and the answer
+arrived on the first real request as `401 API key is invalid.` — measured, not
+assumed (`docs/verification/anthropic-claude-subscription-evidence.md`), and a
+sentence that sends you to check for a typo or suspect Halro when neither is the
+problem. Note what that record also measured: the upstream does **not** refuse a
+subscription credential everywhere, so nothing outside Halro stops an operator
+who goes looking for a way to make one work. The refusal is Halro's own, taken on
+the terms, and it does not wait for Anthropic to enforce them.
+
 For BigModel, the credential form asks which product and account region the key
 belongs to before anything else, and the endpoint follows that choice — mainland and
 international are separate products with separate accounts, balances and

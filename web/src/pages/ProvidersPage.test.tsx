@@ -821,6 +821,33 @@ describe("ProvidersPage profile and credential bindings", () => {
     expect(screen.getByRole("button", { name: "加密保存" })).toBeDisabled();
   });
 
+  // A Claude Code OAuth token and an Anthropic Console API key are both
+  // `sk-ant-` secrets going into the same field, and Anthropic's terms allow
+  // only one of them here. §7.2 keeps that recognition in the Admin handler —
+  // the console never inspects key content — so all this has to prove is that
+  // the named refusal comes back readable instead of as an English sentence.
+  it("explains a refused Claude subscription token in the reader's language", async () => {
+    vi.spyOn(api, "createCredential").mockRejectedValueOnce(
+      new ApiError(
+        400,
+        "this is a Claude subscription OAuth token, not an Anthropic Console API key",
+        "anthropic_subscription_token_refused",
+      ),
+    );
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
+    fireEvent.click(screen.getByRole("button", { name: "＋ 凭据" }));
+    fireEvent.change(screen.getByLabelText("凭据名称"), { target: { value: "Claude Max" } });
+    fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "anthropic" } });
+    fireEvent.change(screen.getByLabelText(/^服务商密钥/), { target: { value: "sk-ant-oat01-pasted-from-claude-code" } });
+    fireEvent.click(screen.getByRole("button", { name: "加密保存" }));
+
+    expect(await screen.findByText(/不是 Anthropic Console 的 API Key/)).toBeVisible();
+    // The key the operator pasted is not echoed back onto the screen.
+    expect(screen.queryByText(/sk-ant-oat01-pasted-from-claude-code/)).toBeNull();
+  });
+
   it("lets a legacy restricted credential record the current terms during rotation", async () => {
     const credential: Credential = {
       id: "credential_legacy_coding", name: "Legacy Coding Plan", type: "bigmodel",
