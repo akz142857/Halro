@@ -507,7 +507,12 @@ export function ConfirmButton({
   ariaLabel,
   confirmLabel,
   title,
-  className = "button danger",
+  // The trigger sits in a row beside Edit and Disable and is not itself the
+  // destructive act — the dialog behind it is. Drawn in full danger colours it
+  // was the loudest thing on every row, which spends the warning long before
+  // the moment it matters; it reddens on hover and on focus instead, while the
+  // dialog's own confirm stays red throughout.
+  className = "button ghost quiet-danger",
   onConfirm,
   onOpen,
   disabled,

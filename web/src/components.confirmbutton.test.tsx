@@ -29,6 +29,21 @@ function renderConfirm(element: React.ReactElement) {
 // render the mutation error — nothing at all to say it had failed. The operator
 // read that as a misclick and did it again.
 describe("ConfirmButton", () => {
+  // The trigger is not the destructive act; the dialog behind it is. Painted in
+  // full danger colours it shouted on every row of every list, beside an Edit
+  // and a Disable that whisper.
+  it("draws the trigger like its neighbours and the dialog's confirm in danger", () => {
+    renderConfirm(<ConfirmButton label="删除" confirmLabel="删除模型路由？" onConfirm={vi.fn()} />);
+
+    const trigger = screen.getByRole("button", { name: "删除" });
+    expect(trigger).toHaveClass("ghost", "quiet-danger");
+    expect(trigger).not.toHaveClass("danger");
+
+    fireEvent.click(trigger);
+    const confirm = screen.getAllByRole("button", { name: "删除" }).at(-1)!;
+    expect(confirm).toHaveClass("danger");
+  });
+
   it("keeps the dialog open and states the reason when the action is refused", async () => {
     const onConfirm = vi.fn()
       .mockRejectedValueOnce(asksForStepUp())

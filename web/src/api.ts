@@ -51,6 +51,7 @@ import type {
   FailurePayload,
   RequestFailure,
   UsageAttempt,
+  UsageRequestDetail,
   UsageSummary,
   DeploymentPriceVersion,
   DeploymentPriceProposal,
@@ -558,7 +559,7 @@ export const api = {
   usageFailurePayload: (requestID: string) =>
     request<FailurePayload>(`/usage/failures/${encodeURIComponent(requestID)}/payload`).then((value) => value.data),
   usageRequest: (requestID: string) =>
-    request<unknown>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
+    request<UsageRequestDetail>(`/usage/requests/${encodeURIComponent(requestID)}`).then((value) => value.data),
   audit: (query = "") => request<Page<AuditRecord>>(`/audit${query}`).then((value) => value.data),
   tokenGuardPolicies: () => pageOfAll<TokenGuardPolicy>("token guard policy", "/token-guard-policies"),
   tokenGuardPoliciesPage: (query = "") =>

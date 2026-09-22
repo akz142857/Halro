@@ -72,7 +72,15 @@ export function UsageFailuresPanel() {
 
   return (
     <>
-      <div className="filter-bar">
+      {/* The same filter shell the attempt list uses. The two tabs had two
+          different constructs — this one on the console's older .filter-bar,
+          that one on the usage panel — so switching between them moved the
+          table under the reader by the difference in their heights. */}
+      <div className="usage-filter-panel">
+        <div className="usage-filter-content">
+          <div className="usage-filter-row">
+            <div className="usage-filter-fields">
+              <div className="usage-filter-grid usage-filter-failures">
         <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
         <label>
           <span>{t("usage.project")}</span>
@@ -91,13 +99,21 @@ export function UsageFailuresPanel() {
         </label>
         <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
         <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
-        {offeringID && (
-          <button type="button" className="filter-chip" onClick={() => setOfferingID("")}>
-            {t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) })}
-            <span aria-hidden="true"> ×</span>
-          </button>
-        )}
-        <span className="filter-count">{t("usage.failures.records", { count: rows.length })}</span>
+              </div>
+              {/* The chip row the attempt list has, for the one filter this
+                  list can arrive carrying but has no field for. */}
+              {offeringID && (
+                <div className="usage-applied-filters" aria-label={t("usage.appliedFilters")}>
+                  <button type="button" className="filter-chip" onClick={() => setOfferingID("")}>
+                    {t("usage.offeringFilter", { offering: t(`providers.offerings.${offeringID}`, { defaultValue: offeringID }) })}
+                    <span aria-hidden="true"> ×</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            <span className="usage-result-count" aria-live="polite">{t("usage.failures.records", { count: rows.length })}</span>
+          </div>
+        </div>
       </div>
       {failures.isPending && <Loading />}
       {failures.isError && <ErrorState error={failures.error} />}
@@ -107,25 +123,21 @@ export function UsageFailuresPanel() {
       {failures.data && rows.length > 0 && (
         <div className="table-shell">
           <table className="usage-table">
-            {/* Attempts and time are fixed-shape values — "1 次尝试", a
-                timestamp — so they take what they need and give the rest to
-                the two columns that carry variable-length text. */}
+            {/* Four composed cells rather than seven thin ones, the shape the
+                attempt list already uses. Seven columns split the width so far
+                that a Request ID wrapped mid-token, a timestamp broke across
+                two lines, and the row's one action was ellipsised to "失败…" —
+                the facts were all present and none of them were legible. */}
             <colgroup>
-              <col style={{ width: "20%" }} /><col style={{ width: "17%" }} /><col style={{ width: "21%" }} />
-              <col style={{ width: "18%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} />
-              <col style={{ width: "6%" }} />
+              <col style={{ width: "27%" }} /><col style={{ width: "31%" }} />
+              <col style={{ width: "26%" }} /><col style={{ width: "16%" }} />
             </colgroup>
             <thead>
               <tr>
-                <th>{t("usage.request")}</th>
-                <th>{t("usage.project")}</th>
-                <th>{t("usage.failures.cause")}</th>
-                <th>{t("usage.deployment")}</th>
-                <th>{t("usage.failures.attempts")}</th>
-                <th>{t("usage.time")}</th>
-                {/* The action column carries no heading, like the summary
-                    table's. Its button names itself. */}
-                <th />
+                <th scope="col">{t("usage.request")}</th>
+                <th scope="col">{t("usage.failures.cause")}</th>
+                <th scope="col">{t("usage.deployment")}</th>
+                <th scope="col">{t("usage.time")}</th>
               </tr>
             </thead>
             <tbody>
@@ -161,22 +173,28 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
   const last = failure.last_failure;
   return (
     <tr>
-      <td>
+      {/* The identifier and who it belongs to. The ID is mono and on one line
+          with the whole of it in the title: it is a token to copy or paste
+          into a filter, and a token broken across two lines is neither. */}
+      <td className="usage-request-cell" data-label={t("usage.request")}>
         {/* The Request ID goes to the attempt list filtered to this request,
             which is where its whole chain already lives. Building a second
             renderer for the chain here would leave two screens to keep in
             agreement about one record. */}
-        <Link className="resource-link" href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(failure.request_id)}`}>
-          <code>{failure.request_id}</code>
+        <Link className="resource-link usage-request-id" href={`/admin/usage?tab=attempts&request_id=${encodeURIComponent(failure.request_id)}`}>
+          <code title={failure.request_id}>{failure.request_id}</code>
         </Link>
-        <small>{failure.requested_model || "—"}</small>
+        <div className="usage-request-context">
+          <Link className="resource-link" href={`/admin/projects?project_id=${encodeURIComponent(failure.project_id)}`}>
+            {projectName || failure.project_id}
+          </Link>
+          <span aria-hidden="true">·</span>
+          <span title={failure.requested_model || undefined}>{failure.requested_model || "—"}</span>
+        </div>
       </td>
-      <td>
-        <Link className="resource-link" href={`/admin/projects?project_id=${encodeURIComponent(failure.project_id)}`}>
-          {projectName || failure.project_id}
-        </Link>
-      </td>
-      <td>
+      {/* What went wrong, how hard it was tried, and the way to the evidence —
+          one cell, because they are one answer. */}
+      <td className="usage-result-cell" data-label={t("usage.failures.cause")}>
         <span className="inline-status">
           <StatusDot ok={false} label={t("usage.error")} />
           {/* A policy rejection is named for what it is. Showing an upstream
@@ -187,15 +205,28 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
             : errorClassLabel(t, last?.error_class)
               || t(`usage.outcomes.${failure.outcome}`, { defaultValue: t("usage.error") })}
         </span>
-        {!policy && last?.provider_status ? <small>{t("usage.httpStatus", { status: last.provider_status })}</small> : null}
+        <div className="usage-result-meta">
+          {!policy && last?.provider_status ? <strong>{t("usage.httpStatus", { status: last.provider_status })}</strong> : null}
+          <span>{t("usage.failures.attemptCount", { count: failure.attempts })}</span>
+          {failure.fallbacks > 0 && <span>{t("usage.failures.fallbackCount", { count: failure.fallbacks })}</span>}
+        </div>
+        {/* Under the facts it belongs to rather than in a column of its own.
+            Its old column was 6% of the table, which ellipsised the label to
+            "失败…"; what it must not be is inline after the status word, where
+            "错误失败详情" read as one phrase. */}
+        <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
+          {t("usage.attemptDetails")}
+        </button>
       </td>
-      <td>
+      <td className="usage-route-cell" data-label={t("usage.deployment")}>
         {last?.deployment_id ? (
           <>
-            <Link className="resource-link" href={`/admin/deployments?q=${encodeURIComponent(last.deployment_id)}`}>
-              {deploymentName || last.deployment_id}
-            </Link>
-            {last.provider_model && <small>{last.provider_model}</small>}
+            <div className="usage-route-primary">
+              <Link className="resource-link" href={`/admin/deployments?q=${encodeURIComponent(last.deployment_id)}`}>
+                {deploymentName || last.deployment_id}
+              </Link>
+            </div>
+            {last.provider_model && <div className="usage-route-meta"><span>{last.provider_model}</span></div>}
           </>
         ) : (
           // Not a dash for tidiness: this request chose no deployment, and an
@@ -203,19 +234,8 @@ function FailureRow({ failure, projectName, deploymentName, formatInstant }: {
           <span className="muted">{t("usage.failures.noTarget")}</span>
         )}
       </td>
-      <td>
-        {t("usage.failures.attemptCount", { count: failure.attempts })}
-        {failure.fallbacks > 0 && <small>{t("usage.failures.fallbackCount", { count: failure.fallbacks })}</small>}
-      </td>
-      <td>{formatInstant(failure.completed_at, "dateTimeYear")}</td>
-      <td>
-        {/* Its own column. Sharing the cause cell put a control immediately
-            after a status word with nothing between them — "错误失败详情" read
-            as one phrase — and made the row's one action the hardest thing on
-            it to find. */}
-        <button type="button" className="resource-link failure-detail-open" onClick={() => setOpen(true)}>
-          {t("usage.attemptDetails")}
-        </button>
+      <td className="usage-failure-time" data-label={t("usage.time")}>
+        <time dateTime={failure.completed_at}>{formatInstant(failure.completed_at, "dateTimeYear")}</time>
         {/* Rendered inside a cell rather than beside the row: the dialog
             portals to the document body and leaves nothing here, and a
             component placed directly under <tr> would be invalid markup the

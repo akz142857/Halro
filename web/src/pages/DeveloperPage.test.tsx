@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { stepUpRequired } from "../test/fixtures";
-import type { Project } from "../types";
+import type { Project, UsageRequestDetail } from "../types";
 import { DeveloperPage } from "./DeveloperPage";
 
 const project: Project = {
@@ -26,6 +26,22 @@ const project: Project = {
   created_at: "2026-08-05T00:00:00Z",
   updated_at: "2026-08-05T00:00:00Z",
 };
+
+// What the ledger reports back for a settled request: the workbench reads the
+// billed project and the cost out of it, so a stub without them would assert
+// nothing about either.
+function settlementFixture(overrides: Partial<UsageRequestDetail["summary"]> = {}): UsageRequestDetail {
+  return {
+    summary: {
+      request_id: "req_debug_1", project_id: "project_1", requested_model: "support-chat",
+      attempts: 1, input_tokens: 12, output_tokens: 34, cost_micros_usd: 2500,
+      unknown_attempts: 0, fallbacks: 0, outcome: "succeeded",
+      accepted_at: "2026-09-22T00:00:00Z", completed_at: "2026-09-22T00:00:01Z",
+      ...overrides,
+    },
+    attempts: [],
+  };
+}
 
 describe("DeveloperPage", () => {
   beforeEach(() => {
@@ -205,7 +221,10 @@ describe("DeveloperPage", () => {
     expect(screen.getByText(/超过实例上限 512 B/)).toBeVisible();
   });
 
-  it("resets raw JSON when the endpoint changes and supports keyboard tab navigation", async () => {
+  // A hand-written body is the only way to send a field the form has no control
+  // for, and switching tabs or endpoints used to overwrite it from the form
+  // with nothing said. The form's body stays one click away instead.
+  it("keeps a hand-written JSON body across an endpoint change, and refills it on request", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -220,8 +239,49 @@ describe("DeveloperPage", () => {
     const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ });
     fireEvent.change(raw, { target: { value: '{"model":"custom","input":"hello","stream":true}' } });
     fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "chat" } });
+    expect((raw as HTMLTextAreaElement).value).toContain('"custom"');
+
+    fireEvent.click(screen.getByRole("button", { name: "用表单内容覆盖" }));
     expect((raw as HTMLTextAreaElement).value).toContain('"messages"');
-    expect((raw as HTMLTextAreaElement).value).not.toContain('"input"');
+    expect((raw as HTMLTextAreaElement).value).not.toContain('"custom"');
+    // Refilled means no longer hand-written, so an endpoint change follows the
+    // form again.
+    fireEvent.change(screen.getByLabelText("API 协议"), { target: { value: "embeddings" } });
+    expect((raw as HTMLTextAreaElement).value).not.toContain('"messages"');
+  });
+
+  // A refusal is a perfectly readable JSON body, so a sample that prints
+  // whatever came back reports the gateway's error envelope as an answer. Go
+  // and Python checked; JavaScript and Java did not, and they are the two most
+  // likely to be pasted straight into a service.
+  it("checks the HTTP status in every language and asks for the stream when streaming", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.click(screen.getByRole("button", { name: "展开代码" }));
+    const sample = () => view.container.querySelector(".developer-code")?.textContent ?? "";
+
+    const statusChecks: [string, RegExp][] = [
+      ["JavaScript", /if \(!response\.ok\)/],
+      ["Python", /raise_for_status\(\)/],
+      ["Go", /resp\.StatusCode < 200/],
+      ["Java", /response\.statusCode\(\) < 200/],
+    ];
+    for (const streaming of [false, true]) {
+      fireEvent.click(screen.getByRole("button", { name: streaming ? "SSE 流式" : "普通响应" }));
+      for (const [language, check] of statusChecks) {
+        fireEvent.click(screen.getByRole("tab", { name: language }));
+        expect(sample(), `${language} ${streaming ? "streaming" : "standard"}`).toMatch(check);
+      }
+      // curl prints the refusal where the operator is already looking, so it
+      // states the stream it wants and nothing more.
+      for (const language of ["curl", "JavaScript", "Python", "Go", "Java"]) {
+        fireEvent.click(screen.getByRole("tab", { name: language }));
+        expect(sample().includes("text/event-stream"), `${language} accept`).toBe(streaming);
+      }
+    }
   });
 
   it("shell-quotes curl examples and keeps Python JSON strings intact", async () => {
@@ -244,6 +304,89 @@ describe("DeveloperPage", () => {
     expect(pythonCode).not.toContain("What's True?");
   });
 
+  // An HTTP 200 says the call was accepted, not what it cost or who paid for
+  // it — and the project picker only filters aliases, so the Gateway Key can
+  // bill a different project than the one on screen.
+  it("reports what the ledger settled and flags a call billed to another project", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [
+      project,
+      { ...project, id: "project_2", name: "Batch jobs" },
+    ], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture({ project_id: "project_2", cost_micros_usd: 2500 }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+    expect(await screen.findByText("12 / 34")).toBeVisible();
+    // Once in the response panel, once in this session's history.
+    expect(screen.getAllByText(/0\.0025/)).toHaveLength(2);
+    expect(screen.getByText(/本次调用计入项目“Batch jobs”/)).toBeVisible();
+  });
+
+  // Debugging is comparing this call against the last one, and the page used to
+  // forget the last one the moment the next was sent.
+  it("keeps this session's requests and loads one back into the editor", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "first call" } });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("输入内容"), { target: { value: "second call" } });
+    fireEvent.click(screen.getByRole("button", { name: "载入这条请求" }));
+
+    // It lands in JSON mode because the stored body is what was sent, fields
+    // the form cannot express included.
+    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    expect(raw.value).toContain("first call");
+    expect(raw.value).not.toContain("second call");
+  });
+
+  // Settlement lands after the answer does, so the read retries — and it used
+  // to keep retrying after the page was gone, because `finally` clears the
+  // controller the unmount cleanup aborts. The next page's spy then saw a call
+  // for a request nobody was looking at.
+  it("stops reading settlement once the page is unmounted", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_unmount" } },
+    ));
+    // Never settles, so every attempt of the retry is taken.
+    const usage = vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("not settled yet"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+
+    view.unmount();
+    const callsAtUnmount = usage.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(usage.mock.calls.length).toBe(callsAtUnmount);
+  });
+
   it("executes a standard response and opens the correlated usage record", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
@@ -251,7 +394,7 @@ describe("DeveloperPage", () => {
       JSON.stringify({ id: "chatcmpl_1", choices: [{ message: { content: "hello" } }] }),
       { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
     ));
-    vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
@@ -343,7 +486,7 @@ describe("DeveloperPage", () => {
       .mockImplementationOnce((_endpoint, _key, _body, _streaming, signal) => new Promise((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
       }));
-    vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });
@@ -371,7 +514,7 @@ describe("DeveloperPage", () => {
       JSON.stringify({ error: { message: "missing or invalid bearer token" } }),
       { status: 401, statusText: "Unauthorized", headers: { "Content-Type": "application/json" } },
     ));
-    const usage = vi.spyOn(api, "usageRequest").mockResolvedValue({});
+    const usage = vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
     await screen.findByRole("option", { name: "support-chat" });

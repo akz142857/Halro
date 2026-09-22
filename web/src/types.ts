@@ -1160,6 +1160,32 @@ export interface UsageAttempt {
   fallback_count: number;
 }
 
+// One settled request, as the accounting authority reports it. The developer
+// workbench reads it to answer the two questions an HTTP status cannot: which
+// project was actually billed, and what the call cost.
+export interface UsageRequestSummary {
+  request_id: string;
+  project_id: string;
+  key_id?: string;
+  requested_model?: string;
+  attempts: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_micros_usd: number;
+  // Attempts whose cost the ledger could not decide. A zero cost with these
+  // above zero is an incomplete answer, not a free call.
+  unknown_attempts: number;
+  fallbacks: number;
+  outcome: string;
+  accepted_at: string;
+  completed_at: string;
+}
+
+export interface UsageRequestDetail {
+  summary: UsageRequestSummary;
+  attempts: UsageAttempt[];
+}
+
 // What a failed call carried, when the operator has switched capture on. This
 // is the only payload in the console that holds material a caller wrote, which
 // is why fetching it is an audited action on the server and why nothing here is

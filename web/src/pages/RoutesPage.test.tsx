@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, api } from "../api";
-import type { Deployment, Provider, Route } from "../types";
+import type { Deployment, Project, Provider, Route } from "../types";
 import { RoutesPage } from "./RoutesPage";
 
 describe("RoutesPage", () => {
@@ -96,8 +96,18 @@ describe("RoutesPage", () => {
     // And the two chat rows are under one heading, with zeta's own heading after.
     const headings = Array.from(document.querySelectorAll(".route-group-heading strong"), (cell) => cell.textContent);
     expect(headings).toEqual(["chat", "zeta"]);
+    // Two targets is structure no row states, so the band says it. The alias
+    // with one working target says nothing at all: silence is the healthy
+    // state, and the row under it already names the target.
     expect(screen.getByText("2 个目标 · 顺序回退")).toBeVisible();
-    expect(screen.getByText("单一目标 · 无回退")).toBeVisible();
+    expect(screen.queryByText("可用")).toBeNull();
+    // The band spans the table. It is a div inside the cell because a th laid
+    // out as flex stops being a table cell, and the browser then ignores its
+    // colSpan and squeezes the heading into the first column.
+    const heading = document.querySelector(".route-group-heading th") as HTMLTableCellElement;
+    expect(heading.colSpan).toBe(4);
+    expect(heading.classList.contains("route-group-band")).toBe(false);
+    expect(heading.querySelector(":scope > .route-group-band")).not.toBeNull();
   });
 
   // Priority decides which target is tried first, and nothing on the page said
@@ -131,6 +141,41 @@ describe("RoutesPage", () => {
 
     await screen.findByText("rte_first");
     expect(screen.queryByText("主")).toBeNull();
+  });
+
+  // The alias is the only string on this page that leaves the console and
+  // lands in someone's code, and the page used to neither say so nor hand it
+  // over — while "which projects may send it" was visible only as a refusal
+  // when deleting the last route.
+  it("hands over the alias and says which projects may send it", async () => {
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [
+      { id: "rte_first", public_model: "chat", deployment_id: "deployment_gpt", priority: 8, strategy: "ordered", enabled: true, revision: 1, created_at: "", updated_at: "" },
+    ] as Route[], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [
+      { id: "deployment_gpt", name: "GPT", provider_id: "p", provider_model: "gpt-5.1", enabled: true },
+    ] as Deployment[], next_cursor: "" });
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [{ id: "p", name: "OpenAI" } as Provider], next_cursor: "" });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [
+      { id: "prj_a", name: "A", enabled: true, allowed_models: ["chat"] },
+      { id: "prj_b", name: "B", enabled: true, allowed_models: ["other"] },
+      // Disabled projects authorize nothing today, so counting them would
+      // report an alias as reachable when it is not.
+      { id: "prj_c", name: "C", enabled: false, allowed_models: ["chat"] },
+    ] as Project[], next_cursor: "" });
+    const copy = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: copy } });
+    renderPage();
+
+    expect(await screen.findByText("应用在 model 字段里写它")).toBeVisible();
+    expect(await screen.findByText("1 个项目已授权")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "复制别名“chat”" }));
+    await waitFor(() => expect(copy).toHaveBeenCalledWith("chat"));
+
+    // Publishing an alias is finished when a request has gone through it, so
+    // the way there is a control, not a sentence at the end of a grey run.
+    fireEvent.click(screen.getByRole("button", { name: "去调试" }));
+    expect(window.location.pathname).toBe("/admin/developer");
+    expect(new URLSearchParams(window.location.search).get("model")).toBe("chat");
   });
 
   // The engine reads only the highest-priority target's strategy. The others
@@ -200,8 +245,8 @@ describe("RoutesPage", () => {
     vi.spyOn(api, "providers").mockResolvedValue({ items: [], next_cursor: "" });
     renderPage();
 
-    expect(await screen.findByText("目标状态读取失败")).toBeVisible();
-    expect(screen.queryByText("没有可用目标")).toBeNull();
+    expect(await screen.findByText("无法确认这个别名现在是否可用")).toBeVisible();
+    expect(screen.queryByText("不可用 · 应用请求这个名字会被拒绝")).toBeNull();
   });
 
   // Four columns carried one fact between them, and three repeated what the

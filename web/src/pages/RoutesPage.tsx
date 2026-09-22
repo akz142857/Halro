@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { api } from "../api";
 import {
   ConfirmButton,
@@ -18,11 +18,11 @@ import {
   type ReauthValues,
 } from "../components";
 import type { InlineTestState } from "../components";
-import type { Deployment, Provider, Route } from "../types";
+import type { Deployment, Project, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
-import { Link } from "../navigation";
+import { Link, navigate } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 // The route update is a full replacement, so a state toggle has to resend
@@ -91,6 +91,30 @@ export function RoutesPage() {
     () => new Map(providers.data?.items.map((item) => [item.id, item]) ?? []),
     [providers.data],
   );
+  // Which projects let an application ask for an alias. It is the fact that
+  // decides whether publishing one finished anything, and until now the console
+  // only revealed it by refusing a delete. A failed read leaves the count
+  // unsaid rather than reporting zero, and never blocks the list.
+  const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
+  const authorizingProjects = useMemo(() => {
+    if (!projects.data) return undefined;
+    const counts = new Map<string, number>();
+    projects.data.items.forEach((project: Project) => {
+      if (!project.enabled) return;
+      new Set(project.allowed_models ?? []).forEach((alias) => counts.set(alias, (counts.get(alias) ?? 0) + 1));
+    });
+    return counts;
+  }, [projects.data]);
+  // Where a route actually sends the request. The group band and the row both
+  // name it, and they must not name it differently.
+  const targetLabel = (route: Route) => {
+    const deployment = deploymentByID.get(route.deployment_id);
+    const providerID = deployment?.provider_id || "";
+    // Joined rather than concatenated, so a provider the list has not loaded
+    // does not leave a dangling separator in front of the model.
+    return [providerNames.get(providerID) || providerID, deployment?.provider_model]
+      .filter(Boolean).join(" · ") || route.deployment_id;
+  };
   // A failed deployments read cannot be reported as "no usable target": that is
   // a claim about the configuration, and this is a claim about one request.
   const targetStateUnknown = deployments.isError;
@@ -153,6 +177,19 @@ export function RoutesPage() {
         <div className="table-shell">
           <table className="route-table">
             <caption className="visually-hidden">{t("routes.list")}</caption>
+            {/* The columns are declared rather than measured. Under the default
+                auto layout a test failure's sentence — which only some rows
+                have, and only after a click — widened the actions column and
+                moved every other column with it, so testing one route shifted
+                the whole table under the reader's cursor. */}
+            <colgroup>
+              {/* No width: the target column takes whatever the three sized
+                  ones leave, and its contents already ellipsize. */}
+              <col />
+              <col className="route-col-priority" />
+              <col className="route-col-status" />
+              <col className="route-col-actions" />
+            </colgroup>
             <thead>
               <tr>
                 {/* Four columns used to carry one fact between them — the
@@ -168,13 +205,27 @@ export function RoutesPage() {
               </tr>
             </thead>
             {aliasGroups.map((group) => {
-              const summary = targetStateUnknown
-                ? t("aliasTargets.unknown")
-                : group.candidates.length === 0
-                  ? t("aliasTargets.none")
-                  : group.candidates.length === 1
-                    ? t("aliasTargets.single")
-                    : `${t("aliasTargets.count", { count: group.candidates.length })} · ${group.strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered")}`;
+              // Whether an application can send this name, which is the one
+              // question the rows below cannot answer: a row says its own route
+              // is enabled, not whether the alias resolves. Where the request
+              // lands is the rows' business — naming the target here reprinted
+              // the row underneath word for word whenever there was only one.
+              const aliasState = targetStateUnknown ? "unknown" : group.candidates.length === 0 ? "dark" : "serving";
+              // Silence is the healthy state. An alias with one working target
+              // has nothing to report that the row under it does not already
+              // show, so the band speaks only when something is off — or when
+              // there is more than one target, which is structure no row states.
+              const summary = aliasState === "unknown"
+                ? t("routes.aliasStateUnknown")
+                : aliasState === "dark"
+                  ? t("routes.aliasDark")
+                  : group.candidates.length > 1
+                    ? t("routes.aliasBandTargets", {
+                      count: group.candidates.length,
+                      strategy: group.strategy === "round_robin" ? t("routes.roundRobin") : t("routes.ordered"),
+                    })
+                    : "";
+              const authorized = authorizingProjects?.get(group.alias);
               // Only ordered failover has a first target. Round robin rotates
               // the starting point on every request, so marking one row primary
               // there would name a precedence that does not exist.
@@ -191,17 +242,53 @@ export function RoutesPage() {
                     group's own facts ride the far end of the same band: they
                     describe the set, not any one row. */}
                 <th colSpan={4} scope="colgroup">
-                  <strong className="route-group-alias">{group.alias}</strong>
-                  <span className="route-group-meta">
-                    <span>{summary}</span>
-                    {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
-                    {group.mixedEgress && <span className="badge warning" title={t("routes.mixedEgressTitle")}>{t("routes.mixedEgress")}</span>}
-                  </span>
+                  {/* The band is a div inside the cell rather than the cell
+                      itself: a th laid out as flex is no longer a table cell,
+                      so its colSpan stops applying and the heading shrinks to
+                      the first column. */}
+                  <div className="route-group-band">
+                    {/* The alias is the string a caller puts in its `model`
+                        field — the one thing on this page that leaves the
+                        console and lands in someone's code. It is therefore
+                        copyable, and says out loud what it is for. */}
+                    <div className="route-alias-identity">
+                      <strong className="route-group-alias">{group.alias}</strong>
+                      <CopyAlias alias={group.alias} />
+                      <span className="route-alias-usage">{t("routes.aliasUsage")}</span>
+                    </div>
+                    <span className="route-group-meta">
+                      {summary && <span className={`route-alias-state ${aliasState}`}>{summary}</span>}
+                      {group.mixed && <span className="badge warning" title={t("routes.mixedStrategyTitle")}>{t("routes.mixedStrategy")}</span>}
+                      {group.mixedEgress && <span className="badge warning" title={t("routes.mixedEgressTitle")}>{t("routes.mixedEgress")}</span>}
+                      {authorized !== undefined && (
+                        <span className="route-alias-projects">
+                          {authorized === 0 ? t("routes.aliasNoProjects") : t("routes.aliasProjects", { count: authorized })}
+                        </span>
+                      )}
+                      {/* Publishing an alias is only finished once a real
+                          request has gone through it, and the page that sends
+                          one is two clicks away with the name retyped. Drawn as
+                          a button rather than as link text: at the end of a run
+                          of grey facts it read as one more fact. */}
+                      <button
+                        type="button"
+                        className="button secondary route-alias-try"
+                        onClick={() => navigate(`/admin/developer?model=${encodeURIComponent(group.alias)}`)}
+                      >
+                        {/* The console's own developer-workbench mark, so the
+                            control names its destination before its label is
+                            read. */}
+                        <svg className="route-alias-try-icon" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M8 8 4 12l4 4M16 8l4 4-4 4M14 5l-4 14" />
+                        </svg>
+                        {t("routes.tryInWorkbench")}
+                      </button>
+                    </span>
+                  </div>
                 </th>
               </tr>
               {group.ordered.map((route) => {
                 const deployment = deploymentByID.get(route.deployment_id);
-                const providerID = deployment?.provider_id || "";
                 // What still serves the alias once THIS row is off: the row
                 // itself is only subtracted when it was serving, so disabling a
                 // withheld route does not report the alias as going dark when a
@@ -216,13 +303,7 @@ export function RoutesPage() {
                           <StatusDot ok={route.enabled && !route.withheld} />
                           {/* What the request actually reaches. The deployment
                               and route names below are how to go change it. */}
-                          {/* Joined rather than concatenated, so a provider the
-                              list has not loaded does not leave a dangling
-                              separator in front of the model. */}
-                          <span className="route-target-name">
-                            {[providerNames.get(providerID) || providerID, deployment?.provider_model]
-                              .filter(Boolean).join(" · ") || route.deployment_id}
-                          </span>
+                          <span className="route-target-name">{targetLabel(route)}</span>
                           {/* Not a badge: the pill's radius turns one CJK
                               character into a circle. A bracketed tag reads as
                               the annotation it is, and the brackets are drawn
@@ -238,8 +319,12 @@ export function RoutesPage() {
                             </span>
                           )}
                         </div>
+                        {/* The route ID is an internal handle no caller ever
+                            types; it was set in the mono face the console gives
+                            identifiers a reader is meant to use, which put it
+                            visually above the alias. */}
                         <small className="route-target-meta">
-                          {deployment?.name || route.deployment_id} · <code>{route.id}</code>
+                          {deployment?.name || route.deployment_id} · <span className="route-id">{route.id}</span>
                         </small>
                       </div>
                     </td>
@@ -312,6 +397,35 @@ export function RoutesPage() {
         <RouteForm current={editing} routes={routes.data?.items ?? []} deployments={deployments.data?.items ?? []} onClose={() => setEditing(undefined)} />
       )}
     </>
+  );
+}
+
+// The alias is meant to be pasted into an application, so the console hands it
+// over rather than asking the reader to select it by hand.
+function CopyAlias({ alias }: { alias: string }) {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<number>(undefined);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(alias);
+      setStatus("copied");
+    } catch {
+      setStatus("failed");
+    }
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setStatus("idle"), 2000);
+  };
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return (
+    <span className="route-alias-copy">
+      <button type="button" className="icon-button" aria-label={t("routes.copyAlias", { alias })} onClick={copy}>
+        {status === "copied" ? "✓" : status === "failed" ? "!" : "⧉"}
+      </button>
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {status === "copied" ? t("routes.aliasCopied", { alias }) : status === "failed" ? t("routes.aliasCopyFailed") : ""}
+      </span>
+    </span>
   );
 }
 
