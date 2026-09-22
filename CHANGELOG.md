@@ -8,6 +8,19 @@ semantic versioning.
 
 ### Fixed
 
+- The idempotency index bucket was the only durable bucket missing from
+  `requiredBuckets()`, so the check that runs after every migration — "metadata
+  schema N is missing bucket X" — did not cover it.
+
+  Nothing was wrong in practice: migration 40 creates it in the same
+  transaction as the schema bump, so it always exists. What was wrong is that
+  the one bucket whose absence has a bad failure mode was the one not asserted.
+  `tx.Bucket` returns nil for a bucket that is not there and bbolt's `Get`
+  dereferences the receiver, so a missing index would panic on the first keyed
+  request rather than refuse to start with the message that exists for exactly
+  this. Both other index buckets, and every bucket added since, are listed; this
+  one is now too.
+
 - A response-header timeout was reported as a connection that could not be
   established, which sent operators to check DNS, TLS and the egress proxy for
   an upstream that had been reachable the whole time.
