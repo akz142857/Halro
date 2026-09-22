@@ -77,6 +77,7 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 		domain.CredentialBedrockAPIKey:          []byte("test-key"),
 		domain.CredentialBigModelAPIKey:         []byte("test-key"),
 		domain.CredentialBigModelCodingPlanKey:  []byte("test-key"),
+		domain.CredentialKimiCodeKey:            []byte("test-key"),
 		domain.CredentialMiniMaxSubscriptionKey: []byte("test-key"),
 	}
 	for _, profile := range domain.AllProviderProfiles() {

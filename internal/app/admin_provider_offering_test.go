@@ -128,15 +128,34 @@ func TestCodeSubscriptionOfferingsExposeOnlyValidatedProducts(t *testing.T) {
 	for _, providerType := range view.ProviderTypes {
 		switch providerType.Type {
 		case domain.ProviderKimi:
-			for _, offering := range providerType.Offerings {
-				if offering.ID == domain.OfferingKimiCode {
-					t.Fatal("Kimi Code was served before its identity and protocol admission gates passed")
+			// Served since 2026-09-22, when both admission gates were driven with
+			// a real subscription key: Halro's own User-Agent is accepted, and the
+			// reasoning off switch is honoured on each face.
+			var code *providerOfferingView
+			for index := range providerType.Offerings {
+				if providerType.Offerings[index].ID == domain.OfferingKimiCode {
+					code = &providerType.Offerings[index]
 				}
 			}
+			if code == nil || code.Kind != domain.OfferingKindSubscription || !code.RequiresUsageWarning {
+				t.Fatalf("Kimi Code metadata=%#v", code)
+			}
+			// No region axis at all, where BigModel's Coding Plan and MiniMax's
+			// Token Plan each carry two. The product publishes one Coding host and
+			// nothing establishes two account boundaries behind it, so the form
+			// offers the product alone; a selector here would be Halro inventing
+			// the boundary.
+			if len(code.Regions) != 0 {
+				t.Fatalf("Kimi Code regions=%v, want no region axis", code.Regions)
+			}
+			profiles := map[domain.ProviderProfileID]bool{}
 			for _, profile := range providerType.Profiles {
-				if profile.ID == domain.ProfileKimiCodeOpenAIChat || profile.ID == domain.ProfileKimiCodeAnthropicMessages {
-					t.Fatalf("withheld Kimi Code profile %q reached Admin metadata", profile.ID)
-				}
+				profiles[profile.ID] = true
+			}
+			// Two protocol options on one credential, not a companion pair: they
+			// hold different connection groups, so the form offers each on its own.
+			if !profiles[domain.ProfileKimiCodeOpenAIChat] || !profiles[domain.ProfileKimiCodeAnthropicMessages] {
+				t.Fatalf("Kimi Code profiles are missing: %#v", profiles)
 			}
 		case domain.ProviderMiniMax:
 			var subscription *providerOfferingView

@@ -350,8 +350,10 @@ func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 }
 
 // Types with more than one reachable product require an explicit credential
-// identity; everys and MiniMax now both do. Kimi Code remains withheld, so Kimi
-// still exposes only its metered identity until the evidence gate is cleared.
+// identity, so the console asks which product a key belongs to instead of
+// resolving the only one there is. BigModel has four, MiniMax three, and Kimi
+// two since Kimi Code was offered on 2026-09-22: the Open Platform identity and
+// the subscription one, which share neither surface nor scheme.
 func TestCredentialIdentityCountsMatchReachableProducts(t *testing.T) {
 	for _, providerType := range AllProviderTypes() {
 		want := 1
@@ -360,6 +362,8 @@ func TestCredentialIdentityCountsMatchReachableProducts(t *testing.T) {
 			want = 4
 		case ProviderMiniMax:
 			want = 3
+		case ProviderKimi:
+			want = 2
 		}
 		if count := len(CredentialIdentities(providerType)); count != want {
 			t.Fatalf("provider type %q has %d credential identities; the write path's"+

@@ -219,6 +219,22 @@ func (a *Adapter) encodeChatRequest(request openaiapi.ChatCompletionRequest, req
 			return nil, err
 		}
 		return json.Marshal(body)
+	case a.kimiCode:
+		// The subscription face is not the Open Platform dialect above, and it is
+		// not the plain OpenAI shape either: measured on 2026-09-22, it pins
+		// temperature at 0.6 and top_p at 0.95 and answers any other value with a
+		// 400, so the default branch was sending two members that fail the
+		// request after the reservation was taken.
+		//
+		// Its reasoning switch is one top-level member rather than the metered
+		// face's two per-model spellings, and every model it serves reasons on a
+		// request that says nothing, so the renderer always writes the off state
+		// instead of omitting it.
+		body, err := compatibility.RenderKimiCodeChatRequest(request)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(body)
 	case a.miniMax:
 		// MiniMax's member list is smaller than OpenAI's in the same direction
 		// DeepSeek's is, and worse in one respect: it documents its unsupported

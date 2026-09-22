@@ -215,9 +215,11 @@ credited to either subscription product.
 
 - Kimi Code has isolated `kimi.code-key` and `kimi-code` identities, exact
   `/coding/v1/chat/completions` and `/coding/v1/messages` paths, and a forced
-  `User-Agent: Halro/<version>`. Both profiles remain withheld pending the
-  account-bound identity and Thinking checks in the adaptation plan. The
-  surface is deliberately regionless because the public host does not prove a
+  `User-Agent: Halro/<version>`. Both profiles were withheld pending the
+  account-bound identity and Thinking checks in the adaptation plan; both were
+  driven on 2026-09-22 and offered — see
+  [Kimi Code: measured on a real subscription (2026-09-22)](./kimi-code-subscription-evidence.md).
+  The surface stays regionless because the public host still does not prove a
   mainland/global quota boundary.
 - MiniMax Subscription Access has separate mainland and global fixed surfaces
   and a distinct `minimax.subscription-key`. Fake-transport contract tests bind
