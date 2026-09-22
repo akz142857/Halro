@@ -525,19 +525,45 @@ var profileTable = []profileRow{
 		Defaults:        kimiResponsesSet, Ceiling: kimiResponsesSet,
 	},
 	{
+		// Offered from 2026-09-22, when the two gates this product was withheld
+		// for were driven with a real Kimi Code subscription key rather than
+		// reasoned about. Both fixtures are in
+		// docs/verification/kimi-code-subscription-evidence.md.
+		//
+		// Identity: the product requires a third-party tool to keep its own, and
+		// Halro sends `User-Agent: Halro/<version>` and refuses to borrow a
+		// supported client's. That identity is accepted — model enumeration and
+		// generation both answer 200 under it. The upstream does not appear to
+		// enforce the header at all (curl's default is accepted too), which is
+		// why the fixture records acceptance rather than a mechanism.
+		//
+		// Reasoning: every model here publishes supports_thinking_type "only" and
+		// reasons on a request that asked for nothing. A top-level
+		// reasoning_effort "none" switches it off, which is what
+		// RenderKimiCodeChatRequest now always spells — so this face is not a
+		// target that reasons unasked, and the request-field rule that goes with
+		// it is in internal/compatibility/provider_fields.go.
 		ID: ProfileKimiCodeOpenAIChat, Type: ProviderKimi,
 		ConnectionGroup: "kimi-code-openai",
 		Surface:         SurfaceKimiCode, Scheme: CredentialKimiCodeKey,
 		BaseURLTemplate: "https://api.kimi.com",
-		Withheld:        true,
 		Defaults:        kimiCodeSet, Ceiling: kimiCodeSet,
 	},
 	{
+		// Offered on the same evidence, and this row is the one the Thinking gate
+		// was actually about. The portable renderer sends thinking disabled when
+		// no depth is asked, and k3, k3-256k and kimi-for-coding each answered
+		// that with a text block alone, non-streaming and streaming; the same
+		// request without the member returns a thinking block. So the portable
+		// decoder is never handed a signature it cannot carry.
+		//
+		// This is the opposite result from ProfileKimiResponses above, on the
+		// same vendor, and the difference is measured rather than assumed: there
+		// the off switch is accepted and ignored, here it is honoured.
 		ID: ProfileKimiCodeAnthropicMessages, Type: ProviderKimi,
 		ConnectionGroup: "kimi-code-anthropic",
 		Surface:         SurfaceKimiCode, Scheme: CredentialKimiCodeKey,
 		BaseURLTemplate: "https://api.kimi.com",
-		Withheld:        true,
 		Defaults:        kimiCodeSet, Ceiling: kimiCodeSet,
 	},
 	{

@@ -158,7 +158,8 @@ func unaskedReasoningEntries(t *testing.T) map[domain.ProviderProfileID][]string
 func profileDecodesReasoning(t *testing.T, profileID domain.ProviderProfileID) bool {
 	t.Helper()
 	switch profileID {
-	case domain.ProfileKimiChat, domain.ProfileMiniMaxChat,
+	case domain.ProfileKimiChat, domain.ProfileKimiCodeOpenAIChat,
+		domain.ProfileMiniMaxChat,
 		domain.ProfileMiniMaxCNSubscriptionOpenAIChat,
 		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat,
 		domain.ProfileDeepSeekChat,

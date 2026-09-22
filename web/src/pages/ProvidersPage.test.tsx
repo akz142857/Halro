@@ -844,7 +844,7 @@ describe("ProvidersPage profile and credential bindings", () => {
     });
   });
 
-  it("offers validated MiniMax subscription regions while keeping Kimi Code withheld", async () => {
+  it("offers each subscription product the account evidence supports", async () => {
 		renderPage();
 
 		fireEvent.click(await screen.findByRole("tab", { name: /凭据库/ }));
@@ -855,9 +855,16 @@ describe("ProvidersPage profile and credential bindings", () => {
 		expect(miniMaxLabels).toContain("MiniMax Subscription Access（订阅与 Credits） · 中国大陆");
 		expect(miniMaxLabels).toContain("MiniMax Subscription Access（订阅与 Credits） · 海外");
 
+		// Kimi Code is offered since its subscription key was driven, and it is
+		// offered without a region: one Coding host, one measured account, and
+		// nothing establishing a mainland/international balance boundary. A pair
+		// of regional options here would be the console inventing one.
 		fireEvent.change(screen.getByLabelText("服务商类型"), { target: { value: "kimi" } });
-		expect(screen.queryByLabelText(/^上游产品/)).not.toBeInTheDocument();
-		expect(screen.queryByText(/Kimi Code/)).not.toBeInTheDocument();
+		products = screen.getByLabelText(/^上游产品/) as HTMLSelectElement;
+		const kimiLabels = Array.from(products.options).map((option) => option.text);
+		expect(kimiLabels).toContain("Kimi 开放平台");
+		expect(kimiLabels).toContain("Kimi Code（订阅）");
+		expect(kimiLabels.some((label) => /Kimi Code.*(中国大陆|海外)/.test(label))).toBe(false);
 	});
 
   it("requires endpoint-specific acknowledgement for unverified MiniMax global API credentials", async () => {
@@ -1185,7 +1192,11 @@ describe("ProvidersPage profile and credential bindings", () => {
 
     const row = (await screen.findAllByText("Kimi global")).map((item) => item.closest<HTMLElement>(".provider-row")).find(Boolean);
     expect(row).not.toBeNull();
-    expect(within(row!).getByText("海外")).toBeVisible();
+    // The product is named alongside the region because Kimi now sells two: the
+    // Open Platform account this connection is on, and the Code subscription.
+    // While it sold one, naming it said nothing and the row showed the region
+    // alone.
+    expect(within(row!).getByText("Kimi 开放平台 · 海外")).toBeVisible();
   });
 
   // And says nothing where there is nothing to say: an OpenAI connection spans

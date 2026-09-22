@@ -503,7 +503,26 @@
       },
       {
         "profile_id": "kimi.code.openai.chat.v1",
-        "status": "experimental"
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "n",
+          "parallel_tool_calls",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "stop",
+          "temperature",
+          "tool_choice",
+          "top_p",
+          "user"
+        ],
+        "declared_transforms": [
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+        ]
       },
       {
         "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
@@ -595,7 +614,9 @@
         ],
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]
@@ -1200,8 +1221,20 @@
       {
         "profile_id": "kimi.code.openai.chat.v1",
         "status": "experimental",
+        "unsupported_request_fields": [
+          "parallel_tool_calls",
+          "temperature",
+          "text.format",
+          "tool_choice",
+          "top_p",
+          "user"
+        ],
         "declared_transforms": [
-          "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive"
+          "Responses items are mapped through the OpenAI Chat Completions ProviderPrimitive",
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
         ]
       },
       {
@@ -1272,7 +1305,9 @@
         ],
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]
@@ -1398,8 +1433,10 @@
       "kimi.chat.v1",
       "kimi.anthropic.messages.v1",
       "kimi.responses.v1",
+      "kimi.code.openai.chat.v1",
       "minimax.cn.subscription.openai.chat.v1",
-      "minimax.global.subscription.openai.chat.v1"
+      "minimax.global.subscription.openai.chat.v1",
+      "kimi.code.anthropic.messages.v1"
     ],
     "profile_coverage": [
       {
@@ -1795,6 +1832,30 @@
         ]
       },
       {
+        "profile_id": "kimi.code.openai.chat.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "max_tokens",
+          "metadata",
+          "output_config.effort",
+          "output_config.format",
+          "service_tier",
+          "stop_sequences",
+          "temperature",
+          "thinking",
+          "top_k",
+          "top_p",
+          "tool_choice"
+        ],
+        "declared_transforms": [
+          "portable Messages content is mapped through OpenAI Chat Completions",
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+        ]
+      },
+      {
         "profile_id": "minimax.cn.subscription.openai.chat.v1",
         "status": "experimental",
         "unsupported_request_fields": [
@@ -1826,6 +1887,26 @@
         "declared_transforms": [
           "MiniMax Subscription Access reuses the OpenAI Chat wire renderer on its isolated product surface; no metered-account fixture is credited to this profile",
           "value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior"
+        ]
+      },
+      {
+        "profile_id": "kimi.code.anthropic.messages.v1",
+        "status": "experimental",
+        "unsupported_request_fields": [
+          "metadata",
+          "output_config.effort",
+          "output_config.format",
+          "service_tier",
+          "temperature",
+          "thinking",
+          "top_k",
+          "top_p"
+        ],
+        "declared_transforms": [
+          "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]
@@ -2058,7 +2139,13 @@
       },
       {
         "profile_id": "kimi.code.openai.chat.v1",
-        "status": "experimental"
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+        ]
       },
       {
         "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
@@ -2097,7 +2184,9 @@
         "status": "experimental",
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]
@@ -2265,7 +2354,13 @@
       },
       {
         "profile_id": "kimi.code.openai.chat.v1",
-        "status": "experimental"
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+        ]
       },
       {
         "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
@@ -2304,7 +2399,9 @@
         "status": "experimental",
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]
@@ -2465,7 +2562,13 @@
       },
       {
         "profile_id": "kimi.code.openai.chat.v1",
-        "status": "experimental"
+        "status": "experimental",
+        "declared_transforms": [
+          "Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+          "reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+          "the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+          "the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth"
+        ]
       },
       {
         "profile_id": "minimax.cn.subscription.anthropic.messages.v1",
@@ -2504,7 +2607,9 @@
         "status": "experimental",
         "declared_transforms": [
           "Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-          "portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures"
+          "thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+          "temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+          "stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence"
         ]
       }
     ]

@@ -91,3 +91,60 @@ func TestCodeSubscriptionProfilesUseTheirOwnPathsAndAuthentication(t *testing.T)
 		})
 	}
 }
+
+// The renderer reaching the wire, not just existing. Kimi Code's Chat face was
+// built on the plain OpenAI marshaller, which sent the request struct as
+// written: no off switch, and temperature straight through to an upstream that
+// pins it. This drives the adapter the gateway builds and reads the bytes.
+func TestKimiCodeChatSendsTheOffSwitchAndDropsThePinnedMembers(t *testing.T) {
+	endpoint, _ := url.Parse("https://api.kimi.com")
+	providerType, _, ok := domain.RegisteredProviderProfile(domain.ProfileKimiCodeOpenAIChat)
+	if !ok {
+		t.Fatal("profile is not registered")
+	}
+	var sent []byte
+	client := &http.Client{Transport: recordingTransport(func(request *http.Request) (*http.Response, error) {
+		sent, _ = io.ReadAll(request.Body)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"id":"chat_1","object":"chat.completion","created":1,"model":"k3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))}, nil
+	})}
+	instance := domain.ProviderInstance{
+		ID: "prov_1", Name: "subscription", Type: providerType,
+		BaseURL: "https://api.kimi.com", CredentialID: "cred_1", AccessSurface: domain.SurfaceKimiCode,
+		ProfileID: domain.ProfileKimiCodeOpenAIChat, CredentialScheme: domain.CredentialKimiCodeKey,
+	}
+	binding := domain.ProviderProfileBinding{
+		ID:         domain.DefaultProviderProfileBindingID(instance.ID, domain.ProfileKimiCodeOpenAIChat),
+		ProviderID: instance.ID, ProfileID: domain.ProfileKimiCodeOpenAIChat,
+		AccessSurface: domain.SurfaceKimiCode, CredentialScheme: domain.CredentialKimiCodeKey, Enabled: true,
+		Capabilities: domain.DefaultProviderCapabilitiesForProfile(instance.Type, domain.ProfileKimiCodeOpenAIChat),
+	}
+	adapter, err := newProviderBindingAdapterWithClient(instance, binding, endpoint, []byte("subscription-key"), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	temperature := 0.5
+	if _, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_1", ProviderModel: "k3",
+		Request: openaiapi.ChatCompletionRequest{
+			Model: "k3", Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(sent), `"reasoning_effort":"none"`) {
+		t.Fatalf("a request that asked for nothing left without the off switch: %s", sent)
+	}
+	// Reached through the adapter rather than the renderer alone, because the
+	// refusal has to happen before the bytes exist.
+	if _, err := adapter.Chat(context.Background(), provider.ChatCall{
+		RequestID: "req_2", ProviderModel: "k3",
+		Request: openaiapi.ChatCompletionRequest{
+			Model: "k3", Temperature: &temperature,
+			Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("hi")}},
+		},
+	}); err == nil {
+		t.Fatal("temperature reached an upstream that pins it")
+	}
+}

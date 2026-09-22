@@ -86,6 +86,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | --- | --- |
 | [生产验证执行方案](verification/production-validation-plan.zh-CN.md) | 从候选冻结开始，依次完成真实 Provider、安全边界、告警与恢复、容量与 24 小时浸泡、正式发布和四方签署 |
 | [生产验证执行记录 · 2026-09-18](verification/production-validation-run-260918.zh-CN.md) | 在候选 `f09ed2d` 上执行该方案中不需要外部授权的部分（G0 条件通过、G1/G3/G4 的本机 E3 子集）。首轮 22 条发现修掉 10 条，对修复本身的第二轮评审再出 13 条（含一条把 fail-closed 放行的自造回归，已回退）；G2/G5/G6/G7 因缺真实账户、生产形态环境与四方签署而 `BLOCKED`，结论维持 `NO-GO / PRODUCTION UNVERIFIED` |
+| [Kimi Code 订阅实测证据 · 2026-09-22](verification/kimi-code-subscription-evidence.md) | 用操作者真实订阅密钥跑通阶段 A：Halro 自己的 User-Agent 被接受、两个 face 的 thinking 开关实测可关、`/coding/v1/models` 可枚举而 `/models/{id}` 为 404、成员接受清单（temperature/top_p 被钉死，seed/user 接受但无证据）、以及两条要命的形状——未知模型返回 200 并回显请求名，401 同时表示密钥无效与套餐不含该模型。据此解除两个 Profile 的 withheld |
 | [上游拒绝形态取证矩阵](verification/route-eligibility-refusal-matrix.zh-CN.md) | Route eligibility（#318/#319）定参数所依赖的上游取证记录：额度耗尽、普通限流、凭证失效、订阅未开通四种拒绝各自的状态码与 `Retry-After`，以及**耗尽与限流是否同码**——那一格决定 `FailureReason` 要不要进路由路径。九个入口目前只有 MiniMax 一行有内容，且其中额度那格仍是第三方报告等级 |
 
 ## 评审 · [`review/`](review/)

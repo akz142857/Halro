@@ -546,10 +546,42 @@ func expandCodeSubscriptionProfiles(manifests []EndpointCompatibilityManifest) {
 						"value-dependent optional fields remain fail-closed until a subscription-key fixture establishes their behavior",
 					}
 				}
+				if alias == domain.ProfileKimiCodeOpenAIChat {
+					// The wire shape is OpenAI's and the accepted member list is
+					// not, so this profile cannot inherit the source coverage the
+					// way the MiniMax pair inherits theirs. Measured 2026-09-22
+					// against a real subscription key: temperature and top_p are
+					// pinned per model and refused at any other value, n>1 and
+					// logprobs are refused as invalid, and seed, user and
+					// parallel_tool_calls=false answer 200 without establishing
+					// that anything read them.
+					// Appended rather than replaced: the source row carries
+					// endpoint-level statements that are true of this profile too,
+					// such as the Responses face being served through the Chat
+					// Completions primitive.
+					copy.UnsupportedRequestFields = kimiCodeChatUnsupportedFields(manifest.ID)
+					copy.DeclaredTransforms = append(copy.DeclaredTransforms,
+						"Kimi Code's OpenAI-compatible face is rendered by its own request renderer, not the OpenAI one: the shared wire shape does not extend to the accepted member list",
+						"reasoning is switched off explicitly on every request that asks for no depth, because each model this product serves reasons by default and bills for it",
+						"the single output bound counts reasoning, so an answer-only max_tokens is carried only while nothing is thinking",
+						"the published depth ladder is low/high/max and the upstream enforces none of it, so a depth this face does not publish is refused rather than served as the product's default depth",
+					)
+				}
 				if alias == domain.ProfileKimiCodeAnthropicMessages {
+					// output_config.format on top of the source list: the metered
+					// face carries a json_schema through that member and this
+					// product's Messages face has nothing establishing that it
+					// does. See internal/compatibility/provider_fields.go.
+					if slices.Contains(manifest.RequestFields, "output_config.format") {
+						copy.UnsupportedRequestFields = append(copy.UnsupportedRequestFields, "output_config.format")
+						slices.Sort(copy.UnsupportedRequestFields)
+						copy.UnsupportedRequestFields = slices.Compact(copy.UnsupportedRequestFields)
+					}
 					copy.DeclaredTransforms = []string{
 						"Kimi Code reuses the Anthropic Messages wire renderer on its isolated membership surface; no Kimi Open Platform fixture is credited to this profile",
-						"portable optional fields remain fail-closed until a Kimi Code key passes the account-bound admission fixtures",
+						"thinking disabled is sent on every portable request that asks for no depth, and was measured honoured on k3, k3-256k and kimi-for-coding, non-streaming and streaming alike",
+						"temperature and top_k are refused here because this face accepts them and answers 200 without establishing that either was read, where the Chat face refuses them outright",
+						"stop_sequences is carried and was measured honoured, but a cut answer reports stop_reason end_turn with a null stop_sequence rather than naming the sequence",
 					}
 				}
 				if alias == domain.ProfileMiniMaxCNSubscriptionAnthropicMessages || alias == domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages {
@@ -569,6 +601,36 @@ func expandCodeSubscriptionProfiles(manifests []EndpointCompatibilityManifest) {
 				manifest.ProfileCoverage = append(manifest.ProfileCoverage, copy)
 			}
 		}
+	}
+}
+
+// kimiCodeChatUnsupportedFields is what the Kimi Code Chat profile's request
+// rules refuse, spelled the way each northbound endpoint spells it.
+//
+// It is written out per endpoint rather than derived, for the same reason the
+// other 77 coverage rows are: the manifest is a published claim and the field
+// rules are code, and the containment test in manifest_derivable_coverage_test.go
+// is what holds the two together in both directions. A rule added without its
+// entry here fails that test rather than reaching an operator.
+func kimiCodeChatUnsupportedFields(manifestID string) []string {
+	switch manifestID {
+	case "openai.chat-completions.v1":
+		return []string{
+			"max_tokens", "n", "parallel_tool_calls", "reasoning_effort", "response_format",
+			"seed", "stop", "temperature", "tool_choice", "top_p", "user",
+		}
+	case "openai.responses.create.v1":
+		return []string{
+			"parallel_tool_calls", "temperature", "text.format", "tool_choice", "top_p", "user",
+		}
+	case "anthropic.messages.2023-06-01":
+		return []string{
+			"max_tokens", "metadata", "output_config.effort", "output_config.format",
+			"service_tier", "stop_sequences", "temperature", "thinking", "top_k", "top_p",
+			"tool_choice",
+		}
+	default:
+		return nil
 	}
 }
 

@@ -345,8 +345,28 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 	}, domain.ProfileKimiAnthropicMessages)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// Kimi Code's Anthropic face is not the Open Platform account measured by
-		// the rule above. Keep its portable path conservative and independent
-		// until a subscription-key fixture reaches the admission gate.
+		// the rule above, and it keeps its own conservative rule for a reason the
+		// 2026-09-22 subscription-key fixtures make concrete: the members it
+		// refuses outright on the Chat face are *accepted* here. temperature=0.5
+		// and top_k=5 both answer 200, and nothing in the response establishes
+		// that either was read. So they stay declared as losses — on this face
+		// because they are silently ignored, on the other because they are
+		// refused.
+		//
+		// What the fixtures did settle is the reasoning gate this profile was
+		// withheld for. The portable renderer sends {"type":"disabled"} when no
+		// depth is asked (internal/compatibility/anthropic/mapping.go), and
+		// k3, k3-256k and kimi-for-coding each answered it with a text block
+		// alone, where the same request without the member came back carrying a
+		// thinking block. reasoning_effort stays declared lost: an
+		// output_config.effort request answers 200 and reasons, which is what it
+		// does with no member at all, so nothing shows the depth was read.
+		//
+		// stop_sequences is carried and was measured honoured — a request naming
+		// THREE came back cut at it. One deviation goes with that and is declared
+		// in the endpoint manifest rather than refused here: the cut answer
+		// reports stop_reason "end_turn" with a null stop_sequence, where the
+		// Anthropic wire contract would name the sequence.
 		add(hasNamedMessage(request), "messages[].name")
 		add(hasImageDetail(request), "messages[].content[].detail")
 		add(hasDeveloperMessage(request), "messages[].role=developer")
@@ -454,11 +474,53 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		add(KimiEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceNamesAFunction(request.ToolChoice), "tool_choice")
 	}, domain.ProfileKimiChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
-		// Kimi Code's OpenAI-compatible face is a separate contract from the
-		// Open Platform Kimi dialect. Until real-key verification establishes
-		// narrower limits, preserve the OpenAI request shape and declare only the
-		// canonical tool-result loss shared by compatible Chat profiles.
+		// Kimi Code's OpenAI-compatible face is a separate contract from the Open
+		// Platform Kimi dialect, and this rule is what a real subscription key
+		// measured on 2026-09-22 says it is. The version before it declared the
+		// canonical tool-result loss alone and left the OpenAI request shape
+		// intact, which meant an ordinary client sending temperature was admitted,
+		// reserved for, and refused by the upstream.
 		add(hasFailedToolResult(request), "messages[].content[].is_error")
+		// Each pinned to one value, each answering any other with a 400 that
+		// names it: temperature only 0.6, top_p only 0.95.
+		add(request.Temperature != nil, "temperature")
+		add(request.TopP != nil, "top_p")
+		add(request.Candidates != nil && *request.Candidates > 1, "n")
+		// These three answer 200 and nothing establishes that any of them is
+		// read. An accepted member that silently does nothing is billed as if it
+		// had been honoured, so they are declared lost here rather than sent.
+		add(request.Seed != nil, "seed")
+		add(request.EndUserRef != "", "user")
+		add(request.ParallelTools != nil && !*request.ParallelTools, "parallel_tool_calls")
+		// Both JSON halves answer 200 on this face, and the profile declares
+		// neither capability. Declaring them is a change to what this product
+		// offers — see RenderKimiCodeChatRequest for the measurement.
+		add(request.OutputFormat != nil, "response_format")
+		// The single output bound counts reasoning: kimi-for-coding with
+		// max_tokens=32 and nothing asked returned 26 reasoning tokens, an empty
+		// answer and finish_reason=length. The renderer switches reasoning off on
+		// a request that asks for none, so the answer-only bound and the
+		// completion budget are the same tokens in the common case; a request
+		// that asks for depth, or carries both members, is shed here rather than
+		// refused after the budget is reserved.
+		add(request.VisibleOutputTokenLimit != nil &&
+			(KimiCodeEffortAsksForDepth(request.ReasoningEffort) || request.CompletionTokenLimit != nil),
+			"max_tokens")
+		// The upstream names both bounds in its error text: at most five stop
+		// sequences, each at most 32 bytes.
+		add(len(request.Stop) > kimiMaxStopSequences ||
+			slices.ContainsFunc(request.Stop, func(value string) bool {
+				return len(value) > kimiMaxStopBytes || !utf8.ValidString(value)
+			}), "stop")
+		// The published ladder is low/high/max and the upstream enforces none of
+		// it — every string tried, nonsense included, answered 200 and reasoned.
+		// So a depth this face does not publish is shed here instead of being
+		// served as Kimi's default depth under the caller's name for it.
+		add(request.ReasoningEffort != "" && !slices.Contains(KimiCodePortableEfforts, request.ReasoningEffort), "reasoning_effort")
+		// A named function together with a depth: `tool_choice 'specified' is
+		// incompatible with thinking enabled`. `required` with a depth answers
+		// 200, so it is not covered.
+		add(KimiCodeEffortAsksForDepth(request.ReasoningEffort) && kimiToolChoiceNamesAFunction(request.ToolChoice), "tool_choice")
 	}, domain.ProfileKimiCodeOpenAIChat)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		// The Responses face carries the Chat face's losses and two of its own.

@@ -1,8 +1,8 @@
 # Kimi、MiniMax、DeepSeek Code 订阅适配实施方案
 
-状态：**实现完成；MiniMax OpenAI 已开放，Kimi Code 与 MiniMax Anthropic 按证据门槛保持 withheld，DeepSeek 未注册虚构订阅产品**
+状态：**实现完成；Kimi Code 两个 Profile 已于 2026-09-22 用真实订阅密钥通过阶段 A 并开放，MiniMax OpenAI 已开放，MiniMax Anthropic 仍按证据门槛 withheld，DeepSeek 未注册虚构订阅产品**
 
-最近复核：2026-09-10
+最近复核：2026-09-22
 
 关联方案：
 
@@ -83,9 +83,10 @@ Provider Type
   Profile。它们仍因 Halro 身份/Thinking 门槛保持 withheld，但不得预注册、下发或展示虚构的国内/
   海外选项。
 
-本次实现采用**单地域降级清单**：领域表中只有 `kimi-code`（`RegionNone`）及两个 withheld Profile；
-Admin 元数据和 UI 均不显示 Kimi Code，直到阶段 A 的身份与协议门槛完成。MiniMax 则按已公开的两个
-固定地域 surface 实现。
+本次实现采用**单地域降级清单**：领域表中只有 `kimi-code`（`RegionNone`）及两个 Profile。两个
+Profile 在 2026-09-22 用真实订阅密钥通过身份与 Thinking 门槛后开放，Admin 元数据与 UI 开始展示
+Kimi Code；地域仍未验证，只测到一个账号，因此 surface 继续是 `RegionNone`，不得据“同一 Host 可用”
+推导国内/海外。MiniMax 则按已公开的两个固定地域 surface 实现。
 
 ### 3.2 MiniMax Token Plan
 
@@ -413,15 +414,17 @@ Ledger、failure capture、日志、Parquet 与查询 API；如推进 schema ver
 > 本次实现未获得专用订阅测试凭据，且仓库策略禁止默认执行会消耗额度的真实 smoke；因此下列外部
 > 准入项保持未完成，对应 Profile 也按设计继续 withheld，而不是用按量账号或无鉴权响应替代证据。
 
-- [ ] 获取 Kimi Code 国内/海外、MiniMax Token Plan 国内/海外专用测试账号。
-- [ ] 每个地域分别捕获模型枚举、portable/native 非流式、流式、工具调用、Thinking 和额度错误的
-      脱敏响应；不得执行耗尽整个套餐的测试。
-- [ ] 验证 Kimi 两类账号的 issuer、控制台地域、条款、额度归属及 `User-Agent: Halro/<version>`；这
-      是解除 Kimi Profile withheld 的硬门槛，不能用“两个 Key 都可调用同一 Host”代替。
+- [x] Kimi Code：操作者提供真实订阅密钥，2026-09-22 完成采证；MiniMax Token Plan 国内/海外专用测试账号仍未获取。
+- [x] Kimi Code 已捕获模型枚举、非流式、流式、工具调用、Thinking 开关与 401 错误形状的脱敏响应
+      （见 docs/verification/kimi-code-subscription-evidence.md）；额度耗尽与 402 未覆盖，健康订阅
+      无法按需制造。MiniMax 仍未采集。
+- [x] `User-Agent: Halro/<version>` 被接受（上游似乎并不校验该 Header，curl 默认身份同样 200，
+      因此记录的是“真实身份被接纳”而非强制机制）。地域仍未验证：只有一个账号，surface 保持
+      `RegionNone`，不得据此推导国内/海外。
 - [ ] 验证 MiniMax 两地 Subscription Key entitlement 和实际模型列表；官方两种枚举路由与 shape
       直接作为契约，不复用按量 adapter 的猜测。
-- [ ] 对每个 Anthropic Profile 验证 `thinking.disabled` 的 portable 流式/非流式；失败则 native-only
-      或继续 withheld。
+- [x] Kimi Code Anthropic Profile：`thinking:{"type":"disabled"}` 在 k3、k3-256k、kimi-for-coding 上
+      流式与非流式均只返回 text block，未请求时则返回 thinking block，门槛通过。MiniMax 仍未验证。
 
 ### 阶段 B：领域模型（已完成）
 
@@ -439,7 +442,9 @@ Ledger、failure capture、日志、Parquet 与查询 API；如推进 schema ver
 
 - [x] 按选定清单注册 6 或 8 个 profile-scoped adapter/binding，并严格应用各自的 offered/withheld 状态。
 - [x] MiniMax OpenAI 使用 Bearer，Anthropic 使用 `x-api-key`；Kimi 使用 Bearer + 真实 Halro User-Agent。
-- [ ] 根据真实响应实现模型枚举；无路由时才使用最小 seed。
+- [x] Kimi Code：`GET /coding/v1/models` 两个 face 均可用（OpenAI list shape），
+      `/coding/v1/models/{id}` 返回 404，因此保留 DisableTargetDescribe；内建目录改为只附能力、
+      不再声明随套餐变化的上下文窗口。MiniMax 仍待真实响应。
 - [x] 为每个模型填写独立能力证据和 substitution guard。
 - [x] 增加请求 path、认证 Header 清理、portable/native Thinking、流式事件和 tool-call 转换测试。
 

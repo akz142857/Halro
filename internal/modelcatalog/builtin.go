@@ -617,23 +617,47 @@ func kimiModels() []Entry {
 	for _, model := range []string{"kimi-k2.7-code", "kimi-k2.7-code-highspeed"} {
 		entries = append(entries, reasonsUnasked(builtinEntry(provider, domain.ProfileKimiChat, model, kimiChat(k2Context, 0))))
 	}
-	// Kimi Code publishes these membership identifiers for both protocol faces.
-	// The product profiles are withheld until the honest-client and Thinking
-	// gates are exercised; keeping the seed here makes their future availability
-	// independent from the pay-as-you-go catalogue and model aliases.
+	// Kimi Code's four membership identifiers, confirmed on 2026-09-22 by the
+	// product's own enumeration route — `GET /coding/v1/models` answers on both
+	// faces with an OpenAI list, which is why availability comes from the account
+	// and these entries only attach capability evidence to what it returns.
+	//
+	// No context window is claimed for any of them, and the enumeration is what
+	// says why: on the plan measured, `kimi-for-coding` reported 1M while `k3`
+	// reported 256K, and the seed here had those two numbers the other way round
+	// against an earlier reading of the model-configuration page. The bound is
+	// plan-dependent, so a static catalogue can only be wrong about it.
 	for _, profile := range []domain.ProviderProfileID{
 		domain.ProfileKimiCodeOpenAIChat,
 		domain.ProfileKimiCodeAnthropicMessages,
 	} {
-		entries = append(entries,
-			// The unqualified k3 identifier inherits the member's plan tier: some
-			// tiers cap it at 256K and others expose 1M. A static catalogue cannot
-			// know that entitlement, so it must not claim either bound.
-			builtinEntry(provider, profile, "k3", kimiCodeModel(0)),
-			builtinEntry(provider, profile, "k3-256k", kimiCodeModel(262_144)),
-			builtinEntry(provider, profile, "kimi-for-coding", kimiCodeModel(262_144)),
-			builtinEntry(provider, profile, "kimi-for-coding-highspeed", kimiCodeModel(262_144)),
-		)
+		for _, model := range []string{"k3", "k3-256k", "kimi-for-coding"} {
+			entries = append(entries, builtinEntry(provider, profile, model, kimiCodeModel(0)))
+		}
+		// The highspeed model is the one this plan could not drive: enumeration
+		// returns it, and a request for it answers 401 `Your current subscription
+		// does not have access to kimi-for-coding-highspeed`. Its entry stays,
+		// because entitlement is per account — but the off switch honoured on the
+		// other three is unverified for it, and it is also the one model whose
+		// enumeration carries no think_efforts ladder at all.
+		//
+		// Marked on the Chat face, which is where Halro's off switch is a member
+		// this product invented: a top-level reasoning_effort "none", honoured on
+		// the three models that answered, and unestablished for the one that
+		// publishes no think_efforts ladder either. On the Messages face the
+		// switch is the Anthropic wire's own thinking:{"type":"disabled"}, sent
+		// unconditionally by the portable renderer and honoured by every model
+		// that answered, so the same asymmetry the MiniMax subscription pair
+		// carries applies here for the same reason.
+		//
+		// The residual is named rather than hidden: if this model turns out to
+		// ignore the disable member on the Messages face too, a portable request
+		// for it comes back with a thinking block the decoder refuses, after the
+		// upstream has billed. A measurement against a plan that includes the
+		// model settles both faces at once.
+		entry := builtinEntry(provider, profile, "kimi-for-coding-highspeed", kimiCodeModel(0))
+		entry.ReasonsUnasked = profile == domain.ProfileKimiCodeOpenAIChat
+		entries = append(entries, entry)
 	}
 	return entries
 }
