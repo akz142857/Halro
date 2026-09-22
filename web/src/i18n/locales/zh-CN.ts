@@ -118,6 +118,7 @@ export const zhCN = {
     credentialTypeInUse: "服务商连接“{{name}}”正以 {{provider}} 类型使用这份凭据，而本次轮换会把它改成 {{credential}}。请在不改类型的情况下轮换密钥，或先把该连接改绑到别的凭据。",
     credentialTypeMismatch: "这份凭据保存的服务商类型是 {{credential}}，当前连接是 {{provider}}。请改选一份为 {{provider}} 保存的凭据。",
     credentialSurfaceMismatch: "这份凭据保存的访问面是 {{credential}}，当前连接使用的是 {{provider}}。两个访问面的端点和凭据方案不同，请改选一份为 {{provider}} 保存的凭据。",
+    anthropicSubscriptionTokenRefused: "这是 Claude 订阅的 OAuth token，不是 Anthropic Console 的 API Key。Anthropic 不允许第三方服务保存 Claude Free/Pro/Max 凭据、也不允许用它代发请求，所以 Halro 不能保存这把密钥。请到 Claude Console 新建 API Key，或改用 Bedrock Mantle。",
     bedrockProjectIDInvalid: "Bedrock 项目 ID 无效。这里要填 AWS 项目的 id（proj_ 开头），不是项目名称；在 Bedrock 控制台的项目详情或 Projects API 的返回里可以找到。留空则使用账户默认项目。",
     offeringUsageWarningUnacknowledged: "保存前请阅读并确认所选订阅产品的官方使用限制。",
     usagePolicyAcknowledgementRequired: "请展开阅读当前产品条款，并确认当前版本后再保存。",

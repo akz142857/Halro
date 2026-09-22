@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -127,7 +128,7 @@ func (r *Runtime) createAdminCredential(writer http.ResponseWriter, request *htt
 	}
 	credential, err := r.credentialFromInput(credentialID, input, nil, time.Now().UTC())
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminCredentialInputError(writer, err)
 		return
 	}
 	profile, _ := domain.ResolveCredentialProfile(credential.Type, credential.AccessSurface, credential.Scheme)
@@ -201,7 +202,7 @@ func (r *Runtime) updateAdminCredential(writer http.ResponseWriter, request *htt
 	}
 	credential, err := r.credentialFromInput(current.ID, input.credentialInput, &current, current.CreatedAt)
 	if err != nil {
-		adminBadRequest(writer, err.Error())
+		adminCredentialInputError(writer, err)
 		return
 	}
 	credential.UsagePolicyAcknowledgement = current.UsagePolicyAcknowledgement
@@ -1539,25 +1540,78 @@ func requireUsagePolicyAcknowledgement(
 // the registry load will run, at the one moment the operator can still fix the
 // value.
 //
-// Only the AWS SigV4 scheme has material with a shape: the static-header schemes
-// carry an opaque token whose only requirement — non-empty — the caller has
-// already checked. An AWS document, by contrast, declares its own region, and
-// the signer pins the host to that region; a credential bound to us-east-2 while
-// its JSON says us-east-1 used to save cleanly and then be dropped at load, so
-// the console reported "provider binding adapter is unavailable" on a record
-// that looked fine and named nothing to change.
+// Two schemes have anything to say about their material, and they say different
+// kinds of thing.
+//
+// An AWS document declares its own region, and the signer pins the host to that
+// region; a credential bound to us-east-2 while its JSON says us-east-1 used to
+// save cleanly and then be dropped at load, so the console reported "provider
+// binding adapter is unavailable" on a record that looked fine and named nothing
+// to change. That is a malformed value.
+//
+// The Anthropic Console key is the other kind: the value is well formed, and it
+// is the wrong product. See refuseClaudeSubscriptionToken.
+//
+// Every other static-header scheme carries an opaque token whose only
+// requirement — non-empty — the caller has already checked, and this function
+// deliberately does not grow a general "your key looks wrong" rule for them.
 //
 // The errors are safe to return to the admin: they name the field or the
 // disagreement, never the key material and never the host.
 func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.URL, plaintext []byte) error {
-	if scheme != domain.CredentialAWSSigV4Explicit {
+	switch scheme {
+	case domain.CredentialAWSSigV4Explicit:
+		authorizer, err := bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
+		if err != nil {
+			return err
+		}
+		authorizer.Close()
+		return nil
+	case domain.CredentialAnthropicAPIKey:
+		return refuseClaudeSubscriptionToken(plaintext)
+	default:
 		return nil
 	}
-	authorizer, err := bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
-	if err != nil {
-		return err
+}
+
+// Claude Code's OAuth tokens and an Anthropic Console API key are both
+// `sk-ant-` secrets that an operator can paste into the same field, and only one
+// of them may be here: Anthropic's terms forbid a third-party service collecting
+// or storing a Claude.ai credential at all, so a subscription token in 服务商密钥
+// is not a configuration Halro may hold. Recorded in full at the Offering table
+// in internal/domain/provider_offering.go.
+//
+// Without this, the save succeeds and the boundary is expressed as a 401 on the
+// operator's first real request — at which point what they read is "Anthropic
+// rejected the key", which is true and useless. Saying it here is both the
+// better message and the honest statement that this is not a thing Halro can be
+// made to do.
+//
+// Narrow on purpose, in three ways. It matches only the two OAuth prefixes, so
+// nothing that could be a Console key is ever refused; it stops before the
+// version digits, because `oat01` is a format revision and pinning it is the
+// exact-equality mistake this repository keeps re-learning; and it lives under
+// CredentialAnthropicAPIKey alone, which is the Anthropic Console surface and
+// nothing else — Bedrock Mantle's Anthropic profile carries an AWS key, and
+// Kimi's and MiniMax's Anthropic faces have schemes of their own.
+//
+// Recognition is not a security control and this does not pretend otherwise: a
+// prefix Anthropic changes tomorrow would simply fall through to today's
+// behaviour. The shapes were read first-hand from a live Claude Code credential
+// on 2026-09-22 — an access token `sk-ant-oat01-…` and a refresh token
+// `sk-ant-ort01-…`, 108 characters each.
+func refuseClaudeSubscriptionToken(plaintext []byte) error {
+	for _, prefix := range [...]string{"sk-ant-oat", "sk-ant-ort"} {
+		if !bytes.HasPrefix(plaintext, []byte(prefix)) {
+			continue
+		}
+		return claudeSubscriptionTokenError{err: errors.New(
+			"this is a Claude subscription OAuth token, not an Anthropic Console API key: " +
+				"Anthropic does not permit a third-party service to store or route requests " +
+				"through Claude Free, Pro or Max credentials, so Halro cannot hold one. " +
+				"Create an API key in the Claude Console, or use Bedrock Mantle",
+		)}
 	}
-	authorizer.Close()
 	return nil
 }
 
@@ -1569,6 +1623,17 @@ type bedrockProjectIDError struct{ err error }
 
 func (e bedrockProjectIDError) Error() string { return e.err.Error() }
 func (e bedrockProjectIDError) Unwrap() error { return e.err }
+
+// claudeSubscriptionTokenError marks the one refusal whose cause is not
+// anything the operator typed wrong. Typed rather than matched on message text,
+// so the console can answer it in the reader's own language — and so the reason
+// stays one sentence in one place rather than being re-argued in the browser,
+// which §7.2 of the subscription-access plan forbids deciding product identity
+// in anyway.
+type claudeSubscriptionTokenError struct{ err error }
+
+func (e claudeSubscriptionTokenError) Error() string { return e.err.Error() }
+func (e claudeSubscriptionTokenError) Unwrap() error { return e.err }
 
 // credentialMatchError marks the refusals that follow from which credential the
 // operator picked rather than from a malformed field. A credential is sealed
@@ -1603,6 +1668,19 @@ type egressProxyInputError struct{ id string }
 
 func (e egressProxyInputError) Error() string {
 	return fmt.Sprintf("Provider egress proxy %q is not available in this Runtime", e.id)
+}
+
+// adminCredentialInputError answers a rejected credential payload. Same division
+// as adminProviderInputError: a refusal the operator can act on from the
+// sentence alone stays code-less, and the one that needs a translated answer
+// carries a stable code.
+func adminCredentialInputError(writer http.ResponseWriter, err error) {
+	var subscriptionToken claudeSubscriptionTokenError
+	if errors.As(err, &subscriptionToken) {
+		adminBadRequestCode(writer, "anthropic_subscription_token_refused", err.Error())
+		return
+	}
+	adminBadRequest(writer, err.Error())
 }
 
 // adminProviderInputError answers a rejected provider payload. Most refusals

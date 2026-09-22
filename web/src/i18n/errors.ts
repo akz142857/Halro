@@ -117,6 +117,9 @@ export function localizedError(t: TFunction, error: unknown) {
     offering_usage_warning_unacknowledged: "errors.offeringUsageWarningUnacknowledged",
     usage_policy_acknowledgement_required: "errors.usagePolicyAcknowledgementRequired",
     usage_policy_revision_mismatch: "errors.usagePolicyRevisionMismatch",
+    // Not a malformed value — a well-formed secret from the wrong product, which
+    // the server recognises and the browser never inspects.
+    anthropic_subscription_token_refused: "errors.anthropicSubscriptionTokenRefused",
     credential_product_immutable: "errors.credentialProductImmutable",
     credential_region_immutable: "errors.credentialRegionImmutable",
     credential_region_mismatch: "errors.credentialRegionMismatch",
