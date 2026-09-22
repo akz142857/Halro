@@ -589,6 +589,26 @@ model_catalog:
   # @description.en-US Maximum exact model entries in one verified manifest.
   max_entries: 10000
 
+# Consumer subscription products, off in the shipped default.
+#
+# Both upstreams reserve these credentials for their own clients: Anthropic's
+# Claude Code legal and compliance page does not permit a developer to collect,
+# store or intermediate a Claude.ai credential, nor to route requests through
+# Free, Pro or Max credentials on behalf of users. Halro holding one and
+# presenting it upstream is what that describes, and neither upstream enforces it
+# on the paths Halro would use — both were measured, see docs/verification/ — so
+# nothing but this switch stops it.
+#
+# Leave it false for any instance that serves anyone but you. The supported
+# answer is a metered API key, which is a different product with its own billing.
+# This exists for developing and debugging against your own account.
+provider_subscriptions:
+  # @title.zh-CN Claude 订阅接入
+  # @title.en-US Claude subscription access
+  # @description.zh-CN 是否提供 Claude 订阅产品。默认关闭：上游条款不允许第三方服务保存或代为出示该凭据，开启即自行承担。
+  # @description.en-US Whether the Claude subscription product is offered. Off by default: the upstream's terms do not permit a third-party service to hold or present that credential.
+  anthropic_claude: false
+
 logging:
   # @title.zh-CN 日志级别
   # @title.en-US Log level

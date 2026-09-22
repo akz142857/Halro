@@ -1307,7 +1307,13 @@ func TestProviderCapabilitiesAreBoundedForMutableProfilesToo(t *testing.T) {
 	cookie, csrf := loginAdminForTest(t, runtime)
 	credentialResponse := performAdminMutation(t, runtime, cookie, csrf,
 		http.MethodPost, "/admin/api/v1/credentials", "",
-		map[string]any{"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com", "secret": "sk-ant-canary"},
+		map[string]any{
+			"name": "Anthropic", "type": "anthropic", "base_url": "https://api.anthropic.com",
+			"secret": "sk-ant-canary",
+			// Anthropic offers two products on this host, so the credential has to
+			// name one; the write path refuses to guess.
+			"access_surface": domain.SurfaceAnthropic, "scheme": domain.CredentialAnthropicAPIKey,
+		},
 	)
 	var credential credentialView
 	if credentialResponse.Code != http.StatusCreated || json.Unmarshal(credentialResponse.Body.Bytes(), &credential) != nil {

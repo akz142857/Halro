@@ -79,6 +79,12 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 		domain.CredentialBigModelCodingPlanKey:  []byte("test-key"),
 		domain.CredentialKimiCodeKey:            []byte("test-key"),
 		domain.CredentialMiniMaxSubscriptionKey: []byte("test-key"),
+		// A document rather than a token, and it has to parse: the authorizer
+		// reads access_token out of it. A gated profile is still built here on
+		// purpose — the switch decides whether the product is offered, not
+		// whether its adapter works, and an unchecked adapter would break the
+		// moment an operator turned it on.
+		domain.CredentialAnthropicOAuth: []byte(`{"access_token":"sk-ant-oat01-test"}`),
 	}
 	for _, profile := range domain.AllProviderProfiles() {
 		// Withheld profiles are refused by every write path, so no connection can
@@ -145,6 +151,7 @@ func TestEveryReachableProfileBuildsAnAdapter(t *testing.T) {
 func expectedAdapterFamily(profileID domain.ProviderProfileID) string {
 	switch profileID {
 	case domain.ProfileAnthropicMessages,
+		domain.ProfileAnthropicSubscriptionMessages,
 		domain.ProfileBedrockMantleAnthropicMessages,
 		domain.ProfileMiniMaxAnthropicMessages,
 		domain.ProfileKimiAnthropicMessages,
@@ -236,6 +243,7 @@ func TestEveryReachableProfileReachesTheNetworkWhenCalled(t *testing.T) {
 		domain.CredentialBigModelCodingPlanKey:  []byte("test-key"),
 		domain.CredentialKimiCodeKey:            []byte("test-key"),
 		domain.CredentialMiniMaxSubscriptionKey: []byte("test-key"),
+		domain.CredentialAnthropicOAuth:         []byte(`{"access_token":"sk-ant-oat01-test"}`),
 	}
 	for _, profile := range domain.AllProviderProfiles() {
 		if profile.Withheld {

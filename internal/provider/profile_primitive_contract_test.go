@@ -57,6 +57,9 @@ func TestBuiltinProfilePrimitivesMatchIndependentAdapterContract(t *testing.T) {
 		domain.ProfileMiniMaxCNSubscriptionAnthropicMessages:     bindings(anthropicContract(PrimitiveMiniMaxAnthropicMessages, PrimitiveMiniMaxAnthropicMessagesStream)),
 		domain.ProfileMiniMaxGlobalSubscriptionOpenAIChat:        bindings(chatPairContract(PrimitiveMiniMaxChat, PrimitiveMiniMaxChatStream)),
 		domain.ProfileMiniMaxGlobalSubscriptionAnthropicMessages: bindings(anthropicContract(PrimitiveMiniMaxAnthropicMessages, PrimitiveMiniMaxAnthropicMessagesStream)),
+		// The wire alone. Files and batches belong to the metered profile, whose
+		// account stores and bills them; this one has established neither.
+		domain.ProfileAnthropicSubscriptionMessages: bindings(anthropicContract(PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream)),
 	}
 
 	if len(expected) != len(profileOperationTable) {

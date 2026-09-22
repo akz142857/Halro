@@ -71,6 +71,7 @@ func TestProfileConnectionGroupsAreStable(t *testing.T) {
 		ProfileMiniMaxResponses: "minimax-api", ProfileKimiChat: "kimi-api",
 		ProfileKimiAnthropicMessages: "kimi-api", ProfileKimiResponses: "kimi-api",
 		ProfileKimiCodeOpenAIChat: "kimi-code-openai", ProfileKimiCodeAnthropicMessages: "kimi-code-anthropic",
+		ProfileAnthropicSubscriptionMessages:              "anthropic-claude-subscription",
 		ProfileMiniMaxCNSubscriptionOpenAIChat:            "minimax-cn-subscription-openai",
 		ProfileMiniMaxCNSubscriptionAnthropicMessages:     "minimax-cn-subscription-anthropic",
 		ProfileMiniMaxGlobalSubscriptionOpenAIChat:        "minimax-global-subscription-openai",
@@ -110,6 +111,7 @@ func TestSurfaceOfferingAndRegionScopeAreStable(t *testing.T) {
 		SurfaceBigModelCNCoding:          {OfferingBigModelCodingPlan, RegionScopeFixed, RegionCN, "open.bigmodel.cn=cn"},
 		SurfaceBigModelGlobalCoding:      {OfferingBigModelCodingPlan, RegionScopeFixed, RegionGlobal, "api.z.ai=global"},
 		SurfaceKimiCode:                  {OfferingKimiCode, RegionScopeNone, RegionNone, ""},
+		SurfaceAnthropicSubscription:     {OfferingAnthropicClaudeSubscription, RegionScopeNone, RegionNone, ""},
 		SurfaceMiniMaxCNSubscription:     {OfferingMiniMaxSubscriptionAccess, RegionScopeFixed, RegionCN, "api.minimax.cn=cn"},
 		SurfaceMiniMaxGlobalSubscription: {OfferingMiniMaxSubscriptionAccess, RegionScopeFixed, RegionGlobal, "api.minimax.io=global"},
 	}
@@ -404,8 +406,12 @@ func TestResolvedEndpointsMatchWhatTheConsoleOffered(t *testing.T) {
 		// The Coding Plan is the same host as the mainland general API and a
 		// different path, which the adapter appends. Two products behind one
 		// address is why the endpoint cannot tell them apart.
-		ProfileBigModelCNCodingChat:                       "https://open.bigmodel.cn",
-		ProfileBigModelGlobalCodingChat:                   "https://api.z.ai",
+		ProfileBigModelCNCodingChat:     "https://open.bigmodel.cn",
+		ProfileBigModelGlobalCodingChat: "https://api.z.ai",
+		// The subscription product shares api.anthropic.com with the metered one,
+		// so the endpoint cannot tell them apart either — the operator's product
+		// choice does, and that is what the credential form asks for.
+		ProfileAnthropicSubscriptionMessages:              "https://api.anthropic.com",
 		ProfileKimiCodeOpenAIChat:                         "https://api.kimi.com",
 		ProfileKimiCodeAnthropicMessages:                  "https://api.kimi.com",
 		ProfileMiniMaxCNSubscriptionOpenAIChat:            "https://api.minimax.cn",

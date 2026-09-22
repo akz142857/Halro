@@ -42,6 +42,7 @@ func TestProviderProfileIdentifiersAndBindingsAreStable(t *testing.T) {
 		"kimi.responses.v1":                                 {"kimi-api", "kimi-api", "bearer.static"},
 		"kimi.code.openai.chat.v1":                          {"kimi-code-openai", "kimi-code", "kimi.code-key"},
 		"kimi.code.anthropic.messages.v1":                   {"kimi-code-anthropic", "kimi-code", "kimi.code-key"},
+		"anthropic.subscription.messages.v1":                {"anthropic-claude-subscription", "anthropic-claude-subscription", "anthropic.claude.oauth"},
 		"minimax.cn.subscription.openai.chat.v1":            {"minimax-cn-subscription-openai", "minimax-cn-subscription-access", "minimax.subscription-key"},
 		"minimax.cn.subscription.anthropic.messages.v1":     {"minimax-cn-subscription-anthropic", "minimax-cn-subscription-access", "minimax.subscription-key"},
 		"minimax.global.subscription.openai.chat.v1":        {"minimax-global-subscription-openai", "minimax-global-subscription-access", "minimax.subscription-key"},
@@ -83,6 +84,7 @@ func TestAccessSurfaceIdentifiersAndProductBindingsAreStable(t *testing.T) {
 		"bigmodel-cn-coding-api":             {"bigmodel.coding-plan", "fixed", "cn", []string{"cn=open.bigmodel.cn"}},
 		"bigmodel-global-coding-api":         {"bigmodel.coding-plan", "fixed", "global", []string{"global=api.z.ai"}},
 		"kimi-code":                          {"kimi.code", "none", "", nil},
+		"anthropic-claude-subscription":      {"anthropic.claude-subscription", "none", "", nil},
 		"minimax-cn-subscription-access":     {"minimax.subscription-access", "fixed", "cn", []string{"cn=api.minimax.cn"}},
 		"minimax-global-subscription-access": {"minimax.subscription-access", "fixed", "global", []string{"global=api.minimax.io"}},
 	}
@@ -115,6 +117,7 @@ func TestProviderOfferingIdentifiersAreStable(t *testing.T) {
 		"kimi.open-platform": "metered_api", "minimax.api-platform": "metered_api",
 		"bigmodel.general-api": "metered_api", "bigmodel.coding-plan": "subscription",
 		"kimi.code": "subscription", "minimax.subscription-access": "entitlement",
+		"anthropic.claude-subscription": "subscription",
 	}
 	got := make(map[string]string, len(providerOfferingTable))
 	for _, row := range providerOfferingTable {

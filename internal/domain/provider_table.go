@@ -59,17 +59,20 @@ import "strings"
 // to declare through — it is a request the upstream will refuse — so the write
 // path and the connection test say so instead of letting it reach the wire.
 type profileRow struct {
-	ID               ProviderProfileID
-	ConnectionGroup  ProviderConnectionGroupID
-	Type             ProviderType
-	Surface          AccessSurface
-	Scheme           CredentialScheme
-	BaseURLTemplate  string
-	Immutable        bool
-	Withheld         bool
-	RoutePartitioned bool
-	Defaults         ProviderCapabilities
-	Ceiling          ProviderCapabilities
+	ID              ProviderProfileID
+	ConnectionGroup ProviderConnectionGroupID
+	Type            ProviderType
+	Surface         AccessSurface
+	Scheme          CredentialScheme
+	BaseURLTemplate string
+	Immutable       bool
+	Withheld        bool
+	// SubscriptionGated marks a row an operator switches on; see
+	// IsSubscriptionGatedProfile.
+	SubscriptionGated bool
+	RoutePartitioned  bool
+	Defaults          ProviderCapabilities
+	Ceiling           ProviderCapabilities
 }
 
 // RegionPlaceholder is what BaseURLTemplate carries where a deployment's own
@@ -143,6 +146,18 @@ var (
 		StructuredOutputs: true,
 		Reasoning:         true, StreamUsage: true, Files: true, Batches: true,
 	}
+	// The subscription product on the same wire, minus the two operations that
+	// are properties of the *account* rather than of the protocol. Files and
+	// Batches were earned on a metered product that stores objects under that
+	// account and bills them; nothing has established that a subscription
+	// credential reaches either, and a capability declared without evidence is an
+	// operation the router offers and the upstream refuses. The manifest binds no
+	// primitive for them, and the ceiling invariant is what keeps the two honest.
+	anthropicSubscriptionMessagesSet = ProviderCapabilities{
+		Chat: true, Streaming: true, Tools: true, Vision: true, FetchedImage: true,
+		StructuredOutputs: true,
+		Reasoning:         true, StreamUsage: true,
+	}
 	// The Responses profile is the same account reached through a different
 	// endpoint, and the difference in what it can do is the point of it being a
 	// separate profile rather than a flag on the one above.
@@ -196,6 +211,26 @@ var profileTable = []profileRow{
 		BaseURLTemplate: "https://api.anthropic.com",
 		Defaults:        anthropicMessagesSet,
 		Ceiling:         withProviderExecutedTools(anthropicMessagesSet),
+	},
+	{
+		// The subscription product on the same host and the same wire. Measured
+		// 2026-09-23 (docs/verification/anthropic-claude-subscription-evidence.md):
+		// the credential is served by the public /v1/messages when presented as a
+		// Bearer token, so nothing here is a different protocol — the row exists
+		// to bind a different surface, a different credential scheme and a
+		// different balance.
+		//
+		// Capabilities are the metered profile's, less Files and Batches, and with
+		// no provider-executed tools in the ceiling. Each of those was earned on a
+		// product that bills per token and stores objects under that account, and
+		// none of it has been established here. See anthropicSubscriptionMessagesSet.
+		ID: ProfileAnthropicSubscriptionMessages, Type: ProviderAnthropic,
+		SubscriptionGated: true,
+		ConnectionGroup:   "anthropic-claude-subscription",
+		Surface:           SurfaceAnthropicSubscription, Scheme: CredentialAnthropicOAuth,
+		BaseURLTemplate: "https://api.anthropic.com",
+		Defaults:        anthropicSubscriptionMessagesSet,
+		Ceiling:         anthropicSubscriptionMessagesSet,
 	},
 	{
 		// No endpoint to offer: an Azure OpenAI deployment lives on the resource's
@@ -925,6 +960,11 @@ type ProviderProfileSummary struct {
 	// keeps: AllProviderProfiles stays the one enumeration, and whoever presents
 	// the matrix decides what to do with a withheld row. See profileRow.
 	Withheld bool
+	// SubscriptionGated travels for the same reason and answers a different
+	// question: not "does this build offer it" but "has the operator said this
+	// instance may". Whoever presents the matrix reads the configuration; this
+	// enumeration stays the one list. See IsSubscriptionGatedProfile.
+	SubscriptionGated bool
 	// RoutePartitioned travels for the same reason, and it is what tells a
 	// connection form whether the profiles of one group are alternatives or
 	// companions: where it is true the upstream serves each model from exactly

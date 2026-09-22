@@ -354,6 +354,12 @@ func TestBigModelCredentialIdentitiesCoverEveryProduct(t *testing.T) {
 // resolving the only one there is. BigModel has four, MiniMax three, and Kimi
 // two since Kimi Code was offered on 2026-09-22: the Open Platform identity and
 // the subscription one, which share neither surface nor scheme.
+//
+// Anthropic became two on 2026-09-23, and it is the case that most needs the
+// question asked: the Console API and the Claude subscription share
+// api.anthropic.com, so nothing about the endpoint distinguishes them and a
+// silently resolved default would put a subscription credential on the metered
+// product or the reverse.
 func TestCredentialIdentityCountsMatchReachableProducts(t *testing.T) {
 	for _, providerType := range AllProviderTypes() {
 		want := 1
@@ -362,7 +368,7 @@ func TestCredentialIdentityCountsMatchReachableProducts(t *testing.T) {
 			want = 4
 		case ProviderMiniMax:
 			want = 3
-		case ProviderKimi:
+		case ProviderKimi, ProviderAnthropic:
 			want = 2
 		}
 		if count := len(CredentialIdentities(providerType)); count != want {
@@ -505,37 +511,6 @@ func TestRegionForProviderEndpointRecognisesSharedBigModelHosts(t *testing.T) {
 		if region != testCase.want || known != testCase.known {
 			t.Fatalf("%s: got (%q, %v), want (%q, %v)", testCase.endpoint, region, known, testCase.want, testCase.known)
 		}
-	}
-}
-
-// Anthropic's Claude subscription is absent from this table for a reason that
-// is not "not yet". Read first-hand on 2026-09-22 at
-// https://code.claude.com/docs/en/legal-and-compliance, under "Authentication
-// and credential use": a developer may not collect, store or intermediate a
-// Claude.ai credential, and may not route requests through Free, Pro or Max plan
-// credentials on behalf of their users. Both halves of what Halro does.
-//
-// A comment records why; this records it in a form that answers back. Adding the
-// row means deleting this test, which is the deliberate step the finding asks
-// for rather than a constant that slips in beside its siblings. The reopening
-// condition is a first-party delegated-access contract from Anthropic (#351).
-func TestClaudeSubscriptionIsNotAnOfferingThisBuildRegisters(t *testing.T) {
-	const excluded = ProviderOfferingID("anthropic.claude-subscription")
-	if _, registered := offeringIndex[excluded]; registered {
-		t.Fatalf("%s is registered; Anthropic's terms do not permit Halro to hold a "+
-			"Claude subscription credential, so the row cannot exist without a "+
-			"first-party delegated-access contract", excluded)
-	}
-	for _, surface := range surfaceTable {
-		if surface.Offering == excluded {
-			t.Fatalf("surface %q claims offering %s", surface.Surface, excluded)
-		}
-	}
-	// The supported path is what the refusal points an operator at, so it has to
-	// be here and reachable.
-	identity, ok := IdentityForSurface(SurfaceAnthropic)
-	if !ok || identity.Offering != OfferingAnthropicAPI {
-		t.Fatalf("the Anthropic Console surface does not resolve %s: %+v", OfferingAnthropicAPI, identity)
 	}
 }
 

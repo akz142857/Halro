@@ -97,7 +97,7 @@ var generateFieldRules = func() map[domain.ProviderProfileID]func(add fieldSink,
 		// reservation, naming a field the caller never sent.
 		add(request.ReasoningEffort != "" && !slices.Contains(portableEffortLevels, request.ReasoningEffort), "reasoning_effort")
 		add(request.EndUserRef != "", "user")
-	}, domain.ProfileAnthropicMessages)
+	}, domain.ProfileAnthropicMessages, domain.ProfileAnthropicSubscriptionMessages)
 	register(func(add fieldSink, request semantic.GenerateRequest) {
 		add(hasImageDetail(request), "messages[].content[].detail")
 		// The Mantle Beta profile shares this wire representation and could carry

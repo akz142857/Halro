@@ -1332,6 +1332,12 @@ func (r *Runtime) credentialFromInput(
 	if domain.IsWithheldProfile(profile.ProfileID) {
 		return domain.Credential{}, fmt.Errorf("credential access surface %q is not supported by this build", profile.AccessSurface)
 	}
+	// The operator's own gate, refused separately so the sentence can say which
+	// of the two it is — "this build does not offer it" and "you have not turned
+	// it on" send the reader to different places.
+	if !offeredProfile(r.config.ProviderSubscriptions, profile.ProfileID) {
+		return domain.Credential{}, subscriptionDisabledError(profile.AccessSurface)
+	}
 	if err := validateCredentialProductRegion(profile.AccessSurface, input.Type, input.BaseURL); err != nil {
 		return domain.Credential{}, err
 	}
@@ -1569,6 +1575,9 @@ func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.UR
 		return nil
 	case domain.CredentialAnthropicAPIKey:
 		return refuseClaudeSubscriptionToken(plaintext)
+	case domain.CredentialAnthropicOAuth:
+		_, err := parseClaudeSubscriptionCredential(plaintext)
+		return err
 	default:
 		return nil
 	}
@@ -1610,11 +1619,11 @@ func refuseClaudeSubscriptionToken(plaintext []byte) error {
 		if !bytes.HasPrefix(plaintext, []byte(prefix)) {
 			continue
 		}
-		return claudeSubscriptionTokenError{err: errors.New(
-			"this is a Claude subscription OAuth token, not an Anthropic Console API key: " +
-				"Anthropic does not permit a third-party service to store or route requests " +
-				"through Claude Free, Pro or Max credentials, so Halro cannot hold one. " +
-				"Create an API key in the Claude Console, or use Bedrock Mantle",
+		return claudeCredentialProductError{code: "anthropic_subscription_token_refused", err: errors.New(
+			"this is a Claude subscription token, not an Anthropic Console API key: " +
+				"the two are different products on the same host and this one would not " +
+				"be accepted here. Create the credential on the Claude subscription " +
+				"product instead, or paste a Console API key",
 		)}
 	}
 	return nil
@@ -1628,17 +1637,6 @@ type bedrockProjectIDError struct{ err error }
 
 func (e bedrockProjectIDError) Error() string { return e.err.Error() }
 func (e bedrockProjectIDError) Unwrap() error { return e.err }
-
-// claudeSubscriptionTokenError marks the one refusal whose cause is not
-// anything the operator typed wrong. Typed rather than matched on message text,
-// so the console can answer it in the reader's own language — and so the reason
-// stays one sentence in one place rather than being re-argued in the browser,
-// which §7.2 of the subscription-access plan forbids deciding product identity
-// in anyway.
-type claudeSubscriptionTokenError struct{ err error }
-
-func (e claudeSubscriptionTokenError) Error() string { return e.err.Error() }
-func (e claudeSubscriptionTokenError) Unwrap() error { return e.err }
 
 // credentialMatchError marks the refusals that follow from which credential the
 // operator picked rather than from a malformed field. A credential is sealed
@@ -1680,9 +1678,9 @@ func (e egressProxyInputError) Error() string {
 // sentence alone stays code-less, and the one that needs a translated answer
 // carries a stable code.
 func adminCredentialInputError(writer http.ResponseWriter, err error) {
-	var subscriptionToken claudeSubscriptionTokenError
-	if errors.As(err, &subscriptionToken) {
-		adminBadRequestCode(writer, "anthropic_subscription_token_refused", err.Error())
+	var product claudeCredentialProductError
+	if errors.As(err, &product) {
+		adminBadRequestCode(writer, product.code, err.Error())
 		return
 	}
 	adminBadRequest(writer, err.Error())
@@ -1785,6 +1783,9 @@ func (r *Runtime) providerFromInput(
 	}
 	if domain.IsWithheldProfile(profile.ProfileID) {
 		return domain.ProviderInstance{}, errors.New("the selected capability implementation is not supported by this build")
+	}
+	if !offeredProfile(r.config.ProviderSubscriptions, profile.ProfileID) {
+		return domain.ProviderInstance{}, subscriptionDisabledError(profile.AccessSurface)
 	}
 	if input.AccessSurface != "" && input.AccessSurface != profile.AccessSurface ||
 		input.ProfileID != "" && input.ProfileID != profile.ProfileID ||
@@ -1965,6 +1966,9 @@ func (r *Runtime) providerFromInput(
 		}
 		if domain.IsWithheldProfile(assigned.ProfileID) {
 			return domain.ProviderInstance{}, errors.New("a selected capability implementation is not supported by this build")
+		}
+		if !offeredProfile(r.config.ProviderSubscriptions, assigned.ProfileID) {
+			return domain.ProviderInstance{}, subscriptionDisabledError(bound.AccessSurface)
 		}
 		binding := domain.ProviderProfileBinding{
 			ID:               domain.DefaultProviderProfileBindingID(id, assigned.ProfileID),

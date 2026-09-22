@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/safetransport"
 )
@@ -18,7 +19,7 @@ import (
 // not say which product it means.
 
 func TestServedMatrixGivesEveryProfileAProductAndEveryProductAProfile(t *testing.T) {
-	view := buildProviderProfilesView("us-east-1")
+	view := buildProviderProfilesView(config.ProviderSubscriptions{}, "us-east-1")
 	for _, providerType := range view.ProviderTypes {
 		offerings := make(map[domain.ProviderOfferingID]bool, len(providerType.Offerings))
 		for _, offering := range providerType.Offerings {
@@ -54,7 +55,7 @@ func TestWithheldOnlyOfferingIsNotServed(t *testing.T) {
 	if !domain.IsWithheldProfile(domain.ProfileBedrockConverseText) {
 		t.Skip("Bedrock Runtime is offered by this build, so it is expected in the served matrix")
 	}
-	view := buildProviderProfilesView("us-east-1")
+	view := buildProviderProfilesView(config.ProviderSubscriptions{}, "us-east-1")
 	for _, providerType := range view.ProviderTypes {
 		for _, offering := range providerType.Offerings {
 			if offering.ID == domain.OfferingBedrockRuntime {
@@ -68,7 +69,7 @@ func TestWithheldOnlyOfferingIsNotServed(t *testing.T) {
 // Coding Plan subscription, each with mainland and international surfaces. This is what the
 // console renders as a product choice and then a region choice.
 func TestBigModelIsServedAsTwoProducts(t *testing.T) {
-	view := buildProviderProfilesView("us-east-1")
+	view := buildProviderProfilesView(config.ProviderSubscriptions{}, "us-east-1")
 	var bigmodel providerTypeView
 	for _, providerType := range view.ProviderTypes {
 		if providerType.Type == domain.ProviderBigModel {
@@ -124,7 +125,7 @@ func TestBigModelIsServedAsTwoProducts(t *testing.T) {
 }
 
 func TestCodeSubscriptionOfferingsExposeOnlyValidatedProducts(t *testing.T) {
-	view := buildProviderProfilesView("us-east-1")
+	view := buildProviderProfilesView(config.ProviderSubscriptions{}, "us-east-1")
 	for _, providerType := range view.ProviderTypes {
 		switch providerType.Type {
 		case domain.ProviderKimi:
@@ -451,7 +452,7 @@ func TestMiniMaxGlobalGeneralCannotBypassSubscriptionResponsibility(t *testing.T
 // choice that writes the endpoint field, which is only possible if the hosts
 // arrive with it.
 func TestByEndpointProductsCarryTheirHosts(t *testing.T) {
-	view := buildProviderProfilesView("us-east-1")
+	view := buildProviderProfilesView(config.ProviderSubscriptions{}, "us-east-1")
 	seen := 0
 	for _, providerType := range view.ProviderTypes {
 		for _, offering := range providerType.Offerings {

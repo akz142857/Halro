@@ -120,6 +120,12 @@ export function localizedError(t: TFunction, error: unknown) {
     // Not a malformed value — a well-formed secret from the wrong product, which
     // the server recognises and the browser never inspects.
     anthropic_subscription_token_refused: "errors.anthropicSubscriptionTokenRefused",
+    // The mirror, and the more dangerous direction: a Console key on the
+    // subscription product would be served, against the wrong balance.
+    anthropic_console_key_refused: "errors.anthropicConsoleKeyRefused",
+    // Not a malformed value either — the product is implemented and this
+    // instance has it switched off.
+    provider_subscription_disabled: "errors.providerSubscriptionDisabled",
     credential_product_immutable: "errors.credentialProductImmutable",
     credential_region_immutable: "errors.credentialRegionImmutable",
     credential_region_mismatch: "errors.credentialRegionMismatch",
