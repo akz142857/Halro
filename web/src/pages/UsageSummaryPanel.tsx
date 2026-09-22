@@ -103,26 +103,26 @@ export function UsageSummaryPanel() {
           <div className="usage-filter-row">
             <div className="usage-filter-fields">
               <div className="usage-filter-grid usage-filter-summary">
-        <div className="filter-field">
-          <span>{t("usage.summary.granularity")}</span>
-          <SegmentedChoice
-            label={t("usage.summary.granularity")}
-            value={granularity}
-            items={(["day", "month", "year"] as const).map((key) => ({ key, label: t(`usage.summary.granularities.${key}`) }))}
-            onChange={setGranularity}
-          />
-        </div>
-        <label><span>{t("usage.start")}</span><input type="date" value={start} max={end || undefined} onChange={(event) => setStart(event.target.value)} /></label>
-        <label><span>{t("usage.end")}</span><input type="date" value={end} min={start || undefined} onChange={(event) => setEnd(event.target.value)} /></label>
-        <label>
-          <span>{t("usage.summary.dimension")}</span>
-          <select value={dimension} onChange={(event) => setDimension(event.target.value as Dimension)}>
-            <option value="">{t("usage.summary.dimensionNone")}</option>
-            {(Object.keys(detailFilters) as Array<Exclude<Dimension, "">>).map((key) => (
-              <option key={key} value={key}>{t(`usage.summary.dimensions.${key}`)}</option>
-            ))}
-          </select>
-        </label>
+                <div className="filter-field">
+                  <span>{t("usage.summary.granularity")}</span>
+                  <SegmentedChoice
+                    label={t("usage.summary.granularity")}
+                    value={granularity}
+                    items={(["day", "month", "year"] as const).map((key) => ({ key, label: t(`usage.summary.granularities.${key}`) }))}
+                    onChange={setGranularity}
+                  />
+                </div>
+                <label><span>{t("usage.start")}</span><input type="date" value={start} max={end || undefined} onChange={(event) => setStart(event.target.value)} /></label>
+                <label><span>{t("usage.end")}</span><input type="date" value={end} min={start || undefined} onChange={(event) => setEnd(event.target.value)} /></label>
+                <label>
+                  <span>{t("usage.summary.dimension")}</span>
+                  <select value={dimension} onChange={(event) => setDimension(event.target.value as Dimension)}>
+                    <option value="">{t("usage.summary.dimensionNone")}</option>
+                    {(Object.keys(detailFilters) as Array<Exclude<Dimension, "">>).map((key) => (
+                      <option key={key} value={key}>{t(`usage.summary.dimensions.${key}`)}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
             </div>
             <button type="button" className="button usage-summary-export" onClick={() => downloadSummaryCSV(report, t("usage.summary.csvName", { start: report.start, end: report.end }))}>

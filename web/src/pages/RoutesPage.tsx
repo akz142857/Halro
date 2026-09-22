@@ -22,7 +22,7 @@ import type { Deployment, Project, Provider, Route } from "../types";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { useIsReadOnly } from "../session";
-import { Link, navigate } from "../navigation";
+import { Link } from "../navigation";
 import { hasOnboardingCreateIntent, OnboardingContextBanner } from "../OnboardingContext";
 
 // The route update is a full replacement, so a state toggle has to resend
@@ -270,10 +270,12 @@ export function RoutesPage() {
                           one is two clicks away with the name retyped. Drawn as
                           a button rather than as link text: at the end of a run
                           of grey facts it read as one more fact. */}
-                      <button
-                        type="button"
+                      {/* An anchor, not a button: this is navigation, so a
+                          middle click opens it in a tab, the status bar names
+                          the destination, and a screen reader calls it a link. */}
+                      <Link
                         className="button secondary route-alias-try"
-                        onClick={() => navigate(`/admin/developer?model=${encodeURIComponent(group.alias)}`)}
+                        href={`/admin/developer?model=${encodeURIComponent(group.alias)}`}
                       >
                         {/* The console's own developer-workbench mark, so the
                             control names its destination before its label is
@@ -282,7 +284,7 @@ export function RoutesPage() {
                           <path d="M8 8 4 12l4 4M16 8l4 4-4 4M14 5l-4 14" />
                         </svg>
                         {t("routes.tryInWorkbench")}
-                      </button>
+                      </Link>
                     </span>
                   </div>
                 </th>

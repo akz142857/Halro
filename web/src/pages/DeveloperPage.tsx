@@ -7,7 +7,7 @@ import { OnboardingContextBanner } from "../OnboardingContext";
 import { api } from "../api";
 import { ConfirmButton, EmptyState, ErrorState, Field, Loading, PageHeader, type ReauthValues } from "../components";
 import { navigate } from "../navigation";
-import { money } from "../format";
+import { money, useInstantFormatter } from "../format";
 import type { UsageRequestSummary } from "../types";
 
 type Endpoint = "responses" | "chat" | "embeddings";
@@ -35,6 +35,17 @@ interface ExecutionState {
   // questions an HTTP status cannot answer are answered: which project was
   // billed, and what the call cost.
   settlement?: UsageRequestSummary;
+  // Whether those numbers are the provider's own or Halro's conservative
+  // stand-in. The summary does not carry the flags; its attempts do.
+  estimated?: EstimationFlags;
+  // The reads are done and no record exists. Different from "not yet": a
+  // refusal before accounting never produces one.
+  settlementUnavailable?: boolean;
+}
+
+interface EstimationFlags {
+  tokens: boolean;
+  cost: boolean;
 }
 
 /** One entry of this session's request history. Held in memory only, like the key. */
@@ -49,6 +60,7 @@ interface HistoryEntry {
   latency?: number;
   requestID: string;
   settlement?: UsageRequestSummary;
+  estimated?: EstimationFlags;
 }
 
 /** An image the request carries. An inline image travels as a data URL built in this
@@ -71,9 +83,17 @@ const copyStatusTimeoutMillis = 4000;
 const debugKeyLifetimeMillis = 24 * 60 * 60 * 1000;
 const emptyExecution: ExecutionState = { outcome: "idle", headers: "", body: "", requestID: "" };
 const historyLimit = 12;
+// Two megabytes of kept request bodies, after which the oldest stop being held.
+const historyBodyBudget = 2 << 20;
+// Settlement lands after the answer does. Six reads over ~1.8s is long enough
+// for the ledger to finalize an ordinary call and short enough that a request
+// which will never have a record says so rather than spinning.
+const settlementAttempts = 6;
+const settlementRetryMillis = 300;
 
 export function DeveloperPage() {
   const { t } = useTranslation();
+  const dateTime = useInstantFormatter();
   const readOnly = useIsReadOnly();
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.projects });
   const developerConfig = useQuery({ queryKey: ["developer-config"], queryFn: api.developerConfig });
@@ -135,11 +155,21 @@ export function DeveloperPage() {
   // Memory only, like the key: nothing here reaches browser storage.
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const executionController = useRef<AbortController | null>(null);
-  const recordSettlement = (requestID: string, settlement: UsageRequestSummary) =>
-    setHistory((entries) => entries.map((entry) => entry.requestID === requestID ? { ...entry, settlement } : entry));
-  // Newest first, and bounded: a long debugging session must not grow the page
-  // without limit.
-  const pushHistory = (entry: HistoryEntry) => setHistory((entries) => [entry, ...entries].slice(0, historyLimit));
+  const recordSettlement = (requestID: string, settlement: UsageRequestSummary, estimated: EstimationFlags) =>
+    setHistory((entries) => entries.map((entry) => entry.requestID === requestID ? { ...entry, settlement, estimated } : entry));
+  // Newest first, and bounded twice over: by count, and by the bytes the kept
+  // bodies add up to. An inline image is base64, so twelve of them can be the
+  // better part of the instance's request ceiling held in memory.
+  const pushHistory = (entry: HistoryEntry) => setHistory((entries) => {
+    const kept: HistoryEntry[] = [];
+    let bytes = 0;
+    for (const candidate of [entry, ...entries].slice(0, historyLimit)) {
+      bytes += byteLength(JSON.stringify(candidate.body));
+      if (kept.length && bytes > historyBodyBudget) break;
+      kept.push(candidate);
+    }
+    return kept;
+  });
   // Loading an earlier call back into the editor is the point of keeping them:
   // it lands in JSON mode because that is the body that was actually sent,
   // fields the form cannot express included.
@@ -154,9 +184,13 @@ export function DeveloperPage() {
     if (selectedProject && selectedProject.id !== projectID) setProjectID(selectedProject.id);
   }, [projectID, selectedProject]);
   useEffect(() => {
+    // Not while the projects query is still in flight: the alias list is empty
+    // then, so this would throw away a deep-linked alias before it could ever
+    // be valid and silently select a different one.
+    if (!projects.data) return;
     const routes = selectedProject?.allowed_models ?? [];
     if (!routes.includes(model)) setModel(routes[0] ?? "");
-  }, [model, selectedProject]);
+  }, [model, projects.data, selectedProject]);
   // Seed the URL once. Reacting to gatewayURL would refill the field the moment the
   // user clears it to type a different one.
   const gatewayURLSeeded = useRef(false);
@@ -169,9 +203,15 @@ export function DeveloperPage() {
   // already cleared the controller the unmount cleanup aborts — so an unmounted
   // page kept polling for a request nobody is looking at any more.
   const mounted = useRef(true);
-  useEffect(() => () => {
-    mounted.current = false;
-    executionController.current?.abort();
+  // The mount half is not optional: StrictMode mounts, runs the cleanup, and
+  // mounts again, so an effect that only clears this latches it false for the
+  // life of the page and the settlement read never runs at all.
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      executionController.current?.abort();
+    };
   }, []);
 
   // Embeddings cannot stream, but the preference survives so switching back restores it.
@@ -246,8 +286,12 @@ export function DeveloperPage() {
   const executionHint = execution.outcome !== "httpError" ? "" :
     execution.adminRejected ? t("developer.hintSessionExpired") :
       codeHint ? codeHint :
-        execution.status === 401 || execution.status === 403 ? t("developer.hintUnauthorized") :
-          execution.status === 429 ? t("developer.hintRateLimited") : "";
+        // Only when the envelope carried no code of its own. 401 and 403 are
+        // different refusals: the first is about the key itself, the second
+        // about what that key, that project or that source may reach.
+        execution.status === 401 ? t("developer.hintCodes.invalid_api_key") :
+          execution.status === 403 ? t("developer.hintUnauthorized") :
+            execution.status === 429 ? t("developer.hintRateLimited") : "";
   // Which project the ledger actually charged. The picker above only filters
   // the alias list — the Gateway Key decides the project — so the two can name
   // different projects and nothing used to say so.
@@ -449,18 +493,42 @@ export function DeveloperPage() {
         // Settlement is committed after the answer is on the wire, so the first
         // read can legitimately miss. A bounded retry is the difference between
         // "this call cost nothing" and "the cost has not landed yet".
-        for (let attempt = 0; attempt < 4 && mounted.current && !controller.signal.aborted; attempt++) {
+        let settled = false;
+        for (let attempt = 0; attempt < settlementAttempts && mounted.current && !controller.signal.aborted; attempt++) {
           try {
             const detail = await api.usageRequest(correlatedRequestID);
+            // A 200 is not a settlement. The aggregate answers with the
+            // in-flight accumulator for a request it has seen but not
+            // finalized, and that record carries no outcome and zeros
+            // throughout — which rendered as "this call cost $0.00" and stayed
+            // that way, because nothing threw and the loop stopped.
+            if (!detail.summary.outcome) {
+              if (attempt < settlementAttempts - 1) await new Promise((resolve) => setTimeout(resolve, settlementRetryMillis));
+              continue;
+            }
+            const estimated = {
+              tokens: detail.attempts.some((event) => event.tokens_estimated),
+              cost: detail.attempts.some((event) => event.cost_estimated),
+            };
             setExecution((current) => current.requestID === correlatedRequestID
-              ? { ...current, usageAvailable: true, settlement: detail.summary }
+              ? { ...current, usageAvailable: true, settlement: detail.summary, estimated }
               : current);
-            recordSettlement(correlatedRequestID, detail.summary);
+            recordSettlement(correlatedRequestID, detail.summary, estimated);
+            settled = true;
             break;
           } catch {
             // Authentication and request-validation failures legitimately have no Usage record.
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            // No sleep after the last read: it would hold the page open for a
+            // retry that is not going to happen.
+            if (attempt < settlementAttempts - 1) await new Promise((resolve) => setTimeout(resolve, settlementRetryMillis));
           }
+        }
+        // Those refusals never produce one, so "awaiting settlement" would be a
+        // promise the page cannot keep. Say the record is not coming instead.
+        if (!settled && mounted.current && !controller.signal.aborted) {
+          setExecution((current) => current.requestID === correlatedRequestID
+            ? { ...current, settlementUnavailable: true }
+            : current);
         }
       }
     }
@@ -734,11 +802,18 @@ export function DeveloperPage() {
                     only way to learn either was to leave the page. */}
                 <div>
                   <small>{t("developer.billedProject")}</small>
-                  <strong>{settlement ? billedProject?.name || settlement.project_id : execution.outcome === "idle" ? "—" : t("developer.settlementPending")}</strong>
+                  <strong>{settlement
+                    ? billedProject?.name || settlement.project_id
+                    : execution.outcome === "idle" ? "—"
+                      : execution.settlementUnavailable ? t("developer.settlementMissing") : t("developer.settlementPending")}</strong>
                 </div>
                 <div>
                   <small>{t("developer.tokens")}</small>
                   <strong>{settlement ? `${settlement.input_tokens} / ${settlement.output_tokens}` : "—"}</strong>
+                  {/* Whose count this is. Every other usage surface says so,
+                      and a conservative stand-in read as a measurement is the
+                      one reading that cannot be corrected later. */}
+                  {settlement && <small className="developer-settlement-note">{t(execution.estimated?.tokens ? "usage.conservative" : "usage.reported")}</small>}
                 </div>
                 <div>
                   <small>{t("developer.cost")}</small>
@@ -747,6 +822,7 @@ export function DeveloperPage() {
                       ? t("developer.costPartial", { amount: money(settlement.cost_micros_usd), count: settlement.unknown_attempts })
                       : money(settlement.cost_micros_usd)
                     : "—"}</strong>
+                  {settlement && execution.estimated?.cost && <small className="developer-settlement-note">{t("developer.costEstimated")}</small>}
                 </div>
               </div>
               {billedElsewhere && (
@@ -825,11 +901,23 @@ export function DeveloperPage() {
                         <span>{t(`developer.endpoint${entry.endpoint === "chat" ? "Chat" : entry.endpoint === "embeddings" ? "Embeddings" : "Responses"}`)}</span>
                       </div>
                       <div className="developer-history-meta">
-                        <span>{new Date(entry.at).toLocaleTimeString()}</span>
+                        {/* Through the console's formatter, which is where the
+                            accounting time zone is decided — not the browser's,
+                            which would disagree with the usage record this row
+                            links to. */}
+                        <span>{dateTime(new Date(entry.at).toISOString(), "dateTime")}</span>
                         {entry.latency != null && <span>{entry.latency} ms</span>}
                         {/* Absent rather than zero while settlement has not
-                            landed: a blank cost is unknown, not free. */}
-                        {entry.settlement && <span>{money(entry.settlement.cost_micros_usd)}</span>}
+                            landed: a blank cost is unknown, not free. A cost
+                            with attempts of unknown cost behind it is not a
+                            complete figure either, and says so here as it does
+                            in the panel above. */}
+                        {entry.settlement && (
+                          <span>{entry.settlement.unknown_attempts > 0
+                            ? t("developer.costPartial", { amount: money(entry.settlement.cost_micros_usd), count: entry.settlement.unknown_attempts })
+                            : money(entry.settlement.cost_micros_usd)}
+                            {entry.estimated?.cost ? ` · ${t("developer.costEstimated")}` : ""}</span>
+                        )}
                       </div>
                       <div className="developer-history-actions">
                         <button type="button" className="resource-link inline" onClick={() => replay(entry)}>{t("developer.replayRequest")}</button>

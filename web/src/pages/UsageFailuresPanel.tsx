@@ -81,24 +81,24 @@ export function UsageFailuresPanel() {
           <div className="usage-filter-row">
             <div className="usage-filter-fields">
               <div className="usage-filter-grid usage-filter-failures">
-        <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
-        <label>
-          <span>{t("usage.project")}</span>
-          <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            {(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name || project.id}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>{t("usage.deployment")}</span>
-          <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
-            <option value="">{t("usage.all")}</option>
-            {(deployments.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
-            {deploymentID && !deploymentNames[deploymentID] && <option value={deploymentID}>{deploymentID}</option>}
-          </select>
-        </label>
-        <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
-        <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
+                <label><span>{t("usage.requestID")}</span><input autoComplete="off" value={requestID} onChange={(event) => setRequestID(event.target.value)} placeholder="req_…" /></label>
+                <label>
+                  <span>{t("usage.project")}</span>
+                  <select value={projectID} onChange={(event) => setProjectID(event.target.value)}>
+                    <option value="">{t("usage.all")}</option>
+                    {(projects.data?.items ?? []).map((project) => <option key={project.id} value={project.id}>{project.name || project.id}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>{t("usage.deployment")}</span>
+                  <select value={deploymentID} onChange={(event) => setDeploymentID(event.target.value)}>
+                    <option value="">{t("usage.all")}</option>
+                    {(deployments.data?.items ?? []).map((item) => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}
+                    {deploymentID && !deploymentNames[deploymentID] && <option value={deploymentID}>{deploymentID}</option>}
+                  </select>
+                </label>
+                <label><span>{t("usage.start")}</span><input autoComplete="off" type="datetime-local" value={start} onChange={(event) => setStart(event.target.value)} /></label>
+                <label><span>{t("usage.end")}</span><input autoComplete="off" type="datetime-local" value={end} onChange={(event) => setEnd(event.target.value)} /></label>
               </div>
               {/* The chip row the attempt list has, for the one filter this
                   list can arrive carrying but has no field for. */}

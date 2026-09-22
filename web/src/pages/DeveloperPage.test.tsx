@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../api";
 import { stepUpRequired } from "../test/fixtures";
@@ -30,7 +31,7 @@ const project: Project = {
 // What the ledger reports back for a settled request: the workbench reads the
 // billed project and the cost out of it, so a stub without them would assert
 // nothing about either.
-function settlementFixture(overrides: Partial<UsageRequestDetail["summary"]> = {}): UsageRequestDetail {
+function settlementFixture(overrides: Partial<UsageRequestDetail["summary"]> = {}, attempts: UsageRequestDetail["attempts"] = []): UsageRequestDetail {
   return {
     summary: {
       request_id: "req_debug_1", project_id: "project_1", requested_model: "support-chat",
@@ -39,8 +40,21 @@ function settlementFixture(overrides: Partial<UsageRequestDetail["summary"]> = {
       accepted_at: "2026-09-22T00:00:00Z", completed_at: "2026-09-22T00:00:01Z",
       ...overrides,
     },
-    attempts: [],
+    attempts,
   };
+}
+
+/** One settled attempt, with the two estimation flags under the caller's control. */
+function attemptFixture(overrides: Partial<UsageRequestDetail["attempts"][number]> = {}): UsageRequestDetail["attempts"][number] {
+  return {
+    event_id: "evt_1", request_id: "req_debug_1", attempt_id: "att_1", sequence: 1, attempt: 1,
+    project_id: "project_1", period_id: "2026-09-22", provider_input_tokens: 12, provider_output_tokens: 34,
+    prepared_output_tokens: 0, cost_micros_usd: 2500, price_evidence_status: "recorded", cost_value_status: "known",
+    input_cost_micros_usd: 0, output_cost_micros_usd: 0, fixed_cost_micros_usd: 0,
+    cost_estimated: false, tokens_estimated: false, latency_millis: 10,
+    started_at: "2026-09-22T00:00:00Z", completed_at: "2026-09-22T00:00:01Z", status: "succeeded",
+    ...overrides,
+  } as UsageRequestDetail["attempts"][number];
 }
 
 describe("DeveloperPage", () => {
@@ -304,6 +318,152 @@ describe("DeveloperPage", () => {
     expect(pythonCode).not.toContain("What's True?");
   });
 
+  // The app renders inside React.StrictMode, whose mount/cleanup/remount left a
+  // cleanup-only ref latched false — and with it every settlement read.
+  it("still reads settlement under StrictMode", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<StrictMode><QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider></StrictMode>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText("12 / 34")).toBeVisible();
+  });
+
+  // The routes page links here with the alias in the URL. The reconciliation
+  // effect ran before the projects query resolved, when the allowed list is
+  // empty, and threw the alias away — so a pasted link or a refresh sent the
+  // request through a different alias with no notice.
+  it("keeps a deep-linked alias through a cold load", async () => {
+    window.history.replaceState({}, "", "/admin/developer?model=text-embedding");
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    expect(screen.getByLabelText("公共模型别名")).toHaveValue("text-embedding");
+    window.history.replaceState({}, "", "/admin/developer");
+  });
+
+  // Switching the tab is the other way into the JSON editor, and it had the
+  // same overwrite the endpoint change did.
+  it("does not overwrite a hand-written body when the mode is switched back", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+
+    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    const raw = screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement;
+    fireEvent.change(raw, { target: { value: '{"model":"custom","input":"kept"}' } });
+    fireEvent.click(screen.getByRole("tab", { name: "表单模式" }));
+    fireEvent.click(screen.getByRole("tab", { name: "原始 JSON" }));
+
+    expect((screen.getByRole("textbox", { name: /原始请求 JSON/ }) as HTMLTextAreaElement).value).toContain("kept");
+  });
+
+  // The gateway names its own refusal, and the status alone cannot tell a
+  // capability rejection from a malformed body.
+  it("explains a refusal by the gateway's own error code", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ error: { message: "model is not allowed for this project", type: "invalid_request_error", code: "model_not_allowed" } }),
+      { status: 403, statusText: "Forbidden", headers: { "Content-Type": "application/json" } },
+    ));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    // The code's own repair, not the generic 403 sentence.
+    expect(await screen.findByText(/这个项目没有被授权调用它/)).toBeVisible();
+  });
+
+  // The aggregate answers with the in-flight accumulator for a request it has
+  // seen but not finalized: 200, no outcome, zeros throughout. Accepting that
+  // as a settlement printed "this call cost $0.00" and kept it there.
+  it("keeps waiting while the ledger answers with an unfinalized record", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    const usage = vi.spyOn(api, "usageRequest")
+      .mockResolvedValueOnce(settlementFixture({ outcome: "", attempts: 0, input_tokens: 0, output_tokens: 0, cost_micros_usd: 0 }))
+      .mockResolvedValue(settlementFixture());
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+    expect(await screen.findByText("请求已完成")).toBeVisible();
+
+    // The unfinalized read is not shown as a settlement of zero…
+    expect(screen.queryByText("0 / 0")).not.toBeInTheDocument();
+    // …and the next read, which carries an outcome, is.
+    expect(await screen.findByText("12 / 34")).toBeVisible();
+    expect(usage.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // Auth and validation refusals never produce a usage record, so "awaiting
+  // settlement" was a promise the page could not keep.
+  it("says there is no usage record once the reads are spent", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockRejectedValue(new Error("no usage record"));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText("没有用量记录", {}, { timeout: 5000 })).toBeVisible();
+    expect(screen.queryByText("等待结算")).not.toBeInTheDocument();
+  }, 10000);
+
+  // A conservative stand-in read as a measurement is the one reading that
+  // cannot be corrected later, and a cost with unknown attempts behind it is
+  // not a complete figure — in the history row as much as in the panel.
+  it("states whose numbers these are and how complete the cost is", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
+    vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
+    vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
+      JSON.stringify({ id: "chatcmpl_1" }),
+      { status: 200, headers: { "Content-Type": "application/json", "X-Request-ID": "req_debug_1" } },
+    ));
+    vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture(
+      { unknown_attempts: 1, attempts: 2 },
+      [attemptFixture({ tokens_estimated: true, cost_estimated: true })],
+    ));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><DeveloperPage /></QueryClientProvider>);
+    await screen.findByRole("option", { name: "support-chat" });
+    fireEvent.change(screen.getByLabelText("Gateway Key"), { target: { value: "gw_debug_secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
+
+    expect(await screen.findByText("保守上限")).toBeVisible();
+    // The incompleteness is stated in the panel and in the history row, never
+    // in only one of them.
+    expect(screen.getAllByText(/1 次调用费用未知/)).toHaveLength(2);
+    expect(screen.getAllByText(/含估算/).length).toBeGreaterThan(0);
+  });
+
   // An HTTP 200 says the call was accepted, not what it cost or who paid for
   // it — and the project picker only filters aliases, so the Gateway Key can
   // bill a different project than the one on screen.
@@ -383,6 +543,10 @@ describe("DeveloperPage", () => {
 
     view.unmount();
     const callsAtUnmount = usage.mock.calls.length;
+    // Pinned, not merely compared with itself: a slow render can spend the
+    // whole retry budget before the unmount, and then nothing could follow it
+    // whether the guard works or not.
+    expect(callsAtUnmount).toBe(1);
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(usage.mock.calls.length).toBe(callsAtUnmount);
   });
@@ -511,7 +675,8 @@ describe("DeveloperPage", () => {
     vi.spyOn(api, "projects").mockResolvedValue({ items: [project], next_cursor: "" });
     vi.spyOn(api, "developerConfig").mockResolvedValue({ gateway_base_url: "http://127.0.0.1:8080" });
     vi.spyOn(api, "developerExecute").mockResolvedValue(new Response(
-      JSON.stringify({ error: { message: "missing or invalid bearer token" } }),
+      // The shape the gateway actually sends: writeError always fills `code`.
+      JSON.stringify({ error: { message: "missing or invalid bearer token", type: "authentication_error", code: "invalid_api_key" } }),
       { status: 401, statusText: "Unauthorized", headers: { "Content-Type": "application/json" } },
     ));
     const usage = vi.spyOn(api, "usageRequest").mockResolvedValue(settlementFixture());
@@ -523,7 +688,7 @@ describe("DeveloperPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送请求" }));
 
     expect(await screen.findByText(/网关返回 401，请求未成功/)).toBeVisible();
-    expect(screen.getByText(/请检查 Gateway Key 是否属于所选项目/)).toBeVisible();
+    expect(screen.getByText(/Gateway Key 无效、已禁用，或不属于所选项目/)).toBeVisible();
     expect(screen.queryByText("请求已完成")).not.toBeInTheDocument();
     expect(usage).not.toHaveBeenCalled();
   });

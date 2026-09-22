@@ -6,7 +6,12 @@ import type { Deployment, Project, Provider, Route } from "../types";
 import { RoutesPage } from "./RoutesPage";
 
 describe("RoutesPage", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    // The alias test navigates; without this every later test in the file runs
+    // against whatever URL it left behind.
+    window.history.replaceState({}, "", "/admin/routes");
+  });
 
   it("shows a route test result inside the route that was tested", async () => {
     const route = {
@@ -100,7 +105,12 @@ describe("RoutesPage", () => {
     // with one working target says nothing at all: silence is the healthy
     // state, and the row under it already names the target.
     expect(screen.getByText("2 个目标 · 顺序回退")).toBeVisible();
-    expect(screen.queryByText("可用")).toBeNull();
+    // The single-target alias says nothing at all — asserted on the band's own
+    // element, because `queryByText` of a word that is no longer anywhere is
+    // satisfied by any copy, including the one this replaced.
+    const zeta = Array.from(document.querySelectorAll(".route-group-heading"))
+      .find((row) => row.querySelector(".route-group-alias")?.textContent === "zeta")!;
+    expect(zeta.querySelector(".route-alias-state")).toBeNull();
     // The band spans the table. It is a div inside the cell because a th laid
     // out as flex stops being a table cell, and the browser then ignores its
     // colSpan and squeezes the heading into the first column.
@@ -173,7 +183,10 @@ describe("RoutesPage", () => {
 
     // Publishing an alias is finished when a request has gone through it, so
     // the way there is a control, not a sentence at the end of a grey run.
-    fireEvent.click(screen.getByRole("button", { name: "去调试" }));
+    // A link, so it also survives a middle click and names its destination.
+    const debug = screen.getByRole("link", { name: "去调试" });
+    expect(debug).toHaveAttribute("href", "/admin/developer?model=chat");
+    fireEvent.click(debug);
     expect(window.location.pathname).toBe("/admin/developer");
     expect(new URLSearchParams(window.location.search).get("model")).toBe("chat");
   });

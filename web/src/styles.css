@@ -1323,6 +1323,11 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 /* The shared icon button is a 44px touch target sized for a row of actions; at
    the end of a name it would outweigh the name. */
 .route-alias-copy .icon-button { width: var(--space-6); height: var(--space-6); font-size: var(--font-size-md); line-height: 1; }
+/* The touch breakpoint raises min-height globally but nothing raises the
+   width, which left this a 24×44 target on a phone. */
+@media (max-width: 51.25rem) {
+  .route-alias-copy .icon-button { min-width: var(--control-touch-block-size); min-height: var(--control-touch-block-size); }
+}
 .route-alias-copy .icon-button:hover { color: var(--text); }
 .route-alias-usage { color: var(--color-text-tertiary); font-size: var(--font-size-xs); }
 .route-alias-state.serving { color: var(--color-status-success-text); }
@@ -1351,10 +1356,15 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 /* Fixed, with the three right-hand columns sized in rem and the target column
    taking what is left: a row that gains a failure sentence then grows taller,
    never wider, and nothing beside it moves. */
-.route-table { table-layout: fixed; min-width: 66rem; }
-.route-col-priority { width: 6rem; }
-.route-col-status { width: 22rem; }
-.route-col-actions { width: 38rem; }
+/* The three sized columns must leave the unsized one something to live on: in
+   fixed layout the target column gets only the leftover, so 6+22+38 against a
+   66rem floor left it exactly 0 and ellipsised the provider · model line to
+   nothing on any viewport under ~1700px. 5+15+29 = 49rem against a 62rem floor
+   keeps at least 13rem for the column the row is about. */
+.route-table { table-layout: fixed; min-width: 62rem; }
+.route-col-priority { width: 5rem; }
+.route-col-status { width: 15rem; }
+.route-col-actions { width: 29rem; }
 .route-table thead th:last-child, .route-table td:last-child { text-align: right; }
 .inline-status { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; font: var(--font-size-xs) var(--mono); }
 
@@ -1479,9 +1489,14 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
    blue that marks a link OUT of the console — so the one screen where every
    link is internal was the one screen that said they were not. */
 .usage-request-id {
-  display: block; margin: 0; overflow: hidden; color: var(--color-text-primary); font: var(--font-weight-semibold) var(--font-size-sm) var(--mono);
+  display: block; margin: 0; overflow: hidden; font: var(--font-weight-semibold) var(--font-size-sm) var(--mono);
   text-overflow: ellipsis; white-space: nowrap;
 }
+/* Only where the ID is plain text. On the failed-request list it is an anchor
+   carrying .resource-link too, and this colour — later in the file, same
+   specificity — was painting a link in body colour, leaving it identical to
+   the non-link ID one tab over. */
+code.usage-request-id { color: var(--color-text-primary); }
 .usage-request-context {
   display: flex; min-width: 0; align-items: baseline; gap: var(--space-2); margin-top: var(--space-2);
   overflow: hidden; color: var(--color-text-tertiary); font-size: var(--font-size-xs); white-space: nowrap;
@@ -1532,7 +1547,10 @@ th[aria-sort="ascending"] .column-sort i, th[aria-sort="descending"] .column-sor
 }
 /* A timestamp is read as a figure, not as prose: it lines up digit for digit
    with the rows above and below, and never breaks across two lines. */
-.usage-failure-time {
+/* Qualified with td: `.usage-table td` is (0,1,1) and set colour, size and
+   white-space, so a bare class here lost every declaration it existed for —
+   the timestamp went on wrapping. */
+.usage-table td.usage-failure-time {
   color: var(--color-text-secondary); font-size: var(--font-size-xs);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
@@ -2506,6 +2524,12 @@ textarea { resize: vertical; }
 .developer-billing-mismatch { margin: 0; padding: var(--space-3) var(--space-4); color: var(--color-status-warning-text); border-bottom: 1px solid var(--color-status-warning-border); background: var(--color-status-warning-surface); font-size: var(--font-size-xs); line-height: 1.5; }
 .developer-json-sync { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 .developer-json-sync .resource-link { color: var(--mint); font-weight: var(--font-weight-semibold); }
+/* Qualified against `.developer-response-meta small`, which is (0,1,1) and
+   would otherwise set this note in the uppercase mono the tile labels use. */
+.developer-response-meta small.developer-settlement-note {
+  display: block; margin-top: var(--space-1); color: var(--muted-2);
+  font: var(--font-size-xs)/1.4 var(--font-sans); letter-spacing: 0; text-transform: none;
+}
 .developer-key-stepup { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--font-size-xs); line-height: 1.5; }
 
 .developer-history-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
@@ -3189,6 +3213,11 @@ textarea { resize: vertical; }
 }
 
 @media (max-width: 36.25rem) {
+  /* One field per row, and a segmented control that wraps instead of
+     overflowing its grid track — the flex-wrap that used to do this went with
+     the old .filter-bar. */
+  .usage-filter-failures, .usage-filter-summary, .usage-filter-primary { grid-template-columns: minmax(0, 1fr); }
+  .usage-filter-summary .segmented-choice { max-width: 100%; height: auto; flex-wrap: wrap; }
   .governance-context-bar { display: flex; align-items: stretch; flex-direction: column; padding: var(--space-4); }
   .governance-context-bar label { width: 100%; }
   .governance-project-status { order: initial; }
