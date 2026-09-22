@@ -1264,11 +1264,17 @@ credentials or make your account available to anyone else — and Halro exists t
 serve Projects other than the one who owns the credential. Unlike Anthropic,
 OpenAI has no clause against a developer holding the credential at all, so an
 operator serving strictly nobody but themselves is not something the terms
-answer; Halro does not answer it for them, and offers no such product. The route
-third-party tools take — presenting as the Codex CLI so the upstream's client
-check passes — is separately prohibited as bypassing a protective measure. Use a
+answer; Halro does not answer it for them, and offers no such product. Use a
 platform API key from platform.openai.com, which is a different product with its
 own billing.
+
+What holds that line is the terms and nothing else. Measured 2026-09-23
+(`docs/verification/codex-subscription-evidence.md`): the Codex endpoint serves a
+client that identifies itself truthfully as Halro, so pointing a self-declared
+OpenAI-compatible connection at it with a subscription token would work today,
+and would breach the terms. Halro does not blockade that — the self-declared
+profile exists precisely to reach endpoints Halro does not enumerate — so on both
+of these upstreams the restraint is yours, not the upstream's.
 
 For BigModel, the credential form asks which product and account region the key
 belongs to before anything else, and the endpoint follows that choice — mainland and

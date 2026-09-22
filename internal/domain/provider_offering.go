@@ -107,11 +107,13 @@ const (
 //     OpenAI does not have is Anthropic's sentence forbidding a developer to
 //     collect or intermediate the credential at all, so an operator serving only
 //     themselves is genuinely unresolved there — and this build does not resolve
-//     it on OpenAI's behalf. The route third-party tools take is separately shut:
-//     presenting as the Codex CLI to pass the upstream's client check is
-//     "bypass any protective measures", and the supported clients OpenAI
-//     enumerates are its own. So the blocker is not the OAuth credential scheme
-//     this build lacks; that is merely what it would need afterwards.
+//     it on OpenAI's behalf. What is *not* in the way is client identity: the
+//     upstream serves a truthful third-party client, measured 2026-09-23 in
+//     docs/verification/codex-subscription-evidence.md, so the reported need to
+//     present as the Codex CLI is not a gate. Nor is the OAuth credential scheme
+//     this build lacks; that is what it would need afterwards, not what stops
+//     it. The blocker is one contractual clause, and nothing upstream enforces
+//     it — the same shape as the Anthropic row above.
 //   - `anthropic.claude-subscription` is excluded by the upstream's own terms,
 //     not by Halro's roadmap. Read 2026-09-22 at
 //     https://code.claude.com/docs/en/legal-and-compliance, under "Usage policy

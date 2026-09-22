@@ -803,19 +803,31 @@ Halro 天生多租户：Project 的 Gateway Key 扇出到操作者个人的 Chat
   宽读涵盖一切非官方客户端的程序化取用，窄读只指抓取/导出。**这个歧义由 OpenAI 澄清，不由本方案
   解释。**
 
-**(c) 客户端身份——没有正面要求，但有一条反面禁令。** 同节：
+**(c) 客户端身份——没有正面要求，实测下来也不是障碍。** 条款里确有一条反面禁令：
 
 > Interfere with or disrupt our Services, including circumvent any rate limits or restrictions or
 > bypass any protective measures or safety mitigations we put on our Services.
 
-第三方工具让订阅可用的既有做法是把请求改写成 Codex CLI 的形状、以通过上游的客户端校验；那是
-"bypass any protective measures"。所以**即使 (a) 将来被澄清为允许，这条路也不能走**——
-`learn.chatgpt.com/docs/auth` 列出的受支持客户端只有 ChatGPT web、桌面端、Codex CLI、
-IDE 扩展、Codex cloud，Halro 一个都不是，而冒充其中之一是被单独禁止的。
+本节初稿据此断言"让订阅可用的唯一已知做法是把请求改写成 Codex CLI 的形状骗过客户端校验，
+因此这条路走不通"。**那是二手报道，实测是错的**（
+[`docs/verification/codex-subscription-evidence.md`](../verification/codex-subscription-evidence.md)）：
+带订阅 Bearer token 与 account id、身份头照实写 `Halro/0.8.5` + `originator: halro`、
+不借用任何 Codex 标识，上游返回 **400**，且拒的是 model 不是身份——
 
-**对本节的结论**：`openai.codex-subscription` 维持不注册。理由从"还没做 OAuth"变成"Halro 的
-形态被 (b) 关掉、(c) 又堵死了让它跑通的唯一已知做法"。重开条件因此不是"我们腾出手做 OAuth"，
-而是 **OpenAI 发布允许第三方网关使用订阅的 delegated access 契约**——与 §5.5 的重开条件同形。
+> The 'halro-probe-not-a-real-model' model is not supported when using Codex with a ChatGPT account.
+
+认证与客户端身份都被接受了，请求一路走到模型校验。OpenAI 自己也把 `originator` 做成可覆盖的
+（`CODEX_INTERNAL_ORIGINATOR_OVERRIDE`），`x-oai-attestation` 则是有才插、没有照发。所以
+**(c) 不构成阻塞**，冒充也不是前提。
+
+**对本节的结论**：`openai.codex-subscription` 维持不注册，理由**只剩 (b)**——Halro 天生多租户，
+而条款禁止把账户提供给他人。(a) 悬而未决，(c) 已排除。重开条件不是"我们腾出手做 OAuth"，
+而是 **OpenAI 发布允许第三方网关使用订阅的 delegated access 契约**——与 §5.5 同形。
+
+同时要写下这条实测的另一面，它与 §5.5 的实测结论同形：**上游不拦。**把自声明的
+OpenAI-compatible 连接指向 Codex endpoint 配一把订阅 token，今天就能跑通，并且违反条款。
+Halro 不提供这个产品、在运维手册里说明原因，但**不封堵通用 profile**——那个 profile 的存在
+理由正是去到 Halro 没有枚举的端点。
 
 官方资料（已复核 2026-09-23）：
 

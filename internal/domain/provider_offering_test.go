@@ -547,8 +547,10 @@ func TestClaudeSubscriptionIsNotAnOfferingThisBuildRegisters(t *testing.T) {
 // multi-tenant by construction. OpenAI has no equivalent of Anthropic's clause
 // against collecting or intermediating the credential, so a single-operator
 // shape is unresolved rather than permitted, and this build does not resolve it
-// on OpenAI's behalf. Separately, presenting as the Codex CLI to satisfy the
-// upstream's client check is "bypass any protective measures".
+// on OpenAI's behalf. Client identity is not part of the reason: the upstream
+// serves a truthful third-party client (measured, 2026-09-23,
+// docs/verification/codex-subscription-evidence.md), so the row is held out by
+// one contractual clause that nothing upstream enforces.
 //
 // Deleting this test is the deliberate step, as for its Anthropic sibling. The
 // reopening condition is a delegated-access contract from OpenAI (#350), not the
