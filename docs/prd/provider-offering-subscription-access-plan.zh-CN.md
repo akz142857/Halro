@@ -812,6 +812,28 @@ Claude Code 的情形）。Consumer Terms（生效日 2025-10-08）本身不含�
 - 受支持的路径已经在售且早已发布：`anthropic.console-api` + `anthropic.x-api-key`，云上走
   Bedrock Mantle。
 
+#### 实测（2026-09-22，操作者自己的订阅）
+
+条款是一回事，上游实际怎么答是另一回事，后者本节原先只有二手报道。实测见
+[`docs/verification/anthropic-claude-subscription-evidence.md`](../verification/anthropic-claude-subscription-evidence.md)：
+
+| 送法 | 结果 |
+|---|---|
+| `x-api-key: sk-ant-oat01-…` | **401** `{"type":"authentication_error","message":"API key is invalid."}` |
+| `Authorization: Bearer sk-ant-oat01-…` | **200**，正常出答案 |
+
+两条都直接用 curl、在 Claude Code 之外、不带任何客户端身份。含义：
+
+- 第一行是操作者真会撞上的那条——`ProfileAnthropicMessages` 送的就是 `x-api-key`
+  并抹掉 `Authorization`。而 "API key is invalid." 把人引去查错别字、换密钥或怀疑
+  Halro，三个都不是问题所在。这是"在保存时就拒绝"的体验理由，现在是实测而非推测。
+- 第二行推翻了二手报道所称的服务端封锁：**上游并没有在拦。**所以边界是条款而不是机制，
+  由此得到本节最要紧的一条工程结论——**拒绝不能以"上游会拒"为条件**，否则它永远不会在
+  真正能跑通的那个形状上触发。`refuseClaudeSubscriptionToken` 因此是 Halro 自己的
+  fail-closed 决定，即使 Anthropic 从不执法也不变。
+- "它其实能跑" **不是**重开条件。重开条件仍然是 Anthropic 发布第一方 delegated access
+  契约；这份记录讲的是机制，不讲许可，也不得被当作用法指引。
+
 #### 落到实现上
 
 - 现有 Anthropic profile 归属 `anthropic.console-api`；

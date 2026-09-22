@@ -1581,11 +1581,16 @@ func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.UR
 // is not a configuration Halro may hold. Recorded in full at the Offering table
 // in internal/domain/provider_offering.go.
 //
-// Without this, the save succeeds and the boundary is expressed as a 401 on the
-// operator's first real request — at which point what they read is "Anthropic
-// rejected the key", which is true and useless. Saying it here is both the
-// better message and the honest statement that this is not a thing Halro can be
-// made to do.
+// Without this, the save succeeds and the boundary arrives on the first real
+// request as `401 API key is invalid.` — measured 2026-09-22, not assumed, in
+// docs/verification/anthropic-claude-subscription-evidence.md. That sentence is
+// true and useless: it sends the reader to check for a typo, rotate the key or
+// suspect Halro, and none of those is the problem.
+//
+// The same measurement is why this refusal is unconditional. The upstream served
+// that credential 200 when it was presented the other way, so the boundary is
+// contractual and not enforced on every path; a guard that waited for the
+// upstream to say no would never fire on the shape that works.
 //
 // Narrow on purpose, in three ways. It matches only the two OAuth prefixes, so
 // nothing that could be a Console key is ever refused; it stops before the

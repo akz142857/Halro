@@ -126,6 +126,12 @@ const (
 // Mantle for the cloud route, and both already ship. See
 // validateCredentialMaterial for the refusal that says so at save time, and
 // issue #351 for the reopening condition.
+//
+// docs/verification/anthropic-claude-subscription-evidence.md measured what the
+// upstream does rather than what it permits, and the two differ: presented as
+// `x-api-key` the token is refused "API key is invalid.", presented as a Bearer
+// token it is served. So nothing upstream enforces this boundary on every path,
+// and the refusal here is Halro's own rather than a report of the upstream's.
 
 // Region is a product boundary — which account, balance and model catalogue a
 // credential reaches — and never a cloud region. Bedrock's us-east-1 is a
