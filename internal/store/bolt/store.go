@@ -2003,6 +2003,7 @@ func requiredBuckets() [][]byte {
 		bucketAdminMFAChallenges,
 		bucketMigrationHistory,
 		bucketProviderResources,
+		bucketProviderResourceIdem,
 		bucketDeploymentPriceVersions,
 		bucketDeploymentPriceTimeline,
 		bucketDeploymentPriceNext,
