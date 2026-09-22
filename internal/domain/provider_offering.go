@@ -97,9 +97,21 @@ const (
 // Those two are not the same kind of absence, and reading them as one costs the
 // next person the re-derivation this comment exists to prevent.
 //
-//   - `openai.codex-subscription` is waiting on work: an OAuth credential
-//     scheme this build does not have, and a first-hand reading of OpenAI's
-//     terms. That one may still arrive.
+//   - `openai.codex-subscription` is excluded by its upstream's terms too, but
+//     less completely, and the difference is the reopening condition rather than
+//     a nuance. Read 2026-09-23: help.openai.com's "Using Codex with your
+//     ChatGPT plan" says a Codex sign-in is governed by the ChatGPT Terms of Use
+//     (effective 2026-01-01), whose Registration section says "You may not share
+//     your account credentials or make your account available to anyone else".
+//     Halro is multi-tenant by construction, so that closes Halro's shape. What
+//     OpenAI does not have is Anthropic's sentence forbidding a developer to
+//     collect or intermediate the credential at all, so an operator serving only
+//     themselves is genuinely unresolved there — and this build does not resolve
+//     it on OpenAI's behalf. The route third-party tools take is separately shut:
+//     presenting as the Codex CLI to pass the upstream's client check is
+//     "bypass any protective measures", and the supported clients OpenAI
+//     enumerates are its own. So the blocker is not the OAuth credential scheme
+//     this build lacks; that is merely what it would need afterwards.
 //   - `anthropic.claude-subscription` is excluded by the upstream's own terms,
 //     not by Halro's roadmap. Read 2026-09-22 at
 //     https://code.claude.com/docs/en/legal-and-compliance, under "Usage policy

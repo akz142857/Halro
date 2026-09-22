@@ -769,10 +769,60 @@ Codex 才消耗订阅/agentic usage。ChatGPT credits 也不是 API credits。
 - 只有在官方提供并允许第三方网关使用的 OAuth / delegated access 契约后，才能注册可达 profile；
 - 在此之前它是一个可达 profile 数为 0 的 Offering，按 §3 的规则**不出现在元数据里**。
 
-官方资料（未复核，帮助中心文章号需在阶段 0 打开确认标题与内容）：
+#### 条款复核（2026-09-23，第一手）
 
-- ChatGPT Work / Codex 使用说明（help.openai.com）
-- ChatGPT credits 与 API credits 的区别（help.openai.com）
+阶段 0 要求的复核已完成，结论：**多租户那一半被第一方条款直接关掉，单操作者那一半没有结论。**
+两者不能混着说，因为它们决定的是不同的重开条件。
+
+适用链条先确认清楚。help.openai.com《Using Codex with your ChatGPT plan》（复核时显示
+"Updated: 6 days ago"）写道：
+
+> When you sign in to Codex using an existing ChatGPT account, the ChatGPT Terms of Use and
+> Privacy Policy—or the corresponding online services agreement for OpenAI API and ChatGPT
+> Enterprise, Education or Business Users—apply to data shared between Codex and ChatGPT.
+
+也就是说管辖文件是 ChatGPT Terms of Use（生效 2026-01-01，<https://openai.com/policies/terms-of-use/>）。
+Usage Policies（生效 2025-10-29）通篇是内容与滥用边界，不涉及凭据转介，这里不适用。
+
+**(b) 通过它服务他人——明确禁止。** Terms of Use "Registration" 一节：
+
+> You may not share your account credentials or make your account available to anyone else and
+> are responsible for all activities that occur under your account.
+
+Halro 天生多租户：Project 的 Gateway Key 扇出到操作者个人的 ChatGPT 套餐，就是
+"make your account available to anyone else"。这一条与 Anthropic 的 "on behalf of their users"
+等效，对 Halro 的形态是决定性的。
+
+**(a) 自建网关只服务操作者本人——没有结论，这正是与 Anthropic 不同之处。** Anthropic 有一句
+"may not collect, store, or intermediate Claude.ai credentials" 把单人情形一并关掉；**OpenAI 的
+条款没有对应句子。**最接近的两条都不足以定论，不能替它们下判断：
+
+- "You may not share your account credentials"——操作者把自己的凭据配置进自己自托管的软件，
+  是否算 "share ... with anyone else"，条款没说；
+- "What you cannot do" 里的 "Automatically or programmatically extract data or Output"——
+  宽读涵盖一切非官方客户端的程序化取用，窄读只指抓取/导出。**这个歧义由 OpenAI 澄清，不由本方案
+  解释。**
+
+**(c) 客户端身份——没有正面要求，但有一条反面禁令。** 同节：
+
+> Interfere with or disrupt our Services, including circumvent any rate limits or restrictions or
+> bypass any protective measures or safety mitigations we put on our Services.
+
+第三方工具让订阅可用的既有做法是把请求改写成 Codex CLI 的形状、以通过上游的客户端校验；那是
+"bypass any protective measures"。所以**即使 (a) 将来被澄清为允许，这条路也不能走**——
+`learn.chatgpt.com/docs/auth` 列出的受支持客户端只有 ChatGPT web、桌面端、Codex CLI、
+IDE 扩展、Codex cloud，Halro 一个都不是，而冒充其中之一是被单独禁止的。
+
+**对本节的结论**：`openai.codex-subscription` 维持不注册。理由从"还没做 OAuth"变成"Halro 的
+形态被 (b) 关掉、(c) 又堵死了让它跑通的唯一已知做法"。重开条件因此不是"我们腾出手做 OAuth"，
+而是 **OpenAI 发布允许第三方网关使用订阅的 delegated access 契约**——与 §5.5 的重开条件同形。
+
+官方资料（已复核 2026-09-23）：
+
+- <https://openai.com/policies/terms-of-use/>（Terms of Use，生效 2026-01-01）
+- <https://openai.com/policies/usage-policies/>（Usage policies，生效 2025-10-29；不适用）
+- <https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan>
+- <https://learn.chatgpt.com/docs/auth>（受支持客户端清单）
 
 ### 5.5 Anthropic
 

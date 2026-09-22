@@ -538,3 +538,38 @@ func TestClaudeSubscriptionIsNotAnOfferingThisBuildRegisters(t *testing.T) {
 		t.Fatalf("the Anthropic Console surface does not resolve %s: %+v", OfferingAnthropicAPI, identity)
 	}
 }
+
+// The Codex subscription is absent for a related reason that is deliberately
+// not the same one, and conflating them would lose what each reopens on. Read
+// 2026-09-23: a Codex sign-in is governed by the ChatGPT Terms of Use (effective
+// 2026-01-01), whose Registration section says "You may not share your account
+// credentials or make your account available to anyone else" — and Halro is
+// multi-tenant by construction. OpenAI has no equivalent of Anthropic's clause
+// against collecting or intermediating the credential, so a single-operator
+// shape is unresolved rather than permitted, and this build does not resolve it
+// on OpenAI's behalf. Separately, presenting as the Codex CLI to satisfy the
+// upstream's client check is "bypass any protective measures".
+//
+// Deleting this test is the deliberate step, as for its Anthropic sibling. The
+// reopening condition is a delegated-access contract from OpenAI (#350), not the
+// OAuth credential scheme this build lacks — that is what would be needed
+// afterwards, not what is in the way.
+func TestCodexSubscriptionIsNotAnOfferingThisBuildRegisters(t *testing.T) {
+	const excluded = ProviderOfferingID("openai.codex-subscription")
+	if _, registered := offeringIndex[excluded]; registered {
+		t.Fatalf("%s is registered; the ChatGPT Terms of Use do not permit Halro's "+
+			"shape to serve others from one plan, so the row cannot exist without a "+
+			"delegated-access contract", excluded)
+	}
+	for _, surface := range surfaceTable {
+		if surface.Offering == excluded {
+			t.Fatalf("surface %q claims offering %s", surface.Surface, excluded)
+		}
+	}
+	// The metered product is the supported path and must stay reachable, since it
+	// is what the plan and the operator guide send people to.
+	identity, ok := IdentityForSurface(SurfaceOpenAI)
+	if !ok || identity.Offering != OfferingOpenAIAPI {
+		t.Fatalf("the OpenAI platform surface does not resolve %s: %+v", OfferingOpenAIAPI, identity)
+	}
+}

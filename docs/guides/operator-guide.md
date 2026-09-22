@@ -1257,6 +1257,19 @@ subscription credential everywhere, so nothing outside Halro stops an operator
 who goes looking for a way to make one work. The refusal is Halro's own, taken on
 the terms, and it does not wait for Anthropic to enforce them.
 
+**A ChatGPT or Codex subscription cannot be used through Halro either**, for a
+related but not identical reason. A Codex sign-in is governed by the ChatGPT
+Terms of Use (effective 2026-01-01), which say you may not share your account
+credentials or make your account available to anyone else — and Halro exists to
+serve Projects other than the one who owns the credential. Unlike Anthropic,
+OpenAI has no clause against a developer holding the credential at all, so an
+operator serving strictly nobody but themselves is not something the terms
+answer; Halro does not answer it for them, and offers no such product. The route
+third-party tools take — presenting as the Codex CLI so the upstream's client
+check passes — is separately prohibited as bypassing a protective measure. Use a
+platform API key from platform.openai.com, which is a different product with its
+own billing.
+
 For BigModel, the credential form asks which product and account region the key
 belongs to before anything else, and the endpoint follows that choice — mainland and
 international are separate products with separate accounts, balances and
