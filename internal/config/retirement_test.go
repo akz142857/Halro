@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -36,9 +37,11 @@ func releaseSnapshots(t *testing.T) []string {
 
 // TestEveryReleasedConfigIsAnswered is the check that was missing when
 // circuit_breaker retired. Measured against the real binary at the time: all
-// twelve published default.yaml files were refused by the current tree, eleven
-// of them on circuit_breaker and v0.3.0 also on elevation_window — and nothing
-// in the tree noticed, because nothing had ever loaded a released config.
+// fourteen published default.yaml files were refused by the current tree,
+// thirteen of them on circuit_breaker, v0.3.0 also on elevation_window, and
+// v0.1.0 and v0.2.0 on the flat TLS keypair and stream_idle_timeout — and
+// nothing in the tree noticed, because nothing had ever loaded a released
+// config.
 //
 // A released config is allowed to be refused. It is not allowed to be refused
 // by a sentence naming a Go type.
@@ -386,7 +389,80 @@ func TestAVersionFromTheFutureIsRefused(t *testing.T) {
 func TestAConfigWithNoVersionIsRefused(t *testing.T) {
 	stripped := strings.Replace(string(defaultTemplate),
 		fmt.Sprintf("version: %d\n", SchemaVersion), "", 1)
-	if _, err := Migrate([]byte(stripped)); err == nil {
+	_, err := Migrate([]byte(stripped))
+	if err == nil {
 		t.Fatal("migrated a configuration that declares no version")
+	}
+	// The refusal has to leave the operator somewhere to go, since `config
+	// check` sends nobody here without also naming the version to add.
+	if !strings.Contains(err.Error(), fmt.Sprintf("version: %d", SchemaVersion)) {
+		t.Errorf("refusal names no version to add: %v", err)
+	}
+}
+
+// TestAKeyRemovedWithNoReplacementIsDeleted covers the row shape that has no
+// destination. gateway.stream_idle_timeout was declared, defaulted, validated
+// and read by nothing, so there is nowhere for its value to go and deleting it
+// is the whole migration.
+func TestAKeyRemovedWithNoReplacementIsDeleted(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.2.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The keypair-to-list decision is the operator's; do it the way the refusal
+	// describes so the rest of the file can be migrated here.
+	edited := strings.Replace(string(source), "  cert_file: \"\"\n  key_file: \"\"\n", "  certificates: []\n", 1)
+	if edited == string(source) {
+		t.Fatal("the v0.2.0 fixture no longer carries the flat TLS keypair")
+	}
+	result, err := Migrate([]byte(edited))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) > 0 {
+		t.Fatalf("refused after the one decision was made: %v", result.Refusals)
+	}
+	if strings.Contains(string(result.Output), "stream_idle_timeout") {
+		t.Error("a key with no replacement survived")
+	}
+	if _, err := Load(writeTemp(t, result.Output), LoadOptions{}); err != nil {
+		t.Fatalf("the migrated v0.2.0 configuration does not load: %v", err)
+	}
+}
+
+// TestTheOldestReleasesAreAnsweredRatherThanDecoded is the case a truncated
+// tag listing hid: v0.1.0 and v0.2.0 carry three keys retired before v0.3.0,
+// and without rows for them `config migrate` promised an edit and then failed
+// on `field cert_file not found in type config.TLS` — the Go-type sentence this
+// table exists to retire.
+func TestTheOldestReleasesAreAnsweredRatherThanDecoded(t *testing.T) {
+	for _, version := range []string{"v0.1.0", "v0.2.0"} {
+		t.Run(version, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(releasesDir, version+".yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retired *RetiredKeyError
+			_, err = Decode(strings.NewReader(string(source)))
+			if !errors.As(err, &retired) {
+				t.Fatalf("not answered by the table: %v", err)
+			}
+			var named []string
+			for _, found := range retired.Found {
+				named = append(named, found.Path)
+			}
+			for _, want := range []string{"tls.cert_file", "tls.key_file", "gateway.stream_idle_timeout"} {
+				if !slices.Contains(named, want) {
+					t.Errorf("%s is not named; the operator meets the decoder instead", want)
+				}
+			}
+			result, err := Migrate(source)
+			if err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+			if len(result.Refusals) == 0 {
+				t.Error("offered to rewrite a keypair into a list on the operator's behalf")
+			}
+		})
 	}
 }

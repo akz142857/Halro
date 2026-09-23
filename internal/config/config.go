@@ -1048,6 +1048,16 @@ func (c *Config) Normalize() error {
 func (c Config) Validate(opts LoadOptions) error {
 	var problems []error
 	switch {
+	case c.Version == 0:
+		// Separated from the older-file case because `config migrate` cannot
+		// help here: it refuses a file that declares no shape rather than
+		// guessing at one, so sending the operator there would name a command
+		// that turns them straight back.
+		problems = append(problems, fmt.Errorf(
+			"no `version` is declared, so there is no shape to read this file as: add `version: %d` "+
+				"if it came from a release older than this one and then run "+
+				"`halro config migrate --config <path>`, or `version: %d` if it is current",
+			SchemaVersion-1, SchemaVersion))
 	case c.Version < SchemaVersion:
 		// Directional on purpose. An older file has a way forward and is told
 		// it; a newer one does not, and guessing at a shape this binary has

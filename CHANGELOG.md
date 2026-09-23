@@ -11,10 +11,11 @@ semantic versioning.
 - `halro config migrate` moves a retired configuration key to the key that
   replaced it, carrying the value the operator chose.
 
-  Measured before it was written: every one of the twelve published
-  `default.yaml` files is refused by the current tree, eleven of them on
-  `circuit_breaker` and v0.3.0 also on `elevation_window` — and nothing noticed,
-  because nothing in CI had ever loaded a released configuration. One snapshot
+  Measured before it was written: every one of the fourteen published
+  `default.yaml` files is refused by the current tree — thirteen on
+  `circuit_breaker`, v0.3.0 also on `elevation_window`, and v0.1.0 and v0.2.0 on
+  the flat TLS keypair and on `gateway.stream_idle_timeout` — and nothing
+  noticed, because nothing in CI had ever loaded a released configuration. One snapshot
   per release now lives in `internal/config/testdata/releases/`, written by
   `tools/release/prepare_release.py`, and the test is one sentence: a released
   configuration, migrated, must load.

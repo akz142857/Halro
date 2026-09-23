@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -16,8 +15,10 @@ import (
 // Without the table an operator holding a released config meets the YAML
 // decoder instead: `field elevation_window not found in type
 // config.ModelCapabilityDetection` names a Go type and not the key that took
-// over. That is what v0.3.0's config still gets today. Every removal adds a row
-// rather than a hand-written branch, so the next one cannot repeat it.
+// over. That is what every released config got until this table existed. Every
+// removal adds a row rather than a hand-written branch, so the next one cannot
+// repeat it — and a key retired before the oldest snapshot still needs its row,
+// because an operator who skipped several releases meets all of them at once.
 //
 // The table is not a compatibility layer. Nothing in the runtime reads a
 // retired key: Decode refuses the file, and `halro config migrate` edits the
@@ -54,6 +55,28 @@ var retirements = []Retirement{
 			"all of them, so choose it again rather than inheriting it",
 		Why: "re-authentication stopped being a model-capability-detection setting and " +
 			"became one policy for every step-up endpoint",
+	},
+	{
+		Path: "gateway.stream_idle_timeout",
+		Why: "it was declared, defaulted, validated as positive and documented, and read by " +
+			"nothing — an operator who set it changed no behaviour and had no way to find that out",
+	},
+	{
+		Path:       "tls.cert_file",
+		ReplacedBy: "tls.certificates",
+		Judgement: "one keypair became a list, and what the list should hold depends on what " +
+			"you had: with TLS disabled or the paths empty it is `certificates: []`, because an " +
+			"entry is refused both when TLS is off and when either path is blank; with real " +
+			"paths it is one entry —\n        certificates:\n          - cert_file: <your cert_file>\n" +
+			"            key_file: <your key_file>",
+		Why: "TLS material is replaceable on SIGHUP and several keypairs can be served, so the " +
+			"one pair of paths became a list of entries selected by SNI",
+	},
+	{
+		Path:       "tls.key_file",
+		ReplacedBy: "tls.certificates",
+		Judgement:  "it is the second half of the keypair above and moves with it, not on its own",
+		Why:        "the same list entry as tls.cert_file",
 	},
 	{
 		Path:       "circuit_breaker",
@@ -269,7 +292,9 @@ func Migrate(source []byte) (MigrationResult, error) {
 func declaredVersion(root *yaml.Node) (version, line int, err error) {
 	key, value := lookupPath(root, "version")
 	if key == nil {
-		return 0, 0, errors.New("the configuration declares no `version`, so there is no shape to migrate from; add `version: 1` if this file came from a release, or start from the file `halro start` writes")
+		return 0, 0, fmt.Errorf("the configuration declares no `version`, so there is no shape to "+
+			"migrate from: add `version: %d` if it came from a release older than this one, or "+
+			"`version: %d` if it is current", SchemaVersion-1, SchemaVersion)
 	}
 	if _, scanErr := fmt.Sscanf(value.Value, "%d", &version); scanErr != nil {
 		return 0, 0, fmt.Errorf("the configuration's `version` is %q, which is not a schema version", value.Value)
