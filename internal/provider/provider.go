@@ -800,6 +800,28 @@ func (r *Registry) Serves(publicModel string) bool {
 	return len(r.targets[publicModel]) > 0
 }
 
+// WidestFanOut reports the public model carrying the most candidates, and how
+// many it carries. An alias's candidate list is what a request walks, so this
+// is the number an attempt budget has to cover — the total route count is not,
+// because a hundred aliases with one candidate each need a budget of one.
+//
+// It counts registered targets rather than configured routes on purpose: a
+// route withheld from the registry is already unreachable, and counting it
+// would report an attempt-budget problem that switching a deployment off
+// created. Ties go to the lowest alias so two reads of an unchanged registry
+// answer identically.
+func (r *Registry) WidestFanOut() (string, int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	widestModel, widest := "", 0
+	for publicModel, targets := range r.targets {
+		if len(targets) > widest || (len(targets) == widest && widest > 0 && publicModel < widestModel) {
+			widestModel, widest = publicModel, len(targets)
+		}
+	}
+	return widestModel, widest
+}
+
 func (r *Registry) ResolveAll(publicModel string) []Target {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -110,20 +110,24 @@ func TestCheckpointVersionProtectsProviderAttributionAndFailureSemantics(t *test
 	store := newCheckpointStore()
 	store.round(t, aggregate)
 	head := decodeCheckpointHead(t, store.head)
-	if head.Version != 14 {
-		t.Fatalf("checkpoint version=%d, want 14 for provider attribution and failure semantics", head.Version)
+	// 15 since the latency histogram was re-cut. The fields this test is about
+	// arrived in 14 and are unchanged; what the bump protects is the fixed-size
+	// bucket array, which JSON will happily fill a longer one from a shorter
+	// one — see the version history in checkpoint.go.
+	if head.Version != 15 {
+		t.Fatalf("checkpoint version=%d, want 15", head.Version)
 	}
 	var previous map[string]json.RawMessage
 	if err := json.Unmarshal(store.head, &previous); err != nil {
 		t.Fatal(err)
 	}
-	previous["version"] = json.RawMessage("13")
+	previous["version"] = json.RawMessage("14")
 	previousHead, err := json.Marshal(previous)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RestoreCheckpoint(previousHead, store.read); err == nil || !contains(err.Error(), "version 13 is not supported") {
-		t.Fatalf("v13 checkpoint was not rejected for Ledger replay: %v", err)
+	if _, err := RestoreCheckpoint(previousHead, store.read); err == nil || !contains(err.Error(), "version 14 is not supported") {
+		t.Fatalf("v14 checkpoint was not rejected for Ledger replay: %v", err)
 	}
 	restored := store.restore(t).Snapshot()
 	if len(restored.Attempts) != 1 {
@@ -132,7 +136,7 @@ func TestCheckpointVersionProtectsProviderAttributionAndFailureSemantics(t *test
 	got := restored.Attempts[0]
 	if got.OfferingID != settled.OfferingID || got.ProfileID != settled.ProfileID || got.AccountRegionID != settled.AccountRegionID ||
 		got.FailurePhase != settled.FailurePhase || got.ErrorClass != settled.ErrorClass || !got.Retryable || !got.FailureSemanticsRecorded {
-		t.Fatalf("restored attempt lost schema-14 fields: %#v", got)
+		t.Fatalf("restored attempt lost the provider attribution and failure fields: %#v", got)
 	}
 }
 

@@ -52,6 +52,12 @@ func TestFrozenV1AdminRoutesAreRegistered(t *testing.T) {
 		"POST /admin/api/v1/providers/{}/model-capability-detections",
 		"GET /admin/api/v1/model-capability-detections/{}", "DELETE /admin/api/v1/model-capability-detections/{}",
 		"GET /admin/api/v1/deployments", "POST /admin/api/v1/deployments",
+		// Read-only. Halro's own numbers put next to each other: the attempt
+		// ceilings against the widest fan-out, the attempt deadline against the
+		// request budget, the gate's suspensions and how its refusals
+		// classified. It carries no caller content, which is what lets it be
+		// rendered in a browser.
+		"GET /admin/api/v1/advisor-findings",
 		// Read-only, and the only surface that names which credential an
 		// upstream refused: the caller-facing 503 and the metrics both carry
 		// enumerations alone, on purpose.

@@ -618,3 +618,61 @@ func TestRoundRobinCounterResetsWithTheRegistry(t *testing.T) {
 		t.Fatalf("start after reload %q; the counter did not come with the new target set", got)
 	}
 }
+
+// TestWidestFanOutCountsPerAlias pins what the attempt budget is measured
+// against. Candidates are walked per public model, so a registry serving many
+// aliases with one target each needs a budget of one — the total number of
+// targets is the wrong number and would make every busy instance look
+// misconfigured.
+func TestWidestFanOutCountsPerAlias(t *testing.T) {
+	registry := NewRegistry()
+	adapter := &registryAdapter{}
+	for _, target := range []Target{
+		{ID: "a1", DeploymentID: "dep_a1", PublicModel: "alpha", ProviderModel: "m", Adapter: adapter},
+		{ID: "b1", DeploymentID: "dep_b1", PublicModel: "beta", ProviderModel: "m", Adapter: adapter},
+		{ID: "b2", DeploymentID: "dep_b2", PublicModel: "beta", ProviderModel: "n", Adapter: adapter},
+		{ID: "b3", DeploymentID: "dep_b3", PublicModel: "beta", ProviderModel: "o", Adapter: adapter},
+	} {
+		if err := registry.Register(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publicModel, candidates := registry.WidestFanOut()
+	if publicModel != "beta" || candidates != 3 {
+		t.Fatalf("widest fan-out is %q with %d, want beta with 3", publicModel, candidates)
+	}
+}
+
+// TestWidestFanOutIsStableAcrossReads. Map iteration order is not, and a panel
+// that renamed the alias it blames between two refreshes would be read as two
+// different problems.
+func TestWidestFanOutIsStableAcrossReads(t *testing.T) {
+	registry := NewRegistry()
+	adapter := &registryAdapter{}
+	for _, target := range []Target{
+		{ID: "z1", DeploymentID: "dep_z1", PublicModel: "zeta", ProviderModel: "m", Adapter: adapter},
+		{ID: "z2", DeploymentID: "dep_z2", PublicModel: "zeta", ProviderModel: "n", Adapter: adapter},
+		{ID: "a1", DeploymentID: "dep_a1", PublicModel: "alpha", ProviderModel: "m", Adapter: adapter},
+		{ID: "a2", DeploymentID: "dep_a2", PublicModel: "alpha", ProviderModel: "n", Adapter: adapter},
+	} {
+		if err := registry.Register(target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := range 32 {
+		publicModel, candidates := registry.WidestFanOut()
+		if publicModel != "alpha" || candidates != 2 {
+			t.Fatalf("read %d answered %q with %d, want alpha with 2", attempt, publicModel, candidates)
+		}
+	}
+}
+
+// TestWidestFanOutOnAnEmptyRegistry answers rather than reporting nothing: an
+// instance with no routes yet has a fan-out of zero, which every attempt budget
+// covers.
+func TestWidestFanOutOnAnEmptyRegistry(t *testing.T) {
+	publicModel, candidates := NewRegistry().WidestFanOut()
+	if publicModel != "" || candidates != 0 {
+		t.Fatalf("empty registry answered %q with %d", publicModel, candidates)
+	}
+}

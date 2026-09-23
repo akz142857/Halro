@@ -1,5 +1,6 @@
 import type {
   AdminUser,
+  AdvisorFindingCatalog,
   AuditRecord,
   AlertWebhook,
   CapabilityPreflight,
@@ -276,6 +277,14 @@ export const api = {
     request<ProviderProfilesCatalog>("/provider-profiles").then((value) => value.data),
   providerEgressProxies: () =>
     request<ProviderEgressCatalog>("/provider-egress-proxies").then((value) => value.data),
+  // Halro's own numbers put next to each other: the attempt ceilings against
+  // the widest fan-out, the attempt deadline against the request budget, what
+  // the admission gate is holding, and how its refusals classified. The same
+  // rules `halro doctor` runs offline, against a process that can also answer
+  // the last two. Read-only, and it states rather than acts — nothing here
+  // applies a change.
+  advisorFindings: () =>
+    request<AdvisorFindingCatalog>("/advisor-findings").then((value) => value.data),
   // What the admission gate is refusing to route to right now. Read-only: there
   // is no clear action yet, deliberately — clearing one is an administrative act
   // that has to commit with an audit record, and a suspension is not a stored

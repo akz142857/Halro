@@ -10,6 +10,7 @@
 | [Encrypted backup and restore](guides/backup-restore.md) | 加密备份与恢复流程（含 Docker / Kubernetes） |
 | [选择 AWS 接入面](guides/aws-surface-selection.md) | Bedrock Runtime 与 Bedrock Mantle 怎么选，以及两者都不支持什么 |
 | [异步提交与延迟取回](guides/deferred-responses.zh-CN.md) | `background: true` 的提交、取回、取消、删除，以及重启时正在执行的请求为什么会 failed |
+| [诊断结论](guides/configuration-findings.zh-CN.md) | `halro doctor` 与控制台「诊断结论」面板：五条规则、证据的读法，以及它为什么不改任何东西 |
 | [Release Process](guides/releasing.md) | 发版流程与证据门禁 |
 
 ## 契约 · [`contracts/`](contracts/)

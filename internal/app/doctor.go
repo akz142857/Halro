@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/akz142857/Halro/internal/advisor"
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
@@ -35,6 +36,14 @@ type DoctorReport struct {
 	ExternalAuditEvents bool          `json:"external_audit_events"`
 	CheckedAt           time.Time     `json:"checked_at"`
 	Checks              []DoctorCheck `json:"checks"`
+	// Findings is what Halro's own numbers say about each other. It is
+	// deliberately not folded into Checks: a check answers "is this instance
+	// intact", and every one of them that fails makes Healthy false, whereas a
+	// finding describes a configuration Halro accepts and runs. Putting advice
+	// in a prose Detail was how this was done three times before it was done
+	// once properly, and a Detail cannot carry the two numbers a finding is
+	// supposed to show. The advisor states; the operator decides.
+	Findings []advisor.Finding `json:"findings"`
 }
 
 type DoctorOptions struct {
@@ -66,6 +75,12 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		return report, errors.New("doctor found an invalid configuration")
 	}
 	add("config", "pass", "configuration schema and safety policy are valid")
+	// The two rules that read only configuration are answered before the data
+	// lock, and the rest are filled in below once the store is open. Everything
+	// past this point needs exclusive offline access, which a running instance
+	// holds — so without this a `halro doctor` run against a live process would
+	// print no findings at all, which is exactly when an operator is asking.
+	report.Findings = advisor.Evaluate(advisorConfigInput(cfg))
 
 	// A config file written before this setting existed decodes to zero, which
 	// is a disabled limiter. That is a legitimate choice but a poor accident,
@@ -287,6 +302,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		}
 	}
 	add("provider_connectivity", "warn", "network probes skipped by read-only offline doctor; use Admin connection tests")
+	report.Findings = advisor.Evaluate(doctorAdvisorInput(ctx, cfg, store))
 	if failedChecks > 0 {
 		return report, errors.New("doctor found one or more failed checks")
 	}

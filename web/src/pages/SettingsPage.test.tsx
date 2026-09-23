@@ -10,6 +10,7 @@ import { PasswordChangeForm } from "./PasswordChangeForm";
 import { RuntimeSettingsForm } from "./RuntimeSettingsForm";
 import { SettingsPage } from "./SettingsPage";
 import { emptyWritePath } from "../test/fixtures";
+import i18n from "../i18n";
 
 function renderWithClient(node: React.ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -647,5 +648,44 @@ describe("SettingsPage root key custody pane", () => {
     expect(await screen.findByText("本地文件密钥已加载")).toBeVisible();
     expect(screen.getByRole("heading", { name: "根密钥状态" })).toBeVisible();
     expect(custody).toHaveBeenCalledTimes(1);
+  });
+  // The findings card sits above the status cards because it answers "why is
+  // this instance behaving the way it is", where the rest answer "is it
+  // intact". Asserting on the rendered arithmetic rather than on the card being
+  // present: the card exists so an operator can read the comparison without
+  // standing up Prometheus or reading three files.
+  it("reports findings above the status cards under diagnostics", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    vi.spyOn(api, "advisorFindings").mockResolvedValue({
+      items: [{
+        rule: "attempt_budget_reaches_fanout", status: "warn",
+        comparison: "ceil(3 / 2) = 2 < 3", consequence: "server wording",
+        evidence: [{ name: "gateway.max_total_attempts", value: "3" }],
+      }],
+    });
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findByText("ceil(3 / 2) = 2 < 3")).toBeVisible();
+    expect(screen.getByText("gateway.max_total_attempts")).toBeVisible();
+  });
+
+  // A failed read says so. An absent card would read as "nothing to report",
+  // which is the one thing an unread advisor cannot promise — and it must not
+  // take the rest of the pane down with it either.
+  it("says findings could not be read without hiding the status cards", async () => {
+    vi.spyOn(api, "systemStatus").mockResolvedValue({
+      build: { version: "1.0.0", commit: "abc", date: "2026-08-07" },
+      accounting_status: 0, draining: false, wal: {}, write_path: emptyWritePath(), audit: {}, alerts: {}, usage_watermark: {},
+    } as never);
+    vi.spyOn(api, "advisorFindings").mockRejectedValue(new Error("unavailable"));
+    window.history.replaceState({}, "", "/admin/settings/diagnostics");
+    renderWithClient(<SettingsPage />);
+
+    expect(await screen.findByText("Halro 1.0.0")).toBeVisible();
+    expect(await screen.findByText(i18n.t("advisor.unavailable"))).toBeVisible();
   });
 });
