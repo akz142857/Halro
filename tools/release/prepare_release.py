@@ -33,6 +33,8 @@ README = ROOT / "README.md"
 WEB_PACKAGE = ROOT / "web/package.json"
 WEB_LOCK = ROOT / "web/package-lock.json"
 LICENSE_REVIEW = ROOT / "docs/verification/dependency-license-review.md"
+DEFAULT_CONFIG = ROOT / "internal/config/default.yaml"
+CONFIG_SNAPSHOTS = ROOT / "internal/config/testdata/releases"
 ASSESSMENTS = ROOT / "docs/verification/assessments"
 
 VERSION = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
@@ -181,6 +183,21 @@ def move_drift_hashes(version: str, previous: str) -> dict[str, str]:
     return moved
 
 
+def snapshot_default_config(version: str) -> Path:
+    """Keep the configuration this release ships, so a later one can load it.
+
+    The retirement table in internal/config is tested against these files rather
+    than against hand-written ones: a fixture built from an author's idea of an
+    old config tests the idea. Every published default.yaml was refused by the
+    tree at the time this was added, and nothing noticed, because nothing had
+    ever loaded a released config.
+    """
+    destination = CONFIG_SNAPSHOTS / f"{version}.yaml"
+    CONFIG_SNAPSHOTS.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(DEFAULT_CONFIG.read_bytes())
+    return destination
+
+
 def scaffold_assessment(version: str, date: str, previous: str) -> Path | None:
     path = ASSESSMENTS / f"{version}.md"
     if path.exists():
@@ -281,11 +298,15 @@ def main() -> int:
     previous = previous_release()
     if previous == version:
         raise Refusal(f"{version} is already the newest changelog section")
+    snapshot = CONFIG_SNAPSHOTS / f"{version}.yaml"
+    if snapshot.exists():
+        raise Refusal(f"{snapshot.relative_to(ROOT)} already exists; a published config is never re-snapshotted")
 
     move_changelog(version, date, previous)
     readme_moved = move_readme(version, previous)
     move_web_version(version, previous)
     hashes = move_drift_hashes(version, previous)
+    config_snapshot = snapshot_default_config(version)
     assessment = scaffold_assessment(version, date, previous)
 
     print(f"prepared {version} (previous {previous}, date {date})")
@@ -295,6 +316,7 @@ def main() -> int:
     print(f"  web/package-lock.json   version bumped")
     for name, digest in hashes.items():
         print(f"  drift hash              {name} -> {digest}")
+    print(f"  {config_snapshot.relative_to(ROOT)}   default.yaml snapshotted")
     if assessment:
         print(f"  {assessment.relative_to(ROOT)}   scaffolded, TODO sections to fill")
     else:

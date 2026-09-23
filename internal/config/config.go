@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -21,20 +22,16 @@ import (
 const SchemaVersion = 1
 
 type Config struct {
-	Version int     `yaml:"version"`
-	Server  Server  `yaml:"server"`
-	TLS     TLS     `yaml:"tls"`
-	Storage Storage `yaml:"storage"`
-	Admin   Admin   `yaml:"admin"`
-	Usage   Usage   `yaml:"usage"`
-	Ledger  Ledger  `yaml:"ledger"`
-	Gateway Gateway `yaml:"gateway"`
-	Retry   Retry   `yaml:"retry"`
-	Routing Routing `yaml:"routing"`
-	// omitempty so a retired section is only ever read, never written: without
-	// it the console enumerates three unlabelled knobs that do nothing, and
-	// `halro config` would offer an operator the very section it refuses.
-	CircuitBreaker        RetiredCircuitBreaker `yaml:"circuit_breaker,omitempty"`
+	Version               int                   `yaml:"version"`
+	Server                Server                `yaml:"server"`
+	TLS                   TLS                   `yaml:"tls"`
+	Storage               Storage               `yaml:"storage"`
+	Admin                 Admin                 `yaml:"admin"`
+	Usage                 Usage                 `yaml:"usage"`
+	Ledger                Ledger                `yaml:"ledger"`
+	Gateway               Gateway               `yaml:"gateway"`
+	Retry                 Retry                 `yaml:"retry"`
+	Routing               Routing               `yaml:"routing"`
 	Alerts                Alerts                `yaml:"alerts"`
 	Security              Security              `yaml:"security"`
 	Metrics               Metrics               `yaml:"metrics"`
@@ -644,24 +641,6 @@ type Routing struct {
 	ProbeRequests int `yaml:"probe_requests"`
 }
 
-// RetiredCircuitBreaker exists only to be refused.
-//
-// Configuration decodes with KnownFields, so deleting the section outright would
-// stop an existing instance with `field circuit_breaker not found` — accurate,
-// and no help at all to the operator holding the file. Keeping the shape lets
-// Validate say what replaced it. It is not a second implementation and nothing
-// reads these values; the moment one did, this would be the compatibility layer
-// pre-1.0.0 exists to avoid.
-type RetiredCircuitBreaker struct {
-	ConsecutiveFailures int      `yaml:"consecutive_failures"`
-	OpenDuration        Duration `yaml:"open_duration"`
-	HalfOpenMaxRequests int      `yaml:"half_open_max_requests"`
-}
-
-func (c RetiredCircuitBreaker) present() bool {
-	return c.ConsecutiveFailures != 0 || c.OpenDuration != 0 || c.HalfOpenMaxRequests != 0
-}
-
 type Alerts struct {
 	QueueCapacity int      `yaml:"queue_capacity"`
 	Workers       int      `yaml:"workers"`
@@ -766,7 +745,18 @@ func Load(path string, opts LoadOptions) (Config, error) {
 }
 
 func Decode(r io.Reader) (Config, error) {
-	decoder := yaml.NewDecoder(r)
+	source, err := io.ReadAll(r)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	// Retired keys are looked for before the strict decode, because otherwise
+	// the operator meets `field circuit_breaker not found in type config.Config`
+	// — a sentence about a Go type, not about the key that replaced theirs.
+	if err := refuseRetiredKeys(source); err != nil {
+		return Config{}, err
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(source))
 	decoder.KnownFields(true)
 
 	var cfg Config
@@ -1264,14 +1254,6 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Retry.BaseDelay <= 0 || c.Retry.MaxDelay < c.Retry.BaseDelay {
 		problems = append(problems, errors.New("retry delays must be positive and max_delay must be at least base_delay"))
-	}
-	if c.CircuitBreaker.present() {
-		problems = append(problems, errors.New(
-			"circuit_breaker has been replaced by routing: consecutive_failures is now "+
-				"routing.availability_failures, open_duration is routing.suspend_for, and "+
-				"half_open_max_requests is routing.probe_requests. Remove the circuit_breaker "+
-				"section. It covered only upstreams that stopped answering; routing also covers "+
-				"upstreams that answer and refuse, which the breaker counted as success"))
 	}
 	if c.Routing.AvailabilityFailures < 1 || c.Routing.SuspendFor <= 0 ||
 		c.Routing.MaxSuspendFor < c.Routing.SuspendFor || c.Routing.ProbeRequests < 1 {

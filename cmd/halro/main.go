@@ -45,7 +45,11 @@ import (
 func main() {
 	logger := logging.Bootstrap()
 	if err := run(os.Args[1:], logger); err != nil && !errors.Is(err, flag.ErrHelp) {
-		reportCommandFailure(os.Stderr, err)
+		// A command that already laid out why it refused sets the exit status
+		// without a second, flatter copy of the same thing.
+		if !errors.Is(err, errSilentRefusal) {
+			reportCommandFailure(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
@@ -60,6 +64,14 @@ func main() {
 // Redaction still applies: it came free with the logger, and an error can quote
 // a value from the configuration it was reading.
 func reportCommandFailure(out io.Writer, err error) {
+	// A retired configuration key is laid out rather than flattened: the whole
+	// point of the retirement table is that the operator reads which key
+	// replaced theirs and why, which one line per finding cannot carry.
+	var retired *config.RetiredKeyError
+	if errors.As(err, &retired) {
+		reportRetiredKeys(out, retired)
+		return
+	}
 	problems := strings.Split(strings.TrimSpace(safelog.Redact(err.Error())), "\n")
 	if len(problems) == 1 {
 		fmt.Fprintf(out, "halro: %s\n", problems[0])
@@ -69,6 +81,25 @@ func reportCommandFailure(out io.Writer, err error) {
 	for _, problem := range problems {
 		fmt.Fprintf(out, "  - %s\n", strings.TrimSpace(problem))
 	}
+}
+
+func reportRetiredKeys(out io.Writer, retired *config.RetiredKeyError) {
+	if len(retired.Found) == 1 {
+		fmt.Fprintln(out, "halro: the configuration holds a retired key:")
+	} else {
+		fmt.Fprintf(out, "halro: the configuration holds %d retired keys:\n", len(retired.Found))
+	}
+	for _, found := range retired.Found {
+		if found.ReplacedBy == "" {
+			fmt.Fprintf(out, "  - %s was removed: %s\n", found.Path, safelog.Redact(found.Why))
+		} else {
+			fmt.Fprintf(out, "  - %s is now %s: %s\n", found.Path, found.ReplacedBy, safelog.Redact(found.Why))
+		}
+		if found.Judgement != "" {
+			fmt.Fprintf(out, "    decide this one by hand — %s\n", safelog.Redact(found.Judgement))
+		}
+	}
+	fmt.Fprintf(out, "%s\n", retired.Remedy())
 }
 
 const adminPasswordInputLimit = 1024
@@ -198,7 +229,7 @@ var topLevelCommands = []commandDescriptor{
 	{"doctor", "halro doctor [flags]", "run read-only offline diagnostics"},
 	{"serve", "halro serve [flags]", "serve a prepared data directory"},
 	{"healthcheck", "halro healthcheck [flags]", "check loopback readiness"},
-	{"config", "halro config check [--config <path>]", "validate configuration without starting Halro"},
+	{"config", "halro config <check|migrate> [--config <path>]", "validate or migrate configuration without starting Halro"},
 	{"version", "halro version", "print build and time-zone database identity"},
 }
 
@@ -543,19 +574,35 @@ func run(arguments []string, logger *slog.Logger) error {
 		fmt.Fprintln(os.Stdout, "Admin password reset; all existing sessions invalidated")
 		return nil
 	case "config":
-		if len(arguments) < 2 || arguments[1] != "check" {
-			return errors.New("usage: halro config check --config <path>")
+		if len(arguments) < 2 {
+			return errors.New("usage: halro config <check|migrate> --config <path>")
 		}
-		flags := flag.NewFlagSet("config check", flag.ContinueOnError)
-		configPath := flags.String("config", "config.yaml", "configuration file")
-		if err := flags.Parse(arguments[2:]); err != nil {
-			return err
+		switch arguments[1] {
+		case "check":
+			flags := flag.NewFlagSet("config check", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if _, err := config.Load(*configPath, config.LoadOptions{}); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stdout, "configuration valid")
+			return nil
+		case "migrate":
+			flags := flag.NewFlagSet("config migrate", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration file")
+			write := flags.Bool("write", false, "apply the migration, keeping the original beside it")
+			// Accepted so the command an error message names can be typed as it
+			// reads. Printing the edit and writing nothing is already the default.
+			flags.Bool("dry-run", false, "print the edit and write nothing (the default)")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			return migrateConfigCommand(*configPath, *write)
+		default:
+			return errors.New("usage: halro config <check|migrate> --config <path>")
 		}
-		if _, err := config.Load(*configPath, config.LoadOptions{}); err != nil {
-			return err
-		}
-		fmt.Fprintln(os.Stdout, "configuration valid")
-		return nil
 	case "key":
 		if len(arguments) < 2 {
 			return errors.New("usage: halro key <create|disable|rotate|rewrap|recover|slot>")

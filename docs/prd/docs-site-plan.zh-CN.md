@@ -301,7 +301,7 @@ v1 说「阻断会让每次改样式都因上游变动而红」是稻草人 —�
 v1 的配置分组是编的：`auth` section 不存在，`alert` 应为 `alerts`，且漏掉一半真实 section。`internal/config/default.yaml` 的真实顶层是：
 
 ```
-server  tls  storage  admin  usage  gateway  retry  circuit_breaker
+server  tls  storage  admin  usage  gateway  retry  routing
 alerts  security  metrics  audit  model_catalog  providers  logging
 ```
 

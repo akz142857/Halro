@@ -6,6 +6,47 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `halro config migrate` moves a retired configuration key to the key that
+  replaced it, carrying the value the operator chose.
+
+  Measured before it was written: every one of the twelve published
+  `default.yaml` files is refused by the current tree, eleven of them on
+  `circuit_breaker` and v0.3.0 also on `elevation_window` — and nothing noticed,
+  because nothing in CI had ever loaded a released configuration. One snapshot
+  per release now lives in `internal/config/testdata/releases/`, written by
+  `tools/release/prepare_release.py`, and the test is one sentence: a released
+  configuration, migrated, must load.
+
+  The command is deliberately not a compatibility layer and never runs on start.
+  The runtime still reads no retired key; this edits the file so the retired key
+  stops existing, at a moment the operator chose. It prints the edit and writes
+  nothing unless `--write` is passed, keeps the original as
+  `<config>.before-migrate`, and refuses as a whole rather than writing a file
+  `config check` would then reject.
+
+  What it may do is bounded: delete a retired key and write its value under the
+  path that replaced it. It changes no value the operator set, and fills in
+  nothing that is merely absent — an omitted key already takes its built-in
+  default, which is why deleting `circuit_breaker` was already enough to make a
+  released config load, and why the only thing a hand edit could lose was the
+  tuning. It refuses where the name survived but the meaning did not:
+  `elevation_window` became `admin.reauth_elevation_window`, which covers every
+  step-up endpoint rather than capability detection alone, so inheriting the old
+  value would widen a security window on the operator's behalf.
+
+### Changed
+
+- A retired configuration key now names the key that replaced it and why, from
+  one table rather than a hand-written branch per removal. `circuit_breaker` had
+  such a message; `elevation_window` had none, and an operator holding a v0.3.0
+  configuration met `field elevation_window not found in type
+  config.ModelCapabilityDetection` — a sentence about a Go type. The
+  `RetiredCircuitBreaker` struct that existed only to be refused is gone with
+  it: the table is checked against the file before decoding, so a retired shape
+  no longer has to survive in Go to be answerable.
+
 ### Fixed
 
 - The idempotency index bucket was the only durable bucket missing from

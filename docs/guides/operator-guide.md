@@ -103,7 +103,7 @@ Guard cannot silently lose their source-IP signal.
 the built-in defaults with a comment on each setting that has a consequence.
 Do not delete a key to request a default. The loader decodes the file into a
 zero `Config` and then normalizes it, so most omitted scalars do take their
-built-in default — `logging`, `retry`, `alerts`, `circuit_breaker`, `admin`,
+built-in default — `logging`, `retry`, `alerts`, `routing`, `admin`,
 `model_catalog` and most of `usage` — but the required ones under `server`,
 `storage`, `gateway`, plus `usage.durability` and `usage.timezone`, fail
 validation and Halro refuses to start, and an omitted boolean such as
@@ -123,7 +123,8 @@ out. Important groups are:
   Instance after the first start);
 - `gateway`: route/attempt/stream deadlines, active probe interval, deferred
   response workers, and failure capture;
-- `retry` and `circuit_breaker`: bounded attempt and failure policy;
+- `retry` and `routing`: bounded attempt policy, and the admission policy that
+  suspends a target which is failing or refusing;
 - `alerts`: queue, worker, timeout, retry, and dedup bounds;
 - `security`: private egress and trusted proxy policy;
 - `metrics`: exporter enablement and authentication requirement;
@@ -1413,7 +1414,19 @@ cannot be adopted.
    unsigned `checksums.txt`.
 2. Stop Halro and confirm the process released the data-directory lock.
 3. Create and verify an encrypted backup; preserve the current binary/config.
-4. Run the new binary's `config check` against a copy of the configuration.
+4. Run the new binary's `config check` against a copy of the configuration. If
+   it reports a retired key, the message names the key that replaced it and why
+   it moved. Run `halro config migrate --config <copy>` to see the edit and
+   again with `--write` to apply it: it deletes the retired key and writes your
+   value under its replacement, keeps the original as `<config>.before-migrate`,
+   and refuses as a whole rather than writing a file `config check` would
+   reject. It changes no value you set, and fills in nothing that is merely
+   absent — an omitted key already takes its built-in default. Where a key's
+   meaning changed rather than its name, it refuses and says so, because
+   inheriting the old value would be a decision made on your behalf. Nothing
+   migrates on start: the runtime reads no retired key, and a config file
+   rewritten during a rollout would take the way back to the older binary with
+   it.
 5. While the service is stopped, run
    `halro pricing migrate --config <config> --dry-run --report <report.json>`.
    Resolve every enabled zero-price Deployment in a schema-v1 resolution file

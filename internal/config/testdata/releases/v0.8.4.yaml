@@ -1,0 +1,324 @@
+# Halro configuration — written on first run, safe for a single host.
+#
+# This is the complete first-run template, not a sparse override file. Some
+# omitted scalar fields are normalized to defaults, while required values and
+# security-sensitive booleans may instead fail validation or retain their zero
+# value. Do not delete a key to request a default: keep the generated value, or
+# consult configs/config.example.yaml and `halro config check` after editing.
+# A config-driven setting is one that cannot change while the gateway is serving:
+# listeners, TLS, storage, key custody, security boundaries. Everything an
+# operator tunes day to day — providers, budgets, limits, policies — lives in
+# the Admin console, not here.
+#
+# The complete annotated reference is configs/config.example.yaml.
+# Restart Halro after editing this file.
+
+version: 1
+
+server:
+  # Loopback by default: nothing here is exposed to the network until you say
+  # so, and a non-loopback listener is refused unless TLS is enabled.
+  gateway_listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
+  metrics_listen: 127.0.0.1:9090
+  read_header_timeout: 5s
+  read_body_timeout: 15s
+  # Shared graceful-shutdown budget for Gateway, Admin and Metrics listeners.
+  # It must be at least gateway.route_total_timeout so an accepted request can
+  # finish before the process forcibly closes remaining connections.
+  shutdown_timeout: 2m0s
+  max_header_bytes: 32768
+  # Bounds one request body. Callers above this get 413 rather than the gateway
+  # deciding how much memory an unauthenticated body may cost.
+  max_request_bytes: 10485760
+
+tls:
+  # Required before any listener may bind a routable address.
+  enabled: false
+  # One entry per keypair. The first entry answers connections that arrive
+  # without SNI; every other entry is selected by the names its certificate
+  # declares, so Gateway and Admin may use different hostnames.
+  # Replace the file with the paths and remove this empty list:
+  #   certificates:
+  #     - cert_file: /etc/halro/tls/fullchain.pem
+  #       key_file: /etc/halro/tls/privkey.pem
+  certificates: []
+
+storage:
+  data_dir: ./data
+  metadata_file: halro.db
+  master_key:
+    # "file" keeps the key on this host: simplest, and it means whoever holds
+    # the file holds everything the vault protects. "key_slots" wraps it with a
+    # cloud KMS instead — see docs/guides/operator-guide.md before switching,
+    # and note that non-repudiation of the audit chain assumes it.
+    mode: file
+    file: ./master.key
+
+admin:
+  session_ttl: 8h0m0s
+  idle_timeout: 30m0s
+  # Failed logins per minute, per source, before the gateway starts refusing.
+  login_rpm: 5
+  # Set when the console is reached through a proxy under a different origin;
+  # it is what CSRF checks compare against.
+  external_origin: ""
+  # Production may mount a deployment-managed one-time setup token here. The
+  # path must be absolute. Leave empty for loopback setup or interactive start.
+  setup_token_file: ""
+  # Maximum generated-token lifetime or allowed remaining lifetime of a file's
+  # absolute expiry. Restarting with the same file never renews it.
+  setup_token_ttl: 30m0s
+  # "required" forces every administrator through an authenticator. Remote Admin
+  # deployments should use it.
+  # optional | administrators_required | required
+  mfa_policy: optional
+  # While enabled, the Admin listener also serves real Gateway calls so an
+  # administrator can send a billed request from the console. Harmless on a
+  # loopback-only Admin listener; on a reachable one it means network controls
+  # applied to the Gateway listener do not cover this path, and startup warns.
+  developer_workbench: enabled
+  # How long one proven re-authentication keeps letting the same admin session
+  # delete or weaken things without proving itself again. Deletes, credential
+  # replacement and edits that remove a protection in force ask for the account
+  # password (and a TOTP code, if the account has an authenticator), so that a
+  # stolen session alone cannot do them — this amortises that proof over the
+  # sitting an operator spends administering rather than dropping it. Bound to
+  # the session, never to the account, and never covering the admin-account
+  # endpoints. Set 0s to ask every time.
+  reauth_elevation_window: 10m
+  model_capability_detection:
+    fresh_ttl: 24h0m0s
+    retention: 720h0m0s
+    refresh_cooldown: 5m0s
+    total_timeout: 1m30s
+    global_concurrency: 4
+    provider_concurrency: 1
+    # Covers both halves of one detection: the probes that identify which
+    # invocation interface the model answers on, and the capability plan run
+    # against the one that did.
+    max_provider_calls: 10
+    create_rpm: 6
+
+usage:
+  # "balanced" batches accounting writes; "strict" fsyncs every one of them,
+  # which costs throughput and loses nothing on a crash.
+  durability: balanced
+  # Seeds the accounting timezone at first initialisation only. After that the
+  # instance setting governs — change it in the console, not here; `halro
+  # doctor` reports when this file and the instance disagree. IANA name.
+  # Storage is unaffected: Parquet partitions and retention are always UTC.
+  timezone: UTC
+  wal_queue_capacity: 4096
+  wal_max_batch: 128
+  wal_flush_interval: 2ms
+  analytics_queue_capacity: 4096
+  checkpoint_interval: 1m0s
+  parquet_interval: 1h0m0s
+  # Analytics retention, a floor rather than an exact age: partitions are dated
+  # in UTC, so pruning keeps one extra day and no timezone loses a day it was
+  # promised. The accounting ledger itself is not trimmed by this. At least 7,
+  # because console_window_days may not go below that and may not exceed this.
+  retention_days: 90
+  # How far back the console's attempt log and failed-request list can page.
+  # Separate from retention_days on purpose: that one bounds the archive on
+  # disk, this one bounds the in-memory aggregate the screens are served from —
+  # about a kilobyte of memory per attempt, held for as long as the process
+  # runs. At least 7 (the overview reads that many days) and no more than
+  # retention_days. The operator guide has a sizing table by throughput.
+  #
+  # This file seeds it on first start and has no say afterwards: the value lives
+  # in the metadata store and is changed under Settings -> Instance, where it is
+  # versioned, audited, and confirmed — shortening it discards attempt history.
+  console_window_days: 30
+  # parquet (default) or ndjson (ADR 0017). Usage is a rebuildable derivative
+  # of the Ledger, never a source of truth, so this only controls what new
+  # partitions are written as — existing ones are never rewritten. ndjson adds
+  # no dependency beyond the standard library, at the cost of larger files and
+  # no columnar compression.
+  export_format: parquet
+
+ledger:
+  # Sealing keeps the accounting write-ahead log from being one file that only
+  # grows. When the active generation passes max_active_bytes it is rolled off
+  # whole — renamed aside, recorded in a manifest, replaced by an empty
+  # successor whose first frame continues the same hash chain. Nothing is
+  # deleted: replay reads the sealed generations first and then the active one,
+  # so the balances still rebuild from the whole history. What changes is that
+  # the file being written stays bounded, and the sealed ones can be compressed
+  # (about 5.6x on real frames) or moved off the box.
+  #
+  # Off by default. This is the only mechanism that lets the accounting
+  # authority's bytes move, and turning it on should be a decision about a
+  # specific disk.
+  seal:
+    enabled: false
+    max_active_bytes: 8589934592
+    compress: true
+
+gateway:
+  # The whole request, across retries and fallbacks.
+  route_total_timeout: 2m0s
+  attempt_connect_timeout: 5s
+  attempt_response_header_timeout: 1m0s
+  # How long a client may take to accept what the gateway is writing. Applied
+  # per write, so it bounds a stalled reader without cutting a long stream.
+  downstream_write_timeout: 15s
+  stream_max_duration: 10m0s
+  max_total_attempts: 3
+  # Shared by the whole instance, while the queue ceiling is per Project.
+  # Dequeuing takes one submission from each Project in turn.
+  deferred_response_workers: 4
+  health_probe_interval: 30s
+  # How far the wall clock may disagree with a Deployment's pricing high-water
+  # mark before the Deployment is quarantined. The rollback tolerance has a 1s
+  # floor: concurrent price selections can reach their durable pin out of the
+  # order they read the clock, and a tighter setting would read that as a clock
+  # rollback.
+  pricing_clock_rollback_tolerance: 2s
+  pricing_clock_forward_tolerance: 30s
+  # What to do when no price is known for a model: "reject" refuses the request
+  # rather than serving traffic it cannot account for.
+  pricing_unknown_policy: reject
+  # Bounds what one source address can ask of the gateway before it has
+  # authenticated — the per-project limits cannot apply until a request is
+  # attributed to a project, so they cannot bound the cost of attributing it.
+  # Set requests_per_minute to 0 to disable; addresses beyond
+  # max_tracked_sources share a single budget so this cannot be grown without
+  # bound.
+  source_rate_limit:
+    requests_per_minute: 600
+    max_tracked_sources: 16384
+  # Keeps the request a failed call carried and the answer the upstream gave it,
+  # so a failure can be reproduced rather than guessed at. Only failures — a
+  # successful call is never stored.
+  #
+  # This is the only store that holds material a caller wrote, so turning it on
+  # changes what this data directory contains. Records are encrypted under the
+  # master key, bound to the request and project they belong to, truncated at
+  # max_bytes, capped at max_records_per_day, deleted after `retain`, and
+  # readable only through an audited admin action. The capture includes the
+  # decoded body received by the Gateway before redaction, but never request
+  # headers or the Gateway credential, plus Halro's post-redaction normalized
+  # request so an operator can compare the two safely.
+  failure_capture:
+    enabled: false
+    max_bytes: 65536
+    max_records_per_day: 1000
+    retain: 24h
+
+retry:
+  max_attempts_per_target: 2
+  base_delay: 100ms
+  max_delay: 2s
+  jitter: true
+
+circuit_breaker:
+  consecutive_failures: 5
+  open_duration: 30s
+  half_open_max_requests: 1
+
+alerts:
+  queue_capacity: 1024
+  workers: 2
+  timeout: 5s
+  max_attempts: 3
+  base_delay: 250ms
+  max_delay: 5s
+  # Repeats of the same alert inside this window are dropped.
+  dedup_cooldown: 1m0s
+
+security:
+  # Provider endpoints and webhooks resolving to private, loopback, link-local,
+  # carrier-grade NAT or reserved addresses are refused unless allowed here.
+  # Cloud metadata addresses stay refused either way.
+  allow_private_provider_endpoints: false
+  allow_private_webhooks: false
+  # Only enable behind a proxy you control, and list its addresses below:
+  # without them a forwarded header is a client-supplied source IP.
+  trust_proxy_headers: false
+  # Required as soon as trust_proxy_headers is on, and it is the whole of the
+  # trust: only a hop inside one of these ranges may state a client's address.
+  # trusted_proxy_cidrs: ["10.0.0.0/8"]
+
+metrics:
+  enabled: true
+  require_auth: true
+  # Empty means the bearer token is derived from the Master Key; point this at
+  # a credential file to manage it yourself.
+  credential_file: ""
+  max_concurrent_scrapes: 2
+  write_timeout: 5s
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    client_ca_file: ""
+
+audit:
+  anchor:
+    # Off by default. In storage.master_key.mode: file, the audit chain has no
+    # witness outside this host — an operator holding master.key can rewrite
+    # history undetected by anyone but themselves. Enabling this periodically
+    # publishes a small, payload-free summary of the chain (record count and
+    # hash) that a dead-man probe on a separate host can pull and keep, making
+    # a later rewrite detectable rather than invisible.
+    enabled: false
+    # dead_man_pull is the only implemented sink: it reuses the existing
+    # halro-deadman probe and its off-host, separately credentialed
+    # deployment rather than standing up a second witness path.
+    sink: dead_man_pull
+    interval: 5m
+    record_delta: 500
+    # Required once enabled — a bearer credential file distinct from
+    # metrics.credential_file, since the two are rotated on unrelated
+    # schedules.
+    credential_file: ""
+
+# Optional signed model capability updates. Disabled means zero catalog
+# network requests; Halro continues to use its bundled reviewed snapshot.
+# Endpoint, host allowlist and signature trust roots are compiled in.
+model_catalog:
+  enabled: false
+  refresh_interval: 6h0m0s
+  pinned_revision: ""
+  max_download_bytes: 1048576
+  max_decoded_bytes: 4194304
+  max_compression_ratio: 20
+  max_entries: 10000
+
+# The process log. Records are redacted before they are written — no
+# authorization headers, provider or gateway keys, prompts, response bodies or
+# raw source IPs — whatever is set here.
+logging:
+  # debug | info | warn | error
+  level: info
+  # json for machine reading, text for a human at a terminal.
+  format: json
+  # stderr | file | both. "file" and "both" also write a local file, which is
+  # what to use when nothing collects this process's stderr.
+  output: stderr
+  # Empty means <data_dir>/logs/halro.log.
+  file: ""
+  # Rotates once a record would carry the file past this size.
+  max_size_mb: 64
+  # Generations kept, counting the file being written. 1 keeps no history.
+  max_files: 5
+  # A second file holding only ERROR records, written beside the ordinary log
+  # rather than instead of it. Setting level: error above would get an
+  # error-only log and lose the WARNs worth keeping — an expiring certificate,
+  # a failed probe, an attempt retried before its request succeeded. This keeps
+  # both. Its level is fixed at ERROR and its encoding at JSON: a threshold that
+  # could be lowered would make it a second copy of the main log, and the one
+  # file that exists to be searched by machine should not be the harder to
+  # search. Note that it holds fewer records than the console reports as failed
+  # requests: a budget, breaker, concurrency, Token Guard, capability or
+  # redaction refusal is a policy working, not an incident, and is not written
+  # here.
+  error_file:
+    enabled: false
+    # Empty means <data_dir>/logs/halro-error.log. It must not be the same path
+    # as logging.file.
+    file: ""
+    max_size_mb: 32
+    max_files: 10
