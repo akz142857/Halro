@@ -83,6 +83,14 @@ var profileOperationTable = map[domain.ProviderProfileID]profileOperations{
 		anthropicWire(PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream),
 		operationBinding{OperationFiles, PrimitiveHalroLocalFiles},
 		operationBinding{OperationBatches, PrimitiveAnthropicMessageBatches})},
+	// The subscription product speaks the same Messages wire, and carries only
+	// the wire. Files and batches are deliberately absent: the metered profile
+	// earned those from a product that bills per token and stores objects under
+	// that account, and nothing has established that a subscription credential
+	// reaches either. A binding declared without evidence would be an operation
+	// the router offers and the upstream refuses.
+	domain.ProfileAnthropicSubscriptionMessages: {Revision: 1, Bindings: anthropicWire(
+		PrimitiveAnthropicMessages, PrimitiveAnthropicMessagesStream)},
 	domain.ProfileAzureChatEmbeddings: {Revision: 1, Bindings: append(
 		chatPair(PrimitiveAzureChatCompletions, PrimitiveAzureChatStream),
 		operationBinding{OperationEmbeddings, PrimitiveAzureEmbeddings})},

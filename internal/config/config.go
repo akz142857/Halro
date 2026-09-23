@@ -34,12 +34,13 @@ type Config struct {
 	// omitempty so a retired section is only ever read, never written: without
 	// it the console enumerates three unlabelled knobs that do nothing, and
 	// `halro config` would offer an operator the very section it refuses.
-	CircuitBreaker RetiredCircuitBreaker `yaml:"circuit_breaker,omitempty"`
-	Alerts         Alerts                `yaml:"alerts"`
-	Security       Security              `yaml:"security"`
-	Metrics        Metrics               `yaml:"metrics"`
-	Audit          Audit                 `yaml:"audit"`
-	ModelCatalog   ModelCatalog          `yaml:"model_catalog"`
+	CircuitBreaker        RetiredCircuitBreaker `yaml:"circuit_breaker,omitempty"`
+	Alerts                Alerts                `yaml:"alerts"`
+	Security              Security              `yaml:"security"`
+	Metrics               Metrics               `yaml:"metrics"`
+	Audit                 Audit                 `yaml:"audit"`
+	ModelCatalog          ModelCatalog          `yaml:"model_catalog"`
+	ProviderSubscriptions ProviderSubscriptions `yaml:"provider_subscriptions"`
 	// LegacyProviders keeps v0.8.1 configuration files readable. Provider
 	// connection defaults moved into the Admin-managed credential workflow in
 	// v0.8.2, so this section is validated but no longer drives runtime state.
@@ -421,6 +422,48 @@ func validLegacyBedrockRegion(region string) bool {
 		}
 	}
 	return true
+}
+
+// ProviderSubscriptions decides whether this instance offers the consumer
+// subscription products whose upstreams reserve them for their own clients:
+// Claude Pro/Max as Claude Code signs in to it, and a ChatGPT plan as Codex
+// signs in to it.
+//
+// Both default to false, and that default is the point. Halro's shipped
+// behaviour is the one that complies with those terms without the operator
+// having to know they exist: the Offering is absent from Admin metadata and
+// every write path refuses it, exactly as a withheld profile is treated. The
+// difference from Withheld is where the fact lives — a withheld profile is
+// waiting on evidence, which is a property of the build, while this is a
+// property of one operator's own arrangement with an upstream, which only they
+// can speak to.
+//
+// What enabling one means, stated plainly because an operator turning it on
+// deserves to read it in the file they are editing rather than in an issue:
+//
+//   - Anthropic's Claude Code legal and compliance page reserves OAuth sign-in
+//     for its own clients, does not permit routing requests through Free, Pro or
+//     Max credentials on behalf of users, and does not permit a developer to
+//     collect, store or intermediate a Claude.ai credential.
+//   - OpenAI's ChatGPT Terms of Use say you may not make your account available
+//     to anyone else.
+//
+// Halro holding such a credential and presenting it upstream is what both
+// describe. Neither upstream enforces it on the paths Halro would use — both
+// were measured, see docs/verification/ — so nothing outside this switch stops
+// it, which is precisely why the switch is off unless someone sets it.
+//
+// The supported production answer stays what it was: an Anthropic Console API
+// key, or an OpenAI platform API key, each a metered product with its own
+// billing. This section exists for an instance whose only user is the operator
+// whose subscription it is — development and debugging against your own
+// account.
+type ProviderSubscriptions struct {
+	// AnthropicClaude offers anthropic.claude-subscription.
+	AnthropicClaude bool `yaml:"anthropic_claude"`
+	// A member for the Codex subscription belongs here and is deliberately
+	// absent until the rows it would open exist: a switch with nothing behind it
+	// is a knob that does nothing, which this configuration refuses to grow.
 }
 
 // ModelCatalog governs optional signed background catalog updates. The remote

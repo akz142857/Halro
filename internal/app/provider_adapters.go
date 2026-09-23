@@ -125,6 +125,19 @@ var adapterBuilders = map[domain.ProviderProfileID]adapterBuilder{
 		authorize: staticHeader("Authorization", "Bearer ", "api-key"),
 		build:     openAICompatibleAdapter(false),
 	},
+	// The subscription product: same adapter, same wire, opposite header. The
+	// Console profile below sends x-api-key and strips Authorization; this one
+	// does the reverse, because that is what each credential is accepted as.
+	domain.ProfileAnthropicSubscriptionMessages: {
+		authorize: claudeSubscriptionAuthorizer,
+		build: func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {
+			return anthropicprovider.New(anthropicprovider.Options{
+				Endpoint: ctx.Endpoint, Authorizer: authorizer, Client: ctx.Client,
+				Capabilities: ctx.Binding.Capabilities, ProfileID: ctx.Binding.ProfileID,
+				CredentialScheme: domain.CredentialAnthropicOAuth,
+			})
+		},
+	},
 	domain.ProfileAnthropicMessages: {
 		authorize: staticHeader("x-api-key", "", "Authorization"),
 		build: func(ctx adapterBuildContext, authorizer provider.Authorizer) (provider.Adapter, error) {

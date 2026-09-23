@@ -266,11 +266,15 @@ const (
 const (
 	excludedEndpointRejected           = "endpoint_rejected"
 	excludedBindingProfileIncompatible = "binding_profile_incompatible"
-	excludedAdapterUnavailable         = "adapter_unavailable"
-	excludedCapabilityCeilingExceeded  = "capability_ceiling_exceeded"
-	excludedUsagePolicyRequired        = "usage_policy_acknowledgement_required"
-	excludedUsagePolicyRevisionChanged = "usage_policy_revision_mismatch"
-	excludedEgressProxyUnavailable     = "egress_proxy_unavailable"
+	// Distinct from incompatible on purpose: nothing is wrong with this binding,
+	// the operator has the product switched off. Saying "incompatible" would send
+	// them to inspect a connection that is exactly as they left it.
+	excludedBindingSubscriptionDisabled = "binding_subscription_disabled"
+	excludedAdapterUnavailable          = "adapter_unavailable"
+	excludedCapabilityCeilingExceeded   = "capability_ceiling_exceeded"
+	excludedUsagePolicyRequired         = "usage_policy_acknowledgement_required"
+	excludedUsagePolicyRevisionChanged  = "usage_policy_revision_mismatch"
+	excludedEgressProxyUnavailable      = "egress_proxy_unavailable"
 	// Not a load-time reason: what a probe reports when no adapter exists and
 	// the active load's exclusions do not account for it — a registry replaced
 	// between the lookup and the read, or a binding this build never loaded.
@@ -569,6 +573,12 @@ func loadProviderRegistryWithCatalogAndEgress(
 			}
 			if domain.IsWithheldProfile(binding.ProfileID) {
 				excludeBinding(instance, binding.ID, excludedBindingProfileIncompatible)
+				continue
+			}
+			// A load, not a write: the record still loads and stays deletable,
+			// and only its ability to serve is withdrawn.
+			if !offeredProfile(cfg.ProviderSubscriptions, binding.ProfileID) {
+				excludeBinding(instance, binding.ID, excludedBindingSubscriptionDisabled)
 				continue
 			}
 			manifest, ok := provider.BuiltinProfile(binding.ProfileID)

@@ -301,8 +301,9 @@ func summaryOf(row profileRow) ProviderProfileSummary {
 		ID: row.ID, ConnectionGroupID: row.ConnectionGroup, Type: row.Type, AccessSurface: row.Surface,
 		CredentialScheme: row.Scheme, BaseURLTemplate: row.BaseURLTemplate,
 		Immutable: row.Immutable, Withheld: row.Withheld,
-		RoutePartitioned: row.RoutePartitioned,
-		Defaults:         row.Defaults, Ceiling: row.Ceiling,
+		SubscriptionGated: row.SubscriptionGated,
+		RoutePartitioned:  row.RoutePartitioned,
+		Defaults:          row.Defaults, Ceiling: row.Ceiling,
 	}
 }
 

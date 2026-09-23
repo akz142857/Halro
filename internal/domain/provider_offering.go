@@ -75,9 +75,10 @@ const (
 	// The first subscription product this build offers. Kind is what it is sold
 	// as, and nothing routes on it: the path and the credential come from the
 	// profile, as they do for every other product.
-	OfferingBigModelCodingPlan        ProviderOfferingID = "bigmodel.coding-plan"
-	OfferingKimiCode                  ProviderOfferingID = "kimi.code"
-	OfferingMiniMaxSubscriptionAccess ProviderOfferingID = "minimax.subscription-access"
+	OfferingBigModelCodingPlan          ProviderOfferingID = "bigmodel.coding-plan"
+	OfferingKimiCode                    ProviderOfferingID = "kimi.code"
+	OfferingAnthropicClaudeSubscription ProviderOfferingID = "anthropic.claude-subscription"
+	OfferingMiniMaxSubscriptionAccess   ProviderOfferingID = "minimax.subscription-access"
 )
 
 // An Offering identifier is permanent. It reaches the Admin audit trail — the
@@ -87,15 +88,13 @@ const (
 // stale. Same rule as event kind numbers and frame epochs: add, never rewrite,
 // never re-point an existing name at a different product.
 //
-// There are deliberately no rows here for products this build cannot reach.
-// `openai.codex-subscription` and `anthropic.claude-subscription` are named in
-// docs/prd/provider-offering-subscription-access-plan.zh-CN.md and registered
-// when they gain a surface, not before: a row no surface references is a
-// constant nothing can resolve, and the invariant tests below would have to
-// carry an exception for it.
+// There are deliberately no rows here for products this build cannot reach: a
+// row no surface references is a constant nothing can resolve, and the invariant
+// tests below would have to carry an exception for it.
 //
-// Those two are not the same kind of absence, and reading them as one costs the
-// next person the re-derivation this comment exists to prevent.
+// Two consumer subscription products are named in
+// docs/prd/provider-offering-subscription-access-plan.zh-CN.md and are not in
+// the same state, which is the thing worth reading carefully.
 //
 //   - `openai.codex-subscription` is excluded by its upstream's terms too, but
 //     less completely, and the difference is the reopening condition rather than
@@ -113,7 +112,11 @@ const (
 //     present as the Codex CLI is not a gate. Nor is the OAuth credential scheme
 //     this build lacks; that is what it would need afterwards, not what stops
 //     it. The blocker is one contractual clause, and nothing upstream enforces
-//     it — the same shape as the Anthropic row above.
+//     it. That is the same shape as the Anthropic row, and it is why the same
+//     answer fits: a gated row an operator may switch on for their own instance.
+//     It is not registered yet only because its rows have not been built, and
+//     config.ProviderSubscriptions deliberately carries no member for it until
+//     they are.
 //   - `anthropic.claude-subscription` is excluded by the upstream's own terms,
 //     not by Halro's roadmap. Read 2026-09-22 at
 //     https://code.claude.com/docs/en/legal-and-compliance, under "Usage policy
@@ -130,22 +133,33 @@ const (
 //     or session tokens — sign-in to a Claude account must complete through
 //     Anthropic's own flow."
 //
-// The second sentence is the one that closes the single-operator reading too.
+// The last sentence is the one that reaches even a single-operator install:
 // Halro's whole credential model is to collect a secret, seal it and present it
-// upstream on someone's behalf, so even an operator serving only themselves
-// lands on the prohibited side; the carve-out the same page grants is for an end
-// user signing in to the *unmodified Claude Code binary*, which Halro is not.
-// So there is nothing here to withhold and nothing to schedule: the supported
-// path is `anthropic.console-api` with `anthropic.x-api-key`, plus Bedrock
-// Mantle for the cloud route, and both already ship. See
-// validateCredentialMaterial for the refusal that says so at save time, and
-// issue #351 for the reopening condition.
+// upstream on someone's behalf, and the carve-out the same page grants is for an
+// end user signing in to the *unmodified Claude Code binary*, which Halro is not.
+//
+// `anthropic.claude-subscription` is nonetheless registered, and the reason it
+// is registered rather than absent is the whole design here. The row exists and
+// is SubscriptionGated: in the shipped default nothing can be created on it, it
+// is absent from Admin metadata, and every write path refuses it — the same
+// treatment a withheld row gets, so the distributed artifact is the compliant
+// one without an operator needing to know the question exists. What the row adds
+// over absence is that an operator can say otherwise, in a file they own, for an
+// instance whose only user is the person whose subscription it is. Halro does
+// not make that judgement for them and does not hide that the judgement exists.
+// See config.ProviderSubscriptions for what the switch says when they read it,
+// and the usage-policy acknowledgement on this Offering for where their
+// acceptance is recorded — in the audit trail, against this identifier.
+//
+// The supported answer for anything else stays `anthropic.console-api` with
+// `anthropic.x-api-key`, plus Bedrock Mantle for the cloud route.
 //
 // docs/verification/anthropic-claude-subscription-evidence.md measured what the
 // upstream does rather than what it permits, and the two differ: presented as
 // `x-api-key` the token is refused "API key is invalid.", presented as a Bearer
-// token it is served. So nothing upstream enforces this boundary on every path,
-// and the refusal here is Halro's own rather than a report of the upstream's.
+// token it is served. So nothing upstream enforces this boundary on any path
+// Halro would use — which is why the gate is Halro's own and why its default
+// matters more than it would if the upstream were policing it.
 
 // Region is a product boundary — which account, balance and model catalogue a
 // credential reaches — and never a cloud region. Bedrock's us-east-1 is a
@@ -231,6 +245,7 @@ var providerOfferingTable = []providerOfferingRow{
 	{ID: OfferingBigModelGeneral, Type: ProviderBigModel, Kind: OfferingKindMeteredAPI},
 	{ID: OfferingBigModelCodingPlan, Type: ProviderBigModel, Kind: OfferingKindSubscription, RequiresUsageWarning: true},
 	{ID: OfferingKimiCode, Type: ProviderKimi, Kind: OfferingKindSubscription, RequiresUsageWarning: true},
+	{ID: OfferingAnthropicClaudeSubscription, Type: ProviderAnthropic, Kind: OfferingKindSubscription, RequiresUsageWarning: true},
 	{ID: OfferingMiniMaxSubscriptionAccess, Type: ProviderMiniMax, Kind: OfferingKindEntitlement, RequiresUsageWarning: true},
 }
 
@@ -268,6 +283,19 @@ type surfaceRow struct {
 var surfaceTable = []surfaceRow{
 	{Surface: SurfaceOpenAI, Type: ProviderOpenAI, Offering: OfferingOpenAIAPI, RegionScope: RegionScopeNone},
 	{Surface: SurfaceAnthropic, Type: ProviderAnthropic, Offering: OfferingAnthropicAPI, RegionScope: RegionScopeNone},
+	{
+		// Shares api.anthropic.com with the metered product, so the host cannot
+		// tell them apart and the credential form asks which one the key is for.
+		// The documentation URL is the upstream's own statement of what a
+		// subscription credential may be used for; acknowledging it is what
+		// records that the operator read it, against this Offering, in the audit
+		// trail. See the Offering comment above for what that statement says.
+		Surface: SurfaceAnthropicSubscription, Type: ProviderAnthropic,
+		Offering:            OfferingAnthropicClaudeSubscription,
+		RegionScope:         RegionScopeNone,
+		DocumentationURL:    "https://code.claude.com/docs/en/legal-and-compliance",
+		UsagePolicyRevision: "anthropic-claude-subscription-2026-09-22",
+	},
 	{Surface: SurfaceAzureOpenAI, Type: ProviderAzureOpenAI, Offering: OfferingAzureOpenAI, RegionScope: RegionScopeNone},
 	{Surface: SurfaceDeepSeek, Type: ProviderDeepSeek, Offering: OfferingDeepSeekAPI, RegionScope: RegionScopeNone},
 	{Surface: SurfaceOpenAICompatible, Type: ProviderOpenAICompatible, Offering: OfferingOpenAICompatible, RegionScope: RegionScopeNone},

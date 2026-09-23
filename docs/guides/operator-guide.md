@@ -1235,46 +1235,48 @@ Kimi Open Platform; it does not expose a speculative Kimi Code region or key
 choice. DeepSeek remains API Platform only because no first-party independent
 Code subscription credential contract is published.
 
-**Claude Pro and Max cannot be used through Halro**, and unlike the two above,
-that is not something a future release changes. Anthropic's Claude Code legal and
-compliance page — read 2026-09-22, under "Authentication and credential use" —
-reserves OAuth sign-in for Claude Code and other native Anthropic applications,
-does not permit a third party to route requests through Free, Pro or Max
-credentials on behalf of its users, and does not permit a developer to collect,
-store or intermediate a Claude.ai credential at all. That last clause is the one
-that also answers "but I am the only user": holding a secret and presenting it
-upstream on someone's behalf is Halro's entire credential model, so a
-single-operator install is not a looser case. Use a Console API key from
+**Claude Pro and Max are off by default, and the default is the one to keep.**
+Anthropic's Claude Code legal and compliance page — read 2026-09-22, under
+"Authentication and credential use" — reserves OAuth sign-in for Claude Code and
+other native Anthropic applications, does not permit a third party to route
+requests through Free, Pro or Max credentials on behalf of its users, and does
+not permit a developer to collect, store or intermediate a Claude.ai credential.
+That last clause reaches even a single-user install: holding a secret and
+presenting it upstream on someone's behalf is Halro's entire credential model,
+and the carve-out the same page grants is for the unmodified Claude Code binary,
+which Halro is not.
+
+So the shipped build offers no such product. The Offering is absent from the
+console, and every write path refuses it, exactly as a withheld profile is
+refused. For anything that serves anyone but you, use a Console API key from
 platform.claude.com, or Bedrock Mantle for the cloud route.
 
-Pasting a Claude Code token into the provider secret field is refused when you
-save it, naming the reason. Without that, the save succeeded and the answer
-arrived on the first real request as `401 API key is invalid.` — measured, not
-assumed (`docs/verification/anthropic-claude-subscription-evidence.md`), and a
-sentence that sends you to check for a typo or suspect Halro when neither is the
-problem. Note what that record also measured: the upstream does **not** refuse a
-subscription credential everywhere, so nothing outside Halro stops an operator
-who goes looking for a way to make one work. The refusal is Halro's own, taken on
-the terms, and it does not wait for Anthropic to enforce them.
+There is a switch, and this is what it is for. Setting
+`provider_subscriptions.anthropic_claude: true` offers the product on an instance
+whose only user is the person whose subscription it is — developing or debugging
+against your own account. Halro does not make that judgement for you: the
+upstream's terms are quoted where the switch is, creating the credential requires
+acknowledging them, and that acknowledgement is recorded in the audit trail
+against the product. Two things to know before you set it:
 
-**A ChatGPT or Codex subscription cannot be used through Halro either**, for a
-related but not identical reason. A Codex sign-in is governed by the ChatGPT
-Terms of Use (effective 2026-01-01), which say you may not share your account
-credentials or make your account available to anyone else — and Halro exists to
-serve Projects other than the one who owns the credential. Unlike Anthropic,
-OpenAI has no clause against a developer holding the credential at all, so an
-operator serving strictly nobody but themselves is not something the terms
-answer; Halro does not answer it for them, and offers no such product. Use a
-platform API key from platform.openai.com, which is a different product with its
-own billing.
+- **Nothing upstream stops you either way.** Measured 2026-09-23
+  (`docs/verification/anthropic-claude-subscription-evidence.md`): a subscription
+  token is served by the public Messages API when presented as a Bearer token,
+  and refused as `x-api-key` with `401 API key is invalid.` — a sentence that
+  sends you to check for a typo when the problem is the product. The restraint
+  here is yours, not the upstream's, which is why the default is off rather than
+  a warning.
+- **The credential expires and nothing refreshes it.** A Claude sign-in yields an
+  access token with a lifetime; Halro stores it with that expiry and fails closed
+  when it passes. Re-import to continue. A refresh path is not built, because a
+  token refreshing itself on a timer would look like an administrator rotating a
+  credential every few hours — the design question that blocks it is recorded in
+  §7.2 of the subscription access plan.
 
-What holds that line is the terms and nothing else. Measured 2026-09-23
-(`docs/verification/codex-subscription-evidence.md`): the Codex endpoint serves a
-client that identifies itself truthfully as Halro, so pointing a self-declared
-OpenAI-compatible connection at it with a subscription token would work today,
-and would breach the terms. Halro does not blockade that — the self-declared
-profile exists precisely to reach endpoints Halro does not enumerate — so on both
-of these upstreams the restraint is yours, not the upstream's.
+Anthropic now offers two products on one host, so the credential form asks which
+one a secret belongs to rather than guessing, and refuses each product's secret
+on the other by name. The dangerous direction is the quiet one: a Console key
+saved as a subscription credential would be served, against the wrong balance.
 
 For BigModel, the credential form asks which product and account region the key
 belongs to before anything else, and the endpoint follows that choice — mainland and

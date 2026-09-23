@@ -13,15 +13,20 @@ type CredentialScheme string
 type CapabilityEvidence string
 
 const (
-	SurfaceOpenAI              AccessSurface = "openai-api"
-	SurfaceAnthropic           AccessSurface = "anthropic-api"
-	SurfaceAzureOpenAI         AccessSurface = "azure-openai"
-	SurfaceDeepSeek            AccessSurface = "deepseek-api"
-	SurfaceOpenAICompatible    AccessSurface = "openai-compatible"
-	SurfaceGemini              AccessSurface = "gemini-generate-content"
-	SurfaceBedrockRuntime      AccessSurface = "bedrock-runtime"
-	SurfaceBedrockMantle       AccessSurface = "bedrock-mantle"
-	SurfaceBedrockAgentRuntime AccessSurface = "bedrock-agent-runtime"
+	SurfaceOpenAI    AccessSurface = "openai-api"
+	SurfaceAnthropic AccessSurface = "anthropic-api"
+	// The Claude subscription is a second product on the same host, not a
+	// billing label on the first: a different credential, a different balance,
+	// and an operator must say which one a key belongs to. Same shape as
+	// BigModel's general/Coding Plan pair, which also share a host.
+	SurfaceAnthropicSubscription AccessSurface = "anthropic-claude-subscription"
+	SurfaceAzureOpenAI           AccessSurface = "azure-openai"
+	SurfaceDeepSeek              AccessSurface = "deepseek-api"
+	SurfaceOpenAICompatible      AccessSurface = "openai-compatible"
+	SurfaceGemini                AccessSurface = "gemini-generate-content"
+	SurfaceBedrockRuntime        AccessSurface = "bedrock-runtime"
+	SurfaceBedrockMantle         AccessSurface = "bedrock-mantle"
+	SurfaceBedrockAgentRuntime   AccessSurface = "bedrock-agent-runtime"
 	// One surface for all three MiniMax wire shapes, the same choice Bedrock
 	// Mantle makes. An Access Surface names the API face one credential reaches,
 	// not the wire format spoken on it: MiniMax serves Anthropic Messages,
@@ -60,19 +65,23 @@ const (
 )
 
 const (
-	ProfileOpenAIChatEmbeddings       ProviderProfileID = "openai.chat-embeddings.v1"
-	ProfileOpenAIResponses            ProviderProfileID = "openai.responses.v1"
-	ProfileAnthropicMessages          ProviderProfileID = "anthropic.messages.2023-06-01"
-	ProfileAzureChatEmbeddings        ProviderProfileID = "azure-openai.chat-embeddings.v1"
-	ProfileDeepSeekChat               ProviderProfileID = "deepseek.chat.v1"
-	ProfileOpenAICompatible           ProviderProfileID = "openai-compatible.chat-embeddings.v1"
-	ProfileGeminiText                 ProviderProfileID = "gemini.generate-content.text.v1beta"
-	ProfileBedrockConverseText        ProviderProfileID = "bedrock.runtime.converse.text.v1"
-	ProfileBedrockInvokeTitanEmbedV2  ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
-	ProfileOpenAIMediaResources       ProviderProfileID = "openai.media-resources.v1"
-	ProfileBedrockInvokeTitanImageV2  ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
-	ProfileBedrockAgentRerankCohere35 ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
-	ProfileBedrockAsyncNovaReel       ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
+	ProfileOpenAIChatEmbeddings ProviderProfileID = "openai.chat-embeddings.v1"
+	ProfileOpenAIResponses      ProviderProfileID = "openai.responses.v1"
+	ProfileAnthropicMessages    ProviderProfileID = "anthropic.messages.2023-06-01"
+	// Same wire as the metered Messages profile — measured, the subscription
+	// credential is served by the public /v1/messages — so this exists to bind a
+	// different surface and credential scheme, not a different protocol.
+	ProfileAnthropicSubscriptionMessages ProviderProfileID = "anthropic.subscription.messages.v1"
+	ProfileAzureChatEmbeddings           ProviderProfileID = "azure-openai.chat-embeddings.v1"
+	ProfileDeepSeekChat                  ProviderProfileID = "deepseek.chat.v1"
+	ProfileOpenAICompatible              ProviderProfileID = "openai-compatible.chat-embeddings.v1"
+	ProfileGeminiText                    ProviderProfileID = "gemini.generate-content.text.v1beta"
+	ProfileBedrockConverseText           ProviderProfileID = "bedrock.runtime.converse.text.v1"
+	ProfileBedrockInvokeTitanEmbedV2     ProviderProfileID = "bedrock.runtime.invoke.titan-embed-text-v2.v1"
+	ProfileOpenAIMediaResources          ProviderProfileID = "openai.media-resources.v1"
+	ProfileBedrockInvokeTitanImageV2     ProviderProfileID = "bedrock.runtime.invoke.titan-image-v2.v1"
+	ProfileBedrockAgentRerankCohere35    ProviderProfileID = "bedrock.agent-runtime.rerank.cohere-v3-5.v1"
+	ProfileBedrockAsyncNovaReel          ProviderProfileID = "bedrock.runtime.async.nova-reel-v1.v1"
 	// Bedrock Mantle serves one host through three routes, and a model reaches
 	// exactly one of them. /v1 and /openai/v1 both speak the OpenAI wire shape,
 	// so the wire shape cannot pick the route and the model list does not carry
@@ -140,8 +149,14 @@ const (
 )
 
 const (
-	CredentialBearerStatic     CredentialScheme = "bearer.static"
-	CredentialAnthropicAPIKey  CredentialScheme = "anthropic.x-api-key"
+	CredentialBearerStatic    CredentialScheme = "bearer.static"
+	CredentialAnthropicAPIKey CredentialScheme = "anthropic.x-api-key"
+	// A separate scheme for the same reason BigModel's Coding Plan key is one:
+	// the scheme is half of what binds a credential to its surface, and sharing
+	// it would let a subscription token be saved against the metered product.
+	// Its material is a JSON document, not a bare token, because the credential
+	// an OAuth sign-in yields is a set — see validateCredentialMaterial.
+	CredentialAnthropicOAuth   CredentialScheme = "anthropic.claude.oauth"
 	CredentialAzureAPIKey      CredentialScheme = "azure.api-key"
 	CredentialGoogleAPIKey     CredentialScheme = "google.api-key"
 	CredentialAWSSigV4Explicit CredentialScheme = "aws.sigv4.explicit-session"
@@ -348,6 +363,24 @@ func NormalizeBedrockProjectID(value string) string {
 // them reach capability detection and the data plane.
 func IsImmutableCapabilityProfile(id ProviderProfileID) bool {
 	return profileIndex[id].Immutable
+}
+
+// IsSubscriptionGatedProfile reports whether the profile is one an operator has
+// to switch on before this instance offers it.
+//
+// The sibling of Withheld, and deliberately a different thing. A withheld
+// profile waits on evidence, which is a property of the build and settled by
+// whoever gathers it. A gated profile waits on the operator: its upstream
+// reserves the credential for its own clients, so whether it may be used is a
+// statement only the person whose subscription it is can make. This table
+// records that the row *is* gated; whether the gate is open is read from
+// configuration, in the composition root, and never here.
+//
+// Like Withheld, this is not a read gate. An instance that switches the product
+// off must still start while a connection on it exists, or the operator cannot
+// delete it.
+func IsSubscriptionGatedProfile(id ProviderProfileID) bool {
+	return profileIndex[id].SubscriptionGated
 }
 
 // IsWithheldProfile reports whether this build offers the profile at all.

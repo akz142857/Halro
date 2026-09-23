@@ -867,12 +867,36 @@ Claude Code 的情形）。Consumer Terms（生效日 2025-10-08）本身不含�
 #### 对 Halro 的结论
 
 - 多租户的那一半由第二句直接否掉：Halro 就是"代其用户转发请求"。
-- **单操作者自用的那一半由第三句否掉**，这是容易被读漏的一条：Halro 的凭据模型本身就是
-  收集密钥、封存、代为出示，即"collect, store, or intermediate"。所以"我只服务自己"不是一个
-  更宽松的情形，它落在同一句禁令里；豁免只给未经修改的 Claude Code，而 Halro 不是它。
-- 因此这不是 Kimi Code 那种"实现已在、等证据解锁 withheld"的状态——**没有可 withhold 的东西**。
+- **单操作者自用的那一半由第三句一并覆盖**，这是容易被读漏的一条：Halro 的凭据模型本身就是
+  收集密钥、封存、代为出示，即"collect, store, or intermediate"；豁免只给未经修改的
+  Claude Code，而 Halro 不是它。
 - 受支持的路径已经在售且早已发布：`anthropic.console-api` + `anthropic.x-api-key`，云上走
   Bedrock Mantle。
+
+#### 因此：注册，但默认关闭
+
+本节初稿的结论是"不注册"。现在的结论是**注册一行、默认不提供**，两者在分发物的行为上
+完全一致，区别只在于把决定权放在谁手里。
+
+`anthropic.claude-subscription` 是一行 `SubscriptionGated` 的 Offering：
+
+- **默认状态与 withheld 完全相同**——不出现在 Admin 元数据里、所有写路径拒绝、控制台连
+  选项都没有。所以**开源分发物本身就是合规的那个**，操作者不需要知道这个问题存在。
+- 与 withheld 的区别在于事实归属。withheld 等的是证据，那是构建方的事；这一条等的是
+  "我这台实例只服务我自己、我自己承担上游条款"，**那句话只有操作者能说**，Halro 不替他说，
+  也不假装这个判断不存在。
+- 打开它的动作在操作者自己的配置文件里（`provider_subscriptions.anthropic_claude`），
+  那段配置注释直接写明开启意味着什么——理由是要改这个开关的人正在看的就是那个文件。
+- 创建凭据时还要**显式确认**该 Offering 的使用条款（`RequiresUsageWarning` +
+  `UsagePolicyRevision`），这条确认记进审计轨迹、绑在 Offering ID 上。"我读过并接受"应该
+  落在这里，而不是一个浏览器转头就忘的勾选框。
+
+两道闸门刻意不合并：`Withheld` 是构建期事实、不可配置；`SubscriptionGated` 是操作者事实、
+走配置。domain 只声明"这一行受闸门控制"，闸门开没开由组合根读配置，表本身不依赖配置。
+
+两者都**只拦写、不拦读**：关掉之后已存在的连接照样加载（否则操作者删不掉它），只是被排除出
+registry，排除原因是独立的 `binding_subscription_disabled` 而不是 `incompatible`——连接本身
+没有任何问题。
 
 #### 实测（2026-09-22，操作者自己的订阅）
 
@@ -898,23 +922,39 @@ Claude Code 的情形）。Consumer Terms（生效日 2025-10-08）本身不含�
 
 #### 落到实现上
 
-- 现有 Anthropic profile 归属 `anthropic.console-api`；
-- `anthropic.claude-subscription` 不注册：无常量、无 surface、控制台也不出现"禁用态"选项；
-- **服务端拒绝把 Claude 订阅 OAuth token 存成 Anthropic API Key。**按 §7.2，产品身份不能在
-  浏览器里从密钥内容推断，所以判定在 Admin handler（`validateCredentialMaterial` →
-  `refuseClaudeSubscriptionToken`），控制台只负责把具名错误
-  `anthropic_subscription_token_refused` 翻译出来。这条刻意做窄：只匹配
-  `sk-ant-oat` / `sk-ant-ort` 两个前缀，不含版本位（`oat01` 是格式版本，写死它就是本仓库
-  反复吃亏的精确等值检查），也只挂在 `anthropic.x-api-key` 这一个 scheme 上——Bedrock Mantle
-  的 Anthropic profile 拿的是 AWS key，Kimi 与 MiniMax 的 Anthropic 面各有自己的 scheme。
-  识别不是安全控制：前缀若变，只是退回到今天的行为，不会误拒合法 Console Key。
+- 现有 Anthropic profile 归属 `anthropic.console-api`，订阅产品是**同一台主机上的第二个
+  surface**（`anthropic-claude-subscription`）+ 独立 scheme（`anthropic.claude.oauth`）。
+  因为共享主机，端点分辨不出产品，所以 Anthropic 从此有两个凭据身份，写路径**拒绝猜**——
+  创建凭据必须点名产品。这正是最需要问的一种情形：猜错会把订阅凭据记在计费产品上，或者反过来。
+- wire 是同一个。实测（见 §上）订阅凭据由公开 `/v1/messages` 以 Bearer 提供服务，所以
+  profile 只换 surface / scheme / authorizer：`Authorization: Bearer` 并剥掉 `x-api-key`，
+  与计费 profile 正好相反。
+- 能力集是计费 profile 减去 **Files 与 Batches**：那两项是*账户*属性不是协议属性，是在一个
+  按 token 计费、把对象存在该账户下的产品上取得的证据，订阅侧一项都没有建立。manifest 也不
+  绑这两个 primitive，ceiling 不变量负责让两者不许偏离。
+- 凭据材料是 **JSON 文档**而非裸 token（`access_token` 必填、`refresh_token` 接受但当前
+  无人读、`expires_at` 映射到 Halro 已有的凭据过期机制）。刷新尚未实现——§7.2 那条
+  "刷新不是轮换"仍然开着——所以订阅凭据会**明确到期**，而不是悄悄变成上游 401。
+- **双向具名拒绝。**按 §7.2，产品身份不能在浏览器里从密钥内容推断，所以判定都在 Admin
+  handler，控制台只负责翻译具名错误码：
+  - 订阅 token 粘进计费产品 → `anthropic_subscription_token_refused`；
+  - Console Key 粘进订阅产品 → `anthropic_console_key_refused`。**后者才是危险方向**：
+    上游会照常服务，只是扣错账户，不会失败。
+  - 产品被配置关闭 → `provider_subscription_disabled`，并点名要改哪个开关。
+  前缀识别刻意做窄：只匹配 `sk-ant-oat` / `sk-ant-ort` / `sk-ant-api`，不含版本位
+  （`oat01` 是格式版本，写死它就是本仓库反复吃亏的精确等值检查），也只挂在 Anthropic 这两个
+  scheme 上——Bedrock Mantle 的 Anthropic profile 拿的是 AWS key，Kimi 与 MiniMax 的
+  Anthropic 面各有自己的 scheme。识别不是安全控制：前缀若变，只是退回到识别之前的行为。
   形状取自本机真实 Claude Code 凭据（2026-09-22）：access token `sk-ant-oat01-…`、
   refresh token `sk-ant-ort01-…`，各 108 字符。
 
-#### 重开条件
+#### 仍然开着的问题
 
-Anthropic 若发布面向订阅计划的第一方 delegated access / gateway 契约，本节重开，并复用
-`openai.codex-subscription` 的 OAuth 工作。在此之前答案是一个**有出处的"不做"**。
+- **刷新不是轮换（§7.2）。**今天没有刷新路径，所以没有这个问题；一旦要做，它是最先要答的：
+  凭据写路径每次都 `KeyVersion + 1`、bump revision、清空调用目标目录缓存、要求 step-up
+  重认证，一个按时刷新的 token 会把这四件事变成定时任务。
+- Anthropic 若发布面向订阅计划的第一方 delegated access / gateway 契约，**默认值可以重新
+  讨论**；在此之前默认保持关闭，这不是排期问题。
 
 ---
 

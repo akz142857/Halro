@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/akz142857/Halro/internal/config"
 	"net/http"
 
 	"github.com/akz142857/Halro/internal/compatibility"
@@ -167,7 +168,7 @@ type providerProfilesView struct {
 // The view is assembled per request rather than memoised. It is a small table
 // of compile-time data on an endpoint a console reads once per session. The
 // optional override exists only for focused table tests.
-func buildProviderProfilesView(regionOverride ...string) providerProfilesView {
+func buildProviderProfilesView(subscriptions config.ProviderSubscriptions, regionOverride ...string) providerProfilesView {
 	region := domain.DefaultProviderEndpointRegion
 	if len(regionOverride) > 0 && regionOverride[0] != "" {
 		region = regionOverride[0]
@@ -181,6 +182,14 @@ func buildProviderProfilesView(regionOverride ...string) providerProfilesView {
 		if profile.Withheld {
 			continue
 		}
+		// A product the operator has switched off is dropped for exactly the same
+		// reason, and it has to be dropped here rather than only refused on save:
+		// an Offering left in the metadata would be selectable, and choosing it
+		// would be answered by a refusal about a configuration file the person
+		// filling in a form is not looking at.
+		if !offeredProfile(subscriptions, profile.ID) {
+			continue
+		}
 		// A withheld peer is dropped for the same reason the withheld profile
 		// itself is: this list tells an operator which other implementations one
 		// credential opens, and the write path refuses to bind a withheld one. A
@@ -190,7 +199,7 @@ func buildProviderProfilesView(regionOverride ...string) providerProfilesView {
 		// then rejects.
 		combines := make([]domain.ProviderProfileID, 0)
 		for _, peer := range domain.ConnectionProfiles(profile.Type, profile.ID)[1:] {
-			if peer.Withheld {
+			if peer.Withheld || !offeredProfile(subscriptions, peer.ID) {
 				continue
 			}
 			combines = append(combines, peer.ID)
@@ -237,7 +246,7 @@ func buildProviderProfilesView(regionOverride ...string) providerProfilesView {
 }
 
 func (r *Runtime) getAdminProviderProfiles(writer http.ResponseWriter, _ *http.Request) {
-	writeJSON(writer, http.StatusOK, buildProviderProfilesView())
+	writeJSON(writer, http.StatusOK, buildProviderProfilesView(r.config.ProviderSubscriptions))
 }
 
 // offeringsForProfiles assembles a type's products out of the profiles this

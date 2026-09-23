@@ -49,6 +49,17 @@ func TestAdminProviderProfilesServesEveryTableRow(t *testing.T) {
 			}
 			continue
 		}
+		// This runtime carries the shipped default, where every subscription
+		// product is off. Serving one would put an Offering in the console that
+		// the write path then refuses, which is the drift this endpoint exists to
+		// prevent — and the refusal would name a configuration file the person
+		// filling in the form is not looking at.
+		if row.SubscriptionGated {
+			if _, served := served[row.ID]; served {
+				t.Errorf("%s is gated off by default but was served", row.ID)
+			}
+			continue
+		}
 		offered = append(offered, row)
 	}
 	if len(served) != len(offered) {
