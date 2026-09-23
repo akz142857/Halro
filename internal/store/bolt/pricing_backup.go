@@ -17,7 +17,7 @@ func (s *Store) ValidateDeploymentPriceReferences(state *ledger.State) error {
 	if state == nil {
 		return errors.New("Ledger state is required")
 	}
-	return s.db.View(func(tx *bbolt.Tx) error {
+	return s.view(func(tx *Tx) error {
 		prices := tx.Bucket(bucketDeploymentPriceVersions)
 		for _, pending := range state.PendingLeases() {
 			snapshot := pending.Reservation.PriceSnapshot
@@ -77,7 +77,7 @@ func (s *Store) ValidateDeploymentPriceReferences(state *ledger.State) error {
 	})
 }
 
-func validateSnapshotAgainstPrice(prices *bbolt.Bucket, snapshot domain.PriceSnapshot) error {
+func validateSnapshotAgainstPrice(prices *Bucket, snapshot domain.PriceSnapshot) error {
 	raw := prices.Get([]byte(snapshot.PriceVersionID))
 	if raw == nil {
 		return fmt.Errorf("references missing price %q", snapshot.PriceVersionID)
@@ -113,7 +113,7 @@ type PricingBackupState struct {
 func (s *Store) PricingBackupState() (PricingBackupState, error) {
 	stateHash, pendingHash := sha256.New(), sha256.New()
 	result := PricingBackupState{}
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		for _, name := range [][]byte{
 			bucketDeploymentPriceVersions, bucketDeploymentPriceTimeline, bucketDeploymentPricingHighWater,
 			bucketDeploymentPricePins, bucketDeploymentPriceNext, bucketPricingIdempotency,
@@ -156,7 +156,7 @@ func LegacyPricingBackupState(path string) (PricingBackupState, error) {
 	defer db.Close()
 	stateHash, pendingHash := sha256.New(), sha256.New()
 	result := PricingBackupState{}
-	err = db.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(db, func(tx *Tx) error {
 		for _, name := range [][]byte{bucketDeploymentPriceVersions, bucketDeploymentPriceTimeline, bucketDeploymentPricingHighWater, bucketDeploymentPricePins} {
 			bucket := tx.Bucket(name)
 			if bucket == nil {
@@ -193,7 +193,7 @@ func LegacyPricingBackupState(path string) (PricingBackupState, error) {
 
 type hashWriter interface{ Write([]byte) (int, error) }
 
-func hashBucketRecursive(hash hashWriter, bucket *bbolt.Bucket) error {
+func hashBucketRecursive(hash hashWriter, bucket *Bucket) error {
 	return bucket.ForEach(func(key, value []byte) error {
 		hash.Write(key)
 		if value != nil {

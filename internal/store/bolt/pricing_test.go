@@ -17,7 +17,7 @@ import (
 )
 
 func TestDeploymentPriceTimelineCreateSelectAndCancel(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestDeploymentPriceTimelineCreateSelectAndCancel(t *testing.T) {
 
 func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		for _, bucket := range [][]byte{bucketDeploymentPriceVersions, bucketDeploymentPriceTimeline, bucketDeploymentPriceNext, bucketDeploymentPricingHighWater, bucketPricingAuditIntents, bucketPricingIdempotency} {
 			if err := tx.DeleteBucket(bucket); err != nil && !errors.Is(err, bbolt.ErrBucketNotFound) {
 				return err
@@ -121,7 +121,7 @@ func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 	// one with migration provenance) is therefore no longer reachable from real
 	// data at all: legacy prices only exist alongside deployments. The coverage
 	// is gone with the upgrade path, not merely disabled here.
-	if _, err := Open(path); err == nil {
+	if _, err := openForTest(t, path); err == nil {
 		t.Fatal("legacy pricing data upgraded past schema 20")
 	} else if !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("refusal is not actionable: %v", err)
@@ -130,7 +130,7 @@ func TestVersionedPricingMigrationPreservesLegacyPriceAsEvidence(t *testing.T) {
 
 func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
+	if err := publishInto(db, func(tx *Tx) error {
 		for _, bucket := range [][]byte{bucketDeploymentPriceVersions, bucketDeploymentPriceTimeline, bucketDeploymentPriceNext, bucketDeploymentPricingHighWater, bucketPricingAuditIntents, bucketPricingIdempotency} {
 			if err := tx.DeleteBucket(bucket); err != nil && !errors.Is(err, bbolt.ErrBucketNotFound) {
 				return err
@@ -171,13 +171,13 @@ func TestVersionedPricingMigrationRejectsEnabledAmbiguousZeroPrice(t *testing.T)
 	// refused at schema 20 before any pricing decision arises. The ambiguity it
 	// guarded against can no longer be reached, so the refusal is what upgrading
 	// this fixture produces.
-	if _, err := Open(path); err == nil || !strings.Contains(err.Error(), "reinitialize the data directory") {
+	if _, err := openForTest(t, path); err == nil || !strings.Contains(err.Error(), "reinitialize the data directory") {
 		t.Fatalf("upgrade error=%v", err)
 	}
 }
 
 func TestPricingMutationAndAuditIntentCommitAtomically(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestPricingMutationAndAuditIntentCommitAtomically(t *testing.T) {
 }
 
 func TestPendingPricingAuditIntentsIgnoreDeliveredRecords(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func putRawPricingAuditIntent(t *testing.T, store *Store, intent domain.PricingA
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		return tx.Bucket(bucketPricingAuditIntents).Put([]byte(intent.EventID), encoded)
 	}); err != nil {
 		t.Fatal(err)
@@ -284,7 +284,7 @@ func putRawPricingAuditIntent(t *testing.T, store *Store, intent domain.PricingA
 }
 
 func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.
 		t.Fatalf("committed=%#v err=%v", committed, err)
 	}
 	var highWater domain.DeploymentPricingHighWater
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		return json.Unmarshal(tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte("dep_pin")), &highWater)
 	}); err != nil || !highWater.LatestSelectedAt.Equal(now) || !highWater.LatestObservedEffectiveFrom.Equal(price.EffectiveFrom) {
 		t.Fatalf("high-water=%#v err=%v", highWater, err)
@@ -326,7 +326,7 @@ func TestDeploymentPricePinPersistsHighWaterAndCommitsLedgerSequence(t *testing.
 }
 
 func TestDeploymentPricePinQuarantinesUnexplainedForwardJump(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestDeploymentPricePinQuarantinesUnexplainedForwardJump(t *testing.T) {
 		t.Fatalf("forward jump error=%v", err)
 	}
 	var highWater domain.DeploymentPricingHighWater
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		return json.Unmarshal(tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte("dep_forward")), &highWater)
 	}); err != nil || highWater.QuarantineReason != "wall_clock_forward_jump" {
 		t.Fatalf("high-water=%#v err=%v", highWater, err)
@@ -355,7 +355,7 @@ func TestDeploymentPricePinQuarantinesUnexplainedForwardJump(t *testing.T) {
 }
 
 func TestScheduledPriceCancellationIsBlockedByDurablePin(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestScheduledPriceCancellationIsBlockedByDurablePin(t *testing.T) {
 }
 
 func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T)
 	if err := store.RecoverDeploymentPricePins(ctx, state); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		if bucket.Get([]byte("att_orphan")) != nil {
 			return errors.New("orphan prepared pin was not deleted")
@@ -431,7 +431,7 @@ func TestPreparedPricePinRecoveryUsesLedgerSnapshotOrDeletesOrphan(t *testing.T)
 }
 
 func TestRestoreIncoherentPricingHighWaterIsPersistentlyQuarantined(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestRestoreIncoherentPricingHighWaterIsPersistentlyQuarantined(t *testing.T
 	if err := store.DeletePreparedDeploymentPricePin(ctx, "att_restore"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPricingHighWater)
 		var highWater domain.DeploymentPricingHighWater
 		if err := json.Unmarshal(bucket.Get([]byte("dep_restore")), &highWater); err != nil {
@@ -472,7 +472,7 @@ func TestRestoreIncoherentPricingHighWaterIsPersistentlyQuarantined(t *testing.T
 }
 
 func TestRestoreQuarantinesNewlyDueScheduledPriceUntilAuditedConfirmation(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +572,7 @@ func newStoredPrice(id, deploymentID string, effective time.Time) domain.Deploym
 // and the real pin path rather than a hand-built snapshot, because the property
 // under test is precisely that the two agree.
 func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -607,7 +607,7 @@ func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
 	if err != nil || digest != pin.SnapshotSHA256 {
 		t.Fatalf("digest=%q pin=%q err=%v", digest, pin.SnapshotSHA256, err)
 	}
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		return validateSnapshotAgainstPrice(tx.Bucket(bucketDeploymentPriceVersions), snapshot)
 	}); err != nil {
 		t.Fatalf("backup validation rejected a scheduled price snapshot: %v", err)
@@ -631,7 +631,7 @@ func TestScheduledPricePinReDerivesThroughTheBackupValidator(t *testing.T) {
 	if later.InputMicrosPerMillion == nil || *later.InputMicrosPerMillion != 400_000 {
 		t.Fatalf("off-peak pin = %#v, want the base rate", later.InputMicrosPerMillion)
 	}
-	if err := store.db.View(func(tx *bbolt.Tx) error {
+	if err := store.view(func(tx *Tx) error {
 		return validateSnapshotAgainstPrice(tx.Bucket(bucketDeploymentPriceVersions), later)
 	}); err != nil {
 		t.Fatalf("backup validation rejected the off-peak snapshot: %v", err)

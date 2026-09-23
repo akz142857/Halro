@@ -54,7 +54,7 @@ func TestKMSBackupManifestAndHistoricalDescriptorRemainImmutableAfterRewrap(t *t
 	}, harness.factory, time.Now, nil); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestKMSRestoreUsesStagedDescriptorForPrimaryAndExplicitRecovery(t *testing.
 			if payload, err := os.ReadFile(filepath.Join(result.PreviousDataDir, "post-backup-sentinel")); err != nil || string(payload) != "preserve in rollback" {
 				t.Fatalf("rollback payload=%q err=%v", payload, err)
 			}
-			store, err := boltstore.Open(cfg.MetadataPath())
+			store, err := openMetadataForTest(t, cfg)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +267,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(objectDir, deferredInputName), []byte(deferredInputCanary), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	if payload, err := os.ReadFile(filepath.Join(extracted, "data", "provider-objects", objectName)); err != nil || string(payload) != objectCanary {
 		t.Fatalf("restored provider object=%q err=%v", payload, err)
 	}
-	restoredStore, err := boltstore.Open(filepath.Join(extracted, "data", "metadata.db"))
+	restoredStore, err := openStagedMetadataForTest(t, filepath.Join(extracted, "data", "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestBackupRejectsMissingReferencedProviderObject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	metadata, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -823,7 +823,7 @@ func TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges(t *testing.T) {
 	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte("correct horse battery staple")); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -869,7 +869,7 @@ func TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restored, err := boltstore.Open(cfg.MetadataPath())
+	restored, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -914,7 +914,7 @@ func TestBackupSucceedsWhenTheStoredUsageCheckpointPredatesThisBuild(t *testing.
 	}, []byte("provider-secret")); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -228,7 +228,23 @@ data/
 | **C 节点派生** | `meta/usage_checkpoint` `meta/usage_rollup_state` `usage_checkpoint_segments` `usage_daily_rollup` `meta/token_guard_checkpoint` `meta/audit_checkpoint` `meta/ledger_chain_checkpoint` `meta/governance_checkpoint` `governance_checkpoint_segments` `meta/governance_journal_anchor` `audit_anchors` | **不进 journal**；每节点从自己的 Ledger/Audit/Governance 推进，Replica 只推进到 confirmed index（§6.2）。`token_guard_checkpoint` 含 `BlockedUntil` 封禁状态：它是派生的，但 Replica 上必须禁用 `runUsageMaintenance` 对它的写，否则提升后会被空 manager 覆盖 |
 | **D 密钥信封与格式门** | `meta/vault_keyring` `key_slot_descriptor` `audit_hmac_envelope` `ledger_hmac_envelope` `vault_key_check` | 经 journal 复制（Replica 打开 Ledger/Audit MAC 需要它们）；Master Key 本身带外（§10）；轮换 bridge 见 §6.1.4 |
 | **E 节点本地运营计数** | `meta/shutdown_truncated_attempts_total` | **不进 journal**。它是本节点 telemetry 的持久化背板（`internal/app/metrics.go:281`），不是账也不派生自任何日志 |
-| **C 节点派生（续）** | `route_suspensions` | **不进 journal、不复制**。准入挂起派生自本节点的流量：Replica 没有流量可学，提升后每个 target 用一次失败请求重新学到，代价是一次请求。复制它反而会把 Primary 观测到的拒绝当成 Replica 的事实。清除挂起是管理动作、与 `admin_audit_intents`（A 类）同事务提交——**这是唯一一处跨类同事务写**，Phase 0a 的 recorder 必须按"记录 A 类那一半、直通 C 类那一半"处理，而不是按混写拒绝 |
+| **C 节点派生（续）** | `route_suspensions` | **不进 journal、不复制**。准入挂起派生自本节点的流量：Replica 没有流量可学，提升后每个 target 用一次失败请求重新学到，代价是一次请求。复制它反而会把 Primary 观测到的拒绝当成 Replica 的事实。清除挂起是管理动作、与 `admin_audit_intents`（A 类）同事务提交，recorder 按"记录 A 类那一半、直通 C 类那一半"处理 |
+
+> **实测更正（Phase 0a 落地，2026-09-24）。** 上一行原文写的是"**这是唯一一处跨类同事务写**"。
+> 不是。把检查改成只报告不拒绝、跑完整套测试扫了一遍，生产代码里有**两处**：
+>
+> 1. 清除路由挂起 + 它的 `admin_audit_intents`（上一行描述的那处）；
+> 2. **Key Slot 初始化与 Master Key 改写**：五个 D 类密钥信封与 `meta/audit_checkpoint`（C 类）
+>    在同一事务里发布。理由与第一处同源——一个节点持有 Audit HMAC 信封却没有配套 checkpoint，
+>    就是拿着一把钥匙对着一条没有可信头的链；而 checkpoint 是每个节点自己的，Replica 从自己的
+>    Audit 日志推进它，发布时它本来就是每个节点都从零开始的那一个。
+>
+> 两处都落成 `internal/store/bolt/journal_class.go` 里 `crossClassWrites` 的显式条目：每条列出
+> **一个**本地写和它被允许同事务的**全部**复制写，其余一律拒绝。清单是量出来的，不是读代码读出来的。
+>
+> 另外两处数字更正：§6.1.1 写 `db.Update` 94 处，实测 **96** 处（另 `db.Batch` 1 处）；
+> `meta` 的分类必须按 `meta/<key>` 作标识去做跨类判断，按 bucket 名判断会把**每一个**
+> 写 `meta` 的事务都判成混写——这是第一版实现真实犯过的错。
 
 ### 5.3 其它状态
 
@@ -254,10 +270,20 @@ data/
 
 #### 6.1.1 为什么需要
 
-bbolt 没有日志，无法直接复制。`internal/store/bolt` 里的写事务全部在包内（`db.Update` 94 处 +
-`db.Batch` 1 处，包外无调用），Phase 0a 把它们收敛到**一个**会记录操作的事务入口。这条路径在
-**Standalone 也启用**——只在 HA 里存在的写路径永远得不到 Standalone 每天的测试覆盖。它要求
-bbolt schema bump 并**重新初始化数据目录**（pre-1.0.0 允许）。
+bbolt 没有日志，无法直接复制。`internal/store/bolt` 里的写事务全部在包内（实测 `db.Update`
+**96** 处 + `db.Batch` 1 处，包外无调用），Phase 0a 把它们收敛到**一个**会记录操作的事务入口。
+这条路径在 **Standalone 也启用**——只在 HA 里存在的写路径永远得不到 Standalone 每天的测试覆盖。
+
+> **实测更正（2026-09-24）：不需要重新初始化，也不需要 schema bump。** 本节原文预判两者都要。
+> 落地后都不要：已有数据目录没有 journal，attach 就以"当前这个 bbolt 文件"作为 epoch 1 的起始
+> 投影发布一份新的，并把派生出来的密钥封进 `meta/metadata_hmac_envelope`。拿真实数据目录的
+> 副本跑过：启动干净、`metadata journal epoch published epoch=1`、`halro doctor` 报
+> `epoch 1 authenticated through sequence 1`、重启续用同一 epoch。
+>
+> 这里没有沿用 Audit/Ledger 密钥那条"轮换过就拒绝派生"的门禁，是因为两者的失败形状不同：
+> 那两条链轮换后派生会得到一把从未签过名的密钥，于是每一帧历史都报成被篡改——信封丢失读起来
+> 像一次攻击。journal 打开时整条链当场验签，错密钥在第一帧就是 `ErrCorrupt`；而一个早于 journal
+> 的实例根本没有历史帧可以作废。
 
 #### 6.1.2 事务入口
 
@@ -289,6 +315,19 @@ ADR 0012 Amendment 的三条重跑前提（期望结果不当 error 返回、每
 `BenchmarkMetadataBatchDelay` 的 250 µs 调参迁到新层。
 
 **成本**：bbolt 一次 commit 已是两次 `fdatasync`（脏页、meta），加 journal 是三次。
+
+实测（`BenchmarkDeploymentPricePinCeiling`，同一台 darwin 参考机，前后两次构建对跑，100x；
+darwin 的 `Sync` 走 `F_FULLFSYNC`，所以这是悲观上界，不能外推到 Linux NVMe）：
+
+| 并发 | 改动前 attempts/s | 改动后 attempts/s | 变化 |
+|---|---|---|---|
+| 1 | 52.10 | 34.26 | −34% |
+| 8 | 369.0 | 248.6 | −33% |
+| 64 | 1210 | 1218 | 持平 |
+
+形状与预期一致：单写者多付一次 fsync，64 并发下合并层把这一帧摊掉，所以代价消失。
+§16.3 要的那个"含 bbolt 写的端到端基线"分母，bbolt 那一半就是这条基准（现已包含 journal），
+另一半是 `internal/budget` 的 `BenchmarkRequestLifecycle`。
 
 #### 6.1.3 谁在写 bbolt
 
@@ -765,8 +804,8 @@ HA 下"真实恢复"指恢复为新 incarnation、播种一个 Replica、并验�
 
 - **单个 Replica 或其 PVC 丢失**：按 §11.1 从 Primary 重新播种。不从旧 `.hmbk` 直接加入。
 - **整个集群丢失**：隔离旧网络与流量；校验 `.hmbk`、Backup Key、Master Key；`halro restore` 到一个
-  节点——restore 是整文件发布，journal 开新 epoch（归档里的 journal 只用于校验
-  `applied_journal_sequence`，不复用）——并赋予**新的 incarnation**；从它播种其它节点；校验后切流量。
+  节点——restore 是整文件发布，新 epoch 在暂存阶段就开好、与库同一次 rename 发布（归档里的 journal
+  只用于校验 `applied_journal_sequence`，不复用）——并赋予**新的 incarnation**；从它播种其它节点；校验后切流量。
   旧节点即使上线也因 incarnation 不匹配被拒（§8.2 行 1）。
 - **从 HA 退回 Standalone**：在选定节点上删除 `replication` 块并显式执行 `halro cluster leave --confirm`
   ——它写 `cluster.leave` Audit、清除 `cluster/`，目录作为普通 Standalone 目录打开；其它节点的目录
@@ -999,15 +1038,23 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 ## 18. 实施阶段
 
-### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）
+### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已落地 2026-09-24**
 
-1. `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务；
-2. 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2），ADR 0012 前提与测试迁移；
-3. journal 帧格式、MAC 域、epoch 规则（§6.1.4）、保留/裁剪、Standalone 崩溃恢复矩阵新增行；
-   schema bump，**要求重新初始化**；
-4. `doctor` / `backup create|verify|restore` / `config check` 认识 `metadata.journal`；journal↔bbolt
-   分歧诊断；
-5. 端到端基线基准（§16.3 分母）。
+1. ✅ `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务——`internal/store/bolt/journal_class.go`，
+   未分类即拒绝，没有默认值；跨类白名单两条（见 §5.2 的实测更正）；
+2. ✅ 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2）——`journal_entry.go`；ADR 0012 的三条重跑前提
+   原样保留，`BenchmarkMetadataWriteTransaction` / `BenchmarkMetadataBatchDelay` 迁到新层，
+   `metadataBatchDelay` 的 250 µs 现在要对着多一次 fsync 重新扫；
+3. ✅ journal 帧格式、MAC 域 `halro:metadata:v1`、epoch 规则（§6.1.4）、保留/裁剪（带签名的裁剪锚点，
+   Standalone 按字节阈值触发，与 Ledger seal 同一次 tick）、崩溃恢复矩阵新增 8 行；
+   **不需要 schema bump，也不需要重新初始化**（见 §6.1.1 的实测更正）；
+4. ✅ `doctor` 新增 `metadata_journal` 检查（只读：验签整条链、与 bbolt 记录的位置对比、分歧只报不修）；
+   `backup create` 把当前 epoch 收进归档、manifest 记 `metadata_journal_epoch` / `_sequence`；
+   `restore` 撤下归档里的 journal，并**在发布之前**就在暂存目录里开好新 epoch，所以库和它的
+   journal 是同一次 rename 发布的（§12.2）。原本打算留给首次启动去开——实测发现那样会留下一个
+   窗口：目录记着 epoch N 而文件不存在，`halro doctor` 报分歧，而它报得没错。
+   `config check` 无新增：`metadata.journal` 不由配置定位，路径是数据目录里的固定名字；
+5. ✅ 端到端基线基准（§16.3 分母）——见 §6.1.2 的实测表。
 
 ### Phase 0b：复制格式（[#106](https://github.com/akz142857/Halro/issues/106)）
 

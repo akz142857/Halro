@@ -230,6 +230,24 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
+	// Before anything reads or writes authoritative metadata: the journal is
+	// where those writes are recorded, and bringing the projection level with
+	// it is what turns a crash between a frame's fsync and its transaction's
+	// commit back into a consistent database. A divergence it cannot close
+	// stops the start rather than being papered over.
+	journalState, err := attachMetadataJournal(metadata, secretVault, masterKey, "start")
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	if journalState.Replayed > 0 {
+		logger.Warn("metadata journal replayed transactions the projection had not applied",
+			"replayed", journalState.Replayed, "sequence", journalState.Sequence)
+	}
+	if journalState.StartedEpoch {
+		logger.Info("metadata journal epoch published", "epoch", journalState.Epoch)
+	}
 	adminCount, err := metadata.AdminUserCount(ctx)
 	if err != nil {
 		metadata.Close()
@@ -1202,6 +1220,11 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// generation uncompressed for an extra interval for no reason.
 			r.sealLedgerGeneration()
 			r.compactLedgerSegments()
+			// Same tick, same shape: a size threshold on an append-only file
+			// whose prefix is already held somewhere else. The journal's
+			// prefix is held by bbolt, which is what makes the applied
+			// sequence a safe cut under Standalone.
+			r.trimMetadataJournal()
 		case <-ctx.Done():
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()

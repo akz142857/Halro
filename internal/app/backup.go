@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,10 +223,20 @@ func restoreBackupWithFactory(
 			return RestoreResult{}, err
 		}
 	}
+	// The archived journal is evidence, not state to resume. A restore is a
+	// whole-file publish of the projection, so the chain the archive carries
+	// stops describing the database the moment it is published (§6.1.4, §12.2).
+	// It is withdrawn before validation, because validation is also where the
+	// restored directory's own epoch is opened — and that has to be a new one,
+	// not a continuation of somebody else's chain.
+	if err := os.Remove(filepath.Join(stageData, boltstore.MetadataJournalFileName)); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return RestoreResult{}, fmt.Errorf("withdraw the archived metadata journal: %w", err)
+	}
 	if err := validateRestoreStage(ctx, cfg, stageData, manifest, purpose, factory); err != nil {
 		return RestoreResult{}, err
 	}
-	stageStore, err := boltstore.Open(stageMetadata)
+	stageStore, err := boltstore.OpenForWholeFilePublish(stageMetadata)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
 	}
@@ -309,7 +320,7 @@ func validateRestoreStage(
 	factory kmsWrapperFactory,
 ) error {
 	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupState(filepath.Join(stageData, cfg.Storage.MetadataFile))
-	metadata, err := boltstore.Open(filepath.Join(stageData, cfg.Storage.MetadataFile))
+	metadata, err := boltstore.OpenForWholeFilePublish(filepath.Join(stageData, cfg.Storage.MetadataFile))
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
@@ -376,11 +387,25 @@ func validateRestoreStage(
 		return err
 	}
 	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
-	secretVault.Close()
-	clear(masterKey)
 	if err != nil {
+		secretVault.Close()
+		clear(masterKey)
 		clear(auditKey)
 		return err
+	}
+	// Open the restored projection's journal epoch here, while the staged tree
+	// is still staged: the rename below publishes the database and its journal
+	// together, so there is no window in which a data directory follows an
+	// epoch whose file does not exist. Deferring it to the first start left
+	// exactly that window, and `halro doctor` was right to call it a
+	// divergence — which is how it was found.
+	journalErr := attachStagedMetadataJournal(metadata, secretVault, masterKey)
+	secretVault.Close()
+	clear(masterKey)
+	if journalErr != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		return journalErr
 	}
 	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
 	if err != nil {
@@ -593,6 +618,21 @@ func createBackupSnapshotWithLedger(
 	if err != nil {
 		return backup.Manifest{}, err
 	}
+	// Copied after the snapshot, so the journal in the archive is at least as
+	// long as the position the snapshot recorded. The other direction would be
+	// a journal that cannot explain the database beside it.
+	metadataJournalSnapshot := filepath.Join(staging, boltstore.MetadataJournalFileName)
+	journalStaged := true
+	if err := copyFileForBackup(metadata.MetadataJournalPath(), metadataJournalSnapshot); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return backup.Manifest{}, fmt.Errorf("stage metadata journal: %w", err)
+		}
+		// A data directory that has not started since the journal was
+		// introduced has none yet, and the database is its own starting
+		// projection. The manifest's zero epoch says so; inventing an empty
+		// file would claim a chain that does not exist.
+		journalStaged = false
+	}
 	pricingBackupState, err := metadata.PricingBackupState()
 	if err != nil {
 		return backup.Manifest{}, err
@@ -702,9 +742,19 @@ func createBackupSnapshotWithLedger(
 	files := []backup.SourceFile{
 		{ArchivePath: "config/config.yaml", LocalPath: configPath},
 		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
+
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
 		{ArchivePath: "data/governance/governance.journal", LocalPath: cfg.GovernancePath()},
+	}
+	if journalStaged {
+		// The journal's current epoch (HA design §12.1). A restore does not
+		// reuse it — restore is a whole-file publish and starts a fresh epoch —
+		// but without it the archive cannot show that the metadata snapshot
+		// sits at the position its manifest claims.
+		files = append(files, backup.SourceFile{
+			ArchivePath: "data/" + boltstore.MetadataJournalFileName, LocalPath: metadataJournalSnapshot,
+		})
 	}
 	for _, name := range stagedSegments {
 		files = append(files, backup.SourceFile{
@@ -836,4 +886,45 @@ func appendBackupAudit(
 func pathWithin(candidate, directory string) bool {
 	relative, err := filepath.Rel(filepath.Clean(directory), filepath.Clean(candidate))
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
+}
+
+// copyFileForBackup stages one file into the archive's staging directory.
+//
+// It copies rather than referencing the live path because the staging
+// directory is what the archive is built from, and a file that changed between
+// staging and archiving would produce a manifest describing bytes the archive
+// does not contain.
+func copyFileForBackup(source, destination string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// attachStagedMetadataJournal publishes the next journal epoch into a staged
+// data directory.
+//
+// The staged store records nothing — it is how the next projection is built,
+// not an operation inside one — but the attach itself writes the epoch and the
+// applied sequence on the raw transaction, and creates the file. Both travel
+// with the rename.
+func attachStagedMetadataJournal(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte) error {
+	if _, err := attachMetadataJournal(store, secretVault, masterKey, "backup restore"); err != nil {
+		return fmt.Errorf("publish the restored metadata journal epoch: %w", err)
+	}
+	return nil
 }

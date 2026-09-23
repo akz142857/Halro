@@ -20,7 +20,7 @@ func testAdminUser(username, role string, now time.Time) domain.AdminUser {
 }
 
 func TestListAdminUsersReturnsEveryAdministratorOrderedByUsername(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestListAdminUsersReturnsEveryAdministratorOrderedByUsername(t *testing.T) 
 }
 
 func TestDeleteAdminUserRemovesSessionsAndMFAState(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestDeleteAdminUserRemovesSessionsAndMFAState(t *testing.T) {
 }
 
 func TestDeleteAdminUserRejectsRevisionConflictAndMissingUser(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestDeleteAdminUserRejectsRevisionConflictAndMissingUser(t *testing.T) {
 }
 
 func TestAdminUserMutationsCommitTheirAuditIntentAtomically(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestAdminUserMutationsCommitTheirAuditIntentAtomically(t *testing.T) {
 }
 
 func TestFirstAdminBootstrapCommitsCompletionAndAuditIntentAtomically(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestFirstAdminBootstrapCommitsCompletionAndAuditIntentAtomically(t *testing
 }
 
 func TestFirstAdminBootstrapRefusesAnUntrackedExistingAdministrator(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestFirstAdminBootstrapRefusesAnUntrackedExistingAdministrator(t *testing.T
 }
 
 func TestFirstAdminBootstrapRejectsUnsafeOperationID(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

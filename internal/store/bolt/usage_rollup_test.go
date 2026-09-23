@@ -28,7 +28,7 @@ func totalRollupKey() domain.RollupKey {
 // incremental path and a full rebuild produce different numbers from the same
 // ledger.
 func TestUsageRollupIncrementsAccumulate(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestUsageRollupIncrementsAccumulate(t *testing.T) {
 // one day's traffic can be filed under another's heading and the total that
 // reads by key prefix would silently include it.
 func TestUsageRollupRejectsRowsThatContradictTheirKey(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestUsageRollupRejectsRowsThatContradictTheirKey(t *testing.T) {
 // The two derivatives are discarded together. Leaving the rows behind while the
 // checkpoint goes would double every stored number on the next replay.
 func TestResetUsageDerivativesClearsBothViews(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestResetUsageDerivativesClearsBothViews(t *testing.T) {
 // "models/...", Bedrock inference profiles are ARNs — so the separator has to
 // be one the key cannot contain, and the scan has to stay inside its prefix.
 func TestUsageRollupKeysSurviveSlashesInDimensionValues(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func dimensionRows(t *testing.T, store *Store) map[string]domain.DailyRollup {
 // and the folded row still carries its attempts so the dimension keeps adding
 // up to the day's total.
 func TestUsageRollupBoundsKeysPerDimension(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestUsageRollupBoundsKeysPerDimension(t *testing.T) {
 // sequence that first produced each row is what makes those the same.
 func TestUsageRollupCapIsIndependentOfIncrementBatching(t *testing.T) {
 	oneShot := func(t *testing.T, batches int) map[string]domain.DailyRollup {
-		store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+		store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -17,7 +17,6 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/routegate"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -27,7 +26,7 @@ import (
 // asserting half the answer.
 func suspensionRuntime(t *testing.T, gate *routegate.Gate, now time.Time) *Runtime {
 	t.Helper()
-	store, err := boltstore.Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openStagedMetadataForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

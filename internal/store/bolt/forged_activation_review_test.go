@@ -18,7 +18,7 @@ func (rejectingBoltCandidateVerifier) VerifyCandidate(context.Context, []byte) e
 }
 
 func TestStoreActivationCannotBypassCandidateVerification(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestStoreActivationCannotBypassCandidateVerification(t *testing.T) {
 }
 
 func TestPutKeySlotDescriptorRejectsNonPristineSeed(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

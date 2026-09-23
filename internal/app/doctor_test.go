@@ -19,7 +19,6 @@ import (
 
 	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/domain"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 )
 
@@ -184,7 +183,7 @@ func TestDoctorAcceptsAuditedAdministratorRotationAfterBootstrap(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

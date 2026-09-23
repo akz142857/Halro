@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
-func migrateProviderProfileBindings(tx *bbolt.Tx, step func(string) error) error {
+func migrateProviderProfileBindings(tx *Tx, step func(string) error) error {
 	if err := migrationStep(step, "before_migrate_provider_profile_bindings"); err != nil {
 		return err
 	}
@@ -49,7 +48,7 @@ func migrateProviderProfileBindings(tx *bbolt.Tx, step func(string) error) error
 	return migrationStep(step, "after_migrate_provider_profile_bindings")
 }
 
-func migrateProviderProfiles(tx *bbolt.Tx, step func(string) error) error {
+func migrateProviderProfiles(tx *Tx, step func(string) error) error {
 	if err := migrationStep(step, "before_migrate_provider_profiles"); err != nil {
 		return err
 	}
@@ -164,7 +163,7 @@ func (s *Store) PutCredential(ctx context.Context, credential domain.Credential,
 	if err := ctx.Err(); err != nil {
 		return domain.Credential{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketCredentials)
 		if err := putVersioned(bucket, credential.ID, expectedRevision, &credential); err != nil {
 			return err
@@ -201,7 +200,7 @@ func (s *Store) DeleteCredential(ctx context.Context, id string, expectedRevisio
 	if id == "" || expectedRevision == 0 {
 		return errors.New("credential id and expected revision are required")
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketCredentials)
 		raw := bucket.Get([]byte(id))
 		if raw == nil {
@@ -233,7 +232,7 @@ func (s *Store) PutProvider(ctx context.Context, provider domain.ProviderInstanc
 	if err := ctx.Err(); err != nil {
 		return domain.ProviderInstance{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		rawCredential := tx.Bucket(bucketCredentials).Get([]byte(provider.CredentialID))
 		if rawCredential == nil {
 			return fmt.Errorf("credential %q: %w", provider.CredentialID, ErrNotFound)
@@ -336,7 +335,7 @@ func (s *Store) PutRoute(ctx context.Context, route domain.Route, expectedRevisi
 	if err := ctx.Err(); err != nil {
 		return domain.Route{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		rawDeployment := tx.Bucket(bucketDeployments).Get([]byte(route.DeploymentID))
 		if rawDeployment == nil {
 			return fmt.Errorf("deployment %q: %w", route.DeploymentID, ErrNotFound)
@@ -383,7 +382,7 @@ func (s *Store) ListRoutes(ctx context.Context) ([]domain.Route, error) {
 	return routes, err
 }
 
-func ensureCredentialUnreferenced(tx *bbolt.Tx, credentialID string) error {
+func ensureCredentialUnreferenced(tx *Tx, credentialID string) error {
 	for _, bucketName := range [][]byte{bucketProviders, bucketAlertWebhooks, bucketProviderEgressProxies} {
 		err := tx.Bucket(bucketName).ForEach(func(_, raw []byte) error {
 			if raw == nil {
@@ -413,7 +412,7 @@ func (s *Store) PutProviderResource(ctx context.Context, resource domain.Provide
 	if err := resource.Validate(); err != nil {
 		return domain.ProviderResource{}, err
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		// A new resource may only be created against live owners. Updates are
 		// exempt: a batch keeps being polled and settled after its deployment is
 		// tombstoned, and refusing the status write would strand the record.
@@ -569,7 +568,7 @@ func selectsDeferredPending(raw []byte, projectID string) (bool, error) {
 // decoding the records in it. Admission needs the number and nothing else.
 func (s *Store) CountPendingDeferredResponses(ctx context.Context, projectID string) (int64, error) {
 	var depth int64
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -592,7 +591,7 @@ func (s *Store) CountPendingDeferredResponses(ctx context.Context, projectID str
 
 func (s *Store) PendingDeferredResponses(ctx context.Context, projectID string) ([]domain.ProviderResource, error) {
 	var pending []domain.ProviderResource
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketProviderResources).ForEach(func(_, raw []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -634,7 +633,7 @@ func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID str
 	}
 	var found domain.ProviderResource
 	var exists bool
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		holder := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(projectID, kind, keyHash))
 		if holder == nil {
 			return nil
@@ -662,7 +661,7 @@ func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID str
 }
 
 func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketProviderResources)
 		raw := bucket.Get([]byte(id))
 		if raw == nil {
@@ -693,7 +692,7 @@ func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string
 
 func (s *Store) ExpiredProviderResources(ctx context.Context, now time.Time) ([]domain.ProviderResource, error) {
 	var expired []domain.ProviderResource
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketProviderResources)
 		cursor := bucket.Cursor()
 		for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {

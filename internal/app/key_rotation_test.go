@@ -26,7 +26,7 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	defer clear(oldKey)
 	defer clear(oldAuditKey)
 
-	beforeStore, err := boltstore.Open(cfg.MetadataPath())
+	beforeStore, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestMasterKeyRotationReencryptsCredentialsAndPreservesAuditChain(t *testing
 	}
 	clear(activeKey)
 
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,11 @@ func TestMasterKeyRotationRecoversFromEveryPublicationKillPoint(t *testing.T) {
 			_, err := rotateMasterKeyWithHook(context.Background(), cfg, newKeyFile, func(current string) error {
 				if current == point {
 					if current == "after_metadata_publish" {
-						store, openErr := boltstore.Open(cfg.MetadataPath())
+						// Read only: the metadata already carries the new
+						// envelopes while master.key still holds the old key,
+						// so attaching a journal here would try to unwrap with
+						// the wrong one.
+						store, openErr := openMetadataReadForTest(t, cfg)
 						if openErr != nil {
 							return openErr
 						}
@@ -260,7 +264,7 @@ func TestMasterKeyRotationAdvancesPersistentKeyringAcrossRotations(t *testing.T)
 		second.OldKeyVersion != 2 || second.NewKeyVersion != 3 {
 		t.Fatalf("first=%#v second=%#v", first, second)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +327,7 @@ func rotationFixture(t *testing.T) (config.Config, string, string, []byte, []byt
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +382,7 @@ func assertCompletedRotation(t *testing.T, cfg config.Config, newKeyFile, creden
 		t.Fatal("recovered active master key differs from requested key")
 	}
 	clear(active)
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

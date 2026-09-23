@@ -11,7 +11,7 @@ func TestMigration22RefusesRoutesWithNoDeployment(t *testing.T) {
 	path := t.TempDir() + "/metadata.db"
 	createV2MetadataWithRoutes(t, path, 3)
 
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err == nil {
 		store.Close()
 		t.Fatal("a directory holding deployment-less routes was opened")
@@ -25,7 +25,7 @@ func TestMigration22RefusesRoutesWithNoDeployment(t *testing.T) {
 
 // A fresh directory is the ordinary case and must be untouched by the gate.
 func TestMigration22DoesNotAffectAFreshDirectory(t *testing.T) {
-	store, err := Open(t.TempDir() + "/metadata.db")
+	store, err := openForTest(t, t.TempDir()+"/metadata.db")
 	if err != nil {
 		t.Fatalf("a fresh directory was refused: %v", err)
 	}

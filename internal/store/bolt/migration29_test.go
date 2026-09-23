@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
-
-	bbolt "go.etcd.io/bbolt"
 )
 
 // Migration 29 moves a stored project's authorization list from the key that
@@ -18,11 +16,11 @@ func TestMigration29RenamesProjectAllowedModels(t *testing.T) {
 
 	// A current-format directory, downgraded to schema 28 with one project
 	// record still holding the legacy key.
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.db.Update(func(tx *bbolt.Tx) error {
+	err = store.update(func(tx *Tx) error {
 		record := map[string]any{
 			"id": "project_legacy", "name": "Legacy", "enabled": true,
 			"allowed_routes": []string{"chat", "embed"},
@@ -47,7 +45,7 @@ func TestMigration29RenamesProjectAllowedModels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := Open(path)
+	migrated, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +58,7 @@ func TestMigration29RenamesProjectAllowedModels(t *testing.T) {
 		t.Fatalf("allowed models were not carried across the rename: %#v", project.AllowedModels)
 	}
 	// The legacy key is gone from the stored bytes, not merely shadowed.
-	err = migrated.db.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(migrated.db, func(tx *Tx) error {
 		raw := tx.Bucket(bucketProjects).Get([]byte("project_legacy"))
 		var record map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &record); err != nil {

@@ -11,7 +11,6 @@ import (
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/masterkey"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -82,7 +81,7 @@ func TestKMSMasterKeyRotationRefusesRetainedProviderObjectBeforeMutation(t *test
 	}); !errors.Is(err, errRetainedVaultCiphertext) {
 		t.Fatalf("rotation error = %v, want retained ciphertext refusal", err)
 	}
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	metadata, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

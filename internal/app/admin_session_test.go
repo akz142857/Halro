@@ -186,7 +186,7 @@ func TestAdminBootstrapReplayFailsWhenCompletionLostItsAuditEvidence(t *testing.
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestAdminBootstrapReplayRecoversPendingAuditAfterCommitCrash(t *testing.T) 
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestAdminBootstrapReplayRecoversPendingAuditAfterCommitCrash(t *testing.T) 
 	if _, err := VerifyAudit(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
