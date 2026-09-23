@@ -13,7 +13,7 @@ import (
 )
 
 const validConfig = `
-version: 1
+version: 2
 server:
   gateway_listen: "127.0.0.1:8080"
   admin_listen: "127.0.0.1:8081"

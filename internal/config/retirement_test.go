@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -287,5 +288,105 @@ func TestMigrationWritesIntoAnExistingSection(t *testing.T) {
 	}
 	if time.Duration(cfg.Routing.MaxSuspendFor) != 15*time.Minute {
 		t.Errorf("max_suspend_for=%s, want the 15m the operator had already written", time.Duration(cfg.Routing.MaxSuspendFor))
+	}
+}
+
+// TestMigrationAdvancesTheSchemaVersion is what makes `version` mean something.
+// It shipped as 1 in every release from v0.3.0 to v0.8.5, across two
+// retirements, so a file could not say which shape it was — and an exact-equality
+// check against a constant that never moved was inert.
+func TestMigrationAdvancesTheSchemaVersion(t *testing.T) {
+	for _, path := range releaseSnapshots(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := Migrate(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Refusals) > 0 {
+				return
+			}
+			cfg, err := Decode(strings.NewReader(string(result.Output)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Version != SchemaVersion {
+				t.Errorf("version=%d after migration, want %d", cfg.Version, SchemaVersion)
+			}
+		})
+	}
+}
+
+// TestAStaleVersionAloneIsMigrated covers the file that has no retired key left
+// — an operator who already did the edit by hand — but still declares the older
+// shape. It has somewhere to go, and is told so rather than only refused.
+func TestAStaleVersionAloneIsMigrated(t *testing.T) {
+	current := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d", SchemaVersion), "version: 1", 1)
+	if !strings.Contains(current, "version: 1") {
+		t.Fatal("the template no longer carries a version line this test can age")
+	}
+	if _, err := Decode(strings.NewReader(current)); err != nil {
+		t.Fatalf("an aged current config should still decode: %v", err)
+	}
+	result, err := Migrate([]byte(current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 {
+		t.Fatalf("actions=%d, want the version line alone", len(result.Actions))
+	}
+	cfg, err := Load(writeTemp(t, result.Output), LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != SchemaVersion {
+		t.Errorf("version=%d, want %d", cfg.Version, SchemaVersion)
+	}
+}
+
+// TestAVersionFromTheFutureIsRefused is the direction with no way forward.
+// Repairing a shape this binary has never seen would be the fail-open half of
+// the same check.
+func TestAVersionFromTheFutureIsRefused(t *testing.T) {
+	ahead := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d", SchemaVersion),
+		fmt.Sprintf("version: %d", SchemaVersion+1), 1)
+
+	cfg, err := Decode(strings.NewReader(ahead))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.Validate(LoadOptions{})
+	if err == nil {
+		t.Fatal("a configuration from a newer Halro was accepted")
+	}
+	if !strings.Contains(err.Error(), "newer Halro") {
+		t.Errorf("error does not say which direction is wrong: %v", err)
+	}
+
+	result, migrateErr := Migrate([]byte(ahead))
+	if migrateErr != nil {
+		t.Fatal(migrateErr)
+	}
+	if len(result.Refusals) == 0 {
+		t.Error("the migration offered to move a newer file backwards")
+	}
+}
+
+// TestAConfigWithNoVersionIsRefused keeps the migration from guessing. No
+// release ever shipped a file without one, so an absent version is a file
+// whose shape is unknown rather than an old one.
+func TestAConfigWithNoVersionIsRefused(t *testing.T) {
+	stripped := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d\n", SchemaVersion), "", 1)
+	if _, err := Migrate([]byte(stripped)); err == nil {
+		t.Fatal("migrated a configuration that declares no version")
 	}
 }

@@ -27,7 +27,7 @@ func TestEncryptedBackupCreateVerifyAndSecretConfidentiality(t *testing.T) {
 	if err := os.WriteFile(wal, []byte("ledger"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config, []byte("version: 1"), 0o600); err != nil {
+	if err := os.WriteFile(config, []byte("version: 2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(audit, []byte("audit"), 0o600); err != nil {

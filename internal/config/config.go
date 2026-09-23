@@ -19,7 +19,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const SchemaVersion = 1
+// SchemaVersion is the shape of the configuration file this binary writes and
+// reads. It advances when a key is retired, which is what gives a file's
+// `version` something to say: v0.3.0 through v0.8.5 all shipped version 1
+// across two retirements, so the key recorded nothing and an older file could
+// not be told apart from a current one. `halro config migrate` is what moves a
+// file from one version to the next.
+const SchemaVersion = 2
 
 type Config struct {
 	Version               int                   `yaml:"version"`
@@ -1041,8 +1047,19 @@ func (c *Config) Normalize() error {
 
 func (c Config) Validate(opts LoadOptions) error {
 	var problems []error
-	if c.Version != SchemaVersion {
-		problems = append(problems, fmt.Errorf("version must be %d", SchemaVersion))
+	switch {
+	case c.Version < SchemaVersion:
+		// Directional on purpose. An older file has a way forward and is told
+		// it; a newer one does not, and guessing at a shape this binary has
+		// never seen is the fail-open version of this check.
+		problems = append(problems, fmt.Errorf(
+			"version is %d and this Halro writes %d: run `halro config migrate --config <path>` "+
+				"to see what moved, then again with --write", c.Version, SchemaVersion))
+	case c.Version > SchemaVersion:
+		problems = append(problems, fmt.Errorf(
+			"version is %d and this Halro only knows %d, so the file was written by a newer "+
+				"Halro; run that one, or start from a configuration this version wrote",
+			c.Version, SchemaVersion))
 	}
 	if c.Storage.DataDir == "" {
 		problems = append(problems, errors.New("storage.data_dir is required"))

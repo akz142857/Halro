@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -198,11 +199,22 @@ func Migrate(source []byte) (MigrationResult, error) {
 		return MigrationResult{}, fmt.Errorf("parse config: %w", err)
 	}
 	found := findRetired(&root)
-	if len(found) == 0 {
+	declared, versionLine, err := declaredVersion(&root)
+	if err != nil {
+		return MigrationResult{}, err
+	}
+	if len(found) == 0 && declared == SchemaVersion {
 		return MigrationResult{Output: source}, nil
 	}
 
 	var result MigrationResult
+	if declared > SchemaVersion {
+		result.Refusals = append(result.Refusals, fmt.Sprintf(
+			"version is %d and this Halro only knows %d: the file was written by a newer Halro, "+
+				"and nothing here can migrate a shape it has never seen backwards",
+			declared, SchemaVersion))
+		return result, nil
+	}
 	for _, retirement := range found {
 		if retirement.Judgement != "" {
 			result.Refusals = append(result.Refusals, fmt.Sprintf(
@@ -218,6 +230,14 @@ func Migrate(source []byte) (MigrationResult, error) {
 	edits, err := planEdits(&root, lines, found)
 	if err != nil {
 		return MigrationResult{}, err
+	}
+	if declared != SchemaVersion {
+		edits = append(edits, edit{
+			start:       versionLine,
+			end:         versionLine,
+			replacement: []string{fmt.Sprintf("version: %d", SchemaVersion)},
+			description: fmt.Sprintf("advance the schema version from %d to %d", declared, SchemaVersion),
+		})
 	}
 	// Descending, so an earlier edit's line numbers stay valid.
 	sort.Slice(edits, func(a, b int) bool { return edits[a].start > edits[b].start })
@@ -240,6 +260,21 @@ func Migrate(source []byte) (MigrationResult, error) {
 	}
 	result.Output = output
 	return result, nil
+}
+
+// declaredVersion reads the file's own `version`, which says which shape of
+// configuration it is. A file that declares none is not a shape any release
+// shipped, and inventing one would be guessing at what the rest of the file
+// means — so it is refused rather than repaired.
+func declaredVersion(root *yaml.Node) (version, line int, err error) {
+	key, value := lookupPath(root, "version")
+	if key == nil {
+		return 0, 0, errors.New("the configuration declares no `version`, so there is no shape to migrate from; add `version: 1` if this file came from a release, or start from the file `halro start` writes")
+	}
+	if _, scanErr := fmt.Sscanf(value.Value, "%d", &version); scanErr != nil {
+		return 0, 0, fmt.Errorf("the configuration's `version` is %q, which is not a schema version", value.Value)
+	}
+	return version, key.Line, nil
 }
 
 // loadsAfterMigration is the guarantee that a file this wrote passes

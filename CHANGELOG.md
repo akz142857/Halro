@@ -19,6 +19,9 @@ semantic versioning.
   `tools/release/prepare_release.py`, and the test is one sentence: a released
   configuration, migrated, must load.
 
+  It advances the file's `version` as part of the same edit, which is what that
+  key is for and what it had never done.
+
   The command is deliberately not a compatibility layer and never runs on start.
   The runtime still reads no retired key; this edits the file so the retired key
   stops existing, at a moment the operator chose. It prints the edit and writes
@@ -37,6 +40,20 @@ semantic versioning.
   value would widen a security window on the operator's behalf.
 
 ### Changed
+
+- **The configuration schema version advances, and a configuration file now says
+  which shape it is.** `version` shipped as `1` in every release from v0.3.0 to
+  v0.8.5 — across two retirements — so the key recorded nothing and the
+  exact-equality check against it was inert. It is `2` as of this change, and
+  `halro config migrate` moves a file from one version to the next.
+
+  The check is now directional, because the two directions do not have the same
+  answer: an older file has a way forward and is told what it is, while a file
+  from a newer Halro is refused outright. Repairing a shape this binary has
+  never seen would be the fail-open half of the same check.
+
+  Operators editing a configuration by hand: the `version:` line becomes `2`,
+  which is what `config migrate` writes for you. No data directory is affected.
 
 - A retired configuration key now names the key that replaced it and why, from
   one table rather than a hand-written branch per removal. `circuit_breaker` had

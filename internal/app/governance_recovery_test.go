@@ -250,7 +250,7 @@ func governanceBackupFixture(t *testing.T) (configPath string, cfg config.Config
 		t.Fatal(err)
 	}
 	configPath = filepath.Join(filepath.Dir(cfg.Storage.DataDir), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		log.Close()
 		clear(key)
 		store.Close()

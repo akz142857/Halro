@@ -13,7 +13,7 @@
 # The complete annotated reference is configs/config.example.yaml.
 # Restart Halro after editing this file.
 
-version: 1
+version: 2
 
 server:
   # Loopback by default: nothing here is exposed to the network until you say
