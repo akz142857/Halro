@@ -44,11 +44,7 @@ type Config struct {
 	Audit                 Audit                 `yaml:"audit"`
 	ModelCatalog          ModelCatalog          `yaml:"model_catalog"`
 	ProviderSubscriptions ProviderSubscriptions `yaml:"provider_subscriptions"`
-	// LegacyProviders keeps v0.8.1 configuration files readable. Provider
-	// connection defaults moved into the Admin-managed credential workflow in
-	// v0.8.2, so this section is validated but no longer drives runtime state.
-	LegacyProviders LegacyProviders `yaml:"providers,omitempty"`
-	Logging         Logging         `yaml:"logging"`
+	Logging               Logging               `yaml:"logging"`
 }
 
 // Logging configures the process log: what is written, in which encoding, and
@@ -390,41 +386,6 @@ type ModelCapabilityDetection struct {
 	ProviderConcurrency int      `yaml:"provider_concurrency"`
 	MaxProviderCalls    int      `yaml:"max_provider_calls"`
 	CreateRPM           int      `yaml:"create_rpm"`
-}
-
-// LegacyProviders is the retired v0.8.1 providers section. It remains in the
-// decoding contract because configuration uses KnownFields: deleting the Go
-// field would turn a supported in-place upgrade into a startup failure before
-// the operator had any chance to remove the obsolete YAML.
-type LegacyProviders struct {
-	Bedrock LegacyBedrockProvider `yaml:"bedrock"`
-}
-
-type LegacyBedrockProvider struct {
-	Region string `yaml:"region"`
-}
-
-const maxLegacyBedrockRegionLength = 64
-
-func validLegacyBedrockRegion(region string) bool {
-	if region == "" || len(region) > maxLegacyBedrockRegionLength || region[0] == '-' || region[len(region)-1] == '-' {
-		return false
-	}
-	previousHyphen := false
-	for _, character := range region {
-		switch {
-		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
-			previousHyphen = false
-		case character == '-':
-			if previousHyphen {
-				return false
-			}
-			previousHyphen = true
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // ProviderSubscriptions decides whether this instance offers the consumer
@@ -806,7 +767,6 @@ func (c *Config) Normalize() error {
 	// Keep the v0.8.1 normalization contract even though the value is now
 	// compatibility-only. Harmless surrounding whitespace must not turn an
 	// existing valid file into an upgrade failure.
-	c.LegacyProviders.Bedrock.Region = strings.TrimSpace(c.LegacyProviders.Bedrock.Region)
 	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
 		// Omitting the ceiling means "whatever is sane", not "track nothing".
 		// Kept in step with sourcelimit.DefaultMaxTrackedSources by
@@ -1100,9 +1060,6 @@ func (c Config) Validate(opts LoadOptions) error {
 		} else if _, err := hex.DecodeString(strings.TrimPrefix(pin, "sha256:")); err != nil {
 			problems = append(problems, errors.New("model_catalog.pinned_revision must be a sha256 digest"))
 		}
-	}
-	if region := c.LegacyProviders.Bedrock.Region; region != "" && !validLegacyBedrockRegion(region) {
-		problems = append(problems, errors.New("providers.bedrock.region must be an AWS region name such as us-east-1"))
 	}
 	if c.TLS.Enabled {
 		if len(c.TLS.Certificates) == 0 {

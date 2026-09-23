@@ -57,6 +57,17 @@ var retirements = []Retirement{
 			"became one policy for every step-up endpoint",
 	},
 	{
+		Path: "providers",
+		Why: "provider connection defaults moved into the Admin-managed credential workflow, " +
+			"where a connection is an object with a revision and an audit trail rather than a " +
+			"line in a file the gateway reads at boot",
+	},
+	{
+		Path: "providers.bedrock.region",
+		Why: "the region belongs to the Bedrock credential the console holds, and is chosen " +
+			"per connection rather than once per instance",
+	},
+	{
 		Path: "gateway.stream_idle_timeout",
 		Why: "it was declared, defaulted, validated as positive and documented, and read by " +
 			"nothing — an operator who set it changed no behaviour and had no way to find that out",

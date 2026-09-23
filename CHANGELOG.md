@@ -56,6 +56,20 @@ semantic versioning.
   Operators editing a configuration by hand: the `version:` line becomes `2`,
   which is what `config migrate` writes for you. No data directory is affected.
 
+- **The v0.8.1 `providers` section is refused rather than accepted.** It was
+  kept in the decoding contract when provider connections moved into the
+  Admin-managed credential workflow, so `providers.bedrock.region` was decoded,
+  trimmed and validated while nothing read it — an operator who still had it
+  believed it was choosing the region their Bedrock calls used, and the fact
+  that the value was checked made it look acted on. It is a row in the
+  retirement table now, with the same refusal and the same way out as every
+  other retired key: `config migrate` deletes it, and there is no value to carry
+  because the region belongs to the credential the console holds.
+
+  `LegacyProviders`, its validation and its trimming are deleted with it. A
+  section that is read by nothing and accepted anyway is the "retired but still
+  accepted" placeholder pre-1.0.0 exists to avoid.
+
 - A retired configuration key now names the key that replaced it and why, from
   one table rather than a hand-written branch per removal. `circuit_breaker` had
   such a message; `elevation_window` had none, and an operator holding a v0.3.0
