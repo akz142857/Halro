@@ -10,6 +10,10 @@
 /coverage.out
 /config.yaml
 /config.local.yaml
+# `halro config migrate --write` keeps the pre-migration file beside the one it
+# wrote. It is a whole configuration, so it is ignored for the same reasons the
+# original is.
+*.before-migrate
 /v1.0.0.md
 /docs/drafts/
 /.env

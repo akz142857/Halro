@@ -32,7 +32,7 @@ jobs:
           test -f NOTICE
           test -f THIRD_PARTY_NOTICES.md
           test ! -e v1.0.0.md
-          ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test)$'
+          ! git ls-files | grep -E '(^|/)(data|node_modules|bin)/|(^|/)(master\.key|config\.yaml|v1\.0\.0\.md)$|\.(hmbk|pem|p12|pprof|prof|test|before-migrate)$'
       - name: Verify dependency license review is current
         run: sh scripts/check-dependency-license-review.sh
 
