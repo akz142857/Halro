@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,34 +19,32 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const SchemaVersion = 1
+// SchemaVersion is the shape of the configuration file this binary writes and
+// reads. It advances when a key is retired, which is what gives a file's
+// `version` something to say: v0.3.0 through v0.8.5 all shipped version 1
+// across two retirements, so the key recorded nothing and an older file could
+// not be told apart from a current one. `halro config migrate` is what moves a
+// file from one version to the next.
+const SchemaVersion = 2
 
 type Config struct {
-	Version int     `yaml:"version"`
-	Server  Server  `yaml:"server"`
-	TLS     TLS     `yaml:"tls"`
-	Storage Storage `yaml:"storage"`
-	Admin   Admin   `yaml:"admin"`
-	Usage   Usage   `yaml:"usage"`
-	Ledger  Ledger  `yaml:"ledger"`
-	Gateway Gateway `yaml:"gateway"`
-	Retry   Retry   `yaml:"retry"`
-	Routing Routing `yaml:"routing"`
-	// omitempty so a retired section is only ever read, never written: without
-	// it the console enumerates three unlabelled knobs that do nothing, and
-	// `halro config` would offer an operator the very section it refuses.
-	CircuitBreaker        RetiredCircuitBreaker `yaml:"circuit_breaker,omitempty"`
+	Version               int                   `yaml:"version"`
+	Server                Server                `yaml:"server"`
+	TLS                   TLS                   `yaml:"tls"`
+	Storage               Storage               `yaml:"storage"`
+	Admin                 Admin                 `yaml:"admin"`
+	Usage                 Usage                 `yaml:"usage"`
+	Ledger                Ledger                `yaml:"ledger"`
+	Gateway               Gateway               `yaml:"gateway"`
+	Retry                 Retry                 `yaml:"retry"`
+	Routing               Routing               `yaml:"routing"`
 	Alerts                Alerts                `yaml:"alerts"`
 	Security              Security              `yaml:"security"`
 	Metrics               Metrics               `yaml:"metrics"`
 	Audit                 Audit                 `yaml:"audit"`
 	ModelCatalog          ModelCatalog          `yaml:"model_catalog"`
 	ProviderSubscriptions ProviderSubscriptions `yaml:"provider_subscriptions"`
-	// LegacyProviders keeps v0.8.1 configuration files readable. Provider
-	// connection defaults moved into the Admin-managed credential workflow in
-	// v0.8.2, so this section is validated but no longer drives runtime state.
-	LegacyProviders LegacyProviders `yaml:"providers,omitempty"`
-	Logging         Logging         `yaml:"logging"`
+	Logging               Logging               `yaml:"logging"`
 }
 
 // Logging configures the process log: what is written, in which encoding, and
@@ -389,41 +388,6 @@ type ModelCapabilityDetection struct {
 	CreateRPM           int      `yaml:"create_rpm"`
 }
 
-// LegacyProviders is the retired v0.8.1 providers section. It remains in the
-// decoding contract because configuration uses KnownFields: deleting the Go
-// field would turn a supported in-place upgrade into a startup failure before
-// the operator had any chance to remove the obsolete YAML.
-type LegacyProviders struct {
-	Bedrock LegacyBedrockProvider `yaml:"bedrock"`
-}
-
-type LegacyBedrockProvider struct {
-	Region string `yaml:"region"`
-}
-
-const maxLegacyBedrockRegionLength = 64
-
-func validLegacyBedrockRegion(region string) bool {
-	if region == "" || len(region) > maxLegacyBedrockRegionLength || region[0] == '-' || region[len(region)-1] == '-' {
-		return false
-	}
-	previousHyphen := false
-	for _, character := range region {
-		switch {
-		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
-			previousHyphen = false
-		case character == '-':
-			if previousHyphen {
-				return false
-			}
-			previousHyphen = true
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 // ProviderSubscriptions decides whether this instance offers the consumer
 // subscription products whose upstreams reserve them for their own clients:
 // Claude Pro/Max as Claude Code signs in to it, and a ChatGPT plan as Codex
@@ -644,24 +608,6 @@ type Routing struct {
 	ProbeRequests int `yaml:"probe_requests"`
 }
 
-// RetiredCircuitBreaker exists only to be refused.
-//
-// Configuration decodes with KnownFields, so deleting the section outright would
-// stop an existing instance with `field circuit_breaker not found` — accurate,
-// and no help at all to the operator holding the file. Keeping the shape lets
-// Validate say what replaced it. It is not a second implementation and nothing
-// reads these values; the moment one did, this would be the compatibility layer
-// pre-1.0.0 exists to avoid.
-type RetiredCircuitBreaker struct {
-	ConsecutiveFailures int      `yaml:"consecutive_failures"`
-	OpenDuration        Duration `yaml:"open_duration"`
-	HalfOpenMaxRequests int      `yaml:"half_open_max_requests"`
-}
-
-func (c RetiredCircuitBreaker) present() bool {
-	return c.ConsecutiveFailures != 0 || c.OpenDuration != 0 || c.HalfOpenMaxRequests != 0
-}
-
 type Alerts struct {
 	QueueCapacity int      `yaml:"queue_capacity"`
 	Workers       int      `yaml:"workers"`
@@ -766,7 +712,18 @@ func Load(path string, opts LoadOptions) (Config, error) {
 }
 
 func Decode(r io.Reader) (Config, error) {
-	decoder := yaml.NewDecoder(r)
+	source, err := io.ReadAll(r)
+	if err != nil {
+		return Config{}, fmt.Errorf("read config: %w", err)
+	}
+	// Retired keys are looked for before the strict decode, because otherwise
+	// the operator meets `field circuit_breaker not found in type config.Config`
+	// — a sentence about a Go type, not about the key that replaced theirs.
+	if err := refuseRetiredKeys(source); err != nil {
+		return Config{}, err
+	}
+
+	decoder := yaml.NewDecoder(bytes.NewReader(source))
 	decoder.KnownFields(true)
 
 	var cfg Config
@@ -810,7 +767,6 @@ func (c *Config) Normalize() error {
 	// Keep the v0.8.1 normalization contract even though the value is now
 	// compatibility-only. Harmless surrounding whitespace must not turn an
 	// existing valid file into an upgrade failure.
-	c.LegacyProviders.Bedrock.Region = strings.TrimSpace(c.LegacyProviders.Bedrock.Region)
 	if c.Gateway.SourceRateLimit.MaxTrackedSources == 0 {
 		// Omitting the ceiling means "whatever is sane", not "track nothing".
 		// Kept in step with sourcelimit.DefaultMaxTrackedSources by
@@ -1051,8 +1007,29 @@ func (c *Config) Normalize() error {
 
 func (c Config) Validate(opts LoadOptions) error {
 	var problems []error
-	if c.Version != SchemaVersion {
-		problems = append(problems, fmt.Errorf("version must be %d", SchemaVersion))
+	switch {
+	case c.Version == 0:
+		// Separated from the older-file case because `config migrate` cannot
+		// help here: it refuses a file that declares no shape rather than
+		// guessing at one, so sending the operator there would name a command
+		// that turns them straight back.
+		problems = append(problems, fmt.Errorf(
+			"no `version` is declared, so there is no shape to read this file as: add `version: %d` "+
+				"if it came from a release older than this one and then run "+
+				"`halro config migrate --config <path>`, or `version: %d` if it is current",
+			SchemaVersion-1, SchemaVersion))
+	case c.Version < SchemaVersion:
+		// Directional on purpose. An older file has a way forward and is told
+		// it; a newer one does not, and guessing at a shape this binary has
+		// never seen is the fail-open version of this check.
+		problems = append(problems, fmt.Errorf(
+			"version is %d and this Halro writes %d: run `halro config migrate --config <path>` "+
+				"to see what moved, then again with --write", c.Version, SchemaVersion))
+	case c.Version > SchemaVersion:
+		problems = append(problems, fmt.Errorf(
+			"version is %d and this Halro only knows %d, so the file was written by a newer "+
+				"Halro; run that one, or start from a configuration this version wrote",
+			c.Version, SchemaVersion))
 	}
 	if c.Storage.DataDir == "" {
 		problems = append(problems, errors.New("storage.data_dir is required"))
@@ -1083,9 +1060,6 @@ func (c Config) Validate(opts LoadOptions) error {
 		} else if _, err := hex.DecodeString(strings.TrimPrefix(pin, "sha256:")); err != nil {
 			problems = append(problems, errors.New("model_catalog.pinned_revision must be a sha256 digest"))
 		}
-	}
-	if region := c.LegacyProviders.Bedrock.Region; region != "" && !validLegacyBedrockRegion(region) {
-		problems = append(problems, errors.New("providers.bedrock.region must be an AWS region name such as us-east-1"))
 	}
 	if c.TLS.Enabled {
 		if len(c.TLS.Certificates) == 0 {
@@ -1264,14 +1238,6 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	if c.Retry.BaseDelay <= 0 || c.Retry.MaxDelay < c.Retry.BaseDelay {
 		problems = append(problems, errors.New("retry delays must be positive and max_delay must be at least base_delay"))
-	}
-	if c.CircuitBreaker.present() {
-		problems = append(problems, errors.New(
-			"circuit_breaker has been replaced by routing: consecutive_failures is now "+
-				"routing.availability_failures, open_duration is routing.suspend_for, and "+
-				"half_open_max_requests is routing.probe_requests. Remove the circuit_breaker "+
-				"section. It covered only upstreams that stopped answering; routing also covers "+
-				"upstreams that answer and refuse, which the breaker counted as success"))
 	}
 	if c.Routing.AvailabilityFailures < 1 || c.Routing.SuspendFor <= 0 ||
 		c.Routing.MaxSuspendFor < c.Routing.SuspendFor || c.Routing.ProbeRequests < 1 {

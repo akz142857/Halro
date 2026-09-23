@@ -2,7 +2,7 @@
 # @title.en-US Configuration version
 # @description.zh-CN 配置文件的结构版本。
 # @description.en-US Schema version of this configuration file.
-version: 1
+version: 2
 
 server:
   # @title.zh-CN Gateway 监听地址

@@ -6,6 +6,79 @@ semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `halro config migrate` moves a retired configuration key to the key that
+  replaced it, carrying the value the operator chose.
+
+  Measured before it was written: every one of the fourteen published
+  `default.yaml` files is refused by the current tree — thirteen on
+  `circuit_breaker`, v0.3.0 also on `elevation_window`, and v0.1.0 and v0.2.0 on
+  the flat TLS keypair and on `gateway.stream_idle_timeout` — and nothing
+  noticed, because nothing in CI had ever loaded a released configuration. One snapshot
+  per release now lives in `internal/config/testdata/releases/`, written by
+  `tools/release/prepare_release.py`, and the test is one sentence: a released
+  configuration, migrated, must load.
+
+  It advances the file's `version` as part of the same edit, which is what that
+  key is for and what it had never done.
+
+  The command is deliberately not a compatibility layer and never runs on start.
+  The runtime still reads no retired key; this edits the file so the retired key
+  stops existing, at a moment the operator chose. It prints the edit and writes
+  nothing unless `--write` is passed, keeps the original as
+  `<config>.before-migrate`, and refuses as a whole rather than writing a file
+  `config check` would then reject.
+
+  What it may do is bounded: delete a retired key and write its value under the
+  path that replaced it. It changes no value the operator set, and fills in
+  nothing that is merely absent — an omitted key already takes its built-in
+  default, which is why deleting `circuit_breaker` was already enough to make a
+  released config load, and why the only thing a hand edit could lose was the
+  tuning. It refuses where the name survived but the meaning did not:
+  `elevation_window` became `admin.reauth_elevation_window`, which covers every
+  step-up endpoint rather than capability detection alone, so inheriting the old
+  value would widen a security window on the operator's behalf.
+
+### Changed
+
+- **The configuration schema version advances, and a configuration file now says
+  which shape it is.** `version` shipped as `1` in every release from v0.3.0 to
+  v0.8.5 — across two retirements — so the key recorded nothing and the
+  exact-equality check against it was inert. It is `2` as of this change, and
+  `halro config migrate` moves a file from one version to the next.
+
+  The check is now directional, because the two directions do not have the same
+  answer: an older file has a way forward and is told what it is, while a file
+  from a newer Halro is refused outright. Repairing a shape this binary has
+  never seen would be the fail-open half of the same check.
+
+  Operators editing a configuration by hand: the `version:` line becomes `2`,
+  which is what `config migrate` writes for you. No data directory is affected.
+
+- **The v0.8.1 `providers` section is refused rather than accepted.** It was
+  kept in the decoding contract when provider connections moved into the
+  Admin-managed credential workflow, so `providers.bedrock.region` was decoded,
+  trimmed and validated while nothing read it — an operator who still had it
+  believed it was choosing the region their Bedrock calls used, and the fact
+  that the value was checked made it look acted on. It is a row in the
+  retirement table now, with the same refusal and the same way out as every
+  other retired key: `config migrate` deletes it, and there is no value to carry
+  because the region belongs to the credential the console holds.
+
+  `LegacyProviders`, its validation and its trimming are deleted with it. A
+  section that is read by nothing and accepted anyway is the "retired but still
+  accepted" placeholder pre-1.0.0 exists to avoid.
+
+- A retired configuration key now names the key that replaced it and why, from
+  one table rather than a hand-written branch per removal. `circuit_breaker` had
+  such a message; `elevation_window` had none, and an operator holding a v0.3.0
+  configuration met `field elevation_window not found in type
+  config.ModelCapabilityDetection` — a sentence about a Go type. The
+  `RetiredCircuitBreaker` struct that existed only to be refused is gone with
+  it: the table is checked against the file before decoding, so a retired shape
+  no longer has to survive in Go to be answerable.
+
 ### Fixed
 
 - The idempotency index bucket was the only durable bucket missing from

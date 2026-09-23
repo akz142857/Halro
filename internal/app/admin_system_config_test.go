@@ -10,7 +10,7 @@ import (
 )
 
 func TestDescribeSystemConfigUsesReferenceMetadataAndEffectiveValues(t *testing.T) {
-	effective := []byte(`version: 1
+	effective := []byte(`version: 2
 server:
   gateway_listen: 0.0.0.0:8080
 tls:

@@ -1,11 +1,7 @@
 # Halro configuration — written on first run, safe for a single host.
 #
-# This is the complete first-run template, not a sparse override file. Some
-# omitted scalar fields are normalized to defaults, while required values and
-# security-sensitive booleans may instead fail validation or retain their zero
-# value. Do not delete a key to request a default: keep the generated value, or
-# consult configs/config.example.yaml and `halro config check` after editing.
-# A config-driven setting is one that cannot change while the gateway is serving:
+# Every value below is the built-in default; deleting a key restores it. A
+# config-driven setting is one that cannot change while the gateway is serving:
 # listeners, TLS, storage, key custody, security boundaries. Everything an
 # operator tunes day to day — providers, budgets, limits, policies — lives in
 # the Admin console, not here.
@@ -13,7 +9,7 @@
 # The complete annotated reference is configs/config.example.yaml.
 # Restart Halro after editing this file.
 
-version: 2
+version: 1
 
 server:
   # Loopback by default: nothing here is exposed to the network until you say
@@ -63,15 +59,8 @@ admin:
   # Set when the console is reached through a proxy under a different origin;
   # it is what CSRF checks compare against.
   external_origin: ""
-  # Production may mount a deployment-managed one-time setup token here. The
-  # path must be absolute. Leave empty for loopback setup or interactive start.
-  setup_token_file: ""
-  # Maximum generated-token lifetime or allowed remaining lifetime of a file's
-  # absolute expiry. Restarting with the same file never renews it.
-  setup_token_ttl: 30m0s
   # "required" forces every administrator through an authenticator. Remote Admin
   # deployments should use it.
-  # optional | administrators_required | required
   mfa_policy: optional
   # While enabled, the Admin listener also serves real Gateway calls so an
   # administrator can send a billed request from the console. Harmless on a
@@ -165,11 +154,7 @@ gateway:
   # per write, so it bounds a stalled reader without cutting a long stream.
   downstream_write_timeout: 15s
   stream_max_duration: 10m0s
-  # Shared by the whole request, across retries and fallbacks. The number of
-  # distinct candidates a request can reach is ceil(max_total_attempts /
-  # retry.max_attempts_per_target), so this has to be at least as large as the
-  # longest route fan-out or the last target is configured and never called.
-  max_total_attempts: 4
+  max_total_attempts: 3
   # Shared by the whole instance, while the queue ceiling is per Project.
   # Dequeuing takes one submission from each Project in turn.
   deferred_response_workers: 4
@@ -201,10 +186,9 @@ gateway:
   # changes what this data directory contains. Records are encrypted under the
   # master key, bound to the request and project they belong to, truncated at
   # max_bytes, capped at max_records_per_day, deleted after `retain`, and
-  # readable only through an audited admin action. The capture includes the
-  # decoded body received by the Gateway before redaction, but never request
-  # headers or the Gateway credential, plus Halro's post-redaction normalized
-  # request so an operator can compare the two safely.
+  # readable only through an audited admin action. Redaction runs before
+  # capture, so what is stored is what went upstream and not what the caller
+  # sent.
   failure_capture:
     enabled: false
     max_bytes: 65536
@@ -212,28 +196,15 @@ gateway:
     retain: 24h
 
 retry:
-  # One, not two: asking the same upstream again helps only a transient blip,
-  # and it spends an attempt the next provider could have had. Raise it for a
-  # single-target alias, which has nowhere to fall back to.
-  max_attempts_per_target: 1
+  max_attempts_per_target: 2
   base_delay: 100ms
   max_delay: 2s
   jitter: true
 
-# When a route target stops being offered, and when it is tried again. Only the
-# availability figures are here: what to do about an upstream that stated its
-# refusal — out of quota, subscription lapsed, key revoked — follows from who
-# said what, and is not a dial.
-routing:
-  # Consecutive failures with no stated reason before a target is taken out.
-  # More than one, because a single 5xx is noise.
-  availability_failures: 5
-  # The first suspension, doubling up to max_suspend_for each time a probe finds
-  # the upstream still failing.
-  suspend_for: 30s
-  max_suspend_for: 5m0s
-  # How many requests may test a suspended target once its window is up.
-  probe_requests: 1
+circuit_breaker:
+  consecutive_failures: 5
+  open_duration: 30s
+  half_open_max_requests: 1
 
 alerts:
   queue_capacity: 1024
@@ -303,6 +274,17 @@ model_catalog:
   max_decoded_bytes: 4194304
   max_compression_ratio: 20
   max_entries: 10000
+
+# What varies by deployment about reaching an upstream. What a provider can do
+# is fixed by the build and is not configurable here.
+#
+# The region fills in the Bedrock endpoints the console offers when you create a
+# connection — bedrock-runtime.<region>.amazonaws.com and its siblings. Setting
+# it saves retyping the URL for every Bedrock connection; it grants nothing on
+# its own, and you can still enter any endpoint on the form.
+providers:
+  bedrock:
+    region: us-east-1
 
 # The process log. Records are redacted before they are written — no
 # authorization headers, provider or gateway keys, prompts, response bodies or

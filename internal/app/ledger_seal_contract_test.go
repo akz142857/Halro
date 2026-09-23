@@ -106,7 +106,7 @@ func TestABackupTakenAfterASealRestoresEveryGeneration(t *testing.T) {
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	log, metadata, ledgerKey := openSealingLedger(t, cfg)

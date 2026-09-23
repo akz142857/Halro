@@ -61,6 +61,7 @@ class PrepareReleaseTest(unittest.TestCase):
         (self.root / "tools/release").mkdir(parents=True)
         (self.root / "web").mkdir()
         (self.root / "docs/verification/assessments").mkdir(parents=True)
+        (self.root / "internal/config").mkdir(parents=True)
         shutil.copy(SCRIPT, self.root / "tools/release/prepare_release.py")
         (self.root / "CHANGELOG.md").write_text(CHANGELOG, encoding="utf-8")
         (self.root / "README.md").write_text(README, encoding="utf-8")
@@ -70,6 +71,7 @@ class PrepareReleaseTest(unittest.TestCase):
             encoding="utf-8",
         )
         (self.root / "docs/verification/dependency-license-review.md").write_text(LICENSE_REVIEW, encoding="utf-8")
+        (self.root / "internal/config/default.yaml").write_text("version: 1\nretry:\n  jitter: true\n", encoding="utf-8")
         for command in (["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "fixture"]):
             subprocess.run(["git", "-C", str(self.root), *command], check=True, capture_output=True)
 
@@ -98,6 +100,14 @@ class PrepareReleaseTest(unittest.TestCase):
         self.assertEqual(readme.count("v1.2.4"), 3)
 
         self.assertIn('"version": "1.2.4"', self.read("web/package.json"))
+
+        # The configuration this release ships is kept, so a later release's
+        # retirement table is tested against a real old config rather than an
+        # author's idea of one.
+        self.assertEqual(
+            self.read("internal/config/testdata/releases/v1.2.4.yaml"),
+            self.read("internal/config/default.yaml"),
+        )
         self.assertEqual(self.read("web/package-lock.json").count('"version": "1.2.4"'), 2)
 
         review = self.read("docs/verification/dependency-license-review.md")
@@ -163,6 +173,15 @@ class PrepareReleaseTest(unittest.TestCase):
         # Nothing was half-applied by the refusal.
         self.assertEqual(self.read("CHANGELOG.md").count("## [1.2.4]"), 1)
         self.assertEqual(self.read("README.md").count("v1.2.4"), 3)
+
+
+    def test_it_refuses_to_resnapshot_a_published_config(self):
+        snapshots = self.root / "internal/config/testdata/releases"
+        snapshots.mkdir(parents=True)
+        (snapshots / "v1.2.4.yaml").write_text("version: 1\n", encoding="utf-8")
+        result = self.run_tool("v1.2.4", "--date", "2026-02-02")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("never re-snapshotted", result.stderr)
 
 
 if __name__ == "__main__":

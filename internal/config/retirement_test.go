@@ -1,0 +1,468 @@
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+// releasesDir holds one snapshot of default.yaml per published release. It is
+// the only fixture here that is not written by hand, and that is the point: a
+// migrator tested against invented old configs tests the author's idea of an
+// old config. Adding a release adds its file.
+const releasesDir = "testdata/releases"
+
+func releaseSnapshots(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(releasesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".yaml") {
+			paths = append(paths, filepath.Join(releasesDir, entry.Name()))
+		}
+	}
+	if len(paths) == 0 {
+		t.Fatalf("no release snapshots in %s", releasesDir)
+	}
+	return paths
+}
+
+// TestEveryReleasedConfigIsAnswered is the check that was missing when
+// circuit_breaker retired. Measured against the real binary at the time: all
+// fourteen published default.yaml files were refused by the current tree,
+// thirteen of them on circuit_breaker, v0.3.0 also on elevation_window, and
+// v0.1.0 and v0.2.0 on the flat TLS keypair and stream_idle_timeout — and
+// nothing in the tree noticed, because nothing had ever loaded a released
+// config.
+//
+// A released config is allowed to be refused. It is not allowed to be refused
+// by a sentence naming a Go type.
+func TestEveryReleasedConfigIsAnswered(t *testing.T) {
+	for _, path := range releaseSnapshots(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, loadErr := Decode(strings.NewReader(string(source)))
+			if loadErr == nil {
+				return
+			}
+			var retired *RetiredKeyError
+			if !errors.As(loadErr, &retired) {
+				t.Fatalf("refused by something other than the retirement table, so the "+
+					"operator gets a decoder error instead of the key that replaced theirs: %v", loadErr)
+			}
+		})
+	}
+}
+
+// TestEveryReleasedConfigLoadsAfterMigration is the sentence the whole table
+// exists to make true: take any released configuration, run the migration the
+// binary offers, and the result must load. Where the migration refuses, the
+// refusal must name the key and the reason rather than leaving the operator to
+// read a diff.
+func TestEveryReleasedConfigLoadsAfterMigration(t *testing.T) {
+	for _, path := range releaseSnapshots(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := Migrate(source)
+			if err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+			if len(result.Refusals) > 0 {
+				for _, refusal := range result.Refusals {
+					if !strings.Contains(refusal, " is now ") {
+						t.Errorf("refusal does not name the replacement: %q", refusal)
+					}
+				}
+				return
+			}
+			cfg, err := Decode(strings.NewReader(string(result.Output)))
+			if err != nil {
+				t.Fatalf("migrated config does not decode: %v", err)
+			}
+			if err := cfg.Normalize(); err != nil {
+				t.Fatalf("migrated config does not normalize: %v", err)
+			}
+			if err := cfg.Validate(LoadOptions{}); err != nil {
+				t.Fatalf("migrated config does not validate: %v", err)
+			}
+		})
+	}
+}
+
+// TestMigrationCarriesTheOperatorsValue is what separates the migration from
+// "delete the section and start again". Deleting is enough to make the file
+// load — every routing key takes its default when absent — so the only thing
+// that can be lost is the value the operator chose, which is exactly the thing
+// worth keeping.
+func TestMigrationCarriesTheOperatorsValue(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.8.5.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tuned := strings.NewReplacer(
+		"consecutive_failures: 5", "consecutive_failures: 9",
+		"open_duration: 30s", "open_duration: 45s",
+		"half_open_max_requests: 1", "half_open_max_requests: 3",
+	).Replace(string(source))
+	if tuned == string(source) {
+		t.Fatal("the fixture no longer carries the circuit_breaker values this test tunes")
+	}
+
+	result, err := Migrate([]byte(tuned))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) > 0 {
+		t.Fatalf("refused a mechanical migration: %v", result.Refusals)
+	}
+	if err := refuseRetiredKeys(result.Output); err != nil {
+		t.Errorf("a retired key survived the migration: %v", err)
+	}
+
+	cfg, err := Load(writeTemp(t, result.Output), LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Routing.AvailabilityFailures != 9 {
+		t.Errorf("availability_failures=%d, want the 9 the operator set as consecutive_failures", cfg.Routing.AvailabilityFailures)
+	}
+	if time.Duration(cfg.Routing.SuspendFor) != 45*time.Second {
+		t.Errorf("suspend_for=%s, want the 45s the operator set as open_duration", time.Duration(cfg.Routing.SuspendFor))
+	}
+	if cfg.Routing.ProbeRequests != 3 {
+		t.Errorf("probe_requests=%d, want the 3 the operator set as half_open_max_requests", cfg.Routing.ProbeRequests)
+	}
+	// Absent means the default, so the one key with no predecessor is not
+	// written. Writing it would be a value this migrator invented.
+	if strings.Contains(string(result.Output), "max_suspend_for") {
+		t.Error("max_suspend_for was written; it has no predecessor and absent already means the default")
+	}
+}
+
+// TestMigrationRefusesWhatNeedsJudgement holds the line between a rename and a
+// decision. elevation_window's replacement covers every step-up endpoint rather
+// than capability detection alone, so carrying the operator's value across
+// would widen a security window on their behalf.
+func TestMigrationRefusesWhatNeedsJudgement(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.3.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Migrate(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) == 0 {
+		t.Fatal("migrated a key whose meaning changed")
+	}
+	if len(result.Output) != 0 {
+		t.Error("a refusal wrote output; a half-migrated file is worse than an unmigrated one")
+	}
+	if !strings.Contains(result.Refusals[0], "elevation_window") {
+		t.Errorf("refusal does not name the key: %q", result.Refusals[0])
+	}
+}
+
+// TestRetirementRefusalNamesTheReplacement keeps the table from growing a row
+// that says nothing. The whole reason it exists is that a decoder error names a
+// Go type, so a row without a replacement or a reason is no better.
+func TestRetirementRefusalNamesTheReplacement(t *testing.T) {
+	for _, retirement := range Retirements() {
+		if retirement.Path == "" || retirement.Why == "" {
+			t.Errorf("retirement %+v has no path or no reason", retirement)
+		}
+		if retirement.ReplacedBy == retirement.Path {
+			t.Errorf("%s is recorded as replacing itself", retirement.Path)
+		}
+	}
+}
+
+// TestMigrateLeavesACurrentConfigAlone is the no-op case: the file the binary
+// writes today holds no retired key, so running the migration must not touch it.
+func TestMigrateLeavesACurrentConfigAlone(t *testing.T) {
+	result, err := Migrate(defaultTemplate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 0 || len(result.Refusals) != 0 {
+		t.Fatalf("actions=%v refusals=%v, want a current config left alone", result.Actions, result.Refusals)
+	}
+	if string(result.Output) != string(defaultTemplate) {
+		t.Error("the migration rewrote a file that had nothing to migrate")
+	}
+}
+
+func writeTemp(t *testing.T, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestMigrationRefusesOutputTheLoaderWouldReject is the guarantee that makes
+// the command safe to run before an upgrade: a file it wrote passes
+// `halro config check`. open_duration had no ceiling to agree with; its
+// replacement must not exceed routing.max_suspend_for, so a long-enough value
+// migrates into a file that would not start.
+func TestMigrationRefusesOutputTheLoaderWouldReject(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.8.5.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tuned := strings.Replace(string(source), "open_duration: 30s", "open_duration: 10m", 1)
+	if tuned == string(source) {
+		t.Fatal("the fixture no longer carries open_duration")
+	}
+	result, err := Migrate([]byte(tuned))
+	if err == nil {
+		t.Fatalf("migrated a config the loader rejects, output=%d bytes", len(result.Output))
+	}
+	if !strings.Contains(err.Error(), "max_suspend_for") {
+		t.Errorf("error does not name the problem: %v", err)
+	}
+	if len(result.Output) != 0 {
+		t.Error("output was handed back alongside the error")
+	}
+}
+
+// TestMigrationRefusesWhenBothKeysAreSet keeps the migration from silently
+// picking a winner. An operator part-way through the edit by hand has both, and
+// writing the retired value across would either duplicate the key or overwrite
+// the new one.
+func TestMigrationRefusesWhenBothKeysAreSet(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.8.5.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := string(source) + "\nrouting:\n  availability_failures: 7\n"
+	result, err := Migrate([]byte(both))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) == 0 {
+		t.Fatal("migrated onto a key the operator had already set")
+	}
+	if !strings.Contains(result.Refusals[0], "routing.availability_failures") {
+		t.Errorf("refusal does not name the destination: %q", result.Refusals[0])
+	}
+	if len(result.Output) != 0 {
+		t.Error("a refusal wrote output")
+	}
+}
+
+// TestMigrationWritesIntoAnExistingSection covers the other half of that: a
+// destination section that exists but does not yet hold the key being moved.
+func TestMigrationWritesIntoAnExistingSection(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.8.5.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial := strings.Replace(string(source), "open_duration: 30s", "open_duration: 10m", 1) +
+		"\nrouting:\n  max_suspend_for: 15m\n"
+	result, err := Migrate([]byte(partial))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) > 0 {
+		t.Fatalf("refused: %v", result.Refusals)
+	}
+	cfg, err := Load(writeTemp(t, result.Output), LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Duration(cfg.Routing.SuspendFor) != 10*time.Minute {
+		t.Errorf("suspend_for=%s, want 10m", time.Duration(cfg.Routing.SuspendFor))
+	}
+	if time.Duration(cfg.Routing.MaxSuspendFor) != 15*time.Minute {
+		t.Errorf("max_suspend_for=%s, want the 15m the operator had already written", time.Duration(cfg.Routing.MaxSuspendFor))
+	}
+}
+
+// TestMigrationAdvancesTheSchemaVersion is what makes `version` mean something.
+// It shipped as 1 in every release from v0.3.0 to v0.8.5, across two
+// retirements, so a file could not say which shape it was — and an exact-equality
+// check against a constant that never moved was inert.
+func TestMigrationAdvancesTheSchemaVersion(t *testing.T) {
+	for _, path := range releaseSnapshots(t) {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := Migrate(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Refusals) > 0 {
+				return
+			}
+			cfg, err := Decode(strings.NewReader(string(result.Output)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Version != SchemaVersion {
+				t.Errorf("version=%d after migration, want %d", cfg.Version, SchemaVersion)
+			}
+		})
+	}
+}
+
+// TestAStaleVersionAloneIsMigrated covers the file that has no retired key left
+// — an operator who already did the edit by hand — but still declares the older
+// shape. It has somewhere to go, and is told so rather than only refused.
+func TestAStaleVersionAloneIsMigrated(t *testing.T) {
+	current := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d", SchemaVersion), "version: 1", 1)
+	if !strings.Contains(current, "version: 1") {
+		t.Fatal("the template no longer carries a version line this test can age")
+	}
+	if _, err := Decode(strings.NewReader(current)); err != nil {
+		t.Fatalf("an aged current config should still decode: %v", err)
+	}
+	result, err := Migrate([]byte(current))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Actions) != 1 {
+		t.Fatalf("actions=%d, want the version line alone", len(result.Actions))
+	}
+	cfg, err := Load(writeTemp(t, result.Output), LoadOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != SchemaVersion {
+		t.Errorf("version=%d, want %d", cfg.Version, SchemaVersion)
+	}
+}
+
+// TestAVersionFromTheFutureIsRefused is the direction with no way forward.
+// Repairing a shape this binary has never seen would be the fail-open half of
+// the same check.
+func TestAVersionFromTheFutureIsRefused(t *testing.T) {
+	ahead := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d", SchemaVersion),
+		fmt.Sprintf("version: %d", SchemaVersion+1), 1)
+
+	cfg, err := Decode(strings.NewReader(ahead))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	err = cfg.Validate(LoadOptions{})
+	if err == nil {
+		t.Fatal("a configuration from a newer Halro was accepted")
+	}
+	if !strings.Contains(err.Error(), "newer Halro") {
+		t.Errorf("error does not say which direction is wrong: %v", err)
+	}
+
+	result, migrateErr := Migrate([]byte(ahead))
+	if migrateErr != nil {
+		t.Fatal(migrateErr)
+	}
+	if len(result.Refusals) == 0 {
+		t.Error("the migration offered to move a newer file backwards")
+	}
+}
+
+// TestAConfigWithNoVersionIsRefused keeps the migration from guessing. No
+// release ever shipped a file without one, so an absent version is a file
+// whose shape is unknown rather than an old one.
+func TestAConfigWithNoVersionIsRefused(t *testing.T) {
+	stripped := strings.Replace(string(defaultTemplate),
+		fmt.Sprintf("version: %d\n", SchemaVersion), "", 1)
+	_, err := Migrate([]byte(stripped))
+	if err == nil {
+		t.Fatal("migrated a configuration that declares no version")
+	}
+	// The refusal has to leave the operator somewhere to go, since `config
+	// check` sends nobody here without also naming the version to add.
+	if !strings.Contains(err.Error(), fmt.Sprintf("version: %d", SchemaVersion)) {
+		t.Errorf("refusal names no version to add: %v", err)
+	}
+}
+
+// TestAKeyRemovedWithNoReplacementIsDeleted covers the row shape that has no
+// destination. gateway.stream_idle_timeout was declared, defaulted, validated
+// and read by nothing, so there is nowhere for its value to go and deleting it
+// is the whole migration.
+func TestAKeyRemovedWithNoReplacementIsDeleted(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(releasesDir, "v0.2.0.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The keypair-to-list decision is the operator's; do it the way the refusal
+	// describes so the rest of the file can be migrated here.
+	edited := strings.Replace(string(source), "  cert_file: \"\"\n  key_file: \"\"\n", "  certificates: []\n", 1)
+	if edited == string(source) {
+		t.Fatal("the v0.2.0 fixture no longer carries the flat TLS keypair")
+	}
+	result, err := Migrate([]byte(edited))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Refusals) > 0 {
+		t.Fatalf("refused after the one decision was made: %v", result.Refusals)
+	}
+	if strings.Contains(string(result.Output), "stream_idle_timeout") {
+		t.Error("a key with no replacement survived")
+	}
+	if _, err := Load(writeTemp(t, result.Output), LoadOptions{}); err != nil {
+		t.Fatalf("the migrated v0.2.0 configuration does not load: %v", err)
+	}
+}
+
+// TestTheOldestReleasesAreAnsweredRatherThanDecoded is the case a truncated
+// tag listing hid: v0.1.0 and v0.2.0 carry three keys retired before v0.3.0,
+// and without rows for them `config migrate` promised an edit and then failed
+// on `field cert_file not found in type config.TLS` — the Go-type sentence this
+// table exists to retire.
+func TestTheOldestReleasesAreAnsweredRatherThanDecoded(t *testing.T) {
+	for _, version := range []string{"v0.1.0", "v0.2.0"} {
+		t.Run(version, func(t *testing.T) {
+			source, err := os.ReadFile(filepath.Join(releasesDir, version+".yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retired *RetiredKeyError
+			_, err = Decode(strings.NewReader(string(source)))
+			if !errors.As(err, &retired) {
+				t.Fatalf("not answered by the table: %v", err)
+			}
+			var named []string
+			for _, found := range retired.Found {
+				named = append(named, found.Path)
+			}
+			for _, want := range []string{"tls.cert_file", "tls.key_file", "gateway.stream_idle_timeout"} {
+				if !slices.Contains(named, want) {
+					t.Errorf("%s is not named; the operator meets the decoder instead", want)
+				}
+			}
+			result, err := Migrate(source)
+			if err != nil {
+				t.Fatalf("migrate: %v", err)
+			}
+			if len(result.Refusals) == 0 {
+				t.Error("offered to rewrite a keypair into a list on the operator's behalf")
+			}
+		})
+	}
+}

@@ -238,7 +238,7 @@ Azure 缺少等价 AAD 不得被描述为与 AWS/GCP 密码学能力完全一致
 项目仍在开发期，配置直接采用最终嵌套结构，不保留旧 `master_key_file` 字段或迁移状态。
 
 ```yaml
-version: 1
+version: 2
 
 storage:
   data_dir: /var/lib/halro

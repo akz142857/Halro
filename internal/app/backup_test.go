@@ -215,7 +215,7 @@ func kmsBackupFixture(t *testing.T) (config.Config, string, []byte, backuppkg.Ma
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	archivePath := filepath.Join(root, "kms-backup.hmbk")
@@ -318,7 +318,7 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
 	const configCanary = "backup-config-canary"
-	if err := os.WriteFile(configPath, []byte("version: 1\n# "+configCanary+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n# "+configCanary+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(cfg.UsagePath(), 0o700); err != nil {
@@ -464,7 +464,7 @@ func TestBackupRejectsMissingReferencedProviderObject(t *testing.T) {
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "incomplete.hmbk")
@@ -483,7 +483,7 @@ func TestBackupRequiresExclusiveDataLockAndExternalOutput(t *testing.T) {
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	key := bytes.Repeat([]byte{0x33}, 32)
@@ -516,7 +516,7 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	metadata, err := boltstore.Open(cfg.MetadataPath())
@@ -649,7 +649,7 @@ func TestRestoreValidatesStagesAtomicallyAndPreservesRollbackDirectory(t *testin
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	key := bytes.Repeat([]byte{0x71}, 32)
@@ -739,7 +739,7 @@ func TestBackupRestoreRebuildsRunGovernanceConfigurationAndLedgerState(t *testin
 
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	backupKey := bytes.Repeat([]byte{0x73}, 32)
@@ -785,7 +785,7 @@ func TestRestoreMasterKeyMismatchNamesBothFingerprintsAndRecoveryStep(t *testing
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	backupKey := bytes.Repeat([]byte{0x64}, 32)
@@ -856,7 +856,7 @@ func TestRestoreInvalidatesCapturedAdminSessionsAndMFAChallenges(t *testing.T) {
 
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	archivePath := filepath.Join(root, "authentication-restore.hmbk")
@@ -928,7 +928,7 @@ func TestBackupSucceedsWhenTheStoredUsageCheckpointPredatesThisBuild(t *testing.
 	}
 	root := filepath.Dir(cfg.Storage.DataDir)
 	configPath := filepath.Join(root, "config.yaml")
-	if err := os.WriteFile(configPath, []byte("version: 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	output := filepath.Join(root, "stale-checkpoint.hmbk")
