@@ -271,6 +271,46 @@ groups:
       # Thresholds below are starting points, not universal truths: fsync cost
       # spans orders of magnitude between filesystems, so re-baseline them per
       # host from halro:wal_sync:mean5m before trusting them.
+      # Spend control. There is no threshold in this file, and that is the
+      # point: the budget already exists as `Project.DailyBudgetMicrosUSD`,
+      # set per Project in the Admin console, stored durably and enforced
+      # before any upstream is called — a request past it is refused, not
+      # merely noted. What was missing was never a budget. It was that nothing
+      # watched the one Halro already had (260918-PV-F-07).
+      #
+      # So these alert on the refusal itself, which needs no number: a Project
+      # hitting the cap its operator set is a fact Halro already counts.
+      # Approaching-the-cap would need per-Project spend as a series, and that
+      # is a label whose cardinality grows with the customer list.
+      #
+      # The per-minute cost guard is already covered elsewhere: a Token Guard
+      # policy with `cost_micros_per_minute` raises its own alert through
+      # Halro's webhook dispatcher, with the Project on the event.
+      - alert: HalroProjectDailyBudgetRefusingTraffic
+        expr: increase(halro_policy_rejections_total{reason="budget"}[1h]) > 0
+        for: 5m
+        labels: {severity: warning, service: halro, owner: product, category: cost}
+        annotations:
+          summary: A Halro Project reached its daily budget and requests are being refused
+          runbook_url: /docs/observability/operations-runbook.md#halroprojectdailybudgetrefusingtraffic
+      - alert: HalroRunBudgetRefusingTraffic
+        expr: increase(halro_policy_rejections_total{reason="run_budget"}[1h]) > 0
+        for: 5m
+        labels: {severity: warning, service: halro, owner: product, category: cost}
+        annotations:
+          summary: A Halro Run reached its budget and requests are being refused
+          runbook_url: /docs/observability/operations-runbook.md#halrorunbudgetrefusingtraffic
+      # Spend that stops being reported is not spend that stopped. The counter
+      # is restored from the usage checkpoint and rebuilt from the Ledger, so
+      # its absence means the metrics path or the accounting aggregate is
+      # broken — and every cost signal above is silent while it is.
+      - alert: HalroProviderSpendUnreported
+        expr: absent(halro_cost_usd_total)
+        for: 10m
+        labels: {severity: critical, service: halro, owner: sre, category: cost}
+        annotations:
+          summary: Halro is not reporting Provider spend at all
+          runbook_url: /docs/observability/operations-runbook.md#halroproviderspendunreported
       - alert: HalroWALSyncSlow
         expr: halro:wal_sync:mean5m > 0.05
         for: 10m

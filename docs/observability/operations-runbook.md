@@ -187,6 +187,52 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 3. Escalate to Security immediately; restore emission and independently verify
    a new chain head before treating the external witness as current.
 
+### HalroProjectDailyBudgetRefusingTraffic
+
+A Project reached `daily_budget_micros_usd` — the cap its operator set in the
+console — and the Gateway is refusing its requests with 403. The budget is
+accounted against a reservation *before* any upstream is called, so nothing was
+spent past it; what is happening is that a caller is being turned away.
+
+1. Find the Project from the Usage breakdown. The alert carries no Project
+   label on purpose: a per-Project series grows with the customer list, and the
+   console already answers "which one" without that cost.
+2. Decide which this is. A Project that reached its cap on the last day of a
+   billing period is working as configured and needs nothing. A Project that
+   reached it at 09:00 is either under-budgeted or doing something it did not
+   do yesterday.
+3. If it is the second, check the Usage breakdown for a change in rate before
+   raising the budget — a leaked Gateway Key looks exactly like a popular
+   application until you compare it with last week.
+4. Raising the budget is a console change on the Project and takes effect
+   immediately. There is no instance-wide cap to consult: the Project budget is
+   the cap, deliberately, so there is one number per tenant and one place it
+   lives.
+
+### HalroRunBudgetRefusingTraffic
+
+The same, for a Run's own budget under Run Governance. The Run is bounded
+separately from the Project that owns it, so this fires while the Project still
+has room.
+
+1. Identify the Run and its Work Unit from Run Governance.
+2. A Run that exhausted its budget has either been mis-sized or is looping.
+   Check its attempt count against what the Work Unit expected before extending
+   it.
+
+### HalroProviderSpendUnreported
+
+`halro_cost_usd_total` is absent from the scrape entirely.
+
+1. This is not "spend stopped". The counter is restored from the usage
+   checkpoint and rebuilt from the Ledger, so its absence means the metrics
+   path or the accounting aggregate is broken — and every cost signal is silent
+   while it is.
+2. Check the metrics endpoint's reachability and credential, then
+   `halro doctor` for the accounting and Parquet checks.
+3. Budget *enforcement* is unaffected: it runs in the request path against the
+   Ledger, not against this metric. What is lost is the ability to see it.
+
 ### HalroAdminAuditBacklogStuck
 
 An administrative mutation and its audit intent commit in one transaction; the
