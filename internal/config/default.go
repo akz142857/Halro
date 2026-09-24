@@ -197,3 +197,13 @@ func WriteDefault(path string) error {
 	}
 	return nil
 }
+
+// FirstRunTemplate is the annotated configuration `halro start` writes when no
+// file exists.
+//
+// Exported so a gate outside this package can hold it to the same standard as
+// configs/config.example.yaml: every key the configuration type can produce has
+// to be written down in the file an operator is actually handed.
+func FirstRunTemplate() []byte {
+	return defaultTemplate
+}
