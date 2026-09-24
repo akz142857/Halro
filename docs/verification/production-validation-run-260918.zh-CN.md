@@ -204,8 +204,7 @@ Platform 角色的结论里有本轮**唯一一条已确认的高危缺陷**：
 - fuzz 目标交叉核对 **8/8 一致，零漂移**；但守护是单向的（`ci.yml:130-133` 能抓「已列出但不存在」，
   抓不到「新增但未列出」）(260918-PV-F-13)。
 - 本 SHA 的 CI 是绿的（run `35316876983`，7m18s），最近 10 次运行全部成功。
-- `make check` 不等于 `CLAUDE.md` 描述的完整门禁：它不含 typecheck、生产构建与 bundle 漂移检查，
-  只有 `make full-check` 覆盖（260918-PV-F-14）。
+- ~~`make check` 不等于 `CLAUDE.md` 描述的完整门禁~~ —— **2026-09-24 已修**，并加了比对二者的门禁。
 - 其他：release-run evidence manifest 只作为 90 天的 workflow artifact 存在、从未发布；仓库内
   Homebrew Formula 镜像仍指向 v0.7.0；容器归档因根 `Dockerfile` 使用浮动 base tag 而不可复现。
 
@@ -283,7 +282,7 @@ Security 角色的结论里最重要的一条是**结构性的**：G3 不是一�
 | 260918-PV-F-11 | P2 | `halro-deadman` 没有版本身份（release 只给 `-s -w`） | **已修**（tarball、`.deb` 与容器镜像统一注入 buildinfo + `-version` 标志 + 测试 + 契约断言；容器部分见 260918-PV-R-01/R-02） |
 | 260918-PV-F-12 | P2 | `CLAUDE.md` 落后 7 个 release（称最新 `v0.5.0`，实为 `v0.8.3`）；同处的前端用例数 276 也已过期（实为 618） | **已修** |
 | 260918-PV-F-13 | P2 | fuzz 清单守护是单向的：新增但未登记的目标永远不会被 fuzz，CI 仍是绿的 | **已修**（反向清点测试，已做反向验证） |
-| 260918-PV-F-14 | P3 | `make check` 不等于 `CLAUDE.md` 描述的完整门禁（缺 typecheck、生产构建、bundle 漂移），只有 `make full-check` 覆盖 | OPEN |
+| 260918-PV-F-14 | P3 | `make check` 不等于 `CLAUDE.md` 描述的完整门禁（缺 typecheck、生产构建、bundle 漂移），只有 `make full-check` 覆盖 | **已修 2026-09-24**：改的是文档不是 Makefile —— `full-check` 从 v0.8.2 起就是发版证据里记录的门禁名，动它会断掉证据链。`CLAUDE.md` 现在指向 `make full-check` 并注明要 Node 22；`make check` 明确标为「迭代循环，不是门禁」。**并加了防漂移门禁**：`tools/gates/test_documented_gate_contract.py` 比对文档指名的目标与 Makefile 的实际依赖（该目标必须够得到 `frontend-production-check`），已进 CI。一次性改文档不够——这两者当初分开，正是因为没有东西在比对它们 |
 | 260918-PV-F-15 | P2 | `CLAUDE.md` 的「failurecapture 是唯一存储调用方内容之处」在本 SHA 不成立，`data/provider-objects/` 是第二处（加密、有界、有 ADR） | **已修** |
 | 260918-PV-F-16 | P2 | 「恢复不得复活已撤销身份」这条红线的唯一控制（restore 列出被重新启用的 Gateway Key）没有针对性测试 | **已修**（新增回归测试） |
 | 260918-PV-F-17 | P2 | 没有 mTLS 客户端证书吊销机制（无 CRL/OCSP/`VerifyPeerCertificate`） | OPEN（设计决定，需在 G3 明确接受或补齐） |

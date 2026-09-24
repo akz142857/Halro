@@ -89,7 +89,8 @@ jobs:
             tools/modelcatalog/test_workflow_contract.py \
             tools/release/test_release_workflow_contract.py \
             tools/release/test_verify_environment.py \
-            tools/release/test_run_evidence.py
+            tools/release/test_run_evidence.py \
+            tools/gates/test_documented_gate_contract.py
           ./tools/m11/check-kms-boundaries.sh
           ./tools/m11/check-production-assets.sh
       - name: Go vulnerability scan
