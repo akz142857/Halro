@@ -56,6 +56,7 @@ an authentication boundary.
 | `halro_attempt_duration_seconds` | summary sum/count | none |
 | `halro_request_latency_seconds` | classic histogram | `le` |
 | `halro_attempt_latency_seconds` | classic histogram | `le` |
+| `halro_stream_first_byte_seconds` | classic histogram | `operation`, `le` |
 | `halro_activation_stale` | gauge | none |
 | `halro_activation_stale_seconds` | gauge | none |
 | `halro_active_requests` | gauge | none |

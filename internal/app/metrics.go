@@ -18,6 +18,7 @@ import (
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/gatewayapi"
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
@@ -127,6 +128,7 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	writeLatencyHistogram(output, "halro_attempt_latency_seconds",
 		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
 		usageMetrics.AttemptLatencyMillis, attemptCount)
+	writeStreamFirstByte(output, r.gateway.StreamFirstByte())
 	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges, capabilityGaugesReadable)
 	metricHeader(output, "halro_activation_stale", "gauge", "Whether any live configuration snapshot is known to be behind the durable store.")
 	if activation.Stale {
@@ -962,4 +964,39 @@ func failureReasonFromLabel(label string) provider.FailureReason {
 		return ""
 	}
 	return provider.FailureReason(label)
+}
+
+// writeStreamFirstByte renders how long streaming callers waited for the first
+// byte they could act on, per northbound endpoint.
+//
+// The plan's §5 asks for a signed streaming first-byte p95/p99 and the
+// 2026-09-18 run found nothing exporting one (260918-PV-F-06). This is that
+// series. It is labelled by operation because the four streaming faces do
+// different work before the first byte — the Anthropic face renders from the
+// semantic model where the native one passes events through — and an average
+// across them answers no question anybody asks.
+//
+// The label set is closed at four and cannot grow with traffic.
+func writeStreamFirstByte(output *bufio.Writer, samples []gatewayapi.StreamFirstByteSample) {
+	metricHeader(output, "halro_stream_first_byte_seconds", "histogram",
+		"Wait from request arrival to the first streamed event delivered to the caller.")
+	// Sorted so two scrapes of an unchanged process render identically.
+	sort.Slice(samples, func(left, right int) bool {
+		return samples[left].Operation < samples[right].Operation
+	})
+	for _, sample := range samples {
+		operation := strconv.Quote(sample.Operation)
+		var cumulative uint64
+		for index, count := range sample.Buckets {
+			cumulative += count
+			fmt.Fprintf(output, "halro_stream_first_byte_seconds_bucket{operation=%s,le=%s} %d\n",
+				operation, strconv.Quote(millisecondsSeconds(usage.LatencyBucketsMillis[index])), cumulative)
+		}
+		fmt.Fprintf(output, "halro_stream_first_byte_seconds_bucket{operation=%s,le=\"+Inf\"} %d\n",
+			operation, sample.Count)
+		fmt.Fprintf(output, "halro_stream_first_byte_seconds_sum{operation=%s} %s\n",
+			operation, millisecondsSeconds(sample.SumMillis))
+		fmt.Fprintf(output, "halro_stream_first_byte_seconds_count{operation=%s} %d\n",
+			operation, sample.Count)
+	}
 }

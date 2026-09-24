@@ -57,14 +57,19 @@ func TestEveryGatewayRouteIsADeclaredNorthboundMethod(t *testing.T) {
 // apply.
 //
 // Middleware values are functions and cannot be compared, so this counts them:
-// the router itself carries two (panic recovery, the write deadline) and each
-// guarded group adds three (the stale-snapshot refusal, the limiter, the guard).
-// Counting is enough to catch the mistake the warning is about — registering a
-// northbound route on the bare router — without pinning which three they are.
+// the router itself carries three (panic recovery, the first-byte arrival
+// stamp, the write deadline) and each guarded group adds three (the
+// stale-snapshot refusal, the limiter, the guard). Counting is enough to catch
+// the mistake the warning is about — registering a northbound route on the bare
+// router — without pinning which three they are.
+//
+// The arrival stamp is on the bare router on purpose: it has to run before the
+// limiter and the guard, because a first-byte measurement that started after
+// them would exclude the time a caller spent being admitted.
 func TestEveryGatewayRouteSitsInsideItsGuardedGroup(t *testing.T) {
 	served, middlewares := walkGatewayRoutes(t)
 	declared := declaredNorthboundMethods()
-	const baseMiddlewares = 2
+	const baseMiddlewares = 3
 	for _, route := range served {
 		if _, ok := declared[route]; !ok {
 			continue

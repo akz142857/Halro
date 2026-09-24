@@ -131,11 +131,22 @@ SRE 角色把九行 `TBD` 全部填成**待签署草案**，每一项标注依�
 
 ### 4.1 三个必须在签署前解决的测量矛盾
 
-1. **方案 §5 要求签署流式首字节 p95/p99，而 Halro 没有任何首字节指标**
-   （全仓 grep `first_byte|ttfb|time_to_first` 零命中，`docs/contracts/metrics-reference.md`
-   的导出清单也没有该系列）。
-   只有三条路：压测端客户端测量、新增埋点、或把该行签为不可测量。这是方案与实现的直接冲突，
-   属于 260918-PV-F-06。
+1. ~~**方案 §5 要求签署流式首字节 p95/p99，而 Halro 没有任何首字节指标**~~
+   —— **2026-09-24 已解决**，选了「新增埋点」：`halro_stream_first_byte_seconds{operation,le}`，
+   已进 `docs/contracts/metrics-reference.md` 的导出清单（该清单有契约测试守门）。
+
+   几个定义上的决定，签署 §5 前要知道：
+   - **起点是请求到达**，不是流式 handler 入口——由 `WithArrival` 中间件打戳，所以来源限流、
+     key 守门、限长读体、JSON 解码都算在里面。SLO 签的是调用方等了多久。
+   - **终点是首个事件写出并 flush 之后**。flush 之前字节还在缓冲区，那不等于调用方看见了。
+   - **只记成功的数据事件，不记错误事件**。首字节之前就被拒的流不产生样本——否则快速失败
+     会拉好这条 SLO 自己的分位数，这是延迟指标被自己的仪器做掉的经典方式。
+   - **按四个 face 分列**（`chat_completions` / `responses` / `messages` / `messages_native`）：
+     Anthropic 的翻译面要从语义模型渲染，原生面是直通，首字节前的工作量不同。
+   - **进程内计数，重启即忘**，与拒绝分类计数器同形，不进 Ledger——这是性能观测，不是账。
+
+   仍然缺的那一半：把 Halro 自己的耗时与上游耗时分开，需要在 Provider 分发处再取一个点。
+   那属于 260913 设计评审的「Gateway 附加延迟」，不属于本条，未做。
 2. **延迟被量化到 12 个桶边界**（`internal/usage/aggregate.go:25-27`，上界之上只能说“大于 120s”），
    因此签署的 p95/p99 必须落在桶边界上，否则无法用 Halro 自己的指标评判。
 3. **Halro 不导出 CPU、RSS、FD 指标**（只有 `halro_process_goroutines`、`go_goroutines`、
@@ -261,7 +272,7 @@ Security 角色的结论里最重要的一条是**结构性的**：G3 不是一�
 | 260918-PV-F-03 | P3（降级） | 首次启动前 `halro usage verify` 以裸 `no such file or directory` 退出 1 | **已修为信息问题**：同样保持非零退出，改为说明是哪种状态；并保留「manifest 在、分区文件丢失」必须失败的反向测试 |
 | 260918-PV-F-04 | P3 | 优雅停止不写任何日志行，日志上「停止」与「被杀」不可区分 | **已修**（`internal/app/runtime.go` 增加 shutdown started/complete） |
 | 260918-PV-F-05 | P2 | `operator-guide.md` 与 `user-guide.md` 声称「删除一个键即恢复默认值」，与内嵌模板 `internal/config/default.yaml:3-7` 的说明相反。真实行为是三分的：`server`/`storage`/`gateway`/`usage.durability`/`usage.timezone` 删掉会校验失败拒绝启动，其余多数被 `Normalize` 补回默认值，而**删掉布尔值会静默变成 `false`**（如 `metrics.require_auth`） | **已修**（两份指南；第一版修正矫枉过正，见 260918-PV-R-13） |
-| 260918-PV-F-06 | P1（方案） | 方案 §5 要求签署流式首字节 p95/p99，而 Halro 没有任何首字节指标 | OPEN（签署 §5 前必须三选一：压测端测量／新增埋点／签为不可测量） |
+| 260918-PV-F-06 | P1（方案） | 方案 §5 要求签署流式首字节 p95/p99，而 Halro 没有任何首字节指标 | **CLOSED 2026-09-24**：选了「新增埋点」。`halro_stream_first_byte_seconds{operation,le}`，观测点在 HTTP 层 flush 之后（`internal/gatewayapi/first_byte_metrics.go`），起点由 `WithArrival` 中间件在请求到达时打戳。不选压测端测量的理由：那样生产里看的数和签的数来自两台不同的仪器 |
 | 260918-PV-F-07 | P2 | 没有任何费用或 token 告警规则，预算超支对 Prometheus 不可见 | OPEN（阈值属 NO BASIS，需四方先定值） |
 | 260918-PV-F-08 | P2 | Gemini 以 Beta 对外提供，却没有任何真实账户证据 | OPEN（G2，需授权） |
 | 260918-PV-F-09 | P3 | 「正式声明支持」无唯一定义：BigModel 四个、MiniMax 订阅两个 profile 写路径可达但不在 README/CLAUDE.md 清单 | OPEN |
@@ -313,7 +324,7 @@ Security 角色的结论里最重要的一条是**结构性的**：G3 不是一�
 按依赖顺序，前三项不需要任何外部授权：
 
 1. 提交当前工作树，用干净提交重新冻结候选并重跑 G0（260918-PV-F-01）。
-2. 决定 260918-PV-F-06 的处理方式——这决定 §5 能不能被签署，而 §5 是 G5 的前置。
+2. ~~决定 260918-PV-F-06 的处理方式~~ —— **2026-09-24 已做**（新增埋点，见第 4.1 节）。§5 的首字节行不再是阻塞项；该行的**阈值**仍待四方签署。
 3. 补 260918-PV-F-18、260918-PV-F-19、260918-PV-F-21 的自动化覆盖；给 260918-PV-F-07 定阈值后补告警规则。
 4. 申请并记录授权：Provider 测试账户与费用上限、隔离目标环境、真实 Contact Point、
    四方签署人、24 小时窗口（方案 §4.2 / §11）。

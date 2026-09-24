@@ -85,7 +85,7 @@
 | 指标 | 目标值 | 状态（2026-09-18 草案） | 负责人 |
 | --- | --- | --- | --- |
 | 同步请求吞吐与 p50/p95/p99 | 待签署 | 有参考主机基准可依据；延迟必须落在 12 个直方图桶边界上 | Application / SRE |
-| 流式首字节与完整响应 p95/p99 | 待签署 | **首字节当前不可测量**：Halro 没有 TTFB 指标，必须先解决 | Application / SRE |
+| 流式首字节与完整响应 p95/p99 | 待签署 | 首字节**已可测量**（2026-09-24，260918-PV-F-06 已关闭）：`halro_stream_first_byte_seconds{operation,le}`，从请求到达到首个事件写出并 flush，按四个 northbound face 分列，落在与其它延迟序列相同的 15 个桶边界上 | Application / SRE |
 | 允许错误率、超时率和限流率 | 待签署 | 错误率有依据（告警 5% / 浸泡 1%）；超时率与限流率无依据 | Application / SRE |
 | CPU、RSS/heap、goroutine、FD 上限 | 待签署 | 增长容差有依据；绝对值需外部采集器，构成 G1 硬前置 | SRE |
 | 队列、重试、failure capture 和 WAL 上限 | 待签署 | 全部为代码中生效的硬上限，可直接签署 | Application / SRE |
