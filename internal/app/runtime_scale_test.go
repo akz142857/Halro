@@ -81,7 +81,14 @@ const (
 	// the gateway admits with it, and both must hold the same one — and because
 	// it has to outlive a registry reload, which the probe map only managed
 	// through carry-forward code that no longer exists.
-	runtimeFieldBudget = 76
+	// 77: auditDeliveryFailures. An atomic counter, not a subsystem. It is on
+	// Runtime because it counts a failure that happens in the runtime's own
+	// drain loop and is read by the metrics endpoint, which is the same shape
+	// and the same reason as the audit anchor counters already beside it. The
+	// alternative — a struct to hold one uint64 — would cost a field anyway
+	// and buy nothing. Raised so 260918-PV-F-19's alerting has something to
+	// fire on.
+	runtimeFieldBudget = 77
 	runtimeMutexBudget = 10
 )
 

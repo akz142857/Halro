@@ -187,6 +187,56 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 3. Escalate to Security immediately; restore emission and independently verify
    a new chain head before treating the external witness as current.
 
+### HalroAdminAuditBacklogStuck
+
+An administrative mutation and its audit intent commit in one transaction; the
+append to the audit log happens afterwards. A backlog that drains is the
+ordinary recovery from a crash between the two. A backlog that does not drain
+means mutations are still being accepted while the records describing them are
+not landing — the audit trail going quiet without anything failing loudly.
+`HalroAuditAnchorStale` cannot see this: an anchor witnesses the chain that
+exists, not the records missing from it.
+
+1. Read `halro_admin_audit_intents_pending` and compare it with
+   `halro_admin_audit_delivery_failures_total`. A rising failure count names a
+   delivery that is being attempted and refused; a flat one with a stuck gauge
+   means nothing is retrying.
+2. Run `halro doctor` offline. Its `admin_audit_backlog` check reports the same
+   backlog from the store, which distinguishes a metrics-path problem from a
+   real one.
+3. Check the audit log's filesystem for space and permissions, then
+   `halro audit verify` on a stopped instance to confirm the chain itself is
+   intact before anything is appended to it.
+4. Escalate to Security. Until the backlog drains, treat every administrative
+   change in the window as unrecorded: the mutations took effect and the trail
+   does not describe them.
+
+### HalroAdminAuditBacklogUnreadable
+
+`halro_admin_audit_intents_pending` reports `-1` when the backlog could not be
+read. Zero is the healthy answer, so an unreadable store must not be able to
+report it — an integrity signal that goes silent when its own source breaks is
+worse than no signal.
+
+1. Check metadata store health and the data directory's permissions and space.
+2. Run `halro doctor`; a failing `metadata` or `admin_audit_backlog` check
+   names the same fault from outside the serving process.
+3. Escalate to Security. The trail's state is unknown, which is not the same as
+   healthy, and no administrative change should be assumed recorded until the
+   gauge reads zero or higher.
+
+### HalroAdminAuditDeliveryFailing
+
+At least one append of a durable mutation's audit record failed in the window.
+The mutation is already in effect; only its record is missing.
+
+1. Identify the failure from the instance's logs and whether the backlog gauge
+   is also non-zero. A failure that clears with the backlog is a transient the
+   retry absorbed.
+2. If the backlog is not draining, follow **HalroAdminAuditBacklogStuck**.
+3. Record the window in the incident log either way: a retried delivery still
+   means the trail was, for a time, behind the state it describes.
+
 ### HalroDeploymentCapabilityEvidenceDegraded
 
 1. Determine whether the family is absent (store read unknown) or the

@@ -37,6 +37,38 @@ groups:
         annotations:
           summary: Halro audit anchor emission is stale
           runbook_url: /docs/observability/operations-runbook.md#halroauditanchorstale
+      - alert: HalroAdminAuditBacklogStuck
+        # An administrative mutation is durable together with its intent, and
+        # the append happens afterwards. A backlog that drains is the ordinary
+        # recovery from a crash between the two; a backlog that does not is
+        # mutations still being accepted while the records describing them are
+        # not landing. The audit anchor cannot see this at all — it witnesses
+        # the chain that exists, not the records missing from it.
+        expr: halro_admin_audit_intents_pending > 0
+        # Long enough that a restart's drain finishes well inside it, short
+        # enough that a trail going quiet is noticed the same shift.
+        for: 15m
+        labels: {severity: critical, service: halro, owner: security, category: audit}
+        annotations:
+          summary: Halro administrative mutations are committed with their audit records unwritten
+          runbook_url: /docs/observability/operations-runbook.md#halroadminauditbacklogstuck
+      - alert: HalroAdminAuditBacklogUnreadable
+        # -1 is the deliberate value for a read that failed. Zero is the
+        # healthy answer, so a store that cannot be read must not be able to
+        # report it — an integrity signal that goes quiet when its source
+        # breaks is worse than none.
+        expr: halro_admin_audit_intents_pending < 0
+        for: 5m
+        labels: {severity: critical, service: halro, owner: security, category: audit}
+        annotations:
+          summary: Halro cannot read its administrative audit backlog
+          runbook_url: /docs/observability/operations-runbook.md#halroadminauditbacklogunreadable
+      - alert: HalroAdminAuditDeliveryFailing
+        expr: increase(halro_admin_audit_delivery_failures_total[15m]) > 0
+        labels: {severity: warning, service: halro, owner: security, category: audit}
+        annotations:
+          summary: Halro failed to append an administrative mutation's audit record
+          runbook_url: /docs/observability/operations-runbook.md#halroadminauditdeliveryfailing
       - alert: HalroDeploymentCapabilityEvidenceDegraded
         expr: absent(halro_deployment_capability_status) or halro_deployment_capability_status{state="conflicting"} > 0
         labels: {severity: warning, service: halro, owner: sre, category: capability}

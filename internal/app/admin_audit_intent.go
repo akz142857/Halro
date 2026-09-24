@@ -133,6 +133,7 @@ func (r *Runtime) drainAdminAuditIntents(ctx context.Context) error {
 	}
 	for _, intent := range intents {
 		if err := r.deliverAdminAuditIntent(ctx, intent); err != nil {
+			r.auditDeliveryFailures.Add(1)
 			return err
 		}
 	}
@@ -150,4 +151,21 @@ func (r *Runtime) recoverAdminAuditIntents() error {
 	ctx, cancel := r.activationContext()
 	defer cancel()
 	return r.drainAdminAuditIntents(ctx)
+}
+
+// pendingAdminAuditIntents is the backlog, for the metrics endpoint.
+//
+// A read error reports -1 rather than 0. Zero is the healthy value and would
+// make an unreadable store look like a clean one — the opposite of what an
+// integrity signal is for. A negative value cannot be produced by a successful
+// read, so an alert can tell the two apart.
+func (r *Runtime) pendingAdminAuditIntents() int {
+	if r == nil || r.store == nil {
+		return -1
+	}
+	pending, err := r.store.PendingAdminAuditIntentCount(r.backgroundCtx)
+	if err != nil {
+		return -1
+	}
+	return pending
 }
