@@ -17,15 +17,46 @@ import (
 // Log is the append side of the journal. One process owns one data directory
 // exclusively, so there is exactly one of these per directory and its mutex
 // serializes appends the way the Ledger's and the Audit log's do.
+// DurabilityWriter is the append side of the journal file, narrowed to what
+// the log actually needs.
+//
+// It exists as an interface for one reason: fault injection. The HA design's
+// release gate (§17) requires the crash matrix to be exercised at real failure
+// points, and the Ledger already carries the same seam — a disk that returns
+// ENOSPC or EIO is not something a test can produce on a filesystem it does not
+// own. Production always passes the *os.File straight through.
+type DurabilityWriter interface {
+	io.Writer
+	Sync() error
+}
+
+// WrapDurability is the injection seam. Nil means the file is used directly.
+//
+// It is a package variable rather than an option on Open because every caller
+// of Open and StartEpoch is inside internal/store/bolt, and threading a test
+// hook through a store's attach path would put a test seam in a production
+// signature that nothing else needs.
+var WrapDurability func(*os.File) DurabilityWriter
+
+func durabilityFor(file *os.File) DurabilityWriter {
+	if WrapDurability != nil {
+		return WrapDurability(file)
+	}
+	return file
+}
+
 type Log struct {
-	mu       sync.Mutex
-	file     *os.File
-	path     string
-	key      []byte
-	epoch    uint64
-	sequence uint64
-	offset   int64
-	lastHash [32]byte
+	mu   sync.Mutex
+	file *os.File
+	// durability is what Append writes through; it is the file itself unless a
+	// test has installed a seam.
+	durability DurabilityWriter
+	path       string
+	key        []byte
+	epoch      uint64
+	sequence   uint64
+	offset     int64
+	lastHash   [32]byte
 	// trimmedThrough is carried so Head answers the same question the file
 	// does. A reader comparing a projection against this log needs it: a
 	// projection below the cut cannot be caught up from here.
@@ -82,7 +113,8 @@ func Open(path string, key []byte) (*Log, error) {
 		return nil, err
 	}
 	return &Log{
-		file: file, path: path, key: append([]byte(nil), key...),
+		file: file, durability: durabilityFor(file),
+		path: path, key: append([]byte(nil), key...),
 		epoch: head.Epoch, sequence: head.Sequence, offset: head.Offset, lastHash: head.Hash,
 		trimmedThrough: head.TrimmedThrough,
 	}, nil
@@ -127,7 +159,8 @@ func StartEpoch(path string, key []byte, header EpochHeader) (*Log, error) {
 		return nil, err
 	}
 	return &Log{
-		file: file, path: path, key: append([]byte(nil), key...),
+		file: file, durability: durabilityFor(file),
+		path: path, key: append([]byte(nil), key...),
 		epoch: header.Epoch, sequence: 0, offset: int64(len(frame)), lastHash: hash,
 	}, nil
 }
@@ -191,10 +224,10 @@ func (l *Log) Append(ops []Op) (Record, error) {
 	}
 	sequence := l.sequence + 1
 	frame, hash := encodeFrame(l.key, KindOperations, l.epoch, sequence, l.lastHash, payload)
-	if err := writeFull(l.file, frame); err != nil {
+	if err := writeFull(l.durability, frame); err != nil {
 		return Record{}, fmt.Errorf("append metadata journal: %w", err)
 	}
-	if err := l.file.Sync(); err != nil {
+	if err := l.durability.Sync(); err != nil {
 		return Record{}, fmt.Errorf("sync metadata journal: %w", err)
 	}
 	record := Record{
@@ -226,9 +259,9 @@ func (l *Log) Close() error {
 	return err
 }
 
-func writeFull(file *os.File, data []byte) error {
+func writeFull(writer io.Writer, data []byte) error {
 	for written := 0; written < len(data); {
-		n, err := file.Write(data[written:])
+		n, err := writer.Write(data[written:])
 		if err != nil {
 			return err
 		}
