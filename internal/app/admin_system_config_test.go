@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	referenceconfigs "github.com/akz142857/Halro/configs"
@@ -114,6 +115,50 @@ func TestConfigReferenceValuesMatchTheShippedDefaults(t *testing.T) {
 		if !bytes.Equal(fromReference, fromShipped) {
 			t.Errorf("configs/config.example.yaml claims %q where the binary defaults to %q",
 				bytes.TrimSpace(fromReference), bytes.TrimSpace(fromShipped))
+		}
+	}
+}
+
+// A description too long for one line is written as several lines carrying the
+// same annotation name. The console has to receive them as one description.
+//
+// It did not: the parser assigned rather than joined, so every wrapped
+// description reached the console as its closing clause alone —
+// gateway.max_total_attempts, whose four lines exist to explain that setting it
+// below the fallback chain leaves the last target never called, showed only
+// "...set it below the longest fallback chain and the last target is configured
+// and never called." with nothing before it to say what it was about.
+func TestAWrappedDescriptionReachesTheConsoleWhole(t *testing.T) {
+	rendered, err := yaml.Marshal(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wrapped systemConfigEntry
+	for _, entry := range describeSystemConfig(referenceconfigs.ExampleYAML, rendered) {
+		if entry.Path == "gateway.max_total_attempts" {
+			wrapped = entry
+		}
+	}
+	// The opening clause and the closing one, which the reference writes on
+	// different lines. Holding both is what proves they were joined rather than
+	// the last one kept.
+	for _, want := range []string{
+		"Total attempts allowed across route targets",
+		"the last target is configured and never called",
+	} {
+		if !strings.Contains(wrapped.DescriptionEN, want) {
+			t.Errorf("gateway.max_total_attempts description lost %q: %q", want, wrapped.DescriptionEN)
+		}
+	}
+	if !strings.Contains(wrapped.DescriptionZH, "一次请求跨路由目标允许的尝试总数") ||
+		!strings.Contains(wrapped.DescriptionZH, "永远不会被调用") {
+		t.Errorf("gateway.max_total_attempts zh description=%q", wrapped.DescriptionZH)
+	}
+	// Joined, not glued with the space an English line break stands for:
+	// Chinese sets none, so one after its punctuation is a visible gap.
+	for _, gap := range []string{"， ", "。 ", "； ", "： "} {
+		if strings.Contains(wrapped.DescriptionZH, gap) {
+			t.Errorf("gateway.max_total_attempts zh description has a stray space: %q", wrapped.DescriptionZH)
 		}
 	}
 }
