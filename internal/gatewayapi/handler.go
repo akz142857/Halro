@@ -122,6 +122,7 @@ func (h *Handler) Responses(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *Handler) responsesStream(writer http.ResponseWriter, request *http.Request, key string, decoded openaiapi.ResponseRequest) {
+	firstByte := h.startFirstByteClock(request.Context(), firstByteResponses)
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writeError(writer, http.StatusInternalServerError, "streaming_unsupported", "response streaming is unavailable", nil)
@@ -161,6 +162,7 @@ func (h *Handler) responsesStream(writer http.ResponseWriter, request *http.Requ
 			return err
 		}
 		flusher.Flush()
+		firstByte.delivered()
 		return nil
 	})
 	if !started && err != nil {
@@ -236,6 +238,7 @@ func (h *Handler) chatCompletionsStream(
 	key string,
 	decoded openaiapi.ChatCompletionRequest,
 ) {
+	firstByte := h.startFirstByteClock(request.Context(), firstByteChatCompletions)
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writeError(writer, http.StatusInternalServerError, "streaming_unsupported", "response streaming is unavailable", nil)
@@ -268,6 +271,7 @@ func (h *Handler) chatCompletionsStream(
 			return err
 		}
 		flusher.Flush()
+		firstByte.delivered()
 		return nil
 	})
 	if !started && err != nil {
@@ -313,6 +317,9 @@ type Handler struct {
 	trustedProxies     []netip.Prefix
 	authorizeKey       func(string) (int64, error)
 	sourceLimit        SourceLimiter
+	// firstByte records how long streaming callers waited for the first byte
+	// they could act on. See first_byte_metrics.go.
+	firstByte *streamFirstByteHistogram
 }
 
 // SourceLimiter bounds how many requests one source address may start per
@@ -378,6 +385,7 @@ func NewWithOptions(service Service, options Options) (*Handler, error) {
 		trustedProxies: append([]netip.Prefix(nil), options.TrustedProxyCIDRs...),
 		authorizeKey:   options.AuthorizeKey,
 		sourceLimit:    options.SourceLimiter,
+		firstByte:      newStreamFirstByteHistogram(),
 	}
 	handler.responses, _ = service.(ResponsesService)
 	handler.messages, _ = service.(MessagesService)
@@ -570,6 +578,7 @@ func (h *Handler) CountTokens(writer http.ResponseWriter, request *http.Request)
 }
 
 func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http.Request, key, version string, betas []string, decoded anthropicapi.MessageRequest, requestID string) {
+	firstByte := h.startFirstByteClock(request.Context(), firstByteMessagesNative)
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "response streaming is unavailable", requestID)
@@ -601,6 +610,7 @@ func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http
 			return err
 		}
 		flusher.Flush()
+		firstByte.delivered()
 		return nil
 	})
 	if !started && err != nil {
@@ -618,6 +628,7 @@ func (h *Handler) messagesNativeStream(writer http.ResponseWriter, request *http
 }
 
 func (h *Handler) messagesStream(writer http.ResponseWriter, request *http.Request, key string, decoded anthropicapi.MessageRequest, requestID string) {
+	firstByte := h.startFirstByteClock(request.Context(), firstByteMessages)
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		writeAnthropicError(writer, http.StatusInternalServerError, "api_error", "response streaming is unavailable", requestID)
@@ -653,6 +664,7 @@ func (h *Handler) messagesStream(writer http.ResponseWriter, request *http.Reque
 			return err
 		}
 		flusher.Flush()
+		firstByte.delivered()
 		return nil
 	})
 	if !started && err != nil {

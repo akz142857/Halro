@@ -1787,6 +1787,9 @@ func (r *Runtime) gatewayHandler() http.Handler {
 func (r *Runtime) gatewayRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
+	// Before the source limiter and the key guard: the first-byte clock has to
+	// start when the request arrived, not when a handler finally got it.
+	router.Use(r.gateway.WithArrival)
 	router.Use(r.gateway.WithWriteDeadline)
 	// Health stays outside the per-source limiter on purpose: an orchestrator
 	// probes from one address on a fixed interval, so limiting by source would
