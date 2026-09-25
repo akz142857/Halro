@@ -23,6 +23,28 @@ RELEASE_DATE ?= $(shell date -u -r "$${SOURCE_DATE_EPOCH:-$$(date +%s)}" +%Y-%m-
 BUILDINFO := github.com/akz142857/Halro/internal/buildinfo
 GO_LDFLAGS := -X $(BUILDINFO).Version=$(RELEASE_VERSION) -X $(BUILDINFO).Commit=$(RELEASE_COMMIT) -X $(BUILDINFO).Date=$(RELEASE_DATE)
 
+# The identity a binary is stamped with is invisible to make's timestamp rule:
+# bin/halro-deadman depends on its sources, and those do not move when HEAD
+# does. A deadman linked on 2026-09-18 therefore survived every build after it
+# and went on answering `-version` with that day's describe string, `-dirty`
+# suffix and all, from a tree that was not clean. G0 asks whether every
+# artifact traces back to the candidate SHA; this is how that answer becomes no
+# with nothing failing on the way.
+#
+# So the identity is a prerequisite of its own. The stamp is rewritten only
+# when the value changes, so an unchanged checkout still relinks nothing.
+# RELEASE_DATE is deliberately not in it: it moves on every invocation and
+# would turn this into a rebuild-always rule.
+RELEASE_IDENTITY := bin/.release-identity
+
+$(RELEASE_IDENTITY): FORCE
+	@mkdir -p bin
+	@printf '%s %s\n' '$(RELEASE_VERSION)' '$(RELEASE_COMMIT)' > $@.candidate
+	@cmp -s $@.candidate $@ || mv $@.candidate $@
+	@rm -f $@.candidate
+
+FORCE:
+
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/halro-deadman internal/deadman -type f -name '*.go')
 WEBUI_DIST_SOURCES := $(shell find internal/webui/dist -type f)
@@ -31,7 +53,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.halro-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.halro-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version FORCE
 
 help:
 	@echo "Halro Makefile commands:"
@@ -128,11 +150,11 @@ stats: bin/halro
 # README promises. Rebuild the bundle explicitly with `make frontend` after
 # changing anything under web/; CI fails on a stale one (`git diff --exit-code
 # -- internal/webui/dist`), so it cannot drift unnoticed.
-bin/halro: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum
+bin/halro: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum $(RELEASE_IDENTITY)
 	mkdir -p bin
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro
 
-bin/halro-deadman: $(DEADMAN_SOURCES) go.mod go.sum
+bin/halro-deadman: $(DEADMAN_SOURCES) go.mod go.sum $(RELEASE_IDENTITY)
 	mkdir -p bin
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro-deadman
 
