@@ -1089,12 +1089,21 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 截至 2026-09-25，对 `main` 实测得到（不是按文档声明抄的）：
 
-| 阶段 | 条目 | 完成 | Issue | 备注 |
+**这张表是进度的唯一来源。** 对应的 issue 是工作分解，不是第二份记录：两边计数单位不同——本节
+按本文 §18 的粗粒度交付物数，issue 按可勾选的细粒度工作项数——所以数字不该互相对照着读。每个
+issue 的正文首行都指回这里，冲突时听这里。
+
+| 阶段 | 本文条目 | 完成 | Issue（细粒度工作项） | 备注 |
 | --- | --- | --- | --- | --- |
-| Phase 0a metadata journal | 5 | **5** | [#315](https://github.com/akz142857/Halro/issues/315) CLOSED | 已合入 `main`，3858 行含测试 |
-| Phase 0b 复制格式 | 6 | 0 | [#106](https://github.com/akz142857/Halro/issues/106) | 未开工 |
-| Phase 1 复制流与 Replica | 5 | 0 | [#107](https://github.com/akz142857/Halro/issues/107) | 未开工 |
-| Phase 2 提升、备份与部署 | 5 | 0 | [#108](https://github.com/akz142857/Halro/issues/108) | 未开工 |
+| Phase 0a metadata journal | 5 | **5** | [#315](https://github.com/akz142857/Halro/issues/315) **CLOSED** | 已合入 `main`，3858 行含测试，无未完成项 |
+| Phase 0b 复制格式 | 6 | 0 开工 | [#106](https://github.com/akz142857/Halro/issues/106) · 8 项，1 项经核实已满足 | 见下 |
+| Phase 1 复制流与 Replica | 5 | 0 | [#107](https://github.com/akz142857/Halro/issues/107) · 25 项 | 未开工 |
+| Phase 2 提升、备份与部署 | 5 | 0 | [#108](https://github.com/akz142857/Halro/issues/108) · 20 项 | 未开工 |
+| §1.3 进入条件 | 3 | 0 | [#105](https://github.com/akz142857/Halro/issues/105) · 7 项 | 全部未满足，见本节末 |
+| §19 自动切换的未决问题 | — | — | [#109](https://github.com/akz142857/Halro/issues/109) · 4 问 | 必须在 Phase 2 之前回答 |
+
+Phase 0b 那一项是 #106 的第 5 项（#12 的调用方幂等记录落 A 类 bucket）：它**经核实已满足，不是被
+实现的**，因为它不冻结任何格式，所以在门之外做完了。其余七项原样未动，阶段未开工。
 
 **按条目是 5/21，按能力是 0。** Phase 0a 按 §1.3 的说法本就是「一个独立的 Standalone 变更」：
 它让 `halro.db` 成为 journal 的投影，从而使物理复制*成为可能*，但它自己不复制任何东西。实测
