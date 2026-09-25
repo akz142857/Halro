@@ -3,6 +3,8 @@
 > - 执行方案：[生产验证执行方案](production-validation-plan.zh-CN.md)
 > - 候选提交：`f09ed2d768bf2cd335478223beb4d57af326013b`（冻结时工作树只含未提交的 `docs/` 修改；
 >   本次执行随后在同一工作树上落了修复，见第 9 节与 260918-PV-F-01）
+> - **后续**：本记录的修复已全部落地，G0 已于 2026-09-25 用干净提交 `9e0d73c7` 重跑，见
+>   [G0 重新冻结记录](production-validation-run-260925-g0.zh-CN.md)
 > - 运行版本串：`v0.8.3-11-gf09ed2d-dirty`
 > - 执行环境：单台 macOS 26.6 / Darwin arm64 开发机，Go 1.26.6，Node v22.22.2
 > - 执行角色：Application / Security / SRE / Platform 四个独立评审角色（由 agent 承担，
@@ -269,7 +271,7 @@ Security 角色的结论里最重要的一条是**结构性的**：G3 不是一�
 
 | ID | 严重度 | 发现 | 状态 |
 | --- | --- | --- | --- |
-| 260918-PV-F-01 | P2 | 候选工作树不干净，版本串带 `-dirty`，G0 的「制品可追溯到同一 SHA」不成立 | OPEN（发布前必须用干净提交重跑 G0） |
+| 260918-PV-F-01 | P2 | 候选工作树不干净，版本串带 `-dirty`，G0 的「制品可追溯到同一 SHA」不成立 | **CLOSED 2026-09-25**：本次的修复全部合入 `main` 后用干净提交 `9e0d73c7` 重跑 G0，见 [G0 重新冻结记录](production-validation-run-260925-g0.zh-CN.md)。重跑时发现 `make build` 会留下一个自称来自不干净树的旧 `halro-deadman`（260925-PV-F-01），已修并加门禁 |
 | 260918-PV-F-02 | P3（降级） | 全新安装上 `halro ledger verify` 退出 1，且信息是「ledger chain could not be authenticated」，读起来像损坏 | **已修为信息问题**：退出码**仍然非零**——安全评审证明放行会把「擦掉 WAL + 清零 checkpoint」变成干净体检（见 260918-PV-R-10）；改为区分两种状态的措辞，并补 `ledger.ChainReport.HoldsFrames` 与擦除场景回归测试 |
 | 260918-PV-F-03 | P3（降级） | 首次启动前 `halro usage verify` 以裸 `no such file or directory` 退出 1 | **已修为信息问题**：同样保持非零退出，改为说明是哪种状态；并保留「manifest 在、分区文件丢失」必须失败的反向测试 |
 | 260918-PV-F-04 | P3 | 优雅停止不写任何日志行，日志上「停止」与「被杀」不可区分 | **已修**（`internal/app/runtime.go` 增加 shutdown started/complete） |
