@@ -32,8 +32,15 @@ go vet ./...
 cd web && npm ci --ignore-scripts && npm run typecheck && npm test -- --run && npm run build && cd ..
 git diff --exit-code -- internal/webui/dist   # fails if the embedded bundle is stale after web/ changes
 ```
-Or run the full local gate: `make check` (fmt-check, test, race, vet, frontend-test,
-observability-check).
+Or run it as one target: `make full-check`. That is the gate — it is what the
+release assessments from v0.8.2 onward record, and it needs Node 22 to match CI,
+because it rebuilds the committed bundle and compares it.
+
+`make check` is the shorter loop (fmt-check, test, race, vet, frontend-test,
+observability-check). It is **not** the full gate and this file used to say it
+was: it runs no typecheck, no production build, and no bundle-drift check, so a
+stale `internal/webui/dist` passes it and fails CI. Use it while iterating; use
+`full-check` before the push.
 
 The race detector is conditional, not part of every gate — run it for changes that
 touch concurrency, goroutines, shared state or lifecycle, and for the package that
