@@ -3,13 +3,14 @@ module github.com/akz142857/Halro/tests/compatibility/go
 go 1.25.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.72.0
-	github.com/openai/openai-go/v3 v3.61.0
+	github.com/anthropics/anthropic-sdk-go v1.74.0
+	github.com/openai/openai-go/v3 v3.64.2
 )
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
