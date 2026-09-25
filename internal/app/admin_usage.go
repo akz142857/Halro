@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	referenceconfigs "github.com/akz142857/Halro/configs"
 	"github.com/akz142857/Halro/internal/budget"
@@ -699,6 +701,14 @@ func collectConfigLeaves(node *yaml.Node, prefix string, visit func(string, *yam
 	}
 }
 
+// configCommentMetadata reads the @title/@description annotations above a key.
+//
+// A description longer than one line is written as repeated lines carrying the
+// same annotation name, because the reference file wraps rather than running a
+// paragraph off the right edge. They are one description and are joined here.
+// Assigning instead of joining kept only the last line, which silently shortened
+// every wrapped description the console shows — gateway.max_total_attempts lost
+// everything except its closing clause.
 func configCommentMetadata(comment string) map[string]string {
 	metadata := make(map[string]string)
 	for _, line := range strings.Split(comment, "\n") {
@@ -707,11 +717,30 @@ func configCommentMetadata(comment string) map[string]string {
 			continue
 		}
 		key, value, ok := strings.Cut(strings.TrimPrefix(line, "@"), " ")
-		if ok {
-			metadata[key] = strings.TrimSpace(value)
+		if !ok {
+			continue
 		}
+		value = strings.TrimSpace(value)
+		if existing, repeated := metadata[key]; repeated {
+			value = existing + continuationSeparator(existing) + value
+		}
+		metadata[key] = value
 	}
 	return metadata
+}
+
+// continuationSeparator picks what joins a wrapped annotation back together.
+// A line broken mid-sentence in English needs the space the line break stood
+// for; Chinese sets no space between characters, so a wrapped Chinese
+// description joined with one shows a gap after its punctuation.
+func continuationSeparator(previous string) string {
+	last, _ := utf8.DecodeLastRuneInString(previous)
+	if unicode.Is(unicode.Han, last) || unicode.Is(unicode.Hiragana, last) ||
+		unicode.Is(unicode.Katakana, last) || unicode.Is(unicode.Hangul, last) ||
+		strings.ContainsRune("，。；：、！？（）「」《》…—", last) {
+		return ""
+	}
+	return " "
 }
 
 func configNodeValue(node *yaml.Node) string {

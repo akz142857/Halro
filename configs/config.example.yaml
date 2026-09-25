@@ -32,13 +32,17 @@ server:
   read_body_timeout: 15s
   # @title.zh-CN 优雅关闭超时
   # @title.en-US Graceful shutdown timeout
-  # @description.zh-CN 所有监听器共享的关闭预算，必须不短于 Gateway 路由总超时。
-  # @description.en-US Shared listener shutdown budget; must not be shorter than the Gateway route total timeout.
+  # @description.zh-CN 所有监听器共享的关闭预算，必须不短于 gateway.route_total_timeout，
+  # @description.zh-CN 否则已受理的请求来不及走完。
+  # @description.en-US Shared listener shutdown budget. It must be at least
+  # @description.en-US gateway.route_total_timeout, or accepted requests cannot drain.
   shutdown_timeout: 120s
   # @title.zh-CN 最大请求头大小
   # @title.en-US Maximum header size
   # @description.zh-CN 单个请求头允许的最大字节数。
+  # @description.zh-CN 至少 1024。
   # @description.en-US Maximum header bytes accepted for one request.
+  # @description.en-US At least 1024.
   max_header_bytes: 32768
   # @title.zh-CN 最大请求大小
   # @title.en-US Maximum request size
@@ -78,8 +82,94 @@ storage:
     # @title.zh-CN 主密钥文件
     # @title.en-US Master-key file
     # @description.zh-CN file 模式使用的主密钥文件路径。
+    # @description.zh-CN key_slots 模式下不得设置。
     # @description.en-US Master-key file path used in file mode.
+    # @description.en-US It cannot be set in key_slots mode.
     file: "./master.key"
+    # Everything below belongs to mode: key_slots, where the Master Key is held
+    # by a cloud KMS instead of by this host. The keys are commented out
+    # because validation refuses to see them set together with `file`.
+    #
+    # To switch: set mode to key_slots, comment `file` out, and uncomment only
+    # the lines that read `key: value` — leave the `# @title` and
+    # `# @description` lines commented. They are the console's field metadata
+    # and are meant to stay comments; they attach themselves to the keys below
+    # them once those keys are live.
+    #
+    # See docs/guides/operator-guide.md before doing so — non-repudiation of
+    # the audit chain assumes this mode.
+    #
+    # @title.zh-CN 主用密钥槽
+    # @title.en-US Primary key slot
+    # @description.zh-CN key_slots 模式下日常解封主密钥的槽标识；必须与恢复槽不同。
+    # @description.en-US Slot identifier that unwraps the Master Key in normal operation; must differ from the recovery slot.
+    # primary_slot: "halro-primary"
+    # @title.zh-CN 恢复密钥槽
+    # @title.en-US Recovery key slot
+    # @description.zh-CN 主用槽不可用时使用的独立槽；必须由独立的 KMS 密钥支撑，否则两者同时失效。
+    # @description.en-US Independent slot used when the primary is unavailable; back it with a separate KMS key or both fail together.
+    # recovery_slot: "halro-recovery"
+    # @title.zh-CN 解封启动期限
+    # @title.en-US Unwrap startup deadline
+    # @description.zh-CN 启动时解封主密钥的总期限；超时即拒绝启动，不降级运行。
+    # @description.en-US Total deadline for unwrapping the Master Key at startup; exceeding it refuses to start rather than running degraded.
+    # startup_deadline: "30s"
+    # @title.zh-CN 单次 KMS 调用超时
+    # @title.en-US Single KMS call timeout
+    # @description.zh-CN 单次 KMS 调用的超时，必须为正且小于 startup_deadline，否则一次挂起的调用会吃掉整个启动期限。
+    # @description.en-US Timeout for one KMS call; must be positive and less than startup_deadline, or a single hung call consumes the whole startup budget.
+    # call_timeout: "10s"
+    # @title.zh-CN KMS 密钥允许清单
+    # @title.en-US KMS key allowlist
+    # @description.zh-CN 本实例允许使用的 KMS 密钥；必须恰好包含 primary 与 recovery 各一条。清单之外的密钥即使 IAM 放行也会被拒绝。
+    # @description.en-US KMS keys this instance may use; exactly one primary and one recovery entry are required. A key outside the list is refused even where IAM would allow it.
+    # allowed_kms_keys:
+    #     # @title.zh-CN 密钥用途
+    #     # @title.en-US Key purpose
+    #     # @description.zh-CN 取值 primary 或 recovery，两者各须恰好出现一次。
+    #     # @description.en-US Either primary or recovery; each must appear exactly once.
+    #   - purpose: "primary"
+    #     # @title.zh-CN KMS 提供方
+    #     # @title.en-US KMS provider
+    #     # @description.zh-CN 本版本仅支持 aws-kms。
+    #     # @description.en-US Only aws-kms is available in this release.
+    #     provider: "aws-kms"
+    #     # @title.zh-CN 区域
+    #     # @title.en-US Region
+    #     # @description.zh-CN AWS 区域，必须与 key_id 这个 ARN 中的区域一致。
+    #     # @description.en-US AWS region; must match the region inside the key_id ARN.
+    #     region: "us-east-1"
+    #     # @title.zh-CN 账号
+    #     # @title.en-US Account
+    #     # @description.zh-CN 12 位 AWS 账号，必须与 key_id 这个 ARN 中的账号一致。
+    #     # @description.en-US Twelve-digit AWS account; must match the account inside the key_id ARN.
+    #     account: "123456789012"
+    #     # @title.zh-CN 密钥 ARN
+    #     # @title.en-US Key ARN
+    #     # @description.zh-CN 完整的 KMS Key ARN；别名或裸 key id 会被拒绝，因为它们可以在不改配置的情况下被指向另一把密钥。
+    #     # @description.en-US Full KMS Key ARN; an alias or bare key id is refused, because either can be repointed at a different key without the configuration changing.
+    #     key_id: "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+    #     # @title.zh-CN 自定义端点
+    #     # @title.en-US Custom endpoint
+    #     # @description.zh-CN 可选的 VPC 端点或私有链路地址；留空使用该区域的默认端点。
+    #     # @description.en-US Optional VPC endpoint or private link address; empty uses the region's default endpoint.
+    #     endpoint: ""
+    #     # @title.zh-CN 加密算法
+    #     # @title.en-US Encryption algorithm
+    #     # @description.zh-CN aws-kms 下留空即 SYMMETRIC_DEFAULT，也只接受这一个取值。
+    #     # @description.en-US Empty means SYMMETRIC_DEFAULT under aws-kms, which is also the only accepted value.
+    #     algorithm: ""
+    #     # The recovery entry is not optional: the allowlist is refused without
+    #     # exactly one of each purpose. Backing it with a key in another region
+    #     # is the point of having it — one region's outage should not take the
+    #     # recovery path with it.
+    #   - purpose: "recovery"
+    #     provider: "aws-kms"
+    #     region: "us-west-2"
+    #     account: "123456789012"
+    #     key_id: "arn:aws:kms:us-west-2:123456789012:key/11111111-1111-1111-1111-111111111111"
+    #     endpoint: ""
+    #     algorithm: ""
 
 admin:
   # @title.zh-CN 会话有效期
@@ -223,7 +313,10 @@ usage:
   # @title.zh-CN 用量保留天数
   # @title.en-US Usage retention days
   # @description.zh-CN 归档保留天数，管的是磁盘上的 Parquet 分区，不是控制台能翻多久。
-  # @description.en-US How long the Parquet archive on disk is kept. This is not how far the console can page back.
+  # @description.zh-CN 至少 7 天：console_window_days 不得低于 7 天，也不得超过本项。
+  # @description.en-US How long the Parquet archive on disk is kept. This is not how far the
+  # @description.en-US console can page back. At least 7 days: console_window_days may go no
+  # @description.en-US lower and may not exceed this.
   retention_days: 90
   # @title.zh-CN 控制台可见天数
   # @title.en-US Console window in days
@@ -264,7 +357,10 @@ gateway:
   # @title.zh-CN 价格时钟回退容差
   # @title.en-US Pricing rollback tolerance
   # @description.zh-CN 价格选择时间允许向后偏移的安全容差。
+  # @description.zh-CN 至少 1 秒，否则并发的价格选择会被误判成墙上时钟回退。
   # @description.en-US Safe tolerance for backward movement in pricing selection time.
+  # @description.en-US At least 1s, so concurrent price selections cannot be mistaken for a
+  # @description.en-US wall-clock rollback.
   pricing_clock_rollback_tolerance: 2s
   # @title.zh-CN 价格时钟前移容差
   # @title.en-US Pricing forward tolerance
@@ -312,12 +408,14 @@ gateway:
   # @description.zh-CN 消费能力是全局的:调高它会增加延迟层能同时压在上游的并发量,每个
   # @description.zh-CN 线程最长占用一次 route_total_timeout。出队顺序按项目轮转,所以
   # @description.zh-CN 一个项目灌满自己的队列不会挡住其他项目。
+  # @description.zh-CN 取值 1 到 256。
   # @description.en-US How many deferred submissions execute at once, shared by the whole
   # @description.en-US instance. The queue ceiling is per Project and this is global: raising it
   # @description.en-US raises how much concurrent upstream work the deferred tier may add, each
   # @description.en-US worker holding one call for up to route_total_timeout. Dequeuing takes one
   # @description.en-US submission from each Project in turn, so a Project that fills its own queue
   # @description.en-US does not hold up the others.
+  # @description.en-US Between 1 and 256.
   deferred_response_workers: 4
   # @title.zh-CN 健康探测间隔
   # @title.en-US Health probe interval
@@ -463,7 +561,9 @@ security:
   # @title.zh-CN 可信代理网段
   # @title.en-US Trusted proxy CIDRs
   # @description.zh-CN 允许提供可信转发头的代理 CIDR 列表。
+  # @description.zh-CN trust_proxy_headers 打开时必填。
   # @description.en-US Proxy CIDRs allowed to supply trusted forwarding headers.
+  # @description.en-US Required when trust_proxy_headers is on.
   trusted_proxy_cidrs: []
 
 metrics:
@@ -480,17 +580,23 @@ metrics:
   # @title.zh-CN 指标凭据文件
   # @title.en-US Metrics credential file
   # @description.zh-CN 指标服务独立认证凭据的文件路径。
+  # @description.zh-CN 需要同时打开 metrics.require_auth。
   # @description.en-US Path to the metrics service's independent credential file.
+  # @description.en-US Requires metrics.require_auth.
   credential_file: ""
   # @title.zh-CN 最大并发抓取数
   # @title.en-US Maximum concurrent scrapes
   # @description.zh-CN 指标服务同时处理的抓取请求上限。
+  # @description.zh-CN 取值 1 到 32。
   # @description.en-US Maximum metrics scrape requests handled concurrently.
+  # @description.en-US Between 1 and 32.
   max_concurrent_scrapes: 2
   # @title.zh-CN 指标写入超时
   # @title.en-US Metrics write timeout
   # @description.zh-CN 指标响应写回抓取客户端允许的最长时间。
+  # @description.zh-CN 大于零且不超过 30 秒。
   # @description.en-US Maximum time allowed to write a metrics response.
+  # @description.en-US Above zero and at most 30 seconds.
   write_timeout: 5s
   tls:
     # @title.zh-CN 指标 TLS
@@ -532,12 +638,18 @@ audit:
     # @title.zh-CN 审计锚定接收端
     # @title.en-US Audit anchor sink
     # @description.zh-CN 接收外部审计锚定摘要的实现类型。
+    # @description.zh-CN dead_man_pull 要求 metrics.enabled 与 metrics.tls.enabled 同时打开；
+    # @description.zh-CN 锚定源不能以明文提供。
     # @description.en-US Sink implementation receiving external audit-anchor summaries.
+    # @description.en-US dead_man_pull requires both metrics.enabled and metrics.tls.enabled;
+    # @description.en-US the anchor feed must not be served in the clear.
     sink: dead_man_pull
     # @title.zh-CN 审计锚定间隔
     # @title.en-US Audit anchor interval
     # @description.zh-CN 即使记录增量未达到阈值也发布锚定的最长间隔。
+    # @description.zh-CN 大于零且不超过 1 小时。
     # @description.en-US Maximum interval between anchors even below the record threshold.
+    # @description.en-US Above zero and at most one hour.
     interval: 5m
     # @title.zh-CN 审计锚定记录增量
     # @title.en-US Audit anchor record delta
@@ -549,7 +661,9 @@ audit:
     # @title.zh-CN 审计锚定凭据文件
     # @title.en-US Audit anchor credential file
     # @description.zh-CN dead-man 拉取审计锚定使用的独立凭据文件。
+    # @description.zh-CN 必须与 metrics.credential_file 不同。
     # @description.en-US Independent credential file used by dead-man audit-anchor pulls.
+    # @description.en-US It must differ from metrics.credential_file.
     credential_file: ""
 
 model_catalog:
@@ -561,7 +675,9 @@ model_catalog:
   # @title.zh-CN 目录刷新间隔
   # @title.en-US Catalog refresh interval
   # @description.zh-CN 后台检查签名目录更新的间隔。
+  # @description.zh-CN 取值 5 分钟到 7 天。
   # @description.en-US Interval between signed catalog update checks.
+  # @description.en-US Between 5 minutes and 7 days.
   refresh_interval: 6h
   # @title.zh-CN 固定目录 revision
   # @title.en-US Pinned catalog revision
@@ -571,22 +687,30 @@ model_catalog:
   # @title.zh-CN 最大下载字节数
   # @title.en-US Maximum download bytes
   # @description.zh-CN 压缩响应体的硬上限。
+  # @description.zh-CN 取值 4096 到 16777216。
   # @description.en-US Hard limit for the compressed response body.
+  # @description.en-US Between 4096 and 16777216.
   max_download_bytes: 1048576
   # @title.zh-CN 最大解码字节数
   # @title.en-US Maximum decoded bytes
   # @description.zh-CN 解压和解码后的硬上限。
+  # @description.zh-CN 不小于 max_download_bytes，且不超过 67108864。
   # @description.en-US Hard limit after decompression and decoding.
+  # @description.en-US At least max_download_bytes and at most 67108864.
   max_decoded_bytes: 4194304
   # @title.zh-CN 最大压缩比
   # @title.en-US Maximum compression ratio
   # @description.zh-CN 拒绝超过该展开比例的压缩目录。
+  # @description.zh-CN 取值 1 到 100。
   # @description.en-US Rejects compressed catalogs exceeding this expansion ratio.
+  # @description.en-US Between 1 and 100.
   max_compression_ratio: 20
   # @title.zh-CN 最大目录条目数
   # @title.en-US Maximum catalog entries
   # @description.zh-CN 单个已验证清单允许的最大精确模型条目数。
+  # @description.zh-CN 取值 1 到 100000。
   # @description.en-US Maximum exact model entries in one verified manifest.
+  # @description.en-US Between 1 and 100000.
   max_entries: 10000
 
 # Consumer subscription products, off in the shipped default.
@@ -633,12 +757,16 @@ logging:
   # @title.zh-CN 单个日志文件上限（MB）
   # @title.en-US Log file size limit (MB)
   # @description.zh-CN 写入将超过该大小时轮转当前文件。
+  # @description.zh-CN 取值 1 到 4096。
   # @description.en-US Rotates the current file once a record would carry it past this size.
+  # @description.en-US Between 1 and 4096.
   max_size_mb: 64
   # @title.zh-CN 保留的日志文件数
   # @title.en-US Retained log files
   # @description.zh-CN 含正在写入的文件在内的总代数；1 表示不保留历史。
+  # @description.zh-CN 取值 1 到 100。
   # @description.en-US Total generations kept, including the file being written; 1 keeps no history.
+  # @description.en-US Between 1 and 100.
   max_files: 5
   error_file:
     # @title.zh-CN 启用错误专用日志文件
@@ -654,10 +782,14 @@ logging:
     # @title.zh-CN 单个错误日志文件上限（MB）
     # @title.en-US Error log file size limit (MB)
     # @description.zh-CN 写入将超过该大小时轮转当前文件。
+    # @description.zh-CN 取值 1 到 4096。
     # @description.en-US Rotates the current file once a record would carry it past this size.
+    # @description.en-US Between 1 and 4096.
     max_size_mb: 32
     # @title.zh-CN 保留的错误日志文件数
     # @title.en-US Retained error log files
     # @description.zh-CN 含正在写入的文件在内的总代数；这些代数就是事故后可以往回读的范围。
+    # @description.zh-CN 取值 1 到 100。
     # @description.en-US Total generations kept, including the file being written; these generations are how far back an operator can read after an incident.
+    # @description.en-US Between 1 and 100.
     max_files: 10
