@@ -20,8 +20,8 @@ module and lock files.
 | `github.com/aws/aws-sdk-go-v2` | 1.47.0 | Apache-2.0 | runtime |
 | `github.com/aws/aws-sdk-go-v2/config` | 1.33.5 | Apache-2.0 | runtime |
 | `github.com/aws/aws-sdk-go-v2/credentials` | 1.20.5 | Apache-2.0 | runtime |
-| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.60.0 | Apache-2.0 | runtime |
-| `github.com/aws/smithy-go` | 1.28.1 | Apache-2.0 | runtime |
+| `github.com/aws/aws-sdk-go-v2/service/kms` | 1.61.0 | Apache-2.0 | runtime |
+| `github.com/aws/smithy-go` | 1.28.2 | Apache-2.0 | runtime |
 | `github.com/go-chi/chi/v5` | 5.3.2 | MIT | runtime |
 | `github.com/google/jsonschema-go` | 0.4.3 | MIT | test/release tooling |
 | `github.com/parquet-go/parquet-go` | 0.32.0 | Apache-2.0 | runtime |
@@ -205,6 +205,16 @@ would change the dependency set as a side effect of a version bump, which is
 the thing this review exists to catch. So each Python bump keeps the lock its
 own Dependabot run generated, and they land one after another.
 
+The 2026-09-26 runtime refresh moved `github.com/aws/aws-sdk-go-v2/service/kms`
+from 1.60.0 to 1.61.0 and `github.com/aws/smithy-go` from 1.28.1 to 1.28.2.
+Both LICENSE files are byte-identical across their bumps and the resolved
+module-path set is unchanged. Unlike the compatibility SDKs, these two are in
+the shipped binary: the KMS client is the named exception to "SafeTransport is
+the only path to the network" that ADR 0010 records, so a change in its
+transport reaches production rather than only CI. Nothing moved in either
+`go.mod` except its own version line, and the KMS boundary, Master Key and
+Vault suites were run against the result.
+
 The 2026-09-26 Go compatibility refresh moved
 `github.com/anthropics/anthropic-sdk-go` from 1.72.0 to 1.74.0 and
 `github.com/openai/openai-go/v3` from 3.61.0 to 3.64.2, taken together because
@@ -271,8 +281,8 @@ CI runs `scripts/check-dependency-license-review.sh`. These are Git blob hashes
 of the reviewed dependency inputs; a dependency change cannot pass until this
 document is deliberately refreshed with the new inventory and hashes.
 
-- `go.mod`: `d424d793437ee2b237f9c9861deaea5e76a8bd76`
-- `go.sum`: `b2b51b4b4ab3cb03f792df71afa520d1b936ce43`
+- `go.mod`: `742ec795e94a3945336be2f5e3a7b35d5209e180`
+- `go.sum`: `f2b3fdf9939c7cbef8048f41ac042bafb6165079`
 - `web/package.json`: `32594ca3980b25dab677bb4a54edf6ddb058c022`
 - `web/package-lock.json`: `00e8554b7e862dc3507d9f2ec4b27bcce579f2df`
 - `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
