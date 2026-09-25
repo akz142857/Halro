@@ -165,15 +165,15 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 
 | Ecosystem | Reviewed direct dependencies | License |
 |---|---|---|
-| Go | `github.com/anthropics/anthropic-sdk-go` 1.72.0 | MIT |
-| Go | `github.com/openai/openai-go/v3` 3.61.0 | Apache-2.0 |
+| Go | `github.com/anthropics/anthropic-sdk-go` 1.74.0 | MIT |
+| Go | `github.com/openai/openai-go/v3` 3.64.2 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
 | Node | `openai` 7.15.0 | Apache-2.0 |
 | Python | `anthropic` 1.5.0 | MIT |
 | Python | `openai` 3.14.0 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
-The resolved Go compatibility graph is MIT, BSD-3-Clause, or Apache-2.0. The
+The resolved Go compatibility graph is MIT, BSD-3-Clause, Apache-2.0, or ISC — the last of these arrived on 2026-09-26 and is described below. The
 Node lock contains MIT, Apache-2.0, and Unlicense packages. The 42-package
 Python lock contains MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, PSF/PSFL,
 and one MPL-2.0 certificate bundle (`certifi`); all are test-only and none are
@@ -190,6 +190,22 @@ The 2026-09-18 OpenAI Go compatibility refresh moved
 `github.com/openai/openai-go/v3` from 3.56.0 to 3.61.0. The module remains
 Apache-2.0 licensed, the resolved module-path set is unchanged, and this SDK
 is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-26 Go compatibility refresh moved
+`github.com/anthropics/anthropic-sdk-go` from 1.72.0 to 1.74.0 and
+`github.com/openai/openai-go/v3` from 3.61.0 to 3.64.2, taken together because
+both edit the same two files and neither can land without the other conflicting.
+Both LICENSE files are byte-identical across their bumps, and both SDKs remain
+confined to the compatibility contracts rather than the shipped runtime.
+
+**The resolved module-path set changed this time**, which every previous
+refresh here has been able to say it did not. `github.com/coder/websocket`
+1.8.15 is now an indirect dependency, pulled in by the OpenAI SDK's realtime
+surface. It is ISC licensed — the full text is the standard ISC permission
+grant with no additional terms — which is why the paragraph above now names a
+fourth license. It reaches no Halro artifact: this module is a separate
+`go.mod` outside `./...`, built only by the SDK compatibility job, and Halro's
+own realtime paths do not use it.
 
 The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
 0.124.0 to 0.125.0. The package remains MIT licensed, the lockfile package set
@@ -237,8 +253,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `go.sum`: `b2b51b4b4ab3cb03f792df71afa520d1b936ce43`
 - `web/package.json`: `32594ca3980b25dab677bb4a54edf6ddb058c022`
 - `web/package-lock.json`: `00e8554b7e862dc3507d9f2ec4b27bcce579f2df`
-- `tests/compatibility/go/go.mod`: `98f9f79f0ab3414b25a22eaa0c113f0fd235900a`
-- `tests/compatibility/go/go.sum`: `556241cfca1de062baa88163d5c76a55db287161`
+- `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
+- `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
 - `tests/compatibility/node/package-lock.json`: `530d2b6425cfcfa22c95161739e133329721fa8b`
 - `tests/compatibility/python/requirements.in`: `a6f9953e62dbbe7f15f4fbc7b920868882b0834b`
