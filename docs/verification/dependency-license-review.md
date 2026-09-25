@@ -169,7 +169,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Go | `github.com/openai/openai-go/v3` 3.64.2 | Apache-2.0 |
 | Node | `@anthropic-ai/sdk` 0.127.0 | MIT |
 | Node | `openai` 7.20.0 | Apache-2.0 |
-| Python | `anthropic` 1.5.0 | MIT |
+| Python | `anthropic` 1.8.0 | MIT |
 | Python | `openai` 3.16.2 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
@@ -190,6 +190,14 @@ The 2026-09-18 OpenAI Go compatibility refresh moved
 `github.com/openai/openai-go/v3` from 3.56.0 to 3.61.0. The module remains
 Apache-2.0 licensed, the resolved module-path set is unchanged, and this SDK
 is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-26 Anthropic Python compatibility refresh moved `anthropic` from
+1.5.0 to **1.8.0**, not to the 1.7.0 its pull request is titled after: the bot
+regenerated the lock after the OpenAI bump landed, and 1.8.0 had been released
+by then. The package remains MIT, read from the installed distribution's
+metadata, the 42-package lock set is unchanged, and the SDK stays confined to
+compatibility CI. The lock is the one Dependabot's own run produced, for the
+reason given below.
 
 The 2026-09-26 OpenAI Python compatibility refresh moved `openai` from 3.14.0
 to 3.16.2. The package remains Apache-2.0, read from the installed
@@ -279,8 +287,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
 - `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
-- `tests/compatibility/python/requirements.in`: `7ed940fb6e5eccd59b09bf6e54bbbe915b6857d8`
-- `tests/compatibility/python/requirements.txt`: `ee3667da58477d1ee088376417a8dc2cda7d5aa7`
+- `tests/compatibility/python/requirements.in`: `178571770ce0d9f229f1bd770be6cbb207089226`
+- `tests/compatibility/python/requirements.txt`: `f66337c33b96dce08370cd18a6e5b99ac310dfb0`
 
 The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
 web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before
