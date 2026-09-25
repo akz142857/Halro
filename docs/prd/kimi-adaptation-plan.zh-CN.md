@@ -1909,3 +1909,60 @@ kimi-k3 + reasoning_effort:"high" + tool_choice:{具名函数}
 
 仍有一格未测，在**放行**侧且风险很低：具名函数 + 思考**关闭**。上游的错误消息把条件明确写
 成 `incompatible with thinking enabled`，而 `required` + 思考关闭已实测为 200。
+
+## 18. 把实测变成可重跑的回归（2026-09-26）
+
+§10 到 §17 全部是 2026-09-01 到 09-02 那几天的一次性实测。此后二十五天里，没有任何东西再问过
+上游一次——上游改了行为，这些结论会静默失效，而第一个察觉的会是运营者的账单。
+
+`internal/provider/openai/kimi_real_smoke_test.go`（`TestRealKimiSmoke`）把其中花钱的那一条变成
+可重跑的回归。默认跳过，计费闸门要显式打开：
+
+```
+HALRO_REAL_PROVIDER_SMOKE=1 HALRO_SMOKE_PROFILE=kimi
+HALRO_SMOKE_BASE_URL=https://api.moonshot.cn
+HALRO_SMOKE_API_KEY=… HALRO_SMOKE_MODEL=…
+```
+
+### 18.1 这次复查到的
+
+`api.moonshot.cn` 真实账号，2026-09-26：
+
+| 项 | 结果 |
+| --- | --- |
+| `/v1/models` 枚举 | 四个模型：`kimi-k3`、`kimi-k2.6`、`kimi-k2.7-code`、`kimi-k2.7-code-highspeed`——与 §10.2 第 9 格一致 |
+| `kimi-k3` + `reasoning_effort: "high"` | **32 个 reasoning token，`reasoning_content` 存在** |
+| `kimi-k3` + `reasoning_effort: "none"` | **0 个 reasoning token，无 `reasoning_content`** |
+
+所以 §10.1 那条「k3 能被关掉」在二十五天后仍然成立，而且这次是**双向**的：先证明它确实会推理，
+再证明关得掉。
+
+### 18.2 两处是测试自己写错，不是上游变了
+
+写这条 smoke 的过程本身暴露了两个值得写下来的误读：
+
+**(1) 阳性对照缺失。** 第一版问「默认深度」再问「none」，两次都是 0 个 reasoning token，然后
+**通过**了。可零对零正是「开关完全失效、而模型本来就不推理」的样子——这个绿不是证据。现在先用
+`high` 点亮阳性对照，只有观测到推理之后才做关闭断言；若 `high` 也不推理，测试报 skip 并说明三种
+无法从此处区分的可能，而不是报一个空洞的成功。
+
+**(2) 把本地拒绝当成上游拒绝。** 第一版给 `high` 配了 `max_tokens`，被 `bad_request` 拒绝，而错误
+里没有 HTTP 状态码——因为那是 `RenderKimiChatRequest` 的**本地**拒绝：Kimi 只有一个输出上限且
+它把推理算在内，所以推理开着时「只管答案的 `max_tokens`」不是同一个量。渲染器拒得对，测试错了，
+改用 `max_completion_tokens`。
+
+顺带解掉一个看起来像上游漂移的现象：**不提要求时 `reasoning_tokens` 为 0，不是 Kimi 改了默认**
+（`/v1/models` 仍报 `think_efforts` 默认 `max`），而是渲染器对「没提要求」的请求主动把推理关掉。
+这在 `RenderKimiChatRequest` 的注释里写着，是我没读到就先怀疑上游。
+
+### 18.3 这条 smoke 覆盖不到的
+
+- **402 与配额耗尽路径。** 那属于 Kimi Code 订阅产品，不是本计费版；
+  `docs/verification/kimi-code-subscription-evidence.md` 已写明健康订阅无法按需制造配额耗尽，
+  所以 `classifyHTTPError` 把 402 判成 `EntitlementVerificationUnavailable` + 可重试这件事，
+  **至今没有任何真实响应确认过**。它是代码里的分类，不是实测事实。
+- **另外三个模型。** 只测了 `kimi-k3`。`kimi-k2.7-code` 按 §10 是关不掉推理的那个，
+  值得单独一轮，但那是另一次计费。
+- **限速。** 这个账号很紧：一轮里两次撞上 `429 rate_limit_reached_error`。smoke 会退避重试四次，
+  仍被限就 skip 并说明「账号太紧，测不出来」——瞬时错误不作为契约结论，与能力矩阵拒绝把瞬时失败
+  记成 `unsupported` 是同一条规矩。
