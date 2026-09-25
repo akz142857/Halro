@@ -285,10 +285,13 @@ commit. This is not a style preference; it is where the expensive mistakes come 
 
 ## Pre-1.0.0: fix in place, do not accumulate compatibility
 
-Releases `v0.1.0` through `v0.8.3` are published (latest `v0.8.3`, 2026-09-17), and every
-one of them is below 1.0.0 — which is the whole point: while the version stays under
-1.0.0 there is no compatibility promise to keep, and an operator re-initialises their own
-instance rather than being migrated. Check `gh release list` before assuming what exists.
+Releases are published from `v0.1.0` onward and every one of them is below 1.0.0 —
+which is the whole point: while the version stays under 1.0.0 there is no compatibility
+promise to keep, and an operator re-initialises their own instance rather than being
+migrated. **Run `gh release list` for what actually exists**; no version is named here,
+because a number in this paragraph is stale the next time a release is cut, and it was
+— 260918-PV-F-12 found this file claiming `v0.5.0` while `v0.8.3` was out, and the
+replacement sentence naming `v0.8.3` was itself stale within three days.
 
 - **A wrong construct must not survive beside its replacement.** If a field is wrong, fix
   the field — do not keep it and add a corrected one. If a parameter is wrong, change it —

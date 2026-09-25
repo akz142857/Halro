@@ -78,7 +78,9 @@ Standalone 的写路径，由 Standalone 自己的门禁验证，要求重新初
 
 1. Standalone 已按[生产验证方案](../verification/production-validation-plan.zh-CN.md)走完 G0–G7
    至少一次。2026-09-18 的执行只完成 E1–E3，4 项 BLOCKED、3 项 PARTIAL
-   （[记录](../verification/production-validation-run-260918.zh-CN.md)）。HA 的门禁要证明"已确认的
+   （[记录](../verification/production-validation-run-260918.zh-CN.md)）。2026-09-25 用干净提交重跑了 G0
+   （[记录](../verification/production-validation-run-260925-g0.zh-CN.md)），但 G0 本身仍是 `CONDITIONAL PASS`，
+   G1–G7 一项未动，所以本条**仍未满足**。HA 的门禁要证明"已确认的
    账务 mutation 在切换后不丢"，判据来自 Standalone 已建立的账务不变量；没被生产验证过的
    Standalone 做 HA 故障注入，只能证明副本彼此一致，不能证明它们一致地保持了正确的账。
 2. 一段生产窗口内的五类数据：`halro_wal_sync_seconds` 分布与 `halro stats` 吞吐；峰值并发与在飞数；
