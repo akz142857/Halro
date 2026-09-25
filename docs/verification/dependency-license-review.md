@@ -90,13 +90,13 @@ is linked into the Go runtime.
 | Package | Version | License |
 |---|---:|---|
 | `@hookform/resolvers` | 5.9.1 | MIT |
-| `@tanstack/react-query` | 5.102.8 | MIT |
+| `@tanstack/react-query` | 5.103.2 | MIT |
 | `i18next` | 26.4.2 | MIT |
 | `qrcode` | 1.5.4 | MIT |
 | `react` | 19.3.0 | MIT |
 | `react-dom` | 19.3.0 | MIT |
 | `react-hook-form` | 7.88.0 | MIT |
-| `react-i18next` | 17.0.14 | MIT |
+| `react-i18next` | 17.0.15 | MIT |
 | `uplot` | 1.6.32 | MIT |
 | `zod` | 4.6.5 | MIT |
 
@@ -112,6 +112,25 @@ added to the dependency surface. The build-tooling bump did rewrite
 `internal/webui/dist` — chunk contents and hashed names moved, and one
 auto-named shared chunk regrouped — with no change to which packages reach the
 bundle.
+
+The 2026-09-26 Admin UI refresh moved two runtime dependencies —
+`@tanstack/react-query` 5.102.8 to 5.103.2 and `react-i18next` 17.0.14 to
+17.0.15 — and two dev-only ones absent from the table because they are not
+shipped: `jsdom` 30.0.1 to 30.1.0 and `vitest` 5.0.0 to 5.0.1.
+
+Nineteen lockfile entries moved version in total once transitives are counted,
+and **no license changed on any of them**; the comparison was made entry by
+entry against the previous lock rather than by reading the four direct bumps,
+because a transitive is exactly where a license would change unnoticed. The set
+of licenses in the lock is unchanged — MIT throughout, plus the MIT-0 and
+BlueOak-1.0.0 entries that were already there. One package left the lock:
+`symbol-tree`, which `jsdom` 30.1.0 no longer depends on. Nothing new entered
+it.
+
+`internal/webui/dist` was rebuilt under Node 22, the version the gate uses, and
+is committed with this change. Chunk contents and hashed names moved; the
+initial bundle went from 246109 to 246119 bytes gzipped, and the browser
+artifact secret scan reports 29 files clean.
 
 The 2026-09-05 Admin UI refresh then moved five runtime dependencies:
 `@tanstack/react-query` 5.102.3 to 5.102.8, `i18next` 26.4.0 to 26.4.1,
@@ -291,8 +310,8 @@ document is deliberately refreshed with the new inventory and hashes.
 
 - `go.mod`: `742ec795e94a3945336be2f5e3a7b35d5209e180`
 - `go.sum`: `f2b3fdf9939c7cbef8048f41ac042bafb6165079`
-- `web/package.json`: `32594ca3980b25dab677bb4a54edf6ddb058c022`
-- `web/package-lock.json`: `00e8554b7e862dc3507d9f2ec4b27bcce579f2df`
+- `web/package.json`: `ef5d38e8a10ddb05637847ef44ad0ff3a5f5afab`
+- `web/package-lock.json`: `3a1d755426394151731995ee69f599a332bceed6`
 - `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
