@@ -59,25 +59,29 @@ type Runtime struct {
 	// failureCapture holds the payloads of failed requests. Nil when the
 	// operator has not switched it on, which is the default; every read path
 	// treats nil as "the feature is off" rather than as an error.
-	failureCapture      *failurecapture.Store
-	auth                *auth.Snapshot
-	providers           *provider.Registry
-	routes              *routegate.Gate
-	providerEgress      *providerEgressManager
-	accounting          *budget.Manager
-	gateway             *gatewayapi.Handler
-	gatewayService      *gatewaycore.Service
-	sourceLimiter       *sourcelimit.Limiter
-	tokenGuard          *tokenguard.Manager
-	redactor            *redaction.Engine
-	alerts              *alert.Dispatcher
-	audit               *audit.Log
-	auditBatchMu        sync.Mutex
-	auditBatchPending   []adminAuditRequest
-	auditBatchRunning   bool
-	gatewayHandlerOnce  sync.Once
-	gatewayHandlerValue http.Handler
-	adminTopologyMu     sync.Mutex
+	failureCapture *failurecapture.Store
+	auth           *auth.Snapshot
+	providers      *provider.Registry
+	routes         *routegate.Gate
+	providerEgress *providerEgressManager
+	accounting     *budget.Manager
+	gateway        *gatewayapi.Handler
+	gatewayService *gatewaycore.Service
+	sourceLimiter  *sourcelimit.Limiter
+	tokenGuard     *tokenguard.Manager
+	redactor       *redaction.Engine
+	alerts         *alert.Dispatcher
+	audit          *audit.Log
+	// auditDeliveryFailures counts appends of a durable mutation's audit record
+	// that did not land. It is the loud half of the signal the pending gauge
+	// gives quietly.
+	auditDeliveryFailures atomic.Uint64
+	auditBatchMu          sync.Mutex
+	auditBatchPending     []adminAuditRequest
+	auditBatchRunning     bool
+	gatewayHandlerOnce    sync.Once
+	gatewayHandlerValue   http.Handler
+	adminTopologyMu       sync.Mutex
 	// activation records whether the live snapshots still reflect the store, so
 	// a durable mutation that failed to activate refuses traffic instead of
 	// being served from a snapshot known to be behind it.

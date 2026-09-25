@@ -301,6 +301,23 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		metricHeader(output, "halro_audit_anchor_auth_failures_total", "counter", "Rejected audit anchor authentication attempts.")
 		fmt.Fprintf(output, "halro_audit_anchor_auth_failures_total %d\n", r.anchorAuthFailed.Load())
 	}
+	// The audit trail's own integrity, which had no series at all: the only
+	// audit alert was about anchor emission, and an anchor is a witness to the
+	// chain rather than a statement about it (260918-PV-F-19).
+	//
+	// An administrative mutation is durable together with its intent, and the
+	// append happens afterwards. A backlog that persists therefore means
+	// mutations are still being accepted while the records describing them are
+	// not landing — which is the shape of an audit trail going quiet without
+	// anything failing loudly. It is exported unconditionally, unlike the
+	// anchor series above, because the intent path exists whether or not an
+	// external witness is configured.
+	metricHeader(output, "halro_admin_audit_intents_pending", "gauge",
+		"Administrative mutations that are durable with their audit record not yet appended.")
+	fmt.Fprintf(output, "halro_admin_audit_intents_pending %d\n", r.pendingAdminAuditIntents())
+	metricHeader(output, "halro_admin_audit_delivery_failures_total", "counter",
+		"Failed attempts to append a durable administrative mutation's audit record.")
+	fmt.Fprintf(output, "halro_admin_audit_delivery_failures_total %d\n", r.auditDeliveryFailures.Load())
 	metricHeader(output, "halro_fallbacks_total", "counter", "Provider fallback transitions.")
 	fmt.Fprintf(output, "halro_fallbacks_total %d\n", usageMetrics.Fallbacks)
 	metricHeader(output, "halro_usage_queue_depth", "gauge", "Current durable Ledger append queue depth.")
