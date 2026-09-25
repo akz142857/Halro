@@ -266,3 +266,38 @@ func TestEveryCrossClassRuleNamesRealState(t *testing.T) {
 		}
 	}
 }
+
+// TestCallerIdempotencyReplicatesWithTheJournal.
+//
+// HA Phase 0b (#106) requires that the caller idempotency contract for
+// Chat/Embeddings keeps its lifecycle records in a class-A bucket, so they
+// travel with the journal rather than being rebuilt per node. The design says
+// why: a Replica promoted after a Primary failed must answer a retried
+// Idempotency-Key with the original resource, and it can only do that if the
+// record reached it.
+//
+// The contract is already satisfied — both buckets are authoritative today, so
+// this test passes the day it is written. That is the point of writing it now.
+// Nothing else states the dependency: the classification table reads as a list
+// of buckets, and moving either of these to class C or E would be a one-line
+// edit that looks local, passes every other test, and silently makes a retried
+// key answerable on one node and not on another. The failure would first appear
+// during a promotion, which is the worst place to learn it.
+func TestCallerIdempotencyReplicatesWithTheJournal(t *testing.T) {
+	// The state `store_providers.go` reads and writes to answer a repeated
+	// Idempotency-Key: the resource itself, and the index from key to resource.
+	for _, bucket := range []string{
+		string(bucketProviderResources),
+		string(bucketProviderResourceIdem),
+	} {
+		class, known := bucketClasses[bucket]
+		if !known {
+			t.Fatalf("%s has no journal class; caller idempotency writes to it", bucket)
+		}
+		if class != classAuthoritative {
+			t.Errorf("%s is class %v; caller idempotency needs it journalled, or a promoted "+
+				"Replica cannot answer a retried Idempotency-Key with the original resource "+
+				"(HA design §5.2, #106)", bucket, class)
+		}
+	}
+}
