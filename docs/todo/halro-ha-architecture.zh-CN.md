@@ -1122,6 +1122,25 @@ journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_se
 条件。2026-09-25 把 G0 推到了 `CONDITIONAL PASS`
 （[记录](../verification/production-validation-run-260925-g0.zh-CN.md)），G1–G7 未动。
 
+#### 门外的加固（2026-09-25）
+
+门关着，但 Phase 1 将要依赖的那些**现有**不变量可以现在就钉住——不冻结任何格式，不开任何阶段。
+这一轮补了五道，全部当天即通过，这正是重点：每一道守的都是一处"改一个词就破、而且破了不会有
+任何测试变红"的地方，而第一次显形的场合会是一次提升。
+
+| 守护 | 守的是什么 | 位置 |
+| --- | --- | --- |
+| `TestCallerIdempotencyReplicatesWithTheJournal` | 调用方幂等的两个 bucket 必须是 A 类，否则提升后的 Replica 答不出重试的 `Idempotency-Key` | §5.2 / [#106](https://github.com/akz142857/Halro/issues/106) 第 5 项 |
+| `TestWithdrawnAuthorityCannotSurviveAPromotion` | A 类里决定"允许不允许"的九个 bucket 必须复制，否则**撤销**到不了另一个节点 | §5.2 |
+| `TestTheCrossClassAllowlistDoesNotGrowByItself` | 跨类豁免条目数钉成 2，加第三条必须自觉 | §5.2 |
+| `TestEveryCrossClassRuleIsShapedLikeItsName` | 每条豁免的 `local` 真的不复制、`with` 真的复制 | §5.2 |
+| `TestTheRecorderIsTheOnlyWayToWriteMetadata` | 包内除三个具名豁免外不得出现裸 `*bbolt.Tx` | §6.1.4 |
+
+其中一条顺带把 #106 的第 5 项（#12 的调用方幂等契约落 A 类 bucket）**核实为已满足**——它不冻结
+格式，只是对现状的核实，所以在门之外做完了。0b 的其余七项原样未动。
+
+`metadataBatchDelay` 的重扫（见 §6.1.2）也在这一轮，它是 Phase 0a 留下的最后一条尾巴。
+
 
 ### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已合入 `main` 2026-09-25**（[#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）
 
