@@ -131,7 +131,7 @@ func TestAdminMasterKeyCustodyFileModeContract(t *testing.T) {
 }
 
 func TestAdminMasterKeyCustodyFailsClosedWhenKeySlotMetadataIsUnavailable(t *testing.T) {
-	store, err := boltstore.Open(t.TempDir() + "/metadata.db")
+	store, err := openStagedMetadataForTest(t, t.TempDir()+"/metadata.db")
 	if err != nil {
 		t.Fatal(err)
 	}

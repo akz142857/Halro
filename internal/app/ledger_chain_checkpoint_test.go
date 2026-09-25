@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/akz142857/Halro/internal/ledger"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // seedLedgerActivity writes one accepted request so the WAL holds at least one
@@ -109,7 +108,7 @@ func TestUsageCheckpointAheadOfLedgerHeadIsDiscarded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

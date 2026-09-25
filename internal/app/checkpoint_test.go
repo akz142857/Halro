@@ -13,7 +13,6 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/usage"
 )
 
@@ -65,7 +64,7 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 		t.Fatal(err)
 	}
 
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

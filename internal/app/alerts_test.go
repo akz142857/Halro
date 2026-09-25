@@ -146,7 +146,7 @@ func TestTokenGuardAlertPipelineWritesGeneratedAndSubmissionAudit(t *testing.T) 
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestTokenGuardAlertPipelineWritesGeneratedAndSubmissionAudit(t *testing.T) 
 
 func openMetadataVault(t *testing.T, cfg config.Config) (*boltstore.Store, *vault.Vault) {
 	t.Helper()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

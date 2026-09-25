@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"go.etcd.io/bbolt"
 )
 
 // auditAnchorRetention bounds the local ring: emitted roughly every 5
@@ -50,7 +48,7 @@ func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 	if err != nil {
 		return err
 	}
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")
@@ -110,7 +108,7 @@ func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 // incrementally without re-fetching what it already has.
 func (s *Store) AuditAnchorsSince(since uint64) ([]AuditAnchor, error) {
 	var anchors []AuditAnchor
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")
@@ -133,7 +131,7 @@ func (s *Store) AuditAnchorsSince(since uint64) ([]AuditAnchor, error) {
 func (s *Store) LatestAuditAnchor() (AuditAnchor, error) {
 	var anchor AuditAnchor
 	found := false
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")

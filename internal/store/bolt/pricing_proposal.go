@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	bbolt "go.etcd.io/bbolt"
 )
 
 const maxPriceProposalsPerDeployment = 10_000
@@ -29,7 +28,7 @@ func (s *Store) CreateDeploymentPriceProposal(ctx context.Context, proposal doma
 		return proposal, intent, false, errors.New("invalid idempotent pricing proposal mutation")
 	}
 	replayed := false
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		idempotency := tx.Bucket(bucketPricingProposalIdempotency)
 		if raw := idempotency.Get([]byte(keySHA256)); raw != nil {
 			var previous pricingIdempotencyRecord
@@ -111,7 +110,7 @@ func (s *Store) ListDeploymentPriceProposals(ctx context.Context, deploymentID s
 		return nil, err
 	}
 	var proposals []domain.DeploymentPriceProposal
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		return tx.Bucket(bucketDeploymentPriceProposals).ForEach(func(_, raw []byte) error {
 			var proposal domain.DeploymentPriceProposal
 			if err := json.Unmarshal(raw, &proposal); err != nil {
@@ -135,7 +134,7 @@ func (s *Store) GetDeploymentPriceProposal(ctx context.Context, deploymentID, pr
 		return domain.DeploymentPriceProposal{}, err
 	}
 	var proposal domain.DeploymentPriceProposal
-	err := s.db.View(func(tx *bbolt.Tx) error {
+	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceProposals).Get([]byte(proposalID))
 		if raw == nil {
 			return ErrNotFound
@@ -160,7 +159,7 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 	if err := intent.Validate(); err != nil || intent.Action != "deployment_price.proposal_adopt" || intent.TargetID != proposalID {
 		return proposal, price, errors.New("invalid proposal adoption audit intent")
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceProposals).Get([]byte(proposalID))
 		if raw == nil {
 			return ErrNotFound
@@ -254,7 +253,7 @@ func (s *Store) RejectDeploymentPriceProposal(ctx context.Context, deploymentID,
 	if err := intent.Validate(); err != nil || intent.Action != "deployment_price.proposal_reject" || intent.TargetID != proposalID {
 		return proposal, errors.New("invalid proposal rejection audit intent")
 	}
-	err := s.db.Update(func(tx *bbolt.Tx) error {
+	err := s.update(func(tx *Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPriceProposals)
 		raw := bucket.Get([]byte(proposalID))
 		if raw == nil {
@@ -289,7 +288,7 @@ func (s *Store) RejectDeploymentPriceProposal(ctx context.Context, deploymentID,
 	return proposal, err
 }
 
-func selectLatestNonCancelledPriceTx(tx *bbolt.Tx, deploymentID string) (domain.DeploymentPriceVersion, error) {
+func selectLatestNonCancelledPriceTx(tx *Tx, deploymentID string) (domain.DeploymentPriceVersion, error) {
 	var latest domain.DeploymentPriceVersion
 	timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
 	if timeline == nil {

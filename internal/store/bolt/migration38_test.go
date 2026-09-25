@@ -13,7 +13,7 @@ import (
 
 func TestMigration38FencesReadersWithoutRewritingProviders(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestMigration38FencesReadersWithoutRewritingProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		if err := tx.Bucket(bucketProviders).Put([]byte(provider.ID), raw); err != nil {
 			return err
 		}
@@ -46,11 +46,11 @@ func TestMigration38FencesReadersWithoutRewritingProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := Open(path)
+	migrated, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := migrated.db.View(func(tx *bbolt.Tx) error {
+	if err := viewRaw(migrated.db, func(tx *Tx) error {
 		if tx.Bucket(bucketProviderEgressProxies) == nil {
 			t.Fatal("migration 38 did not create the managed proxy bucket")
 		}
@@ -73,7 +73,7 @@ func TestMigration38FencesReadersWithoutRewritingProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.View(func(tx *bbolt.Tx) error {
+	if err := viewRaw(db, func(tx *Tx) error {
 		version := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion))
 		if version == 37 {
 			return nil

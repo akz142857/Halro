@@ -20,7 +20,7 @@ import (
 // than trusting a v13 reader that silently ignored the new fields.
 func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 	if err := store.PutUsageCheckpoint(watermark, []byte(`{"version":13}`), nil, nil, domain.RollupVersion, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		if history := tx.Bucket(bucketMigrationHistory); history != nil {
 			if err := history.Delete(versionKey(37)); err != nil {
 				return err
@@ -70,7 +70,7 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer readOnly.Close()
-			if err := readOnly.View(func(tx *bbolt.Tx) error {
+			if err := viewRaw(readOnly, func(tx *Tx) error {
 				if version := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion)); version != 36 {
 					t.Fatalf("schema=%d, want rollback to 36", version)
 				}
@@ -84,7 +84,7 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 		})
 	}
 
-	migrated, err := Open(path)
+	migrated, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 		t.Fatalf("schema-13 usage checkpoint survived migration: %v", err)
 	}
 
-	if err := migrated.db.View(func(tx *bbolt.Tx) error {
+	if err := viewRaw(migrated.db, func(tx *Tx) error {
 		stored := binary.BigEndian.Uint64(tx.Bucket(bucketMeta).Get(keySchemaVersion))
 		if stored <= 36 {
 			t.Fatalf("stored schema=%d does not fence a v0.7.1 reader", stored)

@@ -89,7 +89,7 @@ func billOneRequest(t *testing.T, runtime *Runtime, requestID string) {
 // exact row rather than guess at how the key was encoded.
 func readOneRollupKey(t *testing.T, metadataPath string, out *domain.RollupKey) error {
 	t.Helper()
-	store, err := boltstore.Open(metadataPath)
+	store, err := openStagedMetadataForTest(t, metadataPath)
 	if err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func readOneRollupKey(t *testing.T, metadataPath string, out *domain.RollupKey) 
 
 func storedRollupTotal(t *testing.T, metadataPath string) domain.DailyRollup {
 	t.Helper()
-	store, err := boltstore.Open(metadataPath)
+	store, err := openStagedMetadataForTest(t, metadataPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 
 	// A checkpoint the next start cannot read: the payload no longer carries a
 	// version it accepts. The rollup rows on disk are untouched and complete.
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 		t.Fatalf("fixture rollup=%#v", expected)
 	}
 
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 
 func allRollupRows(t *testing.T, metadataPath string) map[domain.RollupKey]domain.DailyRollup {
 	t.Helper()
-	store, err := boltstore.Open(metadataPath)
+	store, err := openStagedMetadataForTest(t, metadataPath)
 	if err != nil {
 		t.Fatal(err)
 	}

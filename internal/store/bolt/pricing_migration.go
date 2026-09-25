@@ -70,7 +70,7 @@ func DryRunPricingMigration(ctx context.Context, metadataPath string) (PricingMi
 	}
 	defer db.Close()
 	report := PricingMigrationReport{SchemaVersion: 1, MetadataSHA256: digest, GeneratedAt: time.Now().UTC(), EstimatedDowntime: "one offline metadata publication", SchemaChanges: []string{"deployment price version buckets", "Ledger/Usage/Parquet versioned pricing readers"}}
-	err = db.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(db, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketDeployments)
 		if bucket == nil {
 			return errors.New("deployment bucket is missing")
@@ -131,7 +131,7 @@ func ApplyPricingMigration(ctx context.Context, metadataPath string, resolutionF
 	if err != nil {
 		return "", err
 	}
-	err = source.View(func(tx *bbolt.Tx) error {
+	err = viewRaw(source, func(tx *Tx) error {
 		out, err := os.OpenFile(tempPath, os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			return err
@@ -151,7 +151,7 @@ func ApplyPricingMigration(ctx context.Context, metadataPath string, resolutionF
 	if err != nil {
 		return "", err
 	}
-	err = stage.Update(func(tx *bbolt.Tx) error {
+	err = publishInto(stage, func(tx *Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists(bucketPricingMigrationResolutions)
 		if err != nil {
 			return err
@@ -210,7 +210,7 @@ func ApplyPricingMigration(ctx context.Context, metadataPath string, resolutionF
 		migrated.Close()
 		return "", err
 	}
-	if err := migrated.db.Update(func(tx *bbolt.Tx) error { return putPricingAuditIntentTx(tx, effectiveAudit) }); err != nil {
+	if err := publishInto(migrated.db, func(tx *Tx) error { return putPricingAuditIntentTx(tx, effectiveAudit) }); err != nil {
 		migrated.Close()
 		return "", err
 	}

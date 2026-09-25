@@ -43,7 +43,7 @@ func stringHex(value []byte) string {
 func openGovernanceRecoveryFixture(t *testing.T) (*boltstore.Store, *governance.Log, string, []byte) {
 	t.Helper()
 	directory := t.TempDir()
-	store, err := boltstore.Open(filepath.Join(directory, "metadata.db"))
+	store, err := openStagedMetadataForTest(t, filepath.Join(directory, "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func governanceBackupFixture(t *testing.T) (configPath string, cfg config.Config
 		t.Fatal(err)
 	}
 	var err error
-	store, err = boltstore.Open(cfg.MetadataPath())
+	store, err = openMetadataForTest(t, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

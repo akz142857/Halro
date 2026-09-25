@@ -3,13 +3,11 @@ package bolt
 import (
 	"path/filepath"
 	"testing"
-
-	bbolt "go.etcd.io/bbolt"
 )
 
 func TestShutdownTruncatedAttemptsPersistsAcrossOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +24,7 @@ func TestShutdownTruncatedAttemptsPersistsAcrossOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err = Open(path)
+	store, err = openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,12 +40,12 @@ func TestShutdownTruncatedAttemptsPersistsAcrossOpen(t *testing.T) {
 // a silent zero would be indistinguishable from a clean shutdown history.
 func TestShutdownTruncatedAttemptsReportsACorruptCounterRatherThanZero(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if err := store.db.Update(func(tx *bbolt.Tx) error {
+	if err := store.update(func(tx *Tx) error {
 		return tx.Bucket(bucketMeta).Put(keyShutdownTruncatedAttempts, []byte{1, 2, 3})
 	}); err != nil {
 		t.Fatal(err)

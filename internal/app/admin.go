@@ -85,6 +85,9 @@ func BootstrapAdminWithOptions(
 	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
 		return "", err
 	}
+	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin bootstrap"); err != nil {
+		return "", err
+	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
 	if err != nil {
 		return "", err
@@ -257,6 +260,9 @@ func ResetAdminPassword(
 	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
 		return err
 	}
+	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin password reset"); err != nil {
+		return err
+	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
 	if err != nil {
 		return err
@@ -317,6 +323,9 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 	}
 	defer secretVault.Close()
 	if err = verifyVaultKeyCheck(store, secretVault); err != nil {
+		return err
+	}
+	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin MFA reset"); err != nil {
 		return err
 	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
