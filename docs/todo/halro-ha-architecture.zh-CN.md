@@ -246,6 +246,21 @@ data/
 > 两处都落成 `internal/store/bolt/journal_class.go` 里 `crossClassWrites` 的显式条目：每条列出
 > **一个**本地写和它被允许同事务的**全部**复制写，其余一律拒绝。清单是量出来的，不是读代码读出来的。
 >
+> **这张清单有两道守护**（2026-09-25 补）。每条规则都是对 fail-closed 混写拒绝的一次豁免，也就是
+> 一句"未被记录的那一半在 Replica 上无所谓"的承诺，所以它不能悄悄变长，也不能名不副实：
+> `TestTheCrossClassAllowlistDoesNotGrowByItself` 把条目数钉成 2——加第三条必须同时把这个数字改掉，
+> 理由写进提交；`TestEveryCrossClassRuleIsShapedLikeItsName` 检查形状——`local` 必须真的不复制，
+> 每个 `with` 必须真的复制，否则这条规则要么豁免了一个根本不需要豁免的事务（真正的混写就藏在别处），
+> 要么把两个本地写叫成了跨类事务。
+
+> **A 类的鉴权成员也钉住了**（2026-09-25 补）。C/E 类一直有 `TestDerivedAndNodeLocalStateIsNotJournalled`、
+> D 类有 `TestKeyEnvelopesAreJournalled`，而 A 类——最大的那一类——此前没有，这是反的：一个被误标为
+> 派生的 bucket 不只是"在别处重建"，它是**它的撤销永远到不了另一个节点**。Halro 对"这个请求允许吗"
+> 的回答是存下来的、不是算出来的：Gateway Key 由记录上的标志位停用，管理员同理，MFA 恢复码靠被消费
+> 而作废，Provider 凭据靠删除而撤回。每一条都是一次**撤销**，而不复制的撤销就是提升后的 Replica
+> 放行了 Primary 已经收回的权限——这正是本项目在别处处处拒绝的那种 fail-open。
+> `TestWithdrawnAuthorityCannotSurviveAPromotion` 守住它。
+>
 > 另外两处数字更正：§6.1.1 写 `db.Update` 94 处，实测 **96** 处（另 `db.Batch` 1 处）；
 > `meta` 的分类必须按 `meta/<key>` 作标识去做跨类判断，按 bucket 名判断会把**每一个**
 > 写 `meta` 的事务都判成混写——这是第一版实现真实犯过的错。
