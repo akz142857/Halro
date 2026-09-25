@@ -1,7 +1,9 @@
 # Halro HA 架构设计
 
-- 状态：Proposed（2026-09-20）。**未实现**——本文的 `replication` 配置、`halro cluster` 子命令、
-  复制协议与 metadata journal 在当前代码里都不存在
+- 状态：Proposed（2026-09-20）。**Phase 0a 已实现并合入 `main`**（2026-09-25，
+  [#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）——metadata journal 已经在代码里。
+  本文的 `replication` 配置、`halro cluster` 子命令与复制协议**仍不存在**，一行未写
+- 进度：见 [§18.0](#180-进度一览)
 - 适用范围：Standalone 向 Primary/Replica 的演进
 - 目标版本：不绑定。进入条件是 §1.3 列出的证据，不是某个 tag
 - 追踪：[#105](https://github.com/akz142857/Halro/issues/105) Epic、
@@ -1040,7 +1042,42 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 ## 18. 实施阶段
 
-### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已落地 2026-09-24**
+### 18.0 进度一览
+
+截至 2026-09-25，对 `main` 实测得到（不是按文档声明抄的）：
+
+| 阶段 | 条目 | 完成 | Issue | 备注 |
+| --- | --- | --- | --- | --- |
+| Phase 0a metadata journal | 5 | **5** | [#315](https://github.com/akz142857/Halro/issues/315) CLOSED | 已合入 `main`，3858 行含测试 |
+| Phase 0b 复制格式 | 6 | 0 | [#106](https://github.com/akz142857/Halro/issues/106) | 未开工 |
+| Phase 1 复制流与 Replica | 5 | 0 | [#107](https://github.com/akz142857/Halro/issues/107) | 未开工 |
+| Phase 2 提升、备份与部署 | 5 | 0 | [#108](https://github.com/akz142857/Halro/issues/108) | 未开工 |
+
+**按条目是 5/21，按能力是 0。** Phase 0a 按 §1.3 的说法本就是「一个独立的 Standalone 变更」：
+它让 `halro.db` 成为 journal 的投影，从而使物理复制*成为可能*，但它自己不复制任何东西。实测
+`main` 上没有 `internal/cluster`、没有 replication 包、`config.Config` 里没有 `replication` 块。
+
+已落地的部分：
+
+| 位置 | 行数（含测试） |
+| --- | --- |
+| `internal/metadatajournal/` | 1219 |
+| `internal/store/bolt/journal_*.go` | 2206 |
+| `internal/vault/metadata.go` | 35 |
+| `internal/app/doctor_journal.go` + `metadata_journal_test.go` | 398 |
+| 合计 | **3858** |
+
+`doctor` 的 `metadata_journal` 只读检查在 `internal/app/doctor_journal.go`；`backup create` 把
+journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_sequence` 记下它投影的是
+哪一段前缀（`TestTheBackupManifestRecordsWhichPrefixItProjects` 钉住这一点）；`restore` 撤下归档
+里的 journal 并在发布前于暂存目录开好新 epoch。
+
+**Phase 0b 不具备开工条件**，卡在 §1.3 的三个进入条件，一个都没满足——不是缺代码，是缺运行
+条件。2026-09-25 把 G0 推到了 `CONDITIONAL PASS`
+（[记录](../verification/production-validation-run-260925-g0.zh-CN.md)），G1–G7 未动。
+
+
+### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已合入 `main` 2026-09-25**（[#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）
 
 1. ✅ `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务——`internal/store/bolt/journal_class.go`，
    未分类即拒绝，没有默认值；跨类白名单两条（见 §5.2 的实测更正）；
