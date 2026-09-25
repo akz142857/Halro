@@ -156,13 +156,21 @@ func TestSIGKILLLeavesEveryReportedRequestRecoverable(t *testing.T) {
 	//    authenticated against its checkpoint, metadata journal level with its
 	//    projection, Parquet manifest verified.
 	report, err := Doctor(context.Background(), cfg)
-	if err != nil || !report.Healthy {
-		t.Fatalf("doctor after the kill: healthy=%v err=%v", report.Healthy, err)
+	if err != nil {
+		t.Fatalf("doctor after the kill: %v", err)
 	}
-	for _, check := range report.Checks {
-		if check.Name == "metadata_journal" && check.Status == "fail" {
-			t.Fatalf("the journal and its projection diverged across the kill: %s", check.Detail)
+	// Name the checks that failed. "One or more checks failed" sends whoever
+	// reads a CI log back to reproduce something that only happens sometimes;
+	// the report already knows which ones, so the failure should say.
+	if !report.Healthy {
+		var failed []string
+		for _, check := range report.Checks {
+			if check.Status == "fail" {
+				failed = append(failed, fmt.Sprintf("%s: %s", check.Name, check.Detail))
+			}
 		}
+		t.Fatalf("doctor after the kill reported %d failed check(s):\n  %s",
+			len(failed), strings.Join(failed, "\n  "))
 	}
 
 	// 3. Every request the child said it had settled is still there. This is
