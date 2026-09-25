@@ -167,8 +167,8 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 |---|---|---|
 | Go | `github.com/anthropics/anthropic-sdk-go` 1.74.0 | MIT |
 | Go | `github.com/openai/openai-go/v3` 3.64.2 | Apache-2.0 |
-| Node | `@anthropic-ai/sdk` 0.125.0 | MIT |
-| Node | `openai` 7.15.0 | Apache-2.0 |
+| Node | `@anthropic-ai/sdk` 0.127.0 | MIT |
+| Node | `openai` 7.20.0 | Apache-2.0 |
 | Python | `anthropic` 1.5.0 | MIT |
 | Python | `openai` 3.14.0 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
@@ -206,6 +206,14 @@ grant with no additional terms — which is why the paragraph above now names a
 fourth license. It reaches no Halro artifact: this module is a separate
 `go.mod` outside `./...`, built only by the SDK compatibility job, and Halro's
 own realtime paths do not use it.
+
+The 2026-09-26 Node compatibility refresh moved `@anthropic-ai/sdk` from
+0.125.0 to 0.127.0 and `openai` from 7.15.0 to 7.20.0, taken together for the
+same reason as the Go pair: both edit the same two files. `@anthropic-ai/sdk`
+remains MIT and `openai` remains Apache-2.0, read from the installed packages
+rather than from the bot's summary, the lockfile package set is unchanged, and
+both stay confined to compatibility CI. Both packages are pinned exactly, with
+no range, which is this module's convention and was preserved.
 
 The 2026-09-18 Node compatibility refresh moved `@anthropic-ai/sdk` from
 0.124.0 to 0.125.0. The package remains MIT licensed, the lockfile package set
@@ -255,8 +263,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `web/package-lock.json`: `00e8554b7e862dc3507d9f2ec4b27bcce579f2df`
 - `tests/compatibility/go/go.mod`: `738e441acd384f01b95150407cfad761111a63aa`
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
-- `tests/compatibility/node/package.json`: `eb98eff7082a317fbcaea3d401217c50ebdec914`
-- `tests/compatibility/node/package-lock.json`: `530d2b6425cfcfa22c95161739e133329721fa8b`
+- `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
+- `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
 - `tests/compatibility/python/requirements.in`: `a6f9953e62dbbe7f15f4fbc7b920868882b0834b`
 - `tests/compatibility/python/requirements.txt`: `49f7bf5e4c9d7ab8845e2d18a35a01cef71b0e37`
 
