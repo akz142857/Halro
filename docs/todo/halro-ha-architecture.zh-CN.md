@@ -399,6 +399,12 @@ delay 里最高（72.3，甚至压过 delay=0 的 71.6）。
 - **备份**：journal 的当前 epoch 进 `.hmbk` 的 `files`（§12）。
 - **离线 CLI 直写**（`admin reset-password|reset-mfa`、`key rotate|rewrap`、`usage rebuild-summary`）
   全部经过同一入口；不存在绕过 journal 的 bbolt 写。
+  **这一条由 `TestTheRecorderIsTheOnlyWayToWriteMetadata` 守着**（2026-09-25 补）。在此之前它只是
+  一次性转换 96 个调用点的结果加上 `journal_entry.go` 里的一句注释——在包里任何别的文件写
+  `s.db.Update(func(tx *bbolt.Tx) error { … })` 都能编译、能过全部测试，写出的状态没有任何 journal
+  帧描述。门禁按 AST 扫包内每个非测试文件，除三个具名豁免（入口层、journal 自身的挂载/回放路径、
+  recorder 类型本身）外出现裸 `*bbolt.Tx` 即失败，且豁免过时也失败。它防的是漂移不是规避：豁免文件里
+  定义、别处调用的 handler 能过——要拦的是有人顺手写出那个显而易见的形状，而不知道这条路已经关了。
 
 ### 6.2 复制流
 
