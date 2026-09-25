@@ -627,7 +627,10 @@ func writeLatencyHistogram(
 	output *bufio.Writer,
 	name string,
 	help string,
-	buckets [12]uint64,
+	// Sized from the ladder itself rather than from a literal: the two drifted
+	// apart the moment the buckets were re-cut, and the compiler is the only
+	// thing that should have to notice.
+	buckets [len(usage.LatencyBucketsMillis)]uint64,
 	sumMillis uint64,
 	count uint64,
 ) {

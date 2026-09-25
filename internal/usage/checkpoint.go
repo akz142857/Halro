@@ -32,6 +32,13 @@ import (
 // long window at high throughput still costs what it costs to hold. Serving
 // the console from disk is a different question and not this one.
 
+// checkpointVersion 15 re-cut the latency histogram, adding three bounds
+// between 30s and 120s. The stored Metrics carries a fixed-size array, and JSON
+// fills a longer one from a shorter one without complaint — so a version 14
+// checkpoint read into the new shape would move the old 30s-to-120s count into
+// the new 45s bucket and report it as fact. A derivative is refused and
+// replayed from the Ledger rather than reinterpreted.
+//
 // checkpointVersion 14 protects Provider Offering, Profile, account-region and
 // canonical failure fields carried by attempt rows. Version 13 readers ignore
 // unknown JSON members, so leaving the version unchanged would let an older
@@ -63,7 +70,7 @@ import (
 // it was charged to, and the daily rollup, which keys on the period stamped at
 // admission, had nothing to key on. Version 7 persisted the dedup window;
 // version 6 dropped the duplicate cost columns.
-const checkpointVersion = 14
+const checkpointVersion = 15
 
 // checkpointSegmentTargetBytes is the size an open segment is allowed to reach
 // before it is sealed and a new one starts. It bounds the only work a tick

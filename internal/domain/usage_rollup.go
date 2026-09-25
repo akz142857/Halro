@@ -12,12 +12,15 @@ import (
 // rollup is a derivative of the Ledger, so a version it does not recognise is
 // refused and rebuilt rather than migrated — the same posture the Usage
 // checkpoint takes.
-const RollupVersion = 1
+// Version 2 re-cut the latency histogram: one bucket used to cover 30s to 120s,
+// which is precisely the range a request occupies when the gateway's own
+// deadlines cut it. See usage.LatencyBucketsMillis.
+const RollupVersion = 2
 
 // RollupLatencyBuckets is the number of latency histogram buckets a rollup row
 // carries. It mirrors usage.LatencyBucketsMillis; usage asserts the two agree
 // at compile time.
-const RollupLatencyBuckets = 12
+const RollupLatencyBuckets = 15
 
 // Rollup dimensions. A row holds one dimension's one value — the rollup is a
 // marginal aggregate and deliberately stores no cross terms (D7-a), so a

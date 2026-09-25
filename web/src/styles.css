@@ -1860,6 +1860,32 @@ code.usage-request-id { color: var(--color-text-primary); }
    land on top of each other and read as one thick or doubled rule, so the row
    yields to the container. */
 .diagnostic-details dl > div:first-child { border-top: 0; }
+/* Findings. The evidence is the content and the sentence is the annotation, so
+   the comparison sits at code weight beside a status chip and the consequence
+   is one muted line under it. Getting this the other way round — a paragraph
+   with the numbers buried in it — is what the three hand-written `remedy` keys
+   in the log records already did, and is the thing this card replaces. */
+.advisor-findings .advisor-caption { margin: 0; padding: var(--space-3) var(--space-4) 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.6; }
+.advisor-finding-list { margin: var(--space-3) 0 0; padding: 0; list-style: none; border-top: 1px solid var(--border); }
+.advisor-finding { padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+.advisor-finding:first-child { border-top: 0; }
+.advisor-finding-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); }
+.advisor-finding-head strong { min-width: 0; font-size: var(--font-size-sm); }
+/* The chip carries the verdict in a word as well as a colour, because a status
+   told only in colour is not told to everyone. */
+.advisor-status { flex: 0 0 auto; padding: var(--space-1) var(--space-2); border: 1px solid var(--color-status-neutral-border); border-radius: var(--radius-pill); color: var(--color-status-neutral-text); background: var(--color-status-neutral-surface); font-size: var(--font-size-xs); font-weight: var(--font-weight-semibold); }
+.advisor-status.ok { border-color: var(--color-status-success-border); color: var(--color-status-success-text); background: var(--color-status-success-surface); }
+.advisor-status.warn { border-color: var(--color-status-warning-border); color: var(--color-status-warning-text); background: var(--color-status-warning-surface); }
+.advisor-comparison { display: block; margin-top: var(--space-2); overflow-x: auto; color: var(--text); font-size: var(--font-size-sm); }
+.advisor-consequence { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--font-size-xs); line-height: 1.6; }
+/* Evidence reads as pairs, not as a table: the names are long and the values
+   are short, and a two-column grid at this width leaves the numbers stranded on
+   the far side of the card. */
+.advisor-evidence { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; padding: 0; border-top: 0; }
+.advisor-evidence > div { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; padding: 0; border-top: 0; }
+.advisor-evidence dt { color: var(--muted-2); font-size: var(--font-size-xs); }
+.advisor-evidence dd { margin: 0; color: var(--text); font-size: var(--font-size-xs); font-variant-numeric: tabular-nums; }
+
 /* The write-path card carries three lines of context around its table. They are
    annotation, not content: at body weight they read as paragraphs and bury the
    numbers the card exists to show, which is how the first version of this card

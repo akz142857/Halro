@@ -980,6 +980,58 @@ mfaTitle: "身份验证器二次验证", mfaDescription: "兼容 Microsoft Authe
       latencyApproximate: "P95 由直方图估算，取样本所在分桶的上界；超过 120 秒的样本只报「> 120s」。",
     },
   },
+  // Halro 自己的数字放在一起。规则标题写成运营者会问的问题，而不是机制名称：
+  // 出事时先问的是「这是不是我自己的超时」，不是 attempt_response_header_timeout。
+  advisor: {
+    title: "诊断结论",
+    description: "把这台实例自己的数字放在一起看。只读：结论只陈述，决定由你来做。",
+    summaryClear: "没有需要处理的",
+    summaryWarnings: "{{count}} 条需要看",
+    summaryUnknown: "{{count}} 条没有检查",
+    unavailable: "诊断结论读取失败，本页其余内容不受影响。",
+    statuses: { ok: "正常", warn: "需要看", unknown: "未检查" },
+    rules: {
+      attempt_header_timeout_reachable: "单次尝试的超时有机会触发吗？",
+      retry_fits_route_budget: "配置的重试放得进整条请求的预算吗？",
+      attempt_budget_reaches_fanout: "配置的每个备选都会被调用吗？",
+      suspended_scopes: "现在有什么被挡在路由之外？",
+      unclassified_refusals: "上游的拒绝被读懂了吗？",
+    },
+    consequences: {
+      attempt_header_timeout_reachable: {
+        ok: "卡住的尝试会被自己的超时切断，请求预算还剩下一部分留给下一个备选。",
+        warn: "单次尝试的超时永远不会触发：整条请求的截止时间先到，于是一个卡住的上游花掉整次请求，其它备选一个都到不了。",
+      },
+      retry_fits_route_budget: {
+        ok: "针对同一个目标配置的重试放得进整条请求的预算。",
+        warn: "针对同一个目标配置的重试放不进整条请求的预算；最后一次会被请求截止时间切断，而不是拿到回答。",
+      },
+      attempt_budget_reaches_fanout: {
+        ok: "尝试预算能走到最宽的那个别名后面的每一个备选。",
+        warn: "某个别名后面的备选比尝试预算能走到的多。超出的那些配置了、启用了，但永远不会被调用。",
+        unknown: "读不到路由表，尝试预算没有可比的对象。",
+      },
+      suspended_scopes: {
+        ok: "当前每个配置好的备选都是可用的。",
+        warn: "以下对象被挡在路由之外。无限期的那一种不会自己到期，要等凭据被替换或由运营者清除。",
+        unknown: "这些状态在运行中的进程里，当前视图没有进程可问。",
+      },
+      unclassified_refusals: {
+        ok: "没有出现 Halro 读不懂的拒绝。旁边的计数说明一共见到过多少次拒绝。",
+        warn: "有些拒绝没有 Halro 能读懂的原因，于是被当成上游一时不稳定处理。其中若混着配额或凭据问题，重试用的是错误的时间尺度。",
+        unknown: "拒绝分类在运行中的进程里，当前视图没有进程可问。",
+      },
+    },
+    terms: {
+      attempts_that_fit_the_request_budget: "请求预算放得下的尝试次数",
+      candidates_the_budget_reaches: "尝试预算能走到的备选数",
+      widest_fan_out: "最宽别名后面的备选数",
+      widest_fan_out_public_model: "最宽的别名",
+      suspended_scopes: "被挡在路由之外的对象",
+      refusals_observed: "见到的拒绝次数",
+      refusals_unclassified: "没读懂的拒绝次数",
+    },
+  },
   operations: {
     notifyCreated: "告警通道已创建", notifyUpdated: "告警通道已保存", notifyDeleted: "告警通道已删除", notifyEnabled: "告警通道已启用", notifyDisabled: "告警通道已禁用",
     eyebrow: "安全运维", title: "告警与审计", description: "异常状态推送到受控 Webhook；所有配置、测试和管理动作进入 HMAC 链式审计日志。",

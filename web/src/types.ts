@@ -803,6 +803,28 @@ export interface RouteSuspensionCatalog {
   items: RouteSuspension[];
 }
 
+// One rule's answer, from Halro's own numbers put next to each other.
+//
+// The row carries the values its comparison read rather than a sentence about
+// them, because a finding an operator can check is worth more than one they
+// have to believe. `comparison` and `consequence` arrive in English: the CLI
+// prints them to a terminal that has no translation to look up, and the console
+// renders its own copy keyed on `rule` and `status`, falling back to these so a
+// rule added upstream never renders as a blank.
+export interface AdvisorFinding {
+  rule: string;
+  // "ok" is checked and fine; "unknown" is not checked at all, which reads very
+  // differently and is never collapsed into the first.
+  status: "ok" | "warn" | "unknown";
+  evidence?: { name: string; value: string }[];
+  comparison: string;
+  consequence: string;
+}
+
+export interface AdvisorFindingCatalog {
+  items: AdvisorFinding[];
+}
+
 export interface ProviderEgressCatalog {
   runtime_id: string;
   items: ProviderEgressProxy[];

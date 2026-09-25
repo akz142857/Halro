@@ -7,7 +7,8 @@ import { ErrorState, Loading, PageHeader, StatusDot } from "../components";
 import { useInstantFormatter } from "../format";
 import { navigate, usePathname } from "../navigation";
 import { useIsReadOnly, useSession } from "../session";
-import type { ModelCatalogInfo, ReloadStatus, SystemConfigEntry, WritePathSummary } from "../types";
+import type { AdvisorFinding, ModelCatalogInfo, ReloadStatus, SystemConfigEntry, WritePathSummary } from "../types";
+import { AdvisorFindingsPanel } from "./AdvisorFindingsPanel";
 import { AdminUsersSection } from "./AdminUsersSection";
 import { AccountingTimezoneForm } from "./AccountingTimezoneForm";
 import { AppearanceForm } from "./AppearanceForm";
@@ -44,6 +45,16 @@ export function SettingsPage({
     queryKey: ["system-status"],
     queryFn: api.systemStatus,
     refetchInterval: 15_000,
+    enabled: !mfaSetupRequired && pane === "diagnostics",
+  });
+  // Read beside the status, not folded into it. A finding describes a
+  // configuration Halro accepts and runs, where every other row in this pane
+  // says whether the instance is intact — so a failed read here must not take
+  // the pane down with it, and the card says it could not look instead.
+  const advisor = useQuery({
+    queryKey: ["advisor-findings"],
+    queryFn: api.advisorFindings,
+    refetchInterval: 30_000,
     enabled: !mfaSetupRequired && pane === "diagnostics",
   });
   // The effective config.yaml gets its own pane rather than riding along with
@@ -107,7 +118,7 @@ export function SettingsPage({
             {!pending && !error && pane === "instance" && uiSettings.data && preferences.data && settings.data && <section aria-labelledby="instance-title"><SettingsGroupHeader title={t("settings.panes.instance")} description={t("settings.instanceDescription")} id="instance-title" /><InstanceLanguageForm ui={uiSettings.data.data} preferences={preferences.data.data} />{accounting.data && <AccountingTimezoneForm settings={accounting.data.data} />}{usageSettings.data && <UsageWindowForm settings={usageSettings.data.data} />}<RuntimeSettingsForm settings={settings.data.data} /></section>}
             {!pending && !error && pane === "config" && config.data && modelCatalog.data && <section aria-labelledby="config-title"><SettingsGroupHeader title={t("settings.panes.config")} description={t("settings.configPreviewDescription")} id="config-title" /><ModelCatalogCard info={modelCatalog.data} onRefresh={() => modelCatalog.refetch()} /><ConfigPreviewCard yaml={config.data.yaml} entries={config.data.entries} /></section>}
             {pane === "custody" && <Suspense fallback={<Loading />}><MasterKeyCustodyPage embedded /></Suspense>}
-            {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
+            {!pending && !error && pane === "diagnostics" && status.data && <DiagnosticsPane status={status.data} findings={advisor.data?.items} findingsUnavailable={advisor.isError} accountingLabels={accountingLabels} metricLabels={metricLabels} />}
           </div>
         </div>
       )}
@@ -147,7 +158,7 @@ function ModelCatalogCard({ info, onRefresh }: { info: ModelCatalogInfo; onRefre
   </section>;
 }
 
-function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; accountingLabels: string[]; metricLabels: Record<string, string> }) {
+function DiagnosticsPane({ status, findings, findingsUnavailable, accountingLabels, metricLabels }: { status: Awaited<ReturnType<typeof api.systemStatus>>; findings?: AdvisorFinding[]; findingsUnavailable?: boolean; accountingLabels: string[]; metricLabels: Record<string, string> }) {
   const { t } = useTranslation();
   const formatInstant = useInstantFormatter();
   const activation = status.activation;
@@ -163,6 +174,16 @@ function DiagnosticsPane({ status, accountingLabels, metricLabels }: { status: A
       <span>{t("settings.activationStaleDescription")}</span>
     </div>}
     <div className="settings-grid">
+          {/* First in the pane, because it is the card that answers "why is
+              this instance behaving the way it is" — the others answer "is it
+              intact", which is a question an operator asks second. A read that
+              failed says so rather than disappearing: an absent card would read
+              as "nothing to report", which is the one thing an unread advisor
+              cannot promise. */}
+          {findings && <AdvisorFindingsPanel findings={findings} />}
+          {!findings && findingsUnavailable && (
+            <div className="notice warning"><span>{t("advisor.unavailable")}</span></div>
+          )}
           <details id="system" className="panel system-card diagnostic-details" open>
             <summary><span>{t("settings.build")}</span><strong>Halro {status.build.version || "development"}</strong></summary>
             <dl>

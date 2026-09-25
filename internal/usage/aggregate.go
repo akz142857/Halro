@@ -20,10 +20,29 @@ import (
 // still be absent after a restart.
 const maxTrackedEventIDs = 4096
 
-const latencyBucketCount = 12
+const latencyBucketCount = 15
 
+// LatencyBucketsMillis are the upper bounds a latency histogram counts into.
+//
+// The three above 30s are there because the shape below them was useless for
+// the question they answer. The ladder used to step 30000 → 120000, one bucket
+// covering a minute and a half, which is exactly the range a request spends
+// when this instance's own deadlines are the thing cutting it: the shipped
+// attempt_response_header_timeout is 1m0s and the shipped route_total_timeout
+// is 2m0s. "Is 90 seconds enough for this deployment?" could not be answered —
+// 55s and 90s landed in the same bucket — so during a triage the per-attempt
+// latency column had to be read by eye instead. 60000 is the boundary that
+// separates "under the attempt deadline" from "at it", and 90000 separates that
+// from the request deadline; 45000 keeps the step from 30000 comparable to the
+// rest of the ladder.
+//
+// Changing this changes what a stored histogram means, so both derivative
+// formats that carry one are versioned past it: usage.checkpointVersion and
+// domain.RollupVersion. An existing instance rebuilds them from the Ledger,
+// which is the authority; a Prometheus server keeps the old `le` series and
+// starts a new set, the ordinary consequence of re-cutting a histogram.
 var LatencyBucketsMillis = [latencyBucketCount]uint64{
-	10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 120000,
+	10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 45000, 60000, 90000, 120000,
 }
 
 type AttemptEvent struct {

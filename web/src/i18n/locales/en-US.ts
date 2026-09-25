@@ -979,6 +979,68 @@ mfaTitle: "Authenticator two-factor authentication", mfaDescription: "Compatible
       latencyApproximate: "P95 is read off a histogram and reports the bucket it falls in; samples above 120s are reported only as \"> 120s\".",
     },
   },
+  // Halro's own numbers put next to each other. The rule titles are questions
+  // rather than mechanism names: an operator arrives asking "was that my own
+  // timeout?", not asking about attempt_response_header_timeout. The
+  // consequences repeat what the server sends so the console can speak the
+  // operator's language while the CLI keeps printing English to a terminal that
+  // has no translation to look up.
+  //
+  // One constraint on that repetition: a rule may word its sentence per sub-case
+  // and per number, and there is one key here per rule and status — so a
+  // sentence written here has to hold for every sub-case that status covers.
+  // Anything that varies (which alias, how many candidates, which deadline) is
+  // already in the evidence beside it and does not belong in the sentence.
+  advisor: {
+    title: "Findings",
+    description: "What this instance's own numbers say about each other. Read-only: a finding states, you decide.",
+    summaryClear: "Nothing to report",
+    summaryWarnings: "{{count}} to look at",
+    summaryUnknown: "{{count}} not checked",
+    unavailable: "Findings could not be read. The rest of this page is unaffected.",
+    statuses: { ok: "Fine", warn: "Look at this", unknown: "Not checked" },
+    rules: {
+      attempt_header_timeout_reachable: "Can the attempt deadline ever fire?",
+      retry_fits_route_budget: "Does the retry fit in the request budget?",
+      attempt_budget_reaches_fanout: "Does every configured fallback get called?",
+      suspended_scopes: "What is being held out of routing?",
+      unclassified_refusals: "Are refusals being understood?",
+    },
+    consequences: {
+      attempt_header_timeout_reachable: {
+        ok: "A hanging attempt is cut by its own deadline, leaving the rest of the request budget for another candidate.",
+        warn: "The per-attempt deadline can never fire: the request budget cuts first, so one hanging upstream spends the whole request and no other candidate is reached.",
+      },
+      retry_fits_route_budget: {
+        ok: "The retries configured against one target fit inside the request budget.",
+        warn: "The retries configured against one target cannot all fit in the request budget; the last of them is cut by the request deadline rather than answered.",
+      },
+      attempt_budget_reaches_fanout: {
+        ok: "The attempt budget reaches every candidate behind the widest alias.",
+        warn: "There are more candidates behind one alias than the attempt budget reaches. The ones past it are configured, enabled and never called.",
+        unknown: "The route table was not available, so the attempt budget has nothing to be compared against.",
+      },
+      suspended_scopes: {
+        ok: "Every configured candidate is admissible right now.",
+        warn: "These are held out of routing. An indefinite hold ends when the credential is replaced or an operator clears it, not on a clock.",
+        unknown: "Holds live in the running process; this view has no process to ask.",
+      },
+      unclassified_refusals: {
+        ok: "Nothing was refused in a way Halro could not read. The count beside it says how many refusals there were.",
+        warn: "Some refusals carried no reason Halro understood, so they were treated as an upstream having a bad minute. A quota or credential refusal among them is being retried on the wrong clock.",
+        unknown: "Refusal classification lives in the running process; this view has no process to ask.",
+      },
+    },
+    terms: {
+      attempts_that_fit_the_request_budget: "attempts that fit the request budget",
+      candidates_the_budget_reaches: "candidates the budget reaches",
+      widest_fan_out: "candidates behind the widest alias",
+      widest_fan_out_public_model: "widest alias",
+      suspended_scopes: "held out of routing",
+      refusals_observed: "refusals seen",
+      refusals_unclassified: "refusals not understood",
+    },
+  },
   operations: {
     notifyCreated: "Alert endpoint created", notifyUpdated: "Alert endpoint saved", notifyDeleted: "Alert endpoint deleted", notifyEnabled: "Alert endpoint enabled", notifyDisabled: "Alert endpoint disabled",
     eyebrow: "Security operations", title: "Alerts & Audit", description: "Send anomalous states to controlled webhooks; all configuration, tests, and administrative actions enter the HMAC-chained audit log.",

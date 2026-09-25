@@ -1945,6 +1945,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.With(r.requireAdmin).Get("/admin/api/v1/model-capability-detections/{id}", r.getAdminModelCapabilityDetection)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/model-capability-detections/{id}", r.cancelAdminModelCapabilityDetection)
 	router.With(r.requireAdmin).Get("/admin/api/v1/deployments", r.listAdminDeployments)
+	router.With(r.requireAdmin).Get("/admin/api/v1/advisor-findings", r.listAdminAdvisorFindings)
 	router.With(r.requireAdmin).Get("/admin/api/v1/route-suspensions", r.listAdminRouteSuspensions)
 	router.With(r.requireAdminMutation).Delete("/admin/api/v1/route-suspensions/{scopeID}", r.clearAdminRouteSuspension)
 	router.With(r.requireAdminMutation).Post("/admin/api/v1/deployments", r.createAdminDeployment)
