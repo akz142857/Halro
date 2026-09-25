@@ -333,6 +333,28 @@ darwin 的 `Sync` 走 `F_FULLFSYNC`，所以这是悲观上界，不能外推到
 §16.3 要的那个"含 bbolt 写的端到端基线"分母，bbolt 那一半就是这条基准（现已包含 journal），
 另一半是 `internal/budget` 的 `BenchmarkRequestLifecycle`。
 
+**`metadataBatchDelay` 的 250 µs 已对着多一次 fsync 重新扫过**（2026-09-25，同一台 darwin/M4
+参考机，`-benchtime 200x -count=3` 取中位数；改动前是 `8343abad` 的工作树，那一侧走裸
+`bbolt.DB.Batch`，改动后是 `main` 的合并层加 journal 帧）：
+
+| delay | 改动前 w=1 | 改动后 w=1 | 改动前 w=8 | 改动后 w=8 |
+|---|---|---|---|---|
+| 0 | 114.3 | 71.6 | 115.8 | 78.6 |
+| **250 µs** | 104.6 | **72.3** | 766.5 | **561.8** |
+| 500 µs | 106.1 | 68.6 | 800.0 | 506.8 |
+| 1 ms | 93.7 | 67.9 | 733.2 | 540.6 |
+| 2 ms | 87.6 | 59.6 | 680.3 | 490.0 |
+| 10 ms | 47.7 | 38.5 | 372.5 | 300.2 |
+
+**结论：250 µs 不动。** 它在改动后的两个方向上都是最优——8 并发最高（561.8），单写者也是非零
+delay 里最高（72.3，甚至压过 delay=0 的 71.6）。
+
+值得记下的是**代价的形状变了**。`BenchmarkMetadataBatchDelay` 的注释警告"过于慷慨的窗口会让一次
+无争用的写比 `db.Update` 还慢"，改动前这在 250 µs 上就已经成立（114.3 → 104.6，−8.5%）；改动后
+不成立了（71.6 → 72.3，落在噪声里），因为 journal 那次 fsync 在单写者上约 14 ms/op，把 250 µs
+的窗口整个盖住。那个权衡没有消失，只是**拐点右移到 500 µs**（68.6 < 71.6）。所以注释仍然正确，
+而下一个调这个常数的人应该知道他调的是一条形状不同的曲线。
+
 #### 6.1.3 谁在写 bbolt
 
 不是"只有 Admin"。每个带 Deployment 的 Attempt 在上游调用前有两次 bbolt 写——
@@ -1067,6 +1089,9 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 | `internal/app/doctor_journal.go` + `metadata_journal_test.go` | 398 |
 | 合计 | **3858** |
 
+Phase 0a 留下的唯一一条尾巴——`metadataBatchDelay` 要对着多一次 fsync 重新扫——已于 2026-09-25
+扫完，结论是 250 µs 不动，两侧对跑的表见 §6.1.2。**Phase 0a 现在没有未完成项。**
+
 `doctor` 的 `metadata_journal` 只读检查在 `internal/app/doctor_journal.go`；`backup create` 把
 journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_sequence` 记下它投影的是
 哪一段前缀（`TestTheBackupManifestRecordsWhichPrefixItProjects` 钉住这一点）；`restore` 撤下归档
@@ -1082,8 +1107,9 @@ journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_se
 1. ✅ `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务——`internal/store/bolt/journal_class.go`，
    未分类即拒绝，没有默认值；跨类白名单两条（见 §5.2 的实测更正）；
 2. ✅ 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2）——`journal_entry.go`；ADR 0012 的三条重跑前提
-   原样保留，`BenchmarkMetadataWriteTransaction` / `BenchmarkMetadataBatchDelay` 迁到新层，
-   `metadataBatchDelay` 的 250 µs 现在要对着多一次 fsync 重新扫；
+   原样保留，`BenchmarkMetadataWriteTransaction` / `BenchmarkMetadataBatchDelay` 迁到新层；
+   `metadataBatchDelay` 的 250 µs **已于 2026-09-25 对着多一次 fsync 重新扫过，结论是不动**——
+   两侧对跑的表见 §6.1.2；
 3. ✅ journal 帧格式、MAC 域 `halro:metadata:v1`、epoch 规则（§6.1.4）、保留/裁剪（带签名的裁剪锚点，
    Standalone 按字节阈值触发，与 Ledger seal 同一次 tick）、崩溃恢复矩阵新增 8 行；
    **不需要 schema bump，也不需要重新初始化**（见 §6.1.1 的实测更正）；
