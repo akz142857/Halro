@@ -1123,7 +1123,16 @@ journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_se
 
 ### Phase 0b：复制格式（[#106](https://github.com/akz142857/Halro/issues/106)）
 
-进入条件：§1.3 全部满足。
+进入条件：§1.3 全部满足。**目前一项未满足，本阶段未开工。**
+
+> 唯一的例外是下面第 4 项的一半：它不冻结任何格式，只是对现状的核实，所以在门之外做完了。
+> 2026-09-25 实测 `main`：调用方幂等（#12 的契约，Chat/Embeddings 由
+> [#342](https://github.com/akz142857/Halro/pull/342) 落地）的生命周期记录写在
+> `provider_resources` 与 `provider_resource_idempotency`，**两者都已是 A 类**，所以它们确实随
+> journal 复制。`TestCallerIdempotencyReplicatesWithTheJournal` 把这条依赖钉住——分类表读起来只是
+> 一列 bucket 名，把这两个之一改成 C 或 E 是一处看上去很局部的单行修改，能通过其它所有测试，却会
+> 让重试的 Idempotency-Key 在一个节点上答得出、在另一个节点上答不出，而这件事第一次显形会是在
+> 一次提升的时候。
 
 1. 复制帧、ordering journal、`cluster/state.json`（含 MAC）的格式 ADR；term / promised_term /
    incarnation / index 语义；`leadership_established`；
