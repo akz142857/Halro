@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/sdk": "0.125.0",
-    "openai": "7.15.0"
+    "@anthropic-ai/sdk": "0.127.0",
+    "openai": "7.20.0"
   },
   "scripts": {
     "test": "node test-sdk.mjs"
