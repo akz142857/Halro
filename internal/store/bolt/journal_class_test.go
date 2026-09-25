@@ -301,3 +301,116 @@ func TestCallerIdempotencyReplicatesWithTheJournal(t *testing.T) {
 		}
 	}
 }
+
+// TestWithdrawnAuthorityCannotSurviveAPromotion.
+//
+// The class table pins its other three classes already — C and E through
+// TestDerivedAndNodeLocalStateIsNotJournalled, D through
+// TestKeyEnvelopesAreJournalled. Class A is the largest and the only one with
+// nothing holding its security-critical members in place, which is backwards:
+// a bucket wrongly marked derived is not merely rebuilt somewhere, it is a
+// bucket whose *removals* never reach the other node.
+//
+// That is the failure this names. Halro's answer to "is this request allowed"
+// is stored, not computed: a Gateway Key is disabled by a flag on its record,
+// an admin is disabled the same way, an MFA recovery code is spent by being
+// consumed, a Provider credential is withdrawn by being deleted. Every one of
+// those is a *withdrawal*, and a withdrawal that does not replicate is a
+// promoted Replica honouring access the Primary had already taken away — the
+// exact fail-open this project refuses everywhere else.
+//
+// It reads as obvious, which is why it is worth writing down: each of these is
+// one word in a table, and changing that word looks like a local decision
+// about where some state belongs.
+func TestWithdrawnAuthorityCannotSurviveAPromotion(t *testing.T) {
+	for _, subject := range []struct {
+		bucket    []byte
+		withdraws string
+	}{
+		{bucketGatewayKeys, "a Gateway Key disabled on the Primary"},
+		{bucketGatewayKeyHash, "the lookup that finds that key, which would resolve to it regardless"},
+		{bucketAdminUsers, "an administrator disabled or deleted"},
+		{bucketAdminMFAAuthenticators, "a second factor unenrolled"},
+		{bucketAdminMFARecoveryCodes, "a one-time recovery code already spent"},
+		{bucketCredentials, "a Provider credential withdrawn"},
+		{bucketProjects, "a Project's CIDR allowlist, budget or limits tightened"},
+		{bucketTokenGuardPolicies, "a Token Guard policy tightened"},
+		{bucketRedactionPolicies, "a redaction rule added"},
+	} {
+		name := string(subject.bucket)
+		class, known := bucketClasses[name]
+		if !known {
+			t.Errorf("%s has no journal class", name)
+			continue
+		}
+		if !class.replicated() {
+			t.Errorf("%s is class %v, so %s would not reach a Replica; "+
+				"a promotion would then honour what the Primary had withdrawn",
+				name, class, subject.withdraws)
+		}
+	}
+}
+
+// crossClassWriteBudget is how many transactions in this package are allowed to
+// write both sets at once.
+//
+// Two, and the number is here so that a third has to be typed deliberately.
+// Each entry is an exemption from the fail-closed refusal that is the whole
+// point of the classification: a Replica applies only the recorded half, so
+// every exemption is a promise that the unrecorded half does not matter there.
+// Both existing promises are argued in the list itself, and both were found by
+// measuring rather than by reading the code — a third that arrives without the
+// same argument is how the guarantee erodes one convenient transaction at a
+// time.
+//
+// Raising this is allowed. Raising it silently is not.
+const crossClassWriteBudget = 2
+
+func TestTheCrossClassAllowlistDoesNotGrowByItself(t *testing.T) {
+	if len(crossClassWrites) != crossClassWriteBudget {
+		t.Fatalf("crossClassWrites holds %d rules, budget is %d; "+
+			"a new exemption needs its safety argued in the list and this number moved "+
+			"in the same change, with the reason in the commit",
+			len(crossClassWrites), crossClassWriteBudget)
+	}
+}
+
+// TestEveryCrossClassRuleIsShapedLikeItsName.
+//
+// TestEveryCrossClassRuleNamesRealState next door checks that a rule names
+// state that exists. It does not check that the state is on the side the rule
+// claims, and the rule only means anything if it is: a `local` that is actually
+// replicated exempts a transaction that never needed exempting, and hides that
+// the real mixed write is somewhere else. A `with` entry that is not replicated
+// is two node-local writes being called a cross-class transaction, which is the
+// same mistake read from the other end.
+func TestEveryCrossClassRuleIsShapedLikeItsName(t *testing.T) {
+	classOf := func(t *testing.T, identity string) journalClass {
+		t.Helper()
+		if bucket, key, found := strings.Cut(identity, "/"); found && bucket == string(bucketMeta) {
+			class, known := metaKeyClasses[key]
+			if !known {
+				t.Fatalf("%q has no journal class", identity)
+			}
+			return class
+		}
+		class, known := bucketClasses[identity]
+		if !known {
+			t.Fatalf("%q has no journal class", identity)
+		}
+		return class
+	}
+	for _, rule := range crossClassWrites {
+		if classOf(t, rule.local).replicated() {
+			t.Errorf("cross-class rule calls %q its node-local write, but that state replicates; "+
+				"the rule exempts a transaction that did not need exempting", rule.local)
+		}
+		for _, companion := range rule.with {
+			if !classOf(t, companion).replicated() {
+				t.Errorf("cross-class rule for %q lists %q as a replicated companion, but that "+
+					"state does not replicate; nothing about this transaction crosses classes",
+					rule.local, companion)
+			}
+		}
+	}
+}
