@@ -90,7 +90,7 @@
 | CPU、RSS/heap、goroutine、FD 上限 | 待签署 | 增长容差有依据；绝对值需外部采集器，构成 G1 硬前置 | SRE |
 | 队列、重试、failure capture 和 WAL 上限 | 待签署 | 全部为代码中生效的硬上限，可直接签署 | Application / SRE |
 | Ledger、Audit、Parquet、TSDB 增长预算 | 待签署 | TSDB 有模板阈值（假设 5 GiB 卷）；应用侧每日字节数无依据，须在 G5 实测 | SRE / Platform |
-| Provider 费用和 token 预算 | 待签署 | 无依据，且当前没有任何费用/token 告警规则 | Product / Application |
+| Provider 费用和 token 预算 | **由各 Project 的 `daily_budget_micros_usd` 承载，不在本表另立实例级阈值** | 2026-09-24：告警改为盯「项目预算已在拒绝流量」（`halro_policy_rejections_total{reason="budget"}`）与 `absent(halro_cost_usd_total)`，规则文件里不含阈值。签署对象因此是**各 Project 的预算值**，由运营者在控制台逐个设定 | Product / Application |
 | RPO / RTO | 待签署 | RPO=0 仅在 `usage.durability: strict` 下成立；RTO 参考值来自 opt-in 测试 | SRE / Platform |
 | 24 小时浸泡允许事件预算 | 待签署 | 门禁已在 `tests/soak` 中固化，可直接签署 | 四方签署 |
 
