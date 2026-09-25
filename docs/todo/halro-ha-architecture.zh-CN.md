@@ -1,7 +1,9 @@
 # Halro HA 架构设计
 
-- 状态：Proposed（2026-09-20）。**未实现**——本文的 `replication` 配置、`halro cluster` 子命令、
-  复制协议与 metadata journal 在当前代码里都不存在
+- 状态：Proposed（2026-09-20）。**Phase 0a 已实现并合入 `main`**（2026-09-25，
+  [#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）——metadata journal 已经在代码里。
+  本文的 `replication` 配置、`halro cluster` 子命令与复制协议**仍不存在**，一行未写
+- 进度：见 [§18.0](#180-进度一览)
 - 适用范围：Standalone 向 Primary/Replica 的演进
 - 目标版本：不绑定。进入条件是 §1.3 列出的证据，不是某个 tag
 - 追踪：[#105](https://github.com/akz142857/Halro/issues/105) Epic、
@@ -330,6 +332,28 @@ darwin 的 `Sync` 走 `F_FULLFSYNC`，所以这是悲观上界，不能外推到
 形状与预期一致：单写者多付一次 fsync，64 并发下合并层把这一帧摊掉，所以代价消失。
 §16.3 要的那个"含 bbolt 写的端到端基线"分母，bbolt 那一半就是这条基准（现已包含 journal），
 另一半是 `internal/budget` 的 `BenchmarkRequestLifecycle`。
+
+**`metadataBatchDelay` 的 250 µs 已对着多一次 fsync 重新扫过**（2026-09-25，同一台 darwin/M4
+参考机，`-benchtime 200x -count=3` 取中位数；改动前是 `8343abad` 的工作树，那一侧走裸
+`bbolt.DB.Batch`，改动后是 `main` 的合并层加 journal 帧）：
+
+| delay | 改动前 w=1 | 改动后 w=1 | 改动前 w=8 | 改动后 w=8 |
+|---|---|---|---|---|
+| 0 | 114.3 | 71.6 | 115.8 | 78.6 |
+| **250 µs** | 104.6 | **72.3** | 766.5 | **561.8** |
+| 500 µs | 106.1 | 68.6 | 800.0 | 506.8 |
+| 1 ms | 93.7 | 67.9 | 733.2 | 540.6 |
+| 2 ms | 87.6 | 59.6 | 680.3 | 490.0 |
+| 10 ms | 47.7 | 38.5 | 372.5 | 300.2 |
+
+**结论：250 µs 不动。** 它在改动后的两个方向上都是最优——8 并发最高（561.8），单写者也是非零
+delay 里最高（72.3，甚至压过 delay=0 的 71.6）。
+
+值得记下的是**代价的形状变了**。`BenchmarkMetadataBatchDelay` 的注释警告"过于慷慨的窗口会让一次
+无争用的写比 `db.Update` 还慢"，改动前这在 250 µs 上就已经成立（114.3 → 104.6，−8.5%）；改动后
+不成立了（71.6 → 72.3，落在噪声里），因为 journal 那次 fsync 在单写者上约 14 ms/op，把 250 µs
+的窗口整个盖住。那个权衡没有消失，只是**拐点右移到 500 µs**（68.6 < 71.6）。所以注释仍然正确，
+而下一个调这个常数的人应该知道他调的是一条形状不同的曲线。
 
 #### 6.1.3 谁在写 bbolt
 
@@ -1040,13 +1064,52 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 
 ## 18. 实施阶段
 
-### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已落地 2026-09-24**
+### 18.0 进度一览
+
+截至 2026-09-25，对 `main` 实测得到（不是按文档声明抄的）：
+
+| 阶段 | 条目 | 完成 | Issue | 备注 |
+| --- | --- | --- | --- | --- |
+| Phase 0a metadata journal | 5 | **5** | [#315](https://github.com/akz142857/Halro/issues/315) CLOSED | 已合入 `main`，3858 行含测试 |
+| Phase 0b 复制格式 | 6 | 0 | [#106](https://github.com/akz142857/Halro/issues/106) | 未开工 |
+| Phase 1 复制流与 Replica | 5 | 0 | [#107](https://github.com/akz142857/Halro/issues/107) | 未开工 |
+| Phase 2 提升、备份与部署 | 5 | 0 | [#108](https://github.com/akz142857/Halro/issues/108) | 未开工 |
+
+**按条目是 5/21，按能力是 0。** Phase 0a 按 §1.3 的说法本就是「一个独立的 Standalone 变更」：
+它让 `halro.db` 成为 journal 的投影，从而使物理复制*成为可能*，但它自己不复制任何东西。实测
+`main` 上没有 `internal/cluster`、没有 replication 包、`config.Config` 里没有 `replication` 块。
+
+已落地的部分：
+
+| 位置 | 行数（含测试） |
+| --- | --- |
+| `internal/metadatajournal/` | 1219 |
+| `internal/store/bolt/journal_*.go` | 2206 |
+| `internal/vault/metadata.go` | 35 |
+| `internal/app/doctor_journal.go` + `metadata_journal_test.go` | 398 |
+| 合计 | **3858** |
+
+Phase 0a 留下的唯一一条尾巴——`metadataBatchDelay` 要对着多一次 fsync 重新扫——已于 2026-09-25
+扫完，结论是 250 µs 不动，两侧对跑的表见 §6.1.2。**Phase 0a 现在没有未完成项。**
+
+`doctor` 的 `metadata_journal` 只读检查在 `internal/app/doctor_journal.go`；`backup create` 把
+journal 收进归档并在 manifest 的 `metadata.metadata_journal_epoch` / `_sequence` 记下它投影的是
+哪一段前缀（`TestTheBackupManifestRecordsWhichPrefixItProjects` 钉住这一点）；`restore` 撤下归档
+里的 journal 并在发布前于暂存目录开好新 epoch。
+
+**Phase 0b 不具备开工条件**，卡在 §1.3 的三个进入条件，一个都没满足——不是缺代码，是缺运行
+条件。2026-09-25 把 G0 推到了 `CONDITIONAL PASS`
+（[记录](../verification/production-validation-run-260925-g0.zh-CN.md)），G1–G7 未动。
+
+
+### Phase 0a：metadata journal（独立的 Standalone 变更，[#315](https://github.com/akz142857/Halro/issues/315)）· **已合入 `main` 2026-09-25**（[#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）
 
 1. ✅ `(bucket, key)` 分类表落成代码（§5.2）；入口拒绝混合事务——`internal/store/bolt/journal_class.go`，
    未分类即拒绝，没有默认值；跨类白名单两条（见 §5.2 的实测更正）；
 2. ✅ 事务入口 + 自建合并层替换 `db.Batch`（§6.1.2）——`journal_entry.go`；ADR 0012 的三条重跑前提
-   原样保留，`BenchmarkMetadataWriteTransaction` / `BenchmarkMetadataBatchDelay` 迁到新层，
-   `metadataBatchDelay` 的 250 µs 现在要对着多一次 fsync 重新扫；
+   原样保留，`BenchmarkMetadataWriteTransaction` / `BenchmarkMetadataBatchDelay` 迁到新层；
+   `metadataBatchDelay` 的 250 µs **已于 2026-09-25 对着多一次 fsync 重新扫过，结论是不动**——
+   两侧对跑的表见 §6.1.2；
 3. ✅ journal 帧格式、MAC 域 `halro:metadata:v1`、epoch 规则（§6.1.4）、保留/裁剪（带签名的裁剪锚点，
    Standalone 按字节阈值触发，与 Ledger seal 同一次 tick）、崩溃恢复矩阵新增 8 行；
    **不需要 schema bump，也不需要重新初始化**（见 §6.1.1 的实测更正）；
