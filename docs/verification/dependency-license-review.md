@@ -170,7 +170,7 @@ Node lock, and `pip-audit` for the complete hashed Python lock.
 | Node | `@anthropic-ai/sdk` 0.127.0 | MIT |
 | Node | `openai` 7.20.0 | Apache-2.0 |
 | Python | `anthropic` 1.5.0 | MIT |
-| Python | `openai` 3.14.0 | Apache-2.0 |
+| Python | `openai` 3.16.2 | Apache-2.0 |
 | Python tooling | `pip-audit` 2.10.1 | Apache-2.0 |
 
 The resolved Go compatibility graph is MIT, BSD-3-Clause, Apache-2.0, or ISC — the last of these arrived on 2026-09-26 and is described below. The
@@ -190,6 +190,20 @@ The 2026-09-18 OpenAI Go compatibility refresh moved
 `github.com/openai/openai-go/v3` from 3.56.0 to 3.61.0. The module remains
 Apache-2.0 licensed, the resolved module-path set is unchanged, and this SDK
 is used only by the compatibility contracts rather than the shipped runtime.
+
+The 2026-09-26 OpenAI Python compatibility refresh moved `openai` from 3.14.0
+to 3.16.2. The package remains Apache-2.0, read from the installed
+distribution's metadata rather than from the bot's summary, the 42-package lock
+set is unchanged, and the SDK remains confined to compatibility CI.
+
+This one was not combined with the `anthropic` bump beside it, unlike the Go
+and Node pairs. The Python lock is fully hashed and compiled by `uv`, and
+recompiling it here resolved a different package set — `cachecontrol` and `pip`
+appeared — because this machine's `uv` and platform are not the ones that
+produced the committed file. Rewriting a hashed lock with a different toolchain
+would change the dependency set as a side effect of a version bump, which is
+the thing this review exists to catch. So each Python bump keeps the lock its
+own Dependabot run generated, and they land one after another.
 
 The 2026-09-26 Go compatibility refresh moved
 `github.com/anthropics/anthropic-sdk-go` from 1.72.0 to 1.74.0 and
@@ -265,8 +279,8 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/go/go.sum`: `e41910b1dfe53890a0f3d9caa912db7a3f00c6c7`
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
 - `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
-- `tests/compatibility/python/requirements.in`: `a6f9953e62dbbe7f15f4fbc7b920868882b0834b`
-- `tests/compatibility/python/requirements.txt`: `49f7bf5e4c9d7ab8845e2d18a35a01cef71b0e37`
+- `tests/compatibility/python/requirements.in`: `7ed940fb6e5eccd59b09bf6e54bbbe915b6857d8`
+- `tests/compatibility/python/requirements.txt`: `ee3667da58477d1ee088376417a8dc2cda7d5aa7`
 
 The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
 web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before
