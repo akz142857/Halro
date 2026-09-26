@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/akz142857/Halro/internal/durable"
 )
 
 // ReplicationCursor authenticates the complete Ledger history and returns the
@@ -176,6 +178,108 @@ func TruncateReplicationTail(path string, key []byte, generation, sequence uint6
 		return err
 	}
 	return file.Sync()
+}
+
+// RepairReplicaTail removes torn bytes only when the complete authenticated
+// Ledger prefix is exactly the cursor recovered from ordering. Interrupted
+// Roll intents remain a separate structural transaction and are refused here.
+func RepairReplicaTail(path string, key []byte, expectedGeneration, expectedSequence uint64) error {
+	_, pending, err := resolveSegments(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if pending {
+		return errors.New("replica Ledger interrupted Roll requires ordering-aware structural reconciliation")
+	}
+	report, partial, err := InspectReplayAuthenticated(path, key, nil)
+	if err != nil {
+		return err
+	}
+	if report.Head.Generation != expectedGeneration || report.Head.Sequence != expectedSequence {
+		return errors.New("Ledger complete prefix does not match ordering cursor")
+	}
+	if !partial {
+		return nil
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Truncate(report.Head.Offset); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+// RepairReplicaRoll resolves only a pending Roll whose pre-roll cursor exactly
+// matches the authenticated ordering prefix. If the rename happened but the
+// successor creation did not, it publishes the empty successor before making
+// the resolved manifest durable. A retransmitted Roll then follows the normal
+// idempotent ApplyReplicatedRoll path and supplies the ordering record.
+func RepairReplicaRoll(path string, key []byte, expectedGeneration, expectedSequence uint64) error {
+	directory := filepath.Dir(path)
+	manifest, err := loadSegmentManifest(directory)
+	if err != nil {
+		return err
+	}
+	if manifest.Pending == nil {
+		return nil
+	}
+	pending := *manifest.Pending
+	if pending.Generation != expectedGeneration || pending.LastSequence != expectedSequence {
+		return errors.New("replica Ledger pending Roll does not match ordering cursor")
+	}
+	segments, _, err := resolveSegments(directory)
+	if err != nil {
+		return err
+	}
+	rolled := filepath.Join(directory, pending.File)
+	_, rolledErr := os.Stat(rolled)
+	if rolledErr == nil {
+		info, statErr := os.Stat(path)
+		switch {
+		case errors.Is(statErr, os.ErrNotExist):
+			file, createErr := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0o600)
+			if createErr != nil {
+				return createErr
+			}
+			if syncErr := file.Sync(); syncErr != nil {
+				file.Close()
+				return syncErr
+			}
+			if closeErr := file.Close(); closeErr != nil {
+				return closeErr
+			}
+			if syncErr := durable.SyncDirectory(directory); syncErr != nil {
+				return syncErr
+			}
+		case statErr != nil:
+			return statErr
+		case !info.Mode().IsRegular() || info.Size() != 0:
+			return errors.New("replica Ledger pending Roll successor is not an empty regular file")
+		}
+	} else if !errors.Is(rolledErr, os.ErrNotExist) {
+		return rolledErr
+	}
+	report, partial, err := InspectReplayAuthenticated(path, key, nil)
+	if err != nil || partial {
+		// Keep any recoverable successor in place. Removing it would make a
+		// failed retry destructive and is unnecessary: the pending manifest
+		// still prevents Replica open from treating it as committed.
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%w: replica Ledger pending Roll has a partial active tail", ErrCorrupt)
+	}
+	wantGeneration := expectedGeneration
+	if rolledErr == nil {
+		wantGeneration++
+	}
+	if report.Head.Generation != wantGeneration || report.Head.Sequence != expectedSequence {
+		return errors.New("replica Ledger pending Roll history does not match ordering cursor")
+	}
+	return saveSegmentManifest(directory, segmentManifest{Segments: segments})
 }
 
 func replicationGenerationReader(path string, generation uint64) (io.ReadSeekCloser, error) {

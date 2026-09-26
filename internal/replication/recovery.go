@@ -160,17 +160,52 @@ func RecoverLocalCommits(clusterID, incarnation string, confirmed uint64, journa
 		}
 	}
 
-	commits := make([]LocalCommit, 0, head-confirmed)
-	for index := confirmed + 1; index <= head; index++ {
+	return ReconstructRange(clusterID, incarnation, confirmed+1, head, journal, source)
+}
+
+// ReconstructRange rebuilds a finite range into memory. Catch-up paths should
+// use ReconstructRangeEach so a lagging Replica cannot make the Primary retain
+// its entire history at once.
+func ReconstructRange(clusterID, incarnation string, first, last uint64, journal *OrderingJournal, source DurableSource) ([]LocalCommit, error) {
+	commits := make([]LocalCommit, 0)
+	err := ReconstructRangeEach(clusterID, incarnation, first, last, journal, source, func(commit LocalCommit) error {
+		commits = append(commits, commit)
+		return nil
+	})
+	return commits, err
+}
+
+// ReconstructRangeEach rebuilds exact wire frames from an authenticated
+// ordering range one record at a time. The callback must consume or copy a
+// commit before returning. This bounds reconstruction memory by one maximum
+// frame instead of by the peer's complete lag.
+func ReconstructRangeEach(clusterID, incarnation string, first, last uint64, journal *OrderingJournal, source DurableSource, consume func(LocalCommit) error) error {
+	if journal == nil || source == nil {
+		return errors.New("replication reconstruction requires an ordering journal and durable source")
+	}
+	if consume == nil {
+		return errors.New("replication reconstruction consumer is required")
+	}
+	if len(clusterID) == 0 || len(clusterID) > MaxIdentityBytes || len(incarnation) == 0 || len(incarnation) > MaxIdentityBytes {
+		return errors.New("replication reconstruction identity is invalid")
+	}
+	if first > last {
+		return nil
+	}
+	head, _, _ := journal.Head()
+	if first == 0 || last > head {
+		return fmt.Errorf("replication reconstruction range %d-%d is outside ordering head %d", first, last, head)
+	}
+	for index := first; index <= last; index++ {
 		record, err := journal.Record(index)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		var payload []byte
 		if record.Kind == KindData {
 			payload, err = source.Read(record.Store, record.StoreGeneration, record.StoreSequenceFirst, record.StoreSequenceLast)
 			if err != nil {
-				return nil, fmt.Errorf("read source bytes for ordering index %d: %w", index, err)
+				return fmt.Errorf("read source bytes for ordering index %d: %w", index, err)
 			}
 		}
 		frame := Frame{
@@ -182,14 +217,16 @@ func RecoverLocalCommits(clusterID, incarnation string, confirmed uint64, journa
 		}
 		encoded, digest, err := frame.MarshalBinaryAndDigest()
 		if err != nil {
-			return nil, fmt.Errorf("reconstruct ordering index %d: %w", index, err)
+			return fmt.Errorf("reconstruct ordering index %d: %w", index, err)
 		}
 		if digest != record.FrameDigest {
-			return nil, fmt.Errorf("source bytes for ordering index %d do not match its authenticated digest", index)
+			return fmt.Errorf("source bytes for ordering index %d do not match its authenticated digest", index)
 		}
-		commits = append(commits, LocalCommit{Index: index, Encoded: encoded})
+		if err := consume(LocalCommit{Index: index, Encoded: encoded}); err != nil {
+			return fmt.Errorf("consume reconstructed ordering index %d: %w", index, err)
+		}
 	}
-	return commits, nil
+	return nil
 }
 
 func sourceCursorBehind(actual, expected StoreCursor) bool {

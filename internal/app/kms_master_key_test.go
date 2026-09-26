@@ -168,6 +168,48 @@ func TestKMSInitializationPublishesIndependentVerifiedSlotsWithoutPlaintextKey(t
 	}
 }
 
+func TestMemberKeySlotUnlockNeverCreatesOrMigratesMetadata(t *testing.T) {
+	cfg := kmsAppTestConfig(t)
+	harness := newKMSAppHarness(t)
+	masterKey := bytes.Repeat([]byte{0x5a}, 32)
+	if err := initializeKMS(context.Background(), cfg, kmsInitializationOptions{
+		factory: harness.factory, random: bytes.NewReader(masterKey),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlocked, err := unlockMemberMasterKeyWithFactory(context.Background(), cfg, harness.factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(unlocked)
+	if !bytes.Equal(unlocked, masterKey) {
+		t.Fatal("member startup unlocked the wrong Master Key")
+	}
+	after, err := os.ReadFile(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("member Master Key unlock mutated metadata")
+	}
+
+	missing := kmsAppTestConfig(t)
+	missingHarness := newKMSAppHarness(t)
+	if _, err := unlockMemberMasterKeyWithFactory(context.Background(), missing, missingHarness.factory); err == nil {
+		t.Fatal("member Master Key unlock created missing metadata")
+	}
+	if _, err := os.Stat(missing.MetadataPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing member metadata was touched: %v", err)
+	}
+	if missingHarness.callCount() != 0 {
+		t.Fatal("missing member metadata reached KMS")
+	}
+}
+
 func TestKMSInitializationFailureNeverPublishesPartialInstance(t *testing.T) {
 	for _, point := range []string{
 		"after_empty_check", "after_primary_verified", "after_recovery_verified",

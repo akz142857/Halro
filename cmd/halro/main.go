@@ -35,6 +35,7 @@ import (
 	"github.com/akz142857/Halro/internal/hostsecurity"
 	"github.com/akz142857/Halro/internal/logging"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/safelog"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	storelock "github.com/akz142857/Halro/internal/store/lock"
@@ -1347,10 +1348,7 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 }
 
 func rejectReplicationMutation(cfg config.Config, operation string) error {
-	if cfg.Replication == nil {
-		return nil
-	}
-	return fmt.Errorf("replication is configured but this build has no replication runtime; refusing %s because it would mutate member state outside the replication order", operation)
+	return replication.GuardUnavailableRuntime(cfg.Storage.DataDir, cfg.Replication != nil, operation)
 }
 
 // watchReloadSignal answers SIGHUP for as long as the returned stop has not

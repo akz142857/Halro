@@ -35,6 +35,33 @@ func unlockMasterKey(ctx context.Context, cfg config.Config, stores ...*boltstor
 	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
 }
 
+// unlockMemberMasterKey is the HA startup path. Unlike unlockMasterKey's
+// Standalone bootstrap behavior, it may neither create nor migrate metadata
+// before state.json has been authenticated and startup recovery has selected a
+// role. Key Slots are therefore read through the exact-schema, read-only store.
+func unlockMemberMasterKey(ctx context.Context, cfg config.Config) ([]byte, error) {
+	return unlockMemberMasterKeyWithFactory(ctx, cfg, defaultKMSWrapperFactory)
+}
+
+func unlockMemberMasterKeyWithFactory(ctx context.Context, cfg config.Config, factory kmsWrapperFactory) ([]byte, error) {
+	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile {
+		unlocker, err := masterkey.NewUnlocker(cfg.Storage.MasterKey)
+		if err != nil {
+			return nil, err
+		}
+		return unlocker.Unlock(ctx)
+	}
+	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
+		return nil, errors.New("unsupported Master Key mode")
+	}
+	store, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, factory)
+}
+
 func fileMasterKeyStore(cfg config.Config) (*masterkey.FileStore, error) {
 	return masterkey.FileStoreFromConfig(cfg.Storage.MasterKey)
 }

@@ -126,9 +126,15 @@ func bindConnectionContext(ctx context.Context, conn *tls.Conn) func() {
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	callbackDone := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(callbackDone)
+		_ = conn.SetDeadline(time.Now())
+	})
 	return func() {
-		stop()
+		if !stop() {
+			<-callbackDone
+		}
 		_ = conn.SetDeadline(time.Time{})
 	}
 }

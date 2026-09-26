@@ -186,14 +186,14 @@ non-secret control metadata plus an order and digest index over payload bytes
 owned by the four stores. Persisting the original confirmation watermark and
 control metadata makes an unconfirmed frame's exact envelope reconstructible.
 
-### 5. Persistent member state version 1
+### 5. Persistent member state version 2
 
 `cluster/state.json` is a single JSON object published by write-temp, file
 fsync, rename and directory fsync. It contains:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "cluster_id": "production-a",
   "incarnation": "inc_...",
   "node_id": "halro-0",
@@ -201,9 +201,10 @@ fsync, rename and directory fsync. It contains:
   "term": 7,
   "promised_term": 7,
   "durable_index": 10241,
-  "applied_index": 10241,
+  "confirmed_index": 10240,
+  "applied_index": 10240,
   "ordering_head_mac": "sha256:...",
-  "projection": {"index": 10241, "metadata_epoch": 4, "metadata_sequence": 91},
+  "projection": {"index": 10240, "metadata_epoch": 4, "metadata_sequence": 91},
   "peers": [{"name": "halro-1", "address": "...", "spki_sha256": "sha256:..."}],
   "mac": "sha256:..."
 }
@@ -215,9 +216,33 @@ encoding of the fields above excluding `mac`; peers are ordered by name. It is
 not the JSON rendering, so whitespace or object-key order cannot change the
 authenticated meaning. Unknown fields and duplicate peer identities are
 refused. `role` is one of `primary`, `replica` or `awaiting_decision`.
+`applied_index <= confirmed_index <= durable_index`; persisting the confirmed
+watermark is required because the final ACK in a process lifetime may advance
+confirmation without causing another data frame whose envelope could record
+that fact.
 
 The cluster key is derived from the unlocked Master Key with HKDF-SHA-256,
 incarnation as salt and `halro:cluster:v1` as info. It is never stored or sent.
+Startup therefore reads state in two passes: a bounded, non-authoritative parse
+supplies only the incarnation used as the HKDF salt, then the derived key must
+authenticate the complete state before any role, term, peer or watermark is
+trusted. The ordering journal's existing authenticated header is read from disk
+on restart; current native tails must never be synthesized into a new index-zero
+baseline.
+
+During normal operation every Primary durable append publishes
+`(durable_index, confirmed_index, ordering_head_mac)` before the frame can be
+queued or its local caller can observe success. A Replica publishes the same
+tuple before ACK and additionally publishes `(applied_index, projection)` only
+after the confirmed Ledger and metadata projections are visible. A failed or
+uncertain state-file/directory barrier poisons that role until restart. The
+journal-ahead-of-state allowance above is therefore crash recovery tolerance,
+not a normal deferred-write policy.
+
+Version 1 was never published by an enabled HA runtime. The addition of the
+durable confirmation watermark therefore freezes the first runtime-consumable
+member-state format as version 2; a version-1 file is rejected rather than
+silently interpreted or migrated.
 An offline Master Key rotation therefore starts a new cluster incarnation and
 new ordering/state files while both old and new keys are still available; all
 Replicas are then re-seeded. Reusing the old incarnation after rotation is

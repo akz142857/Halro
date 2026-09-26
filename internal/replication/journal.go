@@ -53,6 +53,77 @@ func OpenOrderingJournal(path string, key []byte, header OrderingHeader, expecte
 	return OpenOrderingJournalWithOptions(path, key, header, expectedIndex, expectedHead, OrderingJournalOptions{})
 }
 
+// ReadOrderingHeader authenticates the index-zero store baselines from an
+// existing journal without deriving them again from current native tails.
+func ReadOrderingHeader(path string, key []byte) (OrderingHeader, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return OrderingHeader{}, fmt.Errorf("open existing ordering journal header: %w", err)
+	}
+	defer file.Close()
+	encoded, err := ReadLengthDelimited(file, orderingHeaderFixedBytes+2*MaxIdentityBytes)
+	if err != nil {
+		return OrderingHeader{}, fmt.Errorf("read existing ordering journal header: %w", err)
+	}
+	header, err := UnmarshalOrderingHeader(encoded, key)
+	if err != nil {
+		return OrderingHeader{}, fmt.Errorf("authenticate existing ordering journal header: %w", err)
+	}
+	return header, nil
+}
+
+// OpenExistingOrderingJournal is the restart path. It never creates a journal
+// and reuses the authenticated on-disk baseline before the normal full scan
+// verifies expectedIndex and expectedHead against the record MAC chain.
+func OpenExistingOrderingJournal(path string, key []byte, clusterID, incarnation string, expectedIndex uint64, expectedHead [sha256.Size]byte) (*OrderingJournal, error) {
+	if len(key) != sha256.Size {
+		return nil, errors.New("ordering journal key must be 32 bytes")
+	}
+	if expectedIndex == 0 && expectedHead != ([sha256.Size]byte{}) {
+		return nil, errors.New("ordering journal expected head requires a positive index")
+	}
+	if expectedIndex > 0 && expectedHead == ([sha256.Size]byte{}) {
+		return nil, errors.New("ordering journal expected index requires a head MAC")
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open existing ordering journal: %w", err)
+	}
+	closeOnError := func(openErr error) (*OrderingJournal, error) {
+		_ = file.Close()
+		return nil, openErr
+	}
+	encoded, err := ReadLengthDelimited(file, orderingHeaderFixedBytes+2*MaxIdentityBytes)
+	if err != nil {
+		return closeOnError(fmt.Errorf("read existing ordering journal header: %w", err))
+	}
+	header, err := UnmarshalOrderingHeader(encoded, key)
+	if err != nil {
+		return closeOnError(fmt.Errorf("authenticate existing ordering journal header: %w", err))
+	}
+	if header.ClusterID != clusterID || header.Incarnation != incarnation {
+		return closeOnError(errors.New("ordering journal identity does not match authenticated member state"))
+	}
+	// A restart path never creates or replaces the file. Keep this same file
+	// descriptor through header authentication and the complete record scan so
+	// an unlink/replace race cannot fall through to the creation path.
+	if err := file.Sync(); err != nil {
+		return closeOnError(fmt.Errorf("sync existing ordering journal: %w", err))
+	}
+	if err := durable.SyncDirectory(filepath.Dir(path)); err != nil {
+		return closeOnError(fmt.Errorf("sync ordering journal directory: %w", err))
+	}
+	journal := &OrderingJournal{
+		file: file, durability: file, header: header,
+		dataOffset: int64(len(encoded)), nextOffset: int64(len(encoded)),
+	}
+	copy(journal.key[:], key)
+	if err := journal.recover(expectedIndex, expectedHead); err != nil {
+		return closeOnError(err)
+	}
+	return journal, nil
+}
+
 func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHeader, expectedIndex uint64, expectedHead [sha256.Size]byte, options OrderingJournalOptions) (*OrderingJournal, error) {
 	if len(key) != sha256.Size {
 		return nil, errors.New("ordering journal key must be 32 bytes")

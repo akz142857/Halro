@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,7 +54,7 @@ func newTestPrimary(t *testing.T, outbound OutboundQueue) (*PrimaryCoordinator, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1", "halro-2"}, journal, outbound)
+	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1", "halro-2"}, journal, outbound, func(PrimaryProgress) error { return nil })
 	if err != nil {
 		journal.Close()
 		t.Fatal(err)
@@ -163,6 +164,122 @@ func TestPrimaryCoordinatorWaitHonorsContext(t *testing.T) {
 	}
 }
 
+func TestPrimaryCoordinatorPersistsConfirmationBeforePublishingSuccess(t *testing.T) {
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	persistErr := errors.New("state fsync failed")
+	outbound := &recordingOutbound{}
+	primary, err := NewPrimaryCoordinator(
+		"production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1"}, journal, outbound,
+		func(progress PrimaryProgress) error {
+			if progress.ConfirmedIndex > 0 {
+				return persistErr
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished, Store: StoreNone}); err != nil {
+		t.Fatal(err)
+	}
+	if confirmed, err := primary.Acknowledge(testAcknowledgement("halro-1", 1)); confirmed != 0 || !errors.Is(err, persistErr) {
+		t.Fatalf("confirmed=%d err=%v", confirmed, err)
+	}
+	if len(outbound.acks) != 0 || len(outbound.notices) != 0 {
+		t.Fatalf("confirmation became externally visible after failed state fsync: acks=%d notices=%d", len(outbound.acks), len(outbound.notices))
+	}
+	if confirmed, available, cause := primary.Status(); confirmed != 0 || available || !errors.Is(cause, persistErr) {
+		t.Fatalf("status confirmed=%d available=%t cause=%v", confirmed, available, cause)
+	}
+	if err := primary.WaitConfirmed(context.Background(), 1); !errors.Is(err, ErrReplicationUnavailable) {
+		t.Fatalf("wait after failed state fsync=%v", err)
+	}
+}
+
+func TestPrimaryCoordinatorPersistsDurableWatermarkBeforeQueueing(t *testing.T) {
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	outbound := &recordingOutbound{}
+	var persisted []PrimaryProgress
+	primary, err := NewPrimaryCoordinator(
+		"production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1"}, journal, outbound,
+		func(progress PrimaryProgress) error {
+			journalIndex, _, journalHead := journal.Head()
+			if journalIndex != progress.DurableIndex || journalHead != progress.OrderingHeadMAC {
+				t.Fatalf("state progress=%#v journal=%d/%x", progress, journalIndex, journalHead)
+			}
+			if progress.DurableIndex > 0 && len(outbound.frames) != 0 {
+				t.Fatal("frame queued before durable member state")
+			}
+			persisted = append(persisted, progress)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished}); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 2 || persisted[0].DurableIndex != 0 || persisted[1].DurableIndex != 1 || persisted[1].ConfirmedIndex != 0 || persisted[1].OrderingHeadMAC == ([32]byte{}) {
+		t.Fatalf("persisted=%#v", persisted)
+	}
+}
+
+func TestPrimaryCoordinatorPoisonsWhenDurableStatePublicationIsUncertain(t *testing.T) {
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	persistErr := errors.New("state directory fsync failed")
+	outbound := &recordingOutbound{}
+	primary, err := NewPrimaryCoordinator(
+		"production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1"}, journal, outbound,
+		func(progress PrimaryProgress) error {
+			if progress.DurableIndex > 0 {
+				return persistErr
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished}); commit.Index != 0 || len(commit.Encoded) != 0 || !errors.Is(err, persistErr) {
+		t.Fatalf("commit=%#v err=%v", commit, err)
+	}
+	if len(outbound.frames) != 0 {
+		t.Fatalf("queued %d frames after state publication failure", len(outbound.frames))
+	}
+	if index, _, _ := journal.Head(); index != 1 {
+		t.Fatalf("ordering index=%d, want durable-but-unpublished 1", index)
+	}
+	if _, err := primary.RecordDurable(Frame{Kind: KindData, Store: StoreLedger, StoreGeneration: 1, StoreSequenceFirst: 1, StoreSequenceLast: 1, Payload: []byte("frame")}); err == nil || !strings.Contains(err.Error(), "requires restart") {
+		t.Fatalf("poisoned retry error=%v", err)
+	}
+}
+
 func TestPrimaryCoordinatorDoesNotRecoverAvailabilityFromAStaleACK(t *testing.T) {
 	outbound := &recordingOutbound{}
 	primary, journal := newTestPrimary(t, outbound)
@@ -259,7 +376,7 @@ func TestPrimaryCoordinatorResumesEstablishedTermWithoutSecondAnchor(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 1, []string{"halro-1"}, journal, &recordingOutbound{})
+	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 1, []string{"halro-1"}, journal, &recordingOutbound{}, func(PrimaryProgress) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +401,7 @@ func TestPrimaryCoordinatorRecoversAndRetransmitsUnconfirmedSuffix(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1", "halro-2"}, journal, &recordingOutbound{})
+	primary, err := NewPrimaryCoordinator("production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1", "halro-2"}, journal, &recordingOutbound{}, func(PrimaryProgress) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +450,7 @@ func TestPrimaryCoordinatorRecoversAndRetransmitsUnconfirmedSuffix(t *testing.T)
 	recoveredOutbound := &recordingOutbound{}
 	recovered, err := NewPrimaryCoordinator(
 		"production-a", "inc_01", "halro-0", 7, 1, []string{"halro-1", "halro-2"},
-		reopened, recoveredOutbound, LocalCommit{Index: 2, Encoded: encoded},
+		reopened, recoveredOutbound, func(PrimaryProgress) error { return nil }, LocalCommit{Index: 2, Encoded: encoded},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -365,7 +482,7 @@ func TestPrimaryCoordinatorAuthenticatesEntireRecoveredSuffixBeforeQueueing(t *t
 	recoveredOutbound := &recordingOutbound{}
 	if _, err := NewPrimaryCoordinator(
 		"production-a", "inc_01", "halro-0", 7, 0, []string{"halro-1", "halro-2"},
-		journal, recoveredOutbound, first, second,
+		journal, recoveredOutbound, func(PrimaryProgress) error { return nil }, first, second,
 	); err == nil {
 		t.Fatal("corrupt second recovered frame was accepted")
 	}

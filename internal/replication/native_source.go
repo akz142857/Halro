@@ -115,6 +115,34 @@ func (s *NativeSource) Truncate(store Store, cursor StoreCursor) error {
 	}
 }
 
+// RepairReplicaTail is the explicit bootstrap repair step. The expected cursor
+// must come from the authenticated ordering prefix; individual Replica open
+// paths never infer permission to truncate from their own partial bytes.
+func (s *NativeSource) RepairReplicaTail(store Store, cursor StoreCursor) error {
+	switch store {
+	case StoreLedger:
+		return ledger.RepairReplicaTail(s.options.LedgerPath, s.options.LedgerKey, cursor.Generation, cursor.Sequence)
+	case StoreAudit:
+		if cursor.Generation != 1 {
+			return errors.New("audit replication generation must be 1")
+		}
+		return audit.RepairReplicaTail(s.options.AuditPath, s.options.AuditKey, cursor.Sequence)
+	case StoreGovernance:
+		if cursor.Generation != 1 {
+			return errors.New("governance replication generation must be 1")
+		}
+		return governance.RepairReplicaTail(s.options.GovernancePath, s.options.GovernanceKey, cursor.Sequence)
+	case StoreMetadata:
+		return metadatajournal.RepairReplicaTail(s.options.MetadataPath, s.options.MetadataKey, cursor.Generation, cursor.Sequence)
+	default:
+		return fmt.Errorf("native replication store %d is invalid", store)
+	}
+}
+
+func (s *NativeSource) RepairReplicaLedgerRoll(cursor StoreCursor) error {
+	return ledger.RepairReplicaRoll(s.options.LedgerPath, s.options.LedgerKey, cursor.Generation, cursor.Sequence)
+}
+
 // PendingLedgerRoll returns the authenticated structural metadata left by a
 // native Roll whose ordering record was not made durable before a crash.
 func (s *NativeSource) PendingLedgerRoll(generation uint64) ([]byte, error) {

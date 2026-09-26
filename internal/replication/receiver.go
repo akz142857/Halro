@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -21,6 +22,30 @@ type DurableFrameSink interface {
 	Persist(frame Frame) error
 }
 
+// ReplicaProgress is the complete mutable portion of Replica member state.
+// Projection.Index follows AppliedIndex even when the confirmed range contains
+// no metadata record; the epoch/sequence identify the last metadata prefix
+// actually materialized in bbolt.
+type ReplicaProgress struct {
+	DurableIndex    uint64
+	ConfirmedIndex  uint64
+	AppliedIndex    uint64
+	OrderingHeadMAC [sha256.Size]byte
+	Projection      ProjectionState
+}
+
+// ReplicaStateWriter durably publishes the complete progress tuple after the
+// native store and ordering journal have reached progress.DurableIndex. A nil return
+// must mean state.json and its directory entry are durable. The ordering head
+// is supplied so the persisted index is bound to the exact authenticated
+// journal prefix rather than merely to a number.
+type ReplicaStateWriter func(progress ReplicaProgress) error
+
+type ReplicaReceiverOptions struct {
+	PersistState ReplicaStateWriter
+	Projection   ProjectionState
+}
+
 type ReplicaReceiver struct {
 	mu             sync.Mutex
 	clusterID      string
@@ -32,14 +57,16 @@ type ReplicaReceiver struct {
 	durableIndex   uint64
 	confirmedIndex uint64
 	appliedIndex   uint64
+	projection     ProjectionState
 	anchorSeen     bool
 	storeCursors   map[Store]StoreCursor
 	journal        *OrderingJournal
 	sink           DurableFrameSink
+	persistState   ReplicaStateWriter
 	poisoned       error
 }
 
-func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, term, promisedTerm, confirmedIndex, appliedIndex uint64, journal *OrderingJournal, sink DurableFrameSink) (*ReplicaReceiver, error) {
+func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, term, promisedTerm, confirmedIndex, appliedIndex uint64, journal *OrderingJournal, sink DurableFrameSink, receiverOptions ...ReplicaReceiverOptions) (*ReplicaReceiver, error) {
 	if len(clusterID) == 0 || len(clusterID) > MaxIdentityBytes || len(incarnation) == 0 || len(incarnation) > MaxIdentityBytes ||
 		len(nodeID) == 0 || len(nodeID) > MaxIdentityBytes || len(primaryNodeID) == 0 || len(primaryNodeID) > MaxIdentityBytes ||
 		primaryNodeID == nodeID || term == 0 || promisedTerm < term {
@@ -47,6 +74,16 @@ func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, te
 	}
 	if journal == nil || sink == nil {
 		return nil, errors.New("replica receiver requires a journal and durable frame sink")
+	}
+	if len(receiverOptions) > 1 {
+		return nil, errors.New("replica receiver accepts at most one options value")
+	}
+	var options ReplicaReceiverOptions
+	if len(receiverOptions) == 1 {
+		options = receiverOptions[0]
+	}
+	if options.Projection.Index > appliedIndex {
+		return nil, errors.New("replica projection index exceeds applied index")
 	}
 	durableIndex, durableTerm, _ := journal.Head()
 	if durableTerm > term || durableTerm > promisedTerm {
@@ -66,7 +103,7 @@ func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, te
 	return &ReplicaReceiver{
 		clusterID: clusterID, incarnation: incarnation, nodeID: nodeID, primaryNodeID: primaryNodeID,
 		term: term, promisedTerm: promisedTerm, durableIndex: durableIndex, confirmedIndex: confirmedIndex, appliedIndex: appliedIndex,
-		anchorSeen: durableTerm == term, storeCursors: cursors, journal: journal, sink: sink,
+		projection: options.Projection, anchorSeen: durableTerm == term, storeCursors: cursors, journal: journal, sink: sink, persistState: options.PersistState,
 	}, nil
 }
 
@@ -101,6 +138,10 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 			return Acknowledgement{}, errors.New("replication index already has different frame bytes")
 		}
 		if frame.ConfirmedIndex > r.confirmedIndex {
+			if err := r.persistProgress(r.durableIndex, frame.ConfirmedIndex, r.appliedIndex, r.projection); err != nil {
+				r.poisoned = err
+				return Acknowledgement{}, fmt.Errorf("persist replica confirmation watermark: %w", err)
+			}
 			r.confirmedIndex = frame.ConfirmedIndex
 		}
 		return r.acknowledgement(), nil
@@ -150,14 +191,21 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		StoreSequenceFirst: frame.StoreSequenceFirst, StoreSequenceLast: frame.StoreSequenceLast,
 		FrameDigest: digest,
 	}
-	if _, err := r.journal.Append(record); err != nil {
+	persistedRecord, err := r.journal.Append(record)
+	if err != nil {
 		r.poisoned = err
 		return Acknowledgement{}, fmt.Errorf("persist replicated ordering record: %w", err)
 	}
-	r.durableIndex = frame.Index
-	if frame.ConfirmedIndex > r.confirmedIndex {
-		r.confirmedIndex = frame.ConfirmedIndex
+	confirmedIndex := r.confirmedIndex
+	if frame.ConfirmedIndex > confirmedIndex {
+		confirmedIndex = frame.ConfirmedIndex
 	}
+	if err := r.persistProgress(frame.Index, confirmedIndex, r.appliedIndex, r.projection, persistedRecord.MAC); err != nil {
+		r.poisoned = err
+		return Acknowledgement{}, fmt.Errorf("persist replica durable watermark: %w", err)
+	}
+	r.durableIndex = frame.Index
+	r.confirmedIndex = confirmedIndex
 	if frame.Kind == KindLeadershipEstablished {
 		r.anchorSeen = true
 	}
@@ -172,17 +220,45 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 
 func (r *ReplicaReceiver) AdvanceApplied(index uint64) error {
 	r.mu.Lock()
+	projection := r.projection
+	r.mu.Unlock()
+	projection.Index = index
+	return r.AdvanceAppliedWithProjection(index, projection)
+}
+
+// AdvanceAppliedWithProjection publishes derived-state progress only after the
+// caller has made both Ledger State and the metadata projection visible.
+func (r *ReplicaReceiver) AdvanceAppliedWithProjection(index uint64, projection ProjectionState) error {
+	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.poisoned != nil {
+		return fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
+	}
 	if index < r.appliedIndex || index > r.confirmedIndex {
 		return errors.New("replica applied index must advance monotonically within the confirmed prefix")
 	}
+	if projection.Index != index || projection.MetadataEpoch < r.projection.MetadataEpoch ||
+		projection.MetadataEpoch == r.projection.MetadataEpoch && projection.MetadataSequence < r.projection.MetadataSequence {
+		return errors.New("replica projection must match applied index and advance metadata monotonically")
+	}
+	if index == r.appliedIndex && projection == r.projection {
+		return nil
+	}
+	if err := r.persistProgress(r.durableIndex, r.confirmedIndex, index, projection); err != nil {
+		r.poisoned = err
+		return fmt.Errorf("persist replica applied watermark: %w", err)
+	}
 	r.appliedIndex = index
+	r.projection = projection
 	return nil
 }
 
 func (r *ReplicaReceiver) Confirm(notice CommitNotice) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.poisoned != nil {
+		return fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
+	}
 	if err := notice.Validate(); err != nil {
 		return err
 	}
@@ -193,9 +269,51 @@ func (r *ReplicaReceiver) Confirm(notice CommitNotice) error {
 		return errors.New("commit notice exceeds the Replica durable prefix")
 	}
 	if notice.ConfirmedIndex > r.confirmedIndex {
+		if err := r.persistProgress(r.durableIndex, notice.ConfirmedIndex, r.appliedIndex, r.projection); err != nil {
+			r.poisoned = err
+			return fmt.Errorf("persist replica confirmation watermark: %w", err)
+		}
 		r.confirmedIndex = notice.ConfirmedIndex
 	}
 	return nil
+}
+
+// Acknowledgement returns the current durable/apply progress for a commit
+// notice response. Index zero has no valid wire representation and is refused.
+func (r *ReplicaReceiver) Acknowledgement() (Acknowledgement, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.poisoned != nil {
+		return Acknowledgement{}, fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
+	}
+	ack := r.acknowledgement()
+	if err := ack.Validate(); err != nil {
+		return Acknowledgement{}, err
+	}
+	return ack, nil
+}
+
+func (r *ReplicaReceiver) persistProgress(durableIndex, confirmedIndex, appliedIndex uint64, projection ProjectionState, heads ...[sha256.Size]byte) error {
+	if r.persistState == nil {
+		return nil
+	}
+	var head [sha256.Size]byte
+	if len(heads) > 1 {
+		return errors.New("replica progress accepts at most one ordering head")
+	}
+	if len(heads) == 1 {
+		head = heads[0]
+	} else {
+		journalIndex, _, journalHead := r.journal.Head()
+		if journalIndex != durableIndex {
+			return fmt.Errorf("ordering head %d does not match replica durable index %d", journalIndex, durableIndex)
+		}
+		head = journalHead
+	}
+	return r.persistState(ReplicaProgress{
+		DurableIndex: durableIndex, ConfirmedIndex: confirmedIndex, AppliedIndex: appliedIndex,
+		OrderingHeadMAC: head, Projection: projection,
+	})
 }
 
 func (r *ReplicaReceiver) acknowledgement() Acknowledgement {
@@ -209,4 +327,10 @@ func (r *ReplicaReceiver) Progress() (durable, confirmed, applied uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.durableIndex, r.confirmedIndex, r.appliedIndex
+}
+
+func (r *ReplicaReceiver) ProjectionProgress() ProjectionState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.projection
 }

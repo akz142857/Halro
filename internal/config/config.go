@@ -1422,6 +1422,18 @@ func (c Config) GovernanceExportPath() string {
 	return filepath.Join(c.Storage.DataDir, "governance", "export")
 }
 
+func (c Config) ClusterDirectoryPath() string {
+	return filepath.Join(c.Storage.DataDir, "cluster")
+}
+
+func (c Config) ReplicationStatePath() string {
+	return filepath.Join(c.ClusterDirectoryPath(), "state.json")
+}
+
+func (c Config) OrderingJournalPath() string {
+	return filepath.Join(c.ClusterDirectoryPath(), "ordering.journal")
+}
+
 // validateLogging refuses a logging block that cannot be honoured. The limits
 // are validated whether or not a file is written: a value that only becomes
 // invalid when the operator later switches output to a file is a trap set for

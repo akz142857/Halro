@@ -69,6 +69,9 @@ func TestReplicaApplierBatchesOnlyTheConfirmedPrefix(t *testing.T) {
 	if applied != 4 {
 		t.Fatalf("receiver applied=%d", applied)
 	}
+	if projectionProgress := receiver.ProjectionProgress(); projectionProgress != (ProjectionState{Index: 4, MetadataEpoch: 5, MetadataSequence: 1}) {
+		t.Fatalf("receiver projection=%#v", projectionProgress)
+	}
 }
 
 func TestReplicaApplierStopsBeforeAdvancingAppliedOnCancellation(t *testing.T) {

@@ -1243,7 +1243,38 @@ Phase 1/2 的本地门禁冒充生产验收。
 > 已应用记录；Primary 若在 native Roll 发布后、ordering fsync 前崩溃，启动恢复从完整验签的 sealed
 > manifest 补齐唯一缺失的结构 index；Replica 在同一窗口崩溃则从 ordering 重建逻辑 cursor，等待
 > Primary 原始 Roll frame 重传并逐字段幂等核对，不在本地合成一个 digest 不同的替代 frame。
-> 但 app 运行时尚未安装这些 hook，也没有 listener、真实连接管理或角色 HTTP 行为；播种、对象通道和
+> 第二轮接线前审查又补齐了启动与传输边界：磁盘上只要已有 `cluster/`，删除 `replication` 配置也不能
+> 降级成 Standalone；`state.json` v2 现在持久化 `confirmed_index`（未启用的 v1 明确拒绝），并用有界两遍读取（先取不可信
+> incarnation 派生 key，再验完整 MAC）闭合启动密钥链；重启从磁盘认证已有 ordering header，不能拿
+> 当前 native tail 重造 index-0 baseline；已 confirmed 的历史也能按任意 ordering 区间从原生存储精确
+> 重建，且 catch-up 可逐帧回调、不会把整个落后区间驻留内存，供落后 Replica 在 Primary 重启后追赶。
+> Primary 的 ACK 推进现在必须先由注入的 state writer 完成 `state.json`+目录持久化；写失败会 poison
+> coordinator，既不推进可见 confirmed 水位，也不发 commit notice。post-handshake stream 会先读固定 magic，再按
+> frame/ACK/commit notice 的方向与各自上限分配，不能拿 16 MiB frame 上限放大控制消息。Ledger、Audit、
+> Governance 的 Replica 打开模式缺文件或遇到待协调尾部时只失败，不创建空 seed、不先于 ordering 修复；
+> 四个原生存储都有显式的 authenticated ordering cursor 修尾入口，普通 Replica open 不自行猜测或截断；
+> Ledger interrupted Roll 也按 ordering 的 pre-roll cursor 显式裁决：rename 前撤销 pending，rename 后补齐
+> 空 successor 并发布已验签 manifest，随后由 Primary 原始 Roll frame 的重传走幂等核对；
+> Key Slots 的成员启动解锁只读既有、精确 schema 的 metadata，不创建也不迁移；
+> 握手 context 的取消回调与 deadline 清理也已消除竞态。真实 TLS peer session 已使用每连接随机 nonce、
+> 强制握手/读进度/写 deadline、单 reader/单 writer、按条目和总字节双重有界的非阻塞队列，以及每秒
+> 字节/记录速率上限；连接 registry 以 node ID 确定唯一拨号方向。replacement 会先把旧 generation
+> 标成 stale、关闭连接并等待已获准的 handler 完整退出，才发布新 generation，消除了
+> `IsCurrent`→持久化之间的检查竞态。其上的 connection manager 已具备真实 TCP listener/dialer、固定
+> peer pin、握手并发上限、指数退避+jitter、稳定窗口后才重置退避、context 关闭与 loopback 双节点 race
+> 集成测试。认证后的 Hello 与数据流授权已经拆开：包括同角色/`awaiting_decision` 在内的 Hello 都必须先
+> 进入同步任期/角色裁决回调；只有裁决完成且角色恰为 Primary↔Replica 才会注册数据 session。
+> Primary outbound adapter 会尽力投递全部 Replica，但按“本机 + 任一 Replica”判断三节点 enqueue quorum；
+> 未送达成员仍由 coordinator 保留的 frame/commit notice 和 data-session-ready retry hook 追赶。
+> 角色化 record handler 已把认证后的连接接到 coordinator / receiver / applier：Primary 只接受与 TLS Hello
+> 同 node ID 的 ACK；Replica 对 frame 与 commit notice 都走“持久化 → 只 apply confirmed 前缀 → 回报最新
+> applied ACK”，因此安静连接的最后一帧不会停在 durable 而永远不 apply。Primary 和 Replica 的
+> `durable_index` / `confirmed_index` / `applied_index`、ordering head 与 metadata projection 已统一经过
+> 原子 `state.json` publisher；任何目录 fsync 结果不确定都会 poison 当前角色并要求重启，不能先 ACK、
+> 发 commit notice 或向本地调用方返回成功。ordering journal 允许领先 state 的规则只用于崩溃恢复，
+> 不再被正常运行路径当作延迟发布策略。
+> 但 app 运行时尚未安装这些 hook，也尚未绑定 replication listener、outbound/coordinator 或角色 HTTP
+> 行为；播种、对象通道和
 > 故障注入门禁也未完成。因此下面五个粗粒度交付物仍为 0/5，不能据此声称
 > HA 可运行。
 

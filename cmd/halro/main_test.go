@@ -129,6 +129,7 @@ func TestReplicationDoesNotSilentlyStartAsStandalone(t *testing.T) {
 
 func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *testing.T) {
 	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "standalone")
 	if err := rejectReplicationMutation(cfg, "init"); err != nil {
 		t.Fatalf("Standalone mutation was refused: %v", err)
 	}
@@ -143,6 +144,18 @@ func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *test
 		if err == nil || !strings.Contains(err.Error(), operation) || !strings.Contains(err.Error(), "outside the replication order") {
 			t.Fatalf("operation %q error=%v", operation, err)
 		}
+	}
+}
+
+func TestExistingMemberStateCannotBeDowngradedByRemovingReplicationConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(filepath.Join(cfg.Storage.DataDir, "cluster"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := rejectReplicationMutation(cfg, "serve")
+	if err == nil || !strings.Contains(err.Error(), "cannot downgrade") || !strings.Contains(err.Error(), "refusing serve") {
+		t.Fatalf("member-state downgrade error=%v", err)
 	}
 }
 

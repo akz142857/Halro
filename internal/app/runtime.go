@@ -35,6 +35,7 @@ import (
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/sourcelimit"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -176,6 +177,9 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 }
 
 func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
+	if err := replication.GuardUnavailableRuntime(cfg.Storage.DataDir, cfg.Replication != nil, "open runtime"); err != nil {
+		return nil, err
+	}
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, err
@@ -183,6 +187,12 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	fail := func(err error) (*Runtime, error) {
 		dataLock.Close()
 		return nil, err
+	}
+	// Close the inspection-to-lock race. The first check avoids touching a
+	// known member directory; this second check makes the decision stable while
+	// the process owns the data directory.
+	if err := replication.GuardUnavailableRuntime(cfg.Storage.DataDir, cfg.Replication != nil, "open runtime"); err != nil {
+		return fail(err)
 	}
 	kmsAudit := &kmsAuditRecorder{}
 	masterKey, err := unlockMasterKey(withKMSAuditRecorder(ctx, kmsAudit), cfg)

@@ -465,15 +465,25 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	if options.Replica && (options.AfterDurable != nil || options.BeforeRoll != nil) {
 		return nil, errors.New("replica ledger cannot install Primary replication callbacks")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create ledger directory: %w", err)
-	}
 	directory := filepath.Dir(path)
 	// Before the file is read: finish or abandon a roll that a crash caught
 	// mid-flight, so the chain the scan below verifies is the one the manifest
 	// claims. Doing it after would verify the active file against the wrong
 	// anchor and report tampering.
-	segments, err := repairSegments(directory)
+	var segments []Segment
+	var err error
+	if options.Replica {
+		var pending bool
+		segments, pending, err = resolveSegments(directory)
+		if err == nil && pending {
+			err = errors.New("replica ledger has an interrupted Roll that must be reconciled against ordering")
+		}
+	} else {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return nil, fmt.Errorf("create ledger directory: %w", err)
+		}
+		segments, err = repairSegments(directory)
+	}
 	if err != nil {
 		status.RequireRecovery()
 		return nil, err
@@ -491,7 +501,11 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		return nil, err
 	}
 	generation := activeGeneration(segments)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	flags := os.O_RDWR
+	if !options.Replica {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		status.MarkUnavailable()
 		return nil, fmt.Errorf("open ledger: %w", err)
@@ -508,6 +522,11 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		return nil, err
 	}
 	if partial {
+		if options.Replica {
+			file.Close()
+			status.RequireRecovery()
+			return nil, fmt.Errorf("%w: replica Ledger has a partial tail that must be reconciled against ordering", ErrCorrupt)
+		}
 		if err := file.Truncate(last.Offset); err != nil {
 			file.Close()
 			status.RequireRecovery()

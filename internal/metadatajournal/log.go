@@ -146,12 +146,11 @@ func open(path string, key []byte, replica bool) (*Log, error) {
 		file.Close()
 		return nil, err
 	}
-	// A torn tail is a crash during append, and it is repaired rather than
-	// refused for the same reason the Audit log repairs one: the frame was
-	// never acknowledged to anybody, because the bbolt transaction that would
-	// have committed alongside it had not committed either. Anything the frame
-	// described is therefore absent from the projection too.
 	if partial {
+		if replica {
+			file.Close()
+			return nil, fmt.Errorf("%w: replica metadata journal has a partial tail that must be reconciled against ordering", ErrCorrupt)
+		}
 		if err := file.Truncate(head.Offset); err != nil {
 			file.Close()
 			return nil, fmt.Errorf("truncate partial metadata journal tail: %w", err)

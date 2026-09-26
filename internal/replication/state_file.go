@@ -1,15 +1,84 @@
 package replication
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/durable"
 )
 
+type StateBootstrap struct {
+	Version     int
+	Incarnation string
+}
+
+// ReadStateBootstrap reads only the unauthenticated fields needed to derive
+// the cluster key. Its output is never authority: callers must immediately use
+// that derived key to authenticate the complete state with ReadState. Keeping
+// this pass bounded prevents a corrupt state file from controlling allocation
+// before its MAC can be checked.
+func ReadStateBootstrap(path string) (StateBootstrap, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return StateBootstrap{}, fmt.Errorf("open member state bootstrap: %w", err)
+	}
+	defer file.Close()
+	encoded, err := io.ReadAll(io.LimitReader(file, MaxMemberStateJSON+1))
+	if err != nil {
+		return StateBootstrap{}, fmt.Errorf("read member state bootstrap: %w", err)
+	}
+	if len(encoded) == 0 || len(encoded) > MaxMemberStateJSON {
+		return StateBootstrap{}, errors.New("member-state bootstrap is empty or exceeds its size bound")
+	}
+	var bootstrap struct {
+		Version     int    `json:"version"`
+		Incarnation string `json:"incarnation"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	if err := decoder.Decode(&bootstrap); err != nil {
+		return StateBootstrap{}, fmt.Errorf("decode member state bootstrap: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return StateBootstrap{}, errors.New("member-state bootstrap has trailing content")
+	}
+	if bootstrap.Version != StateVersion {
+		return StateBootstrap{}, fmt.Errorf("unsupported member-state version %d", bootstrap.Version)
+	}
+	if len(bootstrap.Incarnation) == 0 || len(bootstrap.Incarnation) > MaxIdentityBytes {
+		return StateBootstrap{}, errors.New("member-state bootstrap incarnation is invalid")
+	}
+	return StateBootstrap{Version: bootstrap.Version, Incarnation: bootstrap.Incarnation}, nil
+}
+
+// ReadStateWithMasterKey performs the two-pass member-state open: a bounded,
+// non-authoritative read supplies the HKDF salt, then the derived key verifies
+// every authoritative field and the state MAC.
+func ReadStateWithMasterKey(path string, masterKey []byte) (MemberState, error) {
+	bootstrap, err := ReadStateBootstrap(path)
+	if err != nil {
+		return MemberState{}, err
+	}
+	key, err := DeriveClusterKey(masterKey, bootstrap.Incarnation)
+	if err != nil {
+		return MemberState{}, err
+	}
+	defer clear(key[:])
+	return ReadState(path, key[:])
+}
+
 func ReadState(path string, key []byte) (MemberState, error) {
-	encoded, err := os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return MemberState{}, fmt.Errorf("read member state: %w", err)
+	}
+	defer file.Close()
+	encoded, err := io.ReadAll(io.LimitReader(file, MaxMemberStateJSON+1))
 	if err != nil {
 		return MemberState{}, fmt.Errorf("read member state: %w", err)
 	}

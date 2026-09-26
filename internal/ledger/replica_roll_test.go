@@ -78,12 +78,88 @@ func TestReplicatedRollVerifiesWholeSegmentBeforePublish(t *testing.T) {
 		t.Fatal("completed Roll accepted different Segment metadata")
 	}
 
-	empty, err := OpenWithOptions(filepath.Join(directory, "empty", "ledger.wal"), NewStatus(), Options{ChainKey: testChainKey, Replica: true})
+	emptyPath := filepath.Join(directory, "empty", "ledger.wal")
+	if err := os.MkdirAll(filepath.Dir(emptyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(emptyPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := OpenWithOptions(emptyPath, NewStatus(), Options{ChainKey: testChainKey, Replica: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer empty.Close()
 	if _, err := empty.ApplyReplicatedRoll(result.Sealed); err == nil {
 		t.Fatal("fresh empty Replica accepted a Roll it never landed")
+	}
+}
+
+func TestRepairReplicaRollRequiresOrderingCursorAndResolvesBothCrashSides(t *testing.T) {
+	primaryPath := filepath.Join(t.TempDir(), "primary", "ledger.wal")
+	primary, err := OpenWithOptions(primaryPath, NewStatus(), Options{ChainKey: testChainKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.Append(context.Background(), validReservation("evt_repair_roll", "att_repair_roll")); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(primaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := primary.Roll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, renamed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before rename", true: "after rename before successor"}[renamed], func(t *testing.T) {
+			directory := t.TempDir()
+			path := filepath.Join(directory, "ledger.wal")
+			if err := os.WriteFile(path, contents, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			pending := result.Sealed
+			if err := saveSegmentManifest(directory, segmentManifest{Pending: &pending}); err != nil {
+				t.Fatal(err)
+			}
+			if renamed {
+				if err := os.Rename(path, filepath.Join(directory, pending.File)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := RepairReplicaRoll(path, testChainKey, 1, 2); err == nil {
+				t.Fatal("pending Roll accepted a mismatched ordering cursor")
+			}
+			if err := RepairReplicaRoll(path, testChainKey, 1, 1); err != nil {
+				t.Fatal(err)
+			}
+			manifest, err := loadSegmentManifest(directory)
+			if err != nil || manifest.Pending != nil {
+				t.Fatalf("resolved manifest=%#v err=%v", manifest, err)
+			}
+			replica, err := OpenWithOptions(path, NewStatus(), Options{ChainKey: testChainKey, Replica: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer replica.Close()
+			wantGeneration := uint64(1)
+			if renamed {
+				wantGeneration = 2
+			}
+			if replica.Generation() != wantGeneration {
+				t.Fatalf("generation=%d want=%d", replica.Generation(), wantGeneration)
+			}
+			if renamed {
+				duplicate, err := replica.ApplyReplicatedRoll(result.Sealed)
+				if err != nil || duplicate.Rolled {
+					t.Fatalf("retransmitted resolved Roll result=%#v err=%v", duplicate, err)
+				}
+			}
+		})
 	}
 }

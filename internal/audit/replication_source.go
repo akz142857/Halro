@@ -116,3 +116,29 @@ func TruncateReplicationTail(path string, key []byte, sequence uint64) error {
 	}
 	return file.Sync()
 }
+
+// RepairReplicaTail removes only torn bytes after the complete authenticated
+// prefix named by ordering. It is intentionally separate from OpenReplica so a
+// member cannot mutate native storage before ordering recovery has supplied
+// the expected cursor.
+func RepairReplicaTail(path string, key []byte, expectedSequence uint64) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	summary, partial, err := scan(file, key, nil)
+	if err != nil {
+		return err
+	}
+	if summary.Records != expectedSequence {
+		return errors.New("audit complete prefix does not match ordering cursor")
+	}
+	if !partial {
+		return nil
+	}
+	if err := file.Truncate(summary.Bytes); err != nil {
+		return err
+	}
+	return file.Sync()
+}

@@ -125,6 +125,66 @@ func TestRecoverLocalCommitsFailsClosedOnMissingOrDifferentSourceBytes(t *testin
 	}
 }
 
+func TestReconstructRangeResendsConfirmedHistoryAfterPrimaryRestart(t *testing.T) {
+	primary, journal := newTestPrimary(t, &recordingOutbound{})
+	defer journal.Close()
+	anchor, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished, Store: StoreNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("confirmed-ledger-frame")
+	data, err := primary.RecordDurable(Frame{
+		Kind: KindData, Store: StoreLedger, StoreGeneration: 1,
+		StoreSequenceFirst: 1, StoreSequenceLast: 1, Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.Acknowledge(testAcknowledgement("halro-1", 2)); err != nil {
+		t.Fatal(err)
+	}
+	source := &fakeDurableSource{
+		cursors:  map[Store]StoreCursor{StoreLedger: {Generation: 1, Sequence: 1}},
+		payloads: map[string][]byte{sourceKey(StoreLedger, 1, 1, 1): payload},
+	}
+	commits, err := ReconstructRange("production-a", "inc_01", 1, 2, journal, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commits) != 2 || commits[0].Index != 1 || commits[1].Index != 2 ||
+		string(commits[0].Encoded) != string(anchor.Encoded) || string(commits[1].Encoded) != string(data.Encoded) {
+		t.Fatalf("reconstructed commits=%#v", commits)
+	}
+}
+
+func TestReconstructRangeEachStreamsAndStopsAtConsumerFailure(t *testing.T) {
+	primary, journal := newTestPrimary(t, &recordingOutbound{})
+	defer journal.Close()
+	if _, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished, Store: StoreNone}); err != nil {
+		t.Fatal(err)
+	}
+	payload := []byte("confirmed-ledger-frame")
+	if _, err := primary.RecordDurable(Frame{
+		Kind: KindData, Store: StoreLedger, StoreGeneration: 1,
+		StoreSequenceFirst: 1, StoreSequenceLast: 1, Payload: payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	source := &fakeDurableSource{payloads: map[string][]byte{sourceKey(StoreLedger, 1, 1, 1): payload}}
+	stop := errors.New("queue window full")
+	var indexes []uint64
+	err := ReconstructRangeEach("production-a", "inc_01", 1, 2, journal, source, func(commit LocalCommit) error {
+		indexes = append(indexes, commit.Index)
+		if commit.Index == 2 {
+			return stop
+		}
+		return nil
+	})
+	if !errors.Is(err, stop) || len(indexes) != 2 {
+		t.Fatalf("streamed indexes=%v err=%v", indexes, err)
+	}
+}
+
 func TestRecoverLocalCommitsStartsFromAuthenticatedSeedBaseline(t *testing.T) {
 	directory := t.TempDir()
 	header := OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}

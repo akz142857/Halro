@@ -134,6 +134,84 @@ func TestReplicaReceiverPersistsBeforeAcknowledgingAndDeduplicates(t *testing.T)
 	}
 }
 
+func TestReplicaReceiverPersistsEveryExternallyVisibleWatermark(t *testing.T) {
+	sink := &recordingFrameSink{}
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	type persistedProgress struct {
+		durable, confirmed, applied uint64
+		head                        [32]byte
+	}
+	var persisted []persistedProgress
+	receiver, err := NewReplicaReceiver(
+		"production-a", "inc_01", "halro-1", "halro-0", 7, 7, 0, 0, journal, sink,
+		ReplicaReceiverOptions{PersistState: func(progress ReplicaProgress) error {
+			journalIndex, _, journalHead := journal.Head()
+			if journalIndex != progress.DurableIndex || journalHead != progress.OrderingHeadMAC {
+				t.Fatalf("state writer saw journal %d/%x for durable %d/%x", journalIndex, journalHead, progress.DurableIndex, progress.OrderingHeadMAC)
+			}
+			persisted = append(persisted, persistedProgress{progress.DurableIndex, progress.ConfirmedIndex, progress.AppliedIndex, progress.OrderingHeadMAC})
+			return nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Receive(encodeTestReplicaFrame(t, 1, KindLeadershipEstablished)); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 1 || persisted[0].durable != 1 || persisted[0].confirmed != 0 || persisted[0].applied != 0 || persisted[0].head == ([32]byte{}) {
+		t.Fatalf("durable progress=%#v", persisted)
+	}
+	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.AdvanceApplied(1); err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 3 || persisted[1].confirmed != 1 || persisted[1].applied != 0 || persisted[2].confirmed != 1 || persisted[2].applied != 1 {
+		t.Fatalf("persisted progress=%#v", persisted)
+	}
+}
+
+func TestReplicaReceiverPoisonsAfterUncertainStatePublication(t *testing.T) {
+	sink := &recordingFrameSink{}
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	persistErr := errors.New("state directory fsync failed")
+	receiver, err := NewReplicaReceiver(
+		"production-a", "inc_01", "halro-1", "halro-0", 7, 7, 0, 0, journal, sink,
+		ReplicaReceiverOptions{PersistState: func(ReplicaProgress) error { return persistErr }},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchor := encodeTestReplicaFrame(t, 1, KindLeadershipEstablished)
+	if ack, err := receiver.Receive(anchor); ack != (Acknowledgement{}) || !errors.Is(err, persistErr) {
+		t.Fatalf("ack=%#v err=%v", ack, err)
+	}
+	if index, _, _ := journal.Head(); index != 1 {
+		t.Fatalf("ordering index=%d, want durable-but-unacknowledged 1", index)
+	}
+	if _, err := receiver.Receive(anchor); err == nil || !strings.Contains(err.Error(), "requires restart") {
+		t.Fatalf("poisoned retry error=%v", err)
+	}
+}
+
 func TestReplicaReceiverFailsClosedBeforeOrderingOnSinkError(t *testing.T) {
 	sink := &recordingFrameSink{err: errors.New("disk full")}
 	receiver, journal := newTestReceiver(t, sink)

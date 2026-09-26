@@ -328,3 +328,79 @@ func TestOrderingJournalDoesNotCreateMissingFileRequiredByState(t *testing.T) {
 		t.Fatalf("missing required journal was created: %v", err)
 	}
 }
+
+func TestExistingOrderingJournalReopensItsAuthenticatedBaseline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster", "ordering.journal")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	header := OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}
+	header.StoreCursors[StoreLedger-StoreLedger] = StoreCursor{Generation: 3, Sequence: 41}
+	header.StoreHeads[StoreLedger-StoreLedger] = sha256.Sum256([]byte("ledger baseline"))
+	journal, err := OpenOrderingJournal(path, key, header, 0, [sha256.Size]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := journal.Append(OrderingRecord{
+		Kind: KindLeadershipEstablished, Index: 1, Term: 1,
+		FrameDigest: sha256.Sum256([]byte("anchor")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := ReadOrderingHeader(path, key)
+	if err != nil || decoded != header {
+		t.Fatalf("header=%#v err=%v", decoded, err)
+	}
+	reopened, err := OpenExistingOrderingJournal(path, key, header.ClusterID, header.Incarnation, 1, record.MAC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if index, term, head := reopened.Head(); index != 1 || term != 1 || head != record.MAC {
+		t.Fatalf("reopened head index=%d term=%d mac=%x", index, term, head)
+	}
+}
+
+func TestExistingOrderingJournalNeverCreatesOrTrustsAnUnauthenticatedHeader(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster", "ordering.journal")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	if _, err := OpenExistingOrderingJournal(path, key, "production-a", "inc_01", 0, [sha256.Size]byte{}); err == nil {
+		t.Fatal("missing restart journal was created")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("restart path touched missing journal: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	header, err := (OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}).MarshalBinary(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	header[len(header)-1] ^= 0x01
+	if err := os.WriteFile(path, header, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExistingOrderingJournal(path, key, "production-a", "inc_01", 0, [sha256.Size]byte{}); err == nil || !strings.Contains(err.Error(), "MAC mismatch") {
+		t.Fatalf("tampered restart header error=%v", err)
+	}
+}
+
+func TestExistingOrderingJournalBindsAuthenticatedMemberIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster", "ordering.journal")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	header := OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}
+	journal, err := OpenOrderingJournal(path, key, header, 0, [sha256.Size]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExistingOrderingJournal(path, key, "production-b", "inc_01", 0, [sha256.Size]byte{}); err == nil || !strings.Contains(err.Error(), "member state") {
+		t.Fatalf("wrong cluster identity error=%v", err)
+	}
+}

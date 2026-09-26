@@ -39,6 +39,7 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, confirmed, applied := a.receiver.Progress()
+	projectionState := a.receiver.ProjectionProgress()
 	if confirmed == applied {
 		return applied, nil
 	}
@@ -78,13 +79,16 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 		if err := a.projection.ApplyMetadataThrough(ctx, metadataCursor.Generation, metadataCursor.Sequence); err != nil {
 			return applied, fmt.Errorf("apply confirmed metadata prefix: %w", err)
 		}
+		projectionState.MetadataEpoch = metadataCursor.Generation
+		projectionState.MetadataSequence = metadataCursor.Sequence
 	}
 	if ledgerCursor.Generation != 0 {
 		if err := a.projection.ApplyLedgerThrough(ctx, ledgerCursor.Generation, ledgerCursor.Sequence); err != nil {
 			return applied, fmt.Errorf("apply confirmed Ledger prefix: %w", err)
 		}
 	}
-	if err := a.receiver.AdvanceApplied(confirmed); err != nil {
+	projectionState.Index = confirmed
+	if err := a.receiver.AdvanceAppliedWithProjection(confirmed, projectionState); err != nil {
 		return applied, err
 	}
 	return confirmed, nil

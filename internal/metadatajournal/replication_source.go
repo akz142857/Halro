@@ -111,3 +111,28 @@ func TruncateReplicationTail(path string, key []byte, epoch, sequence uint64) er
 	}
 	return file.Sync()
 }
+
+// RepairReplicaTail removes only torn bytes after the complete authenticated
+// prefix named by ordering. The caller must supply the epoch and sequence from
+// the authenticated ordering scan, never from the partial native tail.
+func RepairReplicaTail(path string, key []byte, expectedEpoch, expectedSequence uint64) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	head, partial, err := scan(file, key, nil)
+	if err != nil {
+		return err
+	}
+	if head.Epoch != expectedEpoch || head.Sequence != expectedSequence {
+		return errors.New("metadata journal complete prefix does not match ordering cursor")
+	}
+	if !partial {
+		return nil
+	}
+	if err := file.Truncate(head.Offset); err != nil {
+		return err
+	}
+	return file.Sync()
+}

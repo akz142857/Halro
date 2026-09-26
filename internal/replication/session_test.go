@@ -6,8 +6,29 @@ import (
 	"crypto/tls"
 	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+type deadlineTrackingConn struct {
+	net.Conn
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (c *deadlineTrackingConn) SetDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	c.deadline = deadline
+	c.mu.Unlock()
+	return c.Conn.SetDeadline(deadline)
+}
+
+func (c *deadlineTrackingConn) Deadline() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.deadline
+}
 
 func TestAuthenticatedSessionCombinesMTLSPinHelloAndMasterKeyProof(t *testing.T) {
 	files, leaf := writeTestCertificateChain(t)
@@ -84,5 +105,25 @@ func TestAuthenticatedSessionRefusesWrongClusterKey(t *testing.T) {
 		if err := <-serverErr; err == nil || !strings.Contains(err.Error(), "proof") {
 			t.Fatalf("client error=%v server error=%v", clientErr, err)
 		}
+	}
+}
+
+func TestConnectionContextCleanupCannotRaceAnExpiredDeadlineBackOntoSession(t *testing.T) {
+	for iteration := 0; iteration < 100; iteration++ {
+		clientSide, serverSide := net.Pipe()
+		tracked := &deadlineTrackingConn{Conn: clientSide}
+		connection := tls.Client(tracked, &tls.Config{}) // No handshake: this test exercises deadline ownership only.
+		ctx, cancel := context.WithCancel(context.Background())
+		cleanup := bindConnectionContext(ctx, connection)
+		var wait sync.WaitGroup
+		wait.Add(2)
+		go func() { defer wait.Done(); cancel() }()
+		go func() { defer wait.Done(); cleanup() }()
+		wait.Wait()
+		if deadline := tracked.Deadline(); !deadline.IsZero() {
+			t.Fatalf("iteration %d left expired deadline %s", iteration, deadline)
+		}
+		_ = connection.Close()
+		_ = serverSide.Close()
 	}
 }

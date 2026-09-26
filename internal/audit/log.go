@@ -148,10 +148,16 @@ func OpenWithOptions(path string, key []byte, options Options) (*Log, error) {
 	if len(key) != auditHMACKeySize {
 		return nil, fmt.Errorf("audit HMAC key must be %d bytes", auditHMACKeySize)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create audit directory: %w", err)
+	if !options.Replica {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, fmt.Errorf("create audit directory: %w", err)
+		}
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	flags := os.O_RDWR
+	if !options.Replica {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open audit log: %w", err)
 	}
@@ -170,6 +176,10 @@ func OpenWithOptions(path string, key []byte, options Options) (*Log, error) {
 		return nil, err
 	}
 	if partial {
+		if options.Replica {
+			file.Close()
+			return nil, fmt.Errorf("%w: replica audit log has a partial tail that must be reconciled against ordering", ErrCorrupt)
+		}
 		if err := file.Truncate(summary.Bytes); err != nil {
 			file.Close()
 			return nil, fmt.Errorf("truncate partial audit tail: %w", err)

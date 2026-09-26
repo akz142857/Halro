@@ -2,6 +2,7 @@ package replication
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,6 +40,9 @@ func TestNativeSinkAuthenticatesAuditBeforeWriting(t *testing.T) {
 		t.Fatal(err)
 	}
 	replicaPath := filepath.Join(directory, "replica.log")
+	if err := os.WriteFile(replicaPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	replica, err := audit.OpenWithOptions(replicaPath, key, audit.Options{Replica: true})
 	if err != nil {
 		t.Fatal(err)

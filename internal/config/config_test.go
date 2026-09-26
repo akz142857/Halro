@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -133,6 +134,20 @@ func TestReplicationConfigurationIsOptionalAndStrict(t *testing.T) {
 	}
 	if warnings := member.Warnings(); len(warnings) != 1 || !strings.Contains(warnings[0], "cannot accept confirmed writes") {
 		t.Fatalf("two-member warning=%v", warnings)
+	}
+}
+
+func TestReplicationPathsFollowStorageDataDirectory(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.DataDir = "/srv/halro/member-a"
+	if got, want := cfg.ClusterDirectoryPath(), filepath.Join(cfg.Storage.DataDir, "cluster"); got != want {
+		t.Fatalf("cluster directory=%q want=%q", got, want)
+	}
+	if got, want := cfg.ReplicationStatePath(), filepath.Join(cfg.Storage.DataDir, "cluster", "state.json"); got != want {
+		t.Fatalf("replication state=%q want=%q", got, want)
+	}
+	if got, want := cfg.OrderingJournalPath(), filepath.Join(cfg.Storage.DataDir, "cluster", "ordering.journal"); got != want {
+		t.Fatalf("ordering journal=%q want=%q", got, want)
 	}
 }
 

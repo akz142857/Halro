@@ -3,6 +3,7 @@ package replication
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -29,6 +30,18 @@ type LocalCommit struct {
 	ReplicationAvailable bool
 }
 
+type PrimaryProgress struct {
+	DurableIndex    uint64
+	ConfirmedIndex  uint64
+	OrderingHeadMAC [sha256.Size]byte
+}
+
+// PrimaryStateWriter atomically publishes the complete authenticated member
+// progress. Returning nil must mean the state file and its directory entry are
+// durable. Both local durability and quorum confirmation pass through it so
+// state.json is a live watermark rather than merely a restart lower bound.
+type PrimaryStateWriter func(progress PrimaryProgress) error
+
 // PrimaryCoordinator is the single global index allocator shared by all four
 // store commit paths. RecordDurable must be called only after the source bytes'
 // fsync and before that store reports success to its caller.
@@ -41,6 +54,7 @@ type PrimaryCoordinator struct {
 	journal            *OrderingJournal
 	confirmations      *ConfirmationTracker
 	outbound           OutboundQueue
+	persistState       PrimaryStateWriter
 	confirmed          uint64
 	available          bool
 	unavailable        error
@@ -59,9 +73,9 @@ type PrimaryCoordinator struct {
 // ordering suffix above confirmed. Callers reconstruct those bytes from the
 // four stores during startup; omitting a non-empty suffix fails closed instead
 // of either losing it or pretending it was confirmed.
-func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirmed uint64, peers []string, journal *OrderingJournal, outbound OutboundQueue, recovered ...LocalCommit) (*PrimaryCoordinator, error) {
-	if journal == nil || outbound == nil {
-		return nil, errors.New("primary coordinator requires an ordering journal and outbound queue")
+func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirmed uint64, peers []string, journal *OrderingJournal, outbound OutboundQueue, persistState PrimaryStateWriter, recovered ...LocalCommit) (*PrimaryCoordinator, error) {
+	if journal == nil || outbound == nil || persistState == nil {
+		return nil, errors.New("primary coordinator requires an ordering journal, outbound queue and state writer")
 	}
 	if len(nodeID) == 0 || len(nodeID) > MaxIdentityBytes {
 		return nil, errors.New("primary coordinator node identity is invalid")
@@ -87,7 +101,8 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 	}
 	coordinator := &PrimaryCoordinator{
 		clusterID: clusterID, incarnation: incarnation, nodeID: nodeID, term: term, journal: journal,
-		confirmations: tracker, outbound: outbound, confirmed: confirmed, available: true, changed: make(chan struct{}),
+		confirmations: tracker, outbound: outbound, persistState: persistState,
+		confirmed: confirmed, available: true, changed: make(chan struct{}),
 		pending: make(map[uint64][]byte), peerApplied: make(map[string]uint64, len(peers)),
 	}
 	for _, peer := range peers {
@@ -120,6 +135,10 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 			return nil, fmt.Errorf("register recovered frame %d: %w", expectedIndex, registerErr)
 		}
 		coordinator.pending[expectedIndex] = append([]byte(nil), commit.Encoded...)
+	}
+	_, _, orderingHead := journal.Head()
+	if err := persistState(PrimaryProgress{DurableIndex: index, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead}); err != nil {
+		return nil, fmt.Errorf("persist recovered primary member state: %w", err)
 	}
 	// Authenticate the complete suffix before any network-visible enqueue. A
 	// corrupt later record must not leak a verified prefix to peers.
@@ -161,12 +180,20 @@ func (c *PrimaryCoordinator) RecordDurable(frame Frame) (LocalCommit, error) {
 		StoreSequenceFirst: frame.StoreSequenceFirst, StoreSequenceLast: frame.StoreSequenceLast,
 		FrameDigest: digest,
 	}
-	if _, err := c.journal.Append(record); err != nil {
+	persistedRecord, err := c.journal.Append(record)
+	if err != nil {
 		return LocalCommit{}, err
 	}
 	if err := c.confirmations.Register(frame); err != nil {
 		c.poisoned = err
 		return LocalCommit{}, fmt.Errorf("register durable frame: %w", err)
+	}
+	if err := c.persistState(PrimaryProgress{DurableIndex: frame.Index, ConfirmedIndex: c.confirmed, OrderingHeadMAC: persistedRecord.MAC}); err != nil {
+		c.poisoned = err
+		c.available = false
+		c.unavailable = err
+		c.signalChanged()
+		return LocalCommit{}, fmt.Errorf("persist primary durable watermark: %w", err)
 	}
 	c.pending[frame.Index] = append([]byte(nil), encoded...)
 	commit := LocalCommit{Index: frame.Index, Encoded: encoded, ReplicationAvailable: c.available}
@@ -181,9 +208,23 @@ func (c *PrimaryCoordinator) RecordDurable(frame Frame) (LocalCommit, error) {
 func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.poisoned != nil {
+		return c.confirmed, fmt.Errorf("primary coordinator requires restart after an uncertain durable transition: %w", c.poisoned)
+	}
 	confirmed, err := c.confirmations.Acknowledge(ack)
 	if err != nil {
 		return c.confirmed, err
+	}
+	advanced := confirmed != c.confirmed
+	if advanced {
+		durableIndex, _, orderingHead := c.journal.Head()
+		if err := c.persistState(PrimaryProgress{DurableIndex: durableIndex, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead}); err != nil {
+			c.poisoned = err
+			c.available = false
+			c.unavailable = err
+			c.signalChanged()
+			return c.confirmed, fmt.Errorf("persist confirmed member state: %w", err)
+		}
 	}
 	c.outbound.Acknowledge(ack.NodeID, ack.DurableIndex, ack.AppliedIndex)
 	if ack.AppliedIndex > c.peerApplied[ack.NodeID] {
@@ -196,7 +237,6 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 		c.noticeUnavailable = false
 		noticeAcknowledged = true
 	}
-	advanced := confirmed != c.confirmed
 	changed := advanced || noticeAcknowledged
 	c.confirmed = confirmed
 	for index := range c.pending {

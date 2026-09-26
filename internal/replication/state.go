@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	StateVersion       = 1
+	StateVersion       = 2
 	MaxMemberStateJSON = 64 << 10
 )
 
@@ -50,6 +50,7 @@ type MemberState struct {
 	Term            uint64
 	PromisedTerm    uint64
 	DurableIndex    uint64
+	ConfirmedIndex  uint64
 	AppliedIndex    uint64
 	OrderingHeadMAC [sha256.Size]byte
 	Projection      ProjectionState
@@ -65,6 +66,7 @@ type memberStateJSON struct {
 	Term            uint64          `json:"term"`
 	PromisedTerm    uint64          `json:"promised_term"`
 	DurableIndex    uint64          `json:"durable_index"`
+	ConfirmedIndex  uint64          `json:"confirmed_index"`
 	AppliedIndex    uint64          `json:"applied_index"`
 	OrderingHeadMAC string          `json:"ordering_head_mac"`
 	Projection      ProjectionState `json:"projection"`
@@ -93,8 +95,11 @@ func (s MemberState) Validate() error {
 	if s.PromisedTerm < s.Term {
 		return errors.New("member-state promised_term cannot be lower than term")
 	}
-	if s.AppliedIndex > s.DurableIndex {
-		return errors.New("member-state applied_index cannot exceed durable_index")
+	if s.ConfirmedIndex > s.DurableIndex {
+		return errors.New("member-state confirmed_index cannot exceed durable_index")
+	}
+	if s.AppliedIndex > s.ConfirmedIndex {
+		return errors.New("member-state applied_index cannot exceed confirmed_index")
 	}
 	if s.Projection.Index > s.AppliedIndex {
 		return errors.New("member-state projection index cannot exceed applied_index")
@@ -147,7 +152,7 @@ func MarshalState(state MemberState, key []byte) ([]byte, error) {
 	payload := memberStateJSON{
 		Version: state.Version, ClusterID: state.ClusterID, Incarnation: state.Incarnation, NodeID: state.NodeID,
 		Role: state.Role, Term: state.Term, PromisedTerm: state.PromisedTerm,
-		DurableIndex: state.DurableIndex, AppliedIndex: state.AppliedIndex,
+		DurableIndex: state.DurableIndex, ConfirmedIndex: state.ConfirmedIndex, AppliedIndex: state.AppliedIndex,
 		OrderingHeadMAC: digestText(state.OrderingHeadMAC), Projection: state.Projection, Peers: state.Peers,
 		MAC: digestText(mac),
 	}
@@ -189,7 +194,7 @@ func UnmarshalState(encoded, key []byte) (MemberState, error) {
 	state := MemberState{
 		Version: payload.Version, ClusterID: payload.ClusterID, Incarnation: payload.Incarnation, NodeID: payload.NodeID,
 		Role: payload.Role, Term: payload.Term, PromisedTerm: payload.PromisedTerm,
-		DurableIndex: payload.DurableIndex, AppliedIndex: payload.AppliedIndex,
+		DurableIndex: payload.DurableIndex, ConfirmedIndex: payload.ConfirmedIndex, AppliedIndex: payload.AppliedIndex,
 		OrderingHeadMAC: orderingHead, Projection: payload.Projection, Peers: append([]StatePeer(nil), payload.Peers...),
 	}
 	if !sort.SliceIsSorted(state.Peers, func(i, j int) bool { return state.Peers[i].Name < state.Peers[j].Name }) {
@@ -239,7 +244,7 @@ func canonicalStateInput(state MemberState) ([]byte, error) {
 			return nil, err
 		}
 	}
-	for _, value := range []uint64{state.Term, state.PromisedTerm, state.DurableIndex, state.AppliedIndex} {
+	for _, value := range []uint64{state.Term, state.PromisedTerm, state.DurableIndex, state.ConfirmedIndex, state.AppliedIndex} {
 		writeUint64(value)
 	}
 	buffer.Write(state.OrderingHeadMAC[:])
