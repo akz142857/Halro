@@ -38,6 +38,54 @@ func newTestManager(t testing.TB) (*Manager, *ledger.State, func()) {
 	return manager, state, func() { _ = log.Close() }
 }
 
+func TestRequiredAccountingEventsWaitOnlyAfterLocalApply(t *testing.T) {
+	state := ledger.NewState()
+	var waited []uint64
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "usage.wal"), ledger.NewStatus(), ledger.Options{
+		ChainKey: testChainKey, MaxBatch: 1,
+		AfterDurable: func(batch ledger.DurableBatch) (uint64, error) {
+			return batch.LastSequence, nil
+		},
+		WaitConfirmed: func(_ context.Context, index uint64) error {
+			if state.Watermark().Sequence < index {
+				t.Fatalf("confirmation wait for %d ran before local apply at %d", index, state.Watermark().Sequence)
+			}
+			waited = append(waited, index)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	manager, err := New(log, state, mustResolver(t, "UTC"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.now = func() time.Time { return time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC) }
+	request, err := manager.BeginRequest(context.Background(), "project_replication", "request_replication")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := manager.ReserveLeaseDetailed(context.Background(), request, 100, LeaseSpec{
+		Mode: ledger.LeaseModeMetered, ReservationMicrosUSD: 10,
+		PriceSnapshot:               testPriceSnapshot(t, domain.BillingModeMetered),
+		TokenGuardPricingViewDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}, AttemptMetadata{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.MarkStarted(context.Background(), attempt); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Settle(context.Background(), attempt, Settlement{CommittedMicrosUSD: 0, Outcome: "success"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waited) != 2 || waited[0] != 2 || waited[1] != 3 {
+		t.Fatalf("confirmation waits=%v, want reservation and attempt-start indexes [2 3]", waited)
+	}
+}
+
 func testPriceSnapshot(t testing.TB, mode domain.BillingMode) *domain.PriceSnapshot {
 	t.Helper()
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)

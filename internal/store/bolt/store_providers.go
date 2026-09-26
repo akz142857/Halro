@@ -163,7 +163,7 @@ func (s *Store) PutCredential(ctx context.Context, credential domain.Credential,
 	if err := ctx.Err(); err != nil {
 		return domain.Credential{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketCredentials)
 		if err := putVersioned(bucket, credential.ID, expectedRevision, &credential); err != nil {
 			return err
@@ -200,7 +200,7 @@ func (s *Store) DeleteCredential(ctx context.Context, id string, expectedRevisio
 	if id == "" || expectedRevision == 0 {
 		return errors.New("credential id and expected revision are required")
 	}
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketCredentials)
 		raw := bucket.Get([]byte(id))
 		if raw == nil {

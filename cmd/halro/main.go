@@ -289,6 +289,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+		if *apply {
+			if err := rejectReplicationMutation(cfg, "pricing migrate --apply"); err != nil {
+				return err
+			}
+		}
 		metadataPath := filepath.Join(cfg.Storage.DataDir, cfg.Storage.MetadataFile)
 		offlineLock, err := storelock.Acquire(cfg.Storage.DataDir)
 		if err != nil {
@@ -347,6 +352,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{AllowInsecurePublicGateway: *allowInsecure})
 		if err != nil {
+			return err
+		}
+		if err := rejectReplicationMutation(cfg, "start initialization"); err != nil {
 			return err
 		}
 		if *allowInsecure {
@@ -419,6 +427,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+		if err := rejectReplicationMutation(cfg, "init"); err != nil {
+			return err
+		}
 		if err := hardenSecretHandlingCommand(); err != nil {
 			return err
 		}
@@ -471,6 +482,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
+			return err
+		}
+		if err := rejectReplicationMutation(cfg, "bootstrap"); err != nil {
 			return err
 		}
 		if err := hardenSecretHandlingCommand(); err != nil {
@@ -533,6 +547,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+		if err := rejectReplicationMutation(cfg, "admin "+command); err != nil {
+			return err
+		}
 		if command == "reset-mfa" {
 			if *passwordFile != "" || *ifNeeded || *operationID != "" {
 				return errors.New("reset-mfa does not accept password or bootstrap flags")
@@ -584,8 +601,12 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
 			}
-			if _, err := config.Load(*configPath, config.LoadOptions{}); err != nil {
+			cfg, err := config.Load(*configPath, config.LoadOptions{})
+			if err != nil {
 				return err
+			}
+			for _, warning := range cfg.Warnings() {
+				fmt.Fprintf(os.Stdout, "warning: %s\n", warning)
 			}
 			fmt.Fprintln(os.Stdout, "configuration valid")
 			return nil
@@ -622,6 +643,9 @@ func run(arguments []string, logger *slog.Logger) error {
 				if err != nil {
 					return err
 				}
+				if err := rejectReplicationMutation(cfg, "key slot status"); err != nil {
+					return err
+				}
 				result, err := inspectKMSSlotsCommand(context.Background(), cfg)
 				if err != nil {
 					return err
@@ -645,6 +669,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "key slot revoke"); err != nil {
+				return err
+			}
 			result, err := revokeKMSCommand(context.Background(), cfg, app.KMSRevokeOptions{
 				SlotID: *slotID, ConfirmSlotID: *confirmSlotID,
 				ExpectedDescriptorRevision: *expectedDescriptorRevision,
@@ -665,6 +692,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "key recover"); err != nil {
+				return err
+			}
 			result, err := verifyRecoveryCommand(context.Background(), cfg, *confirmedSlot)
 			if err != nil {
 				return err
@@ -681,6 +711,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
+				return err
+			}
+			if err := rejectReplicationMutation(cfg, "key rotate"); err != nil {
 				return err
 			}
 			var result app.KeyRotationResult
@@ -713,6 +746,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "key rewrap"); err != nil {
+				return err
+			}
 			result, err := rewrapKMSCommand(context.Background(), cfg, app.KMSRewrapOptions{
 				Purpose: masterkey.KeySlotPurpose(*purpose), SlotID: *slotID, KeyReference: *keyReference, Compromised: *compromised,
 			})
@@ -732,6 +768,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "key create"); err != nil {
+				return err
+			}
 			result, err := app.CreateProjectKey(context.Background(), cfg, *projectID, *name)
 			if err != nil {
 				return err
@@ -747,6 +786,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
+				return err
+			}
+			if err := rejectReplicationMutation(cfg, "key disable"); err != nil {
 				return err
 			}
 			if err := app.DisableProjectKey(context.Background(), cfg, *keyID); err != nil {
@@ -777,6 +819,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
+				return err
+			}
+			if err := rejectReplicationMutation(cfg, "backup create"); err != nil {
 				return err
 			}
 			key, err := backuppkg.LoadKeyFile(*keyPath)
@@ -833,6 +878,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "backup restore"); err != nil {
+				return err
+			}
 			key, err := backuppkg.LoadKeyFile(*keyPath)
 			if err != nil {
 				return err
@@ -870,12 +918,18 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		switch arguments[1] {
 		case "suspensions":
+			if err := rejectReplicationMutation(cfg, "route suspensions"); err != nil {
+				return err
+			}
 			items, err := app.ListStoredRouteSuspensions(context.Background(), cfg)
 			if err != nil {
 				return err
 			}
 			return json.NewEncoder(os.Stdout).Encode(map[string]any{"items": items})
 		case "clear-suspension":
+			if err := rejectReplicationMutation(cfg, "route clear-suspension"); err != nil {
+				return err
+			}
 			if *scopeID == "" {
 				return errors.New("--scope-id is required; take it from `halro route suspensions`")
 			}
@@ -900,6 +954,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
+		}
+		if arguments[1] != "verify" {
+			if err := rejectReplicationMutation(cfg, "usage "+arguments[1]); err != nil {
+				return err
+			}
 		}
 		switch arguments[1] {
 		case "compact":
@@ -952,6 +1011,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
+			if err := rejectReplicationMutation(cfg, "audit verify"); err != nil {
+				return err
+			}
 			if err := hardenSecretHandlingCommand(); err != nil {
 				return err
 			}
@@ -972,6 +1034,9 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
+				return err
+			}
+			if err := rejectReplicationMutation(cfg, "audit verify-anchor"); err != nil {
 				return err
 			}
 			if err := hardenSecretHandlingCommand(); err != nil {
@@ -1001,6 +1066,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
+			return err
+		}
+		if err := rejectReplicationMutation(cfg, "ledger "+arguments[1]); err != nil {
 			return err
 		}
 		if arguments[1] == "seal" {
@@ -1168,6 +1236,9 @@ func writeRestoreStatus(output io.Writer, result app.RestoreResult) {
 // one that has to answer questions hours later, and it is the only one whose
 // configuration was read before it started writing.
 func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, printGuide bool) error {
+	if err := rejectReplicationMutation(cfg, "serve"); err != nil {
+		return err
+	}
 	configured, logControls, err := logging.Open(cfg)
 	if err != nil {
 		return fmt.Errorf("open log destination: %w", err)
@@ -1196,6 +1267,9 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 			"error_file_max_files", cfg.Logging.ErrorFile.FileLimit())
 	}
 	logger.Info("logging configured", logAttributes...)
+	for _, warning := range cfg.Warnings() {
+		logger.Warn("configuration warning", "detail", warning)
+	}
 	if cfg.Gateway.FailureCapture.Enabled {
 		// The one feature that begins persisting material a caller wrote is the
 		// one that should not be discoverable only by reading config.yaml or
@@ -1270,6 +1344,13 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 		}
 	}
 	return runtime.RunWithReady(ctx, ready)
+}
+
+func rejectReplicationMutation(cfg config.Config, operation string) error {
+	if cfg.Replication == nil {
+		return nil
+	}
+	return fmt.Errorf("replication is configured but this build has no replication runtime; refusing %s because it would mutate member state outside the replication order", operation)
 }
 
 // watchReloadSignal answers SIGHUP for as long as the returned stop has not

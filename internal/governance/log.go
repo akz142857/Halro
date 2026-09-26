@@ -137,12 +137,34 @@ func governanceMAC(key []byte, domain string, version int, sequence uint64, offs
 type Log struct {
 	mu               sync.Mutex
 	file             *os.File
+	path             string
+	durability       DurabilityWriter
 	key              []byte
 	sequence         uint64
 	offset           int64
 	lastHash         [32]byte
 	recordsByEventID map[string]Record
 	trackedOrder     []string
+	afterDurable     func(DurableBatch) error
+	replica          bool
+	terminalErr      error
+}
+
+type DurabilityWriter interface {
+	io.Writer
+	Sync() error
+}
+
+type DurableBatch struct {
+	FirstSequence uint64
+	LastSequence  uint64
+	Frames        []byte
+}
+
+type Options struct {
+	WrapDurability func(*os.File) DurabilityWriter
+	AfterDurable   func(DurableBatch) error
+	Replica        bool
 }
 
 // remember indexes a record for duplicate detection and evicts the oldest
@@ -161,6 +183,10 @@ func (l *Log) remember(record Record) {
 }
 
 func Open(path string, key []byte) (*Log, error) {
+	return OpenWithOptions(path, key, Options{})
+}
+
+func OpenWithOptions(path string, key []byte, options Options) (*Log, error) {
 	if len(key) != governanceHMACKeySize {
 		return nil, fmt.Errorf("audit HMAC key must be %d bytes", governanceHMACKeySize)
 	}
@@ -171,7 +197,15 @@ func Open(path string, key []byte) (*Log, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open governance journal: %w", err)
 	}
-	log := &Log{file: file, recordsByEventID: make(map[string]Record)}
+	var durability DurabilityWriter = file
+	if options.WrapDurability != nil {
+		durability = options.WrapDurability(file)
+		if durability == nil {
+			file.Close()
+			return nil, errors.New("governance durability wrapper returned nil")
+		}
+	}
+	log := &Log{file: file, path: path, durability: durability, recordsByEventID: make(map[string]Record), afterDurable: options.AfterDurable, replica: options.Replica}
 	summary, partial, err := scan(file, key, func(record Record) error { log.remember(record); return nil })
 	if err != nil {
 		file.Close()
@@ -254,8 +288,16 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 	if l.file == nil {
 		return nil, errors.New("governance journal is closed")
 	}
+	if l.replica {
+		return nil, errors.New("governance journal is replica-owned and refuses local append")
+	}
+	if l.terminalErr != nil {
+		return nil, fmt.Errorf("governance journal requires restart after an uncertain durable callback: %w", l.terminalErr)
+	}
 	records := make([]Record, len(events))
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
+	firstSequence := uint64(0)
+	var durableFrames []byte
 	for index, payload := range payloads {
 		if existing, ok := l.recordsByEventID[events[index].EventID]; ok {
 			if !reflect.DeepEqual(existing.Event, events[index]) {
@@ -266,19 +308,33 @@ func (l *Log) AppendBatch(ctx context.Context, events []Event) ([]Record, error)
 		}
 		sequence++
 		frame, hash := encodeFrame(l.key, sequence, previous, payload)
-		if err := writeFull(l.file, frame); err != nil {
+		if err := writeFull(l.durability, frame); err != nil {
+			l.terminalErr = err
 			return nil, fmt.Errorf("append governance journal: %w", err)
+		}
+		if l.afterDurable != nil {
+			if firstSequence == 0 {
+				firstSequence = sequence
+			}
+			durableFrames = append(durableFrames, frame...)
 		}
 		offset += int64(len(frame))
 		previous = hash
 		records[index] = Record{Sequence: sequence, Offset: offset, Event: events[index], Hash: hash}
 	}
-	if err := l.file.Sync(); err != nil {
+	if err := l.durability.Sync(); err != nil {
+		l.terminalErr = err
 		return nil, fmt.Errorf("sync governance journal: %w", err)
 	}
 	l.sequence, l.offset, l.lastHash = sequence, offset, previous
 	for index := range records {
 		l.remember(records[index])
+	}
+	if len(durableFrames) > 0 && l.afterDurable != nil {
+		if err := l.afterDurable(DurableBatch{FirstSequence: firstSequence, LastSequence: sequence, Frames: append([]byte(nil), durableFrames...)}); err != nil {
+			l.terminalErr = err
+			return nil, fmt.Errorf("record durable governance batch for replication: %w", err)
+		}
 	}
 	return records, nil
 }
@@ -329,6 +385,7 @@ func (l *Log) Close() error {
 	}
 	err := l.file.Close()
 	l.file = nil
+	l.durability = nil
 	clear(l.key)
 	l.key = nil
 	return err
@@ -349,10 +406,13 @@ func encodeFrame(key []byte, sequence uint64, previous [32]byte, payload []byte)
 }
 
 func scan(file *os.File, key []byte, visit func(Record) error) (Summary, bool, error) {
+	return scanFrom(file, key, Summary{}, visit)
+}
+
+func scanFrom(file io.ReadSeeker, key []byte, summary Summary, visit func(Record) error) (Summary, bool, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return Summary{}, false, err
 	}
-	var summary Summary
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)

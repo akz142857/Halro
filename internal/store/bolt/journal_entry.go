@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -34,19 +35,30 @@ func (s *Store) view(fn func(*Tx) error) error {
 // open-time reconciliation replays; the reverse would leave a committed write
 // that no log describes, which nothing could recover.
 func (s *Store) update(fn func(*Tx) error) error {
-	return s.updateAll([]func(*Tx) error{fn})
+	return s.updateContext(context.Background(), fn)
+}
+
+func (s *Store) updateContext(ctx context.Context, fn func(*Tx) error) error {
+	receipt, requiresConfirmation, err := s.updateAll([]func(*Tx) error{fn})
+	if err != nil || !requiresConfirmation || s.journal == nil {
+		return err
+	}
+	return s.journal.WaitConfirmed(ctx, receipt)
 }
 
 // updateAll runs several callbacks in one transaction and one frame. It is the
 // merge layer that replaces db.Batch — see batch below for why db.Batch could
 // not be kept.
-func (s *Store) updateAll(callbacks []func(*Tx) error) error {
+func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendReceipt, bool, error) {
 	if len(callbacks) == 0 {
-		return nil
+		return metadatajournal.AppendReceipt{}, false, nil
+	}
+	if s.replica {
+		return metadatajournal.AppendReceipt{}, false, errors.New("replica metadata projection refuses local update")
 	}
 	tx, err := s.db.Begin(true)
 	if err != nil {
-		return err
+		return metadatajournal.AppendReceipt{}, false, err
 	}
 	committed := false
 	defer func() {
@@ -58,19 +70,21 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) error {
 	wrapped := &Tx{tx: tx, recorder: recorder}
 	for _, callback := range callbacks {
 		if err := callback(wrapped); err != nil {
-			return err
+			return metadatajournal.AppendReceipt{}, false, err
 		}
 	}
 	if err := recorder.finish(); err != nil {
-		return err
+		return metadatajournal.AppendReceipt{}, false, err
 	}
+	var receipt metadatajournal.AppendReceipt
 	if len(recorder.ops) > 0 && !s.publishing {
 		if s.journal == nil {
-			return fmt.Errorf("%w: refusing a metadata write that nothing would record", ErrJournalUnavailable)
+			return metadatajournal.AppendReceipt{}, false, fmt.Errorf("%w: refusing a metadata write that nothing would record", ErrJournalUnavailable)
 		}
-		record, appendErr := s.journal.Append(recorder.ops)
+		var appendErr error
+		receipt, appendErr = s.journal.AppendWithReceipt(recorder.ops)
 		if appendErr != nil {
-			return fmt.Errorf("record metadata transaction: %w", appendErr)
+			return metadatajournal.AppendReceipt{}, false, fmt.Errorf("record metadata transaction: %w", appendErr)
 		}
 		// Written on the raw transaction rather than through the recorder: a
 		// frame that recorded the sequence it had just been assigned would be
@@ -78,17 +92,17 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) error {
 		// position with the Primary's.
 		meta := tx.Bucket(bucketMeta)
 		if meta == nil {
-			return errors.New("metadata bucket is missing")
+			return metadatajournal.AppendReceipt{}, false, errors.New("metadata bucket is missing")
 		}
-		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(record.Sequence)); err != nil {
-			return err
+		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(receipt.Record.Sequence)); err != nil {
+			return metadatajournal.AppendReceipt{}, false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return metadatajournal.AppendReceipt{}, false, err
 	}
 	committed = true
-	return nil
+	return receipt, recorder.requiresConfirmation, nil
 }
 
 // migrate runs a writable transaction that is deliberately not recorded.
@@ -203,7 +217,10 @@ func (s *Store) commitBatch(queued []*batchCall) {
 				return nil
 			}
 		}
-		err := s.updateAll(callbacks)
+		receipt, requiresConfirmation, err := s.updateAll(callbacks)
+		if err == nil && requiresConfirmation && s.journal != nil {
+			err = s.journal.WaitConfirmed(context.Background(), receipt)
+		}
 		if err == nil {
 			s.batchTransactions.Add(1)
 			for _, call := range queued {

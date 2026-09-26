@@ -89,6 +89,26 @@ storage:
     #     endpoint: ""
     #     algorithm: ""
 
+# Omit this entire block for Standalone. A replication build uses it to open a
+# fourth, mTLS-only listener and join one fixed two- or three-member group. This
+# build validates the contract but refuses to start with it until the Phase 1
+# runtime is present; it never silently serves this file as Standalone.
+# replication:
+#   cluster_id: production-a
+#   node_id: halro-0
+#   listen: 0.0.0.0:9910
+#   peers:
+#     - name: halro-1
+#       address: halro-1.halro-internal:9910
+#       spki_sha256: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+#     - name: halro-2
+#       address: halro-2.halro-internal:9910
+#       spki_sha256: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+#   tls:
+#     ca_file: /run/secrets/halro-cluster/ca.crt
+#     cert_file: /run/secrets/halro-cluster/tls.crt
+#     key_file: /run/secrets/halro-cluster/tls.key
+
 admin:
   session_ttl: 8h0m0s
   idle_timeout: 30m0s

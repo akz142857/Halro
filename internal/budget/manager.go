@@ -1295,14 +1295,14 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	if err := m.applyFailure(); err != nil {
 		return ledger.Record{}, err
 	}
-	watermark, err := m.log.Append(ctx, event)
+	receipt, err := m.log.AppendWithReceipt(ctx, event)
 	if err != nil {
 		return ledger.Record{}, err
 	}
 	record := ledger.Record{
-		Generation: watermark.Generation,
-		Sequence:   watermark.Sequence,
-		Offset:     watermark.Offset,
+		Generation: receipt.Watermark.Generation,
+		Sequence:   receipt.Watermark.Sequence,
+		Offset:     receipt.Watermark.Offset,
 		Event:      event,
 	}
 	m.applyMu.Lock()
@@ -1332,6 +1332,12 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	}
 	m.applyCond.Broadcast()
 	m.applyMu.Unlock()
+	// The local state must observe ReservationCreated/AttemptStarted before the
+	// request waits for a Replica. Waiting inside the Ledger writer would hold
+	// its lock and serialize unrelated appends behind network latency.
+	if err := m.log.WaitConfirmed(ctx, receipt); err != nil {
+		return ledger.Record{}, err
+	}
 	return record, nil
 }
 

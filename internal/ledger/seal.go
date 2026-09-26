@@ -71,6 +71,40 @@ func (l *Log) SealedThrough() uint64 {
 func (l *Log) Roll() (SealResult, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.options.Replica {
+		return SealResult{}, errors.New("ledger is replica-owned and refuses local roll")
+	}
+	if l.options.BeforeRoll != nil {
+		if err := l.options.BeforeRoll(l.generation, l.sequence); err != nil {
+			return SealResult{}, fmt.Errorf("confirm ledger generation before roll: %w", err)
+		}
+	}
+	result, err := l.rollLocked(time.Now().UTC(), nil)
+	if err != nil {
+		return result, err
+	}
+	if result.Rolled && l.options.AfterRoll != nil {
+		if err := l.options.AfterRoll(result.Sealed); err != nil {
+			l.status.MarkUnavailable()
+			return result, fmt.Errorf("record durable ledger roll for replication: %w", err)
+		}
+	}
+	return result, nil
+}
+
+// ApplyReplicatedRoll verifies the Primary's complete authoritative Segment
+// description before publishing the local rename and manifest. Compression
+// fields and filenames remain node-local.
+func (l *Log) ApplyReplicatedRoll(expected Segment) (SealResult, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.options.Replica {
+		return SealResult{}, errors.New("replicated ledger roll requires replica mode")
+	}
+	return l.rollLocked(expected.SealedAt.UTC(), &expected)
+}
+
+func (l *Log) rollLocked(sealedAt time.Time, expected *Segment) (SealResult, error) {
 	if l.file == nil {
 		return SealResult{}, errors.New("ledger is closed")
 	}
@@ -84,6 +118,19 @@ func (l *Log) Roll() (SealResult, error) {
 		return SealResult{}, errors.New("ledger requires a chain key to seal a generation")
 	}
 	if l.offset == 0 {
+		if expected != nil {
+			if expected.Generation+1 != l.generation {
+				return SealResult{}, errors.New("replicated ledger Roll does not name the previously sealed generation")
+			}
+			sealed, index := findSegment(l.segments, expected.Generation)
+			if index < 0 || !sameAuthoritativeSegment(sealed, *expected) {
+				return SealResult{}, errors.New("replicated ledger Roll does not match sealed history")
+			}
+			return SealResult{
+				Sealed: sealed, Active: l.generation, Bytes: sealed.Length,
+				Records: sealed.LastSequence - sealed.FirstSequence + 1,
+			}, nil
+		}
 		return SealResult{Active: l.generation}, nil
 	}
 	if !l.chainSawFrames {
@@ -122,7 +169,10 @@ func (l *Log) Roll() (SealResult, error) {
 		EndEpoch:       uint8(l.chainEpoch),
 		PlainChecksum:  checksum,
 		StoredChecksum: checksum,
-		SealedAt:       time.Now().UTC(),
+		SealedAt:       sealedAt,
+	}
+	if expected != nil && !sameAuthoritativeSegment(pending, *expected) {
+		return SealResult{}, errors.New("replicated ledger Roll does not match the active generation")
 	}
 	rolled := filepath.Join(l.directory, pending.File)
 	if _, err := os.Stat(rolled); err == nil {
@@ -192,6 +242,14 @@ func (l *Log) Roll() (SealResult, error) {
 		Sealed: pending, Rolled: true, Active: l.generation,
 		Bytes: pending.Length, Records: pending.LastSequence - pending.FirstSequence + 1,
 	}, nil
+}
+
+func sameAuthoritativeSegment(left, right Segment) bool {
+	return left.Generation == right.Generation && left.FirstSequence == right.FirstSequence &&
+		left.LastSequence == right.LastSequence && left.Length == right.Length &&
+		left.StartHash == right.StartHash && left.EndHash == right.EndHash &&
+		left.EndEpoch == right.EndEpoch && left.PlainChecksum == right.PlainChecksum &&
+		left.SealedAt.Equal(right.SealedAt)
 }
 
 // Compact replaces a sealed generation's plain bytes with a compressed copy.

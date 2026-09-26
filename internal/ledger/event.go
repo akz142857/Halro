@@ -411,6 +411,9 @@ type Record struct {
 	Offset     int64
 	Epoch      uint8
 	Event      Event
+	// Hash is the authenticated chain head after this record. It is zero for
+	// legacy checksum-only frames and is not part of the event serialization.
+	Hash [32]byte
 }
 
 type Watermark struct {

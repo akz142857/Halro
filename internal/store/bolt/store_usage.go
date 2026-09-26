@@ -409,7 +409,7 @@ func (s *Store) PutRedactionPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.RedactionPolicy{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if err := putVersioned(
 			tx.Bucket(bucketRedactionPolicies),
 			policy.ID,
@@ -455,7 +455,7 @@ func (s *Store) PutTokenGuardPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.TokenGuardPolicy{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if err := putVersioned(tx.Bucket(bucketTokenGuardPolicies), policy.ID, expectedRevision, &policy); err != nil {
 			return err
 		}

@@ -1423,7 +1423,8 @@ func (s *Store) MetadataWriteStats() MetadataWriteStats {
 }
 
 type Store struct {
-	db *bbolt.DB
+	db      *bbolt.DB
+	replica bool
 
 	// journal is the write-ahead log that makes db a projection. It is nil
 	// until AttachMetadataJournal installs it, because its HMAC key is derived
@@ -1558,6 +1559,40 @@ func OpenReadOnly(path string) (*Store, error) {
 	if version != schemaVersion {
 		db.Close()
 		return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
+			ErrSchemaVersionMismatch, version, schemaVersion)
+	}
+	return store, nil
+}
+
+// OpenReplica opens an existing writable projection without running schema
+// migrations. A Replica may remain behind this binary while it consumes the
+// Primary's pre-boundary frames, but it may never open a schema newer than it
+// knows how to apply. It also never creates an empty database: seeding must
+// publish the projection first.
+func OpenReplica(path string) (*Store, error) {
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{
+		Timeout:      2 * time.Second,
+		FreelistType: bbolt.FreelistMapType,
+		// bbolt normally includes O_CREATE. A Replica must never turn a missing
+		// seed into an empty writable database, and a preceding Stat cannot make
+		// that promise atomically because the path may disappear before OpenFile.
+		OpenFile: func(name string, flag int, mode os.FileMode) (*os.File, error) {
+			return os.OpenFile(name, flag&^os.O_CREATE, mode)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open replica metadata: %w", err)
+	}
+	store := &Store{db: db, replica: true}
+	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
+	version, err := store.SchemaVersion()
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read replica metadata schema: %w", err)
+	}
+	if version == 0 || version > schemaVersion {
+		db.Close()
+		return nil, fmt.Errorf("%w: replica metadata schema version %d exceeds supported version %d",
 			ErrSchemaVersionMismatch, version, schemaVersion)
 	}
 	return store, nil

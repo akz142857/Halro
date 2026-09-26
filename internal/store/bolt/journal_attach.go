@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -46,6 +47,16 @@ func (s *Store) MetadataJournalPath() string {
 	return filepath.Join(filepath.Dir(s.db.Path()), MetadataJournalFileName)
 }
 
+// SetMetadataJournalAfterDurable installs the Phase-1 index/ordering hook. It
+// must be called after AttachMetadataJournal and before the runtime admits
+// writes. Standalone never calls it.
+func (s *Store) SetMetadataJournalAfterDurable(callback func(metadatajournal.DurableBatch) (uint64, error), waitConfirmed func(context.Context, uint64) error) error {
+	if s.journal == nil {
+		return ErrJournalUnavailable
+	}
+	return s.journal.SetAfterDurable(callback, waitConfirmed)
+}
+
 // AttachMetadataJournal installs the journal and brings the projection level
 // with it. Nothing this package records may be written before it returns.
 //
@@ -60,6 +71,9 @@ func (s *Store) MetadataJournalPath() string {
 // reason is recorded in the epoch header when a new epoch is started, so an
 // operator reading a journal can see what replaced the one before it.
 func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, error) {
+	if s.replica {
+		return JournalState{}, errors.New("replica metadata requires AttachReplicaMetadataJournal")
+	}
 	if s.journal != nil {
 		return JournalState{}, errors.New("metadata journal is already attached")
 	}
@@ -97,6 +111,78 @@ func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, 
 	}
 	s.journal, s.journalKey = log, append([]byte(nil), key...)
 	return state, nil
+}
+
+// AttachReplicaMetadataJournal shares the Replica-owned native journal with
+// the projection without replaying its durable-but-unconfirmed tail. Only
+// ApplyReplicaMetadataThrough may advance the bbolt projection afterwards.
+func (s *Store) AttachReplicaMetadataJournal(log *metadatajournal.Log, key []byte) (JournalState, error) {
+	if !s.replica {
+		return JournalState{}, errors.New("replica metadata journal attach requires replica store mode")
+	}
+	if s.journal != nil || log == nil || len(key) != metadatajournal.KeySize {
+		return JournalState{}, errors.New("replica metadata journal attach is invalid")
+	}
+	stored, err := s.journalPosition()
+	if err != nil {
+		return JournalState{}, err
+	}
+	head := log.Head()
+	state := JournalState{Path: s.MetadataJournalPath(), Epoch: head.Epoch, Sequence: head.Sequence, Applied: stored.sequence, TrimmedThrough: head.TrimmedThrough}
+	if !stored.present || stored.epoch != head.Epoch || stored.sequence > head.Sequence || stored.sequence < head.TrimmedThrough {
+		return state, fmt.Errorf("%w: replica projection is not a recoverable prefix of its metadata journal", ErrJournalDiverged)
+	}
+	s.journal, s.journalKey = log, append([]byte(nil), key...)
+	return state, nil
+}
+
+// ApplyReplicaMetadataThrough applies all journal operations after the current
+// projection position through target in one bbolt transaction. The caller is
+// responsible for proving target is covered by the confirmed replication
+// prefix; this method independently refuses another epoch or anything beyond
+// the durable file.
+func (s *Store) ApplyReplicaMetadataThrough(ctx context.Context, epoch, target uint64) (uint64, error) {
+	if !s.replica || s.journal == nil {
+		return 0, errors.New("replica metadata journal is not attached")
+	}
+	head := s.journal.Head()
+	if epoch != head.Epoch || target > head.Sequence || target < head.TrimmedThrough {
+		return 0, errors.New("replica metadata apply target is outside the durable journal prefix")
+	}
+	var applied uint64
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		storedEpoch, hasEpoch := decodeUint64(meta.Get(keyMetadataJournalEpoch))
+		storedSequence, hasSequence := decodeUint64(meta.Get(keyAppliedJournalSequence))
+		if !hasEpoch || !hasSequence || storedEpoch != epoch || target < storedSequence {
+			return errors.New("replica metadata apply target would change epoch or regress the projection")
+		}
+		applied = storedSequence
+		if target == storedSequence {
+			return nil
+		}
+		wrapped := &Tx{tx: tx}
+		if err := s.journal.ReplayRange(storedSequence, target, func(record metadatajournal.Record) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return applyOps(wrapped, record.Ops)
+		}); err != nil {
+			return err
+		}
+		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(target)); err != nil {
+			return err
+		}
+		applied = target
+		return nil
+	})
+	return applied, err
 }
 
 type journalPosition struct {
@@ -354,6 +440,9 @@ func (s *Store) MetadataJournalState() (JournalState, error) {
 // for incremental catch-up (§11.2), and this call takes the sequence rather
 // than deciding it.
 func (s *Store) TrimMetadataJournal(throughSequence uint64) (JournalState, error) {
+	if s.replica {
+		return JournalState{}, errors.New("replica metadata projection refuses local journal trim")
+	}
 	if s.journal == nil {
 		return JournalState{}, ErrJournalUnavailable
 	}

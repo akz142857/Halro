@@ -24,6 +24,170 @@ func journalHead(t *testing.T, store *Store) metadatajournal.Head {
 	return head
 }
 
+func TestAuthorityWithdrawalWaitsOnlyAfterProjectionCommit(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waited []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		var raw []byte
+		if err := store.view(func(tx *Tx) error {
+			raw = append([]byte(nil), tx.Bucket(bucketGatewayKeys).Get([]byte("key-1"))...)
+			return nil
+		}); err != nil {
+			return err
+		}
+		if !strings.Contains(string(raw), `"enabled":false`) {
+			return errors.New("confirmation wait ran before the bbolt projection committed")
+		}
+		waited = append(waited, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketMeta).Put(keyRuntimeSettings, []byte("value"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waited) != 0 {
+		t.Fatalf("ordinary metadata waited at indexes %v", waited)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketGatewayKeys).Put([]byte("key-1"), []byte(`{"enabled":false}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waited) != 1 || waited[0] != 2 {
+		t.Fatalf("withdrawal waits=%v, want [2]", waited)
+	}
+}
+
+func TestAuthorityWithdrawalConfirmationUsesTheRequestContext(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	project := domain.Project{ID: "prj_cancel", Name: "cancel", Enabled: true}
+	var err error
+	project, err = store.PutProject(context.Background(), project, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := make(chan struct{})
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		return 17, nil
+	}, func(ctx context.Context, index uint64) error {
+		if index != 17 {
+			t.Fatalf("confirmation index=%d, want 17", index)
+		}
+		close(waiting)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	project.Enabled = false
+	go func() {
+		_, err := store.PutProject(ctx, project, project.Revision, nil)
+		done <- err
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authority withdrawal did not reach its confirmation wait")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("withdrawal returned %v, want context cancellation", err)
+	}
+	stored, err := store.GetProject(context.Background(), project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Enabled {
+		t.Fatal("request cancellation rolled back a withdrawal that had already committed")
+	}
+}
+
+func TestAuthorityTighteningClassificationCoversPromotionFailOpenWrites(t *testing.T) {
+	tests := []struct {
+		name     string
+		bucket   []byte
+		previous string
+		value    string
+		want     bool
+	}{
+		{name: "new enabled project is additive", bucket: bucketProjects, value: `{"enabled":true}`, want: false},
+		{name: "existing project may tighten limits", bucket: bucketProjects, previous: `{"enabled":true,"rpm":100}`, value: `{"enabled":true,"rpm":50}`, want: true},
+		{name: "existing gateway key may lose a scope", bucket: bucketGatewayKeys, previous: `{"enabled":true,"scopes":["inference","governance:read"]}`, value: `{"enabled":true,"scopes":["inference"]}`, want: true},
+		{name: "token guard policy may tighten", bucket: bucketTokenGuardPolicies, value: `{"enabled":true}`, want: true},
+		{name: "redaction rule may be added", bucket: bucketRedactionPolicies, value: `{"enabled":true}`, want: true},
+		{name: "existing admin may rotate password", bucket: bucketAdminUsers, previous: `{"role":"admin","password_hash":"old"}`, value: `{"role":"admin","password_hash":"new"}`, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := metadataOpRequiresConfirmation(
+				metadatajournal.OpPut, []string{string(test.bucket)}, []byte(test.previous), []byte(test.value),
+			)
+			if got != test.want {
+				t.Fatalf("requires confirmation=%t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCursorDeleteRecordsAndConfirmsMFARevocation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var waits []uint64
+	var index uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		index++
+		return index, nil
+	}, func(_ context.Context, confirmed uint64) error {
+		waits = append(waits, confirmed)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("admin\x00code")
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketAdminMFARecoveryCodes).Put(key, []byte(`{"used_at":null}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("additive recovery code waited at %v", waits)
+	}
+	if err := store.updateContext(context.Background(), func(tx *Tx) error {
+		cursor := tx.Bucket(bucketAdminMFARecoveryCodes).Cursor()
+		found, _ := cursor.Seek([]byte("admin\x00"))
+		if string(found) != string(key) {
+			return errors.New("recovery code cursor did not find seeded key")
+		}
+		return cursor.Delete()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] != 2 {
+		t.Fatalf("MFA revocation waits=%v, want [2]", waits)
+	}
+	var last metadatajournal.Record
+	_, err := metadatajournal.Replay(store.MetadataJournalPath(), testJournalKey(), func(record metadatajournal.Record) error {
+		if record.Kind == metadatajournal.KindOperations {
+			last = record
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(last.Ops) != 1 || last.Ops[0].Kind != metadatajournal.OpDelete || string(last.Ops[0].Key) != string(key) {
+		t.Fatalf("last MFA journal operations=%#v", last.Ops)
+	}
+}
+
 func appliedSequence(t *testing.T, store *Store) uint64 {
 	t.Helper()
 	state, err := store.MetadataJournalState()

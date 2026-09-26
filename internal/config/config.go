@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ type Config struct {
 	Server                Server                `yaml:"server"`
 	TLS                   TLS                   `yaml:"tls"`
 	Storage               Storage               `yaml:"storage"`
+	Replication           *Replication          `yaml:"replication,omitempty"`
 	Admin                 Admin                 `yaml:"admin"`
 	Usage                 Usage                 `yaml:"usage"`
 	Ledger                Ledger                `yaml:"ledger"`
@@ -206,6 +208,32 @@ type TLS struct {
 }
 
 type TLSCertificate struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+// Replication is present only for a member of one Primary/Replica group.
+// Absence is the Standalone contract: no cluster listener, no role state and no
+// behavior change. Phase 0b validates the identity and trust boundary here;
+// the listener and protocol are activated by the later replication phase.
+type Replication struct {
+	ClusterID string            `yaml:"cluster_id"`
+	NodeID    string            `yaml:"node_id"`
+	Listen    string            `yaml:"listen"`
+	Peers     []ReplicationPeer `yaml:"peers"`
+	TLS       ReplicationTLS    `yaml:"tls"`
+}
+
+type ReplicationPeer struct {
+	Name       string `yaml:"name"`
+	Address    string `yaml:"address"`
+	SPKISHA256 string `yaml:"spki_sha256"`
+}
+
+// ReplicationTLS has no Enabled switch: a replication listener is always mTLS
+// and there is deliberately no plaintext fallback.
+type ReplicationTLS struct {
+	CAFile   string `yaml:"ca_file"`
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
 }
@@ -812,6 +840,21 @@ func (c *Config) Normalize() error {
 			}
 		}
 	}
+	if c.Replication != nil {
+		for name, value := range map[string]*string{
+			"replication.tls.ca_file":   &c.Replication.TLS.CAFile,
+			"replication.tls.cert_file": &c.Replication.TLS.CertFile,
+			"replication.tls.key_file":  &c.Replication.TLS.KeyFile,
+		} {
+			if *value == "" {
+				continue
+			}
+			*value, err = cleanAbsolutePath(*value)
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+		}
+	}
 	for name, value := range map[string]*string{
 		"metrics.credential_file":    &c.Metrics.CredentialFile,
 		"metrics.tls.cert_file":      &c.Metrics.TLS.CertFile,
@@ -1038,6 +1081,7 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Storage.MetadataFile == "" || filepath.Base(c.Storage.MetadataFile) != c.Storage.MetadataFile {
 		problems = append(problems, errors.New("storage.metadata_file must be a file name without path components"))
 	}
+	problems = append(problems, validateReplication(c.Replication)...)
 	problems = append(problems, validateLogging(c.Logging)...)
 	if c.ModelCatalog.RefreshInterval < Duration(5*time.Minute) || c.ModelCatalog.RefreshInterval > Duration(7*24*time.Hour) {
 		problems = append(problems, errors.New("model_catalog.refresh_interval must be between 5 minutes and 7 days"))
@@ -1168,6 +1212,9 @@ func (c Config) Validate(opts LoadOptions) error {
 		}
 		if c.Metrics.Enabled {
 			listeners["metrics"] = c.Server.MetricsListen
+		}
+		if c.Replication != nil {
+			listeners["replication"] = c.Replication.Listen
 		}
 		for leftName, leftAddress := range listeners {
 			for rightName, rightAddress := range listeners {
@@ -1603,6 +1650,119 @@ func cleanAbsolutePath(value string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(absolute), nil
+}
+
+// Warnings reports valid configurations whose operational meaning is easy to
+// overestimate. They do not belong in Validate: a two-node group is useful for
+// keeping a second durable copy, but it cannot remain writable after one member
+// is lost because the writes that precede Provider I/O still require an ack.
+func (c Config) Warnings() []string {
+	if c.Replication != nil && len(c.Replication.Peers) == 1 {
+		return []string{"replication has two members: it preserves a second durable copy but cannot accept confirmed writes after either member is lost"}
+	}
+	return nil
+}
+
+func validateReplication(replication *Replication) []error {
+	if replication == nil {
+		return nil
+	}
+	var problems []error
+	if !validReplicationIdentifier(replication.ClusterID) {
+		problems = append(problems, errors.New("replication.cluster_id must be 1-64 characters: letters, digits, dot, underscore or hyphen, starting with a letter or digit"))
+	}
+	if !validReplicationIdentifier(replication.NodeID) {
+		problems = append(problems, errors.New("replication.node_id must be 1-64 characters: letters, digits, dot, underscore or hyphen, starting with a letter or digit"))
+	}
+	if err := validateReplicationAddress("replication.listen", replication.Listen, true); err != nil {
+		problems = append(problems, err)
+	}
+	if len(replication.Peers) < 1 || len(replication.Peers) > 2 {
+		problems = append(problems, errors.New("replication.peers must contain one or two entries"))
+	}
+	if replication.TLS.CAFile == "" || replication.TLS.CertFile == "" || replication.TLS.KeyFile == "" {
+		problems = append(problems, errors.New("replication.tls ca_file, cert_file, and key_file are required; replication has no plaintext mode"))
+	}
+	if replication.TLS.CertFile != "" && replication.TLS.CertFile == replication.TLS.KeyFile {
+		problems = append(problems, errors.New("replication.tls.cert_file must differ from replication.tls.key_file"))
+	}
+
+	peerNames := make(map[string]struct{}, len(replication.Peers))
+	peerAddresses := make(map[string]struct{}, len(replication.Peers))
+	peerPins := make(map[string]struct{}, len(replication.Peers))
+	for index, peer := range replication.Peers {
+		prefix := fmt.Sprintf("replication.peers[%d]", index)
+		if !validReplicationIdentifier(peer.Name) {
+			problems = append(problems, fmt.Errorf("%s.name must be 1-64 characters: letters, digits, dot, underscore or hyphen, starting with a letter or digit", prefix))
+		}
+		if peer.Name == replication.NodeID && peer.Name != "" {
+			problems = append(problems, fmt.Errorf("%s.name names this node; peers must contain only other members", prefix))
+		}
+		if _, duplicate := peerNames[peer.Name]; duplicate && peer.Name != "" {
+			problems = append(problems, fmt.Errorf("%s.name is listed more than once", prefix))
+		}
+		peerNames[peer.Name] = struct{}{}
+
+		if err := validateReplicationAddress(prefix+".address", peer.Address, false); err != nil {
+			problems = append(problems, err)
+		}
+		if _, duplicate := peerAddresses[peer.Address]; duplicate && peer.Address != "" {
+			problems = append(problems, fmt.Errorf("%s.address is listed more than once", prefix))
+		}
+		peerAddresses[peer.Address] = struct{}{}
+
+		if !validSHA256Pin(peer.SPKISHA256) {
+			problems = append(problems, fmt.Errorf("%s.spki_sha256 must be sha256: followed by 64 lowercase hexadecimal characters", prefix))
+		}
+		if _, duplicate := peerPins[peer.SPKISHA256]; duplicate && peer.SPKISHA256 != "" {
+			problems = append(problems, fmt.Errorf("%s.spki_sha256 is shared by more than one peer", prefix))
+		}
+		peerPins[peer.SPKISHA256] = struct{}{}
+	}
+	return problems
+}
+
+func validReplicationIdentifier(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for index, character := range value {
+		letter := character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z'
+		digit := character >= '0' && character <= '9'
+		if letter || digit || index > 0 && (character == '.' || character == '_' || character == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateReplicationAddress(name, address string, allowUnspecified bool) error {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%s requires an explicit host", name)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%s port must be between 1 and 65535", name)
+	}
+	if !allowUnspecified {
+		if parsed, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil && parsed.IsUnspecified() {
+			return fmt.Errorf("%s must be dialable and cannot use an unspecified address", name)
+		}
+	}
+	return nil
+}
+
+func validSHA256Pin(value string) bool {
+	if len(value) != len("sha256:")+64 || !strings.HasPrefix(value, "sha256:") || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
+	return err == nil
 }
 
 func validateListener(name, address string, tlsEnabled, allowInsecurePublic bool) []error {
