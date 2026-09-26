@@ -52,6 +52,11 @@ const (
 	maxPayloadSize        = 1 << 20
 )
 
+// ReplicationFormatVersion is the Ledger reader/writer epoch advertised in an
+// HA Hello. Keep it tied to the actual frame writer rather than duplicating a
+// number in the app runtime.
+func ReplicationFormatVersion() uint16 { return uint16(frameVersionRunAttribution) }
+
 var ErrCorrupt = errors.New("ledger is corrupt")
 var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
 
@@ -202,6 +207,9 @@ type Options struct {
 	// Replica refuses semantic appends. Native frames may only enter through
 	// AppendReplicated after their MAC and chain continuation are verified.
 	Replica bool
+	// RequireExisting is the HA Primary mode: ordinary appends and crash repair
+	// remain enabled, but missing seeded directories/files are never created.
+	RequireExisting bool
 	// BeforeRoll proves the active generation's last frame is confirmed before
 	// any structural mutation. AfterRoll records the now-durable Segment in the
 	// global replication order. Both are nil in Standalone and Replica modes.
@@ -479,8 +487,17 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 			err = errors.New("replica ledger has an interrupted Roll that must be reconciled against ordering")
 		}
 	} else {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			return nil, fmt.Errorf("create ledger directory: %w", err)
+		if options.RequireExisting {
+			if info, statErr := os.Stat(directory); statErr != nil || !info.IsDir() {
+				if statErr == nil {
+					statErr = errors.New("ledger path is not a directory")
+				}
+				return nil, fmt.Errorf("open seeded ledger directory: %w", statErr)
+			}
+		} else {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				return nil, fmt.Errorf("create ledger directory: %w", err)
+			}
 		}
 		segments, err = repairSegments(directory)
 	}
@@ -502,7 +519,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	}
 	generation := activeGeneration(segments)
 	flags := os.O_RDWR
-	if !options.Replica {
+	if !options.Replica && !options.RequireExisting {
 		flags |= os.O_CREATE
 	}
 	file, err := os.OpenFile(path, flags, 0o600)

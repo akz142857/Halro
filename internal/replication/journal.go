@@ -347,9 +347,20 @@ func (j *OrderingJournal) BaselineHeads() [4][sha256.Size]byte {
 // precedes ordering fsync. A Replica must resume from this logical position and
 // let an exact Primary retransmission complete the interrupted transaction.
 func (j *OrderingJournal) StoreCursors() ([4]StoreCursor, error) {
+	head, _, _ := j.Head()
+	return j.StoreCursorsThrough(head)
+}
+
+// StoreCursorsThrough reconstructs the native positions at one authenticated
+// global index. Replica startup uses its persisted applied index rather than
+// the physical tail so a durable-but-unconfirmed suffix is never projected.
+func (j *OrderingJournal) StoreCursorsThrough(through uint64) ([4]StoreCursor, error) {
 	cursors := j.BaselineCursors()
 	head, _, _ := j.Head()
-	for index := uint64(1); index <= head; index++ {
+	if through > head {
+		return [4]StoreCursor{}, errors.New("ordering cursor index is beyond the journal head")
+	}
+	for index := uint64(1); index <= through; index++ {
 		record, err := j.Record(index)
 		if err != nil {
 			return [4]StoreCursor{}, err

@@ -41,3 +41,38 @@ func GuardUnavailableRuntime(dataDir string, configured bool, operation string) 
 		return fmt.Errorf("inspect replication state before %s: %w", operation, err)
 	}
 }
+
+// RequireMemberRuntime is the online role-aware counterpart to
+// GuardUnavailableRuntime. It authorizes only an explicitly configured member
+// whose cluster directory and authenticated-state input already exist. It does
+// not create either path: join/re-seed owns the first publication, while a
+// missing replication block can never downgrade durable member state to
+// Standalone.
+func RequireMemberRuntime(dataDir string, configured bool, operation string) error {
+	clusterPath := filepath.Join(dataDir, ClusterDirectoryName)
+	if !configured {
+		return GuardUnavailableRuntime(dataDir, false, operation)
+	}
+	info, err := os.Lstat(clusterPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("replication is configured but member state is absent at %s; refusing %s; join or re-seed must establish the member first", clusterPath, operation)
+		}
+		return fmt.Errorf("inspect replication state before %s: %w", operation, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing %s: replication state path %s is not a directory", operation, clusterPath)
+	}
+	statePath := filepath.Join(clusterPath, "state.json")
+	stateInfo, err := os.Lstat(statePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("replication is configured but authenticated member state is absent at %s; refusing %s; join or re-seed must establish the member first", statePath, operation)
+		}
+		return fmt.Errorf("inspect authenticated member state before %s: %w", operation, err)
+	}
+	if !stateInfo.Mode().IsRegular() {
+		return fmt.Errorf("refusing %s: authenticated member state %s is not a regular file", operation, statePath)
+	}
+	return nil
+}

@@ -9,6 +9,12 @@ type recordingProjection struct {
 	ledger   []StoreCursor
 	metadata []StoreCursor
 	err      error
+	schema   []SchemaBoundaryMetadata
+}
+
+func (p *recordingProjection) ValidateSchemaBoundary(_ context.Context, from, to uint32) error {
+	p.schema = append(p.schema, SchemaBoundaryMetadata{From: from, To: to})
+	return p.err
 }
 
 func (p *recordingProjection) ApplyLedgerThrough(_ context.Context, generation, sequence uint64) error {
@@ -99,5 +105,44 @@ func TestReplicaApplierStopsBeforeAdvancingAppliedOnCancellation(t *testing.T) {
 	_, _, applied := receiver.Progress()
 	if applied != 0 {
 		t.Fatalf("receiver applied index advanced to %d", applied)
+	}
+}
+
+func TestReplicaApplierValidatesConfirmedSchemaBoundaryBeforeAdvancing(t *testing.T) {
+	receiver, journal := newTestReceiver(t, &recordingFrameSink{})
+	defer journal.Close()
+	anchor, err := testConfirmationFrame(1, KindLeadershipEstablished).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Receive(anchor); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := (SchemaBoundaryMetadata{From: 40, To: 41}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := testConfirmationFrame(2, KindSchemaBoundary)
+	frame.Metadata = metadata
+	encoded, err := frame.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Receive(encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 2}); err != nil {
+		t.Fatal(err)
+	}
+	projection := &recordingProjection{}
+	applier, err := NewReplicaApplier(receiver, journal, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := applier.ApplyConfirmed(context.Background()); err != nil || applied != 2 {
+		t.Fatalf("schema apply=%d err=%v", applied, err)
+	}
+	if len(projection.schema) != 1 || projection.schema[0] != (SchemaBoundaryMetadata{From: 40, To: 41}) {
+		t.Fatalf("validated schema boundaries=%#v", projection.schema)
 	}
 }

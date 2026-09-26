@@ -47,8 +47,8 @@ func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
 			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
 		}
 	}
-	if len(seen) != 19 {
-		t.Fatalf("top-level command descriptor count=%d, want 19", len(seen))
+	if len(seen) != 20 {
+		t.Fatalf("top-level command descriptor count=%d, want 20", len(seen))
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {
@@ -122,7 +122,7 @@ func TestReplicationDoesNotSilentlyStartAsStandalone(t *testing.T) {
 		TLS: config.ReplicationTLS{CAFile: "/cluster/ca.crt", CertFile: "/cluster/tls.crt", KeyFile: "/cluster/tls.key"},
 	}
 	err := runRuntime(cfg, "config.yaml", slog.New(slog.NewTextHandler(io.Discard, nil)), false)
-	if err == nil || !strings.Contains(err.Error(), "refusing serve") {
+	if err == nil || !strings.Contains(err.Error(), "join or re-seed") {
 		t.Fatalf("runRuntime error=%v", err)
 	}
 }
@@ -182,7 +182,6 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 		t.Fatal(err)
 	}
 	commands := [][]string{
-		{"start", "--config", path},
 		{"init", "--config", path},
 		{"bootstrap", "--config", path},
 		{"admin", "reset-mfa", "--config", path},
@@ -199,6 +198,9 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 		{"pricing", "migrate", "--config", path, "--apply", "--resolution-file", filepath.Join(root, "resolution.json")},
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"start", "--config", path}, logger); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+		t.Fatalf("start error=%v", err)
+	}
 	for _, command := range commands {
 		if err := run(command, logger); err == nil || !strings.Contains(err.Error(), "outside the replication order") {
 			t.Fatalf("command %q error=%v", command, err)
@@ -209,9 +211,9 @@ func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *test
 	}
 }
 
-func TestClusterCommandDoesNotExistWithoutReplicationRuntime(t *testing.T) {
+func TestClusterCommandExistsAndRequiresConfiguration(t *testing.T) {
 	err := run([]string{"cluster", "status"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err == nil || !strings.Contains(err.Error(), `unknown command "cluster"`) {
+	if err == nil || strings.Contains(err.Error(), `unknown command "cluster"`) {
 		t.Fatalf("cluster command error=%v", err)
 	}
 }

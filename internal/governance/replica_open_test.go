@@ -18,6 +18,17 @@ func TestReplicaOpenRequiresSeededGovernanceJournal(t *testing.T) {
 	}
 }
 
+func TestPrimaryOpenRequiresSeededGovernanceJournal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "governance.journal")
+	log, err := OpenWithOptions(path, make([]byte, governanceHMACKeySize), Options{RequireExisting: true})
+	if log != nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open log=%v err=%v", log, err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open created a seed directory: %v", err)
+	}
+}
+
 func TestReplicaOpenDoesNotRepairGovernanceTailBeforeOrderingReconciliation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "governance.journal")
 	if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {

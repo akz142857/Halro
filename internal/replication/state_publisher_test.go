@@ -64,3 +64,87 @@ func TestStatePublisherWritesPrimaryAndReplicaProgress(t *testing.T) {
 		}
 	})
 }
+
+func TestStatePublisherPersistsPromiseBeforePromotion(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "cluster", "state.json")
+	state := publisherTestState(RoleReplica)
+	state.AppliedIndex = 4
+	state.ConfirmedIndex = 4
+	state.DurableIndex = 4
+	state.OrderingHeadMAC = [32]byte{4}
+	state.Projection.Index = 4
+	publisher, err := NewStatePublisher(path, key, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Promote(7, 4, 8); err == nil {
+		t.Fatal("promotion without a durable promise was accepted")
+	}
+	promised, err := publisher.Promise(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promised.Role != RoleReplica || promised.Term != 7 || promised.PromisedTerm != 8 {
+		t.Fatalf("promised state=%#v", promised)
+	}
+	if _, err := publisher.Promise(8); err == nil {
+		t.Fatal("duplicate promised term was accepted")
+	}
+	if _, err := publisher.Promote(7, 3, 8); err == nil {
+		t.Fatal("stale expected index was accepted")
+	}
+	promoted, err := publisher.Promote(7, 4, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted.Role != RolePrimary || promoted.Term != 8 || promoted.PromisedTerm != 8 {
+		t.Fatalf("promoted state=%#v", promoted)
+	}
+	onDisk, err := ReadState(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onDisk.Role != RolePrimary || onDisk.Term != 8 || onDisk.AppliedIndex != 4 {
+		t.Fatalf("on-disk promoted state=%#v", onDisk)
+	}
+}
+
+func TestPromiseDemotesPrimaryInTheSameDurablePublication(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "cluster", "state.json")
+	publisher, err := NewStatePublisher(path, key, publisherTestState(RolePrimary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := publisher.Promise(9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Role != RoleReplica || state.Term != 7 || state.PromisedTerm != 9 {
+		t.Fatalf("demoted state=%#v", state)
+	}
+}
+
+func TestStatePublisherAdoptsHigherTermWithoutMovingProgress(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	path := filepath.Join(t.TempDir(), "cluster", "state.json")
+	state := publisherTestState(RolePrimary)
+	state.DurableIndex = 2
+	state.ConfirmedIndex = 1
+	state.OrderingHeadMAC = [32]byte{2}
+	publisher, err := NewStatePublisher(path, key, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := publisher.AdoptHigherTerm(8, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adopted.Role != RoleReplica || adopted.Term != 8 || adopted.PromisedTerm != 9 || adopted.DurableIndex != 2 || adopted.ConfirmedIndex != 1 {
+		t.Fatalf("adopted state=%#v", adopted)
+	}
+	if _, err := publisher.AdoptHigherTerm(7, 9); err == nil {
+		t.Fatal("term regression was accepted")
+	}
+}

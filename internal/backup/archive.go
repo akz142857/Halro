@@ -22,7 +22,7 @@ import (
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
-const manifestVersion = 3
+const manifestVersion = 4
 
 type SourceFile struct {
 	ArchivePath string
@@ -33,6 +33,11 @@ type File struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+}
+
+type StoreHead struct {
+	Generation uint64 `json:"generation"`
+	Sequence   uint64 `json:"sequence"`
 }
 
 type Manifest struct {
@@ -51,22 +56,31 @@ type Manifest struct {
 	// when the source Ledger had not yet written any epoch-4 frame — a chain
 	// head of all zeros in that case is "nothing to verify yet", not a
 	// tampered or empty chain, and restore must not confuse the two.
-	LedgerChainHeadSequence uint64         `json:"ledger_chain_head_sequence,omitempty"`
-	LedgerChainHeadOffset   int64          `json:"ledger_chain_head_offset,omitempty"`
-	LedgerChainHeadHash     [32]byte       `json:"ledger_chain_head_hash,omitempty"`
-	LedgerChainVerified     bool           `json:"ledger_chain_verified,omitempty"`
-	GovernanceSequence      uint64         `json:"governance_sequence,omitempty"`
-	GovernanceOffset        int64          `json:"governance_offset,omitempty"`
-	GovernanceHeadHash      [32]byte       `json:"governance_head_hash,omitempty"`
-	GovernanceFormatVersion int            `json:"governance_format_version,omitempty"`
-	PricingStateSHA256      string         `json:"pricing_state_sha256,omitempty"`
-	PendingIntentSHA256     string         `json:"pending_intent_sha256,omitempty"`
-	PendingIntents          int            `json:"pending_intents,omitempty"`
-	MasterKeyFingerprint    string         `json:"master_key_fingerprint"`
-	KeySlotDescriptorSHA256 string         `json:"key_slot_descriptor_sha256,omitempty"`
-	RestoreDrillVerified    bool           `json:"restore_drill_verified"`
-	Build                   buildinfo.Info `json:"build"`
-	Files                   []File         `json:"files"`
+	LedgerChainHeadSequence uint64               `json:"ledger_chain_head_sequence,omitempty"`
+	LedgerChainHeadOffset   int64                `json:"ledger_chain_head_offset,omitempty"`
+	LedgerChainHeadHash     [32]byte             `json:"ledger_chain_head_hash,omitempty"`
+	LedgerChainVerified     bool                 `json:"ledger_chain_verified,omitempty"`
+	GovernanceSequence      uint64               `json:"governance_sequence,omitempty"`
+	GovernanceOffset        int64                `json:"governance_offset,omitempty"`
+	GovernanceHeadHash      [32]byte             `json:"governance_head_hash,omitempty"`
+	GovernanceFormatVersion int                  `json:"governance_format_version,omitempty"`
+	PricingStateSHA256      string               `json:"pricing_state_sha256,omitempty"`
+	PendingIntentSHA256     string               `json:"pending_intent_sha256,omitempty"`
+	PendingIntents          int                  `json:"pending_intents,omitempty"`
+	MasterKeyFingerprint    string               `json:"master_key_fingerprint"`
+	KeySlotDescriptorSHA256 string               `json:"key_slot_descriptor_sha256,omitempty"`
+	RestoreDrillVerified    bool                 `json:"restore_drill_verified"`
+	Build                   buildinfo.Info       `json:"build"`
+	ClusterID               string               `json:"cluster_id,omitempty"`
+	ClusterIncarnation      string               `json:"cluster_incarnation,omitempty"`
+	SourceNodeID            string               `json:"source_node_id,omitempty"`
+	SourceRole              string               `json:"source_role,omitempty"`
+	Term                    uint64               `json:"term,omitempty"`
+	AppliedIndex            uint64               `json:"applied_index,omitempty"`
+	MetadataJournalEpoch    uint64               `json:"metadata_journal_epoch,omitempty"`
+	MetadataJournalSequence uint64               `json:"metadata_journal_sequence,omitempty"`
+	PerStoreHead            map[string]StoreHead `json:"per_store_head,omitempty"`
+	Files                   []File               `json:"files"`
 }
 
 type CreateOptions struct {
@@ -92,6 +106,15 @@ type CreateOptions struct {
 	PendingIntents             int
 	MasterKeyFingerprint       string
 	KeySlotDescriptorSHA256    string
+	ClusterID                  string
+	ClusterIncarnation         string
+	SourceNodeID               string
+	SourceRole                 string
+	Term                       uint64
+	AppliedIndex               uint64
+	MetadataJournalEpoch       uint64
+	MetadataJournalSequence    uint64
+	PerStoreHead               map[string]StoreHead
 	Build                      buildinfo.Info
 	Now                        func() time.Time
 }
@@ -105,6 +128,16 @@ func Create(options CreateOptions) (Manifest, error) {
 	}
 	if len(options.Files) == 0 {
 		return Manifest{}, errors.New("backup files are required")
+	}
+	if options.ClusterID != "" {
+		if options.ClusterIncarnation == "" || options.SourceNodeID == "" || options.SourceRole != "replica" ||
+			options.Term == 0 || len(options.PerStoreHead) != 4 {
+			return Manifest{}, errors.New("Replica backup cluster metadata is incomplete")
+		}
+		metadataHead, ok := options.PerStoreHead["metadata"]
+		if !ok || metadataHead.Generation != options.MetadataJournalEpoch || metadataHead.Sequence != options.MetadataJournalSequence {
+			return Manifest{}, errors.New("Replica backup metadata journal head is inconsistent")
+		}
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -139,6 +172,9 @@ func Create(options CreateOptions) (Manifest, error) {
 	}
 	formatVersion := 2
 	if options.GovernanceFormatVersion > 0 {
+		formatVersion = 3
+	}
+	if options.ClusterID != "" {
 		formatVersion = manifestVersion
 	}
 	manifest := Manifest{
@@ -157,6 +193,11 @@ func Create(options CreateOptions) (Manifest, error) {
 		KeySlotDescriptorSHA256: options.KeySlotDescriptorSHA256,
 		RestoreDrillVerified:    false,
 		Build:                   options.Build,
+		ClusterID:               options.ClusterID, ClusterIncarnation: options.ClusterIncarnation,
+		SourceNodeID: options.SourceNodeID, SourceRole: options.SourceRole,
+		Term: options.Term, AppliedIndex: options.AppliedIndex,
+		MetadataJournalEpoch: options.MetadataJournalEpoch, MetadataJournalSequence: options.MetadataJournalSequence,
+		PerStoreHead: options.PerStoreHead,
 	}
 	temp, err := os.CreateTemp(filepath.Dir(options.OutputPath), ".halro-backup-*.tmp")
 	if err != nil {
@@ -305,6 +346,19 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 	if manifest.FormatVersion >= 3 && (manifest.GovernanceFormatVersion != 1 || manifest.GovernanceOffset < 0) {
 		return Manifest{}, errors.New("backup Governance manifest is invalid")
 	}
+	if manifest.FormatVersion >= 4 {
+		metadataHead, metadataOK := manifest.PerStoreHead["metadata"]
+		if manifest.ClusterID == "" || manifest.ClusterIncarnation == "" || manifest.SourceNodeID == "" ||
+			manifest.SourceRole != "replica" || manifest.Term == 0 || len(manifest.PerStoreHead) != 4 ||
+			!metadataOK || metadataHead.Generation != manifest.MetadataJournalEpoch || metadataHead.Sequence != manifest.MetadataJournalSequence {
+			return Manifest{}, errors.New("backup Replica prefix manifest is invalid")
+		}
+		for _, name := range []string{"ledger", "audit", "governance", "metadata"} {
+			if _, ok := manifest.PerStoreHead[name]; !ok {
+				return Manifest{}, errors.New("backup Replica per-store head set is incomplete")
+			}
+		}
+	}
 	if manifest.LedgerChainVerified && (manifest.LedgerChainHeadSequence > manifest.LedgerWatermark.Sequence ||
 		manifest.LedgerChainHeadOffset > manifest.LedgerWatermark.Offset) {
 		return Manifest{}, errors.New("backup manifest ledger chain head is inconsistent with the ledger watermark")
@@ -336,6 +390,13 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 	if manifest.FormatVersion >= 3 {
 		if _, exists := expectedFile(manifest.Files, "data/governance/governance.journal"); !exists {
 			return Manifest{}, errors.New("backup is missing Governance Journal")
+		}
+	}
+	if manifest.FormatVersion >= 4 {
+		for _, required := range []string{"data/cluster/state.json", "data/cluster/ordering.journal", "data/metadata.journal"} {
+			if _, exists := expectedFile(manifest.Files, required); !exists {
+				return Manifest{}, fmt.Errorf("Replica backup is missing required file %q", required)
+			}
 		}
 	}
 	return manifest, nil

@@ -68,7 +68,7 @@ type ReplicaReceiver struct {
 
 func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, term, promisedTerm, confirmedIndex, appliedIndex uint64, journal *OrderingJournal, sink DurableFrameSink, receiverOptions ...ReplicaReceiverOptions) (*ReplicaReceiver, error) {
 	if len(clusterID) == 0 || len(clusterID) > MaxIdentityBytes || len(incarnation) == 0 || len(incarnation) > MaxIdentityBytes ||
-		len(nodeID) == 0 || len(nodeID) > MaxIdentityBytes || len(primaryNodeID) == 0 || len(primaryNodeID) > MaxIdentityBytes ||
+		len(nodeID) == 0 || len(nodeID) > MaxIdentityBytes || len(primaryNodeID) > MaxIdentityBytes ||
 		primaryNodeID == nodeID || term == 0 || promisedTerm < term {
 		return nil, errors.New("replica receiver identity or term is invalid")
 	}
@@ -105,6 +105,75 @@ func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, te
 		term: term, promisedTerm: promisedTerm, durableIndex: durableIndex, confirmedIndex: confirmedIndex, appliedIndex: appliedIndex,
 		projection: options.Projection, anchorSeen: durableTerm == term, storeCursors: cursors, journal: journal, sink: sink, persistState: options.PersistState,
 	}, nil
+}
+
+// BindPrimary selects the one authenticated Primary observed during startup.
+// Member state intentionally stores roles, not a separately configured leader
+// ID, so a Replica learns this from peer Hello adjudication. A second distinct
+// Primary in the same process lifetime is a split-brain signal and is refused.
+func (r *ReplicaReceiver) BindPrimary(nodeID string) error {
+	if len(nodeID) == 0 || len(nodeID) > MaxIdentityBytes || nodeID == r.nodeID {
+		return errors.New("replica Primary identity is invalid")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.primaryNodeID == "" {
+		r.primaryNodeID = nodeID
+		return nil
+	}
+	if r.primaryNodeID != nodeID {
+		return errors.New("replica observed more than one Primary for the active term")
+	}
+	return nil
+}
+
+// Promise serializes the durable promised_term publication with frame
+// admission. Once persist returns, no lower-term frame can slip through the
+// in-memory receiver before promisedTerm is updated.
+func (r *ReplicaReceiver) Promise(term uint64, persist func() error) error {
+	if persist == nil {
+		return errors.New("replica promise persistence callback is required")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.poisoned != nil {
+		return fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
+	}
+	if term <= r.promisedTerm {
+		return errors.New("proposed term must be greater than promised_term")
+	}
+	if err := persist(); err != nil {
+		r.poisoned = err
+		return fmt.Errorf("persist Replica promised term: %w", err)
+	}
+	r.promisedTerm = term
+	return nil
+}
+
+// AdoptTerm activates the term already promised during prepare. It is called
+// only after an authenticated Primary for that exact term appears. Holding the
+// receiver lock across state publication prevents an old-term frame from
+// being admitted between the durable role change and the in-memory one.
+func (r *ReplicaReceiver) AdoptTerm(term uint64, primaryNodeID string, persist func() error) error {
+	if persist == nil || primaryNodeID == "" || primaryNodeID == r.nodeID {
+		return errors.New("replica term adoption requires a Primary and persistence callback")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.poisoned != nil {
+		return fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
+	}
+	if term <= r.term || term != r.promisedTerm {
+		return errors.New("adopted term must equal the newer durable promise")
+	}
+	if err := persist(); err != nil {
+		r.poisoned = err
+		return fmt.Errorf("persist Replica active term: %w", err)
+	}
+	r.term = term
+	r.primaryNodeID = primaryNodeID
+	r.anchorSeen = false
+	return nil
 }
 
 func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {

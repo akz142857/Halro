@@ -212,6 +212,13 @@ func (r OrderingRecord) validate() error {
 		if _, err := DecodeSchemaBoundaryMetadata(r.Metadata); err != nil {
 			return err
 		}
+	case KindProviderObject:
+		if r.Store != StoreNone || r.StoreGeneration != 0 || r.StoreSequenceFirst != 0 || r.StoreSequenceLast != 0 {
+			return errors.New("provider-object ordering record has an invalid store shape")
+		}
+		if _, err := DecodeProviderObjectMetadata(r.Metadata); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown ordering record kind %d", r.Kind)
 	}

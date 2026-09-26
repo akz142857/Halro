@@ -57,6 +57,9 @@ func (h *ReplicaRecordHandler) Handle(ctx context.Context, peer Hello, record St
 	}
 	switch record.Kind {
 	case StreamRecordFrame:
+		if err := h.receiver.BindPrimary(peer.NodeID); err != nil {
+			return err
+		}
 		if _, err := h.receiver.Receive(record.Encoded); err != nil {
 			return err
 		}
@@ -67,6 +70,9 @@ func (h *ReplicaRecordHandler) Handle(ctx context.Context, peer Hello, record St
 		}
 		if notice.NodeID != peer.NodeID {
 			return errors.New("commit notice node does not match the authenticated peer")
+		}
+		if err := h.receiver.BindPrimary(peer.NodeID); err != nil {
+			return err
 		}
 		if err := h.receiver.Confirm(notice); err != nil {
 			return err

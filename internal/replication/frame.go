@@ -30,6 +30,7 @@ const (
 	KindLedgerRoll            Kind = 2
 	KindLeadershipEstablished Kind = 3
 	KindSchemaBoundary        Kind = 4
+	KindProviderObject        Kind = 5
 )
 
 type Store uint16
@@ -118,8 +119,103 @@ func (f Frame) Validate() error {
 		if _, err := DecodeSchemaBoundaryMetadata(f.Metadata); err != nil {
 			return err
 		}
+	case KindProviderObject:
+		if f.Store != StoreNone || f.StoreGeneration != 0 || f.StoreSequenceFirst != 0 || f.StoreSequenceLast != 0 {
+			return errors.New("provider-object frame has an invalid store shape")
+		}
+		metadata, err := DecodeProviderObjectMetadata(f.Metadata)
+		if err != nil {
+			return err
+		}
+		if uint64(len(f.Payload)) != metadata.ChunkLength || metadata.Offset+metadata.ChunkLength > metadata.TotalLength {
+			return errors.New("provider-object frame payload does not match its chunk metadata")
+		}
+		if metadata.Final != (metadata.Offset+metadata.ChunkLength == metadata.TotalLength) {
+			return errors.New("provider-object final marker does not match its total length")
+		}
 	default:
 		return fmt.Errorf("unknown replication frame kind %d", f.Kind)
+	}
+	return nil
+}
+
+// ProviderObjectMetadata authenticates one chunk of an already-encrypted
+// provider object. The filename is deliberately a basename rather than an
+// arbitrary path; the object digest binds every chunk to the same final file.
+type ProviderObjectMetadata struct {
+	Name        string
+	Offset      uint64
+	ChunkLength uint64
+	TotalLength uint64
+	Digest      [sha256.Size]byte
+	Final       bool
+}
+
+const providerObjectMetadataFixedBytes = 2 + 8 + 8 + 8 + sha256.Size + 1
+
+func (m ProviderObjectMetadata) MarshalBinary() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	encoded := make([]byte, providerObjectMetadataFixedBytes+len(m.Name))
+	binary.BigEndian.PutUint16(encoded[0:2], uint16(len(m.Name)))
+	binary.BigEndian.PutUint64(encoded[2:10], m.Offset)
+	binary.BigEndian.PutUint64(encoded[10:18], m.ChunkLength)
+	binary.BigEndian.PutUint64(encoded[18:26], m.TotalLength)
+	copy(encoded[26:58], m.Digest[:])
+	if m.Final {
+		encoded[58] = 1
+	}
+	copy(encoded[59:], m.Name)
+	return encoded, nil
+}
+
+func DecodeProviderObjectMetadata(encoded []byte) (ProviderObjectMetadata, error) {
+	if len(encoded) < providerObjectMetadataFixedBytes {
+		return ProviderObjectMetadata{}, errors.New("provider-object metadata is truncated")
+	}
+	nameLength := int(binary.BigEndian.Uint16(encoded[0:2]))
+	if len(encoded) != providerObjectMetadataFixedBytes+nameLength {
+		return ProviderObjectMetadata{}, errors.New("provider-object metadata length is not canonical")
+	}
+	metadata := ProviderObjectMetadata{
+		Name:        string(encoded[59:]),
+		Offset:      binary.BigEndian.Uint64(encoded[2:10]),
+		ChunkLength: binary.BigEndian.Uint64(encoded[10:18]),
+		TotalLength: binary.BigEndian.Uint64(encoded[18:26]),
+		Final:       encoded[58] == 1,
+	}
+	copy(metadata.Digest[:], encoded[26:58])
+	if encoded[58] > 1 {
+		return ProviderObjectMetadata{}, errors.New("provider-object final marker is invalid")
+	}
+	if err := metadata.Validate(); err != nil {
+		return ProviderObjectMetadata{}, err
+	}
+	return metadata, nil
+}
+
+func (m ProviderObjectMetadata) Validate() error {
+	if err := validateProviderObjectName(m.Name); err != nil {
+		return err
+	}
+	if m.Offset > m.TotalLength || m.ChunkLength > uint64(MaxPayloadBytes) || m.Offset+m.ChunkLength < m.Offset ||
+		m.Offset+m.ChunkLength > m.TotalLength {
+		return errors.New("provider-object chunk range is invalid")
+	}
+	if m.ChunkLength == 0 && m.TotalLength != 0 {
+		return errors.New("provider-object non-empty files require non-empty chunks")
+	}
+	if m.Final != (m.Offset+m.ChunkLength == m.TotalLength) {
+		return errors.New("provider-object final marker does not match its total length")
+	}
+	return nil
+}
+
+func validateProviderObjectName(name string) error {
+	if name == "" || len(name) > MaxIdentityBytes || name == "." || name == ".." ||
+		bytes.ContainsAny([]byte(name), "/\\\x00") {
+		return errors.New("provider-object name is not a safe basename")
 	}
 	return nil
 }

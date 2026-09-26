@@ -152,6 +152,55 @@ func TestReplicationTLSHandshakeProducesSharedTranscriptExporter(t *testing.T) {
 	}
 }
 
+func TestReplicationTLSDualCABundleSupportsOneCertificateAtATimeRotation(t *testing.T) {
+	oldFiles, oldLeaf := writeTestCertificateChain(t)
+	newFiles, newLeaf := writeTestCertificateChain(t)
+	oldCA, err := os.ReadFile(oldFiles.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCA, err := os.ReadFile(newFiles.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(t.TempDir(), "dual-ca.pem")
+	bundle := append(append([]byte(nil), oldCA...), newCA...)
+	if err := os.WriteFile(bundlePath, bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldFiles.CAFile = bundlePath
+	newFiles.CAFile = bundlePath
+	serverConfig, err := LoadServerTLSConfig(newFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig, err := LoadClientTLSConfig(oldFiles, "halro-1.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientSide, serverSide := net.Pipe()
+	defer clientSide.Close()
+	defer serverSide.Close()
+	client := tls.Client(clientSide, clientConfig)
+	server := tls.Server(serverSide, serverConfig)
+	serverResult := make(chan error, 1)
+	go func() { serverResult <- server.Handshake() }()
+	if err := client.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverResult; err != nil {
+		t.Fatal(err)
+	}
+	oldPin := sha256.Sum256(oldLeaf.RawSubjectPublicKeyInfo)
+	newPin := sha256.Sum256(newLeaf.RawSubjectPublicKeyInfo)
+	if err := VerifyConnectionSPKI(server.ConnectionState(), digestText(oldPin)); err != nil {
+		t.Fatalf("new-cert server did not accept old-cert client during overlap: %v", err)
+	}
+	if err := VerifyConnectionSPKI(client.ConnectionState(), digestText(newPin)); err != nil {
+		t.Fatalf("old-cert client did not accept new-cert server during overlap: %v", err)
+	}
+}
+
 func tlsStateForCertificate(certificate *x509.Certificate) tls.ConnectionState {
 	return tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{certificate}}}
 }

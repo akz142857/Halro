@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +12,51 @@ import (
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
 )
+
+// RecordProviderObject orders encrypted object bytes before the metadata
+// transaction that will name them. A caller may enqueue all chunks and wait on
+// the returned final index; cumulative confirmation proves the complete object
+// was fsynced and atomically published by at least one Replica.
+func (c *PrimaryCoordinator) RecordProviderObject(name string, sealed []byte) (uint64, error) {
+	digest := sha256.Sum256(sealed)
+	total := uint64(len(sealed))
+	var final uint64
+	for offset := uint64(0); offset < total || offset == 0; {
+		remaining := total - offset
+		chunkLength := remaining
+		if chunkLength > MaxPayloadBytes {
+			chunkLength = MaxPayloadBytes
+		}
+		metadata, err := (ProviderObjectMetadata{
+			Name: name, Offset: offset, ChunkLength: chunkLength, TotalLength: total,
+			Digest: digest, Final: offset+chunkLength == total,
+		}).MarshalBinary()
+		if err != nil {
+			return 0, err
+		}
+		commit, err := c.RecordDurable(Frame{
+			Kind: KindProviderObject, Store: StoreNone, Metadata: metadata,
+			Payload: append([]byte(nil), sealed[offset:offset+chunkLength]...),
+		})
+		if err != nil {
+			return 0, err
+		}
+		final = commit.Index
+		offset += chunkLength
+		if total == 0 {
+			break
+		}
+	}
+	return final, nil
+}
+
+func (c *PrimaryCoordinator) RecordSchemaBoundary(from, to uint32) (LocalCommit, error) {
+	metadata, err := (SchemaBoundaryMetadata{From: from, To: to}).MarshalBinary()
+	if err != nil {
+		return LocalCommit{}, err
+	}
+	return c.RecordDurable(Frame{Kind: KindSchemaBoundary, Store: StoreNone, Metadata: metadata})
+}
 
 func (c *PrimaryCoordinator) RecordLedgerBatch(batch ledger.DurableBatch) (LocalCommit, error) {
 	return c.RecordDurable(Frame{

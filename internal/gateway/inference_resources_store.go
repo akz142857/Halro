@@ -165,6 +165,10 @@ func objectScope(resourceID, role string) string { return resourceID + ":" + rol
 // to: an object is readable only through the record and role that name it, and
 // only inside the install whose master key derived the scope.
 func (s *Service) writeResourceObject(resourceID, projectID, role string, data []byte) (string, error) {
+	return s.writeResourceObjectContext(context.Background(), resourceID, projectID, role, data)
+}
+
+func (s *Service) writeResourceObjectContext(ctx context.Context, resourceID, projectID, role string, data []byte) (string, error) {
 	if s.resourceObjectDir == "" || s.resourceObjectSealer == nil {
 		return "", errors.New("resource object directory is unavailable")
 	}
@@ -200,6 +204,11 @@ func (s *Service) writeResourceObject(resourceID, projectID, role string, data [
 	}
 	if err := durable.SyncDirectory(s.resourceObjectDir); err != nil {
 		return "", err
+	}
+	if s.resourceObjectReplicator != nil {
+		if err := s.resourceObjectReplicator(ctx, name, data); err != nil {
+			return "", fmt.Errorf("replicate provider object: %w", err)
+		}
 	}
 	return name, nil
 }
@@ -419,7 +428,7 @@ func (s *Service) CreateFile(ctx context.Context, key, route, idempotencyKey str
 		return provider.FileObject{}, err
 	}
 	record.UpstreamID = upstream.ID
-	objectPath, objectErr := s.writeResourceObject(record.ID, record.ProjectID, objectRoleContent, call.Data)
+	objectPath, objectErr := s.writeResourceObjectContext(ctx, record.ID, record.ProjectID, objectRoleContent, call.Data)
 	if objectErr != nil {
 		record.CreationStatus = creationUnknown
 		record.UpdatedAt = s.now()
@@ -999,7 +1008,7 @@ func (s *Service) storeBatchResults(ctx context.Context, batch domain.ProviderRe
 	if err != nil {
 		return "", gatewayError("internal_error", "unable to create resource ID", 500, err)
 	}
-	objectPath, err := s.writeResourceObject(externalID, batch.ProjectID, objectRoleContent, data)
+	objectPath, err := s.writeResourceObjectContext(ctx, externalID, batch.ProjectID, objectRoleContent, data)
 	if err != nil {
 		return "", gatewayError("resource_store_unavailable", "batch results could not be stored", 503, err)
 	}

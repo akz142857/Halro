@@ -1,10 +1,14 @@
 package replication
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
@@ -14,7 +18,99 @@ import (
 // needed to authenticate their frames during startup reconciliation.
 type NativeSourceOptions struct {
 	LedgerPath, AuditPath, GovernancePath, MetadataPath string
+	ProviderObjectDir                                   string
 	LedgerKey, AuditKey, GovernanceKey, MetadataKey     []byte
+}
+
+// PersistProviderObjectSource keeps encrypted bytes needed to reconstruct an
+// authenticated ordering record after the live object is no longer named.
+// The spool contains ciphertext only and is pruned with ordering retention.
+func PersistProviderObjectSource(directory, name string, sealed []byte) error {
+	if err := validateProviderObjectName(name); err != nil {
+		return err
+	}
+	digest := sha256.Sum256(sealed)
+	if !filepath.IsAbs(directory) {
+		return errors.New("provider-object source directory must be absolute")
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, name)
+	if existing, err := os.ReadFile(path); err == nil {
+		if sha256.Sum256(existing) != digest {
+			return errors.New("provider-object source already exists with different bytes")
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(directory, ".object-source-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(sealed); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(temporaryPath, path); err != nil {
+		return err
+	}
+	return durable.SyncDirectory(directory)
+}
+
+func (s *NativeSource) ReadProviderObjectChunk(metadata ProviderObjectMetadata) ([]byte, error) {
+	if s.options.ProviderObjectDir == "" {
+		return nil, errors.New("provider-object source directory is unavailable")
+	}
+	if err := metadata.Validate(); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.options.ProviderObjectDir, metadata.Name)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || uint64(info.Size()) != metadata.TotalLength {
+		return nil, errors.New("provider-object source size does not match ordering metadata")
+	}
+	payload := make([]byte, int(metadata.ChunkLength))
+	if len(payload) > 0 {
+		if _, err := file.ReadAt(payload, int64(metadata.Offset)); err != nil {
+			return nil, err
+		}
+	}
+	if metadata.Final {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if sha256.Sum256(contents) != metadata.Digest {
+			return nil, errors.New("provider-object source digest does not match ordering metadata")
+		}
+	}
+	return payload, nil
 }
 
 type NativeSource struct {

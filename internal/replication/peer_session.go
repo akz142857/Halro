@@ -58,6 +58,11 @@ func (o PeerSessionOptions) normalized() (PeerSessionOptions, error) {
 
 type PeerRecordHandler func(context.Context, Hello, StreamRecord) error
 
+type outboundRecord struct {
+	encoded []byte
+	done    chan error
+}
+
 // PeerSession owns one authenticated connection. Run creates exactly one
 // reader and one writer; Send only copies into the bounded writer queue and
 // never performs socket I/O in a store durability callback.
@@ -70,13 +75,14 @@ type PeerSession struct {
 	data           bool
 	readWait       time.Duration
 	writeWait      time.Duration
-	queue          chan []byte
+	queue          chan outboundRecord
 	maxQueued      int64
 	queued         atomic.Int64
 	maxReadBytes   int64
 	maxReadRecords int
 	closeOnce      sync.Once
 	closed         atomic.Bool
+	closedSignal   chan struct{}
 	runMu          sync.Mutex
 	running        bool
 }
@@ -161,8 +167,9 @@ func newPeerSession(connection *tls.Conn, local, peer Hello, options PeerSession
 	return &PeerSession{
 		conn: connection, local: local, peer: peer, incoming: incoming, outgoing: outgoing, data: data,
 		readWait: options.ReadTimeout, writeWait: options.WriteTimeout,
-		queue: make(chan []byte, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
+		queue: make(chan outboundRecord, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
 		maxReadBytes: options.MaxReadBytesPerSecond, maxReadRecords: options.MaxReadRecordsPerSecond,
+		closedSignal: make(chan struct{}),
 	}, nil
 }
 
@@ -170,17 +177,41 @@ func (s *PeerSession) Peer() Hello          { return s.peer }
 func (s *PeerSession) DataAuthorized() bool { return s.data }
 
 func (s *PeerSession) Send(encoded []byte) error {
+	return s.enqueue(encoded, false)
+}
+
+// SendSync is reserved for the tiny promotion control records whose durable
+// state transition must not trigger process shutdown before the response has
+// actually crossed the socket. Data frames and ACKs continue to use Send so a
+// storage fsync callback never waits on network I/O.
+func (s *PeerSession) SendSync(encoded []byte) error {
+	return s.enqueue(encoded, true)
+}
+
+func (s *PeerSession) sendFromHandler(encoded []byte) error {
+	if len(encoded) >= streamPrefixBytes {
+		var magic [8]byte
+		copy(magic[:], encoded[4:streamPrefixBytes])
+		kind, _, _, err := streamRecordShape(magic, s.outgoing)
+		if err == nil && (kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise) {
+			return s.SendSync(encoded)
+		}
+	}
+	return s.Send(encoded)
+}
+
+func (s *PeerSession) enqueue(encoded []byte, wait bool) error {
 	if s.closed.Load() {
 		return ErrPeerSessionClosed
 	}
 	if len(encoded) == 0 {
 		return errors.New("replication peer session record is empty")
 	}
-	if !s.data {
-		return errors.New("authenticated control-only session cannot exchange data records")
-	}
 	// Validate type, direction and bound before retaining a copy in the queue.
 	if err := WriteStreamRecord(discardWriter{}, s.outgoing, encoded); err != nil {
+		if !s.data {
+			return fmt.Errorf("authenticated control-only session cannot exchange this record: %w", err)
+		}
 		return err
 	}
 	size := int64(len(encoded))
@@ -194,12 +225,24 @@ func (s *PeerSession) Send(encoded []byte) error {
 		}
 	}
 	copyOfRecord := append([]byte(nil), encoded...)
+	record := outboundRecord{encoded: copyOfRecord}
+	if wait {
+		record.done = make(chan error, 1)
+	}
 	select {
-	case s.queue <- copyOfRecord:
-		return nil
+	case s.queue <- record:
 	default:
 		s.queued.Add(-size)
 		return ErrPeerSessionQueueFull
+	}
+	if !wait {
+		return nil
+	}
+	select {
+	case err := <-record.done:
+		return err
+	case <-s.closedSignal:
+		return ErrPeerSessionClosed
 	}
 }
 
@@ -210,9 +253,6 @@ func (discardWriter) Write(value []byte) (int, error) { return len(value), nil }
 func (s *PeerSession) Run(ctx context.Context, handler PeerRecordHandler) error {
 	if handler == nil {
 		return errors.New("replication peer session handler is required")
-	}
-	if !s.data {
-		return errors.New("authenticated control-only session cannot run a data stream")
 	}
 	s.runMu.Lock()
 	if s.running {
@@ -240,6 +280,34 @@ func (s *PeerSession) Run(ctx context.Context, handler PeerRecordHandler) error 
 		return second
 	}
 	return first
+}
+
+// ExchangeControl performs one request/response before Run owns the socket.
+// It is used by an offline promotion command: the candidate has no long-lived
+// runtime or queue, but still uses the identical authenticated member session.
+func (s *PeerSession) ExchangeControl(ctx context.Context, encoded []byte) (StreamRecord, error) {
+	s.runMu.Lock()
+	if s.running {
+		s.runMu.Unlock()
+		return StreamRecord{}, errors.New("replication peer session is already running")
+	}
+	s.running = true
+	s.runMu.Unlock()
+	defer s.Close()
+	cleanup := bindConnectionContext(ctx, s.conn)
+	defer cleanup()
+	if s.writeWait > 0 {
+		if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeWait)); err != nil {
+			return StreamRecord{}, err
+		}
+	}
+	if err := WriteStreamRecord(s.conn, s.outgoing, encoded); err != nil {
+		return StreamRecord{}, err
+	}
+	if err := s.conn.SetReadDeadline(time.Now().Add(s.readWait)); err != nil {
+		return StreamRecord{}, err
+	}
+	return ReadStreamRecord(s.conn, s.incoming)
 }
 
 func (s *PeerSession) readLoop(ctx context.Context, handler PeerRecordHandler) error {
@@ -277,21 +345,33 @@ func (s *PeerSession) writeLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case encoded := <-s.queue:
-			size := int64(len(encoded))
+		case record := <-s.queue:
+			size := int64(len(record.encoded))
 			if s.writeWait > 0 {
 				if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeWait)); err != nil {
 					s.queued.Add(-size)
+					if record.done != nil {
+						record.done <- err
+					}
 					return err
 				}
 			}
-			if err := WriteStreamRecord(s.conn, s.outgoing, encoded); err != nil {
+			if err := WriteStreamRecord(s.conn, s.outgoing, record.encoded); err != nil {
 				s.queued.Add(-size)
+				if record.done != nil {
+					record.done <- err
+				}
 				return err
 			}
 			s.queued.Add(-size)
 			if err := s.conn.SetWriteDeadline(time.Time{}); err != nil {
+				if record.done != nil {
+					record.done <- err
+				}
 				return err
+			}
+			if record.done != nil {
+				record.done <- nil
 			}
 		}
 	}
@@ -301,7 +381,16 @@ func (s *PeerSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)
+		close(s.closedSignal)
 		err = s.conn.Close()
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// The authenticated stream is already being retired and the socket is
+			// closed even when TLS cannot deliver close_notify before its deadline.
+			// Treating that advisory alert as a manager shutdown failure makes a
+			// healthy peer race look like lost replicated data.
+			err = nil
+		}
 	})
 	return err
 }

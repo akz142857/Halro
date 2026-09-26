@@ -18,6 +18,10 @@ type ReplicaProjection interface {
 	ApplyMetadataThrough(context.Context, uint64, uint64) error
 }
 
+type schemaBoundaryProjection interface {
+	ValidateSchemaBoundary(context.Context, uint32, uint32) error
+}
+
 type ReplicaApplier struct {
 	mu         sync.Mutex
 	receiver   *ReplicaReceiver
@@ -47,6 +51,7 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 		return applied, errors.New("replica confirmed index regressed behind applied index")
 	}
 	var ledgerCursor, metadataCursor StoreCursor
+	var firstSchema, lastSchema uint32
 	for index := applied + 1; index <= confirmed; index++ {
 		if err := ctx.Err(); err != nil {
 			return applied, err
@@ -67,8 +72,20 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 		case KindLedgerRoll:
 			// The structural sink already published the verified generation
 			// before its durable ACK. There is no semantic Ledger record to apply.
+		case KindProviderObject:
+			// The sink publishes an authenticated object before acknowledging its
+			// final chunk. Metadata that names it is ordered after this record.
 		case KindSchemaBoundary:
-			return applied, errors.New("replica schema-boundary apply is not implemented")
+			boundary, err := DecodeSchemaBoundaryMetadata(record.Metadata)
+			if err != nil {
+				return applied, err
+			}
+			if firstSchema == 0 {
+				firstSchema = boundary.From
+			} else if lastSchema != boundary.From {
+				return applied, errors.New("replica schema boundaries are not contiguous")
+			}
+			lastSchema = boundary.To
 		default:
 			return applied, fmt.Errorf("replica apply found unknown ordering kind %d", record.Kind)
 		}
@@ -85,6 +102,15 @@ func (a *ReplicaApplier) ApplyConfirmed(ctx context.Context) (uint64, error) {
 	if ledgerCursor.Generation != 0 {
 		if err := a.projection.ApplyLedgerThrough(ctx, ledgerCursor.Generation, ledgerCursor.Sequence); err != nil {
 			return applied, fmt.Errorf("apply confirmed Ledger prefix: %w", err)
+		}
+	}
+	if firstSchema != 0 {
+		validator, ok := a.projection.(schemaBoundaryProjection)
+		if !ok {
+			return applied, errors.New("replica projection cannot validate a schema boundary")
+		}
+		if err := validator.ValidateSchemaBoundary(ctx, firstSchema, lastSchema); err != nil {
+			return applied, fmt.Errorf("validate confirmed schema boundary: %w", err)
 		}
 	}
 	projectionState.Index = confirmed
@@ -135,6 +161,17 @@ func (p *NativeProjection) ApplyLedgerThrough(ctx context.Context, generation, s
 	head := p.ledgerState.Watermark()
 	if head.Generation != generation || head.Sequence != sequence {
 		return fmt.Errorf("replica Ledger projection ended at %d/%d, want %d/%d", head.Generation, head.Sequence, generation, sequence)
+	}
+	return nil
+}
+
+func (p *NativeProjection) ValidateSchemaBoundary(_ context.Context, from, to uint32) error {
+	version, err := p.metadata.SchemaVersion()
+	if err != nil {
+		return err
+	}
+	if uint64(to) != version || to <= from {
+		return fmt.Errorf("metadata projection schema is %d after boundary %d->%d", version, from, to)
 	}
 	return nil
 }

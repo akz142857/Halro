@@ -18,6 +18,17 @@ func TestReplicaOpenRequiresSeededLedger(t *testing.T) {
 	}
 }
 
+func TestPrimaryOpenRequiresSeededLedger(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "ledger.wal")
+	log, err := OpenWithOptions(path, NewStatus(), Options{ChainKey: make([]byte, 32), RequireExisting: true})
+	if log != nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open log=%v err=%v", log, err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open created a seed directory: %v", err)
+	}
+}
+
 func TestReplicaOpenDoesNotRepairLedgerTailBeforeOrderingReconciliation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.wal")
 	if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {

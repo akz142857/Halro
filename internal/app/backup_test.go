@@ -28,9 +28,166 @@ import (
 	"github.com/akz142857/Halro/internal/kms/awskms"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
+
+func TestReplicaBackupIsReadOnlyAndCarriesOneAppliedPrefix(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-1", Listen: "127.0.0.1:9911",
+		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("ab", 32)}},
+	}
+	if err := EstablishMemberState(context.Background(), cfg, replication.RoleReplica, "inc_01", 1); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeAudit, err := os.ReadFile(cfg.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeState, err := os.ReadFile(cfg.ReplicationStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "replica.hmbk")
+	key := bytes.Repeat([]byte{0x72}, 32)
+	manifest, err := CreateBackupWithOptions(context.Background(), cfg, configPath, output, key, CreateBackupOptions{Replica: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FormatVersion != 4 || manifest.ClusterID != "production-a" || manifest.ClusterIncarnation != "inc_01" ||
+		manifest.SourceNodeID != "halro-1" || manifest.SourceRole != "replica" || manifest.Term != 1 || manifest.AppliedIndex != 0 ||
+		len(manifest.PerStoreHead) != 4 || manifest.MetadataJournalEpoch != manifest.PerStoreHead["metadata"].Generation ||
+		manifest.MetadataJournalSequence != manifest.PerStoreHead["metadata"].Sequence {
+		t.Fatalf("Replica manifest=%#v", manifest)
+	}
+	for _, required := range []string{"data/cluster/state.json", "data/cluster/ordering.journal"} {
+		if _, ok := expectedFileForTest(manifest.Files, required); !ok {
+			t.Fatalf("Replica backup omitted %s", required)
+		}
+	}
+	verified, err := VerifyBackup(output, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.BackupID != manifest.BackupID || verified.AppliedIndex != manifest.AppliedIndex {
+		t.Fatalf("verified Replica manifest=%#v", verified)
+	}
+	afterAudit, err := os.ReadFile(cfg.AuditPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterState, err := os.ReadFile(cfg.ReplicationStatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeAudit, afterAudit) || !bytes.Equal(beforeState, afterState) {
+		t.Fatal("Replica backup mutated an authoritative log or member state")
+	}
+	if _, err := RestoreBackupWithOptions(context.Background(), cfg, output, key, manifest.BackupID, RestoreOptions{}); err == nil || !strings.Contains(err.Error(), "new --incarnation") {
+		t.Fatalf("HA restore accepted no new incarnation: %v", err)
+	}
+	restored, err := RestoreBackupWithOptions(context.Background(), cfg, output, key, manifest.BackupID, RestoreOptions{NewIncarnation: "inc_restored_02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ClusterIncarnation != "inc_restored_02" || restored.ClusterRole != string(replication.RolePrimary) {
+		t.Fatalf("HA restore result=%#v", restored)
+	}
+	state, err := ClusterStatus(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Incarnation != "inc_restored_02" || state.Role != replication.RolePrimary || state.Term != 1 || state.DurableIndex != 0 {
+		t.Fatalf("restored HA member state=%#v", state)
+	}
+}
+
+func TestReportReplicaBackupAuthenticatesArchiveAndRecordsPrimarySuffix(t *testing.T) {
+	primary := testConfig(t)
+	password := []byte("correct horse battery staple")
+	if err := Initialize(primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), primary, "admin", password); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := OpenWithOptions(context.Background(), primary, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	replicaRoot := t.TempDir()
+	replica := primary
+	replica.Storage.DataDir = filepath.Join(replicaRoot, "data")
+	replica.Storage.MasterKey.File = filepath.Join(replicaRoot, "master.key")
+	copyTestTree(t, primary.Storage.DataDir, replica.Storage.DataDir)
+	copyTestRegularFile(t, primary.Storage.MasterKey.File, replica.Storage.MasterKey.File)
+	primary.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-0", Listen: "127.0.0.1:9910",
+		Peers: []config.ReplicationPeer{{Name: "halro-1", Address: "127.0.0.1:9911", SPKISHA256: "sha256:" + strings.Repeat("ab", 32)}},
+	}
+	replica.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-1", Listen: "127.0.0.1:9911",
+		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("cd", 32)}},
+	}
+	if err := EstablishMemberState(context.Background(), primary, replication.RolePrimary, "inc_backup_01", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := EstablishMemberState(context.Background(), replica, replication.RoleReplica, "inc_backup_01", 1); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "replica.hmbk")
+	backupKey := bytes.Repeat([]byte{0x62}, 32)
+	created, err := CreateBackupWithOptions(context.Background(), replica, configPath, archivePath, backupKey, CreateBackupOptions{Replica: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reported, err := ReportReplicaBackup(context.Background(), primary, archivePath, backupKey, "admin", password, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reported.BackupID != created.BackupID || reported.SourceNodeID != "halro-1" || reported.ClusterIncarnation != "inc_backup_01" {
+		t.Fatalf("reported manifest=%#v", reported)
+	}
+	state, err := ClusterStatus(context.Background(), primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.DurableIndex != 2 || state.ConfirmedIndex != 0 || state.Role != replication.RolePrimary {
+		t.Fatalf("reported backup ordering state=%#v", state)
+	}
+}
+
+func expectedFileForTest(files []backuppkg.File, path string) (backuppkg.File, bool) {
+	for _, file := range files {
+		if file.Path == path {
+			return file, true
+		}
+	}
+	return backuppkg.File{}, false
+}
 
 func TestKMSBackupManifestAndHistoricalDescriptorRemainImmutableAfterRewrap(t *testing.T) {
 	cfg, archivePath, backupKey, manifest, harness, _ := kmsBackupFixture(t)
@@ -573,7 +730,7 @@ func TestBackupRestoreMatchesManifestDuringOneHundredConcurrentLedgerWrites(t *t
 	close(start)
 	manifest, snapshotErr := createBackupSnapshotWithLedger(
 		context.Background(), cfg, configPath, archivePath, backupKey,
-		metadata, masterFingerprint, liveLedger, ledgerKey,
+		metadata, masterFingerprint, liveLedger, ledgerKey, nil, nil,
 	)
 	clear(ledgerKey)
 	writers.Wait()

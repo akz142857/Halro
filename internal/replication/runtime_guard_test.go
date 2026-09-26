@@ -47,3 +47,27 @@ func TestUnavailableRuntimeGuardRefusesNonDirectorySentinel(t *testing.T) {
 		t.Fatalf("non-directory sentinel error=%v", err)
 	}
 }
+
+func TestRequireMemberRuntimeAcceptsOnlyConfiguredSeededMember(t *testing.T) {
+	root := t.TempDir()
+	if err := RequireMemberRuntime(root, true, "start"); err == nil || !strings.Contains(err.Error(), "member state is absent") {
+		t.Fatalf("missing cluster error=%v", err)
+	}
+	cluster := filepath.Join(root, ClusterDirectoryName)
+	if err := os.Mkdir(cluster, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireMemberRuntime(root, true, "start"); err == nil || !strings.Contains(err.Error(), "authenticated member state is absent") {
+		t.Fatalf("missing state error=%v", err)
+	}
+	state := filepath.Join(cluster, "state.json")
+	if err := os.WriteFile(state, []byte("seeded"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequireMemberRuntime(root, true, "start"); err != nil {
+		t.Fatalf("seeded configured member rejected: %v", err)
+	}
+	if err := RequireMemberRuntime(root, false, "start"); err == nil || !strings.Contains(err.Error(), "cannot downgrade") {
+		t.Fatalf("unconfigured member error=%v", err)
+	}
+}

@@ -165,6 +165,9 @@ type Options struct {
 	WrapDurability func(*os.File) DurabilityWriter
 	AfterDurable   func(DurableBatch) error
 	Replica        bool
+	// RequireExisting is the HA Primary mode: append and recover an existing
+	// journal, but never manufacture a missing seed.
+	RequireExisting bool
 }
 
 // remember indexes a record for duplicate detection and evicts the oldest
@@ -190,13 +193,13 @@ func OpenWithOptions(path string, key []byte, options Options) (*Log, error) {
 	if len(key) != governanceHMACKeySize {
 		return nil, fmt.Errorf("audit HMAC key must be %d bytes", governanceHMACKeySize)
 	}
-	if !options.Replica {
+	if !options.Replica && !options.RequireExisting {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return nil, fmt.Errorf("create governance directory: %w", err)
 		}
 	}
 	flags := os.O_RDWR
-	if !options.Replica {
+	if !options.Replica && !options.RequireExisting {
 		flags |= os.O_CREATE
 	}
 	file, err := os.OpenFile(path, flags, 0o600)

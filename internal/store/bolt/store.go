@@ -1501,6 +1501,30 @@ type MetadataInfo struct {
 	MetadataJournalSequence uint64 `json:"metadata_journal_sequence"`
 }
 
+// Info returns the metadata identity and projection position from one read
+// transaction without creating a snapshot. HA seed publication uses it to bind
+// the copied bbolt file to the metadata-journal baseline.
+func (s *Store) Info() (MetadataInfo, error) {
+	var info MetadataInfo
+	err := s.view(func(tx *Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
+		if len(raw) != 8 {
+			return errors.New("invalid metadata schema version")
+		}
+		info = MetadataInfo{
+			SchemaVersion: binary.BigEndian.Uint64(raw), TxID: uint64(tx.ID()),
+			MinimumLedgerReaderVersion: string(tx.Bucket(bucketMeta).Get(keyMinimumLedgerReaderVersion)),
+		}
+		if epoch := tx.Bucket(bucketMeta).Get(keyLedgerFeatureEpoch); len(epoch) == 1 {
+			info.LedgerFeatureEpoch = epoch[0]
+		}
+		info.MetadataJournalEpoch, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyMetadataJournalEpoch))
+		info.MetadataJournalSequence, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyAppliedJournalSequence))
+		return nil
+	})
+	return info, err
+}
+
 type LedgerCompatibilityGate struct {
 	MinimumReaderVersion string `json:"minimum_reader_version"`
 	FeatureEpoch         uint8  `json:"feature_epoch"`
@@ -1559,6 +1583,36 @@ func OpenReadOnly(path string) (*Store, error) {
 	if version != schemaVersion {
 		db.Close()
 		return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
+			ErrSchemaVersionMismatch, version, schemaVersion)
+	}
+	return store, nil
+}
+
+// OpenPrimary opens an already-seeded writable projection at exactly this
+// binary's schema. Unlike Standalone Open it never creates or migrates the
+// database; schema transitions in a replicated group require an ordered
+// schema_boundary rather than a process-local startup side effect.
+func OpenPrimary(path string) (*Store, error) {
+	db, err := bbolt.Open(path, 0o600, &bbolt.Options{
+		Timeout:      2 * time.Second,
+		FreelistType: bbolt.FreelistMapType,
+		OpenFile: func(name string, flag int, mode os.FileMode) (*os.File, error) {
+			return os.OpenFile(name, flag&^os.O_CREATE, mode)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open primary metadata: %w", err)
+	}
+	store := &Store{db: db}
+	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
+	version, err := store.SchemaVersion()
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read primary metadata schema: %w", err)
+	}
+	if version != schemaVersion {
+		db.Close()
+		return nil, fmt.Errorf("%w: primary metadata schema version %d does not match required version %d; an ordered schema boundary is required",
 			ErrSchemaVersionMismatch, version, schemaVersion)
 	}
 	return store, nil
@@ -2147,6 +2201,23 @@ func (s *Store) Snapshot(path string) (MetadataInfo, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return MetadataInfo{}, err
 	}
+	// Replica OpenFile deliberately strips O_CREATE from every bbolt open so a
+	// missing seed cannot become an empty database. bbolt also reuses that hook
+	// for Tx.CopyFile, even though this destination is caller-owned staging.
+	// Pre-create only that explicit staging file and let CopyFile reopen it with
+	// truncate; the live Replica path remains protected by the no-create hook.
+	precreated := false
+	if s.replica {
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return MetadataInfo{}, err
+		}
+		if err := file.Close(); err != nil {
+			_ = os.Remove(path)
+			return MetadataInfo{}, err
+		}
+		precreated = true
+	}
 	var info MetadataInfo
 	err := s.view(func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
@@ -2167,6 +2238,9 @@ func (s *Store) Snapshot(path string) (MetadataInfo, error) {
 		return tx.CopyFile(path, 0o600)
 	})
 	if err != nil {
+		if precreated {
+			_ = os.Remove(path)
+		}
 		return MetadataInfo{}, fmt.Errorf("snapshot metadata: %w", err)
 	}
 	return info, nil

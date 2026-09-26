@@ -23,11 +23,19 @@ func TestConnectionManagersDialAuthenticateExchangeAndShutdown(t *testing.T) {
 	}
 	key := []byte("0123456789abcdef0123456789abcdef")
 	acknowledged := make(chan Acknowledgement, 1)
+	readyHello := make(chan Hello, 1)
 	managerA, err := NewConnectionManager(ConnectionManagerOptions{
 		LocalNode: "halro-0", TLS: files, ClusterKey: key,
 		Peers:                []PeerEndpoint{{NodeID: "halro-1", Address: listenerB.Addr().String(), ServerName: "halro-1.internal", SPKISHA256: digestText(pin)}},
 		LocalHello:           func() (Hello, error) { return testHello("halro-0", RolePrimary, 1), nil },
 		OnAuthenticatedHello: func(context.Context, Hello) (bool, error) { return true, nil },
+		OnDataSessionReady: func(peer string, hello Hello) error {
+			if peer != hello.NodeID {
+				return errors.New("ready callback peer does not match authenticated Hello")
+			}
+			readyHello <- hello
+			return nil
+		},
 		Handle: func(_ context.Context, _ Hello, record StreamRecord, _ func([]byte) error) error {
 			ack, err := UnmarshalAcknowledgement(record.Encoded)
 			if err == nil {
@@ -92,6 +100,14 @@ func TestConnectionManagersDialAuthenticateExchangeAndShutdown(t *testing.T) {
 		case <-deadline.C:
 			t.Fatal("connection managers did not establish a session")
 		}
+	}
+	select {
+	case hello := <-readyHello:
+		if hello.NodeID != "halro-1" || hello.DurableIndex != 11 {
+			t.Fatalf("ready hello=%#v", hello)
+		}
+	case <-deadline.C:
+		t.Fatal("data-session callback did not receive authenticated Hello")
 	}
 	select {
 	case ack := <-acknowledged:

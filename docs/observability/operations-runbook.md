@@ -35,6 +35,48 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 
 ## Alert procedures
 
+### HalroNoPrimary
+
+- Trigger: one or more members report a cluster incarnation, but no member in that environment, region, and cluster reports the Primary role for two minutes.
+- Immediate: stop client writes at the load balancer, compare each member's authenticated `cluster status`, term, promised term, durable/applied index, and replication journal head. Do not start two candidates or edit `cluster/state.json`.
+- Recover: choose the most up-to-date stopped Replica, fence the old Primary outside Halro, and run the documented `halro cluster promote` ceremony with peer promises. Restore client routing only after exactly one Primary reaches ready and a Replica confirms its leadership frame.
+- Escalate: if no candidate has the confirmed prefix or fencing cannot be proven, keep the cluster unavailable and involve the incident commander and data owner.
+
+### HalroMultiplePrimaries
+
+- Trigger: more than one member in the same environment, region, and cluster reports Primary; this fires immediately.
+- Immediate: remove all client traffic, isolate replication and client networks, preserve all data directories and process logs, and identify the highest term. Do not let either side accept another write and do not choose by wall-clock time.
+- Recover: treat this as a safety incident. Fence every lower-term or unproven member externally, compare authenticated state and journals, then retain only the member whose term and confirmed prefix are justified by durable promises. Manual reconciliation is required before restarting replicas.
+- Escalate: page SRE and Security immediately; archive the conflicting state, promise records, audit evidence, and fencing proof.
+
+### HalroAwaitingOperator
+
+- Trigger: a Primary process has not completed startup role adjudication for two minutes.
+- Immediate: inspect peer connectivity, certificate identity, cluster/incarnation equality, term, promised term, and the `leadership_established` confirmation index. A 503 from readiness is expected while the gate is closed.
+- Recover: restore the peer path or carry out the documented fencing and promotion ceremony. Never bypass the startup gate by changing the state file.
+- Escalate: keep client traffic disabled if the peer presents a conflicting term, role, incarnation, or node identity.
+
+### HalroReplicationUnavailable
+
+- Trigger: the Primary cannot obtain the configured synchronous confirmation for one minute.
+- Immediate: expect new durable mutations to fail closed. Check the authenticated peer connection, Replica apply status, disk sync errors, and confirmation/apply lag; do not retry an ambiguous client operation without its idempotency key.
+- Recover: restore the existing Replica and let it catch up from the Primary journal. If it cannot be recovered, use a separately approved reseed procedure; do not promote an out-of-date Replica merely to restore availability.
+- Escalate: if the Primary is also unhealthy, freeze client writes and begin the manual promotion runbook only after external fencing.
+
+### HalroReplicaNotCandidate
+
+- Trigger: a Replica has retained an unapplied replication backlog for five minutes.
+- Immediate: inspect its apply error, disk capacity/I/O, state/applied watermark, and per-store cursor. It is not an eligible promotion candidate while the backlog is non-zero.
+- Recover: repair the Replica and let the ordered applier catch up. If recovery requires replacement, take the member through maintenance and an approved seed rather than copying live files.
+- Escalate: when this is the only Replica, treat loss of promotion capacity as a degraded-HA incident even if Primary traffic is healthy.
+
+### HalroMemberIncompatible
+
+- Trigger: a member has rejected a peer for schema/protocol compatibility, Master Key challenge, or SPKI pinning for two minutes.
+- Immediate: read the bounded `reason` label, compare authenticated `cluster status` on both members, and verify the configured certificate pin and Secret generation.
+- Recover: complete the ordered rolling-upgrade sequence for a schema mismatch, or repair certificate/Master Key distribution and restart the affected member. Never relax mTLS or edit `state.json`.
+- Escalate: keep the peer out of promotion consideration until a fresh authenticated session succeeds and the alert clears after restart.
+
 ### HalroTargetDown
 
 - Trigger: the expected Halro scrape target is absent or down for two minutes.

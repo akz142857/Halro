@@ -364,6 +364,40 @@ func TestExistingOrderingJournalReopensItsAuthenticatedBaseline(t *testing.T) {
 	}
 }
 
+func TestOrderingJournalReconstructsStoreCursorsAtAppliedPrefix(t *testing.T) {
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [sha256.Size]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	for _, record := range []OrderingRecord{
+		{Kind: KindLeadershipEstablished, Store: StoreNone, Index: 1, Term: 1, FrameDigest: sha256.Sum256([]byte("anchor"))},
+		{Kind: KindData, Store: StoreLedger, Index: 2, Term: 1, StoreGeneration: 1, StoreSequenceFirst: 1, StoreSequenceLast: 2, FrameDigest: sha256.Sum256([]byte("ledger"))},
+		{Kind: KindData, Store: StoreMetadata, Index: 3, Term: 1, StoreGeneration: 3, StoreSequenceFirst: 1, StoreSequenceLast: 4, FrameDigest: sha256.Sum256([]byte("metadata"))},
+	} {
+		if _, err := journal.Append(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := journal.StoreCursorsThrough(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := first[StoreLedger-StoreLedger]; got != (StoreCursor{Generation: 1, Sequence: 2}) {
+		t.Fatalf("ledger cursor=%#v", got)
+	}
+	if got := first[StoreMetadata-StoreLedger]; got != (StoreCursor{}) {
+		t.Fatalf("metadata advanced beyond applied prefix: %#v", got)
+	}
+	if _, err := journal.StoreCursorsThrough(4); err == nil {
+		t.Fatal("cursor reconstruction accepted an index beyond the head")
+	}
+}
+
 func TestExistingOrderingJournalNeverCreatesOrTrustsAnUnauthenticatedHeader(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster", "ordering.journal")
 	key := []byte("0123456789abcdef0123456789abcdef")

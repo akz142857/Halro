@@ -14,7 +14,6 @@ import (
 
 var ErrPeerNotConnected = errors.New("replication peer is not connected")
 var ErrStalePeerSession = errors.New("replication peer session generation is stale")
-var errPeerDataNotAuthorized = errors.New("authenticated peer hello did not authorize a data session")
 
 type PeerEndpoint struct {
 	NodeID     string
@@ -36,9 +35,13 @@ type ConnectionManagerOptions struct {
 	// a connection can become visible for data delivery. It is called for every
 	// authenticated role pairing; the bool authorizes data only after that
 	// adjudication has completed.
-	OnAuthenticatedHello  AuthenticatedHelloHandler
-	Handle                ConnectionRecordHandler
-	OnDataSessionReady    func(peer string) error
+	OnAuthenticatedHello AuthenticatedHelloHandler
+	Handle               ConnectionRecordHandler
+	// OnDataSessionReady runs after the authenticated session is registered but
+	// before its read loop starts. The peer Hello is retained here because its
+	// durable/applied watermarks decide which authenticated ordering prefix must
+	// be replayed on reconnect; a node ID alone cannot drive catch-up safely.
+	OnDataSessionReady    func(peer string, hello Hello) error
 	OnSessionError        func(peer string, err error)
 	Session               PeerSessionOptions
 	DialTimeout           time.Duration
@@ -209,6 +212,14 @@ func (m *ConnectionManager) Send(peer string, encoded []byte) error {
 	return session.Send(encoded)
 }
 
+func (m *ConnectionManager) PeerConnections() map[string]bool {
+	connections := make(map[string]bool, len(m.peers))
+	for peer := range m.peers {
+		_, _, connections[peer] = m.registry.Current(peer)
+	}
+	return connections
+}
+
 func (m *ConnectionManager) acceptLoop(ctx context.Context, listener net.Listener, handshakes chan struct{}, wait *sync.WaitGroup) error {
 	for {
 		raw, err := listener.Accept()
@@ -252,8 +263,15 @@ func (m *ConnectionManager) acceptOne(ctx context.Context, raw net.Conn, release
 		m.report("", err)
 		return
 	}
-	if err := m.authorizeSession(ctx, session); err != nil {
-		if !errors.Is(err, errPeerDataNotAuthorized) {
+	allowData, err := m.authorizeSession(ctx, session)
+	if err != nil {
+		m.report(session.Peer().NodeID, err)
+		return
+	}
+	if !allowData {
+		if err := session.Run(ctx, func(handlerCtx context.Context, hello Hello, record StreamRecord) error {
+			return m.options.Handle(handlerCtx, hello, record, session.sendFromHandler)
+		}); err != nil && ctx.Err() == nil {
 			m.report(session.Peer().NodeID, err)
 		}
 		return
@@ -286,13 +304,18 @@ func (m *ConnectionManager) dialLoop(ctx context.Context, peer PeerEndpoint) {
 				var session *PeerSession
 				session, err = DialPeerSession(ctx, raw, clientTLS, local, m.key[:], peer.NodeID, peer.SPKISHA256, m.nonces, m.options.Session)
 				if err == nil {
-					err = m.authorizeSession(ctx, session)
-					if err == nil {
+					var allowData bool
+					allowData, err = m.authorizeSession(ctx, session)
+					if err == nil && allowData {
 						var lifetime time.Duration
 						lifetime, err = m.runRegistered(ctx, peer.NodeID, true, session)
 						if lifetime >= m.options.StableSessionDuration {
 							attempt = 0
 						}
+					} else if err == nil {
+						err = session.Run(ctx, func(handlerCtx context.Context, hello Hello, record StreamRecord) error {
+							return m.options.Handle(handlerCtx, hello, record, session.sendFromHandler)
+						})
 					}
 				}
 			}
@@ -300,7 +323,7 @@ func (m *ConnectionManager) dialLoop(ctx context.Context, peer PeerEndpoint) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !errors.Is(err, errPeerDataNotAuthorized) && !errors.Is(err, ErrNonPreferredPeerConnection) {
+		if !errors.Is(err, ErrNonPreferredPeerConnection) {
 			m.report(peer.NodeID, err)
 		}
 		attempt++
@@ -310,21 +333,20 @@ func (m *ConnectionManager) dialLoop(ctx context.Context, peer PeerEndpoint) {
 	}
 }
 
-func (m *ConnectionManager) authorizeSession(ctx context.Context, session *PeerSession) error {
+func (m *ConnectionManager) authorizeSession(ctx context.Context, session *PeerSession) (bool, error) {
 	allowData, err := m.options.OnAuthenticatedHello(ctx, session.Peer())
 	if err != nil {
 		_ = session.Close()
-		return err
+		return false, err
 	}
 	if !allowData {
-		_ = session.Close()
-		return errPeerDataNotAuthorized
+		return false, nil
 	}
 	if !session.DataAuthorized() {
 		_ = session.Close()
-		return errors.New("hello adjudicator authorized data for incompatible peer roles")
+		return false, errors.New("hello adjudicator authorized data for incompatible peer roles")
 	}
-	return nil
+	return true, nil
 }
 
 func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outbound bool, session *PeerSession) (time.Duration, error) {
@@ -334,7 +356,7 @@ func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outb
 		return time.Since(started), err
 	}
 	if m.options.OnDataSessionReady != nil {
-		if err := m.options.OnDataSessionReady(peer); err != nil {
+		if err := m.options.OnDataSessionReady(peer, session.Peer()); err != nil {
 			m.registry.Remove(peer, generation)
 			_ = session.Close()
 			return time.Since(started), fmt.Errorf("prepare replication data session for %s: %w", peer, err)
@@ -342,7 +364,7 @@ func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outb
 	}
 	err = session.Run(ctx, func(handlerCtx context.Context, hello Hello, record StreamRecord) error {
 		return m.registry.Deliver(peer, generation, func() error {
-			return m.options.Handle(handlerCtx, hello, record, session.Send)
+			return m.options.Handle(handlerCtx, hello, record, session.sendFromHandler)
 		})
 	})
 	m.registry.Remove(peer, generation)

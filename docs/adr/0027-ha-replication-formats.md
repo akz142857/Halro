@@ -82,7 +82,8 @@ u32 record_length                 bytes following this field
 u16 version                       1
 u16 kind                          1=data, 2=ledger_roll,
                                   3=leadership_established,
-                                  4=schema_boundary
+                                  4=schema_boundary,
+                                  5=provider_object
 u16 store                         0=none, 1=ledger, 2=audit,
                                   3=governance, 4=metadata
 u16 reserved                      0
@@ -106,8 +107,8 @@ u32 payload_length
 
 `record_length` is capped at 16 MiB plus the fixed header. `cluster_id` and
 `incarnation` are capped at 64 bytes, metadata at 4 KiB. Data records require a
-non-zero store, a non-empty payload and an inclusive sequence range. Control
-records require store zero and an empty payload.
+non-zero store, a non-empty payload and an inclusive sequence range. Structural
+records require store zero; all except `provider_object` have an empty payload.
 
 The digest is SHA-256 over the domain `halro:replication-frame:v1\x00` followed
 by every field from `magic` through `payload`, with the 32-byte digest position
@@ -134,6 +135,16 @@ checksum and filename suffix are absent because they are node-local.
 `leadership_established` has no metadata. `schema_boundary` metadata is two
 u32 values, `from_schema` and `to_schema`, and is followed in index order by the
 metadata-journal frames that describe the migration.
+
+`provider_object` carries a bounded chunk of an already encrypted object. Its
+metadata is `name_length`, `offset`, `chunk_length`, `total_length`, the full
+object SHA-256, a final-byte marker, and one safe basename. The Replica appends
+chunks to a private staging file, fsyncs every chunk, verifies the complete
+digest, atomically renames the final object and fsyncs the directory before its
+ACK. The Primary waits for cumulative confirmation of the final chunk before
+committing metadata that names the object. Both roles retain a ciphertext-only
+replication source beside the ordering journal so catch-up can reconstruct old
+object records after the live object is no longer named.
 
 The cumulative acknowledgement is another length-delimited version-1 binary
 record with magic `HLRACK01`. It binds `cluster_id`, `incarnation`, `node_id`,

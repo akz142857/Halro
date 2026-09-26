@@ -84,3 +84,40 @@ func TestOpenReplicaRefusesFutureSchemaAndMissingFile(t *testing.T) {
 		t.Fatalf("future schema error=%v", err)
 	}
 }
+
+func TestOpenPrimaryRequiresSeedAndExactSchema(t *testing.T) {
+	directory := t.TempDir()
+	missing := filepath.Join(directory, "missing.db")
+	if store, err := OpenPrimary(missing); !errors.Is(err, os.ErrNotExist) {
+		if store != nil {
+			store.Close()
+		}
+		t.Fatalf("missing Primary error=%v", err)
+	}
+	path := filepath.Join(directory, "halro.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	setSchemaVersionForReplicaTest(t, path, schemaVersion-1)
+	if store, err := OpenPrimary(path); !errors.Is(err, ErrSchemaVersionMismatch) {
+		if store != nil {
+			store.Close()
+		}
+		t.Fatalf("behind Primary error=%v", err)
+	}
+	setSchemaVersionForReplicaTest(t, path, schemaVersion)
+	primary, err := OpenPrimary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.update(func(*Tx) error { return nil }); err != nil {
+		t.Fatalf("Primary exact-schema store is not writable: %v", err)
+	}
+	if err := primary.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

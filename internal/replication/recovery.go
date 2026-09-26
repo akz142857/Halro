@@ -21,6 +21,41 @@ type pendingLedgerRollSource interface {
 	PendingLedgerRoll(generation uint64) ([]byte, error)
 }
 
+type providerObjectSource interface {
+	ReadProviderObjectChunk(ProviderObjectMetadata) ([]byte, error)
+}
+
+// RecoverReplicaStores reconciles native crash tails to the authenticated
+// ordering prefix before any Replica log is opened. Individual log open paths
+// intentionally refuse to guess whether a partial frame or interrupted Roll
+// belongs to the Primary; this is the one place that supplies that authority.
+func RecoverReplicaStores(journal *OrderingJournal, source *NativeSource) error {
+	if journal == nil || source == nil {
+		return errors.New("replica recovery requires an ordering journal and native source")
+	}
+	expected, err := journal.StoreCursors()
+	if err != nil {
+		return err
+	}
+	if err := source.RepairReplicaLedgerRoll(expected[StoreLedger-StoreLedger]); err != nil {
+		return fmt.Errorf("repair interrupted Replica Ledger Roll: %w", err)
+	}
+	for store := StoreLedger; store <= StoreMetadata; store++ {
+		cursor := expected[store-StoreLedger]
+		if err := source.RepairReplicaTail(store, cursor); err != nil {
+			return fmt.Errorf("repair Replica store %d tail: %w", store, err)
+		}
+		actual, err := source.Cursor(store)
+		if err != nil {
+			return fmt.Errorf("verify Replica store %d after repair: %w", store, err)
+		}
+		if actual != cursor {
+			return fmt.Errorf("Replica store %d ended at %d/%d after repair, want %d/%d", store, actual.Generation, actual.Sequence, cursor.Generation, cursor.Sequence)
+		}
+	}
+	return nil
+}
+
 // RecoverLocalCommits reconciles the four source stores to the authenticated
 // ordering head and reconstructs the exact encoded suffix above confirmed.
 // It is intentionally run before a Primary starts network delivery: an
@@ -206,6 +241,19 @@ func ReconstructRangeEach(clusterID, incarnation string, first, last uint64, jou
 			payload, err = source.Read(record.Store, record.StoreGeneration, record.StoreSequenceFirst, record.StoreSequenceLast)
 			if err != nil {
 				return fmt.Errorf("read source bytes for ordering index %d: %w", index, err)
+			}
+		} else if record.Kind == KindProviderObject {
+			objectSource, ok := source.(providerObjectSource)
+			if !ok {
+				return fmt.Errorf("source cannot reconstruct provider object at ordering index %d", index)
+			}
+			metadata, decodeErr := DecodeProviderObjectMetadata(record.Metadata)
+			if decodeErr != nil {
+				return fmt.Errorf("decode provider object at ordering index %d: %w", index, decodeErr)
+			}
+			payload, err = objectSource.ReadProviderObjectChunk(metadata)
+			if err != nil {
+				return fmt.Errorf("read provider object at ordering index %d: %w", index, err)
 			}
 		}
 		frame := Frame{

@@ -24,6 +24,31 @@ type failNthOrderingSync struct {
 	calls int
 }
 
+func TestReplicaReceiverBindsExactlyOneAuthenticatedPrimary(t *testing.T) {
+	journal, err := OpenOrderingJournal(
+		filepath.Join(t.TempDir(), "ordering.journal"),
+		[]byte("0123456789abcdef0123456789abcdef"),
+		OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [32]byte{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	receiver, err := NewReplicaReceiver("production-a", "inc_01", "halro-1", "", 7, 7, 0, 0, journal, &recordingFrameSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.BindPrimary("halro-0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := receiver.BindPrimary("halro-0"); err != nil {
+		t.Fatalf("idempotent bind failed: %v", err)
+	}
+	if err := receiver.BindPrimary("halro-2"); err == nil || !strings.Contains(err.Error(), "more than one Primary") {
+		t.Fatalf("second Primary error=%v", err)
+	}
+}
+
 func (d *failNthOrderingSync) Write(value []byte) (int, error) { return d.file.Write(value) }
 func (d *failNthOrderingSync) Sync() error {
 	d.calls++

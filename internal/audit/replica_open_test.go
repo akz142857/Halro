@@ -18,6 +18,17 @@ func TestReplicaOpenRequiresSeededAuditLog(t *testing.T) {
 	}
 }
 
+func TestPrimaryOpenRequiresSeededAuditLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "audit.log")
+	log, err := OpenWithOptions(path, make([]byte, auditHMACKeySize), Options{RequireExisting: true})
+	if log != nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open log=%v err=%v", log, err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Primary open created a seed directory: %v", err)
+	}
+}
+
 func TestReplicaOpenDoesNotRepairAuditTailBeforeOrderingReconciliation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	if err := os.WriteFile(path, []byte{1}, 0o600); err != nil {

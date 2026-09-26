@@ -49,7 +49,7 @@ func TestRuntimeRefusesConfiguredMemberWithoutStateBeforeOpeningStores(t *testin
 	}
 }
 
-func TestRuntimeRefusesConfiguredMemberStateBeforeOpeningStores(t *testing.T) {
+func TestRuntimeRefusesConfiguredMemberWithoutAuthenticatedStateBeforeOpeningStores(t *testing.T) {
 	cfg := config.Default()
 	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "data")
 	cfg.Replication = &config.Replication{}
@@ -59,8 +59,8 @@ func TestRuntimeRefusesConfiguredMemberStateBeforeOpeningStores(t *testing.T) {
 	runtime, err := OpenWithOptions(
 		context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{},
 	)
-	if runtime != nil || err == nil || !strings.Contains(err.Error(), "no replication runtime") {
-		t.Fatalf("runtime=%v unavailable member runtime error=%v", runtime, err)
+	if runtime != nil || err == nil || !strings.Contains(err.Error(), "authenticated member state is absent") {
+		t.Fatalf("runtime=%v missing authenticated member-state error=%v", runtime, err)
 	}
 	entries, err := os.ReadDir(cfg.Storage.DataDir)
 	if err != nil {
