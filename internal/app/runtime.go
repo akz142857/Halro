@@ -1766,6 +1766,15 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+	// HTTP drain stops new requests, but deferred settlements and alert-delivery
+	// observers can still append ordered frames. Stop and join those producers
+	// while replication is available, before choosing the final audit index.
+	r.stopBackgroundWork()
+	if err := shutdownCtx.Err(); err != nil && len(shutdownErrors) == 0 {
+		// A slow background worker can exhaust the budget after HTTP drain has
+		// succeeded. Do not report a clean stop when final confirmation is skipped.
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("finish background shutdown: %w", err))
+	}
 	// Keep the replication channel alive until the Primary's final audit and
 	// metadata checkpoint are confirmed. Close runs after this channel stops;
 	// appending there would leave a durable but unconfirmed tail on every clean
@@ -1873,6 +1882,18 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 	return nil
 }
 
+func (r *Runtime) stopBackgroundWork() {
+	if r.backgroundCancel != nil {
+		r.backgroundCancel()
+	}
+	r.backgroundWait.Wait()
+	if r.alerts != nil {
+		// Delivery callbacks append Audit records. Close waits for every callback,
+		// and is safe to call again from Close after RunWithReady returns.
+		r.alerts.Close()
+	}
+}
+
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		// Listeners have already drained by the time Close runs — Serve does
@@ -1882,10 +1903,7 @@ func (r *Runtime) Close() error {
 		r.logger.Info("closing runtime")
 		r.draining.Store(true)
 		if r.replication != nil && r.replication.role == replication.RoleReplica {
-			if r.backgroundCancel != nil {
-				r.backgroundCancel()
-			}
-			r.backgroundWait.Wait()
+			r.stopBackgroundWork()
 			r.closeErr = errors.Join(
 				func() error {
 					if r.adminSessions != nil {
@@ -1909,9 +1927,7 @@ func (r *Runtime) Close() error {
 			return
 		}
 		r.clearSetupToken()
-		r.backgroundCancel()
-		r.backgroundWait.Wait()
-		r.alerts.Close()
+		r.stopBackgroundWork()
 		authorityInvalidated := r.replication != nil && r.replication.publisher.Snapshot().Role != replication.RolePrimary
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)

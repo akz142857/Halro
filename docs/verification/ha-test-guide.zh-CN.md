@@ -54,7 +54,7 @@ durable/confirmed/applied index 与已认证 peer 会话；它不读取对端的
 | 正常复制 | 在 Primary 做一次可审计的测试变更；等待确认并核对两个 Replica 的 applied 前缀。已确认变更必须在候选 Replica 上可见。 |
 | 单个 Replica 中断/恢复 | 只停止一个 Replica，保持其 PVC；Primary 的可用性按剩余 quorum 判定。重启后它必须从认证前缀追平，不能接受相同 index 的不同字节。 |
 | 计划交接 | 在有长请求/SSE 的条件下运行运维手册中的 `cluster stepdown`；旧 Primary 先撤 readiness 并 drain，随后才冻结前缀和承诺新 term。旧 index 失效时命令应拒绝并可按新 index 重试。交接后重新以 Replica 打开旧 Primary，核对其元数据投影与已确认前缀，再等待它追平。 |
-| 正常停机与播种 | Primary 与至少一个 Replica 追平后正常停止 Primary；停止后的 durable/confirmed/applied 必须相等，`system.shutdown` 审计必须落在已确认前缀。用该快照执行 `seed-approve`/`seed-install`；未确认尾帧必须被拒绝，不能手改 state 或排序日志。 |
+| 正常停机与播种 | Primary 与至少一个 Replica 追平后正常停止 Primary；同时安排延迟响应收尾或告警投递，让后台审计可能在关停时写入。后台写入必须先于 `system.shutdown`，停止后的 durable/confirmed/applied 必须相等，`system.shutdown` 必须落在已确认前缀。用该快照执行 `seed-approve`/`seed-install`；未确认尾帧必须被拒绝，不能手改 state 或排序日志。 |
 | 非计划提升 | 先在 Halro 外部**证明旧 Primary 已被隔离**，再按手册用精确 term/index 提升已追平 Replica；旧 Primary 回归不得重新确认写入。无外部 fencing 证据就停止此场景。 |
 | 非对称分区 | 分别隔断不同方向的复制连接；任何时刻至多一个成员能确认权威写。无 quorum 的请求必须拒绝或留下可归因的保守状态，不能静默成功。 |
 | 单 PVC 丢失 | 保留其它成员，从已认证 seed 重建该 Replica；旧本地状态不能被当作当前前缀。 |

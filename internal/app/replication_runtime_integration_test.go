@@ -311,9 +311,38 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// A runtime-owned worker may append an ordered frame when cancellation
+	// settles in-flight work. It must finish before system.shutdown is written
+	// and the final prefix is confirmed, rather than writing after transport
+	// cancellation in Close.
+	backgroundAudit := make(chan error, 1)
+	promotedRuntime.backgroundWait.Add(1)
+	go func() {
+		defer promotedRuntime.backgroundWait.Done()
+		<-promotedRuntime.backgroundCtx.Done()
+		backgroundAudit <- appendSystemAudit(promotedRuntime.audit, promotedRuntime.store, "system.shutdown.background.probe")
+	}()
 	stopPromoted()
 	if err := <-promotedError; err != nil {
 		t.Fatalf("promoted Primary graceful shutdown: %v", err)
+	}
+	if err := <-backgroundAudit; err != nil {
+		t.Fatalf("background shutdown audit: %v", err)
+	}
+	var backgroundSequence, shutdownSequence uint64
+	if _, err := promotedRuntime.audit.Replay(func(record audit.Record) error {
+		switch record.Event.Action {
+		case "system.shutdown.background.probe":
+			backgroundSequence = record.Sequence
+		case "system.shutdown":
+			shutdownSequence = record.Sequence
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if backgroundSequence == 0 || shutdownSequence <= backgroundSequence {
+		t.Fatalf("background audit must precede final shutdown audit: background=%d shutdown=%d", backgroundSequence, shutdownSequence)
 	}
 	if err := promotedRuntime.Close(); err != nil {
 		t.Fatal(err)
