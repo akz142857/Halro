@@ -1,6 +1,6 @@
 # Halro HA 使用手册
 
-本手册面向部署和运维人员，说明三成员 Primary/Replica 集群的建立、查看、人工切换、恢复与验证。涉及精确的离线文件操作时，以 [HA 运维 runbook](../runbooks/ha-operations.md) 为准；故障演练的通过条件见 [HA 测试指南](../verification/ha-test-guide.zh-CN.md)。
+本手册面向部署和运维人员，说明三成员 Primary/Replica 集群的建立、查看、人工切换、恢复与验证。涉及精确的离线文件操作时，以 [HA 运维 runbook](../runbooks/ha-operations.md) 为准；故障演练的通过条件见 [HA 测试指南](../verification/ha-test-guide.zh-CN.md)。[English version](ha-usage.en.md)。
 
 > **当前状态**：HA 的命令、复制运行时和只读控制台页面已有仓库实现，但目标环境的生产进入条件、G0–G7、Linux/kind 故障注入、72 小时浸泡和 RTO/RPO 验收尚未完成。不要把本机三进程演练当成生产放行。README 中的 `v0.8.5` Docker 镜像不包含 `halro cluster` 命令；必须先确认所用二进制来自包含 HA 实现的源码或之后经过验收的发布制品。自动故障切换不在当前设计内。
 
@@ -23,6 +23,7 @@ go build -trimpath -o ./bin/halro ./cmd/halro
 ```
 
 如果看到 `unknown command "cluster"`，先核对正在执行的二进制路径与构建来源；当前目录里的旧 `bin/halro` 不会因为 Git 更新而自动替换。生产使用制品还须完成独立的发布与验收门禁。
+下文命令以仓库根目录中的 `./bin/halro` 为例；在各主机上应替换为实际安装的二进制路径。
 
 先按 [普通部署与初始化流程](operator-guide.md)准备一个已有管理员、可正常启动的 Standalone 数据目录，随后停止进程。以完整的 [`configs/config.example.yaml`](../../configs/config.example.yaml) 为基础，为每个成员准备完整配置；不能只保存下面的片段。每个成员只在自己的配置中加入 `replication` 块。`halro-0` 的示意片段如下，其余成员调换 `node_id` 和 `peers`：
 

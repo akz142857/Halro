@@ -67,7 +67,8 @@ For SDK examples and the complete Admin workflow, read the
 [简体中文](docs/guides/user-guide.zh-CN.md). For deployment, upgrades, backup,
 recovery, and hardening, use the [Operator Guide](docs/guides/operator-guide.md).
 For a three-member HA deployment and manual handoff, read the
-[HA 使用手册](docs/guides/ha-usage.zh-CN.md). The Docker example below uses
+[HA Usage Guide](docs/guides/ha-usage.en.md), also available in
+[简体中文](docs/guides/ha-usage.zh-CN.md). The Docker example below uses
 `v0.8.5`, which does **not** include the `cluster` commands.
 
 ## Run with Docker
@@ -156,7 +157,7 @@ Two container facts that bite:
   mount the persistent parent at `/var/lib/halro`; use Kubernetes `replicas: 1`
   with a `Recreate` strategy. HA is a separate Primary/Replica deployment with
   a distinct data directory and PVC for each member, approved seeding, and
-  manual promotion; see the [HA 使用手册](docs/guides/ha-usage.zh-CN.md).
+  manual promotion; see the [HA Usage Guide](docs/guides/ha-usage.en.md).
 - **`healthy` is not reachability.** `HEALTHCHECK` calls a readiness URL from
   inside the container, so it proves the process is ready, not that a published
   port, certificate name, firewall, or reverse proxy works. Probe the external
@@ -194,7 +195,7 @@ snapshots.
 Standalone backups are deliberately offline: stop Halro, create the archive,
 verify it, and regularly perform an isolated restore drill. HA has a separate
 Replica maintenance, backup, and report procedure in the
-[HA 使用手册](docs/guides/ha-usage.zh-CN.md). For containers, mount the
+[HA Usage Guide](docs/guides/ha-usage.en.md). For containers, mount the
 persistent parent directory and configure `storage.data_dir` as its child so
 restore can atomically rename the data directory on the same filesystem.
 
@@ -398,7 +399,7 @@ contract, and production boundaries are documented in the
 
 - [User Guide](docs/guides/user-guide.md) · [中文使用手册](docs/guides/user-guide.zh-CN.md)
 - [Operator Guide](docs/guides/operator-guide.md)
-- [HA 使用手册](docs/guides/ha-usage.zh-CN.md) — deployment, status, manual handoff, recovery, and validation
+- [HA Usage Guide](docs/guides/ha-usage.en.md) · [简体中文](docs/guides/ha-usage.zh-CN.md) — deployment, status, manual handoff, recovery, and validation
 - [Backup and restore](docs/guides/backup-restore.md)
 - [异步提交与延迟取回](docs/guides/deferred-responses.zh-CN.md) — `background: true`
 - [Choosing an AWS access surface](docs/guides/aws-surface-selection.md)

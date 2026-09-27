@@ -8,6 +8,7 @@
 | [中文使用手册](guides/user-guide.zh-CN.md) | 同一份手册的简体中文版 |
 | [Operator Guide](guides/operator-guide.md) | 部署、升级、备份、恢复、加固 |
 | [HA 使用手册](guides/ha-usage.zh-CN.md) | 三节点部署、状态查看、人工切换、恢复与验收边界 |
+| [HA Usage Guide](guides/ha-usage.en.md) | 同一份手册的英文版 |
 | [Encrypted backup and restore](guides/backup-restore.md) | 加密备份与恢复流程（含 Docker / Kubernetes） |
 | [选择 AWS 接入面](guides/aws-surface-selection.md) | Bedrock Runtime 与 Bedrock Mantle 怎么选，以及两者都不支持什么 |
 | [异步提交与延迟取回](guides/deferred-responses.zh-CN.md) | `background: true` 的提交、取回、取消、删除，以及重启时正在执行的请求为什么会 failed |
