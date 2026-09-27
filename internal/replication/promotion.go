@@ -103,6 +103,7 @@ type PromotionPromise struct {
 	Incarnation   string `json:"incarnation"`
 	NodeID        string `json:"node_id"`
 	Role          Role   `json:"role"`
+	PreviousRole  Role   `json:"previous_role"`
 	Term          uint64 `json:"term"`
 	PromisedTerm  uint64 `json:"promised_term"`
 	DurableIndex  uint64 `json:"durable_index"`
@@ -119,7 +120,7 @@ func (p PromotionPromise) Validate() error {
 			return fmt.Errorf("promotion promise %s must be 1-%d bytes", name, MaxIdentityBytes)
 		}
 	}
-	if p.Role != RolePrimary && p.Role != RoleReplica {
+	if (p.Role != RolePrimary && p.Role != RoleReplica) || (p.PreviousRole != RolePrimary && p.PreviousRole != RoleReplica) {
 		return errors.New("promotion promise role is invalid")
 	}
 	if p.Term == 0 || p.PromisedTerm < p.Term || p.AppliedIndex > p.DurableIndex || p.LastFrameTerm > p.Term {
@@ -205,6 +206,7 @@ func ValidatePromotionPromises(candidate MemberState, proposal PromotionProposal
 		return errors.New("promotion requires at least one durable peer promise")
 	}
 	seen := make(map[string]struct{}, len(promises))
+	plannedPrimaryPromised := false
 	for _, promise := range promises {
 		if err := promise.Validate(); err != nil {
 			return err
@@ -215,6 +217,9 @@ func ValidatePromotionPromises(candidate MemberState, proposal PromotionProposal
 		if promise.Role == RolePrimary {
 			return errors.New("a promotion promise responder still reports Primary")
 		}
+		if proposal.PlannedStepdown && promise.NodeID == proposal.OldPrimaryNodeID && promise.PreviousRole == RolePrimary {
+			plannedPrimaryPromised = true
+		}
 		if _, duplicate := seen[promise.NodeID]; duplicate {
 			return errors.New("duplicate promotion promise responder")
 		}
@@ -223,6 +228,9 @@ func ValidatePromotionPromises(candidate MemberState, proposal PromotionProposal
 			promise.LastFrameTerm == proposal.ExpectedTerm && promise.DurableIndex > candidate.AppliedIndex {
 			return errors.New("candidate is behind a promised peer's durable prefix")
 		}
+	}
+	if proposal.PlannedStepdown && !plannedPrimaryPromised {
+		return errors.New("planned stepdown requires a durable promise from the named old Primary")
 	}
 	return nil
 }

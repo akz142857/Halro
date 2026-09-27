@@ -164,6 +164,26 @@ func TestPrimaryCoordinatorWaitHonorsContext(t *testing.T) {
 	}
 }
 
+func TestPrimaryCoordinatorFreezeForStepdownBlocksAppendAndAcknowledgement(t *testing.T) {
+	primary, journal := newTestPrimary(t, &recordingOutbound{})
+	defer journal.Close()
+	if _, err := primary.RecordDurable(Frame{Kind: KindLeadershipEstablished, Store: StoreNone}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.Acknowledge(testAcknowledgement("halro-1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := primary.FreezeForStepdown(1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := primary.RecordDurable(Frame{Kind: KindData, Store: StoreLedger}); !errors.Is(err, ErrReplicationUnavailable) {
+		t.Fatalf("append after stepdown freeze error=%v", err)
+	}
+	if _, err := primary.Acknowledge(testAcknowledgement("halro-2", 1)); !errors.Is(err, ErrReplicationUnavailable) {
+		t.Fatalf("ACK after stepdown freeze error=%v", err)
+	}
+}
+
 func TestPrimaryCoordinatorPersistsConfirmationBeforePublishingSuccess(t *testing.T) {
 	journal, err := OpenOrderingJournal(
 		filepath.Join(t.TempDir(), "ordering.journal"),

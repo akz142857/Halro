@@ -481,11 +481,15 @@ usage checkpoint Sequence)`（`internal/app/ledger_seal.go:86,119-138`），而 
 
 - 按 index 严格顺序落盘，缺口即停止并请求重传；
 - 每个存储追加到与 Primary 相同路径、相同偏移的文件；
-- 每批落盘并 `fsync` 后回 `ack(index, term)`，ACK 表示稳定存储不是收到；**ACK 在 apply 之前**，
-  apply 异步于 ACK；
+- 每批落盘并 `fsync` 后，Replica 把 `confirmed_index = index` 与 durable 水位一起持久化，再回
+  `ack(index, term)`。Primary 在发送前已经持久化同一帧，因此“Primary + 此 Replica”已经形成 v1
+  两种拓扑所需的两个 durable vote；确认是耐久事实，不因 ACK 或 commit notice 在网络中丢失而消失。
+  当前 record handler 随即批量 apply 该 confirmed 前缀，再回带最新 applied 水位的 ACK；apply 失败就不
+  ACK，因此候选资格不会把一个 poisoned projection 误报成已追平；
 - apply：Ledger 帧推进本地 `ledger.State` 与内存 Usage 聚合；metadata 帧**批量**应用到 bbolt（与
   Primary 的合并层同宽，否则逐帧 `db.Update` 约 830 tx/s 会比 Primary 慢一个数量级），且**只应用
-  `index ≤ confirmed_index` 的帧**（Primary 在帧流里携带当前 confirmed）；
+  `index ≤ confirmed_index` 的帧**。帧所携带的 Primary confirmed 水位和 commit notice 用于 leader
+  侧观测、重连追赶与 applied 回报，但不能把已经形成的 durable quorum 降回未确认；
 - Replica 周期性向 Primary 报告 `applied_index`；`durable − applied` 超阈值即 `not_candidate` 并告警；
 - Primary 的 commit notice 与数据帧分队列，并保留到**每个已配置 Replica**都报告对应
   `applied_index`；某个 Replica 断线前漏掉最后一条 notice，重连后仍能重发；
@@ -638,11 +642,12 @@ halro cluster promote --node halro-1 \
   --old-primary halro-0 --old-primary-fenced-by pod-deleted-pvc-retained
 ```
 
-0. **prepare。** 目标选定 `T' = max(term, promised_term) + 1`，向**全部** peers（含被指名的旧
+0. **prepare。** 目标每次尝试都重新读取本地认证状态，选定
+   `T' = max(term, promised_term) + 1`（包括上一次失败尝试留下的 promise），向**全部** peers（含被指名的旧
    Primary）发送 `propose(T')`。peer 把 `promised_term = T'` 写入 `state.json` 并 fsync 后才应答，
    应答携带自己的 durable/applied index 与当前角色。从应答起 peer (a) 拒绝 ack 任何 term < T' 的帧，
    (b) 在 §8.2 中把 `promised_term` 当作自己的 term 报告，(c) 拒绝任何 ≤ T' 的后续 propose。发起
-   节点自身从此停止 ack 旧 term。需要 ≥ 1 个 promise 才能继续；**任一应答者自称 Primary → 拒绝**。
+   节点自身从此停止 ack 旧 term。需要 ≥ 1 个 promise 才能继续；**任一应答者仍自称 Primary → 拒绝**。
    旧 Primary 若可达，收到 propose 的那一刻就按 §8.4 退位。
 1. 校验 `--expect-term/--expect-index` 与本地一致。
 2. **fencing 断言。** `--old-primary-fenced-by` 只接受两种值：`pod-deleted-pvc-retained`（Pod 已删除
@@ -673,8 +678,10 @@ Audit。§8.2 行 4 的节点用它恢复。
 ### 8.4 运行期退位
 
 任何携带 `term > 本地 term` 或 `promised_term > 本地 term` 的消息——propose、帧、ACK 拒绝、握手、
-通告——到达运行中的 Primary，它立即：进入 `ReplicationUnavailable`、停止确认、关闭 Gateway/Admin
-listener、以非零码退出；重启走 §8.2 行 2。在飞的 Provider 调用按不变量 12 终止，其结算落在未确认
+通告——到达运行中的 Primary，它立即：在 `state.json` 持久化更高 promise 并把角色降为 Replica、进入
+`ReplicationUnavailable`、停止确认、关闭 Gateway/Admin listener、以非零码退出；重启走 §8.2 行 2。
+如果消息只是更高任期的认证 Hello，也先完成同样的 durable demotion，不能只靠进程退出表达退位。
+在飞的 Provider 调用按不变量 12 终止，其结算落在未确认
 后缀，由新 Primary 的 `RecoverPendingLeases` 保守结算。Ledger 打开态不可截断
 （`internal/ledger/log.go:665`），退位只能是退出后截断。
 
@@ -684,10 +691,12 @@ listener、以非零码退出；重启走 §8.2 行 2。在飞的 Provider 调�
 halro cluster stepdown --to halro-1
 ```
 
-1. Primary 撤销客户端 readiness，drain 在飞请求到最后一帧 confirmed（超过 `shutdown_timeout` 的
+1. Primary 撤销客户端 readiness，drain 在飞请求到最后一帧 confirmed，并在同一 coordinator 锁下冻结
+   新 append（要求 ordering head = durable = confirmed = 操作者检查的 index；超过 `shutdown_timeout` 的
    Provider 调用按不变量 12 终止并保守结算——但这是运维选的时刻，不是凌晨三点）；
 2. 等目标 Replica `applied_index == confirmed_index`；
-3. 目标执行 §8.3（prepare 在 Primary 自己参与下必然拿到 promise；旧 Primary 收到 propose 即退位）；
+3. 目标执行 §8.3；校验材料里必须含**被指名旧 Primary**的 promise，且其 `previous_role=primary`，
+   其它 Replica 的 promise 不能替代这份交接证据；
 4. 旧 Primary 以 Replica 接入，没有需要截断的后缀。
 
 **升级（§15）、2 节点的备份窗口（§12.3）、节点维护都用它，不走崩溃式切换。**
@@ -803,8 +812,9 @@ digest 的 MAC manifest 是该离线动作的审批凭据；其保管责任与 B
 2. **追加式存储**截到 C 的帧边界。Ledger 文件层接受任意截断；拦截截断的是 bbolt 里的派生 checkpoint
    （下一条）。截断点跨越 Roll 按 §6.2.3 不可能发生；实现上仍要检查并在发生时走 Ledger re-seed。
 3. **bbolt 不截断，重建到 C**，二选一（Phase 0b 定）：
-   - **路径 A′（推荐）**：只从新 Primary 拉一份 bbolt@C′（C′ ≥ C；本机 `halro.db` 524 KiB，与历史
-     不是一个量级），然后从 C+1 正常追赶；
+   - **路径 A′（推荐，v1 实现）**：停止并隔离该节点，从 fully-confirmed 新 Primary 制作一份经审批的
+     snapshot@C′（C′ ≥ C；其中本机 `halro.db` 524 KiB，与历史不是一个量级），走 §11.1 的 staging
+     校验与原子 re-seed 发布，然后从 C′+1 正常追赶；
    - **路径 A**：节点周期性在某个已确认 index S 处做 bbolt 快照（`Store.Snapshot`）并记进
      `state.json`，journal 至少保留 `(S, …]`；回退时用快照 S 替换 `halro.db`、重放 journal `(S, C]`。
 
@@ -814,6 +824,12 @@ digest 的 MAC manifest 是该离线动作的审批凭据；其保管责任与 B
    逐条通过。**原地回退 checkpoint 的路径不可行**：需绕过 5 处 "cannot move backwards" 门
    （`store_audit.go:411`、`store_outcomes.go:222,315`、`store_usage.go:93`、`store_settings.go:206`），
    且不充分——被截断的 journal 帧里还有普通权威写（Route、Key、Credential），journal 没有 before-image。
+
+   **v1 的实现边界**：运行中的旧 Primary 收到更高任期后会先持久化降级并退出；启动恢复可以安全修剪
+   “原生存储已 fsync、ordering 尚未追加”的同任期尾部，但不会原地倒退一个曾任 Primary 的 bbolt
+   投影。若该节点的 `durable/confirmed/applied` 或认证 ordering 前缀与新 Primary 不兼容，它 fail closed
+   并要求按 §11.1 重新播种；这次离线 re-seed 就是路径 A′ 的原子发布。协议不声称存在一个在线、自动的
+   bbolt snapshot RPC。
 4. **Replica 的 bbolt 应用上限是 confirmed index**（§6.2.4），所以 Replica 侧的截断退化为纯文件尾截断，
    只有曾任 Primary 的节点需要第 3 条。
 5. Replica 上**没有绕过 journal 的本地 bbolt 写**（§6.2.4 禁用清单、§12.1 的 `--replica`）——这是
@@ -1209,8 +1225,8 @@ Phase 1/2 的本地门禁冒充生产验收。
    `cluster/state.json`（含 MAC）、term / promised_term / incarnation / index 与
    `leadership_established`；`internal/replication` 提供版本化 codec、严格 decoder 与 golden fixture；
 2. ✅ ADR 0027 冻结 mTLS + SPKI pin + Master Key challenge-response + 全版本范围握手；
-3. ✅ 投影回退选择路径 A′：拉取新 Primary 的认证 bbolt 快照，原子发布后把其它存储追到同一 confirmed
-   index，再恢复增量；不新增本地快照保留系统；
+3. ✅ 投影回退选择路径 A′：从 fully-confirmed 新 Primary 生成经审批的离线 seed snapshot，原子发布
+   同一 confirmed prefix 后再恢复增量；不新增在线 snapshot RPC 或本地快照保留系统；
 4. ✅ #12 的 Chat/Embeddings 调用方幂等契约已落在 `provider_resources` 与
    `provider_resource_idempotency` 两个 A 类 bucket；
 5. ✅ `config check` 校验 `replication` 的成员身份、1–2 个 peer、语法有效且非 unspecified 的 dial target、唯一 SPKI pin 与强制 mTLS；
@@ -1272,7 +1288,8 @@ Phase 1/2 的本地门禁冒充生产验收。
 > 未送达成员仍由 coordinator 保留的 frame/commit notice 和 data-session-ready retry hook 追赶。
 > 角色化 record handler 已把认证后的连接接到 coordinator / receiver / applier：Primary 只接受与 TLS Hello
 > 同 node ID 的 ACK；Replica 对 frame 与 commit notice 都走“持久化 → 只 apply confirmed 前缀 → 回报最新
-> applied ACK”，因此安静连接的最后一帧不会停在 durable 而永远不 apply。Primary 和 Replica 的
+> applied ACK”，因此安静连接的最后一帧不会停在 durable 而永远不 apply。这个路径明确是本地 durable
+> quorum → confirmed 持久化 → apply → ACK；commit notice 仍走同一 apply-and-ACK 路径。Primary 和 Replica 的
 > `durable_index` / `confirmed_index` / `applied_index`、ordering head 与 metadata projection 已统一经过
 > 原子 `state.json` publisher；任何目录 fsync 结果不确定都会 poison 当前角色并要求重启，不能先 ACK、
 > 发 commit notice 或向本地调用方返回成功。ordering journal 允许领先 state 的规则只用于崩溃恢复，
@@ -1282,6 +1299,12 @@ Phase 1/2 的本地门禁冒充生产验收。
 > 保留非零全局 index 与完整 ordering 历史。双 Runtime 集成测试覆盖真实 TCP/mTLS、对象、Audit、撤销传播
 > 和提升后不复活；其余故障缝与证据索引见
 > [HA repository verification gates](../verification/ha-repository-gates.md)。
+> 多角色复审又补齐了崩溃与权限边界：promotion 重试总取新 term，计划交接冻结 append 且必须拿到被指名
+> 旧 Primary 的 durable promise；Replica 把自身 fsync 形成的 quorum 事实持久化，避免 Primary 在 ACK 后、
+> commit notice 前崩溃造成已确认写丢失；更高任期 Hello 会先持久化降级。seed manifest 绑定实际 metadata
+> 文件且拒绝 symlink/宽权限 staging，对象每个 chunk 都保存可重建前缀，Replica 备份先按 ordering 修尾；
+> read-only 管理员不能 leave，TOTP 水位串行消费，deadman 保留 HA 身份并能报告同任期双链。曾任 Primary
+> 的不兼容 bbolt 投影仍按 §11.2 fail closed 后离线 re-seed，不伪装成在线自动回退。
 
 1. ✅ Primary 侧：提交路径内的 index 分配、ordering journal、批次发送、ACK 聚合、`confirmed_index`、
    `ReplicationUnavailable` 状态、§6.3.1/§6.3.2 的两类写；

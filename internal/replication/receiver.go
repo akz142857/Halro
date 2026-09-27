@@ -206,12 +206,17 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		if record.FrameDigest != digest {
 			return Acknowledgement{}, errors.New("replication index already has different frame bytes")
 		}
-		if frame.ConfirmedIndex > r.confirmedIndex {
-			if err := r.persistProgress(r.durableIndex, frame.ConfirmedIndex, r.appliedIndex, r.projection); err != nil {
+		// The Primary durably records a frame before it can send it. This
+		// Replica's authenticated journal already contains the same frame, so
+		// together they are the two durable votes required by both supported
+		// topologies. Persist that quorum fact even when the original ACK or a
+		// later commit notice was lost.
+		if frame.Index > r.confirmedIndex {
+			if err := r.persistProgress(r.durableIndex, frame.Index, r.appliedIndex, r.projection); err != nil {
 				r.poisoned = err
 				return Acknowledgement{}, fmt.Errorf("persist replica confirmation watermark: %w", err)
 			}
-			r.confirmedIndex = frame.ConfirmedIndex
+			r.confirmedIndex = frame.Index
 		}
 		return r.acknowledgement(), nil
 	}
@@ -265,10 +270,10 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		r.poisoned = err
 		return Acknowledgement{}, fmt.Errorf("persist replicated ordering record: %w", err)
 	}
-	confirmedIndex := r.confirmedIndex
-	if frame.ConfirmedIndex > confirmedIndex {
-		confirmedIndex = frame.ConfirmedIndex
-	}
+	// Primary local durability plus this Replica's sink and ordering fsync is a
+	// quorum in the supported two- and three-member groups. Confirmation is a
+	// durability fact, not dependent on whether the ACK reaches the Primary.
+	confirmedIndex := frame.Index
 	if err := r.persistProgress(frame.Index, confirmedIndex, r.appliedIndex, r.projection, persistedRecord.MAC); err != nil {
 		r.poisoned = err
 		return Acknowledgement{}, fmt.Errorf("persist replica durable watermark: %w", err)
@@ -330,6 +335,9 @@ func (r *ReplicaReceiver) Confirm(notice CommitNotice) error {
 	}
 	if err := notice.Validate(); err != nil {
 		return err
+	}
+	if r.promisedTerm != r.term {
+		return errors.New("commit notice term is below this member's durable promise")
 	}
 	if notice.ClusterID != r.clusterID || notice.Incarnation != r.incarnation || notice.NodeID != r.primaryNodeID || notice.Term != r.term {
 		return errors.New("commit notice identity or term does not match the active Primary")
@@ -402,4 +410,10 @@ func (r *ReplicaReceiver) ProjectionProgress() ProjectionState {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.projection
+}
+
+func (r *ReplicaReceiver) HealthError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.poisoned
 }

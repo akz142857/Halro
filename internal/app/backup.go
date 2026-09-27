@@ -140,12 +140,37 @@ func CreateBackupWithOptions(
 		return backup.Manifest{}, err
 	}
 	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
-	secretVault.Close()
-	clear(masterKey)
 	if err != nil {
+		secretVault.Close()
+		clear(masterKey)
 		clear(auditKey)
 		return backup.Manifest{}, err
 	}
+	if options.Replica {
+		governanceKey, deriveErr := vault.DeriveGovernanceHMACKey(ledgerKey)
+		if deriveErr != nil {
+			secretVault.Close()
+			clear(masterKey)
+			clear(auditKey)
+			clear(ledgerKey)
+			return backup.Manifest{}, deriveErr
+		}
+		metadataKey, loadErr := loadMetadataJournalHMACKey(metadata, secretVault, masterKey)
+		if loadErr == nil {
+			loadErr = recoverReplicaForBackup(cfg, *memberState, memberClusterKey, ledgerKey, auditKey, governanceKey, metadataKey)
+		}
+		clear(governanceKey)
+		clear(metadataKey)
+		if loadErr != nil {
+			secretVault.Close()
+			clear(masterKey)
+			clear(auditKey)
+			clear(ledgerKey)
+			return backup.Manifest{}, loadErr
+		}
+	}
+	secretVault.Close()
+	clear(masterKey)
 	var auditLog *audit.Log
 	if options.Replica {
 		auditLog, err = audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{Replica: true, RequireExisting: true})
@@ -186,6 +211,53 @@ func CreateBackupWithOptions(
 		return backup.Manifest{}, errors.Join(createErr, auditErr)
 	}
 	return manifest, nil
+}
+
+func recoverReplicaForBackup(
+	cfg config.Config,
+	state replication.MemberState,
+	clusterKey, ledgerKey, auditKey, governanceKey, metadataKey []byte,
+) error {
+	journal, err := replication.OpenExistingOrderingJournal(
+		cfg.OrderingJournalPath(), clusterKey, state.ClusterID, state.Incarnation,
+		state.DurableIndex, state.OrderingHeadMAC,
+	)
+	if err != nil {
+		return err
+	}
+	defer journal.Close()
+	head, _, headMAC := journal.Head()
+	if head != state.DurableIndex || headMAC != state.OrderingHeadMAC {
+		return errors.New("Replica backup requires runtime recovery because ordering is ahead of authenticated member state")
+	}
+	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
+		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
+		MetadataPath: filepathMetadataJournal(cfg), ProviderObjectDir: providerObjectSourceDir(cfg),
+		LedgerKey: ledgerKey, AuditKey: auditKey, GovernanceKey: governanceKey, MetadataKey: metadataKey,
+	})
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+	if err := replication.RecoverReplicaStores(journal, source); err != nil {
+		return fmt.Errorf("reconcile Replica stores before backup: %w", err)
+	}
+	want, err := journal.StoreCursorsThrough(state.AppliedIndex)
+	if err != nil {
+		return err
+	}
+	for store := replication.StoreLedger; store <= replication.StoreMetadata; store++ {
+		actual, err := source.Cursor(store)
+		if err != nil {
+			return err
+		}
+		if actual != want[store-replication.StoreLedger] {
+			return fmt.Errorf("Replica backup store %s ended at %d/%d, want authenticated applied prefix %d/%d",
+				replicationStoreName(store), actual.Generation, actual.Sequence,
+				want[store-replication.StoreLedger].Generation, want[store-replication.StoreLedger].Sequence)
+		}
+	}
+	return nil
 }
 
 func verifyBackupAuditCheckpoint(metadata *boltstore.Store, summary audit.Summary, readOnly bool) error {

@@ -85,6 +85,39 @@ func TestVerifyAuditAnchorsRefusesAnAnchorAtAPositionNoRecordOccupies(t *testing
 	}
 }
 
+func TestVerifyAuditAnchorsDetectsSameTenureSplitBrain(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := VerifyAudit(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := boltstore.AuditAnchor{
+		Sequence: 1, Records: summary.Records, LastHash: summary.LastHash,
+		ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7,
+	}
+	right := left
+	right.Sequence = 2
+	right.NodeID = "halro-1"
+	right.LastHash[0] ^= 0xff
+	verdicts, err := VerifyAuditAnchors(context.Background(), cfg, []boltstore.AuditAnchor{left, right})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(verdicts) != 2 || verdicts[0].Outcome != AnchorVerdictSplitBrain || verdicts[1].Outcome != AnchorVerdictSplitBrain {
+		t.Fatalf("split-brain verdicts=%#v", verdicts)
+	}
+}
+
 func TestVerifyAuditAnchorsDetectsARewrittenChainWithARecomputedTail(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {

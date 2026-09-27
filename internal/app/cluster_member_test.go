@@ -11,8 +11,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/replication"
 )
 
@@ -99,6 +102,32 @@ func TestPromoteMemberNoPeerPromiseIsExplicitAndDurable(t *testing.T) {
 	if err := EstablishMemberState(context.Background(), cfg, replication.RoleReplica, "inc_01", 1); err != nil {
 		t.Fatal(err)
 	}
+	// Simulate a failed prepare whose durable promise survived but whose
+	// response did not. A retry must allocate a newer term instead of reusing 2.
+	masterKey, err := unlockMemberMasterKey(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := replication.ReadStateWithMasterKey(cfg.ReplicationStatePath(), masterKey)
+	if err != nil {
+		clear(masterKey)
+		t.Fatal(err)
+	}
+	clusterKey, err := replication.DeriveClusterKey(masterKey, state.Incarnation)
+	clear(masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
+	clear(clusterKey[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publisher.Promise(2); err != nil {
+		publisher.Close()
+		t.Fatal(err)
+	}
+	publisher.Close()
 	result, err := PromoteMember(context.Background(), cfg, PromoteMemberOptions{
 		ExpectedTerm: 1, ExpectedAppliedIndex: 0, OldPrimaryNodeID: "halro-0",
 		FencedBy: replication.FenceNodeIsolated, NoPeerPromise: true,
@@ -107,14 +136,14 @@ func TestPromoteMemberNoPeerPromiseIsExplicitAndDurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.State.Role != replication.RolePrimary || result.State.Term != 2 || result.State.PromisedTerm != 2 || len(result.Promises) != 0 {
+	if result.State.Role != replication.RolePrimary || result.State.Term != 3 || result.State.PromisedTerm != 3 || len(result.Promises) != 0 {
 		t.Fatalf("promotion result=%#v", result)
 	}
 	onDisk, err := ClusterStatus(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if onDisk.Role != replication.RolePrimary || onDisk.Term != 2 || onDisk.PromisedTerm != 2 {
+	if onDisk.Role != replication.RolePrimary || onDisk.Term != 3 || onDisk.PromisedTerm != 3 {
 		t.Fatalf("on-disk state=%#v", onDisk)
 	}
 	if onDisk.DurableIndex != 2 || onDisk.ConfirmedIndex != 0 {
@@ -205,6 +234,33 @@ func TestReplicaMaintenanceSentinelIsPrivateAndImmediatelyObservable(t *testing.
 	}
 }
 
+func TestReplicaMaintenanceRejectsAnExistingUnsafeSentinel(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := standalone.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-1", Listen: "127.0.0.1:9911",
+		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("ab", 32)}},
+	}
+	if err := EstablishMemberState(context.Background(), cfg, replication.RoleReplica, "inc_01", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(maintenancePath(cfg), []byte("unsafe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetMemberMaintenance(context.Background(), cfg, true); err == nil {
+		t.Fatal("maintenance accepted an existing non-private sentinel")
+	}
+}
+
 func TestMaintenanceHandlersExposeOnlyLivenessAndAuthenticatedModeMetric(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Metrics.Enabled = true
@@ -250,6 +306,16 @@ func TestLeaveMemberRequiresPasswordAndAuditsBeforeRemovingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	readerPassword := []byte("another correct horse battery staple")
+	reader, err := adminauth.NewUser("reader", readerPassword, domain.AdminRoleReadOnly, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(reader.PasswordHash)
+	defer clear(reader.PasswordSalt)
+	if _, err := seedRuntime.store.PutAdminUser(context.Background(), reader, 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := seedRuntime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +331,12 @@ func TestLeaveMemberRequiresPasswordAndAuditsBeforeRemovingState(t *testing.T) {
 	}
 	if _, err := os.Stat(cfg.ReplicationStatePath()); err != nil {
 		t.Fatalf("failed leave removed member state: %v", err)
+	}
+	if err := LeaveMember(context.Background(), cfg, "production-a/halro-1", "reader", readerPassword); err == nil {
+		t.Fatal("cluster leave accepted a read-only administrator")
+	}
+	if _, err := os.Stat(cfg.ReplicationStatePath()); err != nil {
+		t.Fatalf("read-only leave removed member state: %v", err)
 	}
 	if err := LeaveMember(context.Background(), cfg, "production-a/halro-1", "admin", password); err != nil {
 		t.Fatal(err)

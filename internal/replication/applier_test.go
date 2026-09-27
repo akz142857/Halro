@@ -27,7 +27,7 @@ func (p *recordingProjection) ApplyMetadataThrough(_ context.Context, epoch, seq
 	return p.err
 }
 
-func TestReplicaApplierBatchesOnlyTheConfirmedPrefix(t *testing.T) {
+func TestReplicaApplierBatchesTheLocallyQuorumConfirmedPrefix(t *testing.T) {
 	receiver, journal := newTestReceiver(t, &recordingFrameSink{})
 	defer journal.Close()
 	frames := []Frame{
@@ -53,23 +53,20 @@ func TestReplicaApplierBatchesOnlyTheConfirmedPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 2}); err != nil {
-		t.Fatal(err)
-	}
-	if applied, err := applier.ApplyConfirmed(context.Background()); err != nil || applied != 2 {
+	if applied, err := applier.ApplyConfirmed(context.Background()); err != nil || applied != 4 {
 		t.Fatalf("first apply=%d err=%v", applied, err)
 	}
-	if len(projection.ledger) != 1 || projection.ledger[0] != (StoreCursor{Generation: 1, Sequence: 1}) || len(projection.metadata) != 0 {
+	if len(projection.ledger) != 1 || projection.ledger[0] != (StoreCursor{Generation: 1, Sequence: 1}) ||
+		len(projection.metadata) != 1 || projection.metadata[0] != (StoreCursor{Generation: 5, Sequence: 1}) {
 		t.Fatalf("first projection ledger=%v metadata=%v", projection.ledger, projection.metadata)
 	}
+	// A commit notice is a replay/catch-up signal. It must be idempotent after
+	// this Replica's fsync already formed the second durable vote.
 	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 4}); err != nil {
 		t.Fatal(err)
 	}
 	if applied, err := applier.ApplyConfirmed(context.Background()); err != nil || applied != 4 {
 		t.Fatalf("second apply=%d err=%v", applied, err)
-	}
-	if len(projection.metadata) != 1 || projection.metadata[0] != (StoreCursor{Generation: 5, Sequence: 1}) {
-		t.Fatalf("metadata projection=%v", projection.metadata)
 	}
 	_, _, applied := receiver.Progress()
 	if applied != 4 {

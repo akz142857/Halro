@@ -50,6 +50,7 @@ type replicationRuntime struct {
 	helloMu            sync.Mutex
 	startupPeers       map[string]replication.Hello
 	startupIndex       uint64
+	startupPeerQuorum  int
 	startupOnce        sync.Once
 	startupCtx         context.Context
 	startupStop        context.CancelFunc
@@ -449,8 +450,10 @@ func openPrimaryReplication(
 			return failSource(fmt.Errorf("record leadership establishment: %w", err))
 		}
 		runtime.startupIndex = commit.Index
+		runtime.startupPeerQuorum = 1
 	} else {
 		runtime.startupIndex = state.ConfirmedIndex
+		runtime.startupPeerQuorum = len(state.Peers)
 		for index := state.ConfirmedIndex + 1; index <= state.DurableIndex; index++ {
 			record, recordErr := journal.Record(index)
 			if recordErr != nil {
@@ -515,6 +518,10 @@ func (r *replicationRuntime) authorizePrimaryHello(_ context.Context, peer repli
 	if peer.Term > state.Term || peer.PromisedTerm > state.Term {
 		err := errors.New("peer has a higher durable term; Primary must step down before serving data")
 		r.coordinator.MarkUnavailable(err)
+		if _, publishErr := r.publisher.AdoptHigherTerm(peer.Term, peer.PromisedTerm); publishErr != nil {
+			err = errors.Join(err, fmt.Errorf("persist Primary demotion: %w", publishErr))
+		}
+		r.startupReady.Store(false)
 		r.fail(err)
 		return false, err
 	}
@@ -528,8 +535,8 @@ func (r *replicationRuntime) authorizePrimaryHello(_ context.Context, peer repli
 		return false, nil
 	}
 	head, _, _ := r.journal.Head()
-	if peer.DurableIndex > head || peer.AppliedIndex > state.ConfirmedIndex {
-		return false, errors.New("Replica advertises progress beyond the Primary authenticated prefix")
+	if peer.DurableIndex > head {
+		return false, errors.New("Replica advertises progress beyond the Primary authenticated ordering head")
 	}
 	r.helloMu.Lock()
 	r.startupPeers[peer.NodeID] = peer
@@ -558,7 +565,7 @@ func (r *replicationRuntime) authorizeReplicaHello(_ context.Context, peer repli
 	} else if peer.Term > state.Term || peer.PromisedTerm > state.PromisedTerm {
 		return false, errors.New("peer term is ahead without a matching promised Primary transition")
 	}
-	if peer.Role != replication.RolePrimary || peer.Term != state.Term || peer.PromisedTerm != state.Term {
+	if state.PromisedTerm != state.Term || peer.Role != replication.RolePrimary || peer.Term != state.Term || peer.PromisedTerm != state.Term {
 		return false, nil
 	}
 	if err := r.receiver.BindPrimary(peer.NodeID); err != nil {
@@ -601,9 +608,15 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 		proposal.ClusterID != state.ClusterID || proposal.Incarnation != state.Incarnation {
 		return errors.New("promotion proposal does not match the authenticated candidate")
 	}
-	previousRole := state.Role
-	if previousRole == replication.RolePrimary {
-		r.coordinator.MarkUnavailable(errors.New("durable higher-term promise received"))
+	primaryRuntime := r.coordinator != nil
+	if primaryRuntime {
+		if proposal.PlannedStepdown && proposal.OldPrimaryNodeID == state.NodeID {
+			if err := r.coordinator.FreezeForStepdown(proposal.ExpectedAppliedIndex); err != nil {
+				return err
+			}
+		} else {
+			r.coordinator.MarkUnavailable(errors.New("durable higher-term promise received"))
+		}
 		r.startupReady.Store(false)
 		state, err = r.publisher.Promise(proposal.Term)
 	} else {
@@ -619,7 +632,12 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 	_, lastFrameTerm, _ := r.journal.Head()
 	promise := replication.PromotionPromise{
 		Version: replication.PromotionProtocolVersion, ClusterID: state.ClusterID, Incarnation: state.Incarnation,
-		NodeID: state.NodeID, Role: state.Role, Term: state.Term, PromisedTerm: state.PromisedTerm,
+		NodeID: state.NodeID, Role: state.Role, PreviousRole: func() replication.Role {
+			if primaryRuntime {
+				return replication.RolePrimary
+			}
+			return replication.RoleReplica
+		}(), Term: state.Term, PromisedTerm: state.PromisedTerm,
 		DurableIndex: state.DurableIndex, AppliedIndex: state.AppliedIndex, LastFrameTerm: lastFrameTerm,
 	}
 	response, err := promise.MarshalBinary()
@@ -629,7 +647,7 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 	if err := send(response); err != nil {
 		return err
 	}
-	if previousRole == replication.RolePrimary {
+	if primaryRuntime {
 		r.fail(errors.New("Primary durably promised a higher term and stepped down"))
 	}
 	return nil
@@ -654,9 +672,9 @@ func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.H
 	if hello.DurableIndex > head {
 		return errors.New("Replica durable index exceeds Primary ordering head")
 	}
-	first := hello.DurableIndex
-	if first == 0 {
-		first = 1
+	first := hello.DurableIndex + 1
+	if hello.DurableIndex == ^uint64(0) {
+		return errors.New("Replica durable index is exhausted")
 	}
 	if err := replication.ReconstructRangeEach(
 		hello.ClusterID, hello.Incarnation, first, head, r.journal, r.source,
@@ -673,7 +691,11 @@ func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.H
 		return fmt.Errorf("retry pending replication after %s catch-up: %w", peer, err)
 	}
 	r.helloMu.Lock()
-	allPeers := len(r.startupPeers) == len(r.publisher.Snapshot().Peers)
+	requiredPeers := r.startupPeerQuorum
+	if requiredPeers == 0 {
+		requiredPeers = len(r.publisher.Snapshot().Peers)
+	}
+	allPeers := len(r.startupPeers) >= requiredPeers
 	r.helloMu.Unlock()
 	if allPeers {
 		r.startupOnce.Do(func() {

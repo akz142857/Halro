@@ -76,7 +76,7 @@ func CreateSeedManifest(ctx context.Context, cfg config.Config, targetNode, outp
 	if err := authenticateClusterOperator(ctx, cfg, masterKey, username, password, totpCode); err != nil {
 		return SeedManifest{}, err
 	}
-	files, err := hashSeedFiles(cfg.Storage.DataDir)
+	files, err := hashSeedFiles(cfg.Storage.DataDir, cfg.Storage.MetadataFile)
 	if err != nil {
 		return SeedManifest{}, err
 	}
@@ -107,6 +107,18 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 	if stagingData == filepath.Clean(cfg.Storage.DataDir) || filepath.Dir(stagingData) != filepath.Dir(filepath.Clean(cfg.Storage.DataDir)) {
 		return replication.MemberState{}, errors.New("seed staging directory must be a sibling of storage.data_dir for atomic publication")
 	}
+	stagingInfo, err := os.Lstat(stagingData)
+	if err != nil {
+		return replication.MemberState{}, err
+	}
+	if !stagingInfo.IsDir() || stagingInfo.Mode()&os.ModeSymlink != 0 || stagingInfo.Mode().Perm()&0o077 != 0 {
+		return replication.MemberState{}, errors.New("seed staging must be a private real directory, not a symlink")
+	}
+	publicationLock, err := lock.AcquireInitialization(cfg.Storage.DataDir)
+	if err != nil {
+		return replication.MemberState{}, fmt.Errorf("acquire seed publication lock: %w", err)
+	}
+	defer publicationLock.Close()
 	if _, err := os.Lstat(cfg.Storage.DataDir); err == nil {
 		return replication.MemberState{}, errors.New("seed install requires storage.data_dir to be absent")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -144,6 +156,13 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 	if err != nil {
 		return replication.MemberState{}, err
 	}
+	if err := syncSeedTree(stagingData); err != nil {
+		return replication.MemberState{}, fmt.Errorf("persist seed staging tree: %w", err)
+	}
+	currentInfo, err := os.Lstat(stagingData)
+	if err != nil || !os.SameFile(stagingInfo, currentInfo) {
+		return replication.MemberState{}, errors.New("seed staging directory changed during verification")
+	}
 	if err := os.Rename(stagingData, cfg.Storage.DataDir); err != nil {
 		return replication.MemberState{}, fmt.Errorf("publish seed snapshot: %w", err)
 	}
@@ -151,6 +170,45 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 		return replication.MemberState{}, fmt.Errorf("persist seed publication: %w", err)
 	}
 	return state, nil
+}
+
+func syncSeedTree(root string) error {
+	var directories []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("seed path %s is a symlink or is accessible by group/other", path)
+		}
+		if entry.IsDir() {
+			directories = append(directories, path)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("seed path %s is not a regular file", path)
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		return errors.Join(syncErr, closeErr)
+	})
+	if err != nil {
+		return err
+	}
+	for index := len(directories) - 1; index >= 0; index-- {
+		if err := durable.SyncDirectory(directories[index]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {
@@ -202,7 +260,7 @@ func validateSeedManifest(cfg config.Config, staging string, manifest SeedManife
 	if err != nil || !hmac.Equal(got, want[:]) {
 		return errors.New("seed manifest MAC is invalid")
 	}
-	actual, err := hashSeedFiles(staging)
+	actual, err := hashSeedFiles(staging, cfg.Storage.MetadataFile)
 	if err != nil {
 		return err
 	}
@@ -258,10 +316,10 @@ func seedManifestMAC(manifest SeedManifest, key []byte) ([sha256.Size]byte, erro
 	return result, nil
 }
 
-func hashSeedFiles(root string) ([]SeedFile, error) {
+func hashSeedFiles(root, metadataFile string) ([]SeedFile, error) {
 	var files []SeedFile
 	for _, relativeRoot := range []string{
-		"metadata.db", "metadata.journal", "ledger", "audit", "governance", "provider-objects",
+		metadataFile, "metadata.journal", "ledger", "audit", "governance", "provider-objects",
 		filepath.Join(replication.ClusterDirectoryName, "ordering.journal"),
 		filepath.Join(replication.ClusterDirectoryName, "provider-object-sources"),
 	} {

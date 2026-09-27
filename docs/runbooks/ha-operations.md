@@ -132,6 +132,9 @@ halro cluster leave --config /etc/halro/config.yaml \
   --password-file /secure/admin-password
 ```
 
-Remove the `replication` block only after `leave` succeeds. Destroy or isolate
-every other retained member directory so two Standalone copies cannot both
-hold live Provider credentials.
+Remove the `replication` block only after `leave` succeeds. The command atomically
+renames the authenticated member state to the private `cluster.left` retirement
+tombstone; retain it until the change is accepted, then destroy it with the
+retired PVC under the normal data-retirement procedure. Destroy or isolate every
+other retained member directory so two Standalone copies cannot both hold live
+Provider credentials.

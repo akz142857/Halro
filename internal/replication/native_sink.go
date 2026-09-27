@@ -125,8 +125,19 @@ func (s *NativeSink) persistProviderObject(frame Frame) error {
 	if err != nil {
 		return closeWith(err)
 	}
-	if uint64(info.Size()) != metadata.Offset {
+	if uint64(info.Size()) < metadata.Offset {
 		return closeWith(errors.New("provider-object chunk does not continue its staging prefix"))
+	}
+	if uint64(info.Size()) > metadata.Offset {
+		// The native chunk fsync precedes the ordering append. A crash in that
+		// gap leaves an unauthorized suffix which the Primary will retransmit.
+		// Remove it before replaying this exact frame.
+		if err := file.Truncate(int64(metadata.Offset)); err != nil {
+			return closeWith(err)
+		}
+		if err := file.Sync(); err != nil {
+			return closeWith(err)
+		}
 	}
 	if _, err := file.Seek(int64(metadata.Offset), io.SeekStart); err != nil {
 		return closeWith(err)
@@ -141,6 +152,11 @@ func (s *NativeSink) persistProviderObject(frame Frame) error {
 	}
 	if err := file.Close(); err != nil {
 		return err
+	}
+	if s.objectSourceDir != "" {
+		if err := PersistProviderObjectChunkSource(s.objectSourceDir, metadata, frame.Payload); err != nil {
+			return err
+		}
 	}
 	if !metadata.Final {
 		return nil
@@ -163,15 +179,6 @@ func (s *NativeSink) persistProviderObject(frame Frame) error {
 	}
 	if err := durable.SyncDirectory(s.objectDir); err != nil {
 		return err
-	}
-	if s.objectSourceDir != "" {
-		contents, err := os.ReadFile(finalPath)
-		if err != nil {
-			return err
-		}
-		if err := PersistProviderObjectSource(s.objectSourceDir, metadata.Name, contents); err != nil {
-			return err
-		}
 	}
 	return nil
 }

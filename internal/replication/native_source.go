@@ -33,7 +33,7 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 	if !filepath.IsAbs(directory) {
 		return errors.New("provider-object source directory must be absolute")
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if _, err := ensureProviderObjectSourceDirectory(directory); err != nil {
 		return err
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
@@ -44,7 +44,13 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 		if sha256.Sum256(existing) != digest {
 			return errors.New("provider-object source already exists with different bytes")
 		}
-		return nil
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			return openErr
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		return errors.Join(syncErr, closeErr, durable.SyncDirectory(directory))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -75,6 +81,98 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 	return durable.SyncDirectory(directory)
 }
 
+// PersistProviderObjectChunkSource makes every durably received chunk
+// reconstructable after this Replica is promoted. The source may be a prefix;
+// a final chunk authenticates the complete object before returning.
+func PersistProviderObjectChunkSource(directory string, metadata ProviderObjectMetadata, payload []byte) error {
+	if err := metadata.Validate(); err != nil {
+		return err
+	}
+	if uint64(len(payload)) != metadata.ChunkLength || !filepath.IsAbs(directory) {
+		return errors.New("provider-object chunk source is invalid")
+	}
+	if _, err := ensureProviderObjectSourceDirectory(directory); err != nil {
+		return err
+	}
+	path := filepath.Join(directory, metadata.Name)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	closeWith := func(cause error) error { return errors.Join(cause, file.Close()) }
+	if err := file.Chmod(0o600); err != nil {
+		return closeWith(err)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return closeWith(err)
+	}
+	end := metadata.Offset + metadata.ChunkLength
+	if uint64(info.Size()) < metadata.Offset {
+		return closeWith(errors.New("provider-object source chunk has a prefix gap"))
+	}
+	if uint64(info.Size()) >= end {
+		existing := make([]byte, len(payload))
+		if len(existing) > 0 {
+			if _, err := file.ReadAt(existing, int64(metadata.Offset)); err != nil {
+				return closeWith(err)
+			}
+		}
+		if !equalBytes(existing, payload) {
+			return closeWith(errors.New("provider-object source chunk already exists with different bytes"))
+		}
+	} else {
+		if uint64(info.Size()) != metadata.Offset {
+			return closeWith(errors.New("provider-object source chunk is partially written"))
+		}
+		if _, err := file.WriteAt(payload, int64(metadata.Offset)); err != nil {
+			return closeWith(err)
+		}
+	}
+	if err := file.Sync(); err != nil {
+		return closeWith(err)
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if metadata.Final {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if uint64(len(contents)) != metadata.TotalLength || sha256.Sum256(contents) != metadata.Digest {
+			return errors.New("provider-object source digest does not match final chunk")
+		}
+	}
+	return durable.SyncDirectory(directory)
+}
+
+func ensureProviderObjectSourceDirectory(directory string) (bool, error) {
+	if !filepath.IsAbs(directory) {
+		return false, errors.New("provider-object source directory must be absolute")
+	}
+	info, statErr := os.Lstat(directory)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return false, statErr
+	}
+	if statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
+		return false, errors.New("provider-object source path must be a real directory")
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return false, err
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return false, err
+	}
+	if created {
+		if err := durable.SyncDirectory(filepath.Dir(directory)); err != nil {
+			return false, err
+		}
+	}
+	return created, nil
+}
+
 func (s *NativeSource) ReadProviderObjectChunk(metadata ProviderObjectMetadata) ([]byte, error) {
 	if s.options.ProviderObjectDir == "" {
 		return nil, errors.New("provider-object source directory is unavailable")
@@ -92,7 +190,8 @@ func (s *NativeSource) ReadProviderObjectChunk(metadata ProviderObjectMetadata) 
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || uint64(info.Size()) != metadata.TotalLength {
+	end := metadata.Offset + metadata.ChunkLength
+	if !info.Mode().IsRegular() || uint64(info.Size()) < end || metadata.Final && uint64(info.Size()) != metadata.TotalLength {
 		return nil, errors.New("provider-object source size does not match ordering metadata")
 	}
 	payload := make([]byte, int(metadata.ChunkLength))

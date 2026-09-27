@@ -208,6 +208,13 @@ func (r *Runtime) verifyReplicaTOTP(active []domain.AdminMFAAuthenticator, code 
 	if code == "" {
 		return "", false
 	}
+	// Verification and watermark publication are one transaction. Atomic
+	// rename protects each file write but does not prevent two logins from both
+	// accepting the same step after reading the same old watermark. Reuse the
+	// Replica login-rate mutex: allowAdminLogin releases it before this method,
+	// and serializing the remainder of login is the intended boundary.
+	r.adminLoginMu.Lock()
+	defer r.adminLoginMu.Unlock()
 	watermarks, err := readTOTPWatermarks(r.config)
 	if err != nil {
 		return "", false

@@ -2373,6 +2373,15 @@ func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
 	}
 	if r.replication != nil && r.replication.role == replication.RoleReplica {
 		state := r.replication.publisher.Snapshot()
+		if state.DurableIndex != state.ConfirmedIndex || state.ConfirmedIndex != state.AppliedIndex ||
+			r.replication.receiver == nil || r.replication.receiver.HealthError() != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+				"status": "not_ready", "role": "replica", "replication": "not_candidate",
+				"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
+				"applied_index": state.AppliedIndex,
+			})
+			return
+		}
 		writeJSON(writer, http.StatusOK, map[string]any{
 			"status": "ready", "role": "replica", "durable_index": state.DurableIndex,
 			"confirmed_index": state.ConfirmedIndex, "applied_index": state.AppliedIndex,

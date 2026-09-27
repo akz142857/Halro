@@ -73,3 +73,68 @@ func TestPersistProviderObjectSourceAcceptsObjectsLargerThanOneFrame(t *testing.
 		t.Fatalf("persisted large object length=%d err=%v", len(got), err)
 	}
 }
+
+func TestProviderObjectSourceRefusesSymlinkDirectory(t *testing.T) {
+	root := t.TempDir()
+	realDirectory := filepath.Join(root, "real")
+	if err := os.Mkdir(realDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedDirectory := filepath.Join(root, "linked")
+	if err := os.Symlink(realDirectory, linkedDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := PersistProviderObjectSource(linkedDirectory, "object.content", []byte("sealed")); err == nil {
+		t.Fatal("provider-object source accepted a symlink directory")
+	}
+}
+
+func TestProviderObjectChunkReplayRepairsNativeTailAndKeepsPartialReconstructionSource(t *testing.T) {
+	root := t.TempDir()
+	objectDir := filepath.Join(root, "objects")
+	sourceDir := filepath.Join(root, "sources")
+	contents := []byte("abcdefghijkl")
+	digest := sha256.Sum256(contents)
+	sink := &NativeSink{objectDir: objectDir, objectSourceDir: sourceDir}
+	if err := os.MkdirAll(objectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chunk := func(offset uint64, final bool) (ProviderObjectMetadata, Frame) {
+		metadata := ProviderObjectMetadata{
+			Name: "file_2.content", Offset: offset, ChunkLength: 4, TotalLength: uint64(len(contents)),
+			Digest: digest, Final: final,
+		}
+		encoded, err := metadata.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return metadata, Frame{Kind: KindProviderObject, Metadata: encoded, Payload: contents[offset : offset+4]}
+	}
+	_, first := chunk(0, false)
+	if err := sink.Persist(first); err != nil {
+		t.Fatal(err)
+	}
+	secondMetadata, second := chunk(4, false)
+	if err := sink.Persist(second); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after the chunk fsync but before its ordering append:
+	// a fresh sink receives the same frame again.
+	sink = &NativeSink{objectDir: objectDir, objectSourceDir: sourceDir}
+	if err := sink.Persist(second); err != nil {
+		t.Fatalf("replayed middle chunk: %v", err)
+	}
+	source := &NativeSource{options: NativeSourceOptions{ProviderObjectDir: sourceDir}}
+	got, err := source.ReadProviderObjectChunk(secondMetadata)
+	if err != nil || string(got) != "efgh" {
+		t.Fatalf("partial reconstruction source=%q err=%v", got, err)
+	}
+	_, final := chunk(8, true)
+	if err := sink.Persist(final); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(filepath.Join(objectDir, "file_2.content"))
+	if err != nil || string(got) != string(contents) {
+		t.Fatalf("final object=%q err=%v", got, err)
+	}
+}

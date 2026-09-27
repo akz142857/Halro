@@ -144,12 +144,6 @@ func TestReplicaReceiverPersistsBeforeAcknowledgingAndDeduplicates(t *testing.T)
 	if ack.Index != 2 || ack.AppliedIndex != 0 || len(sink.frames) != 2 {
 		t.Fatalf("ack=%#v persisted=%d", ack, len(sink.frames))
 	}
-	if err := receiver.AdvanceApplied(2); err == nil || !strings.Contains(err.Error(), "confirmed") {
-		t.Fatalf("unconfirmed apply error=%v", err)
-	}
-	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 2}); err != nil {
-		t.Fatal(err)
-	}
 	if err := receiver.AdvanceApplied(2); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +186,7 @@ func TestReplicaReceiverPersistsEveryExternallyVisibleWatermark(t *testing.T) {
 	if _, err := receiver.Receive(encodeTestReplicaFrame(t, 1, KindLeadershipEstablished)); err != nil {
 		t.Fatal(err)
 	}
-	if len(persisted) != 1 || persisted[0].durable != 1 || persisted[0].confirmed != 0 || persisted[0].applied != 0 || persisted[0].head == ([32]byte{}) {
+	if len(persisted) != 1 || persisted[0].durable != 1 || persisted[0].confirmed != 1 || persisted[0].applied != 0 || persisted[0].head == ([32]byte{}) {
 		t.Fatalf("durable progress=%#v", persisted)
 	}
 	if err := receiver.Confirm(CommitNotice{ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 1}); err != nil {
@@ -201,7 +195,7 @@ func TestReplicaReceiverPersistsEveryExternallyVisibleWatermark(t *testing.T) {
 	if err := receiver.AdvanceApplied(1); err != nil {
 		t.Fatal(err)
 	}
-	if len(persisted) != 3 || persisted[1].confirmed != 1 || persisted[1].applied != 0 || persisted[2].confirmed != 1 || persisted[2].applied != 1 {
+	if len(persisted) != 2 || persisted[1].confirmed != 1 || persisted[1].applied != 1 {
 		t.Fatalf("persisted progress=%#v", persisted)
 	}
 }

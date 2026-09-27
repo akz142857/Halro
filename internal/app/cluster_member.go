@@ -260,10 +260,15 @@ func PromoteMember(ctx context.Context, cfg config.Config, options PromoteMember
 	if err := authenticateClusterOperator(ctx, cfg, masterKey, options.Username, options.Password, options.TOTPCode); err != nil {
 		return PromoteMemberResult{}, err
 	}
-	proposalTerm := state.PromisedTerm
-	if proposalTerm == state.Term {
-		proposalTerm++
+	if state.PromisedTerm == ^uint64(0) {
+		return PromoteMemberResult{}, errors.New("promotion term space is exhausted")
 	}
+	// A failed prepare may have left promises durable while its response was
+	// lost. Promises are intentionally not idempotent without a persisted
+	// candidate identity, because accepting the same term for two candidates
+	// would violate election safety. Every retry therefore follows the protocol
+	// rule T' = max(term, promised_term) + 1 and makes a fresh durable round.
+	proposalTerm := state.PromisedTerm + 1
 	proposal := replication.PromotionProposal{
 		Version: replication.PromotionProtocolVersion, ClusterID: state.ClusterID, Incarnation: state.Incarnation,
 		CandidateNodeID: state.NodeID, Term: proposalTerm, ExpectedTerm: options.ExpectedTerm,
@@ -279,11 +284,9 @@ func PromoteMember(ctx context.Context, cfg config.Config, options PromoteMember
 		return PromoteMemberResult{}, err
 	}
 	defer publisher.Close()
-	if state.PromisedTerm == state.Term {
-		state, err = publisher.Promise(proposalTerm)
-		if err != nil {
-			return PromoteMemberResult{}, err
-		}
+	state, err = publisher.Promise(proposalTerm)
+	if err != nil {
+		return PromoteMemberResult{}, err
 	}
 	localHello := promotionHello(state)
 	promises := make([]replication.PromotionPromise, 0, len(cfg.Replication.Peers))
@@ -744,7 +747,7 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 	}
 	defer metadata.Close()
 	user, err := metadata.GetAdminUser(ctx, username)
-	if err != nil || !adminauth.VerifyPassword(user, password) {
+	if err != nil || user.Role != domain.AdminRoleAdministrator || !adminauth.VerifyPassword(user, password) {
 		return errors.New("administrator authentication failed")
 	}
 	secretVault, err := vault.New(masterKey)
@@ -767,7 +770,7 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 			EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: "admin", ActorID: username,
 			Action: "cluster.leave", TargetType: "cluster_member", TargetID: state.NodeID, Outcome: "success",
 			Metadata: map[string]any{"cluster_id": state.ClusterID, "incarnation": state.Incarnation,
-				"term": state.Term, "applied_index": state.AppliedIndex},
+				"node_id": state.NodeID, "role": state.Role, "term": state.Term, "applied_index": state.AppliedIndex},
 		})
 	}
 	if closeErr := auditLog.Close(); err == nil {
@@ -780,8 +783,18 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 	if filepath.Dir(clusterPath) != filepath.Clean(cfg.Storage.DataDir) || filepath.Base(clusterPath) != replication.ClusterDirectoryName {
 		return errors.New("refusing to remove an unexpected cluster path")
 	}
-	if err := os.RemoveAll(clusterPath); err != nil {
-		return fmt.Errorf("remove cluster member state after leave audit: %w", err)
+	retiredPath := filepath.Join(cfg.Storage.DataDir, "cluster.left")
+	if _, err := os.Lstat(retiredPath); err == nil {
+		return errors.New("refusing cluster leave because cluster.left already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// Rename is the irreversible boundary. Keeping the authenticated retired
+	// state as a private tombstone makes a power loss atomic: runtime guards no
+	// longer see cluster/, while no recursive deletion can strand a half-member
+	// that neither leave nor serve can reopen.
+	if err := os.Rename(clusterPath, retiredPath); err != nil {
+		return fmt.Errorf("retire cluster member state after leave audit: %w", err)
 	}
 	return durable.SyncDirectory(cfg.Storage.DataDir)
 }

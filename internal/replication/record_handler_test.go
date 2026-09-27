@@ -53,8 +53,8 @@ func TestReplicaRecordHandlerPersistsAppliesAndAcknowledges(t *testing.T) {
 	if len(acknowledgements) != 3 {
 		t.Fatalf("acknowledgements=%d", len(acknowledgements))
 	}
-	if acknowledgements[0].DurableIndex != 1 || acknowledgements[0].AppliedIndex != 0 ||
-		acknowledgements[1].DurableIndex != 2 || acknowledgements[1].AppliedIndex != 1 ||
+	if acknowledgements[0].DurableIndex != 1 || acknowledgements[0].AppliedIndex != 1 ||
+		acknowledgements[1].DurableIndex != 2 || acknowledgements[1].AppliedIndex != 2 ||
 		acknowledgements[2].DurableIndex != 2 || acknowledgements[2].AppliedIndex != 2 {
 		t.Fatalf("acknowledgements=%#v", acknowledgements)
 	}

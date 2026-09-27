@@ -163,6 +163,9 @@ func (c *PrimaryCoordinator) RecordDurable(frame Frame) (LocalCommit, error) {
 	if c.poisoned != nil {
 		return LocalCommit{}, fmt.Errorf("primary coordinator requires restart after an uncertain durable transition: %w", c.poisoned)
 	}
+	if c.manualUnavailable != nil {
+		return LocalCommit{}, fmt.Errorf("%w: %v", ErrReplicationUnavailable, c.manualUnavailable)
+	}
 	index, _, _ := c.journal.Head()
 	frame.Index = index + 1
 	frame.Term = c.term
@@ -210,6 +213,9 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 	defer c.mu.Unlock()
 	if c.poisoned != nil {
 		return c.confirmed, fmt.Errorf("primary coordinator requires restart after an uncertain durable transition: %w", c.poisoned)
+	}
+	if c.manualUnavailable != nil {
+		return c.confirmed, fmt.Errorf("%w: %v", ErrReplicationUnavailable, c.manualUnavailable)
 	}
 	confirmed, err := c.confirmations.Acknowledge(ack)
 	if err != nil {
@@ -272,6 +278,27 @@ func (c *PrimaryCoordinator) MarkUnavailable(cause error) {
 	c.manualUnavailable = cause
 	c.unavailable = cause
 	c.signalChanged()
+}
+
+// FreezeForStepdown atomically verifies the handoff prefix and prevents every
+// later old-term ordering append or ACK advance. A native store hook already
+// in flight may fail after its own fsync; startup recovery treats that as an
+// unordered tail and removes it before the member can serve again.
+func (c *PrimaryCoordinator) FreezeForStepdown(expectedIndex uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.poisoned != nil {
+		return fmt.Errorf("primary coordinator requires restart after an uncertain durable transition: %w", c.poisoned)
+	}
+	head, _, _ := c.journal.Head()
+	if head != expectedIndex || c.confirmed != expectedIndex {
+		return fmt.Errorf("planned stepdown target index %d does not match Primary durable/confirmed prefix %d/%d", expectedIndex, head, c.confirmed)
+	}
+	c.manualUnavailable = errors.New("planned stepdown frozen")
+	c.available = false
+	c.unavailable = c.manualUnavailable
+	c.signalChanged()
+	return nil
 }
 
 func (c *PrimaryCoordinator) MarkAvailable() {

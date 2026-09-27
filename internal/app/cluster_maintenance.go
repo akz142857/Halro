@@ -60,7 +60,11 @@ func SetMemberMaintenance(ctx context.Context, cfg config.Config, enabled bool) 
 	path := maintenancePath(cfg)
 	if enabled {
 		if _, err := os.Lstat(path); err == nil {
-			return nil
+			valid, validationErr := memberMaintenanceRequested(cfg)
+			if validationErr != nil || !valid {
+				return validationErr
+			}
+			return durable.SyncDirectory(cfg.ClusterDirectoryPath())
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

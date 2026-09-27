@@ -91,6 +91,15 @@ func TestSeedApprovalAuthenticatesStagingBeforeAtomicReplicaPublication(t *testi
 	if manifest.TargetNode != "halro-1" || manifest.Index != 1 || len(manifest.Files) == 0 || manifest.MAC == "" || manifest.OrderingHeadMAC == "" {
 		t.Fatalf("seed manifest=%#v", manifest)
 	}
+	foundMetadata := false
+	for _, file := range manifest.Files {
+		if file.Path == source.Storage.MetadataFile {
+			foundMetadata = true
+		}
+	}
+	if !foundMetadata {
+		t.Fatalf("seed manifest does not authenticate configured metadata file %q", source.Storage.MetadataFile)
+	}
 
 	targetRoot := t.TempDir()
 	target := source
@@ -134,6 +143,24 @@ func TestSeedApprovalAuthenticatesStagingBeforeAtomicReplicaPublication(t *testi
 	objectSource, err := os.ReadFile(filepath.Join(target.ClusterDirectoryPath(), "provider-object-sources", "seeded.content"))
 	if err != nil || string(objectSource) != "sealed-seed-object" {
 		t.Fatalf("seeded provider-object source=%q err=%v", objectSource, err)
+	}
+}
+
+func TestSeedInstallRejectsSymlinkStagingRoot(t *testing.T) {
+	targetRoot := t.TempDir()
+	target := testConfig(t)
+	target.Storage.DataDir = filepath.Join(targetRoot, "data")
+	target.Replication = &config.Replication{ClusterID: "production-a", NodeID: "halro-1"}
+	realStaging := filepath.Join(t.TempDir(), "real-staging")
+	if err := os.MkdirAll(realStaging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stagingLink := filepath.Join(targetRoot, ".seed-staging")
+	if err := os.Symlink(realStaging, stagingLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallSeedSnapshot(context.Background(), target, stagingLink, filepath.Join(t.TempDir(), "manifest.json")); err == nil || !strings.Contains(err.Error(), "not a symlink") {
+		t.Fatalf("symlink staging error=%v", err)
 	}
 }
 

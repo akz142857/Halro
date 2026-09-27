@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -76,6 +77,51 @@ func TestAdminMFALoginRequiresAndConsumesSecondFactor(t *testing.T) {
 	runtime.adminRouter().ServeHTTP(replayResponse, replay)
 	if replayResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("challenge replay status=%d", replayResponse.Code)
+	}
+}
+
+func TestReplicaTOTPWatermarkConsumesAConcurrentCodeOnlyOnce(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := os.MkdirAll(cfg.ClusterDirectoryPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := []byte("12345678901234567890")
+	ciphertext, err := runtime.vault.EncryptAdminMFA("mfa_replica_race", "admin", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	active := []domain.AdminMFAAuthenticator{{
+		ID: "mfa_replica_race", Username: "admin", Type: domain.AdminMFATypeTOTP,
+		SecretCiphertext: ciphertext, Status: domain.AdminMFAStatusActive,
+	}}
+	code := adminauth.TOTPCode(secret, now.Unix()/adminauth.TOTPPeriod)
+	start := make(chan struct{})
+	results := make(chan bool, 2)
+	for range 2 {
+		go func() {
+			<-start
+			_, ok := runtime.verifyReplicaTOTP(active, code, now)
+			results <- ok
+		}()
+	}
+	close(start)
+	accepted := 0
+	for range 2 {
+		if <-results {
+			accepted++
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("concurrent Replica TOTP acceptances=%d, want exactly one", accepted)
 	}
 }
 

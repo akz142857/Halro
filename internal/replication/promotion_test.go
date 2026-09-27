@@ -41,7 +41,7 @@ func TestPromotionRecordsRoundTripAndRejectUnknownFields(t *testing.T) {
 
 	promise := PromotionPromise{
 		Version: PromotionProtocolVersion, ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-2",
-		Role: RoleReplica, Term: 7, PromisedTerm: 8, DurableIndex: 42, AppliedIndex: 42, LastFrameTerm: 7,
+		Role: RoleReplica, PreviousRole: RoleReplica, Term: 7, PromisedTerm: 8, DurableIndex: 42, AppliedIndex: 42, LastFrameTerm: 7,
 	}
 	encoded, err = promise.MarshalBinary()
 	if err != nil {
@@ -70,7 +70,7 @@ func TestValidatePromotionPromisesUsesTermThenIndexFreshness(t *testing.T) {
 	proposal := testPromotionProposal()
 	promise := PromotionPromise{
 		Version: PromotionProtocolVersion, ClusterID: candidate.ClusterID, Incarnation: candidate.Incarnation, NodeID: "halro-1",
-		Role: RoleReplica, Term: 7, PromisedTerm: 8, DurableIndex: 42, AppliedIndex: 41, LastFrameTerm: 7,
+		Role: RoleReplica, PreviousRole: RoleReplica, Term: 7, PromisedTerm: 8, DurableIndex: 42, AppliedIndex: 41, LastFrameTerm: 7,
 	}
 	if err := ValidatePromotionPromises(candidate, proposal, []PromotionPromise{promise}, false); err != nil {
 		t.Fatal(err)
@@ -96,5 +96,28 @@ func TestNoPeerPromiseIsRestrictedToTwoMemberCluster(t *testing.T) {
 	candidate.Peers = append(candidate.Peers, StatePeer{Name: "halro-2", Address: "halro-2.internal:9910", SPKISHA256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"})
 	if err := ValidatePromotionPromises(candidate, proposal, nil, true); err == nil {
 		t.Fatal("three-member no-peer promotion was accepted")
+	}
+}
+
+func TestPlannedStepdownRequiresNamedOldPrimaryPromise(t *testing.T) {
+	candidate := testPromotionCandidate()
+	proposal := testPromotionProposal()
+	proposal.PlannedStepdown = true
+	proposal.FencedBy = FencePrimaryPromise
+	proposal.ActorID = "admin_1"
+
+	replicaPromise := PromotionPromise{
+		Version: PromotionProtocolVersion, ClusterID: candidate.ClusterID, Incarnation: candidate.Incarnation,
+		NodeID: "halro-2", Role: RoleReplica, PreviousRole: RoleReplica, Term: 7, PromisedTerm: 8,
+		DurableIndex: 42, AppliedIndex: 42, LastFrameTerm: 7,
+	}
+	if err := ValidatePromotionPromises(candidate, proposal, []PromotionPromise{replicaPromise}, false); err == nil {
+		t.Fatal("planned stepdown accepted a promise only from another Replica")
+	}
+	oldPrimaryPromise := replicaPromise
+	oldPrimaryPromise.NodeID = proposal.OldPrimaryNodeID
+	oldPrimaryPromise.PreviousRole = RolePrimary
+	if err := ValidatePromotionPromises(candidate, proposal, []PromotionPromise{oldPrimaryPromise}, false); err != nil {
+		t.Fatalf("planned stepdown rejected the named old Primary promise: %v", err)
 	}
 }

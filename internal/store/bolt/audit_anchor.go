@@ -31,6 +31,7 @@ type AuditAnchor struct {
 	Incarnation string    `json:"incarnation,omitempty"`
 	NodeID      string    `json:"node_id,omitempty"`
 	Term        uint64    `json:"term,omitempty"`
+	TargetID    string    `json:"target_id,omitempty"`
 	ObservedAt  time.Time `json:"observed_at"`
 }
 
