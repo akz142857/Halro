@@ -719,14 +719,61 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 	if username == "" || len(password) == 0 {
 		return errors.New("cluster leave requires an administrator username and password")
 	}
-	if err := replication.RequireMemberRuntime(cfg.Storage.DataDir, true, "cluster leave"); err != nil {
-		return err
+	wantConfirmation := cfg.Replication.ClusterID + "/" + cfg.Replication.NodeID
+	if confirm != wantConfirmation {
+		return fmt.Errorf("--confirm must exactly equal %q", wantConfirmation)
 	}
+	clusterPath := cfg.ClusterDirectoryPath()
+	if filepath.Dir(clusterPath) != filepath.Clean(cfg.Storage.DataDir) || filepath.Base(clusterPath) != replication.ClusterDirectoryName {
+		return errors.New("refusing to remove an unexpected cluster path")
+	}
+	retiredPath := filepath.Join(cfg.Storage.DataDir, "cluster.left")
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return fmt.Errorf("cluster leave requires the member process to be stopped: %w", err)
 	}
 	defer dataLock.Close()
+	clusterInfo, clusterErr := os.Lstat(clusterPath)
+	retiredInfo, retiredErr := os.Lstat(retiredPath)
+	if clusterErr == nil && retiredErr == nil {
+		return errors.New("refusing cluster leave because active and retired member state both exist")
+	}
+	if clusterErr != nil && !errors.Is(clusterErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect active cluster member state: %w", clusterErr)
+	}
+	if retiredErr != nil && !errors.Is(retiredErr, os.ErrNotExist) {
+		return fmt.Errorf("inspect retired cluster member state: %w", retiredErr)
+	}
+	if retiredErr == nil {
+		if !retiredInfo.IsDir() {
+			return errors.New("refusing cluster leave because cluster.left is not a directory")
+		}
+		if err := authenticateLeaveAdministrator(ctx, cfg, username, password); err != nil {
+			return err
+		}
+		// A prior call crossed the atomic rename boundary. Repeating both
+		// directory barriers makes either uncertain fsync outcome recoverable;
+		// cleanup may then resume even if an earlier RemoveAll was interrupted.
+		if err := durable.SyncDirectory(cfg.Storage.DataDir); err != nil {
+			return fmt.Errorf("sync retired cluster member state: %w", err)
+		}
+		return cleanupRetiredMemberState(cfg.Storage.DataDir, retiredPath)
+	}
+	if clusterErr != nil {
+		// No active state and no tombstone is the idempotent completed result. A
+		// previous call may have removed cluster.left and then lost the final
+		// directory-fsync result; repeat that barrier before reporting success.
+		if err := authenticateLeaveAdministrator(ctx, cfg, username, password); err != nil {
+			return err
+		}
+		return durable.SyncDirectory(cfg.Storage.DataDir)
+	}
+	if !clusterInfo.IsDir() {
+		return errors.New("refusing cluster leave because cluster is not a directory")
+	}
+	if err := replication.RequireMemberRuntime(cfg.Storage.DataDir, true, "cluster leave"); err != nil {
+		return err
+	}
 	masterKey, err := unlockMemberMasterKey(ctx, cfg)
 	if err != nil {
 		return err
@@ -737,10 +784,6 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 		return err
 	}
 	defer clear(clusterKey[:])
-	wantConfirmation := state.ClusterID + "/" + state.NodeID
-	if confirm != wantConfirmation {
-		return fmt.Errorf("--confirm must exactly equal %q", wantConfirmation)
-	}
 	metadata, err := boltstore.OpenPrimary(cfg.MetadataPath())
 	if err != nil {
 		return err
@@ -779,16 +822,6 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 	if err != nil {
 		return err
 	}
-	clusterPath := cfg.ClusterDirectoryPath()
-	if filepath.Dir(clusterPath) != filepath.Clean(cfg.Storage.DataDir) || filepath.Base(clusterPath) != replication.ClusterDirectoryName {
-		return errors.New("refusing to remove an unexpected cluster path")
-	}
-	retiredPath := filepath.Join(cfg.Storage.DataDir, "cluster.left")
-	if _, err := os.Lstat(retiredPath); err == nil {
-		return errors.New("refusing cluster leave because cluster.left already exists")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
 	// Rename is the irreversible boundary. Keeping the authenticated retired
 	// state as a private tombstone makes a power loss atomic: runtime guards no
 	// longer see cluster/, while no recursive deletion can strand a half-member
@@ -796,5 +829,31 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 	if err := os.Rename(clusterPath, retiredPath); err != nil {
 		return fmt.Errorf("retire cluster member state after leave audit: %w", err)
 	}
-	return durable.SyncDirectory(cfg.Storage.DataDir)
+	if err := durable.SyncDirectory(cfg.Storage.DataDir); err != nil {
+		return fmt.Errorf("sync retired cluster member state: %w", err)
+	}
+	return cleanupRetiredMemberState(cfg.Storage.DataDir, retiredPath)
+}
+
+func authenticateLeaveAdministrator(ctx context.Context, cfg config.Config, username string, password []byte) error {
+	metadata, err := boltstore.OpenPrimary(cfg.MetadataPath())
+	if err != nil {
+		return err
+	}
+	defer metadata.Close()
+	user, err := metadata.GetAdminUser(ctx, username)
+	if err != nil || user.Role != domain.AdminRoleAdministrator || !adminauth.VerifyPassword(user, password) {
+		return errors.New("administrator authentication failed")
+	}
+	return nil
+}
+
+func cleanupRetiredMemberState(dataDir, retiredPath string) error {
+	if err := os.RemoveAll(retiredPath); err != nil {
+		return fmt.Errorf("remove retired cluster member state: %w", err)
+	}
+	if err := durable.SyncDirectory(dataDir); err != nil {
+		return fmt.Errorf("sync retired cluster member cleanup: %w", err)
+	}
+	return nil
 }

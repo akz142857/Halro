@@ -33,7 +33,7 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 	if !filepath.IsAbs(directory) {
 		return errors.New("provider-object source directory must be absolute")
 	}
-	if _, err := ensureProviderObjectSourceDirectory(directory); err != nil {
+	if err := ensureProviderObjectSourceDirectory(directory); err != nil {
 		return err
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
@@ -50,7 +50,7 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 		}
 		syncErr := file.Sync()
 		closeErr := file.Close()
-		return errors.Join(syncErr, closeErr, durable.SyncDirectory(directory))
+		return errors.Join(syncErr, closeErr, syncProviderObjectDirectory(directory))
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -78,7 +78,7 @@ func PersistProviderObjectSource(directory, name string, sealed []byte) error {
 	if err := os.Link(temporaryPath, path); err != nil {
 		return err
 	}
-	return durable.SyncDirectory(directory)
+	return syncProviderObjectDirectory(directory)
 }
 
 // PersistProviderObjectChunkSource makes every durably received chunk
@@ -91,7 +91,7 @@ func PersistProviderObjectChunkSource(directory string, metadata ProviderObjectM
 	if uint64(len(payload)) != metadata.ChunkLength || !filepath.IsAbs(directory) {
 		return errors.New("provider-object chunk source is invalid")
 	}
-	if _, err := ensureProviderObjectSourceDirectory(directory); err != nil {
+	if err := ensureProviderObjectSourceDirectory(directory); err != nil {
 		return err
 	}
 	path := filepath.Join(directory, metadata.Name)
@@ -144,33 +144,36 @@ func PersistProviderObjectChunkSource(directory string, metadata ProviderObjectM
 			return errors.New("provider-object source digest does not match final chunk")
 		}
 	}
-	return durable.SyncDirectory(directory)
+	return syncProviderObjectDirectory(directory)
 }
 
-func ensureProviderObjectSourceDirectory(directory string) (bool, error) {
+var syncProviderObjectDirectory = durable.SyncDirectory
+
+func ensureProviderObjectSourceDirectory(directory string) error {
 	if !filepath.IsAbs(directory) {
-		return false, errors.New("provider-object source directory must be absolute")
+		return errors.New("provider-object source directory must be absolute")
 	}
 	info, statErr := os.Lstat(directory)
 	created := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !created {
-		return false, statErr
+		return statErr
 	}
 	if statErr == nil && (info.Mode()&os.ModeSymlink != 0 || !info.IsDir()) {
-		return false, errors.New("provider-object source path must be a real directory")
+		return errors.New("provider-object source path must be a real directory")
 	}
 	if err := os.MkdirAll(directory, 0o700); err != nil {
-		return false, err
+		return err
 	}
 	if err := os.Chmod(directory, 0o700); err != nil {
-		return false, err
+		return err
 	}
-	if created {
-		if err := durable.SyncDirectory(filepath.Dir(directory)); err != nil {
-			return false, err
-		}
+	// Repeat the parent barrier even when the directory already exists. A
+	// previous attempt can have created it and then failed its parent fsync;
+	// existence alone is therefore not evidence that the name is durable.
+	if err := syncProviderObjectDirectory(filepath.Dir(directory)); err != nil {
+		return err
 	}
-	return created, nil
+	return nil
 }
 
 func (s *NativeSource) ReadProviderObjectChunk(metadata ProviderObjectMetadata) ([]byte, error) {

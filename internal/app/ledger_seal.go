@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"os"
+	"time"
 
+	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -117,6 +120,20 @@ func (r *Runtime) compactLedgerSegments() {
 // only safely archivable once neither the archive nor the checkpoint still
 // needs to read it.
 func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
+	// Replica never exports Parquet. Its compaction gate is therefore the
+	// locally derived Usage checkpoint alone, which is persisted only after the
+	// corresponding confirmed Ledger prefix has been applied. Compression is a
+	// node-local representation change and is not part of global ordering.
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		watermark, _, err := r.store.UsageCheckpoint()
+		if err != nil {
+			if !errors.Is(err, boltstore.ErrNotFound) {
+				r.logger.Warn("Replica Ledger segments not compacted: the usage checkpoint could not be read", "error", err)
+			}
+			return 0, false
+		}
+		return watermark.Sequence, true
+	}
 	manifest, err := r.usageExporter.LoadManifest()
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -136,4 +153,26 @@ func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
 		return 0, false
 	}
 	return min(manifest.LastSequence, watermark.Sequence), true
+}
+
+// runReplicaMaintenance is intentionally smaller than runUsageMaintenance.
+// A Replica derives and checkpoints Usage and may compact already-sealed
+// generations, but it never exports Parquet, rolls the Ledger, delivers
+// alerts, anchors Audit, or writes the Token Guard checkpoint.
+func (r *Runtime) runReplicaMaintenance(ctx context.Context) {
+	checkpointTicker := time.NewTicker(r.config.Usage.CheckpointInterval.Value())
+	compactionTicker := time.NewTicker(r.config.Usage.ParquetInterval.Value())
+	defer checkpointTicker.Stop()
+	defer compactionTicker.Stop()
+	for {
+		select {
+		case <-checkpointTicker.C:
+			r.saveReplicaUsageCheckpoint()
+		case <-compactionTicker.C:
+			r.compactLedgerSegments()
+		case <-ctx.Done():
+			r.saveReplicaUsageCheckpoint()
+			return
+		}
+	}
 }

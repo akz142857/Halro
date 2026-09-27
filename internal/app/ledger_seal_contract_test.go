@@ -13,9 +13,34 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
+
+func TestReplicaCompactionGateUsesItsConfirmedUsageCheckpoint(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := boltstore.OpenPrimary(cfg.MetadataPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	checkpoint := ledger.Watermark{Generation: 1, Offset: 128, Sequence: 7}
+	if err := metadata.PutUsageCheckpoint(checkpoint, []byte(`{"version":1}`), nil, nil, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{
+		store:       metadata,
+		replication: &replicationRuntime{role: replication.RoleReplica},
+	}
+	through, ok := runtime.ledgerArchivedThrough()
+	if !ok || through != checkpoint.Sequence {
+		t.Fatalf("Replica compaction gate=(%d,%v), want (%d,true)", through, ok, checkpoint.Sequence)
+	}
+}
 
 // Sealing, seen from outside the ledger package: what an operator's tools say
 // about an instance whose accounting history is no longer one file.

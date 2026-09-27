@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
 )
 
@@ -62,8 +64,16 @@ func TestReplicaAppliesOnlyRequestedConfirmedMetadataPrefix(t *testing.T) {
 	if _, err := replica.TrimMetadataJournal(0); err == nil {
 		t.Fatal("replica accepted local metadata journal maintenance")
 	}
-	if err := replica.update(func(*Tx) error { return nil }); err == nil {
-		t.Fatal("replica accepted a local metadata update")
+	if err := replica.update(func(tx *Tx) error {
+		return tx.Bucket(bucketProjects).Put([]byte("local-authority"), []byte(`{"enabled":true}`))
+	}); err == nil {
+		t.Fatal("replica accepted an authoritative local metadata update")
+	}
+	if err := replica.PutUsageCheckpoint(
+		ledger.Watermark{Generation: 1, Offset: 128, Sequence: 1},
+		[]byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil,
+	); err != nil {
+		t.Fatalf("replica refused a node-derived usage checkpoint: %v", err)
 	}
 	if _, err := replica.ApplyReplicaMetadataThrough(context.Background(), 2, 1); err == nil {
 		t.Fatal("replica accepted a confirmed sequence from another metadata epoch")

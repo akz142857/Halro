@@ -141,13 +141,17 @@ func (r *Runtime) loginAdmin(writer http.ResponseWriter, request *http.Request) 
 }
 
 func (r *Runtime) loginReplicaAdmin(writer http.ResponseWriter, request *http.Request) {
-	allowed, _ := r.allowAdminLogin(request.RemoteAddr, r.clockNow())
+	allowed, firstReject := r.allowAdminLogin(request.RemoteAddr, r.clockNow())
 	if !allowed {
+		if firstReject {
+			r.logReplicaAdminAuthenticationFailure("", "rate_limited")
+		}
 		writer.Header().Set("Retry-After", "60")
 		writeJSON(writer, http.StatusTooManyRequests, map[string]string{"error": "login rate limit exceeded"})
 		return
 	}
 	if !r.adminSameOrigin(request) {
+		r.logReplicaAdminAuthenticationFailure("", "origin_rejected")
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "origin rejected"})
 		return
 	}
@@ -157,21 +161,30 @@ func (r *Runtime) loginReplicaAdmin(writer http.ResponseWriter, request *http.Re
 		TOTPCode string `json:"totp_code"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
+		r.logReplicaAdminAuthenticationFailure("", "invalid_request")
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request"})
 		return
 	}
 	password := []byte(input.Password)
 	defer clear(password)
+	if input.Username == "" || len(input.Username) > 128 || len(password) > 1024 || len(input.TOTPCode) > 128 {
+		adminauth.DummyVerify(password)
+		r.logReplicaAdminAuthenticationFailure(input.Username, "invalid_credentials")
+		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
 	user, err := r.store.GetAdminUser(request.Context(), input.Username)
 	if err != nil {
 		adminauth.DummyVerify(password)
 	}
 	if err != nil || !adminauth.VerifyPassword(user, password) {
+		r.logReplicaAdminAuthenticationFailure(input.Username, "invalid_credentials")
 		writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 		return
 	}
 	authenticators, err := r.store.ListAdminMFAAuthenticators(request.Context(), user.Username)
 	if err != nil {
+		r.logReplicaAdminAuthenticationFailure(user.Username, "mfa_state_unavailable")
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "authentication unavailable"})
 		return
 	}
@@ -182,17 +195,20 @@ func (r *Runtime) loginReplicaAdmin(writer http.ResponseWriter, request *http.Re
 		}
 	}
 	if len(active) == 0 && r.config.Admin.MFARequiredForRole(user.Role) {
+		r.logReplicaAdminAuthenticationFailure(user.Username, "mfa_setup_required")
 		writeJSON(writer, http.StatusForbidden, map[string]string{"error": "MFA setup required on the Primary", "code": "mfa_setup_required"})
 		return
 	}
 	if len(active) > 0 {
-		if _, ok := r.verifyReplicaTOTP(active, input.TOTPCode, time.Now()); !ok {
+		if _, reason, ok := r.verifyReplicaTOTP(active, input.TOTPCode, time.Now()); !ok {
+			r.logReplicaAdminAuthenticationFailure(user.Username, reason)
 			writeJSON(writer, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
 			return
 		}
 	}
 	created, err := r.adminSessions.Create(request.Context(), user, time.Now())
 	if err != nil {
+		r.logReplicaAdminAuthenticationFailure(user.Username, "session_unavailable")
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "session unavailable"})
 		return
 	}
@@ -204,42 +220,69 @@ func (r *Runtime) loginReplicaAdmin(writer http.ResponseWriter, request *http.Re
 	})
 }
 
-func (r *Runtime) verifyReplicaTOTP(active []domain.AdminMFAAuthenticator, code string, now time.Time) (string, bool) {
+func (r *Runtime) logReplicaAdminAuthenticationFailure(username, reason string) {
+	attributes := []any{
+		"security_event", "replica_admin_authentication",
+		"outcome", "failure",
+		"reason_code", reason,
+	}
+	// Usernames are ordinary Audit actor identifiers, but an unauthenticated
+	// caller may still submit an unbounded or malformed value. Only the same
+	// bounded form accepted by login is useful in a local security record.
+	if username != "" && len(username) <= 128 {
+		attributes = append(attributes, "username", username)
+	}
+	r.logger.Warn("Replica Admin authentication refused", attributes...)
+}
+
+func (r *Runtime) verifyReplicaTOTP(active []domain.AdminMFAAuthenticator, code string, now time.Time) (string, string, bool) {
 	if code == "" {
-		return "", false
+		return "", "mfa_missing", false
 	}
 	// Verification and watermark publication are one transaction. Atomic
 	// rename protects each file write but does not prevent two logins from both
-	// accepting the same step after reading the same old watermark. Reuse the
-	// Replica login-rate mutex: allowAdminLogin releases it before this method,
-	// and serializing the remainder of login is the intended boundary.
+	// accepting the same step after reading the same old watermark.
 	r.adminLoginMu.Lock()
 	defer r.adminLoginMu.Unlock()
 	watermarks, err := readTOTPWatermarks(r.config)
 	if err != nil {
-		return "", false
+		return "", "mfa_watermark_unavailable", false
 	}
+	replayed := false
+	decrypted := false
 	for _, authenticator := range active {
 		secret, err := r.vault.DecryptAdminMFA(authenticator.ID, authenticator.Username, authenticator.SecretCiphertext)
 		if err != nil {
 			continue
 		}
+		decrypted = true
 		lastAccepted := authenticator.LastAcceptedTimeStep
 		if watermarks[authenticator.ID] > lastAccepted {
 			lastAccepted = watermarks[authenticator.ID]
 		}
 		step, ok := adminauth.VerifyTOTP(secret, code, now, lastAccepted)
-		clear(secret)
 		if !ok {
+			matchedStep, matchesCurrentWindow := adminauth.VerifyTOTP(secret, code, now, -1)
+			if matchesCurrentWindow && matchedStep <= lastAccepted {
+				replayed = true
+			}
+			clear(secret)
 			continue
 		}
+		clear(secret)
 		watermarks[authenticator.ID] = step
 		if writeTOTPWatermarks(r.config, watermarks) != nil {
-			return "", false
+			return "", "mfa_watermark_unavailable", false
 		}
-		return authenticator.ID, true
+		return authenticator.ID, "", true
 	}
-	return "", false
+	if replayed {
+		return "", "mfa_replayed", false
+	}
+	if !decrypted {
+		return "", "mfa_material_unavailable", false
+	}
+	return "", "mfa_invalid", false
 }
 
 func (r *Runtime) logoutReplicaAdmin(writer http.ResponseWriter, request *http.Request) {

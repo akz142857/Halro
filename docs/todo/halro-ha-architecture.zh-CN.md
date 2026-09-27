@@ -44,9 +44,10 @@
 │  ledger.wal             │        │                     │
 │  audit.log              │ 帧流   │ 落盘 → fsync        │
 │  governance.journal     │ +index │ → ack(index, term)  │
-│  metadata.journal ──────┼───────►│ → 异步 apply        │
+│  metadata.journal ──────┼───────►│ → confirmed 持久化  │
 │         └→ halro.db     │  mTLS  │    ↳ halro.db 投影  │
-│            （投影）      │        │    ↳ ledger.State   │
+│            （投影）      │        │    ↳ Ledger/Usage   │
+│                         │        │ → apply 完成后 ACK  │
 └─────────────────────────┘        └─────────────────────┘
      独占 PVC + 目录锁                  各自独占 PVC
 ```
@@ -490,7 +491,8 @@ usage checkpoint Sequence)`（`internal/app/ledger_seal.go:86,119-138`），而 
   Primary 的合并层同宽，否则逐帧 `db.Update` 约 830 tx/s 会比 Primary 慢一个数量级），且**只应用
   `index ≤ confirmed_index` 的帧**。帧所携带的 Primary confirmed 水位和 commit notice 用于 leader
   侧观测、重连追赶与 applied 回报，但不能把已经形成的 durable quorum 降回未确认；
-- Replica 周期性向 Primary 报告 `applied_index`；`durable − applied` 超阈值即 `not_candidate` 并告警；
+- Replica 周期性向 Primary 报告 `applied_index`；v1 的候选阈值是 0（任一 backlog 即
+  `not_candidate`），Prometheus 持续 5 分钟后告警，避免瞬时 apply 抖动产生噪声；
 - Primary 的 commit notice 与数据帧分队列，并保留到**每个已配置 Replica**都报告对应
   `applied_index`；某个 Replica 断线前漏掉最后一条 notice，重连后仍能重发；
 - Replica 上**禁用**：seal tick（compact **不**禁用，但门槛按 §6.2.3 重定义）、
@@ -1041,12 +1043,13 @@ v1 不导出伪精确的 lag seconds/bytes 或 seed duration：ordering v1 没�
 | `HalroMultiplePrimaries` | ≥ 2 成员同 incarnation 自称 Primary | §8.2 行 8；隔离、核对 Audit |
 | `HalroAwaitingOperator` | 任一成员停在 §8.2 行 4/7 | `promote --self` / promote |
 | `HalroReplicationUnavailable` | Primary `state=unavailable` | 查 Replica；§6.3.1 的写已停（503） |
-| `HalroReplicaNotCandidate` | `durable − applied` 超阈值 | 查 apply backlog / bbolt |
+| `HalroReplicaNotCandidate` | `durable − applied > 0` 持续 5 分钟 | 查 apply backlog / bbolt |
 | `HalroMemberIncompatible` | schema/协议/密钥不兼容 | §15 |
 | 现有 `HalroTargetDown`、`AccountingLeaseStale` 等 | 改为 role 感知；recording rules 加 `instance`/`role` 维度 | — |
 
-告警**只由 Primary 发**；提升瞬间新旧 Primary 的去重靠 `(cluster_id, term)` 标签；`alert_webhooks`
-的内存队列在 Primary 丢失时丢弃（Standalone 今天就有的语义）。
+应用内 `alert_webhooks` 告警**只由 Primary 发**；提升瞬间新旧 Primary 的去重靠
+`(cluster_id, term)` 标签，其内存队列在 Primary 丢失时丢弃（Standalone 今天就有的语义）。Prometheus
+规则则抓取所有成员：Replica 自己的 lag/incompatible 信号必须仍然可见。
 
 **deadman**：探测**客户端 Service**（跟随 Primary）作为"服务在"的信号，加每节点 liveness；它是
 §1.3 第 3 条 RTO 数据的来源。**Audit 外部锚点**（ADR 0015）增加 `node_id` 与 `term`，只有 Primary 发；
@@ -1102,9 +1105,9 @@ witness 从全部成员拉取并按 `(cluster_id, term)` 归并。分区期间�
 | Reservation / Attempt / Provider 接收 / 首 token / Settlement 各点 Primary 崩溃后提升 | 新 Primary 的账 = 保守结算规则；无重复 Provider 调用（httptest 上游计数） | 是：现有 lifecycle/commit crash hooks + 复制恢复组合门禁 |
 | **已确认的 mutation 不丢** | 双 Runtime 记录 confirmed mutation，停止成员并提升后在新 Primary 投影逐一核对终态 | 是（mTLS 集成测试含 Gateway Key 吊销） |
 | **至多一个进程确认权威写** | higher-term promise 与旧 Primary demotion 同一次 durable state 发布；旧 term ACK 不再推进 | 是（state/promotion/ACK 组合门禁 + planned handoff 集成） |
-| 提升到落后节点被拒绝（含 `(term, index)` 字典序反例：位置更大但 term 更旧的旧分叉节点必须被拒）；旧 Primary 回归被降级、后缀截断、投影重建 | 截断后重开：`reconcileLedgerChainCheckpoint`、`reconcileAuditCheckpoint`、`restoreGovernanceState`、`RecoverDeploymentPricePins` 全部通过；`halro doctor` / `ledger verify` / `audit verify` 与 Standalone 相同 | 是 |
+| 提升到落后节点被拒绝（含 `(term, index)` 字典序反例：位置更大但 term 更旧的旧分叉节点必须被拒）；旧 Primary 回归被持久降级 | 同任期“native 已 fsync、ordering 未追加”的尾部可自动修剪并重开；曾任 Primary 的 bbolt 与新 Primary 前缀不兼容时必须 fail closed，并以 §11.1 离线 re-seed 后通过 `halro doctor` / `ledger verify` / `audit verify` | 是（re-seed 的目标环境恢复演练另验） |
 | 吊销类写在切换后不复活 | 撤销一个 Gateway Key → 杀 Primary → 提升 → 该 Key 仍被拒 | 是 |
-| **Replica 的本地维护不得触碰被复制的字节** | Replica 运行时不启动 seal/export/anchor/alert/usage 写任务；登录与 `--replica` 备份前后权威文件逐字节相同 | 是 |
+| **Replica 的本地维护不得触碰被复制的权威状态** | Replica 不启动 seal/export/anchor/alert/Token Guard 写任务；只允许 Usage 等 C 类派生 checkpoint 推进到 confirmed/applied 前缀并据此做节点本地压缩。四个原生日志保持同一明文帧前缀，bbolt 的 A/B/D 类键不得本地变化 | 是 |
 | 对象：临时写、rename、目录 fsync、末块 ACK、元数据帧各点故障 | 完整 digest 通过且最终文件 fsync+rename 前不 ACK；对象末块 confirmed 前不提交引用元数据；无占位文件 | 是 |
 | 磁盘满、只读、慢盘、帧损坏、MAC 不匹配、密钥挑战失败、SPKI 不匹配 | fail closed 且原因可见 | 部分：真实 ENOSPC/慢盘需目标环境 |
 | Replica `--replica` 备份 + 启动追赶，与 Primary 持续写、Roll 并发 | 备份前后 Replica 各权威文件的明文帧与 Primary 同偏移前缀相同；`audit verify` 记录数不变；隔离环境完整恢复为新 incarnation | 恢复演练是人工 |
@@ -1308,7 +1311,7 @@ Phase 1/2 的本地门禁冒充生产验收。
 
 1. ✅ Primary 侧：提交路径内的 index 分配、ordering journal、批次发送、ACK 聚合、`confirmed_index`、
    `ReplicationUnavailable` 状态、§6.3.1/§6.3.2 的两类写；
-2. ✅ Replica 侧：顺序落盘、校验、ACK、异步批量 apply（bbolt 上限 confirmed）、apply 自报、禁用清单
+2. ✅ Replica 侧：顺序落盘、校验、confirmed 持久化、批量 apply 后 ACK（bbolt 上限 confirmed）、apply 自报、禁用清单
    与压缩门槛重定义（§6.2.3）；第三种 bbolt 打开模式（§15）；
 3. ✅ 结构事件（整条 `Segment`）、Roll 只在 confirmed 后；
 4. ✅ 播种（含审批、staging、非零 index）、追赶、re-seed 拒绝与对象通道（§9）；
@@ -1338,7 +1341,8 @@ Phase 1/2 的本地门禁冒充生产验收。
 **当前设计是人工提升。** 这一条是从 2026-08 的初版继承下来的，理由是：安全的自动选举需要写租约，
 而租约需要量化的时钟漂移界与进程暂停界，那套验证是数月工程。
 
-**但这个理由在本文的提交规则下可能已经不成立，这个问题必须在 Phase 2 之前回答。**
+**历史复核。** 该理由在本文的提交规则下可能已经不成立，因此 Phase 2 开始前曾要求回答；上面的
+2026-09-27 决策就是复核结论。以下推理保留为“不自动切换”的安全边界依据，而不是未决任务。
 
 推理：租约要买的唯一东西是"至多一个节点有资格发起新的 Provider 调用"。而 §6.3.1 已经要求
 `ReservationCreated` 与 `AttemptStarted` 达到 confirmed 才能进 Provider I/O，所以**一个被隔离的旧

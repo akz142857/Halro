@@ -164,6 +164,59 @@ func TestSeedInstallRejectsSymlinkStagingRoot(t *testing.T) {
 	}
 }
 
+func TestSeedInstallRejectsSymlinkPublicationPathComponent(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real-parent")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(root, "linked-parent")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(linkedParent, ".seed-staging")
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := testConfig(t)
+	target.Storage.DataDir = filepath.Join(linkedParent, "data")
+	target.Replication = &config.Replication{ClusterID: "production-a", NodeID: "halro-1"}
+	if _, err := InstallSeedSnapshot(context.Background(), target, staging, filepath.Join(t.TempDir(), "manifest.json")); err == nil || !strings.Contains(err.Error(), "publication directory") {
+		t.Fatalf("symlink publication path error=%v", err)
+	}
+}
+
+func TestSeedTreeRejectsNestedSymlinkAndForcesExactPrivateModes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "seed")
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(nested, "store.log")
+	if err := os.WriteFile(filePath, []byte("authenticated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncSeedTree(root); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{root: 0o700, nested: 0o700, filePath: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("mode %s=%#o want=%#o", path, info.Mode().Perm(), want)
+		}
+	}
+	linked := filepath.Join(nested, "linked.log")
+	if err := os.Symlink(filePath, linked); err != nil {
+		t.Fatal(err)
+	}
+	if err := syncSeedTree(root); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("nested symlink error=%v", err)
+	}
+}
+
 type seedPeerSender struct{}
 
 func (seedPeerSender) Send(string, []byte) error { return nil }

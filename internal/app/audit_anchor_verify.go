@@ -174,31 +174,51 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 	verdicts := make([]AnchorVerdict, 0, len(anchors))
 	type tenurePosition struct {
 		cluster, incarnation string
-		term, records        uint64
+		term, position       uint64
 	}
-	type observedAnchor struct {
-		node string
-		hash [32]byte
-	}
-	observed := make(map[tenurePosition]observedAnchor)
-	conflicting := make(map[tenurePosition]bool)
+	// records and emission sequence are independent positions. Records binds an
+	// anchor to the replicated Audit prefix; sequence binds the witness stream.
+	// A same-tenure hash disagreement at either position is contradictory
+	// evidence and must outrank the ordinary local-chain verdict.
+	recordHashes := make(map[tenurePosition][32]byte)
+	recordConflicts := make(map[tenurePosition]bool)
+	sequenceHashes := make(map[tenurePosition][32]byte)
+	sequenceConflicts := make(map[tenurePosition]bool)
 	for _, anchor := range anchors {
 		if anchor.ClusterID == "" || anchor.Incarnation == "" || anchor.NodeID == "" || anchor.Term == 0 {
 			continue
 		}
-		position := tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Records}
-		if prior, ok := observed[position]; ok && prior.node != anchor.NodeID && prior.hash != anchor.LastHash {
-			conflicting[position] = true
+		recordPosition := tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Records}
+		if prior, ok := recordHashes[recordPosition]; ok && prior != anchor.LastHash {
+			recordConflicts[recordPosition] = true
 		} else if !ok {
-			observed[position] = observedAnchor{anchor.NodeID, anchor.LastHash}
+			recordHashes[recordPosition] = anchor.LastHash
+		}
+		sequencePosition := tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Sequence}
+		if prior, ok := sequenceHashes[sequencePosition]; ok && prior != anchor.LastHash {
+			sequenceConflicts[sequencePosition] = true
+		} else if !ok {
+			sequenceHashes[sequencePosition] = anchor.LastHash
 		}
 	}
-	expected := uint64(1)
+	type anchorStream struct {
+		cluster, incarnation, node, target, instance string
+		term                                         uint64
+	}
+	expectedByStream := make(map[anchorStream]uint64)
 	var highestRecords uint64
 	for _, anchor := range anchors {
 		verdict := AnchorVerdict{
 			Sequence: anchor.Sequence, Records: anchor.Records, ClusterID: anchor.ClusterID,
 			Incarnation: anchor.Incarnation, NodeID: anchor.NodeID, Term: anchor.Term, TargetID: anchor.TargetID,
+		}
+		stream := anchorStream{
+			cluster: anchor.ClusterID, incarnation: anchor.Incarnation, node: anchor.NodeID,
+			target: anchor.TargetID, instance: anchor.InstanceID, term: anchor.Term,
+		}
+		expected := expectedByStream[stream]
+		if expected == 0 {
+			expected = 1
 		}
 		// Whether the chain has a record at that position at all, kept separate
 		// from what its hash is. A plain map read answers a missing key with the
@@ -208,7 +228,8 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		// one verdict that is supposed to be unforgeable without the audit key.
 		hash, recorded := hashBySequence[anchor.Records]
 		switch {
-		case conflicting[tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Records}]:
+		case recordConflicts[tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Records}] ||
+			sequenceConflicts[tenurePosition{anchor.ClusterID, anchor.Incarnation, anchor.Term, anchor.Sequence}]:
 			verdict.Outcome = AnchorVerdictSplitBrain
 		case anchor.Records > summary.Records:
 			verdict.Outcome = AnchorVerdictTruncated
@@ -231,11 +252,13 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 			// between "these anchors agree" and "the record is complete", and
 			// only the report can say which one the operator is looking at.
 			verdicts = append(verdicts, AnchorVerdict{
-				Sequence: expected, Outcome: AnchorVerdictMissing,
+				Sequence: expected, ClusterID: anchor.ClusterID, Incarnation: anchor.Incarnation,
+				NodeID: anchor.NodeID, Term: anchor.Term, TargetID: anchor.TargetID,
+				Outcome: AnchorVerdictMissing,
 			})
 		}
 		if anchor.Sequence >= expected {
-			expected = anchor.Sequence + 1
+			expectedByStream[stream] = anchor.Sequence + 1
 		}
 		highestRecords = max(highestRecords, anchor.Records)
 		verdicts = append(verdicts, verdict)

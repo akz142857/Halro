@@ -2,8 +2,11 @@ package replication
 
 import (
 	"crypto/sha256"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +92,42 @@ func TestProviderObjectSourceRefusesSymlinkDirectory(t *testing.T) {
 	}
 }
 
+func TestProviderObjectSourceRetriesParentDurabilityAfterDirectoryCreation(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "sources")
+	originalSync := syncProviderObjectDirectory
+	t.Cleanup(func() { syncProviderObjectDirectory = originalSync })
+
+	failedParentBarrier := false
+	syncProviderObjectDirectory = func(path string) error {
+		if path == root && !failedParentBarrier {
+			failedParentBarrier = true
+			return errors.New("injected parent fsync failure")
+		}
+		return originalSync(path)
+	}
+	if err := PersistProviderObjectSource(directory, "object.content", []byte("sealed")); err == nil || !strings.Contains(err.Error(), "injected") {
+		t.Fatalf("first persist error=%v", err)
+	}
+	if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+		t.Fatalf("failed attempt did not leave the created directory for retry: info=%v err=%v", info, err)
+	}
+
+	retriedParentBarrier := false
+	syncProviderObjectDirectory = func(path string) error {
+		if path == root {
+			retriedParentBarrier = true
+		}
+		return originalSync(path)
+	}
+	if err := PersistProviderObjectSource(directory, "object.content", []byte("sealed")); err != nil {
+		t.Fatal(err)
+	}
+	if !retriedParentBarrier {
+		t.Fatal("retry trusted an existing source directory without repeating its parent durability barrier")
+	}
+}
+
 func TestProviderObjectChunkReplayRepairsNativeTailAndKeepsPartialReconstructionSource(t *testing.T) {
 	root := t.TempDir()
 	objectDir := filepath.Join(root, "objects")
@@ -136,5 +175,33 @@ func TestProviderObjectChunkReplayRepairsNativeTailAndKeepsPartialReconstruction
 	got, err = os.ReadFile(filepath.Join(objectDir, "file_2.content"))
 	if err != nil || string(got) != string(contents) {
 		t.Fatalf("final object=%q err=%v", got, err)
+	}
+}
+
+func TestProviderObjectChunkRejectsStagingPrefixShorterThanOrderingOffset(t *testing.T) {
+	objectDir := filepath.Join(t.TempDir(), "objects")
+	if err := os.MkdirAll(objectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("abcdefghijkl")
+	digest := sha256.Sum256(contents)
+	stagingPath := filepath.Join(objectDir, ".replicating-"+fmt.Sprintf("%x", digest[:]))
+	if err := os.WriteFile(stagingPath, contents[:3], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata := ProviderObjectMetadata{
+		Name: "file_3.content", Offset: 4, ChunkLength: 4, TotalLength: uint64(len(contents)), Digest: digest,
+	}
+	encoded, err := metadata.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = (&NativeSink{objectDir: objectDir}).Persist(Frame{Kind: KindProviderObject, Metadata: encoded, Payload: contents[4:8]})
+	if err == nil || !strings.Contains(err.Error(), "does not continue") {
+		t.Fatalf("short staging prefix error=%v", err)
+	}
+	got, readErr := os.ReadFile(stagingPath)
+	if readErr != nil || string(got) != string(contents[:3]) {
+		t.Fatalf("short staging prefix was modified: %q err=%v", got, readErr)
 	}
 }

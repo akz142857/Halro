@@ -33,7 +33,7 @@ import (
 	"github.com/akz142857/Halro/internal/vault"
 )
 
-func TestReplicaBackupIsReadOnlyAndCarriesOneAppliedPrefix(t *testing.T) {
+func TestReplicaBackupRecoversNativeTailAndCarriesOneAppliedPrefix(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -59,6 +59,34 @@ func TestReplicaBackupIsReadOnlyAndCarriesOneAppliedPrefix(t *testing.T) {
 	beforeAudit, err := os.ReadFile(cfg.AuditPath())
 	if err != nil {
 		t.Fatal(err)
+	}
+	masterKey, err := vault.LoadMasterKey(cfg.Storage.MasterKey.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditKey, err := vault.DeriveAuditHMACKey(masterKey)
+	clear(masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	clear(auditKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auditLog.Append(context.Background(), audit.Event{
+		EventID: "evt_unauthorized_replica_tail", OccurredAt: time.Now().UTC(), ActorType: "system",
+		Action: "replica.crash_tail", Outcome: "success",
+	}); err != nil {
+		auditLog.Close()
+		t.Fatal(err)
+	}
+	if err := auditLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	withTail, err := os.ReadFile(cfg.AuditPath())
+	if err != nil || bytes.Equal(beforeAudit, withTail) {
+		t.Fatalf("failed to construct native tail: equal=%t err=%v", bytes.Equal(beforeAudit, withTail), err)
 	}
 	beforeState, err := os.ReadFile(cfg.ReplicationStatePath())
 	if err != nil {
@@ -97,7 +125,7 @@ func TestReplicaBackupIsReadOnlyAndCarriesOneAppliedPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(beforeAudit, afterAudit) || !bytes.Equal(beforeState, afterState) {
-		t.Fatal("Replica backup mutated an authoritative log or member state")
+		t.Fatal("Replica backup did not reconcile stores to the exact authenticated applied prefix")
 	}
 	if _, err := RestoreBackupWithOptions(context.Background(), cfg, output, key, manifest.BackupID, RestoreOptions{}); err == nil || !strings.Contains(err.Error(), "new --incarnation") {
 		t.Fatalf("HA restore accepted no new incarnation: %v", err)

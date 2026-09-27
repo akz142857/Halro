@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/akz142857/Halro/internal/bearercred"
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
@@ -32,6 +34,8 @@ import (
 )
 
 const memberBinaryVersion uint16 = 1
+
+const reseedRequiredMarker = "reseed-required"
 
 // replicationRuntime is the one HA subsystem owned by Runtime. Its internals
 // deliberately stay out of Runtime's already-wide field list: role state,
@@ -157,6 +161,21 @@ func openReplicaApplication(
 	if ledgerState.Watermark().Sequence != ledgerApplied.Sequence {
 		return failLedger(errors.New("Replica Ledger projection does not reach authenticated applied prefix"))
 	}
+	usageAggregate, usageWatermark, err := restoreUsageAggregate(metadata, ledgerState.Watermark(), logger)
+	if err != nil {
+		return failLedger(fmt.Errorf("restore Replica Usage projection: %w", err))
+	}
+	if _, err := ledgerLog.Replay(usageWatermark, func(record ledger.Record) error {
+		if record.Sequence > ledgerApplied.Sequence {
+			return nil
+		}
+		return usageAggregate.Apply(record)
+	}); err != nil {
+		return failLedger(fmt.Errorf("replay Replica Usage projection: %w", err))
+	}
+	if usageAggregate.Watermark().Sequence != ledgerApplied.Sequence {
+		return failLedger(errors.New("Replica Usage projection does not reach authenticated applied prefix"))
+	}
 
 	auditLog, err := audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{Replica: true})
 	if err != nil {
@@ -188,7 +207,7 @@ func openReplicaApplication(
 	if err != nil {
 		return failGovernance(err)
 	}
-	projection, err := replication.NewNativeProjection(ledgerLog, ledgerState, metadata)
+	projection, err := replication.NewNativeProjection(ledgerLog, ledgerState, metadata, usageAggregate.Apply)
 	if err != nil {
 		return failGovernance(err)
 	}
@@ -221,8 +240,16 @@ func openReplicaApplication(
 		backgroundCtx: backgroundContext, backgroundCancel: backgroundCancel,
 		metricsScrapes:   make(chan struct{}, max(1, cfg.Metrics.MaxConcurrentScrapes)),
 		metricsTokenHash: metricsTokenHash, metricsAuthorizer: metricsAuthorizer,
-		replication: replicationRuntime,
+		usage: usageAggregate, replication: replicationRuntime,
 	}
+	// Replica maintenance is intentionally limited to node-derived Usage
+	// checkpointing and node-local Ledger compression. It does not start the
+	// Primary collector/export/seal/anchor/alert loops.
+	runtime.backgroundWait.Add(1)
+	go func() {
+		defer runtime.backgroundWait.Done()
+		runtime.runReplicaMaintenance(backgroundContext)
+	}()
 	return runtime, nil
 }
 
@@ -234,6 +261,9 @@ func openReplicaReplicationFoundation(
 ) (*replicationRuntime, error) {
 	if state.Role != replication.RoleReplica {
 		return nil, fmt.Errorf("member role %q is not a Replica", state.Role)
+	}
+	if err := refuseReseedRequiredMember(cfg); err != nil {
+		return nil, err
 	}
 	journal, err := replication.OpenExistingOrderingJournal(
 		cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation,
@@ -358,6 +388,9 @@ func openPrimaryReplication(
 	if state.Role != replication.RolePrimary {
 		return nil, fmt.Errorf("member role %q is not a Primary", state.Role)
 	}
+	if err := refuseReseedRequiredMember(cfg); err != nil {
+		return nil, err
+	}
 	journal, err := replication.OpenExistingOrderingJournal(
 		cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation,
 		state.DurableIndex, state.OrderingHeadMAC,
@@ -442,6 +475,7 @@ func openPrimaryReplication(
 	}
 	runtime.manager = manager
 	sender.Set(manager)
+	runtime.startupPeerQuorum = primaryStartupPeerRequirement(len(state.Peers), false)
 	_, lastTerm, _ := journal.Head()
 	if lastTerm < state.Term {
 		commit, err := coordinator.RecordDurable(replication.Frame{Kind: replication.KindLeadershipEstablished, Store: replication.StoreNone})
@@ -450,10 +484,8 @@ func openPrimaryReplication(
 			return failSource(fmt.Errorf("record leadership establishment: %w", err))
 		}
 		runtime.startupIndex = commit.Index
-		runtime.startupPeerQuorum = 1
 	} else {
 		runtime.startupIndex = state.ConfirmedIndex
-		runtime.startupPeerQuorum = len(state.Peers)
 		for index := state.ConfirmedIndex + 1; index <= state.DurableIndex; index++ {
 			record, recordErr := journal.Record(index)
 			if recordErr != nil {
@@ -462,6 +494,13 @@ func openPrimaryReplication(
 			}
 			if record.Term == state.Term && record.Kind == replication.KindLeadershipEstablished {
 				runtime.startupIndex = index
+				// An offline promotion already obtained a durable remote
+				// promise before writing this anchor. One connected Replica
+				// therefore supplies the second vote needed to confirm it in
+				// either supported topology. A clean Primary restart, and a
+				// brand-new term without a recovered anchor, still require all
+				// configured peers for startup adjudication (§8.2).
+				runtime.startupPeerQuorum = primaryStartupPeerRequirement(len(state.Peers), true)
 				break
 			}
 		}
@@ -518,7 +557,21 @@ func (r *replicationRuntime) authorizePrimaryHello(_ context.Context, peer repli
 	if peer.Term > state.Term || peer.PromisedTerm > state.Term {
 		err := errors.New("peer has a higher durable term; Primary must step down before serving data")
 		r.coordinator.MarkUnavailable(err)
-		if _, publishErr := r.publisher.AdoptHigherTerm(peer.Term, peer.PromisedTerm); publishErr != nil {
+		if primaryProgressRequiresReseed(state, peer) {
+			reseedErr := fmt.Errorf(
+				"%w: demoted Primary progress d/c/a=%d/%d/%d is incompatible with higher-term peer d/a=%d/%d",
+				replication.ErrMemberRequiresFullReseed,
+				state.DurableIndex, state.ConfirmedIndex, state.AppliedIndex,
+				peer.DurableIndex, peer.AppliedIndex,
+			)
+			if markerErr := persistReseedRequiredMarker(filepath.Join(filepath.Dir(r.objectSourceDir), reseedRequiredMarker), reseedErr.Error()); markerErr != nil {
+				reseedErr = errors.Join(reseedErr, fmt.Errorf("persist reseed-required marker: %w", markerErr))
+			}
+			err = errors.Join(err, reseedErr)
+		}
+		adoptedTerm := max(state.Term, peer.Term)
+		adoptedPromise := max(adoptedTerm, peer.PromisedTerm)
+		if _, publishErr := r.publisher.AdoptHigherTerm(adoptedTerm, adoptedPromise); publishErr != nil {
 			err = errors.Join(err, fmt.Errorf("persist Primary demotion: %w", publishErr))
 		}
 		r.startupReady.Store(false)
@@ -554,6 +607,20 @@ func (r *replicationRuntime) authorizeReplicaHello(_ context.Context, peer repli
 	if peer.Role == replication.RolePrimary && peer.Term > state.Term {
 		if peer.Term != peer.PromisedTerm || peer.Term != state.PromisedTerm {
 			return false, errors.New("new Primary term does not match this Replica's durable promise")
+		}
+		if primaryProgressRequiresReseed(state, peer) {
+			reseedErr := fmt.Errorf(
+				"%w: demoted member progress d/c/a=%d/%d/%d is incompatible with new Primary d/a=%d/%d",
+				replication.ErrMemberRequiresFullReseed,
+				state.DurableIndex, state.ConfirmedIndex, state.AppliedIndex,
+				peer.DurableIndex, peer.AppliedIndex,
+			)
+			if markerErr := persistReseedRequiredMarker(filepath.Join(filepath.Dir(r.objectSourceDir), reseedRequiredMarker), reseedErr.Error()); markerErr != nil {
+				reseedErr = errors.Join(reseedErr, fmt.Errorf("persist reseed-required marker: %w", markerErr))
+			}
+			r.startupReady.Store(false)
+			r.fail(reseedErr)
+			return false, reseedErr
 		}
 		if err := r.receiver.AdoptTerm(peer.Term, peer.NodeID, func() error {
 			_, publishErr := r.publisher.AdoptHigherTerm(peer.Term, peer.PromisedTerm)
@@ -608,9 +675,15 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 		proposal.ClusterID != state.ClusterID || proposal.Incarnation != state.Incarnation {
 		return errors.New("promotion proposal does not match the authenticated candidate")
 	}
+	if err := validatePromotionCandidateHello(peer, proposal); err != nil {
+		return err
+	}
 	primaryRuntime := r.coordinator != nil
 	if primaryRuntime {
-		if proposal.PlannedStepdown && proposal.OldPrimaryNodeID == state.NodeID {
+		if proposal.PlannedStepdown {
+			if err := validatePlannedStepdownTarget(proposal, state); err != nil {
+				return err
+			}
 			if err := r.coordinator.FreezeForStepdown(proposal.ExpectedAppliedIndex); err != nil {
 				return err
 			}
@@ -627,7 +700,16 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 		})
 	}
 	if err != nil {
+		if primaryRuntime {
+			r.fail(fmt.Errorf("Primary could not persist a higher-term promise after freezing old-term work: %w", err))
+		}
 		return err
+	}
+	if primaryRuntime {
+		// The durable promise is the irreversible capability transition. Exit
+		// even if encoding or delivering the response fails; a lost response is
+		// recovered by the candidate's next strictly-higher prepare round.
+		defer r.fail(errors.New("Primary durably promised a higher term and stepped down"))
 	}
 	_, lastFrameTerm, _ := r.journal.Head()
 	promise := replication.PromotionPromise{
@@ -647,10 +729,84 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 	if err := send(response); err != nil {
 		return err
 	}
-	if primaryRuntime {
-		r.fail(errors.New("Primary durably promised a higher term and stepped down"))
+	return nil
+}
+
+func primaryStartupPeerRequirement(peerCount int, recoveredPromotionAnchor bool) int {
+	if recoveredPromotionAnchor && peerCount > 0 {
+		return 1
+	}
+	return peerCount
+}
+
+func validatePlannedStepdownTarget(proposal replication.PromotionProposal, state replication.MemberState) error {
+	if proposal.OldPrimaryNodeID != state.NodeID {
+		return errors.New("planned stepdown proposal does not name this Primary")
+	}
+	if proposal.ExpectedTerm != state.Term {
+		return errors.New("planned stepdown expected term does not match this Primary")
 	}
 	return nil
+}
+
+func validatePromotionCandidateHello(peer replication.Hello, proposal replication.PromotionProposal) error {
+	if peer.Term != proposal.ExpectedTerm || peer.PromisedTerm != proposal.Term ||
+		peer.DurableIndex != proposal.ExpectedAppliedIndex || peer.AppliedIndex != proposal.ExpectedAppliedIndex {
+		return errors.New("promotion proposal term or prefix does not match the authenticated candidate Hello")
+	}
+	return nil
+}
+
+func primaryProgressRequiresReseed(state replication.MemberState, peer replication.Hello) bool {
+	return state.DurableIndex != state.ConfirmedIndex || state.ConfirmedIndex != state.AppliedIndex ||
+		state.DurableIndex > peer.DurableIndex || state.AppliedIndex > peer.AppliedIndex
+}
+
+func persistReseedRequiredMarker(path, reason string) error {
+	if path == "" || reason == "" {
+		return errors.New("reseed-required marker needs a path and reason")
+	}
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".reseed-required-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.WriteString(reason + "\n"); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return durable.SyncDirectory(directory)
+}
+
+func refuseReseedRequiredMember(cfg config.Config) error {
+	path := filepath.Join(cfg.ClusterDirectoryPath(), reseedRequiredMarker)
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect reseed-required marker: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%w: reseed-required marker is not a private regular file", replication.ErrMemberRequiresFullReseed)
+	}
+	return fmt.Errorf("%w: durable marker %s is present", replication.ErrMemberRequiresFullReseed, path)
 }
 
 func (r *Runtime) requireMemberStartup(next http.Handler) http.Handler {
@@ -672,15 +828,14 @@ func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.H
 	if hello.DurableIndex > head {
 		return errors.New("Replica durable index exceeds Primary ordering head")
 	}
-	first := hello.DurableIndex + 1
-	if hello.DurableIndex == ^uint64(0) {
-		return errors.New("Replica durable index is exhausted")
-	}
-	if err := replication.ReconstructRangeEach(
-		hello.ClusterID, hello.Incarnation, first, head, r.journal, r.source,
-		func(commit replication.LocalCommit) error { return r.manager.Send(peer, commit.Encoded) },
-	); err != nil {
-		return fmt.Errorf("catch up Replica %s: %w", peer, err)
+	if hello.DurableIndex < head {
+		first := hello.DurableIndex + 1
+		if err := replication.ReconstructRangeEach(
+			hello.ClusterID, hello.Incarnation, first, head, r.journal, r.source,
+			func(commit replication.LocalCommit) error { return r.manager.Send(peer, commit.Encoded) },
+		); err != nil {
+			return fmt.Errorf("catch up Replica %s: %w", peer, err)
+		}
 	}
 	if notice := r.coordinator.PendingCommitNotice(); len(notice) > 0 {
 		if err := r.manager.Send(peer, notice); err != nil {

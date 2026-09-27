@@ -124,13 +124,30 @@ type NativeProjection struct {
 	ledgerLog   *ledger.Log
 	ledgerState *ledger.State
 	metadata    *boltstore.Store
+	// ledgerDerived receives the same authenticated prefix as ledgerState.
+	// Replica-only derivatives such as Usage use this hook so promotion does
+	// not pay a cold replay while still keeping the Ledger log authoritative.
+	ledgerDerived []func(ledger.Record) error
 }
 
-func NewNativeProjection(ledgerLog *ledger.Log, ledgerState *ledger.State, metadata *boltstore.Store) (*NativeProjection, error) {
+func NewNativeProjection(
+	ledgerLog *ledger.Log,
+	ledgerState *ledger.State,
+	metadata *boltstore.Store,
+	ledgerDerived ...func(ledger.Record) error,
+) (*NativeProjection, error) {
 	if ledgerLog == nil || ledgerState == nil || metadata == nil {
 		return nil, errors.New("native replica projection requires Ledger log/state and metadata store")
 	}
-	return &NativeProjection{ledgerLog: ledgerLog, ledgerState: ledgerState, metadata: metadata}, nil
+	for _, apply := range ledgerDerived {
+		if apply == nil {
+			return nil, errors.New("native replica projection ledger derivative cannot be nil")
+		}
+	}
+	return &NativeProjection{
+		ledgerLog: ledgerLog, ledgerState: ledgerState, metadata: metadata,
+		ledgerDerived: append([]func(ledger.Record) error(nil), ledgerDerived...),
+	}, nil
 }
 
 func (p *NativeProjection) ApplyMetadataThrough(ctx context.Context, epoch, sequence uint64) error {
@@ -151,6 +168,11 @@ func (p *NativeProjection) ApplyLedgerThrough(ctx context.Context, generation, s
 			return err
 		}
 		if record.Sequence <= sequence {
+			for _, apply := range p.ledgerDerived {
+				if err := apply(record); err != nil {
+					return err
+				}
+			}
 			return p.ledgerState.Apply(record)
 		}
 		return nil

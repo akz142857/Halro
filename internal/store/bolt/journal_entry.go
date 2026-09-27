@@ -53,9 +53,6 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 	if len(callbacks) == 0 {
 		return metadatajournal.AppendReceipt{}, false, nil
 	}
-	if s.replica {
-		return metadatajournal.AppendReceipt{}, false, errors.New("replica metadata projection refuses local update")
-	}
 	tx, err := s.db.Begin(true)
 	if err != nil {
 		return metadatajournal.AppendReceipt{}, false, err
@@ -76,8 +73,11 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 	if err := recorder.finish(); err != nil {
 		return metadatajournal.AppendReceipt{}, false, err
 	}
+	if s.replica && len(recorder.replicated) > 0 {
+		return metadatajournal.AppendReceipt{}, false, errors.New("replica metadata projection refuses authoritative local update")
+	}
 	var receipt metadatajournal.AppendReceipt
-	if len(recorder.ops) > 0 && !s.publishing {
+	if len(recorder.ops) > 0 && !s.publishing && !s.replica {
 		if s.journal == nil {
 			return metadatajournal.AppendReceipt{}, false, fmt.Errorf("%w: refusing a metadata write that nothing would record", ErrJournalUnavailable)
 		}

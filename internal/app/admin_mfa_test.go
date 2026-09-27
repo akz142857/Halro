@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,7 +111,7 @@ func TestReplicaTOTPWatermarkConsumesAConcurrentCodeOnlyOnce(t *testing.T) {
 	for range 2 {
 		go func() {
 			<-start
-			_, ok := runtime.verifyReplicaTOTP(active, code, now)
+			_, _, ok := runtime.verifyReplicaTOTP(active, code, now)
 			results <- ok
 		}()
 	}
@@ -122,6 +124,67 @@ func TestReplicaTOTPWatermarkConsumesAConcurrentCodeOnlyOnce(t *testing.T) {
 	}
 	if accepted != 1 {
 		t.Fatalf("concurrent Replica TOTP acceptances=%d, want exactly one", accepted)
+	}
+}
+
+func TestReplicaLoginReplayWritesOnlyLowSensitivitySecurityLog(t *testing.T) {
+	cfg := testConfig(t)
+	password := "correct horse battery staple"
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	if err := os.MkdirAll(cfg.ClusterDirectoryPath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secret := []byte("12345678901234567890")
+	ciphertext, err := runtime.vault.EncryptAdminMFA("mfa_replica_log", "admin", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	authenticator := domain.AdminMFAAuthenticator{
+		ID: "mfa_replica_log", Username: "admin", Name: "test phone", Type: domain.AdminMFATypeTOTP,
+		SecretCiphertext: ciphertext, Status: domain.AdminMFAStatusActive, CreatedAt: now, ConfirmedAt: &now,
+	}
+	if _, err := runtime.store.PutAdminMFAAuthenticator(context.Background(), authenticator, 0); err != nil {
+		t.Fatal(err)
+	}
+	code := adminauth.TOTPCode(secret, now.Unix()/adminauth.TOTPPeriod)
+	login := func() *httptest.ResponseRecorder {
+		request := adminRequest(t, http.MethodPost, "/admin/api/v1/session/login", map[string]string{
+			"username": "admin", "password": password, "totp_code": code,
+		})
+		response := httptest.NewRecorder()
+		runtime.loginReplicaAdmin(response, request)
+		return response
+	}
+	if response := login(); response.Code != http.StatusOK {
+		t.Fatalf("first Replica login status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := login(); response.Code != http.StatusUnauthorized {
+		t.Fatalf("replayed Replica login status=%d body=%s", response.Code, response.Body.String())
+	}
+	logged := logs.String()
+	for _, want := range []string{
+		"security_event=replica_admin_authentication", "outcome=failure", "reason_code=mfa_replayed", "username=admin",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("Replica security log lacks %q: %s", want, logged)
+		}
+	}
+	for _, secretValue := range []string{password, code, string(ciphertext)} {
+		if strings.Contains(logged, secretValue) {
+			t.Fatalf("Replica security log exposed authentication material: %s", logged)
+		}
 	}
 }
 

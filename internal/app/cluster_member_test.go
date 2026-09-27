@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Halro/internal/adminauth"
+	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/replication"
@@ -344,15 +346,73 @@ func TestLeaveMemberRequiresPasswordAndAuditsBeforeRemovingState(t *testing.T) {
 	if _, err := os.Stat(cfg.ClusterDirectoryPath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cluster directory still exists after leave: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(cfg.Storage.DataDir, "cluster.left")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired cluster tombstone was not cleaned up: %v", err)
+	}
 	cfg.Replication = nil
 	standalone, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if standalone.audit.Summary().Records == 0 {
-		t.Fatal("leave produced no Audit record")
+	foundLeave := false
+	if _, err := standalone.audit.Replay(func(record audit.Record) error {
+		if record.Event.Action == "cluster.leave" {
+			foundLeave = record.Event.Metadata["role"] == string(replication.RoleReplica) &&
+				record.Event.Metadata["node_id"] == "halro-1"
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !foundLeave {
+		t.Fatal("cluster.leave Audit record lacks the member role or node identity")
 	}
 	if err := standalone.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLeaveMemberResumesRetiredTombstoneCleanup(t *testing.T) {
+	cfg := testConfig(t)
+	password := []byte("correct horse battery staple")
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), cfg, "admin", password); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenWithOptions(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-1", Listen: "127.0.0.1:9911",
+		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("ab", 32)}},
+	}
+	if err := EstablishMemberState(context.Background(), cfg, replication.RoleReplica, "inc_01", 1); err != nil {
+		t.Fatal(err)
+	}
+	retiredPath := filepath.Join(cfg.Storage.DataDir, "cluster.left")
+	if err := os.Rename(cfg.ClusterDirectoryPath(), retiredPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := LeaveMember(context.Background(), cfg, "production-a/halro-1", "admin", []byte("wrong password")); err == nil {
+		t.Fatal("tombstone cleanup accepted the wrong administrator password")
+	}
+	if _, err := os.Stat(retiredPath); err != nil {
+		t.Fatalf("failed tombstone cleanup attempt removed retired state: %v", err)
+	}
+	if err := LeaveMember(context.Background(), cfg, "production-a/halro-1", "admin", password); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(retiredPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired member state still exists after resumed cleanup: %v", err)
+	}
+	// A lost response after the final directory fsync is idempotent too.
+	if err := LeaveMember(context.Background(), cfg, "production-a/halro-1", "admin", password); err != nil {
+		t.Fatalf("completed leave retry failed: %v", err)
 	}
 }

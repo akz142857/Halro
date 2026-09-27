@@ -42,8 +42,30 @@ func RecoverReplicaStores(journal *OrderingJournal, source *NativeSource) error 
 	}
 	for store := StoreLedger; store <= StoreMetadata; store++ {
 		cursor := expected[store-StoreLedger]
-		if err := source.RepairReplicaTail(store, cursor); err != nil {
-			return fmt.Errorf("repair Replica store %d tail: %w", store, err)
+		actual, cursorErr := source.Cursor(store)
+		if cursorErr != nil {
+			// A native cursor cannot be read through a torn final frame. Repair is
+			// allowed only when the complete authenticated prefix ends exactly at
+			// the ordering cursor.
+			if err := source.RepairReplicaTail(store, cursor); err != nil {
+				return fmt.Errorf("repair Replica store %d tail: %w", store, err)
+			}
+			actual, cursorErr = source.Cursor(store)
+			if cursorErr != nil {
+				return fmt.Errorf("read Replica store %d after partial-tail repair: %w", store, cursorErr)
+			}
+		}
+		if sourceCursorBehind(actual, cursor) {
+			return fmt.Errorf("Replica store %d cursor %d/%d is behind ordering %d/%d",
+				store, actual.Generation, actual.Sequence, cursor.Generation, cursor.Sequence)
+		}
+		if actual != cursor {
+			// A complete native frame is fsynced before its ordering record. A
+			// crash in that gap leaves an authenticated but unauthorized suffix;
+			// ordering is the authority that permits truncating it here.
+			if err := source.Truncate(store, cursor); err != nil {
+				return fmt.Errorf("truncate unordered Replica store %d suffix: %w", store, err)
+			}
 		}
 		actual, err := source.Cursor(store)
 		if err != nil {

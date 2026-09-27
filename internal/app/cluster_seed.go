@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
@@ -104,15 +105,27 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 		return replication.MemberState{}, errors.New("seed install requires replication config and absolute staging/manifest paths")
 	}
 	stagingData = filepath.Clean(stagingData)
-	if stagingData == filepath.Clean(cfg.Storage.DataDir) || filepath.Dir(stagingData) != filepath.Dir(filepath.Clean(cfg.Storage.DataDir)) {
+	dataDir := filepath.Clean(cfg.Storage.DataDir)
+	publicationDirectory := filepath.Dir(dataDir)
+	if stagingData == dataDir || filepath.Dir(stagingData) != publicationDirectory {
 		return replication.MemberState{}, errors.New("seed staging directory must be a sibling of storage.data_dir for atomic publication")
+	}
+	publicationInfo, err := os.Lstat(publicationDirectory)
+	if err != nil {
+		return replication.MemberState{}, err
+	}
+	if publicationInfo.Mode()&os.ModeSymlink != 0 || !publicationInfo.IsDir() {
+		return replication.MemberState{}, errors.New("seed publication directory must be a real directory, not a symlink")
 	}
 	stagingInfo, err := os.Lstat(stagingData)
 	if err != nil {
 		return replication.MemberState{}, err
 	}
-	if !stagingInfo.IsDir() || stagingInfo.Mode()&os.ModeSymlink != 0 || stagingInfo.Mode().Perm()&0o077 != 0 {
-		return replication.MemberState{}, errors.New("seed staging must be a private real directory, not a symlink")
+	if !stagingInfo.IsDir() || stagingInfo.Mode()&os.ModeSymlink != 0 {
+		return replication.MemberState{}, errors.New("seed staging must be a real directory, not a symlink")
+	}
+	if !sameSeedFilesystem(stagingInfo, publicationInfo) {
+		return replication.MemberState{}, errors.New("seed staging and storage.data_dir must be on the same filesystem")
 	}
 	publicationLock, err := lock.AcquireInitialization(cfg.Storage.DataDir)
 	if err != nil {
@@ -123,6 +136,12 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 		return replication.MemberState{}, errors.New("seed install requires storage.data_dir to be absent")
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return replication.MemberState{}, err
+	}
+	// Reject links and special files before any key or authenticated store is
+	// opened through the staging tree. The final pass below repeats these checks
+	// through a root descriptor immediately before publication.
+	if err := checkSeedTree(stagingData, false); err != nil {
+		return replication.MemberState{}, fmt.Errorf("validate seed staging tree: %w", err)
 	}
 	payload, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -163,52 +182,125 @@ func InstallSeedSnapshot(ctx context.Context, cfg config.Config, stagingData, ma
 	if err != nil || !os.SameFile(stagingInfo, currentInfo) {
 		return replication.MemberState{}, errors.New("seed staging directory changed during verification")
 	}
-	if err := os.Rename(stagingData, cfg.Storage.DataDir); err != nil {
+	currentPublicationInfo, err := os.Lstat(publicationDirectory)
+	if err != nil || !os.SameFile(publicationInfo, currentPublicationInfo) || !sameSeedFilesystem(currentInfo, currentPublicationInfo) {
+		return replication.MemberState{}, errors.New("seed publication directory changed or crossed filesystems during verification")
+	}
+	if _, err := os.Lstat(dataDir); err == nil {
+		return replication.MemberState{}, errors.New("seed install requires storage.data_dir to remain absent")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return replication.MemberState{}, err
+	}
+	if err := os.Rename(stagingData, dataDir); err != nil {
 		return replication.MemberState{}, fmt.Errorf("publish seed snapshot: %w", err)
 	}
-	if err := durable.SyncDirectory(filepath.Dir(cfg.Storage.DataDir)); err != nil {
+	if err := durable.SyncDirectory(publicationDirectory); err != nil {
 		return replication.MemberState{}, fmt.Errorf("persist seed publication: %w", err)
 	}
 	return state, nil
 }
 
 func syncSeedTree(root string) error {
-	var directories []string
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	return checkSeedTree(root, true)
+}
+
+type seedDirectory struct {
+	name string
+	info os.FileInfo
+}
+
+func checkSeedTree(root string, persist bool) error {
+	pinnedRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return err
+	}
+	defer pinnedRoot.Close()
+	var directories []seedDirectory
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		info, err := entry.Info()
+		relative, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o077 != 0 {
-			return fmt.Errorf("seed path %s is a symlink or is accessible by group/other", path)
+		info, err := pinnedRoot.Lstat(relative)
+		if err != nil {
+			return err
 		}
-		if entry.IsDir() {
-			directories = append(directories, path)
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("seed path %s is a symlink", path)
+		}
+		if info.IsDir() {
+			directories = append(directories, seedDirectory{name: relative, info: info})
 			return nil
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("seed path %s is not a regular file", path)
 		}
-		file, err := os.Open(path)
+		file, err := pinnedRoot.Open(relative)
 		if err != nil {
 			return err
 		}
-		syncErr := file.Sync()
+		openedInfo, statErr := file.Stat()
+		if statErr != nil || !os.SameFile(info, openedInfo) || !openedInfo.Mode().IsRegular() {
+			file.Close()
+			return errors.Join(statErr, fmt.Errorf("seed path %s changed during verification", path))
+		}
+		var chmodErr, syncErr error
+		if persist {
+			chmodErr = file.Chmod(0o600)
+			if chmodErr == nil {
+				openedInfo, statErr = file.Stat()
+				if statErr == nil && openedInfo.Mode().Perm() != 0o600 {
+					statErr = fmt.Errorf("seed file %s does not have mode 0600", path)
+				}
+			}
+			if chmodErr == nil && statErr == nil {
+				syncErr = file.Sync()
+			}
+		}
 		closeErr := file.Close()
-		return errors.Join(syncErr, closeErr)
+		return errors.Join(chmodErr, statErr, syncErr, closeErr)
 	})
 	if err != nil {
 		return err
 	}
 	for index := len(directories) - 1; index >= 0; index-- {
-		if err := durable.SyncDirectory(directories[index]); err != nil {
+		directory := directories[index]
+		handle, err := pinnedRoot.Open(directory.name)
+		if err != nil {
+			return err
+		}
+		openedInfo, statErr := handle.Stat()
+		if statErr != nil || !os.SameFile(directory.info, openedInfo) || !openedInfo.IsDir() {
+			handle.Close()
+			return errors.Join(statErr, fmt.Errorf("seed directory %s changed during verification", directory.name))
+		}
+		var chmodErr, syncErr error
+		if persist {
+			chmodErr = handle.Chmod(0o700)
+			if chmodErr == nil {
+				openedInfo, statErr = handle.Stat()
+				if statErr == nil && openedInfo.Mode().Perm() != 0o700 {
+					statErr = fmt.Errorf("seed directory %s does not have mode 0700", directory.name)
+				}
+			}
+			if chmodErr == nil && statErr == nil {
+				syncErr = handle.Sync()
+			}
+		}
+		if err := errors.Join(chmodErr, statErr, syncErr, handle.Close()); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sameSeedFilesystem(left, right os.FileInfo) bool {
+	leftStat, leftOK := left.Sys().(*syscall.Stat_t)
+	rightStat, rightOK := right.Sys().(*syscall.Stat_t)
+	return leftOK && rightOK && leftStat.Dev == rightStat.Dev
 }
 
 func requireJSONEOF(decoder *json.Decoder) error {

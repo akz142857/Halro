@@ -113,12 +113,16 @@ type Runtime struct {
 	now                 func() time.Time
 	kmsRecoveryLastUsed time.Time
 	adminSessions       *adminauth.Manager
-	adminLoginMu        sync.Mutex
-	adminLogin          adminRateState
-	adminSetupRateMu    sync.Mutex
-	adminSetupRate      adminRateState
-	adminStepUpMu       sync.Mutex
-	adminStepUp         map[string]adminLoginWindow
+	// adminLoginMu protects both rate accounting and the Replica TOTP replay
+	// watermark transaction. allowAdminLogin releases it before credential
+	// verification, so the two uses never nest; sharing also keeps Admin login
+	// concurrency in one existing Runtime subsystem.
+	adminLoginMu     sync.Mutex
+	adminLogin       adminRateState
+	adminSetupRateMu sync.Mutex
+	adminSetupRate   adminRateState
+	adminStepUpMu    sync.Mutex
+	adminStepUp      map[string]adminLoginWindow
 	// Kept in memory on purpose rather than on the session record: an elevation
 	// that survived a restart would be one the operator never granted to the
 	// process now holding it, and the durable session schema stays untouched.
@@ -1383,6 +1387,24 @@ func (r *Runtime) saveUsageCheckpoint() {
 // old stored rows plus the old pending increment, or the new stored rows plus
 // the new increment, never the drained gap or both copies.
 func (r *Runtime) saveUsageCheckpointCoordinated() {
+	r.persistUsageCheckpointCoordinated(true)
+}
+
+// saveReplicaUsageCheckpoint persists only the node-derived Usage view. It
+// deliberately does not run the Primary collector and does not advance the
+// Ledger chain checkpoint to the native durable tail: a Replica may have a
+// locally durable, not-yet-applied suffix, while every Replica derivative is
+// bounded by its authenticated applied/confirmed prefix.
+func (r *Runtime) saveReplicaUsageCheckpoint() {
+	if r.usage == nil {
+		return
+	}
+	r.usage.WithRollupCheckpoint(func() {
+		r.persistUsageCheckpointCoordinated(false)
+	})
+}
+
+func (r *Runtime) persistUsageCheckpointCoordinated(advanceLedgerChain bool) {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
@@ -1414,7 +1436,9 @@ func (r *Runtime) saveUsageCheckpointCoordinated() {
 	// failed above leaves it proposing the same round again on the next tick,
 	// which is why nothing has to be unwound but the increment.
 	r.usage.CommitCheckpoint(snapshot)
-	r.advanceLedgerChainCheckpoint()
+	if advanceLedgerChain {
+		r.advanceLedgerChainCheckpoint()
+	}
 }
 
 // usageCheckpointSegments hands the round's segments to the store in its own

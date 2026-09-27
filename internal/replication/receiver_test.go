@@ -285,6 +285,26 @@ func TestReplicaReceiverRefusesGapWrongTermAndIndexFork(t *testing.T) {
 	}
 }
 
+func TestReplicaReceiverPromiseFencesOldTermFramesAndCommitNotices(t *testing.T) {
+	sink := &recordingFrameSink{}
+	receiver, journal := newTestReceiver(t, sink)
+	defer journal.Close()
+	if err := receiver.Promise(8, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := receiver.Receive(encodeTestReplicaFrame(t, 1, KindLeadershipEstablished)); err == nil || !strings.Contains(err.Error(), "below this member's durable promise") {
+		t.Fatalf("old-term frame error=%v", err)
+	}
+	if err := receiver.Confirm(CommitNotice{
+		ClusterID: "production-a", Incarnation: "inc_01", NodeID: "halro-0", Term: 7, ConfirmedIndex: 1,
+	}); err == nil || !strings.Contains(err.Error(), "below this member's durable promise") {
+		t.Fatalf("old-term commit notice error=%v", err)
+	}
+	if len(sink.frames) != 0 {
+		t.Fatalf("persisted %d old-term frames after promise", len(sink.frames))
+	}
+}
+
 func TestReplicaReceiverRequiresContiguousPerStoreSequence(t *testing.T) {
 	sink := &recordingFrameSink{}
 	receiver, journal := newTestReceiver(t, sink)
