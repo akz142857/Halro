@@ -22,12 +22,17 @@ const auditAnchorRetention = 1000
 // no event payloads, so it is safe to send somewhere with weaker
 // confidentiality than the audit log itself.
 type AuditAnchor struct {
-	Sequence   uint64    `json:"sequence"`
-	Records    uint64    `json:"records"`
-	LastHash   [32]byte  `json:"last_hash"`
-	Bytes      int64     `json:"bytes"`
-	InstanceID string    `json:"instance_id"`
-	ObservedAt time.Time `json:"observed_at"`
+	Sequence    uint64    `json:"sequence"`
+	Records     uint64    `json:"records"`
+	LastHash    [32]byte  `json:"last_hash"`
+	Bytes       int64     `json:"bytes"`
+	InstanceID  string    `json:"instance_id"`
+	ClusterID   string    `json:"cluster_id,omitempty"`
+	Incarnation string    `json:"incarnation,omitempty"`
+	NodeID      string    `json:"node_id,omitempty"`
+	Term        uint64    `json:"term,omitempty"`
+	TargetID    string    `json:"target_id,omitempty"`
+	ObservedAt  time.Time `json:"observed_at"`
 }
 
 func auditAnchorKey(sequence uint64) []byte {
@@ -43,6 +48,15 @@ func auditAnchorKey(sequence uint64) []byte {
 func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 	if anchor.InstanceID == "" || anchor.ObservedAt.IsZero() {
 		return errors.New("audit anchor is incomplete")
+	}
+	clusterFields := 0
+	for _, present := range []bool{anchor.ClusterID != "", anchor.Incarnation != "", anchor.NodeID != "", anchor.Term != 0} {
+		if present {
+			clusterFields++
+		}
+	}
+	if clusterFields != 0 && clusterFields != 4 {
+		return errors.New("HA audit anchor identity is incomplete")
 	}
 	encoded, err := json.Marshal(anchor)
 	if err != nil {

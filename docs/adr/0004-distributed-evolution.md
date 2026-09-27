@@ -1,6 +1,6 @@
 # ADR 0004: Distributed evolution through project ownership
 
-- Status: Accepted for Phase 0 foundations
+- Status: Superseded in part by ADR 0027; mode names and the future Project-sharding boundary remain accepted
 - Date: 2026-08-01
 
 ## Context
@@ -30,15 +30,19 @@ retry under the idempotency contract, but Halro does not claim exactly-once
 Provider execution. A call that might have reached a Provider without a durable
 settlement remains an auditable, conservatively accounted unknown outcome.
 
-Future HA groups require quorum election and fencing. Election alone is not a
-safety boundary: an old leader must be unable to commit mutations or start new
-Provider calls after a higher ownership epoch exists.
+ADR 0027 replaces the HA-group portion of this decision with physical frame
+replication, cluster-wide terms and durable promises. It also narrows the old
+leader claim: promises prevent further confirmation, while operator fencing and
+conservative unknown-outcome recovery cover the residual Provider-call window.
+Project ownership epochs remain a future Cluster-mode concern, not an HA-group
+wire contract.
 
 ## Phase 0 constraints
 
-Phase 0 adds versioned mutation, ownership, idempotency, replay, and measurement
-contracts without adding consensus, cluster transport, shared storage, or a
-second writer. Standalone uses epoch 1.
+The original semantic-mutation, ownership-epoch and deterministic-replay
+constraints are superseded for one HA group by ADR 0027. The ban on adding
+consensus, cluster transport, shared storage or a second writer during Phase 0
+remains historical fact; Standalone behavior remains unchanged.
 
 ## Consequences
 

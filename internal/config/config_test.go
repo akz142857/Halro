@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,6 +94,98 @@ func TestDecodeRejectsUnknownFields(t *testing.T) {
 	_, err := Decode(strings.NewReader(validConfig + "\nunknown: true\n"))
 	if err == nil {
 		t.Fatal("expected unknown field error")
+	}
+}
+
+func validReplicationConfig() *Replication {
+	return &Replication{
+		ClusterID: "production-a",
+		NodeID:    "halro-0",
+		Listen:    "0.0.0.0:9910",
+		Peers: []ReplicationPeer{
+			{Name: "halro-1", Address: "halro-1.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)},
+			{Name: "halro-2", Address: "halro-2.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("b", 64)},
+		},
+		TLS: ReplicationTLS{CAFile: "/cluster/ca.crt", CertFile: "/cluster/tls.crt", KeyFile: "/cluster/tls.key"},
+	}
+}
+
+func TestReplicationConfigurationIsOptionalAndStrict(t *testing.T) {
+	standalone := Default()
+	if standalone.Replication != nil || len(standalone.Warnings()) != 0 {
+		t.Fatalf("Standalone acquired replication state: %#v warnings=%v", standalone.Replication, standalone.Warnings())
+	}
+
+	member := Default()
+	member.Replication = validReplicationConfig()
+	if err := member.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := member.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid three-member replication config was rejected: %v", err)
+	}
+	if warnings := member.Warnings(); len(warnings) != 0 {
+		t.Fatalf("three-member config warnings=%v", warnings)
+	}
+
+	member.Replication.Peers = member.Replication.Peers[:1]
+	if err := member.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid two-member replication config was rejected: %v", err)
+	}
+	if warnings := member.Warnings(); len(warnings) != 1 || !strings.Contains(warnings[0], "cannot accept confirmed writes") {
+		t.Fatalf("two-member warning=%v", warnings)
+	}
+}
+
+func TestReplicationPathsFollowStorageDataDirectory(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.DataDir = "/srv/halro/member-a"
+	if got, want := cfg.ClusterDirectoryPath(), filepath.Join(cfg.Storage.DataDir, "cluster"); got != want {
+		t.Fatalf("cluster directory=%q want=%q", got, want)
+	}
+	if got, want := cfg.ReplicationStatePath(), filepath.Join(cfg.Storage.DataDir, "cluster", "state.json"); got != want {
+		t.Fatalf("replication state=%q want=%q", got, want)
+	}
+	if got, want := cfg.OrderingJournalPath(), filepath.Join(cfg.Storage.DataDir, "cluster", "ordering.journal"); got != want {
+		t.Fatalf("ordering journal=%q want=%q", got, want)
+	}
+}
+
+func TestReplicationConfigurationRejectsAmbiguousIdentityAndTrust(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Replication)
+		want   string
+	}{
+		{name: "cluster id", mutate: func(r *Replication) { r.ClusterID = "-cluster" }, want: "replication.cluster_id"},
+		{name: "node id", mutate: func(r *Replication) { r.NodeID = "node/0" }, want: "replication.node_id"},
+		{name: "listen port", mutate: func(r *Replication) { r.Listen = "0.0.0.0:0" }, want: "replication.listen port"},
+		{name: "no peers", mutate: func(r *Replication) { r.Peers = nil }, want: "one or two"},
+		{name: "too many peers", mutate: func(r *Replication) {
+			r.Peers = append(r.Peers, ReplicationPeer{Name: "halro-3", Address: "halro-3.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("c", 64)})
+		}, want: "one or two"},
+		{name: "self peer", mutate: func(r *Replication) { r.Peers[0].Name = r.NodeID }, want: "names this node"},
+		{name: "duplicate peer name", mutate: func(r *Replication) { r.Peers[1].Name = r.Peers[0].Name }, want: "name is listed more than once"},
+		{name: "duplicate peer address", mutate: func(r *Replication) { r.Peers[1].Address = r.Peers[0].Address }, want: "address is listed more than once"},
+		{name: "wildcard peer", mutate: func(r *Replication) { r.Peers[0].Address = "0.0.0.0:9910" }, want: "cannot use an unspecified address"},
+		{name: "bad pin", mutate: func(r *Replication) { r.Peers[0].SPKISHA256 = "sha256:not-a-pin" }, want: "64 lowercase"},
+		{name: "shared certificate", mutate: func(r *Replication) { r.Peers[1].SPKISHA256 = r.Peers[0].SPKISHA256 }, want: "shared by more than one peer"},
+		{name: "missing tls", mutate: func(r *Replication) { r.TLS.KeyFile = "" }, want: "no plaintext mode"},
+		{name: "same cert and key", mutate: func(r *Replication) { r.TLS.KeyFile = r.TLS.CertFile }, want: "must differ"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Replication = validReplicationConfig()
+			test.mutate(cfg.Replication)
+			if err := cfg.Normalize(); err != nil {
+				t.Fatal(err)
+			}
+			err := cfg.Validate(LoadOptions{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

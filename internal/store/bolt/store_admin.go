@@ -77,7 +77,7 @@ func (s *Store) PutAdminUserWithAuditIntent(
 	if err := ctx.Err(); err != nil {
 		return domain.AdminUser{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if err := putVersioned(tx.Bucket(bucketAdminUsers), user.Username, expectedRevision, &user); err != nil {
 			return err
 		}
@@ -250,7 +250,7 @@ func (s *Store) DeleteAdminUserWithAuditIntent(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		users := tx.Bucket(bucketAdminUsers)
 		raw := users.Get([]byte(username))
 		if raw == nil {
@@ -354,7 +354,7 @@ func (s *Store) RefreshAdminSession(
 	now = now.UTC()
 	var result domain.AdminSession
 	valid := false
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		sessions := tx.Bucket(bucketAdminSessions)
 		raw := sessions.Get(observed.IDHash[:])
 		if raw == nil {
@@ -486,7 +486,7 @@ func (s *Store) PutAdminMFAAuthenticator(ctx context.Context, value domain.Admin
 	if err := ctx.Err(); err != nil {
 		return value, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		return putVersioned(tx.Bucket(bucketAdminMFAAuthenticators), adminMFAKey(value.Username, value.ID), expected, &value)
 	})
 	return value, err
@@ -561,7 +561,7 @@ func (s *Store) ReplaceAdminMFARecoveryCodes(ctx context.Context, username strin
 			return err
 		}
 	}
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
 		prefix := []byte(username + "\x00")
 		cursor := bucket.Cursor()
@@ -589,7 +589,7 @@ func (s *Store) ConsumeAdminMFARecoveryCode(ctx context.Context, username string
 	}
 	remaining := 0
 	found := false
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
 		prefix := []byte(username + "\x00")
 		cursor := bucket.Cursor()
@@ -803,7 +803,7 @@ func (s *Store) ActivateAdminMFAAuthenticator(ctx context.Context, username, id 
 }
 
 func (s *Store) RevokeAdminMFAAuthenticator(ctx context.Context, username, id string, required bool) error {
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
 		prefix := []byte(username + "\x00")
 		active := 0
@@ -843,7 +843,7 @@ func (s *Store) RevokeAdminMFAAuthenticator(ctx context.Context, username, id st
 }
 
 func (s *Store) DeleteAdminMFAForUser(ctx context.Context, username string) error {
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		for _, bucketName := range [][]byte{bucketAdminMFAAuthenticators, bucketAdminMFARecoveryCodes} {
 			bucket := tx.Bucket(bucketName)
 			prefix := []byte(username + "\x00")
@@ -875,7 +875,7 @@ func (s *Store) DeleteAdminMFAForUser(ctx context.Context, username string) erro
 // every session and pre-auth challenge for one administrator.
 func (s *Store) RotateAdminIdentity(ctx context.Context, username string) (domain.AdminUser, error) {
 	var user domain.AdminUser
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		var err error
 		user, err = rotateAdminIdentityTx(tx, username)
 		return err
@@ -1007,7 +1007,7 @@ func replaceAdminMFARecoveryCodesTx(tx *Tx, username string, codes []domain.Admi
 func (s *Store) ConfirmAdminMFAEnrollment(ctx context.Context, username, id string, step int64, now time.Time, limit int, codes []domain.AdminMFARecoveryCode, intent domain.AdminMFAAuditIntent) (domain.AdminUser, bool, error) {
 	var user domain.AdminUser
 	first := false
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
 		prefix := []byte(username + "\x00")
 		active := 0
@@ -1068,7 +1068,7 @@ func (s *Store) ConfirmAdminMFAEnrollment(ctx context.Context, username, id stri
 
 func (s *Store) ReplaceAdminMFARecoveryCodesAndRotate(ctx context.Context, username string, codes []domain.AdminMFARecoveryCode, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
 	var user domain.AdminUser
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if err := replaceAdminMFARecoveryCodesTx(tx, username, codes); err != nil {
 			return err
 		}
@@ -1084,7 +1084,7 @@ func (s *Store) ReplaceAdminMFARecoveryCodesAndRotate(ctx context.Context, usern
 
 func (s *Store) RevokeAdminMFAAuthenticatorAndRotate(ctx context.Context, username, id string, required bool, clearRecovery bool, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
 	var user domain.AdminUser
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketAdminMFAAuthenticators)
 		prefix := []byte(username + "\x00")
 		active := 0
@@ -1139,7 +1139,7 @@ func (s *Store) RevokeAdminMFAAuthenticatorAndRotate(ctx context.Context, userna
 
 func (s *Store) DisableAdminMFAAndRotate(ctx context.Context, username string, recoveryHash *[32]byte, intent domain.AdminMFAAuditIntent) (domain.AdminUser, error) {
 	var user domain.AdminUser
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		if recoveryHash != nil {
 			matched := false
 			bucket := tx.Bucket(bucketAdminMFARecoveryCodes)
@@ -1183,7 +1183,7 @@ func (s *Store) DisableAdminMFAAndRotate(ctx context.Context, username string, r
 // in the same transaction as identity invalidation.
 func (s *Store) ResetAdminMFAIdentity(ctx context.Context, username string) (domain.AdminUser, error) {
 	var user domain.AdminUser
-	err := s.update(func(tx *Tx) error {
+	err := s.updateContext(ctx, func(tx *Tx) error {
 		users := tx.Bucket(bucketAdminUsers)
 		raw := users.Get([]byte(username))
 		if raw == nil {

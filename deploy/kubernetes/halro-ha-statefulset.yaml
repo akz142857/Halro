@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: Service
+metadata: {name: halro-members, namespace: halro}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+  ports:
+    - {name: replication, port: 9910, targetPort: replication}
+---
+# Client routing option (a): every Ready member is an endpoint. Replicas return
+# 503 not_primary with Retry-After; clients must retry.
+apiVersion: v1
+kind: Service
+metadata: {name: halro, namespace: halro}
+spec:
+  selector: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+  ports:
+    - {name: gateway, port: 8080, targetPort: gateway}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: halro-ha, namespace: halro}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: {name: halro, namespace: halro}
+spec:
+  serviceName: halro-members
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy: {type: OnDelete}
+  persistentVolumeClaimRetentionPolicy: {whenDeleted: Retain, whenScaled: Retain}
+  selector:
+    matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+    spec:
+      serviceAccountName: halro-ha
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 150
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+      containers:
+        - name: halro
+          image: ghcr.io/OWNER/halro@sha256:REPLACE_WITH_REVIEWED_DIGEST
+          args: ["serve", "--config", "/etc/halro/config.yaml"]
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - {name: AWS_EC2_METADATA_DISABLED, value: "true"}
+          ports:
+            - {name: gateway, containerPort: 8080}
+            - {name: admin, containerPort: 8081}
+            - {name: metrics, containerPort: 9090}
+            - {name: replication, containerPort: 9910}
+          startupProbe:
+            httpGet: {path: /health/live, port: gateway, scheme: HTTPS}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 720
+          readinessProbe:
+            httpGet: {path: /health/ready, port: gateway, scheme: HTTPS}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /health/live, port: gateway, scheme: HTTPS}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: 500m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts:
+            - name: member-config
+              mountPath: /etc/halro/config.yaml
+              subPathExpr: $(POD_NAME).yaml
+              readOnly: true
+            - name: cluster-tls
+              mountPath: /run/secrets/halro-cluster/tls.crt
+              subPathExpr: $(POD_NAME).crt
+              readOnly: true
+            - name: cluster-tls
+              mountPath: /run/secrets/halro-cluster/tls.key
+              subPathExpr: $(POD_NAME).key
+              readOnly: true
+            - {name: cluster-tls, mountPath: /run/secrets/halro-cluster/ca.crt, subPath: ca.crt, readOnly: true}
+            - {name: data, mountPath: /var/lib/halro}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: member-config
+          secret: {secretName: halro-ha-config, defaultMode: 0440}
+        - name: cluster-tls
+          secret: {secretName: halro-ha-cluster-tls, defaultMode: 0440}
+        - name: tmp
+          emptyDir: {sizeLimit: 64Mi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOncePod]
+        resources: {requests: {storage: 50Gi}}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: halro-ha, namespace: halro}
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: halro-ha-ingress, namespace: halro}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/name: halro, app.kubernetes.io/component: ha-member}
+      ports:
+        - {protocol: TCP, port: 9910}
+    - from:
+        - namespaceSelector:
+            matchLabels: {halro.io/client-access: "allowed"}
+      ports:
+        - {protocol: TCP, port: 8080}

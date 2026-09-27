@@ -88,7 +88,11 @@ const (
 	// alternative — a struct to hold one uint64 — would cost a field anyway
 	// and buy nothing. Raised so 260918-PV-F-19's alerting has something to
 	// fire on.
-	runtimeFieldBudget = 77
+	// 78: replication. Raised deliberately as one lifecycle-owned subsystem:
+	// authenticated role state, ordering journal, native source and peer
+	// transport must open and close together. Spreading them into Runtime would
+	// add several fields and make partial cleanup states representable.
+	runtimeFieldBudget = 78
 	runtimeMutexBudget = 10
 )
 

@@ -171,6 +171,66 @@ storage:
     #     endpoint: ""
     #     algorithm: ""
 
+# Omit this whole block for Standalone. Its presence declares one member of a
+# two- or three-node Primary/Replica group. Phase 0b validates the identity and
+# mTLS boundary; a build without the replication runtime refuses to start with
+# the block rather than silently serving as Standalone.
+# replication:
+  # @title.zh-CN 复制集群标识
+  # @title.en-US Replication cluster ID
+  # @description.zh-CN 同一复制组所有成员共享的稳定标识；长度 1–64，只允许字母、数字、点、下划线和连字符，且首字符必须是字母或数字。
+  # @description.en-US Stable identity shared by every member; 1–64 characters using letters, digits, dot, underscore or hyphen, starting with a letter or digit.
+  # cluster_id: "production-a"
+  # @title.zh-CN 本节点标识
+  # @title.en-US Local node ID
+  # @description.zh-CN 本成员的稳定唯一标识；长度与字符规则同 cluster_id，且不得出现在 peers 中。
+  # @description.en-US Stable unique identity of this member; the cluster_id length and character rules apply, and it must not appear in peers.
+  # node_id: "halro-0"
+  # @title.zh-CN 复制监听地址
+  # @title.en-US Replication listen address
+  # @description.zh-CN mTLS 复制端口的 host:port；端口必须在 1–65535 之间，并且不得与 Gateway、Admin 或 Metrics 监听地址相同。
+  # @description.en-US host:port for the mTLS replication listener; the port must be between 1 and 65535 and the address must differ from the Gateway, Admin and Metrics listeners.
+  # listen: "0.0.0.0:9910"
+  # @title.zh-CN 复制成员
+  # @title.en-US Replication peers
+  # @description.zh-CN 只列其它成员：一个 peer 表示两节点并会产生可用性警告，两个 peer 表示三节点；不接受更多成员或在线变更成员。
+  # @description.en-US Other members only: one peer forms a two-node group and emits an availability warning; two peers form a three-node group. Larger or online-changing membership is not accepted.
+  # peers:
+    # @title.zh-CN 成员名称
+    # @title.en-US Peer name
+    # @description.zh-CN 对端稳定 node_id；必须唯一，且不能等于本节点 node_id。
+    # @description.en-US Stable node_id of the peer; it must be unique and must not equal this node's node_id.
+    # - name: "halro-1"
+      # @title.zh-CN 成员地址
+      # @title.en-US Peer address
+      # @description.zh-CN 可拨号的 host:port；端口范围为 1–65535，不能使用 0.0.0.0 或 :: 等未指定地址，且每个 peer 必须唯一。
+      # @description.en-US Dialable host:port with a port from 1–65535; unspecified addresses such as 0.0.0.0 or :: are refused, and every peer address must be unique.
+      # address: "halro-1.halro-internal:9910"
+      # @title.zh-CN 成员公钥固定值
+      # @title.en-US Peer public-key pin
+      # @description.zh-CN 对端证书 SPKI 的 sha256: 加 64 位小写十六进制摘要；每个 peer 必须使用不同固定值。
+      # @description.en-US Peer certificate SPKI as sha256: plus 64 lowercase hexadecimal characters; every peer must have a distinct pin.
+      # spki_sha256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    # - name: "halro-2"
+      # address: "halro-2.halro-internal:9910"
+      # spki_sha256: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  # tls:
+    # @title.zh-CN 集群 CA 文件
+    # @title.en-US Cluster CA file
+    # @description.zh-CN 用于验证成员证书的集群 CA；replication 没有明文模式，三个 TLS 文件缺一不可。
+    # @description.en-US Cluster CA used to verify member certificates; replication has no plaintext mode and all three TLS files are required.
+    # ca_file: "/run/secrets/halro-cluster/ca.crt"
+    # @title.zh-CN 本节点证书
+    # @title.en-US Local member certificate
+    # @description.zh-CN 本节点的成员证书；cert_file 必须与 replication.tls.key_file 不同。
+    # @description.en-US Certificate of this member; cert_file must differ from replication.tls.key_file.
+    # cert_file: "/run/secrets/halro-cluster/tls.crt"
+    # @title.zh-CN 本节点私钥
+    # @title.en-US Local member private key
+    # @description.zh-CN 与 cert_file 配套的私钥；文件内容不会由 config check 读取。
+    # @description.en-US Private key paired with cert_file; config check does not read the file contents.
+    # key_file: "/run/secrets/halro-cluster/tls.key"
+
 admin:
   # @title.zh-CN 会话有效期
   # @title.en-US Session lifetime

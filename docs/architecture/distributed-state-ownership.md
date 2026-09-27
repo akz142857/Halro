@@ -1,5 +1,10 @@
 # Distributed state ownership
 
+> HA note: ADR 0027 supersedes invariants 1, 3 and 5 below for one
+> Primary/Replica group. HA uses a cluster-wide term, durable promises and
+> physical frame-prefix equivalence. The original wording remains the design
+> input for future multi-shard Cluster mode.
+
 This matrix is the Phase 0 contract for future HA and Cluster work. It does not
 change the Standalone runtime described by ADR 0001.
 

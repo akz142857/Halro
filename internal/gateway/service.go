@@ -101,6 +101,7 @@ type Service struct {
 	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
 	resourceObjectSealer          ResourceObjectSealer
+	resourceObjectReplicator      func(context.Context, string, []byte) error
 	deferred                      *deferredEngine
 	deferredExecutionTimeout      time.Duration
 	contentScanner                contentscan.Scanner
@@ -178,6 +179,10 @@ type ServiceOptions struct {
 	Resources            InferenceResourcesResourceStore
 	ResourceObjectDir    string
 	ResourceObjectSealer ResourceObjectSealer
+	// ResourceObjectReplicator must not return until the encrypted object is
+	// durably available on the HA quorum. It runs after the local atomic rename
+	// and before callers may persist metadata naming the object.
+	ResourceObjectReplicator func(context.Context, string, []byte) error
 	// DeferredResponseWorkers bounds how many deferred submissions this
 	// instance executes at once, above and beyond each Project's own
 	// concurrency limit. Zero takes the default.
@@ -1127,6 +1132,7 @@ func NewServiceWithOptions(
 		resources:                     options.Resources,
 		resourceObjectDir:             options.ResourceObjectDir,
 		resourceObjectSealer:          options.ResourceObjectSealer,
+		resourceObjectReplicator:      options.ResourceObjectReplicator,
 		contentScanner:                options.ContentScanner,
 		pricing:                       options.Pricing,
 		pricingClockRollbackTolerance: options.PricingClockRollbackTolerance,

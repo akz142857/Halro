@@ -35,6 +35,7 @@ import (
 	"github.com/akz142857/Halro/internal/modelcatalog"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/sourcelimit"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -112,12 +113,16 @@ type Runtime struct {
 	now                 func() time.Time
 	kmsRecoveryLastUsed time.Time
 	adminSessions       *adminauth.Manager
-	adminLoginMu        sync.Mutex
-	adminLogin          adminRateState
-	adminSetupRateMu    sync.Mutex
-	adminSetupRate      adminRateState
-	adminStepUpMu       sync.Mutex
-	adminStepUp         map[string]adminLoginWindow
+	// adminLoginMu protects both rate accounting and the Replica TOTP replay
+	// watermark transaction. allowAdminLogin releases it before credential
+	// verification, so the two uses never nest; sharing also keeps Admin login
+	// concurrency in one existing Runtime subsystem.
+	adminLoginMu     sync.Mutex
+	adminLogin       adminRateState
+	adminSetupRateMu sync.Mutex
+	adminSetupRate   adminRateState
+	adminStepUpMu    sync.Mutex
+	adminStepUp      map[string]adminLoginWindow
 	// Kept in memory on purpose rather than on the session record: an elevation
 	// that survived a restart would be one the operator never granted to the
 	// process now holding it, and the durable session schema stays untouched.
@@ -153,6 +158,9 @@ type Runtime struct {
 	// five because the material, the sources it comes from, and the record of
 	// what was applied are one subsystem, and Runtime is already wide.
 	reload reloadRuntime
+	// replication owns the authenticated member role, global ordering and peer
+	// transport as one lifecycle. Nil is the unchanged Standalone contract.
+	replication *replicationRuntime
 }
 
 type governanceRuntime struct {
@@ -176,6 +184,14 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 }
 
 func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
+	member := cfg.Replication != nil
+	guard := replication.GuardUnavailableRuntime
+	if member {
+		guard = replication.RequireMemberRuntime
+	}
+	if err := guard(cfg.Storage.DataDir, member, "open runtime"); err != nil {
+		return nil, err
+	}
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, err
@@ -184,12 +200,35 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		dataLock.Close()
 		return nil, err
 	}
+	// Close the inspection-to-lock race. The first check avoids touching a
+	// known member directory; this second check makes the decision stable while
+	// the process owns the data directory.
+	if err := guard(cfg.Storage.DataDir, member, "open runtime"); err != nil {
+		return fail(err)
+	}
 	kmsAudit := &kmsAuditRecorder{}
-	masterKey, err := unlockMasterKey(withKMSAuditRecorder(ctx, kmsAudit), cfg)
+	var masterKey []byte
+	if member {
+		masterKey, err = unlockMemberMasterKey(withKMSAuditRecorder(ctx, kmsAudit), cfg)
+	} else {
+		masterKey, err = unlockMasterKey(withKMSAuditRecorder(ctx, kmsAudit), cfg)
+	}
 	if err != nil {
 		return fail(err)
 	}
 	defer clear(masterKey)
+	var memberState replication.MemberState
+	var clusterKey [sha256.Size]byte
+	if member {
+		memberState, clusterKey, err = readMemberState(cfg, masterKey)
+		if err != nil {
+			return fail(fmt.Errorf("open authenticated member state: %w", err))
+		}
+		defer clear(clusterKey[:])
+		if memberState.Role == replication.RoleAwaitingDecision {
+			return fail(errors.New("member is awaiting an explicit startup role decision"))
+		}
+	}
 	adminSessionKey, err := vault.DeriveAdminSessionKey(masterKey)
 	if err != nil {
 		clear(masterKey)
@@ -229,7 +268,23 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if err != nil {
 		return fail(err)
 	}
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	if memberState.Role == replication.RoleReplica {
+		runtime, replicaErr := openReplicaApplication(
+			ctx, cfg, logger, dataLock, secretVault, masterKey, adminSessionKey,
+			metricsTokenHash, metricsAuthorizer, memberState, clusterKey,
+		)
+		if replicaErr != nil {
+			secretVault.Close()
+			return fail(fmt.Errorf("open Replica runtime: %w", replicaErr))
+		}
+		return runtime, nil
+	}
+	var metadata *boltstore.Store
+	if member {
+		metadata, err = boltstore.OpenPrimary(cfg.MetadataPath())
+	} else {
+		metadata, err = boltstore.Open(cfg.MetadataPath())
+	}
 	if err != nil {
 		secretVault.Close()
 		return fail(err)
@@ -239,18 +294,21 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	// it is what turns a crash between a frame's fsync and its transaction's
 	// commit back into a consistent database. A divergence it cannot close
 	// stops the start rather than being papered over.
-	journalState, err := attachMetadataJournal(metadata, secretVault, masterKey, "start")
-	if err != nil {
-		metadata.Close()
-		secretVault.Close()
-		return fail(err)
-	}
-	if journalState.Replayed > 0 {
-		logger.Warn("metadata journal replayed transactions the projection had not applied",
-			"replayed", journalState.Replayed, "sequence", journalState.Sequence)
-	}
-	if journalState.StartedEpoch {
-		logger.Info("metadata journal epoch published", "epoch", journalState.Epoch)
+	var journalState boltstore.JournalState
+	if !member {
+		journalState, err = attachMetadataJournal(metadata, secretVault, masterKey, "start")
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(err)
+		}
+		if journalState.Replayed > 0 {
+			logger.Warn("metadata journal replayed transactions the projection had not applied",
+				"replayed", journalState.Replayed, "sequence", journalState.Sequence)
+		}
+		if journalState.StartedEpoch {
+			logger.Info("metadata journal epoch published", "epoch", journalState.Epoch)
+		}
 	}
 	adminCount, err := metadata.AdminUserCount(ctx)
 	if err != nil {
@@ -337,6 +395,47 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(err)
 	}
 	defer clear(ledgerKey)
+	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	defer clear(governanceKey)
+	metadataJournalKey, err := loadMetadataJournalHMACKey(metadata, secretVault, masterKey)
+	if err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(err)
+	}
+	defer clear(metadataJournalKey)
+	var memberReplication *replicationRuntime
+	memberReplicationOwned := false
+	defer func() {
+		if memberReplicationOwned {
+			_ = memberReplication.close()
+		}
+	}()
+	if member {
+		memberReplication, err = openPrimaryReplication(
+			cfg, logger, memberState, clusterKey, ledgerKey, auditKey, governanceKey, metadataJournalKey,
+		)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("open Primary replication runtime: %w", err))
+		}
+		memberReplicationOwned = true
+		journalState, err = metadata.AttachMetadataJournal(metadataJournalKey, "Primary start")
+		if err == nil {
+			err = memberReplication.installMetadataHook(metadata)
+		}
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("attach Primary metadata journal: %w", err))
+		}
+	}
 	// The gate only guarantees "at least" a reader version, not an exact one:
 	// the accounting-timezone work (schema v16) shipped frame epoch 3 without
 	// ever moving this gate off epoch 2 (docs/review/260805/progress.md
@@ -360,6 +459,9 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		FlushInterval: cfg.Usage.WALFlushInterval.Value(),
 		ChainKey:      ledgerKey,
 	}
+	if memberReplication != nil {
+		memberReplication.ledgerHooks(&ledgerOptions)
+	}
 	if cfg.Usage.Durability == "strict" {
 		ledgerOptions.MaxBatch = 1
 		ledgerOptions.FlushInterval = 0
@@ -378,18 +480,22 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(fmt.Errorf("replay ledger: %w", err))
 	}
-	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
-	if err != nil {
-		ledgerLog.Close()
-		metadata.Close()
-		secretVault.Close()
-		return fail(err)
-	}
-	defer clear(governanceKey)
 	governanceState := governance.NewState()
-	governanceLog, governanceOpenErr := governance.Open(cfg.GovernancePath(), governanceKey)
+	var governanceLog *governance.Log
+	var governanceOpenErr error
+	if memberReplication != nil {
+		governanceLog, governanceOpenErr = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, memberReplication.governanceOptions())
+	} else {
+		governanceLog, governanceOpenErr = governance.Open(cfg.GovernancePath(), governanceKey)
+	}
 	var governanceManager *governance.Manager
 	if governanceOpenErr != nil {
+		if memberReplication != nil {
+			ledgerLog.Close()
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("open Primary governance journal: %w", governanceOpenErr))
+		}
 		logger.Error("Governance Journal unavailable; ordinary inference remains available", "error", governanceOpenErr)
 		governanceManager = governance.NewUnavailable(governanceOpenErr)
 		governanceLog = nil
@@ -592,6 +698,10 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		routeGate.Restore(stored)
 	}
 	providerRegistry.SetEligibility(routeGate)
+	var resourceObjectReplicator func(context.Context, string, []byte) error
+	if memberReplication != nil {
+		resourceObjectReplicator = memberReplication.replicateProviderObject
+	}
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
 		providerRegistry,
@@ -608,6 +718,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			Resources:                     metadata,
 			ResourceObjectDir:             filepath.Join(cfg.Storage.DataDir, "provider-objects"),
 			ResourceObjectSealer:          secretVault,
+			ResourceObjectReplicator:      resourceObjectReplicator,
 			DeferredExecutionTimeout:      cfg.Gateway.RouteTotalTimeout.Value(),
 			DeferredResponseWorkers:       cfg.Gateway.DeferredResponseWorkers,
 			Pricing:                       metadata,
@@ -665,7 +776,12 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(fmt.Errorf("create gateway handler: %w", err))
 	}
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	var auditLog *audit.Log
+	if memberReplication != nil {
+		auditLog, err = audit.OpenWithOptions(cfg.AuditPath(), auditKey, memberReplication.auditOptions())
+	} else {
+		auditLog, err = audit.Open(cfg.AuditPath(), auditKey)
+	}
 	if err != nil {
 		alertDispatcher.Close()
 		ledgerLog.Close()
@@ -778,6 +894,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		redactor:            redactor,
 		alerts:              alertDispatcher,
 		audit:               auditLog,
+		replication:         memberReplication,
 		metricsTokenHash:    metricsTokenHash,
 		metricsAuthorizer:   metricsAuthorizer,
 		metricsScrapes:      make(chan struct{}, cfg.Metrics.MaxConcurrentScrapes),
@@ -1021,6 +1138,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	}()
 	cleanupProviderEgress = false
 	setupTokenOwned = false
+	memberReplicationOwned = false
 	return runtime, nil
 }
 
@@ -1269,6 +1387,24 @@ func (r *Runtime) saveUsageCheckpoint() {
 // old stored rows plus the old pending increment, or the new stored rows plus
 // the new increment, never the drained gap or both copies.
 func (r *Runtime) saveUsageCheckpointCoordinated() {
+	r.persistUsageCheckpointCoordinated(true)
+}
+
+// saveReplicaUsageCheckpoint persists only the node-derived Usage view. It
+// deliberately does not run the Primary collector and does not advance the
+// Ledger chain checkpoint to the native durable tail: a Replica may have a
+// locally durable, not-yet-applied suffix, while every Replica derivative is
+// bounded by its authenticated applied/confirmed prefix.
+func (r *Runtime) saveReplicaUsageCheckpoint() {
+	if r.usage == nil {
+		return
+	}
+	r.usage.WithRollupCheckpoint(func() {
+		r.persistUsageCheckpointCoordinated(false)
+	})
+}
+
+func (r *Runtime) persistUsageCheckpointCoordinated(advanceLedgerChain bool) {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
@@ -1300,7 +1436,9 @@ func (r *Runtime) saveUsageCheckpointCoordinated() {
 	// failed above leaves it proposing the same round again on the next tick,
 	// which is why nothing has to be unwound but the increment.
 	r.usage.CommitCheckpoint(snapshot)
-	r.advanceLedgerChainCheckpoint()
+	if advanceLedgerChain {
+		r.advanceLedgerChainCheckpoint()
+	}
 }
 
 // usageCheckpointSegments hands the round's segments to the store in its own
@@ -1429,8 +1567,10 @@ func (r *Runtime) warnAboutReachableWorkbench() {
 // keeps startup guidance and service-manager readiness signals from claiming
 // success when one of the ports cannot actually be opened.
 func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
-	r.warnAboutReachableWorkbench()
-	r.warnAboutMissingAnchorSink()
+	if r.replication == nil || r.replication.role != replication.RoleReplica {
+		r.warnAboutReachableWorkbench()
+		r.warnAboutMissingAnchorSink()
+	}
 	// Certificates are loaded before any listener binds. A keypair that cannot
 	// be read is a refusal to start, not a listener that comes up in the clear.
 	if err := r.openTLSMaterial(); err != nil {
@@ -1470,16 +1610,30 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		}
 		bound = append(bound, boundServer{name: name, server: server, listener: listener})
 	}
+	var replicationListener net.Listener
+	if r.replication != nil {
+		var err error
+		replicationListener, err = net.Listen("tcp", r.config.Replication.Listen)
+		if err != nil {
+			for _, item := range bound {
+				_ = item.listener.Close()
+			}
+			return fmt.Errorf("bind replication listener %s: %w", r.config.Replication.Listen, err)
+		}
+	}
 	if ready != nil {
 		if err := ready(); err != nil {
 			for _, item := range bound {
 				_ = item.listener.Close()
 			}
+			if replicationListener != nil {
+				_ = replicationListener.Close()
+			}
 			return err
 		}
 	}
 
-	errs := make(chan error, len(bound))
+	errs := make(chan error, len(bound)+2)
 	for _, item := range bound {
 		item := item
 		go func() {
@@ -1499,17 +1653,106 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 			}
 		}()
 	}
+	var replicationDone chan struct{}
+	var replicationCancel context.CancelFunc
+	if replicationListener != nil {
+		replicationCtx, cancel := context.WithCancel(ctx)
+		replicationCancel = cancel
+		replicationDone = make(chan struct{})
+		go func() {
+			defer close(replicationDone)
+			r.logger.Info("replication listener started", "address", r.config.Replication.Listen, "role", r.replication.role)
+			if err := r.replication.serve(replicationCtx, replicationListener); err != nil {
+				errs <- fmt.Errorf("replication listener: %w", err)
+			}
+		}()
+	}
+	var replicationFatal <-chan error
+	if r.replication != nil {
+		replicationFatal = r.replication.fatalErrors()
+	}
+	var maintenanceRequested <-chan error
+	var stopMaintenanceWatch context.CancelFunc
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		watchCtx, cancel := context.WithCancel(ctx)
+		stopMaintenanceWatch = cancel
+		requests := make(chan error, 1)
+		maintenanceRequested = requests
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-watchCtx.Done():
+					return
+				case <-ticker.C:
+					requested, err := memberMaintenanceRequested(r.config)
+					if err != nil {
+						requests <- err
+						return
+					}
+					if requested {
+						requests <- ErrMaintenanceRequested
+						return
+					}
+				}
+			}
+		}()
+	}
+	if stopMaintenanceWatch != nil {
+		defer stopMaintenanceWatch()
+	}
 
 	select {
 	case <-ctx.Done():
 		// Continue to graceful shutdown.
 	case err := <-errs:
 		r.draining.Store(true)
+		if replicationCancel != nil {
+			replicationCancel()
+		}
+		if replicationListener != nil {
+			_ = replicationListener.Close()
+		}
 		runErr := fmt.Errorf("listener failed: %w", err)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		defer cancel()
 		shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+		if replicationDone != nil {
+			<-replicationDone
+		}
 		return errors.Join(runErr, errors.Join(shutdownErrors...))
+	case err := <-replicationFatal:
+		r.draining.Store(true)
+		if replicationCancel != nil {
+			replicationCancel()
+		}
+		if replicationListener != nil {
+			_ = replicationListener.Close()
+		}
+		runErr := fmt.Errorf("replication role invalidated: %w", err)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
+		defer cancel()
+		shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+		if replicationDone != nil {
+			<-replicationDone
+		}
+		return errors.Join(runErr, errors.Join(shutdownErrors...))
+	case err := <-maintenanceRequested:
+		r.draining.Store(true)
+		if replicationCancel != nil {
+			replicationCancel()
+		}
+		if replicationListener != nil {
+			_ = replicationListener.Close()
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
+		defer cancel()
+		shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+		if replicationDone != nil {
+			<-replicationDone
+		}
+		return errors.Join(err, errors.Join(shutdownErrors...))
 	}
 
 	r.draining.Store(true)
@@ -1519,6 +1762,15 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+	if replicationCancel != nil {
+		replicationCancel()
+	}
+	if replicationListener != nil {
+		_ = replicationListener.Close()
+	}
+	if replicationDone != nil {
+		<-replicationDone
+	}
 	return errors.Join(shutdownErrors...)
 }
 
@@ -1564,6 +1816,9 @@ func gracefullyShutdownHTTPServers(
 }
 
 func (r *Runtime) activeProviderAttemptCount() uint64 {
+	if r.gatewayService == nil {
+		return 0
+	}
 	var total uint64
 	for _, active := range r.gatewayService.ActiveProviderRequests() {
 		if active > 0 {
@@ -1590,18 +1845,49 @@ func (r *Runtime) Close() error {
 		// whether the next start finds a clean directory.
 		r.logger.Info("closing runtime")
 		r.draining.Store(true)
+		if r.replication != nil && r.replication.role == replication.RoleReplica {
+			if r.backgroundCancel != nil {
+				r.backgroundCancel()
+			}
+			r.backgroundWait.Wait()
+			r.closeErr = errors.Join(
+				func() error {
+					if r.adminSessions != nil {
+						r.adminSessions.Close()
+					}
+					return nil
+				}(),
+				r.ledger.Close(),
+				func() error {
+					if r.governance.log != nil {
+						return r.governance.log.Close()
+					}
+					return nil
+				}(),
+				r.audit.Close(),
+				r.store.Close(),
+				r.replication.close(),
+				func() error { r.vault.Close(); return nil }(),
+				r.lock.Close(),
+			)
+			return
+		}
 		r.clearSetupToken()
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
 		r.alerts.Close()
+		authorityInvalidated := r.replication != nil && r.replication.publisher.Snapshot().Role != replication.RolePrimary
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)
 		cancelCapture()
 		// Frames written since the last tick would otherwise sit outside the
 		// checkpoint until the next start, which is precisely the window a
 		// shutdown-then-truncate would use.
-		r.advanceLedgerChainCheckpoint()
-		auditErr := appendSystemAudit(r.audit, r.store, "system.shutdown")
+		var auditErr error
+		if !authorityInvalidated {
+			r.advanceLedgerChainCheckpoint()
+			auditErr = appendSystemAudit(r.audit, r.store, "system.shutdown")
+		}
 		r.closeErr = errors.Join(
 			auditErr,
 			captureErr,
@@ -1626,6 +1912,12 @@ func (r *Runtime) Close() error {
 				return nil
 			}(),
 			r.store.Close(),
+			func() error {
+				if r.replication != nil {
+					return r.replication.close()
+				}
+				return nil
+			}(),
 			func() error {
 				r.vault.Close()
 				return nil
@@ -1789,8 +2081,12 @@ func (r *Runtime) gatewayHandler() http.Handler {
 }
 
 func (r *Runtime) gatewayRouter() http.Handler {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		return r.replicaGatewayRouter()
+	}
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
+	router.Use(r.requireMemberStartup)
 	// Before the source limiter and the key guard: the first-byte clock has to
 	// start when the request arrived, not when a handler finally got it.
 	router.Use(r.gateway.WithArrival)
@@ -1867,11 +2163,18 @@ func (r *Runtime) gatewayRouter() http.Handler {
 }
 
 func (r *Runtime) adminRouter() http.Handler {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		return r.replicaAdminRouter()
+	}
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Use(adminSecurityHeaders)
+	router.Use(r.requireMemberStartup)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
+	if r.replication != nil {
+		router.With(r.requireAdmin).Get("/admin/api/v1/cluster/status", r.adminClusterStatus)
+	}
 	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
 	router.Get("/admin/api/v1/ui/bootstrap", r.getAdminUIBootstrap)
 	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)
@@ -2041,6 +2344,9 @@ func adminSecurityHeaders(next http.Handler) http.Handler {
 }
 
 func (r *Runtime) metricsRouter() http.Handler {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		return r.replicaMetricsRouter()
+	}
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Get("/health/live", r.live)
@@ -2086,6 +2392,29 @@ func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
 	if r.draining.Load() {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"status": "draining",
+		})
+		return
+	}
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		state := r.replication.publisher.Snapshot()
+		if state.DurableIndex != state.ConfirmedIndex || state.ConfirmedIndex != state.AppliedIndex ||
+			r.replication.receiver == nil || r.replication.receiver.HealthError() != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
+				"status": "not_ready", "role": "replica", "replication": "not_candidate",
+				"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
+				"applied_index": state.AppliedIndex,
+			})
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]any{
+			"status": "ready", "role": "replica", "durable_index": state.DurableIndex,
+			"confirmed_index": state.ConfirmedIndex, "applied_index": state.AppliedIndex,
+		})
+		return
+	}
+	if r.replication != nil && !r.replication.startupReady.Load() {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+			"status": "not_ready", "replication": "awaiting_peer_adjudication",
 		})
 		return
 	}

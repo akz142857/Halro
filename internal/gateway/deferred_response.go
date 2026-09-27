@@ -448,7 +448,7 @@ func (s *Service) SubmitDeferredResponse(
 	// names is swept once it is old enough that no write could still be holding
 	// it; a record naming an object that was never written is a queued request
 	// the worker can only fail.
-	inputPath, err := s.writeResourceObject(record.ID, record.ProjectID, objectRoleInput, payload)
+	inputPath, err := s.writeResourceObjectContext(ctx, record.ID, record.ProjectID, objectRoleInput, payload)
 	if err != nil {
 		return openaiapi.Response{}, gatewayError("resource_store_unavailable", "the request could not be stored", 503, err)
 	}
@@ -782,7 +782,7 @@ func (s *Service) finishDeferred(
 	answer []byte,
 ) error {
 	if len(answer) > 0 {
-		path, err := s.writeResourceObject(record.ID, record.ProjectID, objectRoleContent, answer)
+		path, err := s.writeResourceObjectContext(ctx, record.ID, record.ProjectID, objectRoleContent, answer)
 		if err != nil {
 			return err
 		}

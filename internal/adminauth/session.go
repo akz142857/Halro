@@ -135,6 +135,35 @@ func (m *Manager) Authenticate(
 	return refreshed, nil
 }
 
+// AuthenticateReadOnly validates a replicated Admin session without refreshing
+// or deleting it. Replica Admin endpoints use this path because even session
+// housekeeping is an authoritative metadata mutation owned by the Primary.
+// Expired or revoked sessions are simply rejected and left for the Primary's
+// normal cleanup.
+func (m *Manager) AuthenticateReadOnly(
+	ctx context.Context,
+	token string,
+	now time.Time,
+) (domain.AdminSession, error) {
+	if !validSessionToken(token) {
+		return domain.AdminSession{}, ErrInvalidSession
+	}
+	hash := sha256.Sum256([]byte(token))
+	session, err := m.store.GetAdminSession(ctx, hash)
+	if err != nil {
+		return domain.AdminSession{}, ErrInvalidSession
+	}
+	now = now.UTC()
+	if !now.Before(session.AbsoluteExpiresAt) || !now.Before(session.IdleExpiresAt) {
+		return domain.AdminSession{}, ErrInvalidSession
+	}
+	user, err := m.store.GetAdminUser(ctx, session.Username)
+	if err != nil || user.SessionGeneration != session.Generation {
+		return domain.AdminSession{}, ErrInvalidSession
+	}
+	return session, nil
+}
+
 func (m *Manager) VerifyCSRF(sessionToken, supplied string) bool {
 	if !validSessionToken(sessionToken) || supplied == "" {
 		return false

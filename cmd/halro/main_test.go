@@ -47,8 +47,8 @@ func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
 			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
 		}
 	}
-	if len(seen) != 19 {
-		t.Fatalf("top-level command descriptor count=%d, want 19", len(seen))
+	if len(seen) != 20 {
+		t.Fatalf("top-level command descriptor count=%d, want 20", len(seen))
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {
@@ -108,6 +108,113 @@ func TestConfigCheckValidatesKeySlotsWithoutCallingKMS(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := run([]string{"config", "check", "--config", path}, logger); err != nil {
 		t.Fatalf("static config check attempted runtime behavior or rejected valid key_slots config: %v", err)
+	}
+}
+
+func TestReplicationDoesNotSilentlyStartAsStandalone(t *testing.T) {
+	cfg := config.Default()
+	cfg.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-0", Listen: "0.0.0.0:9910",
+		Peers: []config.ReplicationPeer{
+			{Name: "halro-1", Address: "halro-1.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)},
+			{Name: "halro-2", Address: "halro-2.internal:9910", SPKISHA256: "sha256:" + strings.Repeat("b", 64)},
+		},
+		TLS: config.ReplicationTLS{CAFile: "/cluster/ca.crt", CertFile: "/cluster/tls.crt", KeyFile: "/cluster/tls.key"},
+	}
+	err := runRuntime(cfg, "config.yaml", slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	if err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+		t.Fatalf("runRuntime error=%v", err)
+	}
+}
+
+func TestReplicationRefusesOfflineMemberStateMutationsUntilRuntimeExists(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "standalone")
+	if err := rejectReplicationMutation(cfg, "init"); err != nil {
+		t.Fatalf("Standalone mutation was refused: %v", err)
+	}
+	cfg.Replication = &config.Replication{}
+	for _, operation := range []string{
+		"start initialization", "init", "bootstrap", "admin reset-password",
+		"key rotate", "backup create", "backup restore", "route clear-suspension",
+		"key slot status", "route suspensions", "audit verify", "audit verify-anchor",
+		"usage rebuild-summary", "ledger verify", "ledger seal",
+	} {
+		err := rejectReplicationMutation(cfg, operation)
+		if err == nil || !strings.Contains(err.Error(), operation) || !strings.Contains(err.Error(), "outside the replication order") {
+			t.Fatalf("operation %q error=%v", operation, err)
+		}
+	}
+}
+
+func TestExistingMemberStateCannotBeDowngradedByRemovingReplicationConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(filepath.Join(cfg.Storage.DataDir, "cluster"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := rejectReplicationMutation(cfg, "serve")
+	if err == nil || !strings.Contains(err.Error(), "cannot downgrade") || !strings.Contains(err.Error(), "refusing serve") {
+		t.Fatalf("member-state downgrade error=%v", err)
+	}
+}
+
+func TestReplicationMutationCommandsRefuseBeforeTouchingTheDataDirectory(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.DataDir = filepath.Join(root, "data")
+	cfg.Replication = &config.Replication{
+		ClusterID: "production-a", NodeID: "halro-0", Listen: "127.0.0.1:9910",
+		Peers: []config.ReplicationPeer{{
+			Name: "halro-1", Address: "halro-1.internal:9910",
+			SPKISHA256: "sha256:" + strings.Repeat("a", 64),
+		}},
+		TLS: config.ReplicationTLS{
+			CAFile: filepath.Join(root, "ca.crt"), CertFile: filepath.Join(root, "tls.crt"), KeyFile: filepath.Join(root, "tls.key"),
+		},
+	}
+	contents, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commands := [][]string{
+		{"init", "--config", path},
+		{"bootstrap", "--config", path},
+		{"admin", "reset-mfa", "--config", path},
+		{"key", "create", "--config", path},
+		{"key", "slot", "status", "--config", path},
+		{"backup", "create", "--config", path, "--output", filepath.Join(root, "backup.hmbk"), "--key-file", filepath.Join(root, "backup.key")},
+		{"route", "clear-suspension", "--config", path, "--scope-id", "route:r1"},
+		{"route", "suspensions", "--config", path},
+		{"audit", "verify", "--config", path},
+		{"audit", "verify-anchor", "--config", path, "--anchors", filepath.Join(root, "anchors.jsonl")},
+		{"usage", "rebuild-summary", "--config", path},
+		{"ledger", "verify", "--config", path},
+		{"ledger", "seal", "--config", path},
+		{"pricing", "migrate", "--config", path, "--apply", "--resolution-file", filepath.Join(root, "resolution.json")},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"start", "--config", path}, logger); err == nil || !strings.Contains(err.Error(), "join or re-seed") {
+		t.Fatalf("start error=%v", err)
+	}
+	for _, command := range commands {
+		if err := run(command, logger); err == nil || !strings.Contains(err.Error(), "outside the replication order") {
+			t.Fatalf("command %q error=%v", command, err)
+		}
+	}
+	if _, err := os.Stat(cfg.Storage.DataDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("member data directory was touched: %v", err)
+	}
+}
+
+func TestClusterCommandExistsAndRequiresConfiguration(t *testing.T) {
+	err := run([]string{"cluster", "status"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil || strings.Contains(err.Error(), `unknown command "cluster"`) {
+		t.Fatalf("cluster command error=%v", err)
 	}
 }
 

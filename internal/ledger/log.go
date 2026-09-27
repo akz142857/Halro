@@ -52,6 +52,11 @@ const (
 	maxPayloadSize        = 1 << 20
 )
 
+// ReplicationFormatVersion is the Ledger reader/writer epoch advertised in an
+// HA Hello. Keep it tied to the actual frame writer rather than duplicating a
+// number in the app runtime.
+func ReplicationFormatVersion() uint16 { return uint16(frameVersionRunAttribution) }
+
 var ErrCorrupt = errors.New("ledger is corrupt")
 var ErrUnsupportedVersion = errors.New("ledger version is unsupported")
 
@@ -186,6 +191,38 @@ type Options struct {
 	// without it: epoch-4 frames are still decoded, just not authenticated —
 	// the same checksum-only treatment epochs 1-3 always get.
 	ChainKey []byte
+	// AfterDurable runs under the log writer lock after the source bytes fsync
+	// and before append callers receive success. HA uses it to allocate the
+	// global replication index and fsync the ordering record. The batch labels
+	// whether its caller must later wait for confirmation; the callback itself
+	// must not wait on the network while holding the writer lock. Nil preserves
+	// the Standalone path exactly.
+	AfterDurable func(DurableBatch) (uint64, error)
+	// WaitConfirmed is called by the accounting manager only after the durable
+	// record has been applied to the local State, and only for the two event
+	// kinds whose request path must wait for a Replica ACK. The uint64 is the
+	// replication index returned by AfterDurable. Both callbacks must be set
+	// together; nil preserves the Standalone path exactly.
+	WaitConfirmed func(context.Context, uint64) error
+	// Replica refuses semantic appends. Native frames may only enter through
+	// AppendReplicated after their MAC and chain continuation are verified.
+	Replica bool
+	// RequireExisting is the HA Primary mode: ordinary appends and crash repair
+	// remain enabled, but missing seeded directories/files are never created.
+	RequireExisting bool
+	// BeforeRoll proves the active generation's last frame is confirmed before
+	// any structural mutation. AfterRoll records the now-durable Segment in the
+	// global replication order. Both are nil in Standalone and Replica modes.
+	BeforeRoll func(generation, lastSequence uint64) error
+	AfterRoll  func(Segment) error
+}
+
+type DurableBatch struct {
+	Generation           uint64
+	FirstSequence        uint64
+	LastSequence         uint64
+	RequiresConfirmation bool
+	Frames               []byte
 }
 
 // ChainHead reports the verified epoch-4 chain state as of the most recent
@@ -252,8 +289,18 @@ type appendRequest struct {
 }
 
 type appendResult struct {
-	watermark Watermark
-	err       error
+	receipt AppendReceipt
+	err     error
+}
+
+// AppendReceipt binds one locally durable Ledger record to the replication
+// batch that contains it. Several records may share ReplicationIndex because
+// the writer group-commits them. Callers must use WaitConfirmed rather than
+// interpreting a zero index themselves; zero is the Standalone receipt.
+type AppendReceipt struct {
+	Watermark            Watermark
+	ReplicationIndex     uint64
+	RequiresConfirmation bool
 }
 
 func Open(path string, status *Status) (*Log, error) {
@@ -417,15 +464,43 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	if len(options.ChainKey) != 0 && len(options.ChainKey) != 32 {
 		return nil, errors.New("ledger chain key must be 32 bytes")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("create ledger directory: %w", err)
+	if (options.AfterDurable == nil) != (options.WaitConfirmed == nil) {
+		return nil, errors.New("ledger replication durability and confirmation callbacks must be configured together")
+	}
+	if (options.BeforeRoll == nil) != (options.AfterRoll == nil) {
+		return nil, errors.New("ledger replication roll callbacks must be configured together")
+	}
+	if options.Replica && (options.AfterDurable != nil || options.BeforeRoll != nil) {
+		return nil, errors.New("replica ledger cannot install Primary replication callbacks")
 	}
 	directory := filepath.Dir(path)
 	// Before the file is read: finish or abandon a roll that a crash caught
 	// mid-flight, so the chain the scan below verifies is the one the manifest
 	// claims. Doing it after would verify the active file against the wrong
 	// anchor and report tampering.
-	segments, err := repairSegments(directory)
+	var segments []Segment
+	var err error
+	if options.Replica {
+		var pending bool
+		segments, pending, err = resolveSegments(directory)
+		if err == nil && pending {
+			err = errors.New("replica ledger has an interrupted Roll that must be reconciled against ordering")
+		}
+	} else {
+		if options.RequireExisting {
+			if info, statErr := os.Stat(directory); statErr != nil || !info.IsDir() {
+				if statErr == nil {
+					statErr = errors.New("ledger path is not a directory")
+				}
+				return nil, fmt.Errorf("open seeded ledger directory: %w", statErr)
+			}
+		} else {
+			if err := os.MkdirAll(directory, 0o700); err != nil {
+				return nil, fmt.Errorf("create ledger directory: %w", err)
+			}
+		}
+		segments, err = repairSegments(directory)
+	}
 	if err != nil {
 		status.RequireRecovery()
 		return nil, err
@@ -443,7 +518,11 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		return nil, err
 	}
 	generation := activeGeneration(segments)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	flags := os.O_RDWR
+	if !options.Replica && !options.RequireExisting {
+		flags |= os.O_CREATE
+	}
+	file, err := os.OpenFile(path, flags, 0o600)
 	if err != nil {
 		status.MarkUnavailable()
 		return nil, fmt.Errorf("open ledger: %w", err)
@@ -460,6 +539,11 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 		return nil, err
 	}
 	if partial {
+		if options.Replica {
+			file.Close()
+			status.RequireRecovery()
+			return nil, fmt.Errorf("%w: replica Ledger has a partial tail that must be reconciled against ordering", ErrCorrupt)
+		}
 		if err := file.Truncate(last.Offset); err != nil {
 			file.Close()
 			status.RequireRecovery()
@@ -521,22 +605,33 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 }
 
 func (l *Log) Append(ctx context.Context, event Event) (Watermark, error) {
+	receipt, err := l.AppendWithReceipt(ctx, event)
+	return receipt.Watermark, err
+}
+
+// AppendWithReceipt returns after local durability and ordering persistence.
+// It deliberately does not wait for a network ACK: the accounting manager
+// must first apply the event to local State, then call WaitConfirmed.
+func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt, error) {
+	if l.options.Replica {
+		return AppendReceipt{}, errors.New("ledger is replica-owned and refuses local append")
+	}
 	if err := event.validateForAppend(); err != nil {
-		return Watermark{}, err
+		return AppendReceipt{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return Watermark{}, err
+		return AppendReceipt{}, err
 	}
 	payload, err := json.Marshal(event)
 	if err != nil {
-		return Watermark{}, fmt.Errorf("encode ledger event: %w", err)
+		return AppendReceipt{}, fmt.Errorf("encode ledger event: %w", err)
 	}
 	if len(payload) > maxPayloadSize {
-		return Watermark{}, fmt.Errorf("ledger payload exceeds %d bytes", maxPayloadSize)
+		return AppendReceipt{}, fmt.Errorf("ledger payload exceeds %d bytes", maxPayloadSize)
 	}
 
 	if l.status.Load() != AccountingHealthy {
-		return Watermark{}, errors.New("accounting is not healthy")
+		return AppendReceipt{}, errors.New("accounting is not healthy")
 	}
 
 	request := appendRequest{
@@ -545,23 +640,35 @@ func (l *Log) Append(ctx context.Context, event Event) (Watermark, error) {
 	l.lifecycle.RLock()
 	if l.closed {
 		l.lifecycle.RUnlock()
-		return Watermark{}, errors.New("ledger is closed")
+		return AppendReceipt{}, errors.New("ledger is closed")
 	}
 	select {
 	case l.appendQueue <- request:
 		l.lifecycle.RUnlock()
 	case <-ctx.Done():
 		l.lifecycle.RUnlock()
-		return Watermark{}, ctx.Err()
+		return AppendReceipt{}, ctx.Err()
 	case <-l.closeSignal:
 		l.lifecycle.RUnlock()
-		return Watermark{}, errors.New("ledger is closed")
+		return AppendReceipt{}, errors.New("ledger is closed")
 	}
 	// Once accepted, wait for the durability result even if the caller is
 	// canceled: returning early would make an eventually committed event look
 	// uncommitted to its caller.
 	result := <-request.result
-	return result.watermark, result.err
+	return result.receipt, result.err
+}
+
+// WaitConfirmed enforces the request-path ACK rule represented by a receipt.
+// Standalone and ordinary events return immediately.
+func (l *Log) WaitConfirmed(ctx context.Context, receipt AppendReceipt) error {
+	if !receipt.RequiresConfirmation || l.options.WaitConfirmed == nil {
+		return nil
+	}
+	if receipt.ReplicationIndex == 0 {
+		return errors.New("ledger confirmation receipt has no replication index")
+	}
+	return l.options.WaitConfirmed(ctx, receipt.ReplicationIndex)
 }
 
 func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error) {
@@ -854,8 +961,12 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	offset := l.offset
 	previousHash := l.chainHash
 	watermarks := make([]Watermark, len(batch))
+	requiresConfirmation := false
 	var encoded bytes.Buffer
 	for index, request := range batch {
+		if request.event.Kind == EventReservationCreated || request.event.Kind == EventAttemptStarted {
+			requiresConfirmation = true
+		}
 		sequence++
 		frame, nextHash := encodeChainFrameVersion(frameVersionRunAttribution, l.chainKey, sequence, request.event.Kind, request.payload, previousHash)
 		if _, err := encoded.Write(frame); err != nil {
@@ -909,16 +1020,45 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	l.chainEpoch = frameVersionRunAttribution
 	l.batches.Add(1)
 	l.writtenRecords.Add(uint64(len(batch)))
-	respondBatch(batch, watermarks, nil)
+	replicationIndex := uint64(0)
+	if l.options.AfterDurable != nil {
+		var err error
+		replicationIndex, err = l.options.AfterDurable(DurableBatch{
+			Generation: l.generation, FirstSequence: watermarks[0].Sequence,
+			LastSequence:         watermarks[len(watermarks)-1].Sequence,
+			RequiresConfirmation: requiresConfirmation,
+			Frames:               append([]byte(nil), encoded.Bytes()...),
+		})
+		if err != nil {
+			l.status.MarkUnavailable()
+			l.appendErrors.Add(uint64(len(batch)))
+			respondBatch(batch, nil, fmt.Errorf("record durable ledger batch for replication: %w", err))
+			return
+		}
+		if replicationIndex == 0 {
+			l.status.MarkUnavailable()
+			l.appendErrors.Add(uint64(len(batch)))
+			respondBatch(batch, nil, errors.New("record durable ledger batch for replication: callback returned index zero"))
+			return
+		}
+	}
+	respondBatchWithReplication(batch, watermarks, replicationIndex, nil)
 }
 
 func respondBatch(batch []appendRequest, watermarks []Watermark, err error) {
+	respondBatchWithReplication(batch, watermarks, 0, err)
+}
+
+func respondBatchWithReplication(batch []appendRequest, watermarks []Watermark, replicationIndex uint64, err error) {
 	for index, request := range batch {
 		var watermark Watermark
 		if index < len(watermarks) {
 			watermark = watermarks[index]
 		}
-		request.result <- appendResult{watermark: watermark, err: err}
+		request.result <- appendResult{receipt: AppendReceipt{
+			Watermark: watermark, ReplicationIndex: replicationIndex,
+			RequiresConfirmation: request.event.Kind == EventReservationCreated || request.event.Kind == EventAttemptStarted,
+		}, err: err}
 	}
 }
 
@@ -986,13 +1126,17 @@ func encodeChainFrameVersion(version byte, key []byte, sequence uint64, kind Eve
 }
 
 func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
-	if fromOffset < 0 {
+	return scanFrom(file, generation, fromOffset, fromOffset, initialSequence, visit, verifier)
+}
+
+func scanFrom(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
+	if sourceOffset < 0 || logicalOffset < 0 {
 		return Watermark{}, false, errors.New("ledger offset cannot be negative")
 	}
-	if _, err := file.Seek(fromOffset, io.SeekStart); err != nil {
+	if _, err := file.Seek(sourceOffset, io.SeekStart); err != nil {
 		return Watermark{}, false, err
 	}
-	offset := fromOffset
+	offset := logicalOffset
 	lastSequence := initialSequence
 	// Once a frame has been written at the authenticated epoch, no later frame
 	// may fall below it. Epoch 4 is the first that carries a MAC, so
@@ -1126,7 +1270,11 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 			verifier.offset = nextOffset
 		}
 		if visit != nil {
-			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event}); err != nil {
+			var recordHash [32]byte
+			if authenticatedFrameEpoch(epoch) && verifier.verify() {
+				recordHash = verifier.hash
+			}
+			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event, Hash: recordHash}); err != nil {
 				return Watermark{}, false, visitError{err}
 			}
 		}
