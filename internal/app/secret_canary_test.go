@@ -152,7 +152,7 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 		"/admin/api/v1/usage/summary", "/admin/api/v1/usage/failures",
 		"/admin/api/v1/audit", "/admin/api/v1/credentials",
 		"/admin/api/v1/providers", "/admin/api/v1/routes",
-		"/admin/api/v1/projects", "/admin/api/v1/system/status", "/admin/api/v1/settings",
+		"/admin/api/v1/projects", "/admin/api/v1/system/status", "/admin/api/v1/cluster/status", "/admin/api/v1/settings",
 	} {
 		request := httptest.NewRequest(http.MethodGet, route, nil)
 		request.AddCookie(cookie)

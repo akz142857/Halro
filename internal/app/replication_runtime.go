@@ -996,12 +996,25 @@ func (r *Runtime) writeNotPrimary(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (r *Runtime) adminClusterStatus(writer http.ResponseWriter, _ *http.Request) {
+	if r.replication == nil {
+		writeJSON(writer, http.StatusOK, map[string]string{"mode": "standalone"})
+		return
+	}
 	state := r.replication.publisher.Snapshot()
+	connections := map[string]bool{}
+	if r.replication.manager != nil {
+		connections = r.replication.manager.PeerConnections()
+	}
+	peers := make([]map[string]any, 0, len(state.Peers))
+	for _, peer := range state.Peers {
+		peers = append(peers, map[string]any{"node_id": peer.Name, "connected": connections[peer.Name]})
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
+		"mode": "ha", "startup_ready": r.replication.startupReady.Load(),
 		"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
 		"role": state.Role, "term": state.Term, "promised_term": state.PromisedTerm,
 		"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
-		"applied_index": state.AppliedIndex, "projection": state.Projection,
+		"applied_index": state.AppliedIndex, "projection": state.Projection, "peers": peers,
 	})
 }
 

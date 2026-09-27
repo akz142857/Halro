@@ -1657,7 +1657,10 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	var replicationDone chan struct{}
 	var replicationCancel context.CancelFunc
 	if replicationListener != nil {
-		replicationCtx, cancel := context.WithCancel(ctx)
+		// A normal process cancellation starts HTTP drain, but replication
+		// must outlive it long enough to confirm the shutdown audit below.
+		// Every RunWithReady exit path explicitly cancels this child context.
+		replicationCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		replicationCancel = cancel
 		replicationDone = make(chan struct{})
 		go func() {
@@ -1763,6 +1766,31 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+	// HTTP drain stops new requests, but deferred settlements and alert-delivery
+	// observers can still append ordered frames. Stop and join those producers
+	// while replication is available, before choosing the final audit index.
+	r.stopBackgroundWork()
+	if err := shutdownCtx.Err(); err != nil && len(shutdownErrors) == 0 {
+		// A slow background worker can exhaust the budget after HTTP drain has
+		// succeeded. Do not report a clean stop when final confirmation is skipped.
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("finish background shutdown: %w", err))
+	}
+	// Keep the replication channel alive until the Primary's final audit and
+	// metadata checkpoint are confirmed. Close runs after this channel stops;
+	// appending there would leave a durable but unconfirmed tail on every clean
+	// shutdown and make an otherwise caught-up snapshot ineligible for seeding.
+	if shutdownCtx.Err() == nil && r.replication != nil && r.replication.role == replication.RolePrimary &&
+		r.replication.publisher.Snapshot().Role == replication.RolePrimary {
+		r.advanceLedgerChainCheckpoint()
+		if err := appendSystemAudit(r.audit, r.store, "system.shutdown"); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		} else {
+			shutdownIndex := r.replication.publisher.Snapshot().DurableIndex
+			if err := r.replication.coordinator.WaitConfirmed(shutdownCtx, shutdownIndex); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("confirm shutdown audit: %w", err))
+			}
+		}
+	}
 	if replicationCancel != nil {
 		replicationCancel()
 	}
@@ -1854,6 +1882,18 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 	return nil
 }
 
+func (r *Runtime) stopBackgroundWork() {
+	if r.backgroundCancel != nil {
+		r.backgroundCancel()
+	}
+	r.backgroundWait.Wait()
+	if r.alerts != nil {
+		// Delivery callbacks append Audit records. Close waits for every callback,
+		// and is safe to call again from Close after RunWithReady returns.
+		r.alerts.Close()
+	}
+}
+
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
 		// Listeners have already drained by the time Close runs — Serve does
@@ -1863,10 +1903,7 @@ func (r *Runtime) Close() error {
 		r.logger.Info("closing runtime")
 		r.draining.Store(true)
 		if r.replication != nil && r.replication.role == replication.RoleReplica {
-			if r.backgroundCancel != nil {
-				r.backgroundCancel()
-			}
-			r.backgroundWait.Wait()
+			r.stopBackgroundWork()
 			r.closeErr = errors.Join(
 				func() error {
 					if r.adminSessions != nil {
@@ -1890,9 +1927,7 @@ func (r *Runtime) Close() error {
 			return
 		}
 		r.clearSetupToken()
-		r.backgroundCancel()
-		r.backgroundWait.Wait()
-		r.alerts.Close()
+		r.stopBackgroundWork()
 		authorityInvalidated := r.replication != nil && r.replication.publisher.Snapshot().Role != replication.RolePrimary
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)
@@ -1901,7 +1936,7 @@ func (r *Runtime) Close() error {
 		// checkpoint until the next start, which is precisely the window a
 		// shutdown-then-truncate would use.
 		var auditErr error
-		if !authorityInvalidated {
+		if !authorityInvalidated && r.replication == nil {
 			r.advanceLedgerChainCheckpoint()
 			auditErr = appendSystemAudit(r.audit, r.store, "system.shutdown")
 		}
@@ -2189,9 +2224,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Use(r.requireMemberStartup)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
-	if r.replication != nil {
-		router.With(r.requireAdmin).Get("/admin/api/v1/cluster/status", r.adminClusterStatus)
-	}
+	router.With(r.requireAdmin).Get("/admin/api/v1/cluster/status", r.adminClusterStatus)
 	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
 	router.Get("/admin/api/v1/ui/bootstrap", r.getAdminUIBootstrap)
 	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)

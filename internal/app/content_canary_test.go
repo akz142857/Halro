@@ -220,7 +220,7 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 		"/admin/api/v1/dashboard", "/admin/api/v1/usage", "/admin/api/v1/usage/summary",
 		"/admin/api/v1/usage/failures",
 		"/admin/api/v1/audit", "/admin/api/v1/projects", "/admin/api/v1/routes",
-		"/admin/api/v1/system/status",
+		"/admin/api/v1/system/status", "/admin/api/v1/cluster/status",
 	} {
 		request := httptest.NewRequest(http.MethodGet, route, nil)
 		request.AddCookie(cookie)
