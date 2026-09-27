@@ -14,6 +14,31 @@ func TestLegacyGatewayKeyScopesResolveToInferenceOnly(t *testing.T) {
 	}
 }
 
+func TestGatewayKeyDiscoveryScopeRequiresInference(t *testing.T) {
+	base := GatewayKey{ID: "key_1", ProjectID: "prj_1", Name: "test", HashVersion: 1}
+	for name, scopes := range map[string][]GatewayScope{
+		"legacy unset":        nil,
+		"inference only":      {GatewayScopeInference},
+		"inference discovery": {GatewayScopeInference, GatewayScopeDiscovery},
+	} {
+		candidate := base
+		candidate.Scopes = scopes
+		if err := candidate.Validate(); err != nil {
+			t.Fatalf("%s: valid scopes were rejected: %v", name, err)
+		}
+	}
+	candidate := base
+	candidate.Scopes = []GatewayScope{GatewayScopeDiscovery}
+	if err := candidate.Validate(); err == nil {
+		t.Fatal("discovery-only key was accepted")
+	}
+	deletedAt := time.Now().UTC()
+	candidate.DeletedAt = &deletedAt
+	if err := candidate.Validate(); err != nil {
+		t.Fatalf("historical discovery-only key could not be tombstoned: %v", err)
+	}
+}
+
 func TestRunGovernanceConfigIsFailClosed(t *testing.T) {
 	valid := RunGovernanceConfig{
 		Enabled: true, DefaultRunBudgetMicrosUSD: 1_000_000, MaxRunBudgetMicrosUSD: 2_000_000,

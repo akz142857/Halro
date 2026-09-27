@@ -51,3 +51,56 @@ func TestResourcePlaneRefusesWhenPolicySnapshotMissesProjectPolicy(t *testing.T)
 		t.Fatalf("clean project was refused: %v", err)
 	}
 }
+
+// Files, batches, async invocations and deferred responses share one
+// authentication entry point. A governance-only key must be stopped there,
+// before an identifier lookup or any provider I/O, while the legacy nil-scope
+// representation remains inference-only and therefore compatible.
+func TestEveryResourceFamilyRequiresInferenceScope(t *testing.T) {
+	adapter := &inferenceResourcesAdapter{providerType: string(domain.ProviderOpenAI)}
+	f := newInferenceResourcesServiceFixture(t, domain.ProfileOpenAIMediaResources, adapter, inferenceResourcesTargetFor("media", adapter), nil)
+	defer f.close()
+
+	if _, err := f.service.resourcePrincipal(context.Background(), f.plaintext); err != nil {
+		t.Fatalf("legacy nil scopes lost inference access: %v", err)
+	}
+	key := domain.GatewayKey{
+		ID: "key_governance_only", ProjectID: f.project.ID, Name: "governance only",
+		HashVersion: 1, KeyHash: auth.HashGatewayKey(f.plaintext), Enabled: true,
+		Scopes: []domain.GatewayScope{domain.GatewayScopeGovernanceRead},
+	}
+	if err := f.service.auth.Refresh(context.Background(), source{
+		keys: []domain.GatewayKey{key}, projects: []domain.Project{f.project},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, call := range map[string]func() error{
+		"files": func() error {
+			_, err := f.service.GetFile(context.Background(), f.plaintext, "file_unknown")
+			return err
+		},
+		"batches": func() error {
+			_, err := f.service.GetBatch(context.Background(), f.plaintext, "batch_unknown")
+			return err
+		},
+		"async invocations": func() error {
+			_, err := f.service.GetAsyncInvoke(context.Background(), f.plaintext, "async_unknown")
+			return err
+		},
+		"deferred responses": func() error {
+			_, _, err := f.service.DeferredResponse(context.Background(), f.plaintext, "resp_unknown")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var refusal *Error
+			if err := call(); !errors.As(err, &refusal) || refusal.HTTPStatus != http.StatusForbidden || refusal.Code != "gateway_key_scope_denied" {
+				t.Fatalf("err=%v, want 403 gateway_key_scope_denied", err)
+			}
+		})
+	}
+	if adapter.fileCalls != 0 || adapter.getFileCalls != 0 || adapter.deleteCalls != 0 {
+		t.Fatalf("scope denial reached provider: %+v", adapter)
+	}
+}

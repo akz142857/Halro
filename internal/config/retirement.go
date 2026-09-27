@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -307,7 +308,11 @@ func declaredVersion(root *yaml.Node) (version, line int, err error) {
 			"migrate from: add `version: %d` if it came from a release older than this one, or "+
 			"`version: %d` if it is current", SchemaVersion-1, SchemaVersion)
 	}
-	if _, scanErr := fmt.Sscanf(value.Value, "%d", &version); scanErr != nil {
+	if value.Kind != yaml.ScalarNode || value.Tag != "!!int" {
+		return 0, 0, fmt.Errorf("the configuration's `version` is %q, which is not a schema version", value.Value)
+	}
+	version, parseErr := strconv.Atoi(value.Value)
+	if parseErr != nil || version <= 0 {
 		return 0, 0, fmt.Errorf("the configuration's `version` is %q, which is not a schema version", value.Value)
 	}
 	return version, key.Line, nil

@@ -1505,5 +1505,18 @@ func (k GatewayKey) Validate() error {
 		}
 		seenScopes[scope] = struct{}{}
 	}
+	// Discovery enumerates the aliases an inference key may call. Without the
+	// inference grant there is no such set, so accepting discovery by itself
+	// creates a credential that can never exercise the permission it names.
+	// Unset legacy scopes remain inference-only through EffectiveGatewayScopes.
+	// Tombstones retain the old scopes for audit. Allowing a pre-fix invalid
+	// record to be tombstoned is the safe migration path: it stays visible to
+	// Admin until the operator revokes and reissues it, without granting the
+	// missing inference permission automatically.
+	if _, discovery := seenScopes[GatewayScopeDiscovery]; discovery && k.DeletedAt == nil {
+		if _, inference := seenScopes[GatewayScopeInference]; !inference {
+			problems = append(problems, errors.New("gateway key discovery scope requires inference scope"))
+		}
+	}
 	return errors.Join(problems...)
 }

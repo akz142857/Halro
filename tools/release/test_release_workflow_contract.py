@@ -193,6 +193,14 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
         self.assertIn('tools/release/release_notes.sh "${VERSION}"', publish)
         self.assertIn('--notes-file "${RUNNER_TEMP}/release-notes.md"', publish)
 
+    def test_release_refuses_an_unreviewed_changelog_decision_table(self):
+        prepare = self.workflow[
+            self.workflow.index("# The changelog is what an operator reads") : self.workflow.index("# Decided here rather")
+        ]
+        self.assertIn('assessment="docs/verification/assessments/${version}.md"', prepare)
+        self.assertIn("## Changelog coverage", prepare)
+        self.assertIn("still contains TODO decisions", prepare)
+
     def test_release_notes_render_the_requested_section_and_refuse_a_missing_one(self):
         changelog = (
             "# Changelog\n\n"

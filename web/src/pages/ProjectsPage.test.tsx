@@ -398,6 +398,24 @@ describe("projects page", () => {
     resolve({ data: { key: "gw_secret", metadata: gatewayKey() }, etag: "" });
   });
 
+  it("cannot configure discovery without inference", async () => {
+    vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
+
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: "＋ 创建密钥" }));
+    const inference = screen.getByRole("checkbox", { name: "inference" });
+    const discovery = screen.getByRole("checkbox", { name: "discovery" });
+
+    expect(inference).toBeChecked();
+    expect(discovery).not.toBeChecked();
+    fireEvent.click(discovery);
+    expect(inference).toBeChecked();
+    expect(discovery).toBeChecked();
+    fireEvent.click(inference);
+    expect(inference).not.toBeChecked();
+    expect(discovery).not.toBeChecked();
+  });
+
   it("carries one idempotency key so a retried create cannot mint a second credential", async () => {
     vi.mocked(api.projectsPage).mockResolvedValue({ items: [project()], next_cursor: "" } as never);
     const createKey = vi.spyOn(api, "createKey").mockRejectedValue(new ApiError(503, "upstream unavailable"));

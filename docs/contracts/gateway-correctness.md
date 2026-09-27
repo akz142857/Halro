@@ -34,10 +34,17 @@ disable.
   Gateway Key and on its Project instead. That ceiling is a constant: it has no
   configuration surface, so no deployment can be assembled in which an
   authenticated principal has no bound.
+- On the local-state paths governed by the fixed ceiling, it is charged
+  immediately after authentication. A valid key's scope or CIDR refusal
+  therefore consumes the same ceiling and eventually answers `429
+  rate_limit_exceeded`; invalid credentials are not charged.
 - The per-source limiter is ahead of both and is not one of them. It counts
   addresses rather than principals, applies before authentication, and an
   operator may set it to `0`.
 - Requests on the resource plane pass both bounds. Nothing else passes two.
+- Every resource-plane operation requires the Gateway Key's `inference` scope;
+  an explicitly narrower key is refused before lookup or Provider I/O. The
+  legacy unset scope list remains inference-only.
 
 ## Delivery boundary
 

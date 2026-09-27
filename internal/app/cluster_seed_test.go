@@ -146,6 +146,59 @@ func TestSeedApprovalAuthenticatesStagingBeforeAtomicReplicaPublication(t *testi
 	}
 }
 
+func TestSeedApprovalAllowsTheInitialZeroOrderingIndex(t *testing.T) {
+	source := testConfig(t)
+	password := []byte("correct horse battery staple")
+	if err := Initialize(source); err != nil {
+		t.Fatal(err)
+	}
+	if err := BootstrapAdmin(context.Background(), source, "admin", password); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := OpenWithOptions(context.Background(), source, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	source.Replication = &config.Replication{
+		ClusterID: "production-zero", NodeID: "halro-0", Listen: "127.0.0.1:9910",
+		Peers: []config.ReplicationPeer{{Name: "halro-1", Address: "127.0.0.1:9911", SPKISHA256: "sha256:" + strings.Repeat("ab", 32)}},
+	}
+	if err := EstablishMemberState(context.Background(), source, replication.RolePrimary, "inc_seed_zero", 1); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(t.TempDir(), "halro-1.seed.json")
+	manifest, err := CreateSeedManifest(context.Background(), source, "halro-1", manifestPath, "admin", password, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Index != 0 || manifest.Projection.Index != 0 {
+		t.Fatalf("initial seed index=%d projection=%d, want 0/0", manifest.Index, manifest.Projection.Index)
+	}
+
+	targetRoot := t.TempDir()
+	target := source
+	target.Storage.DataDir = filepath.Join(targetRoot, "data")
+	target.Replication = &config.Replication{
+		ClusterID: "production-zero", NodeID: "halro-1", Listen: "127.0.0.1:9911",
+		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("cd", 32)}},
+	}
+	staging := filepath.Join(targetRoot, ".seed-staging")
+	copyTestTree(t, source.Storage.DataDir, staging)
+	if err := os.Remove(filepath.Join(staging, replication.ClusterDirectoryName, "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := InstallSeedSnapshot(context.Background(), target, staging, manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded.DurableIndex != 0 || seeded.ConfirmedIndex != 0 || seeded.AppliedIndex != 0 {
+		t.Fatalf("initial seeded state=%#v", seeded)
+	}
+}
+
 func TestSeedInstallRejectsSymlinkStagingRoot(t *testing.T) {
 	targetRoot := t.TempDir()
 	target := testConfig(t)

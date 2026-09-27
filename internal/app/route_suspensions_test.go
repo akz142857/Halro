@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,69 @@ func TestClearingRejectsAHandleItDidNotIssue(t *testing.T) {
 	}
 	if err := ClearStoredRouteSuspension(context.Background(), cfg, "not-a-handle!!"); err == nil {
 		t.Fatal("an unparseable scope handle was accepted")
+	}
+}
+
+// The clear and its audit record have one commit point. If the append-only log
+// is temporarily unavailable, the suspension stays cleared and a durable
+// intent remains for recovery instead of the mutation becoming unaudited.
+func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openMetadataForTest(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suspension := domain.RouteSuspension{
+		ScopeKind: "credential", ScopeKey: "cred_blocked", Reason: string(provider.FailureReasonInvalidCredential),
+		ObservedAt: time.Now().UTC(), Indefinite: true, CredentialRevision: 1,
+	}
+	if err := store.PutRouteSuspension(context.Background(), suspension); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	auditPath := cfg.AuditPath()
+	heldPath := auditPath + ".held"
+	if err := os.Rename(auditPath, heldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(auditPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scopeID := suspension.ScopeID()
+	if err := ClearStoredRouteSuspension(context.Background(), cfg, scopeID); err == nil {
+		t.Fatal("clear reported success while the audit log was unavailable")
+	}
+	if err := os.Remove(auditPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(heldPath, auditPath); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = openMetadataForTest(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if rows, err := store.ListRouteSuspensions(context.Background()); err != nil || len(rows) != 0 {
+		t.Fatalf("suspension survived committed clear: rows=%+v err=%v", rows, err)
+	}
+	intents, err := store.ListPendingAdminAuditIntents(context.Background())
+	if err != nil || len(intents) != 1 || intents[0].Action != "route_suspension.clear" || intents[0].TargetID != scopeID {
+		t.Fatalf("pending intents=%+v err=%v", intents, err)
+	}
+	if err := deliverPendingOfflineAudit(context.Background(), cfg, store); err != nil {
+		t.Fatal(err)
+	}
+	if intents, err = store.ListPendingAdminAuditIntents(context.Background()); err != nil || len(intents) != 0 {
+		t.Fatalf("intent did not drain: intents=%+v err=%v", intents, err)
 	}
 }
 

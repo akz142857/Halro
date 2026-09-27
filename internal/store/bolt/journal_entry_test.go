@@ -125,6 +125,12 @@ func TestAuthorityTighteningClassificationCoversPromotionFailOpenWrites(t *testi
 		{name: "token guard policy may tighten", bucket: bucketTokenGuardPolicies, value: `{"enabled":true}`, want: true},
 		{name: "redaction rule may be added", bucket: bucketRedactionPolicies, value: `{"enabled":true}`, want: true},
 		{name: "existing admin may rotate password", bucket: bucketAdminUsers, previous: `{"role":"admin","password_hash":"old"}`, value: `{"role":"admin","password_hash":"new"}`, want: true},
+		{name: "new MFA authenticator is additive", bucket: bucketAdminMFAAuthenticators, value: `{"status":"pending"}`, want: false},
+		{name: "existing MFA authenticator may advance the TOTP watermark", bucket: bucketAdminMFAAuthenticators, previous: `{"status":"active","last_accepted_time_step":41}`, value: `{"status":"active","last_accepted_time_step":42}`, want: true},
+		{name: "new MFA challenge is additive", bucket: bucketAdminMFAChallenges, value: `{"claimed":false}`, want: false},
+		{name: "existing MFA challenge claim is one time", bucket: bucketAdminMFAChallenges, previous: `{"claimed":false}`, value: `{"claimed":true}`, want: true},
+		{name: "reserved provider resource has not reached upstream", bucket: bucketProviderResources, value: `{"creation_status":"reserved"}`, want: false},
+		{name: "in flight provider resource gates upstream dispatch", bucket: bucketProviderResources, previous: `{"creation_status":"reserved"}`, value: `{"creation_status":"in_flight"}`, want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -135,6 +141,122 @@ func TestAuthorityTighteningClassificationCoversPromotionFailOpenWrites(t *testi
 				t.Fatalf("requires confirmation=%t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestAuthorityWithdrawingDeletesRequireConfirmation(t *testing.T) {
+	for _, bucket := range [][]byte{bucketAdminSessions, bucketAdminMFAChallenges} {
+		if !metadataOpRequiresConfirmation(metadatajournal.OpDelete, []string{string(bucket)}, []byte(`{"present":true}`), nil) {
+			t.Fatalf("delete from %q did not require confirmation", bucket)
+		}
+	}
+}
+
+func TestAdminOneTimeStateTransitionsWaitForConfirmation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waits []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		waits = append(waits, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	challengeHash := [32]byte{1}
+	challenge := domain.AdminMFAChallenge{
+		IDHash: challengeHash, Username: "admin", Purpose: domain.AdminMFAChallengeLogin,
+		CreatedAt: now, ExpiresAt: now.Add(time.Minute), AttemptsRemaining: 3, SessionGeneration: 1,
+	}
+	if err := store.PutAdminMFAChallenge(context.Background(), challenge); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("new challenge unexpectedly waited: %v", waits)
+	}
+	if _, err := store.ClaimAdminMFAChallenge(context.Background(), challengeHash, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 {
+		t.Fatalf("challenge claim waits=%v, want one", waits)
+	}
+	if err := store.CompleteAdminMFAChallenge(context.Background(), challengeHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 2 {
+		t.Fatalf("challenge completion waits=%v, want two", waits)
+	}
+
+	confirmedAt := now
+	authenticator := domain.AdminMFAAuthenticator{
+		ID: "mfa_confirm", Username: "admin", Name: "phone", Type: domain.AdminMFATypeTOTP,
+		SecretCiphertext: []byte("sealed"), Status: domain.AdminMFAStatusActive,
+		CreatedAt: now, ConfirmedAt: &confirmedAt,
+	}
+	storedAuthenticator, err := store.PutAdminMFAAuthenticator(context.Background(), authenticator, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 2 {
+		t.Fatalf("new authenticator unexpectedly waited: %v", waits)
+	}
+	if err := store.AcceptAdminMFATimeStep(context.Background(), "admin", storedAuthenticator.ID, 42, now); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 3 {
+		t.Fatalf("TOTP consumption waits=%v, want three", waits)
+	}
+
+	sessionHash := [32]byte{2}
+	session := domain.AdminSession{
+		IDHash: sessionHash, Username: "admin", Generation: 1, CreatedAt: now, LastSeenAt: now,
+		AbsoluteExpiresAt: now.Add(time.Hour), IdleExpiresAt: now.Add(15 * time.Minute),
+	}
+	if err := store.PutAdminSession(context.Background(), session); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 3 {
+		t.Fatalf("new session unexpectedly waited: %v", waits)
+	}
+	if err := store.DeleteAdminSession(context.Background(), sessionHash); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 4 {
+		t.Fatalf("session revocation waits=%v, want four", waits)
+	}
+}
+
+func TestProviderInFlightBoundaryWaitsForConfirmation(t *testing.T) {
+	store := openJournalledStore(t, filepath.Join(t.TempDir(), "metadata.db"))
+	var nextIndex uint64
+	var waits []uint64
+	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
+		nextIndex++
+		return nextIndex, nil
+	}, func(_ context.Context, index uint64) error {
+		waits = append(waits, index)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketProviderResources).Put([]byte("idm_1"), []byte(`{"creation_status":"reserved"}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 0 {
+		t.Fatalf("reservation unexpectedly waited: %v", waits)
+	}
+	if err := store.update(func(tx *Tx) error {
+		return tx.Bucket(bucketProviderResources).Put([]byte("idm_1"), []byte(`{"creation_status":"in_flight"}`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0] != 2 {
+		t.Fatalf("in-flight boundary waits=%v, want [2]", waits)
 	}
 }
 

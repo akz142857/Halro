@@ -204,9 +204,19 @@ def scaffold_assessment(version: str, date: str, previous: str) -> Path | None:
         return None
     unresolved = f"(range {previous}..HEAD could not be resolved; fetch tags and fill this in)"
     commits = git_optional("log", "--oneline", f"{previous}..HEAD")
+    commit_decisions = git_optional("log", "--format=%H%x09%s", f"{previous}..HEAD")
     listing = git_optional("diff", "--name-only", f"{previous}..HEAD")
     files = listing.splitlines() if listing else []
     commits = commits or unresolved
+    decision_rows = []
+    for line in (commit_decisions or "").splitlines():
+        commit, _, subject = line.partition("\t")
+        subject = subject.replace("|", "\\|")
+        decision_rows.append(
+            f"| `{commit[:12]}` | {subject} | TODO — CHANGELOG section, or `no changelog`: reason |"
+        )
+    if not decision_rows:
+        decision_rows.append("| unresolved range | fetch tags and enumerate every commit | TODO |")
     triggers = {
         "internal/store schemas, durable formats": any(f.startswith("internal/store/") or f.startswith("internal/ledger/") for f in files),
         "internal/provider/* wire behaviour, semantic mapping": any(f.startswith("internal/provider/") or f.startswith("internal/semantic/") for f in files),
@@ -252,6 +262,18 @@ to say why.
 ## Defect and review disposition
 
 TODO
+
+## Changelog coverage
+
+Every commit in the release range needs an explicit disposition. Point to the
+`Added`, `Changed`, `Fixed`, `Deprecated`, `Removed`, or `Security` subsection
+which describes its user/operator-visible effect, or write `no changelog` and
+the reason. Dependency and documentation-only commits are still decisions; an
+empty cell is not one.
+
+| Commit | Subject | Disposition |
+| --- | --- | --- |
+{chr(10).join(decision_rows)}
 
 ## Quality and recovery evidence
 

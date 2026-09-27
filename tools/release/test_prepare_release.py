@@ -125,6 +125,8 @@ class PrepareReleaseTest(unittest.TestCase):
 
         assessment = self.read("docs/verification/assessments/v1.2.4.md")
         self.assertIn("# v1.2.4 pre-release assessment", assessment)
+        self.assertIn("## Changelog coverage", assessment)
+        self.assertIn("no changelog", assessment)
         self.assertIn("TODO", assessment)
 
     def test_it_refuses_rather_than_guesses(self):

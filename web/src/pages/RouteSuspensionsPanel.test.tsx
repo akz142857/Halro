@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatInstant } from "../format";
 import { resetAccountingTimeZone, setAccountingTimeZone } from "../timezone";
@@ -18,6 +19,7 @@ const deployment = { id: "deployment_mini", name: "gpt-4o-mini 部署" } as Depl
 
 function suspension(overrides: Partial<RouteSuspension> = {}): RouteSuspension {
   return {
+    scope_id: "credential.credential_openai", clearable: false,
     scope_kind: "credential", scope_key: "credential_openai",
     reason: "invalid_credential", observed_at: "2026-09-20T10:00:00Z",
     indefinite: true, ...overrides,
@@ -28,7 +30,9 @@ function renderPanel(
   items: RouteSuspension[],
   state: "loading" | "ready" | "unavailable" = "ready",
   onRetry?: () => void,
+  onClear?: Parameters<typeof RouteSuspensionsPanel>[0]["onClear"],
 ) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <RouteSuspensionsPanel
       suspensions={items}
@@ -37,7 +41,9 @@ function renderPanel(
       providers={[provider]}
       deployments={[deployment]}
       onRetry={onRetry}
+      onClear={onClear}
     />,
+    { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> },
   );
 }
 
@@ -115,6 +121,25 @@ describe("route suspensions panel", () => {
   it("puts the upstream status and code beside the reason", () => {
     renderPanel([suspension({ provider_status: 401, provider_code: "invalid_api_key" })]);
     expect(screen.getByText(/HTTP 401 · invalid_api_key/)).toBeVisible();
+  });
+
+  it("confirms and clears only a durable suspension by its opaque handle", async () => {
+    const clear = vi.fn().mockResolvedValue(undefined);
+    renderPanel([suspension({ scope_id: "opaque/handle", clearable: true })], "ready", undefined, clear);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("providers.suspensions.clear") }));
+    expect(screen.getByText(i18n.t("providers.suspensions.clearConfirm", { name: "OpenAI production" }))).toBeVisible();
+    const buttons = screen.getAllByRole("button", { name: i18n.t("providers.suspensions.clear") });
+    fireEvent.click(buttons[buttons.length - 1]);
+    await waitFor(() => expect(clear).toHaveBeenCalledWith(
+      expect.objectContaining({ scope_id: "opaque/handle" }),
+      { currentPassword: "", totpCode: "" },
+    ));
+  });
+
+  it("does not offer a clear action for a short live-only suspension", () => {
+    renderPanel([suspension({ clearable: false, indefinite: false })], "ready", undefined, vi.fn());
+    expect(screen.queryByRole("button", { name: i18n.t("providers.suspensions.clear") })).not.toBeInTheDocument();
+    expect(screen.getByText(i18n.t("providers.suspensions.notClearable"))).toBeVisible();
   });
 
   // Both timestamps here are read against another screen — "first seen" against

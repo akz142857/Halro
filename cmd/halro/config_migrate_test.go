@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,5 +107,100 @@ func TestMigrateRefusesSilentlyAfterSayingWhy(t *testing.T) {
 	}
 	if _, statErr := os.Stat(path + ".before-migrate"); !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("a refusal still wrote")
+	}
+}
+
+func TestMigrateWriteRefusesASymbolicLink(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "managed-config.yaml")
+	original := releasedConfig(t, "v0.8.5")
+	if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(directory, "config.yaml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	err := migrateConfigCommand(link, true)
+	if err == nil || !strings.Contains(err.Error(), "symbolic-link") {
+		t.Fatalf("err=%v, want symbolic-link refusal", err)
+	}
+	after, readErr := os.ReadFile(target)
+	if readErr != nil || string(after) != original {
+		t.Fatalf("symlink target changed: err=%v", readErr)
+	}
+	if _, statErr := os.Lstat(link + ".before-migrate"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("a refused symlink migration left a backup")
+	}
+}
+
+func TestMigratePreservesRegularFileMode(t *testing.T) {
+	path := writeConfig(t, releasedConfig(t, "v0.8.5"))
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateConfigCommand(path, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []string{path, path + ".before-migrate"} {
+		info, err := os.Stat(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o640 {
+			t.Errorf("%s mode=%#o, want 0640", candidate, got)
+		}
+	}
+}
+
+func TestMigrateSyncFailureDoesNotReplaceTheOriginal(t *testing.T) {
+	path := writeConfig(t, releasedConfig(t, "v0.8.5"))
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := syncConfigFile
+	t.Cleanup(func() { syncConfigFile = originalSync })
+	calls := 0
+	syncConfigFile = func(file *os.File) error {
+		calls++
+		if calls == 2 {
+			return fmt.Errorf("injected staging sync failure")
+		}
+		return file.Sync()
+	}
+	err = migrateConfigCommand(path, true)
+	if err == nil || !strings.Contains(err.Error(), "injected staging sync failure") {
+		t.Fatalf("err=%v, want injected sync failure", err)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil || string(after) != string(original) {
+		t.Fatalf("original changed after pre-rename sync failure: err=%v", readErr)
+	}
+	backup, readErr := os.ReadFile(path + ".before-migrate")
+	if readErr != nil || string(backup) != string(original) {
+		t.Fatalf("durable recovery copy missing after failure: err=%v", readErr)
+	}
+}
+
+func TestMigrateRemovesABackupWhoseDurableWriteFailed(t *testing.T) {
+	path := writeConfig(t, releasedConfig(t, "v0.8.5"))
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalSync := syncConfigFile
+	t.Cleanup(func() { syncConfigFile = originalSync })
+	syncConfigFile = func(*os.File) error { return fmt.Errorf("injected backup sync failure") }
+	err = migrateConfigCommand(path, true)
+	if err == nil || !strings.Contains(err.Error(), "injected backup sync failure") {
+		t.Fatalf("err=%v, want injected backup sync failure", err)
+	}
+	if _, statErr := os.Stat(path + ".before-migrate"); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed backup permanently blocked retry: %v", statErr)
+	}
+	after, readErr := os.ReadFile(path)
+	if readErr != nil || string(after) != string(original) {
+		t.Fatalf("original changed after backup failure: err=%v", readErr)
 	}
 }

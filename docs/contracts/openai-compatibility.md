@@ -22,7 +22,9 @@
   with `503 configuration_stale` too. Skipping the Project's policy-snapshot
   check inside the service is not an exemption from the listener's gate. They
   consume no per-Project rate limit or budget and are bounded instead by the
-  built-in per-Key ceiling, which refuses with `429 rate_limit_exceeded`.
+  built-in per-Key ceiling, which refuses with `429 rate_limit_exceeded`. The
+  ceiling is charged after authentication and before scope and source-policy
+  checks, so repeated authenticated `403` responses are bounded too.
 
   An `id` here is a public alias, not a model identifier: an operator may repoint
   it at another deployment between two calls without the id changing. Listing an

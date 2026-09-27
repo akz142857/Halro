@@ -55,10 +55,14 @@ must enter through the approved seed path below.
    ```
 
 The installer requires staging to be a sibling of `storage.data_dir`, verifies
-the manifest MAC, the complete ordering chain at the approved non-zero index,
+the manifest MAC, the complete ordering chain at the exact approved index,
 and every authoritative file, rejects source-local member state, writes the
 target Replica state inside staging, then publishes the directory with one
 rename. Failure before publication leaves the target absent.
+
+Index `0` is valid only for the initial seed before the Primary has committed
+its first globally ordered frame. It authenticates the empty ordering prefix;
+after ordered work exists, the manifest preserves that non-zero index exactly.
 
 ## Planned handoff
 
@@ -70,6 +74,13 @@ halro cluster stepdown --config /etc/halro/target.yaml \
   --from halro-0 --to halro-1 --expect-term 7 --expect-index 10241 \
   --username admin --password-file /secure/admin-password
 ```
+
+The old Primary withdraws readiness and drains every admitted HTTP handler
+before it freezes the ordering prefix or signs the higher-term promise. If a
+handler completes an ordered write during that drain, the checked index has
+advanced: the command fails before the promise. Let the target catch up, read
+the new index, and retry with that index; do not treat the stale-index refusal
+as a completed handoff.
 
 The old Primary durably promises the higher term and exits. The target writes
 `leadership_established`, `cluster.stepdown.requested`, and

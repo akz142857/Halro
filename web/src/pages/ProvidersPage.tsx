@@ -283,6 +283,7 @@ function SubscriptionUsageDisclosure({
 
 export function ProvidersPage() {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const readOnly = useIsReadOnly();
   const [activeView, setActiveView] = useState<ProviderView>(() => providerViewFromURL());
   const [focusedCredentialID, setFocusedCredentialID] = useState("");
@@ -311,6 +312,11 @@ export function ProvidersPage() {
   // one, so a stale read is a panel that should not be on the screen at all.
   const suspensions = useQuery({
     queryKey: ["route-suspensions"], queryFn: api.routeSuspensions, refetchInterval: 30_000,
+  });
+  const clearSuspension = useMutation({
+    mutationFn: ({ scopeID, reauth }: { scopeID: string; reauth: ReauthValues }) =>
+      api.clearRouteSuspension(scopeID, reauth),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["route-suspensions"] }),
   });
   // What this build can serve. The forms cannot decide what to offer without it,
   // so they wait for it; the listing below does not, and stays readable either
@@ -414,6 +420,8 @@ export function ProvidersPage() {
           deployments={deployments.data?.items ?? []}
           onRetry={() => { void suspensions.refetch(); }}
           retrying={suspensions.isFetching}
+          clearingScopeID={clearSuspension.isPending ? clearSuspension.variables?.scopeID : undefined}
+          onClear={(suspension, reauth) => clearSuspension.mutateAsync({ scopeID: suspension.scope_id, reauth })}
         />
       )}
       {!pending && (

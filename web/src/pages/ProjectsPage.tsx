@@ -721,6 +721,17 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
   // shown once and the key outlives this session, so a stolen session that
   // could not delete anything could still leave with durable billable access.
   const [reauth, setReauth] = useState<ReauthValues>({ currentPassword: "", totpCode: "" });
+  const setScope = (scope: GatewayScope, checked: boolean) => {
+    setScopes((current) => {
+      if (scope === "discovery" && checked) {
+        return Array.from(new Set([...current, "inference", "discovery"]));
+      }
+      if (scope === "inference" && !checked) {
+        return current.filter((item) => item !== "inference" && item !== "discovery");
+      }
+      return checked ? Array.from(new Set([...current, scope])) : current.filter((item) => item !== scope);
+    });
+  };
   const mutation = useMutation({
     mutationFn: () => api.createKey(
       project.id,
@@ -807,7 +818,7 @@ function CreateKey({ project, onClose }: { project: Project; onClose: () => void
           <div className="gateway-key-scope-options">
             {(["inference", "discovery", "work_unit:create", "run:create", "run:attach", "governance:read", "outcome:write"] as GatewayScope[]).map((scope) => (
               <label className="check-row" key={scope}>
-                <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((item) => item !== scope))} />
+                <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScope(scope, event.target.checked)} />
                 <span>{scope}</span>
               </label>
             ))}

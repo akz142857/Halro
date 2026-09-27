@@ -696,6 +696,8 @@ halro cluster stepdown --to halro-1
 1. Primary 撤销客户端 readiness，drain 在飞请求到最后一帧 confirmed，并在同一 coordinator 锁下冻结
    新 append（要求 ordering head = durable = confirmed = 操作者检查的 index；超过 `shutdown_timeout` 的
    Provider 调用按不变量 12 终止并保守结算——但这是运维选的时刻，不是凌晨三点）；
+   如果 drain 期间在飞请求推进了 index，本次旧 `expect-index` 在签发 promise 前失败；目标追平后以新
+   index 重试，不能把 stale-index 拒绝当成交接完成；
 2. 等目标 Replica `applied_index == confirmed_index`；
 3. 目标执行 §8.3；校验材料里必须含**被指名旧 Primary**的 promise，且其 `previous_role=primary`，
    其它 Replica 的 promise 不能替代这份交接证据；

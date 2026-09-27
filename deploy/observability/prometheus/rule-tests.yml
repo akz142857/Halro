@@ -542,6 +542,129 @@ tests:
           - exp_labels: {alertname: Watchdog, category: deadman, owner: sre, service: halro, severity: none}
             exp_annotations: {summary: Continuous signal for an independent dead-man monitor, runbook_url: /docs/observability/operations-runbook.md#watchdog}
 
+  # Administrative audit integrity: healthy zero values do not page, sustained
+  # backlog/read failures respect their `for` windows, and a counter increment
+  # pages only while it remains inside the lookback window.
+  - interval: 1m
+    input_series:
+      - series: 'halro_admin_audit_intents_pending{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '1x16 0x3'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: HalroAdminAuditBacklogStuck
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HalroAdminAuditBacklogStuck
+        exp_alerts:
+          - exp_labels: {alertname: HalroAdminAuditBacklogStuck, category: audit, cluster: standalone, environment: test, instance: one, owner: security, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro administrative mutations are committed with their audit records unwritten, runbook_url: /docs/observability/operations-runbook.md#halroadminauditbacklogstuck}
+      - eval_time: 17m
+        alertname: HalroAdminAuditBacklogStuck
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_admin_audit_intents_pending{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '-1x6 0x2'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HalroAdminAuditBacklogUnreadable
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: HalroAdminAuditBacklogUnreadable
+        exp_alerts:
+          - exp_labels: {alertname: HalroAdminAuditBacklogUnreadable, category: audit, cluster: standalone, environment: test, instance: one, owner: security, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro cannot read its administrative audit backlog, runbook_url: /docs/observability/operations-runbook.md#halroadminauditbacklogunreadable}
+      - eval_time: 7m
+        alertname: HalroAdminAuditBacklogUnreadable
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_admin_audit_delivery_failures_total{environment="test",region="local",cluster="standalone",instance="one"}'
+        values: '0 1x18'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroAdminAuditDeliveryFailing
+        exp_alerts:
+          - exp_labels: {alertname: HalroAdminAuditDeliveryFailing, category: audit, cluster: standalone, environment: test, instance: one, owner: security, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: Halro failed to append an administrative mutation's audit record, runbook_url: /docs/observability/operations-runbook.md#halroadminauditdeliveryfailing}
+      - eval_time: 17m
+        alertname: HalroAdminAuditDeliveryFailing
+        exp_alerts: []
+
+  # Upstream refusal alerts distinguish an operator-actionable dead credential
+  # from quota and from a temporary rate limit, then resolve with the gauge.
+  - interval: 1m
+    input_series:
+      - series: 'halro_route_suspended{environment="test",region="local",cluster="standalone",instance="one",scope_kind="credential",reason="invalid_credential"}'
+        values: '1x6 0'
+      - series: 'halro_route_suspended{environment="test",region="local",cluster="standalone",instance="one",scope_kind="credential_model",reason="subscription_quota_exhausted"}'
+        values: '1x6 0'
+      - series: 'halro_route_suspended{environment="test",region="local",cluster="standalone",instance="one",scope_kind="provider",reason="rate_limited"}'
+        values: '1x7'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroCredentialUnusable
+        exp_alerts:
+          - exp_labels: {alertname: HalroCredentialUnusable, category: provider, cluster: standalone, environment: test, instance: one, owner: sre, reason: invalid_credential, region: local, scope_kind: credential, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro Provider credential is refused upstream and will not recover on its own, runbook_url: /docs/observability/operations-runbook.md#halrocredentialunusable}
+      - eval_time: 5m
+        alertname: HalroProviderQuotaExhausted
+        exp_alerts:
+          - exp_labels: {alertname: HalroProviderQuotaExhausted, category: provider, cluster: standalone, environment: test, instance: one, owner: sre, reason: subscription_quota_exhausted, region: local, scope_kind: credential_model, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro upstream has exhausted its quota, runbook_url: /docs/observability/operations-runbook.md#halroproviderquotaexhausted}
+      - eval_time: 7m
+        alertname: HalroCredentialUnusable
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: HalroProviderQuotaExhausted
+        exp_alerts: []
+
+  # A single rejection keeps the one-hour expression true long enough for the
+  # five-minute guard, then ages out. The two reason labels are separate
+  # operator actions and must never collapse into one alert.
+  - interval: 1m
+    input_series:
+      - series: 'halro_policy_rejections_total{environment="test",region="local",cluster="standalone",instance="one",reason="budget"}'
+        values: '0 1x70'
+      - series: 'halro_policy_rejections_total{environment="test",region="local",cluster="standalone",instance="one",reason="run_budget"}'
+        values: '0 1x70'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HalroProjectDailyBudgetRefusingTraffic
+        exp_alerts:
+          - exp_labels: {alertname: HalroProjectDailyBudgetRefusingTraffic, category: cost, cluster: standalone, environment: test, instance: one, owner: product, reason: budget, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro Project reached its daily budget and requests are being refused, runbook_url: /docs/observability/operations-runbook.md#halroprojectdailybudgetrefusingtraffic}
+      - eval_time: 6m
+        alertname: HalroRunBudgetRefusingTraffic
+        exp_alerts:
+          - exp_labels: {alertname: HalroRunBudgetRefusingTraffic, category: cost, cluster: standalone, environment: test, instance: one, owner: product, reason: run_budget, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro Run reached its budget and requests are being refused, runbook_url: /docs/observability/operations-runbook.md#halrorunbudgetrefusingtraffic}
+      - eval_time: 66m
+        alertname: HalroProjectDailyBudgetRefusingTraffic
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: HalroRunBudgetRefusingTraffic
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cost_usd_total{environment="test",region="local",cluster="standalone",instance="one",provider="openai"}'
+        values: '_x11 0x2'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: HalroProviderSpendUnreported
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: HalroProviderSpendUnreported
+        exp_alerts:
+          - exp_labels: {alertname: HalroProviderSpendUnreported, category: cost, owner: sre, service: halro, severity: critical}
+            exp_annotations: {summary: Halro is not reporting Provider spend at all, runbook_url: /docs/observability/operations-runbook.md#halroproviderspendunreported}
+      - eval_time: 11m
+        alertname: HalroProviderSpendUnreported
+        exp_alerts: []
+
   # Durable write path. A slow fsync and a saturated per-project accounting lock
   # both present as "requests got slower"; these two series are what tell them
   # apart, so they are worth pinning.

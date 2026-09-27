@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
@@ -331,6 +334,62 @@ func TestAnthropicCredentialRefusesTheOtherProductsSecret(t *testing.T) {
 	if elsewhere.Code != http.StatusCreated {
 		t.Fatalf("the check leaked onto another provider's secret: status=%d body=%s",
 			elsewhere.Code, elsewhere.Body.String())
+	}
+}
+
+// A Claude subscription document is the authority for the access token's own
+// lifetime. Requiring an operator to copy the same instant into a second field
+// made omission silently turn a short-lived token into an undated credential.
+func TestClaudeSubscriptionCredentialPersistsItsDocumentExpiry(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.ProviderSubscriptions.AnthropicClaude = true
+	runtime, _ := openRuntimeWithPolicyForTest(t, cfg)
+	cookie, csrf := loginAdminForTest(t, runtime)
+	accessToken := "sk-ant-oat01-" + strings.Repeat("A", 95)
+
+	tests := []struct {
+		name, declared string
+		want           time.Time
+	}{
+		{name: "RFC3339", declared: "2027-03-01T12:00:00Z", want: time.Date(2027, 3, 1, 12, 0, 0, 0, time.UTC)},
+		{name: "millisecond epoch", declared: "1803902400000", want: time.UnixMilli(1803902400000).UTC()},
+		{name: "already expired", declared: "2020-01-02T03:04:05Z", want: time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			secret := fmt.Sprintf(`{"access_token":%q,"expires_at":%q}`, accessToken, test.declared)
+			response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+				"name": "Claude " + test.name, "type": "anthropic", "base_url": "https://api.anthropic.com",
+				"secret": secret, "access_surface": domain.SurfaceAnthropicSubscription,
+				"scheme":                       domain.CredentialAnthropicOAuth,
+				"acknowledged_policy_revision": "anthropic-claude-subscription-2026-09-22",
+			})
+			if response.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			var view credentialView
+			if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
+				t.Fatal(err)
+			}
+			if view.ExpiresAt == nil || !view.ExpiresAt.Equal(test.want) {
+				t.Fatalf("expires_at=%v, want %s", view.ExpiresAt, test.want)
+			}
+			stored, err := runtime.store.GetCredential(context.Background(), view.ID)
+			if err != nil || stored.ExpiresAt == nil || !stored.ExpiresAt.Equal(test.want) {
+				t.Fatalf("stored expires_at=%v err=%v, want %s", stored.ExpiresAt, err, test.want)
+			}
+		})
+	}
+
+	response := performAdminMutation(t, runtime, cookie, csrf, http.MethodPost, "/admin/api/v1/credentials", "", map[string]any{
+		"name": "Conflicting Claude expiry", "type": "anthropic", "base_url": "https://api.anthropic.com",
+		"secret":         fmt.Sprintf(`{"access_token":%q,"expires_at":"2027-03-01T12:00:00Z"}`, accessToken),
+		"expires_at":     time.Date(2027, 3, 2, 12, 0, 0, 0, time.UTC),
+		"access_surface": domain.SurfaceAnthropicSubscription, "scheme": domain.CredentialAnthropicOAuth,
+		"acknowledged_policy_revision": "anthropic-claude-subscription-2026-09-22",
+	})
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "expiry conflicts") {
+		t.Fatalf("conflicting expiries: status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

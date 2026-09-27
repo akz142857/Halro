@@ -12,6 +12,7 @@
 // unexplained failures where there is one cause, which is why this reads the
 // gate's own scopes rather than the deployment list.
 import { useTranslation } from "react-i18next";
+import { ConfirmButton, type ReauthValues } from "../components";
 import { useInstantFormatter } from "../format";
 import type { Credential, Deployment, Provider, RouteSuspension } from "../types";
 
@@ -116,7 +117,7 @@ export function TabRefusalMark({ count }: { count: number }) {
 }
 
 export function RouteSuspensionsPanel({
-  suspensions, state, credentials, providers, deployments, onRetry, retrying,
+  suspensions, state, credentials, providers, deployments, onRetry, retrying, onClear, clearingScopeID,
 }: {
   suspensions: RouteSuspension[];
   state: SuspensionReadState;
@@ -125,6 +126,8 @@ export function RouteSuspensionsPanel({
   deployments: Deployment[];
   onRetry?: () => void;
   retrying?: boolean;
+  onClear?: (suspension: RouteSuspension, reauth: ReauthValues) => Promise<unknown>;
+  clearingScopeID?: string;
 }) {
   const { t } = useTranslation();
   // Every instant in the console is rendered in the server's accounting zone,
@@ -168,8 +171,8 @@ export function RouteSuspensionsPanel({
               a status and an upstream code joined together — so it takes the
               share the fixed-shape columns do not need. */}
           <colgroup>
-            <col style={{ width: "26%" }} /><col style={{ width: "34%" }} />
-            <col style={{ width: "24%" }} /><col style={{ width: "16%" }} />
+            <col style={{ width: "23%" }} /><col style={{ width: "31%" }} />
+            <col style={{ width: "22%" }} /><col style={{ width: "15%" }} /><col style={{ width: "9%" }} />
           </colgroup>
           <thead>
             <tr>
@@ -177,6 +180,7 @@ export function RouteSuspensionsPanel({
               <th>{t("providers.suspensions.cause")}</th>
               <th>{t("providers.suspensions.recovery")}</th>
               <th>{t("providers.suspensions.observed")}</th>
+              <th>{t("common.actions")}</th>
             </tr>
           </thead>
           <tbody>
@@ -188,7 +192,7 @@ export function RouteSuspensionsPanel({
                 suspension.provider_code || "",
               ].filter(Boolean).join(" · ");
               return (
-                <tr key={`${suspension.scope_kind}:${suspension.scope_key}`}>
+                <tr key={suspension.scope_id || `${suspension.scope_kind}:${suspension.scope_key}`}>
                   <td>
                     <strong>{subject.name}</strong>
                     <span className="suspension-detail">
@@ -217,6 +221,17 @@ export function RouteSuspensionsPanel({
                     ) : null}
                   </td>
                   <td>{dateTime(suspension.observed_at)}</td>
+                  <td>
+                    {suspension.clearable && onClear ? (
+                      <ConfirmButton
+                        label={t("providers.suspensions.clear")}
+                        confirmLabel={t("providers.suspensions.clearConfirm", { name: subject.name })}
+                        disabled={clearingScopeID === suspension.scope_id}
+                        requireStepUp
+                        onConfirm={(reauth) => onClear(suspension, reauth)}
+                      />
+                    ) : <span className="suspension-detail">{t("providers.suspensions.notClearable")}</span>}
+                  </td>
                 </tr>
               );
             })}

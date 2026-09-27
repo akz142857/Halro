@@ -15,6 +15,7 @@ export const zhCN = {
     close: "关闭",
     edit: "编辑",
     delete: "删除",
+    actions: "操作",
     test: "测试",
     // State, not action. In English "Enabled" and "Enable" are already two
     // words; in Chinese they were the same two characters, so a card that
@@ -1482,7 +1483,7 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
     saveKey: "保存这个网关密钥", oneTime: "只显示这一次", oneTimeDescription: "离开后 Halro 无法恢复明文。不要将它保存到浏览器或聊天记录。",
     copyKey: "复制密钥", keyStored: "我已将密钥保存到安全的密钥管理器", finish: "完成并清除明文", createKeyTitle: "创建网关密钥",
     keyName: "密钥名称", keyNameHint: "使用工作负载或服务名称，便于单独撤销", generateKey: "生成密钥",
-    keyScopes: "权限范围", keyScopesHint: "inference 允许模型调用；discovery 额外允许该 Key 通过 GET /v1/models 列出本项目的别名，不授予时该 Key 只能调用已告知的别名，看不到其余别名。其余权限分别控制创建 Work Unit、创建 Run、附加 Run、读取运行治理和上报业务结果。",
+    keyScopes: "权限范围", keyScopesHint: "inference 允许模型调用；discovery 必须与 inference 一起授予，并额外允许该 Key 通过 GET /v1/models 列出本项目的别名，不授予时该 Key 只能调用已告知的别名，看不到其余别名。其余权限分别控制创建 Work Unit、创建 Run、附加 Run、读取运行治理和上报业务结果。",
     nameTooLong: "项目名称不能超过 128 个字符", cidrInvalid: "存在无法解析的 IP 或 CIDR，请检查每一项",
     noKeysTitle: "还没有网关密钥", copyFailed: "无法写入剪贴板（可能不是安全上下文）。请手动选中上方明文复制。",
     keyExpiry: "过期时间（可选）", keyExpiryHint: "到期后该密钥立即停止鉴权；留空表示长期有效。",
@@ -1503,6 +1504,9 @@ save: "保存并热加载", saveWithDeclaration: "声明并保存",  saveDisable
       cause: "上游怎么说的",
       recovery: "什么时候恢复",
       observed: "发现时间",
+      clear: "清除",
+      clearConfirm: "清除“{{name}}”的持久挂起状态？流量会立即重新到达该对象；若上游仍然拒绝，Halro 会再次挂起。",
+      notClearable: "不可手动清除",
       // 没有被拒绝的对象时整块不出现，所以这里不再有「空」的说法；读不到准入
       // 状态是另一回事，它必须自己说出来，否则一块消失的面板就成了「没事」。
       unavailable: "读不到准入状态，这不等于没有被拒绝的对象。",

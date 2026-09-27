@@ -79,6 +79,13 @@ func (s *Service) authenticateForDiscovery(ctx context.Context, plaintextKey str
 	if err != nil {
 		return auth.AuthResult{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
 	}
+	// Once the key authenticates, every request is charged. Scope and source
+	// refusals are cheap, but leaving them ahead of the only non-configurable
+	// bound makes an authenticated principal unbounded when the source limiter
+	// is disabled.
+	if err := s.admitKeyRate(principal); err != nil {
+		return auth.AuthResult{}, err
+	}
 	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
 		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
 	}
@@ -92,9 +99,6 @@ func (s *Service) authenticateForDiscovery(ctx context.Context, plaintextKey str
 		)
 	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {
-		return auth.AuthResult{}, err
-	}
-	if err := s.admitKeyRate(principal); err != nil {
 		return auth.AuthResult{}, err
 	}
 	return principal, nil

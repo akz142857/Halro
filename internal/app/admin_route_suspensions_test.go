@@ -40,9 +40,10 @@ func suspensionRuntime(t *testing.T, gate *routegate.Gate, now time.Time) *Runti
 	}
 	t.Cleanup(func() { auditLog.Close() })
 	return &Runtime{
-		routes: gate, store: store, audit: auditLog,
-		now:    func() time.Time { return now },
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		routes: gate, store: store, audit: auditLog, config: testConfig(t),
+		now:            func() time.Time { return now },
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		adminElevation: adminElevationState{grants: make(map[[32]byte]adminElevationGrant)},
 	}
 }
 
@@ -170,6 +171,26 @@ func TestTheListingSaysWhichSuspensionsAreClearable(t *testing.T) {
 	}
 }
 
+func TestRouteSuspensionListingFailsClosedWhenTheDurableStateCannotBeRead(t *testing.T) {
+	gate := routegate.New(routegate.Config{})
+	now := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	runtime := suspensionRuntime(t, gate, now)
+	gate.Observe(provider.Target{
+		ID: "route_1", DeploymentID: "dep_1", ProviderID: "provider_1",
+		ProviderModel: "gpt-test", CredentialID: "cred_live", CredentialRevision: 7,
+	}, routegate.Observation{Reason: provider.FailureReasonInvalidCredential, Status: 401}, now)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder := httptest.NewRecorder()
+	runtime.listAdminRouteSuspensions(recorder, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%s, want a degraded read failure", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), `"items"`) {
+		t.Fatalf("an unreadable store was represented as a suspension catalog: %s", recorder.Body.String())
+	}
+}
+
 // Clearing removes the stored row, clears the live gate, and leaves an audit
 // record — the three halves that make this an administrative action rather than
 // a knob.
@@ -188,7 +209,7 @@ func TestClearingARouteSuspensionRemovesTheRowAndRecordsIt(t *testing.T) {
 	scopeID := domain.EncodeRouteScopeID("credential", "cred_live")
 
 	recorder := httptest.NewRecorder()
-	runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, scopeID))
+	runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, runtime, scopeID))
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -233,7 +254,7 @@ func TestClearingASuspensionThatIsNotDurableSaysSo(t *testing.T) {
 	gate.ObserveProbe("dep_1", routegate.DeploymentProbe{Healthy: false, ObservedAt: now}, now)
 
 	recorder := httptest.NewRecorder()
-	runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, domain.EncodeRouteScopeID("deployment", "dep_1")))
+	runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, runtime, domain.EncodeRouteScopeID("deployment", "dep_1")))
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s, want 409", recorder.Code, recorder.Body.String())
 	}
@@ -249,23 +270,38 @@ func TestClearingAnUnknownScopeIsNotFound(t *testing.T) {
 
 	for _, scopeID := range []string{domain.EncodeRouteScopeID("credential", "cred_absent"), "not-a-handle!!"} {
 		recorder := httptest.NewRecorder()
-		runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, scopeID))
+		runtime.clearAdminRouteSuspension(recorder, adminClearRequest(t, runtime, scopeID))
 		if recorder.Code != http.StatusNotFound {
 			t.Fatalf("scope %q: status=%d body=%s, want 404", scopeID, recorder.Code, recorder.Body.String())
 		}
 	}
 }
 
+func TestClearingARouteSuspensionRequiresRecentReauthentication(t *testing.T) {
+	runtime := suspensionRuntime(t, routegate.New(routegate.Config{}), time.Now().UTC())
+	recorder := httptest.NewRecorder()
+	runtime.clearAdminRouteSuspension(recorder, rawAdminClearRequest("not-a-handle!!"))
+	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "recent_reauth_required") {
+		t.Fatalf("status=%d body=%s, want step-up refusal", recorder.Code, recorder.Body.String())
+	}
+}
+
 // adminClearRequest is the DELETE the router would deliver: the path parameter
 // chi extracts, and the authenticated admin the audit record names.
-func adminClearRequest(t *testing.T, scopeID string) *http.Request {
+func adminClearRequest(t *testing.T, runtime *Runtime, scopeID string) *http.Request {
 	t.Helper()
+	request := rawAdminClearRequest(scopeID)
+	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
+	runtime.elevateStepUp(admin.session, runtime.clockNow())
+	return request
+}
+
+func rawAdminClearRequest(scopeID string) *http.Request {
 	request := httptest.NewRequest(http.MethodDelete, "/admin/api/v1/route-suspensions/"+scopeID, nil)
 	routeContext := chi.NewRouteContext()
 	routeContext.URLParams.Add("scopeID", scopeID)
 	ctx := context.WithValue(request.Context(), chi.RouteCtxKey, routeContext)
-	ctx = context.WithValue(ctx, adminContextKey{}, adminRequestContext{
-		session: domain.AdminSession{Username: "admin"}, role: "administrator",
-	})
+	session := domain.AdminSession{Username: "admin", IDHash: [32]byte{1}, Generation: 1}
+	ctx = context.WithValue(ctx, adminContextKey{}, adminRequestContext{session: session, role: "administrator"})
 	return request.WithContext(ctx)
 }

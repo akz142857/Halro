@@ -41,28 +41,33 @@ const reseedRequiredMarker = "reseed-required"
 // deliberately stay out of Runtime's already-wide field list: role state,
 // ordering, native-source authentication and peer transport have one lifetime.
 type replicationRuntime struct {
-	role               replication.Role
-	clusterKey         [32]byte
-	publisher          *replication.StatePublisher
-	journal            *replication.OrderingJournal
-	source             *replication.NativeSource
-	manager            *replication.ConnectionManager
-	coordinator        *replication.PrimaryCoordinator
-	receiver           *replication.ReplicaReceiver
-	applier            *replication.ReplicaApplier
-	startupReady       atomic.Bool
-	helloMu            sync.Mutex
-	startupPeers       map[string]replication.Hello
-	startupIndex       uint64
-	startupPeerQuorum  int
-	startupOnce        sync.Once
-	startupCtx         context.Context
-	startupStop        context.CancelFunc
-	fatal              chan error
-	objectSourceDir    string
-	incompatibleSchema atomic.Uint64
-	incompatibleKey    atomic.Uint64
-	incompatibleSPKI   atomic.Uint64
+	role              replication.Role
+	clusterKey        [32]byte
+	publisher         *replication.StatePublisher
+	journal           *replication.OrderingJournal
+	source            *replication.NativeSource
+	manager           *replication.ConnectionManager
+	coordinator       *replication.PrimaryCoordinator
+	receiver          *replication.ReplicaReceiver
+	applier           *replication.ReplicaApplier
+	startupReady      atomic.Bool
+	helloMu           sync.Mutex
+	startupPeers      map[string]replication.Hello
+	startupIndex      uint64
+	startupPeerQuorum int
+	startupOnce       sync.Once
+	startupCtx        context.Context
+	startupStop       context.CancelFunc
+	fatal             chan error
+	objectSourceDir   string
+	// plannedStepdownDrain is installed by Runtime before the replication
+	// listener starts. A planned promise is not a crash fence: the old Primary
+	// must first stop accepting HTTP work and wait for every admitted handler to
+	// finish, otherwise one paused before Provider I/O can run after promotion.
+	plannedStepdownDrain func() error
+	incompatibleSchema   atomic.Uint64
+	incompatibleKey      atomic.Uint64
+	incompatibleSPKI     atomic.Uint64
 }
 
 func openReplicaApplication(
@@ -681,10 +686,7 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 	primaryRuntime := r.coordinator != nil
 	if primaryRuntime {
 		if proposal.PlannedStepdown {
-			if err := validatePlannedStepdownTarget(proposal, state); err != nil {
-				return err
-			}
-			if err := r.coordinator.FreezeForStepdown(proposal.ExpectedAppliedIndex); err != nil {
+			if err := r.freezeForPlannedStepdown(proposal, state); err != nil {
 				return err
 			}
 		} else {
@@ -730,6 +732,19 @@ func (r *replicationRuntime) handlePromotionProposal(peer replication.Hello, enc
 		return err
 	}
 	return nil
+}
+
+func (r *replicationRuntime) freezeForPlannedStepdown(proposal replication.PromotionProposal, state replication.MemberState) error {
+	if err := validatePlannedStepdownTarget(proposal, state); err != nil {
+		return err
+	}
+	if r.plannedStepdownDrain == nil {
+		return errors.New("planned stepdown drain is unavailable")
+	}
+	if err := r.plannedStepdownDrain(); err != nil {
+		return fmt.Errorf("drain old Primary before planned stepdown: %w", err)
+	}
+	return r.coordinator.FreezeForStepdown(proposal.ExpectedAppliedIndex)
 }
 
 func primaryStartupPeerRequirement(peerCount int, recoveredPromotionAnchor bool) int {

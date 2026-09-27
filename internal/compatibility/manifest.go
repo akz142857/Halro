@@ -711,14 +711,16 @@ func inferenceResourcesEndpointManifests() []EndpointCompatibilityManifest {
 				"every line of the input is checked against the selected profile before the batch is created, because a batch is routed once for many requests; a line the profile cannot carry fails the batch and names itself")
 		}
 		// Files, batches and async invocations authenticate through the
-		// project resource plane, which charges the built-in per-Key ceiling
-		// before it looks the record up. The other endpoints here reach
+		// project resource plane. It requires inference scope and charges the
+		// built-in per-Key ceiling immediately after authentication, before
+		// scope/source policy and record lookup. The other endpoints here reach
 		// resolveRequest instead and are bounded by the Project limiter alone.
 		if strings.HasPrefix(manifests[index].ID, "openai.files.") ||
 			strings.HasPrefix(manifests[index].ID, "openai.batches.") ||
 			strings.HasPrefix(manifests[index].ID, "halro.async.") {
 			manifests[index].DocumentedDeviations = append(manifests[index].DocumentedDeviations,
-				"an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every call on this plane is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited")
+				"every call on this plane requires the Gateway Key's inference scope and is refused with 403 gateway_key_scope_denied before lookup or Provider I/O when that grant is absent",
+				"an identifier that names nothing answers 404 before any accounting is opened, so it consumes no Project rate limit or budget; every authenticated call on this plane, including scope and source-policy refusals, is instead charged against a fixed per-minute ceiling on the calling Key and on its Project, and a 429 rate_limit_exceeded is therefore possible where the Project's own RPM is unlimited")
 		}
 		if manifests[index].ID == "openai.images.generations.v1" {
 			manifests[index].RejectedRequestFields = []string{"user"}

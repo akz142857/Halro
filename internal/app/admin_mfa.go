@@ -269,7 +269,10 @@ func (r *Runtime) cancelAdminMFAChallenge(w http.ResponseWriter, req *http.Reque
 	}
 	hash, err := adminauth.HashChallengeToken(input.ChallengeToken)
 	if err == nil {
-		_ = r.store.DeleteAdminMFAChallenge(req.Context(), hash)
+		if err := r.store.DeleteAdminMFAChallenge(req.Context(), hash); err != nil {
+			adminStoreError(w)
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }

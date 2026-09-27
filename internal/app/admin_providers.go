@@ -1365,7 +1365,8 @@ func (r *Runtime) credentialFromInput(
 		}
 	}
 	defer clear(plaintext)
-	if err := validateCredentialMaterial(profile.CredentialScheme, endpoint, plaintext); err != nil {
+	materialExpiry, err := validateCredentialMaterial(profile.CredentialScheme, endpoint, plaintext)
+	if err != nil {
 		return domain.Credential{}, err
 	}
 	ciphertext, err := r.vault.EncryptCredential(id, string(input.Type), audience, plaintext)
@@ -1387,6 +1388,12 @@ func (r *Runtime) credentialFromInput(
 		}
 		normalized := input.ExpiresAt.UTC()
 		expiresAt = &normalized
+	}
+	if materialExpiry != nil {
+		if expiresAt != nil && !expiresAt.Equal(*materialExpiry) {
+			return domain.Credential{}, errors.New("credential expiry conflicts with the expires_at in the secret document")
+		}
+		expiresAt = materialExpiry
 	}
 	credential := domain.Credential{
 		ID: id, Name: input.Name, Type: input.Type, AccessSurface: profile.AccessSurface,
@@ -1564,22 +1571,29 @@ func requireUsagePolicyAcknowledgement(
 //
 // The errors are safe to return to the admin: they name the field or the
 // disagreement, never the key material and never the host.
-func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.URL, plaintext []byte) error {
+func validateCredentialMaterial(scheme domain.CredentialScheme, endpoint *url.URL, plaintext []byte) (*time.Time, error) {
 	switch scheme {
 	case domain.CredentialAWSSigV4Explicit:
 		authorizer, err := bedrockprovider.NewAuthorizer(endpoint, plaintext, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		authorizer.Close()
-		return nil
+		return nil, nil
 	case domain.CredentialAnthropicAPIKey:
-		return refuseClaudeSubscriptionToken(plaintext)
+		return nil, refuseClaudeSubscriptionToken(plaintext)
 	case domain.CredentialAnthropicOAuth:
-		_, err := parseClaudeSubscriptionCredential(plaintext)
-		return err
+		parsed, err := parseClaudeSubscriptionCredential(plaintext)
+		if err != nil {
+			return nil, err
+		}
+		expiresAt, err := parsed.expiry()
+		if err != nil || expiresAt.IsZero() {
+			return nil, err
+		}
+		return &expiresAt, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 

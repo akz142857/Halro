@@ -256,7 +256,8 @@ func metadataOpRequiresConfirmation(kind metadatajournal.OpKind, path []string, 
 	if kind == metadatajournal.OpDelete {
 		switch bucket {
 		case string(bucketCredentials), string(bucketGatewayKeys), string(bucketGatewayKeyHash),
-			string(bucketAdminUsers), string(bucketAdminMFAAuthenticators), string(bucketAdminMFARecoveryCodes):
+			string(bucketAdminUsers), string(bucketAdminSessions), string(bucketAdminMFAAuthenticators),
+			string(bucketAdminMFARecoveryCodes), string(bucketAdminMFAChallenges):
 			return true
 		}
 		return false
@@ -302,12 +303,28 @@ func metadataOpRequiresConfirmation(kind metadatajournal.OpKind, path []string, 
 		var record struct {
 			Status string `json:"status"`
 		}
-		return json.Unmarshal(value, &record) == nil && record.Status == "revoked"
+		// Creation of a pending authenticator adds no authority. Every later
+		// mutation is security-sensitive: it may activate/revoke the factor or
+		// advance LastAcceptedTimeStep, whose loss would permit TOTP replay.
+		return len(previous) != 0 || json.Unmarshal(value, &record) == nil && record.Status == "revoked"
 	case string(bucketAdminMFARecoveryCodes):
 		var record struct {
 			UsedAt any `json:"used_at"`
 		}
 		return json.Unmarshal(value, &record) == nil && record.UsedAt != nil
+	case string(bucketAdminMFAChallenges):
+		// A new challenge is additive. Updates claim it or consume an attempt;
+		// losing either transition on promotion reopens a one-time credential.
+		return len(previous) != 0
+	case string(bucketProviderResources):
+		var record struct {
+			CreationStatus string `json:"creation_status"`
+		}
+		// in_flight is the last durable boundary before Provider I/O. It must
+		// belong to the confirmed prefix before the upstream can observe the
+		// call, otherwise promotion can recover the old reserved record and
+		// dispatch the same idempotency key again.
+		return json.Unmarshal(value, &record) == nil && record.CreationStatus == "in_flight"
 	}
 	return false
 }

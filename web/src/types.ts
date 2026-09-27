@@ -781,6 +781,10 @@ export interface ProviderEgressProxy {
 // model joined by "/". The console resolves those against the lists it already
 // loads, because an identifier is not an answer to "which credential".
 export interface RouteSuspension {
+  // Opaque because credential_model keys can contain both NULs internally and
+  // slashes in model identifiers. It is the only value the clear API accepts.
+  scope_id: string;
+  clearable: boolean;
   scope_kind: "deployment" | "credential_model" | "credential" | "provider";
   scope_key: string;
   // A provider.FailureReason, or "unclassified". Turned into a sentence by

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/replication"
 )
 
 type fakeShutdownServer struct {
@@ -53,5 +55,25 @@ func TestGracefulShutdownDoesNotRecordOrForceCloseWithinBudget(t *testing.T) {
 	)
 	if len(errs) != 0 || recorded || server.shutdownCalls != 1 || server.closeCalls != 0 {
 		t.Fatalf("errors=%v recorded=%v shutdown=%d close=%d", errs, recorded, server.shutdownCalls, server.closeCalls)
+	}
+}
+
+func TestPlannedStepdownDrainWithdrawsReadinessAndWaitsForHTTPServers(t *testing.T) {
+	server := &fakeShutdownServer{}
+	replicationRuntime := &replicationRuntime{role: replication.RolePrimary}
+	replicationRuntime.startupReady.Store(true)
+	runtime := &Runtime{config: testConfig(t), replication: replicationRuntime}
+	runtime.installPlannedStepdownDrain([]shutdownHTTPServer{server})
+	if replicationRuntime.plannedStepdownDrain == nil {
+		t.Fatal("Primary did not install its planned-stepdown drain")
+	}
+	if err := replicationRuntime.plannedStepdownDrain(); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.draining.Load() || replicationRuntime.startupReady.Load() {
+		t.Fatalf("draining=%t startup_ready=%t", runtime.draining.Load(), replicationRuntime.startupReady.Load())
+	}
+	if server.shutdownCalls != 1 || server.closeCalls != 0 {
+		t.Fatalf("shutdown calls=%d close calls=%d", server.shutdownCalls, server.closeCalls)
 	}
 }

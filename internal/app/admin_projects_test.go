@@ -67,6 +67,27 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 		t.Fatalf("CIDR was not normalized: %#v", project.AllowedCIDRs)
 	}
 
+	// Discovery enumerates the aliases the same key may infer against. Reject a
+	// discovery-only credential at the management boundary instead of storing a
+	// live key whose sole advertised permission can never succeed.
+	discoveryOnly := adminRequest(t, http.MethodPost,
+		"/admin/api/v1/projects/"+project.ID+"/keys",
+		map[string]any{
+			"name": "discovery-only", "current_password": "correct horse battery staple",
+			"scopes": []string{"discovery"},
+		},
+	)
+	discoveryOnly.AddCookie(cookie)
+	discoveryOnly.Header.Set("X-CSRF-Token", csrf)
+	discoveryOnly.Header.Set("Idempotency-Key", "discovery-only-1")
+	discoveryOnlyResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(discoveryOnlyResponse, discoveryOnly)
+	if discoveryOnlyResponse.Code != http.StatusBadRequest ||
+		!strings.Contains(discoveryOnlyResponse.Body.String(), "discovery scope requires inference") {
+		t.Fatalf("discovery-only key create status=%d body=%s",
+			discoveryOnlyResponse.Code, discoveryOnlyResponse.Body.String())
+	}
+
 	withoutIdempotency := adminRequest(t, http.MethodPost,
 		"/admin/api/v1/projects/"+project.ID+"/keys",
 		map[string]any{"name": "service-a"},
@@ -147,6 +168,21 @@ func TestAdminProjectAndKeyLifecycle(t *testing.T) {
 		strings.Contains(getKeyResponse.Body.String(), keyResult.Key) ||
 		strings.Contains(getKeyResponse.Body.String(), "key_hash") {
 		t.Fatalf("key read leaked secret status=%d body=%s", getKeyResponse.Code, getKeyResponse.Body.String())
+	}
+
+	discoveryOnlyUpdate := adminRequest(t, http.MethodPut,
+		"/admin/api/v1/projects/"+project.ID+"/keys/"+keyResult.Metadata.ID,
+		map[string]any{"name": "service-a", "enabled": true, "scopes": []string{"discovery"}},
+	)
+	discoveryOnlyUpdate.AddCookie(cookie)
+	discoveryOnlyUpdate.Header.Set("X-CSRF-Token", csrf)
+	discoveryOnlyUpdate.Header.Set("If-Match", `"1"`)
+	discoveryOnlyUpdateResponse := httptest.NewRecorder()
+	runtime.adminRouter().ServeHTTP(discoveryOnlyUpdateResponse, discoveryOnlyUpdate)
+	if discoveryOnlyUpdateResponse.Code != http.StatusBadRequest ||
+		!strings.Contains(discoveryOnlyUpdateResponse.Body.String(), "discovery scope requires inference") {
+		t.Fatalf("discovery-only key update status=%d body=%s",
+			discoveryOnlyUpdateResponse.Code, discoveryOnlyUpdateResponse.Body.String())
 	}
 
 	disable := adminRequest(t, http.MethodPut,

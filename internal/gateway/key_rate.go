@@ -37,12 +37,14 @@ const (
 // admitKeyRate charges one request to the caller's Key and Project against the
 // built-in ceiling.
 //
-// It is applied where a request may be answered without reaching
-// beginRequestRun: model discovery, and the whole resource plane — files,
-// batches, async invocations and deferred responses — where a retrieval, a
-// cancellation, or a 404 for an identifier that names nothing all return before
-// any accounting is opened. For the calls on that plane that do go on to reach
-// an upstream, this sits under the Project limiter rather than replacing it.
+// It is applied immediately after authentication where a request may be
+// answered without reaching beginRequestRun: model discovery, and the whole
+// resource plane — files, batches, async invocations and deferred responses.
+// Scope and source refusals are charged too: they are still requests by a known
+// principal, and otherwise an install with its source limiter disabled would
+// leave those denial paths unbounded. For calls on the resource plane that do
+// go on to reach an upstream, this sits under the Project limiter rather than
+// replacing it.
 //
 // The inference path is deliberately not charged here. Every request that
 // proceeds on it reaches the Project limiter, which is the bound that belongs

@@ -96,6 +96,10 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer primary.Close()
+	// This harness serves only the replication listeners; no HTTP listener can
+	// own an admitted request. Production installs the real net/http drain in
+	// RunWithReady before starting this same replication transport.
+	primary.replication.plannedStepdownDrain = func() error { return nil }
 	replica, err := OpenWithOptions(context.Background(), replicaConfig, logger, OpenOptions{})
 	if err != nil {
 		t.Fatal(err)

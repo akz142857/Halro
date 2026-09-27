@@ -8,6 +8,37 @@ semantic versioning.
 
 ### Added
 
+- High-availability repository foundations now cover the versioned metadata
+  journal, Primary-to-Replica replication protocol, mTLS member identity and
+  revocation, confirmed-prefix recovery, promotion and seed workflows,
+  provider-object replication, Kubernetes examples, deterministic failure
+  scenarios, and production acceptance/rollback runbooks. These are repository
+  gates; a target environment still has to complete the documented G0-G7 and
+  soak acceptance before HA is claimed in production.
+
+- Kimi Code and the operator-enabled Claude subscription product are available
+  as explicit provider offerings, kept separate from their metered products so
+  credentials cannot silently spend the wrong balance. Claude subscription
+  credentials store their access/refresh-token JSON and carry the document's
+  expiry into the durable credential record.
+
+- The Admin Advisor compares request/attempt budgets, fallback fan-out,
+  admission suspensions and related runtime limits, with deterministic CLI and
+  Console findings rather than silently accepting combinations which cannot do
+  what their individual fields suggest.
+
+- Streaming metrics now report time to first response byte separately from
+  total latency. Cost operations also gain alerts for Project and Run budget
+  refusals and for a missing Provider-spend series; administrative audit intent
+  backlog, unreadability and delivery failures have their own signals and
+  runbooks.
+
+- Release and configuration gates now verify stamped build identity, load every
+  published configuration snapshot through migration, and require every
+  configuration key to remain represented in the generated reference. Release
+  preparation also enumerates every commit for an explicit CHANGELOG subsection
+  or `no changelog` decision, and publication refuses an unfinished assessment.
+
 - `halro config migrate` moves a retired configuration key to the key that
   replaced it, carrying the value the operator chose.
 

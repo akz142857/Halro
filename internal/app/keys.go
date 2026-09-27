@@ -133,3 +133,35 @@ func appendOfflineAudit(
 	}
 	return checkpointAudit(store, auditLog.Summary())
 }
+
+// deliverPendingOfflineAudit opens the trusted chain and drains intents which
+// already committed atomically with their offline mutation.
+func deliverPendingOfflineAudit(ctx context.Context, cfg config.Config, store *boltstore.Store) error {
+	masterKey, err := unlockMasterKey(ctx, cfg, store)
+	if err != nil {
+		return err
+	}
+	defer clear(masterKey)
+	secretVault, err := vault.New(masterKey)
+	if err != nil {
+		return err
+	}
+	defer secretVault.Close()
+	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
+		return err
+	}
+	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
+	if err != nil {
+		return err
+	}
+	defer clear(auditKey)
+	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	if err != nil {
+		return err
+	}
+	defer auditLog.Close()
+	if err := reconcileAuditCheckpoint(store, auditLog.Summary()); err != nil {
+		return err
+	}
+	return deliverOfflineAdminAuditIntents(ctx, store, auditLog)
+}

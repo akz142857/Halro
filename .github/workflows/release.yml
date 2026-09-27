@@ -93,6 +93,19 @@ jobs:
             echo "::error::CHANGELOG.md has no '## [${version#v}]' section for ${version}"
             exit 1
           fi
+          assessment="docs/verification/assessments/${version}.md"
+          if [ ! -f "${assessment}" ]; then
+            echo "::error::${assessment} is missing; prepare and review the release assessment first"
+            exit 1
+          fi
+          if ! grep -Fq '## Changelog coverage' "${assessment}"; then
+            echo "::error::${assessment} has no changelog coverage decision table"
+            exit 1
+          fi
+          if grep -Fq 'TODO' "${assessment}"; then
+            echo "::error::${assessment} still contains TODO decisions"
+            exit 1
+          fi
           # Decided here rather than with an Actions '&& x || y', which picks the
           # right-hand side whenever the left one is falsy — and '' is falsy, so
           # that shape labelled every run a rehearsal, real releases included.

@@ -60,6 +60,8 @@ func (r *Runtime) listAdminRouteSuspensions(writer http.ResponseWriter, request 
 		}
 	} else {
 		r.logger.Error("stored route suspensions could not be read", "error", err)
+		adminStoreError(writer)
+		return
 	}
 	items := make([]routeSuspensionView, 0, len(suspensions))
 	for _, suspension := range suspensions {
@@ -133,6 +135,9 @@ func routeSuspensionKey(scope routegate.Scope) string {
 // the gate is the authority while it is running, and the row it would have been
 // restored from is already gone.
 func (r *Runtime) clearAdminRouteSuspension(writer http.ResponseWriter, request *http.Request) {
+	if !r.requireDestructiveStepUp(writer, request) {
+		return
+	}
 	kind, key, ok := domain.DecodeRouteScopeID(chi.URLParam(request, "scopeID"))
 	if !ok {
 		adminNotFound(writer)

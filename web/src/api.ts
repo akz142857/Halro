@@ -285,13 +285,16 @@ export const api = {
   // applies a change.
   advisorFindings: () =>
     request<AdvisorFindingCatalog>("/advisor-findings").then((value) => value.data),
-  // What the admission gate is refusing to route to right now. Read-only: there
-  // is no clear action yet, deliberately — clearing one is an administrative act
-  // that has to commit with an audit record, and a suspension is not a stored
-  // thing to commit against. The console must not grow a button the API has not
-  // got.
+  // What the admission gate is refusing to route to right now. Durable rows
+  // carry an opaque clear handle; clearing is step-up protected and the server
+  // commits its audit intent with the deletion.
   routeSuspensions: () =>
     request<RouteSuspensionCatalog>("/route-suspensions").then((value) => value.data),
+  clearRouteSuspension: (scopeID: string, reauth: Reauth) =>
+    request<void>(
+      `/route-suspensions/${encodeURIComponent(scopeID)}`,
+      json("DELETE", stepUpBody(reauth)),
+    ).then((value) => value.data),
   createProviderEgressProxy: (value: object, idempotencyKey: string, reauth: Reauth) =>
     request<ProviderEgressProxy>("/provider-egress-proxies", {
       ...json("POST", { ...value, ...stepUpBody(reauth) }), headers: { "Idempotency-Key": idempotencyKey },

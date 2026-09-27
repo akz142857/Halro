@@ -3,7 +3,7 @@ package app
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,8 +100,8 @@ func (c claudeSubscriptionCredential) expiry() (time.Time, error) {
 	if instant, err := time.Parse(time.RFC3339, c.ExpiresAt); err == nil {
 		return instant.UTC(), nil
 	}
-	var millis int64
-	if _, err := fmt.Sscanf(c.ExpiresAt, "%d", &millis); err == nil && millis > 0 {
+	millis, err := strconv.ParseInt(c.ExpiresAt, 10, 64)
+	if err == nil && millis > 0 {
 		return time.UnixMilli(millis).UTC(), nil
 	}
 	return time.Time{}, errors.New("expires_at must be an RFC 3339 instant or a millisecond epoch")

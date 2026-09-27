@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 )
 
@@ -64,6 +66,47 @@ func TestTheKeyCeilingIsRestoredWhenTheWindowRolls(t *testing.T) {
 	now = now.Add(30 * time.Second)
 	if _, err := f.service.Models(context.Background(), f.plaintext); err != nil {
 		t.Fatalf("the budget was not restored by the new window: %v", err)
+	}
+}
+
+// Authentication establishes the principal the fixed ceiling protects. Scope
+// and source-policy checks are deliberately after that charge so disabling the
+// configurable source limiter does not leave a valid key an unbounded 403 path.
+func TestAuthenticatedDiscoveryDenialsAreBoundedByTheBuiltInKeyCeiling(t *testing.T) {
+	t.Run("scope", func(t *testing.T) {
+		f := newFixtureAt(t, 0, ledger.Options{}, frozen)
+		defer f.close()
+		f.key.Scopes = []domain.GatewayScope{domain.GatewayScopeGovernanceRead}
+		if err := f.service.auth.Refresh(context.Background(), source{
+			keys: []domain.GatewayKey{f.key}, projects: []domain.Project{f.project},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		assertDiscoveryDenialBecomesRateLimit(t, f.service, f.plaintext, "gateway_key_scope_denied")
+	})
+
+	t.Run("source", func(t *testing.T) {
+		f := newFixtureShaped(t, 0, ledger.Options{}, frozen, func(project *domain.Project) {
+			project.AllowedCIDRs = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+		}, nil)
+		defer f.close()
+		assertDiscoveryDenialBecomesRateLimit(t, f.service, f.plaintext, "source_not_allowed")
+	})
+}
+
+func assertDiscoveryDenialBecomesRateLimit(t *testing.T, service *Service, plaintext, denialCode string) {
+	t.Helper()
+	for attempt := range KeyCeilingRPM {
+		_, err := service.Models(context.Background(), plaintext)
+		var refusal *Error
+		if !errors.As(err, &refusal) || refusal.HTTPStatus != 403 || refusal.Code != denialCode {
+			t.Fatalf("request %d: err=%v, want 403 %s", attempt, err, denialCode)
+		}
+	}
+	_, err := service.Models(context.Background(), plaintext)
+	var refusal *Error
+	if !errors.As(err, &refusal) || refusal.HTTPStatus != 429 || refusal.Code != "rate_limit_exceeded" {
+		t.Fatalf("after ceiling: err=%v, want 429 rate_limit_exceeded", err)
 	}
 }
 

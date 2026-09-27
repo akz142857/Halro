@@ -39,10 +39,13 @@ start the matrix unless `CHANGELOG.md` carries a section for the version being
 tagged. The required exact-commit ordinary CI run separately supplies the fuzz
 jobs; the release workflow does not rerun fuzz itself.
 
-What is **not** enforced anywhere: that the CHANGELOG section is complete, that
-the pre-release assessment in `docs/verification/assessments/` has been filled
-in, or that anyone other than the tagger has looked at the release. Those are
-procedure, and the procedure is `docs/verification/release-assessment.md`.
+The release workflow also refuses an absent or unfinished pre-release
+assessment. Its **Changelog coverage** table enumerates the release range and
+requires every commit to point at its user/operator-facing CHANGELOG subsection
+or carry an explicit `no changelog` reason. Any remaining `TODO` stops both a
+rehearsal and publication. Independent review remains a procedure described by
+`docs/verification/release-assessment.md`; the workflow can prove the decisions
+were recorded, not that the same person did not make and approve them.
 
 Provider-egress releases advance the bbolt metadata compatibility fence. Before
 upgrading, take and verify a complete backup. Managed proxy definitions and their
@@ -161,8 +164,9 @@ It moves the `## [Unreleased]` entries into a dated section and adds its compare
 link, the README image tags and download line, the `web/` package version and
 lock, and the two dependency-license drift hashes the version bump displaces —
 the surfaces v0.8.1 and v0.8.2 both shipped without. It scaffolds
-`docs/verification/assessments/vX.Y.Z.md` with the range, the commit list and the
-§0 trigger table computed from the paths the range touched. It refuses rather
+`docs/verification/assessments/vX.Y.Z.md` with the range, the commit list, a
+per-commit Changelog disposition table and the §0 trigger table computed from
+the paths the range touched. It refuses rather
 than guesses: an existing tag, an existing section, an empty `## [Unreleased]`,
 or any surface it cannot find is a hard failure, and every edit asserts that it
 applied.
@@ -170,10 +174,12 @@ applied.
 What it deliberately does not do is the judgement. The changelog prose is written
 per pull request under `## [Unreleased]`, because that section is what the GitHub
 Release will say and it should read for someone arriving at the Release page. The
-assessment's every `TODO` is the owner's: the trigger rows, the gate evidence,
-the real-binary smoke, the invariants, the verdict, and any explicitly waived
-external acceptance such as a real-Provider smoke. The workflow only checks that
-the section exists and that ordinary CI passed for this exact `main` commit.
+assessment's every `TODO` is the owner's: the trigger rows, every Changelog
+disposition, the gate evidence, the real-binary smoke, the invariants, the
+verdict, and any explicitly waived external acceptance such as a real-Provider
+smoke. The workflow refuses a missing assessment, a missing Changelog coverage
+table, or any remaining `TODO`, then separately requires ordinary CI for this
+exact `main` commit.
 
 `publish_packages` defaults to `true` and preserves that complete chain.
 

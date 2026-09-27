@@ -82,6 +82,23 @@ func TestInferenceResourcesMaturityDoesNotClaimUnvalidatedSDKCompatibility(t *te
 	}
 }
 
+func TestResourcePlaneManifestsDeclareInferenceScopeAndAuthenticatedCeiling(t *testing.T) {
+	for _, manifest := range inferenceResourcesEndpointManifests() {
+		if !(strings.HasPrefix(manifest.ID, "openai.files.") ||
+			strings.HasPrefix(manifest.ID, "openai.batches.") ||
+			strings.HasPrefix(manifest.ID, "halro.async.")) {
+			continue
+		}
+		deviations := strings.Join(manifest.DocumentedDeviations, "\n")
+		if !strings.Contains(deviations, "requires the Gateway Key's inference scope") {
+			t.Errorf("%s does not declare the inference-scope gate", manifest.ID)
+		}
+		if !strings.Contains(deviations, "including scope and source-policy refusals") {
+			t.Errorf("%s does not declare which authenticated refusals consume the fixed ceiling", manifest.ID)
+		}
+	}
+}
+
 func TestEmbeddingsProfileMaturityDoesNotPromoteExperimentalProviders(t *testing.T) {
 	var embeddings EndpointCompatibilityManifest
 	for _, manifest := range BuiltinEndpointManifests() {

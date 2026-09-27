@@ -1620,6 +1620,7 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 			}
 			return fmt.Errorf("bind replication listener %s: %w", r.config.Replication.Listen, err)
 		}
+		r.installPlannedStepdownDrain(shutdownServers)
 	}
 	if ready != nil {
 		if err := ready(); err != nil {
@@ -1772,6 +1773,22 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		<-replicationDone
 	}
 	return errors.Join(shutdownErrors...)
+}
+
+func (r *Runtime) installPlannedStepdownDrain(servers []shutdownHTTPServer) {
+	if r.replication == nil || r.replication.role != replication.RolePrimary {
+		return
+	}
+	r.replication.plannedStepdownDrain = func() error {
+		// Readiness changes before listeners close so an external load balancer
+		// stops routing new work during net/http's drain window. Shutdown then
+		// waits for every handler already admitted through those listeners.
+		r.draining.Store(true)
+		r.replication.startupReady.Store(false)
+		drainCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
+		defer cancel()
+		return errors.Join(r.shutdownHTTPServers(drainCtx, servers)...)
+	}
 }
 
 type shutdownHTTPServer interface {

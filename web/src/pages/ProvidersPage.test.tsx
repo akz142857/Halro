@@ -58,6 +58,7 @@ describe("ProvidersPage profile and credential bindings", () => {
   it("shows what the upstream is refusing, above the resource tabs", async () => {
     vi.spyOn(api, "routeSuspensions").mockResolvedValue({
       items: [{
+        scope_id: "credential.credential_openai", clearable: false,
         scope_kind: "credential", scope_key: "credential_openai",
         reason: "invalid_credential", provider_status: 401,
         observed_at: "2026-09-20T10:00:00Z", indefinite: true, credential_revision: 1,

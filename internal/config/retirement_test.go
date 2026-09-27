@@ -400,6 +400,19 @@ func TestAConfigWithNoVersionIsRefused(t *testing.T) {
 	}
 }
 
+func TestMigrationRequiresACompletePositiveIntegerVersion(t *testing.T) {
+	for _, declared := range []string{"1junk", "1.0", "-1", `"1"`} {
+		t.Run(declared, func(t *testing.T) {
+			source := strings.Replace(string(defaultTemplate),
+				fmt.Sprintf("version: %d", SchemaVersion), "version: "+declared, 1)
+			_, err := Migrate([]byte(source))
+			if err == nil || !strings.Contains(err.Error(), "not a schema version") {
+				t.Fatalf("version %q err=%v, want strict refusal", declared, err)
+			}
+		})
+	}
+}
+
 // TestAKeyRemovedWithNoReplacementIsDeleted covers the row shape that has no
 // destination. gateway.stream_idle_timeout was declared, defaulted, validated
 // and read by nothing, so there is nowhere for its value to go and deleting it

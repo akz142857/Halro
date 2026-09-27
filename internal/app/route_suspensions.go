@@ -8,6 +8,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/id"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 )
@@ -90,15 +91,27 @@ func ClearStoredRouteSuspension(ctx context.Context, cfg config.Config, scopeID 
 		return err
 	}
 	defer store.Close()
-	// nil intent: this is an offline command holding the data lock, and it
-	// appends its own audit record below.
-	if err := store.DeleteRouteSuspensionWithAuditIntent(ctx, kind, key, nil); err != nil {
+	if err := attachMetadataJournalForCLI(ctx, cfg, store, "clear route suspension"); err != nil {
+		return err
+	}
+	eventID, err := id.New("aud")
+	if err != nil {
+		return err
+	}
+	intent := &domain.AdminAuditIntent{
+		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: "local_cli",
+		Action: "route_suspension.clear", TargetType: "route_suspension", TargetID: scopeID,
+	}
+	if err := store.DeleteRouteSuspensionWithAuditIntent(ctx, kind, key, intent); err != nil {
 		if errors.Is(err, boltstore.ErrNotFound) {
 			return fmt.Errorf("no stored suspension for %s", scopeID)
 		}
 		return err
 	}
-	return appendOfflineAudit(ctx, cfg, store, "route_suspension.clear", "route_suspension", scopeID)
+	// Delivery is allowed to fail because the record already committed with the
+	// clear. The error tells this invocation that the trusted log is behind; the
+	// pending intent gives startup and the next drain a durable way to finish it.
+	return deliverPendingOfflineAudit(ctx, cfg, store)
 }
 
 // readableRouteScopeKey renders a scope key for a human. The

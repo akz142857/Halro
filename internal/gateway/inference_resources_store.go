@@ -267,6 +267,16 @@ func (s *Service) resourcePrincipal(ctx context.Context, key string) (auth.AuthR
 	if err != nil {
 		return auth.AuthResult{}, gatewayError("invalid_api_key", "invalid API key", 401, err)
 	}
+	// The fixed ceiling covers every authenticated resource-plane request,
+	// including scope and CIDR refusals. It is deliberately ahead of those
+	// checks so disabling the source limiter cannot make a valid principal's
+	// cheap denial path unbounded.
+	if err := s.admitKeyRate(principal); err != nil {
+		return auth.AuthResult{}, err
+	}
+	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeInference) {
+		return auth.AuthResult{}, gatewayError("gateway_key_scope_denied", "gateway key does not allow inference", 403, nil)
+	}
 	if err := authorizeSource(ctx, principal.Project); err != nil {
 		return auth.AuthResult{}, err
 	}
@@ -280,13 +290,6 @@ func (s *Service) resourcePrincipal(ctx context.Context, key string) (auth.AuthR
 	}
 	if s.resources == nil {
 		return auth.AuthResult{}, gatewayError("resource_store_unavailable", "resource storage is unavailable", 503, nil)
-	}
-	// Charged before the record is looked up, so the answers that never reach
-	// an upstream are bounded too: a retrieval, a cancellation, and above all
-	// the 404 for an identifier that names nothing, which is otherwise the
-	// cheapest request on this plane and the one worth repeating.
-	if err := s.admitKeyRate(principal); err != nil {
-		return auth.AuthResult{}, err
 	}
 	return principal, nil
 }
