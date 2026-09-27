@@ -397,11 +397,11 @@ contract, and production boundaries are documented in the
 
 ### Use and operations
 
-- [User Guide](docs/guides/user-guide.md) · [中文使用手册](docs/guides/user-guide.zh-CN.md)
+- [User Guide](docs/guides/user-guide.md)
 - [Operator Guide](docs/guides/operator-guide.md)
-- [HA Usage Guide](docs/guides/ha-usage.en.md) · [简体中文](docs/guides/ha-usage.zh-CN.md) — deployment, status, manual handoff, recovery, and validation
+- [HA Usage Guide](docs/guides/ha-usage.en.md) — deployment, status, manual handoff, recovery, and validation
 - [Backup and restore](docs/guides/backup-restore.md)
-- [异步提交与延迟取回](docs/guides/deferred-responses.zh-CN.md) — `background: true`
+- [Deferred responses](docs/guides/deferred-responses.en.md) — `background: true`
 - [Choosing an AWS access surface](docs/guides/aws-surface-selection.md)
 - [Metrics reference](docs/contracts/metrics-reference.md)
 - [Prometheus/Alertmanager deployment](deploy/observability/README.md)

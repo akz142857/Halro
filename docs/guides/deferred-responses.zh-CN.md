@@ -3,7 +3,7 @@
 适用范围：`POST /v1/responses`。契约见 [ADR 0024](../adr/0024-deferred-response-tier.md)，
 机器可读清单见 [`endpoint-manifests.json`](../compatibility/endpoint-manifests.json)
 中的 `openai.responses.create.v1`、`openai.responses.get.v1`、
-`openai.responses.cancel.v1`、`openai.responses.delete.v1`。
+`openai.responses.cancel.v1`、`openai.responses.delete.v1`。[English version](deferred-responses.en.md)。
 
 ## 一句话
 
