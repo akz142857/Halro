@@ -269,15 +269,83 @@ func TestPrimaryAndReplicaRuntimesReplicateAndApplyAnAuditFrame(t *testing.T) {
 	if err := primary.Close(); err != nil {
 		t.Fatal(err)
 	}
+	rejoined, err := OpenWithOptions(context.Background(), primaryConfig, logger, OpenOptions{})
+	if err != nil {
+		t.Fatalf("former Primary could not reopen as Replica after planned handoff: %v", err)
+	}
+	if rejoined.replication.publisher.Snapshot().Role != replication.RoleReplica {
+		t.Fatal("former Primary reopened with an unexpected role")
+	}
 	promotedMetadata, err := boltstore.OpenReadOnly(replicaConfig.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer promotedMetadata.Close()
 	promotedKey, err := promotedMetadata.GetGatewayKey(context.Background(), bootstrap.KeyID)
 	if err != nil || promotedKey.Enabled {
 		t.Fatalf("revoked Gateway Key revived after promotion: key=%#v err=%v", promotedKey, err)
 	}
+	if err := promotedMetadata.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the real server lifecycle after promotion. A clean Primary
+	// shutdown must confirm its final audit while the Replica transport still
+	// runs, leaving a prefix eligible for an offline seed approval.
+	rejoined.config.Server.GatewayListen = unusedLoopbackAddress(t)
+	rejoined.config.Server.AdminListen = unusedLoopbackAddress(t)
+	replicaConfig.Server.GatewayListen = unusedLoopbackAddress(t)
+	replicaConfig.Server.AdminListen = unusedLoopbackAddress(t)
+	promotedRuntime, err := OpenWithOptions(context.Background(), replicaConfig, logger, OpenOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejoinedContext, stopRejoined := context.WithCancel(context.Background())
+	rejoinedError := make(chan error, 1)
+	go func() { rejoinedError <- rejoined.RunWithReady(rejoinedContext, nil) }()
+	promotedContext, stopPromoted := context.WithCancel(context.Background())
+	promotedError := make(chan error, 1)
+	go func() { promotedError <- promotedRuntime.RunWithReady(promotedContext, nil) }()
+	startupDeadline = time.Now().Add(8 * time.Second)
+	for !promotedRuntime.replication.startupReady.Load() {
+		if time.Now().After(startupDeadline) {
+			t.Fatal("promoted Primary did not become ready after former Primary rejoined")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stopPromoted()
+	if err := <-promotedError; err != nil {
+		t.Fatalf("promoted Primary graceful shutdown: %v", err)
+	}
+	if err := promotedRuntime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := ClusterStatus(context.Background(), replicaConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.DurableIndex != stopped.ConfirmedIndex || stopped.AppliedIndex != stopped.ConfirmedIndex ||
+		stopped.Projection.Index != stopped.AppliedIndex {
+		t.Fatalf("cleanly stopped Primary has an unconfirmed or unprojected tail: %#v", stopped)
+	}
+	stopRejoined()
+	if err := <-rejoinedError; err != nil {
+		t.Fatalf("former Primary Replica shutdown: %v", err)
+	}
+	if err := rejoined.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func unusedLoopbackAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
 }
 
 func copyTestTree(t *testing.T, source, destination string) {

@@ -23,6 +23,7 @@ import { adoptTimeContext, resetAccountingTimeZone } from "./timezone";
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const DeploymentsPage = lazy(() => import("./pages/DeploymentsPage").then((module) => ({ default: module.DeploymentsPage })));
 const OperationsPage = lazy(() => import("./pages/OperationsPage").then((module) => ({ default: module.OperationsPage })));
+const ClusterPage = lazy(() => import("./pages/ClusterPage").then((module) => ({ default: module.ClusterPage })));
 const PoliciesPage = lazy(() => import("./pages/PoliciesPage").then((module) => ({ default: module.PoliciesPage })));
 const ProjectsPage = lazy(() => import("./pages/ProjectsPage").then((module) => ({ default: module.ProjectsPage })));
 const ProvidersPage = lazy(() => import("./pages/ProvidersPage").then((module) => ({ default: module.ProvidersPage })));
@@ -171,6 +172,7 @@ function Route({ path }: { path: string }) {
   if (path.startsWith("/admin/operations") || path.startsWith("/admin/audit") || path.startsWith("/admin/alerts")) {
     return <OperationsPage />;
   }
+  if (path === "/admin/cluster") return <ClusterPage />;
   if (path.startsWith("/admin/settings")) return <SettingsPage />;
   if (path.startsWith("/admin/master-key")) return <LegacyMasterKeyRedirect />;
   return (

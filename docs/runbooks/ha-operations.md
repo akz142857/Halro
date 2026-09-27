@@ -15,6 +15,21 @@ authorize a production rollout: the admission evidence in
 - Keep the same Master Key on every member, but use a distinct node
   certificate and the configured SPKI pin for every peer.
 
+## Inspect member status
+
+The Primary Admin Console has a read-only **Cluster status** page. It reports
+the local authenticated role, term and replication indexes, plus whether this
+member has a data session with each configured peer. A connected peer is not
+proof that its projection has caught up. For a promotion decision, run
+`halro cluster status --config /etc/halro/config.yaml` on **each** member and
+compare their authenticated indexes. The Replica Admin API also serves its
+own authenticated `GET /admin/api/v1/cluster/status`; the normal Console is
+served from the Primary. An unreadable status is unknown, never a zero index
+or a healthy cluster.
+
+For a repeatable validation sequence and observable pass criteria, see
+[`ha-test-guide.zh-CN.md`](../verification/ha-test-guide.zh-CN.md).
+
 ## Initial Primary
 
 Create and verify the ordinary data directory, add the `replication` block,
@@ -86,6 +101,13 @@ The old Primary durably promises the higher term and exits. The target writes
 `leadership_established`, `cluster.stepdown.requested`, and
 `cluster.stepdown.completed` into its authenticated suffix and does not become
 ready until that term is replicated and confirmed.
+
+Start the promoted target and wait for its `/health/ready` to return 200.
+Then start the former Primary as a Replica and check all members separately:
+one Primary in the new term, authenticated `durable >= confirmed >= applied`
+on each member, and eventual equality of the applied indexes. A former
+Primary that refuses its metadata projection check needs investigation or a
+fresh approved seed; never edit `state.json` to force it online.
 
 ## Unplanned manual promotion
 

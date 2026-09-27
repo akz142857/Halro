@@ -1657,7 +1657,10 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	var replicationDone chan struct{}
 	var replicationCancel context.CancelFunc
 	if replicationListener != nil {
-		replicationCtx, cancel := context.WithCancel(ctx)
+		// A normal process cancellation starts HTTP drain, but replication
+		// must outlive it long enough to confirm the shutdown audit below.
+		// Every RunWithReady exit path explicitly cancels this child context.
+		replicationCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		replicationCancel = cancel
 		replicationDone = make(chan struct{})
 		go func() {
@@ -1763,6 +1766,22 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
 	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
+	// Keep the replication channel alive until the Primary's final audit and
+	// metadata checkpoint are confirmed. Close runs after this channel stops;
+	// appending there would leave a durable but unconfirmed tail on every clean
+	// shutdown and make an otherwise caught-up snapshot ineligible for seeding.
+	if shutdownCtx.Err() == nil && r.replication != nil && r.replication.role == replication.RolePrimary &&
+		r.replication.publisher.Snapshot().Role == replication.RolePrimary {
+		r.advanceLedgerChainCheckpoint()
+		if err := appendSystemAudit(r.audit, r.store, "system.shutdown"); err != nil {
+			shutdownErrors = append(shutdownErrors, err)
+		} else {
+			shutdownIndex := r.replication.publisher.Snapshot().DurableIndex
+			if err := r.replication.coordinator.WaitConfirmed(shutdownCtx, shutdownIndex); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("confirm shutdown audit: %w", err))
+			}
+		}
+	}
 	if replicationCancel != nil {
 		replicationCancel()
 	}
@@ -1901,7 +1920,7 @@ func (r *Runtime) Close() error {
 		// checkpoint until the next start, which is precisely the window a
 		// shutdown-then-truncate would use.
 		var auditErr error
-		if !authorityInvalidated {
+		if !authorityInvalidated && r.replication == nil {
 			r.advanceLedgerChainCheckpoint()
 			auditErr = appendSystemAudit(r.audit, r.store, "system.shutdown")
 		}
@@ -2189,9 +2208,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	router.Use(r.requireMemberStartup)
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
-	if r.replication != nil {
-		router.With(r.requireAdmin).Get("/admin/api/v1/cluster/status", r.adminClusterStatus)
-	}
+	router.With(r.requireAdmin).Get("/admin/api/v1/cluster/status", r.adminClusterStatus)
 	router.Get("/admin/api/v1/setup/status", r.getAdminSetupStatus)
 	router.Get("/admin/api/v1/ui/bootstrap", r.getAdminUIBootstrap)
 	router.Post("/admin/api/v1/setup/admin", r.setupAdmin)

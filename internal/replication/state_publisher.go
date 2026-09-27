@@ -54,6 +54,11 @@ func (p *StatePublisher) PublishPrimary(progress PrimaryProgress) error {
 		progress.ConfirmedIndex > progress.DurableIndex {
 		return errors.New("primary member-state progress regressed or crossed its durable prefix")
 	}
+	if progress.Projection.Index != progress.ConfirmedIndex ||
+		progress.Projection.MetadataEpoch < p.state.Projection.MetadataEpoch ||
+		progress.Projection.MetadataEpoch == p.state.Projection.MetadataEpoch && progress.Projection.MetadataSequence < p.state.Projection.MetadataSequence {
+		return errors.New("primary member-state projection regressed or does not match confirmed progress")
+	}
 	if progress.DurableIndex == 0 && progress.OrderingHeadMAC != ([sha256.Size]byte{}) ||
 		progress.DurableIndex > 0 && progress.OrderingHeadMAC == ([sha256.Size]byte{}) {
 		return errors.New("primary member-state progress has an invalid ordering head")
@@ -67,6 +72,7 @@ func (p *StatePublisher) PublishPrimary(progress PrimaryProgress) error {
 	// authority.
 	next.AppliedIndex = progress.ConfirmedIndex
 	next.OrderingHeadMAC = progress.OrderingHeadMAC
+	next.Projection = progress.Projection
 	return p.publish(next)
 }
 

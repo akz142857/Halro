@@ -1,10 +1,10 @@
 # Halro HA 架构设计
 
-- 状态：Proposed（2026-09-20）。**Phase 0a 已实现并合入 `main`**（2026-09-25，
-  [#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）——metadata journal 已经在代码里。
-  **Phase 0b 的格式与配置契约已于 2026-09-26 完成仓库侧实现**：`replication` 块已有 fail-closed
-  校验，帧、ACK/commit notice、握手、ordering journal 与 `state.json` 有版本化 codec/MAC/golden fixture；`halro cluster`
-  子命令、复制连接、Primary/Replica 运行时与提升仍不存在
+- 状态：仓库实现完成，目标环境与生产验收未完成（2026-09-27）。Phase 0a metadata journal
+  已合入 `main`（[#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）；
+  Phase 0b、Phase 1 和 Phase 2 的格式、复制连接、Primary/Replica 运行时、`halro cluster`
+  命令、人工提升、备份与部署资产也已完成仓库侧实现。具体进度以 [§18.0](#180-进度一览)
+  为准；§1.3 的进入条件及 kind、Linux、相邻版本和生产演练仍未通过，不能据此启用 HA。
 - 进度：见 [§18.0](#180-进度一览)
 - 适用范围：Standalone 向 Primary/Replica 的演进
 - 目标版本：不绑定。进入条件是 §1.3 列出的证据，不是某个 tag

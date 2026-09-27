@@ -4,6 +4,8 @@ This file is the repository-side evidence index for
 `docs/todo/halro-ha-architecture.zh-CN.md` §17. It deliberately separates
 deterministic repository tests from the production admission evidence in §1.3
 and from kind/Linux reference-host exercises.
+An operator-facing execution sequence is in
+[`ha-test-guide.zh-CN.md`](ha-test-guide.zh-CN.md).
 
 ## Repository gates
 

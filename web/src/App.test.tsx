@@ -135,6 +135,19 @@ describe("App first-run routing", () => {
     await waitFor(() => expect(screen.getByRole("link", { name: "设置与状态" })).toHaveAttribute("aria-current", "page"));
     expect(screen.getByRole("link", { name: "根密钥状态" })).toHaveAttribute("aria-current", "page");
   });
+
+  it("opens cluster status from the main navigation", async () => {
+    window.history.replaceState({}, "", "/admin/cluster");
+    vi.spyOn(api, "setupStatus").mockResolvedValue({ instance_initialized: true, setup_required: false, token_required: false });
+    vi.spyOn(api, "session").mockResolvedValue({ username: "admin", role: "administrator", locale: "system", appearance: "dark", csrf_token: "csrf", absolute_expires_at: "x", idle_expires_at: "x" });
+    vi.spyOn(api, "systemStatus").mockResolvedValue({ time_context: { accounting_timezone: "UTC" } } as never);
+    vi.spyOn(api, "clusterStatus").mockResolvedValue({ mode: "standalone" });
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "当前为单实例模式" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "集群状态" })).toHaveAttribute("aria-current", "page");
+  });
 });
 
 function renderApp() {

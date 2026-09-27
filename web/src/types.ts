@@ -1487,6 +1487,22 @@ export interface SystemStatus {
   tzdata?: { source: string; path?: string; version: string; fingerprint: string; zones: string[] };
 }
 
+export type ClusterStatus = { mode: "standalone" } | {
+  mode: "ha";
+  cluster_id: string;
+  incarnation: string;
+  node_id: string;
+  role: "primary" | "replica" | "awaiting_decision";
+  term: number;
+  promised_term: number;
+  durable_index: number;
+  confirmed_index: number;
+  applied_index: number;
+  startup_ready: boolean;
+  projection: { index: number; metadata_epoch: number; metadata_sequence: number };
+  peers: Array<{ node_id: string; connected: boolean }>;
+};
+
 // What SIGHUP last did, and what is actually being served. A configuration that
 // can change without a restart makes the file on disk an unreliable answer to
 // "what is in force", and this is the reliable one.

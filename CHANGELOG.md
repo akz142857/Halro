@@ -8,6 +8,11 @@ semantic versioning.
 
 ### Added
 
+- The Admin Console now has a read-only Cluster status page for the local HA
+  member's role, term, replication indexes, and authenticated peer sessions.
+  Standalone instances show their mode explicitly; the HA test guide describes
+  how to validate each member and exercise failover in an isolated environment.
+
 - High-availability repository foundations now cover the versioned metadata
   journal, Primary-to-Replica replication protocol, mTLS member identity and
   revocation, confirmed-prefix recovery, promotion and seed workflows,
