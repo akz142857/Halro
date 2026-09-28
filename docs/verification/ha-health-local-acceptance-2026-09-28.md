@@ -1787,3 +1787,13 @@ SHA-256 为
 启动后前 13 次均为可解析 `observed`。采样尚在运行，不能声称 72 小时
 通过；最终 `summary.json`、成员原始样本、告警投递、RTO/RPO、G0–G7、
 独立不可变归档及客户端最终结果仍须分别验收。
+
+采样启动后的一次 30 分钟 Prometheus 原始窗口检查中，Primary `halro-1`
+到两个 Replica 的 `halro_replication_peer_connected` 最小值均为 1，
+两条序列各有 360 个样本；原始查询摘要分别为
+`cb4acc3ca99d704a0895a55f14aeea200c838f920dd4c952ec8e643d34fc3051`
+和 `d1592eeb00fa10f40fb13b0c1144c423b5f3ad12743273a429b967a71869c6d2`。
+本机 Prometheus 查询 port-forward 曾因 `broken pipe` 退出，实际 Prometheus
+Pod 仍为 1/1、0 次重启；重新建立只读查询转发后取得上述样本。健康采样
+使用另一条独立转发，检查时前 141 次采样均为 `observed`。这些短窗口
+证据仍不能代签 72 小时结果。
