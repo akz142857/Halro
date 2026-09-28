@@ -227,6 +227,9 @@ func (a *eventArchive) capture(statuses []memberStatus, now time.Time) {
 			}
 			captureSource(&doc, status.NodeID, status.Incarnation, "primary_coordinator", history.CoordinatorStartedAt, history.Dropped, events, now)
 		} else if cursor, exists := doc.Cursors[status.NodeID+"/primary_coordinator"]; exists {
+			if cursor.Failed {
+				appendArchiveRecord(&doc, eventArchiveRecord{ObservedAt: now, NodeID: status.NodeID, Incarnation: cursor.Incarnation, Source: "primary_coordinator", ProcessAt: cursor.ProcessAt, Gap: "collection_resumed"})
+			}
 			cursor.Active, cursor.Failed = false, false
 			doc.Cursors[status.NodeID+"/primary_coordinator"] = cursor
 		}
@@ -239,6 +242,9 @@ func (a *eventArchive) capture(statuses []memberStatus, now time.Time) {
 			}
 			captureSource(&doc, status.NodeID, status.Incarnation, "replica_stage", history.ReceiverStartedAt, history.Dropped, events, now)
 		} else if cursor, exists := doc.Cursors[status.NodeID+"/replica_stage"]; exists {
+			if cursor.Failed {
+				appendArchiveRecord(&doc, eventArchiveRecord{ObservedAt: now, NodeID: status.NodeID, Incarnation: cursor.Incarnation, Source: "replica_stage", ProcessAt: cursor.ProcessAt, Gap: "collection_resumed"})
+			}
 			cursor.Active, cursor.Failed = false, false
 			doc.Cursors[status.NodeID+"/replica_stage"] = cursor
 		}
@@ -256,6 +262,11 @@ func (a *eventArchive) capture(statuses []memberStatus, now time.Time) {
 func captureSource(doc *archiveDocument, node, incarnation, source string, processAt time.Time, dropped uint64, events []eventArchiveRecord, now time.Time) {
 	key := node + "/" + source
 	cursor, exists := doc.Cursors[key]
+	if cursor.Failed {
+		// A successful poll bounds the outage, even when the source has no new
+		// events. It does not recover events lost during the outage.
+		appendArchiveRecord(doc, eventArchiveRecord{ObservedAt: now, NodeID: node, Incarnation: incarnation, Source: source, ProcessAt: processAt, Gap: "collection_resumed"})
+	}
 	if !exists || cursor.ProcessAt.IsZero() {
 		appendArchiveRecord(doc, eventArchiveRecord{ObservedAt: now, NodeID: node, Incarnation: incarnation, Source: source, ProcessAt: processAt, Gap: "initial_observation"})
 		cursor.Sequence = 0

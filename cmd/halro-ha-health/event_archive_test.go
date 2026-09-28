@@ -51,7 +51,7 @@ func TestEventArchiveSurvivesRestartAndMarksUnprovableIntervals(t *testing.T) {
 	status.LiveTransitions.Events = []liveTransition{{Sequence: 3, At: start.Add(3 * time.Second), Kind: "promote"}}
 	capture(status, now.Add(4*time.Second))
 	got := archive.view()
-	if len(got.Records) != 5 || got.Records[3].Gap != "ring_history_missing" || got.Records[4].Live.Sequence != 3 || len(got.CollectionErrors) != 0 {
+	if len(got.Records) != 6 || got.Records[3].Gap != "collection_resumed" || got.Records[4].Gap != "ring_history_missing" || got.Records[5].Live.Sequence != 3 || len(got.CollectionErrors) != 0 {
 		t.Fatalf("ring gap not marked: %+v", got)
 	}
 	status.LiveTransitions.PublisherStartedAt = now.Add(5 * time.Second)
@@ -59,13 +59,13 @@ func TestEventArchiveSurvivesRestartAndMarksUnprovableIntervals(t *testing.T) {
 	status.LiveTransitions.Events = nil
 	capture(status, now.Add(6*time.Second))
 	got = archive.view()
-	if len(got.Records) != 6 || got.Records[5].Gap != "source_changed" {
+	if len(got.Records) != 7 || got.Records[6].Gap != "source_changed" {
 		t.Fatalf("process gap not marked: %+v", got)
 	}
 	status.Incarnation = "inc-2"
 	capture(status, now.Add(7*time.Second))
 	got = archive.view()
-	if len(got.Records) != 7 || got.Records[6].Gap != "incarnation_changed" {
+	if len(got.Records) != 8 || got.Records[7].Gap != "incarnation_changed" {
 		t.Fatalf("incarnation gap not marked: %+v", got)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
@@ -178,8 +178,58 @@ func TestEventArchiveRejectsIncompleteOrAmbiguousCollectorInventory(t *testing.T
 	}
 
 	archive.capture([]memberStatus{first, {NodeID: "node-2"}}, now.Add(3*time.Second))
-	if got := archive.view(); got.Status != "ok" || len(got.CollectionErrors) != 0 || len(got.Records) != 4 {
+	if got := archive.view(); got.Status != "ok" || len(got.CollectionErrors) != 0 || len(got.Records) != 5 ||
+		got.Records[4].Gap != "collection_resumed" {
 		t.Fatalf("recovered inventory not visible: %+v", got)
+	}
+}
+
+func TestEventArchiveRecoveryBoundaryPersistsWithoutNewMemberEvent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.json")
+	archive, err := openEventArchive(path, "test", "cluster", []string{"node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	status := memberStatus{NodeID: "node-1", Incarnation: "inc-1", LiveTransitions: &liveTransitionHistory{PublisherStartedAt: now.Add(-time.Minute)}}
+	archive.capture([]memberStatus{status}, now)
+	archive.capture([]memberStatus{{NodeID: "node-1", Error: "transport"}}, now.Add(time.Second))
+	archive.capture([]memberStatus{status}, now.Add(2*time.Second))
+	archive.capture([]memberStatus{status}, now.Add(3*time.Second))
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err = openEventArchive(path, "test", "cluster", []string{"node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	got := archive.view()
+	if got.Status != "ok" || len(got.Records) != 3 || got.Records[1].Gap != "collection_failed" ||
+		got.Records[1].ObservedAt != now.Add(time.Second) || got.Records[2].Gap != "collection_resumed" ||
+		got.Records[2].ObservedAt != now.Add(2*time.Second) || got.Records[2].Live != nil {
+		t.Fatalf("event-free recovery boundary lost or duplicated: %+v", got)
+	}
+}
+
+func TestEventArchiveMarksRecoveryWhenReplicaSourceDisappears(t *testing.T) {
+	archive, err := openEventArchive(filepath.Join(t.TempDir(), "events.json"), "test", "cluster", []string{"node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	now := time.Now().UTC()
+	live := &liveTransitionHistory{PublisherStartedAt: now.Add(-time.Minute)}
+	archive.capture([]memberStatus{{NodeID: "node-1", Incarnation: "inc-1", LiveTransitions: live, ReplicaStageTransitions: &replicaStageHistory{
+		ReceiverStartedAt: now.Add(-time.Minute), ReceiveState: "ready", ApplyState: "ready",
+	}}}, now)
+	archive.capture([]memberStatus{{NodeID: "node-1", Error: "transport"}}, now.Add(time.Second))
+	archive.capture([]memberStatus{{NodeID: "node-1", Incarnation: "inc-1", Role: "primary", LiveTransitions: live}}, now.Add(2*time.Second))
+	archive.capture([]memberStatus{{NodeID: "node-1", Incarnation: "inc-1", Role: "primary", LiveTransitions: live}}, now.Add(3*time.Second))
+	got := archive.view()
+	if got.Status != "ok" || len(got.Records) != 6 || got.Records[3].Gap != "collection_failed" ||
+		got.Records[5].Gap != "collection_resumed" || got.Records[5].Source != "replica_stage" {
+		t.Fatalf("disappearing source recovery boundary lost or duplicated: %+v", got)
 	}
 }
 

@@ -346,7 +346,7 @@
       const status={ok:'文件写入正常',partial:'成员采集不完整',stale:'采集陈旧',journal_write_failed:'文件写入失败'}[archive.status]||'未知';
       const failures=archive.collection_errors?.length?`；本轮成员采集失败：${archive.collection_errors.join('、')}`:'';
       summary.textContent=`留存状态：${status}；最近采集 ${archive.polled_at?new Date(archive.polled_at).toLocaleString('zh-CN'):'尚无'}${failures}；容量淘汰 ${archive.retention_dropped||0} 条。缺口标记表示无法证明事件完整性；本文件也不是 HA Audit。`;
-      const labels={initial_observation:'首次观测：此前历史未知',source_changed:'事件源实例变化：间隔期间未知',incarnation_changed:'Incarnation 变化：前后证据分离',collection_failed:'采集失败：故障期间未知',ring_history_missing:'内存环已淘汰：事件缺失',sequence_regressed:'同一事件源序号倒退：来源异常'};
+      const labels={initial_observation:'首次观测：此前历史未知',source_changed:'事件源实例变化：间隔期间未知',incarnation_changed:'Incarnation 变化：前后证据分离',collection_failed:'采集失败：故障期间未知',collection_resumed:'首次恢复观测：故障期间仍未知',ring_history_missing:'内存环已淘汰：事件缺失',sequence_regressed:'同一事件源序号倒退：来源异常'};
       const records=(archive.records||[]).slice(-100).reverse();
       if(!records.length){const row=document.createElement('tr');cell(row,'尚无留存事件');tbody.append(row);return;}
       for(const record of records) {
