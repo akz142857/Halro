@@ -1791,6 +1791,10 @@ tests:
         values: '3x5'
       - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
         values: '1 0x2 1x2'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '128x5'
       - series: 'halro_replication_transition_journal_capacity_readable{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="wrong-job"}'
         values: '0x5'
       - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v2"}'
@@ -1819,6 +1823,10 @@ tests:
         values: '3x5'
       - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
         values: '1x2 _x2 1'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '128x5'
     alert_rule_test:
       - eval_time: 3m
         alertname: HalroTransitionJournalCapacityUnreadable
@@ -1827,6 +1835,73 @@ tests:
         alertname: HalroTransitionJournalCapacityUnreadable
         exp_alerts:
           - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+      - eval_time: 5m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+
+  # Readable=1 is insufficient when the current scrape omits or duplicates an
+  # inventory gauge; lookback must not make the inventory appear complete.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-segments"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-segments"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-segments"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-segments"}'
+        values: '1x2 _x2 1'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-segments"}'
+        values: '128x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-bytes"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-bytes"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-bytes"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-bytes"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-no-bytes"}'
+        values: '128x2 _x2 128'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments",source="extra"}'
+        values: '_x3 1x1 _'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-segments"}'
+        values: '128x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable",source="extra"}'
+        values: '_x3 1x1 _'
+      - series: 'halro_replication_transition_journal_segments{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable"}'
+        values: '1x5'
+      - series: 'halro_replication_transition_journal_bytes{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3-duplicate-readable"}'
+        values: '128x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts:
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3-no-segments, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3-no-bytes, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3-duplicate-segments, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3-duplicate-readable, job: halro, owner: sre, region: local, service: halro, severity: warning}
             exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
       - eval_time: 5m
         alertname: HalroTransitionJournalCapacityUnreadable

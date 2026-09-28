@@ -1413,3 +1413,49 @@ SHA-256；报告自身 SHA-256 为
 这是“成员固定指标首次缺报”中**一个 Peer 指标**的本地实际触发与恢复；
 其余固定指标仍须逐项注入，本地 webhook 不是正式联系点，临时磁盘不是
 独立不可变归档，此矩阵行仍未完整签署。
+
+## kind v3 日志容量三指标同轮门禁（约 16:33–16:42 UTC）
+
+规则复核发现原 `HalroTransitionJournalCapacityUnreadable` 只要求同轮
+`capacity_readable=1`，没有要求同轮的 `segments` 和 `bytes`，因此指标被
+选择性过滤时可误认为容量证据齐全。现要求 v3 成员成功抓取时可读性、
+段数和字节数三项容量序列各恰好一份且时间与本轮 `up` 相同；v2 仍不要求容量序列。Prometheus
+规则夹具新增 `readable=1` 但段数或字节数缺报的 pending、firing、恢复
+场景，并覆盖段数与可读性重复来源；锁定部署版本的规则/配置检查、全部规则夹具及
+`go test -count=1 ./deploy/observability` 通过。
+
+本地 kind 加载新规则后，`halro-2` 的 v3 状态版本、`up=1`、
+`capacity_readable=1`、段数 1、字节数 516 在 16:33:45.809 UTC 同轮。
+随后只从该成员的 Prometheus 抓取中过滤
+`halro_replication_transition_journal_bytes`；16:37:18.171 UTC 其他四条
+原始序列仍同轮刷新，字节数最后原始样本停在 16:36:53.242 UTC。
+新告警先 pending 后 firing，告警 `startsAt=16:38:02.917 UTC`；
+独立健康服务显示该 firing 并将总览降级，本地 webhook 于
+16:38:07.934 UTC 收到 firing。故障期间 21 条 HA 告警规则健康状态均为
+`ok`。
+
+恢复精确原始抓取配置后，16:42:35.569 UTC 的五条原始序列再次同轮，
+健康服务活动告警为空，总览回到缺近期需确认写证据的 `unknown`；
+webhook 于 16:42:17.982 UTC 收到 resolved，告警
+`endsAt=16:42:17.917 UTC`。Pod 中抓取配置与冻结基线逐字节一致，
+运行规则与仓库新规则逐字节一致。本机私有报告
+`/tmp/halro-ha-health-kind-20260928/evidence/capacity-bytes-local-report.json`
+包含原始样本、规则、健康状态、告警及接收器文件的逐项 SHA-256；报告
+SHA-256 为 `e41979f5255937177fcd8ca6877819acb25f8c52093a6432030c00677b772751`。
+结束时两个监控 Deployment 均为 1/1 Ready，三成员 StatefulSet 为
+3/3 Ready。
+本地实际注入的是**字节数缺报**；段数缺报和两种重复来源由锁定规则夹具覆盖。此演练
+不测真实磁盘容量核算失败、最大留存启动资源或外部不可变归档，
+“长留存恢复资源”整行仍未正式签署。
+
+上述实际字节缺报注入后，最终复核又补上 `capacity_readable` 自身的单份
+同轮门禁；新增重复来源夹具通过。最终规则文件 SHA-256 为
+`fb8d2c8d53724c1dbb989d62170a43c3e188601289df1db3f079cd67dff5aa8a`，
+与 Prometheus Pod 投射文件逐字节相同；16:55:24.956 UTC 热重载成功。
+最终健康 API 仍有三名成员、活动告警为零，安全与追平健康，总览与确认能力
+因缺近期需确认写保持未知。最终加载报告
+`/tmp/halro-ha-health-kind-20260928/evidence/capacity-final-rule-rollout.json`
+的 SHA-256 为
+`35c2739924584ef21113f41e2bc8ea85bf8b8d7a6789389bdfa2f2add3ab763a`。
+字节缺报没有在补充可读性唯一性之后重复注入；前述 live 证据对应其未变的
+字节覆盖分支，最终三项唯一性由规则夹具与加载状态验证。

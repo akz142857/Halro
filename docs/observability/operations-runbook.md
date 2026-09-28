@@ -125,9 +125,9 @@ This root probe does not perform a write or establish client-final success.
 
 ### HalroTransitionJournalCapacityUnreadable
 
-- Trigger: a member freshly reports `halro_replication_member_state_version=3` while its same-scrape capacity-readable sample is zero or missing for one minute. V2 members omit capacity series and do not trigger this rule. A failed scrape uses the target-down procedure.
-- Immediate: preserve the member data directory and check its active `transitions.journal` segment and local storage errors. The bytes and segment gauges are withheld while accounting is inconsistent; do not replace them with zero or delete old segments to silence the alert.
-- Recover: authenticate a frozen member snapshot using the [HA operations procedure](../runbooks/ha-operations.md#frozen-member-transition-evidence-check), repair only through an approved offline recovery path, then verify that the capacity gauge returns to 1 and the retained file inventory matches. Check volume free bytes and inodes separately.
+- Trigger: a member freshly reports `halro_replication_member_state_version=3` while its same-scrape capacity-readable sample is zero, or any of the readable, byte and segment gauges is missing or duplicated, for one minute. V2 members omit capacity series and do not trigger this rule. A failed scrape uses the target-down procedure.
+- Immediate: preserve the member data directory. When readable is 1 but an inventory gauge is absent, first compare the raw `/metrics` response, Prometheus metric relabeling, and the `up`/gauge sample timestamps; an older lookback sample is not current evidence. When readable is 0, check the active `transitions.journal` segment and local storage errors. The bytes and segment gauges are withheld while accounting is inconsistent; do not replace them with zero or delete old segments to silence the alert.
+- Recover: authenticate a frozen member snapshot using the [HA operations procedure](../runbooks/ha-operations.md#frozen-member-transition-evidence-check) if local storage failed; repair only through an approved offline recovery path. Then verify readable is 1, all three capacity gauges appear exactly once in the current scrape, and the retained file inventory matches. Check volume free bytes and inodes separately.
 
 ### HalroMemberIdentityMismatch
 

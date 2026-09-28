@@ -226,9 +226,13 @@ For migrated v3 members, query
 `halro_replication_transition_journal_bytes` per expected member. A zero
 `halro_replication_transition_journal_capacity_readable` means local capacity
 accounting failed; preserve the data directory and investigate the active
-file before relying on its size. Missing series on a v2 member mean the
-durable transition journal is not enabled. Monitor persistent-volume free
-bytes and inodes separately, estimate growth against the site's retention
+file before relying on its size. Require exactly one current readable,
+`segments` and `bytes` sample aligned with that member's successful
+`up` scrape; a missing or duplicated capacity gauge triggers the same
+capacity alert after one minute. Check raw `/metrics` and metric relabeling
+before treating this case as disk corruption. Missing series on a v2 member
+mean the durable transition journal is not enabled. Monitor persistent-volume
+free bytes and inodes separately, estimate growth against the site's retention
 budget, and rehearse full-chain startup and archived-copy readback at the
 expected largest inventory. These gauges do not justify deleting old files.
 

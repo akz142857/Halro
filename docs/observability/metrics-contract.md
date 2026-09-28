@@ -51,6 +51,10 @@ exposition. `docs/contracts/metrics-reference.md` remains the operator-facing in
   archive. `halro_replication_transition_journal_capacity_readable` is 1 when
   the member can account for those files and 0 when the active file changed or
   cannot be read; byte and segment samples are omitted in that case. A
+  successfully scraped version-3 member must have exactly one current
+  readable, byte and segment sample, with readable equal to 1. The capacity
+  alert treats missing or duplicated same-scrape gauges as incomplete
+  accounting, including while Prometheus lookback exposes an older value. A
   version-2 member exposes none of these series, rather than a misleading
   zero-byte complete history. Monitor the persistent volume's free bytes and
   inodes separately, and do not treat these gauges as chain-authentication or
