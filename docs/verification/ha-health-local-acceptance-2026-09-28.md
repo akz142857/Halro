@@ -1223,3 +1223,24 @@ Prometheus、Alertmanager 和本地告警 webhook 接收器均 Ready。
 仍未验证独立生产接收器、外部联系点、不可变审计、跨主机故障域、错误
 cluster/缺身份注入及客户端最终逻辑操作结果。`ha_client_root`
 只能证明找到同集群 Primary，不能推导写请求已完整返回给调用方。
+
+## 精确提交健康服务镜像启动（约 15:06–15:08 UTC）
+
+仓库源码检查点为 `02f2da143907dcdf1e64c6e58dc651317d11e355`。
+此前注入该版本字段却来自后续文档提交的两个本地镜像已排除；准确镜像的
+`go version -m` 显示相同 `vcs.revision` 和 `vcs.modified=false`，详情见
+[仓库检查点门禁](ha-health-repository-gate-2026-09-28.md)。本轮仅把
+`halro-monitoring/ha-health` Deployment 的 `view` 容器更新到
+`halro-ha-health-view-local:02f2da14-exact`，未更新成员 StatefulSet。
+Recreate rollout 成功，实跑 imageID 为
+`sha256:f4162d7a39d79a0c0d90c02f5b5c4319398a10aec145a0fa5b2f79fed3bf40fd`；
+Deployment 1/1，`view` 与 `status-token-sync` 均 Ready、零次重启，
+日志显示服务在 `0.0.0.0:9105` 监听。三个成员仍运行
+`halro-ha-health-local:ack-stall-localized-20260928`，StatefulSet 3/3 Ready。
+
+本轮没有获批的操作员客户端证书路径；尝试从 localhost 临时转发的
+Prometheus HTTPS 入口只读查询时，无客户端证书的 TLS 连接不能取得查询
+结果，端口转发随后已停止。**此项只证明精确镜像启动和工作负载就绪**，
+未核对 `/api/health`、机器状态、事件链追赶、历史图或告警恢复，
+不能将 §4.2 任一完整场景改成 `PASS`。成员镜像绑定同一源码 SHA、
+正式制品 provenance、外部不可变归档及 G0–G7 仍待验收。

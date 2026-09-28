@@ -4,8 +4,9 @@
 `02f2da143907dcdf1e64c6e58dc651317d11e355`。检查时工作树干净，Go
 为 `go1.26.6 darwin/arm64`，前端使用 Node `v22.18.0`。这是仓库侧证据，
 **不是 G0 正式通过**：此分支尚未推送，未取得对应远端 CI、正式制品集合、
-签名或目标环境部署证据。当前 kind Pod 使用此前本地构建的镜像，不能称为
-该提交的运行验收。
+签名或完整目标环境部署证据。后续只把精确源码提交的健康服务镜像部署到
+本地 kind；三个 HA 成员仍运行较早的本地镜像，因此不能称为该提交的
+集群运行验收。
 
 | 检查 | 结果 | 可复核材料 |
 | --- | --- | --- |
@@ -43,9 +44,12 @@ ID 分别为 `sha256:9260cf5be7400c4898dbda9f50f2d64b2aca3c6d33a1339f7625ca2c5ba
 | `halro-ha-health-local:02f2da14-exact` | `sha256:e4b65353c23425f84796cb9cd5172951336a34df4df8e57160a433a9bb5eb686` | `fd0b72f777eb66029c2d8ef84f1a33d19fc6be73c520d282efda635123a597ee` |
 | `halro-ha-health-view-local:02f2da14-exact` | `sha256:f4162d7a39d79a0c0d90c02f5b5c4319398a10aec145a0fa5b2f79fed3bf40fd` | `83f658f5291df8bf37a8eb35510ee2a36eff4d8ea6204b75b686fd6f76831232` |
 
-准确身份的镜像已加载到本地 kind 的四个节点；尚未修改 StatefulSet 或健康
-Deployment，也未取得正式发布流水线的镜像摘要、SBOM、签名或 provenance。
-离线封装只支撑本地后续验收，
+准确身份的镜像已加载到本地 kind 的四个节点。约 15:06 UTC 只将健康
+Deployment 的 `view` 容器更新为 `:02f2da14-exact`；Recreate rollout 成功，
+实跑 imageID 与上表一致，Deployment 1/1、两个容器 Ready 且零次重启，
+三成员 StatefulSet 镜像未改且仍 3/3 Ready。未用获批操作员证书读取健康
+API，不能据此认定历史事件链或页面正确；仍未取得正式发布流水线的镜像
+摘要、SBOM、签名或 provenance。离线封装只支撑本地后续验收，
 不能替代上述失败的标准 Dockerfile 门禁。
 
 正式 G0 仍需冻结最终候选 SHA，核对该 SHA 的普通 CI、发布构建、镜像及
