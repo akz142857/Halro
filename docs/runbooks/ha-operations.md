@@ -122,7 +122,7 @@ halro-ha-health \
 ```
 
 Expect `readback_bytes_match_local_only` and the same `inventory_sha256` as
-the original inventory. The command re-reads the source after the comparison,
+the original inventory. The command re-reads both copies after the comparison,
 but both inputs must already be frozen. Record the immutable storage receipt,
 retention/version identity, retrieval time and failure domain separately; a
 matching local report by itself is not an external archive receipt.
@@ -146,6 +146,24 @@ halro cluster verify-transition-snapshot \
   --snapshot-dir /secure/halro-0-snapshot \
   > /secure/halro-0-transition-inventory.json
 ```
+
+After retrieving a separate copy with the same file names, authenticate and
+compare both frozen directories in one command:
+
+```sh
+halro cluster verify-transition-snapshot \
+  --config /etc/halro/config.yaml \
+  --snapshot-dir /secure/halro-0-snapshot \
+  --archive-readback-dir /secure/halro-0-readback \
+  > /secure/halro-0-transition-readback.json
+```
+
+Expect `member_readback_mac_and_bytes_match_local_only` and the original
+`inventory_sha256`. The command rejects a missing or altered authenticated
+file, the source directory itself, and a hard-linked source file masquerading
+as a separate readback. It reads both copies again after comparison. Keep the
+immutable storage receipt, version/retention identity, retrieval record and
+failure-domain evidence separately; this report alone cannot establish them.
 
 The snapshot directory must be a clean absolute private path separate from
 the configured live data directory. The command reads and authenticates the

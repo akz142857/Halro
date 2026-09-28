@@ -51,11 +51,15 @@ func verifyArchiveReadback(source, readback, environment, cluster string, member
 			return archiveReadbackReport{}, fmt.Errorf("readback file %q is the source file or a hard link", file.Name)
 		}
 	}
-	// Detect a source change between the two reads. External freeze and
+	// Detect a change to either copy between the two reads. External freeze and
 	// immutable retention must still be established independently.
 	sourceAgain, err := verifyDurableSnapshot(source, environment, cluster, members)
 	if err != nil || !reflect.DeepEqual(sourceReport, sourceAgain) {
 		return archiveReadbackReport{}, errors.New("source snapshot changed during readback verification")
+	}
+	readbackAgain, err := verifyDurableSnapshot(readback, environment, cluster, members)
+	if err != nil || !reflect.DeepEqual(readbackReport, readbackAgain) {
+		return archiveReadbackReport{}, errors.New("readback snapshot changed during verification")
 	}
 	return archiveReadbackReport{Version: 1, Status: "readback_bytes_match_local_only",
 		SourceManifest: source, ReadbackManifest: readback, InventorySHA256: sourceReport.InventorySHA256,

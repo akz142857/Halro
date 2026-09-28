@@ -159,6 +159,15 @@ The hash becomes durable archive evidence only when an independent immutable
 sink stores both the exact files and that root and later re-verification
 matches them. This check has no member MAC key, cannot prove live catch-up,
 and does not authorize deleting old member or collector segments.
+For a retrieved collector copy, `-verify-archive-readback` re-verifies both
+frozen directories and compares the complete file inventory. For a retrieved
+member copy, `halro cluster verify-transition-snapshot --archive-readback-dir`
+re-authenticates both frozen v3 state and journal MAC chains with the matching
+Master Key before comparing inventories. Both modes reject a source file or
+hard link presented as the readback and return a `local_only` result. Neither
+mode proves that a remote immutable sink accepted the bytes, preserved a
+specified version/retention period or survived the source failure domain;
+those claims still require the sink receipt and a documented retrieval.
 
 The collector's frozen-snapshot report also carries each chain's last
 observed committed head digest and observation time. With

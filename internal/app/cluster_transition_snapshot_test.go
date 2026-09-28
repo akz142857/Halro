@@ -106,6 +106,49 @@ func TestVerifyMemberTransitionSnapshotUsesFrozenConfiguredMember(t *testing.T) 
 	if archived, err := VerifyMemberTransitionSnapshot(context.Background(), archivalCfg, snapshotDir); err != nil || archived.InventorySHA256 != report.InventorySHA256 {
 		t.Fatalf("archived member copy could not be verified away from original data directory: %+v err=%v", archived, err)
 	}
+	readbackDir := filepath.Join(t.TempDir(), "retrieved-member")
+	readbackCluster := filepath.Join(readbackDir, "cluster")
+	if err := os.MkdirAll(readbackCluster, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range report.Files {
+		data, err := os.ReadFile(filepath.Join(clusterDir, file.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(readbackCluster, file.Name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readback, err := VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, snapshotDir, readbackDir)
+	if err != nil || readback.Status != "member_readback_mac_and_bytes_match_local_only" || readback.InventorySHA256 != report.InventorySHA256 {
+		t.Fatalf("valid member archive readback rejected: %+v err=%v", readback, err)
+	}
+	if _, err := VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, snapshotDir, snapshotDir); err == nil {
+		t.Fatal("source directory accepted as its own archive readback")
+	}
+	readbackJournal := filepath.Join(readbackCluster, "transitions.journal")
+	if err := os.Remove(readbackJournal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, snapshotDir, readbackDir); err == nil {
+		t.Fatal("missing retrieved journal passed member archive readback")
+	}
+	if err := os.Link(filepath.Join(clusterDir, "transitions.journal"), readbackJournal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, snapshotDir, readbackDir); err == nil || !strings.Contains(err.Error(), "hard link") {
+		t.Fatalf("shared member journal was not rejected: %v", err)
+	}
+	if err := os.Remove(readbackJournal); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readbackJournal, append(append([]byte(nil), before...), ' '), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, snapshotDir, readbackDir); err == nil {
+		t.Fatal("modified retrieved journal passed member archive readback")
+	}
 	after, err := os.ReadFile(filepath.Join(clusterDir, "transitions.journal"))
 	if err != nil || string(after) != string(before) {
 		t.Fatalf("verification modified snapshot journal: %v", err)

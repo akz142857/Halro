@@ -396,6 +396,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			flags := flag.NewFlagSet("cluster verify-transition-snapshot", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration matching the frozen member")
 			snapshotDir := flags.String("snapshot-dir", "", "clean absolute path to a frozen member data directory")
+			archiveReadbackDir := flags.String("archive-readback-dir", "", "separately retrieved frozen member data directory to re-authenticate and compare with --snapshot-dir")
 			afterJournalID := flags.String("after-journal-id", "", "journal ID of an exact committed cursor for a bounded tail read")
 			afterSequence := flags.Uint64("after-sequence", 0, "committed sequence of the exact tail cursor")
 			afterDigest := flags.String("after-digest", "", "digest of the exact tail cursor")
@@ -411,6 +412,16 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			if err := hardenSecretHandlingCommand(); err != nil {
 				return err
+			}
+			if *archiveReadbackDir != "" {
+				if *afterJournalID != "" || *afterSequence != 0 || *afterDigest != "" {
+					return errors.New("archive readback cannot be combined with a bounded tail read")
+				}
+				report, err := app.VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, *snapshotDir, *archiveReadbackDir)
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(os.Stdout).Encode(report)
 			}
 			if *afterJournalID != "" || *afterSequence != 0 || *afterDigest != "" {
 				if *afterJournalID == "" || *afterDigest == "" {

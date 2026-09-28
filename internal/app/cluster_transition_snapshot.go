@@ -3,8 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/replication"
@@ -16,6 +18,66 @@ import (
 func VerifyMemberTransitionSnapshot(ctx context.Context, cfg config.Config, snapshotDir string) (replication.TransitionSnapshotReport, error) {
 	report, _, err := readMemberTransitionSnapshot(ctx, cfg, snapshotDir, nil)
 	return report, err
+}
+
+// MemberTransitionReadbackReport compares two separately read, MAC-verified
+// frozen copies. It is local byte-equality evidence, not an immutable storage
+// receipt or proof that the copies occupy different failure domains.
+type MemberTransitionReadbackReport struct {
+	Version              int                                  `json:"version"`
+	Status               string                               `json:"status"`
+	SourceDir            string                               `json:"source_dir"`
+	ReadbackDir          string                               `json:"readback_dir"`
+	InventorySHA256      string                               `json:"inventory_sha256"`
+	SourceVerification   replication.TransitionSnapshotReport `json:"source_verification"`
+	ReadbackVerification replication.TransitionSnapshotReport `json:"readback_verification"`
+}
+
+// VerifyMemberTransitionSnapshotReadback re-authenticates each frozen copy
+// with the member Master Key, compares its exact file inventory and re-reads
+// both copies. Both directories must be frozen before this read-only operation.
+func VerifyMemberTransitionSnapshotReadback(ctx context.Context, cfg config.Config, sourceDir, readbackDir string) (MemberTransitionReadbackReport, error) {
+	if sourceDir == readbackDir {
+		return MemberTransitionReadbackReport{}, errors.New("member archive readback must be a separate frozen copy")
+	}
+	source, err := VerifyMemberTransitionSnapshot(ctx, cfg, sourceDir)
+	if err != nil {
+		return MemberTransitionReadbackReport{}, fmt.Errorf("verify source member snapshot: %w", err)
+	}
+	readback, err := VerifyMemberTransitionSnapshot(ctx, cfg, readbackDir)
+	if err != nil {
+		return MemberTransitionReadbackReport{}, fmt.Errorf("verify readback member snapshot: %w", err)
+	}
+	if !reflect.DeepEqual(source, readback) {
+		return MemberTransitionReadbackReport{}, errors.New("member archive readback differs from source file inventory or committed history")
+	}
+	sourceCfg, readbackCfg := cfg, cfg
+	sourceCfg.Storage.DataDir = sourceDir
+	readbackCfg.Storage.DataDir = readbackDir
+	for _, file := range source.Files {
+		sourceInfo, err := os.Stat(filepath.Join(sourceCfg.ClusterDirectoryPath(), file.Name))
+		if err != nil {
+			return MemberTransitionReadbackReport{}, err
+		}
+		readbackInfo, err := os.Stat(filepath.Join(readbackCfg.ClusterDirectoryPath(), file.Name))
+		if err != nil {
+			return MemberTransitionReadbackReport{}, err
+		}
+		if os.SameFile(sourceInfo, readbackInfo) {
+			return MemberTransitionReadbackReport{}, fmt.Errorf("member archive readback file %q is the source file or a hard link", file.Name)
+		}
+	}
+	sourceAgain, err := VerifyMemberTransitionSnapshot(ctx, cfg, sourceDir)
+	if err != nil || !reflect.DeepEqual(source, sourceAgain) {
+		return MemberTransitionReadbackReport{}, errors.New("source member snapshot changed during archive readback verification")
+	}
+	readbackAgain, err := VerifyMemberTransitionSnapshot(ctx, cfg, readbackDir)
+	if err != nil || !reflect.DeepEqual(readback, readbackAgain) {
+		return MemberTransitionReadbackReport{}, errors.New("readback member snapshot changed during verification")
+	}
+	return MemberTransitionReadbackReport{Version: 1, Status: "member_readback_mac_and_bytes_match_local_only",
+		SourceDir: sourceDir, ReadbackDir: readbackDir, InventorySHA256: source.InventorySHA256,
+		SourceVerification: source, ReadbackVerification: readback}, nil
 }
 
 // ReadMemberTransitionSnapshotPage authenticates a frozen member copy before

@@ -166,6 +166,12 @@ curl --fail --show-error --cacert /path/to/ca.pem \
 | 同步停滞与写请求影响 | 用合成、不计费的需确认写和受控 ACK 停滞验证 Primary `replication_unavailable`、确认卡、三个阶段时延与 Replica 接收/应用边界；无写流量时不得把平坦曲线判为零延迟。可信唯一 Primary 明确报告阻断时，即使两个 Replica 缺报，确认卡也应显示已知降级，安全与追平仍未知。Admin mutation 返回 `503 replication_unavailable` 或超时后须待确认链恢复再回读资源与修订号：失败响应不能证明本地持久变更不会随后确认。让一个成员缺少一个 HTTP outcome 的当前或窗口序列，`/api/impact` 应为未观测，不由其他成员补齐。服务端 2xx 和内部屏障成功不得标为客户端已完整收到。 |
 | 告警证据与访问 | 对一次实际 firing 保存规则表达式与 `for`、活动告警的求值向量、最近成员原始样本与各自时间、Alertmanager 投递/恢复证据；抽屉不得把当前规则或最近样本伪称为触发瞬间原样本。检查运维手册链接经过目标受控入口可访问，并确认页面/API 无提升或播种操作。 |
 
+两类冻结快照的归档读回可分别使用 `halro-ha-health -verify-archive-readback`
+和 `halro cluster verify-transition-snapshot --archive-readback-dir`。二者会重验
+源与取回副本、比较 SHA-256 清单并拒绝硬链接冒充；返回的 `local_only`
+状态仅是字节与成员 MAC 校验。矩阵中的“外部留存”仍须独立不可变存储回执、
+保留版本、真实取回记录和故障域证据，不能由同一主机的复制预演签署。
+
 ### 4.3 记录格式与结论
 
 每个矩阵行单独登记：`SCENARIO_ID`、执行人、候选 SHA/digest、目标环境和 cluster、

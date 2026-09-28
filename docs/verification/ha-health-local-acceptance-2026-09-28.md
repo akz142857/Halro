@@ -1510,3 +1510,31 @@ SHA-256 为 `e41979f5255937177fcd8ca6877819acb25f8c52093a6432030c00677b772751`�
 回执、保留版本、外部读回或成员 MAC 链的**归档副本**认证。因此只能作为
 归档交接工具的本地预检，冻结采集快照与外部留存矩阵行继续 `NOT_RUN`，
 也不允许删除任何旧段。
+
+## 冻结成员迁移快照的本机读回预演（约 17:35 UTC）
+
+从此前三成员故障演练留存的私有冻结数据目录，按四条日志代际分别复制 v3
+`cluster/state.json` 与完整 `cluster/transitions.journal` 到其他 `0700`
+本机目录，文件均为 `0600`。以各成员匹配的配置和 Master Key 执行新增
+`halro cluster verify-transition-snapshot --archive-readback-dir`，源与副本
+各自完成全链 MAC 认证，均返回
+`member_readback_mac_and_bytes_match_local_only`，逐文件哈希与根摘要一致：
+
+| 冻结成员链 | 已提交序号 | 文件清单根 SHA-256 | 私有报告 SHA-256 |
+| --- | ---: | --- | --- |
+| `halro-0` 当前链 | 4 | `07d6e03ec5e4f11ab555b856a94c4a3c2df90b6d7a46329b5eddcba3640bd21a` | `fb59175bce3c7a14bad0cbde62eeaa75f5a0a9a5cf52cb89e60d60ab3d716e21` |
+| `halro-1` 当前链 | 4 | `c6753b72d2cad2aa1898821a138317e8d2e824b554711d2c108133ee868fd0b2` | `b97d9eb26dbf0244378852f17fc6b2a36634493d0ce1e4262a36e5f6514f49a7` |
+| `halro-2` 新链 | 0 | `9c8da8a387107aa1405de27dafbab34ad8b5f1fec6baa4e2e69022dde8f6afd1` | `efc6b0c864fcdc75501c78fc624ae700819820a297fb811e9b80be99bd83f8c6` |
+| `halro-2` 退役旧链 | 3 | `4a499c08b5d26ab704f5e5334863a139cd95235c27bd28fbdffe1f6e0cacb600` | `63cfc702baa1cfdbe9c11c746e06024aa1b0028cef4f9911751961dbb9daeb1c` |
+
+四份私有报告位于 `/tmp/halro-member-archive-readback.5cy4Bf/`，按上表
+依次为 `readback-report.json`、`node1-report.json`、`node2-report.json`、
+`retired2-report.json`；每份均列出源与副本各两份已认证文件、成员身份、
+journal ID、提交头与事件摘要。
+定向测试覆盖副本缺日志、字节变化、原目录和硬链接冒充，并保持源目录字节
+未变；受影响 `internal/app` 定向测试、`cmd/halro` CLI 测试、`go vet`
+和本地 CLI 构建通过。
+
+这仍是同主机四条已留存链的读回预演。尚无独立不可变存储回执、保留版本、
+外部故障域读回及与采集端归档副本的一体化交接证明；完整 §4.2 成员
+归档行继续 `NOT_RUN`，不能授权删段。
