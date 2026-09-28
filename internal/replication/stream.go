@@ -23,6 +23,7 @@ const (
 	StreamRecordCommitNotice
 	StreamRecordPromotionProposal
 	StreamRecordPromotionPromise
+	StreamRecordHeartbeat
 )
 
 type StreamRecord struct {
@@ -120,11 +121,15 @@ func streamRecordShape(magic [8]byte, direction StreamDirection) (StreamRecordKi
 		kind = StreamRecordPromotionPromise
 		minimum = 8 + 2
 		maximum = MaxPromotionRecordBytes
+	case bytes.Equal(magic[:], heartbeatMagic[:]):
+		kind = StreamRecordHeartbeat
+		minimum = heartbeatBodyBytes
+		maximum = heartbeatBodyBytes
 	default:
 		return 0, 0, 0, errors.New("replication stream record has unknown type magic")
 	}
 	control := kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise
-	allowed := control || direction == StreamPrimaryToReplica && (kind == StreamRecordFrame || kind == StreamRecordCommitNotice) ||
+	allowed := control || kind == StreamRecordHeartbeat || direction == StreamPrimaryToReplica && (kind == StreamRecordFrame || kind == StreamRecordCommitNotice) ||
 		direction == StreamReplicaToPrimary && kind == StreamRecordAcknowledgement
 	if !allowed {
 		return 0, 0, 0, fmt.Errorf("replication %s record is not allowed in this stream direction", streamRecordKindName(kind))
@@ -144,6 +149,8 @@ func streamRecordKindName(kind StreamRecordKind) string {
 		return "promotion-proposal"
 	case StreamRecordPromotionPromise:
 		return "promotion-promise"
+	case StreamRecordHeartbeat:
+		return "heartbeat"
 	default:
 		return "unknown"
 	}

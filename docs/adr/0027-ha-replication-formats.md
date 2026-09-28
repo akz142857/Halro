@@ -164,6 +164,28 @@ term's latest confirmed notice. A disconnected Replica therefore cannot lose
 the only notice that makes a final frame applicable. A notice beyond the
 Replica's durable prefix is refused; duplicate or older notices are idempotent.
 
+### 3.1. Optional idle-session heartbeat
+
+An authenticated post-handshake connection may carry a fixed 16-byte heartbeat
+record in either direction: `u32 record_length=12`, 8-byte magic `HLRHB002`,
+`u16 version=2`, and `u16 reserved=0`. It carries no index, term, ACK, promise,
+or application data and cannot change any durable state. Its only effect is to
+prove that the same authenticated TLS session is still exchanging records.
+Unknown length, version, or reserved bits are rejected before the record can
+reach a replication data handler.
+
+The existing frame, ACK, and commit-notice encodings remain version 1. A new
+member advertises Hello protocol `Current=1, Minimum=1, Maximum=2`; a legacy
+member advertises maximum 1. Both sides must advertise maximum 2 before either
+sends a heartbeat. Thus a mixed pair continues to exchange only version-1
+records, while a fully upgraded pair sends a heartbeat after an outbound idle
+interval of one third of the session read timeout (10 seconds with the default
+30-second timeout). Missing
+heartbeats still close the session at the read deadline, making actual loss
+visible; the new record prevents an idle, otherwise healthy connection from
+being torn down solely because no data frame or ACK was needed. A heartbeat on
+a connection that did not negotiate it is rejected.
+
 ### 4. Ordering journal version 1
 
 `cluster/ordering.journal` starts with a length-delimited header containing

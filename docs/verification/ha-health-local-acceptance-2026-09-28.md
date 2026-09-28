@@ -1657,3 +1657,34 @@ Secret 键集合与当前阶段；应用模式需现场资源版本与 `0700` �
 五个现行 TLS Secret 的 `trust` 阶段均通过 Kubernetes 服务端 dry-run，
 每个只拟更新其单个 CA 字段；未提交任何 Secret replace，也未重启 Pod。
 公开 PEM 互信、服务端 dry-run 和测试均不能代替实际阶段轮换与端到端 mTLS。
+
+## 可选只读预演提前结束与空闲会话根因（约 18:37–18:51 UTC）
+
+为优先完成正式 72 小时候选准备，可选的 86400 秒 `smoke_only` 采样在约
+3931 秒时向已核验的采样器进程发送 SIGTERM；程序正常写出
+`collection_complete=false`、`ha_acceptance=NOT_RUN`。263 次采样均得到
+可解析健康响应，0 个漏采时隙；262 次总览为 `unknown`，1 次为
+`degraded`。`summary.json` SHA-256 为
+`dc2f41539936dc4d68f45935fe0cfde99127f7a5e987b57e06b174d7a969584d`，
+`samples.jsonl` 为
+`0f86910ab655e6d25ff212117ebfbf9fed7411dd0cb2ef882d29e7c4276c6371`。
+这**不是 24 小时连续采样通过**，也不签收 72 小时。
+
+唯一的降级发生于 `2026-09-28T18:37:04.339046Z`：确认能力卡降级，
+安全、追平和客户端入口仍健康。Prometheus 原始 5 秒抓取显示 Primary
+`halro-1` 到两个 Replica 的 `halro_replication_peer_connected` 在
+`18:37:01Z` 同时为 0、`18:37:06Z` 均恢复为 1；
+`halro_replication_unavailable` 一直为 0。三个成员日志在相同时间记录
+复制会话读取超时或 EOF。原始样本与日志存于私有证据包
+`/tmp/halro-ha-health-kind-20260928/evidence/idle-peer-drop-20260928/`，
+`report.json` SHA-256 为
+`4bce8f0b36bd2bf0573a6abef8f10ae4331ef35aa6921a9e11248d65651287b2`。
+健康页按实际“无认证 Replica 会话”显示降级，不能把这一次改记为采样误报。
+
+源码检查发现复制会话默认 30 秒读取截止时间，但空闲时没有保活记录；
+即使没有待复制帧，读超时也会撤销认证会话。仓库已增加双方握手声明后
+才发送的有界保活记录，保留旧版混跑时的旧记录语义；定向测试验证
+空闲会话跨多个旧读超时仍连接、保活不触及数据 handler、旧节点不接收
+新记录以及未协商记录被拒。复制包全量 `-race -count=1` 在允许 loopback
+的环境通过，HA 运行时复制集成 `-count=1` 和定向 `-race` 通过。
+修订代码**尚未部署到 kind**，真实长时空闲稳定性仍须在候选镜像滚动后复验。

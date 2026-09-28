@@ -565,7 +565,7 @@ func (r *replicationRuntime) localHello() (replication.Hello, error) {
 		Role: state.Role, Term: state.Term, PromisedTerm: state.PromisedTerm,
 		DurableIndex: state.DurableIndex, AppliedIndex: state.AppliedIndex,
 		Binary:   replication.VersionRange{Current: memberBinaryVersion, Minimum: memberBinaryVersion, Maximum: memberBinaryVersion},
-		Protocol: replication.VersionRange{Current: replication.ProtocolVersion, Minimum: replication.ProtocolVersion, Maximum: replication.ProtocolVersion},
+		Protocol: replication.VersionRange{Current: replication.ProtocolVersion, Minimum: replication.ProtocolVersion, Maximum: replication.HeartbeatProtocolVersion},
 		Schema:   replication.VersionRange{Current: uint16(boltstore.CurrentSchemaVersion()), Minimum: uint16(boltstore.CurrentSchemaVersion()), Maximum: uint16(boltstore.CurrentSchemaVersion())},
 		Ledger:   replication.VersionRange{Current: ledger.ReplicationFormatVersion(), Minimum: ledger.ReplicationFormatVersion(), Maximum: ledger.ReplicationFormatVersion()},
 		Metadata: replication.VersionRange{Current: metadatajournal.ReplicationFormatVersion(), Minimum: metadatajournal.ReplicationFormatVersion(), Maximum: metadatajournal.ReplicationFormatVersion()},

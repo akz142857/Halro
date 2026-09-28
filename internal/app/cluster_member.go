@@ -454,7 +454,7 @@ func promotionHello(state replication.MemberState) replication.Hello {
 		DurableIndex: state.DurableIndex, AppliedIndex: state.AppliedIndex,
 		Nonce:    [replication.NonceBytes]byte{1},
 		Binary:   replication.VersionRange{Current: memberBinaryVersion, Minimum: memberBinaryVersion, Maximum: memberBinaryVersion},
-		Protocol: replication.VersionRange{Current: replication.ProtocolVersion, Minimum: replication.ProtocolVersion, Maximum: replication.ProtocolVersion},
+		Protocol: replication.VersionRange{Current: replication.ProtocolVersion, Minimum: replication.ProtocolVersion, Maximum: replication.HeartbeatProtocolVersion},
 		Schema:   replication.VersionRange{Current: currentSchema, Minimum: currentSchema, Maximum: currentSchema},
 		Ledger:   replication.VersionRange{Current: ledger.ReplicationFormatVersion(), Minimum: ledger.ReplicationFormatVersion(), Maximum: ledger.ReplicationFormatVersion()},
 		Metadata: replication.VersionRange{Current: metadatajournal.ReplicationFormatVersion(), Minimum: metadatajournal.ReplicationFormatVersion(), Maximum: metadatajournal.ReplicationFormatVersion()},
