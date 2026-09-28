@@ -1603,3 +1603,38 @@ Prometheus 抓取、查询服务端和查询客户端的 SAN、用途与当前�
 仅比较键名，未读取或输出集群中的私钥值。
 证书**仅已准备，尚未安装**；当前 24 小时采样仍使用原信任链。完整采样
 结束后才可在维护窗口轮换、验证旧证书拒绝，并重跑 Secret 有效期预检。
+
+## 精确提交候选镜像预载与仓库门禁（约 18:18–18:33 UTC）
+
+以干净提交 `8379458dfb4a052d328d5422aa0facd384fc5698` 构建 Linux arm64
+成员和健康服务镜像，再从该提交的私有 `git archive` 重新构建；两轮构建
+分别得到相同 image ID：成员
+`sha256:4fd5fdfc93783fd941c2504630ac10eb38c027bbb21b705cf67ee04566d78abe`，
+健康服务
+`sha256:b62e1f83830e6227a2822f8c008d0af9c3341fadea84a93bbef85cd6a2e385e5`。
+两个容器内版本命令都返回完整相同 commit；归档 tar SHA-256 为
+`5a7a5af0a006e50a42b4548f2a1e0182d693319081d38e78eaa02ce7980f1a31`。
+两张镜像已预载并在 kind 的 control-plane 与三个 worker 的容器运行时
+逐节点核对标签和 ID。运行中的三个成员仍用 `02f2da14`，健康服务仍用
+`4cb69cf4`，**尚未滚动候选镜像**，24 小时预演未因此中断。
+
+此精确提交的本机仓库门禁：`GOCACHE=/tmp/halro-go-cache go test -count=1 ./...`
+全部通过（`internal/app` 约 295 秒）；`go vet ./...`、`make fmt-check`、
+Node 22 `make frontend-production-check` 与嵌入 bundle 零漂移、前端 48 个
+文件 702 项测试、`deploy/observability/validate.sh` 检查 14 条记录规则和
+64 条告警规则均通过。私有候选报告
+`/tmp/halro-ha-health-kind-20260928/evidence/candidate-preload-8379458d/candidate-preload.json`
+SHA-256 为 `e06807e8fca4108da6e13afbbcde9df408aff4e22b48f265e80fd5f77bad993e`。
+这是构建与预载证据，不是候选 Pod 运行或目标环境验收。
+
+## 双 CA 信任交接的公开证书预检（约 18:35 UTC）
+
+读取当前 kind 五个 TLS Secret 的公开 CA 和叶子证书字段：成员、健康服务、
+Prometheus 抓取三个 CA 引用的字节一致；Prometheus 查询服务端与客户端的
+两个 CA 引用的字节也一致。将两套现行 CA 分别与暂存的新 CA 拼接，在本机
+私有目录验证当前八张 Secret 叶子证书、主机操作员证书及对应九张新证书
+都能以适用的服务端或客户端用途通过双 CA bundle 链校验。报告
+`/tmp/halro-ha-health-kind-20260928/ca-overlap-stage-20260928/overlap-report.json`
+SHA-256 为 `4c0a9c1b7664ac67b0e42676dfa8c5f09ce5670f51e666e05f62fbae4cb13aa1`。
+此项只证明公开证书的离线互信；尚未更改 Secret 或重启任何工作负载，
+没有运行中进程的 mTLS、旧证书拒绝或故障期可用性证据。

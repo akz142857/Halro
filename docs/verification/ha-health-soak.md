@@ -82,12 +82,28 @@ Kubernetes，也不安装或轮换任何证书。输出目录应在受控私有�
 准备不等于轮换。当前只读采样器启动时已加载原 CA 和操作员证书；应先等
 这轮采样结束并保存 `summary.json`，然后依据 `stage-report.json` 核对实际
 Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护窗口
-更新两套信任域和全部引用它们的工作负载。成员证书使用 `subPath` 挂载，
-Secret 更新不会让运行中成员自动读取新字节，必须逐成员重启并核对身份、
-复制水位及可用性；健康服务和 Prometheus 也须核对其实际进程加载的新证书。
-轮换后重新执行上面的 Secret 清单有效期预检，并分别验证成员 mTLS 抓取、
-状态采集、Prometheus 查询 mTLS、操作员入口以及旧证书拒绝。记录每一步的
-Pod UID、证书指纹、采集缺口和恢复时间；在这些证据齐备前不启动正式窗口。
+更新两套信任域和全部引用它们的工作负载。根 CA 跨代时须分三阶段：
+
+1. **扩展信任**：分别把当前 CA 与新 CA 拼接为两套 PEM bundle，只更换五个
+   Secret 中对应的 `ca.crt` 或 `client-ca.crt`，保留旧叶子证书与私钥。重启
+   所有引用这些 CA 的成员、健康服务及 Prometheus，验证旧链仍能工作；
+   在未证明全部进程加载双 CA 前，不更换任何叶子证书。
+2. **更换身份**：保留双 CA bundle，逐一更换三个成员、健康服务、采集器、
+   Prometheus 抓取、Prometheus 查询服务端与客户端证书，并切换操作员证书。
+   成员按实际角色先 Replica 后 Primary 滚动；每一步核对角色、term、成员
+   身份、真实 Peer 会话、复制水位和客户端 Service。Prometheus 的
+   `client_allowed_sans` 须与新客户端 SAN 一致。
+3. **移除旧信任**：确认所有身份都已使用新证书后，把五个 Secret 的 CA 字段
+   缩减为新 CA，重启引用方，分别验证旧操作员、抓取和查询客户端证书被
+   拒绝，新链各路径仍可用。最后以实际 Secret 重跑 74 小时预检。
+
+成员证书使用 `subPath` 挂载，Secret 更新不会让运行中成员自动读取新字节；
+健康服务与 Prometheus 也须核对实际进程加载的新证书。更新 Secret 时避免
+把私钥写入命令参数、仓库文件或 `kubectl apply` 的 last-applied 注解；由
+受控 Secret 管理器执行，或通过标准输入传入经过资源版本核对的替换对象。
+每阶段记录 Pod UID、服务端与客户端证书指纹、采集缺口、恢复时间、
+Secret 资源版本和回滚点。公开证书的离线链校验只证明 PEM 可互信，
+不能证明运行中进程已加载 bundle；这些证据齐备前不启动正式窗口。
 
 ```sh
 python3 tests/ha-health-soak/collector.py \
