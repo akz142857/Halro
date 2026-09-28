@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/akz142857/Halro/internal/replication"
 )
 
 func TestEventArchiveSurvivesRestartAndMarksUnprovableIntervals(t *testing.T) {
@@ -70,6 +73,91 @@ func TestEventArchiveSurvivesRestartAndMarksUnprovableIntervals(t *testing.T) {
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("journal not private: info=%v err=%v", info, err)
+	}
+}
+
+func TestDurableMemberRingOverflowReachesIndependentEventArchive(t *testing.T) {
+	directory := t.TempDir()
+	statePath := filepath.Join(directory, "member", "state.json")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := replication.MemberState{
+		Version: replication.StateVersion, ClusterID: "cluster", Incarnation: "inc_1", NodeID: "node-1",
+		Role: replication.RoleReplica, Term: 7, PromisedTerm: 7,
+		Peers: []replication.StatePeer{{Name: "node-2", Address: "node-2.internal:9910", SPKISHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+	}
+	if err := replication.WriteState(statePath, state, key); err != nil {
+		t.Fatal(err)
+	}
+	state, err := replication.MigrateStateTransitionJournal(statePath, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := replication.NewDurableStatePublisher(statePath, key, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	if _, err := publisher.Promise(8); err != nil {
+		t.Fatal(err)
+	}
+	tokenFile := filepath.Join(directory, "status-token")
+	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	collector := statusCollector{config: statusMemberConfig{
+		NodeID: "node-1", URL: "https://member.invalid/ha/status", TokenFile: tokenFile, RequireLiveTransitions: true,
+	}, client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		current := publisher.Snapshot()
+		body, err := json.Marshal(map[string]any{
+			"mode": "ha", "cluster_id": current.ClusterID, "incarnation": current.Incarnation, "node_id": current.NodeID,
+			"role": current.Role, "term": current.Term, "promised_term": current.PromisedTerm,
+			"live_transitions": publisher.LiveTransitions(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return jsonResponse(string(body)), nil
+	})}}
+	archivePath := filepath.Join(directory, "events.json")
+	archive, err := openEventArchive(archivePath, "test", "cluster", []string{"node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := collector.fetch(context.Background(), "cluster")
+	if status.Error != "" || status.LiveTransitions == nil || len(status.LiveTransitions.Events) != 1 {
+		t.Fatalf("initial durable member status not accepted: %+v", status)
+	}
+	archive.capture([]memberStatus{status}, time.Now().UTC())
+	for term := uint64(9); term <= 137; term++ {
+		if _, err := publisher.Promise(term); err != nil {
+			t.Fatal(err)
+		}
+	}
+	durableEvents, err := publisher.DurableTransitions()
+	if err != nil || len(durableEvents) != 130 || durableEvents[1].Sequence != 2 || durableEvents[129].Sequence != 130 {
+		t.Fatalf("authenticated member chain did not retain the transition lost by the live ring: count=%d err=%v", len(durableEvents), err)
+	}
+	status = collector.fetch(context.Background(), "cluster")
+	if status.Error != "" || status.LiveTransitions == nil || status.LiveTransitions.Dropped != 2 ||
+		len(status.LiveTransitions.Events) != 128 || status.LiveTransitions.Events[0].Sequence != 3 {
+		t.Fatalf("overflowed durable member status not accepted: %+v", status)
+	}
+	archive.capture([]memberStatus{status}, time.Now().UTC())
+	archive.capture([]memberStatus{status}, time.Now().UTC())
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err = openEventArchive(archivePath, "test", "cluster", []string{"node-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	view := archive.view()
+	if view.Status != "ok" || len(view.Records) != 131 || view.RetentionDropped != 0 ||
+		view.Records[0].Gap != "initial_observation" || view.Records[1].Live == nil || view.Records[1].Live.Sequence != 1 ||
+		view.Records[2].Gap != "ring_history_missing" || view.Records[3].Live == nil || view.Records[3].Live.Sequence != 3 ||
+		view.Records[len(view.Records)-1].Live == nil || view.Records[len(view.Records)-1].Live.Sequence != 130 {
+		t.Fatalf("real member ring loss was hidden, duplicated, or lost on restart: %+v", view)
 	}
 }
 
