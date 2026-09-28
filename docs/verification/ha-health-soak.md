@@ -59,6 +59,36 @@ Secret 的 `.crt` 键集合，逐张检查 PEM 链中的证书。Kubernetes API 
 清单必须与目标部署
 配置和 Secret 实际引用核对，报告的清单 SHA-256 与证据一同留存。
 
+### 本地 kind 证书轮换准备
+
+当前本地 kind 样例同时使用成员/健康入口 CA 和独立 Prometheus 查询 CA。
+正式 72 小时窗口前，两套 CA、所有服务端及客户端证书都必须覆盖完整窗口；
+只续签叶子证书不能补救已临近到期的 CA。只在本地隔离验收环境中，
+可用以下命令**离线准备**两套 14 天测试 PKI：
+
+```sh
+python3 tests/ha-health-soak/stage_kind_certificates.py \
+  --output /private/ha-health-kind-certificates-new
+```
+
+脚本新建 `0700` 目录、生成 `0600` 私钥，为三个成员、健康服务、采集器、
+Prometheus 抓取、操作员和 Prometheus 查询双方生成九张叶子证书；校验链、
+用途、SAN、证书与私钥匹配及至少 74 小时有效期。`stage-report.json` 只含
+证书指纹和五个本地 Secret 的**文件路径映射**，不含私钥字节。它不访问
+Kubernetes，也不安装或轮换任何证书。输出目录应在受控私有路径，绝不可
+把其内容提交仓库。脚本的名称和 SAN 专用于
+`halro-ha-health-local` 样例；目标环境须用受控 PKI 自行签发和审查。
+
+准备不等于轮换。当前只读采样器启动时已加载原 CA 和操作员证书；应先等
+这轮采样结束并保存 `summary.json`，然后依据 `stage-report.json` 核对实际
+Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护窗口
+更新两套信任域和全部引用它们的工作负载。成员证书使用 `subPath` 挂载，
+Secret 更新不会让运行中成员自动读取新字节，必须逐成员重启并核对身份、
+复制水位及可用性；健康服务和 Prometheus 也须核对其实际进程加载的新证书。
+轮换后重新执行上面的 Secret 清单有效期预检，并分别验证成员 mTLS 抓取、
+状态采集、Prometheus 查询 mTLS、操作员入口以及旧证书拒绝。记录每一步的
+Pod UID、证书指纹、采集缺口和恢复时间；在这些证据齐备前不启动正式窗口。
+
 ```sh
 python3 tests/ha-health-soak/collector.py \
   --url https://ha-health.example.internal/ \

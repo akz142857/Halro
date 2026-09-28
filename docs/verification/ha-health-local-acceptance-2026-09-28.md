@@ -1586,3 +1586,20 @@ Prometheus、Alertmanager 和本地接收器 Deployment 均为 1/1 Ready。
 `18589636e9daa15a7af4b3e064a13f6f85a2d049e0448e76caa64f19ba636b15`，
 目录权限 `0700`，报告 `0600`。此报告只检查所列证书的有效期；正式候选
 仍须核对部署引用、轮换及跨故障域可用性，然后重新从零启动 72 小时窗口。
+
+## 本地证书轮换材料预备（约 18:15 UTC）
+
+只读取当前五个 Secret 的公开证书字段，确认成员/健康入口与 Prometheus 查询
+分别使用两套将在候选窗口内到期的 CA；核对三个成员、健康服务、采集器、
+Prometheus 抓取、查询服务端和查询客户端的 SAN、用途与当前查询端
+`client_allowed_sans`。在私有目录
+`/tmp/halro-ha-health-kind-20260928/cert-rotation-stage-20260928/`
+用 `stage_kind_certificates.py` 离线生成两套 14 天本地测试 CA 与九张叶子
+证书，并逐张验证证书链、用途、SAN、私钥匹配及 74 小时有效期。脚本未
+访问或更改 Kubernetes。目录和两个 CA 私钥权限分别为 `0700`、`0600`；
+只含公开指纹与本地 Secret 文件路径映射的 `stage-report.json` SHA-256 为
+`ff85e3d8805f1014e6f24e5fa926ec5e4ca10ce18407b625d08257fd70e5cce9`。
+五个待替换 Secret 的文件键集合分别与当前 kind 实物精确一致（7/5/3/3/3），
+仅比较键名，未读取或输出集群中的私钥值。
+证书**仅已准备，尚未安装**；当前 24 小时采样仍使用原信任链。完整采样
+结束后才可在维护窗口轮换、验证旧证书拒绝，并重跑 Secret 有效期预检。
