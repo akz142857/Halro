@@ -233,6 +233,10 @@ kubectl apply --dry-run=server -f /private/evidence/ha-health-soak-CANDIDATE.jso
 按目标集群确认 `--storage-class`（默认 `standard`）、PVC 容量（默认 `1Gi`）、
 监控节点和网络策略，再对生成物做服务端 dry-run。Job 不自动重试，
 只把三项证书复制进 Pod 内存卷，以非 root 身份运行采样器；证据落在独立 PVC。
+渲染器要求 `--candidate-sha` 与当前 Git HEAD 完全一致，并逐字节核对
+`collector.py` 与该提交中的版本；旧候选必须在它的冻结 checkout 中生成，
+不能用后来的工作树脚本冒充旧候选。成员镜像、配置和规则摘要仍须从实际
+部署独立核对，Git 绑定不能证明这些外部字节。
 旧窗口 Job/PVC 和采样原件应保留，新的候选使用新名称。服务端 dry-run
 只证明 API 接受资源结构，不能证明镜像可拉取、Secret 可读或 72 小时覆盖。
 

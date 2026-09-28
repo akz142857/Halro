@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,8 @@ import render_kind_job
 
 
 SHA = "a" * 64
+HEAD = subprocess.check_output(["git", "-C", str(render_kind_job.ROOT),
+                                "rev-parse", "HEAD"], text=True).strip()
 
 
 def arguments(path, **overrides):
@@ -21,7 +24,7 @@ def arguments(path, **overrides):
         "environment": "kind-local",
         "cluster": "halro-kind-health-local",
         "members": "halro-0,halro-1,halro-2",
-        "candidate-sha": "b" * 40,
+        "candidate-sha": HEAD,
         "image-digest": "sha256:" + SHA,
         "config-sha256": SHA,
         "rules-sha256": SHA,
@@ -79,6 +82,13 @@ class RenderKindJobTest(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(FileExistsError):
                     render_kind_job.main(arguments(path))
+
+    def test_rejects_candidate_and_script_mismatch(self):
+        script = render_kind_job.SCRIPT.read_bytes()
+        with self.assertRaisesRegex(ValueError, "candidate SHA differs"):
+            render_kind_job.verify_source_binding("b" * 40, script)
+        with self.assertRaisesRegex(ValueError, "collector.py differs"):
+            render_kind_job.verify_source_binding(HEAD, script + b"\n")
 
 
 if __name__ == "__main__":

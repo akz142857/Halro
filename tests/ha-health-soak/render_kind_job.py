@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +16,8 @@ import collector
 DNS_LABEL = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?\Z")
 IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}\Z")
 SCRIPT = Path(__file__).with_name("collector.py")
+ROOT = SCRIPT.parents[2]
+SCRIPT_IN_GIT = "tests/ha-health-soak/collector.py"
 
 
 def dns_label(value, option):
@@ -68,6 +71,25 @@ def parse_args(argv=None):
     except ValueError as error:
         parser.error(str(error))
     return args
+
+
+def verify_source_binding(candidate_sha, script):
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            check=True, capture_output=True, timeout=10,
+        ).stdout.decode("ascii").strip()
+        committed_script = subprocess.run(
+            ["git", "-C", str(ROOT), "show", "HEAD:" + SCRIPT_IN_GIT],
+            check=True, capture_output=True, timeout=10,
+        ).stdout
+    except (OSError, UnicodeError, subprocess.CalledProcessError,
+            subprocess.TimeoutExpired) as error:
+        raise ValueError("cannot read the frozen Git candidate and collector") from error
+    if head != candidate_sha:
+        raise ValueError("candidate SHA differs from the checked-out Git HEAD")
+    if committed_script != script:
+        raise ValueError("collector.py differs from the frozen candidate bytes")
 
 
 def render(args, script):
@@ -174,7 +196,12 @@ def render(args, script):
 
 def main(argv=None):
     args = parse_args(argv)
-    script = SCRIPT.read_text(encoding="utf-8")
+    script_bytes = SCRIPT.read_bytes()
+    try:
+        verify_source_binding(args.candidate_sha, script_bytes)
+    except ValueError as error:
+        raise SystemExit("candidate source binding failed: " + str(error)) from error
+    script = script_bytes.decode("utf-8")
     manifest = render(args, script)
     destination = Path(args.manifest)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
