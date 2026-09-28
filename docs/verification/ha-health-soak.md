@@ -205,6 +205,37 @@ Service DNS。启动前完成下面的前提，并先运行短时 Job 预检：
    验证 mTLS、环境/集群/成员清单和 PVC 写入；正式 Job 启动后读回前几行
    原始样本确认 `observed`，不能以 Pod `Running` 代替数据证据。
 
+完成短时预检后，可用仓库内的 `render_kind_job.py` 为**新的** 72 小时窗口
+生成独立 ConfigMap、PVC 和 Job。下面参数必须来自冻结候选和目标集群；
+`--python-image` 使用目标节点能获取的完整镜像 digest，不能直接填 Pod 的
+`imageID` 并假定它是可拉取的镜像引用。Secret 必须已有 `ca.crt`、
+`collector.crt`、`collector.key` 三个键，服务端证书 SAN 须覆盖 URL 中的
+Service DNS；这些事实需单独从实际 Secret 和运行中进程核对。
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/ha-health-soak/render_kind_job.py \
+  --run-name ha-health-soak-CANDIDATE --namespace halro-monitoring \
+  --url https://ha-health.halro-monitoring.svc.cluster.local:9105/ \
+  --secret-name ha-health-tls \
+  --environment TARGET_ENV --cluster CLUSTER_ID \
+  --members halro-0,halro-1,halro-2 \
+  --candidate-sha FULL_40_HEX_SHA \
+  --image-digest sha256:FULL_64_HEX_MEMBER_IMAGE_DIGEST \
+  --config-sha256 FULL_64_HEX_CONFIG_SHA256 \
+  --rules-sha256 FULL_64_HEX_RULES_SHA256 \
+  --python-image registry.example/python@sha256:FULL_64_HEX_PYTHON_IMAGE_DIGEST \
+  --node DEDICATED_MONITORING_NODE \
+  --manifest /private/evidence/ha-health-soak-CANDIDATE.json
+kubectl apply --dry-run=server -f /private/evidence/ha-health-soak-CANDIDATE.json
+```
+
+渲染器只生成文件，不访问集群；输出文件以 `0600` 新建且拒绝覆盖。运行前
+按目标集群确认 `--storage-class`（默认 `standard`）、PVC 容量（默认 `1Gi`）、
+监控节点和网络策略，再对生成物做服务端 dry-run。Job 不自动重试，
+只把三项证书复制进 Pod 内存卷，以非 root 身份运行采样器；证据落在独立 PVC。
+旧窗口 Job/PVC 和采样原件应保留，新的候选使用新名称。服务端 dry-run
+只证明 API 接受资源结构，不能证明镜像可拉取、Secret 可读或 72 小时覆盖。
+
 集群内 Job 去掉验证主机的端口转发依赖，但仍依赖 Service、Pod 和 PVC。
 kind 中不同 Kubernetes 节点若位于同一物理主机，也不构成独立生产故障域；
 本地 PVC 不等于独立不可变归档。运行期间不要在同一候选上做会改变采样
