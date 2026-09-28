@@ -45,11 +45,10 @@ func TestHealthKeepsConfirmationUnknownWithoutProgress(t *testing.T) {
 		}
 		vector = append(vector, map[string]any{"metric": identity, "value": []any{now, value}})
 	}
-	for _, member := range []struct{ instance, role string }{{"halro-0", "primary"}, {"halro-1", "replica"}} {
-		name := member.instance
+	addMember := func(name, role string) {
 		add(name, "up", nil, "1")
 		add(name, "halro_cluster_member_info", map[string]string{"cluster_id": "ha", "node_id": name}, "1")
-		add(name, "halro_cluster_role", map[string]string{"role": member.role}, "1")
+		add(name, "halro_cluster_role", map[string]string{"role": role}, "1")
 		add(name, "halro_cluster_incarnation_info", map[string]string{"incarnation": "inc_1"}, "1")
 		add(name, "halro_cluster_term", nil, "7")
 		add(name, "halro_cluster_promised_term", nil, "7")
@@ -63,6 +62,8 @@ func TestHealthKeepsConfirmationUnknownWithoutProgress(t *testing.T) {
 			add(name, "halro_replication_member_incompatible", map[string]string{"reason": reason}, "0")
 		}
 	}
+	addMember("halro-0", "primary")
+	addMember("halro-1", "replica")
 	add("halro-0", "halro_replication_peer_connected", map[string]string{"peer": "halro-1"}, "1")
 	add("halro-1", "halro_replication_peer_connected", map[string]string{"peer": "halro-0"}, "1")
 	confirmedBarrier := false
@@ -198,6 +199,72 @@ func TestHealthKeepsConfirmationUnknownWithoutProgress(t *testing.T) {
 	if !testedSecondPrimary {
 		t.Fatal("second Primary metric scenario was not exercised")
 	}
+	baselineLength := len(vector)
+	addMember("halro-2", "replica")
+	add("halro-0", "halro_replication_peer_connected", map[string]string{"peer": "halro-2"}, "1")
+	add("halro-1", "halro_replication_peer_connected", map[string]string{"peer": "halro-2"}, "1")
+	add("halro-2", "halro_replication_peer_connected", map[string]string{"peer": "halro-0"}, "1")
+	add("halro-2", "halro_replication_peer_connected", map[string]string{"peer": "halro-1"}, "1")
+	s.members = append(s.members, "halro-2")
+	response = httptest.NewRecorder()
+	s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	result = hahealth.Result{}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+		result.Safety.Level != hahealth.Healthy || result.Catchup.Level != hahealth.Healthy ||
+		result.Confirmation.Level != hahealth.Healthy || result.Overall.Level != hahealth.Healthy {
+		t.Fatalf("complete three-member observation not healthy: %+v err=%v", result, err)
+	}
+	testedThreeMemberPrimaryConflict := false
+	for _, item := range vector {
+		metric := item["metric"].(map[string]string)
+		if metric["__name__"] != "halro_cluster_role" || metric["instance"] != "halro-2" {
+			continue
+		}
+		testedThreeMemberPrimaryConflict = true
+		metric["role"] = "primary"
+		response = httptest.NewRecorder()
+		s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		result = hahealth.Result{}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+			result.Safety.Level != hahealth.Critical || result.Catchup.Level != hahealth.Unknown ||
+			result.Confirmation.Level != hahealth.Unknown || result.Overall.Level == hahealth.Healthy {
+			t.Fatalf("three-member second Primary retained a green card: %+v err=%v", result, err)
+		}
+		metric["role"] = "replica"
+		break
+	}
+	if !testedThreeMemberPrimaryConflict {
+		t.Fatal("three-member Primary conflict was not exercised")
+	}
+	completeVector := append([]map[string]any(nil), vector...)
+	for missingIndex, missing := range []string{"halro-1", "halro-2"} {
+		vector = make([]map[string]any, 0, len(completeVector)-1)
+		for _, item := range completeVector {
+			metric := item["metric"].(map[string]string)
+			if metric["__name__"] == "halro_replication_index" && metric["kind"] == "applied" && metric["instance"] == missing {
+				continue
+			}
+			vector = append(vector, item)
+		}
+		response = httptest.NewRecorder()
+		s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		result = hahealth.Result{}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+			result.Safety.Level != hahealth.Unknown || result.Catchup.Level != hahealth.Unknown ||
+			result.Confirmation.Level != hahealth.Healthy || result.Overall.Level != hahealth.Unknown ||
+			len(result.Members) != 3 || result.Members[missingIndex+1].Applied != nil {
+			t.Fatalf("missing %s progress inherited other Replica evidence: %+v err=%v", missing, result, err)
+		}
+	}
+	vector = completeVector
+	response = httptest.NewRecorder()
+	s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	result = hahealth.Result{}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || result.Overall.Level != hahealth.Healthy {
+		t.Fatalf("three-member progress recovery not healthy: %+v err=%v", result, err)
+	}
+	vector = vector[:baselineLength]
+	s.members = s.members[:2]
 	for _, metricName := range []string{"up", "halro_cluster_role"} {
 		t.Run("missing instance label on "+metricName, func(t *testing.T) {
 			metric := map[string]string{"__name__": metricName}
