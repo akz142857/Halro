@@ -47,9 +47,14 @@ ID 分别为 `sha256:9260cf5be7400c4898dbda9f50f2d64b2aca3c6d33a1339f7625ca2c5ba
 准确身份的镜像已加载到本地 kind 的四个节点。约 15:06 UTC 只将健康
 Deployment 的 `view` 容器更新为 `:02f2da14-exact`；Recreate rollout 成功，
 实跑 imageID 与上表一致，Deployment 1/1、两个容器 Ready 且零次重启，
-三成员 StatefulSet 镜像未改且仍 3/3 Ready。未用获批操作员证书读取健康
-API，不能据此认定历史事件链或页面正确；仍未取得正式发布流水线的镜像
-摘要、SBOM、签名或 provenance。离线封装只支撑本地后续验收，
+三成员 StatefulSet 镜像未改且仍 3/3 Ready。后续以匹配的本地操作员
+测试证书和独占端口转发读取精确镜像的 `/api/health`、
+`/api/event-archive`、`/api/durable-transitions` 与 15 分钟 `/api/evidence`，
+四个只读请求均返回 200；三成员机器状态和持久迁移当前链在读取时完整，
+总览因无近期必需确认成功保持 `unknown`。原始响应摘要与限制见
+[本地验收记录](ha-health-local-acceptance-2026-09-28.md)。这没有验证
+成员镜像的同一源码身份、跨主机归档或故障恢复，也未取得正式发布流水线
+的镜像摘要、SBOM、签名或 provenance。离线封装只支撑本地后续验收，
 不能替代上述失败的标准 Dockerfile 门禁。
 
 正式 G0 仍需冻结最终候选 SHA，核对该 SHA 的普通 CI、发布构建、镜像及

@@ -1238,9 +1238,71 @@ Deployment 1/1，`view` 与 `status-token-sync` 均 Ready、零次重启，
 日志显示服务在 `0.0.0.0:9105` 监听。三个成员仍运行
 `halro-ha-health-local:ack-stall-localized-20260928`，StatefulSet 3/3 Ready。
 
-本轮没有获批的操作员客户端证书路径；尝试从 localhost 临时转发的
+当时尚未定位到匹配的本地操作员客户端证书路径；尝试从 localhost 临时转发的
 Prometheus HTTPS 入口只读查询时，无客户端证书的 TLS 连接不能取得查询
 结果，端口转发随后已停止。**此项只证明精确镜像启动和工作负载就绪**，
 未核对 `/api/health`、机器状态、事件链追赶、历史图或告警恢复，
 不能将 §4.2 任一完整场景改成 `PASS`。成员镜像绑定同一源码 SHA、
 正式制品 provenance、外部不可变归档及 G0–G7 仍待验收。
+
+## 精确镜像的认证健康 API 与证据导出（约 15:14–15:18 UTC）
+
+随后找到此前本地演练生成、仍在有效期内的 kind 操作员测试证书和 CA，
+仅使用文件路径发起双向 TLS 请求，未输出私钥或 Kubernetes Secret 值。
+第一次 `127.0.0.1:19105` 查询误命中了已有主机服务，响应的
+`environment=host-local`、`cluster=halro-health-local` 与 Deployment 参数不符；
+该文件单独保留为误路由诊断，**不计入 kind 验收**。改用独占的 IPv4
+`127.0.0.1:29105` 端口转发后，握手中的公开服务端证书为
+`CN=halro-health-view-kind-local`，SAN 含 `127.0.0.1`，由本地 kind CA
+签发。以匹配的操作员证书和受信 CA 查询以下三个只读 API 均返回 HTTP 200；
+仅提供 CA、不提供客户端证书的 `/api/health` 请求在 TLS 阶段失败。
+
+| 私有证据（`/tmp/halro-ha-health-kind-20260928/evidence/`，文件权限 0600） | SHA-256 |
+| --- | --- |
+| `health-exact-02f2-kind.json` | `9545913b35267bec72efa5e9e4a2d53f273f34275dd684221e006e54cc3d2b4d` |
+| `archive-exact-02f2-kind.json` | `a09fc2ba8663fb308bcd2163854a3f3ef0267c3c505ed9d46439a8d90ea4a7a3` |
+| `durable-exact-02f2-kind.json` | `41eca8d52088fab12f141906a772354cc5fdbb8ac20ec6656cce9d9cf05b99ce` |
+| `evidence-exact-02f2-kind-15m.json` | `22283cfe364c55f9b4d57c0d5e0b73c4ada5064141ec9d91dcc93e5abf0c37a5` |
+
+`/api/health` 的 `environment=kind-local`、`cluster=halro-kind-health-local`、
+`expected_members=3` 与部署参数一致。三名成员均通过机器状态采集，
+同属 `inc_kind_local_20260928`、term 3，角色为一个 Primary、两个 Replica；
+各自 `durable=confirmed=applied=153`，live/ready 为真。客户端 Service
+入口、安全、追平卡为健康；近五分钟无真实必需确认成功样本，确认能力与
+总状态正确保持 `unknown`。这些相等的 index 不能证明成员前缀相同或可提升。
+
+`/api/event-archive` 为 `ok`，本地文件当前留存 166 条已采记录；
+`/api/durable-transitions` 为 `caught_up`，三名成员当前代际的
+`stored_sequence/observed_head` 分别是 4/4、4/4、0/0。
+15 分钟 `/api/evidence` 导出包含三名机器状态、166 条已采事件、
+三名持久迁移摘要与 51 个指标快照序列；`client_final=not_configured`，
+未把服务端计数冒充客户端最终结果。简单敏感词扫描未发现私钥、Bearer
+或密码片段；该扫描不等同于完整隐私审计。端口转发已停止。
+
+这补强了精确健康服务镜像重启后的读取与本地追赶证据；三名成员仍运行
+先前本地镜像，未完成同一 SHA 的整集群验证。旧代际与当前链的独立
+不可变归档、跨故障域恢复、完整矩阵和 G0–G7 继续为 `NOT_RUN`。
+
+## 真实集群短时采样与纳秒时间修复（约 15:21–15:26 UTC）
+
+用同一 kind 操作员证书执行仓库的只读长跑采样器时，首次 25 秒预演的
+五次 HTTPS 请求均到达 `/api/health`，但被记为
+`observation_time_invalid`。根因是服务端 Go `RFC3339Nano` 输出 9 位小数，
+本机 Python 3.9 的 `datetime.fromisoformat` 只接受至多 6 位；既有合成
+测试只用了 Python 自身的 6 位时间。采样器现先严格检查 RFC3339 的
+1–9 位小数和时区，再仅为 Python 解析截到微秒，保留原始纳秒时间串
+写入证据。新增回归测试验证真实 Go 格式可接收、超过 9 位或缺时区
+会拒绝；四项定向单测与 Python 3.9 语法检查通过。
+
+修复后的第二轮 25 秒、5 秒间隔预演取得 5 次有效观测、0 个漏采时隙，
+最大单调采样间隔 5.004 秒；`sampling_continuous=true`、
+`health_endpoint_coverage_complete=true`。五次总状态均为 `unknown`，
+与健康 API 无近期必需确认写的事实一致。记录中包含部署健康镜像 ID、
+源码提交、成员清单，以及当时健康 ConfigMap 和 Prometheus 配置的
+SHA-256；私有目录为 0700、文件为 0600。正式 72 小时采样仍未运行，
+两轮结果均保持 `kind=smoke_only`、`ha_acceptance=NOT_RUN`。
+
+| 私有证据（`/tmp/halro-ha-health-kind-20260928/evidence/soak-preview-exact-02f2-v2/`） | SHA-256 |
+| --- | --- |
+| `samples.jsonl` | `33eb22455de26f16ad84ed97ad8afdd774cd67d246ed4cd58fd1047b33dfd7f8` |
+| `summary.json` | `c225df32fce8fddb8ee16c8ca0e487f49b69490dbb5bb96cbabb091bf221639b` |

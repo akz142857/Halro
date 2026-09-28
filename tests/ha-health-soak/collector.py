@@ -22,6 +22,11 @@ LEVELS = {"healthy", "degraded", "critical", "unknown"}
 CARDS = ("overall", "client", "confirmation", "safety", "catchup")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+RFC3339_NANO = re.compile(
+    r"(?P<second>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})"
+    r"(?:\.(?P<fraction>\d{1,9}))?"
+    r"(?P<zone>Z|[+-]\d{2}:\d{2})\Z"
+)
 
 
 def utc_now():
@@ -104,8 +109,17 @@ def summarize_health(payload, options):
     observed_at = payload.get("observed_at")
     if not isinstance(observed_at, str):
         raise ValueError("observation_time_missing")
+    timestamp = RFC3339_NANO.fullmatch(observed_at)
+    if timestamp is None:
+        raise ValueError("observation_time_invalid")
+    fraction = timestamp.group("fraction")
+    zone = timestamp.group("zone")
+    normalized = timestamp.group("second")
+    if fraction:
+        normalized += "." + fraction[:6]
+    normalized += "+00:00" if zone == "Z" else zone
     try:
-        parsed = dt.datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(normalized)
     except ValueError as error:
         raise ValueError("observation_time_invalid") from error
     if parsed.tzinfo is None:

@@ -49,6 +49,21 @@ class CollectorTests(unittest.TestCase):
                     "--duration-seconds", str(collector.FORMAL_DURATION), "--output", str(Path(root) / "formal"),
                 ])
 
+    def test_accepts_go_nanosecond_observation_time_and_rejects_invalid_precision(self):
+        with tempfile.TemporaryDirectory() as root:
+            options = self.options(Path(root) / "samples")
+            payload = self.payload()
+            payload["observed_at"] = (
+                collector.dt.datetime.now(collector.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
+            )
+            self.assertEqual(collector.summarize_health(payload, options)["server_observed_at"], payload["observed_at"])
+            payload["observed_at"] = payload["observed_at"].replace("123Z", "1234Z")
+            with self.assertRaisesRegex(ValueError, "observation_time_invalid"):
+                collector.summarize_health(payload, options)
+            payload["observed_at"] = collector.utc_now().removesuffix("Z")
+            with self.assertRaisesRegex(ValueError, "observation_time_invalid"):
+                collector.summarize_health(payload, options)
+
     def test_persists_bounded_observations_without_claiming_ha_acceptance(self):
         with tempfile.TemporaryDirectory() as root:
             output = Path(root) / "samples"
