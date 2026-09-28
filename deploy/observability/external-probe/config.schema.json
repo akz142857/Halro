@@ -111,15 +111,27 @@
             "properties": {"kind": {"const": "prometheus"}}
           },
           "then": {"required": ["freshness"]}
+        },
+        {
+          "if": {"required": ["mode"], "properties": {"mode": {"const": "ha_client_root"}}},
+          "then": {
+            "properties": {
+              "kind": {"const": "halro"},
+              "url": {"pattern": "^https://[^/?#@\\s]+/$"}
+            },
+            "not": {"anyOf": [{"required": ["freshness"]}, {"required": ["anchor_url"]}]}
+          }
         }
       ],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "kind": {"enum": ["halro", "prometheus", "alertmanager"]},
+        "mode": {"const": "ha_client_root"},
         "url": {"$ref": "#/$defs/https_url"},
         "bearer_token_file": {"type": "string"},
         "tls": {"$ref": "#/$defs/tls"},
-        "freshness": {"$ref": "#/$defs/freshness"}
+        "freshness": {"$ref": "#/$defs/freshness"},
+        "anchor_url": {"$ref": "#/$defs/https_url"}
       }
     }
   }

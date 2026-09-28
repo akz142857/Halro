@@ -137,6 +137,35 @@ an authentication boundary.
 | `halro_reload_total` | counter | `item`, `status` |
 | `halro_reload_last_success_timestamp_seconds` | gauge | `item` |
 | `halro_build_info` | gauge | `version`, `commit` |
+| `halro_cluster_member_info` | gauge | `cluster_id`, `node_id` |
+| `halro_ha_status_auth_failures_total` | counter | none |
+| `halro_ha_client_write_http_responses_total` | counter | `outcome` |
+| `halro_cluster_role` | gauge | `role` |
+| `halro_cluster_term` | gauge | none |
+| `halro_cluster_promised_term` | gauge | none |
+| `halro_cluster_incarnation_info` | gauge | `incarnation` |
+| `halro_replication_index` | gauge | `kind` |
+| `halro_replication_durable_index` | gauge | none |
+| `halro_replication_confirmed_index` | gauge | none |
+| `halro_replication_applied_index` | gauge | none |
+| `halro_replication_confirmation_lag` | gauge | none |
+| `halro_replication_apply_lag` | gauge | none |
+| `halro_replication_apply_backlog_frames` | gauge | none |
+| `halro_replication_startup_ready` | gauge | none |
+| `halro_replication_unavailable` | gauge | none |
+| `halro_replication_member_state_version` | gauge | none |
+| `halro_replication_transition_journal_capacity_readable` | gauge | none |
+| `halro_replication_transition_journal_segments` | gauge | none |
+| `halro_replication_transition_journal_bytes` | gauge | none |
+| `halro_replication_durable_to_confirm_seconds` | classic histogram | `le` |
+| `halro_replication_last_confirmed_timestamp_seconds` | gauge | none |
+| `halro_replication_required_confirmation_wait_total` | counter | `store`, `outcome` |
+| `halro_replication_sink_persist_seconds` | classic histogram | `le` |
+| `halro_replication_apply_batch_seconds` | classic histogram | `le` |
+| `halro_replication_state` | gauge | `state` |
+| `halro_replication_peer_connected` | gauge | `peer` |
+| `halro_cluster_maintenance` | gauge | none |
+| `halro_replication_member_incompatible` | gauge | `reason` |
 | `halro_tzdata_info` | gauge | `source`, `version`, `fingerprint` |
 | `halro_accounting_timezone_version` | gauge | none |
 | `halro_accounting_period_end_seconds` | gauge | none |
@@ -170,6 +199,81 @@ an authentication boundary.
 | `go_memstats_heap_alloc_bytes` | gauge | none |
 | `go_memstats_gc_cycles_total` | counter | none |
 | `process_start_time_seconds` | gauge | none |
+
+### HA interpretation
+
+HA families appear only when `replication` is enabled and must be scraped from
+every configured member. `role`, `kind`, `state`, `reason`, `store`, and `outcome` are bounded enums;
+`peer`, `node_id`, and `cluster_id` come from fixed member configuration;
+`incarnation` comes from current cluster tenure. They contain no address or key
+material. The scrape target's `environment`, `region`, `cluster`, and
+`instance` labels identify the member; the application does not attach them to
+each series. A health collector must compare `halro_cluster_member_info` with
+the configured `cluster` and `instance` labels before declaring safety healthy.
+
+Each index and difference is a count of globally ordered frames, not seconds,
+bytes, or requests. Peer connection reports only an authenticated data session.
+`halro_replication_unavailable=1` means the Primary coordinator knows an
+internal reason it cannot confirm; `=0` does **not** prove that a newly appended
+frame can receive an ACK. On a Replica, this gauge and
+`halro_replication_state{state="replicating"}` do not describe Primary write
+availability. `halro_replication_member_incompatible` is sticky for the process
+after observing a schema, key-challenge, or SPKI failure; it does not prove the
+current connection is still incompatible. Missing HA series mean absent or
+unobserved, never zero or healthy.
+
+`halro_replication_durable_to_confirm_seconds` is emitted only by a Primary.
+It observes each frame that was locally durable in this process and whose
+quorum confirmation was later durably published to member state; it includes
+network and Replica persistence time. A recovered suffix has no trustworthy
+local start timestamp and is excluded from the histogram. The
+`halro_replication_last_confirmed_timestamp_seconds` gauge is zero until this
+process durably publishes a new confirmation. Neither family counts client
+write success or proves current write availability on an idle cluster.
+`halro_replication_required_confirmation_wait_total` counts the terminal result
+of each required Ledger or metadata confirmation barrier callback on the
+Primary. `store` is `ledger` or `metadata`; `outcome` is `confirmed`,
+`deadline`, `unavailable`, `canceled`, or `error`. Calls that fail before the
+barrier, provider-object replication, and startup/shutdown confirmation are
+excluded. This is an internal wait result, not a final client HTTP result:
+one request may encounter more than one barrier and may fail afterward.
+`halro_ha_client_write_http_responses_total` counts completed server handlers
+for the explicit client write route inventory on HA Gateway listeners: POST
+inference, async submission, file/batch creation, and Work Unit/Run creation,
+closure, or outcome report. It includes
+Replica `not_primary` replies and refusals before a Ledger append. `outcome` is
+one of `http_2xx`, `http_4xx`, `not_primary`, `http_503`, `timeout`,
+`http_5xx`, `canceled`, or `write_error`. These are server observations, not
+end-to-end client receipts; a 2xx stream may end with an application error
+after its headers were committed. Retries count separately, and a process crash
+before a handler returns is absent. Do not divide this family by required
+confirmation waits to infer request success.
+An external client-final metric is proposed in
+[the HA logical-operation result contract](ha-client-final-result.md), but no
+Halro member exports it and it is intentionally absent from the table above.
+On Replicas, `halro_replication_sink_persist_seconds` times the native sink
+`Persist` call for a newly received frame, including failed calls but excluding
+retransmissions. It does not include the later ordering journal and member-state
+fsyncs. `halro_replication_apply_batch_seconds` times only a successfully
+published confirmed-prefix apply batch, including derived projections and the
+applied watermark; it is per batch, not per frame. These metrics separate
+stages but cannot alone calculate end-to-end client latency.
+
+Prometheus records `halro:ha_epoch_stable:bool` per member from a five-minute
+window of `halro_cluster_term` and `halro_cluster_incarnation_info`, both
+selected from `job="halro",expected_target="true"`. It is 1 only when the
+term did not change, exactly one term, incarnation, and `up` source was
+observed in the window, and each source has as many raw five-minute samples
+as that target's `up`. The latest
+term and incarnation samples must also match the target's current successful
+`up` scrape. A selective missing scrape sample keeps the record absent until
+the gap leaves the five-minute window; a duplicate source also withholds the
+record until its window history expires. A value of 0 blocks cross-epoch comparisons.
+An absent record is unknown, not stable. The HA health view and progress-stall
+alerts consume the same record. This is a monitoring rule, not an
+application-exported metric. Equal sample counts do not detect a period when
+Prometheus itself made no scrapes; the independent monitoring-availability
+probe and health service failure behavior cover that outage separately.
 
 ### Counter reset semantics
 

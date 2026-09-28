@@ -108,6 +108,37 @@ func TestSeedApprovalAuthenticatesStagingBeforeAtomicReplicaPublication(t *testi
 		ClusterID: "production-a", NodeID: "halro-1", Listen: "127.0.0.1:9911",
 		Peers: []config.ReplicationPeer{{Name: "halro-0", Address: "127.0.0.1:9910", SPKISHA256: "sha256:" + strings.Repeat("cd", 32)}},
 	}
+	approvedCopy := filepath.Join(targetRoot, "approved-copy")
+	if err := os.MkdirAll(approvedCopy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range manifest.Files {
+		copyTestRegularFile(t, filepath.Join(source.Storage.DataDir, filepath.FromSlash(file.Path)),
+			filepath.Join(approvedCopy, filepath.FromSlash(file.Path)))
+	}
+	approval, err := VerifySeedApprovalSnapshot(context.Background(), target, approvedCopy, manifestPath)
+	if err != nil || approval.Status != "seed_manifest_mac_files_ordering_verified" || approval.Index != manifest.Index ||
+		approval.ManifestSHA256 == "" || approval.Ordering.VerifiedLastIndex != manifest.Index || approval.ApprovedFileCount != len(manifest.Files) {
+		t.Fatalf("read-only seed approval=%+v err=%v", approval, err)
+	}
+	extra := filepath.Join(approvedCopy, "unapproved-file")
+	if err := os.WriteFile(extra, []byte("extra"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifySeedApprovalSnapshot(context.Background(), target, approvedCopy, manifestPath); err == nil {
+		t.Fatal("seed approval accepted an extra unapproved file")
+	}
+	if err := os.Remove(extra); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(approvedCopy, source.Storage.MetadataFile)
+	if err := os.WriteFile(metadata, []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifySeedApprovalSnapshot(context.Background(), target, approvedCopy, manifestPath); err == nil {
+		t.Fatal("seed approval accepted changed authoritative bytes")
+	}
+	copyTestRegularFile(t, filepath.Join(source.Storage.DataDir, source.Storage.MetadataFile), metadata)
 	staging := filepath.Join(targetRoot, ".seed-staging")
 	copyTestTree(t, source.Storage.DataDir, staging)
 	if err := os.Remove(filepath.Join(staging, replication.ClusterDirectoryName, "state.json")); err != nil {
@@ -143,6 +174,60 @@ func TestSeedApprovalAuthenticatesStagingBeforeAtomicReplicaPublication(t *testi
 	objectSource, err := os.ReadFile(filepath.Join(target.ClusterDirectoryPath(), "provider-object-sources", "seeded.content"))
 	if err != nil || string(objectSource) != "sealed-seed-object" {
 		t.Fatalf("seeded provider-object source=%q err=%v", objectSource, err)
+	}
+	masterKey, err = unlockMemberMasterKey(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, clusterKey, err = readMemberState(target, masterKey)
+	clear(masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replication.MigrateStateTransitionJournal(target.ReplicationStatePath(), clusterKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	clear(clusterKey[:])
+	frozenTarget := filepath.Join(targetRoot, "frozen-target")
+	copyTestTree(t, target.Storage.DataDir, frozenTarget)
+	origin, err := VerifyMemberSeedOrigin(context.Background(), target, frozenTarget, approvedCopy, manifestPath)
+	if err != nil || origin.Status != "replacement_seed_origin_mac_verified" || origin.Member.NodeID != "halro-1" ||
+		origin.Approval.Index != 1 || origin.TargetOrdering.ExpectedIndex != 1 {
+		t.Fatalf("replacement member seed origin=%+v err=%v", origin, err)
+	}
+	wrongTarget := target
+	wrongReplication := *target.Replication
+	wrongReplication.Peers = append([]config.ReplicationPeer(nil), target.Replication.Peers...)
+	wrongReplication.Peers[0].SPKISHA256 = "sha256:" + strings.Repeat("ef", 32)
+	wrongTarget.Replication = &wrongReplication
+	if _, err := VerifyMemberSeedOrigin(context.Background(), wrongTarget, frozenTarget, approvedCopy, manifestPath); err == nil {
+		t.Fatal("replacement journal accepted a different seeded peer identity")
+	}
+	masterKey, err = unlockMemberMasterKey(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, clusterKey, err = readMemberState(source, masterKey)
+	clear(masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := replication.MigrateStateTransitionJournal(source.ReplicationStatePath(), clusterKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	clear(clusterKey[:])
+	frozenSource := filepath.Join(targetRoot, "frozen-source")
+	copyTestTree(t, source.Storage.DataDir, frozenSource)
+	sourceOrigin, err := VerifySourceSeedOrigin(context.Background(), source, frozenSource, target, approvedCopy, manifestPath)
+	if err != nil || sourceOrigin.Status != "source_primary_seed_files_mac_verified" ||
+		sourceOrigin.SourceMember.NodeID != "halro-0" || sourceOrigin.SourceOrdering.FileSHA256 != approval.Ordering.FileSHA256 {
+		t.Fatalf("approved source Primary origin=%+v err=%v", sourceOrigin, err)
+	}
+	if err := os.WriteFile(filepath.Join(frozenSource, "metadata.journal"), []byte("different source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifySourceSeedOrigin(context.Background(), source, frozenSource, target, approvedCopy, manifestPath); err == nil {
+		t.Fatal("source proof accepted bytes different from approved seed")
 	}
 }
 

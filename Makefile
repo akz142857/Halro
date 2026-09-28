@@ -47,13 +47,14 @@ FORCE:
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/halro-deadman internal/deadman -type f -name '*.go')
+HA_HEALTH_SOURCES := $(shell find cmd/halro-ha-health internal/hahealth -type f \( -name '*.go' -o -name '*.html' -o -name '*.js' \))
 WEBUI_DIST_SOURCES := $(shell find internal/webui/dist -type f)
 WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 	web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json web/vite.config.ts
 WEB_DEPS_STAMP := web/node_modules/.halro-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.halro-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version FORCE
+.PHONY: help init-help setup init reset start dev build deadman ha-health frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version FORCE
 
 help:
 	@echo "Halro Makefile commands:"
@@ -66,6 +67,7 @@ help:
 	@echo "  dev                  Build the frontend and start with go run"
 	@echo "  build                Build Halro and dead-man"
 	@echo "  deadman              Build only halro-deadman"
+	@echo "  ha-health            Build the independent read-only HA health view"
 	@echo "  frontend             Install dependencies and build the frontend"
 	@echo "  frontend-test        Run frontend tests"
 	@echo "  frontend-production-check  Node 22 typecheck/build and embedded bundle drift gate"
@@ -131,6 +133,8 @@ build: bin/halro bin/halro-deadman
 
 deadman: bin/halro-deadman
 
+ha-health: bin/halro-ha-health
+
 backup: bin/halro
 	./scripts/backup.sh \
 		--binary "$(abspath bin/halro)" \
@@ -157,6 +161,10 @@ bin/halro: $(GO_SOURCES) $(WEBUI_DIST_SOURCES) go.mod go.sum $(RELEASE_IDENTITY)
 bin/halro-deadman: $(DEADMAN_SOURCES) go.mod go.sum $(RELEASE_IDENTITY)
 	mkdir -p bin
 	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro-deadman
+
+bin/halro-ha-health: $(HA_HEALTH_SOURCES) go.mod go.sum $(RELEASE_IDENTITY)
+	mkdir -p bin
+	go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $@ ./cmd/halro-ha-health
 
 frontend: $(WEB_BUILD_STAMP)
 

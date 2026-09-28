@@ -68,6 +68,32 @@ type replicationRuntime struct {
 	incompatibleSchema   atomic.Uint64
 	incompatibleKey      atomic.Uint64
 	incompatibleSPKI     atomic.Uint64
+	requiredWaits        [2][5]atomic.Uint64
+}
+
+const (
+	requiredLedger = iota
+	requiredMetadata
+)
+
+var requiredWaitStores = [...]string{"ledger", "metadata"}
+var requiredWaitOutcomes = [...]string{"confirmed", "deadline", "unavailable", "canceled", "error"}
+
+func (r *replicationRuntime) waitRequiredConfirmation(ctx context.Context, index uint64, store int) error {
+	err := r.coordinator.WaitConfirmed(ctx, index)
+	outcome := 4
+	switch {
+	case err == nil:
+		outcome = 0
+	case errors.Is(err, context.DeadlineExceeded):
+		outcome = 1
+	case errors.Is(err, replication.ErrReplicationUnavailable):
+		outcome = 2
+	case errors.Is(err, context.Canceled):
+		outcome = 3
+	}
+	r.requiredWaits[store][outcome].Add(1)
+	return err
 }
 
 func openReplicaApplication(
@@ -292,7 +318,7 @@ func openReplicaReplicationFoundation(
 		_ = journal.Close()
 		return nil, err
 	}
-	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
+	publisher, err := replication.OpenStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
 	if err != nil {
 		source.Close()
 		_ = journal.Close()
@@ -423,7 +449,7 @@ func openPrimaryReplication(
 	if err != nil {
 		return failSource(err)
 	}
-	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
+	publisher, err := replication.OpenStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
 	if err != nil {
 		return failSource(err)
 	}
@@ -889,7 +915,9 @@ func (r *replicationRuntime) ledgerHooks(options *ledger.Options) {
 		commit, err := r.coordinator.RecordLedgerBatch(batch)
 		return commit.Index, err
 	}
-	options.WaitConfirmed = r.coordinator.WaitConfirmed
+	options.WaitConfirmed = func(ctx context.Context, index uint64) error {
+		return r.waitRequiredConfirmation(ctx, index, requiredLedger)
+	}
 	options.BeforeRoll = r.coordinator.RequireLedgerConfirmed
 	options.AfterRoll = func(segment ledger.Segment) error {
 		_, err := r.coordinator.RecordLedgerRoll(segment)
@@ -915,7 +943,9 @@ func (r *replicationRuntime) installMetadataHook(store *boltstore.Store) error {
 	return store.SetMetadataJournalAfterDurable(func(batch metadatajournal.DurableBatch) (uint64, error) {
 		commit, err := r.coordinator.RecordMetadataBatch(batch)
 		return commit.Index, err
-	}, r.coordinator.WaitConfirmed)
+	}, func(ctx context.Context, index uint64) error {
+		return r.waitRequiredConfirmation(ctx, index, requiredMetadata)
+	})
 }
 
 func (r *replicationRuntime) replicateProviderObject(ctx context.Context, name string, sealed []byte) error {
@@ -967,10 +997,14 @@ func (r *Runtime) replicaGatewayRouter() http.Handler {
 	router.Get("/health/live", r.live)
 	router.Get("/health/ready", r.ready)
 	router.Get("/", func(writer http.ResponseWriter, _ *http.Request) {
-		writeJSON(writer, http.StatusOK, map[string]any{"name": "halro", "version": buildinfo.Current(), "role": "replica"})
+		body := map[string]any{"name": "halro", "version": buildinfo.Current(), "role": "replica"}
+		if r.replication.publisher != nil {
+			body["cluster_id"] = r.replication.publisher.Snapshot().ClusterID
+		}
+		writeJSON(writer, http.StatusOK, body)
 	})
 	router.Handle("/*", http.HandlerFunc(r.writeNotPrimary))
-	return router
+	return r.trackHAWriteResponses(router)
 }
 
 func (r *Runtime) replicaAdminRouter() http.Handler {
@@ -996,11 +1030,17 @@ func (r *Runtime) writeNotPrimary(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (r *Runtime) adminClusterStatus(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, r.clusterStatusView())
+}
+
+func (r *Runtime) clusterStatusView() map[string]any {
 	if r.replication == nil {
-		writeJSON(writer, http.StatusOK, map[string]string{"mode": "standalone"})
-		return
+		return map[string]any{"mode": "standalone"}
 	}
-	state := r.replication.publisher.Snapshot()
+	return r.clusterStatusViewFor(r.replication.publisher.Snapshot())
+}
+
+func (r *Runtime) clusterStatusViewFor(state replication.MemberState) map[string]any {
 	connections := map[string]bool{}
 	if r.replication.manager != nil {
 		connections = r.replication.manager.PeerConnections()
@@ -1009,19 +1049,23 @@ func (r *Runtime) adminClusterStatus(writer http.ResponseWriter, _ *http.Request
 	for _, peer := range state.Peers {
 		peers = append(peers, map[string]any{"node_id": peer.Name, "connected": connections[peer.Name]})
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	return map[string]any{
 		"mode": "ha", "startup_ready": r.replication.startupReady.Load(),
 		"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
 		"role": state.Role, "term": state.Term, "promised_term": state.PromisedTerm,
 		"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
 		"applied_index": state.AppliedIndex, "projection": state.Projection, "peers": peers,
-	})
+	}
 }
 
 func (r *Runtime) replicaMetricsRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Get("/health/live", r.live)
+	if r.config.Metrics.HAStatus.Enabled {
+		router.Get("/ha/status", r.haMemberStatus)
+		router.Get("/ha/transitions", r.haMemberTransitions)
+	}
 	router.Get("/metrics", func(writer http.ResponseWriter, request *http.Request) {
 		if r.config.Metrics.RequireAuth && !r.authorizeMetrics(request) {
 			writer.Header().Set("WWW-Authenticate", `Bearer realm="halro-metrics"`)
@@ -1041,6 +1085,14 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 		return
 	}
 	state := r.replication.publisher.Snapshot()
+	metricHeader(output, "halro_ha_status_auth_failures_total", "counter", "Rejected HA member status requests since process start.")
+	fmt.Fprintf(output, "halro_ha_status_auth_failures_total %d\n", r.haStatus.authFailed.Load())
+	metricHeader(output, "halro_ha_client_write_http_responses_total", "counter", "Server-observed terminal HTTP result on a tracked HA client write route; 2xx can include incomplete streams and does not prove client receipt.")
+	for outcome, name := range haWriteResponseOutcomes {
+		fmt.Fprintf(output, "halro_ha_client_write_http_responses_total{outcome=%s} %d\n", strconv.Quote(name), r.haWriteResponses[outcome].Load())
+	}
+	metricHeader(output, "halro_cluster_member_info", "gauge", "Configured identity reported by this HA member.")
+	fmt.Fprintf(output, "halro_cluster_member_info{cluster_id=%s,node_id=%s} 1\n", strconv.Quote(state.ClusterID), strconv.Quote(state.NodeID))
 	metricHeader(output, "halro_cluster_role", "gauge", "Authenticated role held by this member.")
 	fmt.Fprintf(output, "halro_cluster_role{role=%s} 1\n", strconv.Quote(string(state.Role)))
 	metricHeader(output, "halro_cluster_term", "gauge", "Current durable replication term.")
@@ -1049,6 +1101,19 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 	fmt.Fprintf(output, "halro_cluster_promised_term %d\n", state.PromisedTerm)
 	metricHeader(output, "halro_cluster_incarnation_info", "gauge", "Static identity of the active cluster incarnation.")
 	fmt.Fprintf(output, "halro_cluster_incarnation_info{incarnation=%s} 1\n", strconv.Quote(state.Incarnation))
+	metricHeader(output, "halro_replication_member_state_version", "gauge", "Authenticated member state format version; version 3 has a durable transition journal.")
+	fmt.Fprintf(output, "halro_replication_member_state_version %d\n", state.Version)
+	if state.Version == replication.TransitionStateVersion {
+		storage, err := r.replication.publisher.TransitionJournalStorage()
+		metricHeader(output, "halro_replication_transition_journal_capacity_readable", "gauge", "Whether this version-3 member can account for its retained transition journal files; not a full chain verification.")
+		fmt.Fprintf(output, "halro_replication_transition_journal_capacity_readable %d\n", boolMetric(err == nil))
+		metricHeader(output, "halro_replication_transition_journal_segments", "gauge", "Retained member transition journal segment count, including the active segment.")
+		metricHeader(output, "halro_replication_transition_journal_bytes", "gauge", "Known bytes in retained member transition journal segments; excludes state.json and free disk space.")
+		if err == nil {
+			fmt.Fprintf(output, "halro_replication_transition_journal_segments %d\n", storage.Segments)
+			fmt.Fprintf(output, "halro_replication_transition_journal_bytes %d\n", storage.Bytes)
+		}
+	}
 	metricHeader(output, "halro_replication_index", "gauge", "Global replication index by durability stage.")
 	fmt.Fprintf(output, "halro_replication_index{kind=\"durable\"} %d\n", state.DurableIndex)
 	fmt.Fprintf(output, "halro_replication_index{kind=\"confirmed\"} %d\n", state.ConfirmedIndex)
@@ -1074,11 +1139,43 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 	}
 	metricHeader(output, "halro_replication_unavailable", "gauge", "Whether this member cannot currently confirm replicated writes.")
 	fmt.Fprintf(output, "halro_replication_unavailable %d\n", boolMetric(unavailable))
+	if r.replication.coordinator != nil {
+		telemetry := r.replication.coordinator.ConfirmationTelemetry()
+		writeReplicationDurationHistogram(output, "halro_replication_durable_to_confirm_seconds",
+			"Elapsed time from locally durable Primary frame to durably published quorum confirmation; excludes recovered suffix frames.",
+			telemetry.DurableToConfirmed)
+		metricHeader(output, "halro_replication_last_confirmed_timestamp_seconds", "gauge", "Unix time of the last newly durably published Primary confirmation in this process; zero before first observation.")
+		var lastConfirmed int64
+		if !telemetry.LastConfirmedAt.IsZero() {
+			lastConfirmed = telemetry.LastConfirmedAt.Unix()
+		}
+		fmt.Fprintf(output, "halro_replication_last_confirmed_timestamp_seconds %d\n", lastConfirmed)
+		metricHeader(output, "halro_replication_required_confirmation_wait_total", "counter", "Terminal outcome of a required Ledger or metadata confirmation wait; internal barrier outcomes, not final HTTP responses.")
+		for store, label := range requiredWaitStores {
+			for outcome, name := range requiredWaitOutcomes {
+				fmt.Fprintf(output, "halro_replication_required_confirmation_wait_total{store=%s,outcome=%s} %d\n",
+					strconv.Quote(label), strconv.Quote(name), r.replication.requiredWaits[store][outcome].Load())
+			}
+		}
+	}
+	if r.replication.receiver != nil {
+		writeReplicationDurationHistogram(output, "halro_replication_sink_persist_seconds",
+			"Elapsed time spent in the Replica native frame sink Persist call, including failed calls; retransmissions are excluded.",
+			r.replication.receiver.SinkPersistTelemetry())
+	}
+	if r.replication.applier != nil {
+		writeReplicationDurationHistogram(output, "halro_replication_apply_batch_seconds",
+			"Elapsed time for a successful Replica confirmed-prefix apply batch, including projection and applied-watermark publication.",
+			r.replication.applier.ApplyBatchTelemetry())
+	}
 	metricHeader(output, "halro_replication_state", "gauge", "Current replication availability state.")
 	fmt.Fprintf(output, "halro_replication_state{state=\"replicating\"} %d\n", boolMetric(!unavailable))
 	fmt.Fprintf(output, "halro_replication_state{state=\"unavailable\"} %d\n", boolMetric(unavailable))
 	metricHeader(output, "halro_replication_peer_connected", "gauge", "Whether the authenticated data session for a configured peer is connected.")
-	connections := r.replication.manager.PeerConnections()
+	connections := map[string]bool{}
+	if r.replication.manager != nil {
+		connections = r.replication.manager.PeerConnections()
+	}
 	for _, peer := range state.Peers {
 		fmt.Fprintf(output, "halro_replication_peer_connected{peer=%s} %d\n", strconv.Quote(peer.Name), boolMetric(connections[peer.Name]))
 	}
@@ -1088,4 +1185,17 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"schema\"} %d\n", boolMetric(r.replication.incompatibleSchema.Load() > 0))
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"key_challenge\"} %d\n", boolMetric(r.replication.incompatibleKey.Load() > 0))
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"spki\"} %d\n", boolMetric(r.replication.incompatibleSPKI.Load() > 0))
+}
+
+func writeReplicationDurationHistogram(output *bufio.Writer, name, help string, histogram replication.DurationHistogram) {
+	metricHeader(output, name, "histogram", help)
+	var cumulative uint64
+	for index, count := range histogram.Buckets {
+		cumulative += count
+		fmt.Fprintf(output, "%s_bucket{le=%s} %d\n", name,
+			strconv.Quote(strconv.FormatFloat(replication.DurationBucketBound(index), 'f', -1, 64)), cumulative)
+	}
+	fmt.Fprintf(output, "%s_bucket{le=\"+Inf\"} %d\n", name, histogram.Count)
+	fmt.Fprintf(output, "%s_sum %s\n", name, strconv.FormatFloat(histogram.Sum, 'f', -1, 64))
+	fmt.Fprintf(output, "%s_count %d\n", name, histogram.Count)
 }

@@ -80,6 +80,7 @@ export const enUS = {
     governanceSummaryUnavailable: "The governance summary could not be produced from a consistent accounting and outcome snapshot. Try again after checking system status.",
     governanceExportInconsistent: "The governance export could not capture a consistent accounting and outcome snapshot. No partial export was accepted.",
     governanceSummaryOverflow: "The governance summary exceeds the supported numeric range. Narrow the cohort before trying again.",
+    replicationUnavailable: "Replication confirmation is unavailable. The change may take effect after a Replica returns. Wait for recovery, then read the resource and revision before deciding whether to retry.",
     invalidConsoleWindow: "The console window length is outside the allowed range.",
     consoleWindowExceedsRetention: "The console window cannot exceed the archive's retention, or the screen promises history the archive no longer holds.",
     consoleWindowTrimUnacknowledged: "Shortening the console window discards call history and must be acknowledged first.",

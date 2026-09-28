@@ -47,28 +47,52 @@ type PrimaryStateWriter func(progress PrimaryProgress) error
 // store commit paths. RecordDurable must be called only after the source bytes'
 // fsync and before that store reports success to its caller.
 type PrimaryCoordinator struct {
-	mu                 sync.Mutex
-	clusterID          string
-	incarnation        string
-	nodeID             string
-	term               uint64
-	journal            *OrderingJournal
-	confirmations      *ConfirmationTracker
-	outbound           OutboundQueue
-	persistState       PrimaryStateWriter
-	confirmed          uint64
-	projection         ProjectionState
-	available          bool
-	unavailable        error
-	changed            chan struct{}
-	pending            map[uint64][]byte
-	pendingNotice      []byte
-	pendingNoticeIndex uint64
-	failedFrameIndex   uint64
-	peerApplied        map[string]uint64
-	noticeUnavailable  bool
-	manualUnavailable  error
-	poisoned           error
+	mu                    sync.Mutex
+	clusterID             string
+	incarnation           string
+	nodeID                string
+	term                  uint64
+	journal               *OrderingJournal
+	confirmations         *ConfirmationTracker
+	outbound              OutboundQueue
+	persistState          PrimaryStateWriter
+	confirmed             uint64
+	projection            ProjectionState
+	available             bool
+	unavailable           error
+	changed               chan struct{}
+	pending               map[uint64][]byte
+	pendingSince          map[uint64]time.Time
+	confirmationTimes     DurationHistogram
+	lastConfirmedAt       time.Time
+	pendingNotice         []byte
+	pendingNoticeIndex    uint64
+	failedFrameIndex      uint64
+	peerApplied           map[string]uint64
+	noticeUnavailable     bool
+	manualUnavailable     error
+	poisoned              error
+	availabilityEvents    []AvailabilityTransitionEvent
+	availabilityStartedAt time.Time
+	availabilitySequence  uint64
+	availabilityDropped   uint64
+}
+
+const maxAvailabilityTransitionEvents = 128
+
+type AvailabilityTransitionEvent struct {
+	Sequence uint64    `json:"sequence"`
+	At       time.Time `json:"at"`
+	From     string    `json:"from"`
+	To       string    `json:"to"`
+	Reason   string    `json:"reason"`
+}
+
+type AvailabilityTransitionHistory struct {
+	CoordinatorStartedAt time.Time                     `json:"coordinator_started_at"`
+	Current              string                        `json:"current"`
+	Dropped              uint64                        `json:"dropped"`
+	Events               []AvailabilityTransitionEvent `json:"events"`
 }
 
 // NewPrimaryCoordinator accepts the exact encoded frames for any authenticated
@@ -110,8 +134,8 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 	coordinator := &PrimaryCoordinator{
 		clusterID: clusterID, incarnation: incarnation, nodeID: nodeID, term: term, journal: journal,
 		confirmations: tracker, outbound: outbound, persistState: persistState,
-		confirmed: confirmed, projection: projection, available: true, changed: make(chan struct{}),
-		pending: make(map[uint64][]byte), peerApplied: make(map[string]uint64, len(peers)),
+		confirmed: confirmed, projection: projection, available: true, changed: make(chan struct{}), availabilityStartedAt: time.Now().UTC(),
+		pending: make(map[uint64][]byte), pendingSince: make(map[uint64]time.Time), peerApplied: make(map[string]uint64, len(peers)),
 	}
 	for _, peer := range peers {
 		coordinator.peerApplied[peer] = 0
@@ -159,7 +183,7 @@ func NewPrimaryCoordinator(clusterID, incarnation, nodeID string, term, confirme
 		if err := coordinator.queueCommitNotice(confirmed); err != nil {
 			coordinator.noticeUnavailable = true
 			coordinator.unavailable = err
-			coordinator.available = false
+			coordinator.setAvailability(false, "notice_queue_failed")
 		}
 	}
 	return coordinator, nil
@@ -201,12 +225,13 @@ func (c *PrimaryCoordinator) RecordDurable(frame Frame) (LocalCommit, error) {
 	}
 	if err := c.persistState(PrimaryProgress{DurableIndex: frame.Index, ConfirmedIndex: c.confirmed, OrderingHeadMAC: persistedRecord.MAC, Projection: c.projection}); err != nil {
 		c.poisoned = err
-		c.available = false
+		c.setAvailability(false, "state_persist_failed")
 		c.unavailable = err
 		c.signalChanged()
 		return LocalCommit{}, fmt.Errorf("persist primary durable watermark: %w", err)
 	}
 	c.pending[frame.Index] = append([]byte(nil), encoded...)
+	c.pendingSince[frame.Index] = time.Now()
 	commit := LocalCommit{Index: frame.Index, Encoded: encoded, ReplicationAvailable: c.available}
 	if err := c.outbound.QueueFrame(frame.Index, append([]byte(nil), encoded...)); err != nil {
 		c.noteFrameQueueFailure(frame.Index, err)
@@ -235,14 +260,14 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 		projection, projectionErr := c.projectionThrough(confirmed)
 		if projectionErr != nil {
 			c.poisoned = projectionErr
-			c.available = false
+			c.setAvailability(false, "projection_failed")
 			c.unavailable = projectionErr
 			c.signalChanged()
 			return c.confirmed, fmt.Errorf("reconstruct confirmed primary projection: %w", projectionErr)
 		}
 		if err := c.persistState(PrimaryProgress{DurableIndex: durableIndex, ConfirmedIndex: confirmed, OrderingHeadMAC: orderingHead, Projection: projection}); err != nil {
 			c.poisoned = err
-			c.available = false
+			c.setAvailability(false, "confirmation_persist_failed")
 			c.unavailable = err
 			c.signalChanged()
 			return c.confirmed, fmt.Errorf("persist confirmed member state: %w", err)
@@ -265,6 +290,16 @@ func (c *PrimaryCoordinator) Acknowledge(ack Acknowledgement) (uint64, error) {
 	for index := range c.pending {
 		if index <= confirmed {
 			delete(c.pending, index)
+		}
+	}
+	if advanced {
+		now := time.Now()
+		c.lastConfirmedAt = now
+		for index, since := range c.pendingSince {
+			if index <= confirmed {
+				c.confirmationTimes.observe(now.Sub(since))
+				delete(c.pendingSince, index)
+			}
 		}
 	}
 	if c.failedFrameIndex > 0 && confirmed >= c.failedFrameIndex {
@@ -317,7 +352,7 @@ func (c *PrimaryCoordinator) MarkUnavailable(cause error) {
 	if cause == nil {
 		cause = ErrReplicationUnavailable
 	}
-	c.available = false
+	c.setAvailability(false, "manual_unavailable")
 	c.manualUnavailable = cause
 	c.unavailable = cause
 	c.signalChanged()
@@ -338,7 +373,7 @@ func (c *PrimaryCoordinator) FreezeForStepdown(expectedIndex uint64) error {
 		return fmt.Errorf("planned stepdown target index %d does not match Primary durable/confirmed prefix %d/%d", expectedIndex, head, c.confirmed)
 	}
 	c.manualUnavailable = errors.New("planned stepdown frozen")
-	c.available = false
+	c.setAvailability(false, "planned_stepdown")
 	c.unavailable = c.manualUnavailable
 	c.signalChanged()
 	return nil
@@ -389,6 +424,21 @@ func (c *PrimaryCoordinator) Status() (confirmed uint64, available bool, cause e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.confirmed, c.available, c.unavailable
+}
+
+func (c *PrimaryCoordinator) AvailabilityTransitions() AvailabilityTransitionHistory {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return AvailabilityTransitionHistory{
+		CoordinatorStartedAt: c.availabilityStartedAt, Current: availabilityName(c.available), Dropped: c.availabilityDropped,
+		Events: append([]AvailabilityTransitionEvent(nil), c.availabilityEvents...),
+	}
+}
+
+func (c *PrimaryCoordinator) ConfirmationTelemetry() ConfirmationTelemetry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return ConfirmationTelemetry{DurableToConfirmed: c.confirmationTimes, LastConfirmedAt: c.lastConfirmedAt}
 }
 
 // RequireLedgerConfirmed is the Roll gate: a generation may become a sealed
@@ -467,7 +517,7 @@ func (c *PrimaryCoordinator) noteFrameQueueFailure(index uint64, cause error) {
 	if index > c.failedFrameIndex {
 		c.failedFrameIndex = index
 	}
-	c.available = false
+	c.setAvailability(false, "frame_queue_failed")
 	c.unavailable = cause
 }
 
@@ -494,10 +544,48 @@ func (c *PrimaryCoordinator) queueCommitNotice(confirmed uint64) error {
 }
 
 func (c *PrimaryCoordinator) refreshAvailability() {
-	c.available = c.failedFrameIndex == 0 && !c.noticeUnavailable && c.manualUnavailable == nil
+	next := c.failedFrameIndex == 0 && !c.noticeUnavailable && c.manualUnavailable == nil && c.poisoned == nil
+	reason := "recovered"
+	switch {
+	case c.poisoned != nil:
+		reason = "poisoned"
+	case c.manualUnavailable != nil:
+		reason = "manual_unavailable"
+	case c.failedFrameIndex != 0:
+		reason = "frame_queue_failed"
+	case c.noticeUnavailable:
+		reason = "notice_queue_failed"
+	}
+	c.setAvailability(next, reason)
 	if c.available {
 		c.unavailable = nil
 	}
+}
+
+func availabilityName(available bool) string {
+	if available {
+		return "replicating"
+	}
+	return "unavailable"
+}
+
+// setAvailability runs under the coordinator lock, after the operation that
+// changed the state. It never performs I/O or exposes arbitrary error text.
+func (c *PrimaryCoordinator) setAvailability(next bool, reason string) {
+	previous := c.available
+	c.available = next
+	if previous == next {
+		return
+	}
+	c.availabilitySequence++
+	if len(c.availabilityEvents) == maxAvailabilityTransitionEvents {
+		copy(c.availabilityEvents, c.availabilityEvents[1:])
+		c.availabilityEvents = c.availabilityEvents[:maxAvailabilityTransitionEvents-1]
+		c.availabilityDropped++
+	}
+	c.availabilityEvents = append(c.availabilityEvents, AvailabilityTransitionEvent{
+		Sequence: c.availabilitySequence, At: time.Now().UTC(), From: availabilityName(previous), To: availabilityName(next), Reason: reason,
+	})
 }
 
 func ReplicationRetryAfter() time.Duration { return time.Second }

@@ -18,8 +18,65 @@ import (
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/store/lock"
 )
+
+func TestGatewayRootIdentifiesHAClusterAndRoleForNonBillableServiceProbe(t *testing.T) {
+	cfg := testConfig(t)
+	if err := Initialize(cfg); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	readRoot := func() map[string]any {
+		response := httptest.NewRecorder()
+		runtime.gatewayRouter().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("root status=%d body=%s", response.Code, response.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+	if body := readRoot(); body["role"] != nil || body["cluster_id"] != nil {
+		t.Fatalf("Standalone unexpectedly exposed HA identity: %#v", body)
+	}
+	publisher, err := replication.NewStatePublisher(filepath.Join(t.TempDir(), "state.json"), make([]byte, 32), replication.MemberState{
+		Version: replication.StateVersion, ClusterID: "test-cluster", Incarnation: "inc_1", NodeID: "halro-0",
+		Role: replication.RolePrimary, Term: 1, PromisedTerm: 1,
+		Peers: []replication.StatePeer{{Name: "halro-1", Address: "private.invalid:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	runtime.replication = &replicationRuntime{role: replication.RolePrimary, publisher: publisher}
+	defer func() { runtime.replication = nil }()
+	runtime.replication.startupReady.Store(true)
+	if body := readRoot(); body["role"] != "primary" || body["cluster_id"] != "test-cluster" {
+		t.Fatalf("HA root identity=%#v", body)
+	}
+	replicaPublisher, err := replication.NewStatePublisher(filepath.Join(t.TempDir(), "state.json"), make([]byte, 32), replication.MemberState{
+		Version: replication.StateVersion, ClusterID: "test-cluster", Incarnation: "inc_1", NodeID: "halro-1",
+		Role: replication.RoleReplica, Term: 1, PromisedTerm: 1,
+		Peers: []replication.StatePeer{{Name: "halro-0", Address: "private.invalid:9910", SPKISHA256: "sha256:" + strings.Repeat("a", 64)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replicaPublisher.Close()
+	runtime.replication = &replicationRuntime{role: replication.RoleReplica, publisher: replicaPublisher}
+	runtime.replication.startupReady.Store(true)
+	if body := readRoot(); body["role"] != "replica" || body["cluster_id"] != "test-cluster" {
+		t.Fatalf("HA Replica root identity=%#v", body)
+	}
+}
 
 func TestInitializeOpenAndReadiness(t *testing.T) {
 	cfg := testConfig(t)

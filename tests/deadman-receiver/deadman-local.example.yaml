@@ -1,0 +1,51 @@
+# Local fixture only. Replace absolute test certificate, token and state paths.
+probe_id: local-ttl-probe
+environment: local
+region: local
+cluster: local-ha
+interval: 10s
+timeout: 5s
+heartbeat_ttl: 30s
+failures_to_down: 2
+successes_to_up: 2
+outbox_limit: 512
+delivery_batch: 16
+state_file: /path/to/private/deadman-state.json
+audit_file: /path/to/private/deadman-audit.jsonl
+notification:
+  url: https://127.0.0.1:19420/v1/events
+  bearer_token_file: /path/to/private/receiver-token
+  timeout: 5s
+  retry_min: 1s
+  retry_max: 10s
+  tls:
+    ca_file: /path/to/private/ca.crt
+    client_cert_file: /path/to/private/client.crt
+    client_key_file: /path/to/private/client.key
+targets:
+  - id: client-root
+    kind: halro
+    mode: ha_client_root
+    url: https://127.0.0.1:19420/
+    tls:
+      ca_file: /path/to/private/ca.crt
+      client_cert_file: /path/to/private/client.crt
+      client_key_file: /path/to/private/client.key
+  - id: prometheus
+    kind: prometheus
+    url: https://127.0.0.1:19420/-/ready
+    tls:
+      ca_file: /path/to/private/ca.crt
+      client_cert_file: /path/to/private/client.crt
+      client_key_file: /path/to/private/client.key
+    freshness:
+      mode: prometheus_scalar_age
+      url: https://127.0.0.1:19420/api/v1/query?query=synthetic_age
+      max_age: 2m
+  - id: alertmanager
+    kind: alertmanager
+    url: https://127.0.0.1:19420/-/ready
+    tls:
+      ca_file: /path/to/private/ca.crt
+      client_cert_file: /path/to/private/client.crt
+      client_key_file: /path/to/private/client.key

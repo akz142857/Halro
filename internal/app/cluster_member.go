@@ -279,7 +279,7 @@ func PromoteMember(ctx context.Context, cfg config.Config, options PromoteMember
 	if err := proposal.Validate(); err != nil {
 		return PromoteMemberResult{}, err
 	}
-	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
+	publisher, err := replication.OpenStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
 	if err != nil {
 		return PromoteMemberResult{}, err
 	}
@@ -625,7 +625,7 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 		manifest.Term > state.Term || manifest.AppliedIndex > state.ConfirmedIndex || !stateHasPeer(state, manifest.SourceNodeID) {
 		return backup.Manifest{}, errors.New("Replica backup manifest does not belong to a configured peer and confirmed cluster prefix")
 	}
-	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
+	publisher, err := replication.OpenStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
 	if err != nil {
 		return backup.Manifest{}, err
 	}

@@ -5,11 +5,81 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
+  # Duplicate target labels survive a Prometheus instant-vector lookback after
+  # the second target stops. Keep the source alert independent of HA joins.
   - interval: 1m
     input_series:
-      - series: 'halro_cluster_incarnation_info{environment="test",region="local",cluster="ha",instance="replica-1",incarnation="inc_1"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+        values: '1x9'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="primary",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x9'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one",source="duplicate"}'
+        values: '_ 1 1 _ _ _ _ _ _ _'
+      - series: 'halro_replication_durable_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_durable_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 0 0 _ _ _ _ _ _ _'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 0 0 _ _ _ _ _ _ _'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",source="duplicate"}'
+        values: '_ 0 0 _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroMemberDuplicateScrapeSource
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberDuplicateScrapeSource
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberDuplicateScrapeSource, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Multiple Metrics scrape sources claim one Halro member, runbook_url: /docs/observability/operations-runbook.md#halromemberduplicatescrapesource}
+      - eval_time: 2m
+        alertname: HalroMultiplePrimaries
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberRoleAmbiguous
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HalroMemberDuplicateScrapeSource
+        exp_alerts: []
+    promql_expr_test:
+      - eval_time: 2m
+        expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        exp_samples: []
+      - eval_time: 8m
+        expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        exp_samples:
+          - labels: 'halro:ha_epoch_stable:bool{environment="test",region="local",cluster="ha",instance="one"}'
+            value: 1
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1",incarnation="inc_1"}'
         values: '1x5'
-      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="replica-1",role="replica"}'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1",role="replica"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1"}'
         values: '1x5'
     alert_rule_test:
       - eval_time: 1m
@@ -23,9 +93,92 @@ tests:
 
   - interval: 1m
     input_series:
-      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1",role="replica"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="noise",role="primary"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts:
+          - exp_labels: {alertname: HalroNoPrimary, category: ha, cluster: ha, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: No Halro member reports the Primary role, runbook_url: /docs/observability/operations-runbook.md#halronoprimary}
+      - eval_time: 3m
+        alertname: HalroMultiplePrimaries
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="rogue",role="replica"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="awaiting_decision"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+      - eval_time: 0m
+        alertname: HalroMemberRoleAmbiguous
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberRoleAmbiguous, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member has conflicting role observations, runbook_url: /docs/observability/operations-runbook.md#halromemberroleambiguous}
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
         values: '1x3'
-      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="two",role="primary"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x3'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+        values: '1x3'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",role="primary"}'
         values: '1x3'
     alert_rule_test:
       - eval_time: 0m
@@ -36,22 +189,679 @@ tests:
 
   - interval: 1m
     input_series:
-      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x7'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x7'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x7'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",incarnation="inc_2"}'
+        values: '1x7'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroMemberIncarnationConflict
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIncarnationConflict, category: ha, cluster: ha, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: Halro members report conflicting cluster incarnations, runbook_url: /docs/observability/operations-runbook.md#halromemberincarnationconflict}
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="missing"}'
+        values: '1x3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroMemberIdentityMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: missing, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member does not report its configured HA identity, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymissing}
+
+  # A previous successful scrape must not fill an identity or role omitted by
+  # a later successful scrape while the old series remains in lookback.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x4'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one"}'
+        values: '1 _ _ 1 1'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '1 _ _ 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberIdentityMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberIdentityMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: one, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member does not report its configured HA identity, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymissing}
+      - eval_time: 2m
+        alertname: HalroMemberRoleMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberRoleMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: one, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has no HA role observation, runbook_url: /docs/observability/operations-runbook.md#halromemberrolemissing}
+      - eval_time: 3m
+        alertname: HalroMemberIdentityMissing
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroMemberRoleMissing
+        exp_alerts: []
+
+  # Old Primary and incarnation label series must not fabricate conflicts or
+  # hide a new no-Primary state after a later successful scrape.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+        values: '1 _ _ _ _ _'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '_ 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberRoleAmbiguous
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts:
+          - exp_labels: {alertname: HalroNoPrimary, category: ha, cluster: ha, environment: test, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: No Halro member reports the Primary role, runbook_url: /docs/observability/operations-runbook.md#halronoprimary}
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x4'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x4'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="primary"}'
+        values: '1 _ _ _ _'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",role="replica"}'
+        values: '_ 1 1 1 1'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",role="replica"}'
+        values: '1 _ _ _ _'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",role="primary"}'
+        values: '_ 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMultiplePrimaries
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: HalroMemberRoleAmbiguous
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroNoPrimary
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x4'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x4'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1 _ _ _ _'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_2"}'
+        values: '_ 1 1 1 1'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",incarnation="inc_2"}'
+        values: '1x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberIncarnationConflict
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="missing"}'
+        values: '1x3'
+      - series: 'halro_cluster_member_info{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="missing",cluster_id="ha",node_id="missing"}'
+        values: '1x3'
+      - series: 'halro_cluster_role{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="missing",role="replica"}'
+        values: '1x3'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroMemberIdentityMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: missing, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member does not report its configured HA identity, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymissing}
+      - eval_time: 2m
+        alertname: HalroMemberRoleMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberRoleMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: missing, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has no HA role observation, runbook_url: /docs/observability/operations-runbook.md#halromemberrolemissing}
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="missing-role"}'
+        values: '1x4'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="missing-role",role="replica"}'
+        values: '0 0 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberRoleMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberRoleMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: missing-role, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has no HA role observation, runbook_url: /docs/observability/operations-runbook.md#halromemberrolemissing}
+      - eval_time: 3m
+        alertname: HalroMemberRoleMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '1x5'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x5'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x5'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '0x5'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="durable"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="confirmed"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '0x5'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="durable"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="confirmed"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="applied"}'
+        values: '0x5'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '1x5'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '1x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",kind="durable"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",kind="confirmed"}'
+        values: '0x5'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",kind="applied"}'
+        values: '0x5'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x5'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '1x5'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x5'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x5'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="schema"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="key_challenge"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="spki"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="schema"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="key_challenge"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="spki"}'
+        values: '_ _ _ 0 0'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",reason="schema"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",reason="key_challenge"}'
+        values: '0x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",reason="spki"}'
+        values: '0x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",peer="two"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",peer="three"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",peer="one"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",peer="three"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",peer="one"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="three",peer="two"}'
+        values: '_ _ _ 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberHASignalMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: two, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has an incomplete HA signal inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing}
+          - exp_labels: {alertname: HalroMemberHASignalMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: three, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has an incomplete HA signal inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing}
+      - eval_time: 4m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+
+  # A metric disappearing after a successful scrape remains in Prometheus's
+  # instant-vector lookback. It must not postpone the one-minute alert.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0 0 _ _ _ _ _ _ 0 0'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '0x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="applied"}'
+        values: '0x9'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",peer="two"}'
+        values: '1x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",peer="one"}'
+        values: '1x9'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberHASignalMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: two, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has an incomplete HA signal inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing}
+      - eval_time: 4m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+
+  # A term series alone can disappear while every other fixed HA signal and
+  # up continue. Its old instant-vector value must not hide the gap.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '0x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1 1 _ _ _ _ _ _ 1 1'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="applied"}'
+        values: '0x9'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",peer="two"}'
+        values: '1x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",peer="one"}'
+        values: '1x9'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberHASignalMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: two, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has an incomplete HA signal inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing}
+      - eval_time: 4m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+
+  # One index kind missing cannot be hidden by a duplicate of another kind.
+  # Up and every other fixed HA signal continue throughout the gap.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_cluster_maintenance{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '0x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="durable"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="confirmed"}'
+        values: '0x9'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="applied"}'
+        values: '0 0 _ _ _ _ _ _ 0 0'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",kind="durable",source="duplicate"}'
+        values: '_ _ 0 0 0 0 0 0 _ _'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x9'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '1x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '0x9'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="schema"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="key_challenge"}'
+        values: '0x9'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",reason="spki"}'
+        values: '0x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",peer="two"}'
+        values: '1x9'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="two",peer="one"}'
+        values: '1x9'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberHASignalMissing, category: ha, cluster: ha, environment: test, expected_target: "true", instance: two, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: A scraped Halro member has an incomplete HA signal inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberhasignalmissing}
+      - eval_time: 4m
+        alertname: HalroMemberHASignalMissing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="two"}'
+        values: '1x2'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x2'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMismatch, category: ha, cluster: ha, cluster_id: ha, environment: test, expected_target: "true", instance: one, job: halro, node_id: two, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member's self-reported identity disagrees with scrape inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymismatch}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one"}'
+        values: '1x2'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x2'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_replication_durable_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '10x2'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '11x2'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '9x2'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x2'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: HalroReplicationIndexOrderingInvalid
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationIndexOrderingInvalid, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member reports invalid durable/confirmed/applied ordering, runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexorderinginvalid}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7 7 7 7'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '6 6 7 7'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x4'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroPromisedTermInvalid
+        exp_alerts:
+          - exp_labels: {alertname: HalroPromisedTermInvalid, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member reports a promise below its current term, runbook_url: /docs/observability/operations-runbook.md#halropromisedterminvalid}
+      - eval_time: 3m
+        alertname: HalroPromisedTermInvalid
+        exp_alerts: []
+
+  # An old identity contradiction remains in the instant-vector lookback after
+  # the member starts reporting its corrected identity in a later scrape.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="two"}'
+        values: '1 1 _ _ _'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one"}'
+        values: '_ _ 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMismatch, category: ha, cluster: ha, cluster_id: ha, environment: test, expected_target: "true", instance: one, job: halro, node_id: two, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member's self-reported identity disagrees with scrape inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymismatch}
+      - eval_time: 2m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="other",node_id="one"}'
+        values: '1 1 _ _ _'
+      - series: 'halro_cluster_member_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",cluster_id="ha",node_id="one"}'
+        values: '_ _ 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts:
+          - exp_labels: {alertname: HalroMemberIdentityMismatch, category: ha, cluster: ha, cluster_id: other, environment: test, expected_target: "true", instance: one, job: halro, node_id: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member's self-reported identity disagrees with scrape inventory, runbook_url: /docs/observability/operations-runbook.md#halromemberidentitymismatch}
+      - eval_time: 2m
+        alertname: HalroMemberIdentityMismatch
+        exp_alerts: []
+
+  # An invalid index pair is actionable only when both operands were actually
+  # returned by this successful scrape, not when one is a retained old sample.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_replication_durable_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '10 10 _ _ _'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '11x5'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '9x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroReplicationIndexOrderingInvalid
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationIndexOrderingInvalid, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member reports invalid durable/confirmed/applied ordering, runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexorderinginvalid}
+      - eval_time: 2m
+        alertname: HalroReplicationIndexOrderingInvalid
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x5'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7 7 _ _ _'
+      - series: 'halro_cluster_promised_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '6x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroPromisedTermInvalid
+        exp_alerts:
+          - exp_labels: {alertname: HalroPromisedTermInvalid, category: ha, cluster: ha, environment: test, instance: one, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member reports a promise below its current term, runbook_url: /docs/observability/operations-runbook.md#halropromisedterminvalid}
+      - eval_time: 2m
+        alertname: HalroPromisedTermInvalid
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
         values: '1x8'
-      - series: 'halro_replication_startup_ready{environment="test",region="local",cluster="ha",instance="primary"}'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '20 20 20 19 19 19 19 19'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HalroReplicationIndexRegressed
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationIndexRegressed, category: ha, cluster: ha, environment: test, expected_target: "true", instance: one, job: halro, kind: applied, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member's replication index regressed within one epoch, runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexregressed}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '20 20 20 19 19 19 _ _'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: HalroReplicationIndexRegressed
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationIndexRegressed, category: ha, cluster: ha, environment: test, expected_target: "true", instance: one, job: halro, kind: applied, owner: sre, region: local, service: halro, severity: critical}
+            exp_annotations: {summary: A Halro member's replication index regressed within one epoch, runbook_url: /docs/observability/operations-runbook.md#halroreplicationindexregressed}
+      - eval_time: 6m
+        alertname: HalroReplicationIndexRegressed
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_term{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",kind="applied"}'
+        values: '20 20 20 19 19 19 19 19'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HalroReplicationIndexRegressed
+        exp_alerts: []
+    promql_expr_test:
+      - expr: 'halro:ha_epoch_stable:bool{environment="test",cluster="ha",instance="one"}'
+        eval_time: 6m
+        exp_samples: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+        values: '1x8'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
         values: '0x4 1x4'
-      - series: 'halro_replication_unavailable{environment="test",region="local",cluster="ha",instance="primary"}'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
         values: '0 1x3 0x4'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '1x8'
     alert_rule_test:
       - eval_time: 2m
         alertname: HalroReplicationUnavailable
         exp_alerts:
-          - exp_labels: {alertname: HalroReplicationUnavailable, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
-            exp_annotations: {summary: The Halro Primary cannot confirm replicated writes, runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable}
+          - exp_labels: {alertname: HalroReplicationUnavailable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: primary, job: halro, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: The Halro Primary reports an internal replication block, runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable}
       - eval_time: 3m
         alertname: HalroAwaitingOperator
         exp_alerts:
-          - exp_labels: {alertname: HalroAwaitingOperator, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
+          - exp_labels: {alertname: HalroAwaitingOperator, category: ha, cluster: ha, environment: test, expected_target: "true", instance: primary, job: halro, owner: sre, region: local, role: primary, service: halro, severity: critical}
             exp_annotations: {summary: A Halro member is waiting for startup role adjudication, runbook_url: /docs/observability/operations-runbook.md#halroawaitingoperator}
       - eval_time: 5m
         alertname: HalroAwaitingOperator
@@ -59,24 +869,108 @@ tests:
 
   - interval: 1m
     input_series:
-      - series: 'halro_cluster_role{environment="test",region="local",cluster="ha",instance="replica",role="replica"}'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",role="replica"}'
         values: '1x8'
-      - series: 'halro_replication_apply_backlog_frames{environment="test",region="local",cluster="ha",instance="replica"}'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_apply_backlog_frames{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
         values: '2x6 0'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '10x8'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '1x8'
     alert_rule_test:
       - eval_time: 6m
-        alertname: HalroReplicaNotCandidate
+        alertname: HalroReplicaApplyStalled
         exp_alerts:
-          - exp_labels: {alertname: HalroReplicaNotCandidate, category: ha, cluster: ha, environment: test, instance: replica, owner: sre, region: local, role: replica, service: halro, severity: warning}
-            exp_annotations: {summary: A Halro Replica is not caught up enough to promote, runbook_url: /docs/observability/operations-runbook.md#halroreplicanotcandidate}
+          - exp_labels: {alertname: HalroReplicaApplyStalled, category: ha, cluster: ha, environment: test, expected_target: "true", instance: replica, job: halro, owner: sre, region: local, role: replica, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro Replica has an unapplied backlog without apply progress, runbook_url: /docs/observability/operations-runbook.md#halroreplicaapplystalled}
       - eval_time: 7m
-        alertname: HalroReplicaNotCandidate
+        alertname: HalroReplicaApplyStalled
         exp_alerts: []
 
   - interval: 1m
     input_series:
-      - series: 'halro_replication_member_incompatible{environment="test",region="local",cluster="ha",instance="replica",reason="schema"}'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing",role="replica"}'
+        values: '1x8'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_apply_backlog_frames{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing"}'
+        values: '2x8'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing"}'
+        values: '10 11 12 13 14 15 16 17 18'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-progressing"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HalroReplicaApplyStalled
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+        values: '1x8'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '7x8'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '0x8'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",peer="replica-1"}'
+        values: '0x8'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",peer="replica-2"}'
+        values: '0x8'
+      - series: 'halro_replication_confirmation_lag{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '0 1x7'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '20x8'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '1x8'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1"}'
+        values: '1x8'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-2"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroReplicationNoConnectedPeer
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationNoConnectedPeer, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: The Halro Primary has no authenticated Replica data session, runbook_url: /docs/observability/operations-runbook.md#halroreplicationnoconnectedpeer}
+      - eval_time: 7m
+        alertname: HalroReplicationConfirmationStalled
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationConfirmationStalled, category: ha, cluster: ha, environment: test, expected_target: "true", instance: primary, job: halro, owner: sre, region: local, role: primary, service: halro, severity: warning}
+            exp_annotations: {summary: Durable Halro frames have not advanced to confirmed, runbook_url: /docs/observability/operations-runbook.md#halroreplicationconfirmationstalled}
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching",role="replica"}'
+        values: '1x8'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '7x3 8x5'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching",incarnation="inc_1"}'
+        values: '1x8'
+      - series: 'halro_replication_apply_backlog_frames{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '2x8'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '10x8'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HalroReplicaApplyStalled
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",reason="schema"}'
         values: '1x3'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '1x4'
     alert_rule_test:
       - eval_time: 1m
         alertname: HalroMemberIncompatible
@@ -84,8 +978,121 @@ tests:
       - eval_time: 3m
         alertname: HalroMemberIncompatible
         exp_alerts:
-          - exp_labels: {alertname: HalroMemberIncompatible, category: ha, cluster: ha, environment: test, instance: replica, owner: sre, reason: schema, region: local, service: halro, severity: critical}
+          - exp_labels: {alertname: HalroMemberIncompatible, category: ha, cluster: ha, environment: test, expected_target: "true", instance: replica, job: halro, owner: sre, reason: schema, region: local, service: halro, severity: critical}
             exp_annotations: {summary: A Halro member failed replication compatibility checks, runbook_url: /docs/observability/operations-runbook.md#halromemberincompatible}
+
+  # Primary-only alerts must stop on the first new scrape that reports Replica,
+  # even while the old Primary label remains visible through lookback.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching",role="primary"}'
+        values: '1 1 _ _ _'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching",role="replica"}'
+        values: '_ _ 1 1 1'
+      - series: 'halro_replication_startup_ready{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '0x5'
+      - series: 'halro_replication_unavailable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="switching"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroReplicationUnavailable
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationUnavailable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: switching, job: halro, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: The Halro Primary reports an internal replication block, runbook_url: /docs/observability/operations-runbook.md#halroreplicationunavailable}
+      - eval_time: 2m
+        alertname: HalroReplicationUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroAwaitingOperator
+        exp_alerts: []
+
+  # One missing peer gauge makes the all-peers-disconnected conclusion unknown.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-1"}'
+        values: '1x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica-2"}'
+        values: '1x5'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+        values: '1x5'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",peer="replica-1"}'
+        values: '0 0 _ _ _'
+      - series: 'halro_replication_peer_connected{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",peer="replica-2"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroReplicationNoConnectedPeer
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationNoConnectedPeer, category: ha, cluster: ha, environment: test, instance: primary, owner: sre, region: local, role: primary, service: halro, severity: critical}
+            exp_annotations: {summary: The Halro Primary has no authenticated Replica data session, runbook_url: /docs/observability/operations-runbook.md#halroreplicationnoconnectedpeer}
+      - eval_time: 2m
+        alertname: HalroReplicationNoConnectedPeer
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '1x5'
+      - series: 'halro_replication_member_incompatible{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",reason="schema"}'
+        values: '1 1 _ _ _'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroMemberIncompatible
+        exp_alerts: []
+
+  # A stale backlog/lag gauge cannot keep a stalled-progress alert active after
+  # a new successful scrape omitted that gauge.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '1x9'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",role="primary"}'
+        values: '1x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '7x9'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary",incarnation="inc_1"}'
+        values: '1x9'
+      - series: 'halro_replication_confirmation_lag{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '0 1x6 _ _'
+      - series: 'halro_replication_confirmed_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="primary"}'
+        values: '20x9'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HalroReplicationConfirmationStalled
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicationConfirmationStalled, category: ha, cluster: ha, environment: test, expected_target: "true", instance: primary, job: halro, owner: sre, region: local, role: primary, service: halro, severity: warning}
+            exp_annotations: {summary: Durable Halro frames have not advanced to confirmed, runbook_url: /docs/observability/operations-runbook.md#halroreplicationconfirmationstalled}
+      - eval_time: 8m
+        alertname: HalroReplicationConfirmationStalled
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '1x9'
+      - series: 'halro_cluster_role{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",role="replica"}'
+        values: '1x9'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '7x9'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica",incarnation="inc_1"}'
+        values: '1x9'
+      - series: 'halro_replication_apply_backlog_frames{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '2x7 _ _'
+      - series: 'halro_replication_applied_index{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="replica"}'
+        values: '10x9'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HalroReplicaApplyStalled
+        exp_alerts:
+          - exp_labels: {alertname: HalroReplicaApplyStalled, category: ha, cluster: ha, environment: test, expected_target: "true", instance: replica, job: halro, owner: sre, region: local, role: replica, service: halro, severity: warning}
+            exp_annotations: {summary: A Halro Replica has an unapplied backlog without apply progress, runbook_url: /docs/observability/operations-runbook.md#halroreplicaapplystalled}
+      - eval_time: 8m
+        alertname: HalroReplicaApplyStalled
+        exp_alerts: []
 
   - interval: 1m
     input_series:
@@ -695,3 +1702,224 @@ tests:
       - eval_time: 6m
         alertname: HalroAccountingProjectLockSaturated
         exp_alerts: []
+
+  # Optional client-final observer alerts must stay silent before deployment
+  # and must not accept an identically labelled gauge from another scrape job.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="other",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroClientObserverDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1 0x3 1x2'
+      - series: 'halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x6'
+      - series: 'halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroClientObserverDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroClientObserverDown
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverDown, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: An accepted client-final observer target is down, runbook_url: /docs/observability/operations-runbook.md#halroclientobserverdown}
+      - eval_time: 5m
+        alertname: HalroClientObserverDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x8'
+      - series: 'halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1 0x2 1x4'
+      - series: 'halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x4 1x2 0'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverCoverageIncomplete, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A client-final observer is unready, unreconciled or missing its coverage gauges", runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete}
+
+      - eval_time: 4m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverCoverageIncomplete, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A client-final observer is unready, unreconciled or missing its coverage gauges", runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete}
+      - eval_time: 8m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x4'
+      - series: 'halro_ha_client_observer_ready{job="other",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x4'
+      - series: 'halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverCoverageIncomplete, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A client-final observer is unready, unreconciled or missing its coverage gauges", runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete}
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1 0x2 1x2'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="other",expected_target="true",environment="test",region="local",cluster="ha",instance="wrong-job"}'
+        values: '0x5'
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v2"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v2"}'
+        values: '2x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts:
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+      - eval_time: 4m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+
+  # A previous readable=1 cannot mask a missing current v3 capacity sample.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1x5'
+      - series: 'halro_replication_member_state_version{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '3x5'
+      - series: 'halro_replication_transition_journal_capacity_readable{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="v3"}'
+        values: '1x2 _x2 1'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts:
+          - exp_labels: {alertname: HalroTransitionJournalCapacityUnreadable, category: ha, cluster: ha, environment: test, expected_target: "true", instance: v3, job: halro, owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A version-3 Halro member cannot account for its retained transition journal files", runbook_url: /docs/observability/operations-runbook.md#halrotransitionjournalcapacityunreadable}
+      - eval_time: 5m
+        alertname: HalroTransitionJournalCapacityUnreadable
+        exp_alerts: []
+
+  # Prometheus lookback can still return a prior ready=1 after the exporter
+  # omits a scrape. Timestamp alignment must see that single-source gap.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x7'
+      - series: 'halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x1 _x2 1x2'
+      - series: 'halro_ha_client_observer_unreconciled_operations{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x7'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverCoverageIncomplete, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A client-final observer is unready, unreconciled or missing its coverage gauges", runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete}
+      - eval_time: 5m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x4'
+      - series: 'halro_ha_client_observer_ready{job="halro-client-observer",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '1x4'
+      - series: 'halro_ha_client_observer_unreconciled_operations{job="other",expected_client_observer="true",environment="test",region="local",cluster="ha",instance="client-a"}'
+        values: '0x4'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HalroClientObserverCoverageIncomplete
+        exp_alerts:
+          - exp_labels: {alertname: HalroClientObserverCoverageIncomplete, category: ha, cluster: ha, environment: test, instance: client-a, job: halro-client-observer, expected_client_observer: "true", owner: sre, region: local, service: halro, severity: warning}
+            exp_annotations: {summary: "A client-final observer is unready, unreconciled or missing its coverage gauges", runbook_url: /docs/observability/operations-runbook.md#halroclientobservercoverageincomplete}
+
+  # A fresh epoch record cannot be minted from omitted term/incarnation samples
+  # and must wait until their five-minute coverage gap ages out after recovery.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x14'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7x5 _ _ 7x6'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x14'
+    promql_expr_test:
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'halro:ha_epoch_stable:bool{environment="test",region="local",cluster="ha",instance="one"}'
+            value: 1
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 6m
+        exp_samples: []
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 8m
+        exp_samples: []
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'halro:ha_epoch_stable:bool{environment="test",region="local",cluster="ha",instance="one"}'
+            value: 1
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '1x14'
+      - series: 'halro_cluster_term{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one"}'
+        values: '7x14'
+      - series: 'halro_cluster_incarnation_info{job="halro",expected_target="true",environment="test",region="local",cluster="ha",instance="one",incarnation="inc_1"}'
+        values: '1x5 _ _ 1x6'
+    promql_expr_test:
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'halro:ha_epoch_stable:bool{environment="test",region="local",cluster="ha",instance="one"}'
+            value: 1
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 6m
+        exp_samples: []
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 8m
+        exp_samples: []
+      - expr: 'halro:ha_epoch_stable:bool{instance="one"}'
+        eval_time: 12m
+        exp_samples:
+          - labels: 'halro:ha_epoch_stable:bool{environment="test",region="local",cluster="ha",instance="one"}'
+            value: 1

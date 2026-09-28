@@ -33,55 +33,183 @@ a public Prometheus UI or unrestricted API. Useful checks include:
 - provider pressure: `halro:deployments_unhealthy:count` and
   `halro:deployment_capacity:ratio`.
 
+## HA client-final panel
+
+The independent HA page keeps Service reachability, the Primary's internal
+confirmation barrier, server HTTP outcomes, and client-final logical
+operations separate. `GET /api/client-final` returns `not_configured` until an
+external caller/ingress producer has passed the
+[client-final acceptance contract](../contracts/ha-client-final-result.md) and
+its manifest is enabled. A server 2xx or confirmed replication index cannot
+fill this gap.
+
+- For `query_failed`, inspect the approved Prometheus query path and target
+  error; preserve the query time and raw response before retrying.
+- For `coverage_incomplete`, compare every manifest observer, region and
+  operation class with the `halro-client-observer` target inventory. Check raw
+  `up`, ready, unreconciled-operation and all six result counters at the same
+  scrape times across the full five-minute window. Inspect reset and duplicate
+  series evidence. Do not remove an unavailable observer or outcome from the
+  manifest to make the panel appear healthy.
+- For `empty_window`, record that no terminal client operation was observed in
+  the window. Do not interpret this as a 100% success interval; compare the
+  separate ingress traffic census and caller receipts.
+- For `observed`, preserve the deployment acceptance-record ID, exported
+  estimated counts, raw Prometheus samples and private caller receipts under
+  the incident's evidence controls. Confirm that the approved route/fleet
+  mapping still covers current traffic before using the result operationally.
+
+The manifest is loaded at service startup. Change it only after the observer
+inventory and acceptance evidence have been reviewed, then restart the
+independent view under the normal deployment procedure.
+
 ## Alert procedures
 
 ### HalroNoPrimary
 
-- Trigger: one or more members report a cluster incarnation, but no member in that environment, region, and cluster reports the Primary role for two minutes.
+- Trigger: all configured `up{job="halro",expected_target="true"}` members in one environment, region, and cluster scrape successfully, each has exactly one role observation **from that same scrape**, and none reports Primary for two minutes. If a target or current-scrape role is missing, treat Primary status as unknown and investigate target/identity collection alerts first.
 - Immediate: stop client writes at the load balancer, compare each member's authenticated `cluster status`, term, promised term, durable/applied index, and replication journal head. Do not start two candidates or edit `cluster/state.json`.
 - Recover: choose the most up-to-date stopped Replica, fence the old Primary outside Halro, and run the documented `halro cluster promote` ceremony with peer promises. Restore client routing only after exactly one Primary reaches ready and a Replica confirms its leadership frame.
 - Escalate: if no candidate has the confirmed prefix or fencing cannot be proven, keep the cluster unavailable and involve the incident commander and data owner.
 
+The optional independent `halro-deadman` `ha_client_root` target reports
+client Service routing separately from `HalroNoPrimary`. A single Replica
+route is normal; repeated checks that never reach a same-cluster Primary,
+an unidentified route, transport failure or a wrong cluster enter its
+persisted down/up alarm path. Check the target ID and reason code against the
+client Service endpoints and the health page before inferring member loss.
+This root probe does not perform a write or establish client-final success.
+
 ### HalroMultiplePrimaries
 
-- Trigger: more than one member in the same environment, region, and cluster reports Primary; this fires immediately.
+- Trigger: more than one member in the same environment, region, and cluster reports Primary in its current successful scrape; this fires immediately.
 - Immediate: remove all client traffic, isolate replication and client networks, preserve all data directories and process logs, and identify the highest term. Do not let either side accept another write and do not choose by wall-clock time.
 - Recover: treat this as a safety incident. Fence every lower-term or unproven member externally, compare authenticated state and journals, then retain only the member whose term and confirmed prefix are justified by durable promises. Manual reconciliation is required before restarting replicas.
 - Escalate: page SRE and Security immediately; archive the conflicting state, promise records, audit evidence, and fencing proof.
 
+### HalroMemberIncarnationConflict
+
+- Trigger: members under one environment, region, and cluster report more than one incarnation in their current successful scrapes; this fires immediately.
+- Immediate: stop routing writes, verify each target's `instance` and scrape configuration, then compare the authenticated cluster status and state files. A stale or duplicated scrape target must be ruled out before interpreting the conflict as a runtime split.
+- Recover: follow the cluster's approved reconfiguration or recovery procedure. Never merge data directories or select an incarnation from the chart alone.
+
+### HalroMemberIdentityMissing
+
+- Trigger: a configured HA target is scraped successfully but does not emit `halro_cluster_member_info` in that scrape for one minute. A prior sample still visible through Prometheus lookback does not count as current identity evidence.
+- Immediate: check the member version, HA mode, metric exposition, and target labels. Keep the health conclusion unknown until the application itself reports its identity.
+- Recover: repair the scrape or upgrade the member; do not fill the absent identity from the Prometheus target label.
+
+### HalroMemberRoleMissing
+
+- Trigger: a configured HA target is scraped successfully but emits no `halro_cluster_role` observation in that scrape for one minute. A prior role sample still visible through Prometheus lookback does not count as current role evidence.
+- Immediate: check scrape freshness, member version, HA mode, and Metrics exposition. Treat the member's role as unknown even if another member appears to be Primary; preserve the raw samples and compare authenticated member status.
+- Recover: repair the exporter or target inventory. Do not infer a Replica role from the absence of a Primary role metric.
+
+### HalroMemberRoleAmbiguous
+
+- Trigger: one configured member exposes more than one HA role series in the same successful scrape; this fires immediately. Historical role series from earlier scrapes do not establish a conflict.
+- Immediate: stop using that member's role in safety or promotion decisions. Preserve the raw series with labels and sample times, then compare authenticated member status and scrape relabeling; a duplicate target or exporter bug can fabricate a role conflict.
+- Recover: correct the member or scrape configuration and verify exactly one role series remains. Do not select one role from the chart by hand.
+
+### HalroMemberHASignalMissing
+
+- Trigger: a configured member is scraped successfully for one minute but its maintenance, term, promised term, durable/confirmed/applied index, startup-ready, replication-unavailable, three fixed incompatibility-reason series, or expected peer-connection series are absent from the **same raw scrape as `up`**. Each index kind must appear exactly once; the peer count is compared with the configured target count minus one. An instant-vector lookup can show an older value during Prometheus's lookback period; compare `timestamp(metric)` with `timestamp(up)` or inspect raw range samples before declaring the current scrape complete.
+- Immediate: open that node's HA health detail to identify the missing signal, then compare the raw `/metrics` response with Prometheus target and metric relabeling. Keep the safety conclusion unknown unless another fresh observation already proves a stronger condition. A zero value from another member cannot replace a missing series.
+- Recover: repair the exporter, rollout version, target inventory, or relabeling, and verify that every configured member again emits the full signal set. A matching peer count alone does not prove the peer labels are correct; reconcile their names with the deployment inventory.
+
+### HalroMemberDuplicateScrapeSource
+
+- Trigger: more than one `up{job="halro",expected_target="true"}` series claims the same environment, region, cluster, and `instance`. This rule has no HA vector joins and fires immediately. HA rules normalize the same-member `up` sample timestamp before matching raw signals; the shared stable-epoch record requires one logical term, incarnation, and `up` source over its five-minute window.
+- Immediate: treat this member's role, index, and identity observations as ambiguous. Preserve both complete target label sets and raw sample times; compare the Prometheus target inventory, service discovery, and relabeling with the fixed member list. The health page must mark the member conflicted and keep safety and overall status non-green. Do not infer two running members or a split-brain from duplicate scrape series alone.
+- Recover: remove the extra target or label source, then verify the health page's 45-second raw window again contains exactly one source per logical member. The duplicate alert can remain active until the old `up` series leaves Prometheus's instant-vector lookback; its resolution and the stable-epoch record may take longer than the page recovery. Check that every HA alert and recording rule remains `ok` throughout. Any rule error is an observability failure, not a healthy cluster observation.
+
+### HalroTransitionJournalCapacityUnreadable
+
+- Trigger: a member freshly reports `halro_replication_member_state_version=3` while its same-scrape capacity-readable sample is zero or missing for one minute. V2 members omit capacity series and do not trigger this rule. A failed scrape uses the target-down procedure.
+- Immediate: preserve the member data directory and check its active `transitions.journal` segment and local storage errors. The bytes and segment gauges are withheld while accounting is inconsistent; do not replace them with zero or delete old segments to silence the alert.
+- Recover: authenticate a frozen member snapshot using the [HA operations procedure](../runbooks/ha-operations.md#frozen-member-transition-evidence-check), repair only through an approved offline recovery path, then verify that the capacity gauge returns to 1 and the retained file inventory matches. Check volume free bytes and inodes separately.
+
+### HalroMemberIdentityMismatch
+
+- Trigger: a member's `node_id` or `cluster_id` from its **current successful scrape** differs from the target's `instance` or `cluster` label; this fires immediately. An earlier wrong identity retained by Prometheus lookback is not a current mismatch.
+- Immediate: stop using this target in HA decisions, verify the actual member configuration and scrape inventory, and preserve the raw identity sample. A swapped or mislabeled target can make other observations appear to belong to the wrong node.
+- Recover: correct the target inventory or the member configuration through the approved HA procedure; never relabel a conflicting member merely to make the alert green.
+
+### HalroReplicationIndexOrderingInvalid
+
+- Trigger: a member reports `durable < confirmed` or `confirmed < applied` with both operands from the same successful scrape; this fires immediately. If an operand is missing, inspect HA signal coverage instead of comparing it with a retained old sample.
+- Immediate: preserve the raw scrape, authenticated status, state file, and journal evidence. Remove that member from operational decisions until the discrepancy is explained.
+- Recover: use the HA recovery runbook; do not edit a watermark or advance a local state file by hand.
+
+### HalroPromisedTermInvalid
+
+- Trigger: one member reports `promised_term < term` in the same successful scrape; this fires immediately because its durable promise cannot be below the term it says it occupies.
+- Immediate: preserve the raw Metrics scrape and authenticated member status, then compare the persisted state and journal under the approved incident procedure. Exclude this member from candidate decisions while the contradiction is unresolved.
+- Recover: investigate stale or mislabeled scrape data first, then storage or state publication failure. Do not edit the promise or term by hand to silence the alert.
+
+### HalroReplicationIndexRegressed
+
+- Trigger: one local index moves backward inside a five-minute stable term/incarnation window, and the index, term and single incarnation are still present in the member's current successful scrape; the shared epoch rule excludes expected term/incarnation transitions. If a current signal is missing, investigate coverage before asserting an ongoing regression.
+- Immediate: preserve the member's raw samples, restart history, state file, and journal. Compare authenticated state before any promotion or reseed decision.
+- Recover: investigate storage rollback or incorrect state restoration; do not treat the lower index as a clean new baseline without an approved new incarnation.
+
 ### HalroAwaitingOperator
 
-- Trigger: a Primary process has not completed startup role adjudication for two minutes.
+- Trigger: a member reports Primary role and incomplete startup adjudication in the same successful scrape for two minutes.
 - Immediate: inspect peer connectivity, certificate identity, cluster/incarnation equality, term, promised term, and the `leadership_established` confirmation index. A 503 from readiness is expected while the gate is closed.
 - Recover: restore the peer path or carry out the documented fencing and promotion ceremony. Never bypass the startup gate by changing the state file.
 - Escalate: keep client traffic disabled if the peer presents a conflicting term, role, incarnation, or node identity.
 
 ### HalroReplicationUnavailable
 
-- Trigger: the Primary cannot obtain the configured synchronous confirmation for one minute.
-- Immediate: expect new durable mutations to fail closed. Check the authenticated peer connection, Replica apply status, disk sync errors, and confirmation/apply lag; do not retry an ambiguous client operation without its idempotency key.
+- Trigger: the member's current successful scrape reports both Primary role and an internal replication block for one minute. This signal is not a positive confirmation test: zero means no known internal block, not that a new frame would receive an ACK.
+- Immediate: check the authenticated peer connection, Replica apply status, disk sync errors, and confirmation/apply lag; do not retry an ambiguous client operation without its idempotency key.
 - Recover: restore the existing Replica and let it catch up from the Primary journal. If it cannot be recovered, use a separately approved reseed procedure; do not promote an out-of-date Replica merely to restore availability.
 - Escalate: if the Primary is also unhealthy, freeze client writes and begin the manual promotion runbook only after external fencing.
 
-### HalroReplicaNotCandidate
+### HalroReplicationNoConnectedPeer
 
-- Trigger: a Replica has retained an unapplied replication backlog for five minutes.
-- Immediate: inspect its apply error, disk capacity/I/O, state/applied watermark, and per-store cursor. It is not an eligible promotion candidate while the backlog is non-zero.
+- Trigger: the current Primary scrape reports every configured peer connection gauge, all zero, for one minute. A missing peer gauge makes this particular conclusion unknown and triggers `HalroMemberHASignalMissing` instead. Zero current connections are strong negative evidence for new replicated confirmations, but a connected session does not prove ACK or apply progress.
+- Immediate: check each configured peer's process, replication transport, certificate, and Metrics scrape freshness. In a two-member cluster, required writes cannot regain availability until the only peer returns.
+- Recover: restore a valid authenticated peer and verify an actual confirmation before declaring the cluster fully healthy.
+
+### HalroReplicationConfirmationStalled
+
+- Trigger: the Primary has a **current-scrape** durable-to-confirmed backlog and confirmed index, and that index has not advanced in five minutes in one observed term/incarnation, sustained for one further minute. The shared `halro:ha_epoch_stable:bool` rule suppresses cross-epoch comparisons.
+- Immediate: inspect the peer ACK path and each member's authenticated index. A small, persistent backlog still needs investigation; index count is not a time or byte lag measure.
+- Recover: restore the confirmation path and observe the confirmed index advance. Do not infer success merely from `halro_replication_unavailable == 0`.
+
+### HalroReplicaApplyStalled
+
+- Trigger: the current Replica scrape reports an unapplied backlog and applied index, and that index has not advanced for five minutes in one observed term/incarnation, sustained for one more minute. A stable backlog with continuing apply progress does not fire this rule. The shared `halro:ha_epoch_stable:bool` rule suppresses cross-epoch comparisons.
+- Immediate: inspect its apply error, disk capacity/I/O, state/applied watermark, and per-store cursor. This is a stall signal, not a complete promotion-eligibility decision; inspect input/apply rates and the exact authenticated prefix before an operation.
 - Recover: repair the Replica and let the ordered applier catch up. If recovery requires replacement, take the member through maintenance and an approved seed rather than copying live files.
 - Escalate: when this is the only Replica, treat loss of promotion capacity as a degraded-HA incident even if Primary traffic is healthy.
 
 ### HalroMemberIncompatible
 
-- Trigger: a member has rejected a peer for schema/protocol compatibility, Master Key challenge, or SPKI pinning for two minutes.
+- Trigger: a member's current successful scrape reports peer rejection for schema/protocol compatibility, Master Key challenge, or SPKI pinning for two minutes. An old rejection retained by Prometheus lookback is not a current fault.
 - Immediate: read the bounded `reason` label, compare authenticated `cluster status` on both members, and verify the configured certificate pin and Secret generation.
 - Recover: complete the ordered rolling-upgrade sequence for a schema mismatch, or repair certificate/Master Key distribution and restart the affected member. Never relax mTLS or edit `state.json`.
 - Escalate: keep the peer out of promotion consideration until a fresh authenticated session succeeds and the alert clears after restart.
 
 ### HalroTargetDown
 
-- Trigger: the expected Halro scrape target is absent or down for two minutes.
+- Trigger: a statically configured Halro scrape target reports `up=0` for two minutes. The rule also has a global `absent(up{job="halro",expected_target="true"})` fallback when the entire selected scrape set disappears; that fallback has no member or cluster labels. A member never entered in Prometheus target configuration cannot be detected by this rule: reconcile the health page's independent `-members` inventory with Prometheus targets.
 - Immediate: check process/listener health, Metrics authentication and TLS, then the Prometheus target error.
 - Escalate: page the service owner if readiness cannot be restored without restart or rollback.
+
+### HalroClientObserverDown
+
+- Trigger: an already configured `halro-client-observer` target with `expected_client_observer="true"` reports `up=0` for one minute. This rule stays silent when no external observer has been deployed; it cannot detect an observer omitted entirely from Prometheus configuration.
+- Immediate: compare the accepted `-client-final-manifest` inventory with Prometheus targets, inspect the target scrape error and the independent observer's failure domain, then preserve the last raw result samples. The client-final panel must be `unobserved` while the target is unavailable.
+- Recover: restore the approved target and require a full fresh five-minute coverage window before treating its result distribution as observed. Do not remove the target from the manifest to silence the alert.
+
+### HalroClientObserverCoverageIncomplete
+
+- Trigger: a successfully scraped accepted observer has no same-scrape ready gauge equal to 1, or no same-scrape unreconciled-operation gauge equal to 0, for one minute. This includes a missing or stale gauge, an unready producer, and at least one unresolved logical operation.
+- Immediate: inspect the producer's durable start/terminal records and recovery state, then compare raw gauge timestamps with `up`. Preserve private operation IDs only in controlled evidence; never add them to metric labels.
+- Recover: reconcile indeterminate operations and repair the producer/exporter. After the gauges recover, require the entire displayed five-minute window to pass the page's coverage gate; a cleared alert alone does not validate client outcomes.
 
 ### HalroWALAppendErrors
 

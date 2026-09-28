@@ -644,6 +644,26 @@ metrics:
   # @description.en-US Path to the metrics service's independent credential file.
   # @description.en-US Requires metrics.require_auth.
   credential_file: ""
+  # @title.zh-CN HA 机器状态采集
+  # @title.en-US HA machine status access
+  # @description.zh-CN 此配置组仅适用于复制模式；启用时要求 metrics.enabled、metrics.require_auth 与 metrics.tls.enabled 同时为 true。
+  # @description.en-US This section applies only to replication; when enabled, metrics.enabled, metrics.require_auth, and metrics.tls.enabled must all be true.
+  ha_status:
+    # @title.zh-CN HA 机器状态入口
+    # @title.en-US HA machine status endpoint
+    # @description.zh-CN 在 Metrics mTLS 监听器上启用独立的只读 /ha/status；仅适用于复制模式，且必须同时启用 metrics.enabled、metrics.require_auth 和 metrics.tls.enabled。
+    # @description.en-US Enables independent read-only /ha/status on the Metrics mTLS listener; requires replication, metrics.enabled, metrics.require_auth, and metrics.tls.enabled.
+    enabled: false
+    # @title.zh-CN HA 状态凭据文件
+    # @title.en-US HA status credential file
+    # @description.zh-CN 独立版本化机器 bearer 凭据的文件路径；启用时必填，且不得与 Metrics 或审计锚凭据共用。
+    # @description.en-US Path to a separate versioned machine bearer credential; required when enabled and distinct from Metrics and audit-anchor credentials.
+    credential_file: ""
+    # @title.zh-CN 包含前缀摘要
+    # @title.en-US Include prefix digest
+    # @description.zh-CN 可选披露认证 ordering 前缀摘要以辅助诊断；摘要不构成提升授权。
+    # @description.en-US Optionally exposes an authenticated ordering prefix digest for diagnosis; it does not authorize promotion.
+    include_prefix_digest: false
   # @title.zh-CN 最大并发抓取数
   # @title.en-US Maximum concurrent scrapes
   # @description.zh-CN 指标服务同时处理的抓取请求上限。

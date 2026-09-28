@@ -50,6 +50,21 @@ func TestDeadmanConfigSchemaMatchesRuntimeForSharedCases(t *testing.T) {
 			candidate["tls"].(map[string]any)["client_cert_file"] = ""
 			candidate["tls"].(map[string]any)["client_key_file"] = ""
 		}},
+		{name: "HA client Service root", valid: true, mutate: func(config map[string]any) {
+			candidate := target(config, "halro")
+			candidate["mode"] = "ha_client_root"
+			candidate["url"] = "https://halro-client.example/"
+		}},
+		{name: "HA client probe wrong path", mutate: func(config map[string]any) {
+			candidate := target(config, "halro")
+			candidate["mode"] = "ha_client_root"
+		}},
+		{name: "HA client probe with freshness", mutate: func(config map[string]any) {
+			candidate := target(config, "halro")
+			candidate["mode"] = "ha_client_root"
+			candidate["url"] = "https://halro-client.example/"
+			candidate["freshness"] = map[string]any{"url": "https://prometheus.example/api/v1/query", "mode": "prometheus_scalar_age", "max_age": "1m"}
+		}},
 		{name: "missing target kind", mutate: func(config map[string]any) {
 			candidate := target(config, "alertmanager")
 			candidate["kind"] = "halro"

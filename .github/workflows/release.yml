@@ -279,6 +279,9 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
             -o "${package_dir}/halro-deadman" ./cmd/halro-deadman
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/akz142857/Halro/internal/buildinfo.Version=${RELEASE_VERSION} -X github.com/akz142857/Halro/internal/buildinfo.Commit=${RELEASE_COMMIT} -X github.com/akz142857/Halro/internal/buildinfo.Date=${RELEASE_DATE}" \
+            -o "${package_dir}/halro-ha-health" ./cmd/halro-ha-health
           cp deploy/observability/external-probe/config.example.yaml \
             deploy/observability/external-probe/config.schema.json \
             deploy/observability/external-probe/event.schema.json \
@@ -286,6 +289,7 @@ jobs:
             deploy/observability/external-probe/halro-deadman.service \
             "${package_dir}/"
           cp configs/config.example.yaml "${package_dir}/halro.config.example.yaml"
+          cp docs/observability/ha-health-service.md "${package_dir}/halro-ha-health.README.md"
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md README.md "${package_dir}/"
           tar --sort=name --owner=0 --group=0 --numeric-owner \
             --mtime="@${SOURCE_DATE_EPOCH}" -C release -cf - \

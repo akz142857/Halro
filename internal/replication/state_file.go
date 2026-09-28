@@ -47,7 +47,7 @@ func ReadStateBootstrap(path string) (StateBootstrap, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return StateBootstrap{}, errors.New("member-state bootstrap has trailing content")
 	}
-	if bootstrap.Version != StateVersion {
+	if bootstrap.Version != StateVersion && bootstrap.Version != TransitionStateVersion {
 		return StateBootstrap{}, fmt.Errorf("unsupported member-state version %d", bootstrap.Version)
 	}
 	if len(bootstrap.Incarnation) == 0 || len(bootstrap.Incarnation) > MaxIdentityBytes {
