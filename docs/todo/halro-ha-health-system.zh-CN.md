@@ -531,3 +531,10 @@ Secret 的 13 张公开证书和主机操作员公开证书，工具检查 PEM �
 信任 bundle，旧新共九个身份离线链校验通过；阶段性轮换顺序已写入
 [长跑采样指南](../verification/ha-health-soak.md)。这些材料仍不等于运行中
 证书轮换或 72 小时候选观测，详见[本地记录](../verification/ha-health-local-acceptance-2026-09-28.md)。
+
+本地轮换执行入口已补逐 Secret 的阶段和资源版本门禁、服务端 dry-run、
+`0600` 原 Secret 私有备份及替换后全键读回；五个 Secret 的第一阶段均已
+由 Kubernetes 服务端接受 dry-run，尚未应用。发现一个监控客户端 Secret
+的 last-applied 注解重复包含私钥字段，现已移除并证明 Secret `data`
+摘要未变、监控仍 Ready。16 项定向测试通过。实际轮换、Pod 证书加载、
+旧链拒绝和 74 小时预检继续待做。

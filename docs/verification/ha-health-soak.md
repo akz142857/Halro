@@ -105,6 +105,32 @@ Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护�
 Secret 资源版本和回滚点。公开证书的离线链校验只证明 PEM 可互信，
 不能证明运行中进程已加载 bundle；这些证据齐备前不启动正式窗口。
 
+本地 kind 的逐 Secret 操作工具是
+`tests/ha-health-soak/kind_tls_replace.py`。它仅接受上面离线暂存报告中的
+五个 Secret，默认对指定的 `trust`、`leaves` 或 `final` 阶段执行 Kubernetes
+**服务端 dry-run**。每次都核对两个报告 SHA-256、Secret 精确键集合、现行
+CA 与证书阶段、资源版本、元数据安全性；它不会把私钥放进命令参数或
+last-applied 注解。下面的示例只预检一个 Secret：
+
+```sh
+python3 tests/ha-health-soak/kind_tls_replace.py \
+  --secret halro/halro-ha-cluster-tls --phase trust \
+  --stage-dir /private/ha-health-kind-certificates-new \
+  --stage-report-sha256 STAGE_REPORT_SHA256 \
+  --overlap-dir /private/ha-health-kind-ca-overlap \
+  --overlap-report-sha256 OVERLAP_REPORT_SHA256
+```
+
+实际更新必须另外传 `--apply --expect-resource-version <刚核对的值>
+--backup-dir <已存在的 0700 私有目录>`；工具会先做服务端 dry-run，随后
+以资源版本保护执行一次 Secret replace、重新从 API 读回并比较所有键。
+每次应用前把原 Secret 完整保存为该私有目录中的 `0600`、fsync 备份，
+输出仅包含操作状态、版本、变更键名和备份摘要。备份含真实私钥，须按
+目标环境密钥管理规则保管与清理，绝不可提交仓库。每次只处理一个 Secret；
+工具**不**滚动 Pod、不替换操作员本机证书、不验证运行中 mTLS，也不代替
+上述阶段间的业务和复制检查。任何阶段出现部分成功或身份不符，先停止
+后续更新并按私有备份与现场资源版本人工恢复。
+
 ```sh
 python3 tests/ha-health-soak/collector.py \
   --url https://ha-health.example.internal/ \

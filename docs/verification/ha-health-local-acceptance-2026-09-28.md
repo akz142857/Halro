@@ -1638,3 +1638,22 @@ Prometheus 抓取三个 CA 引用的字节一致；Prometheus 查询服务端与
 SHA-256 为 `4c0a9c1b7664ac67b0e42676dfa8c5f09ce5670f51e666e05f62fbae4cb13aa1`。
 此项只证明公开证书的离线互信；尚未更改 Secret 或重启任何工作负载，
 没有运行中进程的 mTLS、旧证书拒绝或故障期可用性证据。
+
+## 轮换前的 Secret 元数据修正及服务端预检（约 18:40 UTC）
+
+检查五个 TLS Secret 的类型、资源版本与注解名称时，发现
+`halro-monitoring/ha-health-prometheus-client` 的
+`kubectl.kubernetes.io/last-applied-configuration` 注解含 `data` 对象并提及
+`client.key`，即在 Secret 元数据中重复保存了私钥字段。仅删除该注解后，
+实际 `data` 对象规范化 SHA-256 前后均为
+`f7d5f28d887c83b02cccfcd6128e75ec5779b68665c39cd1a96e28dd2d7819fc`；
+注解已不存在，健康服务和 Prometheus 均保持 1/1 Ready，采样器继续写入。
+不将注解的旧值或私钥字节写入本记录。
+
+新增的逐 Secret 更新工具默认只做服务端 dry-run，要求精确的暂存报告摘要、
+Secret 键集合与当前阶段；应用模式需现场资源版本与 `0700` 私有备份目录，
+通过标准输入而非命令参数送出替换对象。16 项 Python 定向测试通过，覆盖
+三阶段字段变化、未知或半更新状态拒绝、私有备份和私钥不进入命令参数。
+五个现行 TLS Secret 的 `trust` 阶段均通过 Kubernetes 服务端 dry-run，
+每个只拟更新其单个 CA 字段；未提交任何 Secret replace，也未重启 Pod。
+公开 PEM 互信、服务端 dry-run 和测试均不能代替实际阶段轮换与端到端 mTLS。
