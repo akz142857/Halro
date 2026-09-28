@@ -414,6 +414,16 @@ certificate, subject to the same access audit requirement. Keep the listener
 on loopback unless the target's network policy and identity boundary have been
 reviewed.
 
+For every request that reaches the application, the service logs the client
+certificate Subject and SHA-256 fingerprint of its DER bytes as
+`cert_sha256`, plus method, path, status and remote address. The fingerprint
+distinguishes two certificates that happen to carry the same Subject. A TLS
+handshake rejected before HTTP handling appears in the TLS server log, not in
+this application access log. With a shared proxy certificate, these fields
+identify the proxy only; the proxy must separately audit the human identity
+and retain a request correlation record. The service logs the URL path, not
+query parameters or response bodies.
+
 ```sh
 make ha-health
 ./bin/halro-ha-health \

@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -563,10 +565,16 @@ func (s *server) routes() http.Handler {
 			writer.status = http.StatusOK
 		}
 		principal := "unknown"
+		certificateSHA256 := ""
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-			principal = r.TLS.PeerCertificates[0].Subject.String()
+			certificate := r.TLS.PeerCertificates[0]
+			principal = certificate.Subject.String()
+			if len(certificate.Raw) > 0 {
+				digest := sha256.Sum256(certificate.Raw)
+				certificateSHA256 = hex.EncodeToString(digest[:])
+			}
 		}
-		log.Printf("ha-health access principal=%q remote=%q method=%q path=%q status=%d", principal, r.RemoteAddr, r.Method, r.URL.Path, writer.status)
+		log.Printf("ha-health access principal=%q cert_sha256=%q remote=%q method=%q path=%q status=%d", principal, certificateSHA256, r.RemoteAddr, r.Method, r.URL.Path, writer.status)
 	})
 }
 

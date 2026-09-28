@@ -1,17 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -26,6 +30,41 @@ import (
 
 	"github.com/akz142857/Halro/internal/hahealth"
 )
+
+func TestHealthAccessAuditDistinguishesCertificatesWithSameSubject(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	handler := (&server{}).routes()
+	var fingerprints [2]string
+	for index, raw := range [][]byte{[]byte("first test certificate DER"), []byte("second test certificate DER")} {
+		certificate := &x509.Certificate{Raw: raw, Subject: pkix.Name{CommonName: "same-operator"}}
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("request %d status=%d", index, response.Code)
+		}
+		fingerprint := sha256.Sum256(raw)
+		fingerprints[index] = hex.EncodeToString(fingerprint[:])
+	}
+	if fingerprints[0] == fingerprints[1] {
+		t.Fatal("different certificates have the same test fingerprint")
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("audit lines=%d, want 2: %q", len(lines), output.String())
+	}
+	for index, line := range lines {
+		if !strings.Contains(line, `principal="CN=same-operator"`) ||
+			!strings.Contains(line, `cert_sha256="`+fingerprints[index]+`"`) ||
+			!strings.Contains(line, `method="GET" path="/" status=200`) {
+			t.Fatalf("audit line %d lacks distinct certificate evidence: %q", index, line)
+		}
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
@@ -596,6 +635,10 @@ func TestRunbookBaseRequiresSafeHTTPSOriginAndRendersOnlyWhenConfigured(t *testi
 }
 
 func TestOperatorEndpointRequiresTrustedClientCertificate(t *testing.T) {
+	var accessLogs bytes.Buffer
+	previousLogOutput := log.Writer()
+	log.SetOutput(&accessLogs)
+	t.Cleanup(func() { log.SetOutput(previousLogOutput) })
 	now := time.Now()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -667,6 +710,9 @@ func TestOperatorEndpointRequiresTrustedClientCertificate(t *testing.T) {
 		response.Body.Close()
 		t.Fatal("operator endpoint accepted a client without a certificate")
 	}
+	if strings.Contains(accessLogs.String(), "ha-health access") {
+		t.Fatalf("TLS handshake rejection entered application access audit: %q", accessLogs.String())
+	}
 	client := endpoint.Client()
 	transport := client.Transport.(*http.Transport).Clone()
 	transport.TLSClientConfig = transport.TLSClientConfig.Clone()
@@ -679,6 +725,11 @@ func TestOperatorEndpointRequiresTrustedClientCertificate(t *testing.T) {
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("trusted operator certificate rejected: %d", response.StatusCode)
+	}
+	certificateDigest := sha256.Sum256(clientCertificate.Certificate[0])
+	if !strings.Contains(accessLogs.String(), `principal="CN=operator-test" cert_sha256="`+hex.EncodeToString(certificateDigest[:])+`"`) ||
+		!strings.Contains(accessLogs.String(), `method="GET" path="/health/live" status=200`) {
+		t.Fatalf("authenticated access lacks real client certificate audit: %q", accessLogs.String())
 	}
 }
 
