@@ -107,10 +107,12 @@ python3 tests/ha-health-soak/reissue_kind_pinned_members.py \
 须走能认证修改成员 pin 的独立协议或新 incarnation 恢复流程，不能修改
 Secret 和 YAML 后把断开的复制会话视为可用。
 
-准备不等于轮换。当前只读采样器启动时已加载原 CA 和操作员证书；应先等
-这轮采样结束并保存 `summary.json`，然后依据 `stage-report.json` 核对实际
-Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护窗口
-更新两套信任域和全部引用它们的工作负载。根 CA 跨代时须分三阶段：
+准备不等于轮换。采样器启动时会加载 CA 和操作员证书，运行中不会自动
+重载；正式候选采样应在证书轮换和有效期预检完成后启动。若已有采样正在
+运行，应先保存该轮 `summary.json`，再依据 `stage-report.json` 核对实际
+Secret 键、服务端名称与 Prometheus `client_allowed_sans`，于维护窗口
+更新两套信任域和全部引用它们的工作负载。轮换期间出现的采样缺口不能
+拼接为连续 72 小时，须另起候选目录重新计时。根 CA 跨代时须分三阶段：
 
 1. **扩展信任**：分别把当前 CA 与新 CA 拼接为两套 PEM bundle，只更换五个
    Secret 中对应的 `ca.crt` 或 `client-ca.crt`，保留旧叶子证书与私钥。重启
