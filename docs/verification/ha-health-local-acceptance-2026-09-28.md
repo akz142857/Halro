@@ -1687,4 +1687,37 @@ Secret 键集合与当前阶段；应用模式需现场资源版本与 `0700` �
 空闲会话跨多个旧读超时仍连接、保活不触及数据 handler、旧节点不接收
 新记录以及未协商记录被拒。复制包全量 `-race -count=1` 在允许 loopback
 的环境通过，HA 运行时复制集成 `-count=1` 和定向 `-race` 通过。
-修订代码**尚未部署到 kind**，真实长时空闲稳定性仍须在候选镜像滚动后复验。
+修订代码随后按下节部署到 kind；真实长时空闲稳定性仍须在正式长跑中复验。
+
+## 协商式复制保活候选滚动（约 19:14–19:26 UTC）
+
+源码提交 `1ecddf409647e36eb18b1342528869913b4daabb` 已包含空闲复制会话
+修复。从该提交的 `git archive` 私有构建上下文生成 Linux arm64 成员与
+独立健康服务镜像；归档 SHA-256 为
+`0b3885a6e1f4f7ed048fd61400cd34c54474577cbb5c1c3274530bd3276af89a`，
+成员镜像 ID 为
+`sha256:32db20f267c8cde84ca8cc9b7bdf44729d2e49e6cbb86a2f664cdb26a6459a9d`，
+健康服务镜像 ID 为
+`sha256:6cd6bcf6f5355f330014ba7b6251fcefced1172ea55a385cb6001062d2592a64`。
+两张镜像均预载到 kind 的四个节点。`OnDelete` StatefulSet 先逐一重建
+`halro-2` 和 `halro-0`，每台 Ready 且核对角色、水位后才重建 Primary
+`halro-1`；最后按 `Recreate` 策略更新独立健康服务。四个新 Pod 均显示
+对应 `1ecddf40-exact` 镜像且 Ready。此处未轮换证书或执行人工提升。
+
+滚动后的 mTLS `/api/health` 原始响应 SHA-256 为
+`8fc1647317ad7f286840652cff3806eb862618689c7690d8f5a735820b2f0840`：
+唯一 Primary 为 `halro-1`，两台 Replica 和 Primary 的 durable/confirmed/applied
+均为 159/159/159，客户端入口、安全与追平卡健康；因无最近必需确认写，
+确认与总览继续为 `unknown`。Prometheus
+`min_over_time(halro_replication_peer_connected{instance="halro-1"}[1m])`
+对 `halro-0`、`halro-2` 都为 1；原始查询响应 SHA-256 为
+`1505bdec25b9676d28b38db9174e3ddde97203bfb8aafea9ece6b90a87f8b34e`。
+这只证明滚动后短窗口未再次出现空闲断开，不签署 72 小时稳定性。
+
+当前提交的仓库门禁：`go test -count=1 ./...`、`go vet ./...`、
+`make fmt-check`、Node 22 `make frontend-production-check` 和
+`deploy/observability/validate.sh` 均通过；14 条记录规则与 64 条告警规则
+验证通过。此轮代码只改 Go 复制协议与文档，先前 48 个前端文件、702 项
+测试的结果属于 `8379458d`，没有用旧结果充作新提交的重跑证据。
+证书分阶段实装、74 小时有效期预检、完整 G0–G7 与 72 小时正式采样、
+外部不可变归档和客户端最终结果来源仍未完成。
