@@ -172,6 +172,32 @@ func TestHealthKeepsConfirmationUnknownWithoutProgress(t *testing.T) {
 	if !usedEpochRecord || !usedRequiredWaitMetric || result.Confirmation.Level != hahealth.Healthy || result.Overall.Level != hahealth.Healthy {
 		t.Fatalf("confirmed barrier did not use required wait and shared epoch rule: %+v queryRecord=%v queryWait=%v", result, usedEpochRecord, usedRequiredWaitMetric)
 	}
+	testedSecondPrimary := false
+	for _, item := range vector {
+		metric := item["metric"].(map[string]string)
+		if metric["__name__"] != "halro_cluster_role" || metric["instance"] != "halro-1" {
+			continue
+		}
+		testedSecondPrimary = true
+		metric["role"] = "primary"
+		response = httptest.NewRecorder()
+		s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+			result.Safety.Level != hahealth.Critical || result.Confirmation.Level != hahealth.Unknown || result.Overall.Level == hahealth.Healthy {
+			t.Fatalf("second Primary inherited internal confirmation success: %+v err=%v", result, err)
+		}
+		metric["role"] = "replica"
+		response = httptest.NewRecorder()
+		s.health(response, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil ||
+			result.Safety.Level != hahealth.Healthy || result.Confirmation.Level != hahealth.Healthy || result.Overall.Level != hahealth.Healthy {
+			t.Fatalf("role recovery did not restore complete observation: %+v err=%v", result, err)
+		}
+		break
+	}
+	if !testedSecondPrimary {
+		t.Fatal("second Primary metric scenario was not exercised")
+	}
 	for _, metricName := range []string{"up", "halro_cluster_role"} {
 		t.Run("missing instance label on "+metricName, func(t *testing.T) {
 			metric := map[string]string{"__name__": metricName}
