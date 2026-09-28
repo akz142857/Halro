@@ -615,3 +615,8 @@ arm64 的 `halro`、`halro-deadman` 和 `halro-ha-health`，复制同一批随�
 均为 `c72f725531c10e63e05c28b9a4ab85711f1b170b168c47cd97223399e1686220`。
 原件位于本机 `/tmp/halro-ha-release-smoke.6dBW0P/`，只是可清理的本机烟测，
 尚未执行 GitHub 正式发布工作流、签名和安装后的目标环境验收。
+该归档解包后的健康服务又在独立 loopback 进程完成一次性 mTLS 启动检查：
+独立测试主体 GET 页面为 200，缺证书在握手阶段拒绝，应用访问日志的
+证书 DER SHA-256 与实际客户端证书一致。测试私钥已删除，私有报告及
+限制条件见[本地验收记录](../verification/ha-health-local-acceptance-2026-09-28.md)。
+这不改变运行中的冻结候选，也不能签署 H11 或 H20。
