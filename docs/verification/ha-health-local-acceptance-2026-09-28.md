@@ -6,8 +6,9 @@
 03:20 UTC 之后的 kind 部署。各阶段结论按当时状态陈述，不是候选版本或生产放行记录。
 初始盘点的仓库基线为 `2425ae8ebb957cecfd79508f8fa9b227701c4349`；当时
 HA 健康系统改动还在未提交工作树，没有可冻结的候选 SHA 或镜像摘要。
-后续已将相同源码 SHA 的三成员与健康服务镜像部署到 kind，并于
-2026-09-28 21:00:43 UTC 启动冻结候选的 72 小时只读采样，见文末记录。
+后续已将相同源码 SHA 的三成员与健康服务镜像部署到 kind。首轮
+72 小时只读采样因本机端口转发中断而未完成连续覆盖；新的集群内 Job
+已直接经健康 Service 启动独立窗口，见文末记录。
 这不是正式发布归档或完整 HA 验收。
 
 | 初期有限验收范围 | 当时结论 | 证据边界 |
@@ -52,7 +53,7 @@ HA 健康系统改动还在未提交工作树，没有可冻结的候选 SHA 或
 | H20 告警证据与访问 | kind firing/resolved、规则求值和本地 webhook 回执；冻结候选的直接操作员 mTLS 证据/规则访问及应用审计已复核 | 受控代理与文档根下的 runbook 访问、独立通知与完整触发原始样本留存 |
 
 矩阵之外还须分别签收 G0–G7、相邻版本、72 小时负载 soak 和正式 RTO/RPO。
-当前 72 小时只读候选采样持续运行，但其完成也不能代替这些项目；客户端
+新的 72 小时集群内只读候选采样持续运行，但其完成也不能代替这些项目；客户端
 最终逻辑操作结果的真实 SDK/入口代理责任方尚未确定，本地 PVC 与 webhook
 也不能代替独立不可变归档和外部通知故障域。
 
@@ -1824,8 +1825,8 @@ SHA-256 为
 两个候选镜像内二进制报告同一完整源 SHA。`2026-09-28T21:00:43Z`
 启动 259200 秒、15 秒间隔的无计费只读采样，私有输出目录为
 `/tmp/halro-ha-health-kind-20260928/evidence/soak-candidate-1ecddf40-20260928/`；
-启动后前 13 次均为可解析 `observed`。采样尚在运行，不能声称 72 小时
-通过；最终 `summary.json`、成员原始样本、告警投递、RTO/RPO、G0–G7、
+启动后前 13 次均为可解析 `observed`。此处是启动当时状态；本轮后续的
+转发中断和未通过摘要见文末记录，不能声称 72 小时通过。成员原始样本、告警投递、RTO/RPO、G0–G7、
 独立不可变归档及客户端最终结果仍须分别验收。
 
 采样启动后的一次 30 分钟 Prometheus 原始窗口检查中，Primary `halro-1`
@@ -1969,3 +1970,51 @@ Deployment 实际未配置 `-runbook-base-url`，页面注入值为
 呈为回环，且拒绝发生在应用访问审计之前，这只覆盖健康入口在本地的
 服务端握手日志，不证明其他入口、受控代理或真实来源地址的审计完整。
 H11 仍为 `NOT_RUN`。
+
+## 首轮 72 小时采样中断与集群内重开（2026-09-29）
+
+对持续运行的首轮样本逐行核查时，发现第 354–392 条连续 39 次
+`ConnectionRefusedError`，时间为 `2026-09-28T22:28:58.070222Z` 至
+`22:38:28.078592Z`。同一时刻 `19115` 的 `kubectl port-forward` 在
+`127.0.0.1:43362` 连接报 `broken pipe` 后以 `lost connection to pod`
+终止；该端口与无客户端证书 TLS 负例请求的服务端握手日志一致。健康服务
+Pod 仍为 2/2 Ready、两个容器均 0 次重启。恢复同一端口转发后，第 393
+条于 `22:38:43.072679Z` 再次 `observed`；采样器原进程始终未重启。
+缺口已使连续覆盖失败，因此保留原始证据并主动结束这轮进程。最终
+`summary.json` 记录 432 条、393 次有效、39 次不可用，
+`collection_complete=false`、`sampling_continuous=false`、
+`health_endpoint_coverage_complete=false`、`ha_acceptance=NOT_RUN`；
+单调最大采样间隔 15.009 秒说明计划时隙未丢失，但不能填补端点不可达。
+
+| 首轮私有证据 | SHA-256 |
+| --- | --- |
+| `soak-candidate-1ecddf40-20260928/summary.json` | `e16ececb48fcb646cf3898192ff4aaea2d95e97e30a54a65dc92c3efb6d5bfdf` |
+| `soak-candidate-1ecddf40-20260928/samples.jsonl` | `d7072970e2967768e3cbacc1ab42470f53fc463c5cb20249302f94b61fe9f3c1` |
+| `soak-candidate-1ecddf40-20260928/interruption-snapshot.jsonl` | `efe75355de39acf450c2419689ee63c994224116041f441d7bf261432bf530fa` |
+
+为去掉本机端口转发这一采集依赖，另在监控 namespace 以冻结的
+`collector.py` 建立不可变 ConfigMap，脚本 SHA-256 为
+`0dd595546d3c13799e51f8b5bc8023d9bfc246656057476ffdbead3ee33dda59`，
+与候选源码中的脚本逐字节相同。短时 Job 在 worker2 上经 Service DNS、
+本地 Secret 中的采集器 mTLS 身份访问 worker3 上的健康服务，30 秒内
+6/6 次有效观测，`collection_complete=true`；没有借用主机端口转发。
+
+新建独立 PVC `ha-health-soak-1ecddf40`（本地 `standard` 类）和
+`ha-health-soak-1ecddf40` Job，后者于
+`2026-09-28T22:47:56.665005Z` 从同一候选源码 SHA、三成员运行镜像
+`sha256:52f8652d5a09add3bb1fcc5190df65c1f8d11cd0960fe20adb4a5053ea56a8a7`
+及原配置/规则摘要启动新的 259200 秒、15 秒间隔窗口。Job 禁用
+ServiceAccount token、用非 root 只读根文件系统运行，启动前核对脚本哈希，
+PVC 保存原始 JSONL 和最终摘要，Job 失败不自动重试拼接窗口。启动后
+前 8 条均为 `observed`、无异常来源；总览因没有近期必需确认写保持
+`unknown`。尚无完整窗口结论，目标签收仍为 `NOT_RUN`。
+
+| 集群内采样私有清单（`/tmp/halro-ha-health-kind-20260928/evidence/soak-incluster-20260929/`） | SHA-256 |
+| --- | --- |
+| `preflight-job.yaml` | `b3504cb5d7997d24ce07795e482716071b22af7bd451ea7b72e4717cb83db12a` |
+| `soak-job.yaml` | `fbc7e195ac36e77e4e82f484044c7d0d56d119aff2d07870be76587096f85004` |
+| `soak-pvc.yaml` | `22c84d769654a96e6d091ac8f1bdc4d98ccdea94a600e1656846f98a546f619f` |
+
+此 Job 与健康服务位于不同 kind 节点，但仍在同一物理主机；PVC 不是独立
+不可变归档，Job 也只做只读观测。即使新窗口最终连续，也不能代签目标
+负载、故障注入、告警通知、RTO/RPO 或正式生产故障域。

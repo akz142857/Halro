@@ -178,6 +178,38 @@ python3 tests/ha-health-soak/collector.py \
   --output /private/evidence/ha-health-candidate-001
 ```
 
+### Kubernetes 内部的长跑采样
+
+如果健康入口仅经 `kubectl port-forward` 暴露给验证主机，不要把这条临时转发
+作为正式 72 小时采样的唯一通道。一次本地无客户端证书负例使转发进程在
+TLS 握手失败后报 `broken pipe` 并退出；采样器仍按时写行，但连续 39 次
+得到 `ConnectionRefusedError`。这轮 `sampling_continuous=false`、
+`health_endpoint_coverage_complete=false`，不能重连后拼接成通过。
+
+对 Kubernetes 目标，优先在独立监控节点以专用 Job 直接访问健康服务的
+Service DNS。启动前完成下面的前提，并先运行短时 Job 预检：
+
+1. 将**逐字节核对过候选版本**的 `collector.py` 放入不可变 ConfigMap；
+   Job 的启动容器重新核对脚本 SHA-256。加载可用的 Python 镜像并锁定
+   镜像版本。
+2. 通过已受控的 Secret 投射采集器客户端证书、私钥和 CA；在 Pod 内
+   复制到仅采样进程可读的临时内存卷，不输出到日志、仓库或采样 PVC。
+   核对健康服务证书 SAN 包含实际 Service DNS，及证书窗口满足 72 小时
+   加恢复余量。
+3. 使用独立 PVC 保存 `samples.jsonl` 与 `summary.json`，Job 禁用
+   ServiceAccount token、以非 root 身份运行、限制 CPU/内存，设置
+   `backoffLimit: 0`。故障后保留 Job 和 PVC 原件；新窗口使用新 Job 名称
+   与输出目录，不能让自动重试覆盖或拼接旧样本。
+4. 从实际运行的成员和健康服务 imageID、Secret/ConfigMap 内容与规则
+   核对候选 SHA、镜像、配置、规则摘要，再填入采样器参数。用短时 Job
+   验证 mTLS、环境/集群/成员清单和 PVC 写入；正式 Job 启动后读回前几行
+   原始样本确认 `observed`，不能以 Pod `Running` 代替数据证据。
+
+集群内 Job 去掉验证主机的端口转发依赖，但仍依赖 Service、Pod 和 PVC。
+kind 中不同 Kubernetes 节点若位于同一物理主机，也不构成独立生产故障域；
+本地 PVC 不等于独立不可变归档。运行期间不要在同一候选上做会改变采样
+来源的负例注入；完成后仍须核对每行、最终摘要和归档副本读回。
+
 每次查询最多读取 256 KiB；HTTP 非 200、TLS/网络失败、环境或集群错配、
 成员清单不一致、无效状态卡及服务端观测时间偏差超过一分钟，均记录为
 `unavailable`，不填入上一轮的健康值。程序使用单调时钟安排采样，`SIGTERM`
