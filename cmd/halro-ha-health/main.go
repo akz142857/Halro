@@ -40,6 +40,7 @@ type config struct {
 	eventJournal                                                                               string
 	durableTransitionJournal                                                                   string
 	verifyDurableSnapshot                                                                      string
+	verifyArchiveReadback                                                                      string
 	compareMemberSnapshotReports                                                               string
 	verifyMemberSnapshotManifest                                                               string
 	preflightReseedHandoff                                                                     string
@@ -142,6 +143,7 @@ func main() {
 	flag.StringVar(&cfg.eventJournal, "event-journal", "", "optional private durable file for independently polled member events")
 	flag.StringVar(&cfg.durableTransitionJournal, "durable-transition-journal", "", "optional private file for verified member transition pages")
 	flag.StringVar(&cfg.verifyDurableSnapshot, "verify-durable-snapshot", "", "verify a frozen collector manifest and its closed segments, then print a file-hash inventory")
+	flag.StringVar(&cfg.verifyArchiveReadback, "verify-archive-readback", "", "separately re-verify a retrieved frozen collector copy against -verify-durable-snapshot; local byte equality only")
 	flag.StringVar(&cfg.compareMemberSnapshotReports, "compare-member-snapshot-reports", "", "private manifest of already verified member snapshot reports to compare with the frozen collector head")
 	flag.StringVar(&cfg.verifyMemberSnapshotManifest, "verify-member-snapshot-manifest", "", "private manifest of frozen member data directories and matching configs to authenticate and compare directly")
 	flag.StringVar(&cfg.preflightReseedHandoff, "preflight-reseed-handoff", "", "private manifest of frozen collector, retired member, seed source and replacement snapshots to verify before a journal-generation handoff")
@@ -157,7 +159,7 @@ func main() {
 	}
 	if cfg.commitReseedHandoff != "" {
 		if cfg.preflightReseedHandoff != "" || cfg.verifyDurableSnapshot != "" || cfg.compareMemberSnapshotReports != "" ||
-			cfg.verifyMemberSnapshotManifest != "" || cfg.reconcileRetiredMemberSnapshot != "" || cfg.retiredMemberConfig != "" ||
+			cfg.verifyArchiveReadback != "" || cfg.verifyMemberSnapshotManifest != "" || cfg.reconcileRetiredMemberSnapshot != "" || cfg.retiredMemberConfig != "" ||
 			cfg.durableTransitionJournal == "" {
 			log.Fatal("reseed handoff commit requires a stopped collector journal and cannot run with another offline mode")
 		}
@@ -175,7 +177,7 @@ func main() {
 	}
 	if cfg.preflightReseedHandoff != "" {
 		if cfg.verifyDurableSnapshot != "" || cfg.compareMemberSnapshotReports != "" || cfg.verifyMemberSnapshotManifest != "" ||
-			cfg.reconcileRetiredMemberSnapshot != "" || cfg.retiredMemberConfig != "" {
+			cfg.verifyArchiveReadback != "" || cfg.reconcileRetiredMemberSnapshot != "" || cfg.retiredMemberConfig != "" {
 			log.Fatal("reseed handoff preflight cannot run with another offline mode")
 		}
 		if _, err := hostsecurity.Harden(); err != nil {
@@ -192,7 +194,7 @@ func main() {
 	}
 	if cfg.reconcileRetiredMemberSnapshot != "" || cfg.retiredMemberConfig != "" {
 		if cfg.reconcileRetiredMemberSnapshot == "" || cfg.retiredMemberConfig == "" || cfg.durableTransitionJournal == "" ||
-			cfg.verifyDurableSnapshot != "" || cfg.compareMemberSnapshotReports != "" || cfg.verifyMemberSnapshotManifest != "" {
+			cfg.verifyDurableSnapshot != "" || cfg.verifyArchiveReadback != "" || cfg.compareMemberSnapshotReports != "" || cfg.verifyMemberSnapshotManifest != "" {
 			log.Fatal("retired member reconciliation requires its frozen directory, member config and collector journal, without another offline mode")
 		}
 		members, err := parseExpectedMembers(cfg.members)
@@ -217,12 +219,28 @@ func main() {
 		return
 	}
 	if cfg.verifyDurableSnapshot != "" {
-		if cfg.compareMemberSnapshotReports != "" && cfg.verifyMemberSnapshotManifest != "" {
-			log.Fatal("choose either report comparison or direct member snapshot verification")
+		modes := 0
+		for _, selected := range []string{cfg.verifyArchiveReadback, cfg.compareMemberSnapshotReports, cfg.verifyMemberSnapshotManifest} {
+			if selected != "" {
+				modes++
+			}
+		}
+		if modes > 1 {
+			log.Fatal("choose one snapshot comparison or archive readback mode")
 		}
 		members, err := parseExpectedMembers(cfg.members)
 		if err != nil {
 			log.Fatal(err)
+		}
+		if cfg.verifyArchiveReadback != "" {
+			readback, err := verifyArchiveReadback(cfg.verifyDurableSnapshot, cfg.verifyArchiveReadback, cfg.environment, cfg.cluster, members)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(readback); err != nil {
+				log.Fatal(err)
+			}
+			return
 		}
 		report, err := verifyDurableSnapshot(cfg.verifyDurableSnapshot, cfg.environment, cfg.cluster, members)
 		if err != nil {
@@ -256,8 +274,8 @@ func main() {
 		}
 		return
 	}
-	if cfg.compareMemberSnapshotReports != "" || cfg.verifyMemberSnapshotManifest != "" {
-		log.Fatal("member snapshot comparison requires -verify-durable-snapshot")
+	if cfg.verifyArchiveReadback != "" || cfg.compareMemberSnapshotReports != "" || cfg.verifyMemberSnapshotManifest != "" {
+		log.Fatal("archive readback or member snapshot comparison requires -verify-durable-snapshot")
 	}
 	s, tlsConfig, err := newServer(cfg)
 	if err != nil {

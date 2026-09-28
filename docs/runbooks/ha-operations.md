@@ -110,6 +110,22 @@ an ordered `inventory_sha256`, every stored chain's last observed cursor and
 members with no captured baseline. Store the snapshot and inventory root in
 an independently controlled immutable archive, then verify the archive copy
 and compare the root and chain cursors before calling the handoff complete.
+For a retrieved, separately stored copy with the same filenames, run:
+
+```sh
+halro-ha-health \
+  -verify-durable-snapshot /secure/ha-snapshot/durable-transitions.json \
+  -verify-archive-readback /secure/archive-readback/durable-transitions.json \
+  -environment production -cluster cluster-a \
+  -members halro-0,halro-1,halro-2 \
+  > /secure/ha-archive-readback.json
+```
+
+Expect `readback_bytes_match_local_only` and the same `inventory_sha256` as
+the original inventory. The command re-reads the source after the comparison,
+but both inputs must already be frozen. Record the immutable storage receipt,
+retention/version identity, retrieval time and failure domain separately; a
+matching local report by itself is not an external archive receipt.
 `local_files_verified` proves only that the frozen local files agree with each
 other; it does not authenticate the member's private MAC, prove the collector
 was caught up to the live member, establish external retention or permit

@@ -473,6 +473,17 @@ verification of the archived copy. The command refuses a held collector lock
 but cannot make an ordinary live directory copy atomic; see the
 [operations runbook](../runbooks/ha-operations.md#frozen-independent-collector-evidence-check).
 
+After retrieving a separate copy of the manifest and every closed segment,
+add `-verify-archive-readback <absolute-retrieved-manifest-path>` to the
+source `-verify-durable-snapshot` command. It re-verifies both copies, compares
+their complete reports and exact file-hash inventories, rejects a missing or
+changed file and rejects a source file or hard link presented as the readback.
+Its `readback_bytes_match_local_only` result is a byte-equality preflight; it
+does not establish an independent failure domain, immutable retention or a
+storage receipt. Keep the storage receipt, object version/retention identity
+and retrieval record separately, then perform member MAC and chain comparison
+on the retrieved bytes before declaring the archival handoff complete.
+
 The report also contains each chain's last observed committed head digest
 and time. Add `-compare-member-snapshot-reports <private-manifest-path>` to
 compare its current member heads and committed event-sequence hashes with the
