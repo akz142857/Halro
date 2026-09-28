@@ -54,3 +54,80 @@ func BenchmarkTransitionJournalRecovery(b *testing.B) {
 		})
 	}
 }
+
+// This measures authenticated 64-event pagination at the beginning, middle,
+// and end of a segmented retained chain. Fixture writes are not timed.
+func BenchmarkTransitionJournalPage(b *testing.B) {
+	path, key, state := durablePublisherFixture(b)
+	journalPath := TransitionJournalPath(path)
+	journal, err := OpenTransitionJournal(journalPath, key, state)
+	if err != nil {
+		b.Fatal(err)
+	}
+	journal.segmentLimit = 8 << 10
+	const transitions = 2048
+	for range transitions {
+		next := cloneMemberState(state)
+		next.PromisedTerm++
+		cursor, err := journal.appendIntent("promise", next)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := journal.commit(cursor); err != nil {
+			b.Fatal(err)
+		}
+		next.Transition = cursor
+		state = next
+	}
+	if err := WriteState(path, state, key); err != nil {
+		b.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		b.Fatal(err)
+	}
+	recovered, err := OpenTransitionJournal(journalPath, key, state)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer recovered.Close()
+	if len(recovered.segments) < 100 {
+		b.Fatalf("fixture has only %d segments", len(recovered.segments))
+	}
+	storage, err := recovered.storage()
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, position := range []struct {
+		name  string
+		after uint64
+	}{
+		{name: "first", after: 0},
+		{name: "middle", after: transitions / 2},
+		{name: "last", after: transitions - 64},
+	} {
+		digest := ""
+		if position.after > 0 {
+			if err := recovered.visitRecords(position.after, position.after, func(record transitionJournalRecord, _ *transitionJournalRecord) error {
+				digest = publicTransitionDigest(record.MAC)
+				return nil
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.Run(position.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				page, err := recovered.Page(position.after, digest, 64)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(page.Events) != 64 {
+					b.Fatalf("page has %d events", len(page.Events))
+				}
+			}
+			b.ReportMetric(float64(storage.Segments), "segments")
+			b.ReportMetric(float64(storage.Bytes), "journal_bytes")
+		})
+	}
+}
