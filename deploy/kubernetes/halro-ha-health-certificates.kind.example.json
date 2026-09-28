@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "context": "kind-halro-ha-health-local",
+  "secrets": [
+    {
+      "namespace": "halro",
+      "name": "halro-ha-cluster-tls",
+      "cert_keys": ["ca.crt", "halro-0.crt", "halro-1.crt", "halro-2.crt"]
+    },
+    {
+      "namespace": "halro-monitoring",
+      "name": "ha-health-tls",
+      "cert_keys": ["ca.crt", "collector.crt", "server.crt"]
+    },
+    {
+      "namespace": "halro-monitoring",
+      "name": "ha-prometheus-tls",
+      "cert_keys": ["ca.crt", "client.crt"]
+    },
+    {
+      "namespace": "halro-monitoring",
+      "name": "ha-prometheus-web-tls",
+      "cert_keys": ["client-ca.crt", "server.crt"]
+    },
+    {
+      "namespace": "halro-monitoring",
+      "name": "ha-health-prometheus-client",
+      "cert_keys": ["ca.crt", "client.crt"]
+    }
+  ]
+}

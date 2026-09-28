@@ -34,6 +34,31 @@ python3 tests/ha-health-soak/collector.py \
 启动时加载客户端证书和信任 CA，运行期间不会自动重载；即使脚本持续运行，
 证书中途到期也会产生 `unavailable`，不能把采样进程存活视为覆盖完整。
 
+对于 Kubernetes 部署，先复核实际使用的全部证书 Secret，把每个 Secret
+及其 `.crt` 键写入版本 1 清单；本地 kind 示例见
+[`halro-ha-health-certificates.kind.example.json`](../../deploy/kubernetes/halro-ha-health-certificates.kind.example.json)。
+在具备这些 Secret 只读权限的验证主机执行：
+
+```sh
+python3 tests/ha-health-soak/cert_preflight.py \
+  --manifest deploy/kubernetes/halro-ha-health-certificates.kind.example.json \
+  --certificate-file operator=/approved/path/operator.crt \
+  --min-valid-seconds 266400 \
+  --output /private/evidence/ha-cert-window-001
+```
+
+状态须为 `ready_for_window`，才具备这项有效期前提。该工具核对清单中每个
+Secret 的 `.crt` 键集合，逐张检查 PEM 链中的证书。Kubernetes API 仍会
+把完整 Secret 交给 `kubectl` 进程；模板只将键名和公开证书值传给预检
+进程，报告不输出私钥。应在受控验证主机运行；`certificate-window.json`
+在新建的 `0700` 目录中以 `0600` 保存。尚未生效的证书也会阻止通过。
+不在 Secret 中的操作员或其他客户端证书必须逐一通过可重复的
+`--certificate-file 名称=/绝对路径/公开证书.crt` 纳入同一报告；该选项只读
+公开证书文件。工具不会发现清单遗漏的整个 Secret 或文件，
+也不证明证书信任关系、身份权限、运行中 Pod 已加载的字节或后续轮换安全。
+清单必须与目标部署
+配置和 Secret 实际引用核对，报告的清单 SHA-256 与证据一同留存。
+
 ```sh
 python3 tests/ha-health-soak/collector.py \
   --url https://ha-health.example.internal/ \

@@ -1564,3 +1564,25 @@ Prometheus、Alertmanager 和本地接收器 Deployment 均为 1/1 Ready。
 端口转发进程在记录时均仍运行。完成前没有 `summary.json`，不能宣称
 24 小时连续覆盖；即使最后完成，本轮也只属于 `smoke_only`，不会签署
 72 小时、RTO/RPO 或完整 G0–G7。
+
+## 72 小时证书窗口只读预检（约 17:58 UTC）
+
+按本地 kind 五个实际证书 Secret 的公开 `.crt` 键建立精确清单，并把主机
+操作员公开证书作为独立文件纳入，以
+`tests/ha-health-soak/cert_preflight.py` 检查至少 266400 秒（72 小时加
+2 小时余量）的有效期。`kubectl` 进程读取 Secret 后，模板只把键名和公开
+证书传给预检进程，不把私钥写入输出或报告；清单漏/多证书键、无效 PEM、
+尚未生效及证书链中任一证书提前到期均阻止通过。10 项仓库单测通过，
+其中包含链内第二张证书到期、主机文件到期和不读取私钥字段的检查。
+
+本地结果为 `certificate_window_blocked`：5 个 Secret 的 13 张证书加
+1 张主机操作员证书共 14 张，全部早于所需截止时间
+`2026-10-01T20:06:34.132461Z` 到期；最早的是
+`2026-09-30T03:27:23Z`。清单 SHA-256 为
+`b2e6439e387d511626b637299aab4698e1f62eb75ca276018be8ac2a5f4bfce5`。
+私有报告
+`/tmp/halro-ha-health-kind-20260928/evidence/cert-window-final-v4-20260928/certificate-window.json`
+的 SHA-256 为
+`18589636e9daa15a7af4b3e064a13f6f85a2d049e0448e76caa64f19ba636b15`，
+目录权限 `0700`，报告 `0600`。此报告只检查所列证书的有效期；正式候选
+仍须核对部署引用、轮换及跨故障域可用性，然后重新从零启动 72 小时窗口。
