@@ -1,4 +1,72 @@
     const names = {healthy:'健康',degraded:'降级',critical:'危险',unknown:'未知'};
+    const reasonText = {
+      'client probe not observed':'客户端入口探针未观测到结果',
+      'client Service probe not configured':'客户端 Service 探针未配置',
+      'client Service reached a different cluster':'客户端 Service 路由到其他集群',
+      'client Service returned a route without cluster identity':'客户端 Service 路由缺少集群身份',
+      'client Service reached Primary':'客户端 Service 已到达 Primary',
+      'client Service probe transport unavailable':'客户端 Service 探针传输不可用',
+      'client Service returned unexpected responses':'客户端 Service 返回非预期响应',
+      'client Service returned only Replica routes within probe budget':'探针预算内仅到达 Replica',
+      'conflicting observations for one member identity':'同一成员身份的观测互相矛盾',
+      'member-reported identity differs from scrape inventory':'成员自报身份与采集清单不一致',
+      'members report different incarnations':'成员自报的 incarnation 不一致',
+      'a member promised a term below its current term':'成员的 promised term 低于当前 term',
+      'a member reports invalid index ordering':'成员水位顺序不合法',
+      'multiple members report Primary':'多个成员自报 Primary',
+      'unconfigured HA member observed':'观测到清单外 HA 成员',
+      'a member promised a term above the observed Primary':'成员的 promised term 高于已观测 Primary',
+      'unconfigured HA member evidence is stale or incomplete':'清单外成员证据陈旧或不完整',
+      'member coverage or identity is incomplete':'成员覆盖或身份不完整',
+      'member role observation is incomplete':'成员角色观测不完整',
+      'no member reports Primary':'没有成员自报 Primary',
+      'Primary term is missing':'Primary term 缺失',
+      'member observed an incompatible peer':'成员观测到不兼容 Peer',
+      'member reports maintenance, startup, or replication unavailability':'成员报告维护、启动或复制不可用',
+      'member safety evidence is incomplete':'成员安全证据不完整',
+      'member is awaiting a role decision':'成员正在等待角色裁决',
+      'member HA signal inventory is incomplete':'成员 HA 信号清单不完整',
+      'Replica applied index exceeds the observed Primary confirmed index':'Replica 应用水位超过已观测 Primary 确认水位',
+      'one observed Primary and consistent member identities':'已观测到唯一 Primary，成员身份一致',
+      'Primary reports an internal replication block':'Primary 报告内部复制阻断',
+      'Primary confirmation evidence is incomplete':'Primary 确认证据不完整',
+      'Primary confirmation evidence is ambiguous':'Primary 确认证据互相矛盾',
+      'Primary has not completed startup adjudication':'Primary 尚未完成启动裁决',
+      'peer sessions were not observed':'未观测到 Peer 会话',
+      'peer session observation is missing':'Peer 会话观测缺失',
+      'Primary has no authenticated Replica session':'Primary 没有已认证的 Replica 会话',
+      'no recent required confirmation success observed':'近五分钟没有必需确认写成功证据',
+      'Primary recently completed a required confirmation barrier':'Primary 近期完成必需确认屏障',
+      'Replica coverage is incomplete':'Replica 覆盖不完整',
+      'Primary progress evidence is ambiguous':'Primary 进度证据互相矛盾',
+      'Replica progress evidence is incomplete':'Replica 进度证据不完整',
+      'Primary confirmed index is missing':'Primary 确认水位缺失',
+      'no Replica role observed':'未观测到 Replica 角色',
+      'at least one Replica has an observed matching index':'至少一个 Replica 的观测水位数值匹配',
+      'no Replica has an observed matching index':'没有 Replica 的观测水位数值匹配',
+      'no health evidence':'没有健康证据',
+      'authenticated ordering prefixes differ at the same index':'相同 index 的认证 ordering 前缀不一致',
+      'event archive member collection incomplete':'事件留存的成员采集不完整',
+      'durable transition coverage incomplete':'持久迁移证据覆盖不完整',
+      'current HA alerts unavailable':'当前 HA 告警不可读取',
+    };
+    const reasonPrefixes = [
+      ['member machine status disagrees with fresh Metrics: ','机器状态与新鲜 Metrics 不一致：'],
+      ['member health probe incomplete: ','成员健康探针不完整：'],
+      ['member liveness probe failed: ','成员存活探针失败：'],
+      ['Primary readiness probe failed: ','Primary 就绪探针失败：'],
+      ['member machine status incomplete: ','成员机器状态不完整：'],
+      ['event archive unavailable: ','事件留存不可用：'],
+      ['firing alert: ','正在触发的告警：'],
+    ];
+    function displayReason(reason) {
+      if(!reason) return '无有效数据';
+      if(reasonText[reason]) return reasonText[reason];
+      for(const [prefix,translation] of reasonPrefixes) {
+        if(reason.startsWith(prefix)) return translation+reason.slice(prefix.length);
+      }
+      return reason;
+    }
     const colors = ['#5cc8ff','#77e4ad','#ffcb78','#d4a6ff','#f482a5','#b7c7e7'];
     const byId = id => document.getElementById(id);
     function verifiedRunbookBase(value) {
@@ -19,7 +87,7 @@
       const card = byId(id), level = names[signal?.level] ? signal.level : 'unknown';
       card.className = 'card ' + level;
       card.querySelector('.status').textContent = names[level];
-      card.querySelector('.reason').textContent = signal?.reason || '无有效数据';
+      card.querySelector('.reason').textContent = displayReason(signal?.reason);
     }
     function cell(row, value) { const td = document.createElement('td'); td.textContent = value == null || value === '' ? '未知' : String(value); row.append(td); }
     function ageMs(member) {
@@ -57,15 +125,15 @@
       byId('detail-title').textContent='节点详情 · '+member.instance;
       const list=byId('detail-list');list.replaceChildren();
       const add=(label,value)=>{const term=document.createElement('dt'),description=document.createElement('dd');term.textContent=label;description.textContent=value == null || value === ''?'未知':String(value);list.append(term,description);};
-      add('指标来源','Prometheus /metrics');add('指标采集状态',observation(member));add('最早指标观测',member.sampled_at?new Date(member.sampled_at).toLocaleString():null);
-      add('本轮 up 观测',member.up_sampled_at?new Date(member.up_sampled_at).toLocaleString():null);
-      add('最晚指标观测',member.newest_sampled_at?new Date(member.newest_sampled_at).toLocaleString():null);
+      add('指标来源','Prometheus /metrics');add('指标采集状态',observation(member));add('最早指标观测',member.sampled_at?new Date(member.sampled_at).toLocaleString('zh-CN'):null);
+      add('本轮 up 观测',member.up_sampled_at?new Date(member.up_sampled_at).toLocaleString('zh-CN'):null);
+      add('最晚指标观测',member.newest_sampled_at?new Date(member.newest_sampled_at).toLocaleString('zh-CN'):null);
       add('机器状态采集',machine?(machine.error?'未知：'+machine.error:'成功'):'未配置');
       add('逐节点 HTTP live',machine?flag(machine.health_live):null);
       add('逐节点 HTTP ready',machine?flag(machine.health_ready):null);
       add('逐节点健康探针异常',machine?.health_probe_error);
-      if(machine&&!machine.error){add('状态采集时间',new Date(machine.sampled_at).toLocaleString());add('认证状态角色 / term',machine.role+' / '+machine.term);add('元数据投影',machine.projection?JSON.stringify(machine.projection):null);}
-      if(machine?.live_transitions){add('本进程迁移记录',`${machine.live_transitions.events?.length||0} 条 · 已淘汰 ${machine.live_transitions.dropped||0} 条 · 发布器启动 ${new Date(machine.live_transitions.publisher_started_at).toLocaleString()}`);}
+      if(machine&&!machine.error){add('状态采集时间',new Date(machine.sampled_at).toLocaleString('zh-CN'));add('认证状态角色 / term',machine.role+' / '+machine.term);add('元数据投影',machine.projection?JSON.stringify(machine.projection):null);}
+      if(machine?.live_transitions){add('本进程迁移记录',`${machine.live_transitions.events?.length||0} 条 · 已淘汰 ${machine.live_transitions.dropped||0} 条 · 发布器启动 ${new Date(machine.live_transitions.publisher_started_at).toLocaleString('zh-CN')}`);}
       if(machine?.availability_transitions){add('Primary 可用性事件',`${machine.availability_transitions.current} · ${machine.availability_transitions.events?.length||0} 条 · 已淘汰 ${machine.availability_transitions.dropped||0} 条`);}
       if(machine?.prefix_digest) add('认证前缀摘要',`index ${machine.prefix_digest.index} · last frame term ${machine.prefix_digest.last_frame_term} · SHA-256 ${machine.prefix_digest.ordering_head_sha256}`);
       add('自报 Cluster ID',member.cluster_id);add('自报 Node ID',member.node_id);
@@ -121,7 +189,7 @@
         cell(row,flag(m.startup_ready));cell(row,flag(m.replication_unavailable));cell(row,flag(m.incompatible));
         cell(row,m.peers?Object.entries(m.peers).map(([peer,connected])=>peer+':'+(connected==null?'未知':connected?'已连接':'断开')).join('，')||'无':'未知');
         cell(row,flag(m.maintenance));
-        cell(row,m.sampled_at ? new Date(m.sampled_at).toLocaleString() : '未知'); tbody.append(row);
+        cell(row,m.sampled_at ? new Date(m.sampled_at).toLocaleString('zh-CN') : '未知'); tbody.append(row);
       }
     }
     function renderAlerts(alerts) {
@@ -133,7 +201,7 @@
         button.type='button';button.className='node-button';button.textContent=a.name;
         button.addEventListener('click',()=>showAlertDetail(a));name.append(button);row.append(name);
         cell(row,a.severity);cell(row,a.instance||'集群');cell(row,a.state);
-        cell(row,a.started?new Date(a.started).toLocaleString():'未知');cell(row,a.summary);
+        cell(row,a.started?new Date(a.started).toLocaleString('zh-CN'):'未知');cell(row,a.summary);
         const runbook=document.createElement('td');
         if(runbookBase&&/^\/docs\/observability\/operations-runbook\.md#[a-z0-9-]+$/.test(a.runbook||'')) {
           const link=document.createElement('a');link.href=runbookBase+a.runbook.slice(1);link.textContent='查看处置';runbook.append(link);
@@ -154,7 +222,7 @@
       };
       add('告警状态 / 级别',(alert.state||'未知')+' / '+(alert.severity||'未知'));
       add('影响节点',alert.instance||'集群范围，按表达式核对');
-      add('活动开始',alert.started?new Date(alert.started).toLocaleString():'未知');
+      add('活动开始',alert.started?new Date(alert.started).toLocaleString('zh-CN'):'未知');
       add('规则结果值',alert.value||'未提供；不是原始指标样本');
       add('摘要',alert.summary);
       const observed=alert.instance?currentMembers.filter(member=>member.instance===alert.instance):currentMembers;
@@ -194,7 +262,7 @@
       if(!episodes.length) { const row=document.createElement('tr');cell(row,'所选时间窗无可用告警采样');tbody.append(row);return; }
       for(const episode of episodes.slice(0,100)) {
         const row=document.createElement('tr');cell(row,episode.name);cell(row,episode.instance);cell(row,episode.severity);
-        cell(row,new Date(episode.first*1000).toLocaleString());cell(row,new Date(episode.last*1000).toLocaleString());cell(row,episode.count);tbody.append(row);
+        cell(row,new Date(episode.first*1000).toLocaleString('zh-CN'));cell(row,new Date(episode.last*1000).toLocaleString('zh-CN'));cell(row,episode.count);tbody.append(row);
       }
     }
     function renderEvents(events) {
@@ -204,8 +272,8 @@
       const kinds={role:'角色',term:'Term',incarnation:'Incarnation',replication_phase:'复制阶段',maintenance:'维护',peer_session:'认证会话'};
       for(const event of events) {
         const row=document.createElement('tr');cell(row,event.instance);cell(row,kinds[event.kind]||event.kind);
-        cell(row,event.peer||'—');cell(row,event.from);cell(row,event.to);cell(row,event.previous_seen?new Date(event.previous_seen).toLocaleString():'未知');
-        cell(row,event.first_seen?new Date(event.first_seen).toLocaleString():'未知');tbody.append(row);
+        cell(row,event.peer||'—');cell(row,event.from);cell(row,event.to);cell(row,event.previous_seen?new Date(event.previous_seen).toLocaleString('zh-CN'):'未知');
+        cell(row,event.first_seen?new Date(event.first_seen).toLocaleString('zh-CN'):'未知');tbody.append(row);
       }
     }
     function renderLiveTransitions(statuses) {
@@ -225,7 +293,7 @@
         const row=document.createElement('tr');cell(row,node);cell(row,event.kind);
         cell(row,`${event.from_role} / term ${event.from_term} / promise ${event.from_promised_term}`);
         cell(row,`${event.to_role} / term ${event.to_term} / promise ${event.to_promised_term}`);
-        cell(row,new Date(event.at).toLocaleString());cell(row,event.sequence);tbody.append(row);
+        cell(row,new Date(event.at).toLocaleString('zh-CN'));cell(row,event.sequence);tbody.append(row);
       }
     }
     function renderAvailabilityTransitions(statuses) {
@@ -242,7 +310,7 @@
       if(!all.length){const row=document.createElement('tr');cell(row,available?'所采集进程暂无可用性切换':'可用性边界事件未观测');tbody.append(row);return;}
       for(const {node,event} of all.slice(0,200)) {
         const row=document.createElement('tr');cell(row,node);cell(row,event.from);cell(row,event.to);cell(row,event.reason);
-        cell(row,new Date(event.at).toLocaleString());cell(row,event.sequence);tbody.append(row);
+        cell(row,new Date(event.at).toLocaleString('zh-CN'));cell(row,event.sequence);tbody.append(row);
       }
     }
     function renderReplicaStages(statuses) {
@@ -259,7 +327,7 @@
       if(!all.length){const row=document.createElement('tr');cell(row,available?'所采集 Replica 暂无失败/恢复边界':'Replica 阶段事件未观测');tbody.append(row);return;}
       for(const {node,event} of all.slice(0,200)) {
         const row=document.createElement('tr');cell(row,node);cell(row,event.stage==='receive'?'接收':'应用');cell(row,event.from);cell(row,event.to);
-        cell(row,event.reason);cell(row,event.target_index);cell(row,new Date(event.at).toLocaleString());tbody.append(row);
+        cell(row,event.reason);cell(row,event.target_index);cell(row,new Date(event.at).toLocaleString('zh-CN'));tbody.append(row);
       }
     }
     function renderEventArchive(archive) {
@@ -275,7 +343,7 @@
       }
       const status={ok:'文件写入正常',partial:'成员采集不完整',stale:'采集陈旧',journal_write_failed:'文件写入失败'}[archive.status]||'未知';
       const failures=archive.collection_errors?.length?`；本轮成员采集失败：${archive.collection_errors.join('、')}`:'';
-      summary.textContent=`留存状态：${status}；最近采集 ${archive.polled_at?new Date(archive.polled_at).toLocaleString():'尚无'}${failures}；容量淘汰 ${archive.retention_dropped||0} 条。缺口标记表示无法证明事件完整性；本文件也不是 HA Audit。`;
+      summary.textContent=`留存状态：${status}；最近采集 ${archive.polled_at?new Date(archive.polled_at).toLocaleString('zh-CN'):'尚无'}${failures}；容量淘汰 ${archive.retention_dropped||0} 条。缺口标记表示无法证明事件完整性；本文件也不是 HA Audit。`;
       const labels={initial_observation:'首次观测：此前历史未知',source_changed:'事件源实例变化：间隔期间未知',incarnation_changed:'Incarnation 变化：前后证据分离',collection_failed:'采集失败：故障期间未知',ring_history_missing:'内存环已淘汰：事件缺失',sequence_regressed:'同一事件源序号倒退：来源异常'};
       const records=(archive.records||[]).slice(-100).reverse();
       if(!records.length){const row=document.createElement('tr');cell(row,'尚无留存事件');tbody.append(row);return;}
@@ -288,8 +356,8 @@
           `${event.kind}: ${event.from_role} / ${event.from_term} → ${event.to_role} / ${event.to_term}`:
           record.replica_stage?`${event.stage}: ${event.from} → ${event.to} (${event.reason}, index ${event.target_index})`:
           `${event.from} → ${event.to} (${event.reason})`);
-        cell(row,event?.at?new Date(event.at).toLocaleString():'未知');
-        cell(row,new Date(record.observed_at).toLocaleString());tbody.append(row);
+        cell(row,event?.at?new Date(event.at).toLocaleString('zh-CN'):'未知');
+        cell(row,new Date(record.observed_at).toLocaleString('zh-CN'));tbody.append(row);
       }
     }
     function renderDurableArchive(archive) {
@@ -307,7 +375,7 @@
         const row=document.createElement('tr');
         cell(row,member.node_id);cell(row,member.incarnation||'未观测');cell(row,member.baseline_kind==='legacy_baseline'?'传统迁移基线（此前未知）':member.baseline_kind==='initial_state'?'初始状态':'未观测');
         cell(row,labels[member.status]||member.status);cell(row,member.stored_sequence);cell(row,member.observed_head);cell(row,member.events_retained);
-        cell(row,member.observed_at?new Date(member.observed_at).toLocaleString():'未观测');cell(row,failures[member.failure]||member.failure||'—');tbody.append(row);
+        cell(row,member.observed_at?new Date(member.observed_at).toLocaleString('zh-CN'):'未观测');cell(row,failures[member.failure]||member.failure||'—');tbody.append(row);
       }
       const events=(archive.members||[]).flatMap(member=>(member.recent_events||[]).map(event=>({node:member.node_id,incarnation:member.incarnation,event})));
       events.sort((a,b)=>Date.parse(b.event.at)-Date.parse(a.event.at));
@@ -316,7 +384,7 @@
         const row=document.createElement('tr');cell(row,node);cell(row,incarnation);cell(row,event.kind);
         cell(row,`${event.from_role} / ${event.from_term} / ${event.from_promised_term}`);
         cell(row,`${event.to_role} / ${event.to_term} / ${event.to_promised_term}`);
-        cell(row,new Date(event.at).toLocaleString());cell(row,event.sequence);eventsBody.append(row);
+        cell(row,new Date(event.at).toLocaleString('zh-CN'));cell(row,event.sequence);eventsBody.append(row);
       }
     }
     function renderStageLatencies(members, values) {
@@ -339,7 +407,7 @@
       if(evidence.status==='observed'||evidence.status==='nonpositive') {
         const value=Number(evidence.increase_5m);
         const estimate=Number.isFinite(value)?value.toFixed(2):'未知';
-        panel.textContent=`节点 ${evidence.instance||'未知'}；近 5 分钟成功等待的 Prometheus 估算增量 ${estimate}；两类计数中最旧的抓取 ${evidence.sampled_at?new Date(evidence.sampled_at).toLocaleString():'未知'}；稳定任期规则抓取 ${evidence.epoch_sampled_at?new Date(evidence.epoch_sampled_at).toLocaleString():'未知'}；窗口求值 ${evidence.evaluated_at?new Date(evidence.evaluated_at).toLocaleString():'未知'}。${source}此值只证明内部必需确认屏障的观察结果，不等于客户端完整成功。`;
+        panel.textContent=`节点 ${evidence.instance||'未知'}；近 5 分钟成功等待的 Prometheus 估算增量 ${estimate}；两类计数中最旧的抓取 ${evidence.sampled_at?new Date(evidence.sampled_at).toLocaleString('zh-CN'):'未知'}；稳定任期规则抓取 ${evidence.epoch_sampled_at?new Date(evidence.epoch_sampled_at).toLocaleString('zh-CN'):'未知'}；窗口求值 ${evidence.evaluated_at?new Date(evidence.evaluated_at).toLocaleString('zh-CN'):'未知'}。${source}此值只证明内部必需确认屏障的观察结果，不等于客户端完整成功。`;
         return;
       }
       const reasons={query_failed:'查询失败',ambiguous:'候选序列互相重叠',no_fresh_sample:'没有新鲜的稳定任期成功等待样本'};
@@ -376,7 +444,7 @@
       chart.append(svg('line',{x1:55,y1:220,x2:875,y2:220,stroke:'#6b819f'}));
       const low=svg('text',{x:5,y:220,fill:'#a9b9d1'});low.textContent=String(minV);chart.append(low);
       const high=svg('text',{x:5,y:40,fill:'#a9b9d1'});high.textContent=String(maxV);chart.append(high);
-      const timeLabel=t=>new Date(t*1000).toLocaleString(undefined,{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+      const timeLabel=t=>new Date(t*1000).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
       const start=svg('text',{x:55,y:248,fill:'#a9b9d1','font-size':12});start.textContent=timeLabel(minT);chart.append(start);
       const end=svg('text',{x:875,y:248,fill:'#a9b9d1','font-size':12,'text-anchor':'end'});end.textContent=timeLabel(maxT);chart.append(end);
       const markerKinds={role:'角色',term:'Term',incarnation:'Incarnation',replication_phase:'复制阶段',maintenance:'维护',peer_session:'Peer 会话'};
@@ -398,7 +466,7 @@
         const draw=()=>{
           if(segment.length===1) {
             const dot=svg('circle',{cx:x(segment[0][0]),cy:y(segment[0][1]),r:3.5,fill:color});
-            const title=svg('title',{});title.textContent=line.name+' · '+new Date(segment[0][0]*1000).toLocaleString()+' · index '+segment[0][1];
+            const title=svg('title',{});title.textContent=line.name+' · '+new Date(segment[0][0]*1000).toLocaleString('zh-CN')+' · index '+segment[0][1];
             dot.append(title);chart.append(dot);
           } else if(segment.length>1) {
             const points=[segment[0]];
@@ -429,7 +497,7 @@
       for(const id of ['overall','client','confirmation','safety','catchup']) {
         renderSignal(id,{level:'unknown',reason:'当前健康查询超过 30 秒未更新'});
       }
-      byId('updated').textContent='最近成功查询：'+new Date(lastHealthRenderedAt).toLocaleString()+' · 当前状态已过期';
+      byId('updated').textContent='最近成功查询：'+new Date(lastHealthRenderedAt).toLocaleString('zh-CN')+' · 当前状态已过期';
       lastHealthRenderedAt=0;lastHealthRenderedMono=NaN;healthServerAt=NaN;healthRequestMono=NaN;
     }
     async function refresh(forceHistory=false) {
@@ -469,7 +537,7 @@
           byId('scope').textContent='环境 '+state.environment+' · 集群 '+state.cluster+' · Incarnation '+identity+' · 采集 '+freshCount+'/'+state.expected_members+(unexpected.length?' · 异常来源 '+unexpected.length+'（未证实 '+uncertain+'）':'');
           const unexpectedNote=byId('unexpected-members');unexpectedNote.hidden=!unexpected.length;
           unexpectedNote.textContent=unexpected.length?'异常来源证据：'+unexpected.slice(0,10).map(member=>(member.identity_missing?'缺少 instance 标签':(member.instance||'未知'))+' '+(member.identity_missing?'身份不可核对':member.observed?'近期已观测':'未证实/陈旧')+' · '+(member.sampled_at||'无有效时间')).join('；')+(unexpected.length>10?'；另有 '+(unexpected.length-10)+' 个':''):'';
-          byId('updated').textContent='服务端观测：'+new Date(state.observed_at).toLocaleString()+' · 页面更新：'+new Date().toLocaleString();
+          byId('updated').textContent='服务端观测：'+new Date(state.observed_at).toLocaleString('zh-CN')+' · 页面更新：'+new Date().toLocaleString('zh-CN');
         } else {
           lastHealthRenderedAt=0;lastHealthRenderedMono=NaN;healthServerAt=NaN;healthRequestMono=NaN;
           const failureReason=expiredResponse?'本次查询过期':invalidObservedAt?'观测时间无效':'本次查询失败';
@@ -479,7 +547,7 @@
           byId('two-node').hidden=true;
           byId('scope').textContent='集群身份与采集覆盖未知';
           byId('unexpected-members').hidden=true;byId('unexpected-members').textContent='';
-          byId('updated').textContent='当前状态不可用：'+new Date().toLocaleString();
+          byId('updated').textContent='当前状态不可用：'+new Date().toLocaleString('zh-CN');
         }
       }
       const [historyData,currentAlerts,latency,impact,archive,clientFinal,durableArchive]=await details;
