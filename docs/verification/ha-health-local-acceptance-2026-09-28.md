@@ -49,7 +49,7 @@ HA 健康系统改动还在未提交工作树，没有可冻结的候选 SHA 或
 | H17 同 incarnation 重播种证据交接 | 旧链补采、获批 seed 核验、v3 代际记录和重启追赶 | 全故障矩阵及独立不可变归档中的旧/新链交接 |
 | H18 长留存恢复资源 | 256/2048 次迁移仓库基准、kind 容量字节缺报告警 | 最大留存规模的启动/分页资源、真实容量故障与恢复测量 |
 | H19 同步停滞与写请求影响 | kind metadata ACK 停滞、503 后回读对账；非计费 Ledger/metadata 正向写 | Ledger 故障、流式终止/重试去重、最终客户端结果及阶段时延校准 |
-| H20 告警证据与访问 | kind firing/resolved、规则求值和本地 webhook 回执 | 受控代理下的 runbook/证据访问、独立通知与完整触发原始样本留存 |
+| H20 告警证据与访问 | kind firing/resolved、规则求值和本地 webhook 回执；冻结候选的直接操作员 mTLS 证据/规则访问及应用审计已复核 | 受控代理与文档根下的 runbook 访问、独立通知与完整触发原始样本留存 |
 
 矩阵之外还须分别签收 G0–G7、相邻版本、72 小时负载 soak 和正式 RTO/RPO。
 当前 72 小时只读候选采样持续运行，但其完成也不能代替这些项目；客户端
@@ -1920,3 +1920,32 @@ H05 正式状态继续 `NOT_RUN`。
 测试替身、成员进程运行在隔离目录，未触动正在长跑的 kind 集群。它不能
 代替 kind 现场的 15 秒轮询、成员故障、1000 条留存淘汰、页面/规则联动
 或外部不可变归档；H12 整行仍为 `NOT_RUN`。
+
+## H20 冻结候选的直接 mTLS 访问与证据导出（2026-09-29）
+
+72 小时只读采样期间，仅经现存 `127.0.0.1:19115` 本地端口转发向
+`1ecddf40-exact` 健康服务发起只读操作。现行测试 CA 验证操作员证书通过；
+带证书的 `/`、`/api/evidence?minutes=15` 和
+`/api/alert-rule?name=HalroNoPrimary` 均返回 200。证据文件声明
+`environment=kind-local`、`cluster=halro-kind-health-local`、三名预期成员；
+包含 3 份机器状态、51 条当前指标、30 条历史序列，事件文件 `ok`、
+持久迁移采集 `caught_up`、客户端最终结果 `not_configured`。当前无活动告警；
+规则证据 `available`、规则求值健康，`for=120s`。不带客户端证书的证据
+请求未完成 TLS 握手，HTTP 码为 `000`（curl 退出 56）；带证书的 POST
+证据请求为 405。服务访问日志为两次 GET 200 和一次 POST 405 留下
+`CN=halro-operator-kind-local` 主体、方法、路径和状态。
+
+| 本机私有证据（`/tmp/halro-ha-health-kind-20260928/evidence/h20-access-20260929/`，文件 0600） | SHA-256 |
+| --- | --- |
+| `page.html` | `80aff37ef286156018635fea8fb53b64e3caa1e97f355dac34c38dcfdda67649` |
+| `evidence-15m.json` | `13b79c105248eb72ab10aefa7a170ba6645995b281cd2f45b3d813daf5830ce9` |
+| `alert-rule.json` | `f36ced39113d2f8cbbe6c41b87b9f126008452e58cc00709c33ea7c8e67083f9` |
+| `audit-excerpt.txt` | `0b7c41e7367132c1753a77b70f9e9d151b82f513dc580652e535c34b39d81937` |
+
+Deployment 实际未配置 `-runbook-base-url`，页面注入值为
+`data-runbook-base=""`，因此只显示仓库 runbook 路径而不生成可访问链接；
+当前部署也没有独立的受控操作员代理或逐人身份，直连共享测试证书只证明
+服务自身的 mTLS 和应用层审计。端口转发的日志远端地址是回环，不能证明
+外部网络边界。此次没有活动告警，也没有获取某次触发前、中、后的原始
+样本与通知链；H20 继续 `NOT_RUN`，后续须在受控代理、受保护文档源及
+独立通知接收者实际部署后签收。
