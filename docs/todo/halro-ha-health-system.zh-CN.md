@@ -605,3 +605,13 @@ H20 的既有 Peer 缺报演练现用原始 Prometheus TSDB 再核对一次：84
 重算为 0/1/0 条序列。重算结果不是触发瞬间原始求值向量，本地 webhook
 也非正式联系点；私有证据摘要与边界见[验收台账](../verification/ha-health-local-acceptance-2026-09-28.md)，
 H20 继续 `NOT_RUN`。
+
+独立健康服务发布归档的本机实物复核：从干净的 `4df89d6033874e765664b0c6c171d4f0641ed170`
+Git 归档导出源码，按发布工作流的 `go build -trimpath -ldflags` 参数构建 Darwin
+arm64 的 `halro`、`halro-deadman` 和 `halro-ha-health`，复制同一批随包文件，
+以 GNU tar 固定排序、属主和提交时间，再用 `gzip -n` 生成归档。解包后分别以
+`halro version` 和两个 `-version` 核对三份相同的本机测试版号、提交及日期；
+健康服务 README 与该提交的部署指南逐字节相同。两次生成的归档 SHA-256
+均为 `c72f725531c10e63e05c28b9a4ab85711f1b170b168c47cd97223399e1686220`。
+原件位于本机 `/tmp/halro-ha-release-smoke.6dBW0P/`，只是可清理的本机烟测，
+尚未执行 GitHub 正式发布工作流、签名和安装后的目标环境验收。
