@@ -468,3 +468,10 @@ Primary 滚动重启时独立健康页显示未知/降级并恢复，当前三�
 `zh-CN` 时间、当前/历史图表及正确的未接入客户端结果提示；运行中
 `/app.js` 与提交源码哈希一致。三名 HA 成员继续运行 `02f2da14` 镜像；
 此项仅补齐本地页面可读性检查，正式验收边界不变。见[本地验收记录](../verification/ha-health-local-acceptance-2026-09-28.md)。
+
+本地 kind 又对 `halro-2` 单条 Peer 连接指标执行一次真实抓取缺报：
+`up=1` 持续，安全与追平卡转未知，`HalroMemberHASignalMissing` firing 并
+送达本地 webhook；恢复原抓取配置后指标、卡片与告警均恢复，接收器收到
+resolved，配置逐字节回到基线。该结果只覆盖固定信号矩阵中的一个 Peer
+子项，其他信号、完整 20 行矩阵和正式通知渠道仍未签署；原始样本与摘要见
+[本地验收记录](../verification/ha-health-local-acceptance-2026-09-28.md)。

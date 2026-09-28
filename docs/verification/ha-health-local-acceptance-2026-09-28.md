@@ -1380,3 +1380,36 @@ SHA-256 同为 `db36a5d31f1cfcb4d4d8e608c190cb4ebc043de44f737e6ee15e72f824f0b83e
 中文日期格式。三名 HA 成员仍为 `02f2da14` 精确提交镜像，本次只替换
 独立健康页。此检查补齐本地真实数据视觉证据，不代替正式操作员代理、
 完整故障矩阵、独立归档、客户端最终结果或 G0–G7 验收。
+
+## kind Peer 固定指标缺报与恢复（约 16:11–16:17 UTC）
+
+在现行三成员 kind 的 `halro-2` Prometheus 抓取任务中，临时用
+`metric_relabel_configs` 只过滤 `halro_replication_peer_connected{peer="halro-1"}`；
+其他成员、该成员 `up` 和其余指标保持正常。故障配置先用部署版本
+Prometheus v3.13.0 的 `promtool check config --syntax-only` 验证，再等待
+ConfigMap 投射并对 Prometheus 发送 HUP；日志确认热重载完成。故障前
+安全卡健康，活动告警为空；过滤生效后原始
+`up{instance="halro-2"}=1`，该成员当前只剩 `peer="halro-0"` 一条 Peer
+序列，`peer="halro-1"` 最后一条原始样本停在 16:11:13.245 UTC，
+健康 API 的同成员 `up_sampled_at` 已前进至 16:11:48.246 UTC。
+安全卡与追平卡均转未知，没有用旧 Peer 值补全当轮数据。
+
+`HalroMemberHASignalMissing{instance="halro-2"}` 达到一分钟 `for` 后
+firing；故障期间 Prometheus API 所列 21 条 HA 告警规则的健康状态均为
+`ok`。本地独立 webhook 于 16:12:37.944 UTC 收到 firing，告警
+`startsAt=16:12:32.917 UTC`。将 ConfigMap 精确恢复、核对 Pod 中配置与
+冻结基线逐字节一致并再次热重载后，两条 Peer 当前序列均重新出现；
+16:17:36 UTC 健康 API 的安全和追平卡均恢复健康，活动告警为空。
+webhook 于 16:17:07.979 UTC 收到 resolved，`endsAt=16:17:02.917 UTC`。
+总览与确认能力在整个演练期间仍因缺近期必需确认写而为未知。
+演练结束时 Prometheus 与健康服务 Deployment 均为 1/1 Ready，HA
+StatefulSet 为 3/3 Ready。
+
+本机私有证据报告
+`/tmp/halro-ha-health-kind-20260928/evidence/peer-omission-local-report.json`
+逐项列出基线、故障、恢复配置及健康/告警/原始 Prometheus/接收器文件的
+SHA-256；报告自身 SHA-256 为
+`13cec591a4d64dd81b22df09977f4f998a14a4a23901af7d421c37a5f3203666`。
+这是“成员固定指标首次缺报”中**一个 Peer 指标**的本地实际触发与恢复；
+其余固定指标仍须逐项注入，本地 webhook 不是正式联系点，临时磁盘不是
+独立不可变归档，此矩阵行仍未完整签署。
