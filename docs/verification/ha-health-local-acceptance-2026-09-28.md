@@ -1111,6 +1111,7 @@ Alertmanager、接收器和客户端探针。新增 `TestHealthKeepsConfirmation
 
 这是仓库 E2 指标回放，尚未在 kind Prometheus 注入来源标签故障、核对
 页面截图和五分钟规则恢复；§4.2「缺失目标身份标签」仍未完成目标环境逐行签收。
+此处是当时的验证边界；后续 kind 注入与恢复见本记录末尾。
 
 ## kind 事件文件写入失败与恢复（约 13:03–13:08 UTC）
 
@@ -1459,3 +1460,34 @@ SHA-256 为 `e41979f5255937177fcd8ca6877819acb25f8c52093a6432030c00677b772751`�
 `35c2739924584ef21113f41e2bc8ea85bf8b8d7a6789389bdfa2f2add3ab763a`。
 字节缺报没有在补充可读性唯一性之后重复注入；前述 live 证据对应其未变的
 字节覆盖分支，最终三项唯一性由规则夹具与加载状态验证。
+
+## kind 缺失 `instance` 身份来源与窗口恢复（约 17:01–17:13 UTC）
+
+本地三成员与两个监控 Deployment 均 Ready；注入前 Prometheus 有三条
+`halro_cluster_role`，分别属于 `halro-0`、`halro-1`、`halro-2`，
+健康服务安全卡健康且活动告警为空。只在 kind Prometheus 临时加入一条
+录制规则，复制 `halro-2` 的角色指标并移除其 `instance` 标签；三条成员
+原始序列及三个 `up` 目标均保持不变。临时规则经 `promtool check rules`
+验证后热重载。Prometheus 随后返回四条角色序列，新增一条确实不含
+`instance`，并非已知的第四名成员。
+
+独立 `/api/health` 把异常来源列为
+`identity_missing=true`、`observed=false`，保留原始样本时间
+`2026-09-28T17:08:17.672Z`；安全卡由健康转未知，页面首屏显示
+“采集 3/3 · 异常来源 1（未证实 1）”及“缺少 instance 标签”。本机
+浏览器已视觉核对当前页，截图未保存到私有证据目录。`/api/evidence`
+的 `metric_snapshot` 同时保留三条正常角色序列和一条缺标签的原始序列；
+故障期间 79 条 Prometheus 规则健康状态均为 `ok`。总览在故障前后均因
+缺近期必需确认写而为未知，因此本轮只证明安全卡的因果降级，不能单凭
+总览未知归因于这条异常来源。
+
+撤除临时规则并核对 Pod 中录制规则与冻结基线逐字节一致后，最后一条异常
+原始样本仍在 45 秒当前窗口内时安全卡保持未知；退出该窗口后，
+`unexpected_members` 消失、安全卡恢复健康，Prometheus 只余三条正常
+角色序列。最终 78 条原有规则均为 `ok`、活动告警为空，浏览器刷新后
+不再显示异常来源。本机私有报告
+`/tmp/halro-ha-health-kind-20260928/evidence/missing-instance-local-report.json`
+列出前中后健康响应、原始序列、规则、证据导出和配置的逐项 SHA-256；
+报告 SHA-256 为 `04e776c1e159da2d9f3eb2a9e17c0d32905b186e6036dcdc9aa70f89100bc777`。
+这是本地真实 Prometheus 的**角色指标缺标签**子场景；没有持久截图、
+同一候选 SHA 的整栈冻结或独立不可变归档，§4.2 该行仍未正式签署。
