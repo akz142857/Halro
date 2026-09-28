@@ -1306,3 +1306,48 @@ SHA-256；私有目录为 0700、文件为 0600。正式 72 小时采样仍未�
 | --- | --- |
 | `samples.jsonl` | `33eb22455de26f16ad84ed97ad8afdd774cd67d246ed4cd58fd1047b33dfd7f8` |
 | `summary.json` | `c225df32fce8fddb8ee16c8ca0e487f49b69490dbb5bb96cbabb091bf221639b` |
+
+## 三成员精确提交镜像滚动与故障期观测（约 15:33–15:37 UTC）
+
+先由认证 `/api/health` 取得基线：term 3、同一 incarnation、一个 Primary
+和两个 Replica，各成员 `durable=confirmed=applied=153`；总览因没有近期
+必需确认成功保持 `unknown`。本地 StatefulSet 为 `OnDelete`，PVC 为
+三个独立的 50 Gi `Bound` 卷；将模板设为
+`halro-ha-health-local:02f2da14-exact` 后，按 `halro-2`、`halro-0`、
+`halro-1` 顺序逐个删除并等待新 Pod Ready。两个 Replica 各自恢复后，
+认证健康 API 均返回 200，三成员身份、角色、term 和 153/153/153
+水位一致。三个新 Pod 的运行中 `/usr/local/bin/halro version` 都返回
+完整提交 `02f2da143907dcdf1e64c6e58dc651317d11e355`；Pod 均为
+Ready、零次重启。kind 导入后的容器运行时 imageID 是本地转换摘要，
+本记录以新 Pod 指定的精确 tag、二进制实际版本及前述本地镜像来源共同
+核对身份，不把转换摘要直接等同于 Docker 原始镜像 ID。
+
+Primary 重启前，独立健康服务每两秒只读采集 70 秒，共 35 次有效观测、
+零漏采时隙、最大单调间隔 2.005 秒。入口卡在 15:34:11 UTC 从健康
+转未知，安全卡在 15:34:13 UTC 转未知；15:34:15 UTC 总览和追平卡
+短暂降级。15:34:17 UTC 安全和追平恢复，15:34:19 UTC 客户端入口恢复
+健康。35 次总览有 34 次 `unknown`、一次 `degraded`，故障期未错误变绿。
+这证明独立入口持续应答并显示故障期变化；它不证明真实客户端写请求
+恢复时间或具备人工切换所需的旧 Primary fencing。
+
+Primary 新 Pod Ready 后，健康 API 返回一个 Primary、两个 Replica，
+三者仍同属 term 3 和 `inc_kind_local_20260928`，各自水位为
+156/156/156，live/ready 为真；客户端入口、安全和追平卡健康，
+确认能力与总览仍因缺近期必需确认成功为 `unknown`。迁移接口返回
+`caught_up`，三名成员的 `stored_sequence/observed_head` 仍为
+4/4、4/4、0/0。此滚动重启没有产生可作为客户端最终结果的证据。
+
+| 私有证据（`/tmp/halro-ha-health-kind-20260928/evidence/`） | SHA-256 |
+| --- | --- |
+| `exact-members-before-health.json` | `e702d3d03968ec44d92131b6b7b34e9ade9de0b2576364e78f79ed4248ef9f79` |
+| `exact-members-after-replica2-health.json` | `abf246f7a220b2d0f2914ba7c556cbbaecf82ceeeeb2610a7ef81e519fcbdff0` |
+| `exact-members-after-replica0-health.json` | `1e0af77d565162c4e2f00fbd5469ea1f5af4bffe6110e4812cf4866ce361083c` |
+| `exact-members-after-primary-health.json` | `6c22659e9ea582f4d78d82868df8caf9920391e2118f682b45881875946da265` |
+| `exact-members-after-all-durable.json` | `7f3769edef7e69d2f6ab3575bc6cd88e8ad62a06b8a50bc4e618b44240aa2768` |
+| `primary-image-rollout-samples/samples.jsonl` | `d0058e27b8bf3ac7247bf7bdf4db6b86dab126d1cff501f2fe60cdc1d1ae6c5d` |
+| `primary-image-rollout-samples/summary.json` | `077df31a561fe2f058e732afdd56e39c7f3698072985b058207b6b827028abb9` |
+
+采样器仍标 `kind=smoke_only`、`ha_acceptance=NOT_RUN`。三成员相同
+源码提交的本地运行只补强镜像绑定和受控重启证据；正式 CI/制品来源、
+故障域、独立不可变归档、G0–G7、完整 20 行矩阵、相邻版本和 72 小时
+长跑均未由此签收。
