@@ -57,7 +57,9 @@ class CollectorTests(unittest.TestCase):
                 collector.dt.datetime.now(collector.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "123Z"
             )
             self.assertEqual(collector.summarize_health(payload, options)["server_observed_at"], payload["observed_at"])
-            payload["observed_at"] = payload["observed_at"].replace("123Z", "1234Z")
+            payload["observed_at"] = collector.dt.datetime.now(collector.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + ".28Z"
+            self.assertEqual(collector.summarize_health(payload, options)["server_observed_at"], payload["observed_at"])
+            payload["observed_at"] = "2026-09-28T21:00:00.1234567890Z"
             with self.assertRaisesRegex(ValueError, "observation_time_invalid"):
                 collector.summarize_health(payload, options)
             payload["observed_at"] = collector.utc_now().removesuffix("Z")

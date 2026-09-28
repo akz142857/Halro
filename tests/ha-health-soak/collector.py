@@ -116,7 +116,7 @@ def summarize_health(payload, options):
     zone = timestamp.group("zone")
     normalized = timestamp.group("second")
     if fraction:
-        normalized += "." + fraction[:6]
+        normalized += "." + fraction[:6].ljust(6, "0")
     normalized += "+00:00" if zone == "Z" else zone
     try:
         parsed = dt.datetime.fromisoformat(normalized)

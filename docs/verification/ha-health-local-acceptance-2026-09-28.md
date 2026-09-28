@@ -2018,3 +2018,15 @@ PVC 保存原始 JSONL 和最终摘要，Job 失败不自动重试拼接窗口�
 此 Job 与健康服务位于不同 kind 节点，但仍在同一物理主机；PVC 不是独立
 不可变归档，Job 也只做只读观测。即使新窗口最终连续，也不能代签目标
 负载、故障注入、告警通知、RTO/RPO 或正式生产故障域。
+
+## 首轮失败证据的独立结构复核（2026-09-29）
+
+用仓库 `tests/ha-health-soak/verify_samples.py` 对首轮已结束的私有目录逐行
+读回，432 行与摘要计数完全一致，重算的 `summary.json` 与
+`samples.jsonl` SHA-256 均等于上表记录值。输出仍为
+`collection_complete=false`、`sampling_continuous=false`、
+`health_endpoint_coverage_complete=false`、`ha_acceptance=NOT_RUN`；
+其中 `unavailable=39`。这验证失败证据没有被恢复后样本掩盖，
+不修复中断，也不说明正在运行的新 Job 将通过。复核时发现宿主机 Python 3.9
+不能解析两位小数的 RFC3339 秒，仓库采样解析器与复核器已补齐到微秒后再解析；
+当前 Job 使用的冻结脚本及其运行中的 Python 3.12 镜像未更换。
