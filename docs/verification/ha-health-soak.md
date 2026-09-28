@@ -27,6 +27,13 @@ python3 tests/ha-health-soak/collector.py \
 
 正式候选观测至少 259200 秒，并要求精确候选 SHA、镜像、配置和规则摘要：
 
+启动前核对操作员证书、信任 CA 和服务端证书在整个观测窗口及恢复余量内
+均有效。例如 72 小时窗口可用
+`openssl x509 -checkend 266400 -noout -in <证书路径>` 逐份检查；服务端
+证书须从实际目标部署核对。采样器在
+启动时加载客户端证书和信任 CA，运行期间不会自动重载；即使脚本持续运行，
+证书中途到期也会产生 `unavailable`，不能把采样进程存活视为覆盖完整。
+
 ```sh
 python3 tests/ha-health-soak/collector.py \
   --url https://ha-health.example.internal/ \

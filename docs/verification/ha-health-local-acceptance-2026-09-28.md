@@ -1538,3 +1538,29 @@ journal ID、提交头与事件摘要。
 这仍是同主机四条已留存链的读回预演。尚无独立不可变存储回执、保留版本、
 外部故障域读回及与采集端归档副本的一体化交接证明；完整 §4.2 成员
 归档行继续 `NOT_RUN`，不能授权删段。
+
+## 只读 24 小时连续观测启动（约 17:45 UTC，进行中）
+
+本地 kind 当前三成员 `halro` StatefulSet 为 3/3 Ready，`ha-health`、
+Prometheus、Alertmanager 和本地接收器 Deployment 均为 1/1 Ready。
+所用操作员证书与服务端证书到 2026-09-30 03:36 UTC 到期，信任 CA 到
+03:27 UTC 到期；从本轮启动时起不足 72 小时，因此不能用这套凭据启动
+正式 72 小时候选观测。三份证书分别运行 `openssl x509 -checkend 266400`
+均返回过期预警。健康服务和成员也仍是不同源码版本的本地镜像。
+
+经 `127.0.0.1:19115` 的本地 Service 端口转发及操作员 mTLS 运行 30 秒
+预检：6 次 `/api/health` 均有效，总览均为缺近期确认写证据的 `unknown`，
+`sampling_continuous=true`、`health_endpoint_coverage_complete=true`、
+漏采时隙 0，最大单调间隔 5.010 秒。私有预检目录
+`/tmp/halro-ha-health-kind-20260928/evidence/soak-24h-preflight-1745/`
+中 `summary.json` SHA-256 为
+`4f09dd462f673c0fd1bc762374d349aef4c6a6b4e076f823fe0aa20b7d2308bb`，
+`samples.jsonl` 为
+`1ad180f17ab4eb5251854f6b8a9678770db72bd9c806beb71aec5d6405b9e1bf`。
+
+随后启动 86400 秒、15 秒间隔的非计费只读采样，证据目录为
+`/tmp/halro-ha-health-kind-20260928/evidence/soak-24h-readonly-20260928/`。
+启动后首条样本在 `2026-09-28T17:45:49.334836Z` 成功，采样器和
+端口转发进程在记录时均仍运行。完成前没有 `summary.json`，不能宣称
+24 小时连续覆盖；即使最后完成，本轮也只属于 `smoke_only`，不会签署
+72 小时、RTO/RPO 或完整 G0–G7。
