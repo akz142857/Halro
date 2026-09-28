@@ -449,3 +449,9 @@ v3 清单直接 MAC 读回也已通过；独立不可变归档与容量/故障�
 冒充目标负载、故障注入、资源趋势或 RTO/RPO。尚无冻结候选和经批准的真实
 操作员凭据供采样器读取，故 kind 真实入口长跑与 72 小时验收仍未执行；
 使用方法与边界见[HA 健康观测长跑采样](../verification/ha-health-soak.md)。
+
+仓库实现已在本地分支 `codex/ha-health-system` 建立源码检查点
+`02f2da143907dcdf1e64c6e58dc651317d11e355`；对该提交的 Go、Node 22
+前端、观测规则与构建检查见[仓库门禁记录](../verification/ha-health-repository-gate-2026-09-28.md)。
+该本地提交未推送，当前 kind 镜像也尚未绑定这一 SHA，因此正式 G0 和
+目标环境验收仍不能由本地门禁代签。
