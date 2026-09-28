@@ -24,6 +24,30 @@
 上表的全仓门禁。未重复对未变更的 Go 源码运行耗时竞态测试。
 
 日志目前只在本机 `/tmp`，没有独立不可变留存；哈希不能代替归档副本读回。
+本地 kind 镜像准备另有一条明确边界：仓库 Dockerfile 的构建在解析
+`golang:1.26.6-bookworm` 时收到 Docker Hub `EOF`，并未产出标准构建镜像。
+第一次离线封装的 `:02f2da14` 两个镜像虽然注入了 `02f2da14` 版本字段，
+但二进制的 `go version -m` 显示实际 `vcs.revision=c8a7211d...`；这两个镜像
+**身份不一致，排除在候选和验收之外**，且从未部署到 Pod。它们的本地镜像
+ID 分别为 `sha256:9260cf5be7400c4898dbda9f50f2d64b2aca3c6d33a1339f7625ca2c5ba75f10`
+和 `sha256:9957fe7600b2f47814d46b681ce448cbf9e0b26a01431236b730196a0e5b132e`。
+
+随后从本地 Git 仓库独立检出干净的 `02f2da143907dcdf1e64c6e58dc651317d11e355`，
+用本机 Go 1.26.6 交叉编译静态 Linux arm64 二进制，以缓存的 distroless runtime
+离线封装。两个二进制的 `go version -m` 均显示
+`vcs.revision=02f2da143907dcdf1e64c6e58dc651317d11e355`、
+`vcs.modified=false`，容器内 `version`／`-version` 也返回相同完整提交：
+
+| 本地镜像 | 镜像 ID | 内含二进制 SHA-256 |
+| --- | --- | --- |
+| `halro-ha-health-local:02f2da14-exact` | `sha256:e4b65353c23425f84796cb9cd5172951336a34df4df8e57160a433a9bb5eb686` | `fd0b72f777eb66029c2d8ef84f1a33d19fc6be73c520d282efda635123a597ee` |
+| `halro-ha-health-view-local:02f2da14-exact` | `sha256:f4162d7a39d79a0c0d90c02f5b5c4319398a10aec145a0fa5b2f79fed3bf40fd` | `83f658f5291df8bf37a8eb35510ee2a36eff4d8ea6204b75b686fd6f76831232` |
+
+准确身份的镜像已加载到本地 kind 的四个节点；尚未修改 StatefulSet 或健康
+Deployment，也未取得正式发布流水线的镜像摘要、SBOM、签名或 provenance。
+离线封装只支撑本地后续验收，
+不能替代上述失败的标准 Dockerfile 门禁。
+
 正式 G0 仍需冻结最终候选 SHA，核对该 SHA 的普通 CI、发布构建、镜像及
 包摘要和 provenance。G1–G7、完整 20 行 HA 健康故障矩阵、客户端最终
 逻辑操作来源、独立不可变归档、相邻版本和 72 小时 HA soak 继续保持
