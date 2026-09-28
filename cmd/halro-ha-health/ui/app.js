@@ -155,7 +155,7 @@
         const name=document.createElement('strong');name.textContent=m.instance;node.append(name);
         const role=document.createElement('small');role.textContent=(m.role||'角色未知')+' · '+observation(m);node.append(role);
         const link=document.createElement('small');
-        link.textContent=m.role==='primary'?'到 Replica 的会话见下表':primary?.peers?.[m.instance]===true?'Primary → 本节点：已认证':primary?.peers?.[m.instance]===false?'Primary → 本节点：未连接':'Primary → 本节点：未知';
+        link.textContent=!fresh(m)?'认证连接：当前未观测':m.role==='primary'?'到 Replica 的会话见下表':primary?.peers?.[m.instance]===true?'Primary → 本节点：已认证':primary?.peers?.[m.instance]===false?'Primary → 本节点：未连接':'Primary → 本节点：未知';
         node.append(link);topology.append(node);
       }
       byId('topology-note').textContent=primary?'唯一性由“安全一致性”卡判定；这里的箭头不证明应用水位或提升资格。':'没有可据以绘制连接的 Primary 观测。';
@@ -176,8 +176,10 @@
         const row = document.createElement('tr');
         const nameCell=document.createElement('td'),button=document.createElement('button');button.type='button';button.className='node-button';button.textContent=m.instance;button.addEventListener('click',()=>showDetail(m));nameCell.append(button);row.append(nameCell);
         const machine=currentStatuses.find(status=>status.node_id===m.instance);
-        cell(row,observation(m));cell(row,machine?(machine.error?'未知：'+machine.error:machine.health_probe_error?'状态成功；健康探针异常：'+machine.health_probe_error:'成功'):'未配置');
-        cell(row,machine?flag(machine.health_live):null);cell(row,machine?flag(machine.health_ready):null);
+        const pageElapsed=performance.now()-healthRequestMono;
+        const pageCurrent=Number.isFinite(healthServerAt)&&Number.isFinite(pageElapsed)&&pageElapsed>=0&&pageElapsed<=30000;
+        cell(row,observation(m));cell(row,!pageCurrent?'状态陈旧':machine?(machine.error?'未知：'+machine.error:machine.health_probe_error?'状态成功；健康探针异常：'+machine.health_probe_error:'成功'):'未配置');
+        cell(row,pageCurrent&&machine?flag(machine.health_live):null);cell(row,pageCurrent&&machine?flag(machine.health_ready):null);
         cell(row,m.role);cell(row,m.incarnation);
         cell(row,(m.term ?? '未知') + ' / ' + (m.promised_term ?? '未知'));
         cell(row,m.durable); cell(row,m.confirmed); cell(row,m.applied);
@@ -187,7 +189,7 @@
         const comparable=m.role==='replica'&&primary&&fresh(m)&&primary.incarnation===m.incarnation&&primary.term===m.term&&Math.abs(Date.parse(primary.sampled_at)-Date.parse(m.sampled_at))<=30000;
         cell(row,comparable?difference(primary.confirmed,m.applied):null);
         cell(row,flag(m.startup_ready));cell(row,flag(m.replication_unavailable));cell(row,flag(m.incompatible));
-        cell(row,m.peers?Object.entries(m.peers).map(([peer,connected])=>peer+':'+(connected==null?'未知':connected?'已连接':'断开')).join('，')||'无':'未知');
+        cell(row,!fresh(m)?'未知（指标陈旧）':m.peers?Object.entries(m.peers).map(([peer,connected])=>peer+':'+(connected==null?'未知':connected?'已连接':'断开')).join('，')||'无':'未知');
         cell(row,flag(m.maintenance));
         cell(row,m.sampled_at ? new Date(m.sampled_at).toLocaleString('zh-CN') : '未知'); tbody.append(row);
       }
@@ -491,14 +493,22 @@
         return response.ok?await response.json():null;
       } catch { return null; }
     }
-    let refreshGeneration=0,historyGeneration=0,lastHistoricalPollMono=-Infinity,lastHealthRenderedAt=0,lastHealthRenderedMono=NaN;
+    let refreshGeneration=0,historyGeneration=0,lastHistoricalPollMono=-Infinity,lastHealthRenderedAt=0,lastHealthRenderedMono=NaN,healthExpiryTimer=null;
+    function stopHealthExpiryTimer() {
+      if(healthExpiryTimer!==null) {clearTimeout(healthExpiryTimer);healthExpiryTimer=null;}
+    }
     function expireHealth() {
       if(!lastHealthRenderedAt||!Number.isFinite(lastHealthRenderedMono)||performance.now()-lastHealthRenderedMono<=30000) return;
+      stopHealthExpiryTimer();
       for(const id of ['overall','client','confirmation','safety','catchup']) {
         renderSignal(id,{level:'unknown',reason:'当前健康查询超过 30 秒未更新'});
       }
       byId('updated').textContent='最近成功查询：'+new Date(lastHealthRenderedAt).toLocaleString('zh-CN')+' · 当前状态已过期';
       lastHealthRenderedAt=0;lastHealthRenderedMono=NaN;healthServerAt=NaN;healthRequestMono=NaN;
+      byId('scope').textContent='集群身份与采集覆盖未知 · 最近一次健康查询已过期';
+      byId('unexpected-members').hidden=true;
+      byId('unexpected-members').textContent='';
+      renderTopology(currentMembers);renderNodes(currentMembers);renderConfirmationEvidence(null);
     }
     async function refresh(forceHistory=false) {
       expireHealth();
@@ -523,8 +533,10 @@
       if(generation===refreshGeneration) {
         const error=byId('error');
         if(state) {
+          stopHealthExpiryTimer();
           lastHealthRenderedAt=Date.now();lastHealthRenderedMono=requestStarted;
           healthServerAt=Date.parse(state.observed_at);healthRequestMono=requestStarted;
+          healthExpiryTimer=setTimeout(expireHealth,Math.max(1,30001-(performance.now()-requestStarted)));
           error.hidden=true;
           for(const id of ['overall','client','confirmation','safety','catchup']) renderSignal(id,state[id]);
           currentMembers=state.members||[];currentStatuses=state.member_statuses||[];
@@ -539,6 +551,7 @@
           unexpectedNote.textContent=unexpected.length?'异常来源证据：'+unexpected.slice(0,10).map(member=>(member.identity_missing?'缺少 instance 标签':(member.instance||'未知'))+' '+(member.identity_missing?'身份不可核对':member.observed?'近期已观测':'未证实/陈旧')+' · '+(member.sampled_at||'无有效时间')).join('；')+(unexpected.length>10?'；另有 '+(unexpected.length-10)+' 个':''):'';
           byId('updated').textContent='服务端观测：'+new Date(state.observed_at).toLocaleString('zh-CN')+' · 页面更新：'+new Date().toLocaleString('zh-CN');
         } else {
+          stopHealthExpiryTimer();
           lastHealthRenderedAt=0;lastHealthRenderedMono=NaN;healthServerAt=NaN;healthRequestMono=NaN;
           const failureReason=expiredResponse?'本次查询过期':invalidObservedAt?'观测时间无效':'本次查询失败';
           for(const id of ['overall','client','confirmation','safety','catchup']) renderSignal(id,{level:'unknown',reason:failureReason});
@@ -601,4 +614,6 @@
     byId('node-sort').addEventListener('change',()=>renderNodes(currentMembers));
     byId('detail-close').addEventListener('click',()=>byId('node-detail').close());
     byId('alert-detail-close').addEventListener('click',()=>{alertDetailGeneration++;byId('alert-detail').close();});
+    window.addEventListener('focus',expireHealth);
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)expireHealth();});
     setView('current');refresh();setInterval(refresh,15000);

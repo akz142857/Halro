@@ -40,10 +40,13 @@ function boot(runbookBase = "") {
     calls.push(path);
     return { ok: payloads[path] !== null, json: async () => payloads[path] };
   };
-  let interval;
+  let interval, expiryTimer;
   dom.window.setInterval = callback => { interval = callback; return 0; };
+  dom.window.setTimeout = (callback, delay) => { expiryTimer = { callback, delay }; return 1; };
+  dom.window.clearTimeout = () => { expiryTimer = undefined; };
   dom.window.eval(app);
-  return { dom, payloads, calls, document: dom.window.document, tick: () => interval?.() };
+  return { dom, payloads, calls, document: dom.window.document, tick: () => interval?.(),
+    expire: () => expiryTimer?.callback(), expiryDelay: () => expiryTimer?.delay };
 }
 
 const settled = () => new Promise(resolve => setTimeout(resolve, 20));
@@ -290,16 +293,50 @@ describe("independent HA health page", () => {
   });
 
   it("expires a previously healthy card while the next health query is still pending", async () => {
-    const { dom, payloads, document, tick } = boot();
+    const { dom, payloads, document, tick, expire, expiryDelay } = boot();
+    try {
+      const sampled_at = new Date().toISOString();
+      payloads["/api/health"].observed_at = sampled_at;
+      payloads["/api/health"].members = [{ instance: "halro-0", up: true, role: "primary", incarnation: "inc-a",
+        sampled_at, up_sampled_at: sampled_at, newest_sampled_at: sampled_at, peers: { "halro-1": true } }];
+      payloads["/api/health"].member_statuses = [{ node_id: "halro-0", health_live: true, health_ready: true }];
+      await settled();
+      expect(document.querySelector("#overall .status").textContent).toBe("健康");
+      expect(document.querySelector("#scope").textContent).toContain("采集 1/2");
+      expect(document.querySelector("#nodes tr").cells[1].textContent).toBe("新鲜");
+      expect(expiryDelay()).toBeGreaterThan(0);
+      expect(expiryDelay()).toBeLessThanOrEqual(30001);
+      payloads["/api/health"] = new Promise(() => {});
+      tick();
+      const now = dom.window.performance.now();
+      Object.defineProperty(dom.window.performance, "now", { configurable: true, value: () => now + 31000 });
+      expire();
+      expect(document.querySelector("#overall .status").textContent).toBe("未知");
+      expect(document.querySelector("#updated").textContent).toContain("已过期");
+      expect(document.querySelector("#scope").textContent).toContain("采集覆盖未知");
+      expect(document.querySelector("#scope").textContent).not.toContain("采集 1/2");
+      expect(document.querySelector("#nodes tr").cells[1].textContent).toBe("缺失/陈旧");
+      expect(document.querySelector("#nodes tr").cells[2].textContent).toBe("状态陈旧");
+      expect(document.querySelector("#nodes tr").cells[3].textContent).toBe("未知");
+      expect(document.querySelector("#nodes tr").textContent).toContain("未知（指标陈旧）");
+      expect(document.querySelector("#topology").textContent).toContain("认证连接：当前未观测");
+      expect(document.querySelector("#topology-note").textContent).toContain("没有可据以绘制连接的 Primary");
+      expect(document.querySelector("#confirmation-evidence").textContent).toContain("确认依据未知");
+    } finally {
+      dom.window.close();
+    }
+  });
+
+  it("expires health when a throttled browser tab regains focus", async () => {
+    const { dom, document } = boot();
     try {
       await settled();
       expect(document.querySelector("#overall .status").textContent).toBe("健康");
       const now = dom.window.performance.now();
       Object.defineProperty(dom.window.performance, "now", { configurable: true, value: () => now + 31000 });
-      payloads["/api/health"] = new Promise(() => {});
-      tick();
+      dom.window.dispatchEvent(new dom.window.Event("focus"));
       expect(document.querySelector("#overall .status").textContent).toBe("未知");
-      expect(document.querySelector("#updated").textContent).toContain("已过期");
+      expect(document.querySelector("#scope").textContent).toContain("采集覆盖未知");
     } finally {
       dom.window.close();
     }
