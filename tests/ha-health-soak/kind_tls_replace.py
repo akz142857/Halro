@@ -19,6 +19,24 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def spki_sha256(material, private=False):
+    if private:
+        public_der = subprocess.run(
+            ["openssl", "pkey", "-pubout", "-outform", "DER"], input=material,
+            check=True, capture_output=True, timeout=20,
+        ).stdout
+    else:
+        public_pem = subprocess.run(
+            ["openssl", "x509", "-pubkey", "-noout"], input=material,
+            check=True, capture_output=True, timeout=20,
+        ).stdout
+        public_der = subprocess.run(
+            ["openssl", "pkey", "-pubin", "-outform", "DER"], input=public_pem,
+            check=True, capture_output=True, timeout=20,
+        ).stdout
+    return "sha256:" + digest(public_der)
+
+
 def load_pinned_report(path, expected_digest, status):
     if not SHA256.fullmatch(expected_digest):
         raise ValueError("report SHA-256 must be 64 lowercase hex characters")
@@ -115,6 +133,10 @@ def plan_secret(secret, identity, phase, stage_dir, overlap_dir, stage_report):
     elif phase == "leaves":
         if live[ca_key] != bundle:
             raise ValueError("leaf phase requires the overlap CA bundle")
+        if (identity == "halro/halro-ha-cluster-tls" and
+                stage_report.get("member_key_mode") != "preserved_configured_spki_for_routine_renewal"):
+            raise ValueError("member leaves require a pinned SPKI renewal stage")
+        old_certs = {}
         for key, relative in files.items():
             if key == ca_key:
                 continue
@@ -123,8 +145,27 @@ def plan_secret(secret, identity, phase, stage_dir, overlap_dir, stage_report):
                 old_bytes = read_material(overlap_dir, namespace + "-" + name + "-" + key)
                 if live[key] not in (old_bytes, new_bytes):
                     raise ValueError("leaf phase found an unknown certificate")
+                old_certs[key] = old_bytes
             expected[key] = new_bytes
-        if any(live[key] == expected[key] for key in files if key != ca_key) and any(
+        if (identity == "halro/halro-ha-cluster-tls" and
+                stage_report.get("member_key_mode") == "preserved_configured_spki_for_routine_renewal"):
+            pins = stage_report.get("member_spki_pins", {})
+            if set(pins) != {"halro-0", "halro-1", "halro-2"}:
+                raise ValueError("member renewal stage lacks the complete pinned SPKI inventory")
+            if any(live[key] != expected[key] for key in files if key.endswith(".key")):
+                raise ValueError("member renewal private key differs from the pinned stage")
+            for member, pin in pins.items():
+                if not isinstance(pin, str) or not pin.startswith("sha256:") or not SHA256.fullmatch(pin[7:]):
+                    raise ValueError("member renewal SPKI pin is invalid")
+                if (spki_sha256(old_certs[member + ".crt"]) != pin or
+                        spki_sha256(expected[member + ".crt"]) != pin or
+                        spki_sha256(live[member + ".key"], private=True) != pin):
+                    raise ValueError("member renewal certificate or key differs from configured SPKI pin: " + member)
+            cert_keys = sorted(old_certs)
+            if any(live[key] == old_certs[key] for key in cert_keys) and any(
+                    live[key] != old_certs[key] for key in cert_keys):
+                raise ValueError("leaf phase found a partially changed Secret")
+        elif any(live[key] == expected[key] for key in files if key != ca_key) and any(
                 live[key] != expected[key] for key in files if key != ca_key):
             raise ValueError("leaf phase found a partially changed Secret")
     elif phase == "final":

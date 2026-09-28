@@ -85,6 +85,55 @@ class KindTLSReplaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "last-applied"):
             self.plan(annotated, "trust")
 
+    def test_pinned_member_renewal_changes_all_certs_without_changing_keys(self):
+        identity = "halro/halro-ha-cluster-tls"
+        files = {"ca.crt": "cluster/ca.crt"}
+        live = {"ca.crt": b"old-ca\nnew-ca"}
+        for number in range(3):
+            name = "halro-" + str(number)
+            cert_key, private_key = name + ".crt", name + ".key"
+            files[cert_key] = "cluster/" + cert_key
+            files[private_key] = "cluster/" + private_key
+            live[cert_key] = ("old-" + name).encode()
+            live[private_key] = ("same-key-" + name).encode()
+            (self.stage / files[cert_key]).write_bytes(("new-" + name).encode())
+            (self.stage / files[private_key]).write_bytes(live[private_key])
+            (self.overlap / ("halro-halro-ha-cluster-tls-" + cert_key)).write_bytes(live[cert_key])
+        report = {"secret_files": {identity: files},
+                  "member_key_mode": "preserved_configured_spki_for_routine_renewal",
+                  "member_spki_pins": {"halro-" + str(i): "sha256:" + str(i) * 64
+                                       for i in range(3)}}
+        def pinned_spki(material, private=False):
+            number = material.decode().rsplit("halro-", 1)[1]
+            return report["member_spki_pins"]["halro-" + number]
+
+        patcher = patch.object(rotation, "spki_sha256", side_effect=pinned_spki)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        secret = {"metadata": {"namespace": "halro", "name": "halro-ha-cluster-tls",
+                               "resourceVersion": "10"}, "type": "Opaque", "data": encoded(live)}
+        with self.assertRaisesRegex(ValueError, "pinned SPKI renewal stage"):
+            rotation.plan_secret(secret, identity, "leaves", self.stage, self.overlap,
+                                 {"secret_files": {identity: files}})
+        _replacement, expected, changed = rotation.plan_secret(
+            secret, identity, "leaves", self.stage, self.overlap, report)
+        self.assertEqual(changed, ["halro-0.crt", "halro-1.crt", "halro-2.crt"])
+        self.assertEqual(expected["halro-2.key"], live["halro-2.key"])
+
+        mixed = dict(live)
+        mixed["halro-0.crt"] = expected["halro-0.crt"]
+        with self.assertRaisesRegex(ValueError, "partially changed"):
+            rotation.plan_secret({**secret, "data": encoded(mixed)}, identity, "leaves",
+                                 self.stage, self.overlap, report)
+        wrong_key = dict(live)
+        wrong_key["halro-1.key"] = b"unexpected"
+        with self.assertRaisesRegex(ValueError, "private key differs"):
+            rotation.plan_secret({**secret, "data": encoded(wrong_key)}, identity, "leaves",
+                                 self.stage, self.overlap, report)
+        (self.stage / "cluster/halro-2.crt").write_bytes(b"new-halro-0")
+        with self.assertRaisesRegex(ValueError, "configured SPKI pin: halro-2"):
+            rotation.plan_secret(secret, identity, "leaves", self.stage, self.overlap, report)
+
     def test_backup_is_private_and_exclusive(self):
         backup = Path(self.temporary.name) / "backup"
         backup.mkdir(mode=0o700)

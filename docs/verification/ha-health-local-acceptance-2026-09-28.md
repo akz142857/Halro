@@ -1721,3 +1721,69 @@ Secret 键集合与当前阶段；应用模式需现场资源版本与 `0700` �
 测试的结果属于 `8379458d`，没有用旧结果充作新提交的重跑证据。
 证书分阶段实装、74 小时有效期预检、完整 G0–G7 与 72 小时正式采样、
 外部不可变归档和客户端最终结果来源仍未完成。
+
+## 本地双 CA 证书轮换、SPKI 恢复与长跑启动（约 19:28–21:01 UTC）
+
+在确切候选 `1ecddf409647e36eb18b1342528869913b4daabb` 上，五个 TLS
+Secret 的 `trust` 阶段先仅添加新旧 CA 重叠 bundle，并按 Replica、Primary、
+Prometheus、健康服务顺序重启。旧证书链继续可用，新 CA 操作员和查询
+客户端也被运行进程接受；新 CA 客户端对三名成员完成 mTLS 握手，
+无 Metrics token 的请求按应用授权返回 401。三成员抓取均保持 `up=1`。
+
+首次 `leaves` 暂存包为成员生成了新私钥。只滚动 `halro-2` 后，Primary 对
+其握手记录 `replication peer SPKI pin mismatch`，安全卡降级，Primary 到
+该 Replica 的会话断开；原始健康响应 SHA-256 为
+`e9d2e9b88001d2e10ce585c22226e41d52abe13d898489e9b5c068954f29a73b`。
+立即停止后续身份更新，以哈希固定的私有原 Secret 备份恢复三名成员旧
+证书与私钥、保留双 CA，并重启 `halro-2` 和锁存不兼容指标的 `halro-0`、
+`halro-1`。恢复响应 SHA-256 为
+`159edd1e410b45bc11b26e0a1977faaab3a114181aa17a875ec78bf6e9674b40`：
+唯一 Primary、三成员 165/165/165 水位和安全卡均恢复。该拒绝是持久
+SPKI pin 的正确保护，不能通过改变 CA 或静默修改 YAML 绕过。
+
+新增的离线续签工具从冻结成员 Secret 和现场三份配置的 SPKI pin 派生
+第二份暂存包，**复用成员私钥、仅以新 CA 重签三张成员证书**；报告
+SHA-256 为
+`c4a13ec66fb7b05db862b02a215f3e0c7f18981176195256a425cf0603e53624`。
+错误 pin 的负例在创建目录前拒绝，定向测试通过。替换工具现阻止原始
+新私钥暂存包用于成员 `leaves`，并要求旧证书、新证书与保留私钥的 SPKI
+逐一等于派生报告 pin；混合更新仍拒绝。派生包的 Kubernetes dry-run
+只改变三张成员证书，不改变成员私钥。按 Replica 后 Primary 滚动后，
+三成员安全与追平健康、168/168/168，混合证书期未出现 SPKI 不兼容。
+
+再逐一更新 Prometheus 抓取/查询以及健康服务入口/采集/查询身份；
+新证书链和过渡期旧客户端均可访问，三成员 `up=1`。最后五个 Secret
+逐一从双 CA 收窄为新 CA 并重启引用方；最终读回都返回
+`already_at_phase_target`。新链 mTLS `/api/health` 中三成员
+171/171/171，唯一 Primary，安全、追平、客户端入口健康；没有近期必需
+确认写，确认与总览仍为 `unknown`。健康响应 SHA-256 为
+`9d38ac5c76f766e023e2093b0116a5ca4b8163785f7b48d10a931379b876483b`。
+Prometheus 实际加载 14 条记录、64 条告警规则且全部 `ok`，三成员 `up=1`；
+新链查询响应 SHA-256 为
+`b534f8411934dc5ecc464b502b508b4e7d9239beadfcc4dcd8d006aac0a1bf2d`。
+旧 CA 的操作员、Prometheus 查询、抓取与状态采集四种客户端均在 TLS
+握手收到 `unknown ca`，负例报告 SHA-256 为
+`a3e51f8fb489164d854210c96e726e1ee8d2d23f8b835ef4e88fe8b11746a543`。
+
+实际五个 Secret 加新操作员证书的 74 小时预检覆盖 14 张证书，结果
+`ready_for_window`、0 失败；报告 SHA-256 为
+`60541d7d68d8a4a22cb700e7e54d671eb24c4dfbf73a454f9b896d7428db0d37`。
+现行 14 天本地测试证书如实触发既有“30 天内到期”告警两条，属于
+本地证书窗口的预期 warning，不能将其计为误报或当作全绿基线。
+私有轮换证据索引
+`/tmp/halro-ha-health-kind-20260928/evidence/rotation-live-20260928/rotation-index.json`
+SHA-256 为
+`d1bbebde01b79ba87b6b66dc76ec08d904e836bae3b9879f0dbe9d9284ac19fa`；
+含私钥的回滚备份仅在同目录的 `0700` 私有子目录，不入仓库。
+
+本地候选清单锁定三个成员和健康服务的实际 imageID、Secret/ConfigMap
+内容摘要及工作负载模板；清单 SHA-256 为
+`88f003da5a39e152cbad9247fc5ebf1f23cd11001e89d3d75b3259bdaf0ec598`，
+`config_sha256=f61fc1b32dbc01a80bbd009bca823765c5f1d6c2be8f160db80f7e058af93223`，
+`rules_sha256=8ded1ba7ded4ac8d0f85f60bb17056d547deb3d3282d767feaddbd54219f0bb3`。
+两个候选镜像内二进制报告同一完整源 SHA。`2026-09-28T21:00:43Z`
+启动 259200 秒、15 秒间隔的无计费只读采样，私有输出目录为
+`/tmp/halro-ha-health-kind-20260928/evidence/soak-candidate-1ecddf40-20260928/`；
+启动后前 13 次均为可解析 `observed`。采样尚在运行，不能声称 72 小时
+通过；最终 `summary.json`、成员原始样本、告警投递、RTO/RPO、G0–G7、
+独立不可变归档及客户端最终结果仍须分别验收。

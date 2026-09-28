@@ -1,6 +1,6 @@
 # Halro HA 健康系统设计方案
 
-- 状态：P0 仓库侧组件、规则与页面已实现并通过当前工作树验证，新增 Kubernetes 逐成员 Metrics Service 端口与可选受限监控入口策略；当前本地 kind 已完成部分部署和有限故障验收，完整矩阵与生产故障域准入未完成。P1 客户端最终结果的 SDK/入口代理责任方尚未确定。持久迁移事件链已有成员日志、独立分段采集及同 incarnation 重播种代际交接：本地旧链漏采事件经 MAC 认证补入，源 Primary、获批 seed、新成员精确基线与旧采集链预检通过；停机备份后原子提交 v3 代际清单，新镜像重启两次均从新链继续采集，API 恢复 `caught_up`。健康总览仍因没有近期必需确认写而为 `unknown`。本机四条成员代际链的冻结原件 MAC 读回已通过；独立不可变归档、容量及完整目标环境故障验收未完成。2026-09-28 按仓库现有 HA 实现核对。
+- 状态：P0 仓库侧组件、规则与页面已实现并通过当前工作树验证，新增 Kubernetes 逐成员 Metrics Service 端口与可选受限监控入口策略；当前本地 kind 已完成部分部署和有限故障验收，完整矩阵与生产故障域准入未完成。P1 客户端最终结果的 SDK/入口代理责任方尚未确定。持久迁移事件链已有成员日志、独立分段采集及同 incarnation 重播种代际交接：本地旧链漏采事件经 MAC 认证补入，源 Primary、获批 seed、新成员精确基线与旧采集链预检通过；停机备份后原子提交 v3 代际清单，新镜像重启两次均从新链继续采集，API 恢复 `caught_up`。健康总览仍因没有近期必需确认写而为 `unknown`。本机四条成员代际链的冻结原件 MAC 读回已通过；本地五个 TLS Secret 完成双 CA 轮换及旧身份拒绝，14 张证书通过 74 小时预检，72 小时只读采样正在运行。独立不可变归档、容量及完整目标环境故障验收未完成。2026-09-28 按仓库现有 HA 实现核对。
 - 范围：启用 `replication` 后的 2/3 节点 Primary/Replica 集群；Standalone 保留现有状态页。
 - 依赖：[HA 架构](halro-ha-architecture.zh-CN.md)、[HA 运维手册](../runbooks/ha-operations.md)、[HA 测试指南](../verification/ha-test-guide.zh-CN.md)、[指标契约](../observability/metrics-contract.md)。
 - 目标环境验收台账：[HA 健康系统目标环境验收](../verification/ha-test-guide.zh-CN.md#4-ha-健康系统目标环境验收)；目标为当前本地环境，[2026-09-28 本地验收记录](../verification/ha-health-local-acceptance-2026-09-28.md)记录了三成员 kind、独立监控入口、告警投递、Primary/Replica 故障与恢复、机器凭据轮换及有限的 deadman 客户端入口演练。正式故障矩阵尚未完成，须逐场景留存来源、时间和恢复证据。
@@ -135,7 +135,7 @@ Admin 状态接口经人工 Cookie session 和角色/MFA 守卫。仓库新增�
 | P0 规则与指标契约 | 已修订 HA 告警、runbook、指标 reference/contract；新增成员自报身份指标与缺失/错标告警、缺角色和重复角色告警、成员 HA 固定信号清单缺失告警、断开全部 peer、确认水位停滞、incarnation 冲突、本地水位顺序违反和同任期回退规则，以及页面/停滞告警共用的 `halro:ha_epoch_stable:bool` 记录规则；无 Primary 告警要求预期目标及单一角色观测完整，promtool 覆盖触发、恢复和任期切换期 | 在真实三节点指标下核查阈值、告警投递和首次缺报行为 |
 | P0 独立健康页 | 已加入 `cmd/halro-ha-health`、`internal/hahealth`、只读页面和定向测试；发布工作流现配置为在版本归档内构建同版本身份的独立健康服务二进制。页面读取独立 Prometheus，显示成员、四项信号、认证连接拓扑、可排序节点表与证据详情、节点水位差、分段阶梯图、当前 HA/成员抓取告警、按需加载的告警证据抽屉及采样告警时间线，并支持固定范围 JSON 证据导出；应用以 `halro_cluster_member_info` 自报配置身份，错标或缺失阻止绿色判定；firing 告警和告警查询失败阻止绿色总状态。请求影响接入五分钟写路由 HTTP 结果分布，但只有全部预期成员的新鲜指标齐备才显示，同一 `instance` 的矛盾序列及清单外成员阻止绿色结论；端点级指标回放已覆盖额外来源缺失 `instance` 标签时总览变未知及移除后恢复 | 按[部署契约](../observability/ha-health-service.md)安装逐成员 scrape 与受控 operator proxy，验证 TLS、访问审计、外部故障域与页面视觉效果；进行页面/规则一致性与证据保留验证，告警时间线仍须目标环境 retention/断点校验；如需 Console 快捷链接，再提供受控入口 URL |
 | P0 客户端入口 | HA 根端点增加 `role` 与持久成员状态的 `cluster_id`；监控端仅接受同集群 Primary，按新连接重试同集群 Replica，误路由其他集群为危险，身份缺失为未知。独立 deadman 可选同语义 `ha_client_root` 目标，将连续失败/恢复交给既有持久通知链 | 本机夹具已验证真实 deadman 发送端的 heartbeat TTL、恢复和旧事件重放拒绝，kind 客户端 Service 路由与 TTL 亦已联合演练；仍需真实 SDK 重试边界、独立接收者/联系点及目标故障域下的端到端验收；只采到 Replica 仍为未知，不能由路由探针推出写操作成功 |
-| P1 认证状态与深度诊断 | 已实现机器只读 `/ha/status`、独立版本化凭据轮换/撤销命令、mTLS 与 token 双重认证、逐成员固定清单采集、身份校验及失败阻止绿色总状态；页面节点详情和证据导出包含状态采集结果。可选的认证前缀摘要仅在字段开关启用后披露，状态文件与 ordering 记录不一致拒绝、同位置跨节点冲突显示危险。历史查询同次返回有界的角色/term/incarnation/复制阶段采样变化表，证据导出也保留该表；机器状态另返回本进程状态发布边界的真实角色/term/promise 迁移、Primary coordinator 可用性边界和 Replica 接收/应用失败恢复边界。独立健康服务可选后台采集并以私有事件文件留存已采到的记录和缺口标记，页面与证据导出单列，不能视为完整 Audit。Primary 新增本地持久→确认落盘直方图、本进程最近确认时间和需确认 Ledger/metadata 内部等待结果计数；确认能力卡改用稳定任期内该计数的成功增量，普通 confirmed index 增长不再使卡片变绿。Replica 新增 sink Persist 调用和成功 apply 批次直方图；页面用固定查询展示五分钟 p95，缺失样本不视为 0。HA Gateway 另按固定写路由统计服务端 HTTP 终态，独立页面仅在全成员覆盖时展示五分钟分布 | 本地已完成单成员 HA 状态凭据的 v2 轮换、采集端 Secret 投射及 v1 永久撤销；仍需全成员和 Metrics 凭据、机器证书/TLS 故障与正式 Secret 控制器演练。事件文件的持久卷、重启、失联与 kind 文件不可写故障已局部验证，1000 条保留淘汰后的重启读回已有仓库回放；真实成员事件环溢出和 kind 保留淘汰仍待演练；阶段指标与 HTTP 结果分布仍需真实采集校准；客户端最终完整响应的成功/超时/拒绝结果仍缺生产来源，持久迁移链仍缺归档与目标环境验收。内部等待和服务端 HTTP 2xx 均不能替代最终客户端结果 |
+| P1 认证状态与深度诊断 | 已实现机器只读 `/ha/status`、独立版本化凭据轮换/撤销命令、mTLS 与 token 双重认证、逐成员固定清单采集、身份校验及失败阻止绿色总状态；页面节点详情和证据导出包含状态采集结果。可选的认证前缀摘要仅在字段开关启用后披露，状态文件与 ordering 记录不一致拒绝、同位置跨节点冲突显示危险。历史查询同次返回有界的角色/term/incarnation/复制阶段采样变化表，证据导出也保留该表；机器状态另返回本进程状态发布边界的真实角色/term/promise 迁移、Primary coordinator 可用性边界和 Replica 接收/应用失败恢复边界。独立健康服务可选后台采集并以私有事件文件留存已采到的记录和缺口标记，页面与证据导出单列，不能视为完整 Audit。Primary 新增本地持久→确认落盘直方图、本进程最近确认时间和需确认 Ledger/metadata 内部等待结果计数；确认能力卡改用稳定任期内该计数的成功增量，普通 confirmed index 增长不再使卡片变绿。Replica 新增 sink Persist 调用和成功 apply 批次直方图；页面用固定查询展示五分钟 p95，缺失样本不视为 0。HA Gateway 另按固定写路由统计服务端 HTTP 终态，独立页面仅在全成员覆盖时展示五分钟分布 | 本地已完成单成员 HA 状态凭据的 v2 轮换、采集端 Secret 投射及 v1 永久撤销；五个 TLS Secret 已完成新旧 CA 过渡、成员固定 SPKI 续签、运行中证书加载和旧身份拒绝。仍需全成员状态和 Metrics token 凭据、正式 Secret 控制器与生产 PKI 故障演练。事件文件的持久卷、重启、失联与 kind 文件不可写故障已局部验证，1000 条保留淘汰后的重启读回已有仓库回放；真实成员事件环溢出和 kind 保留淘汰仍待演练；阶段指标与 HTTP 结果分布仍需真实采集校准；客户端最终完整响应的成功/超时/拒绝结果仍缺生产来源，持久迁移链仍缺归档与目标环境验收。内部等待和服务端 HTTP 2xx 均不能替代最终客户端结果 |
 | P2 目标环境校准 | 验收台账已编制；本地 kind 已在独立 PVC 运行真实三成员、监控 Pod、Alertmanager 与本地持久 webhook 接收器，验证客户端 Service 轮转、逐成员 mTLS 抓取、机器状态、事件归档、单 Replica 停止/恢复和 Primary 不可用时的独立入口与页面降级，以及 `HalroTargetDown` firing/resolved 的实际本地投递和接收端重启留存；另以本地非计费 HTTPS 替身验证 Ledger 与 metadata 同窗口必需确认、确认卡正向判定，并以双 Replica 暂停验证一次需确认 metadata 更新失败、阻断告警与恢复后回读对账。单成员状态凭据轮换/永久撤销已完成，隔离主机目录也有一轮有限预演 | 按[目标环境矩阵](../verification/ha-test-guide.zh-CN.md#4-ha-健康系统目标环境验收)继续验证 Ledger 写与流式客户端在受控 ACK 停滞下的最终结果、人工提升与旧 Primary 隔离、真实操作员通知渠道、其余凭据和 TLS 生命周期、NetworkPolicy 强制、G0–G7、相邻版本、72 小时 soak 与 RTO/SLO；本地 PVC 不能代替独立不可变归档，有限故障演练不能代替完整矩阵 |
 
 此前工作树的整体仓库复核（后续仍有改动）：`GOCACHE=/tmp/halro-go-cache go test -count=1 ./...` 全部通过（`internal/app` 约 294 秒）；`go vet ./...` 与 `make fmt-check` 通过。前端 typecheck、48 个测试文件的 696 项测试和生产构建通过，嵌入 bundle 无漂移；`deploy/observability/validate.sh` 验证 Prometheus/Alertmanager 配置和全部规则夹具通过；`cmd/halro-ha-health` 与 `internal/hahealth` 的 `-race -count=1` 通过，独立服务构建及 `-version` 成功。未运行真实 Provider 计费 smoke，也未用仓库门禁代替目标环境的 TLS、Secret、告警投递、故障域和 G0–G7 验收。该记录只是未提交工作树验证；发布前须对最终候选状态再按仓库策略执行门禁。
@@ -534,10 +534,10 @@ Secret 的 13 张公开证书和主机操作员公开证书，工具检查 PEM �
 
 本地轮换执行入口已补逐 Secret 的阶段和资源版本门禁、服务端 dry-run、
 `0600` 原 Secret 私有备份及替换后全键读回；五个 Secret 的第一阶段均已
-由 Kubernetes 服务端接受 dry-run，尚未应用。发现一个监控客户端 Secret
+由 Kubernetes 服务端接受 dry-run，当时尚未应用。发现一个监控客户端 Secret
 的 last-applied 注解重复包含私钥字段，现已移除并证明 Secret `data`
-摘要未变、监控仍 Ready。16 项定向测试通过。实际轮换、Pod 证书加载、
-旧链拒绝和 74 小时预检继续待做。
+摘要未变、监控仍 Ready。16 项定向测试通过。后续完整轮换与预检结果见
+[本地记录](../verification/ha-health-local-acceptance-2026-09-28.md)。
 
 长跑前的可选只读预演在约 65 分钟时为正式候选准备而主动结束，263 次
 接口观测均可解析，摘要明确为未完成；其中一次确认能力降级由同轮两个
@@ -548,5 +548,17 @@ Primary Peer 连接同时短暂为 0 触发。原始 Prometheus 样本和三成�
 集成测试通过。精确提交 `1ecddf40` 的成员和独立健康服务镜像已滚动到
 本地 kind；三成员 159/159/159 水位一致，Primary 到两台 Replica 的
 一分钟连接下界均为 1，健康页安全与追平正常、无最近必需确认写时总览
-仍为未知。该短窗口不代替证书轮换、74 小时预检及 72 小时长跑。
+仍为未知。该短窗口不代替后续证书轮换、74 小时预检及 72 小时长跑。
 见[本地证据](../verification/ha-health-local-acceptance-2026-09-28.md)。
+
+本地五个 TLS Secret 的三阶段轮换已完成。首次使用新成员密钥时真实触发
+持久 SPKI pin 拒绝并使安全卡降级；立即从私有备份恢复。现新增例行续签
+工具，冻结旧成员证书与密钥、核对三份配置的 pin，以**相同成员私钥**在
+新 CA 下重签证书；替换工具禁止原始新私钥包直接更换现有成员。按 Replica
+后 Primary 滚动后，三成员与监控服务只信任新 CA，旧操作员、抓取、查询
+及状态采集身份均在 TLS 层被拒。14 张实际证书通过 74 小时有效期预检，
+14 条记录与 64 条告警规则全部加载且健康。14 天本地测试证书如实触发
+现有 30 天到期 warning，不能记作误报；无近期需确认写时总览仍未知。
+候选 `1ecddf40` 的 72 小时无计费只读采样已启动，尚无完成结论，
+完整 G0–G7、外部不可变归档和客户端最终结果来源仍未验收。
+详见[轮换与采样证据](../verification/ha-health-local-acceptance-2026-09-28.md)。

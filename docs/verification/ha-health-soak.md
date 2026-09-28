@@ -79,6 +79,34 @@ Kubernetes，也不安装或轮换任何证书。输出目录应在受控私有�
 把其内容提交仓库。脚本的名称和 SAN 专用于
 `halro-ha-health-local` 样例；目标环境须用受控 PKI 自行签发和审查。
 
+**已有 incarnation 的成员不能直接使用上述暂存包中的三把新成员私钥。**
+复制握手还会核对成员持久配置和认证 `state.json` 中的 SPKI pin；仅扩展 CA
+信任不能授权公钥变化。实际本地演练中，只替换第一台 Replica 的新私钥便使
+Primary 记录 `spki` 不兼容，页面安全卡降级。`kind_tls_replace.py` 现拒绝
+没有固定 SPKI 派生报告的成员 `leaves` 阶段。例行续签且确认旧私钥未泄露时，
+先冻结双 CA 阶段的成员 Secret 私有备份、核对三份运行配置中的 peer pin，
+再离线生成保留成员公钥的新证书暂存包：
+
+```sh
+python3 tests/ha-health-soak/reissue_kind_pinned_members.py \
+  --source-stage /private/ha-health-kind-certificates-new \
+  --source-report-sha256 SOURCE_STAGE_SHA256 \
+  --member-backup /private/secret-backups/leaves-halro-halro-ha-cluster-tls-rvNNN.json \
+  --member-backup-sha256 MEMBER_BACKUP_SHA256 \
+  --pin halro-0=sha256:CURRENT_HALRO_0_PIN \
+  --pin halro-1=sha256:CURRENT_HALRO_1_PIN \
+  --pin halro-2=sha256:CURRENT_HALRO_2_PIN \
+  --output /private/ha-health-kind-certificates-pinned
+```
+
+三个 `--pin` 必须来自实际成员配置，且与冻结证书和私钥逐一匹配；输出为
+另一份 `0700` 私有暂存目录，`stage-report.json` 给出新的摘要。双 CA
+`trust` 阶段仍使用原始暂存包；此后 `leaves` 和 `final` 阶段都使用
+**派生目录及其摘要**，不得用原始新私钥包更新成员。
+此流程只更新证书有效期，不轮换成员密钥。若私钥泄露或必须换成员公钥，
+须走能认证修改成员 pin 的独立协议或新 incarnation 恢复流程，不能修改
+Secret 和 YAML 后把断开的复制会话视为可用。
+
 准备不等于轮换。当前只读采样器启动时已加载原 CA 和操作员证书；应先等
 这轮采样结束并保存 `summary.json`，然后依据 `stage-report.json` 核对实际
 Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护窗口
@@ -88,7 +116,8 @@ Secret 键、服务端名称与 Prometheus `client_allowed_sans`，再在维护�
    Secret 中对应的 `ca.crt` 或 `client-ca.crt`，保留旧叶子证书与私钥。重启
    所有引用这些 CA 的成员、健康服务及 Prometheus，验证旧链仍能工作；
    在未证明全部进程加载双 CA 前，不更换任何叶子证书。
-2. **更换身份**：保留双 CA bundle，逐一更换三个成员、健康服务、采集器、
+2. **更换身份**：保留双 CA bundle，以固定 SPKI 的派生暂存包逐一更换三个成员
+   的证书，再更换健康服务、采集器、
    Prometheus 抓取、Prometheus 查询服务端与客户端证书，并切换操作员证书。
    成员按实际角色先 Replica 后 Primary 滚动；每一步核对角色、term、成员
    身份、真实 Peer 会话、复制水位和客户端 Service。Prometheus 的
