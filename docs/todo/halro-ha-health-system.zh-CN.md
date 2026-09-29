@@ -4,6 +4,7 @@
 - 范围：启用 `replication` 后的 2/3 节点 Primary/Replica 集群；Standalone 保留现有状态页。
 - 依赖：[HA 架构](halro-ha-architecture.zh-CN.md)、[HA 运维手册](../runbooks/ha-operations.md)、[HA 测试指南](../verification/ha-test-guide.zh-CN.md)、[指标契约](../observability/metrics-contract.md)。
 - 目标环境验收台账：[HA 健康系统目标环境验收](../verification/ha-test-guide.zh-CN.md#4-ha-健康系统目标环境验收)；目标为当前本地环境，[2026-09-28 本地验收记录](../verification/ha-health-local-acceptance-2026-09-28.md)记录了三成员 kind、独立监控入口、告警投递、Primary/Replica 故障与恢复、机器凭据轮换及有限的 deadman 客户端入口演练。正式故障矩阵尚未完成，须逐场景留存来源、时间和恢复证据。
+- 本次仓库交付复核：[2026-09-29 仓库交付核对](../verification/ha-health-repository-handoff-2026-09-29.md)；72 小时长跑不作为本次本地交付等待条件，其状态不据此写成通过。
 - 边界：本系统提供观测、告警与诊断证据；提升、隔离、播种、维护和恢复仍按人工 runbook 执行。面板“健康”不构成生产启用或提升授权。
 
 ## 1. 要回答的运维问题
