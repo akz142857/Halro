@@ -24,12 +24,30 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Halro/internal/hahealth"
 )
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
 
 func TestHealthAccessAuditDistinguishesCertificatesWithSameSubject(t *testing.T) {
 	var output bytes.Buffer
@@ -635,7 +653,7 @@ func TestRunbookBaseRequiresSafeHTTPSOriginAndRendersOnlyWhenConfigured(t *testi
 }
 
 func TestOperatorEndpointRequiresTrustedClientCertificate(t *testing.T) {
-	var accessLogs bytes.Buffer
+	var accessLogs synchronizedBuffer
 	previousLogOutput := log.Writer()
 	log.SetOutput(&accessLogs)
 	t.Cleanup(func() { log.SetOutput(previousLogOutput) })

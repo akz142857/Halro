@@ -47,7 +47,7 @@ FORCE:
 
 GO_SOURCES := $(shell find cmd internal -type f -name '*.go')
 DEADMAN_SOURCES := $(shell find cmd/halro-deadman internal/deadman -type f -name '*.go')
-HA_HEALTH_SOURCES := $(shell find cmd/halro-ha-health internal/hahealth -type f \( -name '*.go' -o -name '*.html' -o -name '*.js' \))
+HA_HEALTH_SOURCES := $(GO_SOURCES) $(shell find cmd/halro-ha-health/ui -type f \( -name '*.html' -o -name '*.js' \))
 WEBUI_DIST_SOURCES := $(shell find internal/webui/dist -type f)
 WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 	web/index.html web/tsconfig.json web/tsconfig.app.json web/tsconfig.node.json web/vite.config.ts
