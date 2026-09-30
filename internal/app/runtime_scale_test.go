@@ -92,7 +92,13 @@ const (
 	// authenticated role state, ordering journal, native source and peer
 	// transport must open and close together. Spreading them into Runtime would
 	// add several fields and make partial cleanup states representable.
-	runtimeFieldBudget = 78
+	// 79: haStatus. The machine-only status route has its own authorizer,
+	// admission semaphore, and failure counter; they are one Metrics-listener
+	// lifecycle and cannot be meaningful separately.
+	// 80: haWriteResponses. A fixed-size, low-cardinality set of Gateway HTTP
+	// outcome counters. The Gateway wrapper writes it and Metrics reads it;
+	// keeping it on Runtime gives both one process-wide observation.
+	runtimeFieldBudget = 80
 	runtimeMutexBudget = 10
 )
 

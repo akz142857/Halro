@@ -318,6 +318,13 @@ metrics:
   # Empty means the bearer token is derived from the Master Key; point this at
   # a credential file to manage it yourself.
   credential_file: ""
+  ha_status:
+    # Machine-only read-only status on the Metrics mTLS listener. Requires HA
+    # replication, metrics authentication, and a separate versioned bearer file.
+    enabled: false
+    credential_file: ""
+    # Exposes an authenticated ordering prefix digest for diagnosis only.
+    include_prefix_digest: false
   max_concurrent_scrapes: 2
   write_timeout: 5s
   tls:

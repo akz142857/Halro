@@ -78,6 +78,13 @@ func TestOrderingJournalCreatesAppendsAndRecoversAuthenticatedHead(t *testing.T)
 	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
+	verified, err := VerifyOrderingSnapshot(path, key, header.ClusterID, header.Incarnation, 2, second.MAC)
+	if err != nil || verified.Status != "ordering_mac_verified" || verified.VerifiedLastIndex != 2 || verified.FileSHA256 == "" {
+		t.Fatalf("read-only ordering snapshot=%+v err=%v", verified, err)
+	}
+	if _, err := VerifyOrderingSnapshot(path, key, header.ClusterID, header.Incarnation, 2, first.MAC); err == nil {
+		t.Fatal("read-only ordering snapshot accepted a wrong prefix MAC")
+	}
 
 	reopened, err := OpenOrderingJournal(path, key, header, 2, second.MAC)
 	if err != nil {
@@ -94,6 +101,44 @@ func TestOrderingJournalCreatesAppendsAndRecoversAuthenticatedHead(t *testing.T)
 	}
 	if third.PreviousMAC != second.MAC {
 		t.Fatal("reopened journal did not continue the authenticated chain")
+	}
+}
+
+func TestVerifyOrderingSnapshotRejectsIncompleteTailWithoutRepair(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cluster", "ordering.journal")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	header := OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}
+	journal, err := OpenOrderingJournal(path, key, header, 0, [sha256.Size]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := journal.Append(testLeadershipRecord(1, 1, "one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte{0x42}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyOrderingSnapshot(path, key, header.ClusterID, header.Incarnation, 1, first.MAC); err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("incomplete ordering snapshot accepted or repaired: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("read-only ordering verifier modified the source: %v", err)
 	}
 }
 

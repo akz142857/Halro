@@ -1026,13 +1026,13 @@ Standalone 已有的写路径指标（`halro_wal_sync_seconds`、`halro_wal_appe
 `halro_accounting_project_lock_{wait,held}_seconds`、`halro_metadata_*`、`halro stats`）保留，复制层增加：
 
 - `halro_cluster_role{role}`、`halro_cluster_term`、`halro_cluster_promised_term`、`halro_cluster_incarnation_info`；
-- `halro_replication_index{kind=durable|confirmed|applied}`（Replica 自报 applied，Primary 汇总按 peer）；
+- `halro_replication_index{kind=durable|confirmed|applied}`（每个成员只报告本地水位；Primary 当前不导出对端实际 applied 水位）；
 - `halro_replication_confirmation_lag`、`halro_replication_apply_lag`、
   `halro_replication_apply_backlog_frames`；在 RPO=0 下它们不是"会丢多少"，而是提升前还要追多少帧；
 - `halro_replication_startup_ready`、`halro_replication_peer_connected{peer}`、
   `halro_replication_state{state=replicating|unavailable}`；
 - `halro_cluster_maintenance`（普通运行时为 0，释放数据锁的 maintenance listener 为 1）；
-- 密钥挑战失败、schema 不兼容、SPKI 不匹配的成员计数。
+- 密钥挑战失败、schema 不兼容、SPKI 不匹配的进程期 sticky gauge；它表明本进程曾见过不兼容成员，不等于当前连接仍不兼容。
 
 v1 不导出伪精确的 lag seconds/bytes 或 seed duration：ordering v1 没有每帧时间戳，离线 seed 也没有运行中
 进程可供 scrape。需要这些量时必须先增加可认证的采样来源；不能用当前时间减进程启动时间冒充复制延迟。
@@ -1044,8 +1044,10 @@ v1 不导出伪精确的 lag seconds/bytes 或 seed duration：ordering v1 没�
 | `HalroNoPrimary` | 无成员 `role=primary` 超过 N s | §8.3 promote |
 | `HalroMultiplePrimaries` | ≥ 2 成员同 incarnation 自称 Primary | §8.2 行 8；隔离、核对 Audit |
 | `HalroAwaitingOperator` | 任一成员停在 §8.2 行 4/7 | `promote --self` / promote |
-| `HalroReplicationUnavailable` | Primary `state=unavailable` | 查 Replica；§6.3.1 的写已停（503） |
-| `HalroReplicaNotCandidate` | `durable − applied > 0` 持续 5 分钟 | 查 apply backlog / bbolt |
+| `HalroReplicationUnavailable` | Primary 内部 `state=unavailable` | 查 Replica；这是已知阻断，`state=replicating` 不保证新写一定得到 ACK |
+| `HalroReplicationNoConnectedPeer` | Primary 无认证 Replica 会话持续 1 分钟 | 查连接/证书；连接恢复后仍需验证实际确认 |
+| `HalroReplicationConfirmationStalled` | 有待确认帧且 confirmed 5 分钟未推进，再持续 1 分钟 | 查 ACK 与持久化路径 |
+| `HalroReplicaApplyStalled` | `durable − applied > 0` 且 `applied` 5 分钟未推进，再持续 1 分钟 | 查 apply backlog / bbolt；此告警不是完整提升资格判定 |
 | `HalroMemberIncompatible` | schema/协议/密钥不兼容 | §15 |
 | 现有 `HalroTargetDown`、`AccountingLeaseStale` 等 | 改为 role 感知；recording rules 加 `instance`/`role` 维度 | — |
 

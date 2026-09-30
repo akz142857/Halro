@@ -226,12 +226,13 @@ var topLevelCommands = []commandDescriptor{
 	{"route", "halro route <suspensions|clear-suspension> [flags]", "inspect or clear durable route suspensions"},
 	{"audit", "halro audit <verify|verify-anchor> [flags]", "verify the Audit chain and anchors"},
 	{"metrics", "halro metrics <token|rotate|revoke|list|verify-audit> [flags]", "manage metrics credentials and audit state"},
+	{"ha-status", "halro ha-status <rotate|revoke|list|verify-audit> [flags]", "manage machine-only HA status credentials"},
 	{"stats", "halro stats [--config <path>] [--interval <duration>]", "summarize the running durable write path"},
 	{"doctor", "halro doctor [flags]", "run read-only offline diagnostics"},
 	{"serve", "halro serve [flags]", "serve a prepared data directory"},
 	{"healthcheck", "halro healthcheck [flags]", "check loopback readiness"},
 	{"config", "halro config <check|migrate> [--config <path>]", "validate or migrate configuration without starting Halro"},
-	{"cluster", "halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]", "seed, inspect, promote, hand off, maintain, report backup evidence, or leave an authenticated HA member"},
+	{"cluster", "halro cluster <establish|seed-approve|seed-install|status|migrate-transitions|verify-transition-snapshot|verify-seed-approval-snapshot|verify-member-seed-origin|verify-seed-source-origin|promote|stepdown|report-backup|maintenance|leave> [flags]", "seed, inspect, migrate and verify HA transition evidence, promote, hand off, maintain, report backup evidence, or leave an authenticated HA member"},
 	{"version", "halro version", "print build and time-zone database identity"},
 }
 
@@ -276,7 +277,7 @@ func run(arguments []string, logger *slog.Logger) error {
 	switch arguments[0] {
 	case "cluster":
 		if len(arguments) < 2 {
-			return errors.New("usage: halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]")
+			return errors.New("usage: halro cluster <establish|seed-approve|seed-install|status|migrate-transitions|verify-transition-snapshot|verify-seed-approval-snapshot|verify-member-seed-origin|verify-seed-source-origin|promote|stepdown|report-backup|maintenance|leave> [flags]")
 		}
 		switch arguments[1] {
 		case "establish":
@@ -386,9 +387,204 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(map[string]any{
 				"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
+				"state_version": state.Version, "transition_journal_id": state.Transition.JournalID,
 				"role": state.Role, "term": state.Term, "promised_term": state.PromisedTerm,
 				"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
 				"applied_index": state.AppliedIndex, "projection": state.Projection, "peers": state.Peers,
+			})
+		case "verify-transition-snapshot":
+			flags := flag.NewFlagSet("cluster verify-transition-snapshot", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration matching the frozen member")
+			snapshotDir := flags.String("snapshot-dir", "", "clean absolute path to a frozen member data directory")
+			archiveReadbackDir := flags.String("archive-readback-dir", "", "separately retrieved frozen member data directory to re-authenticate and compare with --snapshot-dir")
+			afterJournalID := flags.String("after-journal-id", "", "journal ID of an exact committed cursor for a bounded tail read")
+			afterSequence := flags.Uint64("after-sequence", 0, "committed sequence of the exact tail cursor")
+			afterDigest := flags.String("after-digest", "", "digest of the exact tail cursor")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if flags.NArg() != 0 {
+				return errors.New("cluster verify-transition-snapshot takes no positional arguments")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			if *archiveReadbackDir != "" {
+				if *afterJournalID != "" || *afterSequence != 0 || *afterDigest != "" {
+					return errors.New("archive readback cannot be combined with a bounded tail read")
+				}
+				report, err := app.VerifyMemberTransitionSnapshotReadback(context.Background(), cfg, *snapshotDir, *archiveReadbackDir)
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(os.Stdout).Encode(report)
+			}
+			if *afterJournalID != "" || *afterSequence != 0 || *afterDigest != "" {
+				if *afterJournalID == "" || *afterDigest == "" {
+					return errors.New("tail read requires --after-journal-id and --after-digest")
+				}
+				report, page, err := app.ReadMemberTransitionSnapshotPage(context.Background(), cfg, *snapshotDir,
+					replication.DurableTransitionCursor{JournalID: *afterJournalID, Sequence: *afterSequence, Digest: *afterDigest})
+				if err != nil {
+					return err
+				}
+				return json.NewEncoder(os.Stdout).Encode(struct {
+					Snapshot replication.TransitionSnapshotReport `json:"snapshot"`
+					Page     replication.DurableTransitionPage    `json:"page"`
+				}{Snapshot: report, Page: page})
+			}
+			report, err := app.VerifyMemberTransitionSnapshot(context.Background(), cfg, *snapshotDir)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "verify-seed-approval-snapshot":
+			flags := flag.NewFlagSet("cluster verify-seed-approval-snapshot", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration matching the approved seed target")
+			approvedFiles := flags.String("approved-files-dir", "", "clean absolute path to the frozen approved files")
+			manifestPath := flags.String("manifest", "", "clean absolute path to the approved seed manifest")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if flags.NArg() != 0 {
+				return errors.New("cluster verify-seed-approval-snapshot takes no positional arguments")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			report, err := app.VerifySeedApprovalSnapshot(context.Background(), cfg, *approvedFiles, *manifestPath)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "verify-member-seed-origin":
+			flags := flag.NewFlagSet("cluster verify-member-seed-origin", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration matching the frozen replacement member")
+			snapshotDir := flags.String("snapshot-dir", "", "clean absolute path to the frozen replacement member data directory")
+			approvedFiles := flags.String("approved-files-dir", "", "clean absolute path to the frozen approved seed files")
+			manifestPath := flags.String("manifest", "", "clean absolute path to the approved seed manifest")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if flags.NArg() != 0 {
+				return errors.New("cluster verify-member-seed-origin takes no positional arguments")
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			report, err := app.VerifyMemberSeedOrigin(context.Background(), cfg, *snapshotDir, *approvedFiles, *manifestPath)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "verify-seed-source-origin":
+			flags := flag.NewFlagSet("cluster verify-seed-source-origin", flag.ContinueOnError)
+			sourceConfigPath := flags.String("source-config", "", "configuration matching the frozen source Primary")
+			sourceSnapshot := flags.String("source-snapshot-dir", "", "clean absolute path to the frozen source Primary data directory")
+			targetConfigPath := flags.String("target-config", "", "configuration matching the approved seed target")
+			approvedFiles := flags.String("approved-files-dir", "", "clean absolute path to the frozen approved seed files")
+			manifestPath := flags.String("manifest", "", "clean absolute path to the approved seed manifest")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if flags.NArg() != 0 {
+				return errors.New("cluster verify-seed-source-origin takes no positional arguments")
+			}
+			sourceCfg, err := config.Load(*sourceConfigPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			targetCfg, err := config.Load(*targetConfigPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			report, err := app.VerifySourceSeedOrigin(context.Background(), sourceCfg, *sourceSnapshot,
+				targetCfg, *approvedFiles, *manifestPath)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(report)
+		case "migrate-transitions":
+			flags := flag.NewFlagSet("cluster migrate-transitions", flag.ContinueOnError)
+			configPath := flags.String("config", "config.yaml", "configuration for the stopped member")
+			expectIncarnation := flags.String("expect-incarnation", "", "authenticated incarnation inspected before stopping")
+			expectRole := flags.String("expect-role", "", "authenticated role: primary or replica")
+			expectTerm := flags.Uint64("expect-term", 0, "authenticated local term")
+			expectPromised := flags.Uint64("expect-promised-term", 0, "authenticated promised term")
+			expectDurable := flags.Uint64("expect-durable-index", 0, "authenticated durable index")
+			expectConfirmed := flags.Uint64("expect-confirmed-index", 0, "authenticated confirmed index")
+			expectApplied := flags.Uint64("expect-applied-index", 0, "authenticated applied index")
+			username := flags.String("username", "admin", "local administrator username")
+			passwordFile := flags.String("password-file", "", "absolute path to administrator password; otherwise read stdin")
+			totpFile := flags.String("totp-file", "", "absolute path to current TOTP code when MFA is active")
+			if err := flags.Parse(arguments[2:]); err != nil {
+				return err
+			}
+			if flags.NArg() != 0 {
+				return errors.New("cluster migrate-transitions takes no positional arguments")
+			}
+			expectedIndexes := map[string]bool{}
+			flags.Visit(func(current *flag.Flag) {
+				expectedIndexes[current.Name] = true
+			})
+			for _, name := range []string{"expect-durable-index", "expect-confirmed-index", "expect-applied-index"} {
+				if !expectedIndexes[name] {
+					return fmt.Errorf("cluster migrate-transitions requires an explicit --%s, including when it is zero", name)
+				}
+			}
+			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
+			if err != nil {
+				return err
+			}
+			if err := hardenSecretHandlingCommand(); err != nil {
+				return err
+			}
+			password, err := readPasswordInput(os.Stdin, *passwordFile)
+			if err != nil {
+				return err
+			}
+			defer clear(password)
+			var totpCode string
+			if *totpFile != "" {
+				if !filepath.IsAbs(*totpFile) {
+					return errors.New("--totp-file must be an absolute path")
+				}
+				payload, readErr := os.ReadFile(*totpFile)
+				if readErr != nil {
+					return readErr
+				}
+				totpCode = strings.TrimSpace(string(payload))
+				clear(payload)
+			}
+			state, err := app.MigrateMemberTransitionJournal(context.Background(), cfg, app.TransitionMigrationOptions{
+				ExpectedIncarnation: *expectIncarnation, ExpectedRole: replication.Role(*expectRole),
+				ExpectedTerm: *expectTerm, ExpectedPromised: *expectPromised,
+				ExpectedDurable: *expectDurable, ExpectedConfirmed: *expectConfirmed, ExpectedApplied: *expectApplied,
+				Username: *username, Password: password, TOTPCode: totpCode,
+			})
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
+				"state_version": state.Version, "transition_journal_id": state.Transition.JournalID,
+				"baseline_sequence": state.Transition.Sequence, "role": state.Role, "term": state.Term,
+				"promised_term": state.PromisedTerm, "applied_index": state.AppliedIndex,
 			})
 		case "promote":
 			flags := flag.NewFlagSet("cluster promote", flag.ContinueOnError)
@@ -1456,11 +1652,15 @@ func run(arguments []string, logger *slog.Logger) error {
 		report, doctorErr := doctorCommand(context.Background(), cfg, app.DoctorOptions{NoKMS: *noKMS})
 		encodeErr := json.NewEncoder(os.Stdout).Encode(report)
 		return errors.Join(doctorErr, encodeErr)
-	case "metrics":
+	case "metrics", "ha-status":
+		command := arguments[0]
 		if len(arguments) < 2 {
-			return errors.New("usage: halro metrics <token|rotate|revoke|list|verify-audit> --config <path>")
+			if command == "metrics" {
+				return errors.New("usage: halro metrics <token|rotate|revoke|list|verify-audit> --config <path>")
+			}
+			return errors.New("usage: halro ha-status <rotate|revoke|list|verify-audit> --config <path>")
 		}
-		flags := flag.NewFlagSet("metrics "+arguments[1], flag.ContinueOnError)
+		flags := flag.NewFlagSet(command+" "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
 		overlap := flags.Duration("overlap", 10*time.Minute, "old/new token overlap for rotate")
 		version := flags.Uint64("version", 0, "credential version for revoke")
@@ -1471,8 +1671,18 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
+		credentialFile := cfg.Metrics.CredentialFile
+		if command == "ha-status" {
+			if !cfg.Metrics.HAStatus.Enabled {
+				return errors.New("metrics.ha_status.enabled is required")
+			}
+			credentialFile = cfg.Metrics.HAStatus.CredentialFile
+		}
 		switch arguments[1] {
 		case "token":
+			if command != "metrics" {
+				return errors.New("ha-status has no derived token; use ha-status rotate")
+			}
 			token, err := app.MetricsToken(cfg)
 			if err != nil {
 				return err
@@ -1482,33 +1692,37 @@ func run(arguments []string, logger *slog.Logger) error {
 			_, err = fmt.Fprintln(os.Stdout, string(token))
 			return err
 		case "rotate":
-			if cfg.Metrics.CredentialFile == "" {
-				return errors.New("metrics.credential_file is required for versioned rotation")
+			if credentialFile == "" {
+				return fmt.Errorf("%s credential_file is required for versioned rotation", command)
 			}
-			rotation, err := bearercred.Rotate(cfg.Metrics.CredentialFile, *overlap, time.Now())
+			rotation, err := bearercred.Rotate(credentialFile, *overlap, time.Now())
 			if err != nil {
 				return err
 			}
 			defer clear(rotation.Token)
-			fmt.Fprintln(os.Stderr, "Store this one-time Metrics bearer token directly in the Prometheus secret file.")
+			if command == "metrics" {
+				fmt.Fprintln(os.Stderr, "Store this one-time Metrics bearer token directly in the Prometheus secret file.")
+			} else {
+				fmt.Fprintln(os.Stderr, "Store this one-time HA status bearer token directly in the collector secret file.")
+			}
 			if _, err := fmt.Fprintln(os.Stdout, string(rotation.Token)); err != nil {
 				return err
 			}
 			fmt.Fprintln(os.Stderr, "credential_version="+strconv.FormatUint(rotation.Version, 10))
 			return nil
 		case "revoke":
-			if cfg.Metrics.CredentialFile == "" || *version == 0 {
-				return errors.New("metrics revoke requires metrics.credential_file and --version")
+			if credentialFile == "" || *version == 0 {
+				return fmt.Errorf("%s revoke requires credential_file and --version", command)
 			}
-			return bearercred.Revoke(cfg.Metrics.CredentialFile, *version, time.Now())
+			return bearercred.Revoke(credentialFile, *version, time.Now())
 		case "list":
-			if cfg.Metrics.CredentialFile == "" {
-				return errors.New("metrics.credential_file is required for versioned credentials")
+			if credentialFile == "" {
+				return fmt.Errorf("%s credential_file is required for versioned credentials", command)
 			}
-			if err := bearercred.VerifyAudit(cfg.Metrics.CredentialFile); err != nil {
-				return fmt.Errorf("verify metrics credential audit: %w", err)
+			if err := bearercred.VerifyAudit(credentialFile); err != nil {
+				return fmt.Errorf("verify %s credential audit: %w", command, err)
 			}
-			file, err := bearercred.Load(cfg.Metrics.CredentialFile)
+			file, err := bearercred.Load(credentialFile)
 			if err != nil {
 				return err
 			}
@@ -1525,16 +1739,16 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(result)
 		case "verify-audit":
-			if cfg.Metrics.CredentialFile == "" {
-				return errors.New("metrics.credential_file is required for audit verification")
+			if credentialFile == "" {
+				return fmt.Errorf("%s credential_file is required for audit verification", command)
 			}
-			head, err := bearercred.AuditStatus(cfg.Metrics.CredentialFile)
+			head, err := bearercred.AuditStatus(credentialFile)
 			if err != nil {
 				return err
 			}
 			return json.NewEncoder(os.Stdout).Encode(head)
 		default:
-			return fmt.Errorf("unknown metrics command %q", arguments[1])
+			return fmt.Errorf("unknown %s command %q", command, arguments[1])
 		}
 	default:
 		return fmt.Errorf("unknown command %q", arguments[0])

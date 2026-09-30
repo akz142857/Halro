@@ -1,0 +1,43 @@
+# Add this policy only after binding the monitoring namespace and workloads to
+# reviewed identities. Kubernetes labels narrow routing; member mTLS and the
+# distinct Metrics/HA-status bearer credentials remain the authentication gate.
+# Replace the source labels if the target deployment uses different names.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: halro-ha-observability-ingress
+  namespace: halro
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: halro
+      app.kubernetes.io/component: ha-member
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              halro.io/monitoring-access: "allowed"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+        - namespaceSelector:
+            matchLabels:
+              halro.io/monitoring-access: "allowed"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: halro-ha-health
+      ports:
+        - {protocol: TCP, port: 9090}
+    # The health view probes the client Service root and optional direct
+    # member /health/live and /health/ready paths on the Gateway listener.
+    # Prometheus does not need this route.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              halro.io/monitoring-access: "allowed"
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: halro-ha-health
+      ports:
+        - {protocol: TCP, port: 8080}

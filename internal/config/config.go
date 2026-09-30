@@ -676,12 +676,22 @@ type Security struct {
 }
 
 type Metrics struct {
-	Enabled              bool       `yaml:"enabled"`
-	RequireAuth          bool       `yaml:"require_auth"`
-	CredentialFile       string     `yaml:"credential_file"`
-	MaxConcurrentScrapes int        `yaml:"max_concurrent_scrapes"`
-	WriteTimeout         Duration   `yaml:"write_timeout"`
-	TLS                  MetricsTLS `yaml:"tls"`
+	Enabled              bool           `yaml:"enabled"`
+	RequireAuth          bool           `yaml:"require_auth"`
+	CredentialFile       string         `yaml:"credential_file"`
+	HAStatus             HAStatusAccess `yaml:"ha_status"`
+	MaxConcurrentScrapes int            `yaml:"max_concurrent_scrapes"`
+	WriteTimeout         Duration       `yaml:"write_timeout"`
+	TLS                  MetricsTLS     `yaml:"tls"`
+}
+
+// HAStatusAccess grants one fixed, read-only member status route on the
+// independently authenticated Metrics listener. It has its own credential
+// domain; an Admin session or Metrics token cannot substitute for it.
+type HAStatusAccess struct {
+	Enabled             bool   `yaml:"enabled"`
+	CredentialFile      string `yaml:"credential_file"`
+	IncludePrefixDigest bool   `yaml:"include_prefix_digest"`
 }
 
 type MetricsTLS struct {
@@ -856,10 +866,11 @@ func (c *Config) Normalize() error {
 		}
 	}
 	for name, value := range map[string]*string{
-		"metrics.credential_file":    &c.Metrics.CredentialFile,
-		"metrics.tls.cert_file":      &c.Metrics.TLS.CertFile,
-		"metrics.tls.key_file":       &c.Metrics.TLS.KeyFile,
-		"metrics.tls.client_ca_file": &c.Metrics.TLS.ClientCAFile,
+		"metrics.credential_file":           &c.Metrics.CredentialFile,
+		"metrics.ha_status.credential_file": &c.Metrics.HAStatus.CredentialFile,
+		"metrics.tls.cert_file":             &c.Metrics.TLS.CertFile,
+		"metrics.tls.key_file":              &c.Metrics.TLS.KeyFile,
+		"metrics.tls.client_ca_file":        &c.Metrics.TLS.ClientCAFile,
 	} {
 		if *value == "" {
 			continue
@@ -1164,6 +1175,22 @@ func (c Config) Validate(opts LoadOptions) error {
 		} else if c.Metrics.TLS.CertFile != "" || c.Metrics.TLS.KeyFile != "" || c.Metrics.TLS.ClientCAFile != "" {
 			problems = append(problems, errors.New("metrics.tls files cannot be set while metrics.tls is disabled"))
 		}
+	}
+	if c.Metrics.HAStatus.Enabled {
+		if c.Replication == nil {
+			problems = append(problems, errors.New("metrics.ha_status requires HA replication mode"))
+		}
+		if !c.Metrics.Enabled || !c.Metrics.RequireAuth || !c.Metrics.TLS.Enabled {
+			problems = append(problems, errors.New("metrics.ha_status requires metrics.enabled, metrics.require_auth, and metrics.tls.enabled"))
+		}
+		if c.Metrics.HAStatus.CredentialFile == "" {
+			problems = append(problems, errors.New("metrics.ha_status.credential_file is required when enabled"))
+		}
+		if c.Metrics.HAStatus.CredentialFile != "" && (c.Metrics.HAStatus.CredentialFile == c.Metrics.CredentialFile || c.Metrics.HAStatus.CredentialFile == c.Audit.Anchor.CredentialFile) {
+			problems = append(problems, errors.New("metrics.ha_status.credential_file must be separate from Metrics and audit anchor credentials"))
+		}
+	} else if c.Metrics.HAStatus.CredentialFile != "" || c.Metrics.HAStatus.IncludePrefixDigest {
+		problems = append(problems, errors.New("metrics.ha_status options require metrics.ha_status.enabled"))
 	}
 	if c.Audit.Anchor.Enabled {
 		switch c.Audit.Anchor.Sink {

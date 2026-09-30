@@ -68,6 +68,9 @@ func TestReplicaApplierBatchesTheLocallyQuorumConfirmedPrefix(t *testing.T) {
 	if applied, err := applier.ApplyConfirmed(context.Background()); err != nil || applied != 4 {
 		t.Fatalf("second apply=%d err=%v", applied, err)
 	}
+	if telemetry := applier.ApplyBatchTelemetry(); telemetry.Count != 1 {
+		t.Fatalf("idempotent apply counted twice: %+v", telemetry)
+	}
 	_, _, applied := receiver.Progress()
 	if applied != 4 {
 		t.Fatalf("receiver applied=%d", applied)

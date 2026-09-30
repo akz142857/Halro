@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Halro HA 健康</title>
+  <style>
+    :root { color-scheme: dark; font: 15px/1.5 system-ui,sans-serif; background:#0b1220; color:#edf3ff }
+    * { box-sizing:border-box }
+    [hidden] { display:none !important }
+    body { margin:0; padding:clamp(16px,3vw,40px); max-width:1500px; margin-inline:auto }
+    h1,h2,p { margin-top:0 }
+    h1 { font-size:clamp(26px,3vw,38px); line-height:1.2 }
+    h2 { font-size:18px }
+    .muted { color:#a9b9d1 }
+    .bar { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; flex-wrap:wrap }
+    .toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+    button,select { background:#1d3150; color:#fff; border:1px solid #476386; border-radius:8px; padding:8px 12px; font:inherit }
+    .toolbar a { background:#1d3150; color:#fff; border:1px solid #476386; border-radius:8px; padding:8px 12px; text-decoration:none }
+    button:hover { background:#274269; cursor:pointer }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-block:22px }
+    .card,.panel { background:#111d30; border:1px solid #314765; border-radius:14px; padding:18px }
+    .grid a.card { display:block; color:inherit; text-decoration:none }
+    .grid a.card:hover { background:#172942 }
+    .card strong { display:block; font-size:19px; margin:8px 0 4px }
+    .card span { color:#b7c5d9; font-size:13px }
+    .healthy { border-color:#18886c }
+    .degraded { border-color:#e6a329 }
+    .critical { border-color:#e46169 }
+    .unknown { border-color:#71819a }
+    .status { font-weight:700; letter-spacing:.02em }
+    .healthy .status { color:#65e0b3 }
+    .degraded .status { color:#ffcf75 }
+    .critical .status { color:#ff8f9a }
+    .unknown .status { color:#b9c5d5 }
+    .panel { margin-top:16px; overflow-x:auto }
+    table { border-collapse:collapse; width:100%; min-width:750px }
+    th,td { padding:11px 9px; border-bottom:1px solid #304058; text-align:left; white-space:nowrap }
+    th { color:#afc1da; font-weight:600 }
+    .error { color:#ff9a9f }
+    svg { width:100%; height:260px; background:#0c1728; border-radius:8px }
+    #chart { min-width:680px }
+    .legend { display:flex; flex-wrap:wrap; gap:12px; margin-top:10px; color:#bdd0e8; font-size:13px }
+    .legend i { width:12px; height:12px; display:inline-block; margin-right:5px; border-radius:50% }
+    .topology { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px }
+    .topology-node { border:1px solid #415a78; border-radius:10px; padding:14px; background:#0d192a }
+    .topology-node strong { display:block; font-size:17px }
+    .topology-node small { display:block; color:#a9b9d1; margin-top:4px }
+    .topology-node.primary { border-color:#5cc8ff }
+    .topology-node.down { border-color:#e46169 }
+    .topology-node.stale { border-color:#e6a329 }
+    .topology-node.unknown { border-color:#71819a }
+    .topology-note { margin:12px 0 0 }
+    .mono { font-variant-numeric:tabular-nums; font-family:ui-monospace,SFMono-Regular,monospace }
+    .table-tools { display:flex; gap:8px; align-items:center; margin-bottom:12px }
+    .node-button { padding:4px 8px; background:transparent; border-color:#415a78; color:#8dbeff }
+    dialog { background:#111d30; color:#edf3ff; border:1px solid #516b8c; border-radius:14px; width:min(620px,calc(100vw - 32px)); max-height:85vh; overflow:auto }
+    dialog::backdrop { background:rgba(2,8,17,.76) }
+    dialog dl { display:grid; grid-template-columns:minmax(130px,1fr) 2fr; gap:8px 16px }
+    dialog dt { color:#a9b9d1 }
+    dialog dd { margin:0; overflow-wrap:anywhere }
+    a { color:#8dbeff }
+    :focus-visible { outline:2px solid #7dbdff; outline-offset:2px }
+  </style>
+</head>
+<body data-runbook-base="__HALRO_RUNBOOK_BASE__">
+  <header class="bar">
+    <div><p class="muted">独立监控视图 · 只读</p><h1>Halro HA 健康</h1><p class="muted" id="scope">等待集群身份</p><p class="muted" id="unexpected-members" hidden></p><p class="muted" id="updated">等待首次采集</p></div>
+    <div class="toolbar"><label for="view">视图</label><select id="view"><option value="current" selected>当前</option><option value="history">历史</option></select><label for="window">时间范围</label><select id="window"><option value="15">15 分钟</option><option value="60" selected>1 小时</option><option value="360">6 小时</option><option value="1440">24 小时</option></select><button id="refresh" type="button">立即刷新</button><a id="export" href="/api/evidence?minutes=60">导出证据 JSON</a><a class="runbook-context" hidden>HA 运维手册</a></div>
+  </header>
+  <p class="muted">绿色只表示已观测条件满足。连接、水位相等和图表均不能授权人工提升；无近期确认写时，确认能力显示未知。</p>
+  <p class="muted">实时状态卡始终显示。历史视图只呈现采样与留存证据，不替代当前判定。</p>
+  <p id="two-node" class="card degraded" hidden>两节点部署在 Primary 故障后，即使完成提升，也要等另一成员回归才能确认需要副本的写。</p>
+  <p id="error" class="error" role="alert" hidden></p>
+  <section class="grid" aria-label="集群状态">
+    <a class="card unknown" id="overall" href="#alerts-title"><span>综合状态</span><strong class="status">未知</strong><span class="reason">等待采集</span></a>
+    <a class="card unknown" id="client" href="#impact-title"><span>客户端入口</span><strong class="status">未知</strong><span class="reason">等待采集</span></a>
+    <a class="card unknown" id="confirmation" href="#confirmation-evidence-title"><span>关键写确认</span><strong class="status">未知</strong><span class="reason">等待采集</span></a>
+    <a class="card unknown" id="safety" href="#topology-title"><span>安全一致性</span><strong class="status">未知</strong><span class="reason">等待采集</span></a>
+    <a class="card unknown" id="catchup" href="#nodes-title"><span>追平节点观察</span><strong class="status">未知</strong><span class="reason">等待采集</span></a>
+  </section>
+  <section class="panel" data-view="current" aria-labelledby="topology-title"><h2 id="topology-title">成员与认证连接</h2><p class="muted">连接来自 Primary 本地指标，只证明认证数据会话；节点颜色依据抓取状态，不代表已追平。</p><a class="runbook-context" hidden>HA 运维手册</a><div id="topology" class="topology"></div><p id="topology-note" class="muted topology-note"></p></section>
+  <section class="panel" data-view="current" aria-labelledby="nodes-title"><h2 id="nodes-title">成员观测</h2><a class="runbook-context" hidden>HA 运维手册</a><p class="muted">水位和差值单位均为帧。“确认−应用”是本成员确认前缀尚未应用的部分；相对 Primary 的差只是跨节点数值比较。缺失、陈旧或异任期不计算跨节点差值；负差值保留原值供排查。“不兼容”表示进程启动以来曾观测到，不代表当前连接仍不兼容。逐节点 live/ready 来自可选的固定 HTTPS 直连探针，未配置时显示未知；ready 只说明该成员网关自身，不证明客户端 Service 或关键写成功。</p><div class="table-tools"><label for="node-sort">排序</label><select id="node-sort"><option value="name">节点名称</option><option value="role">角色</option><option value="freshness">采集状态</option><option value="backlog">应用积压</option></select></div><table><thead><tr><th>节点</th><th>指标采集</th><th>机器状态</th><th>HTTP live</th><th>HTTP ready</th><th>角色</th><th>Incarnation</th><th>term / promise</th><th>持久</th><th>确认</th><th>应用</th><th>持久−确认</th><th>持久−应用</th><th>确认−应用</th><th>相对 Primary 确认差</th><th>启动裁决</th><th>内部阻断</th><th>曾不兼容</th><th>Peer 会话</th><th>维护</th><th>观测时间</th></tr></thead><tbody id="nodes"></tbody></table></section>
+  <section class="panel" data-view="current" aria-labelledby="confirmation-evidence-title"><h2 id="confirmation-evidence-title">关键写确认依据</h2><p id="confirmation-evidence" class="muted">正在读取稳定任期内的必需确认等待样本。内部屏障返回不等于客户端完整收到响应。</p><a class="runbook-context" hidden>HA 运维手册</a></section>
+  <section class="panel" data-view="history" hidden aria-labelledby="chart-title"><h2 id="chart-title">复制水位</h2><p class="muted">每条阶梯线为一个节点的本地 index；空洞表示缺失采样，孤立点表示前后采样间隔过长。曲线在 term/incarnation 变化处断开。虚线另标角色、维护和 Peer 会话等相邻样本变化，时间是首次观测而非精确事件时刻；数值相等不证明前缀一致。窄屏可横向滚动查看完整时间轴。</p><svg id="chart" viewBox="0 0 900 260" role="img" aria-label="复制水位时间序列"></svg><div id="legend" class="legend"></div></section>
+  <section class="panel" data-view="current" aria-labelledby="live-events-title"><h2 id="live-events-title">状态发布迁移事件（本进程）</h2><p id="live-transition-summary" class="muted">正在读取机器状态。事件在认证状态文件成功发布后产生；每节点最多保留最近 128 条，重启或离线提升会留下历史缺口，不是持久 Audit。</p><table><thead><tr><th>节点</th><th>操作</th><th>先前角色 / 任期 / Promise</th><th>新角色 / 任期 / Promise</th><th>发布时间</th><th>进程序号</th></tr></thead><tbody id="live-transitions"></tbody></table></section>
+  <section class="panel" data-view="current" aria-labelledby="availability-events-title"><h2 id="availability-events-title">Primary 复制可用性切换（本进程）</h2><p id="availability-transition-summary" class="muted">正在读取机器状态。这里只记录 Primary coordinator 的状态边界与固定原因枚举，不把 Replica 指标解释成 Primary 确认能力。</p><table><thead><tr><th>节点</th><th>先前</th><th>新状态</th><th>原因</th><th>时间</th><th>进程序号</th></tr></thead><tbody id="availability-transitions"></tbody></table></section>
+  <section class="panel" data-view="current" aria-labelledby="replica-stage-title"><h2 id="replica-stage-title">Replica 接收与应用边界（本进程）</h2><p id="replica-stage-summary" class="muted">正在读取机器状态。只记录失败或恢复造成的阶段边界；无事件不证明持续接收、持续应用或已追平。目标 index 表示尝试值，不是持久水位。</p><table><thead><tr><th>节点</th><th>阶段</th><th>先前</th><th>新状态</th><th>固定原因</th><th>目标 index</th><th>时间</th></tr></thead><tbody id="replica-stage-transitions"></tbody></table></section>
+  <section class="panel" data-view="history" hidden aria-labelledby="archive-title"><h2 id="archive-title">独立监控事件留存</h2><p id="archive-summary" class="muted">正在读取监控故障域的事件文件。定时采集能跨健康服务重启保留已采到的事件；进程崩溃、采集失败和内存环淘汰期间的事件不可还原，不是完整 Audit。</p><table><thead><tr><th>节点</th><th>Incarnation</th><th>来源</th><th>类型</th><th>内容或缺口</th><th>事件时间</th><th>采集时间</th></tr></thead><tbody id="event-archive"></tbody></table></section>
+  <section class="panel" data-view="history" hidden aria-labelledby="durable-archive-title"><h2 id="durable-archive-title">持久角色迁移证据覆盖</h2><p id="durable-archive-summary" class="muted">正在读取独立监控文件的分页追赶状态。仅“已追到观测头部”表示采集时已覆盖该成员当前 incarnation 的基线至提交点；旧版本、传统迁移基线之前和当前采集后的事件不在覆盖内。</p><table><thead><tr><th>节点</th><th>Incarnation</th><th>基线</th><th>覆盖状态</th><th>已留存序号</th><th>最近观测提交点</th><th>留存事件</th><th>最近采集</th><th>失败原因</th></tr></thead><tbody id="durable-archive"></tbody></table><h3>最近持久迁移</h3><p class="muted">每节点最多显示最近 20 条已验证并落盘的事件；事件为成员状态发布证据，不证明 quorum、fencing 或客户端恢复。</p><table><thead><tr><th>节点</th><th>Incarnation</th><th>操作</th><th>先前角色 / term / Promise</th><th>新角色 / term / Promise</th><th>提交时间</th><th>序号</th></tr></thead><tbody id="durable-events"></tbody></table></section>
+  <section class="panel" data-view="history" hidden aria-labelledby="events-title"><h2 id="events-title">角色、维护与复制变化（采样）</h2><p class="muted">只比较同一节点间隔不超过 45 秒的相邻 Prometheus 样本；时间是变化发生的观测区间，不是精确事件时间。Peer 会话变化只说明认证连接，不说明数据已追平。短暂状态可能落在采样之间而未出现，最多显示最近 200 条。</p><table><thead><tr><th>节点</th><th>字段</th><th>Peer</th><th>先前值</th><th>新值</th><th>先前观测</th><th>首次观测新值</th></tr></thead><tbody id="sampled-events"></tbody></table></section>
+  <section class="panel" data-view="current" aria-labelledby="latency-title"><h2 id="latency-title">复制阶段时延</h2><p class="muted">最近 5 分钟内有观测时显示 p95。Primary 指标是本地持久至确认状态落盘；Replica 指标分别计时原生 sink Persist 调用和成功应用批次。窗口可能包含节点失联前的样本，须结合节点采集状态看；无样本不代表 0 毫秒，这些内部阶段不等于客户端请求延迟。</p><table><thead><tr><th>节点</th><th>持久→确认 p95</th><th>sink Persist p95</th><th>应用批次 p95</th></tr></thead><tbody id="stage-latencies"></tbody></table></section>
+  <section class="panel" data-view="current" aria-labelledby="impact-title"><h2 id="impact-title">请求影响</h2><p id="impact" class="muted">正在读取逐成员写路由 HTTP 结果；服务端 2xx 不等于客户端完整收到流。</p><a class="runbook-context" hidden>HA 运维手册</a></section>
+  <section class="panel" data-view="current" aria-labelledby="client-final-title"><h2 id="client-final-title">客户端最终逻辑操作结果</h2><p id="client-final" class="muted">未接入。只有经完整观测者清单、持续采样与重试去重验证的外部来源才能显示五分钟结果分布。</p></section>
+  <section class="panel" data-view="current" aria-labelledby="alerts-title"><h2 id="alerts-title">当前 HA 与成员抓取告警</h2><p class="muted">告警由 Prometheus 规则计算；点击告警查看规则结果、当前加载的触发表达式与成员观测。来源时间可能不同；详情不代表历史原始样本或 Alertmanager 通知成功。</p><a class="runbook-context" hidden>HA 运维手册</a><table><thead><tr><th>告警</th><th>级别</th><th>节点</th><th>状态</th><th>开始时间</th><th>摘要</th><th>Runbook</th></tr></thead><tbody id="alerts"></tbody></table></section>
+  <section class="panel" data-view="history" hidden aria-labelledby="alert-history-title"><h2 id="alert-history-title">采样告警时间线</h2><p class="muted">来自 Prometheus 的 firing 序列。起止为所选时间窗内首次与末次采样，不是精确触发/恢复时间；空白可能表示未触发、数据未保留或采集缺失。</p><table><thead><tr><th>告警</th><th>节点</th><th>级别</th><th>首次采样</th><th>末次采样</th><th>样本数</th></tr></thead><tbody id="alert-history"></tbody></table></section>
+  <section class="panel"><h2>操作边界</h2><p>故障时先核对各成员认证状态和外部 fencing。图表中的“追平”只是数值观察。人工流程见 <a class="runbook-context" hidden>HA 运维手册</a><code id="runbook-path">docs/runbooks/ha-operations.md（未配置受控文档地址）</code>。</p></section>
+  <dialog id="node-detail" aria-labelledby="detail-title"><div class="bar"><h2 id="detail-title">节点详情</h2><button id="detail-close" type="button">关闭</button></div><p class="muted">来源：逐成员 Prometheus /metrics；可选机器状态来自认证的 /ha/status。前缀摘要只供同 incarnation、同 index 比对，不能授权提升。缺失字段不会推断为 0。</p><dl id="detail-list"></dl></dialog>
+  <dialog id="alert-detail" aria-labelledby="alert-detail-title"><div class="bar"><h2 id="alert-detail-title">告警证据</h2><button id="alert-detail-close" type="button">关闭</button></div><p class="muted">规则结果来自 Prometheus 当前告警；表达式来自当前加载规则；成员事实来自最近一次健康页查询。三者不是同一时刻的原始样本，不能据此还原精确触发过程。</p><dl id="alert-detail-list"></dl></dialog>
+  <script src="/app.js" defer></script>
+</body>
+</html>

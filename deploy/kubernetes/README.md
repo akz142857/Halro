@@ -173,12 +173,103 @@ not replace the single-PVC Deployment above. Before applying it, create:
 - the Master Key and application TLS mounts named by those configurations.
 
 The headless `halro-members` Service publishes unready addresses so startup
-adjudication does not depend on readiness. The client Service deliberately
-uses routing option (a): it selects every Ready member, replicas answer 503
-`not_primary` with `Retry-After`, and the client retries. Halro has no
+adjudication does not depend on readiness. It also names each Pod's Metrics
+port: for example, `halro-0.halro-members.halro.svc.cluster.local:9090` reaches
+one member, including while it is NotReady. Configure each member's
+`server.metrics_listen` on the Pod interface, with `metrics.enabled`,
+`metrics.require_auth`, `metrics.tls.enabled`, and `metrics.ha_status.enabled`;
+mount the separate Metrics and HA-status bearer files and Metrics TLS files
+named by that member's configuration. The Metrics server certificate must
+cover the exact DNS name used by both Prometheus and `halro-ha-health`.
+These files and the monitoring workloads are target-specific and are not
+created by this StatefulSet example.
+
+When seeding each member PVC, copy the **complete versioned credential
+source** for both Metrics and HA status: `credential_file`, its `.audit`
+sidecar, and its `.revocations` sidecar when present. Keep all files private
+to the Halro UID. The one-time bearer token belongs only in the corresponding
+monitoring Secret; it is not a replacement for the member's credential source.
+Compare the staged PVC files with the authoritative stopped source before
+starting the StatefulSet, then run `halro metrics verify-audit` and
+`halro ha-status verify-audit` for every member before calling rotation ready.
+The 2026-09-28 local exercise initially copied only the JSON sources; the
+running authorizer could read them, but `ha-status rotate` correctly refused
+because the audit sidecar was missing. The stopped-source audit files were
+restored byte for byte before testing rotation. Do not synthesize a new audit
+chain for an already-established credential.
+
+The optional `halro-ha-observability-ingress.example.yaml` adds member
+TCP/9090 ingress for Pods labelled `app.kubernetes.io/name=prometheus` or
+`app.kubernetes.io/name=halro-ha-health`. It also allows only the health-view
+Pod to use TCP/8080 for the client Service root probe and optional direct
+member live/ready probes; Prometheus does not need Gateway access. This is a
+port rule, not an HTTP path filter: do not mount Gateway write credentials in
+the health-view Pod, and use a reviewed layer-7 route if path isolation is
+required. Every
+source must be in a namespace labelled
+`halro.io/monitoring-access=allowed` and requires **both** its Pod label and
+the namespace label. NetworkPolicies are additive: audit every other policy
+selecting HA Pods for broader 9090 or 8080 allowances. Review who can create
+or relabel namespaces and Pods before applying it; labels are routing
+selectors, while mTLS and distinct bearer credentials authenticate Metrics
+and HA-status requests. Keep the
+Prometheus `/metrics` credential separate from the health service's
+`/ha/status` and `/ha/transitions` credential. Confirm the monitoring Pods'
+egress policy, DNS, certificate rotation, and Secret mounts independently.
+An external monitoring deployment needs its own reviewed route and policy.
+Verify per-member scrapes, status collection and both Gateway probes before
+treating the health page as an operational source; merely applying this policy
+proves no reachability.
+
+For the dedicated local kind acceptance cluster,
+`halro-ha-health-kind.example.yaml` supplies one control-plane and **three**
+workers: the HA StatefulSet requires three schedulable nodes because of hard
+Pod anti-affinity, and the kind control-plane is tainted. The matching
+`halro-ha-health-monitoring.kind.example.yaml` runs Prometheus and the mTLS
+health view in **separate Pods and RWOP PVCs**. Prometheus exposes an internal
+HTTPS Service with required client certificate authentication; a NetworkPolicy
+admits only the health-view Pod to TCP/9090. Provision its scrape ConfigMap,
+`ha-prometheus-web-config`, `ha-prometheus-web-tls`, and the separate
+`ha-health-prometheus-client` Secret from private target-specific material.
+The web config should require `RequireAndVerifyClientCert` and restrict client
+SANs; the Prometheus server certificate must cover the Service DNS name.
+The sample YAML contains no bearer tokens, private keys or member
+configuration. It leaves Prometheus admin, lifecycle and remote-write receiver
+APIs disabled; native mTLS still exposes Prometheus's internal read API to the
+authorized health identity. Add a reviewed path proxy if that read scope is
+too broad for the target environment.
+
+The non-root synchronizer reads projected group-readable HA-status token
+files and atomically publishes owner-only `0600` copies in a memory-backed
+volume. Only those copies are mounted in the health view; the view keeps its
+fail-closed token permission check. A separate init container copies the
+Prometheus client private key to a `0600` file before the view starts. Test
+both invalidation and restoration after kubelet updates the HA-status Secret.
+A Secret update is not instant: allow for kubelet projection and the
+synchronizer interval, and do not report status-token rotation complete until
+`/ha/status` accepts the new version and rejects the revoked one. A rotated
+Prometheus client certificate/key requires restarting the view, since it
+loads that pair at startup. This kind fixture uses local image tags and a
+fixed node name; both Pods currently share the control-plane node, so node
+failure is not isolated. Review scheduling, labels, Secret mounts, TLS
+lifetimes and the actual CNI policy before using a related pattern elsewhere.
+
+For a Prometheus client-certificate rotation, first add the new client SAN to
+the Prometheus web config while retaining the old SAN, reload it with a
+Prometheus rollout, and verify both client certificates through the authenticated
+HTTPS Service. Replace `ha-health-prometheus-client`, restart the health view,
+and verify its Prometheus-backed API. Finally remove the old SAN, roll
+Prometheus again, and verify that the old certificate fails its TLS handshake
+while the new certificate and health view still work. The local kind exercise
+uses one short-lived CA; rotating that CA or the Prometheus server certificate
+needs an additional trust-overlap plan and target-environment validation.
+
+The client Service deliberately uses routing option (a): it selects every
+Ready member, replicas answer 503 `not_primary` with `Retry-After`, and the
+client retries. Halro has no
 `pods/patch` permission and never mutates a role label. Label only reviewed
 client or ingress-controller namespaces with `halro.io/client-access=allowed`;
-add separate narrow NetworkPolicies for Admin and Metrics access.
+add a separately reviewed narrow NetworkPolicy if remote Admin access is needed.
 
 The startup probe allows one hour for a large seed/catch-up. Size that budget
 and the 50 GiB `ReadWriteOncePod` claim from measured seed time and retained

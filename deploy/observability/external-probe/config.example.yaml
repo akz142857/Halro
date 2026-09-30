@@ -36,6 +36,18 @@ targets:
       client_cert_file: /run/halro-deadman/target-client.pem
       client_key_file: /run/halro-deadman/target-client.key
       server_name: halro-probe.internal.example
+  # For an HA deployment, add a separate Halro target through the actual
+  # client Service. The root probe retries Replica routes and verifies the
+  # cluster ID. It needs no Gateway write credential and calls no Provider.
+  # - id: halro-ha-client-entry
+  #   kind: halro
+  #   mode: ha_client_root
+  #   url: https://halro-client.internal.example/
+  #   tls:
+  #     ca_file: /run/halro-deadman/target-ca.pem
+  #     client_cert_file: /run/halro-deadman/target-client.pem
+  #     client_key_file: /run/halro-deadman/target-client.key
+  #     server_name: halro-client.internal.example
   - id: prometheus-primary
     kind: prometheus
     url: https://prometheus-probe.internal.example/-/ready

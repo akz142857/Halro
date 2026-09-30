@@ -494,6 +494,44 @@ func TestMetricsNonLoopbackRequiresDedicatedMutualTLS(t *testing.T) {
 	}
 }
 
+func TestHAStatusRequiresHAAuthenticatedMetricsAndSeparateCredential(t *testing.T) {
+	cfg := Default()
+	cfg.Metrics.HAStatus = HAStatusAccess{Enabled: true, CredentialFile: "ha-status.json"}
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("Standalone HA status was accepted")
+	}
+	cfg.Replication = validReplicationConfig()
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("HA status without Metrics mTLS was accepted")
+	}
+	cfg.Metrics.TLS = MetricsTLS{Enabled: true, CertFile: "metrics.crt", KeyFile: "metrics.key", ClientCAFile: "metrics-ca.crt"}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatalf("valid HA status access rejected: %v", err)
+	}
+	cfg.Metrics.CredentialFile = cfg.Metrics.HAStatus.CredentialFile
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("HA status credential shared with Metrics was accepted")
+	}
+	cfg.Metrics.CredentialFile = "metrics.json"
+	cfg.Audit.Anchor.CredentialFile = cfg.Metrics.HAStatus.CredentialFile
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("HA status credential shared with audit anchor was accepted")
+	}
+	cfg.Audit.Anchor.CredentialFile = ""
+	cfg.Metrics.HAStatus.Enabled = false
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("disabled HA status retained a credential path")
+	}
+	cfg.Metrics.HAStatus.CredentialFile = ""
+	cfg.Metrics.HAStatus.IncludePrefixDigest = true
+	if err := cfg.Validate(LoadOptions{}); err == nil {
+		t.Fatal("disabled HA status allowed prefix disclosure")
+	}
+}
+
 func TestAuditAnchorRequiresMetricsAndCredentialFile(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig))
 	if err != nil {

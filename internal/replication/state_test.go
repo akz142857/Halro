@@ -92,3 +92,57 @@ func TestMemberStateVersionTwoGoldenJSON(t *testing.T) {
 		t.Fatalf("version-2 state fixture changed\n got: %s\nwant: %s", encoded, want)
 	}
 }
+
+func TestMemberStateVersionThreeAuthenticatesTransitionCursor(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := validMemberState()
+	state.Version = TransitionStateVersion
+	state.Transition = TransitionCursor{
+		JournalID: "0123456789abcdef0123456789abcdef",
+		Sequence:  42,
+		Digest:    sha256.Sum256([]byte("journal-record-42")),
+	}
+	encoded, err := MarshalState(state, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := UnmarshalState(encoded, key)
+	if err != nil || decoded.Transition != state.Transition {
+		t.Fatalf("version-3 cursor not recovered: %+v, %v", decoded.Transition, err)
+	}
+	if _, err := NewStatePublisher("unused-state.json", key, decoded); err == nil || !strings.Contains(err.Error(), "requires the durable transition journal") {
+		t.Fatalf("publisher accepted version-3 state without its journal: %v", err)
+	}
+	for _, tc := range []struct{ name, old, replacement string }{
+		{"journal id", `"transition_journal_id":"0123456789abcdef0123456789abcdef"`, `"transition_journal_id":"0123456789abcdef0123456789abcdee"`},
+		{"sequence", `"transition_sequence":42`, `"transition_sequence":43`},
+		{"digest", `"transition_digest":"` + digestText(state.Transition.Digest) + `"`, `"transition_digest":"` + digestText(sha256.Sum256([]byte("another-record"))) + `"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tampered := []byte(strings.Replace(string(encoded), tc.old, tc.replacement, 1))
+			if string(tampered) == string(encoded) {
+				t.Fatalf("test did not change %s", tc.name)
+			}
+			if _, err := UnmarshalState(tampered, key); err == nil || !strings.Contains(err.Error(), "MAC mismatch") {
+				t.Fatalf("tampered cursor accepted: %v", err)
+			}
+		})
+	}
+	missing := []byte(strings.Replace(string(encoded), `"transition_sequence":42,`, "", 1))
+	if _, err := UnmarshalState(missing, key); err == nil || !strings.Contains(err.Error(), "missing transition sequence") {
+		t.Fatalf("missing cursor accepted: %v", err)
+	}
+	state.Version = StateVersion
+	if _, err := MarshalState(state, key); err == nil || !strings.Contains(err.Error(), "version-2") {
+		t.Fatalf("version-2 cursor accepted: %v", err)
+	}
+	legacy := validMemberState()
+	legacyJSON, err := MarshalState(legacy, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyWithCursor := []byte(strings.Replace(string(legacyJSON), `"mac":`, `"transition_sequence":0,"mac":`, 1))
+	if _, err := UnmarshalState(legacyWithCursor, key); err == nil || !strings.Contains(err.Error(), "version-2") {
+		t.Fatalf("legacy state accepted transition fields: %v", err)
+	}
+}
