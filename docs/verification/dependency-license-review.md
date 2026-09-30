@@ -200,6 +200,13 @@ distributed in Halro artifacts. The `pip-audit` tool and its transitive packages
 are deliberately in the same hash-checked lock, so the scanner is not fetched
 through an unreviewed side channel during the job.
 
+The 2026-09-30 main CI recovery moved the transitive `urllib3` pin from 2.7.0
+to 2.8.0 after `pip-audit` reported CVE-2026-97687 and CVE-2026-97689 with
+2.8.0 as the fix. The wheel and source archive hashes match the published PyPI
+release. `urllib3` remains MIT licensed, the 42-package lock set is unchanged,
+and this dependency is installed only for SDK compatibility tests, not shipped
+in Halro artifacts.
+
 The 2026-09-18 Go compatibility refresh moved
 `github.com/anthropics/anthropic-sdk-go` from 1.71.0 to 1.72.0. The module
 remains MIT licensed, the resolved module-path set is unchanged, and this SDK
@@ -317,7 +324,7 @@ document is deliberately refreshed with the new inventory and hashes.
 - `tests/compatibility/node/package.json`: `08df1b6dbf9e6b758d28cfbb16cba47d42d409f2`
 - `tests/compatibility/node/package-lock.json`: `2b98506e0adbb5c5b77c96b731f752b1e0c1b105`
 - `tests/compatibility/python/requirements.in`: `178571770ce0d9f229f1bd770be6cbb207089226`
-- `tests/compatibility/python/requirements.txt`: `f66337c33b96dce08370cd18a6e5b99ac310dfb0`
+- `tests/compatibility/python/requirements.txt`: `96c533c4ab5bc6815223c43129b443e8185c6986`
 
 The Go hashes last moved for the 2026-09-18 Go refresh recorded above. The two
 web hashes last moved for the 2026-09-18 Admin UI refresh recorded above, before
