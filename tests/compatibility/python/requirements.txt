@@ -451,9 +451,9 @@ msgpack==1.2.2 \
     --hash=sha256:f80361592c13d7226b4379c8941529b63fe1a9d0e05d2de8f3306b70e522b53f \
     --hash=sha256:ffdd2f4950daf7815490f23087963e3420175b9609520b7ff5df64d351159c22
     # via cachecontrol
-openai==3.16.2 \
-    --hash=sha256:660a7f8307e6605342ae84ff4425412e7cd19e5e9b298f975502df2a1a9a5d5f \
-    --hash=sha256:e129455fc6a744276cda63a9e2f0759207bc0cf24afc4cf356bf5029e631e955
+openai==3.20.0 \
+    --hash=sha256:5e5dc0a3c0a9362e69cd35a65d04580a73a66eb39d5abeb78881b6190ca5d98c \
+    --hash=sha256:fb1b109e3423ed51c6ade96bbb0fffddae39c8e64bb9b6e501659bcbaa5ad30c
     # via -r requirements.in
 packageurl-python==0.17.6 \
     --hash=sha256:1252ce3a102372ca6f86eb968e16f9014c4ba511c5c37d95a7f023e2ca6e5c25 \
