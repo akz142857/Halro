@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -475,6 +476,12 @@ func (l *Log) appendBatch(ctx context.Context, events []Event) ([]Record, error)
 	sequence, offset, previous := l.sequence, l.offset, l.lastHash
 	firstSequence := uint64(0)
 	var durableFrames []byte
+	collectReplication := l.afterDurable != nil || l.beforeDurable != nil
+	if collectReplication {
+		// One exact buffer: amortized growth of an 8 MiB batch allocated five
+		// times its size, all inside the native batch encoder's fixed fee.
+		durableFrames = make([]byte, 0, batchFrameBytes(payloads, identities, firstByID))
+	}
 	for index, payload := range payloads {
 		if first := firstByID[identities[index]]; first != index {
 			records[index] = records[first]
@@ -492,15 +499,21 @@ func (l *Log) appendBatch(ctx context.Context, events []Event) ([]Record, error)
 			continue
 		}
 		sequence++
-		frame, hash := encodeFrame(l.key, sequence, previous, payload)
-		if l.afterDurable != nil || l.beforeDurable != nil {
+		var frame []byte
+		var hash [32]byte
+		if collectReplication {
 			if firstSequence == 0 {
 				firstSequence = sequence
 			}
-			durableFrames = append(durableFrames, frame...)
-		} else if err := writeFull(l.durability, frame); err != nil {
-			l.terminalErr = err
-			return nil, fmt.Errorf("append audit log: %w", err)
+			start := len(durableFrames)
+			durableFrames, hash = appendFrame(durableFrames, l.key, sequence, previous, payload)
+			frame = durableFrames[start:]
+		} else {
+			frame, hash = encodeFrame(l.key, sequence, previous, payload)
+			if err := writeFull(l.durability, frame); err != nil {
+				l.terminalErr = err
+				return nil, fmt.Errorf("append audit log: %w", err)
+			}
 		}
 		offset += int64(len(frame))
 		records[index] = Record{Sequence: sequence, Event: events[index], Hash: hash, Offset: offset}
@@ -509,7 +522,8 @@ func (l *Log) appendBatch(ctx context.Context, events []Event) ([]Record, error)
 	var durableBatch DurableBatch
 	var appendAdmission AppendAdmission
 	if len(durableFrames) > 0 {
-		durableBatch = DurableBatch{Context: ctx, FirstSequence: firstSequence, LastSequence: sequence, Frames: append([]byte(nil), durableFrames...)}
+		// durableFrames is only read from here on; the callbacks share it.
+		durableBatch = DurableBatch{Context: ctx, FirstSequence: firstSequence, LastSequence: sequence, Frames: durableFrames}
 		if l.beforeDurable != nil {
 			var err error
 			appendAdmission, err = l.beforeDurable(durableBatch)
@@ -748,8 +762,28 @@ func (l *Log) Close() (resultErr error) {
 	return nil
 }
 
+// batchFrameBytes is the encoded size of a batch's first occurrences.
+func batchFrameBytes(payloads [][]byte, identities [][sha256.Size]byte, firstByID map[[sha256.Size]byte]int) int {
+	size := 0
+	for index, payload := range payloads {
+		if firstByID[identities[index]] == index {
+			size += frameHeaderSize + len(payload) + frameMACSize
+		}
+	}
+	return size
+}
+
 func encodeFrame(key []byte, sequence uint64, previous [32]byte, payload []byte) ([]byte, [32]byte) {
-	frame := make([]byte, frameHeaderSize+len(payload)+frameMACSize)
+	return appendFrame(nil, key, sequence, previous, payload)
+}
+
+// appendFrame encodes one frame at the end of dst, growing dst only when it
+// lacks capacity, so a preallocated batch buffer holds every frame in place.
+func appendFrame(dst, key []byte, sequence uint64, previous [32]byte, payload []byte) ([]byte, [32]byte) {
+	start, size := len(dst), frameHeaderSize+len(payload)+frameMACSize
+	dst = slices.Grow(dst, size)[:start+size]
+	frame := dst[start:]
+	clear(frame[:frameHeaderSize])
 	copy(frame[:4], frameMagic)
 	frame[4] = frameVersion
 	binary.BigEndian.PutUint64(frame[8:16], sequence)
@@ -759,7 +793,7 @@ func encodeFrame(key []byte, sequence uint64, previous [32]byte, payload []byte)
 	mac := hmac.New(sha256.New, key)
 	mac.Write(frame[:frameHeaderSize+len(payload)])
 	copy(frame[frameHeaderSize+len(payload):], mac.Sum(nil))
-	return frame, sha256.Sum256(frame)
+	return dst, sha256.Sum256(frame)
 }
 
 func scan(file io.ReadSeeker, key []byte, visit func(Record) error) (Summary, bool, error) {

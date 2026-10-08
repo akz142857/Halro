@@ -12,7 +12,10 @@ import (
 
 // PhysicalBatchBytes covers every legal encoded batch, including all frames.
 const PhysicalBatchBytes int64 = MaxBatchPayloadBytes + MaxBatchEvents*(frameHeaderSize+frameMACSize)
-const PhysicalBatchRAMBytes int64 = 64 << 20
+// PhysicalBatchRAMBytes is the fee for the one batch encoder. A maximum batch
+// allocates about 25 MiB in total (payload marshal, the exact frame buffer and
+// transient garbage); TestAuditHAMaximumBatchAllocationFitsPhysicalBatchFee guards it.
+const PhysicalBatchRAMBytes int64 = 32 << 20
 
 type HAPhysicalOptions struct {
 	NativeDisk, ControlDisk resourcebudget.Permit

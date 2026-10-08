@@ -285,6 +285,9 @@ func TestHAPhysicalPeerCreditActualTLSPreacceptAndUnusedRelease(t *testing.T) {
 		t.Fatal("actual applier exit did not join and release original ticket", err)
 	}
 	if got, err := replica.metadataStore.GetProject(ctx, "prj_peer_credit"); err != nil || got.ID != "prj_peer_credit" {
+		if m, merr := replica.reopened.Owners.Components.Ledger.ResourceManager(ctx); merr == nil {
+			t.Logf("Replica metadata read refusal: stats=%+v", m.Snapshot())
+		}
 		t.Fatal("actual Replica metadata missing", got, err)
 	}
 	if err := q.withAdmissionPaused(ctx, func(ctx context.Context) error {
