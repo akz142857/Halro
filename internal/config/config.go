@@ -32,6 +32,8 @@ type Config struct {
 	Version               int                   `yaml:"version"`
 	Server                Server                `yaml:"server"`
 	TLS                   TLS                   `yaml:"tls"`
+	ResourcePressure      *ResourcePressure     `yaml:"resource_pressure,omitempty"`
+	ResourceBudget        *ResourceBudget       `yaml:"resource_budget,omitempty"`
 	Storage               Storage               `yaml:"storage"`
 	Replication           *Replication          `yaml:"replication,omitempty"`
 	Admin                 Admin                 `yaml:"admin"`
@@ -1083,6 +1085,24 @@ func (c Config) Validate(opts LoadOptions) error {
 	}
 	problems = append(problems, validateReplication(c.Replication)...)
 	problems = append(problems, validateLogging(c.Logging)...)
+	if c.ResourcePressure != nil {
+		if err := c.ResourcePressure.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("resource_pressure: %w", err))
+		}
+	}
+	if c.ResourceBudget != nil {
+		if err := c.ResourceBudget.Validate(c.ResourcePressure, c.Server.MaxRequestBytes); err != nil {
+			problems = append(problems, fmt.Errorf("resource_budget: %w", err))
+		}
+		if err := c.ResourceBudget.ValidateCapture(c.Gateway.FailureCapture); err != nil {
+			problems = append(problems, fmt.Errorf("resource_budget: %w", err))
+		}
+		if c.Replication != nil {
+			if err := c.ResourceBudget.ValidateReplicationCandidates(); err != nil {
+				problems = append(problems, fmt.Errorf("resource_budget: %w", err))
+			}
+		}
+	}
 	if c.ModelCatalog.RefreshInterval < Duration(5*time.Minute) || c.ModelCatalog.RefreshInterval > Duration(7*24*time.Hour) {
 		problems = append(problems, errors.New("model_catalog.refresh_interval must be between 5 minutes and 7 days"))
 	}

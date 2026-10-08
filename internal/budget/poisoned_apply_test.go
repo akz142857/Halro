@@ -61,7 +61,7 @@ func TestAppendsStopAtTheFirstFailedApply(t *testing.T) {
 // Accounting is the gateway's fail-closed gate and it reads the ledger's
 // status. Leaving that healthy while this manager can no longer apply anything
 // would give two answers to one question.
-func TestFailedApplyPutsAccountingIntoTheSharedUnavailableState(t *testing.T) {
+func TestFailedApplyPutsAccountingIntoTheSharedRecoveryRequiredState(t *testing.T) {
 	manager, state, closeLog := newTestManager(t)
 	defer closeLog()
 
@@ -72,7 +72,7 @@ func TestFailedApplyPutsAccountingIntoTheSharedUnavailableState(t *testing.T) {
 	if _, err := manager.BeginRequest(context.Background(), "project_a", "request_a"); err == nil {
 		t.Fatal("a rejected apply was reported as success")
 	}
-	if status := manager.log.Status().Load(); status != ledger.AccountingUnavailable {
+	if status := manager.log.Status().Load(); status != ledger.AccountingRecoveryRequired {
 		t.Fatalf("status = %v after a failed apply, want unavailable", status)
 	}
 }

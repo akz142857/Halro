@@ -185,7 +185,7 @@ func (s *Store) AdminBootstrapCompletion(ctx context.Context) (AdminBootstrapCom
 		return AdminBootstrapCompletion{}, err
 	}
 	var completion AdminBootstrapCompletion
-	err := s.view(func(tx *Tx) error {
+	err := s.viewContext(ctx, func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyAdminBootstrapCompletion)
 		if raw == nil {
 			return ErrNotFound

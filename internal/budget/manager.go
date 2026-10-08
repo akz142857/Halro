@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -16,6 +17,7 @@ import (
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 )
 
 var (
@@ -148,18 +150,27 @@ func (i GovernanceIntent) validate() error {
 }
 
 type Manager struct {
-	projectLocks sync.Map
-	applyMu      sync.Mutex
-	applyCond    *sync.Cond
-	applyErr     error
-	observerMu   sync.RWMutex
-	log          *ledger.Log
-	state        *ledger.State
-	periods      *PeriodResolver
-	now          func() time.Time
-	observers    []func(ledger.Record)
-	recoveryMu   sync.RWMutex
-	recovery     RecoveryStats
+	operationMu      sync.Mutex
+	retiring         bool
+	paused           *accountingPause
+	activeOperations uint64
+	operationDrain   chan struct{}
+	projectLocks     projectAdmissionRegistry
+	applyMu          sync.Mutex
+	applyCond        *sync.Cond
+	applyErr         error
+	observerMu       sync.RWMutex
+	log              *ledger.Log
+	owner            accountingOwner
+	// Default recovery retains its legacy full collection until Runtime
+	// selects exclusive two-level recovery. Projection owners reject it.
+	legacyPending func() []ledger.PendingLease
+	reads         ledger.AccountingAdmissionReader
+	periods       *PeriodResolver
+	now           func() time.Time
+	observers     []func(ledger.Record)
+	recoveryMu    sync.RWMutex
+	recovery      RecoveryStats
 
 	lockAcquisitions atomic.Uint64
 	lockWaitNanos    atomic.Int64
@@ -180,13 +191,21 @@ func (m *Manager) RecoveryStats() RecoveryStats {
 	return m.recovery
 }
 
-func (m *Manager) AddObserver(observer func(ledger.Record)) {
+// Observers read frozen durable evidence synchronously. They must not mutate
+// it or reenter Ledger append, maintenance, Close or Manager.Retire here.
+func (m *Manager) AddObserver(observer func(ledger.Record)) error {
+	_, release, err := m.enterOperation(context.Background())
+	if err != nil {
+		return err
+	}
+	defer release()
 	if observer == nil {
-		return
+		return nil
 	}
 	m.observerMu.Lock()
 	m.observers = append(m.observers, observer)
 	m.observerMu.Unlock()
+	return nil
 }
 
 // Options carries the dependencies a caller may substitute. Everything here has a working
@@ -213,16 +232,8 @@ func NewWithOptions(
 	if log == nil || state == nil || periods == nil {
 		return nil, errors.New("ledger log, state, and period resolver are required")
 	}
-	if options.Now == nil {
-		options.Now = time.Now
-	}
-	manager := &Manager{
-		log:     log,
-		state:   state,
-		periods: periods,
-		now:     options.Now,
-	}
-	manager.applyCond = sync.NewCond(&manager.applyMu)
+	manager := newWithOwner(log, stateAccountingOwner{state}, periods, options)
+	manager.legacyPending = state.PendingLeases
 	return manager, nil
 }
 
@@ -247,17 +258,15 @@ func (m *Manager) localNow() time.Time {
 }
 
 func (m *Manager) governanceLock(projectID string) func() {
-	value, _ := m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
-	admission := value.(*projectAdmission)
+	admission := m.projectLocks.retain(projectID)
 	admission.lifecycle.Lock()
-	return admission.lifecycle.Unlock
+	return func() { admission.lifecycle.Unlock(); m.projectLocks.release(projectID, admission) }
 }
 
 func (m *Manager) governanceReadLock(projectID string) func() {
-	value, _ := m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
-	admission := value.(*projectAdmission)
+	admission := m.projectLocks.retain(projectID)
 	admission.lifecycle.RLock()
-	return admission.lifecycle.RUnlock
+	return func() { admission.lifecycle.RUnlock(); m.projectLocks.release(projectID, admission) }
 }
 
 func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, maxOpen int64, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
@@ -265,6 +274,11 @@ func (m *Manager) CreateWorkUnit(ctx context.Context, projectID, keyID string, m
 }
 
 func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, keyID string, maxOpen int64, definitions []domain.OutcomeDefinitionRef, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	defer release()
 	if projectID == "" || keyID == "" || maxOpen <= 0 || maxOpen > domain.MaxOpenWorkUnits {
 		return domain.WorkUnit{}, false, ErrResourceLimit
 	}
@@ -273,21 +287,26 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, ok, err := m.reads.ReadGovernanceIdempotency(ctx, projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if ok {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.WorkUnit{}, false, ErrIdempotencyConflict
 		}
-		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		workUnit, found, err := m.ReadWorkUnit(ctx, projectID, previous.WorkUnitID)
+		if err != nil {
+			return domain.WorkUnit{}, false, err
+		}
 		if !found {
 			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
 		}
 		return workUnit, true, nil
 	}
-	open := int64(0)
-	for _, workUnit := range m.state.WorkUnits(projectID) {
-		if workUnit.Status == domain.WorkUnitOpen {
-			open++
-		}
+	open, err := m.reads.ReadOpenWorkUnitCount(ctx, projectID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
 	}
 	if open >= maxOpen {
 		return domain.WorkUnit{}, false, ErrResourceLimit
@@ -315,7 +334,10 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.WorkUnit{}, false, err
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.ReadWorkUnit(ctx, projectID, workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
 	if !ok {
 		return domain.WorkUnit{}, false, errors.New("created work unit is absent from accounting state")
 	}
@@ -323,6 +345,11 @@ func (m *Manager) CreateWorkUnitWithDefinitions(ctx context.Context, projectID, 
 }
 
 func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitID string, intent GovernanceIntent) (domain.WorkUnit, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	defer release()
 	if projectID == "" || keyID == "" || workUnitID == "" {
 		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
 	}
@@ -331,17 +358,27 @@ func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitI
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, ok, err := m.reads.ReadGovernanceIdempotency(ctx, projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if ok {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.WorkUnit{}, false, ErrIdempotencyConflict
 		}
-		workUnit, found := m.state.WorkUnit(previous.WorkUnitID)
+		workUnit, found, err := m.ReadWorkUnit(ctx, projectID, previous.WorkUnitID)
+		if err != nil {
+			return domain.WorkUnit{}, false, err
+		}
 		if !found {
 			return domain.WorkUnit{}, false, errors.New("idempotent work unit is absent from accounting state")
 		}
 		return workUnit, true, nil
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.ReadWorkUnit(ctx, projectID, workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
 	if !ok || workUnit.ProjectID != projectID {
 		return domain.WorkUnit{}, false, ErrWorkUnitNotFound
 	}
@@ -366,7 +403,13 @@ func (m *Manager) CloseWorkUnit(ctx context.Context, projectID, keyID, workUnitI
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.WorkUnit{}, false, err
 	}
-	closed, _ := m.state.WorkUnit(workUnitID)
+	closed, found, err := m.ReadWorkUnit(ctx, projectID, workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if !found {
+		return domain.WorkUnit{}, false, errors.New("closed work unit is absent from accounting view")
+	}
 	return closed, false, nil
 }
 
@@ -378,6 +421,11 @@ func (m *Manager) CreateRun(
 	maxActive int64,
 	intent GovernanceIntent,
 ) (domain.Run, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	defer release()
 	if projectID == "" || keyID == "" || workUnitID == "" || budgetMicrosUSD <= 0 ||
 		ttl <= 0 || ttl > time.Duration(domain.MaxRunTTLSeconds)*time.Second ||
 		maxActive <= 0 || maxActive > domain.MaxActiveRuns {
@@ -388,29 +436,36 @@ func (m *Manager) CreateRun(
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, ok, err := m.reads.ReadGovernanceIdempotency(ctx, projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if ok {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.Run{}, false, ErrIdempotencyConflict
 		}
-		run, found := m.state.Run(previous.RunID)
+		run, found, err := m.ReadRun(ctx, projectID, previous.RunID)
+		if err != nil {
+			return domain.Run{}, false, err
+		}
 		if !found {
 			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
 		}
-		run, _ = m.Run(projectID, run.ID)
 		return run, true, nil
 	}
-	workUnit, ok := m.state.WorkUnit(workUnitID)
+	workUnit, ok, err := m.ReadWorkUnit(ctx, projectID, workUnitID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok || workUnit.ProjectID != projectID || workUnit.Status != domain.WorkUnitOpen {
 		return domain.Run{}, false, ErrWorkUnitClosed
 	}
 	now := m.localNow()
-	active := int64(0)
-	for _, run := range m.state.Runs(projectID, "") {
-		if run.Status == domain.RunActive && now.Before(run.ExpiresAt) {
-			active++
-		}
+	capacity, err := m.reads.ReadRunCapacity(ctx, projectID, workUnitID, now)
+	if err != nil {
+		return domain.Run{}, false, err
 	}
-	if active >= maxActive || len(m.state.Runs(projectID, workUnitID)) >= domain.MaxRunsPerWorkUnit {
+	if capacity.ActiveRuns >= maxActive || capacity.WorkUnitRuns >= domain.MaxRunsPerWorkUnit {
 		return domain.Run{}, false, ErrResourceLimit
 	}
 	runID, err := id.New("run")
@@ -435,15 +490,22 @@ func (m *Manager) CreateRun(
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.Run{}, false, err
 	}
-	run, ok := m.state.Run(runID)
+	run, ok, err := m.ReadRun(ctx, projectID, runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok {
 		return domain.Run{}, false, errors.New("created run is absent from accounting state")
 	}
-	run, _ = m.Run(projectID, run.ID)
 	return run, false, nil
 }
 
 func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, runID, reason string, intent GovernanceIntent) (domain.Run, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	defer release()
 	if projectID == "" || keyID == "" || workUnitID == "" || runID == "" || len(reason) == 0 || len(reason) > 64 {
 		return domain.Run{}, false, ErrRunNotFound
 	}
@@ -452,23 +514,31 @@ func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, ru
 	}
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	if previous, ok := m.state.GovernanceIdempotency(projectID, intent.Operation, intent.IdempotencyKeyHash); ok {
+	previous, ok, err := m.reads.ReadGovernanceIdempotency(ctx, projectID, intent.Operation, intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if ok {
 		if previous.RequestFingerprint != intent.RequestFingerprint {
 			return domain.Run{}, false, ErrIdempotencyConflict
 		}
-		run, found := m.state.Run(previous.RunID)
+		run, found, err := m.ReadRun(ctx, projectID, previous.RunID)
+		if err != nil {
+			return domain.Run{}, false, err
+		}
 		if !found {
 			return domain.Run{}, false, errors.New("idempotent run is absent from accounting state")
 		}
-		run, _ = m.Run(projectID, run.ID)
 		return run, true, nil
 	}
-	run, ok := m.state.Run(runID)
+	run, ok, err := m.ReadRun(ctx, projectID, runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
 	if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
 		return domain.Run{}, false, ErrRunNotFound
 	}
 	if run.Status == domain.RunClosed {
-		run, _ = m.Run(projectID, run.ID)
 		return run, true, nil
 	}
 	// Establish the close/admission order before appending. An admission that
@@ -495,38 +565,171 @@ func (m *Manager) CloseRun(ctx context.Context, projectID, keyID, workUnitID, ru
 	if err := m.appendApply(ctx, event); err != nil {
 		return domain.Run{}, false, err
 	}
-	closed, _ := m.Run(projectID, runID)
+	closed, found, err := m.ReadRun(ctx, projectID, runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if !found {
+		return domain.Run{}, false, errors.New("closed run is absent from accounting view")
+	}
 	return closed, false, nil
 }
 
-func (m *Manager) WorkUnit(projectID, workUnitID string) (domain.WorkUnit, bool) {
-	workUnit, ok := m.state.WorkUnit(workUnitID)
-	return workUnit, ok && (projectID == "" || workUnit.ProjectID == projectID)
-}
-
-func (m *Manager) WorkUnits(projectID string) []domain.WorkUnit {
-	return m.state.WorkUnits(projectID)
-}
-
-func (m *Manager) Run(projectID, runID string) (domain.Run, bool) {
-	run, ok := m.state.Run(runID)
-	if !ok || (projectID != "" && run.ProjectID != projectID) {
-		return domain.Run{}, false
+// ReadWorkUnit and ReadRun keep storage errors distinct from successful absence.
+// Public list readers remain on the legacy State until their pagination migration.
+// These observation reads hold owner lifetime for the entire query. Errors
+// must not become zero financial or pending values.
+func (m *Manager) ReadBalance(ctx context.Context, key ledger.BalanceKey) (ledger.Balance, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.Balance{}, err
 	}
-	admission, unlock := m.lockProject(run.ProjectID)
+	defer release()
+	v, err := m.reads.ReadBalance(ctx, key)
+	if err != nil {
+		return ledger.Balance{}, err
+	}
+	return v, nil
+}
+
+// ReadWorkUnitMaturityPage owns the whole finite, coherent observation.
+func (m *Manager) ReadWorkUnitMaturityPage(ctx context.Context, refs []ledger.WorkUnitReference) (ledger.WorkUnitMaturityPage, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.WorkUnitMaturityPage{}, err
+	}
+	defer release()
+	page, err := m.reads.ReadWorkUnitMaturityPage(ctx, refs)
+	if err != nil {
+		return ledger.WorkUnitMaturityPage{}, err
+	}
+	return page, nil
+}
+
+// VisitGovernanceCohort owns the full query, including visitors between pages.
+// Errors invalidate every visited row; no partial accounting head may escape.
+func (m *Manager) VisitGovernanceCohort(ctx context.Context, q ledger.GovernanceCohortQuery, visit func(ledger.GovernanceCohortRow) error) (ledger.Watermark, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.Watermark{}, err
+	}
+	defer release()
+	head, err := m.reads.VisitGovernanceCohort(ctx, q, visit)
+	if err != nil {
+		return ledger.Watermark{}, err
+	}
+	return head, nil
+}
+
+func (m *Manager) ReadPendingLeaseStats(ctx context.Context, now time.Time) (ledger.PendingLeaseStatistics, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.PendingLeaseStatistics{}, err
+	}
+	defer release()
+	v, err := m.reads.ReadPendingLeaseStats(ctx, now)
+	if err != nil {
+		return ledger.PendingLeaseStatistics{}, err
+	}
+	return v, nil
+}
+
+// ReadWorkUnitAccounting keeps lifetime admission around the entire coherent
+// read. The selected owner serves the WorkUnit, activity and bounded Runs.
+func (m *Manager) ReadWorkUnitAccounting(ctx context.Context, projectID, workUnitID string, includeRuns bool) (ledger.WorkUnitAccountingView, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.WorkUnitAccountingView{}, false, err
+	}
+	defer release()
+	return m.reads.ReadWorkUnitAccounting(ctx, projectID, workUnitID, includeRuns)
+}
+
+func (m *Manager) ReadWorkUnit(ctx context.Context, projectID, workUnitID string) (domain.WorkUnit, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	defer release()
+	workUnit, found, err := m.reads.ReadWorkUnit(ctx, workUnitID)
+	if err != nil {
+		return domain.WorkUnit{}, false, err
+	}
+	if !found || (projectID != "" && workUnit.ProjectID != projectID) {
+		return domain.WorkUnit{}, false, nil
+	}
+	return workUnit, true, nil
+}
+
+func (m *Manager) ReadWorkUnitPage(ctx context.Context, query ledger.WorkUnitListQuery) (ledger.GovernanceListPage[domain.WorkUnit], error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.GovernanceListPage[domain.WorkUnit]{}, err
+	}
+	defer release()
+	page, err := m.reads.ReadWorkUnitPage(ctx, query)
+	if err != nil {
+		return ledger.GovernanceListPage[domain.WorkUnit]{}, err
+	}
+	return page, nil
+}
+
+func (m *Manager) ReadActiveRunCount(ctx context.Context, projectID string, at time.Time) (int64, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	capacity, err := m.reads.ReadRunCapacity(ctx, projectID, "", at)
+	if err != nil {
+		return 0, err
+	}
+	return capacity.ActiveRuns, err
+}
+
+func (m *Manager) ReadRun(ctx context.Context, projectID, runID string) (domain.Run, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	defer release()
+	run, found, err := m.reads.ReadRun(ctx, runID)
+	if err != nil {
+		return domain.Run{}, false, err
+	}
+	if !found || (projectID != "" && run.ProjectID != projectID) {
+		return domain.Run{}, false, nil
+	}
+	lockedProject := run.ProjectID
+	admission, unlock := m.lockProject(lockedProject)
 	defer unlock()
-	run, ok = m.state.Run(runID)
-	if !ok {
-		return domain.Run{}, false
+	// Re-read under the project's money lock before combining in-flight spend.
+	run, found, err = m.reads.ReadRun(ctx, runID)
+	if err != nil {
+		return domain.Run{}, false, err
 	}
-	return domain.WithRunBudgetState(run, admission.runPending[runID]), true
+	if !found || (projectID != "" && run.ProjectID != projectID) {
+		return domain.Run{}, false, nil
+	}
+	if run.ProjectID != lockedProject {
+		return domain.Run{}, false, errors.New("accounting run project changed during read")
+	}
+	return domain.WithRunBudgetState(run, admission.runPending[runID]), true, nil
 }
 
-func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
+func (m *Manager) ActiveRun(ctx context.Context, projectID, runID string) (domain.Run, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	defer release()
 	unlock := m.governanceLock(projectID)
 	defer unlock()
-	run, ok := m.state.Run(runID)
-	if !ok || run.ProjectID != projectID {
+	run, found, err := m.reads.ReadRun(ctx, runID)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	if !found || run.ProjectID != projectID {
 		return domain.Run{}, ErrRunNotFound
 	}
 	if run.Status != domain.RunActive || !m.localNow().Before(run.ExpiresAt) {
@@ -535,14 +738,49 @@ func (m *Manager) ActiveRun(projectID, runID string) (domain.Run, error) {
 	return run, nil
 }
 
-func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
-	items := m.state.Runs(projectID, workUnitID)
-	for index := range items {
-		admission, unlock := m.lockProject(items[index].ProjectID)
-		items[index] = domain.WithRunBudgetState(items[index], admission.runPending[items[index].ID])
-		unlock()
+func (m *Manager) ReadRunPage(ctx context.Context, query ledger.RunListQuery) (ledger.GovernanceListPage[domain.Run], error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.GovernanceListPage[domain.Run]{}, err
 	}
-	return items
+	defer release()
+	page, err := m.reads.ReadRunPage(ctx, query)
+	if err != nil {
+		return ledger.GovernanceListPage[domain.Run]{}, err
+	}
+	output := make([]domain.Run, 0, len(page.Items))
+	size := 0
+	for _, row := range page.Items {
+		run, found, err := m.ReadRun(ctx, query.ProjectID, row.ID)
+		if err != nil {
+			return ledger.GovernanceListPage[domain.Run]{}, err
+		}
+		if !found {
+			return ledger.GovernanceListPage[domain.Run]{}, errors.New("listed run is absent from accounting view")
+		}
+		if (query.WorkUnitID != "" && run.WorkUnitID != query.WorkUnitID) || (query.Status != "" && domain.EffectiveRunStatus(run, query.At) != query.Status) {
+			continue
+		}
+		raw, err := json.Marshal(run)
+		if err != nil {
+			return ledger.GovernanceListPage[domain.Run]{}, err
+		}
+		if len(raw) > query.Limits.Bytes-size {
+			if len(output) == 0 {
+				return ledger.GovernanceListPage[domain.Run]{}, ledger.ErrProjectionPageLimit
+			}
+			page.NextID = output[len(output)-1].ID
+			break
+		}
+		output = append(output, run)
+		size += len(raw)
+	}
+	page.Items = output
+	page.Bytes = size
+	if err := ctx.Err(); err != nil {
+		return ledger.GovernanceListPage[domain.Run]{}, err
+	}
+	return page, nil
 }
 
 // lockProject serializes one project's admission decisions — reading its balance
@@ -572,6 +810,8 @@ func (m *Manager) Runs(projectID, workUnitID string) []domain.Run {
 // multi-project benchmark hit it on the first run.
 type projectAdmission struct {
 	mu sync.Mutex
+	// Protected by the registry, including callers waiting on either lock.
+	users int
 	// lifecycle orders Work Unit/Run create/close against attached request
 	// acceptance. Requests share the read side so their durable acceptance can
 	// batch; control-plane mutations take the write side and wait until every
@@ -615,11 +855,7 @@ func (m *Manager) beginRunClose(projectID, runID string) func() {
 }
 
 func (m *Manager) lockProject(projectID string) (*projectAdmission, func()) {
-	value, loaded := m.projectLocks.Load(projectID)
-	if !loaded {
-		value, _ = m.projectLocks.LoadOrStore(projectID, newProjectAdmission())
-	}
-	admission := value.(*projectAdmission)
+	admission := m.projectLocks.retain(projectID)
 	waitStarted := time.Now()
 	admission.mu.Lock()
 	held := time.Now()
@@ -628,6 +864,7 @@ func (m *Manager) lockProject(projectID string) (*projectAdmission, func()) {
 	return admission, func() {
 		m.lockHeldNanos.Add(int64(time.Since(held)))
 		admission.mu.Unlock()
+		m.projectLocks.release(projectID, admission)
 	}
 }
 
@@ -637,6 +874,7 @@ type ProjectLockStats struct {
 	Acquisitions uint64
 	WaitDuration time.Duration
 	HeldDuration time.Duration
+	LiveProjects int
 }
 
 func (m *Manager) ProjectLockStats() ProjectLockStats {
@@ -644,6 +882,7 @@ func (m *Manager) ProjectLockStats() ProjectLockStats {
 		Acquisitions: m.lockAcquisitions.Load(),
 		WaitDuration: time.Duration(m.lockWaitNanos.Load()),
 		HeldDuration: time.Duration(m.lockHeldNanos.Load()),
+		LiveProjects: m.projectLocks.count(),
 	}
 }
 
@@ -662,13 +901,16 @@ func (m *Manager) ProjectLockStats() ProjectLockStats {
 // in both — and that direction is safe: it can only refuse at the very edge of
 // a budget, never overspend it.
 func (m *Manager) admit(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool) error {
-	return m.admitForRun(key, dailyBudgetMicrosUSD, reservationMicrosUSD, counted, "", "", time.Time{})
+	return m.admitForRun(context.Background(), key, dailyBudgetMicrosUSD, reservationMicrosUSD, counted, "", "", time.Time{})
 }
 
-func (m *Manager) admitForRun(key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool, workUnitID, runID string, now time.Time) error {
+func (m *Manager) admitForRun(ctx context.Context, key ledger.BalanceKey, dailyBudgetMicrosUSD, reservationMicrosUSD int64, counted bool, workUnitID, runID string, now time.Time) error {
 	admission, unlock := m.lockProject(key.ProjectID)
 	defer unlock()
-	balance := m.state.Balance(key.ProjectID, key.PeriodID, key.TimezoneVersion)
+	balance, err := m.reads.ReadBalance(ctx, key)
+	if err != nil {
+		return err
+	}
 	total, err := checkedAdd(balance.CommittedMicrosUSD, balance.ReservedMicrosUSD)
 	if err != nil {
 		return err
@@ -685,7 +927,10 @@ func (m *Manager) admitForRun(key ledger.BalanceKey, dailyBudgetMicrosUSD, reser
 		return ErrExceeded
 	}
 	if runID != "" {
-		run, ok := m.state.Run(runID)
+		run, ok, err := m.reads.ReadRun(ctx, runID)
+		if err != nil {
+			return err
+		}
 		if !ok || run.ProjectID != key.ProjectID || run.WorkUnitID != workUnitID {
 			return ErrRunNotFound
 		}
@@ -778,6 +1023,11 @@ func (m *Manager) BeginAttempt(
 	requestID string,
 	reservationMicrosUSD int64,
 ) (Attempt, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return Attempt{}, err
+	}
+	defer release()
 	if projectID == "" || requestID == "" {
 		return Attempt{}, errors.New("project and request IDs are required")
 	}
@@ -803,6 +1053,11 @@ func (m *Manager) BeginRequestAttributed(
 	ctx context.Context,
 	projectID, keyID, requestID, requestedModel, workUnitID, runID string,
 ) (Request, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return Request{}, err
+	}
+	defer release()
 	if projectID == "" || requestID == "" {
 		return Request{}, errors.New("project and request IDs are required")
 	}
@@ -826,7 +1081,10 @@ func (m *Manager) BeginRequestAttributed(
 		}
 		unlockLifecycle = m.governanceReadLock(projectID)
 		defer unlockLifecycle()
-		run, ok := m.state.Run(runID)
+		run, ok, err := m.reads.ReadRun(ctx, runID)
+		if err != nil {
+			return Request{}, err
+		}
 		if !ok || run.ProjectID != projectID || run.WorkUnitID != workUnitID {
 			return Request{}, ErrRunNotFound
 		}
@@ -868,6 +1126,11 @@ func (m *Manager) ReserveAttemptDetailed(
 }
 
 func (m *Manager) ReserveLeaseDetailed(ctx context.Context, request Request, dailyBudgetMicrosUSD int64, spec LeaseSpec, metadata AttemptMetadata) (Attempt, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return Attempt{}, err
+	}
+	defer release()
 	if spec.Mode == "" || spec.PriceSnapshot == nil || spec.PreparedInputTokens < 0 || spec.PreparedOutputTokens < 0 {
 		return Attempt{}, ErrInvalidAmount
 	}
@@ -898,6 +1161,11 @@ func (m *Manager) reserveAttemptDetailed(
 	spec LeaseSpec,
 	metadata AttemptMetadata,
 ) (Attempt, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return Attempt{}, err
+	}
+	defer release()
 	if request.RequestID == "" || request.ProjectID == "" || request.Period.ID == "" {
 		return Attempt{}, errors.New("request lease is invalid")
 	}
@@ -945,7 +1213,7 @@ func (m *Manager) reserveAttemptDetailed(
 	// it.
 	key := ledger.BalanceKey{ProjectID: request.ProjectID, PeriodID: request.Period.ID, TimezoneVersion: request.Period.TimezoneVersion}
 	counted := spec.Mode != ledger.LeaseModeUnknownAllowed
-	if err := m.admitForRun(key, dailyBudgetMicrosUSD, spec.ReservationMicrosUSD, counted, request.WorkUnitID, request.RunID, m.localNow()); err != nil {
+	if err := m.admitForRun(ctx, key, dailyBudgetMicrosUSD, spec.ReservationMicrosUSD, counted, request.WorkUnitID, request.RunID, m.localNow()); err != nil {
 		return Attempt{}, err
 	}
 	if counted || request.RunID != "" {
@@ -1008,6 +1276,11 @@ func (a Attempt) Request() Request {
 }
 
 func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	eventID, err := id.New("evt")
 	if err != nil {
 		return err
@@ -1035,6 +1308,11 @@ func (m *Manager) MarkStarted(ctx context.Context, attempt Attempt) error {
 // Settle releases the reservation and commits usage and cost in one durable
 // event. Callers should use a cleanup context that is independent of the client.
 func (m *Manager) Settle(ctx context.Context, attempt Attempt, settlement Settlement) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	eventID, err := id.New("evt")
 	if err != nil {
 		return err
@@ -1075,6 +1353,28 @@ func unservedSettlement(settlement Settlement) bool {
 // worth of under-estimation, and admission refuses further attempts once the
 // balance reflects it.
 func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, settlement Settlement) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	occurredAt := settlement.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = m.localNow()
+	} else {
+		occurredAt = m.inAccountingZone(occurredAt)
+	}
+	event, err := buildSettlementEvent(eventID, attempt, settlement, occurredAt)
+	if err != nil {
+		return err
+	}
+	return m.appendApply(ctx, event)
+}
+
+// buildSettlementEvent shares frozen-price and attribution semantics between
+// normal accounting and maintenance recovery. It does not read mutable clocks,
+// admission limits or state, and never appends a fact.
+func buildSettlementEvent(eventID string, attempt Attempt, settlement Settlement, occurredAt time.Time) (ledger.Event, error) {
 	if settlement.CommittedMicrosUSD < 0 ||
 		settlement.ProviderInputTokens < 0 ||
 		settlement.ProviderOutputTokens < 0 ||
@@ -1082,13 +1382,13 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		settlement.ProviderCacheWriteInputTokens < 0 ||
 		settlement.ProviderReasoningTokens < 0 ||
 		settlement.PreparedOutputTokens < 0 {
-		return ErrInvalidAmount
+		return ledger.Event{}, ErrInvalidAmount
 	}
 	// The tiers partition the input total. A sum that overruns it means a caller
 	// added them on top instead of reporting a breakdown, which would let a
 	// later re-rating charge the cached span twice.
 	if settlement.ProviderCachedInputTokens+settlement.ProviderCacheWriteInputTokens > settlement.ProviderInputTokens {
-		return ErrInvalidAmount
+		return ledger.Event{}, ErrInvalidAmount
 	}
 	var priceSnapshot *domain.PriceSnapshot
 	inputCost, outputCost, fixedCost := int64(0), int64(0), int64(0)
@@ -1098,19 +1398,13 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		if copy.CostValueStatus == domain.CostValueKnown && !unservedSettlement(settlement) {
 			cost, costErr := copy.Calculate(settlement.ProviderInputTokens, settlement.ProviderCachedInputTokens, settlement.ProviderOutputTokens)
 			if costErr != nil {
-				return costErr
+				return ledger.Event{}, costErr
 			}
 			if cost.TotalCostMicrosUSD != settlement.CommittedMicrosUSD {
-				return fmt.Errorf("settlement cost does not match immutable price snapshot: calculated=%d committed=%d", cost.TotalCostMicrosUSD, settlement.CommittedMicrosUSD)
+				return ledger.Event{}, fmt.Errorf("settlement cost does not match immutable price snapshot: calculated=%d committed=%d", cost.TotalCostMicrosUSD, settlement.CommittedMicrosUSD)
 			}
 			inputCost, outputCost, fixedCost = cost.InputCostMicrosUSD, cost.OutputCostMicrosUSD, cost.FixedCostMicrosUSD
 		}
-	}
-	occurredAt := settlement.OccurredAt
-	if occurredAt.IsZero() {
-		occurredAt = m.localNow()
-	} else {
-		occurredAt = m.inAccountingZone(occurredAt)
 	}
 	var committedValue *int64
 	if attempt.LeaseMode != ledger.LeaseModeUnknownAllowed {
@@ -1171,14 +1465,22 @@ func (m *Manager) settle(ctx context.Context, eventID string, attempt Attempt, s
 		LatencyMillis:                 settlement.LatencyMillis,
 	}
 	attempt.Period.Stamp(&settled)
-	return m.appendApply(ctx, settled)
+	return settled, nil
 }
 
 // RecoverPendingLeases resolves every durable lease before listeners become
 // ready. Leases without AttemptStarted are released; started leases are
 // conservatively settled from their prepared token bounds and frozen price.
 func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
-	pendingLeases := m.state.PendingLeases()
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if m.legacyPending == nil {
+		return errors.New("projected accounting requires exclusive two-level request/attempt recovery")
+	}
+	pendingLeases := m.legacyPending()
 	now := m.now()
 	m.recoveryMu.Lock()
 	m.recovery.PendingObserved += uint64(len(pendingLeases))
@@ -1190,53 +1492,15 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 	}
 	m.recoveryMu.Unlock()
 	for _, pending := range pendingLeases {
-		event := pending.Reservation
-		reservation := int64(0)
-		if event.ReservationMicrosUSD != nil {
-			reservation = *event.ReservationMicrosUSD
+		attempt, settlement, eventID, err := recoverySettlement(pending)
+		if err != nil {
+			return err
 		}
-		attempt := Attempt{
-			RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
-			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
-			Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
-			KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
-			ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
-			AccountRegionID: event.AccountRegionID,
-			RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
-			ProviderPrimitive: event.ProviderPrimitive,
-			AttemptNumber:     event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
-			LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
-			PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
-			RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,
-			TokenGuardPricingViewDigest: event.TokenGuardPricingViewDigest,
-		}
-		settlement := Settlement{Outcome: "recovered_not_started", FailurePhase: "accounting", OccurredAt: event.OccurredAt}
-		if pending.Started {
-			settlement = Settlement{
-				ProviderInputTokens: event.PreparedInputTokens, ProviderOutputTokens: event.PreparedOutputTokens,
-				PreparedOutputTokens: event.PreparedOutputTokens, TokenEstimated: true, CostEstimated: true,
-				Outcome: "recovered_started_unknown_result", FailurePhase: "accounting", Ambiguous: true,
-				OccurredAt: event.OccurredAt,
-			}
-			if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
-				// Nothing is known about how much of a recovered attempt's prompt
-				// the provider served from cache, so none of it is: the whole
-				// prompt is charged at the ordinary input rate, which is the
-				// conservative reading of an ambiguous outcome.
-				cost, err := event.PriceSnapshot.Calculate(event.PreparedInputTokens, 0, event.PreparedOutputTokens)
-				if err != nil {
-					return fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
-				}
-				settlement.CommittedMicrosUSD = cost.TotalCostMicrosUSD
-			}
-		}
-		digest := sha256.Sum256([]byte("halro:accounting-recovery:v1\x00" + event.AttemptID + "\x00" + settlement.Outcome))
-		eventID := "evt_recovery_" + hex.EncodeToString(digest[:12])
 		if err := m.settle(ctx, eventID, attempt, settlement); err != nil {
 			m.recoveryMu.Lock()
 			m.recovery.Failures++
 			m.recoveryMu.Unlock()
-			return fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
+			return fmt.Errorf("recover attempt %q: %w", attempt.AttemptID, err)
 		}
 		m.recoveryMu.Lock()
 		if pending.Started {
@@ -1249,11 +1513,64 @@ func (m *Manager) RecoverPendingLeases(ctx context.Context) error {
 	return nil
 }
 
+// recoverySettlement retains the v1 attempt recovery identity and frozen
+// provider/price decision shared by both recovery paths.
+func recoverySettlement(pending ledger.PendingLease) (Attempt, Settlement, string, error) {
+	event := pending.Reservation
+	reservation := int64(0)
+	if event.ReservationMicrosUSD != nil {
+		reservation = *event.ReservationMicrosUSD
+	}
+	attempt := Attempt{
+		RequestID: event.RequestID, AttemptID: event.AttemptID, ProjectID: event.ProjectID,
+		WorkUnitID: event.WorkUnitID, RunID: event.RunID,
+		Period: PeriodFromEvent(event), ReservationMicrosUSD: reservation,
+		KeyID: event.KeyID, RouteID: event.RouteID, DeploymentID: event.DeploymentID,
+		ProviderID: event.ProviderID, OfferingID: event.OfferingID, ProfileID: event.ProfileID,
+		AccountRegionID: event.AccountRegionID,
+		RequestedModel:  event.RequestedModel, ProviderModel: event.ProviderModel,
+		ProviderPrimitive: event.ProviderPrimitive,
+		AttemptNumber:     event.AttemptNumber, RetryCount: event.RetryCount, FallbackCount: event.FallbackCount,
+		LeaseMode: event.LeaseMode, PriceSnapshot: event.PriceSnapshot,
+		PreparedInputTokens: event.PreparedInputTokens, PreparedOutputTokens: event.PreparedOutputTokens,
+		RecoveryKey: event.RecoveryKey, UnknownPolicyEvidence: event.UnknownPolicyEvidence,
+		TokenGuardPricingViewDigest: event.TokenGuardPricingViewDigest,
+	}
+	settlement := Settlement{Outcome: "recovered_not_started", FailurePhase: "accounting", OccurredAt: event.OccurredAt}
+	if pending.Started {
+		settlement = Settlement{
+			ProviderInputTokens: event.PreparedInputTokens, ProviderOutputTokens: event.PreparedOutputTokens,
+			PreparedOutputTokens: event.PreparedOutputTokens, TokenEstimated: true, CostEstimated: true,
+			Outcome: "recovered_started_unknown_result", FailurePhase: "accounting", Ambiguous: true,
+			OccurredAt: event.OccurredAt,
+		}
+		if event.PriceSnapshot != nil && event.PriceSnapshot.CostValueStatus == domain.CostValueKnown {
+			// Nothing is known about how much of a recovered attempt's prompt
+			// the provider served from cache, so none of it is: the whole
+			// prompt is charged at the ordinary input rate, which is the
+			// conservative reading of an ambiguous outcome.
+			cost, err := event.PriceSnapshot.Calculate(event.PreparedInputTokens, 0, event.PreparedOutputTokens)
+			if err != nil {
+				return Attempt{}, Settlement{}, "", fmt.Errorf("recover attempt %q: %w", event.AttemptID, err)
+			}
+			settlement.CommittedMicrosUSD = cost.TotalCostMicrosUSD
+		}
+	}
+	digest := sha256.Sum256([]byte("halro:accounting-recovery:v1\x00" + event.AttemptID + "\x00" + settlement.Outcome))
+	eventID := "evt_recovery_" + hex.EncodeToString(digest[:12])
+	return attempt, settlement, eventID, nil
+}
+
 func (m *Manager) FinalizeRequest(ctx context.Context, attempt Attempt, outcome string) error {
 	return m.Finalize(ctx, attempt.Request(), outcome)
 }
 
 func (m *Manager) Finalize(ctx context.Context, request Request, outcome string) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	eventID, err := id.New("evt")
 	if err != nil {
 		return err
@@ -1287,6 +1604,12 @@ func (m *Manager) applyFailure() error {
 }
 
 func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (ledger.Record, error) {
+	ctx = ledger.WithPhysicalAppendKind(ctx, event.Kind)
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return ledger.Record{}, err
+	}
+	defer release()
 	// A failed apply is terminal: the state machine advances in sequence order
 	// and can never get past the event it choked on. Appending anyway would
 	// fsync a record that will never be applied, and leave it in the log for
@@ -1295,34 +1618,96 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 	if err := m.applyFailure(); err != nil {
 		return ledger.Record{}, err
 	}
-	receipt, err := m.log.AppendWithReceipt(ctx, event)
+	var record ledger.Record
+	var receipt ledger.AppendReceipt
+	appendRecord := func(appendCtx context.Context) error {
+		var err error
+		record, receipt, err = m.log.AppendApplyRecordWithReceipt(appendCtx, event, m.applyDurableRecord)
+		return err
+	}
+	if owner, ok := m.owner.(interface {
+		withAppendWorkspace(context.Context, func(context.Context) error) error
+	}); ok {
+		err = owner.withAppendWorkspace(ctx, appendRecord)
+	} else {
+		err = appendRecord(ctx)
+	}
 	if err != nil {
 		return ledger.Record{}, err
 	}
-	record := ledger.Record{
-		Generation: receipt.Watermark.Generation,
-		Sequence:   receipt.Watermark.Sequence,
-		Offset:     receipt.Watermark.Offset,
-		Event:      event,
-	}
-	m.applyMu.Lock()
-	for m.applyErr == nil && m.state.Watermark().Sequence+1 < record.Sequence {
-		m.applyCond.Wait()
-	}
-	if m.applyErr != nil {
-		err := m.applyErr
-		m.applyMu.Unlock()
+	// The local state must observe ReservationCreated/AttemptStarted before the
+	// request waits for a Replica. Waiting inside the Ledger writer would hold
+	// its lock and serialize unrelated appends behind network latency.
+	if err := m.log.WaitConfirmed(ctx, receipt); err != nil {
 		return ledger.Record{}, err
 	}
-	if err := m.state.Apply(record); err != nil {
+	if owner, ok := m.owner.(accountingOperationValidator); ok {
+		if err := owner.validateAccountingOperation(ctx); err != nil {
+			return ledger.Record{}, err
+		}
+	}
+	return record, nil
+}
+
+// applyDurableRecord is part of the native mutation lifetime. Global sequence
+// Apply/observers remain ordered, but no native writer lock is held here.
+// Close wakes an unresolved predecessor wait and fails closed; a record whose
+// turn is ready still applies even when an accepted caller canceled or Close
+// has started. Accepted durable facts are never reported as absent.
+func (m *Manager) applyDurableRecord(ctx context.Context, record ledger.Record) error {
+	m.applyMu.Lock()
+	var stopWake func() bool
+	var wakeDone chan struct{}
+	defer func() {
+		m.applyMu.Unlock()
+		// Stop the subscription or join its signaler outside the mutex. The
+		// native mutation must also outlive this callback-owned goroutine.
+		if stopWake != nil && !stopWake() {
+			<-wakeDone
+		}
+	}()
+	position := func() ledger.Watermark {
+		head, err := m.owner.appliedPosition(ctx)
+		if err != nil && m.applyErr == nil {
+			m.applyErr = fmt.Errorf("read durable accounting apply position: %w", err)
+			m.applyCond.Broadcast()
+			m.log.Status().RequireRecovery()
+		}
+		return head
+	}
+	head := position()
+	if m.applyErr == nil && record.Sequence > 0 && head.Sequence < record.Sequence-1 {
+		wakeDone = make(chan struct{})
+		stopWake = context.AfterFunc(ctx, func() {
+			defer close(wakeDone)
+			m.applyMu.Lock()
+			m.applyCond.Broadcast()
+			m.applyMu.Unlock()
+		})
+	}
+	for m.applyErr == nil && record.Sequence > 0 && head.Sequence < record.Sequence-1 {
+		if err := ctx.Err(); err != nil {
+			m.applyErr = fmt.Errorf("durable accounting predecessor wait interrupted: %w", err)
+			m.applyCond.Broadcast()
+			break
+		}
+		m.applyCond.Wait()
+		head = position()
+	}
+	if m.applyErr != nil {
+		return m.applyErr
+	}
+	if err := m.owner.applyRecord(ctx, record); err != nil {
 		m.applyErr = fmt.Errorf("apply durable accounting event: %w", err)
 		m.applyCond.Broadcast()
-		m.applyMu.Unlock()
-		// Accounting is the gateway's fail-closed gate, and it reads the
-		// ledger's status. Leaving that healthy while this manager can no
-		// longer apply anything would give two answers to one question.
-		m.log.Status().MarkUnavailable()
-		return ledger.Record{}, fmt.Errorf("apply durable accounting event: %w", err)
+		m.log.Status().RequireRecovery()
+		return m.applyErr
+	}
+	if err := resourcebudget.RetireRAMWorkspace(ctx); err != nil {
+		m.applyErr = fmt.Errorf("retire durable accounting workspace: %w", err)
+		m.applyCond.Broadcast()
+		m.log.Status().RequireRecovery()
+		return m.applyErr
 	}
 	m.observerMu.RLock()
 	observers := slices.Clone(m.observers)
@@ -1331,14 +1716,7 @@ func (m *Manager) appendApplyRecord(ctx context.Context, event ledger.Event) (le
 		observer(record)
 	}
 	m.applyCond.Broadcast()
-	m.applyMu.Unlock()
-	// The local state must observe ReservationCreated/AttemptStarted before the
-	// request waits for a Replica. Waiting inside the Ledger writer would hold
-	// its lock and serialize unrelated appends behind network latency.
-	if err := m.log.WaitConfirmed(ctx, receipt); err != nil {
-		return ledger.Record{}, err
-	}
-	return record, nil
+	return nil
 }
 
 // TokenCost is one attempt's priced tokens together with the rates they are
@@ -1405,4 +1783,44 @@ func checkedAdd(left, right int64) (int64, error) {
 		return 0, errors.New("accounting integer overflow")
 	}
 	return left + right, nil
+}
+
+// WithGovernanceExport retains the selected accounting owner and its operation
+// ticket through bounded reads and external publication. There is no State
+// fallback: the legacy State has no immutable as-of lifecycle positions.
+func (m *Manager) WithGovernanceExport(ctx context.Context, visit func(ledger.GovernanceExportView) error) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	reader, ok := m.reads.(ledger.AccountingExportReader)
+	if !ok {
+		return ledger.ErrGovernanceExportBackend
+	}
+	return reader.WithGovernanceExport(ctx, visit)
+}
+
+// Transitional State export only: the full accounting snapshot still grows
+// with history. Select the SAME reader used by this Manager and hold its ticket
+// through external publication; never borrow Runtime's potentially old alias.
+// A projected owner cannot silently use this compatibility path.
+func (m *Manager) WithLegacyGovernanceSnapshot(ctx context.Context, visit func(context.Context, ledger.GovernanceSnapshot) error) error {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	state, ok := m.reads.(stateAccountingOwner)
+	if !ok || state.State == nil {
+		return ledger.ErrGovernanceExportBackend
+	}
+	if visit == nil {
+		return ledger.ErrGovernanceExportIncomplete
+	}
+	snapshot, err := state.GovernanceSnapshot(ctx, ledger.GovernanceSnapshotOptions{IncludeRuns: true})
+	if err != nil {
+		return err
+	}
+	return visit(ctx, snapshot)
 }

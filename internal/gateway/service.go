@@ -28,7 +28,6 @@ import (
 	openaiwire "github.com/akz142857/Halro/internal/compatibility/openai"
 	"github.com/akz142857/Halro/internal/contentscan"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/keylimit"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -37,6 +36,7 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/semantic"
 	"github.com/akz142857/Halro/internal/tokenguard"
@@ -100,10 +100,18 @@ type Service struct {
 	now                           func() time.Time
 	resources                     InferenceResourcesResourceStore
 	resourceObjectDir             string
+	resourceObjectMu              sync.Mutex // Publication/retirement only; never remote IO or Metadata reentry.
 	resourceObjectSealer          ResourceObjectSealer
 	resourceObjectReplicator      func(context.Context, string, []byte) error
 	deferred                      *deferredEngine
 	deferredExecutionTimeout      time.Duration
+	resourceBudget                *resourcebudget.Manager
+	deferredRAMBytes              int64
+	completionRAMBytes            int64
+	completionWorkspace           []resourcebudget.WorkspaceRequirement
+	completionDiskBytes           int64
+	terminalAdmission             func(context.Context, int) (context.Context, func() error, error)
+	captureRAMBytes               int64
 	contentScanner                contentscan.Scanner
 	pricing                       PriceSelector
 	pricingClockRollbackTolerance time.Duration
@@ -119,7 +127,7 @@ type Service struct {
 	// be able to turn slow storage into one blocked goroutine per socket, while
 	// one worker preserves the store's ordering and daily-ceiling accounting.
 	captureMu        sync.Mutex
-	captureQueue     chan failurecapture.Record
+	captureQueue     chan *captureRecord
 	captureCancel    context.CancelFunc
 	captureDone      chan struct{}
 	captureCloseOnce sync.Once
@@ -166,6 +174,10 @@ func NewService(authSnapshot *auth.Snapshot, registry *provider.Registry, accoun
 
 type ServiceOptions struct {
 	MaxAttempts int
+	// TerminalAdmission reserves persistent terminal capacity before the
+	// request is accepted or any provider is called. The returned context is
+	// retained through all settlements/finalization; Close joins the full run.
+	TerminalAdmission func(context.Context, int) (context.Context, func() error, error)
 	// RouteGate decides whether a target may be used. Required: a Service
 	// without one would offer every target unconditionally, including ones an
 	// upstream has plainly refused.
@@ -191,7 +203,18 @@ type ServiceOptions struct {
 	// route_total_timeout bounds a synchronous one. SafeTransport caps the
 	// connect and the response header; a body arriving one byte at a time is
 	// capped by nothing. Zero takes the default.
-	DeferredExecutionTimeout      time.Duration
+	DeferredExecutionTimeout time.Duration
+	// ResourceBudget is the same manager used by HTTP admission. Deferred work
+	// rereads its persisted input under a separate calibrated RAM envelope and
+	// reserves synchronous terminal-write capacity before reading that input.
+	ResourceBudget      *resourcebudget.Manager
+	DeferredRAMBytes    int64
+	CompletionRAMBytes  int64
+	CompletionWorkspace []resourcebudget.WorkspaceRequirement
+	CompletionDiskBytes int64
+	// CaptureRAMBytes reserves the entire diagnostic encoding/queue/sealing
+	// pipeline, separately from the request envelope. No production default.
+	CaptureRAMBytes               int64
 	ContentScanner                contentscan.Scanner
 	Pricing                       PriceSelector
 	PricingClockRollbackTolerance time.Duration
@@ -217,7 +240,9 @@ type ServiceOptions struct {
 }
 
 type requestRun struct {
+	closeTerminalAdmission      func() error
 	service                     *Service
+	completionContext           context.Context
 	principal                   auth.AuthResult
 	policyLease                 *limiter.Lease
 	tokenGuardLease             *tokenguard.Lease
@@ -261,7 +286,7 @@ func (run *requestRun) finalize(outcome string) error {
 		return nil
 	}
 	run.finalized = true
-	err := run.service.finalizeRequest(run.requestLease, outcome)
+	err := run.service.finalizeRequestIn(run.completionContext, run.requestLease, outcome)
 	// One record per request, on the same once-only boundary the settlement
 	// uses, so a request cannot be reported as having failed twice — and a
 	// request that fell back and succeeded cannot be reported as having failed
@@ -402,6 +427,22 @@ func (s *Service) beginRequestRun(
 	payload any,
 	admission admissionMode,
 ) (*requestRun, error) {
+	var closeTerminal func() error
+	if s.terminalAdmission != nil {
+		var err error
+		ctx, closeTerminal, err = s.terminalAdmission(ctx, s.maxAttempts+1)
+		if err != nil {
+			return nil, gatewayError("resource_budget", "terminal accounting capacity is unavailable", 503, err)
+		}
+	}
+	transferred := false
+	defer func() {
+		if !transferred && closeTerminal != nil {
+			if err := closeTerminal(); err != nil {
+				s.logger.Error("retire unused terminal admission", "error", err)
+			}
+		}
+	}()
 	workUnitID, governanceRunID, err := s.resolveRunAttribution(ctx, principal)
 	if err != nil {
 		return nil, err
@@ -455,10 +496,12 @@ func (s *Service) beginRequestRun(
 		return nil, gatewayError("accounting_unavailable", "accounting is unavailable", 503, err)
 	}
 	run := &requestRun{
-		service: s, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
+		closeTerminalAdmission: closeTerminal,
+		service:                s, completionContext: ctx, principal: principal, policyLease: policyLease, tokenGuardLease: tokenGuardLease,
 		requestLease: requestLease, requestID: requestID, tokenGuardPricingViewDigest: pricingViewDigest,
 		acceptedAt: s.now(),
 	}
+	transferred = true
 	run.captureRequest(payload)
 	if inbound, ok := requestmeta.InboundRequest(ctx); ok {
 		run.captureGatewayRequest(inbound)
@@ -480,7 +523,7 @@ func (s *Service) resolveRunAttribution(ctx context.Context, principal auth.Auth
 	if !domain.HasGatewayScope(principal.Key.Scopes, domain.GatewayScopeRunAttach) {
 		return "", "", gatewayError("gateway_key_scope_denied", "gateway key does not allow Run attachment", 403, nil)
 	}
-	governedRun, err := s.accounting.ActiveRun(principal.Project.ID, runID)
+	governedRun, err := s.accounting.ActiveRun(ctx, principal.Project.ID, runID)
 	if errors.Is(err, budget.ErrRunNotFound) {
 		return "", "", gatewayError("run_not_found", "run was not found", 404, err)
 	}
@@ -494,6 +537,13 @@ func (s *Service) resolveRunAttribution(ctx context.Context, principal auth.Auth
 }
 
 func (run *requestRun) close() {
+	defer func() {
+		if run.closeTerminalAdmission != nil {
+			if err := run.closeTerminalAdmission(); err != nil {
+				run.service.logger.Error("retire request terminal admission", "error", err)
+			}
+		}
+	}()
 	// A request that was accepted into the ledger but never finalized stays
 	// "in flight" forever: the usage aggregate keeps its entry, the entry is
 	// checkpointed into bbolt, and halro_active_requests never comes back
@@ -610,6 +660,8 @@ func (s *Service) startAttempt(
 	inputTokens, outputTokens int64,
 	targetIndex, targetTry, attemptNumber int,
 ) (*activeAttempt, error) {
+	ctx, finishContext := run.attemptContext(ctx)
+	defer finishContext()
 	resolved, ok := target.ResolveOperation(operation)
 	if !ok {
 		return nil, errors.New("provider operation primitive is unavailable")
@@ -659,8 +711,9 @@ func (s *Service) startAttempt(
 		reservation, leaseMode, snapshot, pricedTarget, err = s.prepareAccountingLease(ctx, target, inputTokens, outputTokens)
 	}
 	if err != nil {
+		var pinCleanupErr error
 		if pinIntent != nil {
-			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+			pinCleanupErr = run.deletePreparedPricePin(pinStore, pinIntent.AttemptID)
 		}
 		if pricingUnlock != nil {
 			pricingUnlock()
@@ -670,12 +723,13 @@ func (s *Service) startAttempt(
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
-			errors.Join(err, finalizeErr),
+			errors.Join(err, pinCleanupErr, finalizeErr),
 		)
 	}
 	if decision := s.tokenGuard.RecheckCost(run.tokenGuardLease, reservation, s.now()); !decision.Allowed {
+		var pinCleanupErr error
 		if pinIntent != nil {
-			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+			pinCleanupErr = run.deletePreparedPricePin(pinStore, pinIntent.AttemptID)
 		}
 		if pricingUnlock != nil {
 			pricingUnlock()
@@ -684,6 +738,9 @@ func (s *Service) startAttempt(
 		gateLease.Abandon()
 		s.rejections.tokenGuard.Add(1)
 		finalizeErr := run.finalize("token_guard_rejected")
+		if pinCleanupErr != nil {
+			return nil, gatewayError("accounting_unavailable", "prepared price could not be retired", http.StatusServiceUnavailable, errors.Join(pinCleanupErr, finalizeErr))
+		}
 		return nil, gatewayError("token_guard_blocked", "the current attempt price exceeds Token Guard cost limits", http.StatusForbidden, finalizeErr)
 	}
 	metadata := budget.AttemptMetadata{
@@ -707,14 +764,19 @@ func (s *Service) startAttempt(
 		}, metadata)
 	}
 	if err != nil {
+		var pinCleanupErr error
 		if pinIntent != nil {
-			_ = pinStore.DeletePreparedDeploymentPricePin(context.Background(), pinIntent.AttemptID)
+			pinCleanupErr = run.deletePreparedPricePin(pinStore, pinIntent.AttemptID)
 		}
 		if pricingUnlock != nil {
 			pricingUnlock()
 		}
 		providerLease.Release()
 		gateLease.Abandon()
+		if pinCleanupErr != nil {
+			finalizeErr := run.finalize("accounting_error")
+			return nil, gatewayError("accounting_unavailable", "prepared price could not be retired", http.StatusServiceUnavailable, errors.Join(err, pinCleanupErr, finalizeErr))
+		}
 		if errors.Is(err, budget.ErrExceeded) || errors.Is(err, budget.ErrRunExceeded) {
 			return nil, err
 		}
@@ -741,7 +803,7 @@ func (s *Service) startAttempt(
 			pricingUnlock()
 			providerLease.Release()
 			gateLease.Abandon()
-			cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "pin_commit_failed", FailurePhase: phaseAccounting})
+			cleanupErr := s.settleAttemptIn(run.completionContext, attempt, budget.Settlement{Outcome: "pin_commit_failed", FailurePhase: phaseAccounting})
 			finalizeErr := run.finalize("accounting_error")
 			return nil, gatewayError("accounting_unavailable", "accounting price pin could not be committed", 503, errors.Join(err, cleanupErr, finalizeErr))
 		}
@@ -752,7 +814,7 @@ func (s *Service) startAttempt(
 	if err := s.accounting.MarkStarted(ctx, attempt); err != nil {
 		providerLease.Release()
 		gateLease.Abandon()
-		cleanupErr := s.settleAttempt(attempt, budget.Settlement{Outcome: "start_failed", FailurePhase: phaseAccounting})
+		cleanupErr := s.settleAttemptIn(run.completionContext, attempt, budget.Settlement{Outcome: "start_failed", FailurePhase: phaseAccounting})
 		finalizeErr := run.finalize("accounting_error")
 		return nil, gatewayError(
 			"accounting_unavailable", "accounting is unavailable", 503,
@@ -841,7 +903,7 @@ func (attempt *activeAttempt) finish(providerErr error, settlement budget.Settle
 	attempt.concurrency.Release()
 	attempt.run.recordProviderResult(providerErr, settlement)
 	enrichSettlement(&settlement, providerErr, attempt.pricingTarget, attempt.startedAt, attempt.service.now())
-	if err := attempt.service.settleAttempt(attempt.accounting, settlement); err != nil {
+	if err := attempt.service.settleAttemptIn(attempt.run.completionContext, attempt.accounting, settlement); err != nil {
 		attempt.reportGate(providerErr)
 		finalizeErr := attempt.run.finalize("accounting_error")
 		return gatewayError(
@@ -925,7 +987,7 @@ func (attempt *activeAttempt) abort(outcome string) error {
 	// and the upstream was never called. Leaving it blank made the record
 	// indistinguishable from one written before the field existed, which the
 	// console reads as "this predates the field" and says so in words.
-	cleanupErr := attempt.service.settleAttempt(attempt.accounting, budget.Settlement{
+	cleanupErr := attempt.service.settleAttemptIn(attempt.run.completionContext, attempt.accounting, budget.Settlement{
 		Outcome: outcome, FailurePhase: phasePreProvider,
 	})
 	finalizeErr := attempt.run.finalize(outcome)
@@ -1025,6 +1087,31 @@ func NewServiceWithOptions(
 	if authSnapshot == nil || registry == nil || accounting == nil {
 		return nil, errors.New("auth snapshot, provider registry, and accounting manager are required")
 	}
+	if (options.ResourceBudget != nil && options.DeferredRAMBytes <= 0) || (options.ResourceBudget == nil && options.DeferredRAMBytes != 0) {
+		return nil, errors.New("shared resource budget and positive deferred RAM envelope must be supplied together")
+	}
+	if options.CompletionRAMBytes < 0 || options.CompletionDiskBytes < 0 ||
+		(options.ResourceBudget == nil && (options.CompletionRAMBytes != 0 || options.CompletionDiskBytes != 0)) {
+		return nil, errors.New("completion credits require a shared resource budget and non-negative envelopes")
+	}
+	if len(options.CompletionWorkspace) > resourcebudget.MaxWorkspaceSlots || len(options.CompletionWorkspace) != 0 && options.ResourceBudget == nil {
+		return nil, fmt.Errorf("terminal workspace requires the same shared budget and at most %d fixed RAM slots", resourcebudget.MaxWorkspaceSlots)
+	}
+	var terminalRAM int64
+	for _, slot := range options.CompletionWorkspace {
+		if (slot.Class != resourcebudget.IO && slot.Class != resourcebudget.Background) || slot.RAM <= 0 || slot.RAM > options.CompletionRAMBytes-terminalRAM {
+			return nil, errors.New("completion RAM must cover the actual terminal source/COW workspace")
+		}
+		terminalRAM += slot.RAM
+	}
+	if options.CaptureRAMBytes < 0 || (options.ResourceBudget == nil && options.CaptureRAMBytes != 0) {
+		return nil, errors.New("capture RAM requires a shared resource budget")
+	}
+	if options.ResourceBudget != nil && options.FailureCapture != nil {
+		if _, ok := options.FailureCapture.(ownedFailureCapture); !ok || options.CaptureRAMBytes <= 0 {
+			return nil, errors.New("budgeted failure capture requires a calibrated envelope and ownership-aware store")
+		}
+	}
 	// These two are the library's fallback for a caller that supplies neither.
 	// Production always supplies both, from gateway.max_total_attempts and
 	// retry.max_attempts_per_target, and internal/config is where the numbers
@@ -1032,6 +1119,9 @@ func NewServiceWithOptions(
 	// without options behaves the way a configured one does.
 	if options.MaxAttempts <= 0 {
 		options.MaxAttempts = 4
+	}
+	if options.TerminalAdmission != nil && options.MaxAttempts >= resourcebudget.MaxCompletionBatch {
+		return nil, errors.New("terminal admission requires a bounded attempt ladder with room for finalization")
 	}
 	if options.MaxAttemptsPerTarget <= 0 {
 		options.MaxAttemptsPerTarget = 1
@@ -1109,6 +1199,13 @@ func NewServiceWithOptions(
 		logger = slog.New(slog.DiscardHandler)
 	}
 	service := &Service{
+		resourceBudget:                options.ResourceBudget,
+		deferredRAMBytes:              options.DeferredRAMBytes,
+		completionRAMBytes:            options.CompletionRAMBytes,
+		completionWorkspace:           slices.Clone(options.CompletionWorkspace),
+		terminalAdmission:             options.TerminalAdmission,
+		completionDiskBytes:           options.CompletionDiskBytes,
+		captureRAMBytes:               options.CaptureRAMBytes,
 		logger:                        logger,
 		failureCapture:                options.FailureCapture,
 		captureAsync:                  options.FailureCapture != nil,
@@ -2704,15 +2801,46 @@ func (s *Service) cleanup(attempt budget.Attempt, settlement budget.Settlement, 
 }
 
 func (s *Service) settleAttempt(attempt budget.Attempt, settlement budget.Settlement) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	return s.settleAttemptIn(nil, attempt, settlement)
+}
+
+// A durable Prepared pin is an original request obligation even when Ledger
+// refuses the reservation. Cleanup keeps the request's actual physical targets
+// and Completion fee, and its error prevents another provider attempt.
+func (run *requestRun) deletePreparedPricePin(store PricePinStore, attemptID string) error {
+	parent := run.completionContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), cleanupTimeout)
 	defer cancel()
-	return s.accounting.Settle(ctx, attempt, settlement)
+	return resourcebudget.WithCompletionWorkspace(ctx, func(ctx context.Context) error { return store.DeletePreparedDeploymentPricePin(ctx, attemptID) })
+}
+
+func (s *Service) settleAttemptIn(parent context.Context, attempt budget.Attempt, settlement budget.Settlement) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), cleanupTimeout)
+	defer cancel()
+	return resourcebudget.WithCompletionWorkspace(ctx, func(ctx context.Context) error {
+		return s.accounting.Settle(ctx, attempt, settlement)
+	})
 }
 
 func (s *Service) finalizeRequest(request budget.Request, outcome string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	return s.finalizeRequestIn(nil, request, outcome)
+}
+
+func (s *Service) finalizeRequestIn(parent context.Context, request budget.Request, outcome string) error {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), cleanupTimeout)
 	defer cancel()
-	return s.accounting.Finalize(ctx, request, outcome)
+	return resourcebudget.WithCompletionWorkspace(ctx, func(ctx context.Context) error {
+		return s.accounting.Finalize(ctx, request, outcome)
+	})
 }
 
 func estimateReservation(inputTokens, outputTokens int64, target provider.Target) (int64, error) {

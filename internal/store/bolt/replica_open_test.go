@@ -95,7 +95,7 @@ func TestOpenPrimaryRequiresSeedAndExactSchema(t *testing.T) {
 		t.Fatalf("missing Primary error=%v", err)
 	}
 	path := filepath.Join(directory, "halro.db")
-	store, err := Open(path)
+	store, err := openForTest(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,5 +119,47 @@ func TestOpenPrimaryRequiresSeedAndExactSchema(t *testing.T) {
 	}
 	if err := primary.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestExistingMetadataOpenDoesNotInitializeEmptyOrFollowSymlink(t *testing.T) {
+	for _, open := range []func(string) (*Store, error){OpenPrimary, OpenReplica, OpenReadOnly} {
+		path := filepath.Join(t.TempDir(), "empty.db")
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if store, err := open(path); err == nil || store != nil {
+			if store != nil {
+				store.Close()
+			}
+			t.Fatal("unpublished empty seed initialized")
+		}
+		if info, err := os.Stat(path); err != nil || info.Size() != 0 {
+			t.Fatal("empty source mutated before schema refusal", err)
+		}
+	}
+	s, err := Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := s.path
+	info := s.physicalInfo
+	if err := s.VerifyPhysicalIdentity(info); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "linked.db")
+	if err := os.Symlink(source, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, open := range []func(string) (*Store, error){Open, OpenPrimary, OpenReplica, OpenReadOnly} {
+		if store, err := open(link); err == nil || store != nil {
+			if store != nil {
+				store.Close()
+			}
+			t.Fatal("Metadata source symlink accepted")
+		}
 	}
 }

@@ -210,14 +210,24 @@ func TestConcurrentSelectionsOnOneDeploymentDoNotQuarantine(t *testing.T) {
 func TestClockAnchorDoesNotRegress(t *testing.T) {
 	base := time.Now().UTC()
 	store := newPricedStore(t, "dep_anchor", base.Add(-time.Hour))
-	state := store.deploymentPricingState("dep_anchor")
+	state, err := store.pricingClockOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	observed := time.Now()
-	state.mergeClockAnchor(pricingClockObservation{SelectedAt: base, ObservedAt: observed})
+	if err := state.mergeClockAnchor("dep_anchor", pricingClockObservation{SelectedAt: base, ObservedAt: observed}); err != nil {
+		t.Fatal(err)
+	}
 	// The write a late-merging sibling would perform.
-	state.mergeClockAnchor(pricingClockObservation{SelectedAt: base.Add(-time.Second), ObservedAt: observed.Add(time.Millisecond)})
+	if err := state.mergeClockAnchor("dep_anchor", pricingClockObservation{SelectedAt: base.Add(-time.Second), ObservedAt: observed.Add(time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
 
-	anchor, ok := state.clockAnchor()
+	anchor, ok, err := state.clockAnchor("dep_anchor")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok {
 		t.Fatal("no clock anchor was recorded")
 	}
@@ -232,8 +242,10 @@ func TestClockAnchorDoesNotRegress(t *testing.T) {
 	}
 
 	// A genuinely newer selection still advances it.
-	state.mergeClockAnchor(pricingClockObservation{SelectedAt: base.Add(time.Second), ObservedAt: observed.Add(time.Second)})
-	if anchor, _ = state.clockAnchor(); !anchor.SelectedAt.Equal(base.Add(time.Second)) {
+	if err := state.mergeClockAnchor("dep_anchor", pricingClockObservation{SelectedAt: base.Add(time.Second), ObservedAt: observed.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if anchor, _, err = state.clockAnchor("dep_anchor"); err != nil || !anchor.SelectedAt.Equal(base.Add(time.Second)) {
 		t.Fatalf("the anchor did not advance: %s", anchor.SelectedAt)
 	}
 }

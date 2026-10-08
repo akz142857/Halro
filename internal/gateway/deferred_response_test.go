@@ -136,7 +136,10 @@ func TestDeferredResponseCarriesRunAttributionFromSubmissionToSettlement(t *test
 		t.Fatalf("stored attribution=%s/%s", record.WorkUnitID, record.RunID)
 	}
 	f.runOnce(t)
-	settled, ok := f.accounting.Run(f.project.ID, run.ID)
+	settled, ok, readErr := f.accounting.ReadRun(context.Background(), f.project.ID, run.ID)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
 	if !ok || settled.CommittedMicrosUSD <= 0 || settled.ReservedMicrosUSD != 0 {
 		t.Fatalf("settled Run=%#v found=%t", settled, ok)
 	}

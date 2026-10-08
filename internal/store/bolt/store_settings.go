@@ -1,6 +1,7 @@
 package bolt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -171,8 +172,12 @@ func (s *Store) SeedInstanceUsageSettings(consoleWindowDays int, now time.Time) 
 }
 
 func (s *Store) InstanceAccountingSettings() (domain.InstanceAccountingSettings, error) {
+	return s.InstanceAccountingSettingsContext(context.Background())
+}
+
+func (s *Store) InstanceAccountingSettingsContext(ctx context.Context) (domain.InstanceAccountingSettings, error) {
 	var settings domain.InstanceAccountingSettings
-	err := s.view(func(tx *Tx) error {
+	err := s.viewContext(ctx, func(tx *Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyInstanceAccountingSettings)
 		if raw == nil {
 			return ErrNotFound

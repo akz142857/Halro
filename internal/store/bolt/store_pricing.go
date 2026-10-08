@@ -3,16 +3,19 @@ package bolt
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/metadatajournal"
 )
 
 func migrateVersionedDeploymentPricing(tx *Tx, step func(string) error) error {
@@ -248,6 +251,11 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 	if price.Version != 0 || price.Revision != 0 || price.CancelledAt != nil || price.CancelledBy != "" {
 		return domain.DeploymentPriceVersion{}, nil, false, errors.New("new price version must not set version, revision, or cancellation metadata")
 	}
+	state, release, lockErr := s.beginPricingTimelineMutation(price.DeploymentID)
+	if lockErr != nil {
+		return domain.DeploymentPriceVersion{}, nil, false, lockErr
+	}
+	defer release()
 	var effectiveIntent *domain.PricingAuditIntent
 	replayed := false
 	err := s.update(func(tx *Tx) error {
@@ -390,10 +398,9 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 		}
 		return nil
 	})
-	// The timeline this deployment prices from has changed, so the audited copy
-	// the Gateway selects against is no longer the timeline.
+	// Publish marker invalidation under the same lock as the committed write.
 	if err == nil {
-		s.invalidateDeploymentPricingTimeline(price.DeploymentID)
+		state.timelineLoaded = false
 	}
 	return price, effectiveIntent, replayed, err
 }
@@ -457,56 +464,53 @@ func (s *Store) ListDeploymentPriceVersions(ctx context.Context, deploymentID st
 	return prices, err
 }
 
-// SelectDeploymentPriceVersion answers which price version is in force for a
-// deployment at an instant, from a timeline that has passed the full integrity
-// audit.
-//
-// The audit is what makes the answer trustworthy — it rejects a timeline whose
-// versions contradict each other rather than picking one of the readings — but
-// it is a property of the timeline, not of the request, and the Gateway asks
-// this question for every candidate of every request. Re-reading and re-decoding
-// the whole timeline each time made the cost of pricing a request grow with the
-// number of price changes the deployment had ever had: measured at a 60-version
-// timeline, 386µs and 300KB per call, against 5.5µs for the same answer. The
-// audited timeline is cached per deployment instead and dropped by every write
-// path that changes a version record.
-func (s *Store) SelectDeploymentPriceVersion(ctx context.Context, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+// SelectDeploymentPriceVersion audits a cold timeline in finite pages, retains
+// only the successful audit marker, then selects the candidate through its
+// native time index. No price-version history slice is built or cached here.
+func (s *Store) SelectDeploymentPriceVersion(ctx context.Context, deploymentID string, selectedAt time.Time) (price domain.DeploymentPriceVersion, err error) {
 	if strings.TrimSpace(deploymentID) == "" || selectedAt.IsZero() || selectedAt.Location() != time.UTC {
-		return domain.DeploymentPriceVersion{}, errors.New("deployment id and UTC pricing_selected_at are required")
+		return price, errors.New("deployment id and UTC pricing_selected_at are required")
 	}
-	prices, err := s.auditedDeploymentTimeline(ctx, deploymentID)
+	leave, err := s.enter()
+	if err != nil {
+		return price, err
+	}
+	defer leave()
+	operation, err := s.acquirePricingIO()
+	if err != nil {
+		return price, err
+	}
+	defer func() { err = errors.Join(err, operation.release()) }()
+	ctx, cancel := s.confirmationContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return price, err
+	}
+	err = s.withAuditedPricingTimeline(ctx, deploymentID, nil, operation, func(tx *Tx, _ uint64) error {
+		price, err = selectDeploymentPriceVersionTxContext(ctx, tx, deploymentID, selectedAt)
+		return err
+	})
+
 	if err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
-	return domain.SelectAuditedPriceVersion(prices, selectedAt)
+	if err := ctx.Err(); err != nil {
+		return domain.DeploymentPriceVersion{}, err
+	}
+	return price, nil
 }
 
-// auditedDeploymentTimeline returns the deployment's audited price timeline,
-// reading and auditing it only when the cached copy is absent.
-//
-// The returned slice is the cached one and must not be mutated by callers;
-// selection only reads it. A failed audit is not cached: it means the stored
-// timeline is broken, and every later call has to keep failing closed rather
-// than serving a remembered verdict.
-func (s *Store) auditedDeploymentTimeline(ctx context.Context, deploymentID string) ([]domain.DeploymentPriceVersion, error) {
+func (s *Store) beginPricingTimelineMutation(deploymentID string) (*deploymentPricingState, func(), error) {
+	leave, err := s.enter()
+	if err != nil {
+		return nil, nil, err
+	}
 	state := s.deploymentPricingState(deploymentID)
 	state.timelineMu.Lock()
-	defer state.timelineMu.Unlock()
-	if state.timelineLoaded {
-		return state.timeline, nil
-	}
-	prices, err := s.ListDeploymentPriceVersions(ctx, deploymentID)
-	if err != nil {
-		return nil, err
-	}
-	if err := domain.AuditPriceTimeline(prices, deploymentID); err != nil {
-		return nil, err
-	}
-	state.timeline, state.timelineLoaded = prices, true
-	return state.timeline, nil
+	return state, func() { state.timelineMu.Unlock(); leave() }, nil
 }
 
-// invalidateDeploymentPricingTimeline drops the audited copy after a write that
+// invalidateDeploymentPricingTimeline drops the audit marker after a write that
 // changed what the timeline says. It is called after the transaction commits:
 // dropping before would let a concurrent read repopulate the cache from the
 // pre-commit state.
@@ -516,16 +520,36 @@ func (s *Store) invalidateDeploymentPricingTimeline(deploymentID string) {
 	}
 	state := s.deploymentPricingState(deploymentID)
 	state.timelineMu.Lock()
-	state.timeline, state.timelineLoaded = nil, false
+	state.timelineLoaded = false
 	state.timelineMu.Unlock()
 }
 
+// Only synchronization and a replaceable audit marker use this fixed table.
+// Digest collisions at the slot index share exclusion but never clock values.
 func (s *Store) deploymentPricingState(deploymentID string) *deploymentPricingState {
-	if value, ok := s.pricingStates.Load(deploymentID); ok {
-		return value.(*deploymentPricingState)
+	s.pricingResources.mu.Lock()
+	s.pricingResources.started = true
+	s.pricingStatesOnce.Do(func() { s.pricingStates = new([pricingStateSlots]deploymentPricingState) })
+	s.pricingResources.mu.Unlock()
+	key := sha256.Sum256([]byte(deploymentID))
+	return &s.pricingStates[binary.BigEndian.Uint64(key[:8])%pricingStateSlots]
+}
+
+// The caller owns Store admission through every clock IO operation.
+func (s *Store) pricingClockOwner() (*pricingClockIndex, error) {
+	s.pricingResources.mu.Lock()
+	s.pricingResources.started = true
+	s.pricingResources.mu.Unlock()
+	s.pricingClockMu.Lock()
+	defer s.pricingClockMu.Unlock()
+	if s.pricingClock != nil || s.pricingClockErr != nil {
+		return s.pricingClock, s.pricingClockErr
 	}
-	value, _ := s.pricingStates.LoadOrStore(deploymentID, &deploymentPricingState{})
-	return value.(*deploymentPricingState)
+	if s.replica || s.db != nil && s.db.IsReadOnly() {
+		return nil, errors.New("pricing preparation requires writable authoritative metadata")
+	}
+	s.pricingClock, s.pricingClockErr = newPricingClockIndex(filepath.Dir(s.path))
+	return s.pricingClock, s.pricingClockErr
 }
 
 // LockDeploymentPricingShared is taken by price selection and pin preparation.
@@ -535,9 +559,23 @@ func (s *Store) deploymentPricingState(deploymentID string) *deploymentPricingSt
 // per-deployment attempt rate the Gateway's throughput ceiling; see ADR 0012,
 // "Amendment 2026-08-07".
 func (s *Store) LockDeploymentPricingShared(deploymentID string) func() {
+	leave, err := s.enter()
+	if err != nil {
+		return func() {}
+	}
 	state := s.deploymentPricingState(deploymentID)
 	state.gate.RLock()
-	return state.gate.RUnlock
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			held := state
+			state = nil
+			held.gate.RUnlock()
+			exit := leave
+			leave = nil
+			exit()
+		})
+	}
 }
 
 // LockDeploymentPricingExclusive is taken by the Admin operations that mutate a
@@ -548,32 +586,22 @@ func (s *Store) LockDeploymentPricingShared(deploymentID string) func() {
 // that these operator actions may now wait behind in-flight attempts, bounded by
 // one attempt's durable path.
 func (s *Store) LockDeploymentPricingExclusive(deploymentID string) func() {
+	leave, err := s.enter()
+	if err != nil {
+		return func() {}
+	}
 	state := s.deploymentPricingState(deploymentID)
 	state.gate.Lock()
-	return state.gate.Unlock
-}
-
-// clockAnchor returns the last trusted (selection time, observation instant)
-// pair for this deployment. Forward-jump detection needs an in-memory anchor
-// because the durable high-water mark only ever moves forward and so cannot
-// witness a clock that jumped ahead.
-func (state *deploymentPricingState) clockAnchor() (pricingClockObservation, bool) {
-	state.clockMu.Lock()
-	defer state.clockMu.Unlock()
-	return state.clock, state.hasClock
-}
-
-// mergeClockAnchor advances the anchor only when the candidate selection time is
-// newer. Concurrent selections on one deployment can commit in the reverse of
-// their capture order, and a plain assignment would let the anchor walk
-// backwards — turning ordinary reordering into a forward-jump verdict on a later
-// request. The pair is replaced together: an ObservedAt is only meaningful
-// beside the SelectedAt it was captured with.
-func (state *deploymentPricingState) mergeClockAnchor(candidate pricingClockObservation) {
-	state.clockMu.Lock()
-	defer state.clockMu.Unlock()
-	if !state.hasClock || candidate.SelectedAt.After(state.clock.SelectedAt) {
-		state.clock, state.hasClock = candidate, true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			held := state
+			state = nil
+			held.gate.Unlock()
+			exit := leave
+			leave = nil
+			exit()
+		})
 	}
 }
 
@@ -640,66 +668,7 @@ func (s *Store) DeploymentPricingQuarantine(ctx context.Context, deploymentID st
 }
 
 func (s *Store) QuarantineRestoredScheduledPrices(ctx context.Context, backupCreatedAt, restoredAt time.Time) (int, error) {
-	if err := ctx.Err(); err != nil {
-		return 0, err
-	}
-	backupCreatedAt, restoredAt = backupCreatedAt.UTC(), restoredAt.UTC()
-	if backupCreatedAt.IsZero() || !restoredAt.After(backupCreatedAt) {
-		return 0, nil
-	}
-	count := 0
-	err := s.update(func(tx *Tx) error {
-		due := make(map[string]domain.DeploymentPriceVersion)
-		if err := tx.Bucket(bucketDeploymentPriceVersions).ForEach(func(_, raw []byte) error {
-			var price domain.DeploymentPriceVersion
-			if err := json.Unmarshal(raw, &price); err != nil {
-				return err
-			}
-			if price.EffectiveFrom.After(backupCreatedAt) && !price.EffectiveFrom.After(restoredAt) &&
-				(price.CancelledAt == nil || price.CancelledAt.After(backupCreatedAt)) {
-				if current, ok := due[price.DeploymentID]; !ok || current.EffectiveFrom.Before(price.EffectiveFrom) {
-					due[price.DeploymentID] = price
-				}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		highs := tx.Bucket(bucketDeploymentPricingHighWater)
-		for deploymentID, price := range due {
-			var high domain.DeploymentPricingHighWater
-			if raw := highs.Get([]byte(deploymentID)); raw != nil {
-				if err := json.Unmarshal(raw, &high); err != nil {
-					return err
-				}
-				if high.Quarantined {
-					continue
-				}
-				high.Quarantined = true
-				high.QuarantineReason = "restored_scheduled_price_requires_confirmation"
-				high.Revision++
-			} else {
-				high = domain.DeploymentPricingHighWater{
-					DeploymentID: deploymentID, LatestObservedPriceVersionID: price.ID,
-					LatestSelectedAt: restoredAt, LatestObservedEffectiveFrom: price.EffectiveFrom,
-					Quarantined: true, QuarantineReason: "restored_scheduled_price_requires_confirmation", Revision: 1,
-				}
-			}
-			if err := high.Validate(); err != nil {
-				return err
-			}
-			encoded, err := json.Marshal(high)
-			if err != nil {
-				return err
-			}
-			if err := highs.Put([]byte(deploymentID), encoded); err != nil {
-				return err
-			}
-			count++
-		}
-		return nil
-	})
-	return count, err
+	return s.quarantineRestoredScheduledPricesBounded(ctx, backupCreatedAt, restoredAt)
 }
 
 func (s *Store) ConfirmRestoredPricing(ctx context.Context, deploymentID string) error {
@@ -752,7 +721,20 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	if deploymentID == "" || attemptID == "" || selectedAt.IsZero() || rollbackTolerance < 0 || forwardTolerance <= 0 {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, errors.New("deployment, attempt, UTC selection time, and valid clock tolerances are required")
 	}
-	state := s.deploymentPricingState(deploymentID)
+	leave, err := s.enter()
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	defer leave()
+	operation, err := s.acquirePricingIO()
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
+	defer operation.release()
+	clock, err := s.pricingClockOwner()
+	if err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
 	requestedAt := selectedAt
 	var price domain.DeploymentPriceVersion
 	var snapshot domain.PriceSnapshot
@@ -768,7 +750,7 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	// price still serves under the unknown-price policy). Only genuine faults are
 	// returned as errors, so only they can spoil a batch.
 	var outcome error
-	err := s.batch(func(tx *Tx) error {
+	err = s.batchPricePinContext(ctx, false, func(tx *Tx) error {
 		// Everything the caller reads is reset here, not accumulated across
 		// runs: this body may execute more than once for a single call, and a
 		// re-run happens in a fresh transaction that can observe state another
@@ -780,7 +762,10 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 		// never decide a forward jump from an observation older than the
 		// transaction that ends up committing.
 		observedAt = time.Now()
-		previousObservation, hasObservation := state.clockAnchor()
+		previousObservation, hasObservation, err := clock.clockAnchor(deploymentID)
+		if err != nil {
+			return err
+		}
 		forwardJump := false
 		if hasObservation {
 			elapsed := observedAt.Sub(previousObservation.ObservedAt)
@@ -835,7 +820,6 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 				selectedAt = highWater.LatestSelectedAt
 			}
 		}
-		var err error
 		price, err = selectDeploymentPriceVersionTx(tx, deploymentID, selectedAt)
 		if errors.Is(err, domain.ErrPriceUnavailable) {
 			outcome = err
@@ -914,7 +898,9 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	if outcome != nil {
 		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, outcome
 	}
-	state.mergeClockAnchor(pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt})
+	if err := clock.mergeClockAnchor(deploymentID, pricingClockObservation{SelectedAt: selectedAt, ObservedAt: observedAt}); err != nil {
+		return domain.DeploymentPriceVersion{}, domain.PriceSnapshot{}, domain.PricePinIntent{}, err
+	}
 	return price, snapshot, intent, nil
 }
 
@@ -926,7 +912,7 @@ func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapsho
 	// See PrepareDeploymentPricePin: expected outcomes travel in outcome so they
 	// cannot abort a batch shared with unrelated deployments' commits.
 	var outcome error
-	err := s.batch(func(tx *Tx) error {
+	err := s.batchPricePinContext(ctx, true, func(tx *Tx) error {
 		intent, outcome = domain.PricePinIntent{}, nil
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))
@@ -974,7 +960,7 @@ func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.updatePricePinTerminalContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))
 		if raw == nil {
@@ -991,128 +977,11 @@ func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID 
 	})
 }
 
-func quarantineIncoherentPricingHighWatersTx(tx *Tx) error {
-	highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
-	updates := make(map[string]domain.DeploymentPricingHighWater)
-	if err := highWaterBucket.ForEach(func(key, raw []byte) error {
-		if raw == nil {
-			return nil
-		}
-		var highWater domain.DeploymentPricingHighWater
-		if err := json.Unmarshal(raw, &highWater); err != nil {
-			return err
-		}
-		if err := highWater.Validate(); err != nil {
-			return err
-		}
-		if highWater.Quarantined {
-			return nil
-		}
-		var price domain.DeploymentPriceVersion
-		priceRaw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(highWater.LatestObservedPriceVersionID))
-		incoherent := priceRaw == nil
-		if !incoherent {
-			if err := json.Unmarshal(priceRaw, &price); err != nil {
-				return err
-			}
-			incoherent = price.DeploymentID != highWater.DeploymentID ||
-				!price.EffectiveFrom.Equal(highWater.LatestObservedEffectiveFrom)
-		}
-		if incoherent {
-			highWater.Quarantined = true
-			highWater.QuarantineReason = "restored_high_water_incoherent"
-			highWater.Revision++
-			updates[string(key)] = highWater
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	for key, highWater := range updates {
-		encoded, err := json.Marshal(highWater)
-		if err != nil {
-			return err
-		}
-		if err := highWaterBucket.Put([]byte(key), encoded); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.State) error {
-	if state == nil {
-		return errors.New("ledger state is required for price pin recovery")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return s.update(func(tx *Tx) error {
-		if err := quarantineIncoherentPricingHighWatersTx(tx); err != nil {
-			return err
-		}
-		bucket := tx.Bucket(bucketDeploymentPricePins)
-		var deletes [][]byte
-		var updates = make(map[string]domain.PricePinIntent)
-		if err := bucket.ForEach(func(key, raw []byte) error {
-			if raw == nil {
-				return nil
-			}
-			var intent domain.PricePinIntent
-			if err := json.Unmarshal(raw, &intent); err != nil {
-				return err
-			}
-			if err := intent.Validate(); err != nil {
-				return err
-			}
-			lease, exists := state.AccountingLease(intent.AttemptID)
-			if !exists {
-				if intent.State == domain.PricePinPrepared {
-					deletes = append(deletes, bytes.Clone(key))
-					return nil
-				}
-				return fmt.Errorf("committed price pin %q has no Ledger lease", intent.AttemptID)
-			}
-			if lease.Event.PriceSnapshot == nil {
-				return fmt.Errorf("price pin %q Ledger lease has no snapshot", intent.AttemptID)
-			}
-			digest, err := lease.Event.PriceSnapshot.Digest()
-			if err != nil || digest != intent.SnapshotSHA256 {
-				return fmt.Errorf("price pin %q snapshot digest mismatch: %w", intent.AttemptID, err)
-			}
-			if intent.State == domain.PricePinPrepared {
-				now := time.Now().UTC()
-				intent.State, intent.LedgerSequence, intent.CommittedAt = domain.PricePinCommitted, lease.Sequence, &now
-				updates[string(key)] = intent
-			} else if intent.LedgerSequence != lease.Sequence {
-				return fmt.Errorf("price pin %q Ledger sequence mismatch", intent.AttemptID)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		for _, key := range deletes {
-			if err := bucket.Delete(key); err != nil {
-				return err
-			}
-		}
-		for key, intent := range updates {
-			if err := intent.Validate(); err != nil {
-				return err
-			}
-			encoded, err := json.Marshal(intent)
-			if err != nil {
-				return err
-			}
-			if err := bucket.Put([]byte(key), encoded); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 func selectDeploymentPriceVersionTx(tx *Tx, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+	return selectDeploymentPriceVersionTxContext(context.Background(), tx, deploymentID, selectedAt)
+}
+
+func selectDeploymentPriceVersionTxContext(ctx context.Context, tx *Tx, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
 	timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
 	if timeline == nil {
 		return domain.DeploymentPriceVersion{}, domain.ErrPriceUnavailable
@@ -1123,12 +992,24 @@ func selectDeploymentPriceVersionTx(tx *Tx, deploymentID string, selectedAt time
 		key, priceID = cursor.Prev()
 	}
 	for key != nil {
+		if err := ctx.Err(); err != nil {
+			return domain.DeploymentPriceVersion{}, err
+		}
 		raw := tx.Bucket(bucketDeploymentPriceVersions).Get(priceID)
 		if raw == nil {
 			return domain.DeploymentPriceVersion{}, errors.New("deployment price timeline references a missing record")
 		}
+		if len(raw) > metadatajournal.MaxPayloadSize {
+			return domain.DeploymentPriceVersion{}, ErrPricingAuditLimit
+		}
 		var price domain.DeploymentPriceVersion
 		if err := json.Unmarshal(raw, &price); err != nil {
+			return domain.DeploymentPriceVersion{}, err
+		}
+		if price.ID != string(priceID) || price.DeploymentID != deploymentID || !bytes.Equal(key, deploymentPriceTimelineKey(price.EffectiveFrom)) {
+			return domain.DeploymentPriceVersion{}, domain.ErrPriceTimelineConflict
+		}
+		if err := price.Validate(); err != nil {
 			return domain.DeploymentPriceVersion{}, err
 		}
 		if price.CancelledAt == nil && !price.EffectiveFrom.After(selectedAt) {
@@ -1147,6 +1028,11 @@ func (s *Store) cancelDeploymentPriceVersion(ctx context.Context, deploymentID, 
 	if err := ctx.Err(); err != nil {
 		return domain.DeploymentPriceVersion{}, err
 	}
+	state, release, lockErr := s.beginPricingTimelineMutation(deploymentID)
+	if lockErr != nil {
+		return domain.DeploymentPriceVersion{}, lockErr
+	}
+	defer release()
 	var price domain.DeploymentPriceVersion
 	err := s.update(func(tx *Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(priceID))
@@ -1201,7 +1087,7 @@ func (s *Store) cancelDeploymentPriceVersion(ctx context.Context, deploymentID, 
 	// A cancellation rewrites a version record in place, so the audited copy
 	// still says the cancelled version is in force.
 	if err == nil {
-		s.invalidateDeploymentPricingTimeline(deploymentID)
+		state.timelineLoaded = false
 	}
 	return price, err
 }

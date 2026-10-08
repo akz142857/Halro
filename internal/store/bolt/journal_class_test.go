@@ -62,7 +62,9 @@ func TestTheClassTableHasNoBucketsThatDoNotExist(t *testing.T) {
 	// migration (pricing_migration.go), so a fresh database legitimately does
 	// not have it. It is named here rather than exempted by a rule, so a second
 	// lazily created bucket has to be thought about rather than absorbed.
-	createdOnFirstUse := map[string]struct{}{"pricing_migration_resolutions": {}}
+	// The two rebuild slots are lazy node-derived buckets: their creation is
+	// not a replicated schema transition and never changes native authority.
+	createdOnFirstUse := map[string]struct{}{"pricing_migration_resolutions": {}, "usage_daily_rollup_a": {}, "usage_daily_rollup_b": {}}
 	for name := range bucketClasses {
 		if _, exists := onDisk[name]; exists {
 			continue
@@ -91,6 +93,7 @@ func TestEveryDeclaredMetaKeyIsClassified(t *testing.T) {
 		keyInstanceID, keyAdminBootstrapCompletion, keyMinimumLedgerReaderVersion,
 		keyLedgerFeatureEpoch, keyShutdownTruncatedAttempts,
 		keyMetadataHMACEnvelope, keyAppliedJournalSequence, keyMetadataJournalEpoch,
+		vaultGroupRotationProgressKey,
 	}
 	for _, key := range declared {
 		class, err := classify([]string{string(bucketMeta)}, key)

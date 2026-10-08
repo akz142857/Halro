@@ -193,7 +193,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 40 ||
+	if uint64(len(history)) != schemaVersion ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -233,7 +233,12 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[36] != (MigrationRecord{Version: 37, Name: "usage_provider_attribution_boundary"}) ||
 		history[37] != (MigrationRecord{Version: 38, Name: "provider_egress_proxy_compatibility_fence"}) ||
 		history[38] != (MigrationRecord{Version: 39, Name: "route_suspensions"}) ||
-		history[39] != (MigrationRecord{Version: 40, Name: "provider_resource_idempotency_index"}) {
+		history[39] != (MigrationRecord{Version: 40, Name: "provider_resource_idempotency_index"}) ||
+		history[40] != (MigrationRecord{Version: 41, Name: "outcome_definition_export_prefix"}) ||
+		history[41] != (MigrationRecord{Version: 42, Name: "deployment_price_revision_fence"}) ||
+		history[42] != (MigrationRecord{Version: 43, Name: "pricing_audit_pending_count"}) ||
+		history[43] != (MigrationRecord{Version: 44, Name: "pricing_proposal_revision_fence"}) ||
+		history[44] != (MigrationRecord{Version: 45, Name: "pricing_proposal_order_index"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -346,10 +351,14 @@ func TestProviderProfileBindingMigrationFromV8IsAtomicAndIdempotent(t *testing.T
 	}
 	for _, point := range []string{"before_migrate_provider_profile_bindings", "after_migrate_provider_profile_bindings"} {
 		t.Run(point, func(t *testing.T) {
-			path := filepath.Join(root, point+".db")
+			// The journal belongs to a data directory, not a DB filename. Each
+			// migration retry needs its own matching DB/epoch pair; sharing root
+			// would leave the second DB at epoch 1 with the first retry's epoch 2.
+			path := filepath.Join(t.TempDir(), point+".db")
 			if err := os.WriteFile(path, template, 0o600); err != nil {
 				t.Fatal(err)
 			}
+			copyTestFile(t, filepath.Join(root, MetadataJournalFileName), filepath.Join(filepath.Dir(path), MetadataJournalFileName))
 			injected := errors.New("injected v9 failure")
 			_, err := openWithMigrationStepHook(path, func(version uint64, step string) error {
 				if version == 9 && step == point {

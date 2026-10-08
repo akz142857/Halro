@@ -1,8 +1,10 @@
 package masterkey
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -55,5 +57,41 @@ func TestFileStoreHonorsCancelledContext(t *testing.T) {
 	cancel()
 	if err := store.Initialize(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}
+
+func TestFileStoreReplacementRequiresOriginalUnlockedIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "master.key")
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Initialize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	next := make([]byte, vault.MasterKeySize)
+	next[0] = 22
+	if err := store.Replace(context.Background(), next); err == nil {
+		t.Fatal("replacement accepted without original unlock")
+	}
+	original, err := store.Unlock(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(original)
+	if err := os.Rename(path, path+".original"); err != nil {
+		t.Fatal(err)
+	}
+	foreign := make([]byte, vault.MasterKeySize)
+	foreign[0] = 33
+	if err := os.WriteFile(path, foreign, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Replace(context.Background(), next); err == nil {
+		t.Fatal("late foreign live key overwritten")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(raw, foreign) {
+		t.Fatal("foreign key changed", err)
 	}
 }

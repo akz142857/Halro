@@ -24,6 +24,9 @@ import (
 type UsageRollupState struct {
 	Version   int              `json:"version"`
 	Watermark ledger.Watermark `json:"watermark"`
+	// Slot zero is the historical bucket. Rebuilds publish one of two fixed
+	// node-derived buckets; no staged rows are visible before this root commits.
+	Slot int `json:"slot,omitempty"`
 }
 
 // PutUsageCheckpoint durably advances both Usage derivatives at once: the
@@ -72,10 +75,6 @@ func (s *Store) PutUsageCheckpoint(
 	if err != nil {
 		return fmt.Errorf("encode usage checkpoint envelope: %w", err)
 	}
-	state, err := json.Marshal(UsageRollupState{Version: rollupVersion, Watermark: watermark})
-	if err != nil {
-		return fmt.Errorf("encode usage rollup state: %w", err)
-	}
 	// One transaction for the head, the segments it names, the segments it no
 	// longer names, and the rollup increment. A head that committed without its
 	// segments would name records nobody can read, and a checkpoint that
@@ -83,6 +82,14 @@ func (s *Store) PutUsageCheckpoint(
 	// of the WAL nobody can name.
 	return s.update(func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
+		_, slot, err := selectedUsageRollupBucket(tx)
+		if err != nil {
+			return err
+		}
+		state, err := json.Marshal(UsageRollupState{Version: rollupVersion, Watermark: watermark, Slot: slot})
+		if err != nil {
+			return err
+		}
 		if current := meta.Get(keyUsageCheckpoint); current != nil {
 			var saved usageCheckpoint
 			if err := json.Unmarshal(current, &saved); err != nil {
@@ -165,9 +172,9 @@ func applyUsageRollupDelta(tx *Tx, rollup map[string]domain.DailyRollup) error {
 	if len(rollup) == 0 {
 		return nil
 	}
-	bucket := tx.Bucket(bucketUsageDailyRollup)
-	if bucket == nil {
-		return errors.New("usage rollup bucket is missing")
+	bucket, _, err := selectedUsageRollupBucket(tx)
+	if err != nil {
+		return err
 	}
 	type pending struct {
 		key domain.RollupKey
@@ -342,9 +349,9 @@ func (s *Store) UsageRollupRange(
 	visit func(domain.RollupKey, domain.DailyRollup) error,
 ) error {
 	return s.view(func(tx *Tx) error {
-		bucket := tx.Bucket(bucketUsageDailyRollup)
-		if bucket == nil {
-			return errors.New("usage rollup bucket is missing")
+		bucket, _, err := selectedUsageRollupBucket(tx)
+		if err != nil {
+			return err
 		}
 		cursor := bucket.Cursor()
 		key, value := cursor.Seek([]byte(startPeriodID))

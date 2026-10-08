@@ -29,6 +29,9 @@ func (s *Store) CreateDeploymentPriceProposal(ctx context.Context, proposal doma
 	}
 	replayed := false
 	err := s.update(func(tx *Tx) error {
+		if err := proposalIndexReadyTx(tx); err != nil {
+			return err
+		}
 		idempotency := tx.Bucket(bucketPricingProposalIdempotency)
 		if raw := idempotency.Get([]byte(keySHA256)); raw != nil {
 			var previous pricingIdempotencyRecord
@@ -64,17 +67,8 @@ func (s *Store) CreateDeploymentPriceProposal(ctx context.Context, proposal doma
 			return errors.New("price proposal does not match deployment identity")
 		}
 		bucket := tx.Bucket(bucketDeploymentPriceProposals)
-		count := 0
-		if err := bucket.ForEach(func(_, raw []byte) error {
-			var item domain.DeploymentPriceProposal
-			if err := json.Unmarshal(raw, &item); err != nil {
-				return err
-			}
-			if item.DeploymentID == proposal.DeploymentID {
-				count++
-			}
-			return nil
-		}); err != nil {
+		count, err := proposalCountTx(tx, proposal.DeploymentID)
+		if err != nil {
 			return err
 		}
 		if count >= maxPriceProposalsPerDeployment {
@@ -159,6 +153,11 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 	if err := intent.Validate(); err != nil || intent.Action != "deployment_price.proposal_adopt" || intent.TargetID != proposalID {
 		return proposal, price, errors.New("invalid proposal adoption audit intent")
 	}
+	state, release, lockErr := s.beginPricingTimelineMutation(deploymentID)
+	if lockErr != nil {
+		return proposal, price, lockErr
+	}
+	defer release()
 	err := s.update(func(tx *Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceProposals).Get([]byte(proposalID))
 		if raw == nil {
@@ -240,10 +239,10 @@ func (s *Store) AdoptDeploymentPriceProposal(ctx context.Context, deploymentID, 
 		intent.ChangeSummary = fmt.Sprintf("before={proposal:%s} after={price:%s,billing:%s,input:%d,cached_input:%d,output:%d,fixed:%d}", proposal.ID, price.ID, price.BillingMode, price.InputMicrosPerMillion, price.CachedInputMicrosPerMillion, price.OutputMicrosPerMillion, price.FixedRequestMicrosUSD) + price.Schedule.AuditSummary()
 		return putPricingAuditIntentTx(tx, intent)
 	})
-	// Adoption appends a version like any other creation, so the audited copy
-	// the Gateway selects against has to be rebuilt.
+	// Adoption appends a version and invalidates its audit marker before any
+	// subsequent selector can observe the committed timeline.
 	if err == nil {
-		s.invalidateDeploymentPricingTimeline(deploymentID)
+		state.timelineLoaded = false
 	}
 	return proposal, price, err
 }

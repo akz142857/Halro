@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/semantic"
+	storebolt "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
@@ -454,11 +456,11 @@ type fixture struct {
 	log        *ledger.Log
 }
 
-func newFixture(t *testing.T, dailyBudget int64) fixture {
+func newFixture(t testing.TB, dailyBudget int64) fixture {
 	return newFixtureWithLedgerOptions(t, dailyBudget, ledger.Options{})
 }
 
-func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger.Options) fixture {
+func newFixtureWithLedgerOptions(t testing.TB, dailyBudget int64, options ledger.Options) fixture {
 	return newFixtureAt(t, dailyBudget, options, nil)
 }
 
@@ -470,7 +472,7 @@ func newFixtureWithLedgerOptions(t *testing.T, dailyBudget int64, options ledger
 // could have had. A test that needs two therefore says so here, rather than
 // inheriting it from a default and failing the day that default moves — which is
 // how this helper came to exist.
-func newFixtureRetryingSameTarget(t *testing.T, dailyBudget int64, options ledger.Options) fixture {
+func newFixtureRetryingSameTarget(t testing.TB, dailyBudget int64, options ledger.Options) fixture {
 	return newFixtureShaped(t, dailyBudget, options, nil, nil, func(serviceOptions *ServiceOptions) {
 		serviceOptions.MaxAttemptsPerTarget = 2
 	})
@@ -481,7 +483,7 @@ func newFixtureRetryingSameTarget(t *testing.T, dailyBudget int64, options ledge
 // only overrode service.now would still write into the real current day and its assertion
 // would start failing the day after it was written.
 func newFixtureAt(
-	t *testing.T,
+	t testing.TB,
 	dailyBudget int64,
 	options ledger.Options,
 	clock func() time.Time,
@@ -493,7 +495,7 @@ func newFixtureAt(
 // a Project that has the feature turned on, and a Service that has somewhere to
 // keep what it defers.
 func newFixtureShaped(
-	t *testing.T,
+	t testing.TB,
 	dailyBudget int64,
 	options ledger.Options,
 	clock func() time.Time,
@@ -2540,5 +2542,317 @@ func TestOrderedFallbackReachesEveryCandidate(t *testing.T) {
 				t.Fatalf("walking the candidates left %d pending reservations", f.state.PendingReservations())
 			}
 		})
+	}
+}
+
+// BenchmarkGatewayChatPricePinLifecycle walks the real Gateway chat path with
+// a durable bbolt pricing store and the real Ledger-backed accounting manager.
+// The provider adapter is the local fake from this test file, so the benchmark
+// measures admission, reservation, pin commit, settlement, and finalization
+// without making a billable or network provider call.
+func BenchmarkGatewayChatPricePinLifecycle(b *testing.B) {
+	for _, workers := range []int{1, 8} {
+		b.Run(fmt.Sprintf("workers=%d", workers), func(b *testing.B) {
+			f := newFixture(b, 1_000_000_000_000)
+			defer f.close()
+
+			pricingStore, err := storebolt.Open(filepath.Join(b.TempDir(), "pricing.db"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer pricingStore.Close()
+			if _, err := pricingStore.AttachMetadataJournal(bytes.Repeat([]byte{0x42}, 32), "gateway-benchmark"); err != nil {
+				b.Fatal(err)
+			}
+			seedGatewayBenchmarkPricing(b, pricingStore, "dep_target_1")
+			f.service.pricing = pricingStore
+
+			maxTokens := int64(64)
+			request := openaiapi.ChatCompletionRequest{
+				Model: "chat", MaxCompletionTokens: &maxTokens,
+				Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("bounded admission benchmark")}},
+			}
+			ctx := context.Background()
+			var next, completed atomic.Int64
+			failures := make(chan error, workers)
+			var group sync.WaitGroup
+			b.ResetTimer()
+			started := time.Now()
+			for worker := 0; worker < workers; worker++ {
+				group.Add(1)
+				go func() {
+					defer group.Done()
+					for {
+						index := next.Add(1) - 1
+						if index >= int64(b.N) {
+							return
+						}
+						if _, err := f.service.Chat(ctx, f.plaintext, request); err != nil {
+							select {
+							case failures <- fmt.Errorf("chat attempt %d: %w", index, err):
+							default:
+							}
+							return
+						}
+						completed.Add(1)
+					}
+				}()
+			}
+			group.Wait()
+			elapsed := time.Since(started)
+			b.StopTimer()
+			close(failures)
+			for err := range failures {
+				b.Error(err)
+			}
+			if completed.Load() != int64(b.N) {
+				b.Fatalf("completed %d/%d chat requests", completed.Load(), b.N)
+			}
+			if pending := f.state.PendingReservations(); pending != 0 {
+				b.Fatalf("gateway benchmark left %d pending reservations", pending)
+			}
+			b.ReportMetric(float64(b.N)/elapsed.Seconds(), "gateway-requests/s")
+		})
+	}
+}
+
+func seedGatewayBenchmarkPricing(b testing.TB, store *storebolt.Store, deploymentID string) {
+	b.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	profile, ok := domain.DefaultProviderProfile(domain.ProviderOpenAI)
+	if !ok {
+		b.Fatal("OpenAI provider profile unavailable")
+	}
+	credentialID, providerID := "cred_gateway_bench", "provider_gateway_bench"
+	credential, err := store.PutCredential(ctx, domain.Credential{
+		ID: credentialID, Name: credentialID, Type: domain.ProviderOpenAI,
+		AccessSurface: profile.AccessSurface, Scheme: profile.CredentialScheme,
+		Audience: "benchmark", Ciphertext: []byte("local-benchmark"), KeyVersion: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	capabilities := domain.ProviderCapabilities{Chat: true, Streaming: true}
+	providerInstance, err := store.PutProvider(ctx, domain.ProviderInstance{
+		ID: providerID, Name: providerID, Type: domain.ProviderOpenAI,
+		BaseURL: "https://api.openai.com", CredentialID: credential.ID,
+		AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID, CredentialScheme: profile.CredentialScheme,
+		AllowedHosts: []string{"api.openai.com"}, Capabilities: capabilities,
+		CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		Enabled:            true, CreatedAt: now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = store.PutDeployment(ctx, domain.Deployment{
+		ID: deploymentID, Name: deploymentID, ProviderID: providerInstance.ID, ProviderModel: "gpt-benchmark",
+		TargetKind: domain.TargetModelID, AccessSurface: profile.AccessSurface, ProfileID: profile.ProfileID,
+		BindingID:    domain.DefaultProviderProfileBindingID(providerInstance.ID, profile.ProfileID),
+		Capabilities: capabilities, CapabilityEvidence: domain.EvidenceForCapabilities(capabilities, domain.EvidenceDeclared),
+		ModelCapabilitySnapshot: domain.DeclaredCapabilitySnapshot("gpt-benchmark", "sha256:benchmark", capabilities, now),
+		InputMicrosPerMillion:   400_000, OutputMicrosPerMillion: 1_600_000,
+		Enabled: false, CreatedAt: now, UpdatedAt: now,
+	}, 0, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	_, err = store.CreateDeploymentPriceVersion(ctx, domain.DeploymentPriceVersion{
+		ID: "price_gateway_bench", DeploymentID: deploymentID, BillingMode: domain.BillingModeMetered,
+		Currency: "USD", FormulaVersion: domain.PriceFormulaUSDTokensV1,
+		InputMicrosPerMillion: 400_000, OutputMicrosPerMillion: 1_600_000,
+		EffectiveFrom: now.Add(-time.Hour), CreatedBy: "benchmark", CreatedAt: now.Add(-time.Hour),
+		Source: domain.PriceSource{Type: domain.PriceSourceManual, Assurance: domain.PriceAssuranceAsserted,
+			ReceivedAt: now.Add(-time.Hour), ContentSHA256: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Reference: "local benchmark fixture", AssertedWithoutArchive: true},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+}
+
+// BenchmarkGatewayChatProjectionChurnCompetition combines actual Gateway
+// admission/accounting with a node-derived Usage projection that deletes and
+// appends fixed-size history while random point readers validate the live
+// range. Both layouts use the production Store API; only the database owner
+// changes. The provider remains local and deterministic.
+func BenchmarkGatewayChatProjectionChurnCompetition(b *testing.B) {
+	for _, rows := range []int{10000, 100000} {
+		for _, layout := range []string{"same", "separate"} {
+			for _, workers := range []int{1, 8} {
+				b.Run(fmt.Sprintf("rows=%d/layout=%s/workers=%d", rows, layout, workers), func(b *testing.B) {
+					f := newFixture(b, 1_000_000_000_000)
+					defer f.close()
+					pricingStore, err := storebolt.Open(filepath.Join(b.TempDir(), "pricing.db"))
+					if err != nil {
+						b.Fatal(err)
+					}
+					defer pricingStore.Close()
+					if _, err := pricingStore.AttachMetadataJournal(bytes.Repeat([]byte{0x42}, 32), "gateway-benchmark"); err != nil {
+						b.Fatal(err)
+					}
+					seedGatewayBenchmarkPricing(b, pricingStore, "dep_target_1")
+					f.service.pricing = pricingStore
+
+					projectionStore := pricingStore
+					if layout == "separate" {
+						projectionStore, err = storebolt.Open(filepath.Join(b.TempDir(), "projection.db"))
+						if err != nil {
+							b.Fatal(err)
+						}
+						defer projectionStore.Close()
+					}
+					payload := make([]byte, 1024)
+					for i := 8; i < len(payload); i++ {
+						payload[i] = byte(i % 251)
+					}
+					for first := 0; first < rows; first += 1000 {
+						segments := make([]storebolt.UsageCheckpointSegment, 0, min(1000, rows-first))
+						for row := first; row < min(first+1000, rows); row++ {
+							segments = append(segments, storebolt.UsageCheckpointSegment{ID: uint64(row + 1), Payload: bytes.Clone(payload)})
+						}
+						sequence := uint64(min(first+1000, rows))
+						if err := projectionStore.PutUsageCheckpoint(ledger.Watermark{Generation: 1, Offset: int64(sequence), Sequence: sequence}, []byte(`{"benchmark":1}`), segments, nil, domain.RollupVersion, nil); err != nil {
+							b.Fatal(err)
+						}
+					}
+
+					maxTokens := int64(64)
+					request := openaiapi.ChatCompletionRequest{
+						Model: "chat", MaxCompletionTokens: &maxTokens,
+						Messages: []openaiapi.Message{{Role: "user", Content: openaiapi.TextContent("bounded admission benchmark")}},
+					}
+					ctx := context.Background()
+					start := make(chan struct{})
+					failures := make(chan error, workers+2)
+					var next, completed atomic.Int64
+					var projectionMutations atomic.Uint64
+					var group sync.WaitGroup
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						<-start
+						for iteration := 0; iteration < b.N; iteration++ {
+							segments := make([]storebolt.UsageCheckpointSegment, 100)
+							removed := make([]uint64, 100)
+							for offset := 0; offset < 100; offset++ {
+								mutation := iteration*100 + offset
+								segmentPayload := bytes.Clone(payload)
+								segmentID := uint64(rows + mutation + 1)
+								binary.BigEndian.PutUint64(segmentPayload[:8], segmentID-uint64(rows))
+								segments[offset] = storebolt.UsageCheckpointSegment{ID: segmentID, Payload: segmentPayload}
+								removed[offset] = uint64(mutation + 1)
+							}
+							sequence := uint64(rows + (iteration+1)*100)
+							err := projectionStore.PutUsageCheckpoint(ledger.Watermark{Generation: 1, Offset: int64(sequence), Sequence: sequence}, []byte(`{"benchmark":1}`), segments, removed, domain.RollupVersion, nil)
+							if err == nil {
+								projectionMutations.Store(uint64((iteration + 1) * 100))
+							}
+							if err != nil {
+								failures <- fmt.Errorf("projection churn transaction %d: %w", iteration, err)
+								return
+							}
+						}
+					}()
+					group.Add(1)
+					go func() {
+						defer group.Done()
+						<-start
+						var random uint64 = 0x704d4d2ae9
+						for query := 0; query < b.N*100; query++ {
+							random ^= random << 13
+							random ^= random >> 7
+							random ^= random << 17
+							mutations := projectionMutations.Load()
+							id := mutations + uint64(rows/2+1) + random%uint64(rows/2)
+							value, err := projectionStore.UsageCheckpointSegmentPayload(id)
+							if err == nil {
+								version := uint64(0)
+								if id > uint64(rows) {
+									version = id - uint64(rows)
+								}
+								if len(value) != 1024 || binary.BigEndian.Uint64(value) != version {
+									err = fmt.Errorf("projection random read returned invalid row %d", id)
+								}
+							}
+							if err != nil {
+								failures <- fmt.Errorf("projection random read %d: %w", query, err)
+								return
+							}
+						}
+					}()
+					for worker := 0; worker < workers; worker++ {
+						group.Add(1)
+						go func() {
+							defer group.Done()
+							<-start
+							for {
+								index := next.Add(1) - 1
+								if index >= int64(b.N) {
+									return
+								}
+								if _, err := f.service.Chat(ctx, f.plaintext, request); err != nil {
+									failures <- fmt.Errorf("gateway chat request %d: %w", index, err)
+									return
+								}
+								completed.Add(1)
+							}
+						}()
+					}
+					b.ResetTimer()
+					started := time.Now()
+					close(start)
+					group.Wait()
+					elapsed := time.Since(started)
+					b.StopTimer()
+					close(failures)
+					for err := range failures {
+						b.Error(err)
+					}
+					if completed.Load() != int64(b.N) {
+						b.Fatalf("completed %d/%d gateway requests", completed.Load(), b.N)
+					}
+					if pending := f.state.PendingReservations(); pending != 0 {
+						b.Fatalf("projection competition left %d pending ledger reservations", pending)
+					}
+					b.ReportMetric(float64(b.N)/elapsed.Seconds(), "gateway-requests/s")
+					b.ReportMetric(float64(b.N)/elapsed.Seconds(), "projection-tx/s")
+					b.ReportMetric(float64(b.N*100), "verified-point-queries")
+					b.ReportMetric(float64(rows), "live-history-rows")
+					verifyProjection := func() error {
+						mutations := uint64(b.N * 100)
+						for _, id := range []uint64{mutations + 1, mutations + uint64(rows), mutations + uint64(rows*3/4)} {
+							value, err := projectionStore.UsageCheckpointSegmentPayload(id)
+							if err != nil {
+								return fmt.Errorf("projection boundary row %d: %w", id, err)
+							}
+							if len(value) != 1024 {
+								return fmt.Errorf("projection boundary row %d has %d bytes", id, len(value))
+							}
+							version := uint64(0)
+							if id > uint64(rows) {
+								version = id - uint64(rows)
+							}
+							if binary.BigEndian.Uint64(value) != version {
+								return fmt.Errorf("projection row %d has invalid version", id)
+							}
+						}
+						checkpoint, _, err := projectionStore.UsageCheckpoint()
+						if err != nil {
+							return err
+						}
+						want := uint64(rows + b.N*100)
+						if checkpoint.Sequence != want || checkpoint.Offset != int64(want) {
+							return fmt.Errorf("projection checkpoint is %#v, want sequence/offset %d", checkpoint, want)
+						}
+						return nil
+					}
+					if err := verifyProjection(); err != nil {
+						b.Fatal(err)
+					}
+				})
+			}
+		}
 	}
 }

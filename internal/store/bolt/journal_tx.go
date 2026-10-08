@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"math"
 	"slices"
 
 	"github.com/akz142857/Halro/internal/metadatajournal"
@@ -25,7 +25,8 @@ import (
 // the one that took the raw transaction would be a way to write without
 // recording — reachable by accident rather than by decision.
 type Tx struct {
-	tx *bbolt.Tx
+	tx     *bbolt.Tx
+	facade FacadeTransaction
 	// recorder is nil for a read-only transaction, and for the two writable
 	// transactions that deliberately do not record: schema migration and
 	// initial bucket creation. Both are whole-projection events, published as
@@ -37,6 +38,14 @@ type Tx struct {
 // Bucket returns a top-level bucket, or nil if it does not exist. Callers rely
 // on the nil, the way they do with bbolt.
 func (t *Tx) Bucket(name []byte) *Bucket {
+	if t.facade != nil {
+		path := []string{string(name)}
+		found, err := t.facade.BucketExists(path)
+		if err == nil && !found {
+			return nil
+		}
+		return &Bucket{tx: t, path: path}
+	}
 	bucket := t.tx.Bucket(name)
 	if bucket == nil {
 		return nil
@@ -45,6 +54,16 @@ func (t *Tx) Bucket(name []byte) *Bucket {
 }
 
 func (t *Tx) CreateBucketIfNotExists(name []byte) (*Bucket, error) {
+	if t.facade != nil {
+		path := []string{string(name)}
+		if err := t.facade.CreateBucket(path); err != nil {
+			return nil, err
+		}
+		if err := t.record(metadatajournal.OpCreateBucket, path, nil, nil, nil); err != nil {
+			return nil, err
+		}
+		return &Bucket{tx: t, path: path}, nil
+	}
 	bucket, err := t.tx.CreateBucketIfNotExists(name)
 	if err != nil {
 		return nil, err
@@ -57,6 +76,16 @@ func (t *Tx) CreateBucketIfNotExists(name []byte) (*Bucket, error) {
 }
 
 func (t *Tx) CreateBucket(name []byte) (*Bucket, error) {
+	if t.facade != nil {
+		found, err := t.facade.BucketExists([]string{string(name)})
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			return nil, bbolt.ErrBucketExists
+		}
+		return t.CreateBucketIfNotExists(name)
+	}
 	bucket, err := t.tx.CreateBucket(name)
 	if err != nil {
 		return nil, err
@@ -69,6 +98,13 @@ func (t *Tx) CreateBucket(name []byte) (*Bucket, error) {
 }
 
 func (t *Tx) DeleteBucket(name []byte) error {
+	if t.facade != nil {
+		path := []string{string(name)}
+		if err := t.facade.DeleteBucket(path); err != nil {
+			return err
+		}
+		return t.record(metadatajournal.OpDeleteBucket, path, nil, nil, nil)
+	}
 	if err := t.tx.DeleteBucket(name); err != nil {
 		return err
 	}
@@ -76,25 +112,71 @@ func (t *Tx) DeleteBucket(name []byte) error {
 }
 
 func (t *Tx) ForEach(fn func(name []byte, bucket *Bucket) error) error {
+	if t.facade != nil {
+		names := make([]string, 0, len(bucketClasses)+1)
+		names = append(names, "meta")
+		for name := range bucketClasses {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		for _, name := range names {
+			b := t.Bucket([]byte(name))
+			if err := t.facade.Error(); err != nil {
+				return err
+			}
+			if b != nil {
+				if err := fn([]byte(name), b); err != nil {
+					return err
+				}
+			}
+		}
+		return t.facade.Error()
+	}
 	return t.tx.ForEach(func(name []byte, raw *bbolt.Bucket) error {
 		return fn(name, &Bucket{tx: t, bucket: raw, path: []string{string(name)}})
 	})
 }
 
-// ID, WriteTo and CopyFile are read-only views of the transaction itself, used
+// ID and WriteTo are read-only views of the transaction itself, used
 // by the batch metrics and by snapshot/backup. Nothing they do changes a key,
 // so nothing they do is recorded.
-func (t *Tx) ID() int                            { return t.tx.ID() }
-func (t *Tx) WriteTo(w io.Writer) (int64, error) { return t.tx.WriteTo(w) }
-func (t *Tx) CopyFile(path string, mode os.FileMode) error {
-	return t.tx.CopyFile(path, mode)
+func (t *Tx) ID() int {
+	if t.facade != nil {
+		revision, err := t.facade.Revision()
+		if err != nil || revision == 0 || revision > uint64(math.MaxInt) {
+			return 0
+		}
+		// bbolt readers see the last committed transaction, while a writer
+		// sees its proposed successor. The authenticated backend pins the old
+		// immutable root during preparation; preserve the same DAO fence here.
+		if t.recorder != nil {
+			if revision == uint64(math.MaxInt) {
+				return 0
+			}
+			revision++
+		}
+		return int(revision)
+	}
+	return t.tx.ID()
+}
+func (t *Tx) WriteTo(w io.Writer) (int64, error) {
+	if t.facade != nil {
+		return 0, ErrFacadeMaintenance
+	}
+	return t.tx.WriteTo(w)
 }
 
 func (t *Tx) record(kind metadatajournal.OpKind, path []string, key, previous, value []byte) error {
 	if t.recorder == nil {
 		return nil
 	}
-	return t.recorder.add(kind, path, key, previous, value)
+	if err := t.recorder.add(kind, path, key, previous, value); err != nil {
+		return err
+	}
+	if len(path) == 1 && path[0] == string(bucketDeploymentPriceProposals) && (kind == metadatajournal.OpPut || kind == metadatajournal.OpDelete) {
+		return t.updateProposalOrder(key, previous, value)
+	}
+	return nil
 }
 
 // Bucket is a bbolt bucket that knows where it is, so a write to a nested
@@ -105,10 +187,39 @@ type Bucket struct {
 	path   []string
 }
 
-func (b *Bucket) Get(key []byte) []byte { return b.bucket.Get(key) }
+func (b *Bucket) Get(key []byte) []byte {
+	if b.tx.facade != nil {
+		value, found, err := b.tx.facade.Get(b.path, key)
+		if err != nil || !found {
+			return nil
+		}
+		return value
+	}
+	return b.bucket.Get(key)
+}
+
+// Local writes are still classified and checked by record/finish, but their
+// previous payload never enters a frame or a confirmation decision. Cloning a
+// historical Usage checkpoint just to discard it defeats finite rebuilds.
+// Preserve the existing owned copy for every replicated/unknown classification.
+func (b *Bucket) previousForRecording(key, raw []byte) []byte {
+	if b.tx.recorder == nil {
+		return nil
+	}
+	if class, err := classify(b.path, key); err == nil && (class == classNodeDerived || class == classNodeLocal) {
+		return nil
+	}
+	return slices.Clone(raw)
+}
 
 func (b *Bucket) Put(key, value []byte) error {
-	previous := slices.Clone(b.bucket.Get(key))
+	previous := b.previousForRecording(key, b.Get(key))
+	if b.tx.facade != nil {
+		if err := b.tx.facade.Put(b.path, key, value); err != nil {
+			return err
+		}
+		return b.tx.record(metadatajournal.OpPut, b.path, key, previous, value)
+	}
 	if err := b.bucket.Put(key, value); err != nil {
 		return err
 	}
@@ -116,14 +227,25 @@ func (b *Bucket) Put(key, value []byte) error {
 }
 
 func (b *Bucket) Delete(key []byte) error {
-	previous := slices.Clone(b.bucket.Get(key))
+	previous := b.previousForRecording(key, b.Get(key))
+	if b.tx.facade != nil {
+		if err := b.tx.facade.Delete(b.path, key); err != nil {
+			return err
+		}
+		return b.tx.record(metadatajournal.OpDelete, b.path, key, previous, nil)
+	}
 	if err := b.bucket.Delete(key); err != nil {
 		return err
 	}
 	return b.tx.record(metadatajournal.OpDelete, b.path, key, previous, nil)
 }
 
-func (b *Bucket) Cursor() *Cursor { return &Cursor{bucket: b, cursor: b.bucket.Cursor()} }
+func (b *Bucket) Cursor() *Cursor {
+	if b.tx.facade != nil {
+		return &Cursor{bucket: b}
+	}
+	return &Cursor{bucket: b, cursor: b.bucket.Cursor()}
+}
 
 // Cursor preserves bbolt's traversal API without handing writable callers a
 // raw Delete method that bypasses the metadata recorder.
@@ -132,26 +254,84 @@ type Cursor struct {
 	cursor *bbolt.Cursor
 	key    []byte
 	value  []byte
+	edge   int8 // -1 before first; +1 after last; 0 inside or unpositioned
 }
 
 func (c *Cursor) remember(key, value []byte) ([]byte, []byte) {
 	c.key, c.value = key, value
+	c.edge = 0
 	return key, value
 }
 
-func (c *Cursor) First() ([]byte, []byte) { return c.remember(c.cursor.First()) }
-func (c *Cursor) Last() ([]byte, []byte)  { return c.remember(c.cursor.Last()) }
-func (c *Cursor) Next() ([]byte, []byte)  { return c.remember(c.cursor.Next()) }
-func (c *Cursor) Prev() ([]byte, []byte)  { return c.remember(c.cursor.Prev()) }
+func (c *Cursor) First() ([]byte, []byte) {
+	if c.bucket.tx.facade != nil {
+		return c.facadeSeek(nil, false, false)
+	}
+	return c.remember(c.cursor.First())
+}
+func (c *Cursor) Last() ([]byte, []byte) {
+	if c.bucket.tx.facade != nil {
+		return c.facadeSeek(nil, true, false)
+	}
+	return c.remember(c.cursor.Last())
+}
+func (c *Cursor) Next() ([]byte, []byte) {
+	if c.bucket.tx.facade != nil {
+		if c.key == nil {
+			if c.edge == -1 {
+				return c.First()
+			}
+			return nil, nil
+		}
+		return c.facadeSeek(c.key, false, true)
+	}
+	return c.remember(c.cursor.Next())
+}
+func (c *Cursor) Prev() ([]byte, []byte) {
+	if c.bucket.tx.facade != nil {
+		if c.key == nil {
+			if c.edge == 1 {
+				return c.Last()
+			}
+			return nil, nil
+		}
+		return c.facadeSeek(c.key, true, true)
+	}
+	return c.remember(c.cursor.Prev())
+}
 func (c *Cursor) Seek(prefix []byte) ([]byte, []byte) {
+	if c.bucket.tx.facade != nil {
+		return c.facadeSeek(prefix, false, false)
+	}
 	return c.remember(c.cursor.Seek(prefix))
 }
 
+func (c *Cursor) facadeSeek(key []byte, reverse, exclusive bool) ([]byte, []byte) {
+	entry, found, err := c.bucket.tx.facade.Seek(c.bucket.path, key, reverse, exclusive)
+	if err != nil || !found {
+		c.key, c.value, c.edge = nil, nil, 0
+		if err == nil {
+			c.edge = 1
+			if reverse {
+				c.edge = -1
+			}
+		}
+		return nil, nil
+	}
+	return c.remember(entry.Key, entry.Value)
+}
+
 func (c *Cursor) Delete() error {
+	if c.bucket.tx.facade != nil {
+		if c.key == nil {
+			return bbolt.ErrKeyRequired
+		}
+		return c.bucket.Delete(c.key)
+	}
 	if c.key == nil {
 		return errors.New("cursor is not positioned on a key")
 	}
-	key, previous := slices.Clone(c.key), slices.Clone(c.value)
+	key, previous := slices.Clone(c.key), c.bucket.previousForRecording(c.key, c.value)
 	if err := c.cursor.Delete(); err != nil {
 		return err
 	}
@@ -159,11 +339,37 @@ func (c *Cursor) Delete() error {
 	return c.bucket.tx.record(metadatajournal.OpDelete, c.bucket.path, key, previous, nil)
 }
 
-func (b *Bucket) ForEach(fn func(key, value []byte) error) error { return b.bucket.ForEach(fn) }
+func (b *Bucket) ForEach(fn func(key, value []byte) error) error {
+	if b.tx.facade != nil {
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if err := fn(k, v); err != nil {
+				return err
+			}
+		}
+		return b.tx.facade.Error()
+	}
+	return b.bucket.ForEach(fn)
+}
 
-func (b *Bucket) Stats() bbolt.BucketStats { return b.bucket.Stats() }
+func (b *Bucket) Stats() bbolt.BucketStats {
+	if b.tx.facade != nil {
+		var stats bbolt.BucketStats
+		_ = b.ForEach(func(k, v []byte) error { stats.KeyN++; return nil })
+		return stats
+	}
+	return b.bucket.Stats()
+}
 
 func (b *Bucket) Bucket(name []byte) *Bucket {
+	if b.tx.facade != nil {
+		path := append(slices.Clone(b.path), string(name))
+		found, err := b.tx.facade.BucketExists(path)
+		if err == nil && !found {
+			return nil
+		}
+		return &Bucket{tx: b.tx, path: path}
+	}
 	nested := b.bucket.Bucket(name)
 	if nested == nil {
 		return nil
@@ -172,6 +378,16 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 }
 
 func (b *Bucket) CreateBucketIfNotExists(name []byte) (*Bucket, error) {
+	if b.tx.facade != nil {
+		path := append(slices.Clone(b.path), string(name))
+		if err := b.tx.facade.CreateBucket(path); err != nil {
+			return nil, err
+		}
+		if err := b.tx.record(metadatajournal.OpCreateBucket, path, nil, nil, nil); err != nil {
+			return nil, err
+		}
+		return &Bucket{tx: b.tx, path: path}, nil
+	}
 	nested, err := b.bucket.CreateBucketIfNotExists(name)
 	if err != nil {
 		return nil, err
@@ -184,6 +400,13 @@ func (b *Bucket) CreateBucketIfNotExists(name []byte) (*Bucket, error) {
 }
 
 func (b *Bucket) DeleteBucket(name []byte) error {
+	if b.tx.facade != nil {
+		path := append(slices.Clone(b.path), string(name))
+		if err := b.tx.facade.DeleteBucket(path); err != nil {
+			return err
+		}
+		return b.tx.record(metadatajournal.OpDeleteBucket, path, nil, nil, nil)
+	}
 	if err := b.bucket.DeleteBucket(name); err != nil {
 		return err
 	}
@@ -203,8 +426,15 @@ type recorder struct {
 	requiresConfirmation bool
 	// The two bucket sets a mixed-write check needs. Sets rather than counts:
 	// the exception in §5.2 is about which buckets, not how many.
-	replicated map[string]struct{}
-	local      map[string]struct{}
+	replicated                map[string]struct{}
+	local                     map[string]struct{}
+	priceDeployments          map[string]struct{}
+	updatingPriceRevisions    bool
+	pricingPendingDelta       int64
+	updatingPricingPending    bool
+	proposalDeployments       map[string]struct{}
+	updatingProposalRevisions bool
+	updatingProposalOrder     bool
 }
 
 func newRecorder() *recorder {
@@ -217,6 +447,15 @@ func newRecorder() *recorder {
 func (r *recorder) add(kind metadatajournal.OpKind, path []string, key, previous, value []byte) error {
 	class, err := classify(path, key)
 	if err != nil {
+		return err
+	}
+	if err := r.trackPriceMutation(kind, path, previous, value); err != nil {
+		return err
+	}
+	if err := r.trackProposalMutation(kind, path, previous, value); err != nil {
+		return err
+	}
+	if err := r.trackPricingPendingMutation(kind, path, previous, value); err != nil {
 		return err
 	}
 	switch {

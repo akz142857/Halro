@@ -30,7 +30,24 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 	if err := ctx.Err(); err != nil {
 		return domain.OutcomeDefinition{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	leave, err := s.enter()
+	if err != nil {
+		return domain.OutcomeDefinition{}, err
+	}
+	defer leave()
+	s.definitionWriteMu.Lock()
+	defer s.definitionWriteMu.Unlock()
+	scan, err := s.scanOutcomeDefinitions(ctx, definition.ProjectID, definition.ID, nil)
+	if err != nil {
+		return domain.OutcomeDefinition{}, err
+	}
+	err = s.update(func(tx *Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := scan.checkTx(tx); err != nil {
+			return err
+		}
 		var project domain.Project
 		rawProject := tx.Bucket(bucketProjects).Get([]byte(definition.ProjectID))
 		if rawProject == nil {
@@ -44,35 +61,10 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 		}
 		bucket := tx.Bucket(bucketOutcomeDefinitions)
 		var latest *domain.OutcomeDefinition
-		latestByID := map[string]domain.OutcomeDefinition{}
-		if err := bucket.ForEach(func(_, value []byte) error {
-			if value == nil {
-				return nil
-			}
-			var item domain.OutcomeDefinition
-			if err := json.Unmarshal(value, &item); err != nil {
-				return err
-			}
-			if item.ProjectID != definition.ProjectID {
-				return nil
-			}
-			if current, ok := latestByID[item.ID]; !ok || item.Version > current.Version {
-				latestByID[item.ID] = item
-			}
-			if item.ID == definition.ID && (latest == nil || item.Version > latest.Version) {
-				copy := item
-				latest = &copy
-			}
-			return nil
-		}); err != nil {
-			return err
+		if scan.latest.ID != "" {
+			latest = &scan.latest
 		}
-		active := 0
-		for _, item := range latestByID {
-			if item.Enabled {
-				active++
-			}
-		}
+		active := scan.active
 		if latest == nil {
 			if definition.Version != 1 || expectedDefinitionRevision != 0 {
 				return ErrNotFound
@@ -91,6 +83,9 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 			if !latest.Enabled && definition.Enabled && active >= domain.MaxActiveOutcomeDefinitions {
 				return errors.New("active outcome definition limit exceeded")
 			}
+			if latest.Revision == ^uint64(0) {
+				return ErrRevisionConflict
+			}
 			definition.Revision = latest.Revision + 1
 		}
 		encoded, err := json.Marshal(definition)
@@ -103,47 +98,47 @@ func (s *Store) PutOutcomeDefinition(ctx context.Context, definition domain.Outc
 		if err := bucket.Put(outcomeDefinitionKey(definition.ID, definition.Version), encoded); err != nil {
 			return err
 		}
+		if err := appendOutcomeDefinitionExport(tx, outcomeDefinitionKey(definition.ID, definition.Version), encoded); err != nil {
+			return err
+		}
 		return putAdminAuditIntentTx(tx, intent)
 	})
 	return definition, err
 }
 
 func (s *Store) GetOutcomeDefinition(ctx context.Context, projectID, id string, version uint64) (domain.OutcomeDefinition, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.OutcomeDefinition{}, err
+	}
+	if version == 0 {
+		scan, err := s.scanOutcomeDefinitions(ctx, projectID, id, nil)
+		if err != nil {
+			return domain.OutcomeDefinition{}, err
+		}
+		if scan.latest.ID == "" {
+			return domain.OutcomeDefinition{}, ErrNotFound
+		}
+		return scan.latest, nil
+	}
 	var result domain.OutcomeDefinition
 	err := s.view(func(tx *Tx) error {
-		bucket := tx.Bucket(bucketOutcomeDefinitions)
-		if version != 0 {
-			raw := bucket.Get(outcomeDefinitionKey(id, version))
-			if raw == nil {
-				return ErrNotFound
-			}
-			if err := json.Unmarshal(raw, &result); err != nil {
-				return err
-			}
-			if projectID != "" && result.ProjectID != projectID {
-				return ErrNotFound
-			}
-			return nil
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		return bucket.ForEach(func(_, raw []byte) error {
-			if raw == nil {
-				return nil
-			}
-			var item domain.OutcomeDefinition
-			if err := json.Unmarshal(raw, &item); err != nil {
-				return err
-			}
-			if item.ID == id && (projectID == "" || item.ProjectID == projectID) && item.Version > result.Version {
-				result = item
-			}
-			return nil
-		})
+		raw := tx.Bucket(bucketOutcomeDefinitions).Get(outcomeDefinitionKey(id, version))
+		if raw == nil {
+			return ErrNotFound
+		}
+		if err := json.Unmarshal(raw, &result); err != nil {
+			return err
+		}
+		if projectID != "" && result.ProjectID != projectID {
+			return ErrNotFound
+		}
+		return nil
 	})
 	if err != nil {
 		return domain.OutcomeDefinition{}, err
-	}
-	if result.ID == "" {
-		return domain.OutcomeDefinition{}, ErrNotFound
 	}
 	return result, nil
 }

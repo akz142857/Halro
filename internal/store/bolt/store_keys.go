@@ -400,54 +400,12 @@ func (s *Store) VaultRotationBridge() ([]byte, error) {
 // RewriteVaultMaterial runs only against an offline copy of metadata. All
 // credential ciphertext and system envelopes change in one bbolt transaction.
 func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
-	if len(options.VaultKeyCheck) == 0 || len(options.AuditHMACEnvelope) == 0 ||
-		len(options.LedgerHMACEnvelope) == 0 ||
-		options.Transform == nil || options.TransformAdminMFA == nil || options.Keyring.Validate() != nil ||
-		len(options.Keyring.RecoveryEnvelope) == 0 {
-		return errors.New("complete vault rewrite material is required")
-	}
-	if options.KeySlotDescriptor != nil {
-		if options.Context == nil || options.Unwrapper == nil || options.Verifier == nil {
-			return errors.New("rotated key slot descriptor requires unwrap and candidate verification")
-		}
-		if err := options.KeySlotDescriptor.Validate(); err != nil {
-			return err
-		}
-		if options.KeySlotDescriptor.MasterKeyFingerprint != options.Keyring.ActiveFingerprint {
-			return errors.New("rotated descriptor and keyring fingerprints do not match")
-		}
-		for _, slot := range options.KeySlotDescriptor.Slots {
-			candidate, err := options.Unwrapper.Unwrap(options.Context, slot)
-			if err != nil {
-				return fmt.Errorf("verify rotated key slot %q: %w", slot.ID, err)
-			}
-			fingerprint, fingerprintErr := masterkey.MasterKeyFingerprint(candidate)
-			verifyErr := options.Verifier.VerifyCandidate(options.Context, candidate)
-			clear(candidate)
-			if fingerprintErr != nil {
-				return fmt.Errorf("verify rotated key slot %q fingerprint: %w", slot.ID, fingerprintErr)
-			}
-			if fingerprint != options.KeySlotDescriptor.MasterKeyFingerprint {
-				return fmt.Errorf("verify rotated key slot %q: %w", slot.ID, masterkey.ErrVaultKeyMismatch)
-			}
-			if verifyErr != nil {
-				return fmt.Errorf("verify rotated key slot %q candidate: %w", slot.ID, verifyErr)
-			}
-		}
+	if err := validateVaultRewrite(options); err != nil {
+		return err
 	}
 	return s.update(func(tx *Tx) error {
-		if options.KeySlotDescriptor != nil {
-			raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
-			if raw == nil {
-				return ErrNotFound
-			}
-			var previous masterkey.KeySlotDescriptor
-			if err := json.Unmarshal(raw, &previous); err != nil {
-				return fmt.Errorf("decode previous key slot descriptor: %w", err)
-			}
-			if err := options.KeySlotDescriptor.ValidateRotationSuccessor(previous); err != nil {
-				return err
-			}
+		if err := validateVaultRewriteDescriptor(tx, options); err != nil {
+			return err
 		}
 		credentials := tx.Bucket(bucketCredentials)
 		cursor := credentials.Cursor()
@@ -499,38 +457,8 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 				return err
 			}
 		}
-		meta := tx.Bucket(bucketMeta)
-		if err := meta.Put(keyVaultCheck, options.VaultKeyCheck); err != nil {
+		if err := rewriteVaultMaterialMetaTx(tx, options); err != nil {
 			return err
-		}
-		if err := meta.Put(keyAuditHMACEnvelope, options.AuditHMACEnvelope); err != nil {
-			return err
-		}
-		// Absent on an instance that predates the journal, which has no
-		// envelope to re-wrap; the attach after the publish derives one.
-		if len(options.MetadataJournalHMACEnvelope) > 0 {
-			if err := meta.Put(keyMetadataHMACEnvelope, options.MetadataJournalHMACEnvelope); err != nil {
-				return err
-			}
-		}
-		if err := meta.Put(keyLedgerHMACEnvelope, options.LedgerHMACEnvelope); err != nil {
-			return err
-		}
-		encodedKeyring, err := json.Marshal(options.Keyring)
-		if err != nil {
-			return err
-		}
-		if err := meta.Put(keyVaultKeyring, encodedKeyring); err != nil {
-			return err
-		}
-		if options.KeySlotDescriptor != nil {
-			encodedDescriptor, err := json.Marshal(options.KeySlotDescriptor)
-			if err != nil {
-				return err
-			}
-			if err := meta.Put(keyKeySlotDescriptor, encodedDescriptor); err != nil {
-				return err
-			}
 		}
 		// Master-key rotation invalidates every active Admin identity and
 		// pre-auth challenge in the same transaction as the ciphertext rewrite.
@@ -591,4 +519,117 @@ func (s *Store) ClearVaultRotationBridge() error {
 		}
 		return meta.Put(keyVaultKeyring, encoded)
 	})
+}
+
+func validateVaultRewrite(options VaultRewrite) error {
+	remaining := pricingRecoveryWideRowBytes
+	for _, value := range [][]byte{options.VaultKeyCheck, options.AuditHMACEnvelope, options.LedgerHMACEnvelope, options.MetadataJournalHMACEnvelope} {
+		if len(value) > remaining {
+			return ErrPricingRecoveryLimit
+		}
+		remaining -= len(value)
+	}
+	keyring, err := encodeVaultRewriteRow(options.Keyring, remaining)
+	if err != nil {
+		return err
+	}
+	remaining -= len(keyring)
+	if options.KeySlotDescriptor != nil {
+		if _, err := encodeVaultRewriteRow(options.KeySlotDescriptor, remaining); err != nil {
+			return err
+		}
+	}
+	if len(options.VaultKeyCheck) == 0 || len(options.AuditHMACEnvelope) == 0 ||
+		len(options.LedgerHMACEnvelope) == 0 ||
+		options.Transform == nil || options.TransformAdminMFA == nil || options.Keyring.Validate() != nil ||
+		len(options.Keyring.RecoveryEnvelope) == 0 {
+		return errors.New("complete vault rewrite material is required")
+	}
+	if options.KeySlotDescriptor != nil {
+		if options.Context == nil || options.Unwrapper == nil || options.Verifier == nil {
+			return errors.New("rotated key slot descriptor requires unwrap and candidate verification")
+		}
+		if err := options.KeySlotDescriptor.Validate(); err != nil {
+			return err
+		}
+		if options.KeySlotDescriptor.MasterKeyFingerprint != options.Keyring.ActiveFingerprint {
+			return errors.New("rotated descriptor and keyring fingerprints do not match")
+		}
+		for _, slot := range options.KeySlotDescriptor.Slots {
+			candidate, err := options.Unwrapper.Unwrap(options.Context, slot)
+			if err != nil {
+				return fmt.Errorf("verify rotated key slot %q: %w", slot.ID, err)
+			}
+			fingerprint, fingerprintErr := masterkey.MasterKeyFingerprint(candidate)
+			verifyErr := options.Verifier.VerifyCandidate(options.Context, candidate)
+			clear(candidate)
+			if fingerprintErr != nil {
+				return fmt.Errorf("verify rotated key slot %q fingerprint: %w", slot.ID, fingerprintErr)
+			}
+			if fingerprint != options.KeySlotDescriptor.MasterKeyFingerprint {
+				return fmt.Errorf("verify rotated key slot %q: %w", slot.ID, masterkey.ErrVaultKeyMismatch)
+			}
+			if verifyErr != nil {
+				return fmt.Errorf("verify rotated key slot %q candidate: %w", slot.ID, verifyErr)
+			}
+		}
+	}
+	return nil
+}
+
+func validateVaultRewriteDescriptor(tx *Tx, options VaultRewrite) error {
+	if options.KeySlotDescriptor != nil {
+		raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
+		if raw == nil {
+			return ErrNotFound
+		}
+		if len(raw) > pricingRecoveryWideRowBytes {
+			return ErrPricingRecoveryLimit
+		}
+		var previous masterkey.KeySlotDescriptor
+		if err := json.Unmarshal(raw, &previous); err != nil {
+			return fmt.Errorf("decode previous key slot descriptor: %w", err)
+		}
+		if err := options.KeySlotDescriptor.ValidateRotationSuccessor(previous); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rewriteVaultMaterialMetaTx(tx *Tx, options VaultRewrite) error {
+	meta := tx.Bucket(bucketMeta)
+	if err := meta.Put(keyVaultCheck, options.VaultKeyCheck); err != nil {
+		return err
+	}
+	if err := meta.Put(keyAuditHMACEnvelope, options.AuditHMACEnvelope); err != nil {
+		return err
+	}
+	// Absent on an instance that predates the journal, which has no
+	// envelope to re-wrap; the attach after the publish derives one.
+	if len(options.MetadataJournalHMACEnvelope) > 0 {
+		if err := meta.Put(keyMetadataHMACEnvelope, options.MetadataJournalHMACEnvelope); err != nil {
+			return err
+		}
+	}
+	if err := meta.Put(keyLedgerHMACEnvelope, options.LedgerHMACEnvelope); err != nil {
+		return err
+	}
+	encodedKeyring, err := encodeVaultRewriteRow(options.Keyring, pricingRecoveryWideRowBytes)
+	if err != nil {
+		return err
+	}
+	if err := meta.Put(keyVaultKeyring, encodedKeyring); err != nil {
+		return err
+	}
+	if options.KeySlotDescriptor != nil {
+		encodedDescriptor, err := encodeVaultRewriteRow(options.KeySlotDescriptor, pricingRecoveryWideRowBytes)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(keyKeySlotDescriptor, encodedDescriptor); err != nil {
+			return err
+		}
+	}
+	return nil
 }

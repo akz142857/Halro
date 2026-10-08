@@ -504,10 +504,8 @@ func (s *Store) ProviderResource(ctx context.Context, projectID, id string) (dom
 	return resource, nil
 }
 
-// ListProviderResources returns every persisted resource owner mapping. Backup
-// uses this while holding the data-directory lock so it can include exactly
-// the local objects referenced by the metadata snapshot and reject a missing
-// object instead of publishing an incomplete archive.
+// ListProviderResources is the collecting compatibility API. Offline backup
+// uses WalkProviderObjectReferences with the frozen Metadata snapshot TxID.
 func (s *Store) ListProviderResources(ctx context.Context) ([]domain.ProviderResource, error) {
 	var resources []domain.ProviderResource
 	err := s.listJSON(ctx, bucketProviderResources, func(raw []byte) error {
@@ -661,7 +659,7 @@ func (s *Store) ProviderResourceByIdempotency(ctx context.Context, projectID str
 }
 
 func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string) error {
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		bucket := tx.Bucket(bucketProviderResources)
 		raw := bucket.Get([]byte(id))
 		if raw == nil {
@@ -671,23 +669,28 @@ func (s *Store) DeleteProviderResource(ctx context.Context, projectID, id string
 		if err := json.Unmarshal(raw, &resource); err != nil {
 			return err
 		}
-		if resource.ProjectID != projectID {
+		if resource.ProjectID != projectID || resource.ID != id {
 			return ErrNotFound
 		}
-		if resource.IdempotencyKeyHash != ([32]byte{}) {
-			indexKey := providerResourceIdemKey(resource.ProjectID, resource.Kind, resource.IdempotencyKeyHash)
-			index := tx.Bucket(bucketProviderResourceIdem)
-			// Only if it still names this record: a key reclaimed by a later
-			// request points at that one, and deleting the entry here would
-			// free a key that is in use.
-			if holder := index.Get(indexKey); bytes.Equal(holder, []byte(id)) {
-				if err := index.Delete(indexKey); err != nil {
-					return err
-				}
+		return deleteProviderResourceTx(tx, resource)
+	})
+}
+
+func deleteProviderResourceTx(tx *Tx, resource domain.ProviderResource) error {
+	id := resource.ID
+	if resource.IdempotencyKeyHash != ([32]byte{}) {
+		indexKey := providerResourceIdemKey(resource.ProjectID, resource.Kind, resource.IdempotencyKeyHash)
+		index := tx.Bucket(bucketProviderResourceIdem)
+		// Only if it still names this record: a key reclaimed by a later
+		// request points at that one, and deleting the entry here would
+		// free a key that is in use.
+		if holder := index.Get(indexKey); bytes.Equal(holder, []byte(id)) {
+			if err := index.Delete(indexKey); err != nil {
+				return err
 			}
 		}
-		return bucket.Delete([]byte(id))
-	})
+	}
+	return tx.Bucket(bucketProviderResources).Delete([]byte(id))
 }
 
 func (s *Store) ExpiredProviderResources(ctx context.Context, now time.Time) ([]domain.ProviderResource, error) {

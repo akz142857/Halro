@@ -15,7 +15,77 @@ import (
 // view runs a read-only transaction. It records nothing and exists so that a
 // helper shared between a read and a write path has one signature.
 func (s *Store) view(fn func(*Tx) error) error {
-	return s.db.View(func(tx *bbolt.Tx) error { return fn(&Tx{tx: tx}) })
+	view, err := s.captureView()
+	if err != nil {
+		return err
+	}
+	return view(fn)
+}
+
+// viewContext keeps the caller's original read workspace through the actual
+// facade transaction. Its lifetime ticket still joins Store.Close.
+func (s *Store) viewContext(ctx context.Context, fn func(*Tx) error) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	ctx, cancel := s.confirmationContext(ctx)
+	defer cancel()
+	if err := errors.Join(ctx.Err(), s.RecoveryError()); err != nil {
+		return err
+	}
+	if s.facade != nil {
+		err := s.facade.View(ctx, func(tx FacadeTransaction) error {
+			if err := errors.Join(ctx.Err(), s.RecoveryError()); err != nil {
+				return err
+			}
+			return errors.Join(fn(&Tx{facade: tx}), tx.Error())
+		})
+		return s.facadeFailure(err)
+	}
+	return s.db.View(func(tx *bbolt.Tx) error {
+		if err := errors.Join(ctx.Err(), s.RecoveryError()); err != nil {
+			return err
+		}
+		return fn(&Tx{tx: tx})
+	})
+}
+
+// captureView returns a revocable read entry. Each invocation owns a lifetime
+// ticket through transaction exit; a retained closure cannot reopen admission.
+func (s *Store) captureView() (func(func(*Tx) error) error, error) {
+	leave, err := s.enter()
+	if err != nil {
+		return nil, err
+	}
+	leave()
+	return func(fn func(*Tx) error) error {
+		leave, err := s.enter()
+		if err != nil {
+			return err
+		}
+		defer leave()
+		if s.facade != nil {
+			err := s.facade.View(s.closingContext(), func(tx FacadeTransaction) error {
+				if err := s.RecoveryError(); err != nil {
+					return err
+				}
+				err := fn(&Tx{facade: tx})
+				if fault := tx.Error(); fault != nil {
+					return fault
+				}
+				return err
+			})
+			return s.facadeFailure(err)
+		}
+		return s.db.View(func(tx *bbolt.Tx) error {
+			if err := s.RecoveryError(); err != nil {
+				return err
+			}
+			return fn(&Tx{tx: tx})
+		})
+	}, nil
 }
 
 // update is the transaction entry of §6.1.2. Every authoritative write in this
@@ -39,11 +109,36 @@ func (s *Store) update(fn func(*Tx) error) error {
 }
 
 func (s *Store) updateContext(ctx context.Context, fn func(*Tx) error) error {
-	receipt, requiresConfirmation, err := s.updateAll([]func(*Tx) error{fn})
-	if err != nil || !requiresConfirmation || s.journal == nil {
+	leave, err := s.enter()
+	if err != nil {
 		return err
 	}
-	return s.journal.WaitConfirmed(ctx, receipt)
+	defer leave()
+	return s.updateAndConfirm(ctx, []func(*Tx) error{fn})
+}
+
+// The caller owns admission, including queued batch callbacks. Capture the
+// journal used for this commit before allowing maintenance to replace it.
+func (s *Store) updateAndConfirm(ctx context.Context, callbacks []func(*Tx) error) error {
+	if s.facade != nil {
+		return s.runFacadeUpdate(ctx, callbacks)
+	}
+	var receipt metadatajournal.AppendReceipt
+	var requiresConfirmation bool
+	var err error
+	var journal *attachedJournal
+	func() {
+		s.journalMu.RLock()
+		defer s.journalMu.RUnlock()
+		receipt, requiresConfirmation, err = s.updateAll(callbacks)
+		journal = s.journal
+	}()
+	if err != nil || !requiresConfirmation || journal == nil {
+		return err
+	}
+	ctx, cancel := s.confirmationContext(ctx)
+	defer cancel()
+	return journal.WaitConfirmed(ctx, receipt)
 }
 
 // updateAll runs several callbacks in one transaction and one frame. It is the
@@ -63,12 +158,26 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 			_ = tx.Rollback()
 		}
 	}()
+	// Another admitted writer may have waited for bbolt's writer lock while
+	// its predecessor persisted a fact but failed to commit the projection.
+	if err := s.RecoveryError(); err != nil {
+		return metadatajournal.AppendReceipt{}, false, err
+	}
 	recorder := newRecorder()
 	wrapped := &Tx{tx: tx, recorder: recorder}
 	for _, callback := range callbacks {
 		if err := callback(wrapped); err != nil {
 			return metadatajournal.AppendReceipt{}, false, err
 		}
+	}
+	if err := wrapped.bumpPriceRevisions(); err != nil {
+		return metadatajournal.AppendReceipt{}, false, err
+	}
+	if err := wrapped.bumpProposalRevisions(); err != nil {
+		return metadatajournal.AppendReceipt{}, false, err
+	}
+	if err := wrapped.updatePricingPendingCount(); err != nil {
+		return metadatajournal.AppendReceipt{}, false, err
 	}
 	if err := recorder.finish(); err != nil {
 		return metadatajournal.AppendReceipt{}, false, err
@@ -84,6 +193,9 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 		var appendErr error
 		receipt, appendErr = s.journal.AppendWithReceipt(recorder.ops)
 		if appendErr != nil {
+			if s.journal.HealthError() != nil {
+				appendErr = s.requireMetadataRecovery(appendErr)
+			}
 			return metadatajournal.AppendReceipt{}, false, fmt.Errorf("record metadata transaction: %w", appendErr)
 		}
 		// Written on the raw transaction rather than through the recorder: a
@@ -92,17 +204,50 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 		// position with the Primary's.
 		meta := tx.Bucket(bucketMeta)
 		if meta == nil {
-			return metadatajournal.AppendReceipt{}, false, errors.New("metadata bucket is missing")
+			return metadatajournal.AppendReceipt{}, false, s.requireMetadataRecovery(errors.New("metadata bucket is missing after native append"))
 		}
 		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(receipt.Record.Sequence)); err != nil {
-			return metadatajournal.AppendReceipt{}, false, err
+			return metadatajournal.AppendReceipt{}, false, s.requireMetadataRecovery(err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return metadatajournal.AppendReceipt{}, false, err
+	if err := s.commitMetadataTransaction(tx); err != nil {
+		// The native fact may already be durable. Refusing only this write
+		// leaves later callbacks and cached authorization using the old DB.
+		return metadatajournal.AppendReceipt{}, false, s.requireMetadataRecovery(err)
 	}
 	committed = true
 	return receipt, recorder.requiresConfirmation, nil
+}
+
+func (s *Store) commitMetadataTransaction(tx *bbolt.Tx) error {
+	if s.batches.commit != nil {
+		return normalizeMetadataFileError(s.batches.commit(tx))
+	}
+	return normalizeMetadataFileError(tx.Commit())
+}
+
+// Epoch bookkeeping and confirmed Replica application are unrecorded physical
+// projection writes. A callback refusal is definite; an approved transaction
+// whose commit fails permanently revokes the same Store as ordinary writes.
+func (s *Store) updateNativeProjection(fn func(*bbolt.Tx) error) error {
+	if s.facade != nil {
+		return ErrFacadeMaintenance
+	}
+	tx, err := s.db.Begin(true)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := s.RecoveryError(); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := s.commitMetadataTransaction(tx); err != nil {
+		return s.requireMetadataRecovery(err)
+	}
+	return nil
 }
 
 // migrate runs a writable transaction that is deliberately not recorded.
@@ -113,7 +258,12 @@ func (s *Store) updateAll(callbacks []func(*Tx) error) (metadatajournal.AppendRe
 // would mean a Replica replaying DDL, which is the thing physical replication
 // was chosen to avoid.
 func (s *Store) migrate(fn func(*Tx) error) error {
-	return s.db.Update(func(tx *bbolt.Tx) error { return fn(&Tx{tx: tx}) })
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	return s.updateNativeProjection(func(tx *bbolt.Tx) error { return fn(&Tx{tx: tx}) })
 }
 
 func encodeUint64(value uint64) []byte {
@@ -152,6 +302,8 @@ type batchState struct {
 	// replaced; the numbers are the same and their meaning is unchanged.
 	delay time.Duration
 	size  int
+	// Private deterministic commit-failure seam; production leaves this nil.
+	commit func(*bbolt.Tx) error
 }
 
 type batchCall struct {
@@ -167,9 +319,24 @@ type batchCall struct {
 // failed attempt's operations never reach the journal, because the frame is
 // written after every surviving callback has run.
 func (s *Store) batch(fn func(*Tx) error) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	s.batchCalls.Add(1)
 	call := &batchCall{fn: fn, done: make(chan error, 1)}
 	s.batches.mu.Lock()
+	// Close takes batches.mu after revoking admission. A caller which entered
+	// before that revocation must either be visible to that flush or refuse
+	// here; it cannot enqueue behind the final flush and wait forever.
+	s.lifetime.mu.Lock()
+	closing := s.lifetime.closing
+	s.lifetime.mu.Unlock()
+	if closing {
+		s.batches.mu.Unlock()
+		return bbolt.ErrDatabaseNotOpen
+	}
 	s.batches.pending = append(s.batches.pending, call)
 	first := len(s.batches.pending) == 1
 	full := len(s.batches.pending) >= s.batches.size
@@ -187,6 +354,15 @@ func (s *Store) batch(fn func(*Tx) error) error {
 
 // runBatch takes whatever has queued and commits it as one transaction.
 func (s *Store) runBatch() {
+	leave, err := s.enter()
+	if err != nil {
+		return
+	}
+	defer leave()
+	s.runAdmittedBatch()
+}
+
+func (s *Store) runAdmittedBatch() {
 	s.batches.mu.Lock()
 	queued := s.batches.pending
 	s.batches.pending, s.batches.timer = nil, nil
@@ -217,10 +393,7 @@ func (s *Store) commitBatch(queued []*batchCall) {
 				return nil
 			}
 		}
-		receipt, requiresConfirmation, err := s.updateAll(callbacks)
-		if err == nil && requiresConfirmation && s.journal != nil {
-			err = s.journal.WaitConfirmed(context.Background(), receipt)
-		}
+		err := s.updateAndConfirm(context.Background(), callbacks)
 		if err == nil {
 			s.batchTransactions.Add(1)
 			for _, call := range queued {
@@ -254,7 +427,7 @@ func (s *Store) flushBatches() {
 	if timer != nil {
 		timer.Stop()
 	}
-	s.runBatch()
+	s.runAdmittedBatch()
 }
 
 // attachedJournal is what a Store holds once its key is available.

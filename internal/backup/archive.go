@@ -2,23 +2,27 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/dirscan"
 	"io"
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/ownedfile"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -84,9 +88,17 @@ type Manifest struct {
 }
 
 type CreateOptions struct {
-	OutputPath                 string
-	BackupKey                  []byte
-	Files                      []SourceFile
+	OutputPath string
+	BackupKey  []byte
+	Files      []SourceFile
+	// OutputDiskBytes and ReserveOutputDisk must be enabled together. The
+	// producer charges the complete finite encrypted-output ceiling before
+	// creating its inode; publication/unknown exits never refund the token.
+	OutputDiskBytes   int64
+	ReserveOutputDisk func(int64) (ledger.NativeFileDiskReservation, error)
+	// SourceCatalog is exclusive with Files; Create consumes its ownership.
+	SourceCatalog              *SourceCatalog
+	Context                    context.Context
 	Metadata                   boltstore.MetadataInfo
 	LedgerWatermark            ledger.Watermark
 	CheckpointWatermark        ledger.Watermark
@@ -119,14 +131,33 @@ type CreateOptions struct {
 	Now                        func() time.Time
 }
 
-func Create(options CreateOptions) (Manifest, error) {
+func Create(options CreateOptions) (Manifest, error) { return createArchive(options, nil) }
+
+func createArchive(options CreateOptions, paged *PagedManifest) (result Manifest, resultErr error) {
+	catalog := options.SourceCatalog
+	defer func() {
+		if err := catalog.Close(); err != nil {
+			resultErr = &archiveCatalogDebt{catalog: catalog, cause: errors.Join(resultErr, err)}
+			result = Manifest{}
+		}
+	}()
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
+	if catalog != nil && len(options.Files) != 0 {
+		return Manifest{}, errors.New("backup sources must use either Files or SourceCatalog")
+	}
 	if !filepath.IsAbs(options.OutputPath) {
 		return Manifest{}, errors.New("backup output path must be absolute")
 	}
 	if len(options.BackupKey) != 32 {
 		return Manifest{}, errors.New("backup key must be exactly 32 bytes")
 	}
-	if len(options.Files) == 0 {
+	if catalog == nil && len(options.Files) == 0 {
 		return Manifest{}, errors.New("backup files are required")
 	}
 	if options.ClusterID != "" {
@@ -150,21 +181,23 @@ func Create(options CreateOptions) (Manifest, error) {
 	if err := os.MkdirAll(filepath.Dir(options.OutputPath), 0o700); err != nil {
 		return Manifest{}, err
 	}
-	files := slices.Clone(options.Files)
-	slices.SortFunc(files, func(left, right SourceFile) int {
-		return strings.Compare(left.ArchivePath, right.ArchivePath)
-	})
-	seen := make(map[string]struct{}, len(files))
-	for index := range files {
-		clean, err := safeArchivePath(files[index].ArchivePath)
+	if catalog == nil {
+		var err error
+		catalog, err = NewSourceCatalogWithContext(ctx, filepath.Dir(options.OutputPath), 0)
 		if err != nil {
 			return Manifest{}, err
 		}
-		files[index].ArchivePath = clean
-		if _, exists := seen[clean]; exists || clean == "manifest.json" {
-			return Manifest{}, fmt.Errorf("duplicate or reserved backup path %q", clean)
+		for _, source := range options.Files {
+			if err := ctx.Err(); err != nil {
+				return Manifest{}, err
+			}
+			if err := catalog.Add(source); err != nil {
+				return Manifest{}, err
+			}
 		}
-		seen[clean] = struct{}{}
+	}
+	if catalog.index == nil || catalog.index.count == 0 {
+		return Manifest{}, errors.New("backup files are required")
 	}
 	backupID, err := randomID()
 	if err != nil {
@@ -199,33 +232,98 @@ func Create(options CreateOptions) (Manifest, error) {
 		MetadataJournalEpoch: options.MetadataJournalEpoch, MetadataJournalSequence: options.MetadataJournalSequence,
 		PerStoreHead: options.PerStoreHead,
 	}
-	temp, err := os.CreateTemp(filepath.Dir(options.OutputPath), ".halro-backup-*.tmp")
+	manifestBytes := 0
+	if paged == nil {
+		baseManifest, err := json.Marshal(manifest)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if len(baseManifest) > backupManifestSizeLimit {
+			return Manifest{}, errors.New("backup manifest exceeds size limit")
+		}
+		manifestBytes = len(baseManifest) - 2
+	} else {
+		paged.Manifest = manifest
+		paged.CompatibilityVersion = manifest.FormatVersion
+		paged.FormatVersion = pagedManifestVersion
+		if paged.ClusterID == "" {
+			paged.SourceRole = "standalone"
+		}
+		paged.Catalog = FileCatalogSummary{Version: 1, SHA256: strings.Repeat("0", 64)}
+		if err := validatePagedManifest(*paged); err != nil {
+			return Manifest{}, err
+		}
+		encoded, err := json.Marshal(paged)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if len(encoded) > pagedMetadataLimit-128 {
+			return Manifest{}, errors.New("paged backup root exceeds size limit")
+		}
+		if err := validatePagedSources(ctx, *paged, catalog); err != nil {
+			return Manifest{}, err
+		}
+	}
+	output, err := newArchiveOutput(options)
 	if err != nil {
 		return Manifest{}, err
 	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return Manifest{}, err
-	}
-	encrypted, err := newEncryptWriter(temp, options.BackupKey)
+	defer func() {
+		resultErr = output.finish(resultErr)
+		if resultErr != nil {
+			result = Manifest{}
+		}
+	}()
+	encrypted, err := newEncryptWriter(output, options.BackupKey)
 	if err != nil {
-		temp.Close()
 		return Manifest{}, err
 	}
 	archive := tar.NewWriter(encrypted)
-	for _, source := range files {
-		entry, err := writeSource(archive, source)
-		if err != nil {
-			archive.Close()
-			encrypted.Close()
-			temp.Close()
-			return Manifest{}, err
+	pages := newCatalogWriter(archive, manifest.CreatedAt)
+	err = catalog.Walk(ctx, func(source SourceFile) error {
+		if paged != nil && isCatalogPath(source.ArchivePath) {
+			return errors.New("backup source uses reserved catalog path")
 		}
+		entry, err := writeSource(ctx, archive, source)
+		if err != nil {
+			return err
+		}
+		if paged != nil {
+			return pages.Add(entry)
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		size := len(encoded)
+		if len(manifest.Files) > 0 {
+			size++
+		}
+		if size > backupManifestSizeLimit-manifestBytes {
+			return errors.New("backup manifest exceeds size limit")
+		}
+		manifestBytes += size
 		manifest.Files = append(manifest.Files, entry)
+		return nil
+	})
+	if err != nil {
+		return Manifest{}, errors.Join(err, archive.Close(), encrypted.Close())
 	}
-	encodedManifest, err := json.Marshal(manifest)
+	var encodedManifest []byte
+	if paged == nil {
+		encodedManifest, err = json.Marshal(manifest)
+		if err == nil && len(encodedManifest) > backupManifestSizeLimit {
+			err = errors.New("backup manifest exceeds size limit")
+		}
+	} else {
+		paged.Catalog, err = pages.Finish()
+		if err == nil {
+			encodedManifest, err = json.Marshal(paged)
+		}
+		if err == nil && len(encodedManifest) > pagedMetadataLimit {
+			err = errors.New("paged backup root exceeds size limit")
+		}
+	}
 	if err == nil {
 		err = archive.WriteHeader(&tar.Header{
 			Name: "manifest.json", Mode: 0o600, Size: int64(len(encodedManifest)),
@@ -241,44 +339,76 @@ func Create(options CreateOptions) (Manifest, error) {
 	if closeErr := encrypted.Close(); err == nil {
 		err = closeErr
 	}
-	if syncErr := temp.Sync(); err == nil {
+	if syncErr := output.file.Sync(); err == nil {
 		err = syncErr
 	}
-	if closeErr := temp.Close(); err == nil {
+	if verifyErr := output.verify(); err == nil {
+		err = verifyErr
+	}
+	if closeErr := output.closeFile(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return Manifest{}, err
 	}
+	if err := catalog.Close(); err != nil {
+		return Manifest{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
 	// Hard-link publication is atomic and, unlike Rename, cannot overwrite an
 	// output created by a racing process after the initial existence check.
-	if err := os.Link(tempPath, options.OutputPath); err != nil {
+	if err := output.publish(options.OutputPath); err != nil {
 		return Manifest{}, err
-	}
-	if err := os.Remove(tempPath); err != nil {
-		return Manifest{}, err
-	}
-	if err := durable.SyncDirectory(filepath.Dir(options.OutputPath)); err != nil {
-		removeErr := os.Remove(options.OutputPath)
-		cleanupSyncErr := durable.SyncDirectory(filepath.Dir(options.OutputPath))
-		return Manifest{}, errors.Join(err, removeErr, cleanupSyncErr)
 	}
 	return manifest, nil
 }
 
-func Verify(archivePath string, backupKey []byte) (Manifest, error) {
+func Verify(archivePath string, backupKey []byte) (manifest Manifest, err error) {
+	return VerifyContext(context.Background(), archivePath, backupKey)
+}
+
+func VerifyContext(ctx context.Context, archivePath string, backupKey []byte) (manifest Manifest, err error) {
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
 	input, err := os.Open(archivePath)
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer input.Close()
-	decrypted, err := newDecryptReader(input, backupKey)
+	defer func() {
+		if closeErr := input.Close(); closeErr != nil {
+			err = errors.Join(err, ownedfile.ErrRetirement, closeErr)
+		}
+		if err != nil {
+			manifest = Manifest{}
+		}
+	}()
+	return verifyArchiveContext(ctx, input, backupKey)
+}
+
+// input lifetime belongs to the caller; verification retires its own index.
+func verifyArchive(input io.Reader, backupKey []byte) (manifest Manifest, err error) {
+	return verifyArchiveContext(context.Background(), input, backupKey)
+}
+
+func verifyArchiveContext(ctx context.Context, input io.Reader, backupKey []byte) (manifest Manifest, err error) {
+	decrypted, err := newDecryptReader(backupContextReader{ctx: ctx, reader: input}, backupKey)
 	if err != nil {
 		return Manifest{}, err
 	}
 	reader := tar.NewReader(decrypted)
-	observed := make(map[string]File)
-	var manifest Manifest
+	observed, err := newObservationIndexForWorkspace(ctx, os.TempDir(), 0)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer func() {
+		err = errors.Join(err, observed.Close())
+		if err != nil {
+			manifest = Manifest{}
+		}
+	}()
 	foundManifest := false
 	for {
 		header, err := reader.Next()
@@ -296,7 +426,7 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 			return Manifest{}, errors.New("backup contains an unsafe archive entry")
 		}
 		if name == "manifest.json" {
-			if header.Size > 1<<20 {
+			if header.Size > backupManifestSizeLimit {
 				return Manifest{}, errors.New("backup manifest exceeds size limit")
 			}
 			payload, err := io.ReadAll(io.LimitReader(reader, header.Size+1))
@@ -309,7 +439,9 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 			foundManifest = true
 			continue
 		}
-		if _, duplicate := observed[name]; duplicate {
+		if _, duplicate, err := observed.Get(name); err != nil {
+			return Manifest{}, err
+		} else if duplicate {
 			return Manifest{}, fmt.Errorf("duplicate backup entry %q", name)
 		}
 		hash := sha256.New()
@@ -317,67 +449,23 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		if err != nil || count != header.Size {
 			return Manifest{}, fmt.Errorf("read backup entry %q", name)
 		}
-		observed[name] = File{
+		if err := observed.Add(File{
 			Path: name, Size: count, SHA256: hex.EncodeToString(hash.Sum(nil)),
+		}); err != nil {
+			return Manifest{}, err
 		}
 	}
 	if _, err := io.Copy(io.Discard, decrypted); err != nil {
 		return Manifest{}, fmt.Errorf("verify authenticated backup ending: %w", err)
 	}
-	if manifest.Metadata.SchemaVersion > boltstore.CurrentSchemaVersion() {
-		return Manifest{}, fmt.Errorf(
-			"backup metadata schema version %d is newer than this Halro binary supports (schema version %d)",
-			manifest.Metadata.SchemaVersion, boltstore.CurrentSchemaVersion(),
-		)
-	}
-	if !foundManifest || (manifest.FormatVersion < 1 || manifest.FormatVersion > manifestVersion) || !manifest.Encrypted ||
-		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
-		manifest.Metadata.SchemaVersion == 0 ||
-		manifest.Metadata.TxID == 0 ||
-		manifest.CheckpointWatermark.After(manifest.LedgerWatermark) ||
-		!validFingerprint(manifest.MasterKeyFingerprint) {
+	if !foundManifest {
 		return Manifest{}, errors.New("backup manifest is invalid")
 	}
-	if manifest.FormatVersion >= 2 && (manifest.LedgerFeatureEpoch < 4 ||
-		manifest.MinimumLedgerReaderVersion != fmt.Sprintf("v%d", manifest.LedgerFeatureEpoch) ||
-		!validSHA256Label(manifest.PricingStateSHA256) || !validSHA256Label(manifest.PendingIntentSHA256)) {
-		return Manifest{}, errors.New("backup compatibility manifest is invalid")
+	if err := validateManifestHeader(manifest); err != nil {
+		return Manifest{}, err
 	}
-	if manifest.FormatVersion >= 3 && (manifest.GovernanceFormatVersion != 1 || manifest.GovernanceOffset < 0) {
-		return Manifest{}, errors.New("backup Governance manifest is invalid")
-	}
-	if manifest.FormatVersion >= 4 {
-		metadataHead, metadataOK := manifest.PerStoreHead["metadata"]
-		if manifest.ClusterID == "" || manifest.ClusterIncarnation == "" || manifest.SourceNodeID == "" ||
-			manifest.SourceRole != "replica" || manifest.Term == 0 || len(manifest.PerStoreHead) != 4 ||
-			!metadataOK || metadataHead.Generation != manifest.MetadataJournalEpoch || metadataHead.Sequence != manifest.MetadataJournalSequence {
-			return Manifest{}, errors.New("backup Replica prefix manifest is invalid")
-		}
-		for _, name := range []string{"ledger", "audit", "governance", "metadata"} {
-			if _, ok := manifest.PerStoreHead[name]; !ok {
-				return Manifest{}, errors.New("backup Replica per-store head set is incomplete")
-			}
-		}
-	}
-	if manifest.LedgerChainVerified && (manifest.LedgerChainHeadSequence > manifest.LedgerWatermark.Sequence ||
-		manifest.LedgerChainHeadOffset > manifest.LedgerWatermark.Offset) {
-		return Manifest{}, errors.New("backup manifest ledger chain head is inconsistent with the ledger watermark")
-	}
-	if manifest.KeySlotDescriptorSHA256 != "" && !validSHA256(manifest.KeySlotDescriptorSHA256) {
-		return Manifest{}, errors.New("backup manifest Key Slot descriptor digest is invalid")
-	}
-	if len(observed) != len(manifest.Files) {
-		return Manifest{}, errors.New("backup file set does not match manifest")
-	}
-	for _, expected := range manifest.Files {
-		actual, exists := observed[expected.Path]
-		if !exists || actual != expected {
-			return Manifest{}, fmt.Errorf("backup checksum mismatch for %q", expected.Path)
-		}
-		delete(observed, expected.Path)
-	}
-	if len(observed) != 0 {
-		return Manifest{}, errors.New("backup contains unmanifested files")
+	if err := matchManifestObservations(manifest, observed); err != nil {
+		return Manifest{}, err
 	}
 	for _, required := range []string{
 		"config/config.yaml", "data/metadata.db",
@@ -422,32 +510,86 @@ func validSHA256Label(value string) bool {
 // files into an empty staging directory. Callers must validate staged domain
 // data before publishing it as the live data directory.
 func Extract(archivePath string, backupKey []byte, destination string) (Manifest, error) {
-	manifest, err := Verify(archivePath, backupKey)
+	return extractArchive(archivePath, backupKey, destination, nil)
+}
+
+// between is a per-operation test boundary after complete authentication.
+func extractArchive(archivePath string, backupKey []byte, destination string, between func() error) (manifest Manifest, err error) {
+	input, err := os.Open(archivePath)
 	if err != nil {
+		return Manifest{}, err
+	}
+	defer func() {
+		if closeErr := input.Close(); closeErr != nil {
+			err = errors.Join(err, ownedfile.ErrRetirement, closeErr)
+		}
+		if err != nil {
+			manifest = Manifest{}
+		}
+	}()
+	identity, err := input.Stat()
+	if err != nil {
+		return Manifest{}, err
+	}
+	firstDigest := sha256.New()
+	manifest, err = verifyArchive(io.TeeReader(input, firstDigest), backupKey)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if between != nil {
+		if err := between(); err != nil {
+			return Manifest{}, err
+		}
+	}
+	if err := checkArchiveInput(input, identity, archivePath); err != nil {
 		return Manifest{}, err
 	}
 	if !filepath.IsAbs(destination) {
 		return Manifest{}, errors.New("backup extraction destination must be absolute")
 	}
-	if entries, err := os.ReadDir(destination); err == nil && len(entries) != 0 {
+	if err := dirscan.Empty(context.Background(), destination); errors.Is(err, dirscan.ErrNotEmpty) {
 		return Manifest{}, errors.New("backup extraction destination must be empty")
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+	} else if err != nil && !dirscan.Missing(err) {
 		return Manifest{}, err
 	}
 	if err := os.MkdirAll(destination, 0o700); err != nil {
 		return Manifest{}, err
 	}
-	input, err := os.Open(archivePath)
+	expected, err := newObservationIndex(os.TempDir())
 	if err != nil {
 		return Manifest{}, err
 	}
-	defer input.Close()
-	decrypted, err := newDecryptReader(input, backupKey)
+	defer func() {
+		err = errors.Join(err, expected.Close())
+		if err != nil {
+			manifest = Manifest{}
+		}
+	}()
+	for _, file := range manifest.Files {
+		if err := expected.Add(file); err != nil {
+			return Manifest{}, err
+		}
+	}
+	extracted, err := newObservationIndex(os.TempDir())
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer func() {
+		err = errors.Join(err, extracted.Close())
+		if err != nil {
+			manifest = Manifest{}
+		}
+	}()
+	if _, err := input.Seek(0, io.SeekStart); err != nil {
+		return Manifest{}, err
+	}
+	secondDigest := sha256.New()
+	decrypted, err := newDecryptReader(io.TeeReader(input, secondDigest), backupKey)
 	if err != nil {
 		return Manifest{}, err
 	}
 	reader := tar.NewReader(decrypted)
-	extracted := make(map[string]struct{}, len(manifest.Files))
+	foundManifest := false
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
@@ -455,6 +597,9 @@ func Extract(archivePath string, backupKey []byte, destination string) (Manifest
 		}
 		if err != nil {
 			return Manifest{}, fmt.Errorf("read backup archive: %w", err)
+		}
+		if foundManifest {
+			return Manifest{}, errors.New("backup contains entries after manifest")
 		}
 		name, pathErr := safeArchivePath(header.Name)
 		if pathErr != nil || header.Typeflag != tar.TypeReg || header.Size < 0 {
@@ -464,43 +609,64 @@ func Extract(archivePath string, backupKey []byte, destination string) (Manifest
 			if _, err := io.Copy(io.Discard, reader); err != nil {
 				return Manifest{}, err
 			}
+			foundManifest = true
 			continue
 		}
-		expected, exists := expectedFile(manifest.Files, name)
+		file, exists, err := expected.Get(name)
+		if err != nil {
+			return Manifest{}, err
+		}
 		if !exists {
 			return Manifest{}, fmt.Errorf("backup contains unmanifested file %q", name)
 		}
-		if _, duplicate := extracted[name]; duplicate {
+		if _, duplicate, err := extracted.Get(name); err != nil {
+			return Manifest{}, err
+		} else if duplicate {
 			return Manifest{}, fmt.Errorf("duplicate backup entry %q", name)
 		}
 		localPath := filepath.Join(destination, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
 			return Manifest{}, err
 		}
-		output, err := os.OpenFile(localPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		actual, err := writeExtractedPayload(context.Background(), localPath, name, reader, nil)
 		if err != nil {
 			return Manifest{}, err
 		}
-		hash := sha256.New()
-		count, copyErr := io.Copy(io.MultiWriter(output, hash), reader)
-		syncErr := output.Sync()
-		closeErr := output.Close()
-		if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
-			return Manifest{}, err
-		}
-		actualHash := hex.EncodeToString(hash.Sum(nil))
-		if count != expected.Size || actualHash != expected.SHA256 {
+		if actual != file {
 			return Manifest{}, fmt.Errorf("backup checksum mismatch for %q", name)
 		}
-		extracted[name] = struct{}{}
+		if err := extracted.Add(actual); err != nil {
+			return Manifest{}, err
+		}
 	}
 	if _, err := io.Copy(io.Discard, decrypted); err != nil {
 		return Manifest{}, fmt.Errorf("verify authenticated backup ending: %w", err)
 	}
-	if len(extracted) != len(manifest.Files) {
+	if !foundManifest || extracted.count != expected.count {
 		return Manifest{}, errors.New("extracted backup file set does not match manifest")
 	}
+	if !bytes.Equal(firstDigest.Sum(nil), secondDigest.Sum(nil)) {
+		return Manifest{}, errors.New("backup archive changed between verification and extraction")
+	}
+	if err := checkArchiveInput(input, identity, archivePath); err != nil {
+		return Manifest{}, err
+	}
 	return manifest, durable.SyncDirectory(destination)
+}
+
+func checkArchiveInput(input *os.File, identity os.FileInfo, archivePath string) error {
+	opened, err := input.Stat()
+	if err != nil {
+		return err
+	}
+	named, err := os.Stat(archivePath)
+	if err != nil {
+		return err
+	}
+	if !identity.Mode().IsRegular() || !os.SameFile(identity, opened) || !os.SameFile(identity, named) || identity.Size() != opened.Size() || identity.Size() != named.Size() || !identity.ModTime().Equal(opened.ModTime()) || !identity.ModTime().Equal(named.ModTime()) {
+		return errors.New("backup archive changed during extraction")
+	}
+	return nil
 }
 
 func validFingerprint(value string) bool {
@@ -521,7 +687,11 @@ func expectedFile(files []File, name string) (File, bool) {
 	return File{}, false
 }
 
-func writeSource(archive *tar.Writer, source SourceFile) (File, error) {
+func writeSource(ctx context.Context, archive *tar.Writer, source SourceFile) (File, error) {
+	return writeSourceWithClose(ctx, archive, source, ownedfile.CloseFile)
+}
+
+func writeSourceWithClose(ctx context.Context, archive *tar.Writer, source SourceFile, closeInput func(*os.File) error) (result File, resultErr error) {
 	info, err := os.Lstat(source.LocalPath)
 	if err != nil {
 		return File{}, err
@@ -532,11 +702,20 @@ func writeSource(archive *tar.Writer, source SourceFile) (File, error) {
 	if hasMultipleLinks(info) {
 		return File{}, fmt.Errorf("backup source %q has multiple hard links", source.LocalPath)
 	}
-	input, err := os.Open(source.LocalPath)
+	input, err := os.OpenFile(source.LocalPath, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return File{}, err
 	}
-	defer input.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, closeInput(input))
+		if resultErr != nil {
+			result = File{}
+		}
+	}()
+	opened, err := input.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) || hasMultipleLinks(opened) {
+		return File{}, errors.Join(err, ownedfile.ErrReplaced)
+	}
 	header := &tar.Header{
 		Name: source.ArchivePath, Mode: 0o600, Size: info.Size(),
 		ModTime: info.ModTime().UTC(), Typeflag: tar.TypeReg,
@@ -545,9 +724,15 @@ func writeSource(archive *tar.Writer, source SourceFile) (File, error) {
 		return File{}, err
 	}
 	hash := sha256.New()
-	count, err := io.Copy(io.MultiWriter(archive, hash), input)
+	var buffer [32 << 10]byte
+	count, err := io.CopyBuffer(io.MultiWriter(archive, hash), backupContextReader{ctx: ctx, reader: io.LimitReader(input, info.Size())}, buffer[:])
 	if err != nil || count != info.Size() {
-		return File{}, fmt.Errorf("copy backup source %q", source.LocalPath)
+		return File{}, errors.Join(fmt.Errorf("copy backup source %q", source.LocalPath), err, io.ErrUnexpectedEOF)
+	}
+	current, err := input.Stat()
+	named, nameErr := os.Lstat(source.LocalPath)
+	if err != nil || nameErr != nil || !os.SameFile(info, current) || !os.SameFile(info, named) || info.Size() != current.Size() || !info.ModTime().Equal(current.ModTime()) {
+		return File{}, errors.Join(err, nameErr, ownedfile.ErrReplaced)
 	}
 	return File{
 		Path: source.ArchivePath, Size: count,
@@ -572,4 +757,18 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return "bkp_" + hex.EncodeToString(random[:]), nil
+}
+
+// IO remains owned until Read returns; cancellation never releases resources
+// around a still-running filesystem read.
+type backupContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r backupContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }

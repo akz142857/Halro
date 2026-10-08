@@ -37,6 +37,10 @@ var rawTransactionExemptions = map[string]string{
 	"journal_attach.go": "applies the journal to bbolt on replay, and writes the journal's own " +
 		"epoch and sequence bookkeeping — both must not be recorded as ordinary writes",
 	"journal_tx.go": "the recorder type itself; the raw transaction is the field it wraps",
+	"file_limit.go": "constructor-only read transaction rejects an unpublished vault rewrite before " +
+		"the Store exists; it neither writes metadata nor applies journal frames",
+	"owned_snapshot.go": "reads the source under one immutable view and writes only the independently " +
+		"exclusive-created compact destination; this whole-file maintenance candidate is not live journal state",
 }
 
 func TestTheRecorderIsTheOnlyWayToWriteMetadata(t *testing.T) {

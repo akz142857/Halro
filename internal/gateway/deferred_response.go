@@ -18,6 +18,7 @@ import (
 	"github.com/akz142857/Halro/internal/openaiapi"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -56,11 +57,12 @@ const (
 // tracks what is executing right now, which is what cancellation needs to reach
 // and what stops a second worker picking up a record already in flight.
 type deferredEngine struct {
-	service *Service
-	signal  chan struct{}
-	slots   chan struct{}
-	running sync.Map
-	wait    sync.WaitGroup
+	service  *Service
+	signal   chan struct{}
+	slots    chan struct{}
+	running  sync.Map
+	wait     sync.WaitGroup
+	lifetime deferredWorkLifetime
 	// runCtx is the context the whole engine lives under, so a worker can tell
 	// the two cancellations apart. A caller cancelling one request and the
 	// process shutting down both arrive as a cancelled worker context, and they
@@ -139,7 +141,12 @@ func (s *Service) RunDeferredResponses(ctx context.Context) {
 		return
 	}
 	engine.runCtx = ctx
+	leave, err := engine.lifetime.enter(ctx, true)
+	if err != nil {
+		return
+	}
 	engine.recover(ctx)
+	leave()
 	backoff := deferredRetryFloor
 	timer := time.NewTimer(backoff)
 	defer timer.Stop()
@@ -224,6 +231,11 @@ func interleaveByProject(pending []domain.ProviderResource) []domain.ProviderRes
 
 // dispatch starts what it can and reports whether anything was left waiting.
 func (e *deferredEngine) dispatch(ctx context.Context) bool {
+	leave, err := e.lifetime.enter(ctx, false)
+	if err != nil {
+		return ctx.Err() == nil
+	}
+	defer leave()
 	pending, err := e.service.resources.PendingDeferredResponses(ctx, "")
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
@@ -261,7 +273,9 @@ func (e *deferredEngine) dispatch(ctx context.Context) bool {
 		workerCtx, cancel := context.WithCancel(ctx)
 		e.running.Store(record.ID, cancel)
 		e.wait.Add(1)
+		workerLeave := e.lifetime.retainAccepted()
 		go func(record domain.ProviderResource) {
+			defer workerLeave()
 			defer e.wait.Done()
 			defer func() {
 				e.running.Delete(record.ID)
@@ -521,6 +535,35 @@ func (s *Service) admitDeferredQueue(ctx context.Context, project domain.Project
 // finished, which happens when the Project is at a limit the queue exists to
 // wait out.
 func (s *Service) runDeferredResponse(ctx context.Context, record domain.ProviderResource) bool {
+	if s.resourceBudget != nil {
+		completion := resourcebudget.Cost{RAM: s.completionRAMBytes, Disk: s.completionDiskBytes}
+		if len(s.completionWorkspace) != 0 {
+			work, err := s.resourceBudget.TryAcquireCompletableWork(resourcebudget.Background, resourcebudget.Cost{RAM: s.deferredRAMBytes}, completion, s.completionWorkspace)
+			if err != nil {
+				return ctx.Err() == nil
+			}
+			defer work.Active.Release()
+			defer work.Close()
+			ctx = work.Bind(ctx)
+		} else if completion != (resourcebudget.Cost{}) {
+			work, err := s.resourceBudget.TryAcquireWork(resourcebudget.Background, resourcebudget.Cost{RAM: s.deferredRAMBytes}, completion)
+			if err != nil {
+				// Nothing has been read, marked in progress or sent upstream. Leave
+				// accepted work queued; the dispatcher retries using its backoff.
+				return ctx.Err() == nil
+			}
+			defer work.Completion.Release()
+			defer work.Active.Release()
+		} else {
+			permit, err := s.resourceBudget.TryAcquire(resourcebudget.Background, resourcebudget.Cost{RAM: s.deferredRAMBytes})
+			if err != nil {
+				// Nothing has been read, marked in progress or sent upstream. Leave
+				// accepted work queued; the dispatcher retries using its backoff.
+				return ctx.Err() == nil
+			}
+			defer permit.Release()
+		}
+	}
 	principal, target, err := s.resolveDeferredRequest(record)
 	if err != nil {
 		s.abandonDeferred(ctx, record, err)

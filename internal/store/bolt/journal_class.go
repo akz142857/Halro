@@ -88,6 +88,10 @@ func (c journalClass) String() string {
 // writes to it, by classify's refusal — which is deliberate. A default would
 // make the omission invisible until a failover.
 var bucketClasses = map[string]journalClass{
+	"deployment_price_revision": classAuthoritative,
+	"pricing_proposal_revision": classAuthoritative,
+	"pricing_proposal_order":    classAuthoritative,
+	"pricing_proposal_count":    classAuthoritative,
 	// A — authoritative metadata.
 	"credentials":                                  classAuthoritative,
 	"projects":                                     classAuthoritative,
@@ -112,6 +116,7 @@ var bucketClasses = map[string]journalClass{
 	"deployment_pricing_high_water":                classAuthoritative,
 	"deployment_price_pin_intents":                 classAuthoritative,
 	"deployment_price_proposals":                   classAuthoritative,
+	"pricing_audit_control":                        classAuthoritative,
 	"pricing_audit_intents":                        classAuthoritative,
 	"pricing_idempotency":                          classAuthoritative,
 	"pricing_proposal_idempotency":                 classAuthoritative,
@@ -122,6 +127,8 @@ var bucketClasses = map[string]journalClass{
 	"model_capability_detection_idempotency":       classAuthoritative,
 	"model_capability_detection_fingerprint_index": classAuthoritative,
 	"outcome_definitions":                          classAuthoritative,
+	"outcome_definition_export":                    classAuthoritative,
+	"outcome_definition_export_meta":               classAuthoritative,
 	"run_governance_idempotency":                   classAuthoritative,
 	"run_governance_index":                         classAuthoritative,
 	"migration_history":                            classAuthoritative,
@@ -135,6 +142,8 @@ var bucketClasses = map[string]journalClass{
 	// traffic. Never journalled.
 	"usage_checkpoint_segments":      classNodeDerived,
 	"usage_daily_rollup":             classNodeDerived,
+	"usage_daily_rollup_a":           classNodeDerived,
+	"usage_daily_rollup_b":           classNodeDerived,
 	"governance_checkpoint_segments": classNodeDerived,
 	"audit_anchors":                  classNodeDerived,
 	// route_suspensions is learned from what this node's own requests were
@@ -177,6 +186,9 @@ var metaKeyClasses = map[string]journalClass{
 	"ledger_hmac_envelope":   classKeyEnvelope,
 	"vault_key_check":        classKeyEnvelope,
 	"metadata_hmac_envelope": classKeyEnvelope,
+	// The exact cursor and row mutation commit together in one native frame.
+	// Replica confirmation retains idempotence across interrupted DEK rewrites.
+	"vault_group_rotation_progress": classKeyEnvelope,
 
 	// E — this node's own telemetry backplane. Not accounting, not derived
 	// from any log, and meaningless on another node.

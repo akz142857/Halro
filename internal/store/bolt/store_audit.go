@@ -390,6 +390,10 @@ func (s *Store) ClearVaultRotationBridgeWithAuditIntent(ctx context.Context, ope
 }
 
 func (s *Store) PutAuditCheckpoint(checkpoint AuditCheckpoint) error {
+	return s.PutAuditCheckpointContext(context.Background(), checkpoint)
+}
+
+func (s *Store) PutAuditCheckpointContext(ctx context.Context, checkpoint AuditCheckpoint) error {
 	if checkpoint.Bytes < 0 || (checkpoint.Records == 0 && (checkpoint.Bytes != 0 ||
 		checkpoint.LastHash != [32]byte{})) ||
 		(checkpoint.Records > 0 && (checkpoint.Bytes == 0 || checkpoint.LastHash == [32]byte{})) {
@@ -399,7 +403,7 @@ func (s *Store) PutAuditCheckpoint(checkpoint AuditCheckpoint) error {
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.updateContext(ctx, func(tx *Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if raw := meta.Get(keyAuditCheckpoint); raw != nil {
 			var current AuditCheckpoint

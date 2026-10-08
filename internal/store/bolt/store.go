@@ -18,10 +18,11 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	bbolt "go.etcd.io/bbolt"
 )
 
-const schemaVersion uint64 = 40
+const schemaVersion uint64 = 45
 
 // legacyCapabilityEvidence is the evidence tier this project used before
 // capability evidence was durable metadata. The domain no longer accepts it, so
@@ -78,13 +79,18 @@ var (
 	bucketProviderResourceIdem         = []byte("provider_resource_idempotency")
 	bucketDeploymentPriceVersions      = []byte("deployment_price_versions")
 	bucketDeploymentPriceTimeline      = []byte("deployment_price_timeline")
+	bucketDeploymentPriceRevision      = []byte("deployment_price_revision")
 	bucketDeploymentPriceNext          = []byte("deployment_price_next_version")
 	bucketDeploymentPricingHighWater   = []byte("deployment_pricing_high_water")
 	bucketDeploymentPricePins          = []byte("deployment_price_pin_intents")
 	bucketPricingAuditIntents          = []byte("pricing_audit_intents")
+	bucketPricingAuditControl          = []byte("pricing_audit_control")
 	bucketAdminAuditIntents            = []byte("admin_audit_intents")
 	bucketPricingIdempotency           = []byte("pricing_idempotency")
 	bucketDeploymentPriceProposals     = []byte("deployment_price_proposals")
+	bucketPricingProposalRevision      = []byte("pricing_proposal_revision")
+	bucketPricingProposalOrder         = []byte("pricing_proposal_order")
+	bucketPricingProposalCount         = []byte("pricing_proposal_count")
 	bucketPricingProposalIdempotency   = []byte("pricing_proposal_idempotency")
 	bucketCostAdjustmentIntents        = []byte("cost_adjustment_intents")
 	bucketAuditAnchors                 = []byte("audit_anchors")
@@ -94,6 +100,8 @@ var (
 	bucketUsageDailyRollup             = []byte("usage_daily_rollup")
 	bucketUsageCheckpointSegments      = []byte("usage_checkpoint_segments")
 	bucketOutcomeDefinitions           = []byte("outcome_definitions")
+	bucketOutcomeDefinitionExport      = []byte("outcome_definition_export")
+	bucketOutcomeDefinitionExportMeta  = []byte("outcome_definition_export_meta")
 	bucketRunGovernanceIdempotency     = []byte("run_governance_idempotency")
 	bucketRunGovernanceIndex           = []byte("run_governance_index")
 	bucketGovernanceCheckpointSegments = []byte("governance_checkpoint_segments")
@@ -1100,6 +1108,11 @@ var migrations = []migration{
 	// is free" and admit exactly the duplicate upstream call the key was sent to
 	// prevent.
 	{version: 40, name: "provider_resource_idempotency_index", up: migrateProviderResourceIdempotencyIndex},
+	{version: 41, name: "outcome_definition_export_prefix", up: migrateOutcomeDefinitionExport},
+	{version: 42, name: "deployment_price_revision_fence", up: migrateDeploymentPriceRevision},
+	{version: 43, name: "pricing_audit_pending_count", up: migratePricingAuditPendingCount},
+	{version: 44, name: "pricing_proposal_revision_fence", up: migratePricingProposalRevision},
+	{version: 45, name: "pricing_proposal_order_index", up: migratePricingProposalOrder},
 }
 
 func migrateProviderResourceIdempotencyIndex(tx *Tx, step func(string) error) error {
@@ -1409,6 +1422,11 @@ type MetadataWriteStats struct {
 }
 
 func (s *Store) MetadataWriteStats() MetadataWriteStats {
+	leave, err := s.enter()
+	if err != nil {
+		return MetadataWriteStats{}
+	}
+	defer leave()
 	stats := MetadataWriteStats{
 		BatchCalls:        s.batchCalls.Load(),
 		BatchTransactions: s.batchTransactions.Load(),
@@ -1423,8 +1441,17 @@ func (s *Store) MetadataWriteStats() MetadataWriteStats {
 }
 
 type Store struct {
-	db      *bbolt.DB
-	replica bool
+	lifetime          storeLifetime
+	definitionWriteMu sync.Mutex
+	journalMu         sync.RWMutex
+	db                *bbolt.DB
+	facade            FacadeBackend
+	path              string
+	physicalInfo      os.FileInfo
+	maxFileBytes      int64
+	mappingPermit     resourcebudget.Permit // Only the actual DB close retires this fee.
+	mappingBudget     *resourcebudget.Manager
+	replica           bool
 
 	// journal is the write-ahead log that makes db a projection. It is nil
 	// until AttachMetadataJournal installs it, because its HMAC key is derived
@@ -1436,6 +1463,9 @@ type Store struct {
 	// journalKey is kept so a trim can reopen the file it just rewrote. It is
 	// the only copy this package holds and it never leaves it.
 	journalKey []byte
+	// journalMaxBytes is the Runtime-configured logical ceiling carried across
+	// authenticated reopen after a trim.
+	journalMaxBytes int64
 	// migrated says a schema migration ran during this Open. It decides whether
 	// the attach continues the existing journal or publishes a new epoch: a
 	// migration rewrites the projection as a whole, and recording DDL as
@@ -1449,37 +1479,38 @@ type Store struct {
 	// journal_entry.go for why db.Batch could not be kept.
 	batches batchState
 
-	batchCalls        atomic.Uint64
-	batchTransactions atomic.Uint64
-	// pricingStates holds deploymentID -> *deploymentPricingState. Entries are
-	// created on first use and never removed: one small struct per deployment
-	// that has been priced, which is bounded by the deployment count.
-	pricingStates sync.Map
+	batchCalls         atomic.Uint64
+	batchTransactions  atomic.Uint64
+	usageRollupRebuild atomic.Bool
+	pricingResources   pricingResources
+	pricingStatesOnce  sync.Once
+	pricingStates      *[pricingStateSlots]deploymentPricingState
+	pricingClockMu     sync.Mutex
+	pricingClock       *pricingClockIndex
+	pricingClockErr    error
+	pricingPageKeyOnce sync.Once
+	pricingPageKey     [32]byte
+	pricingPageKeyErr  error
 }
 
-// deploymentPricingState is the per-deployment concurrency state for pricing.
-// Both members are deliberately per-deployment rather than process-wide: a
-// global lock here serializes every deployment's price selection behind one
-// mutex, which was measured as the Gateway's throughput ceiling (ADR 0012,
-// "Amendment 2026-08-07").
+// A fixed slot keeps shared/exclusive price-to-Lease exclusion and cold-audit
+// serialization. Slot collisions share exclusion only; the full audit digest
+// gates its replaceable marker, and clock observations have a separate exact
+// authenticated disk owner. No identifier or price history is retained here.
 type deploymentPricingState struct {
 	// gate serializes price selection against timeline mutation. Selection
 	// takes it shared, Admin mutation exclusively; see ADR 0012.
 	gate sync.RWMutex
-	// clockMu guards clock, and is held only for the read and the merge — never
-	// across a bbolt transaction, or concurrent selections could not coalesce.
-	clockMu  sync.Mutex
-	clock    pricingClockObservation
-	hasClock bool
-	// timelineMu guards the audited timeline cache below. The timeline is
-	// immutable between Admin mutations, and auditing it means decoding every
-	// version ever created, so the Gateway keeps the audited copy rather than
-	// rebuilding it on each request. Every write path that changes a version
-	// record drops it; a single process owns the data directory, so no other
-	// writer can leave it stale.
-	timelineMu     sync.Mutex
-	timeline       []domain.DeploymentPriceVersion
-	timelineLoaded bool
+	// timelineMu serializes cold audit/marker publication and invalidation.
+	// The marker owns no price history; successful mutation drops it.
+	timelineMu       sync.Mutex
+	timelineLoaded   bool
+	timelineRevision uint64
+	timelineKey      [32]byte
+	proposalMu       sync.Mutex
+	proposalLoaded   bool
+	proposalRevision uint64
+	proposalKey      [32]byte
 }
 
 type pricingClockObservation struct {
@@ -1569,21 +1600,23 @@ var ErrSchemaVersionMismatch = errors.New("metadata schema version mismatch")
 // OpenReadOnly opens existing metadata without creating files or running
 // migrations. It is intended for diagnostics that must never mutate state.
 func OpenReadOnly(path string) (*Store, error) {
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{ReadOnly: true, Timeout: 2 * time.Second})
+	return openReadOnlyLimit(path, 0)
+}
+
+func openReadOnlyLimit(path string, maxBytes int64) (*Store, error) {
+	db, physicalInfo, err := openMetadataFileCaptured(path, &bbolt.Options{ReadOnly: true, Timeout: 2 * time.Second}, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("open metadata read-only: %w", err)
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, path: db.Path(), physicalInfo: physicalInfo, maxFileBytes: maxBytes}
 	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	version, err := store.SchemaVersion()
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("read metadata schema: %w", err)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("read metadata schema: %w", err))
 	}
 	if version != schemaVersion {
-		db.Close()
-		return nil, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
-			ErrSchemaVersionMismatch, version, schemaVersion)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("%w: metadata schema version %d does not match required version %d",
+			ErrSchemaVersionMismatch, version, schemaVersion))
 	}
 	return store, nil
 }
@@ -1593,27 +1626,55 @@ func OpenReadOnly(path string) (*Store, error) {
 // database; schema transitions in a replicated group require an ordered
 // schema_boundary rather than a process-local startup side effect.
 func OpenPrimary(path string) (*Store, error) {
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{
+	return OpenPrimaryWithDiskLimit(path, 0)
+}
+
+// OpenExistingDerivedMaintenance opens precisely the previously authenticated
+// physical file, without creation or migration. The caller holds the exclusive
+// Standalone directory lock; no authoritative writes are enabled by this handle.
+func OpenExistingDerivedMaintenance(path string, expected os.FileInfo) (*Store, error) {
+	if expected == nil || !expected.Mode().IsRegular() {
+		return nil, errors.New("derived maintenance requires authenticated Metadata identity")
+	}
+	return openExactExistingMetadata(path, expected)
+}
+
+func openExactExistingMetadata(path string, expected os.FileInfo) (*Store, error) {
+	return openExactExistingMetadataLimit(path, expected, 0)
+}
+
+func openExactExistingMetadataLimit(path string, expected os.FileInfo, maxBytes int64) (*Store, error) {
+	db, physicalInfo, err := openMetadataFileCaptured(path, &bbolt.Options{
 		Timeout:      2 * time.Second,
 		FreelistType: bbolt.FreelistMapType,
 		OpenFile: func(name string, flag int, mode os.FileMode) (*os.File, error) {
-			return os.OpenFile(name, flag&^os.O_CREATE, mode)
+			f, err := os.OpenFile(name, flag&^os.O_CREATE, mode)
+			if err != nil {
+				return f, err
+			}
+			actual, err := f.Stat()
+			if err != nil || !actual.Mode().IsRegular() || actual.Size() == 0 || expected != nil && (!os.SameFile(expected, actual) || actual.Size() != expected.Size() || !actual.ModTime().Equal(expected.ModTime())) {
+				closeErr := f.Close()
+				if closeErr != nil {
+					closeErr = errors.Join(ErrMetadataFileRetirement, closeErr)
+				}
+				return nil, errors.Join(err, closeErr, errors.New("existing Metadata file is empty or changed"))
+			}
+			return f, nil
 		},
-	})
+	}, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("open primary metadata: %w", err)
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, path: db.Path(), physicalInfo: physicalInfo, maxFileBytes: maxBytes}
 	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	version, err := store.SchemaVersion()
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("read primary metadata schema: %w", err)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("read primary metadata schema: %w", err))
 	}
 	if version != schemaVersion {
-		db.Close()
-		return nil, fmt.Errorf("%w: primary metadata schema version %d does not match required version %d; an ordered schema boundary is required",
-			ErrSchemaVersionMismatch, version, schemaVersion)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("%w: primary metadata schema version %d does not match required version %d; an ordered schema boundary is required",
+			ErrSchemaVersionMismatch, version, schemaVersion))
 	}
 	return store, nil
 }
@@ -1624,30 +1685,44 @@ func OpenPrimary(path string) (*Store, error) {
 // knows how to apply. It also never creates an empty database: seeding must
 // publish the projection first.
 func OpenReplica(path string) (*Store, error) {
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{
+	return openReplicaLimit(path, 0)
+}
+
+func openReplicaLimit(path string, maxBytes int64) (*Store, error) {
+	db, physicalInfo, err := openMetadataFileCaptured(path, &bbolt.Options{
 		Timeout:      2 * time.Second,
 		FreelistType: bbolt.FreelistMapType,
 		// bbolt normally includes O_CREATE. A Replica must never turn a missing
 		// seed into an empty writable database, and a preceding Stat cannot make
 		// that promise atomically because the path may disappear before OpenFile.
 		OpenFile: func(name string, flag int, mode os.FileMode) (*os.File, error) {
-			return os.OpenFile(name, flag&^os.O_CREATE, mode)
+			f, err := os.OpenFile(name, flag&^os.O_CREATE, mode)
+			if err != nil {
+				return nil, err
+			}
+			actual, err := f.Stat()
+			if err != nil || !actual.Mode().IsRegular() || actual.Size() == 0 {
+				closeErr := f.Close()
+				if closeErr != nil {
+					closeErr = errors.Join(ErrMetadataFileRetirement, closeErr)
+				}
+				return nil, errors.Join(err, closeErr, errors.New("Replica Metadata requires a nonempty seed"))
+			}
+			return f, nil
 		},
-	})
+	}, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("open replica metadata: %w", err)
 	}
-	store := &Store{db: db, replica: true}
+	store := &Store{db: db, path: db.Path(), physicalInfo: physicalInfo, maxFileBytes: maxBytes, replica: true}
 	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	version, err := store.SchemaVersion()
 	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("read replica metadata schema: %w", err)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("read replica metadata schema: %w", err))
 	}
 	if version == 0 || version > schemaVersion {
-		db.Close()
-		return nil, fmt.Errorf("%w: replica metadata schema version %d exceeds supported version %d",
-			ErrSchemaVersionMismatch, version, schemaVersion)
+		return nil, closeMetadataAfterError(db, fmt.Errorf("%w: replica metadata schema version %d exceeds supported version %d",
+			ErrSchemaVersionMismatch, version, schemaVersion))
 	}
 	return store, nil
 }
@@ -1678,36 +1753,70 @@ const (
 )
 
 func openWithMigrationHooks(path string, afterUp func(uint64) error, stepHook func(uint64, string) error) (*Store, error) {
+	return openWithMigrationHooksLimit(path, afterUp, stepHook, 0)
+}
+
+func openWithMigrationHooksLimit(path string, afterUp func(uint64) error, stepHook func(uint64, string) error, maxBytes int64) (*Store, error) {
+	if maxBytes < 0 || maxBytes > int64(int(^uint(0)>>1)) {
+		return nil, ErrMetadataStoreDiskLimit
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
-	db, err := bbolt.Open(path, 0o600, &bbolt.Options{
+	db, physicalInfo, err := openMetadataFileCaptured(path, &bbolt.Options{
 		Timeout:      2 * time.Second,
 		FreelistType: bbolt.FreelistMapType,
-	})
+	}, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("open metadata: %w", err)
 	}
 	// bbolt's own batching is left at its defaults and unused: db.Batch was
 	// replaced by the coalescing layer in journal_entry.go, which owns these
 	// numbers now.
-	store := &Store{db: db}
+	store := &Store{db: db, path: db.Path(), physicalInfo: physicalInfo, maxFileBytes: maxBytes}
 	store.batches.delay, store.batches.size = metadataBatchDelay, metadataBatchSize
 	if err := store.initialize(afterUp, stepHook); err != nil {
-		db.Close()
-		return nil, err
+		return nil, closeMetadataAfterError(db, err)
 	}
 	return store, nil
 }
 
 func (s *Store) Close() error {
-	if s == nil || s.db == nil {
+	return s.CloseContext(context.Background())
+}
+
+// CloseContext preserves the caller's original paid shutdown workspace for a
+// selected facade. Revocation and actual worker/descriptor joins are unchanged.
+func (s *Store) CloseContext(ctx context.Context) error {
+	if s == nil || s.db == nil && s.facade == nil {
 		return nil
 	}
-	// Anything still queued in the coalescing layer runs first: a caller
-	// blocked on the batch window must not be left waiting on a store that is
-	// going away, and its transaction is as durable as any other.
+	l := &s.lifetime
+	l.mu.Lock()
+	if l.closing {
+		done := l.done
+		l.mu.Unlock()
+		<-done
+		l.mu.Lock()
+		err := l.err
+		l.mu.Unlock()
+		return err
+	}
+	l.closing, l.done = true, make(chan struct{})
+	if l.cancel != nil {
+		l.cancel()
+	}
+	l.mu.Unlock()
+	// These callbacks were already admitted by their batch callers. Flush does
+	// not acquire fresh admission after revocation, and workers already running
+	// are joined through both their own ticket and each waiting batch caller.
 	s.flushBatches()
+	l.mu.Lock()
+	for l.active != 0 {
+		l.changed.Wait()
+	}
+	l.mu.Unlock()
+	s.journalMu.Lock()
 	var journalErr error
 	if s.journal != nil {
 		journalErr = s.journal.Close()
@@ -1715,9 +1824,35 @@ func (s *Store) Close() error {
 	}
 	clear(s.journalKey)
 	s.journalKey = nil
-	err := s.db.Close()
-	s.db = nil
-	return errors.Join(journalErr, err)
+	clockCloseErr := s.pricingClock.close()
+	var dbCloseErr error
+	if s.facade != nil {
+		if contextual, ok := s.facade.(interface{ CloseContext(context.Context) error }); ok {
+			dbCloseErr = contextual.CloseContext(ctx)
+		} else {
+			dbCloseErr = s.facade.Close()
+		}
+	} else {
+		dbCloseErr = s.db.Close()
+	}
+	err := errors.Join(journalErr, clockCloseErr, dbCloseErr)
+	if dbCloseErr == nil && s.mappingPermit != (resourcebudget.Permit{}) {
+		mappingErr := s.mappingPermit.Release()
+		err = errors.Join(err, mappingErr)
+		if mappingErr == nil {
+			s.mappingPermit = resourcebudget.Permit{}
+		}
+	}
+	s.pricingStates = nil
+	clear(s.pricingPageKey[:])
+	s.pricingPageKeyErr = nil
+	err = errors.Join(err, s.retirePricingResources())
+	s.journalMu.Unlock()
+	l.mu.Lock()
+	l.err = err
+	close(l.done)
+	l.mu.Unlock()
+	return err
 }
 
 func (s *Store) PutLedgerHMACEnvelope(value []byte) error {
@@ -1957,7 +2092,6 @@ func (s *Store) PutBootstrap(ctx context.Context, records *BootstrapRecords) err
 				// can hold an audited timeline for it yet. Dropped anyway: the
 				// rule is that every path writing a version record drops the
 				// cache, and an exception here is one an audit has to re-derive.
-				s.invalidateDeploymentPricingTimeline(records.Deployment.ID)
 				return tx.Bucket(bucketDeploymentPriceNext).Put([]byte(records.Deployment.ID), versionKey(records.Price.Version))
 			},
 			func() error {
@@ -2146,12 +2280,17 @@ func requiredBuckets() [][]byte {
 		bucketDeploymentPriceVersions,
 		bucketDeploymentPriceTimeline,
 		bucketDeploymentPriceNext,
+		bucketDeploymentPriceRevision,
 		bucketDeploymentPricingHighWater,
 		bucketDeploymentPricePins,
 		bucketPricingAuditIntents,
+		bucketPricingAuditControl,
 		bucketAdminAuditIntents,
 		bucketPricingIdempotency,
 		bucketDeploymentPriceProposals,
+		bucketPricingProposalRevision,
+		bucketPricingProposalOrder,
+		bucketPricingProposalCount,
 		bucketPricingProposalIdempotency,
 		bucketCostAdjustmentIntents,
 		bucketModelCapabilityDetections,
@@ -2160,6 +2299,8 @@ func requiredBuckets() [][]byte {
 		bucketUsageDailyRollup,
 		bucketUsageCheckpointSegments,
 		bucketOutcomeDefinitions,
+		bucketOutcomeDefinitionExport,
+		bucketOutcomeDefinitionExportMeta,
 		bucketRunGovernanceIdempotency,
 		bucketRunGovernanceIndex,
 		bucketGovernanceCheckpointSegments,
@@ -2195,77 +2336,16 @@ func (s *Store) MigrationHistory() ([]MigrationRecord, error) {
 	return records, err
 }
 
-// Snapshot writes a transactionally consistent bbolt image to a caller-owned
-// staging path. The caller is responsible for atomic publication.
+// Snapshot writes one transactionally consistent image to an exclusive output.
+// Callers own successful staging output; existing destinations are refused.
 func (s *Store) Snapshot(path string) (MetadataInfo, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return MetadataInfo{}, err
-	}
-	// Replica OpenFile deliberately strips O_CREATE from every bbolt open so a
-	// missing seed cannot become an empty database. bbolt also reuses that hook
-	// for Tx.CopyFile, even though this destination is caller-owned staging.
-	// Pre-create only that explicit staging file and let CopyFile reopen it with
-	// truncate; the live Replica path remains protected by the no-create hook.
-	precreated := false
-	if s.replica {
-		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return MetadataInfo{}, err
-		}
-		if err := file.Close(); err != nil {
-			_ = os.Remove(path)
-			return MetadataInfo{}, err
-		}
-		precreated = true
-	}
-	var info MetadataInfo
-	err := s.view(func(tx *Tx) error {
-		raw := tx.Bucket(bucketMeta).Get(keySchemaVersion)
-		if len(raw) != 8 {
-			return errors.New("invalid metadata schema version")
-		}
-		info = MetadataInfo{
-			SchemaVersion: binary.BigEndian.Uint64(raw), TxID: uint64(tx.ID()),
-			MinimumLedgerReaderVersion: string(tx.Bucket(bucketMeta).Get(keyMinimumLedgerReaderVersion)),
-		}
-		if epoch := tx.Bucket(bucketMeta).Get(keyLedgerFeatureEpoch); len(epoch) == 1 {
-			info.LedgerFeatureEpoch = epoch[0]
-		}
-		// Read inside the same transaction as the copy, so the position and
-		// the bytes it describes are the same instant.
-		info.MetadataJournalEpoch, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyMetadataJournalEpoch))
-		info.MetadataJournalSequence, _ = decodeUint64(tx.Bucket(bucketMeta).Get(keyAppliedJournalSequence))
-		return tx.CopyFile(path, 0o600)
-	})
-	if err != nil {
-		if precreated {
-			_ = os.Remove(path)
-		}
-		return MetadataInfo{}, fmt.Errorf("snapshot metadata: %w", err)
-	}
-	return info, nil
+	return s.SnapshotContext(context.Background(), path)
 }
 
-// CompactSnapshot copies only live keys into a fresh bbolt file. Unlike a
-// page-level snapshot, it excludes freelist pages that may contain retired
-// ciphertext or a deleted master-key rotation bridge.
+// CompactSnapshot copies only live keys using fixed-depth traversal and bounded
+// destination transactions. It excludes retired ciphertext in freelist pages.
 func (s *Store) CompactSnapshot(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	destination, err := bbolt.Open(path, 0o600, &bbolt.Options{FreelistType: bbolt.FreelistMapType})
-	if err != nil {
-		return fmt.Errorf("open compact metadata destination: %w", err)
-	}
-	compactErr := bbolt.Compact(destination, s.db, 0)
-	closeErr := destination.Close()
-	if compactErr != nil {
-		return fmt.Errorf("compact metadata: %w", compactErr)
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return nil
+	return s.CompactSnapshotContext(context.Background(), path)
 }
 
 func capabilityEvidenceRank(value domain.CapabilityEvidence) int {
@@ -2292,7 +2372,7 @@ func (s *Store) getJSON(ctx context.Context, bucketName []byte, id string, targe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.view(func(tx *Tx) error {
+	return s.viewContext(ctx, func(tx *Tx) error {
 		raw := tx.Bucket(bucketName).Get([]byte(id))
 		if raw == nil {
 			return ErrNotFound
@@ -2305,7 +2385,7 @@ func (s *Store) listJSON(ctx context.Context, bucketName []byte, visit func([]by
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.view(func(tx *Tx) error {
+	return s.viewContext(ctx, func(tx *Tx) error {
 		return tx.Bucket(bucketName).ForEach(func(_, value []byte) error {
 			if value == nil {
 				return nil

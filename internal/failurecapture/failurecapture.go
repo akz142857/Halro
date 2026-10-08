@@ -32,15 +32,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/akz142857/Halro/internal/dirscan"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 
 	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/provider"
@@ -57,6 +60,28 @@ const (
 // so the extension is a hint for a human listing the directory rather than
 // anything the reader trusts.
 const fileExtension = ".hfc"
+
+const captureMetadataBytes = 4096
+
+func captureFileCeiling(maxBytes int) int64 {
+	return 18*int64(maxBytes) + 6*captureMetadataBytes + 4096
+}
+
+// ReadRAMBytes covers ciphertext, plaintext, decoded JSON and response encoding
+// plus fixed directory batches. This conservative logical envelope is retained
+// by the response owner through audited output; it is not an RSS guarantee.
+func (s *Store) ReadRAMBytes() int64 { return 4*captureFileCeiling(s.maxBytes) + 64<<10 }
+
+func validRecordMetadata(record Record) bool {
+	remaining := captureMetadataBytes
+	for _, value := range []string{record.RequestID, record.ProjectID, record.Outcome, string(record.OfferingID), string(record.ProfileID), string(record.AccountRegionID), record.ProviderCode, string(record.ProviderFailureReason), record.ProviderRequestID, record.FailurePhase} {
+		if len(value) > remaining {
+			return false
+		}
+		remaining -= len(value)
+	}
+	return true
+}
 
 // captureName is `<unix-millis>-<request-id>.hfc`.
 //
@@ -177,6 +202,10 @@ type Store struct {
 	retain           time.Duration
 	now              func() time.Time
 	sealer           Sealer
+	write            func(context.Context, string, string, []byte) error
+	writeMu          sync.Mutex
+	writeWait        sync.WaitGroup
+	writeClosed      bool
 
 	mu sync.Mutex
 	// countedDay and dayCount enforce MaxRecordsPerDay without listing the
@@ -197,13 +226,23 @@ type Store struct {
 }
 
 func Open(sealer Sealer, options Options) (*Store, error) {
+	return OpenContext(context.Background(), sealer, options)
+}
+
+func OpenContext(ctx context.Context, sealer Sealer, options Options) (*Store, error) {
+	if ctx == nil {
+		return nil, errors.New("failure capture context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if sealer == nil {
 		return nil, errors.New("failure capture requires a sealer")
 	}
 	if strings.TrimSpace(options.Root) == "" {
 		return nil, errors.New("failure capture root is required")
 	}
-	if options.MaxBytes <= 0 {
+	if options.MaxBytes <= 0 || int64(options.MaxBytes) > ((math.MaxInt64-(64<<10))/4-6*captureMetadataBytes-4097)/18 || captureFileCeiling(options.MaxBytes) >= int64(math.MaxInt) {
 		return nil, errors.New("failure capture byte ceiling is required")
 	}
 	if options.MaxRecordsPerDay <= 0 {
@@ -220,7 +259,7 @@ func Open(sealer Sealer, options Options) (*Store, error) {
 		now = time.Now
 	}
 	day := now().UTC().Format("2006-01-02")
-	dayCount, err := countCaptures(filepath.Join(options.Root, day), day)
+	dayCount, err := countCaptures(ctx, filepath.Join(options.Root, day), day)
 	if err != nil {
 		return nil, fmt.Errorf("count current failure captures: %w", err)
 	}
@@ -228,28 +267,55 @@ func Open(sealer Sealer, options Options) (*Store, error) {
 		root: options.Root, maxBytes: options.MaxBytes,
 		maxRecordsPerDay: options.MaxRecordsPerDay, retain: options.Retain,
 		now: now, sealer: sealer, countedDay: day, dayCount: dayCount,
+		write: writeSealedCapture,
 	}, nil
 }
 
-func countCaptures(directory, day string) (int, error) {
-	entries, err := os.ReadDir(directory)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+var ErrClosed = errors.New("failure capture store is closed for writes")
+
+// Close refuses new puts and joins both accepted puts and their sealed writers.
+// PutContext cancellation can return before a regular-file syscall completes;
+// Close deliberately waits for that owner before the vault/data lock is closed.
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
 	}
-	if err != nil {
-		return 0, err
+	s.writeMu.Lock()
+	s.writeClosed = true
+	s.writeMu.Unlock()
+	s.writeWait.Wait()
+	return nil
+}
+
+func (s *Store) beginPut() bool {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.writeClosed {
+		return false
 	}
+	s.writeWait.Add(1)
+	return true
+}
+
+func countCaptures(ctx context.Context, directory, day string) (int, error) {
 	count := 0
-	for _, entry := range entries {
+	err := dirscan.Walk(ctx, directory, func(entry os.DirEntry) error {
 		if entry.IsDir() {
-			continue
+			return nil
 		}
 		_, _, capturedAt, ok := capturedIdentity(entry.Name())
 		if ok && capturedAt.UTC().Format("2006-01-02") == day {
+			if count == math.MaxInt {
+				return errors.New("failure capture count overflow")
+			}
 			count++
 		}
+		return nil
+	})
+	if dirscan.Missing(err) {
+		return 0, nil
 	}
-	return count, nil
+	return count, err
 }
 
 // Put seals one capture. It returns false when the record was dropped rather
@@ -277,11 +343,48 @@ func (s *Store) PrepareRecord(record Record) Record {
 // cancellable so an async capture worker does not begin another expensive step
 // after its owner has started shutting down.
 func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
+	return s.putContext(ctx, record, resourcebudget.Permit{})
+}
+
+// PutContextWithPermit consumes one explicitly retained owner. The caller drops
+// the old handle and its payload references after the call. The calibrated
+// envelope already includes raw JSON, plaintext and encryption copies; retaining
+// a writer keeps that entire cost live if cancellation returns ahead of IO.
+func (s *Store) PutContextWithPermit(ctx context.Context, record Record, permit resourcebudget.Permit) (bool, error) {
+	owner, err := permit.Transfer()
+	if err != nil {
+		return false, fmt.Errorf("own failure capture RAM: %w", err)
+	}
+	return s.putContext(ctx, record, owner)
+}
+
+func (s *Store) putContext(ctx context.Context, record Record, permit resourcebudget.Permit) (bool, error) {
+	var plaintext, sealed []byte
+	begun := false
+	defer func() {
+		record = Record{}
+		clear(plaintext)
+		plaintext, sealed = nil, nil
+		_ = permit.Release()
+		if begun {
+			s.writeWait.Done()
+		}
+	}()
+	if ctx == nil {
+		return false, errors.New("failure capture context is required")
+	}
+	if !s.beginPut() {
+		return false, ErrClosed
+	}
+	begun = true
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	if record.RequestID == "" || record.ProjectID == "" {
 		return false, errors.New("a capture must name its request and project")
+	}
+	if !validRecordMetadata(record) {
+		return false, errors.New("failure capture metadata exceeds byte ceiling")
 	}
 	// The separator is part of the name format now, so neither identifier may
 	// contain one: a project called "a-b" would be read back as a request that
@@ -334,17 +437,22 @@ func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
 			s.finishReservation(day, false)
 		}
 	}()
-	plaintext, err := json.Marshal(record)
+	var err error
+	plaintext, err = json.Marshal(record)
 	if err != nil {
 		return false, fmt.Errorf("encode failure capture: %w", err)
 	}
-	defer clear(plaintext)
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	sealed, err := s.sealer.EncryptFailurePayload(record.RequestID, record.ProjectID, plaintext)
+	sealed, err = s.sealer.EncryptFailurePayload(record.RequestID, record.ProjectID, plaintext)
+	clear(plaintext)
+	plaintext = nil
 	if err != nil {
 		return false, fmt.Errorf("seal failure capture: %w", err)
+	}
+	if int64(len(sealed)) > captureFileCeiling(s.maxBytes) {
+		return false, errors.New("sealed failure capture exceeds byte ceiling")
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -354,13 +462,13 @@ func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
 		return false, fmt.Errorf("create failure capture day: %w", err)
 	}
 	path := filepath.Join(directory, captureName(record.CapturedAt, record.RequestID, record.ProjectID))
-	reservationOwned = false
 	type result struct {
 		committed bool
 		err       error
 	}
-	write := func() result {
-		err := writeSealedCapture(ctx, directory, path, sealed)
+	write := func(payload []byte) result {
+		defer clear(payload)
+		err := s.write(ctx, directory, path, payload)
 		committed := err == nil
 		if err != nil {
 			// rename is the commit point. A following directory fsync can fail
@@ -373,16 +481,32 @@ func (s *Store) PutContext(ctx context.Context, record Record) (bool, error) {
 	}
 	// Put is still synchronous. A cancellable worker gets one extra goroutine
 	// only while its single active filesystem operation is in progress; this
-	// lets shutdown return even if a regular-file syscall itself stalls.
+	// lets queue cancellation return while the store's Close still joins IO.
 	if ctx.Done() == nil {
-		completed := write()
+		reservationOwned = false
+		completed := write(sealed)
 		if completed.err != nil {
 			return false, fmt.Errorf("write failure capture: %w", completed.err)
 		}
 		return completed.committed, nil
 	}
+	var writerPermit resourcebudget.Permit
+	if permit != (resourcebudget.Permit{}) {
+		writerPermit, err = permit.Retain()
+		if err != nil {
+			return false, fmt.Errorf("retain failure capture writer RAM: %w", err)
+		}
+	}
+	reservationOwned = false
+	// This child is registered while its accepted parent still has a positive
+	// wait count. Close may already be waiting; it cannot see a false zero.
+	s.writeWait.Add(1)
 	completed := make(chan result, 1)
-	go func() { completed <- write() }()
+	go func(payload []byte, owner resourcebudget.Permit) {
+		defer s.writeWait.Done()
+		defer func() { payload = nil; _ = owner.Release() }()
+		completed <- write(payload)
+	}(sealed, writerPermit)
 	select {
 	case outcome := <-completed:
 		if outcome.err != nil {
@@ -534,45 +658,35 @@ func (s *Store) Saturated() bool {
 // request did not exist. The project comes from the name now, and the envelope
 // is still sealed against it — this makes the capture findable, not readable.
 func (s *Store) ProjectOf(requestID string) (string, bool, error) {
+	return s.ProjectOfContext(context.Background(), requestID)
+}
+
+func (s *Store) ProjectOfContext(ctx context.Context, requestID string) (string, bool, error) {
 	if requestID == "" || strings.ContainsAny(requestID, `/\.`) {
 		return "", false, nil
 	}
-	days, err := s.days()
-	if err != nil {
-		return "", false, err
-	}
-	for _, day := range days {
-		_, projectID, _, found, err := s.locate(day, requestID)
-		if err != nil {
-			return "", false, err
-		}
-		if found {
-			return projectID, true, nil
-		}
-	}
-	return "", false, nil
+	_, project, _, _, found, err := s.find(ctx, requestID, "")
+	return project, found, err
 }
 
 func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
+	return s.GetContext(context.Background(), requestID, projectID)
+}
+
+func (s *Store) GetContext(ctx context.Context, requestID, projectID string) (Record, bool, error) {
 	if requestID == "" || projectID == "" || strings.ContainsAny(requestID, `/\.`) {
 		return Record{}, false, nil
 	}
-	days, err := s.days()
-	if err != nil {
-		return Record{}, false, err
-	}
-	for _, day := range days {
-		// The name carries a timestamp as well as the request, so the file is
-		// found by listing the day rather than by composing a path. A day holds
-		// at most MaxRecordsPerDay entries and this is an audited admin read,
-		// not a hot path.
-		path, _, capturedAt, found, err := s.locate(day, requestID)
+	before := ""
+	for {
+		path, _, capturedAt, day, found, err := s.find(ctx, requestID, before)
 		if err != nil {
 			return Record{}, false, err
 		}
 		if !found {
-			continue
+			return Record{}, false, nil
 		}
+		before = day
 		// Expiry is a read-time authorization boundary, not a promise that the
 		// periodic physical sweep always wins its scheduling race. At the exact
 		// TTL boundary the payload is already unavailable even if deletion is
@@ -580,7 +694,10 @@ func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 		if !s.now().UTC().Before(capturedAt.Add(s.retain)) {
 			return Record{}, false, nil
 		}
-		sealed, err := os.ReadFile(path)
+		if err := ctx.Err(); err != nil {
+			return Record{}, false, err
+		}
+		sealed, err := s.readCapture(ctx, path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -601,9 +718,48 @@ func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 		if err != nil {
 			return Record{}, false, fmt.Errorf("decode failure capture: %w", err)
 		}
+		if !validRecordMetadata(record) {
+			return Record{}, false, errors.New("stored failure capture metadata exceeds byte ceiling")
+		}
 		return record, true, nil
 	}
-	return Record{}, false, nil
+}
+
+func (s *Store) readCapture(ctx context.Context, path string) (raw []byte, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	identity, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	limit := captureFileCeiling(s.maxBytes)
+	if !identity.Mode().IsRegular() || identity.Size() < 0 || identity.Size() > limit {
+		return nil, errors.New("failure capture file exceeds its byte ceiling or is not regular")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, f.Close())
+		if resultErr != nil {
+			clear(raw)
+			raw = nil
+		}
+	}()
+	actual, err := f.Stat()
+	if err != nil || !os.SameFile(identity, actual) {
+		return nil, errors.Join(dirscan.ErrIdentity, err)
+	}
+	raw, err = io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) > limit {
+		return nil, errors.Join(errors.New("read failure capture exceeds byte ceiling"), err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return raw, nil
 }
 
 // Purge removes every capture older than the retention window, one record at a
@@ -613,88 +769,109 @@ func (s *Store) Get(requestID, projectID string) (Record, bool, error) {
 // A directory that is not a day, and a file that is not a capture, are both
 // left alone: this store deletes on a clock, and deleting what it does not
 // recognise is how a retention sweep becomes a data loss incident.
-func (s *Store) Purge() error {
-	days, err := s.days()
-	if err != nil {
-		return err
-	}
+func (s *Store) Purge() error { return s.PurgeContext(context.Background()) }
+
+func (s *Store) PurgeContext(ctx context.Context) error {
 	cutoff := s.now().UTC().Add(-s.retain)
-	var problems []error
-	for _, day := range days {
-		directory := filepath.Join(s.root, day)
-		entries, err := os.ReadDir(directory)
+	var first error
+	var failures uint64
+	note := func(err error) {
 		if err != nil {
-			problems = append(problems, err)
-			continue
+			if first == nil {
+				first = err
+			}
+			if failures != ^uint64(0) {
+				failures++
+			}
 		}
-		remaining := 0
-		for _, entry := range entries {
+	}
+	err := dirscan.Walk(ctx, s.root, func(dayEntry os.DirEntry) error {
+		if !dayEntry.IsDir() {
+			return nil
+		}
+		day := dayEntry.Name()
+		directory := filepath.Join(s.root, day)
+		remaining := false
+		err := dirscan.Walk(ctx, directory, func(entry os.DirEntry) error {
 			_, _, capturedAt, ours := capturedIdentity(entry.Name())
 			if entry.IsDir() || !ours || capturedAt.After(cutoff) {
-				remaining++
-				continue
+				remaining = true
+				return nil
 			}
 			if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil {
-				problems = append(problems, err)
-				remaining++
+				note(err)
+				remaining = true
 			}
+			return nil
+		})
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
-		// An emptied day directory goes too, so the sweep is bounded rather
-		// than leaving one directory per day forever. Only a directory this
-		// store recognises as one of its own days, and only once nothing it
-		// does not recognise is left inside: a sweep that removes an empty
-		// directory somebody else put here is how retention becomes data loss.
-		if _, err := time.Parse("2006-01-02", day); err != nil {
-			continue
+		if err != nil {
+			note(err)
+			return nil
 		}
-		if remaining == 0 {
-			if err := os.Remove(directory); err != nil {
-				problems = append(problems, err)
-			}
+		if _, err := time.Parse("2006-01-02", day); err == nil && !remaining {
+			note(os.Remove(directory))
 		}
+		return nil
+	})
+	if dirscan.Missing(err) {
+		err = nil
 	}
-	return errors.Join(problems...)
+	if first != nil {
+		err = errors.Join(err, fmt.Errorf("failure capture purge had %d errors: %w", failures, first))
+	}
+	return err
 }
 
-// locate finds the capture for one request inside a day directory.
-func (s *Store) locate(day, requestID string) (string, string, time.Time, bool, error) {
+// find preserves the old newest-directory/first-filename ordering without
+// collecting days or entries. A vanished selected file can retry older days.
+func (s *Store) find(ctx context.Context, requestID, before string) (path, project string, capturedAt time.Time, day string, found bool, resultErr error) {
+	resultErr = dirscan.Walk(ctx, s.root, func(entry os.DirEntry) error {
+		name := entry.Name()
+		if !entry.IsDir() || before != "" && name >= before || found && name <= day {
+			return nil
+		}
+		candidate, candidateProject, stamp, ok, err := s.locateContext(ctx, name, requestID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			path, project, capturedAt, day, found = candidate, candidateProject, stamp, name, true
+		}
+		return nil
+	})
+	if dirscan.Missing(resultErr) {
+		resultErr = nil
+	}
+	if resultErr != nil {
+		return "", "", time.Time{}, "", false, resultErr
+	}
+	return
+}
+
+func (s *Store) locateContext(ctx context.Context, day, requestID string) (path, project string, capturedAt time.Time, found bool, err error) {
 	directory := filepath.Join(s.root, day)
-	entries, err := os.ReadDir(directory)
-	if errors.Is(err, os.ErrNotExist) {
+	var chosen string
+	err = dirscan.Walk(ctx, directory, func(entry os.DirEntry) error {
+		if entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		id, candidateProject, stamp, ours := capturedIdentity(name)
+		if ours && id == requestID && (!found || name < chosen) {
+			chosen, path, project, capturedAt, found = name, filepath.Join(directory, name), candidateProject, stamp, true
+		}
+		return nil
+	})
+	if dirscan.Missing(err) {
 		return "", "", time.Time{}, false, nil
 	}
 	if err != nil {
 		return "", "", time.Time{}, false, fmt.Errorf("list failure captures: %w", err)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if name, project, capturedAt, ours := capturedIdentity(entry.Name()); ours && name == requestID {
-			return filepath.Join(directory, entry.Name()), project, capturedAt, true, nil
-		}
-	}
-	return "", "", time.Time{}, false, nil
-}
-
-func (s *Store) days() ([]string, error) {
-	entries, err := os.ReadDir(s.root)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list failure captures: %w", err)
-	}
-	days := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			days = append(days, entry.Name())
-		}
-	}
-	// Newest first: a lookup by request ID almost always wants a recent
-	// failure, and the days are few.
-	sort.Sort(sort.Reverse(sort.StringSlice(days)))
-	return days, nil
+	return
 }
 
 // truncateJSON bounds one side of a capture.

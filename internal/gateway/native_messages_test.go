@@ -333,7 +333,7 @@ func TestNativeMessagesAcceptsBenignMetadata(t *testing.T) {
 // mustResolver pins the accounting timezone for a test. Period boundaries are
 // the subject of the assertions here, so the zone is stated rather than
 // inherited from whatever the host is set to.
-func mustResolver(t *testing.T, timezone string) *budget.PeriodResolver {
+func mustResolver(t testing.TB, timezone string) *budget.PeriodResolver {
 	t.Helper()
 	resolver, err := budget.NewFixedPeriodResolver(timezone)
 	if err != nil {

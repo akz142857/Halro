@@ -44,17 +44,43 @@ type JournalState struct {
 
 // MetadataJournalPath is where this store's journal lives.
 func (s *Store) MetadataJournalPath() string {
-	return filepath.Join(filepath.Dir(s.db.Path()), MetadataJournalFileName)
+	if s != nil && s.facade != nil {
+		return s.facade.JournalPath()
+	}
+	return filepath.Join(filepath.Dir(s.path), MetadataJournalFileName)
 }
 
 // SetMetadataJournalAfterDurable installs the Phase-1 index/ordering hook. It
 // must be called after AttachMetadataJournal and before the runtime admits
 // writes. Standalone never calls it.
 func (s *Store) SetMetadataJournalAfterDurable(callback func(metadatajournal.DurableBatch) (uint64, error), waitConfirmed func(context.Context, uint64) error) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
 	if s.journal == nil {
 		return ErrJournalUnavailable
 	}
 	return s.journal.SetAfterDurable(callback, waitConfirmed)
+}
+
+// SetMetadataJournalAdmission installs the Primary pre-write reservation and
+// post-fsync ordering callbacks as one atomic replication hook.
+func (s *Store) SetMetadataJournalAdmission(before func(metadatajournal.DurableBatch) (metadatajournal.AppendAdmission, error), after func(metadatajournal.DurableBatch) (uint64, error), waitConfirmed func(context.Context, uint64) error) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
+	if s.journal == nil {
+		return ErrJournalUnavailable
+	}
+	return s.journal.SetReplicationAdmissionAndAfterDurable(before, after, waitConfirmed)
 }
 
 // AttachMetadataJournal installs the journal and brings the projection level
@@ -70,7 +96,24 @@ func (s *Store) SetMetadataJournalAfterDurable(callback func(metadatajournal.Dur
 //
 // reason is recorded in the epoch header when a new epoch is started, so an
 // operator reading a journal can see what replaced the one before it.
-func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, error) {
+func (s *Store) AttachMetadataJournal(key []byte, reason string, diskLimit ...int64) (JournalState, error) {
+	if s != nil && s.facade != nil {
+		return JournalState{}, ErrFacadeMaintenance
+	}
+	maxBytes := int64(0)
+	if len(diskLimit) > 1 || len(diskLimit) == 1 && diskLimit[0] < 0 {
+		return JournalState{}, errors.New("metadata journal disk limit must be a single non-negative value")
+	}
+	if len(diskLimit) == 1 {
+		maxBytes = diskLimit[0]
+	}
+	leave, err := s.enter()
+	if err != nil {
+		return JournalState{}, err
+	}
+	defer leave()
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
 	if s.replica {
 		return JournalState{}, errors.New("replica metadata requires AttachReplicaMetadataJournal")
 	}
@@ -83,22 +126,27 @@ func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, 
 	if err != nil {
 		return state, err
 	}
+	if pending, err := s.definitionExportEpochPending(); err != nil {
+		return state, err
+	} else if len(pending) != 0 {
+		return s.attachDefinitionExportEpoch(key, path, stored, state, reason, pending, maxBytes)
+	}
 	_, statErr := os.Stat(path)
 	switch {
 	case errors.Is(statErr, os.ErrNotExist):
 		// No journal yet: a directory initialised before this existed, or one
 		// whose epoch was published by a restore that did not carry the file.
 		// Either way the database on disk is the starting projection.
-		return s.startEpoch(key, path, stored, state, reason)
+		return s.startEpoch(key, path, stored, state, reason, maxBytes)
 	case statErr != nil:
 		return state, statErr
 	case s.migrated:
 		// A migration rewrote the projection as a whole. Recording DDL as
 		// operations is the thing physical replication was chosen to avoid, so
 		// the migrated database becomes the next epoch's starting state.
-		return s.startEpoch(key, path, stored, state, reason)
+		return s.startEpoch(key, path, stored, state, reason, maxBytes)
 	}
-	log, err := metadatajournal.Open(path, key)
+	log, err := metadatajournal.OpenContextWithLimit(s.closingContext(), path, key, maxBytes)
 	if err != nil {
 		return state, fmt.Errorf("open metadata journal: %w", err)
 	}
@@ -109,7 +157,7 @@ func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, 
 		log.Close()
 		return state, err
 	}
-	s.journal, s.journalKey = log, append([]byte(nil), key...)
+	s.journal, s.journalKey, s.journalMaxBytes = log, append([]byte(nil), key...), maxBytes
 	return state, nil
 }
 
@@ -117,11 +165,26 @@ func (s *Store) AttachMetadataJournal(key []byte, reason string) (JournalState, 
 // the projection without replaying its durable-but-unconfirmed tail. Only
 // ApplyReplicaMetadataThrough may advance the bbolt projection afterwards.
 func (s *Store) AttachReplicaMetadataJournal(log *metadatajournal.Log, key []byte) (JournalState, error) {
+	if s != nil && s.facade != nil {
+		return JournalState{}, ErrFacadeMaintenance
+	}
+	leave, err := s.enter()
+	if err != nil {
+		return JournalState{}, err
+	}
+	defer leave()
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
 	if !s.replica {
 		return JournalState{}, errors.New("replica metadata journal attach requires replica store mode")
 	}
 	if s.journal != nil || log == nil || len(key) != metadatajournal.KeySize {
 		return JournalState{}, errors.New("replica metadata journal attach is invalid")
+	}
+	if pending, err := s.definitionExportEpochPending(); err != nil {
+		return JournalState{}, err
+	} else if len(pending) != 0 {
+		return JournalState{}, fmt.Errorf("%w: replica seed has an unpublished metadata migration", ErrJournalDiverged)
 	}
 	stored, err := s.journalPosition()
 	if err != nil {
@@ -132,16 +195,31 @@ func (s *Store) AttachReplicaMetadataJournal(log *metadatajournal.Log, key []byt
 	if !stored.present || stored.epoch != head.Epoch || stored.sequence > head.Sequence || stored.sequence < head.TrimmedThrough {
 		return state, fmt.Errorf("%w: replica projection is not a recoverable prefix of its metadata journal", ErrJournalDiverged)
 	}
-	s.journal, s.journalKey = log, append([]byte(nil), key...)
+	s.journal, s.journalKey, s.journalMaxBytes = log, append([]byte(nil), key...), log.MaxDiskBytes()
 	return state, nil
 }
 
-// ApplyReplicaMetadataThrough applies all journal operations after the current
-// projection position through target in one bbolt transaction. The caller is
-// responsible for proving target is covered by the confirmed replication
-// prefix; this method independently refuses another epoch or anything beyond
-// the durable file.
+// ApplyReplicaMetadataThrough applies complete native frames through target,
+// committing each frame and its position atomically. On error, the returned
+// position is the committed prefix; retry resumes there. The caller must prove
+// target is confirmed. Epoch changes, regression and non-durable targets refuse.
 func (s *Store) ApplyReplicaMetadataThrough(ctx context.Context, epoch, target uint64) (uint64, error) {
+	return s.applyReplicaMetadataThrough(ctx, epoch, target, nil)
+}
+
+func (s *Store) applyReplicaMetadataThrough(ctx context.Context, epoch, target uint64, step func(uint64) error) (uint64, error) {
+	if s != nil && s.facade != nil {
+		return 0, ErrFacadeMaintenance
+	}
+	leave, err := s.enter()
+	if err != nil {
+		return 0, err
+	}
+	defer leave()
+	// Serialize whole apply jobs. Per-frame transactions must not race another
+	// target's position or allow an older caller to regress a completed prefix.
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
 	if !s.replica || s.journal == nil {
 		return 0, errors.New("replica metadata journal is not attached")
 	}
@@ -149,40 +227,29 @@ func (s *Store) ApplyReplicaMetadataThrough(ctx context.Context, epoch, target u
 	if epoch != head.Epoch || target > head.Sequence || target < head.TrimmedThrough {
 		return 0, errors.New("replica metadata apply target is outside the durable journal prefix")
 	}
-	var applied uint64
-	err := s.db.Update(func(tx *bbolt.Tx) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	var stored journalPosition
+	err = s.db.View(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta == nil {
 			return errors.New("metadata bucket is missing")
 		}
-		storedEpoch, hasEpoch := decodeUint64(meta.Get(keyMetadataJournalEpoch))
-		storedSequence, hasSequence := decodeUint64(meta.Get(keyAppliedJournalSequence))
-		if !hasEpoch || !hasSequence || storedEpoch != epoch || target < storedSequence {
-			return errors.New("replica metadata apply target would change epoch or regress the projection")
-		}
-		applied = storedSequence
-		if target == storedSequence {
-			return nil
-		}
-		wrapped := &Tx{tx: tx}
-		if err := s.journal.ReplayRange(storedSequence, target, func(record metadatajournal.Record) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return applyOps(wrapped, record.Ops)
-		}); err != nil {
-			return err
-		}
-		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(target)); err != nil {
-			return err
-		}
-		applied = target
+		e, hasEpoch := decodeUint64(meta.Get(keyMetadataJournalEpoch))
+		sequence, hasSequence := decodeUint64(meta.Get(keyAppliedJournalSequence))
+		stored = journalPosition{epoch: e, sequence: sequence, present: hasEpoch && hasSequence}
 		return nil
 	})
-	return applied, err
+	if err != nil {
+		return 0, err
+	}
+	if !stored.present || stored.epoch != epoch || target < stored.sequence || stored.sequence < head.TrimmedThrough {
+		return stored.sequence, errors.New("replica metadata apply target would change epoch or regress the projection")
+	}
+	s.lifetime.mu.Lock()
+	closing := s.lifetime.ctx
+	s.lifetime.mu.Unlock()
+	state := JournalState{Applied: stored.sequence}
+	err = s.applyMetadataJournalFrames(ctx, closing, s.journal, stored, target, &state, step)
+	return state.Applied, err
 }
 
 type journalPosition struct {
@@ -211,18 +278,21 @@ func (s *Store) journalPosition() (journalPosition, error) {
 
 // startEpoch publishes a fresh journal whose starting projection is the
 // database as it stands right now.
-func (s *Store) startEpoch(key []byte, path string, stored journalPosition, state JournalState, reason string) (JournalState, error) {
+func (s *Store) startEpoch(key []byte, path string, stored journalPosition, state JournalState, reason string, maxBytes int64) (JournalState, error) {
 	header := metadatajournal.EpochHeader{Epoch: stored.epoch + 1, PreviousEpoch: stored.epoch, Reason: reason}
 	if stored.present {
 		// The chain head of the epoch being replaced, where it is still
 		// readable. A restore hands over a directory whose journal belongs to
 		// somebody else's chain, so this is best-effort by design: the epoch
 		// header records what it could see, and the absence is itself the fact.
-		if head, err := metadatajournal.Verify(path, key); err == nil && head.Epoch == stored.epoch {
+		if head, err := metadatajournal.VerifyContext(s.closingContext(), path, key); err == nil && head.Epoch == stored.epoch {
 			header.PreviousChainHead = head.Hash[:]
 		}
 	}
-	log, err := metadatajournal.StartEpoch(path, key, header)
+	if err := s.closingContext().Err(); err != nil {
+		return state, err
+	}
+	log, err := metadatajournal.StartEpochWithLimit(path, key, header, maxBytes)
 	if err != nil {
 		return state, fmt.Errorf("start metadata journal epoch: %w", err)
 	}
@@ -230,7 +300,7 @@ func (s *Store) startEpoch(key []byte, path string, stored journalPosition, stat
 		log.Close()
 		return state, err
 	}
-	s.journal, s.journalKey = log, append([]byte(nil), key...)
+	s.journal, s.journalKey, s.journalMaxBytes = log, append([]byte(nil), key...), maxBytes
 	state.Epoch, state.Sequence, state.Applied, state.StartedEpoch = header.Epoch, 0, 0, true
 	return state, nil
 }
@@ -270,7 +340,7 @@ func (s *Store) reconcileJournal(log *metadatajournal.Log, stored journalPositio
 			"%w: this database applied metadata journal sequence %d and the file was trimmed through %d, so the gap cannot be replayed",
 			ErrJournalDiverged, stored.sequence, head.TrimmedThrough)
 	}
-	return s.replayJournal(stored, head, state, key, path)
+	return s.replayJournal(log, stored, head, state, nil)
 }
 
 // ErrJournalDiverged says the journal and the projection describe different
@@ -282,32 +352,78 @@ func (s *Store) reconcileJournal(log *metadatajournal.Log, stored journalPositio
 // is the only answer that loses nothing.
 var ErrJournalDiverged = errors.New("metadata journal and its projection have diverged")
 
-func (s *Store) replayJournal(stored journalPosition, head metadatajournal.Head, state *JournalState, key []byte, path string) error {
-	var replayed uint64
-	err := s.db.Update(func(tx *bbolt.Tx) error {
-		wrapped := &Tx{tx: tx}
-		if _, err := metadatajournal.Replay(path, key, func(record metadatajournal.Record) error {
-			if record.Kind != metadatajournal.KindOperations || record.Sequence <= stored.sequence {
-				return nil
+// One native frame remains an atomic metadata transaction. The whole suffix
+// no longer retains one bbolt dirty-page set. Replay uses the already-open,
+// authenticated Log descriptor and append lock, rather than reopening its path.
+// Large atomic DeleteBucket/legacy-value operations still need separate capacity
+// handling; a bounded encoded frame alone does not bound their physical work.
+func (s *Store) replayJournal(log *metadatajournal.Log, stored journalPosition, head metadatajournal.Head, state *JournalState, step func(uint64) error) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	s.lifetime.mu.Lock()
+	ctx := s.lifetime.ctx
+	s.lifetime.mu.Unlock()
+	return s.applyMetadataJournalFrames(ctx, ctx, log, stored, head.Sequence, state, step)
+}
+
+// Callers hold a Store operation ticket and exclusive journal/apply ownership.
+func (s *Store) applyMetadataJournalFrames(ctx, closing context.Context, log *metadatajournal.Log, stored journalPosition, target uint64, state *JournalState, step func(uint64) error) error {
+	state.Applied, state.Replayed = stored.sequence, 0
+	check := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return closing.Err()
+	}
+	if err := check(); err != nil {
+		return err
+	}
+	expected := stored.sequence
+	scanCtx, stop := s.confirmationContext(ctx)
+	defer stop()
+	err := log.ReplayRangeValidatedContext(scanCtx, stored.sequence, target, func(record metadatajournal.Record) error {
+		if err := check(); err != nil {
+			return err
+		}
+		if expected == ^uint64(0) || record.Sequence != expected+1 {
+			return ErrJournalDiverged
+		}
+		if err := s.updateNativeProjection(func(tx *bbolt.Tx) error {
+			if err := check(); err != nil {
+				return err
 			}
-			if err := applyOps(wrapped, record.Ops); err != nil {
+			meta := tx.Bucket(bucketMeta)
+			if meta == nil {
+				return errors.New("metadata bucket is missing")
+			}
+			epoch, validEpoch := decodeUint64(meta.Get(keyMetadataJournalEpoch))
+			sequence, validSequence := decodeUint64(meta.Get(keyAppliedJournalSequence))
+			if !validEpoch || !validSequence || epoch != stored.epoch || sequence != expected {
+				return ErrJournalDiverged
+			}
+			if err := applyOps(&Tx{tx: tx}, record.Ops); err != nil {
 				return fmt.Errorf("replay metadata journal sequence %d: %w", record.Sequence, err)
 			}
-			replayed++
-			return nil
+			return meta.Put(keyAppliedJournalSequence, encodeUint64(record.Sequence))
 		}); err != nil {
 			return err
 		}
-		meta := tx.Bucket(bucketMeta)
-		if meta == nil {
-			return errors.New("metadata bucket is missing")
+		expected = record.Sequence
+		state.Applied, state.Replayed = expected, state.Replayed+1
+		if step != nil {
+			return step(expected)
 		}
-		return meta.Put(keyAppliedJournalSequence, encodeUint64(head.Sequence))
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	state.Applied, state.Replayed = head.Sequence, replayed
+	if expected != target {
+		return ErrJournalDiverged
+	}
 	return nil
 }
 
@@ -403,7 +519,7 @@ func deleteRecordedBucket(tx *Tx, path []string) error {
 }
 
 func (s *Store) writeJournalPosition(epoch, sequence uint64) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	return s.updateNativeProjection(func(tx *bbolt.Tx) error {
 		meta, err := tx.CreateBucketIfNotExists(bucketMeta)
 		if err != nil {
 			return err
@@ -411,12 +527,32 @@ func (s *Store) writeJournalPosition(epoch, sequence uint64) error {
 		if err := meta.Put(keyMetadataJournalEpoch, encodeUint64(epoch)); err != nil {
 			return err
 		}
-		return meta.Put(keyAppliedJournalSequence, encodeUint64(sequence))
+		if err := meta.Put(keyAppliedJournalSequence, encodeUint64(sequence)); err != nil {
+			return err
+		}
+		if export := tx.Bucket(bucketOutcomeDefinitionExportMeta); export != nil {
+			return export.Delete(definitionExportPendingKey)
+		}
+		return nil
 	})
 }
 
 // MetadataJournalState reports where the journal stands, for diagnostics.
 func (s *Store) MetadataJournalState() (JournalState, error) {
+	leave, err := s.enter()
+	if err != nil {
+		return JournalState{}, err
+	}
+	defer leave()
+	s.journalMu.RLock()
+	defer s.journalMu.RUnlock()
+	return s.metadataJournalState()
+}
+
+func (s *Store) metadataJournalState() (JournalState, error) {
+	if s != nil && s.facade != nil {
+		return s.facade.JournalState(s.closingContext())
+	}
 	state := JournalState{Path: s.MetadataJournalPath()}
 	stored, err := s.journalPosition()
 	if err != nil {
@@ -440,6 +576,16 @@ func (s *Store) MetadataJournalState() (JournalState, error) {
 // for incremental catch-up (§11.2), and this call takes the sequence rather
 // than deciding it.
 func (s *Store) TrimMetadataJournal(throughSequence uint64) (JournalState, error) {
+	if s != nil && s.facade != nil {
+		return JournalState{}, ErrFacadeMaintenance
+	}
+	leave, err := s.enter()
+	if err != nil {
+		return JournalState{}, err
+	}
+	defer leave()
+	s.journalMu.Lock()
+	defer s.journalMu.Unlock()
 	if s.replica {
 		return JournalState{}, errors.New("replica metadata projection refuses local journal trim")
 	}
@@ -461,15 +607,15 @@ func (s *Store) TrimMetadataJournal(throughSequence uint64) (JournalState, error
 		return JournalState{}, err
 	}
 	s.journal = nil
-	if _, err := metadatajournal.Trim(path, key, throughSequence); err != nil {
+	if _, err := metadatajournal.TrimContextWithLimit(s.closingContext(), path, key, throughSequence, s.journalMaxBytes); err != nil {
 		return JournalState{}, err
 	}
-	log, err := metadatajournal.Open(path, key)
+	log, err := metadatajournal.OpenContextWithLimit(s.closingContext(), path, key, s.journalMaxBytes)
 	if err != nil {
 		return JournalState{}, err
 	}
 	s.journal = log
-	return s.MetadataJournalState()
+	return s.metadataJournalState()
 }
 
 // PutMetadataJournalHMACEnvelope stores the wrapped journal key. Like the
@@ -522,7 +668,14 @@ func OpenForWholeFilePublish(path string) (*Store, error) {
 // existed, which has neither a journal nor an envelope. Nothing in production
 // removes it — the envelope is re-wrapped on rotation, never deleted.
 func (s *Store) DeleteMetadataJournalHMACEnvelopeForTest() error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	leave, err := s.enter()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	s.journalMu.RLock()
+	defer s.journalMu.RUnlock()
+	return s.updateNativeProjection(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta == nil {
 			return errors.New("metadata bucket is missing")
@@ -535,4 +688,51 @@ func (s *Store) DeleteMetadataJournalHMACEnvelopeForTest() error {
 		}
 		return nil
 	})
+}
+
+// MetadataAppliedPosition belongs to a single short projection read. It is not
+// the native journal head (which may include a later durable tail) or content
+// authentication. Transaction detects any Metadata mutation during preparation.
+type MetadataAppliedPosition struct {
+	Epoch       uint64
+	Sequence    uint64
+	Transaction uint64
+}
+
+// ReadMetadataAppliedPosition distinguishes a closed/read-failed projection
+// from an empty seed without touching its mutable journal/path fields. The
+// read entry owns a native lifetime ticket; Close joins an entered read and
+// refuses subsequent reads. External owners still govern the whole preparation
+// and publication operation across multiple databases.
+func (s *Store) ReadMetadataAppliedPosition(ctx context.Context) (MetadataAppliedPosition, error) {
+	if err := ctx.Err(); err != nil {
+		return MetadataAppliedPosition{}, err
+	}
+	view, err := s.captureView()
+	if err != nil {
+		return MetadataAppliedPosition{}, err
+	}
+	var position MetadataAppliedPosition
+	err = view(func(tx *Tx) error {
+		meta := tx.Bucket(bucketMeta)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		rawEpoch, rawSequence := meta.Get(keyMetadataJournalEpoch), meta.Get(keyAppliedJournalSequence)
+		epoch, hasEpoch := decodeUint64(rawEpoch)
+		sequence, hasSequence := decodeUint64(rawSequence)
+		if (rawEpoch != nil && !hasEpoch) || (rawSequence != nil && !hasSequence) || (hasEpoch && epoch == 0) || hasEpoch != hasSequence {
+			return errors.New("Metadata applied position is incomplete")
+		}
+		// A seed before its first authenticated epoch has neither position key.
+		position = MetadataAppliedPosition{Epoch: epoch, Sequence: sequence, Transaction: uint64(tx.ID())}
+		return ctx.Err()
+	})
+	if err != nil {
+		return MetadataAppliedPosition{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return MetadataAppliedPosition{}, err
+	}
+	return position, nil
 }

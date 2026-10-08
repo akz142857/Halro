@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/vault"
@@ -38,7 +39,9 @@ func NewUnlocker(masterKey config.MasterKey) (Unlocker, error) {
 // intentionally not part of Unlocker because a future KMS-backed unlocker must
 // not inherit file replacement semantics.
 type FileStore struct {
-	path string
+	path   string
+	mu     sync.Mutex
+	loaded os.FileInfo
 }
 
 func NewFileStore(path string) (*FileStore, error) {
@@ -60,7 +63,15 @@ func (f *FileStore) Unlock(ctx context.Context) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return vault.LoadMasterKey(f.path)
+	if !f.mu.TryLock() {
+		return nil, errors.New("file master key owner is busy")
+	}
+	defer f.mu.Unlock()
+	key, identity, err := vault.LoadMasterKeyWithIdentity(ctx, f.path)
+	if err == nil {
+		f.loaded = identity
+	}
+	return key, err
 }
 
 func (f *FileStore) Exists(ctx context.Context) (bool, error) {
@@ -81,14 +92,21 @@ func (f *FileStore) Initialize(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return vault.InitMasterKey(f.path)
+	return vault.InitMasterKeyContext(ctx, f.path)
 }
 
 func (f *FileStore) Replace(ctx context.Context, key []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return vault.ReplaceMasterKey(f.path, key)
+	if !f.mu.TryLock() {
+		return errors.New("file master key owner is busy")
+	}
+	defer f.mu.Unlock()
+	if f.loaded == nil {
+		return errors.New("master key replacement requires this owner's successful unlock")
+	}
+	return vault.ReplaceMasterKeyCapturedContext(ctx, f.path, key, f.loaded)
 }
 
 func FileStoreFromConfig(masterKey config.MasterKey) (*FileStore, error) {

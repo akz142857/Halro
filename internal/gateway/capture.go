@@ -8,6 +8,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/provider"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/semantic"
 )
 
@@ -18,6 +19,48 @@ type FailureCapture interface {
 	PrepareRecord(failurecapture.Record) failurecapture.Record
 	PutContext(context.Context, failurecapture.Record) (bool, error)
 	Saturated() bool
+}
+
+// A budgeted store must keep ownership through an asynchronous sealed writer,
+// including when PutContext returns early on cancellation. No legacy fallback.
+type ownedFailureCapture interface {
+	PutContextWithPermit(context.Context, failurecapture.Record, resourcebudget.Permit) (bool, error)
+}
+
+type captureRecord struct {
+	failurecapture.Record
+	permit resourcebudget.Permit
+}
+
+func (record *captureRecord) discard() {
+	if record == nil {
+		return
+	}
+	permit := record.permit
+	record.Record, record.permit = failurecapture.Record{}, resourcebudget.Permit{}
+	_ = permit.Release()
+}
+
+func (s *Service) acquireCaptureRAM() (resourcebudget.Permit, bool) {
+	s.captureMu.Lock()
+	closed := s.captureClosed
+	s.captureMu.Unlock()
+	if closed {
+		return resourcebudget.Permit{}, false
+	}
+	if s.resourceBudget == nil {
+		return resourcebudget.Permit{}, true
+	}
+	if s.captureRAMBytes > 0 {
+		permit, err := s.resourceBudget.TryAcquire(resourcebudget.Background, resourcebudget.Cost{RAM: s.captureRAMBytes})
+		if err == nil {
+			return permit, true
+		}
+	}
+	if s.captureDegraded.CompareAndSwap(false, true) {
+		s.logger.Warn("failure capture resource budget is unavailable; payload was dropped")
+	}
+	return resourcebudget.Permit{}, false
 }
 
 const failureCaptureQueueCapacity = 64
@@ -32,14 +75,27 @@ func (s *Service) startFailureCapture() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s.captureQueue = make(chan failurecapture.Record, failureCaptureQueueCapacity)
+	s.captureQueue = make(chan *captureRecord, failureCaptureQueueCapacity)
 	s.captureCancel = cancel
 	s.captureDone = make(chan struct{})
 	go s.runFailureCapture(ctx, s.captureQueue, s.captureDone)
 }
 
-func (s *Service) runFailureCapture(ctx context.Context, queue <-chan failurecapture.Record, done chan<- struct{}) {
+func (s *Service) runFailureCapture(ctx context.Context, queue <-chan *captureRecord, done chan<- struct{}) {
 	defer close(done)
+	defer func() {
+		// Enqueue and close share captureMu. On cancellation, close and clear
+		// every unconsumed tail item before announcing that the owner joined.
+		s.captureMu.Lock()
+		if !s.captureClosed {
+			s.captureClosed = true
+			close(s.captureQueue)
+		}
+		s.captureMu.Unlock()
+		for record := range queue {
+			record.discard()
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -56,8 +112,26 @@ func (s *Service) runFailureCapture(ctx context.Context, queue <-chan failurecap
 	}
 }
 
-func (s *Service) storeCapture(ctx context.Context, record failurecapture.Record) {
-	written, err := s.failureCapture.PutContext(ctx, record)
+func (s *Service) storeCapture(ctx context.Context, record *captureRecord) {
+	defer record.discard()
+	var written bool
+	var err error
+	if record.permit != (resourcebudget.Permit{}) {
+		owned, ok := s.failureCapture.(ownedFailureCapture)
+		if !ok {
+			return
+		} // Constructors reject this; mutable test fixtures fail closed.
+		// Keep the packet owner while the store call still borrows its JSON.
+		// Store consumes this additional owner and retains its sealed writer.
+		storePermit, retainErr := record.permit.Retain()
+		if retainErr != nil {
+			return
+		}
+		defer storePermit.Release() // A consumed handle is revoked; safe on every exit.
+		written, err = owned.PutContextWithPermit(ctx, record.Record, storePermit)
+	} else {
+		written, err = s.failureCapture.PutContext(ctx, record.Record)
+	}
 	switch {
 	case err != nil && !errors.Is(err, context.Canceled) && s.captureDegraded.CompareAndSwap(false, true):
 		// Named without payload or upstream prose: the material that failed to
@@ -72,17 +146,48 @@ func (s *Service) enqueueCapture(record failurecapture.Record) {
 	if s == nil || s.failureCapture == nil {
 		return
 	}
+	permit, ok := s.acquireCaptureRAM()
+	if !ok {
+		return
+	}
+	s.enqueueCaptureOwned(&captureRecord{Record: record, permit: permit})
+}
+
+// The production caller reserves before encoding; packet fields are never
+// read again by the sender after publication to the queue.
+func (s *Service) enqueueCaptureOwned(record *captureRecord) {
+	if record == nil {
+		return
+	}
+	if record.permit != (resourcebudget.Permit{}) {
+		moved, err := record.permit.Transfer()
+		if err != nil {
+			record.discard()
+			return
+		}
+		record.permit = moved
+	}
+	published := false
+	defer func() {
+		if !published {
+			record.discard()
+		}
+	}()
+	if s == nil || s.failureCapture == nil {
+		record.discard()
+		return
+	}
 	// The channel bounds record count, not bytes. Drop the caller's full JSON
 	// backing arrays before the record can outlive this request in the queue;
 	// PutContext repeats the same idempotent limit at the storage boundary.
-	record = s.failureCapture.PrepareRecord(record)
+	record.Record = s.failureCapture.PrepareRecord(record.Record)
 	// Tests that install a capture after construction retain the direct behavior.
 	// A normally configured service is marked async by its constructor and starts
 	// its queue atomically before accepting the first record.
 	s.captureMu.Lock()
 	if s.captureQueue == nil && s.captureAsync && !s.captureClosed {
 		ctx, cancel := context.WithCancel(context.Background())
-		s.captureQueue = make(chan failurecapture.Record, failureCaptureQueueCapacity)
+		s.captureQueue = make(chan *captureRecord, failureCaptureQueueCapacity)
 		s.captureCancel = cancel
 		s.captureDone = make(chan struct{})
 		go s.runFailureCapture(ctx, s.captureQueue, s.captureDone)
@@ -92,36 +197,45 @@ func (s *Service) enqueueCapture(record failurecapture.Record) {
 		s.captureMu.Unlock()
 		if !closed {
 			s.storeCapture(context.Background(), record)
+		} else {
+			record.discard()
 		}
 		return
 	}
 	if s.captureClosed {
 		s.captureMu.Unlock()
+		record.discard()
 		return
 	}
 	select {
 	case s.captureQueue <- record:
+		published = true
 		s.captureMu.Unlock()
 	default:
 		s.captureMu.Unlock()
+		requestID := record.RequestID
+		record.discard()
 		if s.captureDegraded.CompareAndSwap(false, true) {
-			s.logger.Warn("failure capture queue is full; payload was dropped", "request_id", record.RequestID)
+			s.logger.Warn("failure capture queue is full; payload was dropped", "request_id", requestID)
 		}
 	}
 }
 
 // ShutdownFailureCapture stops accepting new diagnostics and drains all queued
-// captures before their vault and data directory are closed. The caller owns
-// the deadline; cancellation is passed into the active write.
+// captures. The caller owns the deadline; cancellation reaches the active put.
+// Runtime must additionally join Store.Close before closing its data directory,
+// because a cancelled put may leave one sealed writer finishing a syscall.
 func (s *Service) ShutdownFailureCapture(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
 	s.captureCloseOnce.Do(func() {
 		s.captureMu.Lock()
-		s.captureClosed = true
-		if s.captureQueue != nil {
-			close(s.captureQueue)
+		if !s.captureClosed {
+			s.captureClosed = true
+			if s.captureQueue != nil {
+				close(s.captureQueue)
+			}
 		}
 		s.captureMu.Unlock()
 	})
@@ -142,10 +256,8 @@ func (s *Service) ShutdownFailureCapture(ctx context.Context) error {
 		if cancel != nil {
 			cancel()
 		}
-		// FailureCapture.PutContext is a cancellation contract: once cancelled,
-		// the worker must release references to the vault before Runtime closes
-		// it. The concrete store can abandon a stalled regular-file syscall while
-		// its one bounded writer finishes with already sealed bytes.
+		// Join the queue owner after cancellation and tail cleanup. This is not
+		// the concrete store's IO join; Runtime performs that separately.
 		<-done
 		return fmt.Errorf("drain failure captures: %w", ctx.Err())
 	}
@@ -295,8 +407,15 @@ func (run *requestRun) writeCapture(outcome string) {
 	if run.capturedGatewayRequest == nil && run.capturedRequest == nil && run.capturedResponse == nil {
 		return
 	}
+	permit, ok := run.service.acquireCaptureRAM()
+	if !ok {
+		return
+	}
+	// enqueueCaptureOwned revokes this alias on transfer; retain cleanup here
+	// for encoding failure/panic before ownership reaches the packet.
+	defer permit.Release()
 	descriptor := run.terminalDescriptor(outcome)
-	record := failurecapture.Record{
+	record := &captureRecord{permit: permit, Record: failurecapture.Record{
 		RequestID:                run.requestID,
 		ProjectID:                run.principal.Project.ID,
 		Outcome:                  outcome,
@@ -313,8 +432,8 @@ func (run *requestRun) writeCapture(outcome string) {
 		GatewayRequest:           encodeCaptured(run.capturedGatewayRequest),
 		Request:                  encodeCaptured(run.capturedRequest),
 		Response:                 encodeCaptured(run.capturedResponse),
-	}
-	run.service.enqueueCapture(record)
+	}}
+	run.service.enqueueCaptureOwned(record)
 }
 
 // encodeCaptured serializes one side, or returns nothing when there is nothing

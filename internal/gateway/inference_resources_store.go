@@ -20,6 +20,7 @@ import (
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/idempotency"
 	"github.com/akz142857/Halro/internal/openaiapi"
+	"github.com/akz142857/Halro/internal/ownedfile"
 	"github.com/akz142857/Halro/internal/provider"
 )
 
@@ -168,41 +169,82 @@ func (s *Service) writeResourceObject(resourceID, projectID, role string, data [
 	return s.writeResourceObjectContext(context.Background(), resourceID, projectID, role, data)
 }
 
-func (s *Service) writeResourceObjectContext(ctx context.Context, resourceID, projectID, role string, data []byte) (string, error) {
+func (s *Service) writeResourceObjectContext(ctx context.Context, resourceID, projectID, role string, data []byte) (result string, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if s.resourceObjectDir == "" || s.resourceObjectSealer == nil {
 		return "", errors.New("resource object directory is unavailable")
+	}
+	name := resourceID + "." + role
+	if resourceID == "" || filepath.Base(name) != name || role != objectRoleContent && role != objectRoleInput {
+		return "", errors.New("invalid resource object identity or role")
 	}
 	sealed, err := s.resourceObjectSealer.EncryptResourceObject(objectScope(resourceID, role), projectID, data)
 	if err != nil {
 		return "", err
 	}
 	data = sealed
-	temporary, err := os.CreateTemp(s.resourceObjectDir, ".resource-*")
+	temporary, owner, err := ownedfile.CreateTemporary(s.resourceObjectDir, ".resource-*")
 	if err != nil {
 		return "", err
 	}
-	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
+	closed, published, closeUncertain := false, false, false
+	defer func() {
+		if !closed {
+			if closeErr := temporary.Close(); closeErr != nil {
+				resultErr = errors.Join(resultErr, closeErr)
+				return
+			}
+		}
+		if !published && !closeUncertain {
+			resultErr = errors.Join(resultErr, owner.Retire())
+		}
+		if resultErr != nil {
+			result = ""
+		}
+	}()
 	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
 		return "", err
 	}
 	if _, err := temporary.Write(data); err != nil {
-		temporary.Close()
 		return "", err
 	}
 	if err := temporary.Sync(); err != nil {
-		temporary.Close()
 		return "", err
 	}
-	if err := temporary.Close(); err != nil {
-		return "", err
+	closeErr := temporary.Close()
+	closed = true
+	if closeErr != nil {
+		// No deletion when physical retirement of this descriptor is uncertain.
+		closeUncertain = true
+		return "", closeErr
 	}
-	name := resourceID + "." + role
-	if err := os.Rename(temporaryName, filepath.Join(s.resourceObjectDir, name)); err != nil {
-		return "", err
-	}
-	if err := durable.SyncDirectory(s.resourceObjectDir); err != nil {
+	if err := s.WithProviderObjectMutation(ctx, func() error {
+		destination := filepath.Join(s.resourceObjectDir, name)
+		previous, err := os.Lstat(destination)
+		if err == nil {
+			if !previous.Mode().IsRegular() {
+				return ownedfile.ErrReplaced
+			}
+			if err := owner.ReplaceCaptured(destination, previous); err != nil {
+				return err
+			}
+			published = true
+		} else if errors.Is(err, os.ErrNotExist) {
+			alias, err := owner.LinkCaptured(destination)
+			published = alias != nil
+			if err != nil {
+				return err
+			}
+			if err := owner.Retire(); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+		return durable.SyncDirectory(s.resourceObjectDir)
+	}); err != nil {
 		return "", err
 	}
 	if s.resourceObjectReplicator != nil {
@@ -249,10 +291,31 @@ func (s *Service) removeResourceObject(name string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	return s.WithProviderObjectMutation(context.Background(), func() error {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return durable.SyncDirectory(s.resourceObjectDir)
+	})
+}
+
+// WithProviderObjectMutation joins local object publication and retirement.
+// Callbacks may perform finite local file IO but must not call Metadata or
+// remote replication. Maintenance takes the Metadata writer first; regular
+// writers release this gate before publishing their record or replicating.
+func (s *Service) WithProviderObjectMutation(ctx context.Context, work func() error) error {
+	if ctx == nil || work == nil {
+		return errors.New("provider object mutation requires context and callback")
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return durable.SyncDirectory(s.resourceObjectDir)
+	s.resourceObjectMu.Lock()
+	defer s.resourceObjectMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return work()
 }
 
 func (s *Service) resourceObjectPath(name string) (string, error) {
