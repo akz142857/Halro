@@ -1,6 +1,9 @@
 package usage
 
 import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +14,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,6 +23,7 @@ import (
 	"github.com/parquet-go/parquet-go/compress/zstd"
 
 	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/ledger"
 )
 
 // Schema 8 adds account-region attribution and canonical provider failure
@@ -119,6 +125,10 @@ type Manifest struct {
 	SchemaVersion int            `json:"schema_version"`
 	LastSequence  uint64         `json:"last_sequence"`
 	Files         []ManifestFile `json:"files"`
+	// CompletePrefix includes non-attempt facts through LastSequence. Older
+	// manifests stop at their highest attempt; neither form is a trusted
+	// restart checkpoint or an authenticated source anchor.
+	CompletePrefix bool `json:"complete_prefix,omitempty"`
 }
 
 type ManifestFile struct {
@@ -146,14 +156,59 @@ func (f ManifestFile) format() string {
 }
 
 type Exporter struct {
-	root   string
-	format string
+	datePolicyKey         [32]byte
+	datePolicyReady       bool
+	datePolicyPrefix      func(context.Context, ledger.Watermark) (ledger.ProjectionPrefix, error)
+	dateReferences        *archiveDateReferenceSession  // one private frozen-root reference index, guarded by mu
+	dateProof             *archiveDateProof             // ephemeral, consumed only after independent caller authority
+	dateVerification      *archiveDateVerifySession     // one private comparison job, guarded by mu
+	dateBuildReplay       *archiveDateBuildReplay       // fixed-size, guarded by mu
+	dateReclaimReplay     *archiveDateReclaimReplay     // fixed-size old descriptor prefix, guarded by mu
+	dateDataProof         *archiveDateDataProof         // actual successful data-job completion, guarded by mu
+	dateOrphans           *archiveDateOrphanSession     // one live confined directory scan, guarded by mu
+	dateOrphanPages       *archiveDateOrphanPageSession // one live catalog scan/candidate protection index, guarded by mu
+	archiveLife           sync.RWMutex
+	archiveReadersOnce    sync.Once
+	archiveReaders        chan struct{}
+	archiveEpoch          uint64 // guarded by archiveLife; ephemeral, not restart trust
+	archiveRetired        atomic.Bool
+	windowProof           *archiveWindowProof
+	windowPending         *archiveWindowProof
+	cursorKey             [32]byte
+	mu                    sync.Mutex
+	root                  string
+	format                string
+	archiveDiskCeiling    int64
+	archiveDiskReserve    func(context.Context, int64) (func() error, error)
+	archiveRAMReserve     func(context.Context) (func() error, error)
+	archiveWorkRAMReserve func(context.Context, int64) (func() error, error)
 }
 
 // Options configures what NewExporterWithOptions writes new partitions as.
 // The zero value writes Parquet, matching NewExporter's historical behavior.
 type Options struct {
 	Format string
+	// ArchiveDiskBytes optionally caps the logical bytes retained and written
+	// under root. Zero leaves archive-tree accounting disabled.
+	ArchiveDiskBytes int64
+	// ReserveArchiveDisk charges each disk-writing operation to a caller-owned
+	// shared budget. The returned release joins the complete synchronous call,
+	// including file close, publication barriers and cleanup.
+	ReserveArchiveDisk func(context.Context, int64) (func() error, error)
+	// ReserveArchiveRAM charges one bounded archive reader for its entire
+	// operation, including physical file close. At most ArchiveReaderSlots
+	// callbacks can be held concurrently.
+	ReserveArchiveRAM func(context.Context) (func() error, error)
+	// ReserveArchiveWorkRAM covers the explicit decoder/workspace ceiling of
+	// a private comparison job, through actual scratch retirement.
+	ReserveArchiveWorkRAM func(context.Context, int64) (func() error, error)
+	// DatePolicyKey is independently loaded native authority, never a derivative.
+	// Exporter keeps only a domain-separated key and erases it after Close joins.
+	// DatePolicyPrefix must authenticate complete native history and enforce the
+	// caller's frozen role scope; the returned physical position must be exact.
+	// Both are required for date activation/reclamation, but not ordinary export.
+	DatePolicyKey    []byte
+	DatePolicyPrefix func(context.Context, ledger.Watermark) (ledger.ProjectionPrefix, error)
 }
 
 type RetentionReport struct {
@@ -163,11 +218,22 @@ type RetentionReport struct {
 }
 
 type ReconciliationReport struct {
-	LedgerRecords  int64 `json:"ledger_records"`
-	ParquetRecords int64 `json:"parquet_records"`
-	Missing        int64 `json:"missing"`
-	Duplicates     int64 `json:"duplicates"`
-	Extra          int64 `json:"extra"`
+	LedgerRecords      int64            `json:"ledger_records"`
+	ParquetRecords     int64            `json:"parquet_records"`
+	Missing            int64            `json:"missing"`
+	Duplicates         int64            `json:"duplicates"`
+	Extra              int64            `json:"extra"`
+	AfterSequence      uint64           `json:"after_sequence"`
+	ThroughSequence    uint64           `json:"through_sequence"`
+	SourceHead         ledger.Watermark `json:"source_head"`
+	AllowedLedgerHead  ledger.Watermark `json:"allowed_ledger_head"`
+	NativeHead         ledger.Watermark `json:"native_head"`
+	Role               string           `json:"role,omitempty"`
+	OrderingIndex      uint64           `json:"ordering_index"`
+	RetainFromDate     string           `json:"retain_from_date,omitempty"`
+	RequiredRows       int64            `json:"required_rows,omitempty"`
+	MatchedRows        int64            `json:"matched_rows,omitempty"`
+	ExpiredOmittedRows int64            `json:"expired_omitted_rows,omitempty"`
 }
 
 func NewExporter(root string) (*Exporter, error) {
@@ -175,6 +241,15 @@ func NewExporter(root string) (*Exporter, error) {
 }
 
 func NewExporterWithOptions(root string, options Options) (*Exporter, error) {
+	return NewExporterWithContext(context.Background(), root, options)
+}
+
+// NewExporterWithContext retains the read-only format/catalog startup gate,
+// with caller cancellation across complete directory validation.
+func NewExporterWithContext(ctx context.Context, root string, options Options) (*Exporter, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("usage export directory must be absolute")
 	}
@@ -185,24 +260,80 @@ func NewExporterWithOptions(root string, options Options) (*Exporter, error) {
 	if format != FormatParquet && format != FormatNDJSON {
 		return nil, fmt.Errorf("usage export format %q is not supported", format)
 	}
-	exporter := &Exporter{root: filepath.Clean(root), format: format}
+	if options.ArchiveDiskBytes < 0 {
+		return nil, ErrDiskUsageLimit
+	}
+	exporter := &Exporter{root: filepath.Clean(root), format: format, archiveDiskCeiling: options.ArchiveDiskBytes, archiveDiskReserve: options.ReserveArchiveDisk, archiveRAMReserve: options.ReserveArchiveRAM, archiveWorkRAMReserve: options.ReserveArchiveWorkRAM}
+	if (len(options.DatePolicyKey) != 0) != (options.DatePolicyPrefix != nil) || len(options.DatePolicyKey) != 0 && len(options.DatePolicyKey) < 32 {
+		return nil, ErrArchiveDateProof
+	}
+	if options.DatePolicyPrefix != nil {
+		mac := hmac.New(sha256.New, options.DatePolicyKey)
+		_, _ = mac.Write([]byte("halro/usage/date-policy/key/v1"))
+		copy(exporter.datePolicyKey[:], mac.Sum(nil))
+		exporter.datePolicyPrefix, exporter.datePolicyReady = options.DatePolicyPrefix, true
+	}
+	constructed := false
+	defer func() {
+		if !constructed {
+			clear(exporter.datePolicyKey[:])
+			exporter.datePolicyPrefix = nil
+		}
+	}()
+	if _, err := rand.Read(exporter.cursorKey[:]); err != nil {
+		return nil, err
+	}
+	if exporter.archiveDiskCeiling > 0 {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		if err := os.MkdirAll(exporter.root, 0o700); err != nil {
+			return nil, fmt.Errorf("usage archive disk root: %w", err)
+		}
+		if _, err := inventoryArchiveTree(ctx, exporter.root, exporter.archiveDiskCeiling); err != nil {
+			return nil, fmt.Errorf("usage archive disk inventory: %w", err)
+		}
+	}
 	// Runtime construction happens before any listener is bound. Validate an
 	// existing manifest here rather than waiting for the first maintenance
 	// export, where an incompatible data directory would otherwise look ready
 	// while Usage only emitted periodic warnings.
-	manifest, err := exporter.LoadManifest()
+	manifest, err := exporter.ReadArchivePosition(ctx)
 	if err == nil {
-		if !supportedManifestSchema(manifest.SchemaVersion) {
+		if manifest.CatalogVersion == 1 {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			if err := exporter.ValidateArchiveCatalog(ctx); err != nil {
+				return nil, err
+			}
+		} else if !supportedManifestSchema(manifest.SchemaVersion) {
 			return nil, fmt.Errorf("usage manifest schema version %d is not supported", manifest.SchemaVersion)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	constructed = true
 	return exporter, nil
 }
 
-func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
-	manifest, err := e.LoadManifest()
+func (e *Exporter) Export(snapshot Snapshot) (result Manifest, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	defer func() {
+		if e.archiveRetired.Load() {
+			err = errors.Join(err, ErrDiskUsageClosed)
+			result = Manifest{}
+		}
+	}()
+	if e.archiveRetired.Load() {
+		return Manifest{}, ErrDiskUsageClosed
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	tree, err := newArchiveTreeBudget(ctx, e.root, e.archiveDiskCeiling)
+	if err != nil {
+		return Manifest{}, err
+	}
+	manifest, err := e.loadManifestHeld()
 	manifestMissing := errors.Is(err, os.ErrNotExist)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Manifest{}, err
@@ -233,9 +364,21 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 		}
 	}
 	sort.Slice(pending, func(i, j int) bool { return pending[i].Sequence < pending[j].Sequence })
+	if len(pending) == 0 && !manifestMissing && !manifestUpgraded {
+		return manifest, nil
+	}
+	reserveBytes := DefaultDiskExportLimits().WriteBytes
+	if tree != nil {
+		reserveBytes = tree.ceiling - tree.used
+	}
+	releaseShared, err := e.reserveArchiveDisk(ctx, reserveBytes)
+	if err != nil {
+		return Manifest{}, err
+	}
+	defer func() { err = errors.Join(err, releaseShared()) }()
 	if len(pending) == 0 {
 		if manifestMissing || manifestUpgraded {
-			if err := e.commitManifest(manifest); err != nil {
+			if err := e.commitManifestWithTree(ctx, manifest, tree); err != nil {
 				return Manifest{}, err
 			}
 		}
@@ -252,7 +395,7 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	}
 	sort.Strings(dates)
 	for _, date := range dates {
-		entry, err := e.publishPartition(date, byDate[date])
+		entry, err := e.publishPartition(ctx, date, byDate[date], tree)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -264,26 +407,58 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 	sort.Slice(manifest.Files, func(i, j int) bool {
 		return manifest.Files[i].MinSequence < manifest.Files[j].MinSequence
 	})
-	if err := e.commitManifest(manifest); err != nil {
+	if err := e.commitManifestWithTree(ctx, manifest, tree); err != nil {
 		return Manifest{}, err
 	}
 	return manifest, nil
 }
 
-func (e *Exporter) LoadManifest() (Manifest, error) {
+func (e *Exporter) LoadManifest() (result Manifest, err error) {
+	finish, err := e.beginArchiveRead(context.Background())
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		err = errors.Join(err, finish())
+		if err != nil {
+			result = Manifest{}
+		}
+	}()
+	return e.loadManifestHeld()
+}
+
+func (e *Exporter) loadManifestHeld() (Manifest, error) {
 	payload, err := os.ReadFile(filepath.Join(e.root, "manifest.json"))
 	if err != nil {
 		return Manifest{}, err
 	}
 	var manifest Manifest
+	var kind struct {
+		Catalog json.RawMessage `json:"catalog"`
+	}
+	if err := json.Unmarshal(payload, &kind); err != nil {
+		return Manifest{}, err
+	}
+	if len(kind.Catalog) > 0 && string(kind.Catalog) != "null" {
+		return Manifest{}, ErrArchivePagedCatalog
+	}
 	if err := json.Unmarshal(payload, &manifest); err != nil {
 		return Manifest{}, fmt.Errorf("decode usage manifest: %w", err)
 	}
 	return manifest, nil
 }
 
-func (e *Exporter) Verify(snapshot *Snapshot) error {
-	manifest, err := e.LoadManifest()
+func (e *Exporter) Verify(snapshot *Snapshot) (err error) {
+	finish, err := e.beginArchiveRead(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, finish()) }()
+	return e.verifyHeld(snapshot)
+}
+
+func (e *Exporter) verifyHeld(snapshot *Snapshot) error {
+	manifest, err := e.loadManifestHeld()
 	if err != nil {
 		return err
 	}
@@ -321,7 +496,7 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		}
 	}
 	if lastSequence > manifest.LastSequence ||
-		(len(manifest.Files) > 0 && lastSequence != manifest.LastSequence) {
+		(!manifest.CompletePrefix && len(manifest.Files) > 0 && lastSequence != manifest.LastSequence) {
 		return errors.New("usage manifest last sequence does not match its files")
 	}
 	if snapshot != nil {
@@ -369,12 +544,26 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 // Reconcile verifies checksums, schemas, summaries, duplicate Event IDs and
 // the retained Ledger-to-Parquet set before returning explicit zero-difference
 // counts suitable for an offline release/operations gate.
-func (e *Exporter) Reconcile(snapshot Snapshot) (ReconciliationReport, error) {
+func (e *Exporter) Reconcile(snapshot Snapshot) (result ReconciliationReport, err error) {
+	finish, err := e.beginArchiveRead(context.Background())
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		err = errors.Join(err, finish())
+		if err != nil {
+			result = ReconciliationReport{}
+		}
+	}()
+	return e.reconcileHeld(snapshot)
+}
+
+func (e *Exporter) reconcileHeld(snapshot Snapshot) (ReconciliationReport, error) {
 	report := ReconciliationReport{}
-	if err := e.Verify(&snapshot); err != nil {
+	if err := e.verifyHeld(&snapshot); err != nil {
 		return report, err
 	}
-	manifest, err := e.LoadManifest()
+	manifest, err := e.loadManifestHeld()
 	if err != nil {
 		return report, err
 	}
@@ -449,10 +638,27 @@ func (e *Exporter) rowsBelow(manifest Manifest, floor uint64) (int64, error) {
 	return below, nil
 }
 
-func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
+func (e *Exporter) PruneBefore(cutoff time.Time) (report RetentionReport, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	err = e.withArchiveReclamation(ctx, func(advance func() error) (jobErr error) {
+		tree, treeErr := newArchiveTreeBudget(ctx, e.root, e.archiveDiskCeiling)
+		if treeErr != nil {
+			return treeErr
+		}
+		report, jobErr = e.pruneBeforeHeld(ctx, cutoff, advance, tree)
+		return jobErr
+	})
+	if err != nil {
+		report = RetentionReport{}
+	}
+	return report, err
+}
+
+func (e *Exporter) pruneBeforeHeld(ctx context.Context, cutoff time.Time, advance func() error, tree *archiveTreeBudget) (report RetentionReport, err error) {
 	cutoffDate := cutoff.UTC().Format("2006-01-02")
-	report := RetentionReport{Cutoff: cutoffDate}
-	manifest, err := e.LoadManifest()
+	report = RetentionReport{Cutoff: cutoffDate}
+	manifest, err := e.loadManifestHeld()
 	if err != nil {
 		return report, err
 	}
@@ -475,8 +681,16 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 	if len(removed) == 0 {
 		return report, nil
 	}
+	releaseShared, err := e.reserveArchiveDisk(ctx, archiveManifestValueLimit)
+	if err != nil {
+		return RetentionReport{}, err
+	}
+	defer func() { err = errors.Join(err, releaseShared()) }()
+	if err := advance(); err != nil {
+		return RetentionReport{}, err
+	}
 	manifest.Files = kept
-	if err := e.commitManifest(manifest); err != nil {
+	if err := e.commitManifestWithTree(ctx, manifest, tree); err != nil {
 		return RetentionReport{}, fmt.Errorf("commit retained usage manifest: %w", err)
 	}
 	for _, entry := range removed {
@@ -504,7 +718,7 @@ func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
 	return report, nil
 }
 
-func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (ManifestFile, error) {
+func (e *Exporter) publishPartition(ctx context.Context, date string, attempts []AttemptEvent, tree *archiveTreeBudget) (ManifestFile, error) {
 	if len(attempts) == 0 {
 		return ManifestFile{}, errors.New("cannot publish an empty usage partition")
 	}
@@ -537,10 +751,10 @@ func (e *Exporter) publishPartition(date string, attempts []AttemptEvent) (Manif
 	}
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		if e.format == FormatNDJSON {
-			if err := writeNDJSONAtomic(path, rows); err != nil {
+			if err := writeNDJSONAtomic(ctx, path, rows, tree); err != nil {
 				return ManifestFile{}, err
 			}
-		} else if err := writeParquetAtomic(path, rows); err != nil {
+		} else if err := writeParquetAtomic(ctx, path, rows, tree); err != nil {
 			return ManifestFile{}, err
 		}
 	} else if err != nil {
@@ -580,7 +794,7 @@ func readAttemptRows(path, format string) ([]parquetAttempt, error) {
 // already uses — temp file in the target directory, fsync, atomic rename,
 // directory fsync. A partition's durability story does not depend on what
 // container is inside it.
-func writeNDJSONAtomic[T any](path string, rows []T) (err error) {
+func writeNDJSONAtomic[T any](ctx context.Context, path string, rows []T, tree *archiveTreeBudget) (err error) {
 	temp, err := os.CreateTemp(filepath.Dir(path), ".ndjson-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create usage ndjson temp file: %w", err)
@@ -595,7 +809,7 @@ func writeNDJSONAtomic[T any](path string, rows []T) (err error) {
 	if err = temp.Chmod(0o600); err != nil {
 		return err
 	}
-	encoder := json.NewEncoder(temp)
+	encoder := json.NewEncoder(archiveTreeWriter(ctx, temp, tree))
 	for _, row := range rows {
 		if err = encoder.Encode(row); err != nil {
 			return fmt.Errorf("write usage ndjson: %w", err)
@@ -631,7 +845,7 @@ func readNDJSONFile[T any](path string) ([]T, error) {
 	return rows, nil
 }
 
-func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
+func writeParquetAtomic(ctx context.Context, path string, rows []parquetAttempt, tree *archiveTreeBudget) (err error) {
 	temp, err := os.CreateTemp(filepath.Dir(path), ".usage-*.parquet.tmp")
 	if err != nil {
 		return fmt.Errorf("create usage parquet temp file: %w", err)
@@ -652,7 +866,7 @@ func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
 	// written once and read rarely. Existing partitions are never rewritten, so
 	// this only changes what is written from here on — a reader handles both,
 	// because the codec is recorded per column chunk in the file itself.
-	writer := parquet.NewGenericWriter[parquetAttempt](temp, parquet.Compression(&zstd.Codec{}))
+	writer := parquet.NewGenericWriter[parquetAttempt](archiveTreeWriter(ctx, temp, tree), parquet.Compression(&zstd.Codec{}))
 	if _, err = writer.Write(rows); err != nil {
 		_ = writer.Close()
 		return fmt.Errorf("write usage parquet: %w", err)
@@ -673,6 +887,10 @@ func writeParquetAtomic(path string, rows []parquetAttempt) (err error) {
 }
 
 func (e *Exporter) commitManifest(manifest Manifest) (err error) {
+	return e.commitManifestWithTree(context.Background(), manifest, nil)
+}
+
+func (e *Exporter) commitManifestWithTree(ctx context.Context, manifest Manifest, tree *archiveTreeBudget) (err error) {
 	if err := os.MkdirAll(e.root, 0o700); err != nil {
 		return err
 	}
@@ -690,7 +908,7 @@ func (e *Exporter) commitManifest(manifest Manifest) (err error) {
 	if err = temp.Chmod(0o600); err != nil {
 		return err
 	}
-	encoder := json.NewEncoder(temp)
+	encoder := json.NewEncoder(archiveTreeWriter(ctx, temp, tree))
 	encoder.SetIndent("", "  ")
 	if err = encoder.Encode(manifest); err != nil {
 		return err
@@ -876,12 +1094,17 @@ func sameRows(left, right []parquetAttempt) bool {
 	return true
 }
 
-func fileSHA256(path string) (string, error) {
+func fileSHA256(path string) (result string, err error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() {
+		err = errors.Join(err, file.Close())
+		if err != nil {
+			result = ""
+		}
+	}()
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
 		return "", err

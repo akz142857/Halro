@@ -1,7 +1,9 @@
 package usage
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -202,16 +204,17 @@ type Aggregate struct {
 	// release it before encoding so collection can continue. A summary needs a
 	// view in which the stored rows and the pending increment cross that
 	// boundary together.
-	rollupView   sync.RWMutex
-	mu           sync.RWMutex
-	watermark    ledger.Watermark
-	eventIDs     map[string]struct{}
-	eventIDOrder []string
-	started      map[string]time.Time
-	requests     map[string]*requestAccumulator
-	attempts     []AttemptEvent
-	summaries    []RequestSummary
-	hourly       map[int64]Bucket
+	rollupView         sync.RWMutex
+	mu                 sync.RWMutex
+	watermark          ledger.Watermark
+	eventIDs           map[string]struct{}
+	eventIDOrder       []string
+	started            map[string]time.Time
+	requests           map[string]*requestAccumulator
+	finalizationReader FinalizationReader
+	attempts           []AttemptEvent
+	summaries          []RequestSummary
+	hourly             map[int64]Bucket
 	// rollupDelta is the daily-rollup increment that has not been persisted
 	// yet. It lives here, behind the same lock as the watermark, because Apply
 	// is the only place that knows an event was neither a duplicate nor a
@@ -243,6 +246,44 @@ type Aggregate struct {
 	metrics Metrics
 }
 
+// FinalizationReader must read a trusted, role-permitted terminal fact from a
+// durable request index, and the first occurrence of each event from the same
+// applied ledger prefix. It must distinguish lookup failures from absence;
+// there is no unbounded terminal-ID or event-ID cache in the aggregate.
+type FinalizationReader interface {
+	ReadFinalization(context.Context, string) (ledger.Record, bool, error)
+	ReadEventPosition(context.Context, string) (ledger.Watermark, bool, error)
+}
+
+type LegacyRequestReader interface {
+	// Supplied only by the SAME authenticated selected request index. Legacy
+	// WAL has no Accepted scope contract; settlements retain their own leases'
+	// project/period. A reader without this evidence keeps modern strict scope.
+	ReadLegacyRequest(context.Context, string) (bool, error)
+}
+
+func NewAggregateWithFinalizationReader(reader FinalizationReader) (*Aggregate, error) {
+	if reader == nil {
+		return nil, errors.New("usage finalization reader is required")
+	}
+	a := NewAggregate()
+	a.finalizationReader = reader
+	return a, nil
+}
+
+// ReadWatermark exposes the selected Collector target without a Snapshot or
+// genesis fallback on caller failure.
+func (a *Aggregate) ReadWatermark(ctx context.Context) (ledger.Watermark, error) {
+	if err := ctx.Err(); err != nil {
+		return ledger.Watermark{}, err
+	}
+	head := a.Watermark()
+	if err := ctx.Err(); err != nil {
+		return ledger.Watermark{}, err
+	}
+	return head, nil
+}
+
 func NewAggregate() *Aggregate {
 	return &Aggregate{
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
@@ -252,24 +293,97 @@ func NewAggregate() *Aggregate {
 }
 
 func (a *Aggregate) Apply(record ledger.Record) error {
+	return a.ApplyContext(context.Background(), record)
+}
+
+func (a *Aggregate) ApplyContext(ctx context.Context, record ledger.Record) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := record.Event.Validate(); err != nil {
 		return err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, exists := a.eventIDs[record.Event.EventID]; exists {
+		// The accounting reducer already verifies deterministic event content.
+		// A duplicate physical recovery frame still advances processing position.
+		if record.Sequence > a.watermark.Sequence {
+			a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+		}
 		return nil
 	}
 	if record.Sequence <= a.watermark.Sequence {
 		return errors.New("usage record sequence is not monotonic")
 	}
 	event := record.Event
+	if a.finalizationReader != nil {
+		first, found, err := a.finalizationReader.ReadEventPosition(ctx, event.EventID)
+		if err != nil {
+			return fmt.Errorf("read usage event position: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !found || first.Sequence == 0 || first.Sequence > record.Sequence || first.Generation == 0 || first.Offset <= 0 {
+			return errors.New("usage event has no consistent first occurrence")
+		}
+		if first.Sequence == record.Sequence {
+			if first.Generation != record.Generation || first.Offset != record.Offset {
+				return errors.New("usage event first occurrence changed its physical position")
+			}
+		} else {
+			if first.Sequence > a.watermark.Sequence {
+				return errors.New("usage has not processed the original event before its duplicate")
+			}
+			a.rememberEventID(event.EventID)
+			a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+			return nil
+		}
+	}
 	if event.Kind >= ledger.EventWorkUnitCreated {
 		a.rememberEventID(event.EventID)
 		a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 		return nil
 	}
 	accumulator := a.requests[event.RequestID]
+	afterFinalization := false
+	if a.finalizationReader != nil {
+		final, found, err := a.finalizationReader.ReadFinalization(ctx, event.RequestID)
+		if err != nil {
+			return fmt.Errorf("read usage request finalization: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if found {
+			f := final.Event
+			legacy := false
+			if source, ok := a.finalizationReader.(LegacyRequestReader); ok {
+				legacy, err = source.ReadLegacyRequest(ctx, event.RequestID)
+				if err != nil {
+					return fmt.Errorf("read usage request origin: %w", err)
+				}
+			}
+			if final.Sequence == 0 || f.Kind != ledger.EventRequestFinalized || f.RequestID != event.RequestID || legacy && (f.WorkUnitID != "" || f.RunID != "" || event.WorkUnitID != "" || event.RunID != "") || !legacy && (f.ProjectID != event.ProjectID || f.PeriodID != event.PeriodID || f.PeriodTimezoneVersion != event.PeriodTimezoneVersion || f.WorkUnitID != event.WorkUnitID || f.RunID != event.RunID) {
+				return errors.New("usage request finalization has inconsistent attribution")
+			}
+			// The Ledger projection may be ahead of this consumer. Only a
+			// finalized fact earlier than this event suppresses new request activity.
+			// Legacy WAL can also contain a lease/start after its original terminal.
+			afterFinalization = final.Sequence < record.Sequence
+			if afterFinalization && (a.watermark.Sequence < final.Sequence || accumulator != nil) {
+				return errors.New("usage has not consistently processed the earlier request finalization")
+			}
+		}
+	}
+	if afterFinalization && event.Kind == ledger.EventRequestFinalized {
+		// Preserve the first actual terminal summary even if old native writers
+		// emitted another finalization with a different event ID.
+		a.rememberEventID(event.EventID)
+		a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
+		return nil
+	}
 	if accumulator == nil {
 		accumulator = &requestAccumulator{summary: RequestSummary{
 			RequestID: event.RequestID, ProjectID: event.ProjectID, KeyID: event.KeyID,
@@ -278,7 +392,9 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 			PeriodID:              event.PeriodID,
 			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
 		}}
-		a.requests[event.RequestID] = accumulator
+		if !afterFinalization {
+			a.requests[event.RequestID] = accumulator
+		}
 	}
 	switch event.Kind {
 	case ledger.EventRequestAccepted:

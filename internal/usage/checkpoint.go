@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,7 +120,11 @@ type CheckpointSegment struct {
 // records. It is rewritten on every tick, which is affordable precisely because
 // none of it grows with the number of records held.
 type checkpointHead struct {
-	Version   int              `json:"version"`
+	Version int `json:"version"`
+	// A plain historical reducer can count duplicate terminal facts and revive
+	// requests after finalization. Never mix those totals/rollups with the
+	// selected Ledger first-fact reducer, even when no active row remains.
+	Reducer   string           `json:"reducer_semantics,omitempty"`
 	Watermark ledger.Watermark `json:"watermark"`
 	// Floor is the console window's lower edge — see PruneBefore. Absent on a
 	// checkpoint that was never pruned, which reads correctly as "holds
@@ -177,6 +182,9 @@ func (a *Aggregate) TakeCheckpoint() (CheckpointSnapshot, error) {
 		Started: cloneStarted(a.started), Hourly: cloneHourly(a.hourly),
 		Totals: a.totals, Metrics: a.metrics,
 		EventIDs: append([]string(nil), a.eventIDOrder...),
+	}
+	if a.finalizationReader != nil {
+		head.Reducer = checkpointFirstFactReducer
 	}
 	head.Active = make(map[string]RequestSummary, len(a.requests))
 	for requestID, accumulator := range a.requests {
@@ -379,7 +387,40 @@ func (a *Aggregate) Checkpointed() CheckpointState {
 // the checkpoint is refused and the Ledger replayed, because a checkpoint that
 // silently dropped records would show a console that quietly disagrees with the
 // accounting authority.
+// RestoreCheckpointWithFinalizationReader binds the reader before the restored
+// consumer can process a suffix. The reader is runtime wiring, not checkpoint
+// content, and must belong to the same trusted Ledger projection generation.
+func RestoreCheckpointWithFinalizationReader(head []byte, readSegment func(id uint64) ([]byte, error), reader FinalizationReader) (*Aggregate, error) {
+	if reader == nil {
+		return nil, errors.New("usage finalization reader is required")
+	}
+	a, err := restoreCheckpoint(head, readSegment, checkpointFirstFactReducer)
+	if err != nil {
+		return nil, err
+	}
+	// Old consumers could recreate an active accumulator from a settlement
+	// after Finalized. Refuse that derivative and let Runtime rebuild, rather
+	// than importing phantom activity into the selected-reader generation.
+	for id := range a.requests {
+		final, found, err := reader.ReadFinalization(context.Background(), id)
+		if err != nil {
+			return nil, err
+		}
+		if found && final.Sequence <= a.watermark.Sequence {
+			return nil, errors.New("usage checkpoint retains an already-finalized active request")
+		}
+	}
+	a.finalizationReader = reader
+	return a, nil
+}
+
 func RestoreCheckpoint(head []byte, readSegment func(id uint64) ([]byte, error)) (*Aggregate, error) {
+	return restoreCheckpoint(head, readSegment, "")
+}
+
+const checkpointFirstFactReducer = "ledger-first-facts-v1"
+
+func restoreCheckpoint(head []byte, readSegment func(id uint64) ([]byte, error), reducer string) (*Aggregate, error) {
 	if len(head) == 0 {
 		return nil, errors.New("usage checkpoint is empty")
 	}
@@ -389,6 +430,9 @@ func RestoreCheckpoint(head []byte, readSegment func(id uint64) ([]byte, error))
 	}
 	if saved.Version != checkpointVersion {
 		return nil, fmt.Errorf("usage checkpoint version %d is not supported", saved.Version)
+	}
+	if saved.Reducer != reducer {
+		return nil, errors.New("usage checkpoint reducer semantics differ from selected owner")
 	}
 	if saved.Watermark.Sequence == 0 && (saved.Watermark.Offset != 0 || saved.Watermark.Generation != 0) {
 		return nil, errors.New("usage checkpoint has an invalid empty watermark")
