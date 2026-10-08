@@ -23,6 +23,9 @@ const (
 	StreamRecordCommitNotice
 	StreamRecordPromotionProposal
 	StreamRecordPromotionPromise
+	StreamRecordHAPeerPromotionRequest
+	StreamRecordHAPeerPromotionBoundary
+	StreamRecordPhysicalCredit
 )
 
 type StreamRecord struct {
@@ -104,6 +107,10 @@ func streamRecordShape(magic [8]byte, direction StreamDirection) (StreamRecordKi
 		kind = StreamRecordFrame
 		minimum = frameBodyFixedBytes
 		maximum = frameBodyFixedBytes + 2*MaxIdentityBytes + MaxMetadataBytes + MaxPayloadBytes
+	case bytes.Equal(magic[:], physicalCreditMagic[:]):
+		kind = StreamRecordPhysicalCredit
+		minimum = physicalCreditFixedBytes + 4 + ackFixedBytes
+		maximum = MaxPhysicalCreditRecordBytes - 4
 	case bytes.Equal(magic[:], ackMagic[:]):
 		kind = StreamRecordAcknowledgement
 		minimum = ackFixedBytes
@@ -120,11 +127,15 @@ func streamRecordShape(magic [8]byte, direction StreamDirection) (StreamRecordKi
 		kind = StreamRecordPromotionPromise
 		minimum = 8 + 2
 		maximum = MaxPromotionRecordBytes
+	case bytes.Equal(magic[:], haPeerRequestMagic[:]):
+		kind, minimum, maximum = StreamRecordHAPeerPromotionRequest, 8+33, 8+MaxHAPromotionCarrierBytes
+	case bytes.Equal(magic[:], haPeerBoundaryMagic[:]):
+		kind, minimum, maximum = StreamRecordHAPeerPromotionBoundary, 16+33+1, maxHAPeerBoundaryBodyBytes
 	default:
 		return 0, 0, 0, errors.New("replication stream record has unknown type magic")
 	}
-	control := kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise
-	allowed := control || direction == StreamPrimaryToReplica && (kind == StreamRecordFrame || kind == StreamRecordCommitNotice) ||
+	control := kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise || kind == StreamRecordHAPeerPromotionRequest || kind == StreamRecordHAPeerPromotionBoundary
+	allowed := control || kind == StreamRecordPhysicalCredit || direction == StreamPrimaryToReplica && (kind == StreamRecordFrame || kind == StreamRecordCommitNotice) ||
 		direction == StreamReplicaToPrimary && kind == StreamRecordAcknowledgement
 	if !allowed {
 		return 0, 0, 0, fmt.Errorf("replication %s record is not allowed in this stream direction", streamRecordKindName(kind))
@@ -136,6 +147,8 @@ func streamRecordKindName(kind StreamRecordKind) string {
 	switch kind {
 	case StreamRecordFrame:
 		return "frame"
+	case StreamRecordPhysicalCredit:
+		return "physical-credit"
 	case StreamRecordAcknowledgement:
 		return "acknowledgement"
 	case StreamRecordCommitNotice:
@@ -144,6 +157,10 @@ func streamRecordKindName(kind StreamRecordKind) string {
 		return "promotion-proposal"
 	case StreamRecordPromotionPromise:
 		return "promotion-promise"
+	case StreamRecordHAPeerPromotionRequest:
+		return "HA-peer-promotion-request"
+	case StreamRecordHAPeerPromotionBoundary:
+		return "HA-peer-promotion-boundary"
 	default:
 		return "unknown"
 	}

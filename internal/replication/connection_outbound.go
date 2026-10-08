@@ -12,9 +12,8 @@ type PeerRecordSender interface {
 
 // ConnectionOutbound fans each frame/notice to every configured Replica while
 // requiring only one successful enqueue: Primary plus one Replica is quorum in
-// both supported topologies. The coordinator retains bytes until ACK/applied
-// progress, so a disconnected peer is caught up by RetryPending after its
-// session returns rather than turning a healthy three-member quorum off.
+// both supported topologies. The source-backed coordinator uses separate
+// session-bound windows; this fan-out adapter remains for legacy callers.
 type ConnectionOutbound struct {
 	peers  []string
 	sender PeerRecordSender

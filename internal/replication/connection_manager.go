@@ -38,10 +38,13 @@ type ConnectionManagerOptions struct {
 	OnAuthenticatedHello AuthenticatedHelloHandler
 	Handle               ConnectionRecordHandler
 	// OnDataSessionReady runs after the authenticated session is registered but
-	// before its read loop starts. The peer Hello is retained here because its
+	// before its reader and writer start. The peer Hello is retained here because its
 	// durable/applied watermarks decide which authenticated ordering prefix must
 	// be replayed on reconnect; a node ID alone cannot drive catch-up safely.
-	OnDataSessionReady    func(peer string, hello Hello) error
+	// Prepare holds a generation delivery lease; send targets that concrete
+	// session and may enqueue only a bounded batch before Run starts.
+	OnDataSessionReady    func(peer string, hello Hello, send func([]byte) error) error
+	OnDataSessionClosed   func(peer string)
 	OnSessionError        func(peer string, err error)
 	Session               PeerSessionOptions
 	DialTimeout           time.Duration
@@ -63,6 +66,9 @@ type ConnectionManager struct {
 	serveMu    sync.Mutex
 	serving    bool
 	closed     bool
+	serveStop  context.CancelFunc
+	serveDone  chan struct{}
+	closeErr   error
 }
 
 func NewConnectionManager(options ConnectionManagerOptions) (*ConnectionManager, error) {
@@ -94,6 +100,14 @@ func NewConnectionManager(options ConnectionManagerOptions) (*ConnectionManager,
 	}
 	if options.DialTimeout <= 0 || options.MinRetryBackoff <= 0 || options.MaxRetryBackoff < options.MinRetryBackoff || options.StableSessionDuration <= 0 || options.MaxHandshakes < 1 || options.MaxHandshakes > 16 {
 		return nil, errors.New("replication connection manager limits are invalid")
+	}
+	// Bound authenticated/control-only sessions as well as handshakes, even
+	// when optional shared RAM accounting is disabled.
+	if options.Session.QueueBudget == nil {
+		options.Session.QueueBudget = &PeerQueueBudget{slots: make(chan struct{}, len(options.Peers)+1)}
+	}
+	if cap(options.Session.QueueBudget.slots) < len(options.Peers)+1 {
+		return nil, errors.New("peer queue slots must allow configured peers plus one replacement")
 	}
 	serverTLS, err := LoadServerTLSConfig(options.TLS)
 	if err != nil {
@@ -155,9 +169,11 @@ func (m *ConnectionManager) Serve(ctx context.Context, listener net.Listener) er
 		return errors.New("replication connection manager cannot be served twice")
 	}
 	m.serving = true
+	serveCtx, cancel := context.WithCancel(ctx)
+	m.serveStop = cancel
+	m.serveDone = make(chan struct{})
 	m.serveMu.Unlock()
 
-	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	fatal := make(chan error, 1)
 	var wait sync.WaitGroup
@@ -186,7 +202,7 @@ func (m *ConnectionManager) Serve(ctx context.Context, listener net.Listener) er
 
 	var runErr error
 	select {
-	case <-ctx.Done():
+	case <-serveCtx.Done():
 	case runErr = <-fatal:
 	}
 	cancel()
@@ -195,9 +211,45 @@ func (m *ConnectionManager) Serve(ctx context.Context, listener net.Listener) er
 	wait.Wait()
 	m.serveMu.Lock()
 	m.closed = true
+	m.closeErr = errors.Join(runErr, closeErr)
+	m.serveStop = nil
 	clear(m.key[:])
+	close(m.serveDone)
 	m.serveMu.Unlock()
-	return errors.Join(runErr, closeErr)
+	return m.closeErr
+}
+
+// Close permanently withdraws serving and joins all admitted handshakes,
+// sessions and handlers. Unlike individual session Close, this is an owner
+// barrier: do not call it from a manager-owned callback. Native stores and
+// selected projection owners remain alive until this join returns.
+func (m *ConnectionManager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.serveMu.Lock()
+	if m.serveDone == nil {
+		m.closed = true
+		m.serveDone = make(chan struct{})
+		done := m.serveDone
+		m.serveMu.Unlock()
+		err := m.registry.Close()
+		m.serveMu.Lock()
+		m.closeErr = err
+		clear(m.key[:])
+		close(done)
+		m.serveMu.Unlock()
+		return err
+	}
+	if m.serveStop != nil {
+		m.serveStop()
+	}
+	done := m.serveDone
+	m.serveMu.Unlock()
+	<-done
+	m.serveMu.Lock()
+	defer m.serveMu.Unlock()
+	return m.closeErr
 }
 
 func (m *ConnectionManager) Send(peer string, encoded []byte) error {
@@ -334,6 +386,11 @@ func (m *ConnectionManager) dialLoop(ctx context.Context, peer PeerEndpoint) {
 }
 
 func (m *ConnectionManager) authorizeSession(ctx context.Context, session *PeerSession) (bool, error) {
+	release, err := session.retainCallbackOwner()
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	allowData, err := m.options.OnAuthenticatedHello(ctx, session.Peer())
 	if err != nil {
 		_ = session.Close()
@@ -351,13 +408,26 @@ func (m *ConnectionManager) authorizeSession(ctx context.Context, session *PeerS
 
 func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outbound bool, session *PeerSession) (time.Duration, error) {
 	started := time.Now()
+	release, err := session.retainCallbackOwner()
+	if err != nil {
+		return time.Since(started), err
+	}
+	defer func() {
+		_ = session.Close()
+		release()
+	}()
 	generation, err := m.registry.Register(peer, outbound, session)
 	if err != nil {
 		return time.Since(started), err
 	}
+	defer func() {
+		if m.options.OnDataSessionClosed != nil {
+			_ = m.registry.Deliver(peer, generation, func() error { m.options.OnDataSessionClosed(peer); return nil })
+		}
+		m.registry.Remove(peer, generation)
+	}()
 	if m.options.OnDataSessionReady != nil {
-		if err := m.options.OnDataSessionReady(peer, session.Peer()); err != nil {
-			m.registry.Remove(peer, generation)
+		if err := m.registry.Deliver(peer, generation, func() error { return m.options.OnDataSessionReady(peer, session.Peer(), session.Send) }); err != nil {
 			_ = session.Close()
 			return time.Since(started), fmt.Errorf("prepare replication data session for %s: %w", peer, err)
 		}
@@ -367,7 +437,6 @@ func (m *ConnectionManager) runRegistered(ctx context.Context, peer string, outb
 			return m.options.Handle(handlerCtx, hello, record, session.sendFromHandler)
 		})
 	})
-	m.registry.Remove(peer, generation)
 	return time.Since(started), err
 }
 

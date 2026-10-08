@@ -6,15 +6,17 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/akz142857/Halro/internal/replicationlimits"
 )
 
 const (
 	ProtocolVersion  uint16 = 1
-	MaxIdentityBytes        = 64
-	MaxMetadataBytes        = 4 << 10
-	MaxPayloadBytes         = 16 << 20
+	MaxIdentityBytes        = replicationlimits.MaxIdentityBytes
+	MaxMetadataBytes        = replicationlimits.MaxMetadataBytes
+	MaxPayloadBytes         = replicationlimits.MaxPayloadBytes
 
-	frameBodyFixedBytes = 108
+	frameBodyFixedBytes = replicationlimits.FrameBodyFixedBytes
 	frameDigestOffset   = 76
 )
 
@@ -31,6 +33,7 @@ const (
 	KindLeadershipEstablished Kind = 3
 	KindSchemaBoundary        Kind = 4
 	KindProviderObject        Kind = 5
+	KindMetadataBaseline      Kind = 6
 )
 
 type Store uint16
@@ -132,6 +135,13 @@ func (f Frame) Validate() error {
 		}
 		if metadata.Final != (metadata.Offset+metadata.ChunkLength == metadata.TotalLength) {
 			return errors.New("provider-object final marker does not match its total length")
+		}
+	case KindMetadataBaseline:
+		if f.Store != StoreNone || len(f.Payload) != 0 || f.StoreGeneration != 0 || f.StoreSequenceFirst != 0 || f.StoreSequenceLast != 0 {
+			return errors.New("metadata baseline frame has an invalid control shape")
+		}
+		if _, err := DecodeMetadataBaselineMetadata(f.Metadata); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unknown replication frame kind %d", f.Kind)
@@ -237,7 +247,7 @@ func (f Frame) MarshalBinaryAndDigest() ([]byte, [sha256.Size]byte, error) {
 	binary.BigEndian.PutUint32(encoded[0:4], uint32(bodyLength))
 	body := encoded[4:]
 	copy(body[0:8], frameMagic[:])
-	binary.BigEndian.PutUint16(body[8:10], ProtocolVersion)
+	binary.BigEndian.PutUint16(body[8:10], frameProtocolVersion(f.Kind))
 	binary.BigEndian.PutUint16(body[10:12], uint16(f.Kind))
 	binary.BigEndian.PutUint16(body[12:14], uint16(f.Store))
 	// body[14:16] is the reserved zero field.
@@ -286,7 +296,7 @@ func UnmarshalFrameAndDigest(encoded []byte) (Frame, [sha256.Size]byte, error) {
 	if !bytes.Equal(body[0:8], frameMagic[:]) {
 		return Frame{}, [sha256.Size]byte{}, errors.New("replication frame magic is invalid")
 	}
-	if version := binary.BigEndian.Uint16(body[8:10]); version != ProtocolVersion {
+	if version := binary.BigEndian.Uint16(body[8:10]); version != frameProtocolVersion(Kind(binary.BigEndian.Uint16(body[10:12]))) {
 		return Frame{}, [sha256.Size]byte{}, fmt.Errorf("unsupported replication frame version %d", version)
 	}
 	if binary.BigEndian.Uint16(body[14:16]) != 0 {

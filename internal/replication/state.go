@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/replicationlimits"
 	"io"
 	"sort"
 	"strings"
@@ -16,7 +17,7 @@ import (
 
 const (
 	StateVersion       = 2
-	MaxMemberStateJSON = 64 << 10
+	MaxMemberStateJSON = replicationlimits.MaxMemberStateJSON
 )
 
 var stateDomain = []byte("halro:cluster:v1\x00state\x00")

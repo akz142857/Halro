@@ -110,14 +110,13 @@ func allZero(value []byte) bool {
 	return true
 }
 
-type pendingConfirmation struct {
-	kind Kind
-	acks map[string]struct{}
-}
-
 // ConfirmationTracker advances only a contiguous prefix acknowledged by at
 // least one configured Replica. With two configured peers this is a majority
 // of a three-member group; with one peer it is both members.
+// Registration proves a contiguous current-term prefix beginning at its single
+// leadership anchor. ACKs are cumulative durable prefixes, so one valid ACK
+// confirms that registered prefix without keeping per-index or per-ACK state.
+// The journal/source, not this tracker, retain the durable facts for retries.
 type ConfirmationTracker struct {
 	mu             sync.Mutex
 	clusterID      string
@@ -127,7 +126,6 @@ type ConfirmationTracker struct {
 	confirmed      uint64
 	lastRegistered uint64
 	anchorIndex    uint64
-	pending        map[uint64]*pendingConfirmation
 }
 
 func NewConfirmationTracker(clusterID, incarnation string, term, confirmed uint64, peers []string, termEstablished bool) (*ConfirmationTracker, error) {
@@ -149,7 +147,7 @@ func NewConfirmationTracker(clusterID, incarnation string, term, confirmed uint6
 	}
 	tracker := &ConfirmationTracker{
 		clusterID: clusterID, incarnation: incarnation, term: term, peers: peerSet,
-		confirmed: confirmed, lastRegistered: confirmed, pending: make(map[uint64]*pendingConfirmation),
+		confirmed: confirmed, lastRegistered: confirmed,
 	}
 	if termEstablished {
 		if confirmed == 0 {
@@ -180,7 +178,6 @@ func (t *ConfirmationTracker) Register(frame Frame) error {
 	} else if frame.Kind == KindLeadershipEstablished {
 		return errors.New("a term cannot contain a second leadership anchor")
 	}
-	t.pending[frame.Index] = &pendingConfirmation{kind: frame.Kind, acks: make(map[string]struct{})}
 	t.lastRegistered = frame.Index
 	return nil
 }
@@ -206,24 +203,13 @@ func (t *ConfirmationTracker) Acknowledge(ack Acknowledgement) (uint64, error) {
 	if ack.Index > t.lastRegistered {
 		return t.confirmed, errors.New("acknowledgement refers to an unknown future index")
 	}
-	for index := t.confirmed + 1; index <= ack.Index; index++ {
-		pending, ok := t.pending[index]
-		if !ok {
-			return t.confirmed, errors.New("acknowledgement crosses an unregistered index")
-		}
-		pending.acks[ack.NodeID] = struct{}{}
+	// Register admits no gaps and cannot admit data before the anchor. A
+	// configured Replica's cumulative durable ACK covers every registered
+	// index up to this one; no pending map or historical walk is required.
+	if t.confirmed < t.anchorIndex && t.confirmed+1 != t.anchorIndex {
+		return t.confirmed, nil
 	}
-	for {
-		next, ok := t.pending[t.confirmed+1]
-		if !ok || len(next.acks) < 1 {
-			break
-		}
-		if t.confirmed < t.anchorIndex && t.confirmed+1 != t.anchorIndex {
-			break
-		}
-		delete(t.pending, t.confirmed+1)
-		t.confirmed++
-	}
+	t.confirmed = ack.Index
 	return t.confirmed, nil
 }
 

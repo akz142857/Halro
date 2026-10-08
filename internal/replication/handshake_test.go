@@ -139,3 +139,22 @@ func TestHelloRefusesNonCanonicalAndInvalidShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestPhysicalCreditHelloRoundTripPreservesIndependentMetadataPermission(t *testing.T) {
+	h := testHello("halro-0", RolePrimary, 7)
+	h.Protocol = VersionRange{Current: 3, Minimum: 3, Maximum: 3}
+	h.Metadata = VersionRange{Current: 2, Minimum: 2, Maximum: 2}
+	h.MetadataBaselineAuthority = [32]byte{3}
+	raw, err := h.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := UnmarshalHello(raw)
+	if err != nil || actual != h {
+		t.Fatal(actual, err)
+	}
+	old := testHello("halro-1", RoleReplica, 1)
+	if err := ValidatePeerHello(h, old, old.NodeID, nil); err == nil {
+		t.Fatal("legacy peer gained wire3 credit protocol")
+	}
+}

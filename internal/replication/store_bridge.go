@@ -18,9 +18,14 @@ import (
 // the returned final index; cumulative confirmation proves the complete object
 // was fsynced and atomically published by at least one Replica.
 func (c *PrimaryCoordinator) RecordProviderObject(name string, sealed []byte) (uint64, error) {
+	return c.RecordProviderObjectWithAdmissions(name, sealed, nil)
+}
+
+func (c *PrimaryCoordinator) RecordProviderObjectWithAdmissions(name string, sealed []byte, admissions []UnconfirmedAdmission) (uint64, error) {
 	digest := sha256.Sum256(sealed)
 	total := uint64(len(sealed))
 	var final uint64
+	admissionIndex := 0
 	for offset := uint64(0); offset < total || offset == 0; {
 		remaining := total - offset
 		chunkLength := remaining
@@ -34,11 +39,23 @@ func (c *PrimaryCoordinator) RecordProviderObject(name string, sealed []byte) (u
 		if err != nil {
 			return 0, err
 		}
-		commit, err := c.RecordDurable(Frame{
+		var admission UnconfirmedAdmission
+		if len(admissions) > 0 {
+			if admissionIndex >= len(admissions) {
+				c.RetainUnconfirmedAdmissions(admissions[admissionIndex:])
+				return 0, errors.New("provider object admission set is incomplete")
+			}
+			admission = admissions[admissionIndex]
+			admissionIndex++
+		}
+		commit, err := c.RecordDurableWithAdmission(Frame{
 			Kind: KindProviderObject, Store: StoreNone, Metadata: metadata,
 			Payload: append([]byte(nil), sealed[offset:offset+chunkLength]...),
-		})
+		}, admission)
 		if err != nil {
+			if admissionIndex < len(admissions) {
+				c.RetainUnconfirmedAdmissions(admissions[admissionIndex:])
+			}
 			return 0, err
 		}
 		final = commit.Index
@@ -46,6 +63,10 @@ func (c *PrimaryCoordinator) RecordProviderObject(name string, sealed []byte) (u
 		if total == 0 {
 			break
 		}
+	}
+	if admissionIndex != len(admissions) {
+		c.RetainUnconfirmedAdmissions(admissions[admissionIndex:])
+		return 0, errors.New("provider object admission set has unused entries")
 	}
 	return final, nil
 }
@@ -59,39 +80,39 @@ func (c *PrimaryCoordinator) RecordSchemaBoundary(from, to uint32) (LocalCommit,
 }
 
 func (c *PrimaryCoordinator) RecordLedgerBatch(batch ledger.DurableBatch) (LocalCommit, error) {
-	return c.RecordDurable(Frame{
+	return c.RecordDurableWithAdmission(Frame{
 		Kind: KindData, Store: StoreLedger,
 		StoreGeneration:    batch.Generation,
 		StoreSequenceFirst: batch.FirstSequence, StoreSequenceLast: batch.LastSequence,
 		Payload: batch.Frames,
-	})
+	}, batch.Admission)
 }
 
 func (c *PrimaryCoordinator) RecordAuditBatch(batch audit.DurableBatch) (LocalCommit, error) {
-	return c.RecordDurable(Frame{
+	return c.RecordDurableWithAdmission(Frame{
 		Kind: KindData, Store: StoreAudit,
 		StoreGeneration:    1,
 		StoreSequenceFirst: batch.FirstSequence, StoreSequenceLast: batch.LastSequence,
 		Payload: batch.Frames,
-	})
+	}, batch.Admission)
 }
 
 func (c *PrimaryCoordinator) RecordGovernanceBatch(batch governance.DurableBatch) (LocalCommit, error) {
-	return c.RecordDurable(Frame{
+	return c.RecordDurableWithAdmission(Frame{
 		Kind: KindData, Store: StoreGovernance,
 		StoreGeneration:    1,
 		StoreSequenceFirst: batch.FirstSequence, StoreSequenceLast: batch.LastSequence,
 		Payload: batch.Frames,
-	})
+	}, batch.Admission)
 }
 
 func (c *PrimaryCoordinator) RecordMetadataBatch(batch metadatajournal.DurableBatch) (LocalCommit, error) {
-	return c.RecordDurable(Frame{
+	return c.RecordDurableWithAdmission(Frame{
 		Kind: KindData, Store: StoreMetadata,
 		StoreGeneration:    batch.Epoch,
 		StoreSequenceFirst: batch.FirstSequence, StoreSequenceLast: batch.LastSequence,
 		Payload: batch.Frames,
-	})
+	}, batch.Admission)
 }
 
 func (c *PrimaryCoordinator) RecordLedgerRoll(segment ledger.Segment) (LocalCommit, error) {

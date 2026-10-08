@@ -98,17 +98,18 @@ func UnmarshalPromotionProposal(encoded []byte) (PromotionProposal, error) {
 // storage. LastFrameTerm participates in the freshness comparison; comparing
 // a bare index would select a longer stale fork.
 type PromotionPromise struct {
-	Version       int    `json:"version"`
-	ClusterID     string `json:"cluster_id"`
-	Incarnation   string `json:"incarnation"`
-	NodeID        string `json:"node_id"`
-	Role          Role   `json:"role"`
-	PreviousRole  Role   `json:"previous_role"`
-	Term          uint64 `json:"term"`
-	PromisedTerm  uint64 `json:"promised_term"`
-	DurableIndex  uint64 `json:"durable_index"`
-	AppliedIndex  uint64 `json:"applied_index"`
-	LastFrameTerm uint64 `json:"last_frame_term"`
+	Version               int      `json:"version"`
+	ClusterID             string   `json:"cluster_id"`
+	Incarnation           string   `json:"incarnation"`
+	NodeID                string   `json:"node_id"`
+	Role                  Role     `json:"role"`
+	PreviousRole          Role     `json:"previous_role"`
+	Term                  uint64   `json:"term"`
+	PromisedTerm          uint64   `json:"promised_term"`
+	DurableIndex          uint64   `json:"durable_index"`
+	AppliedIndex          uint64   `json:"applied_index"`
+	LastFrameTerm         uint64   `json:"last_frame_term"`
+	PeerPreparationDigest [32]byte `json:"peer_preparation_digest,omitzero"`
 }
 
 func (p PromotionPromise) Validate() error {

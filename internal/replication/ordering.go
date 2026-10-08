@@ -219,6 +219,13 @@ func (r OrderingRecord) validate() error {
 		if _, err := DecodeProviderObjectMetadata(r.Metadata); err != nil {
 			return err
 		}
+	case KindMetadataBaseline:
+		if r.Store != StoreNone || r.StoreGeneration != 0 || r.StoreSequenceFirst != 0 || r.StoreSequenceLast != 0 {
+			return errors.New("metadata baseline ordering record has an invalid control shape")
+		}
+		if _, err := DecodeMetadataBaselineMetadata(r.Metadata); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown ordering record kind %d", r.Kind)
 	}

@@ -1,8 +1,12 @@
 package replication
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
+	"github.com/akz142857/Halro/internal/ownedfile"
+	"github.com/akz142857/Halro/internal/resourcebudget"
+	"os"
 	"slices"
 	"sync"
 )
@@ -12,10 +16,25 @@ import (
 // directory-fsync barrier as progress so a promise cannot be acknowledged
 // before it survives a crash.
 type StatePublisher struct {
-	mu    sync.Mutex
-	path  string
-	key   [sha256.Size]byte
-	state MemberState
+	received        *PortableReceivedPublication
+	physical        *PhysicalPublication
+	closeMu         sync.Mutex
+	authorityWG     sync.WaitGroup
+	authorityCancel context.CancelFunc
+	// Only the single active Ledger read may retain the same Primary durable
+	// cut across monotonic confirmation publication. Common-cut readers never
+	// install this policy; every role/term/durable change still revokes it.
+	authorityLedgerCut *MemberState
+	authorityLane      chan struct{}
+	authorityJobs      [16]context.CancelFunc
+	authorityDebts     [16]resourcebudget.Permit
+	authorityFault     error
+	closeAuthorityFile func(*os.File) error
+	closed             bool
+	mu                 sync.Mutex
+	path               string
+	key                [sha256.Size]byte
+	state              MemberState
 }
 
 func NewStatePublisher(path string, key []byte, state MemberState) (*StatePublisher, error) {
@@ -25,7 +44,7 @@ func NewStatePublisher(path string, key []byte, state MemberState) (*StatePublis
 	if err := state.Validate(); err != nil {
 		return nil, err
 	}
-	publisher := &StatePublisher{path: path, state: cloneMemberState(state)}
+	publisher := &StatePublisher{path: path, state: cloneMemberState(state), authorityLane: make(chan struct{}, 1)}
 	copy(publisher.key[:], key)
 	return publisher, nil
 }
@@ -39,9 +58,35 @@ func (p *StatePublisher) Snapshot() MemberState {
 // Close erases the in-memory cluster authentication key after the runtime has
 // stopped publishing member progress. StatePublisher owns its private copy.
 func (p *StatePublisher) Close() {
+	if p == nil {
+		return
+	}
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	p.mu.Lock()
+	p.closed = true
+	for _, cancel := range p.authorityJobs {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	p.mu.Unlock()
+	p.authorityWG.Wait()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	clear(p.key[:])
+	if p.received != nil {
+		if err := p.received.closeLocked(); err != nil {
+			p.authorityFault = errors.Join(p.authorityFault, err)
+		}
+	}
+	if p.physical != nil {
+		if err := p.physical.closeBanksLocked(); err != nil {
+			p.authorityFault = errors.Join(p.authorityFault, err)
+		}
+	}
+	if !errors.Is(p.authorityFault, ownedfile.ErrRetirement) {
+		clear(p.key[:])
+	}
 }
 
 func (p *StatePublisher) PublishPrimary(progress PrimaryProgress) error {
@@ -158,6 +203,9 @@ func (p *StatePublisher) Promote(expectedTerm, expectedAppliedIndex, term uint64
 func (p *StatePublisher) AdoptHigherTerm(term, promisedTerm uint64) (MemberState, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed || p.authorityFault != nil {
+		return MemberState{}, errors.Join(ErrMemberAuthority, p.authorityFault)
+	}
 	if term < p.state.Term || promisedTerm < term || promisedTerm < p.state.PromisedTerm {
 		return MemberState{}, errors.New("higher-term adoption would regress term or promised_term")
 	}
@@ -175,10 +223,18 @@ func (p *StatePublisher) AdoptHigherTerm(term, promisedTerm uint64) (MemberState
 }
 
 func (p *StatePublisher) publish(next MemberState) error {
+	if p.closed || p.authorityFault != nil {
+		return errors.Join(ErrMemberAuthority, p.authorityFault)
+	}
 	if !sameMemberIdentity(p.state, next) {
 		return errors.New("member-state progress publication cannot change identity, role, term or membership")
 	}
-	if err := WriteState(p.path, next, p.key[:]); err != nil {
+	// Progress or a role promise may invalidate a long read job immediately.
+	// Fencing is never rejected merely because a Seal candidate is being built.
+	if p.authorityCancel != nil && (p.authorityLedgerCut == nil || !samePrimaryDurableReadCut(*p.authorityLedgerCut, next)) {
+		p.authorityCancel()
+	}
+	if err := p.writeStateLocked(next); err != nil {
 		return err
 	}
 	p.state = next
@@ -186,6 +242,9 @@ func (p *StatePublisher) publish(next MemberState) error {
 }
 
 func (p *StatePublisher) publishTransition(next MemberState) error {
+	if p.closed || p.authorityFault != nil {
+		return errors.Join(ErrMemberAuthority, p.authorityFault)
+	}
 	if p.state.Version != next.Version || p.state.ClusterID != next.ClusterID || p.state.Incarnation != next.Incarnation ||
 		p.state.NodeID != next.NodeID || !slices.Equal(p.state.Peers, next.Peers) {
 		return errors.New("member-state transition cannot change identity or membership")
@@ -195,7 +254,12 @@ func (p *StatePublisher) publishTransition(next MemberState) error {
 		next.Projection != p.state.Projection {
 		return errors.New("member-state transition cannot change progress")
 	}
-	if err := WriteState(p.path, next, p.key[:]); err != nil {
+	// Progress or a role promise may invalidate a long read job immediately.
+	// Fencing is never rejected merely because a Seal candidate is being built.
+	if p.authorityCancel != nil {
+		p.authorityCancel()
+	}
+	if err := p.writeStateLocked(next); err != nil {
 		return err
 	}
 	p.state = next

@@ -47,23 +47,25 @@ type ReplicaReceiverOptions struct {
 }
 
 type ReplicaReceiver struct {
-	mu             sync.Mutex
-	clusterID      string
-	incarnation    string
-	nodeID         string
-	primaryNodeID  string
-	term           uint64
-	promisedTerm   uint64
-	durableIndex   uint64
-	confirmedIndex uint64
-	appliedIndex   uint64
-	projection     ProjectionState
-	anchorSeen     bool
-	storeCursors   map[Store]StoreCursor
-	journal        *OrderingJournal
-	sink           DurableFrameSink
-	persistState   ReplicaStateWriter
-	poisoned       error
+	mu                sync.Mutex
+	clusterID         string
+	incarnation       string
+	nodeID            string
+	primaryNodeID     string
+	term              uint64
+	promisedTerm      uint64
+	durableIndex      uint64
+	confirmedIndex    uint64
+	appliedIndex      uint64
+	projection        ProjectionState
+	anchorSeen        bool
+	storeCursors      map[Store]StoreCursor
+	journal           *OrderingJournal
+	sink              DurableFrameSink
+	startupSink       *replicaStartupNativeSink
+	persistState      ReplicaStateWriter
+	poisoned          error
+	physicalAdmission func(Frame) error
 }
 
 func NewReplicaReceiver(clusterID, incarnation, nodeID, primaryNodeID string, term, promisedTerm, confirmedIndex, appliedIndex uint64, journal *OrderingJournal, sink DurableFrameSink, receiverOptions ...ReplicaReceiverOptions) (*ReplicaReceiver, error) {
@@ -179,6 +181,9 @@ func (r *ReplicaReceiver) AdoptTerm(term uint64, primaryNodeID string, persist f
 func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.startupSink != nil && r.startupSink.native == nil {
+		return Acknowledgement{}, ErrMemberAuthority
+	}
 	if r.poisoned != nil {
 		return Acknowledgement{}, fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
 	}
@@ -254,21 +259,67 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 			return Acknowledgement{}, errors.New("ledger roll does not match the Replica ledger cursor")
 		}
 	}
-	if err := r.sink.Persist(frame); err != nil {
-		r.poisoned = err
-		return Acknowledgement{}, fmt.Errorf("persist replicated frame: %w", err)
+	if frame.Kind == KindMetadataBaseline {
+		b, err := DecodeMetadataBaselineMetadata(frame.Metadata)
+		if err != nil {
+			return Acknowledgement{}, err
+		}
+		if r.storeCursors[StoreMetadata] != (StoreCursor{Generation: b.PreviousEpoch, Sequence: b.PreviousSequence}) || frame.ConfirmedIndex != r.durableIndex {
+			return Acknowledgement{}, errors.New("Metadata baseline does not continue fully confirmed old Replica cursor")
+		}
+		owner, ok := r.sink.(interface {
+			ValidateMetadataBaselineOrdering(*OrderingJournal, Frame) error
+		})
+		if !ok {
+			return Acknowledgement{}, errors.New("Metadata baseline lacks qualified real sink")
+		}
+		if err := owner.ValidateMetadataBaselineOrdering(r.journal, frame); err != nil {
+			return Acknowledgement{}, err
+		}
+	}
+	// This installed policy only adds a pre-byte refusal. All original identity,
+	// term, cursor, sink authentication and receipt/Ordering permissions remain.
+	if r.physicalAdmission != nil {
+		if err := r.physicalAdmission(frame); err != nil {
+			return Acknowledgement{}, err
+		}
+	}
+	physical, reserveErr := r.journal.ReservePhysicalAppend(r.term)
+	if reserveErr != nil {
+		return Acknowledgement{}, reserveErr
 	}
 	record := OrderingRecord{
 		Kind: frame.Kind, Store: frame.Store, Index: frame.Index, Term: frame.Term,
 		ConfirmedIndex: frame.ConfirmedIndex, Metadata: append([]byte(nil), frame.Metadata...),
-		StoreGeneration:    frame.StoreGeneration,
-		StoreSequenceFirst: frame.StoreSequenceFirst, StoreSequenceLast: frame.StoreSequenceLast,
-		FrameDigest: digest,
+		StoreGeneration: frame.StoreGeneration, StoreSequenceFirst: frame.StoreSequenceFirst,
+		StoreSequenceLast: frame.StoreSequenceLast, FrameDigest: digest,
 	}
-	persistedRecord, err := r.journal.Append(record)
+	if err := r.persistReceivedIntent(record, physical); err != nil {
+		if physical != nil {
+			err = errors.Join(err, physical.Retain(err))
+		}
+		r.poisoned = err
+		return Acknowledgement{}, fmt.Errorf("persist original Replica accepted receipt: %w", err)
+	}
+	if err := r.sink.Persist(frame); err != nil {
+		if physical != nil {
+			err = errors.Join(err, physical.Retain(err))
+		}
+		r.poisoned = err
+		return Acknowledgement{}, fmt.Errorf("persist replicated frame: %w", err)
+	}
+	persistedRecord, err := r.journal.AppendWithPhysicalReservation(record, physical)
 	if err != nil {
 		r.poisoned = err
 		return Acknowledgement{}, fmt.Errorf("persist replicated ordering record: %w", err)
+	}
+	if hook, ok := r.sink.(interface {
+		OrderingCommitted(*OrderingJournal, OrderingRecord) error
+	}); ok {
+		if err := hook.OrderingCommitted(r.journal, persistedRecord); err != nil {
+			r.poisoned = err
+			return Acknowledgement{}, fmt.Errorf("activate durably ordered source: %w", err)
+		}
 	}
 	// Primary local durability plus this Replica's sink and ordering fsync is a
 	// quorum in the supported two- and three-member groups. Confirmation is a
@@ -289,6 +340,10 @@ func (r *ReplicaReceiver) Receive(encoded []byte) (Acknowledgement, error) {
 		roll, _ := DecodeLedgerRollMetadata(frame.Metadata)
 		r.storeCursors[StoreLedger] = StoreCursor{Generation: roll.Generation + 1, Sequence: roll.LastSequence}
 	}
+	if frame.Kind == KindMetadataBaseline {
+		b, _ := DecodeMetadataBaselineMetadata(frame.Metadata)
+		r.storeCursors[StoreMetadata] = StoreCursor{Generation: b.Epoch}
+	}
 	return r.acknowledgement(), nil
 }
 
@@ -305,6 +360,10 @@ func (r *ReplicaReceiver) AdvanceApplied(index uint64) error {
 func (r *ReplicaReceiver) AdvanceAppliedWithProjection(index uint64, projection ProjectionState) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.advanceAppliedWithProjectionLocked(index, projection)
+}
+
+func (r *ReplicaReceiver) advanceAppliedWithProjectionLocked(index uint64, projection ProjectionState) error {
 	if r.poisoned != nil {
 		return fmt.Errorf("replica receiver requires restart after uncertain persistence: %w", r.poisoned)
 	}

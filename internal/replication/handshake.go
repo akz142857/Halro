@@ -67,6 +67,9 @@ type Hello struct {
 	Schema       VersionRange
 	Ledger       VersionRange
 	Metadata     VersionRange
+	// Present only in explicit maintenance Hello v2. The mutual cluster-key
+	// proof covers this independently qualified carrier digest before callbacks.
+	MetadataBaselineAuthority [32]byte
 }
 
 func (h Hello) Validate() error {
@@ -99,8 +102,11 @@ func (h Hello) Validate() error {
 			return err
 		}
 	}
-	if h.Protocol.Current != ProtocolVersion {
-		return fmt.Errorf("hello protocol current version must be %d", ProtocolVersion)
+	if h.Protocol.Current != ProtocolVersion && h.Protocol.Current != MetadataBaselineProtocolVersion && h.Protocol.Current != PhysicalCreditProtocolVersion {
+		return fmt.Errorf("unsupported hello protocol current version %d", h.Protocol.Current)
+	}
+	if (h.Protocol.Current >= MetadataBaselineProtocolVersion) != (h.MetadataBaselineAuthority != ([32]byte{})) {
+		return errors.New("hello maintenance protocol requires its independent carrier digest")
 	}
 	return nil
 }
@@ -135,12 +141,18 @@ func (h Hello) MarshalBinary() ([]byte, error) {
 	if err := h.Validate(); err != nil {
 		return nil, err
 	}
-	bodyLength := helloFixedBytes + len(h.ClusterID) + len(h.Incarnation) + len(h.NodeID)
+	fixed := helloFixedBytes
+	version := HandshakeVersion
+	if h.Protocol.Current == MetadataBaselineProtocolVersion || h.Protocol.Current == PhysicalCreditProtocolVersion {
+		fixed += 32
+		version = 2
+	}
+	bodyLength := fixed + len(h.ClusterID) + len(h.Incarnation) + len(h.NodeID)
 	encoded := make([]byte, 4+bodyLength)
 	binary.BigEndian.PutUint32(encoded[:4], uint32(bodyLength))
 	body := encoded[4:]
 	copy(body[:8], helloMagic[:])
-	binary.BigEndian.PutUint16(body[8:10], HandshakeVersion)
+	binary.BigEndian.PutUint16(body[8:10], version)
 	binary.BigEndian.PutUint16(body[10:12], roleCode(h.Role))
 	// body[12:14] is reserved.
 	binary.BigEndian.PutUint16(body[14:16], uint16(len(h.ClusterID)))
@@ -158,9 +170,12 @@ func (h Hello) MarshalBinary() ([]byte, error) {
 		binary.BigEndian.PutUint16(body[offset+4:offset+6], versionRange.Maximum)
 		offset += 6
 	}
-	copy(body[helloFixedBytes:], h.ClusterID)
-	copy(body[helloFixedBytes+len(h.ClusterID):], h.Incarnation)
-	copy(body[helloFixedBytes+len(h.ClusterID)+len(h.Incarnation):], h.NodeID)
+	if version == 2 {
+		copy(body[helloFixedBytes:fixed], h.MetadataBaselineAuthority[:])
+	}
+	copy(body[fixed:], h.ClusterID)
+	copy(body[fixed+len(h.ClusterID):], h.Incarnation)
+	copy(body[fixed+len(h.ClusterID)+len(h.Incarnation):], h.NodeID)
 	return encoded, nil
 }
 
@@ -176,8 +191,19 @@ func UnmarshalHello(encoded []byte) (Hello, error) {
 	if !bytes.Equal(body[:8], helloMagic[:]) {
 		return Hello{}, errors.New("hello magic is invalid")
 	}
-	if version := binary.BigEndian.Uint16(body[8:10]); version != HandshakeVersion {
+	version := binary.BigEndian.Uint16(body[8:10])
+	if version != HandshakeVersion && version != 2 {
 		return Hello{}, fmt.Errorf("unsupported hello version %d", version)
+	}
+	fixed := helloFixedBytes
+	if version == 2 {
+		if current := binary.BigEndian.Uint16(body[90:92]); current != MetadataBaselineProtocolVersion && current != PhysicalCreditProtocolVersion {
+			return Hello{}, errors.New("unsupported maintenance hello without wire2 permission")
+		}
+		fixed += 32
+		if len(body) < fixed {
+			return Hello{}, errors.New("maintenance hello is truncated")
+		}
 	}
 	if binary.BigEndian.Uint16(body[12:14]) != 0 {
 		return Hello{}, errors.New("hello reserved field is non-zero")
@@ -186,7 +212,7 @@ func UnmarshalHello(encoded []byte) (Hello, error) {
 	incarnationLength := int(binary.BigEndian.Uint16(body[16:18]))
 	nodeLength := int(binary.BigEndian.Uint16(body[18:20]))
 	if clusterLength == 0 || clusterLength > MaxIdentityBytes || incarnationLength == 0 || incarnationLength > MaxIdentityBytes ||
-		nodeLength == 0 || nodeLength > MaxIdentityBytes || helloFixedBytes+clusterLength+incarnationLength+nodeLength != len(body) {
+		nodeLength == 0 || nodeLength > MaxIdentityBytes || fixed+clusterLength+incarnationLength+nodeLength != len(body) {
 		return Hello{}, errors.New("hello identity lengths are invalid")
 	}
 	hello := Hello{
@@ -205,7 +231,13 @@ func UnmarshalHello(encoded []byte) (Hello, error) {
 		versionRange.Maximum = binary.BigEndian.Uint16(body[offset+4 : offset+6])
 		offset += 6
 	}
-	offset = helloFixedBytes
+	if version == 2 {
+		copy(hello.MetadataBaselineAuthority[:], body[helloFixedBytes:fixed])
+	}
+	if (version == 2) != (hello.Protocol.Current == MetadataBaselineProtocolVersion || hello.Protocol.Current == PhysicalCreditProtocolVersion) {
+		return Hello{}, errors.New("hello version does not match protocol permission")
+	}
+	offset = fixed
 	hello.ClusterID = string(body[offset : offset+clusterLength])
 	offset += clusterLength
 	hello.Incarnation = string(body[offset : offset+incarnationLength])
@@ -258,6 +290,9 @@ func validatePeerHelloCompatibility(local, peer Hello, expectedPeerNode string) 
 		if !rangesIntersect(pair[0], pair[1]) || !pair[0].accepts(pair[1].Current) || !pair[1].accepts(pair[0].Current) {
 			return fmt.Errorf("peer %s versions are incompatible", name)
 		}
+	}
+	if local.MetadataBaselineAuthority != peer.MetadataBaselineAuthority {
+		return errors.New("peer maintenance carrier authority differs")
 	}
 	return nil
 }

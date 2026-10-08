@@ -1,18 +1,23 @@
 package replication
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/ownedfile"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 )
 
 const orderingRecordBytes = 4 + orderingRecordBodyBytes
+
+var ErrOrderingJournalDiskLimit = errors.New("ordering journal disk limit reached")
 
 type OrderingDurability interface {
 	io.Writer
@@ -20,6 +25,8 @@ type OrderingDurability interface {
 }
 
 type OrderingJournalOptions struct {
+	// MaxDiskBytes caps the logical authenticated file size. Zero disables it.
+	MaxDiskBytes int64
 	// WrapDurability is a test/integration seam for deterministic short-write,
 	// ENOSPC, EIO and slow-fsync injection. Production leaves it nil.
 	WrapDurability func(*os.File) OrderingDurability
@@ -31,18 +38,34 @@ type OrderingJournalOptions struct {
 // OrderingJournal owns the durable global order. Append returns only after the
 // record bytes have been written and fsynced.
 type OrderingJournal struct {
-	mu         sync.Mutex
-	file       *os.File
-	durability OrderingDurability
-	key        [sha256.Size]byte
-	header     OrderingHeader
-	dataOffset int64
-	nextOffset int64
-	lastIndex  uint64
-	lastTerm   uint64
-	head       [sha256.Size]byte
-	closed     bool
-	poisoned   error
+	received          *PortableReceivedPublication
+	physical          *PhysicalPublication
+	ledgerReadMu      sync.Mutex
+	ledgerReadClosing bool
+	ledgerRead        *orderingLedgerReadOwner
+	closeMu           sync.Mutex
+	freezeWG          sync.WaitGroup
+	freezeCancel      context.CancelFunc
+	freezeDebt        resourcebudget.Permit
+	closing           bool
+	mu                sync.Mutex
+	file              *os.File
+	durability        OrderingDurability
+	key               [sha256.Size]byte
+	header            OrderingHeader
+	dataOffset        int64
+	nextOffset        int64
+	lastIndex         uint64
+	lastTerm          uint64
+	head              [sha256.Size]byte
+	closed            bool
+	closeErr          error
+	poisoned          error
+	tailCursors       [4]StoreCursor
+	tailCursorErr     error
+	maxDiskBytes      int64
+	invalidity        chan struct{}
+	invalidated       bool
 }
 
 // OpenOrderingJournal creates or authenticates an ordering journal. The
@@ -55,12 +78,19 @@ func OpenOrderingJournal(path string, key []byte, header OrderingHeader, expecte
 
 // ReadOrderingHeader authenticates the index-zero store baselines from an
 // existing journal without deriving them again from current native tails.
-func ReadOrderingHeader(path string, key []byte) (OrderingHeader, error) {
+func ReadOrderingHeader(path string, key []byte) (result OrderingHeader, resultErr error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return OrderingHeader{}, fmt.Errorf("open existing ordering journal header: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil {
+			resultErr = errors.Join(resultErr, ownedfile.ErrRetirement, err)
+		}
+		if resultErr != nil {
+			result = OrderingHeader{}
+		}
+	}()
 	encoded, err := ReadLengthDelimited(file, orderingHeaderFixedBytes+2*MaxIdentityBytes)
 	if err != nil {
 		return OrderingHeader{}, fmt.Errorf("read existing ordering journal header: %w", err)
@@ -76,8 +106,15 @@ func ReadOrderingHeader(path string, key []byte) (OrderingHeader, error) {
 // and reuses the authenticated on-disk baseline before the normal full scan
 // verifies expectedIndex and expectedHead against the record MAC chain.
 func OpenExistingOrderingJournal(path string, key []byte, clusterID, incarnation string, expectedIndex uint64, expectedHead [sha256.Size]byte) (*OrderingJournal, error) {
+	return OpenExistingOrderingJournalWithOptions(path, key, clusterID, incarnation, expectedIndex, expectedHead, OrderingJournalOptions{})
+}
+
+func OpenExistingOrderingJournalWithOptions(path string, key []byte, clusterID, incarnation string, expectedIndex uint64, expectedHead [sha256.Size]byte, options OrderingJournalOptions) (*OrderingJournal, error) {
 	if len(key) != sha256.Size {
 		return nil, errors.New("ordering journal key must be 32 bytes")
+	}
+	if options.MaxDiskBytes < 0 {
+		return nil, errors.New("ordering journal disk limit cannot be negative")
 	}
 	if expectedIndex == 0 && expectedHead != ([sha256.Size]byte{}) {
 		return nil, errors.New("ordering journal expected head requires a positive index")
@@ -90,8 +127,16 @@ func OpenExistingOrderingJournal(path string, key []byte, clusterID, incarnation
 		return nil, fmt.Errorf("open existing ordering journal: %w", err)
 	}
 	closeOnError := func(openErr error) (*OrderingJournal, error) {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			openErr = errors.Join(openErr, ownedfile.ErrRetirement, closeErr)
+		}
 		return nil, openErr
+	}
+	if options.MaxDiskBytes > 0 {
+		info, statErr := file.Stat()
+		if statErr != nil || info.Size() > options.MaxDiskBytes {
+			return closeOnError(errors.Join(ErrOrderingJournalDiskLimit, statErr))
+		}
 	}
 	encoded, err := ReadLengthDelimited(file, orderingHeaderFixedBytes+2*MaxIdentityBytes)
 	if err != nil {
@@ -107,15 +152,27 @@ func OpenExistingOrderingJournal(path string, key []byte, clusterID, incarnation
 	// A restart path never creates or replaces the file. Keep this same file
 	// descriptor through header authentication and the complete record scan so
 	// an unlink/replace race cannot fall through to the creation path.
-	if err := file.Sync(); err != nil {
+	var durability OrderingDurability = file
+	if options.WrapDurability != nil {
+		durability = options.WrapDurability(file)
+		if durability == nil {
+			return closeOnError(errors.New("ordering journal durability wrapper returned nil"))
+		}
+	}
+	if err := durability.Sync(); err != nil {
 		return closeOnError(fmt.Errorf("sync existing ordering journal: %w", err))
 	}
-	if err := durable.SyncDirectory(filepath.Dir(path)); err != nil {
+	syncDirectory := options.SyncDirectory
+	if syncDirectory == nil {
+		syncDirectory = durable.SyncDirectory
+	}
+	if err := syncDirectory(filepath.Dir(path)); err != nil {
 		return closeOnError(fmt.Errorf("sync ordering journal directory: %w", err))
 	}
 	journal := &OrderingJournal{
-		file: file, durability: file, header: header,
+		file: file, durability: durability, header: header, maxDiskBytes: options.MaxDiskBytes,
 		dataOffset: int64(len(encoded)), nextOffset: int64(len(encoded)),
+		invalidity: make(chan struct{}),
 	}
 	copy(journal.key[:], key)
 	if err := journal.recover(expectedIndex, expectedHead); err != nil {
@@ -134,9 +191,15 @@ func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHead
 	if expectedIndex > 0 && expectedHead == ([sha256.Size]byte{}) {
 		return nil, errors.New("ordering journal expected index requires a head MAC")
 	}
+	if options.MaxDiskBytes < 0 {
+		return nil, errors.New("ordering journal disk limit cannot be negative")
+	}
 	headerBytes, err := header.MarshalBinary(key)
 	if err != nil {
 		return nil, err
+	}
+	if options.MaxDiskBytes > 0 && int64(len(headerBytes)) > options.MaxDiskBytes {
+		return nil, fmt.Errorf("%w: ordering journal header exceeds configured ceiling", ErrOrderingJournalDiskLimit)
 	}
 	if err := ensureDurableDirectory(filepath.Dir(path)); err != nil {
 		return nil, fmt.Errorf("create ordering journal directory: %w", err)
@@ -162,8 +225,16 @@ func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHead
 		}
 	}
 	closeOnError := func(openErr error) (*OrderingJournal, error) {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			openErr = errors.Join(openErr, ownedfile.ErrRetirement, closeErr)
+		}
 		return nil, openErr
+	}
+	if options.MaxDiskBytes > 0 && !created {
+		info, statErr := file.Stat()
+		if statErr != nil || info.Size() > options.MaxDiskBytes {
+			return closeOnError(errors.Join(ErrOrderingJournalDiskLimit, statErr))
+		}
 	}
 	var durability OrderingDurability = file
 	if options.WrapDurability != nil {
@@ -210,7 +281,8 @@ func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHead
 	}
 
 	journal := &OrderingJournal{
-		file: file, durability: durability, header: header, dataOffset: int64(len(headerBytes)), nextOffset: int64(len(headerBytes)),
+		file: file, durability: durability, header: header, dataOffset: int64(len(headerBytes)), nextOffset: int64(len(headerBytes)), maxDiskBytes: options.MaxDiskBytes,
+		invalidity: make(chan struct{}),
 	}
 	copy(journal.key[:], key)
 	if err := journal.recover(expectedIndex, expectedHead); err != nil {
@@ -220,6 +292,8 @@ func OpenOrderingJournalWithOptions(path string, key []byte, header OrderingHead
 }
 
 func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Size]byte) error {
+	j.tailCursors = j.header.StoreCursors
+	j.tailCursorErr = nil
 	if _, err := j.file.Seek(j.nextOffset, io.SeekStart); err != nil {
 		return err
 	}
@@ -263,6 +337,12 @@ func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Siz
 		if record.Term == j.lastTerm && record.Kind == KindLeadershipEstablished {
 			return errors.New("ordering journal term contains a second leadership anchor")
 		}
+		if j.tailCursorErr == nil {
+			j.tailCursors, j.tailCursorErr = advanceOrderingCursors(j.tailCursors, record)
+			if j.tailCursorErr != nil {
+				j.invalidateLocked()
+			}
+		}
 		j.lastIndex, j.lastTerm, j.head = record.Index, record.Term, record.MAC
 		j.nextOffset += int64(len(encoded))
 		if record.Index == expectedIndex {
@@ -280,9 +360,18 @@ func (j *OrderingJournal) recover(expectedIndex uint64, expectedHead [sha256.Siz
 }
 
 func (j *OrderingJournal) Append(record OrderingRecord) (OrderingRecord, error) {
+	return j.AppendWithPhysicalReservation(record, nil)
+}
+
+// AppendWithPhysicalReservation consumes only a reservation created by this
+// actual journal. It changes neither record authentication nor confirmation.
+func (j *OrderingJournal) AppendWithPhysicalReservation(record OrderingRecord, reservation *OrderingPhysicalReservation) (OrderingRecord, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.closed || j.file == nil {
+	if j.freezeCancel != nil {
+		return OrderingRecord{}, ErrOrderingFrozen
+	}
+	if j.closed || j.closing || j.file == nil {
 		return OrderingRecord{}, errors.New("ordering journal is closed")
 	}
 	if j.poisoned != nil {
@@ -305,17 +394,39 @@ func (j *OrderingJournal) Append(record OrderingRecord) (OrderingRecord, error) 
 	if err != nil {
 		return OrderingRecord{}, err
 	}
+	if j.maxDiskBytes > 0 && (j.nextOffset > j.maxDiskBytes || int64(len(encoded)) > j.maxDiskBytes-j.nextOffset) {
+		return OrderingRecord{}, ErrOrderingJournalDiskLimit
+	}
+	if err := j.checkPhysicalAppendLocked(record, int64(len(encoded)), reservation); err != nil {
+		return OrderingRecord{}, err
+	}
 	if err := writeAll(j.durability, encoded); err != nil {
 		j.poisoned = err
+		j.invalidateLocked()
 		return OrderingRecord{}, fmt.Errorf("append ordering record: %w", err)
 	}
 	if err := j.durability.Sync(); err != nil {
 		j.poisoned = err
+		j.invalidateLocked()
 		return OrderingRecord{}, fmt.Errorf("sync ordering record: %w", err)
 	}
 	record.MAC = head
+	if j.tailCursorErr == nil {
+		j.tailCursors, j.tailCursorErr = advanceOrderingCursors(j.tailCursors, record)
+		if j.tailCursorErr != nil {
+			j.invalidateLocked()
+		}
+	}
+	if record.Term > j.lastTerm && !j.invalidated {
+		close(j.invalidity)
+		j.invalidity = make(chan struct{})
+	}
 	j.lastIndex, j.lastTerm, j.head = record.Index, record.Term, head
 	j.nextOffset += int64(len(encoded))
+	if reservation != nil {
+		reservation.used = true
+		j.physical.reserved--
+	}
 	return record, nil
 }
 
@@ -323,6 +434,12 @@ func (j *OrderingJournal) Head() (index, term uint64, mac [sha256.Size]byte) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.lastIndex, j.lastTerm, j.head
+}
+
+func (j *OrderingJournal) appendUncertainty() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.poisoned
 }
 
 // BaselineCursors returns the authenticated per-store positions that existed
@@ -355,38 +472,36 @@ func (j *OrderingJournal) StoreCursors() ([4]StoreCursor, error) {
 // global index. Replica startup uses its persisted applied index rather than
 // the physical tail so a durable-but-unconfirmed suffix is never projected.
 func (j *OrderingJournal) StoreCursorsThrough(through uint64) ([4]StoreCursor, error) {
+	return j.StoreCursorsThroughContext(context.Background(), through)
+}
+
+// StoreCursorsThroughContext bounds cancellation across the complete ordering
+// prefix, before native projection construction has started. It retains only
+// four cursors and leaves the journal/member state untouched on cancellation.
+func (j *OrderingJournal) StoreCursorsThroughContext(ctx context.Context, through uint64) ([4]StoreCursor, error) {
+	if err := ctx.Err(); err != nil {
+		return [4]StoreCursor{}, err
+	}
 	cursors := j.BaselineCursors()
 	head, _, _ := j.Head()
 	if through > head {
 		return [4]StoreCursor{}, errors.New("ordering cursor index is beyond the journal head")
 	}
 	for index := uint64(1); index <= through; index++ {
+		if err := ctx.Err(); err != nil {
+			return [4]StoreCursor{}, err
+		}
 		record, err := j.Record(index)
 		if err != nil {
 			return [4]StoreCursor{}, err
 		}
-		switch record.Kind {
-		case KindData:
-			cursor := cursors[record.Store-StoreLedger]
-			if cursor.Generation == 0 {
-				if record.StoreSequenceFirst != 1 {
-					return [4]StoreCursor{}, fmt.Errorf("ordering store %d begins at sequence %d", record.Store, record.StoreSequenceFirst)
-				}
-			} else if cursor.Generation != record.StoreGeneration || cursor.Sequence+1 != record.StoreSequenceFirst {
-				return [4]StoreCursor{}, fmt.Errorf("ordering store %d range does not continue its durable cursor", record.Store)
-			}
-			cursors[record.Store-StoreLedger] = StoreCursor{Generation: record.StoreGeneration, Sequence: record.StoreSequenceLast}
-		case KindLedgerRoll:
-			roll, err := DecodeLedgerRollMetadata(record.Metadata)
-			if err != nil {
-				return [4]StoreCursor{}, err
-			}
-			cursor := cursors[StoreLedger-StoreLedger]
-			if cursor.Generation != roll.Generation || cursor.Sequence != roll.LastSequence {
-				return [4]StoreCursor{}, errors.New("ordering Ledger Roll does not continue its durable cursor")
-			}
-			cursors[StoreLedger-StoreLedger] = StoreCursor{Generation: roll.Generation + 1, Sequence: roll.LastSequence}
+		cursors, err = advanceOrderingCursors(cursors, record)
+		if err != nil {
+			return [4]StoreCursor{}, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return [4]StoreCursor{}, err
 	}
 	return cursors, nil
 }
@@ -397,7 +512,11 @@ func (j *OrderingJournal) StoreCursorsThrough(through uint64) ([4]StoreCursor, e
 func (j *OrderingJournal) Record(index uint64) (OrderingRecord, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.closed || j.file == nil {
+	return j.recordLocked(index)
+}
+
+func (j *OrderingJournal) recordLocked(index uint64) (OrderingRecord, error) {
+	if j.closed || j.closing || j.file == nil {
 		return OrderingRecord{}, errors.New("ordering journal is closed")
 	}
 	if index == 0 || index > j.lastIndex {
@@ -428,20 +547,62 @@ func (j *OrderingJournal) Record(index uint64) (OrderingRecord, error) {
 }
 
 func (j *OrderingJournal) Close() error {
+	j.closeMu.Lock()
+	defer j.closeMu.Unlock()
+	j.ledgerReadMu.Lock()
+	j.ledgerReadClosing = true
+	reader := j.ledgerRead
+	if reader != nil {
+		reader.cancel()
+	}
+	j.ledgerReadMu.Unlock()
+	if reader != nil {
+		<-reader.done
+	}
+	j.mu.Lock()
+	if j.closed {
+		err := j.closeErr
+		j.mu.Unlock()
+		return err
+	}
+	j.closing = true
+	j.invalidateLocked()
+	if j.freezeCancel != nil {
+		j.freezeCancel()
+	}
+	j.mu.Unlock()
+	j.freezeWG.Wait()
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.closed {
-		return nil
-	}
 	j.closed = true
-	clear(j.key[:])
-	if j.file == nil {
-		return nil
+	if j.file != nil {
+		if err := ownedfile.CloseFile(j.file); err != nil {
+			j.closeErr = err
+			return err
+		}
+		j.file = nil
 	}
-	err := j.file.Close()
-	j.file = nil
 	j.durability = nil
-	return err
+	if j.physical != nil {
+		if err := j.physical.closeOrderingLocked(); err != nil {
+			j.closeErr = err
+			return err
+		}
+	}
+	clear(j.key[:])
+	return nil
+}
+
+// Terminal invalidity wakes prefix waiters without calling back into the
+// coordinator while holding the journal lock. The channel only rotates after
+// a durable higher-term anchor; terminal failures close it permanently.
+func (j *OrderingJournal) invalidateLocked() {
+	if !j.invalidated {
+		j.invalidated = true
+		if j.invalidity != nil {
+			close(j.invalidity)
+		}
+	}
 }
 
 func writeAll(writer io.Writer, value []byte) error {

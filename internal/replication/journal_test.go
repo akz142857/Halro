@@ -1,6 +1,7 @@
 package replication
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -94,6 +95,50 @@ func TestOrderingJournalCreatesAppendsAndRecoversAuthenticatedHead(t *testing.T)
 	}
 	if third.PreviousMAC != second.MAC {
 		t.Fatal("reopened journal did not continue the authenticated chain")
+	}
+}
+
+func TestOrderingJournalDiskCeilingRejectsWholeRecordBeforeWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ordering.journal")
+	key := []byte("0123456789abcdef0123456789abcdef")
+	header := OrderingHeader{ClusterID: "bounded", Incarnation: "inc_01"}
+	headerBytes, err := header.MarshalBinary(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ceiling := int64(len(headerBytes) + orderingRecordBytes)
+	journal, err := OpenOrderingJournalWithOptions(path, key, header, 0, [sha256.Size]byte{}, OrderingJournalOptions{MaxDiskBytes: ceiling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := journal.Append(testLeadershipRecord(1, 1, "one"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Size() != ceiling {
+		t.Fatalf("file size=%v, stat error=%v, want exact ceiling %d", info, err, ceiling)
+	}
+	if _, err := journal.Append(testOrderingRecord(2, 1, "two")); !errors.Is(err, ErrOrderingJournalDiskLimit) {
+		t.Fatalf("over-ceiling append error=%v", err)
+	}
+	index, term, head := journal.Head()
+	if index != 1 || term != 1 || head != first.MAC {
+		t.Fatalf("rejected append changed head=(%d,%d,%x)", index, term, head)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenExistingOrderingJournalWithOptions(path, key, header.ClusterID, header.Incarnation, 1, first.MAC, OrderingJournalOptions{MaxDiskBytes: ceiling - 1}); !errors.Is(err, ErrOrderingJournalDiskLimit) {
+		t.Fatalf("oversized existing journal open error=%v", err)
+	}
+	reopened, err := OpenExistingOrderingJournalWithOptions(path, key, header.ClusterID, header.Incarnation, 1, first.MAC, OrderingJournalOptions{MaxDiskBytes: ceiling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if index, _, _ := reopened.Head(); index != 1 {
+		t.Fatalf("reopened head index=%d, want 1", index)
 	}
 }
 
@@ -395,6 +440,56 @@ func TestOrderingJournalReconstructsStoreCursorsAtAppliedPrefix(t *testing.T) {
 	}
 	if _, err := journal.StoreCursorsThrough(4); err == nil {
 		t.Fatal("cursor reconstruction accepted an index beyond the head")
+	}
+}
+
+// The caller cancellation is deterministically delivered at a checkpoint
+// during scanning, without scheduling or machine-speed assumptions.
+type cursorCancelContext struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (c *cursorCancelContext) Err() error {
+	c.checks++
+	if c.checks == 4 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestOrderingJournalCursorContextCancellationDiscardsPartialPosition(t *testing.T) {
+	journal, err := OpenOrderingJournal(filepath.Join(t.TempDir(), "ordering.journal"), []byte("0123456789abcdef0123456789abcdef"), OrderingHeader{ClusterID: "production-a", Incarnation: "inc_01"}, 0, [sha256.Size]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	for i := uint64(1); i <= 8; i++ {
+		record := OrderingRecord{Kind: KindLeadershipEstablished, Index: i, Term: 1, FrameDigest: sha256.Sum256([]byte{byte(i)})}
+		if i > 1 {
+			record.Kind, record.Store = KindData, StoreLedger
+			record.StoreGeneration, record.StoreSequenceFirst, record.StoreSequenceLast = 1, i-1, i-1
+		}
+		if _, err := journal.Append(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeIndex, beforeTerm, beforeMAC := journal.Head()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controlled := &cursorCancelContext{Context: ctx, cancel: cancel}
+	if cursors, err := journal.StoreCursorsThroughContext(controlled, 8); !errors.Is(err, context.Canceled) || cursors != ([4]StoreCursor{}) {
+		t.Fatal("partial cursor escaped canceled scan", cursors, err)
+	}
+	if cursors, err := journal.StoreCursorsThroughContext(ctx, 8); !errors.Is(err, context.Canceled) || cursors != ([4]StoreCursor{}) {
+		t.Fatal("pre-canceled scan proceeded", cursors, err)
+	}
+	if index, term, mac := journal.Head(); index != beforeIndex || term != beforeTerm || mac != beforeMAC {
+		t.Fatal("canceled scan changed authoritative ordering", index, term, mac)
+	}
+	if cursors, err := journal.StoreCursorsThroughContext(context.Background(), 8); err != nil || cursors[0] != (StoreCursor{Generation: 1, Sequence: 7}) {
+		t.Fatal(cursors, err)
 	}
 }
 

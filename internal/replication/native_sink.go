@@ -1,7 +1,6 @@
 package replication
 
 import (
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -19,17 +18,21 @@ import (
 // Each log validates its own MAC/chain before any byte is written and fsyncs
 // before returning, so ReplicaReceiver may safely emit the durable ACK next.
 type NativeSink struct {
-	ledger          *ledger.Log
-	audit           *audit.Log
-	governance      *governance.Log
-	metadata        *metadatajournal.Log
-	objectDir       string
-	objectSourceDir string
+	ledger           *ledger.Log
+	audit            *audit.Log
+	governance       *governance.Log
+	metadata         *metadatajournal.Log
+	metadataBaseline *nativeMetadataBaselineLanding
+	objectDir        string
+	objectSourceDir  string
 }
 
 func NewNativeSink(ledgerLog *ledger.Log, auditLog *audit.Log, governanceLog *governance.Log, metadataLog *metadatajournal.Log, objectDir ...string) (*NativeSink, error) {
 	if ledgerLog == nil || auditLog == nil || governanceLog == nil || metadataLog == nil {
 		return nil, errors.New("native replication sink requires all four replica logs")
+	}
+	if _, err := metadataLog.ReplicationVersion(); err != nil {
+		return nil, fmt.Errorf("native metadata sink capability: %w", err)
 	}
 	if len(objectDir) > 2 {
 		return nil, errors.New("native replication sink accepts a live and source provider-object directory")
@@ -64,6 +67,8 @@ func (s *NativeSink) Persist(frame Frame) error {
 	switch frame.Kind {
 	case KindLeadershipEstablished, KindSchemaBoundary:
 		return nil
+	case KindMetadataBaseline:
+		return s.persistMetadataBaseline(frame)
 	case KindProviderObject:
 		return s.persistProviderObject(frame)
 	case KindLedgerRoll:
@@ -100,16 +105,27 @@ func (s *NativeSink) persistProviderObject(frame Frame) error {
 		return err
 	}
 	finalPath := filepath.Join(s.objectDir, metadata.Name)
-	if existing, readErr := os.ReadFile(finalPath); readErr == nil {
-		if uint64(len(existing)) != metadata.TotalLength || sha256.Sum256(existing) != metadata.Digest {
-			return errors.New("replicated provider object already exists with different bytes")
+	if existing, openErr := os.Open(finalPath); openErr == nil {
+		closeWith := func(cause error) error { return errors.Join(cause, existing.Close()) }
+		if err := verifyProviderObjectFile(existing, metadata.TotalLength, metadata.Digest); err != nil {
+			return closeWith(fmt.Errorf("replicated provider object already exists with different bytes: %w", err))
+		}
+		// Rename may have succeeded before a failed directory fsync. Existence
+		// alone cannot authorize an ACK; repeat the file and name barriers.
+		if err := existing.Sync(); err != nil {
+			return closeWith(err)
 		}
 		if s.objectSourceDir != "" {
-			return PersistProviderObjectSource(s.objectSourceDir, metadata.Name, existing)
+			if err := persistProviderObjectSource(s.objectSourceDir, metadata.Name, io.NewSectionReader(existing, 0, int64(metadata.TotalLength)), metadata.TotalLength, metadata.Digest); err != nil {
+				return closeWith(err)
+			}
 		}
-		return nil
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return readErr
+		if err := existing.Close(); err != nil {
+			return err
+		}
+		return syncProviderObjectLiveDirectory(s.objectDir)
+	} else if !errors.Is(openErr, os.ErrNotExist) {
+		return openErr
 	}
 	stagingPath := filepath.Join(s.objectDir, ".replicating-"+fmt.Sprintf("%x", metadata.Digest[:]))
 	flags := os.O_WRONLY | os.O_CREATE
@@ -165,23 +181,22 @@ func (s *NativeSink) persistProviderObject(frame Frame) error {
 	if err != nil {
 		return err
 	}
-	hash := sha256.New()
-	written, copyErr := io.Copy(hash, staged)
+	verifyErr := verifyProviderObjectFile(staged, metadata.TotalLength, metadata.Digest)
 	closeErr := staged.Close()
-	if copyErr != nil || closeErr != nil {
-		return errors.Join(copyErr, closeErr)
-	}
-	if uint64(written) != metadata.TotalLength || !equalBytes(hash.Sum(nil), metadata.Digest[:]) {
-		return errors.New("replicated provider-object digest does not match its receipt")
+	if verifyErr != nil || closeErr != nil {
+		return errors.Join(verifyErr, closeErr)
 	}
 	if err := os.Rename(stagingPath, finalPath); err != nil {
 		return err
 	}
-	if err := durable.SyncDirectory(s.objectDir); err != nil {
+	if err := syncProviderObjectLiveDirectory(s.objectDir); err != nil {
 		return err
 	}
 	return nil
 }
+
+// Separate live-name barrier so crash/retry tests can fault after rename.
+var syncProviderObjectLiveDirectory = durable.SyncDirectory
 
 func equalBytes(left, right []byte) bool {
 	if len(left) != len(right) {

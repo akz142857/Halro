@@ -10,12 +10,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/akz142857/Halro/internal/replicationlimits"
 )
 
 var ErrPeerSessionQueueFull = errors.New("replication peer session queue is full")
 var ErrPeerSessionClosed = errors.New("replication peer session is closed")
 
 type PeerSessionOptions struct {
+	QueueBudget             *PeerQueueBudget
 	HandshakeTimeout        time.Duration
 	ReadTimeout             time.Duration
 	WriteTimeout            time.Duration
@@ -36,10 +39,10 @@ func (o PeerSessionOptions) normalized() (PeerSessionOptions, error) {
 		o.ReadTimeout = 30 * time.Second
 	}
 	if o.QueueCapacity == 0 {
-		o.QueueCapacity = 64
+		o.QueueCapacity = replicationlimits.DefaultQueueCapacity
 	}
 	if o.MaxQueuedBytes == 0 {
-		o.MaxQueuedBytes = 64 << 20
+		o.MaxQueuedBytes = replicationlimits.DefaultMaxQueuedBytes
 	}
 	if o.MaxReadBytesPerSecond == 0 {
 		o.MaxReadBytesPerSecond = 64 << 20
@@ -53,9 +56,14 @@ func (o PeerSessionOptions) normalized() (PeerSessionOptions, error) {
 		o.MaxReadRecordsPerSecond < 1 || o.MaxReadRecordsPerSecond > 1_000_000 {
 		return PeerSessionOptions{}, errors.New("replication peer session timeouts or queue capacity are invalid")
 	}
+	if err := o.QueueBudget.validate(o); err != nil {
+		return PeerSessionOptions{}, err
+	}
 	return o, nil
 }
 
+// PeerRecordHandler borrows record.Encoded only until return. Retained data
+// requires a separate owner; the session envelope covers synchronous temporaries.
 type PeerRecordHandler func(context.Context, Hello, StreamRecord) error
 
 type outboundRecord struct {
@@ -85,6 +93,11 @@ type PeerSession struct {
 	closedSignal   chan struct{}
 	runMu          sync.Mutex
 	running        bool
+	writerActive   bool
+	readerActive   bool
+	callbackOwners int
+	socketClosed   bool
+	queueLease     *peerQueueLease
 }
 
 func DialPeerSession(ctx context.Context, raw net.Conn, tlsConfig *tls.Config, local Hello, key []byte, expectedNode, expectedPin string, nonces *NonceCache, options PeerSessionOptions) (*PeerSession, error) {
@@ -154,6 +167,11 @@ func newPeerSession(connection *tls.Conn, local, peer Hello, options PeerSession
 		_ = connection.Close()
 		return nil, err
 	}
+	lease, err := options.QueueBudget.acquire()
+	if err != nil {
+		_ = connection.Close()
+		return nil, err
+	}
 	var incoming, outgoing StreamDirection
 	data := true
 	switch {
@@ -165,7 +183,7 @@ func newPeerSession(connection *tls.Conn, local, peer Hello, options PeerSession
 		data = false
 	}
 	return &PeerSession{
-		conn: connection, local: local, peer: peer, incoming: incoming, outgoing: outgoing, data: data,
+		conn: connection, local: local, peer: peer, incoming: incoming, outgoing: outgoing, data: data, queueLease: lease,
 		readWait: options.ReadTimeout, writeWait: options.WriteTimeout,
 		queue: make(chan outboundRecord, options.QueueCapacity), maxQueued: options.MaxQueuedBytes,
 		maxReadBytes: options.MaxReadBytesPerSecond, maxReadRecords: options.MaxReadRecordsPerSecond,
@@ -193,7 +211,7 @@ func (s *PeerSession) sendFromHandler(encoded []byte) error {
 		var magic [8]byte
 		copy(magic[:], encoded[4:streamPrefixBytes])
 		kind, _, _, err := streamRecordShape(magic, s.outgoing)
-		if err == nil && (kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise) {
+		if err == nil && (kind == StreamRecordPromotionProposal || kind == StreamRecordPromotionPromise || kind == StreamRecordHAPeerPromotionRequest || kind == StreamRecordHAPeerPromotionBoundary) {
 			return s.SendSync(encoded)
 		}
 	}
@@ -201,45 +219,51 @@ func (s *PeerSession) sendFromHandler(encoded []byte) error {
 }
 
 func (s *PeerSession) enqueue(encoded []byte, wait bool) error {
+	// Serialize admission/copy with queue retirement, never with socket IO.
+	s.runMu.Lock()
 	if s.closed.Load() {
+		s.runMu.Unlock()
 		return ErrPeerSessionClosed
 	}
 	if len(encoded) == 0 {
+		s.runMu.Unlock()
 		return errors.New("replication peer session record is empty")
 	}
-	// Validate type, direction and bound before retaining a copy in the queue.
 	if err := WriteStreamRecord(discardWriter{}, s.outgoing, encoded); err != nil {
+		s.runMu.Unlock()
 		if !s.data {
 			return fmt.Errorf("authenticated control-only session cannot exchange this record: %w", err)
 		}
 		return err
 	}
 	size := int64(len(encoded))
-	for {
-		used := s.queued.Load()
-		if size > s.maxQueued-used {
-			return ErrPeerSessionQueueFull
-		}
-		if s.queued.CompareAndSwap(used, used+size) {
-			break
-		}
-	}
-	copyOfRecord := append([]byte(nil), encoded...)
-	record := outboundRecord{encoded: copyOfRecord}
-	if wait {
-		record.done = make(chan error, 1)
-	}
-	select {
-	case s.queue <- record:
-	default:
-		s.queued.Add(-size)
+	if size > s.maxQueued-s.queued.Load() || len(s.queue) >= cap(s.queue) {
+		s.runMu.Unlock()
 		return ErrPeerSessionQueueFull
 	}
+	// The fixed queue envelope was admitted before channel/copy allocation.
+	record := outboundRecord{encoded: append([]byte(nil), encoded...)}
+	var done chan error
+	if wait {
+		done = make(chan error, 1)
+		record.done = done
+	}
+	s.queued.Add(size)
+	select {
+	case s.queue <- record:
+		record = outboundRecord{} // SendSync may retain only the result channel.
+	default:
+		record = outboundRecord{}
+		s.queued.Add(-size)
+		s.runMu.Unlock()
+		return ErrPeerSessionQueueFull
+	}
+	s.runMu.Unlock()
 	if !wait {
 		return nil
 	}
 	select {
-	case err := <-record.done:
+	case err := <-done:
 		return err
 	case <-s.closedSignal:
 		return ErrPeerSessionClosed
@@ -255,11 +279,17 @@ func (s *PeerSession) Run(ctx context.Context, handler PeerRecordHandler) error 
 		return errors.New("replication peer session handler is required")
 	}
 	s.runMu.Lock()
+	if s.closed.Load() {
+		s.runMu.Unlock()
+		return ErrPeerSessionClosed
+	}
 	if s.running {
 		s.runMu.Unlock()
 		return errors.New("replication peer session is already running")
 	}
 	s.running = true
+	s.writerActive = true
+	s.readerActive = true
 	s.runMu.Unlock()
 
 	sessionCtx, cancel := context.WithCancel(ctx)
@@ -287,9 +317,19 @@ func (s *PeerSession) Run(ctx context.Context, handler PeerRecordHandler) error 
 // runtime or queue, but still uses the identical authenticated member session.
 func (s *PeerSession) ExchangeControl(ctx context.Context, encoded []byte) (StreamRecord, error) {
 	s.runMu.Lock()
+	if s.closed.Load() {
+		s.runMu.Unlock()
+		return StreamRecord{}, ErrPeerSessionClosed
+	}
 	if s.running {
 		s.runMu.Unlock()
 		return StreamRecord{}, errors.New("replication peer session is already running")
+	}
+	// This legacy API returns a wire buffer beyond the session lifetime. Runtime
+	// uses borrowed handlers; budgeted callers must use Run, not escape ownership.
+	if s.queueLease != nil && s.queueLease.budget.readRAM > 0 {
+		s.runMu.Unlock()
+		return StreamRecord{}, errors.New("budgeted control exchange requires a borrowed Run handler")
 	}
 	s.running = true
 	s.runMu.Unlock()
@@ -311,14 +351,29 @@ func (s *PeerSession) ExchangeControl(ctx context.Context, encoded []byte) (Stre
 }
 
 func (s *PeerSession) readLoop(ctx context.Context, handler PeerRecordHandler) error {
+	var record StreamRecord
+	defer func() {
+		record = StreamRecord{}
+		s.runMu.Lock()
+		s.readerActive = false
+		s.releaseQueueLocked()
+		s.runMu.Unlock()
+	}()
 	windowStart := time.Now()
 	var windowBytes int64
 	windowRecords := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.closed.Load() {
+			return ErrPeerSessionClosed
+		}
 		if err := s.conn.SetReadDeadline(time.Now().Add(s.readWait)); err != nil {
 			return err
 		}
-		record, err := ReadStreamRecord(s.conn, s.incoming)
+		var err error
+		record, err = ReadStreamRecord(s.conn, s.incoming)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -337,51 +392,111 @@ func (s *PeerSession) readLoop(ctx context.Context, handler PeerRecordHandler) e
 		if err := handler(ctx, s.peer, record); err != nil {
 			return err
 		}
+		record = StreamRecord{}
 	}
 }
 
 func (s *PeerSession) writeLoop(ctx context.Context) error {
+	var record outboundRecord
+	defer func() {
+		record = outboundRecord{}
+		s.runMu.Lock()
+		s.writerActive = false
+		s.releaseQueueLocked()
+		s.runMu.Unlock()
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case record := <-s.queue:
-			size := int64(len(record.encoded))
+		case <-s.closedSignal:
+			return ErrPeerSessionClosed
+		case record = <-s.queue:
+			if s.closed.Load() {
+				s.finishRecord(&record, ErrPeerSessionClosed)
+				return ErrPeerSessionClosed
+			}
+			var err error
 			if s.writeWait > 0 {
-				if err := s.conn.SetWriteDeadline(time.Now().Add(s.writeWait)); err != nil {
-					s.queued.Add(-size)
-					if record.done != nil {
-						record.done <- err
-					}
-					return err
-				}
+				err = s.conn.SetWriteDeadline(time.Now().Add(s.writeWait))
 			}
-			if err := WriteStreamRecord(s.conn, s.outgoing, record.encoded); err != nil {
-				s.queued.Add(-size)
-				if record.done != nil {
-					record.done <- err
-				}
+			if err == nil {
+				err = WriteStreamRecord(s.conn, s.outgoing, record.encoded)
+			}
+			if err == nil {
+				err = s.conn.SetWriteDeadline(time.Time{})
+			}
+			s.finishRecord(&record, err)
+			if err != nil {
 				return err
-			}
-			s.queued.Add(-size)
-			if err := s.conn.SetWriteDeadline(time.Time{}); err != nil {
-				if record.done != nil {
-					record.done <- err
-				}
-				return err
-			}
-			if record.done != nil {
-				record.done <- nil
 			}
 		}
 	}
 }
 
+func (s *PeerSession) finishRecord(record *outboundRecord, err error) {
+	size := int64(len(record.encoded))
+	done := record.done
+	*record = outboundRecord{} // drop data before freeing byte capacity
+	s.queued.Add(-size)
+	if done != nil {
+		done <- err
+	}
+}
+
+// runMu holds session retirement and active reader/writer ownership boundaries.
+// Close does not wait for handlers (which may be retiring a registry lease).
+func (s *PeerSession) releaseQueueLocked() {
+	if !s.closed.Load() || !s.socketClosed || s.writerActive || s.readerActive || s.callbackOwners != 0 {
+		return
+	}
+	s.queue = nil
+	lease := s.queueLease
+	s.queueLease = nil
+	if lease != nil {
+		lease.release()
+	}
+}
+
+// retainCallbackOwner covers manager callbacks before Run creates its reader
+// and after Run joins it. Socket Close still withdraws immediately; the actual
+// session's queue/read permit and replacement slot stay owned until this loan
+// returns. Acquire before publishing the session to the registry.
+func (s *PeerSession) retainCallbackOwner() (func(), error) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if s.closed.Load() {
+		return nil, ErrPeerSessionClosed
+	}
+	s.callbackOwners++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.runMu.Lock()
+			defer s.runMu.Unlock()
+			s.callbackOwners--
+			s.releaseQueueLocked()
+		})
+	}, nil
+}
+
 func (s *PeerSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
+		s.runMu.Lock()
 		s.closed.Store(true)
 		close(s.closedSignal)
+		draining := true
+		for draining {
+			select {
+			case record := <-s.queue:
+				s.finishRecord(&record, ErrPeerSessionClosed)
+			default:
+				draining = false
+			}
+		}
+		s.releaseQueueLocked()
+		s.runMu.Unlock()
 		err = s.conn.Close()
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -391,6 +506,10 @@ func (s *PeerSession) Close() error {
 			// healthy peer race look like lost replicated data.
 			err = nil
 		}
+		s.runMu.Lock()
+		s.socketClosed = true
+		s.releaseQueueLocked()
+		s.runMu.Unlock()
 	})
 	return err
 }

@@ -139,7 +139,10 @@ func TestPrimaryCoordinatorKeepsLocalCommitWhenReplicationQueueFails(t *testing.
 	if index, _, _ := journal.Head(); index != 1 {
 		t.Fatalf("durable ordering head=%d, want 1", index)
 	}
-	pending := primary.PendingFrom(0)
+	pending, pendingErr := primary.PendingFrom(0)
+	if pendingErr != nil {
+		t.Fatal(pendingErr)
+	}
 	if len(pending) != 1 || pending[0].Index != 1 {
 		t.Fatalf("pending=%#v", pending)
 	}
