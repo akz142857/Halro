@@ -26,13 +26,30 @@ func (m *Manager) TryAcquireCompletableWork(class Class, active, completion Cost
 	m.mu.Lock()
 	shared := m.sharedCompletion
 	m.mu.Unlock()
-	if shared != nil && shared.matches(class, active, completion, requirements) {
-		return shared.acquire(class, active)
+	if shared != nil {
+		if rule, disk, ok := shared.matches(class, active, completion, requirements); ok {
+			if !shared.rules[rule].priority {
+				return shared.acquire(class, active, rule, disk)
+			}
+			// A request whose private terminal pool fits keeps it: its terminal
+			// continuation may wait for confirmation, and a private pool does not
+			// hold the lane through that wait. Only a capacity shortfall falls
+			// back to the guaranteed shared lane; pressure still refuses.
+			w, err := m.tryAcquirePrivateCompletableWorkCounted(class, active, completion, requirements, false)
+			if !errors.Is(err, ErrExhausted) {
+				return w, err
+			}
+			return shared.acquire(class, active, rule, disk)
+		}
 	}
 	return m.tryAcquirePrivateCompletableWork(class, active, completion, requirements)
 }
 
 func (m *Manager) tryAcquirePrivateCompletableWork(class Class, active, completion Cost, requirements []WorkspaceRequirement) (*CompletableWork, error) {
+	return m.tryAcquirePrivateCompletableWorkCounted(class, active, completion, requirements, true)
+}
+
+func (m *Manager) tryAcquirePrivateCompletableWorkCounted(class Class, active, completion Cost, requirements []WorkspaceRequirement, countReject bool) (*CompletableWork, error) {
 	if m == nil || len(requirements) == 0 || len(requirements) > MaxWorkspaceSlots {
 		return nil, ErrInvalid
 	}
@@ -53,7 +70,11 @@ func (m *Manager) tryAcquirePrivateCompletableWork(class Class, active, completi
 	if !normalClass(class) || !active.valid() || active == (Cost{}) || !completion.valid() || m.limits.MaxOwners < 2 {
 		return nil, ErrInvalid
 	}
-	if err := m.check(class, active, completion, false, claims); err != nil {
+	admit := m.check
+	if !countReject {
+		admit = m.fit
+	}
+	if err := admit(class, active, completion, false, claims); err != nil {
 		return nil, err
 	}
 	w := &ramWorkspace{manager: m, reusable: true, done: make(chan struct{})}

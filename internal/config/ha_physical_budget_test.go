@@ -37,7 +37,7 @@ func TestHAPhysicalWorkMinimumMatchesSimultaneousAdmission(t *testing.T) {
 	if err := m.SetPressure(resourcebudget.Healthy); err != nil {
 		t.Fatal(err)
 	}
-	shared, err := m.InstallSharedCompletableWorkspace(b.HAPhysicalBackgroundSharedProfiles())
+	shared, err := m.InstallSharedCompletableWorkspace(b.HAPhysicalSharedProfiles())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +95,8 @@ func TestHAPhysicalWorkMinimumMatchesSimultaneousAdmission(t *testing.T) {
 		Normal, Completion int64
 		Claims             int
 		Residents          []resourcebudget.WorkspaceRequirement
-		SharedBackground   []resourcebudget.SharedWorkProfile
-	}{b.HAPhysicalWorkProfiles(), normal, completion, claims, b.HAPhysicalResidentWorkRequirements(), b.HAPhysicalBackgroundSharedProfiles()})
+		Shared             []resourcebudget.SharedWorkProfile
+	}{b.HAPhysicalWorkProfiles(), normal, completion, claims, b.HAPhysicalResidentWorkRequirements(), b.HAPhysicalSharedProfiles()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,10 +143,28 @@ func TestHAPhysicalWorkMinimumMatchesSimultaneousAdmission(t *testing.T) {
 	}
 }
 
+// Even with request completion on the shared lane, the work vector (which now
+// counts the Audit/Governance native batch encoders the Linux run found
+// holding RAM) exceeds the original 2 GiB / 1387 MiB Recovery envelope. The
+// rejection must come from the vector itself, not from unrelated fields.
 func TestHAPhysicalWorkMinimumRejectsOriginal2GiBAndPreservesOptOut(t *testing.T) {
 	b := ResourceBudget{MemoryStateRequired: true, PhysicalTerminalReserve: true, TotalRAMBytes: 2 << 30, RecoveryReserveRAMBytes: 1387 << 20, RequestRAMBytes: 16 << 20, PricingIORAMBytes: 32 << 20, CompletionRAMBytes: 2 << 30, MaxClaims: 1024, RecoveryClaims: 32}
-	if err := b.ValidateReplicationCandidates(); err == nil {
-		t.Fatal("original impossible work vector accepted")
+	normal, _, _, err := b.HAPhysicalWorkMinimum()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.validateHAPhysicalWorkMinimum(); err == nil || normal <= b.TotalRAMBytes-b.RecoveryReserveRAMBytes {
+		t.Fatal("original 2 GiB work vector accepted", normal, err)
+	}
+	t.Logf("original 2 GiB normal deficit %d bytes", normal-(b.TotalRAMBytes-b.RecoveryReserveRAMBytes))
+	exact := b
+	exact.TotalRAMBytes = b.RecoveryReserveRAMBytes + normal
+	if err := exact.validateHAPhysicalWorkMinimum(); err != nil {
+		t.Fatal("exact vector rejected", err)
+	}
+	exact.TotalRAMBytes--
+	if err := exact.validateHAPhysicalWorkMinimum(); err == nil {
+		t.Fatal("one byte short accepted")
 	}
 	b.PhysicalTerminalReserve = false
 	if err := b.validateHAPhysicalWorkMinimum(); err != nil {

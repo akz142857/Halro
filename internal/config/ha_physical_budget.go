@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/authenticatedstate"
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
@@ -25,12 +26,16 @@ type HAPhysicalWorkProfile struct {
 
 // HAPhysicalResidentWorkRequirements covers the selected projection lifetimes
 // which overlap every physical work pool. The five original authenticated
-// stores are Ledger, Usage, Governance, Metadata and Directory. Query pins,
-// collector queues, native retry caches and additional owners remain extra.
+// stores are Ledger, Usage, Governance, Metadata and Directory. The Audit and
+// Governance native physical windows each hold one batch encoder for their
+// whole lifetime. Query pins, collector queues, native retry caches and
+// additional owners remain extra.
 func (b ResourceBudget) HAPhysicalResidentWorkRequirements() []resourcebudget.WorkspaceRequirement {
 	r := []resourcebudget.WorkspaceRequirement{
 		{Class: resourcebudget.Background, RAM: usage.TypedProjectionResidentRAMBytes},
 		{Class: resourcebudget.IO, RAM: governance.TypedProjectionResidentRAMBytes},
+		{Class: resourcebudget.IO, RAM: audit.PhysicalBatchRAMBytes},
+		{Class: resourcebudget.IO, RAM: governance.PhysicalBatchRAMBytes},
 	}
 	for range 5 {
 		r = append(r, resourcebudget.WorkspaceRequirement{Class: resourcebudget.Background, RAM: authenticatedstate.StoreResidentRAMBytes})
@@ -49,12 +54,22 @@ func (b ResourceBudget) HAPhysicalWorkProfiles() []HAPhysicalWorkProfile {
 	}
 }
 
-// Only the three background consumers use the foundation's shared RAM lane.
-// Metadata windows and request completion retain their independent guarantees.
-func (b ResourceBudget) HAPhysicalBackgroundSharedProfiles() []resourcebudget.SharedWorkProfile {
+// haPhysicalSharedProfile reports whether a work profile borrows the
+// foundation's shared RAM lane. The Metadata window keeps its independent pool.
+func haPhysicalSharedProfile(name string) bool { return name != "Metadata terminal/receive" }
+
+// The three background consumers and request completion use the foundation's
+// shared RAM lane. Terminal Apply is already serialized by the Ledger append
+// gate, so requests share one terminal workspace; they are priority members
+// and wait for at most the one job holding the lane, never the queued
+// background. Their terminal Disk stays a private per-request claim.
+func (b ResourceBudget) HAPhysicalSharedProfiles() []resourcebudget.SharedWorkProfile {
 	var profiles []resourcebudget.SharedWorkProfile
-	for _, p := range b.HAPhysicalWorkProfiles()[:3] {
-		profiles = append(profiles, resourcebudget.SharedWorkProfile{Class: p.Class, Active: p.Active, Requirements: p.Requirements})
+	for _, p := range b.HAPhysicalWorkProfiles() {
+		if !haPhysicalSharedProfile(p.Name) {
+			continue
+		}
+		profiles = append(profiles, resourcebudget.SharedWorkProfile{Class: p.Class, Active: p.Active, Requirements: p.Requirements, Priority: p.Class == resourcebudget.Active})
 	}
 	return profiles
 }
@@ -70,7 +85,7 @@ func (b ResourceBudget) HAPhysicalWorkMinimum() (normal, completion int64, claim
 		normal += v
 		return true
 	}
-	shared, err := resourcebudget.SharedWorkspaceRequirements(b.HAPhysicalBackgroundSharedProfiles())
+	shared, err := resourcebudget.SharedWorkspaceRequirements(b.HAPhysicalSharedProfiles())
 	if err != nil || !add(resourcebudget.SharedWorkspaceControlRAMBytes) {
 		return 0, 0, 0, resourcebudget.ErrInvalid
 	}
@@ -81,12 +96,12 @@ func (b ResourceBudget) HAPhysicalWorkMinimum() (normal, completion int64, claim
 		}
 		completion += r.RAM
 	}
-	for i, p := range b.HAPhysicalWorkProfiles() {
+	for _, p := range b.HAPhysicalWorkProfiles() {
 		claims++
 		if p.Active.RAM <= 0 || !add(p.Active.RAM) {
 			return 0, 0, 0, resourcebudget.ErrInvalid
 		}
-		if i < 3 {
+		if haPhysicalSharedProfile(p.Name) {
 			continue // original member fees; shared terminal slots counted above
 		}
 		claims += len(p.Requirements)

@@ -65,7 +65,8 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
-		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
+		reserve := haPhysicalRecoveryReserveFixture(t)
+		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = reserve, reserve
 		limits.CompletionRAMBytes = 1 << 30
 		limits.TotalUnconfirmedBytes = 64 << 20
 		limits.IOUnconfirmedBytes = 32 << 20
@@ -121,6 +122,9 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 		}
 		if i == 1 {
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
+				if m, merr := f.reopened.Owners.Components.Ledger.ResourceManager(ctx); merr == nil {
+					t.Logf("receive window refusal: stats=%+v limits=%+v", m.Snapshot(), *cfg.ResourceBudget)
+				}
 				t.Fatal("actual pre-exposure Metadata receive window", err)
 			}
 		}

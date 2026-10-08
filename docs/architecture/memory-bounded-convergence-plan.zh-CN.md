@@ -250,3 +250,22 @@ I-04 的三批选定行一致性条件已交付：结算/pending、余额/幂等
 | S3 (M3) 冷构建 | 先梳理 Ledger 归约的跨键依赖，再实现外部排序/自底向上建树；分级 1k → 10k → 100k | 1k 改善 ≥30%，10k ≤300 秒，100k ≤1800 秒 |
 
 S0 首项已完成：I-06 夹具 `TestReplicaGenerationPublicOpenFailureRetriesPreserveNativeFacts` 原先在预检阶段就被拒绝（夹具的 Recovery 公式未计入 metadata window/inventory/归档读者）。改为显式私有 Recovery 余量后，6 个子用例全部命中预期的具体错误类型并通过。这是夹具修正，不构成容量接受，原计数仍为 **5 完成 / 19 开放**。
+
+## 15. S1 第一批：请求终结并入共享 RAM 池
+
+| 项 | 结果 |
+| --- | --- |
+| 共享池 | 新增优先成员（已接受请求）：排在已排队的后台 root 之前，同层 FIFO，不抢占正在持有的 root；请求的终结 Disk 作为私有 reserved claim，随成员退休释放 |
+| 私有优先 | 私有终结池放得下时请求保留私有池（终结回调持有工作区等待 `WaitConfirmed`，私有池不会拖住共享池）；只有 `ErrExhausted` 才退回共享池，探测用 `Manager.fit`，不计入拒绝数 |
+| 预检 | `HAPhysicalSharedProfiles` 加入“one Ledger request”；Metadata 窗口保持独立。真实 Linux 运行发现 Audit/Governance 原生物理批编码器各常驻 64 MiB IO 而向量未计，已补入常驻列表 |
+| 数字 | 三后台共享 789.386 MiB → 请求并入后 597.044 MiB → 补齐两个常驻编码器后 **725.044 MiB**；原 661 MiB normal 下仍缺 **64.047 MiB** |
+| 验证 | resourcebudget/config 包及 race 通过；两项反向验证（关闭优先插队、回退计入拒绝）均使新测试失败；默认 896 MiB 夹具下真实 TLS 双角色两测试在实际 2 GiB cgroup 通过（峰值 216608768 B，无 OOM）；原 1387 MiB 下 Replica 仍在 Metadata 接收窗口被 normal 总额拒绝 |
+
+原计数 **5 完成 / 20 开放**，本批实际减费 192.341 MiB，但同时发现 128 MiB 未计常驻费用，原配置仍不成立。证据见 `docs/verification/performance/2026-10-09-s1-request-shared-lane/checks.json`（本地，目录被忽略）。
+
+登记的开放项：
+
+1. 剩余 64.047 MiB：候选为 Audit/Governance 批编码器并入共享池（需先核对它们与请求终结/后台的真实并发），或核算 64 MiB 批编码器的实际必要大小。
+2. 启动失败后关闭时 Usage 报告“实际 IO 退休不确定”并留下共享成员：需判定是 fail-closed 设计还是失败路径清理缺陷。
+3. 请求退回共享池时，HA 终结确认等待会串行化；只在私有池放不下时发生。
+4. S0 遗留：`budget` 包单独运行 813.8 秒（3 个 I-05 遗留恢复测试占 776 秒），`ledger` 单独 361 秒但全量并行时超过 10 分钟，`usage`/`app` 同样超时；CI 的 `go test -count=1 ./...` 无 `-timeout`，会失败。

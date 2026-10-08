@@ -15,6 +15,7 @@ import (
 	"golang.org/x/sys/unix"
 	"log/slog"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -56,7 +57,8 @@ func TestHAPhysicalPeerCreditActualTLSPreacceptAndUnusedRelease(t *testing.T) {
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
-		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
+		reserve := haPhysicalRecoveryReserveFixture(t)
+		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = reserve, reserve
 		limits.CompletionRAMBytes = 1 << 30
 		limits.TotalUnconfirmedBytes = 64 << 20
 		limits.IOUnconfirmedBytes = 32 << 20
@@ -105,6 +107,9 @@ func TestHAPhysicalPeerCreditActualTLSPreacceptAndUnusedRelease(t *testing.T) {
 		}
 		if i == 1 {
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, 2); err != nil {
+				if m, merr := f.reopened.Owners.Components.Ledger.ResourceManager(ctx); merr == nil {
+					t.Logf("receive window refusal: stats=%+v limits=%+v", m.Snapshot(), *cfg.ResourceBudget)
+				}
 				t.Fatal("actual pre-exposure Metadata receive window", err)
 			}
 		}
@@ -367,4 +372,21 @@ func installPeerPhysicalPausedTransport(t *testing.T, ctx context.Context, f *ha
 		t.Fatal(err)
 	}
 	f.sender.Set(r.manager)
+}
+
+// The TLS fixtures default to a 896 MiB Recovery reserve. Setting
+// HALRO_HA_RECOVERY_RESERVE_MIB=1387 runs them under the original 2 GiB
+// logical configuration instead; neither is a capacity acceptance by itself.
+func haPhysicalRecoveryReserveFixture(t *testing.T) int64 {
+	t.Helper()
+	v := os.Getenv("HALRO_HA_RECOVERY_RESERVE_MIB")
+	if v == "" {
+		return 896 << 20
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 || n >= 2048 {
+		t.Fatal("HALRO_HA_RECOVERY_RESERVE_MIB must be a MiB count below 2048", v)
+	}
+	t.Log("Recovery reserve fixture MiB", n)
+	return n << 20
 }

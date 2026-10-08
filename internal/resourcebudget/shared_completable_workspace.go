@@ -15,28 +15,38 @@ const (
 
 // SharedWorkProfile selects exact resource shapes, never domain/source rights.
 // Installation is explicit on one Manager owned by the runtime foundation.
+// Priority roots (accepted requests) are granted the lane ahead of queued
+// ordinary roots; a root already holding the lane is never preempted, so the
+// wait is bounded by one granted job, not by the background queue.
 type SharedWorkProfile struct {
 	Class        Class
 	Active       Cost
 	Requirements []WorkspaceRequirement
+	Priority     bool
 }
 
 type sharedWorkRule struct {
-	class  Class
-	active Cost
-	count  int
-	slots  [MaxWorkspaceSlots]WorkspaceRequirement
+	class    Class
+	active   Cost
+	count    int
+	slots    [MaxWorkspaceSlots]WorkspaceRequirement
+	priority bool
 }
 
 type sharedWorkMember struct {
-	work  *CompletableWork
-	loans int
+	work     *CompletableWork
+	loans    int
+	priority bool
+	// disk is the member's own terminal Disk envelope. Only RAM slots are
+	// shared; Disk stays a private reserved claim released with the member.
+	disk Permit
 }
 
 type sharedWorkWaiter struct {
-	work    *CompletableWork
-	ready   chan struct{}
-	granted bool
+	work     *CompletableWork
+	ready    chan struct{}
+	granted  bool
+	priority bool
 }
 
 type sharedRAMLoanKey struct{}
@@ -148,7 +158,7 @@ func (m *Manager) InstallSharedCompletableWorkspace(profiles []SharedWorkProfile
 	}
 	s := &SharedCompletableWorkspace{manager: m, base: base, ruleCount: len(profiles)}
 	for i, p := range profiles {
-		s.rules[i] = sharedWorkRule{class: p.Class, active: p.Active, count: len(p.Requirements)}
+		s.rules[i] = sharedWorkRule{class: p.Class, active: p.Active, count: len(p.Requirements), priority: p.Priority}
 		copy(s.rules[i].slots[:], p.Requirements)
 	}
 	m.mu.Lock()
@@ -161,11 +171,13 @@ func (m *Manager) InstallSharedCompletableWorkspace(profiles []SharedWorkProfile
 	return s, nil
 }
 
-func (s *SharedCompletableWorkspace) matches(class Class, active, completion Cost, requirements []WorkspaceRequirement) bool {
-	if completion.Disk != 0 || completion.Unconfirmed != 0 {
-		return false
+// matches reports the installed rule for an exact RAM shape. Any Disk in the
+// completion envelope is returned for a private charge; it is never pooled.
+func (s *SharedCompletableWorkspace) matches(class Class, active, completion Cost, requirements []WorkspaceRequirement) (rule int, disk int64, ok bool) {
+	if completion.Unconfirmed != 0 || completion.Disk < 0 {
+		return 0, 0, false
 	}
-	for _, r := range s.rules[:s.ruleCount] {
+	for i, r := range s.rules[:s.ruleCount] {
 		if class != r.class || active != r.active || len(requirements) != r.count {
 			continue
 		}
@@ -179,13 +191,13 @@ func (s *SharedCompletableWorkspace) matches(class Class, active, completion Cos
 			ram += slot.RAM
 		}
 		if equal && ram == completion.RAM {
-			return true
+			return i, completion.Disk, true
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
-func (s *SharedCompletableWorkspace) acquire(class Class, active Cost) (*CompletableWork, error) {
+func (s *SharedCompletableWorkspace) acquire(class Class, active Cost, rule int, disk int64) (*CompletableWork, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closing || s.closed {
@@ -207,12 +219,28 @@ func (s *SharedCompletableWorkspace) acquire(class Class, active Cost) (*Complet
 	if !reusable {
 		return nil, ErrClosed
 	}
-	p, err := s.manager.TryAcquire(class, active)
-	if err != nil {
+	m := s.manager
+	m.mu.Lock()
+	claims, finish := 1, Cost{}
+	if disk != 0 {
+		claims, finish = 2, Cost{Disk: disk}
+	}
+	if !normalClass(class) || !active.valid() || active == (Cost{}) {
+		m.mu.Unlock()
+		return nil, ErrInvalid
+	}
+	if err := m.check(class, active, finish, false, claims); err != nil {
+		m.mu.Unlock()
 		return nil, err
 	}
-	w := &CompletableWork{Active: p, pool: s.base.pool, shared: s}
-	s.members[index] = sharedWorkMember{work: w}
+	member := sharedWorkMember{priority: s.rules[rule].priority}
+	if disk != 0 {
+		member.disk = m.charge(Completion, finish, false, true)
+	}
+	w := &CompletableWork{Active: m.charge(class, active, false, false), pool: s.base.pool, shared: s}
+	m.mu.Unlock()
+	member.work = w
+	s.members[index] = member
 	return w, nil
 }
 
@@ -253,13 +281,25 @@ func (s *SharedCompletableWorkspace) wait(ctx context.Context, w *CompletableWor
 		return ErrClosed
 	}
 	member.loans++
-	waiter := &sharedWorkWaiter{work: w, ready: make(chan struct{})}
+	waiter := &sharedWorkWaiter{work: w, ready: make(chan struct{}), priority: member.priority}
 	if s.root == nil {
 		s.root = w
 		waiter.granted = true
 		close(waiter.ready)
 	} else {
-		s.queue[s.queueCount] = waiter
+		// FIFO within each tier; a priority root goes after earlier priority
+		// roots and before every queued ordinary root.
+		at := s.queueCount
+		if waiter.priority {
+			for i, q := range s.queue[:s.queueCount] {
+				if !q.priority {
+					at = i
+					break
+				}
+			}
+		}
+		copy(s.queue[at+1:s.queueCount+1], s.queue[at:s.queueCount])
+		s.queue[at] = waiter
 		s.queueCount++
 	}
 	s.mu.Unlock()
@@ -395,23 +435,33 @@ func (s *SharedCompletableWorkspace) withLoan(ctx context.Context, w *Completabl
 }
 
 func (s *SharedCompletableWorkspace) closeMember(w *CompletableWork) error {
+	disk, err := s.retireMember(w)
+	if err != nil || disk.claim == nil {
+		return err
+	}
+	// Released after s.mu/pool.mu so no Manager.mu ordering is introduced.
+	return disk.Release()
+}
+
+func (s *SharedCompletableWorkspace) retireMember(w *CompletableWork) (Permit, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	member := s.member(w)
 	if member == nil {
-		return nil
+		return Permit{}, nil
 	}
 	if member.loans != 0 {
-		return ErrExhausted
+		return Permit{}, ErrExhausted
 	}
 	p := s.base.pool
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.children != 0 && !p.reusable {
-		return newWorkspaceRetirementLocked(ownedfile.ErrRetirement, p)
+		return Permit{}, newWorkspaceRetirementLocked(ownedfile.ErrRetirement, p)
 	}
+	disk := member.disk
 	*member = sharedWorkMember{}
-	return nil
+	return disk, nil
 }
 
 func (s *SharedCompletableWorkspace) Close() error {

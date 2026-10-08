@@ -232,7 +232,17 @@ func (m *Manager) TryAcquireRecovery(cost Cost) (Permit, error) {
 
 // All checks happen before any state or owner becomes visible.
 func (m *Manager) check(class Class, cost, finish Cost, recovery bool, claims int) error {
-	reject := func(err error) error { increment(&m.stats.Rejected[class]); return err }
+	err := m.fit(class, cost, finish, recovery, claims)
+	if err != nil {
+		increment(&m.stats.Rejected[class])
+	}
+	return err
+}
+
+// fit is check without the rejection count, for a probe whose failure is
+// answered by another admission path rather than reported to the caller.
+func (m *Manager) fit(class Class, cost, finish Cost, recovery bool, claims int) error {
+	reject := func(err error) error { return err }
 	if m.stats.Closed {
 		return reject(ErrClosed)
 	}

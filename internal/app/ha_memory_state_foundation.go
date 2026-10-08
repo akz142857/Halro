@@ -489,7 +489,7 @@ func openHASelectedRuntimeFoundationPeerCompletionMode(ctx context.Context, cfg 
 		}
 	}
 	if limits.PhysicalTerminalReserve {
-		f.sharedPhysicalWork, err = manager.InstallSharedCompletableWorkspace(limits.HAPhysicalBackgroundSharedProfiles())
+		f.sharedPhysicalWork, err = manager.InstallSharedCompletableWorkspace(limits.HAPhysicalSharedProfiles())
 		if err != nil {
 			return f, fmt.Errorf("HA original background shared RAM owner: %w", err)
 		}

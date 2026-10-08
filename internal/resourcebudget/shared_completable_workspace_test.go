@@ -78,7 +78,7 @@ func sharedResult(t *testing.T, done <-chan error) error {
 }
 
 func TestSharedCompletableWorkUnionAndBoundedMembership(t *testing.T) {
-	profiles := []SharedWorkProfile{{IO, Cost{RAM: 1}, []WorkspaceRequirement{{IO, 200}, {IO, 200}}}, {Background, Cost{RAM: 2}, []WorkspaceRequirement{{IO, 200}, {Background, 300}}}}
+	profiles := []SharedWorkProfile{{IO, Cost{RAM: 1}, []WorkspaceRequirement{{IO, 200}, {IO, 200}}, false}, {Background, Cost{RAM: 2}, []WorkspaceRequirement{{IO, 200}, {Background, 300}}, false}}
 	union, err := SharedWorkspaceRequirements(profiles)
 	if err != nil || !reflect.DeepEqual(union, []WorkspaceRequirement{{IO, 200}, {IO, 200}, {Background, 300}}) {
 		t.Fatal(union, err)
@@ -344,4 +344,134 @@ func TestSharedCompletableWorkOrdinaryPhaseCannotGainCompletionAndForeignLoanRef
 	}
 	closeShared(t, m, s, ws)
 	closeShared(t, other, foreign, outsiders)
+}
+
+func priorityFixture(t *testing.T, completionRAM int64) (*Manager, *SharedCompletableWorkspace, SharedWorkProfile, SharedWorkProfile) {
+	t.Helper()
+	l := fixtureLimits()
+	l.MaxClaims, l.MaxOwners = 64, 16
+	l.Total.RAM, l.Total.Disk = 1<<20, 1<<20
+	for i := range l.Classes {
+		l.Classes[i] = l.Total
+	}
+	l.Classes[Recovery] = l.RecoveryReserve
+	l.Classes[Control] = Cost{RAM: int64(l.MaxClaims) * ClaimRAMBytes}
+	l.Classes[Completion].RAM = completionRAM
+	m, err := New(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetPressure(Healthy)
+	background := SharedWorkProfile{Class: IO, Active: Cost{RAM: 100}, Requirements: []WorkspaceRequirement{{IO, 200}}}
+	request := SharedWorkProfile{Class: Active, Active: Cost{RAM: 50}, Requirements: []WorkspaceRequirement{{IO, 200}}, Priority: true}
+	s, err := m.InstallSharedCompletableWorkspace([]SharedWorkProfile{background, request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m, s, background, request
+}
+
+// A request whose private terminal pool fits keeps it, so its confirmation
+// wait never holds the shared lane.
+func TestSharedCompletableWorkPriorityPrefersPrivatePool(t *testing.T) {
+	m, s, _, request := priorityFixture(t, 1<<20)
+	w, err := m.TryAcquireCompletableWork(Active, request.Active, Cost{RAM: 200, Disk: 4096}, request.Requirements)
+	if err != nil || w.shared != nil {
+		t.Fatal("request with room left its private pool", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Active.Release(); err != nil {
+		t.Fatal(err)
+	}
+	closeShared(t, m, s, nil)
+}
+
+// Accepted requests (priority members) enter ahead of queued background roots,
+// FIFO within each tier, without preempting the root that holds the lane. Their
+// terminal Disk stays a private reserved claim released with the member. A
+// capacity fallback to the shared lane is not reported as a rejection.
+func TestSharedCompletableWorkPriorityTierAndPrivateDisk(t *testing.T) {
+	// Room for the shared union only: no private request pool fits.
+	m, s, background, request := priorityFixture(t, 300)
+	base := m.Snapshot()
+	var bg, req []*CompletableWork
+	for i := 0; i < 3; i++ {
+		w, err := m.TryAcquireCompletableWork(IO, background.Active, Cost{RAM: 200}, background.Requirements)
+		if err != nil || w.shared != s {
+			t.Fatal("background member", err)
+		}
+		bg = append(bg, w)
+	}
+	for i := 0; i < 2; i++ {
+		w, err := m.TryAcquireCompletableWork(Active, request.Active, Cost{RAM: 200, Disk: 4096}, request.Requirements)
+		if err != nil || w.shared != s {
+			t.Fatal("request member", err)
+		}
+		req = append(req, w)
+	}
+	members := m.Snapshot()
+	if members.Rejected != base.Rejected {
+		t.Fatal("shared fallback counted as a rejection", base.Rejected, members.Rejected)
+	}
+	if got := members.CompletionReserved.Disk - base.CompletionReserved.Disk; got != 2*4096 {
+		t.Fatal("request Disk must be a private reserved claim", got)
+	}
+	if got := members.CompletionReserved.RAM - base.CompletionReserved.RAM; got != 0 {
+		t.Fatal("members must not reserve RAM beyond the shared union", got)
+	}
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	rootDone := make(chan error, 1)
+	go func() {
+		rootDone <- bg[0].WithWorkspace(context.Background(), func(context.Context) error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	order := make(chan string, 4)
+	var dones []chan error
+	enqueue := func(name string, w *CompletableWork) {
+		done := make(chan error, 1)
+		dones = append(dones, done)
+		want := len(dones)
+		go func() {
+			done <- w.WithWorkspace(context.Background(), func(context.Context) error { order <- name; return nil })
+		}()
+		awaitShared(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.queueCount == want })
+	}
+	enqueue("bg1", bg[1])
+	enqueue("bg2", bg[2])
+	enqueue("req0", req[0])
+	enqueue("req1", req[1])
+	select {
+	case name := <-order:
+		t.Fatal("a queued root preempted the holder", name)
+	default:
+	}
+	close(release)
+	if err := sharedResult(t, rootDone); err != nil {
+		t.Fatal(err)
+	}
+	for _, done := range dones {
+		if err := sharedResult(t, done); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for range dones {
+		got = append(got, <-order)
+	}
+	if want := []string{"req0", "req1", "bg1", "bg2"}; !reflect.DeepEqual(got, want) {
+		t.Fatal("priority tier order", got)
+	}
+	if err := req[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Snapshot().CompletionReserved.Disk - base.CompletionReserved.Disk; got != 4096 {
+		t.Fatal("retired request kept its Disk claim", got)
+	}
+	if err := req[0].Active.Release(); err != nil {
+		t.Fatal(err)
+	}
+	closeShared(t, m, s, append(bg, req[1]))
 }
