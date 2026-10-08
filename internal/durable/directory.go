@@ -16,20 +16,34 @@
 package durable
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"syscall"
+
+	"github.com/akz142857/Halro/internal/ownedfile"
 )
 
 // SyncDirectory forces the directory entry itself to disk, so a file created or
 // renamed inside it survives a crash rather than only its contents doing so.
 func SyncDirectory(path string) error {
-	handle, err := os.Open(path)
+	return syncDirectory(path, func(path string) (*os.File, error) {
+		return os.OpenFile(path, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	})
+}
+
+func syncDirectory(path string, open func(string) (*os.File, error)) error {
+	handle, err := open(path)
 	if err != nil {
 		return fmt.Errorf("open directory to sync: %w", err)
 	}
-	defer handle.Close()
-	if err := handle.Sync(); err != nil {
-		return fmt.Errorf("sync directory: %w", err)
+	syncErr := handle.Sync()
+	closeErr := handle.Close()
+	if closeErr != nil {
+		closeErr = ownedfile.CloseError(handle, fmt.Errorf("close synced directory: %w", closeErr))
 	}
-	return nil
+	if syncErr != nil {
+		syncErr = fmt.Errorf("sync directory: %w", syncErr)
+	}
+	return errors.Join(syncErr, closeErr)
 }
