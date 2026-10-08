@@ -178,8 +178,11 @@ frontend-production-check: $(WEB_DEPS_STAMP)
 # state, one test leaving a clock or a directory another relies on. It found
 # nothing on the day it was added, which is the point at which to add it —
 # afterwards it stays cheap and only ever reports something new.
+# The memory-bounded packages (app, budget, ledger, usage, store/bolt) each run
+# for minutes; under package parallelism several crossed Go's 10m default while
+# still passing. Like `race`, the gate owns its timeout explicitly.
 test:
-	go test -count=1 -shuffle=on ./...
+	go test -count=1 -shuffle=on -timeout=20m ./...
 
 # Coverage is not gated on a number. It exists so "which branch has no test"
 # is a question the tooling answers rather than one somebody greps for by hand.

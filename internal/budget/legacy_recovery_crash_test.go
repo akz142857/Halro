@@ -127,6 +127,8 @@ func TestLegacyRecoveryActualSIGKILLAtDurableAndAppliedPageBoundaries(t *testing
 	for _, auth := range []bool{false, true} {
 		for _, phase := range []string{"durable-settlement", "applied-settlement", "durable-finalization", "applied-finalization"} {
 			t.Run(fmt.Sprintf("authenticated=%v/%s", auth, phase), func(t *testing.T) {
+				// Both backends; one settlement and one (twice-killed) finalization point.
+				legacyRecoveryCase(t, auth && phase == "durable-finalization" || !auth && phase == "applied-settlement")
 				ctx := context.Background()
 				base, path, key := newProjectedRecoveryTest(t, legacyRecoveryEvents(t, true))
 				beforeUsage := legacyDiskUsage(t, base.log, base.p)
@@ -154,7 +156,10 @@ func TestLegacyRecoveryActualSIGKILLAtDurableAndAppliedPageBoundaries(t *testing
 					if err != nil {
 						t.Fatal(err)
 					}
-					childCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					// The child normally reaches its boundary in seconds, but under a
+					// parallel `go test ./...` it took over 30 s; a timeout kill is still
+					// told apart from the intended SIGKILL by childCtx.Err below.
+					childCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 					defer cancel()
 					cmd := exec.CommandContext(childCtx, executable, "-test.run=^TestLegacyRecoveryActualSIGKILLHelper$", "-test.count=1")
 					// Keep all abandoned child candidates under the owned case directory.
