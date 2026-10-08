@@ -149,6 +149,7 @@ func TestUsageSummaryAgreesWithDashboardForToday(t *testing.T) {
 // beside it for that minute, with nothing to explain the gap.
 func TestUsageSummaryIncludesTheUnpersistedIncrement(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 1)
+	installLegacyUsageForTest(t, runtime) // Explicit legacy checkpoint contract; Standalone disk commits atomically.
 	// Deliberately no saveUsageCheckpoint: nothing has been written yet.
 	if runtime.usage.PendingRollupRows() == 0 {
 		t.Fatal("fixture wrote the increment before the assertion could test it")
@@ -161,6 +162,7 @@ func TestUsageSummaryIncludesTheUnpersistedIncrement(t *testing.T) {
 
 func TestUsageSummaryWaitsForInFlightCheckpointOutcome(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 1)
+	installLegacyUsageForTest(t, runtime) // Explicit legacy checkpoint contract; Standalone disk commits atomically.
 	checkpointTaken := make(chan struct{})
 	releaseCheckpoint := make(chan struct{})
 	checkpointDone := make(chan error, 1)

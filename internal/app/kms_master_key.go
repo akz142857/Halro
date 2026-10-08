@@ -339,6 +339,10 @@ func unlockKMSMasterKey(
 // Runtime, Bootstrap and Admin paths never select the Recovery Slot. A
 // successful use is durably recorded before the command reports success.
 func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot string) (result RecoveryVerificationResult, resultErr error) {
+	ctx, _, scopeErr := commandBudgetContext(ctx, cfg)
+	if scopeErr != nil {
+		return RecoveryVerificationResult{}, scopeErr
+	}
 	recorder := &kmsAuditRecorder{}
 	ctx = withKMSAuditRecorder(ctx, recorder)
 	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
@@ -351,8 +355,9 @@ func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot st
 	if err != nil {
 		return RecoveryVerificationResult{}, err
 	}
+	ctx = withCommandDataLock(ctx, dataLock)
 	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return RecoveryVerificationResult{}, err
 	}
@@ -372,8 +377,10 @@ func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot st
 		return RecoveryVerificationResult{}, err
 	}
 	defer clear(auditKey)
-	defer func() { resultErr = finishOfflineKMSProviderAuditToStore(cfg, auditKey, recorder, store, resultErr) }()
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	defer func() {
+		resultErr = finishOfflineKMSProviderAuditToStore(ctx, cfg, auditKey, recorder, store, resultErr)
+	}()
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return RecoveryVerificationResult{}, err
 	}
@@ -403,6 +410,10 @@ func VerifyRecoverySlot(ctx context.Context, cfg config.Config, confirmedSlot st
 }
 
 func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializationOptions) error {
+	ctx, _, scopeErr := commandBudgetContext(ctx, cfg)
+	if scopeErr != nil {
+		return scopeErr
+	}
 	if options.factory == nil {
 		options.factory = defaultKMSWrapperFactory
 	}
@@ -555,7 +566,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 	}
 	stageConfig := cfg
 	stageConfig.Storage.DataDir = stageRoot
-	metadata, err := boltstore.OpenForWholeFilePublish(stageConfig.MetadataPath())
+	metadata, err := openCommandMetadataPublish(ctx, stageConfig, stageConfig.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -565,14 +576,20 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 			metadata.Close()
 		}
 	}()
-	ledgerLog, err := ledger.OpenWithOptions(stageConfig.LedgerPath(), ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
+	indexDiskOwner, indexLimit, err := newOneShotLedgerSegmentIndexDiskOwner(ctx, stageConfig)
 	if err != nil {
 		return err
 	}
-	if err := ledgerLog.Close(); err != nil {
+	ledgerLog, err := ledger.OpenWithOptions(stageConfig.LedgerPath(), ledger.NewStatus(), ledger.Options{
+		ChainKey: ledgerKey, MaxSegmentDirectoryIndexBytes: indexLimit,
+	})
+	if err != nil {
+		return errors.Join(err, indexDiskOwner.Release())
+	}
+	if err := errors.Join(ledgerLog.Close(), indexDiskOwner.Release()); err != nil {
 		return err
 	}
-	auditLog, err := audit.Open(stageConfig.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, stageConfig, stageConfig.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}
@@ -618,7 +635,7 @@ func initializeKMS(ctx context.Context, cfg config.Config, options kmsInitializa
 			return err
 		}
 	}
-	verificationStore, err := boltstore.OpenForWholeFilePublish(stageConfig.MetadataPath())
+	verificationStore, err := openCommandMetadataPublish(ctx, stageConfig, stageConfig.MetadataPath())
 	if err != nil {
 		return err
 	}

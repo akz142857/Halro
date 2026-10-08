@@ -1,14 +1,39 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/akz142857/Halro/internal/config"
 
 	"github.com/akz142857/Halro/internal/metadatajournal"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
+
+func checkConfiguredDoctorMetadataJournal(ctx context.Context, cfg config.Config, store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, add func(string, string, string)) {
+	if store == nil || !store.AuthenticatedMetadata() {
+		checkDoctorMetadataJournal(store, secretVault, masterKey, add)
+		return
+	}
+	scope, _ := ctx.Value(commandResourceScopeKey{}).(*commandResourceScope)
+	if scope == nil || scope.selectedReader == nil || !scope.selectedReader.guard.CoversDataDirectory(cfg.Storage.DataDir) {
+		add("metadata_journal", "fail", "selected Metadata has no original diagnostic source owner")
+		return
+	}
+	// The selected reader factory has joined the complete historical audit.
+	// JournalState rechecks the actual source health and derived native position;
+	// the legacy format-1 derivation key cannot authenticate this bound journal.
+	state, err := store.MetadataJournalState()
+	if err != nil || state.Path != filepath.Join(memoryStateDirectory(cfg), "metadata.journal") || state.Applied != state.Sequence || state.Epoch == 0 {
+		add("metadata_journal", "fail", fmt.Sprintf("selected bound journal differs from its authenticated diagnostic view: %v", err))
+		return
+	}
+	add("metadata_journal", "pass", fmt.Sprintf("selected bound epoch %d authenticated through sequence %d", state.Epoch, state.Sequence))
+}
 
 // checkDoctorMetadataJournal answers the question the journal made askable:
 // does halro.db still describe the same state its write-ahead log does?

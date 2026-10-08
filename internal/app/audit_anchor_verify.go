@@ -2,12 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
-	"strings"
 
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
@@ -61,14 +58,18 @@ const rotatedAnchorSuffix = ".1"
 // witness has rotated the file, the retired generation is read ahead of it so
 // the series stays in ascending order.
 func LoadAuditAnchorsFile(path string) ([]boltstore.AuditAnchor, error) {
+	return loadAuditAnchorsFileContext(context.Background(), path)
+}
+
+func loadAuditAnchorsFileContext(ctx context.Context, path string) ([]boltstore.AuditAnchor, error) {
 	// A missing rotated generation is the normal state — most witnesses never
 	// fill one file. A missing live file is not: that is the path the operator
 	// named, and it still fails.
-	rotated, err := readAnchorLines(path + rotatedAnchorSuffix)
+	rotated, err := readAnchorLinesContext(ctx, path+rotatedAnchorSuffix, anchorMaximumRows)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	live, err := readAnchorLines(path)
+	live, err := readAnchorLinesContext(ctx, path, anchorMaximumRows-len(rotated))
 	if err != nil {
 		return nil, err
 	}
@@ -76,36 +77,7 @@ func LoadAuditAnchorsFile(path string) ([]boltstore.AuditAnchor, error) {
 }
 
 func readAnchorLines(path string) ([]boltstore.AuditAnchor, error) {
-	payload, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("open anchors file: %w", err)
-	}
-	// A torn final line is an expected artifact, not corruption: the witness
-	// appends one JSON object at a time and is a separate process that can be
-	// killed mid-write. Refusing the whole file for it threw away every intact
-	// anchor because of the one the crash interrupted — the witness silenced by
-	// the same event that made it worth consulting. A short tail is dropped;
-	// anything malformed with a line after it is not, because that is tampering
-	// or real damage, and quietly skipping it is exactly how someone removes the
-	// anchors that disagree.
-	tornTail := len(payload) > 0 && payload[len(payload)-1] != '\n'
-	lines := strings.Split(string(payload), "\n")
-	var anchors []boltstore.AuditAnchor
-	for index, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		var anchor boltstore.AuditAnchor
-		if err := json.Unmarshal([]byte(line), &anchor); err != nil {
-			if tornTail && index == len(lines)-1 {
-				break
-			}
-			return nil, fmt.Errorf("decode anchor line %d: %w", index+1, err)
-		}
-		anchors = append(anchors, anchor)
-	}
-	return anchors, nil
+	return readAnchorLinesContext(context.Background(), path, anchorMaximumRows)
 }
 
 // VerifyAuditAnchors checks each of the given anchors against the local
@@ -113,23 +85,43 @@ func readAnchorLines(path string) ([]boltstore.AuditAnchor, error) {
 // is now shorter than the anchor claims (truncation). Like VerifyAudit, this
 // runs offline against a stopped instance — it does not lock out concurrent
 // appends, it requires the data directory's exclusive lock.
-func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltstore.AuditAnchor) ([]AnchorVerdict, error) {
+func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltstore.AuditAnchor) (result []AnchorVerdict, resultErr error) {
+	if len(anchors) > anchorMaximumRows {
+		return nil, errAnchorLimit
+	}
+	for _, anchor := range anchors {
+		if !boundedAnchor(anchor) {
+			return nil, errAnchorLimit
+		}
+	}
+	ctx, release, err := anchorCommandContext(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, release(), ctx.Err())
+		if resultErr != nil {
+			result = nil
+		}
+	}()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, err
 	}
-	defer dataLock.Close()
-	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	if err := assertConfiguredMetadataSchemaCurrent(ctx, cfg); err != nil {
 		return nil, err
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return nil, err
@@ -148,11 +140,6 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		return nil, err
 	}
 	defer clear(auditKey)
-	log, err := audit.Open(cfg.AuditPath(), auditKey)
-	if err != nil {
-		return nil, fmt.Errorf("open local audit chain: %w", err)
-	}
-	defer log.Close()
 	// Keep only the record hashes the anchors actually name. Retaining one
 	// entry per record made the memory a function of the audit log's length —
 	// unbounded, since the log has no cap but the disk — for a check whose
@@ -162,7 +149,7 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 		wanted[anchor.Records] = struct{}{}
 	}
 	hashBySequence := make(map[uint64][32]byte, len(wanted))
-	summary, err := log.Replay(func(record audit.Record) error {
+	summary, err := inspectCommandAudit(ctx, cfg, auditKey, func(record audit.Record) error {
 		if _, ok := wanted[record.Sequence]; ok {
 			hashBySequence[record.Sequence] = record.Hash
 		}
@@ -185,6 +172,9 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 	sequenceHashes := make(map[tenurePosition][32]byte)
 	sequenceConflicts := make(map[tenurePosition]bool)
 	for _, anchor := range anchors {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if anchor.ClusterID == "" || anchor.Incarnation == "" || anchor.NodeID == "" || anchor.Term == 0 {
 			continue
 		}
@@ -208,6 +198,9 @@ func VerifyAuditAnchors(ctx context.Context, cfg config.Config, anchors []boltst
 	expectedByStream := make(map[anchorStream]uint64)
 	var highestRecords uint64
 	for _, anchor := range anchors {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		verdict := AnchorVerdict{
 			Sequence: anchor.Sequence, Records: anchor.Records, ClusterID: anchor.ClusterID,
 			Incarnation: anchor.Incarnation, NodeID: anchor.NodeID, Term: anchor.Term, TargetID: anchor.TargetID,

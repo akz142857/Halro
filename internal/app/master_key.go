@@ -25,14 +25,14 @@ func unlockMasterKey(ctx context.Context, cfg config.Config, stores ...*boltstor
 		return nil, errors.New("at most one metadata store may be supplied")
 	}
 	if len(stores) == 1 && stores[0] != nil {
-		return unlockKMSMasterKey(ctx, cfg, stores[0], masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
+		return unlockKMSMasterKey(ctx, cfg, stores[0], masterkey.KeySlotPrimary, selectedRotationKMSFactory(ctx))
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openMasterKeyMetadata(ctx, cfg, false)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
-	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
+	return unlockKMSMasterKey(ctx, cfg, store, masterkey.KeySlotPrimary, selectedRotationKMSFactory(ctx))
 }
 
 // unlockMemberMasterKey is the HA startup path. Unlike unlockMasterKey's
@@ -54,7 +54,7 @@ func unlockMemberMasterKeyWithFactory(ctx context.Context, cfg config.Config, fa
 	if cfg.Storage.MasterKey.Mode != config.MasterKeyModeKeySlots {
 		return nil, errors.New("unsupported Master Key mode")
 	}
-	store, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	store, err := openMasterKeyMetadata(ctx, cfg, true)
 	if err != nil {
 		return nil, err
 	}

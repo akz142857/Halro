@@ -57,10 +57,30 @@ func Doctor(ctx context.Context, cfg config.Config) (DoctorReport, error) {
 	return DoctorWithOptions(ctx, cfg, DoctorOptions{})
 }
 
-func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOptions) (DoctorReport, error) {
-	report := DoctorReport{Healthy: true, VaultStatus: "unknown", CheckedAt: time.Now().UTC()}
-	failedChecks := 0
+func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOptions) (report DoctorReport, resultErr error) {
+	ctx, finish, commandScopeErr := doctorBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		return DoctorReport{}, commandScopeErr
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, finish(), ctx.Err())
+		if resultErr != nil {
+			report.Healthy = false
+		}
+	}()
+
+	report = DoctorReport{Healthy: true, VaultStatus: "unknown", CheckedAt: time.Now().UTC()}
+	failedChecks, reportBytes := 0, 0
+	reportLimit := false
 	add := func(name, status, detail string) {
+		if reportLimit {
+			return
+		}
+		if len(report.Checks) >= doctorReportChecks-1 || len(name)+len(status)+len(detail) > doctorReportBytes-reportBytes-256 {
+			name, status, detail = "report_capacity", "fail", "doctor report exceeds its finite check or byte envelope; inspection is incomplete"
+			reportLimit = true
+		}
+		reportBytes += len(name) + len(status) + len(detail)
 		report.Checks = append(report.Checks, DoctorCheck{Name: name, Status: status, Detail: detail})
 		if status == "fail" {
 			report.Healthy = false
@@ -105,7 +125,8 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("data_lock", "fail", doctorDataLockFailure(cfg.Storage.DataDir, err))
 		return report, errors.New("doctor requires exclusive offline access")
 	}
-	defer dataLock.Close()
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = errors.Join(resultErr, doctorClose(ctx, dataLock)) }()
 	add("data_lock", "pass", "exclusive offline snapshot acquired")
 
 	for name, path := range map[string]string{
@@ -126,11 +147,12 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add(name, "pass", fmt.Sprintf("permissions %04o", info.Mode().Perm()))
 	}
 
-	store, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	store, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
+		doctorConstructorDebt(ctx, err)
 		add("metadata", "fail", err.Error())
 	} else {
-		defer store.Close()
+		defer func() { resultErr = errors.Join(resultErr, doctorClose(ctx, store)) }()
 		add("metadata", "pass", fmt.Sprintf("bbolt schema v%d", boltstore.CurrentSchemaVersion()))
 	}
 	// Filled in below when the Ledger chain could actually be authenticated.
@@ -161,6 +183,7 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		}
 		masterKey, keyErr := unlockMasterKey(ctx, cfg, store)
 		if keyErr != nil {
+			doctorConstructorDebt(ctx, keyErr)
 			add("master_key", "fail", keyErr.Error())
 		} else {
 			defer clear(masterKey)
@@ -177,23 +200,16 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 					defer secretVault.Close()
 					report.VaultStatus = "verified"
 					add("master_key", "pass", "mode and encrypted metadata key check are valid")
-					chainStatus, chainDetail = inspectLedgerChain(store, secretVault, masterKey, cfg.LedgerPath())
 				}
 			}
 		}
 	}
 
-	ledgerState := ledger.NewState()
-	recoveredReleased, recoveredSettled := 0, 0
-	watermark, partial, walErr := ledger.InspectReplay(cfg.LedgerPath(), func(record ledger.Record) error {
-		if record.Event.Outcome == "recovered_not_started" {
-			recoveredReleased++
-		} else if record.Event.Outcome == "recovered_started_unknown_result" {
-			recoveredSettled++
-		}
-		return ledgerState.Apply(record)
-	})
+	observation, walErr := inspectDoctorLedger(ctx, cfg, store, doctorVault, doctorMasterKey)
+	watermark, partial := observation.Head, observation.Partial
+	chainStatus, chainDetail = observation.ChainStatus, observation.ChainDetail
 	if walErr != nil {
+		doctorConstructorDebt(ctx, walErr)
 		add("ledger", "fail", walErr.Error())
 	} else if partial {
 		add("ledger", "fail", fmt.Sprintf("partial WAL tail after committed offset %d; doctor did not truncate it", watermark.Offset))
@@ -201,25 +217,63 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("ledger", "fail", chainDetail)
 	} else {
 		add("ledger", chainStatus, fmt.Sprintf("committed sequence %d at offset %d; %s", watermark.Sequence, watermark.Offset, chainDetail))
-		pending, oldestAge := ledgerState.PendingLeaseStats(time.Now())
-		status := "pass"
-		if pending > 0 {
-			status = "warn"
+		if !observation.LeasesVerified {
+			add("accounting_leases", "unverified", "Ledger key is unavailable; pending leases were not reconstructed from unauthenticated frames")
+		} else {
+			status := "pass"
+			if observation.Pending.Count > 0 {
+				status = "warn"
+			}
+			add("accounting_leases", status, fmt.Sprintf("pending=%d oldest_age=%s recovered_released=%d recovered_settled=%d", observation.Pending.Count, observation.Pending.OldestAge.Round(time.Second), observation.RecoveredReleased, observation.RecoveredSettled))
 		}
-		add("accounting_leases", status, fmt.Sprintf("pending=%d oldest_age=%s recovered_released=%d recovered_settled=%d", pending, oldestAge.Round(time.Second), recoveredReleased, recoveredSettled))
 	}
 
-	exporter, exportErr := usage.NewExporter(cfg.UsagePath())
+	archiveBudget, releaseArchive, budgetErr := newOneShotUsageArchiveDiskBudget(ctx, cfg)
+	if budgetErr != nil {
+		add("parquet_budget", "fail", budgetErr.Error())
+	}
+	var reserveArchiveDisk func(context.Context, int64) (func() error, error)
+	if archiveBudget != nil {
+		reserveArchiveDisk = archiveBudget.reserve
+	}
+	var exporter *usage.Exporter
+	var exportErr error
+	if budgetErr == nil {
+		exporter, exportErr = usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: archiveBudget.readerReservation(cfg), ReserveArchiveWorkRAM: archiveBudget.workReservation()})
+	}
 	if exportErr != nil {
+		_ = releaseArchive()
 		add("parquet", "fail", exportErr.Error())
-	} else if _, manifestErr := exporter.LoadManifest(); errors.Is(manifestErr, os.ErrNotExist) {
-		add("parquet", "warn", "no usage manifest yet")
-	} else if manifestErr != nil {
-		add("parquet", "fail", manifestErr.Error())
-	} else if verifyErr := exporter.Verify(nil); verifyErr != nil {
-		add("parquet", "fail", verifyErr.Error())
-	} else {
-		add("parquet", "pass", "manifest, checksums, schemas, and summaries are valid")
+	} else if exporter != nil {
+		defer func() {
+			if closeErr := doctorClose(ctx, exporter); closeErr != nil {
+				add("parquet_close", "fail", closeErr.Error())
+				resultErr = errors.Join(resultErr, errors.New("doctor could not close Usage archive"))
+				return
+			}
+			if releaseErr := releaseArchive(); releaseErr != nil {
+				add("parquet_budget", "fail", releaseErr.Error())
+				resultErr = errors.Join(resultErr, errors.New("doctor could not release Usage archive budget"))
+			}
+		}()
+		position, manifestErr := exporter.ReadArchivePosition(ctx)
+		if errors.Is(manifestErr, os.ErrNotExist) {
+			add("parquet", "warn", "no usage manifest yet")
+		} else if manifestErr != nil {
+			add("parquet", "fail", manifestErr.Error())
+		} else {
+			verifyErr := error(nil)
+			if position.CatalogVersion == 1 {
+				verifyErr = exporter.VerifyArchiveFileChecksums(ctx)
+			} else {
+				verifyErr = exporter.Verify(nil)
+			}
+			if verifyErr != nil {
+				add("parquet", "fail", verifyErr.Error())
+			} else {
+				add("parquet", "pass", "manifest, checksums, schemas, and summaries are valid")
+			}
+		}
 	}
 
 	// The stored setting decides the boundary; config.yaml only seeded it. An
@@ -283,22 +337,24 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		add("disk", status, fmt.Sprintf("%d bytes available", free))
 	}
 
-	checkDoctorMetadataJournal(store, doctorVault, doctorMasterKey, add)
+	checkConfiguredDoctorMetadataJournal(ctx, cfg, store, doctorVault, doctorMasterKey, add)
 	if store != nil {
 		checkDoctorProviderEgress(ctx, store, doctorVault, add)
 		checkDoctorTopology(ctx, cfg, store, add)
 		checkDoctorAdminBootstrap(ctx, store, add)
-		if credentials, credentialErr := store.ListCredentials(ctx); credentialErr != nil {
+		mismatched := 0
+		credentialErr := store.WalkCredentialsMaintenance(ctx, func(item domain.Credential) error {
+			if !internalCredentialType(item.Type) && doctorCredentialProductMismatch(item) {
+				mismatched++
+			}
+			return nil
+		})
+		if credentialErr != nil {
 			add("credential_product", "fail", credentialErr.Error())
 		} else {
-			visible := credentials[:0]
-			for _, credential := range credentials {
-				if !internalCredentialType(credential.Type) {
-					visible = append(visible, credential)
-				}
-			}
-			checkDoctorCredentialProducts(visible, add)
+			doctorCredentialProductStatus(mismatched, add)
 		}
+
 		if err := store.PricingReadiness(ctx); err != nil {
 			add("pricing_clock", "fail", err.Error())
 		} else {
@@ -306,7 +362,11 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 		}
 	}
 	add("provider_connectivity", "warn", "network probes skipped by read-only offline doctor; use Admin connection tests")
-	report.Findings = advisor.Evaluate(doctorAdvisorInput(ctx, cfg, store))
+	advisorInput, advisorErr := doctorAdvisorInputChecked(ctx, cfg, store)
+	if advisorErr != nil {
+		add("advisor_topology", "fail", advisorErr.Error())
+	}
+	report.Findings = advisor.Evaluate(advisorInput)
 	if failedChecks > 0 {
 		return report, errors.New("doctor found one or more failed checks")
 	}
@@ -320,33 +380,37 @@ func DoctorWithOptions(ctx context.Context, cfg config.Config, options DoctorOpt
 // administrators without a marker, so that state is a warning rather than a
 // fabricated success or an upgrade-blocking failure.
 func checkDoctorAdminBootstrap(ctx context.Context, store *boltstore.Store, add func(string, string, string)) {
-	users, err := store.ListAdminUsers(ctx)
-	if err != nil {
-		add("admin_bootstrap_completion", "fail", err.Error())
-		return
-	}
-	completion, err := store.AdminBootstrapCompletion(ctx)
-	if errors.Is(err, boltstore.ErrNotFound) {
-		if len(users) == 0 {
-			add("admin_bootstrap_completion", "pass", "bootstrap has not completed and no administrator exists")
-		} else {
-			add("admin_bootstrap_completion", "warn", fmt.Sprintf("%d administrator(s) exist without a bootstrap completion marker; treat this as legacy or manually created state", len(users)))
-		}
-		return
-	}
-	if err != nil {
-		add("admin_bootstrap_completion", "fail", err.Error())
-		return
-	}
-	fullAdministrators := 0
-	for _, user := range users {
+	completion, completionErr := store.AdminBootstrapCompletion(ctx)
+	users, fullAdministrators, targetFound := 0, 0, false
+	err := store.WalkAdminUsersMaintenance(ctx, func(user domain.AdminUser) error {
+		users++
 		if user.Role == domain.AdminRoleAdministrator {
 			fullAdministrators++
+			if user.Username == completion.Username {
+				targetFound = true
+			}
 		}
-		if user.Username == completion.Username && user.Role == domain.AdminRoleAdministrator {
-			add("admin_bootstrap_completion", "pass", fmt.Sprintf("operation_id=%s target=%s committed_at=%s", completion.OperationID, completion.Username, completion.CommittedAt.UTC().Format(time.RFC3339Nano)))
-			return
+		return nil
+	})
+	if err != nil {
+		add("admin_bootstrap_completion", "fail", err.Error())
+		return
+	}
+	if errors.Is(completionErr, boltstore.ErrNotFound) {
+		if users == 0 {
+			add("admin_bootstrap_completion", "pass", "bootstrap has not completed and no administrator exists")
+		} else {
+			add("admin_bootstrap_completion", "warn", fmt.Sprintf("%d administrator(s) exist without a bootstrap completion marker; treat this as legacy or manually created state", users))
 		}
+		return
+	}
+	if completionErr != nil {
+		add("admin_bootstrap_completion", "fail", completionErr.Error())
+		return
+	}
+	if targetFound {
+		add("admin_bootstrap_completion", "pass", fmt.Sprintf("operation_id=%s target=%s committed_at=%s", completion.OperationID, completion.Username, completion.CommittedAt.UTC().Format(time.RFC3339Nano)))
+		return
 	}
 	if fullAdministrators > 0 {
 		add("admin_bootstrap_completion", "warn", fmt.Sprintf("operation_id=%s is durable but original target %q is no longer a full administrator; %d replacement full administrator(s) remain, so review the audit chain for the rotation", completion.OperationID, completion.Username, fullAdministrators))
@@ -370,22 +434,20 @@ func checkDoctorProviderEgress(ctx context.Context, store *boltstore.Store, secr
 		return
 	}
 	defer registry.Close()
-	providers, err := store.ListProviders(ctx)
-	if err != nil {
-		add("provider_egress", "fail", err.Error())
-		return
-	}
 	bound := 0
-	for _, item := range providers {
+	err = store.WalkProvidersMaintenance(ctx, func(item domain.ProviderInstance) error {
 		if item.DeletedAt != nil || item.EgressProxyID == "" {
-			continue
+			return nil
 		}
 		bound++
 		if _, ok := registry.connector(item.EgressProxyID); !ok {
-			add("provider_egress", "fail", fmt.Sprintf(
-				"provider %q is excluded from routing: egress proxy %q is not configured", item.ID, item.EgressProxyID))
-			return
+			return fmt.Errorf("provider %q is excluded from routing: egress proxy %q is not configured", item.ID, item.EgressProxyID)
 		}
+		return nil
+	})
+	if err != nil {
+		add("provider_egress", "fail", err.Error())
+		return
 	}
 	add("provider_egress", "pass", fmt.Sprintf(
 		"%d managed proxies passed static definition and encrypted-authentication checks; %d providers are proxy-bound; network probes skipped",
@@ -501,104 +563,99 @@ func validateDoctorKeySlots(ctx context.Context, cfg config.Config, store *bolts
 }
 
 func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstore.Store, add func(string, string, string)) {
-	providers, providerErr := store.ListProviders(ctx)
-	deployments, deploymentErr := store.ListDeployments(ctx)
-	routes, routeErr := store.ListRoutes(ctx)
-	if err := errors.Join(providerErr, deploymentErr, routeErr); err != nil {
-		add("topology", "fail", err.Error())
-		return
-	}
-	providerEnabled := make(map[string]bool, len(providers))
-	// An endpoint that was legal when the provider was created stops being legal
-	// the moment the operator tightens allow_private_provider_endpoints, and the
-	// loader then excludes that provider rather than refusing to start. That is
-	// the right call — tightening a security setting must not brick the
-	// instance — but it means the exclusion is silent unless doctor says it.
 	endpointPolicy := providerEndpointPolicy(cfg)
-	for _, item := range providers {
+	err := store.WalkProvidersMaintenance(ctx, func(item domain.ProviderInstance) error {
 		if !item.Enabled || item.DeletedAt != nil {
-			continue
+			return nil
 		}
 		policy := endpointPolicy
 		policy.AllowedHosts = item.AllowedHosts
 		if _, err := safetransport.ValidateURL(item.BaseURL, policy); err != nil {
-			add("topology", "fail", fmt.Sprintf(
-				"provider %q is excluded from routing: its endpoint does not satisfy the current policy: %v", item.ID, err))
-			return
+			return fmt.Errorf("provider %q is excluded from routing: its endpoint does not satisfy the current policy: %v", item.ID, err)
 		}
+		return nil
+	})
+	if err != nil {
+		add("topology", "fail", err.Error())
+		return
 	}
-	// A binding that is switched off produces no adapter, so a route reaching it
-	// is withheld from the routing candidates rather than served. Checking only
-	// the provider and the deployment made that invisible here: the loader is
-	// deliberately tolerant now, which is exactly why doctor has to be the place
-	// the exclusion shows up.
-	bindingEnabled := make(map[string]bool)
-	providerByID := make(map[string]domain.ProviderInstance, len(providers))
-	for _, item := range providers {
-		providerEnabled[item.ID] = item.Enabled && item.DeletedAt == nil
-		providerByID[item.ID] = item
-		for _, binding := range item.EffectiveProfileBindings() {
-			bindingEnabled[item.ID+"\x00"+binding.ID] = binding.Enabled
-		}
-	}
-	deploymentBinding := make(map[string]string, len(deployments))
-	deploymentByID := make(map[string]domain.Deployment, len(deployments))
-	for _, item := range deployments {
-		deploymentByID[item.ID] = item
-	}
-	deploymentEnabled := make(map[string]bool, len(deployments))
 	pricingSelectedAt := time.Now().UTC()
-	for _, item := range deployments {
-		bindingID := item.BindingID
-		if bindingID == "" {
-			bindingID = domain.DefaultProviderProfileBindingID(item.ProviderID, item.ProfileID)
-		}
-		deploymentBinding[item.ID] = bindingID
-		deploymentEnabled[item.ID] = item.Enabled && item.DeletedAt == nil && providerEnabled[item.ProviderID]
+	drifted, review := 0, 0
+	checkName := "topology"
+	err = store.WalkDeploymentsMaintenance(ctx, func(item domain.Deployment) error {
 		if item.Enabled && item.DeletedAt == nil {
 			price, err := store.SelectDeploymentPriceVersion(ctx, item.ID, pricingSelectedAt)
 			if err != nil {
-				add("pricing_readiness", "fail", fmt.Sprintf("enabled deployment %q has no effective versioned price: %v", item.ID, err))
-				return
+				checkName = "pricing_readiness"
+				return fmt.Errorf("enabled deployment %q has no effective versioned price: %v", item.ID, err)
 			}
-			// A price that bills by time of day needs its provider's zone at
-			// request time. Losing it does not stop billing — the attempt is
-			// charged at the dearest rung instead — so nothing else would
-			// report it, and the deployment would quietly over-bill until
-			// someone reconciled an invoice.
 			if price.Schedule != nil {
-				if _, zoneErr := time.LoadLocation(price.Schedule.Timezone); zoneErr != nil {
-					add("pricing_schedule_zone", "fail", fmt.Sprintf("deployment %q prices by time of day in %q, which this binary cannot resolve; attempts are being billed at the dearest rate", item.ID, price.Schedule.Timezone))
-					return
+				if _, err := time.LoadLocation(price.Schedule.Timezone); err != nil {
+					checkName = "pricing_schedule_zone"
+					return fmt.Errorf("deployment %q prices by time of day in %q, which this binary cannot resolve; attempts are being billed at the dearest rate", item.ID, price.Schedule.Timezone)
 				}
 			}
 		}
+		if item.DeletedAt != nil {
+			return nil
+		}
+		instance, err := store.GetProviderMaintenance(ctx, item.ProviderID)
+		if errors.Is(err, boltstore.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		switch doctorDeploymentCapabilityReview(item, instance) {
+		case domain.CapabilityReviewDrifted:
+			drifted++
+		case domain.CapabilityReviewAvailable:
+			review++
+		}
+		return nil
+	})
+	if err != nil {
+		add(checkName, "fail", err.Error())
+		return
 	}
 	add("pricing_readiness", "pass", "all enabled deployments have an effective versioned price")
 	add("pricing_schedule_zone", "pass", "every time-of-day price schedule resolves its provider timezone")
-	checkDoctorCapabilityDrift(providers, deployments, add)
+	doctorCapabilityStatus(drifted, review, add)
 	active := 0
-	for _, item := range routes {
+	err = store.WalkRoutesMaintenance(ctx, func(item domain.Route) error {
 		if !item.Enabled || item.DeletedAt != nil {
-			continue
+			return nil
 		}
 		active++
-		if !deploymentEnabled[item.DeploymentID] {
-			add("topology", "fail", "an enabled route references an unavailable deployment or provider")
-			return
+		deployment, err := store.GetDeploymentMaintenance(ctx, item.DeploymentID)
+		if errors.Is(err, boltstore.ErrNotFound) || err == nil && (!deployment.Enabled || deployment.DeletedAt != nil) {
+			return errors.New("an enabled route references an unavailable deployment or provider")
 		}
-		deployment, ok := deploymentByID[item.DeploymentID]
-		if !ok {
-			add("topology", "fail", fmt.Sprintf("route %q references a deployment that does not exist", item.ID))
-			return
+		if err != nil {
+			return err
 		}
-		if !bindingEnabled[deployment.ProviderID+"\x00"+deploymentBinding[item.DeploymentID]] {
-			add("topology", "fail", fmt.Sprintf(
-				"route %q is withheld: deployment %q uses capability interface %q, which is switched off on provider %q",
-				item.ID, deployment.ID, deploymentBinding[item.DeploymentID], deployment.ProviderID))
-			return
+		provider, err := store.GetProviderMaintenance(ctx, deployment.ProviderID)
+		if errors.Is(err, boltstore.ErrNotFound) || err == nil && (!provider.Enabled || provider.DeletedAt != nil) {
+			return errors.New("an enabled route references an unavailable deployment or provider")
 		}
+		if err != nil {
+			return err
+		}
+		bindingID := deployment.BindingID
+		if bindingID == "" {
+			bindingID = domain.DefaultProviderProfileBindingID(deployment.ProviderID, deployment.ProfileID)
+		}
+		binding, found := provider.ProfileBinding(bindingID)
+		if !found || !binding.Enabled {
+			return fmt.Errorf("route %q is withheld: deployment %q uses capability interface %q, which is switched off on provider %q", item.ID, deployment.ID, bindingID, deployment.ProviderID)
+		}
+		return nil
+	})
+	if err != nil {
+		add("topology", "fail", err.Error())
+		return
 	}
+
 	detail := fmt.Sprintf("%d active routes; all references are available", active)
 	add("topology", "pass", detail)
 	// An admin mutation is durable together with its audit record, and delivery
@@ -620,28 +677,7 @@ func checkDoctorTopology(ctx context.Context, cfg config.Config, store *boltstor
 // been rewritten by anyone holding the data directory reported "pass". doctor
 // has already unlocked the Master Key by this point, so the only thing that was
 // missing is the call.
-func inspectLedgerChain(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, path string) (string, string) {
-	ledgerKey, err := loadLedgerHMACKey(store, secretVault, masterKey)
-	if err != nil {
-		return "unverified", "ledger chain key is unavailable: " + err.Error()
-	}
-	defer clear(ledgerKey)
-	// Sealed generations first. Verifying only the active file would report a
-	// clean chain after every roll while checking almost none of the ledger —
-	// and right after a roll, none of it at all.
-	sealed, err := ledger.VerifySegments(filepath.Dir(path), ledgerKey, 0)
-	if err != nil {
-		return "fail", "ledger chain verification failed: " + err.Error()
-	}
-	report, partial, err := ledger.VerifyChain(path, ledgerKey)
-	if err != nil {
-		return "fail", "ledger chain verification failed: " + err.Error()
-	}
-	for _, segment := range sealed {
-		report.SealedGenerations++
-		report.SealedAuthenticated += segment.Authenticated
-		report.ChecksumOnly += segment.ChecksumOnly
-	}
+func doctorLedgerChainStatus(store *boltstore.Store, report ledger.ChainReport, partial bool) (string, string) {
 	if partial {
 		return "unverified", "ledger has a partial tail; start Halro to repair it before verifying"
 	}
@@ -692,17 +728,25 @@ func checkDoctorCapabilityDrift(providers []domain.ProviderInstance, deployments
 		if !ok {
 			continue
 		}
-		binding, bound := instance.ProfileBinding(deployment.BindingID)
-		if !bound {
-			binding = domain.ProviderProfileBinding{ProfileID: deployment.ProfileID, Capabilities: instance.Capabilities}
-		}
-		switch evaluateCapabilityReview(deployment, binding, instance.Type) {
+		switch doctorDeploymentCapabilityReview(deployment, instance) {
 		case domain.CapabilityReviewDrifted:
 			drifted++
 		case domain.CapabilityReviewAvailable:
 			review++
 		}
 	}
+	doctorCapabilityStatus(drifted, review, add)
+}
+
+func doctorDeploymentCapabilityReview(deployment domain.Deployment, instance domain.ProviderInstance) domain.CapabilityReviewState {
+	binding, bound := instance.ProfileBinding(deployment.BindingID)
+	if !bound {
+		binding = domain.ProviderProfileBinding{ProfileID: deployment.ProfileID, Capabilities: instance.Capabilities}
+	}
+	return evaluateCapabilityReview(deployment, binding, instance.Type)
+}
+
+func doctorCapabilityStatus(drifted, review int, add func(string, string, string)) {
 	switch {
 	case drifted > 0:
 		// Named as a count rather than a list: deployment IDs are the kind of
@@ -740,22 +784,25 @@ func checkDoctorCapabilityDrift(providers []domain.ProviderInstance, deployments
 func checkDoctorCredentialProducts(credentials []domain.Credential, add func(string, string, string)) {
 	mismatched := 0
 	for _, credential := range credentials {
-		// The endpoint a credential is sealed to is its audience with the
-		// provider type appended, which is the same value the Admin listing
-		// shows as bound_base_url.
-		endpoint := credentialOrigin(credential.Audience, credential.Type)
-		surface, surfaceKnown := domain.SurfaceForEndpoint(credential.Type, endpoint)
-		if surfaceKnown && surface != credential.AccessSurface {
+		if doctorCredentialProductMismatch(credential) {
 			mismatched++
-			continue
 		}
-		identity, identityKnown := domain.IdentityForSurface(credential.AccessSurface)
-		region, regionKnown := domain.RegionForProviderEndpoint(credential.Type, endpoint)
-		if !identityKnown || !regionKnown || identity.Region == domain.RegionNone || region == identity.Region {
-			continue
-		}
-		mismatched++
 	}
+	doctorCredentialProductStatus(mismatched, add)
+}
+
+func doctorCredentialProductMismatch(credential domain.Credential) bool {
+	endpoint := credentialOrigin(credential.Audience, credential.Type)
+	surface, surfaceKnown := domain.SurfaceForEndpoint(credential.Type, endpoint)
+	if surfaceKnown && surface != credential.AccessSurface {
+		return true
+	}
+	identity, identityKnown := domain.IdentityForSurface(credential.AccessSurface)
+	region, regionKnown := domain.RegionForProviderEndpoint(credential.Type, endpoint)
+	return identityKnown && regionKnown && identity.Region != domain.RegionNone && region != identity.Region
+}
+
+func doctorCredentialProductStatus(mismatched int, add func(string, string, string)) {
 	if mismatched > 0 {
 		// A count and not a list, like capability_drift above: credential
 		// identifiers are the kind of specific object that belongs in the audit

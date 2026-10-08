@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -25,15 +28,25 @@ type adminWorkUnitView struct {
 	UnknownAttempts    int64 `json:"unknown_attempts"`
 }
 
-func (r *Runtime) adminWorkUnitView(item domain.WorkUnit) adminWorkUnitView {
+func (r *Runtime) adminWorkUnitView(ctx context.Context, item domain.WorkUnit) (adminWorkUnitView, error) {
 	view := adminWorkUnitView{WorkUnit: item}
-	for _, run := range r.accounting.Runs(item.ProjectID, item.ID) {
-		view.RunCount++
-		view.CommittedMicrosUSD = governanceSaturatingAdd(view.CommittedMicrosUSD, run.CommittedMicrosUSD)
-		view.ReservedMicrosUSD = governanceSaturatingAdd(view.ReservedMicrosUSD, run.ReservedMicrosUSD)
-		view.UnknownAttempts = governanceSaturatingAdd(view.UnknownAttempts, run.UnknownAttempts)
+	query := ledger.RunListQuery{ProjectID: item.ProjectID, WorkUnitID: item.ID, At: r.clockNow(), GovernanceListOptions: ledger.GovernanceListOptions{Limits: ledger.ProjectionPageLimits{Rows: 32, Bytes: ledger.GovernanceListMaxBytes}}}
+	for {
+		page, err := r.accounting.ReadRunPage(ctx, query)
+		if err != nil {
+			return adminWorkUnitView{}, err
+		}
+		for _, run := range page.Items {
+			view.RunCount++
+			view.CommittedMicrosUSD = governanceSaturatingAdd(view.CommittedMicrosUSD, run.CommittedMicrosUSD)
+			view.ReservedMicrosUSD = governanceSaturatingAdd(view.ReservedMicrosUSD, run.ReservedMicrosUSD)
+			view.UnknownAttempts = governanceSaturatingAdd(view.UnknownAttempts, run.UnknownAttempts)
+		}
+		if page.NextID == "" {
+			return view, nil
+		}
+		query.After = page.NextID
 	}
-	return view
 }
 
 func (r *Runtime) listAdminWorkUnits(writer http.ResponseWriter, request *http.Request) {
@@ -47,30 +60,61 @@ func (r *Runtime) listAdminWorkUnits(writer http.ResponseWriter, request *http.R
 		adminBadRequest(writer, "invalid Work Unit status")
 		return
 	}
-	items := r.accounting.WorkUnits(projectID)
-	filtered := make([]domain.WorkUnit, 0, len(items))
-	for _, item := range items {
-		if status == "" || item.Status == status {
-			filtered = append(filtered, item)
+	options, ok := readGovernanceListOptions(writer, request)
+	if !ok {
+		return
+	}
+	page, err := r.accounting.ReadWorkUnitPage(request.Context(), ledger.WorkUnitListQuery{ProjectID: projectID, Status: status, GovernanceListOptions: options})
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "work unit")
+		return
+	}
+	views := make([]adminWorkUnitView, 0, len(page.Items))
+	size := 0
+	for _, item := range page.Items {
+		view, err := r.adminWorkUnitView(request.Context(), item)
+		if err != nil {
+			writeGovernanceOperationError(writer, err, "work unit")
+			return
 		}
+		raw, err := json.Marshal(view)
+		if err != nil {
+			writeGovernanceOperationError(writer, err, "work unit")
+			return
+		}
+		if len(raw) > options.Limits.Bytes-size {
+			if len(views) == 0 {
+				writeGovernanceOperationError(writer, ledger.ErrProjectionPageLimit, "work unit")
+				return
+			}
+			page.NextID = views[len(views)-1].ID
+			break
+		}
+		size += len(raw)
+		views = append(views, view)
 	}
-	views := make([]adminWorkUnitView, 0, len(filtered))
-	for _, item := range filtered {
-		views = append(views, r.adminWorkUnitView(item))
-	}
-	writeGovernanceAdminPage(writer, request, views, func(item adminWorkUnitView) string { return item.ID })
+	writeJSON(writer, http.StatusOK, map[string]any{"items": views, "next_cursor": encodeGovernanceNext(page.NextID)})
 }
 
 func (r *Runtime) getAdminWorkUnit(writer http.ResponseWriter, request *http.Request) {
 	if !allowQueryKeys(writer, request, map[string]struct{}{}) {
 		return
 	}
-	item, ok := r.accounting.WorkUnit("", chi.URLParam(request, "workUnitID"))
+	item, ok, err := r.accounting.ReadWorkUnit(request.Context(), "", chi.URLParam(request, "workUnitID"))
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "work unit")
+		return
+	}
 	if !ok {
 		adminNotFound(writer)
 		return
 	}
-	writeJSON(writer, http.StatusOK, r.adminWorkUnitView(item))
+	view, err := r.adminWorkUnitView(request.Context(), item)
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "work unit")
+		return
+	}
+	writeJSON(writer, http.StatusOK, view)
 }
 
 func (r *Runtime) listAdminRuns(writer http.ResponseWriter, request *http.Request) {
@@ -85,22 +129,31 @@ func (r *Runtime) listAdminRuns(writer http.ResponseWriter, request *http.Reques
 		adminBadRequest(writer, "invalid Run status")
 		return
 	}
-	items := r.accounting.Runs(projectID, workUnitID)
-	filtered := make([]domain.Run, 0, len(items))
-	for _, item := range items {
-		item.Status = domain.EffectiveRunStatus(item, r.clockNow())
-		if status == "" || item.Status == status {
-			filtered = append(filtered, item)
-		}
+	options, ok := readGovernanceListOptions(writer, request)
+	if !ok {
+		return
 	}
-	writeGovernanceAdminPage(writer, request, filtered, func(item domain.Run) string { return item.ID })
+	at := r.clockNow()
+	page, err := r.accounting.ReadRunPage(request.Context(), ledger.RunListQuery{ProjectID: projectID, WorkUnitID: workUnitID, Status: status, At: at, GovernanceListOptions: options})
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "run")
+		return
+	}
+	for i := range page.Items {
+		page.Items[i].Status = domain.EffectiveRunStatus(page.Items[i], at)
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"items": page.Items, "next_cursor": encodeGovernanceNext(page.NextID)})
 }
 
 func (r *Runtime) getAdminRun(writer http.ResponseWriter, request *http.Request) {
 	if !allowQueryKeys(writer, request, map[string]struct{}{}) {
 		return
 	}
-	item, ok := r.accounting.Run("", chi.URLParam(request, "runID"))
+	item, ok, err := r.accounting.ReadRun(request.Context(), "", chi.URLParam(request, "runID"))
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "run")
+		return
+	}
 	if !ok {
 		adminNotFound(writer)
 		return
@@ -151,4 +204,29 @@ func writeGovernanceAdminPage[T any](writer http.ResponseWriter, request *http.R
 		page = make([]T, 0)
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"items": page, "next_cursor": nextCursor})
+}
+
+func encodeGovernanceNext(id string) string {
+	if id == "" {
+		return ""
+	}
+	return encodeResourceCursor(id)
+}
+func readGovernanceListOptions(writer http.ResponseWriter, request *http.Request) (ledger.GovernanceListOptions, bool) {
+	options := ledger.GovernanceListOptions{Limits: ledger.ProjectionPageLimits{Rows: 50, Bytes: ledger.GovernanceListMaxBytes}}
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > ledger.GovernanceListMaxRows {
+			adminBadRequest(writer, "page limit must be between 1 and 200")
+			return ledger.GovernanceListOptions{}, false
+		}
+		options.Limits.Rows = n
+	}
+	cursor, err := decodeResourceCursor(request.URL.Query().Get("cursor"))
+	if err != nil {
+		adminBadRequest(writer, "invalid cursor")
+		return ledger.GovernanceListOptions{}, false
+	}
+	options.After = cursor
+	return options, true
 }

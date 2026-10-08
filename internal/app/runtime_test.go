@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,7 +66,7 @@ func TestRuntimeHoldsExclusiveDataLock(t *testing.T) {
 	}
 	defer first.Close()
 
-	if _, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); err != lock.ErrAlreadyLocked {
+	if _, err := Open(context.Background(), cfg, slog.New(slog.NewTextHandler(io.Discard, nil))); !errors.Is(err, lock.ErrAlreadyLocked) {
 		t.Fatalf("expected exclusive lock error, got %v", err)
 	}
 }
@@ -103,8 +104,10 @@ func TestLedgerStateIsRebuiltDuringOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	if got := runtime.state.Balance(event.ProjectID, event.PeriodID, event.PeriodTimezoneVersion).ReservedMicrosUSD; got != 0 || runtime.state.PendingReservations() != 0 {
-		t.Fatalf("pending pre-I/O reservation was not recovered: reserved=%d pending=%d", got, runtime.state.PendingReservations())
+	balance := accountingReaderBalance(t, runtime.accountingState.reader, ledger.BalanceKey{ProjectID: event.ProjectID, PeriodID: event.PeriodID, TimezoneVersion: event.PeriodTimezoneVersion})
+	pending, err := runtime.accounting.ReadPendingLeaseStats(context.Background(), time.Now())
+	if err != nil || balance.ReservedMicrosUSD != 0 || pending.Count != 0 {
+		t.Fatalf("pending pre-I/O reservation was not recovered: balance=%+v pending=%+v err=%v", balance, pending, err)
 	}
 }
 
@@ -283,6 +286,13 @@ func TestMetricsContractHasTypesHistogramsAndNoForbiddenLabels(t *testing.T) {
 		"# TYPE halro_attempt_latency_seconds histogram",
 		"# TYPE halro_build_info gauge",
 		"# TYPE go_goroutines gauge",
+		"# TYPE go_memstats_sys_bytes gauge",
+		"# TYPE go_memstats_heap_sys_bytes gauge",
+		"# TYPE go_memstats_heap_inuse_bytes gauge",
+		"# TYPE go_memstats_heap_idle_bytes gauge",
+		"# TYPE go_memstats_heap_released_bytes gauge",
+		"# TYPE go_memstats_stack_inuse_bytes gauge",
+		"# TYPE go_memstats_next_gc_bytes gauge",
 		"# TYPE process_start_time_seconds gauge",
 	} {
 		if !strings.Contains(body, required) {
@@ -385,7 +395,7 @@ func TestUsageAggregateMatchesReplayAfterRestart(t *testing.T) {
 	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	before := runtime.usage.Snapshot()
+	before := usageSnapshotForTest(t, runtime)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +404,7 @@ func TestUsageAggregateMatchesReplayAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	after := runtime.usage.Snapshot()
+	after := usageSnapshotForTest(t, runtime)
 	if before.Totals != after.Totals || len(after.Attempts) != 1 || len(after.Requests) != 1 {
 		t.Fatalf("before=%#v after=%#v", before, after)
 	}

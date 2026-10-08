@@ -47,8 +47,8 @@ func TestTopLevelHelpIsDiscoverableAndComplete(t *testing.T) {
 			t.Fatalf("help topic %q is incomplete: %q", descriptor.name, topic)
 		}
 	}
-	if len(seen) != 20 {
-		t.Fatalf("top-level command descriptor count=%d, want 20", len(seen))
+	if len(seen) != 21 || !seen["metadata"] {
+		t.Fatalf("top-level command descriptor count=%d, want 21 including metadata migration", len(seen))
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, arguments := range [][]string{{"--help"}, {"-h"}, {"help"}, {"help", "backup"}} {
@@ -288,15 +288,15 @@ func TestKeySlotInitAndRecoveryCLIUseExplicitOfflinePaths(t *testing.T) {
 		return app.KMSKeySlotStatusResult{DescriptorRevision: 4, DescriptorReady: true}, nil
 	}
 	staticDoctor := false
-	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions) (app.DoctorReport, error) {
+	doctorCommand = func(_ context.Context, loaded config.Config, options app.DoctorOptions, consume func(app.DoctorReport) error) error {
 		staticDoctor = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && options.NoKMS
-		return app.DoctorReport{VaultStatus: "vault_unverified"}, nil
+		return consume(app.DoctorReport{VaultStatus: "vault_unverified"})
 	}
 	recoveryRestore := false
-	restoreBackupCommand = func(_ context.Context, loaded config.Config, _ string, key []byte, backupID string, options app.RestoreOptions) (app.RestoreResult, error) {
+	restoreBackupCommand = func(_ context.Context, loaded config.Config, _ string, key []byte, backupID string, options app.RestoreOptions, consume func(app.RestoreResult, func(func(string) error) error) error) error {
 		recoveryRestore = loaded.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots && len(key) == 32 && backupID == "backup_test" &&
 			options.UseRecoverySlot && options.ConfirmRecoverySlot == loaded.Storage.MasterKey.RecoverySlot
-		return app.RestoreResult{BackupID: backupID, UnlockPath: "recovery", VaultVerified: true, RecoveryAudited: true}, nil
+		return consume(app.RestoreResult{BackupID: backupID, UnlockPath: "recovery", VaultVerified: true, RecoveryAudited: true}, func(func(string) error) error { return nil })
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if err := run([]string{"init", "--config", path}, logger); err != nil {

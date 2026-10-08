@@ -34,17 +34,24 @@ type StoredRouteSuspension struct {
 // running instance holds short availability windows this never sees, and the
 // Admin API is where to look at those. Here the data lock means the instance is
 // stopped, so the durable set is the whole of what the gate will believe.
-func ListStoredRouteSuspensions(ctx context.Context, cfg config.Config) ([]StoredRouteSuspension, error) {
+func ListStoredRouteSuspensions(ctx context.Context, cfg config.Config) (result []StoredRouteSuspension, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 []StoredRouteSuspension
+		return commandScopeZero0, commandScopeErr
+	}
+
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return nil, err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return nil, err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	stored, err := store.ListRouteSuspensions(ctx)
 	if err != nil {
 		return nil, err
@@ -76,7 +83,13 @@ func ListStoredRouteSuspensions(ctx context.Context, cfg config.Config) ([]Store
 // Offline, so it clears what the gate would be restored from rather than what a
 // running gate holds — the data lock makes those the same thing. An operator
 // clearing one while Halro is up uses the Admin API, which clears both halves.
-func ClearStoredRouteSuspension(ctx context.Context, cfg config.Config, scopeID string) error {
+func ClearStoredRouteSuspension(ctx context.Context, cfg config.Config, scopeID string) (resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	kind, key, ok := domain.DecodeRouteScopeID(scopeID)
 	if !ok {
 		return errors.New("scope id is not a suspension handle from the listing")
@@ -85,12 +98,13 @@ func ClearStoredRouteSuspension(ctx context.Context, cfg config.Config, scopeID 
 	if err != nil {
 		return err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	if err := attachMetadataJournalForCLI(ctx, cfg, store, "clear route suspension"); err != nil {
 		return err
 	}

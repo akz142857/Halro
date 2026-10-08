@@ -853,3 +853,355 @@ logging:
     # @description.en-US Total generations kept, including the file being written; these generations are how far back an operator can read after an incident.
     # @description.en-US Between 1 and 100.
     max_files: 10
+
+# @title.zh-CN 物理压力准入
+# @title.en-US Physical resource pressure admission
+# @description.zh-CN 可选的 Linux cgroup v2/runtime/statfs 门禁，默认不启用。
+# @description.zh-CN 全部数值须按目标 profile 校准；下面 0 为无效占位，不是默认或建议值。
+# @description.zh-CN 尚不替代共享逻辑预算/持久化储备；动态 inode 文件系统可能保持未知。
+# @description.en-US Optional Linux cgroup v2/runtime/statfs gate, disabled by default.
+# @description.en-US Calibrate every value for the target profile; zeros below are invalid placeholders, not defaults or recommendations.
+# @description.en-US Does not replace logical budgets or durable completion reserves; dynamic-inode filesystems may remain unknown.
+# resource_pressure:
+#   # @title.zh-CN Go 内存进入线
+#   # @title.en-US Go memory enter threshold
+#   # @description.zh-CN 达到此值关闭新工作准入。Go total−released 字节，非 RSS。
+#   # @description.en-US Closes new-work admission at this Go total-minus-released byte value; not RSS.
+#   runtime_enter_bytes: 0
+#   # @title.zh-CN Go 内存退出线
+#   # @title.en-US Go memory exit threshold
+#   # @description.zh-CN 必须小于进入线；恢复须持续低于退出线。
+#   # @description.en-US Must be below enter; recovery requires continuously low measurements.
+#   runtime_exit_bytes: 0
+#   # @title.zh-CN cgroup 进入线
+#   # @title.en-US cgroup enter threshold
+#   # @description.zh-CN 可见 leaf memory.current 的进入线，单位字节。
+#   # @description.en-US Enter threshold in bytes for the visible leaf memory.current.
+#   cgroup_enter_bytes: 0
+#   # @title.zh-CN cgroup 退出线
+#   # @title.en-US cgroup exit threshold
+#   # @description.zh-CN 必须小于 cgroup 进入线。
+#   # @description.en-US Must be below the cgroup enter threshold.
+#   cgroup_exit_bytes: 0
+#   # @title.zh-CN cgroup 余量进入线
+#   # @title.en-US cgroup headroom enter threshold
+#   # @description.zh-CN 任一可见层级有限 high/max 的剩余字节达到此线时关闭准入。
+#   # @description.en-US Closes admission when any visible finite high/max headroom reaches this byte threshold.
+#   headroom_enter_bytes: 0
+#   # @title.zh-CN cgroup 余量退出线
+#   # @title.en-US cgroup headroom exit threshold
+#   # @description.zh-CN 必须大于余量进入线；隐藏祖先仍不可验证。
+#   # @description.en-US Must exceed headroom enter; namespace-hidden ancestors remain unverifiable.
+#   headroom_exit_bytes: 0
+#   # @title.zh-CN 磁盘停止新工作线
+#   # @title.en-US Disk new-work stop threshold
+#   # @description.zh-CN storage.data_dir 的可用字节停止线，须覆盖最坏在途终结成本。
+#   # @description.en-US Available data-directory byte stop threshold; must cover worst-case in-flight completion costs.
+#   disk_enter_bytes: 0
+#   # @title.zh-CN 磁盘退出线
+#   # @title.en-US Disk exit threshold
+#   # @description.zh-CN 必须大于磁盘进入线；不构成文件系统空间预分配。
+#   # @description.en-US Must exceed disk enter; this does not preallocate filesystem space.
+#   disk_exit_bytes: 0
+#   # @title.zh-CN inode 停止线
+#   # @title.en-US Inode stop threshold
+#   # @description.zh-CN 已知可用 inode 停止线；无容量统计的文件系统保持未知。
+#   # @description.en-US Known available inode stop threshold; filesystems without capacity statistics remain unknown.
+#   inodes_enter: 0
+#   # @title.zh-CN inode 退出线
+#   # @title.en-US Inode exit threshold
+#   # @description.zh-CN 必须大于 inode 进入线。
+#   # @description.en-US Must exceed inode enter.
+#   inodes_exit: 0
+#   # @title.zh-CN 采样有效期
+#   # @title.en-US Maximum sample age
+#   # @description.zh-CN 从采集开始计算；迟到或停止采样不会续期。
+#   # @description.en-US Measured from collection start; delayed or stopped sampling cannot renew evidence.
+#   max_age: 0s
+#   # @title.zh-CN 恢复冷却期
+#   # @title.en-US Recovery cooldown
+#   # @description.zh-CN 全部信号持续达到退出线的最短时间。
+#   # @description.en-US Minimum continuous time all signals must meet their exit thresholds.
+#   cooldown: 0s
+#   # @title.zh-CN 采样间隔
+#   # @title.en-US Sampling interval
+#   # @description.zh-CN 必须为正并小于 max_age；不为每个采样创建 goroutine。
+#   # @description.en-US Must be positive and below max_age; no per-sample goroutine.
+#   sample_interval: 0s
+
+# @title.zh-CN 共享逻辑 RAM 预算
+# @title.en-US Shared logical RAM budget
+# @description.zh-CN 可选，默认不启用；必须同时校准 resource_pressure。RAM/磁盘预算数值均须校准；下面 0 为无效占位，不能照抄启用。
+# @description.zh-CN RAM 已接部分 HTTP/deferred/capture、HA 临时工作及 Source/Governance/价格 owner；逻辑磁盘上限可覆盖已取得共享预算的持久 owner。未接线的 owner 不会自动计费。
+# @description.en-US Optional and disabled by default; requires calibrated resource_pressure. RAM and disk envelopes require calibration; zeros below are invalid placeholders.
+# @description.en-US RAM covers selected HTTP/deferred/capture, HA temporaries and Source/Governance/pricing owners. Logical disk limits apply to persistent owners that acquire shared permits; unwired owners are not charged automatically.
+# @description.zh-CN 显式启用未确认预算时，已接入 Primary Ledger、Audit、Governance、Metadata 及 provider object 的写前准入与持久确认后释放；完整故障与容量验收仍未完成。
+# @description.en-US When enabled, pre-append admission and release after durable confirmation cover Primary Ledger, Audit, Governance, Metadata and provider-object sources; complete fault and capacity acceptance remain open.
+# resource_budget:
+#   # Require a migrated, authenticated seven-root Runtime. Startup refuses
+#   # an absent/invalid selection before opening the legacy projection DBs.
+#   # Cold reducers use fixed COW/scratch workspaces; Disk ceilings remain
+#   # independently charged. This flag does not establish capacity acceptance.
+#   memory_state_required: false
+#   # @description.zh-CN 写入前预留认证终结物理块；要求合格的持久 ext4 和完整 owner 向量。当前 HA 启动在完整向量取得验证前拒绝此模式。
+#   # @description.en-US Reserve authenticated physical terminal banks before writes. Requires qualified persistent ext4 storage and a complete owner vector. HA startup currently refuses this profile pending vector qualification.
+#   physical_terminal_reserve: false
+#   # @title.zh-CN 共享 RAM 总额
+#   # @title.en-US Shared RAM capacity
+#   # @description.zh-CN 含逻辑费用和 claim 元数据；不是 heap/RSS 硬限制。
+#   # @description.en-US Includes logical costs and claim metadata; not a heap or RSS hard limit.
+#   total_ram_bytes: 0
+#   # @title.zh-CN 共享逻辑磁盘总额
+#   # @title.en-US Shared logical disk capacity
+#   # @description.zh-CN 已收费持久 owner 的共享逻辑字节上限；不预分配文件系统空间。
+#   # @description.en-US Shared logical byte ceiling for charged persistent owners; does not preallocate filesystem blocks.
+#   total_disk_bytes: 0
+#   # @title.zh-CN 未确认总字节上限
+#   # @title.en-US Total unconfirmed-byte capacity
+#   # @description.zh-CN 可选；启用时还需单独配置 IO 与启动 Recovery 子额度。当前 Primary 的五类原生来源在 append 前接入。
+#   # @description.en-US Optional; configure separate IO and startup Recovery ceilings. The five native Primary sources currently reserve before append.
+#   total_unconfirmed_bytes: 0
+#   # @title.zh-CN 未确认前缀条目上限
+#   # @title.en-US Maximum unconfirmed prefix entries
+#   # @description.zh-CN 新 append 的条目上限。启动可在固定 65536 项表内恢复更长旧后缀；超限时持续有界追赶并拒绝新写入，直到后缀回到配置范围。
+#   # @description.en-US New-append entry limit. Startup can recover older suffixes within the fixed 65536-entry table; over-limit recovery keeps bounded catch-up running and rejects new writes until within configured limits.
+#   unconfirmed_max_entries: 0
+#   # @title.zh-CN 配置类别磁盘
+#   # @title.en-US Configuration disk capacity
+#   configuration_disk_bytes: 0
+#   # @title.zh-CN 请求类别磁盘
+#   # @title.en-US Active request disk capacity
+#   active_disk_bytes: 0
+#   # @title.zh-CN 缓存类别磁盘
+#   # @title.en-US Cache disk capacity
+#   cache_disk_bytes: 0
+#   # @title.zh-CN IO 类别磁盘
+#   # @title.en-US IO disk capacity
+#   io_disk_bytes: 0
+#   # @title.zh-CN IO 未确认字节
+#   # @title.en-US IO unconfirmed bytes
+#   io_unconfirmed_bytes: 0
+#   # @title.zh-CN 后台类别磁盘
+#   # @title.en-US Background disk capacity
+#   background_disk_bytes: 0
+#   # @title.zh-CN 终结类别磁盘额度
+#   # @title.en-US Completion disk ceiling
+#   # @description.zh-CN HTTP 新工作和 deferred worker 会原子预留此磁盘信用，分别保持到 handler 或后台终结写入退出；逻辑额度，不代表物理块预留或按终结记录核销。
+#   # @description.en-US HTTP new work and deferred workers atomically reserve this disk credit through handler return or background terminal write; logical capacity, not physical blocks or per-settlement record reconciliation.
+#   completion_disk_bytes: 0
+#   completion_unconfirmed_bytes: 0 # HA terminal credits; cover (max_total_attempts + 1) isolated Ledger wire frames.
+#   # @title.zh-CN 恢复类别磁盘
+#   # @title.en-US Recovery disk capacity
+#   recovery_disk_bytes: 0
+#   # @title.zh-CN 启动恢复未确认字节
+#   # @title.en-US Startup Recovery unconfirmed bytes
+#   recovery_unconfirmed_bytes: 0
+#   # @title.zh-CN 恢复专用磁盘储备
+#   # @title.en-US Recovery-only disk reserve
+#   # @description.zh-CN 普通工作不能借用；只能覆盖进入 Recovery 类别的已收费工作。
+#   # @description.en-US Normal work cannot borrow this; only charged Recovery work can use it.
+#   recovery_reserve_disk_bytes: 0
+#   # @title.zh-CN 未确认字节恢复储备
+#   # @title.en-US Unconfirmed-byte Recovery reserve
+#   recovery_reserve_unconfirmed_bytes: 0
+#   # @title.zh-CN 配置类别 RAM
+#   # @title.en-US Configuration RAM
+#   # @description.zh-CN 类别上限可重叠，共享总额不可超限；未接入的消费者不会自动收费。
+#   # @description.en-US Class ceilings may overlap; the shared total cannot be exceeded. Unwired consumers are not automatically charged.
+#   configuration_ram_bytes: 0
+#   # @title.zh-CN 请求类别 RAM
+#   # @title.en-US Active request RAM
+#   # @description.zh-CN HTTP 新工作使用此类别，直到 handler 完全返回。
+#   # @description.en-US New HTTP work uses this class until its handler fully returns.
+#   active_ram_bytes: 0
+#   # @title.zh-CN 缓存类别 RAM
+#   # @title.en-US Cache RAM
+#   # @description.zh-CN 预留类别；缓存实际费用尚未接入。
+#   # @description.en-US Reserved class; actual cache consumers are not yet wired.
+#   cache_ram_bytes: 0
+#   # @title.zh-CN IO 类别 RAM
+#   # @title.en-US IO RAM
+#   # @description.zh-CN 价格选择/Prepare/冷审计先取得独立工作集；其它持久 IO 费用仍待接入。
+#   # @description.en-US Pricing selection, Prepare and cold audit acquire an independent envelope; other durable IO consumers remain unwired.
+#   io_ram_bytes: 0
+#   # @title.zh-CN 后台类别 RAM
+#   # @title.en-US Background RAM
+#   # @description.zh-CN deferred worker 读入磁盘输入前、failure capture 编码前取得独立额度；其他后台费用仍待接入。
+#   # @description.en-US Deferred workers acquire before reading stored input; failure capture acquires before encoding independent copies. Other background consumers remain unwired.
+#   background_ram_bytes: 0
+#   # @title.zh-CN 终结类别 RAM
+#   # @title.en-US Completion RAM
+#   # @description.zh-CN HTTP 新工作和 deferred worker 原子预留此 RAM 额度，分别保持到 handler 或后台终结写入退出；逻辑信用，不代表物理预留或单条终结字节核销。
+#   # @description.en-US HTTP new work and deferred workers atomically reserve this RAM credit through handler return or background terminal write; logical credit, not a physical reservation or per-record settlement charge.
+#   completion_ram_bytes: 0
+#   # @title.zh-CN 恢复类别 RAM
+#   # @title.en-US Recovery RAM
+#   # @description.zh-CN 不得超过独立恢复储备；生产恢复消费仍待接入。
+#   # @description.en-US Cannot exceed the independent recovery reserve; production recovery consumers remain unwired.
+#   recovery_ram_bytes: 0
+#   # @title.zh-CN claim 控制 RAM
+#   # @title.en-US Claim control RAM
+#   # @description.zh-CN 至少为 max_claims × 1024 字节，覆盖逻辑元数据。
+#   # @description.en-US At least max_claims times 1024 bytes for logical claim metadata.
+#   control_ram_bytes: 0
+#   # @title.zh-CN 独立恢复 RAM 储备
+#   # @title.en-US Independent recovery RAM reserve
+#   # @description.zh-CN 普通请求与后台任务不能借用；不是持久结算空间保证。
+#   # @description.en-US Normal requests and background tasks cannot borrow it; not a durable settlement-space guarantee.
+#   recovery_reserve_ram_bytes: 0
+#   # @title.zh-CN 最大 claim 槽数
+#   # @title.en-US Maximum claim slots
+#   # @description.zh-CN 普通与恢复槽数之和；必须大于 recovery_claims。
+#   # @description.en-US Total normal and recovery slots; must exceed recovery_claims.
+#   max_claims: 0
+#   # @title.zh-CN 恢复专用槽数
+#   # @title.en-US Recovery-only claim slots
+#   # @description.zh-CN 普通工作无法消耗这些槽；没有恢复槽时储备必须为零。
+#   # @description.en-US Normal work cannot consume these slots; zero recovery slots require zero reserve.
+#   recovery_claims: 0
+#   # @title.zh-CN 每 claim 最大 owner
+#   # @title.en-US Maximum owners per claim
+#   # @description.zh-CN 取值 1 到 16；启用预算下的 failure capture 至少为 3，覆盖 packet、Store 调用和 writer owner。
+#   # @description.en-US Between 1 and 16; budgeted failure capture requires at least 3 for packet, Store call and writer ownership.
+#   max_owners: 0
+#   # @title.zh-CN 单 HTTP 工作 RAM 估算
+#   # @title.en-US Per HTTP work RAM envelope
+#   # @description.zh-CN 须覆盖最大正文、解码副本、上游结果、同步终结和编码峰值；忽略 Content-Length。
+#   # @description.en-US Must cover maximum body, decode copies, upstream results, synchronous finalization and encoding peaks; independent of Content-Length.
+#   request_ram_bytes: 0
+#   # @title.zh-CN 单 deferred worker RAM 估算
+#   # @title.en-US Per deferred worker RAM envelope
+#   # @description.zh-CN 覆盖读入、解码、调用、结果及终结；不足时保持 queued，不丢弃工作。
+#   # @description.en-US Covers input, decoding, execution, output and finalization; refusal preserves queued work.
+#   deferred_ram_bytes: 0
+#   # @title.zh-CN 单 failure capture RAM 估算
+#   # @title.en-US Per failure capture RAM envelope
+#   # @description.zh-CN 启用 capture 时必须配置；覆盖截断前完整 JSON 编码、截断副本、plaintext、密封 bytes 及排队对象，实际 writer 退出后才退账。至少覆盖 request_ram_bytes 与三侧 max_bytes 之和，仍须校准放大峰值。
+#   # @description.en-US Required when capture is enabled; covers full JSON encoding before truncation, truncation copies, plaintext, sealed bytes and queued objects until the actual writer exits. Must cover request_ram_bytes and three side byte limits; peak amplification still requires calibration.
+#   capture_ram_bytes: 0
+#   # @title.zh-CN 单 HA 重建/候选帧 RAM 估算
+#   # @title.en-US Per HA reconstruction/candidate RAM envelope
+#   # @description.zh-CN HA 启用共享预算时必须显式校准；覆盖源解码、wire 副本及最多一个等待窗口空间的候选。Recovery 类、储备及 claim 槽须同时覆盖两个候选、另一次重建以及三个 session 队列/入站 envelope 和一份 Source 固定读者及一份 Governance 原生去重缓存预留；构造逐帧验证也收费，分页/前置 reconcile 另行迁移；队列独立费用另用 replication_queue_ram_bytes，不覆盖完整投影或磁盘/确认 owner。
+#   # @description.en-US Explicit calibration required for HA with shared budgets; covers source decode, wire copies and one blocked candidate. Recovery class/reserve/claims must fit two candidates, one additional reconstruction three session queue/read owners and one fixed NativeSource reader and one Governance cache owner; constructor streaming validation is charged, pagination/preliminary reconcile remain separate; independent queues use replication_queue_ram_bytes, projections and disk/confirmation owners remain separate.
+#   replication_candidate_ram_bytes: 0
+#   # @title.zh-CN 单复制 session 队列 RAM 估算
+#   # @title.en-US Per replication session queue RAM envelope
+#   # @description.zh-CN HA 启用共享预算时必须显式校准；覆盖整个发送队列字节/条数容量及活动 writer 记录，在构造队列前申请，与 replication_read_ram_bytes 合并为一个会话 claim；socket Close 完成且 reader/handler、writer 均退出后退还。Recovery 须同时容纳三个候选/重建三个 session 队列/入站 envelope 和一份 Source 读者与一份 Governance 去重缓存预留（十二个 claim）。TLS 内部和握手另行迁移。
+#   # @description.en-US Explicit calibration required for budgeted HA; reserves full outbound byte/count capacity plus the active writer record before queue construction, combined atomically with replication_read_ram_bytes. Released after socket Close and actual reader/handler and writer exit. Recovery must fit three reconstructions three session queue/read owners and one fixed NativeSource reader and one Governance cache owner (twelve claims). TLS internals and handshake remain separate.
+#   replication_queue_ram_bytes: 0
+#   # @title.zh-CN 单复制 session 入站临时 RAM 估算
+#   # @title.en-US Per replication session inbound temporary RAM envelope
+#   # @description.zh-CN HA 启用共享预算时必须显式校准；握手完成后、任何 stream 帧读取前，与队列费用合并取得一个 Recovery claim；覆盖一个借用 wire 帧及同步接收/应用/ACK 回调临时工作集，空闲读取也持续预留。下限为最大 wire 帧六倍，仅拒绝明显不足；长期域投影、TLS 内部/握手、历史 replay 与 IO 另行迁移。
+#   # @description.en-US Explicit calibration required for budgeted HA. After handshake, one Recovery claim atomically reserves queue plus inbound RAM before any stream read, covering a borrowed wire record and synchronous receive/apply/ACK temporaries even during idle reads. Six maximum wire frames is only a lower bound; retained domain projections, TLS/handshake, historical replay and IO require separate ownership.
+#   replication_read_ram_bytes: 0
+#   # @title.zh-CN 单 NativeSource 固定读者总 RAM 估算
+#   # @title.en-US Aggregate fixed NativeSource reader RAM envelope
+#   # @description.zh-CN HA 启用共享预算时必须显式校准；一份 Recovery claim 预留默认及两个 peer 游标组、密钥副本、可保留的 Ledger 解压流与 descriptor 元数据，构造 owned 副本前取得，Source Close join 全部读取、关流并清引用后归还；空闲和重连保持同份预留。下限仅拒绝明显不足，不替代实测，不包含输出 payload、临时 decode、历史投影、IO 进展时限或磁盘费用。Recovery 总量须同时覆盖 3*(candidate+queue+read)+reader+governance_log+audit_log+pricing_lifetime+pricing_io+accounting_recovery 与十二个基础 claim 控制费用；每个启用的持久投影 Disk ceiling 再增加一个 Recovery claim。
+#   # @description.en-US Explicit calibration required for budgeted HA. One Recovery claim reserves the default and two peer cursor sets, owned keys and retained Ledger decompression/descriptor state before owned allocation, until Source Close joins all reads, closes streams and clears references. Idle/reconnect reuse the same reservation. The lower bound needs measured calibration; output payloads, transient decode, historical projections, IO progress and disk costs remain separate. Recovery must fit 3*(candidate+queue+read)+reader+governance_log+audit_log+pricing_lifetime+pricing_io+accounting_recovery plus twelve claim control costs.
+#   replication_reader_ram_bytes: 0
+#   # @title.zh-CN 原生 Governance 去重缓存 RAM 估算
+#   # @title.en-US Native Governance retry-cache RAM envelope
+#   # @description.zh-CN 启用共享预算时必须显式校准，至少 2 MiB；覆盖固定 4096 个身份/内容指纹、日志位置、ring/map 与 owner 元数据，构造及文件 IO 前取得一份 Recovery lifetime claim。Close join 全部原生读写、成功关闭实际文件并清除缓存引用后归还。恢复扫描、批量编码、投影及磁盘另行计费；下限不是 allocator/RSS 上界。HA Recovery 须同时覆盖十二个基础 claim、每个启用的持久投影 Disk ceiling 的额外 claim 与所有 envelope。
+#   # @description.en-US Explicit calibration required with shared budgets; at least 2 MiB for 4096 fixed identity/content fingerprints, native positions, ring/map and owner metadata. One Recovery lifetime claim is acquired before construction or file IO and released only after native operations join, physical Close succeeds and cache references clear. Replay, batch encoding, projections and disk need separate ownership; the lower bound is not an allocator/RSS limit. Budgeted HA must fit all envelopes, twelve base Recovery claims and one additional Recovery claim for each enabled persistent projection disk ceiling.
+#   governance_log_ram_bytes: 0
+#   # @title.zh-CN Audit 固定去重缓存 RAM
+#   # @title.en-US Audit fixed retry cache RAM
+#   # @description.zh-CN 启用共享预算时须校准，至少 2 MiB；固定 4096 身份/内容指纹、位置和 ring/map，原生 IO 前取得 Recovery lifetime claim。Close 撤销新操作，join 已进入的读取及写入，关闭实际文件并清除缓存引用后归还。恢复扫描与批量编码另计；下限不替代 RSS 实测。普通角色五份基础 Recovery claim，HA 十二份，磁盘 owner 另加。
+#   # @description.en-US Calibrated envelope with a 2 MiB structural floor for 4096 fixed fingerprints, positions and map/ring storage. Acquired before native IO and retained through withdrawal, actual reader/writer join, physical Close and cache-reference removal. Codec/recovery workspaces are separate. Five base Recovery claims for normal roles, twelve for HA, plus disk owners; not an RSS bound.
+#   audit_log_ram_bytes: 0
+#   # @title.zh-CN 固定价格 owner RAM 估算
+#   # @title.en-US Fixed pricing owner RAM envelope
+#   # @description.zh-CN 启用共享预算时必须显式校准，至少 1 MiB；固定 4096 锁/marker 槽和进程 clock owner 在分配前取得 Recovery lifetime claim，Store 实际 join、关闭 clock 文件及清除槽后归还。HA 须覆盖十二个基础 Recovery claim，并为每个启用的持久投影 Disk ceiling 另留一份 Recovery claim。磁盘费用另行迁移。
+#   # @description.en-US Explicit calibration required with shared budgets; at least 1 MiB for 4096 fixed lock/marker slots and the process clock owner. Acquired before allocation, released after Store joins operations, closes the clock file and clears slots. HA requires twelve base Recovery claims plus one Recovery claim for each enabled persistent projection disk ceiling; the disk charge remains separate.
+#   pricing_lifetime_ram_bytes: 0
+#   # @title.zh-CN 单价格 IO RAM 估算
+#   # @title.en-US Per pricing IO RAM envelope
+#   # @description.zh-CN 至少 32 MiB 并实测宽行/JSON 放大峰值；在选择、Prepare 或冷审计读取/分配前取得 IO claim，真实调用和临时审计文件 Close 完成后归还。须与一个 HTTP request 同时容纳，IO 类别也须配置。启动审计 outbox 完整预校验/分页交付另用同额 Recovery claim，直至实际回调退出才归还；普通角色须预留五份 Recovery claim，HA 十二份。它不是 RSS/磁盘上界。
+#   # @description.en-US At least 32 MiB with measured wide-row/JSON amplification; IO claim precedes selection, Prepare or cold-audit reads/allocations and retires after actual return and temporary audit-file Close. Must fit alongside one HTTP request and within the IO class. Startup audit-outbox prevalidation and paged delivery hold a separate Recovery claim of the same size through actual callback exit; normal roles need five Recovery claims, HA twelve. Not an RSS or disk bound.
+#   pricing_io_ram_bytes: 0
+#   # @title.zh-CN 持久目录启动清点磁盘上限
+#   # @title.en-US Persistent startup inventory disk ceiling
+#   # @description.zh-CN 大于零时，在打开业务写入者之前对现有 DataDir 树执行有界清点并单独计费；此基线与各消费者后续增长和替换上限相加。零保持原启动路径。逻辑费用不预留物理块，须按实际目录和文件系统余量校准。
+#   # @description.en-US When positive, reconcile and charge the existing DataDir tree before business writers open. This baseline is additional to consumer growth and replacement ceilings. Zero preserves legacy startup. Logical accounting does not reserve filesystem blocks; calibrate against the actual tree and filesystem headroom.
+#   persistent_inventory_disk_bytes: 0
+#   # @title.zh-CN Ledger 原生追加与辅助文件磁盘额度
+#   # @title.en-US Ledger native append and auxiliary disk capacity
+#   # @description.zh-CN 一个 Runtime 生命周期的额外 Ledger 追加和辅助产物容量；现有树由 persistent_inventory_disk_bytes 单独计费，已发布或状态不确定的产物继续保留费用。启用时还须配置正数 inventory 上限。零表示未启用，不是物理块预留。
+#   # @description.en-US Additional Ledger append and auxiliary-product capacity for one Runtime lifetime. Charge existing files independently through persistent_inventory_disk_bytes; published or uncertain products keep their fees. Requires a positive inventory ceiling when enabled. Zero disables it; this does not reserve physical blocks.
+#   ledger_append_disk_bytes: 0
+#   # @title.zh-CN 投影启动构建与账务恢复 RAM 估算
+#   # @title.en-US Projection startup construction and accounting recovery RAM envelope
+#   # @description.zh-CN 启用共享预算时必须显式校准，至少 128 MiB；默认各角色在构建派生文件前取得一份 Recovery claim，覆盖 Ledger 全源认证与有限批归约，Replica 还覆盖共同 Usage 构建；Standalone/Primary 的 Usage 完整回放、Governance 外部锚校验与构建、Usage 启动归档窗口核对及后续两级恢复均串行复用同额 workspace，估算取各阶段峰值最大值。费用覆盖有限页、关联校验、结算编码与 native 写入/确认等待，构建/验证/失败清理或整个恢复调用和 writer Close 完成后归还。取消不提前退账；资源不足保持不就绪。普通角色须容纳五份基础 Recovery claim，HA 十二份；每个启用的持久投影 Disk ceiling 另需一个 Recovery claim。原生 Open、长期 DB/cache、mmap、磁盘及未确认 owner 另行迁移；下限不替代生产峰值接受。
+#   # @description.en-US Explicit calibration required with shared budgets, at least 128 MiB. Default roles reserve one Recovery claim before derived-file construction for full Ledger authentication and bounded reduction; Replica also holds it through joint Usage construction. Standalone/Primary Usage replay, Governance anchor verification/build, Usage archive/window startup verification and two-level accounting recovery reuse this workspace sequentially; calibrate to the largest phase peak. It covers pages, attribution checks, settlement encoding, native IO, confirmation, failed-candidate cleanup and actual writer Close. Cancellation does not release early; refusal preserves nonreadiness. Four base Recovery claims for normal roles, twelve for HA, plus one Recovery claim for each enabled persistent projection disk ceiling; native Open, live DB/cache, mmap, disk and unconfirmed owners remain separate. The floor does not replace production peak acceptance.
+#   accounting_recovery_ram_bytes: 0
+#   # @title.zh-CN Ledger 派生投影数据文件上限
+#   # @title.en-US Ledger derived projection data-file ceiling
+#   # @description.zh-CN 大于零时，启动重建前收费 Recovery Disk，并通过 bbolt MaxSize 限制数据文件增长；通过 role cut 校验后同一费用转为 Background owner，直到实际删除派生文件才退费。必须同时为 Recovery 启动和 Background 持久 owner 校准类别/总额。仅限制文件长度，不预留物理块或覆盖 mmap/page cache；零表示未启用。
+#   # @description.en-US When positive, charge Recovery Disk before startup rebuild and use bbolt MaxSize to limit data-file growth. After role-cut validation, reclassify the same charge as a persistent Background owner until the derived file is actually removed. Calibrate both startup Recovery and persistent Background/class/total envelopes. Limits file length only; it does not reserve physical blocks or cover mmap/page cache. Zero disables it.
+#   ledger_projection_disk_bytes: 0
+#   # @title.zh-CN Ledger segment locator 磁盘上限
+#   # @title.en-US Ledger segment locator disk ceiling
+#   # @description.zh-CN 大于零时限制一个 Runtime 为认证 segments.idx sidecar 及有界重建 workspace 预留的总 Disk 字节。Standalone 用于一个 Log；HA 为当前/旧 inode、最多三个 NativeSource reader locator 和发布 workspace 分配六份上限。sidecar 由 Ledger key 派生 MAC 并绑定完整 segments.json，仍可从权威 manifest 重建。Runtime 关闭后若 sidecar 留盘则继续计费；没有持久 sidecar 时，在 Log/reader 退出后释放。逻辑上限不预留物理块；零表示不设上限。
+#   # @description.en-US When positive, cap the total Disk bytes reserved by one Runtime for the authenticated segments.idx sidecar and its bounded rebuild workspace. Standalone assigns the cap to the Log; HA divides it into six shares for current/old inodes, up to three NativeSource reader locators, and publication workspace. The sidecar uses a Ledger-key-derived MAC bound to the complete segments.json bytes and can be rebuilt from the authoritative manifest. Keep its claim after Runtime.Close when the sidecar remains on disk; release after all readers close when no persistent sidecar exists. Logical ceiling only; no physical block reservation. Zero disables it.
+#   ledger_segment_index_disk_bytes: 0
+#   # @title.zh-CN Usage 派生投影数据文件上限
+#   # @title.en-US Usage derived projection data-file ceiling
+#   # @description.zh-CN 大于零时，Standalone/Primary/Replica Usage fresh 投影的启动前后按 Recovery/Background 生命周期计费，并通过 bbolt MaxSize 限制数据文件增长。Ledger 与 Usage 上限总和必须能同时装入 Recovery、Background、Recovery reserve 和总额。文件删除失败不会退费；该值不预留物理块或覆盖 mmap/page cache；零表示未启用。
+#   # @description.en-US When positive, charge the fresh Standalone/Primary/Replica Usage projection through its Recovery/Background lifecycle and use bbolt MaxSize to limit data-file growth. The sum of Ledger and Usage ceilings must fit Recovery, Background, Recovery reserve and total envelopes at the same time. Failed file removal does not refund the charge. This does not reserve physical blocks or cover mmap/page cache; zero disables it.
+#   usage_projection_disk_bytes: 0
+#   # @title.zh-CN Usage 归档树逻辑磁盘上限
+#   # @title.en-US Usage archive tree logical disk ceiling
+#   # @description.zh-CN 大于零时，对完整 UsagePath 树执行有界清点，并在写入前拒绝会越过上限的导出、目录发布、校验或回收。Runtime 在清点前申请 Recovery Disk ceiling，校验归档并确定角色后转为持久 Background owner；归档随 Runtime.Close 保留，因此费用也保留。维护/诊断打开路径执行文件 ceiling。Runtime scratch 还需要正数的 io_disk_bytes envelope；单次操作超出该类别当前余量时会被拒绝。只限制逻辑文件字节，不预留物理块，也不替代物理 ENOSPC 处理；零表示未启用。
+#   # @description.en-US When positive, inventory the complete UsagePath tree with bounded memory and reject exports, catalog publication, verification or reclamation before writes cross the ceiling. Runtime charges the Recovery Disk ceiling before inventory and reclassifies it as a persistent Background owner after archive validation and role selection; the archive survives Runtime.Close, so the charge does too. Maintenance/diagnostic opens enforce the file ceiling. Runtime scratch also requires a positive io_disk_bytes envelope; an operation is refused when its reservation exceeds current class capacity. This caps logical file bytes only; it does not reserve physical blocks or handle physical ENOSPC; zero disables it.
+#   usage_archive_disk_bytes: 0
+#   # @title.zh-CN Usage 归档读取 RAM 预算
+#   # @title.en-US Usage archive reader RAM envelope
+#   # @description.zh-CN 每个并发读者的校准 RAM 额度；4 个固定槽必须能同时装入 IO 和启动 Recovery。启动及一次性命令从 Recovery 计费，Runtime 从 IO 计费，直到读者关闭并退出。零表示禁用共享读者 RAM 记账，不是零内存上界。
+#   # @description.en-US Calibrated RAM per concurrent reader; all four fixed slots must fit IO and startup Recovery together. Startup and one-shot commands charge Recovery, while Runtime charges IO through reader close and exit. Zero disables shared reader RAM accounting; it is not a zero-memory bound.
+#   usage_archive_read_ram_bytes: 0
+#   # @title.zh-CN 备份目录索引工作区磁盘上限
+#   # @title.en-US Backup source-catalog workspace disk ceiling
+#   # @description.zh-CN 大于零时，在构建备份 SourceCatalog 前从共享 Recovery 申请同额费用，并用 bbolt MaxSize 限制其临时索引文件。目录关闭并完成所有权安全清理后释放；零表示不限制此索引。它不限制快照副本、加密归档输出或物理磁盘，也不预留物理块。
+#   # @description.en-US When positive, acquire the same shared Recovery Disk charge before building the backup SourceCatalog and cap its temporary bbolt index with MaxSize. Release after close and ownership-safe cleanup; zero leaves this index uncapped. This does not cap staged snapshots, encrypted archive output or physical disk, and reserves no blocks.
+#   backup_workspace_disk_bytes: 0
+#   # @title.zh-CN Provider 对象引用校验磁盘上限
+#   # @title.en-US Provider object reference disk ceiling
+#   # @description.zh-CN 在线维护私有引用集合的完整文件上限；零使用有限 32 MiB，正值须能放入共享 IO Disk；不是生产容量承诺。
+#   # @description.en-US Full private reference-set ceiling for online maintenance; zero selects a finite 32 MiB, positive values must fit shared IO Disk. Not a production capacity promise.
+#   provider_object_reference_disk_bytes: 0
+#   # @title.zh-CN 恢复 staging 磁盘上限
+#   # @title.en-US Restore staging disk ceiling
+#   # @description.zh-CN 大于零时，完整认证归档后先计算 payload 总字节，超过此值即拒绝抽取；未超限时对已验证 payload 大小申请 Recovery Disk claim，直到 staging 安全清理后释放。只限制逻辑文件字节，不覆盖文件系统块元数据或物理预留；零表示不限制。
+#   # @description.en-US When positive, authenticate the complete archive and sum payload bytes before extraction; reject if the total exceeds this value. Otherwise charge the verified payload size to Recovery until staging is safely removed. Logical file bytes only; not filesystem metadata or physical reservation. Zero disables it.
+#   restore_workspace_disk_bytes: 0
+#   # @title.zh-CN Governance 派生投影数据文件上限
+#   # @title.en-US Governance derived projection data-file ceiling
+#   # @description.zh-CN 大于零时，Standalone/Primary 启动重建前收费 Recovery Disk，并通过 bbolt MaxSize 限制 Outcome 投影文件增长；认证 journal 与角色切面校验后转为 Background owner，直到实际删除文件才退费。须与 Ledger/Usage 上限共同满足总额、Background、Recovery、Recovery reserve 和 claim 槽。仅限制文件长度，不预留物理块或覆盖 mmap/page cache；零表示未启用。
+#   # @description.en-US When positive, charge Recovery Disk before Standalone/Primary startup rebuild and use bbolt MaxSize to limit Outcome projection growth. Reclassify as a persistent Background owner only after authenticated journal and role-cut checks; retain the charge until the file is actually removed. Must fit shared Total, Background, Recovery, Recovery reserve and claim slots together with Ledger/Usage ceilings. Limits file length only; it does not reserve physical blocks or cover mmap/page cache; zero disables it.
+#   governance_projection_disk_bytes: 0
+#   # @title.zh-CN Governance 原生认证日志文件上限
+#   # @title.en-US Governance native authenticated journal file ceiling
+#   # @description.zh-CN 大于零时，Standalone/Primary/Replica 启动前为完整认证 Governance 日志申请 Recovery Disk ceiling；已有文件超过上限时启动失败，本地批量追加和 Replica 复制批次在写入前整体拒绝。认证日志 Open 后(Replica 还须应用 confirmed prefix)，同一费用转为 Background，并在 Runtime 生命周期内保留，因为原生日志不会随 Runtime.Close 删除。须和其它持久 ceiling 同时装入 Total/Background/Recovery/reserve 与专用 claim。只限制逻辑文件字节，不预留物理块或覆盖文件系统元数据；零表示未启用。
+#   # @description.en-US When positive, Standalone/Primary/Replica startup acquires a Recovery Disk ceiling for the complete authenticated Governance journal. Startup fails if the existing file exceeds it; local append batches and replicated batches are refused atomically before writes when they exceed it. After authenticated Open (and, for Replica, confirmed-prefix application), the same charge moves to Background and remains for the Runtime lifetime because Runtime.Close does not delete the native journal. Fit it with other persistent ceilings in Total/Background/Recovery/reserve envelopes and a dedicated claim. This is logical file-byte accounting, not physical block reservation or filesystem metadata coverage; zero disables it.
+#   governance_log_disk_bytes: 0
+#   # @title.zh-CN Audit 原生认证日志文件上限
+#   # @title.en-US Audit native authenticated journal file ceiling
+#   # @description.zh-CN 大于零时，Standalone/Primary/Replica 启动前为完整认证 Audit 日志申请 Recovery Disk ceiling；已有文件超过上限时启动失败，本地追加批次和 Replica 复制批次在写入前整体拒绝。认证日志 Open 后(Replica 在 confirmed prefix 应用后)转为 Background；Runtime.Close 不删除日志，因此 claim 保留到 Runtime 生命周期结束。CLI/维护入口也执行相同文件 ceiling，但不持有 Runtime Manager claim。须与其它持久 ceiling 共同满足总额、Background、Recovery、reserve 及专用 claim。只限制逻辑文件字节，不预留物理块或覆盖文件系统元数据；零表示未启用。
+#   # @description.en-US When positive, Standalone/Primary/Replica startup reserves a Recovery Disk ceiling for the complete authenticated Audit journal and fails if the existing file exceeds it. Local append batches and replicated batches are refused atomically before writes when over the ceiling. After authenticated Open (and, for Replica, confirmed-prefix application), the claim moves to Background; Runtime.Close does not delete the journal, so the claim remains for the Runtime lifetime. CLI/maintenance opens enforce the same file ceiling but do not hold the live Runtime Manager claim. It must fit the shared Total, Background, Recovery and reserve envelopes with a dedicated claim alongside other persistent ceilings. Logical file-byte accounting only; it does not reserve physical blocks or filesystem metadata. Zero disables it.
+#   audit_log_disk_bytes: 0
+#   # @title.zh-CN Metadata 原生认证日志文件上限
+#   # @title.en-US Metadata native authenticated journal file ceiling
+#   # @description.zh-CN 大于零时，Standalone/Primary/Replica 启动前为 Metadata 原生日志申请 Recovery Disk ceiling；已有文件超限则启动失败，本地追加和 Replica 复制批次写入前整体拒绝。Runtime Close 不删除日志，认证后转为 Background 并保留 claim。Metadata 日志会在安全应用前缀后按阈值裁剪；若 HA 慢成员阻止裁剪，达到 ceiling 后写入会失败关闭。只限制逻辑文件字节，不预留物理块；零表示未启用。
+#   # @description.en-US When positive, Standalone/Primary/Replica startup reserves a Recovery Disk ceiling for the native Metadata journal. Startup rejects an existing oversized file; local append and Replica batches are rejected atomically before writing. Runtime.Close does not delete the journal, so its authenticated claim moves to Background and remains for the Runtime lifetime. Metadata trims only a safe applied prefix; if a slow HA member prevents trimming, writes fail closed at the ceiling. Logical file-byte accounting only; no physical block reservation. Zero disables it.
+#   metadata_store_disk_bytes: 0 # bbolt data file; positive ceiling also charges ceiling+32MiB logical mapping RAM; no physical block/RSS guarantee
+#   # @title.zh-CN 七根引擎的遗留 Metadata 文件上限
+#   # @title.en-US Legacy Metadata file ceiling for the seven-root engine
+#   # @description.zh-CN 仅 memory_state_required 可用。正值独立限制真实 bbolt 解锁文件、维护映射和导出暂存文件，并按该值加 32MiB 收取映射 RAM；必须不超过 metadata_store_disk_bytes。selected COW 仍保留完整 Metadata Disk ceiling。已有或生成文件超限时拒绝；零保留原全额映射估算。
+#   # @description.en-US Requires memory_state_required. A positive value separately caps actual legacy bbolt unlock files, maintenance mappings and staged exports and charges that ceiling plus 32MiB of mapping RAM. It must not exceed metadata_store_disk_bytes; selected COW retains its full Metadata disk ceiling. Oversized existing or generated files are refused. Zero preserves the original full mapping estimate.
+#   legacy_metadata_file_disk_bytes: 0
+#   metadata_journal_disk_bytes: 0
+#   # @title.zh-CN HA Ordering 原生认证日志文件上限
+#   # @title.en-US HA Ordering native authenticated journal file ceiling
+#   # @description.zh-CN 大于零时，每个 HA Runtime 在认证 Ordering 日志前申请 Recovery Disk ceiling；已有日志超限则拒绝启动，本地和 Replica 新排序记录超限时写入前拒绝。日志不可裁剪且保留整个复制顺序，因此达到上限会阻止后续 HA 写入。运维可在确认共享预算和运行条件后调高上限并重启，也可执行安全的新 incarnation 迁移。Runtime 关闭不删除文件，claim 在 Runtime 生命周期内保留。只限制逻辑文件字节，不预留物理块；零表示未启用。
+#   # @description.en-US When positive, each HA Runtime reserves a Recovery Disk ceiling before authenticating the Ordering journal; startup rejects an oversized file and local or Replica ordering records are refused before writing when over the cap. The journal is not trim-able and preserves the full replication order, so reaching the cap blocks further HA writes. Operations may raise the ceiling and restart after checking shared budgets and runtime conditions, or perform a safe new-incarnation migration. Runtime.Close leaves the file in place and retains its claim for the Runtime lifetime. Logical file-byte accounting only; no physical block reservation. Zero disables it.
+#   ordering_journal_disk_bytes: 0

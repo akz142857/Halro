@@ -50,7 +50,13 @@ type BootstrapResult struct {
 	GatewayKey   string `json:"gateway_key"`
 }
 
-func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions, providerSecret []byte) (BootstrapResult, error) {
+func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions, providerSecret []byte) (result BootstrapResult, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 BootstrapResult
+		return commandScopeZero0, commandScopeErr
+	}
+
 	if len(providerSecret) == 0 || len(providerSecret) > 16<<10 {
 		return BootstrapResult{}, errors.New("provider secret must contain 1 to 16384 bytes")
 	}
@@ -73,12 +79,18 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return BootstrapResult{}, err
 	}
-	defer store.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, store.Close())
+		if resultErr != nil {
+			result = BootstrapResult{}
+		}
+	}()
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return BootstrapResult{}, err
@@ -96,7 +108,7 @@ func Bootstrap(ctx context.Context, cfg config.Config, options BootstrapOptions,
 	// Bootstrap writes a Credential, Provider, Deployment, Route, Project and
 	// Gateway Key — every one of them authoritative, so it goes through the
 	// same entry a running instance does.
-	_, journalErr := attachMetadataJournal(store, secretVault, masterKey, "bootstrap")
+	_, journalErr := attachConfiguredMetadataJournal(store, secretVault, masterKey, "bootstrap", cfg)
 	clear(masterKey)
 	if journalErr != nil {
 		return BootstrapResult{}, journalErr

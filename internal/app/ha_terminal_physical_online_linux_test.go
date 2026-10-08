@@ -1,0 +1,220 @@
+//go:build linux
+
+package app
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/replication"
+	"github.com/akz142857/Halro/internal/resourcebudget"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/store/lock"
+	"golang.org/x/sys/unix"
+	"log/slog"
+	"os"
+	"testing"
+	"time"
+)
+
+// Actual same-owner online renewal with real TLS and full 32-frame Metadata,
+// Ledger and Usage banks. Functional Manager evidence is not cfg.Validate or
+// real OS pressure / public Default Runtime capacity evidence.
+func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
+	root := os.Getenv("HALRO_EXT4_ROOT")
+	if root == "" {
+		t.Skip("requires isolated ext4 with original 32-frame bank capacity")
+	}
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil || fs.Type != unix.EXT4_SUPER_MAGIC {
+		t.Fatal("actual ext4", err)
+	}
+	if uint64(fs.Blocks)*uint64(fs.Bsize) < 2700<<20 {
+		t.Skip("original full 32-frame Ledger and Usage vector requires at least 2700 MiB usable ext4 capacity (3072 MiB backing)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	fixture := prepareHAMetadataMaintenanceFixture(t)
+	// The independent baseline binds this ceiling. Set it before publication;
+	// changing it only at reopen must be rejected by production qualification.
+	for i, cfg := range fixture.configs {
+		limits := *cfg.ResourceBudget
+		limits.MetadataJournalDiskBytes = 576 << 20
+		cfg.ResourceBudget = &limits
+		fixture.configs[i] = cfg
+	}
+	prepareHAMetadataMaintenanceArtifacts(t, fixture)
+	completeHAMemoryActivationBoundary(t, fixture)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	for _, cfg := range fixture.configs {
+		guard, err := lock.Acquire(cfg.Storage.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		activation, err := ActivateHAMemoryRuntime(ctx, cfg, fixture.keys, guard, functionalHAMetadataManager(t, cfg), logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := errors.Join(activation.Close(), guard.Close()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var owners [2]*haSelectedRuntimeFoundation
+	for i, cfg := range fixture.configs {
+		limits := *cfg.ResourceBudget
+		limits.TotalRAMBytes = 2 << 30
+		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
+		limits.CompletionRAMBytes = 1 << 30
+		limits.TotalUnconfirmedBytes = 64 << 20
+		limits.IOUnconfirmedBytes = 32 << 20
+		limits.CompletionUnconfirmedBytes = 32 << 20
+		limits.RecoveryUnconfirmedBytes = 16 << 20
+		limits.RecoveryReserveUnconfirmedBytes = 16 << 20
+		limits.UnconfirmedMaxEntries = 64
+		limits.MaxClaims += 32
+		limits.ControlRAMBytes += 32 * resourcebudget.ClaimRAMBytes
+		limits.PhysicalTerminalReserve = true
+		// 32 actual Metadata COW extents alone occupy 512 MiB; current root,
+		// controls and native prefix need additional space in the paid ceiling.
+		limits.MetadataStoreDiskBytes = 576 << 20
+		limits.MetadataJournalDiskBytes = 576 << 20
+		limits.LedgerProjectionDiskBytes = 80 << 20
+		limits.LedgerSegmentIndexDiskBytes = 48 << 20
+		limits.UsageProjectionDiskBytes = 128 << 20
+		if i == 1 {
+			limits.LedgerProjectionDiskBytes = 576 << 20
+			limits.UsageProjectionDiskBytes = 576 << 20
+		}
+		cfg.ResourceBudget = &limits
+		guard, err := lock.Acquire(cfg.Storage.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
+		if err != nil {
+			t.Fatal("actual foundation", i, err)
+		}
+		owners[i] = f
+		t.Cleanup(func() {
+			if err := f.Close(); err != nil {
+				t.Error("actual foundation join", i, err)
+			}
+			if stats := f.sharedPhysicalWork.Snapshot(); !stats.Closed || stats.Members != 0 || stats.Waiting != 0 || stats.InUse {
+				t.Error("actual shared final owner retained", i, stats)
+			}
+			if err := guard.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
+			t.Fatal("actual original vector", i, err)
+		}
+		if err := f.installHASelectedGovernanceService(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if err := f.prepareHASelectedPrimaryStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if i == 1 {
+			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
+				t.Fatal("actual pre-exposure Metadata receive window", err)
+			}
+		}
+		if err := f.prepareSelectedTransportWithPhysicalCredit(logger); err != nil {
+			t.Fatal("actual transport consumer", i, err)
+		}
+		if f.sharedPhysicalWork == nil {
+			t.Fatal("actual foundation omitted shared RAM owner", i)
+		}
+		if stats := f.sharedPhysicalWork.Snapshot(); stats.Members != 3 || stats.Closing || stats.Closed {
+			t.Fatal("actual Directory/Usage/Governance did not share", i, stats)
+		}
+		t.Log("actual background shared ownership", i, f.sharedPhysicalWork.Snapshot())
+	}
+
+	primary, replica := owners[0], owners[1]
+	q := primary.replication.peerPhysical.Load()
+	if q == nil || replica.replication.peerPhysical.Load() == nil {
+		t.Fatal("original strict controllers absent")
+	}
+	managers := [2]*replication.ConnectionManager{primary.replication.manager, replica.replication.manager}
+	business := [2]*haSelectedBusinessServices{primary.business, replica.business}
+	stores := [2]*boltstore.Store{primary.metadataStore, replica.metadataStore}
+	runCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 2)
+	for _, f := range owners {
+		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
+	}
+	defer func() {
+		stop()
+		for range 2 {
+			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+				t.Error(err)
+			}
+		}
+	}()
+	waitWindow := func() {
+		t.Helper()
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			q.mu.Lock()
+			ready := q.peers[0].window.Operation == replication.PhysicalCreditWindow
+			q.mu.Unlock()
+			if ready && primary.replication.startupReady.Load() {
+				return
+			}
+			select {
+			case <-deadline.C:
+				t.Fatal("actual TLS fresh bank absent")
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	waitWindow()
+	cost, err := haPeerPhysicalTerminalCost(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for cycle := 0; cycle < 3; cycle++ {
+		capCtx, ticket, err := q.reserve(ctx, sha256.Sum256([]byte{byte(100 + cycle)}), cost)
+		if err != nil {
+			t.Fatal("actual future after original online renewal", cycle, err)
+		}
+		id := fmt.Sprintf("prj_online_physical_%d", cycle)
+		if _, err := primary.metadataStore.PutProject(capCtx, domain.Project{ID: id, Name: "same online owner", Enabled: true}, 0, nil); err != nil {
+			t.Fatal("actual native Metadata after renewal", cycle, err)
+		}
+		if err := q.finishTicket(ctx, ticket); err != nil {
+			t.Fatal("actual full applied peer join", cycle, err)
+		}
+		if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
+			t.Fatal("actual Replica fact", got, err)
+		}
+		if cycle == 2 {
+			break
+		}
+		for i, f := range owners {
+			before := f.reopened.Seal.Revision
+			if err := f.checkpointHAPhysicalOnline(ctx); err != nil {
+				t.Fatal("actual online same owner checkpoint", cycle, i, err)
+			}
+			if f.reopened.Seal.Revision != before+1 || f.business != business[i] || f.metadataStore != stores[i] || f.replication.manager != managers[i] || f.recovery.Load() {
+				t.Fatal("online maintenance replaced or retired actual service/transport owner", cycle, i)
+			}
+		}
+		waitWindow()
+	}
+	for _, f := range owners {
+		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
+			t.Fatal("actual final whole common", err)
+		}
+		if err := f.closeHAPhysicalNative(ctx); err != nil {
+			t.Fatal("actual final native join", err)
+		}
+	}
+}

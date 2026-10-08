@@ -1,11 +1,21 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/config"
 
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
+
+func assertConfiguredMetadataSchemaCurrent(ctx context.Context, cfg config.Config) error {
+	store, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
+	if err == nil {
+		return store.Close()
+	}
+	return diagnosticSchemaError(err)
+}
 
 // assertMetadataSchemaCurrent refuses a read-only diagnostic on a data
 // directory this build would have to migrate first.
@@ -23,11 +33,22 @@ import (
 // The refusal names both versions and the one command that is allowed to
 // migrate, because "schema mismatch" alone reads as corruption to someone who
 // has done nothing wrong.
-func assertMetadataSchemaCurrent(path string) error {
-	store, err := boltstore.OpenReadOnly(path)
+func assertMetadataSchemaCurrent(path string, ceilings ...int64) error {
+	if len(ceilings) > 1 {
+		return errors.New("Metadata schema guard accepts one file ceiling")
+	}
+	limit := int64(0)
+	if len(ceilings) == 1 {
+		limit = ceilings[0]
+	}
+	store, err := boltstore.OpenReadOnlyWithDiskLimit(path, limit)
 	if err == nil {
 		return store.Close()
 	}
+	return diagnosticSchemaError(err)
+}
+
+func diagnosticSchemaError(err error) error {
 	if errors.Is(err, boltstore.ErrSchemaVersionMismatch) {
 		return fmt.Errorf(
 			"%w; this command does not migrate. Run `halro start` to upgrade the data directory, "+

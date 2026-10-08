@@ -193,10 +193,16 @@ func appendKMSProviderAuditAs(ctx context.Context, log *audit.Log, store *boltst
 // Calls that cannot unlock any trusted Slot remain available in CloudTrail but
 // cannot be authenticated into the local Audit chain.
 func appendOfflineKMSProviderAudit(ctx context.Context, cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder) error {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	if recorder == nil || len(recorder.snapshot()) == 0 {
 		return nil
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -208,7 +214,7 @@ func appendOfflineKMSProviderAuditToStore(ctx context.Context, cfg config.Config
 	if recorder == nil || len(recorder.snapshot()) == 0 {
 		return nil
 	}
-	log, err := audit.Open(cfg.AuditPath(), auditKey)
+	log, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}
@@ -219,13 +225,13 @@ func appendOfflineKMSProviderAuditToStore(ctx context.Context, cfg config.Config
 	return appendKMSProviderAuditAs(ctx, log, store, recorder, "local_cli")
 }
 
-func finishOfflineKMSProviderAudit(cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, operationErr error) error {
-	auditErr := appendOfflineKMSProviderAudit(context.Background(), cfg, auditKey, recorder)
+func finishOfflineKMSProviderAudit(ctx context.Context, cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, operationErr error) error {
+	auditErr := appendOfflineKMSProviderAudit(context.WithoutCancel(ctx), cfg, auditKey, recorder)
 	return joinOfflineKMSProviderAuditError(operationErr, auditErr)
 }
 
-func finishOfflineKMSProviderAuditToStore(cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, store *boltstore.Store, operationErr error) error {
-	auditErr := appendOfflineKMSProviderAuditToStore(context.Background(), cfg, auditKey, recorder, store)
+func finishOfflineKMSProviderAuditToStore(ctx context.Context, cfg config.Config, auditKey []byte, recorder *kmsAuditRecorder, store *boltstore.Store, operationErr error) error {
+	auditErr := appendOfflineKMSProviderAuditToStore(context.WithoutCancel(ctx), cfg, auditKey, recorder, store)
 	return joinOfflineKMSProviderAuditError(operationErr, auditErr)
 }
 

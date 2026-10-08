@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
+	"syscall"
 	"time"
 
+	"github.com/akz142857/Halro/internal/dirscan"
+	"github.com/akz142857/Halro/internal/diskset"
+	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -43,37 +46,6 @@ func (r *Runtime) runProviderResourceMaintenance(ctx context.Context) {
 // then removed without its object.
 const orphanSettlingPeriod = 24 * time.Hour
 
-// sweepableObjects is the decision the sweep makes, separated from the removal
-// so it can be stated as a test rather than as a data directory.
-//
-// Two conditions, and both are needed. A file a record still names belongs to
-// that record's TTL however old it is. A file nothing names may still be a live
-// write: an object is renamed into place before its record is stored, so for a
-// moment every legitimate write is indistinguishable from an orphan, and only
-// age separates them.
-//
-// Dot-prefixed entries are the temporary name a write holds before its rename,
-// and are swept on the same rule: one that old is a write that died between
-// create and rename.
-func sweepableObjects(entries []os.DirEntry, named map[string]struct{}, cutoff time.Time) []string {
-	var sweepable []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if _, stillNamed := named[name]; stillNamed {
-			continue
-		}
-		info, err := entry.Info()
-		if err != nil || info.ModTime().UTC().After(cutoff) {
-			continue
-		}
-		sweepable = append(sweepable, name)
-	}
-	return sweepable
-}
-
 // sweepOrphanedProviderObjects deletes sealed objects no record names.
 //
 // Two paths produce them, and neither is exotic. A submission writes its object
@@ -93,57 +65,34 @@ func sweepableObjects(entries []os.DirEntry, named map[string]struct{}, cutoff t
 // The bound this restores is the one ADR 0024 states: material a caller wrote
 // has a life measured in hours, not in the lifetime of the installation.
 func (r *Runtime) sweepOrphanedProviderObjects(ctx context.Context) {
-	directory := filepath.Join(r.config.Storage.DataDir, "provider-objects")
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			r.logger.Error("provider object directory could not be listed", "error", err)
-		}
-		return
-	}
-	resources, err := r.store.ListProviderResources(ctx)
-	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			r.logger.Error("provider object sweep could not read the resource records", "error", err)
-		}
-		return
-	}
-	named := make(map[string]struct{}, 2*len(resources))
-	for _, resource := range resources {
-		if resource.ObjectPath != "" {
-			named[resource.ObjectPath] = struct{}{}
-		}
-		if resource.InputObjectPath != "" {
-			named[resource.InputObjectPath] = struct{}{}
-		}
-	}
-	swept := 0
-	for _, name := range sweepableObjects(entries, named, time.Now().UTC().Add(-orphanSettlingPeriod)) {
-		if err := os.Remove(filepath.Join(directory, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			r.logger.Error("an orphaned provider object could not be removed", "error", err)
-			continue
-		}
-		swept++
+	var swept uint64
+	err := r.withProviderMaintenance(ctx, true, func(ctx context.Context, references *diskset.Set) error {
+		var err error
+		swept, err = r.sweepProviderObjects(ctx, references)
+		return err
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		r.logger.Error("provider object sweep refused or interrupted", "error", err)
 	}
 	if swept > 0 {
-		// Warn rather than info: every one of these is a write whose record did
-		// not survive, so the count is also a defect signal.
 		r.logger.Warn("swept provider objects no record names", "count", swept)
 	}
 }
 
 func (r *Runtime) reapProviderResources(ctx context.Context) {
-	expired, err := r.store.ExpiredProviderResources(ctx, time.Now().UTC())
-	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			r.logger.Error("provider resource TTL reaper failed", "error", err)
-		}
-		return
-	}
-	for _, resource := range expired {
-		if err := r.gatewayService.CleanupExpiredProviderResource(ctx, resource); err != nil {
-			r.logger.Error("provider resource cleanup failed", "resource_id", resource.ID, "error", err)
-		}
+	now := time.Now().UTC()
+	err := r.withProviderMaintenance(ctx, false, func(ctx context.Context, _ *diskset.Set) error {
+		return r.store.WalkProviderResourcesMaintenance(ctx, func(resource domain.ProviderResource) error {
+			if !resource.ExpiresAt.After(now) && resource.ExpiryReapable() {
+				if err := r.gatewayService.CleanupExpiredProviderResource(ctx, resource); err != nil {
+					r.logger.Error("provider resource cleanup failed", "resource_id", resource.ID, "error", err)
+				}
+			}
+			return ctx.Err()
+		})
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		r.logger.Error("provider resource TTL reaper refused or interrupted", "error", err)
 	}
 }
 
@@ -158,95 +107,91 @@ func (r *Runtime) reapProviderResources(ctx context.Context) {
 // summary line is logged rather than one per record: the count is the operator's
 // business, the identifiers are not.
 func (r *Runtime) reclaimUnsealedProviderObjects(ctx context.Context) {
-	resources, err := r.store.ListProviderResources(ctx)
-	if err != nil {
-		if !errors.Is(err, context.Canceled) {
-			r.logger.Error("provider object reclamation could not read the resource records", "error", err)
-		}
-		return
-	}
 	directory := filepath.Join(r.config.Storage.DataDir, "provider-objects")
-	reclaimed := 0
-	for _, resource := range resources {
-		if resource.ObjectPath == "" || filepath.Base(resource.ObjectPath) != resource.ObjectPath {
-			continue
-		}
-		path := filepath.Join(directory, resource.ObjectPath)
-		header, err := readObjectHeader(path)
-		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				r.logger.Error("provider object could not be read", "resource_id", resource.ID, "error", err)
+	reclaimed := uint64(0)
+	err := r.withProviderMaintenance(ctx, true, func(ctx context.Context, references *diskset.Set) error {
+		if err := r.store.WalkProviderResourcesMaintenance(ctx, func(resource domain.ProviderResource) error {
+			if resource.ObjectPath == "" || filepath.Base(resource.ObjectPath) != resource.ObjectPath {
+				return nil
 			}
-			continue
+			path := filepath.Join(directory, resource.ObjectPath)
+			header, observed, err := inspectObjectHeader(path)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					r.logger.Error("provider object could not be read", "resource_id", resource.ID, "error", err)
+				}
+				if dirscan.Missing(err) {
+					return ctx.Err()
+				}
+				return errors.Join(err, ctx.Err())
+			}
+			if vault.SealedEnvelope(header) {
+				return nil
+			}
+			if err := r.store.DeleteProviderResourceIfUnchanged(ctx, resource, func() error { return r.retireUnsealedProviderObject(ctx, directory, resource.ObjectPath, observed) }); err != nil {
+				if errors.Is(err, boltstore.ErrNotFound) || errors.Is(err, boltstore.ErrRevisionConflict) {
+					return ctx.Err()
+				}
+				return err
+			}
+			reclaimed++
+			return nil
+		}); err != nil {
+			return err
 		}
-		if vault.SealedEnvelope(header) {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			r.logger.Error("unsealed provider object could not be removed", "resource_id", resource.ID, "error", err)
-			continue
-		}
-		if err := r.store.DeleteProviderResource(ctx, resource.ProjectID, resource.ID); err != nil {
-			r.logger.Error("unsealed provider object record could not be removed", "resource_id", resource.ID, "error", err)
-			continue
-		}
-		reclaimed++
+		removed, err := r.sweepProviderObjectsWithMode(ctx, references, true)
+		reclaimed += removed
+		return err
+	})
+	if err != nil && !errors.Is(err, context.Canceled) {
+		r.logger.Error("provider object reclamation refused or interrupted", "error", err)
 	}
-	reclaimed += removeUnsealedObjectFiles(directory, r.logger)
 	if reclaimed > 0 {
 		r.logger.Warn("reclaimed provider objects written before sealing", "count", reclaimed)
 	}
 }
 
-// removeUnsealedObjectFiles sweeps the directory itself, because walking the
-// records only finds objects a record still names. A write that stored its
-// bytes and then failed to store its record leaves a file nothing points at,
-// and before sealing that file was a plaintext prompt or a plaintext result.
-//
-// Only unsealed files are removed. A sealed file is either in use or unreadable
-// without its record, and either way removing it would race a write that is
-// happening right now. Dot-prefixed entries are skipped for the same reason:
-// that is the temporary name an in-flight write holds before its rename.
-func removeUnsealedObjectFiles(directory string, logger *slog.Logger) int {
-	entries, err := os.ReadDir(directory)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			logger.Error("provider object directory could not be listed", "error", err)
-		}
-		return 0
-	}
-	removed := 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || strings.HasPrefix(name, ".") {
-			continue
-		}
-		path := filepath.Join(directory, name)
-		header, err := readObjectHeader(path)
-		if err != nil || vault.SealedEnvelope(header) {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			logger.Error("unsealed provider object could not be removed", "error", err)
-			continue
-		}
-		removed++
-	}
-	return removed
-}
-
 // readObjectHeader reads only as much as SealedEnvelope inspects. A batch result
 // can be large and nothing here needs its contents.
 func readObjectHeader(path string) ([]byte, error) {
-	file, err := os.Open(path)
+	header, _, err := inspectObjectHeader(path)
+	return header, err
+}
+
+func inspectObjectHeader(path string) (header []byte, identity os.FileInfo, resultErr error) {
+	info, err := os.Lstat(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	defer file.Close()
-	header := make([]byte, 6)
+	if !info.Mode().IsRegular() {
+		return nil, nil, dirscan.ErrIdentity
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, errProviderObjectRetirement, closeErr)
+		}
+		if resultErr != nil {
+			header = nil
+			identity = nil
+		}
+	}()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(info, actual) || !actual.Mode().IsRegular() {
+		return nil, nil, errors.Join(dirscan.ErrIdentity, err)
+	}
+	header = make([]byte, 6)
 	n, err := io.ReadFull(file, header)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return nil, err
+		return nil, nil, err
 	}
-	return header[:n], nil
+	named, err := os.Lstat(path)
+	final, finalErr := file.Stat()
+	if err != nil || finalErr != nil || !os.SameFile(info, named) || !os.SameFile(info, final) || !info.ModTime().Equal(named.ModTime()) || info.Size() != named.Size() || final.Size() != info.Size() || !final.ModTime().Equal(info.ModTime()) {
+		return nil, nil, errors.Join(dirscan.ErrIdentity, err, finalErr)
+	}
+	return header[:n], info, nil
 }

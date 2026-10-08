@@ -8,6 +8,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/dirscan"
 	"github.com/akz142857/Halro/internal/ledger"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -26,6 +27,10 @@ const (
 // without modifying state or initializing a KMS Adapter. Key-Slot mode opens
 // metadata read-only so file presence alone can never imply production-ready.
 func InspectInitialization(cfg config.Config) (InitializationState, error) {
+	ctx, _, err := commandBudgetContext(context.Background(), cfg)
+	if err != nil {
+		return InitializationInconsistent, err
+	}
 	masterKeyExists := false
 	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile {
 		keyStore, err := fileMasterKeyStore(cfg)
@@ -57,7 +62,7 @@ func InspectInitialization(cfg config.Config) (InitializationState, error) {
 	}
 	if rootExists && metadataExists && ledgerExists && auditExists {
 		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
-			metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+			metadata, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 			if err != nil {
 				return InitializationInconsistent, nil
 			}
@@ -77,16 +82,18 @@ func InspectInitialization(cfg config.Config) (InitializationState, error) {
 	if rootExists || metadataExists || ledgerExists || auditExists {
 		return InitializationInconsistent, nil
 	}
-	entries, err := os.ReadDir(cfg.Storage.DataDir)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
+	state := InitializationEmpty
+	err = dirscan.Walk(ctx, cfg.Storage.DataDir, func(entry os.DirEntry) error {
+		if entry.Name() != ".halro.lock" {
+			state = InitializationInconsistent
+			return dirscan.Stop
+		}
+		return nil
+	})
+	if err != nil && !dirscan.Missing(err) {
 		return InitializationInconsistent, fmt.Errorf("inspect data directory: %w", err)
 	}
-	for _, entry := range entries {
-		if entry.Name() != ".halro.lock" {
-			return InitializationInconsistent, nil
-		}
-	}
-	return InitializationEmpty, nil
+	return state, nil
 }
 
 // InitializeIfNeeded initializes only a provably empty instance. Partial state
@@ -168,10 +175,15 @@ func Initialize(cfg config.Config) error {
 }
 
 func initializeFile(cfg config.Config) error {
+	ctx, _, scopeErr := commandBudgetContext(context.Background(), cfg)
+	if scopeErr != nil {
+		return scopeErr
+	}
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return err
 	}
+	ctx = withCommandDataLock(ctx, dataLock)
 	defer dataLock.Close()
 
 	keyStore, err := fileMasterKeyStore(cfg)
@@ -181,7 +193,7 @@ func initializeFile(cfg config.Config) error {
 	if err := keyStore.Initialize(context.Background()); err != nil {
 		return err
 	}
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	metadata, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return fmt.Errorf("initialize metadata: %w", err)
 	}
@@ -264,7 +276,11 @@ func initializeFile(cfg config.Config) error {
 	// as it stands — schema created, migrations run, nothing else — becomes
 	// epoch 1's starting projection. Everything below this line is an operation
 	// inside that epoch and is recorded.
-	_, err = metadata.AttachMetadataJournal(journalKey, "initialize")
+	metadataJournalMaxBytes := int64(0)
+	if cfg.ResourceBudget != nil {
+		metadataJournalMaxBytes = cfg.ResourceBudget.MetadataJournalDiskBytes
+	}
+	_, err = metadata.AttachMetadataJournal(journalKey, "initialize", metadataJournalMaxBytes)
 	clear(journalKey)
 	if err != nil {
 		clear(auditKey)
@@ -310,9 +326,18 @@ func initializeFile(cfg config.Config) error {
 		metadata.Close()
 		return fmt.Errorf("store initial audit checkpoint: %w", err)
 	}
-	ledgerLog, ledgerErr := ledger.OpenWithOptions(cfg.LedgerPath(), ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
+	indexDiskOwner, indexLimit, ownerErr := newOneShotLedgerSegmentIndexDiskOwner(ctx, cfg)
+	if ownerErr != nil {
+		clear(auditKey)
+		clear(ledgerKey)
+		metadata.Close()
+		return ownerErr
+	}
+	ledgerLog, ledgerErr := ledger.OpenWithOptions(cfg.LedgerPath(), ledger.NewStatus(), ledger.Options{
+		ChainKey: ledgerKey, MaxSegmentDirectoryIndexBytes: indexLimit,
+	})
 	clear(ledgerKey)
-	auditLog, auditErr := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, auditErr := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	clear(auditKey)
 	return errors.Join(ledgerErr, func() error {
 		if ledgerLog != nil {
@@ -324,5 +349,5 @@ func initializeFile(cfg config.Config) error {
 			return auditLog.Close()
 		}
 		return nil
-	}(), metadata.Close())
+	}(), indexDiskOwner.Release(), metadata.Close())
 }

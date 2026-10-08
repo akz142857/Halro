@@ -88,7 +88,10 @@ func kmsAppTestConfig(t *testing.T) config.Config {
 }
 
 func TestKMSInitializationPublishesIndependentVerifiedSlotsWithoutPlaintextKey(t *testing.T) {
-	cfg := kmsAppTestConfig(t)
+	cfg := enableLedgerSegmentIndexBudget(kmsAppTestConfig(t))
+	if err := cfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	harness := newKMSAppHarness(t)
 	masterKey := bytes.Repeat([]byte{0x6d}, 32)
 	fixedNow := time.Date(2026, 8, 3, 19, 0, 0, 0, time.UTC)

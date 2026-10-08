@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"log/slog"
 	"os"
@@ -213,13 +214,16 @@ func TestVerifyAuditAnchorsDetectsARewrittenChainWithARecomputedTail(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Truncate at a byte offset guaranteed to remove at least the final
-	// frame's tail without knowing exact frame boundaries: cut a large
-	// fraction of the file. This is only meant to change the observable
-	// summary, not to stay a well-formed file — VerifyAuditAnchors only
-	// needs the truncated file to open and replay, which a byte-aligned cut
-	// followed by the log's own tail-recovery guarantees.
-	cut := len(raw) / 2
+	// A verifier never repairs the authority it is checking. Keep one
+	// complete frame to simulate a self-consistent shortened chain; a torn
+	// frame is separately required to fail without changing its bytes.
+	if len(raw) < 52 {
+		t.Fatal("missing first native audit frame")
+	}
+	cut := 52 + int(binary.BigEndian.Uint32(raw[16:20])) + 32
+	if cut >= len(raw) {
+		t.Fatal("fixture needs a later frame for truncation")
+	}
 	if err := os.WriteFile(cfg.AuditPath(), raw[:cut], 0o600); err != nil {
 		t.Fatal(err)
 	}

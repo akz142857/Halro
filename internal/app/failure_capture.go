@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -22,6 +24,9 @@ import (
 // without stopping the expiry of what is already there; a feature whose "off"
 // switch makes captured prompts permanent is worse than one with no switch.
 func openFailureCapture(cfg config.Config, sealer failurecapture.Sealer) (*failurecapture.Store, error) {
+	return openFailureCaptureContext(context.Background(), cfg, sealer)
+}
+func openFailureCaptureContext(ctx context.Context, cfg config.Config, sealer failurecapture.Sealer) (*failurecapture.Store, error) {
 	root := filepath.Join(cfg.Storage.DataDir, "failures")
 	if !cfg.Gateway.FailureCapture.Enabled {
 		if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
@@ -30,7 +35,7 @@ func openFailureCapture(cfg config.Config, sealer failurecapture.Sealer) (*failu
 			return nil, fmt.Errorf("inspect disabled failure capture store: %w", err)
 		}
 	}
-	store, err := failurecapture.Open(sealer, failurecapture.Options{
+	store, err := failurecapture.OpenContext(ctx, sealer, failurecapture.Options{
 		Root:             root,
 		MaxBytes:         cfg.Gateway.FailureCapture.ByteLimit(),
 		MaxRecordsPerDay: cfg.Gateway.FailureCapture.DailyRecordLimit(),
@@ -64,11 +69,13 @@ func captureFor(enabled bool, store *failurecapture.Store) gatewaycore.FailureCa
 // purgeFailureCaptures enforces the retention window. Failures here are logged
 // and not retried: the next sweep covers the same days, and a retention pass
 // that takes the process down with it is worse than one that is late.
-func (r *Runtime) purgeFailureCaptures() {
+func (r *Runtime) purgeFailureCaptures() { r.purgeFailureCapturesContext(context.Background()) }
+
+func (r *Runtime) purgeFailureCapturesContext(ctx context.Context) {
 	if r.failureCapture == nil {
 		return
 	}
-	if err := r.failureCapture.Purge(); err != nil {
+	if err := r.failureCapture.PurgeContext(ctx); err != nil {
 		r.logger.Warn("failure capture retention sweep failed", "error", err)
 	}
 }
@@ -103,6 +110,22 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
+	var permit resourcebudget.Permit
+	if manager := r.resourcePressure.logicalBudget(); manager != nil {
+		var err error
+		permit, err = manager.TryAcquireContext(request.Context(), resourcebudget.IO, resourcebudget.Cost{RAM: r.failureCapture.ReadRAMBytes()})
+		if err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "failure capture read capacity is unavailable", "code": "resource_budget_unavailable"})
+			return
+		}
+	}
+	var record failurecapture.Record
+	defer func() {
+		record = failurecapture.Record{}
+		if err := permit.Release(); err != nil {
+			r.logger.Warn("failure capture read owner release failed", "error", err)
+		}
+	}()
 	// The project comes from the capture itself rather than from the usage
 	// aggregate. The aggregate holds a bounded console window, and a capture's
 	// retention is configured separately and may be longer, so taking the
@@ -110,7 +133,7 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 	// its promised life unopenable — and reported it as a missing usage request,
 	// which is not what happened. The envelope is still sealed against
 	// (request, project); this only makes the capture findable.
-	projectID, located, err := r.failureCapture.ProjectOf(requestID)
+	projectID, located, err := r.failureCapture.ProjectOfContext(request.Context(), requestID)
 	if err != nil {
 		r.logger.Warn("failure capture could not be located", "request_id", requestID, "error", err)
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "no captured payload for this request"})
@@ -120,7 +143,7 @@ func (r *Runtime) adminUsageFailurePayload(writer http.ResponseWriter, request *
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "no captured payload for this request"})
 		return
 	}
-	record, found, err := r.failureCapture.Get(requestID, projectID)
+	record, found, err := r.failureCapture.GetContext(request.Context(), requestID, projectID)
 	if err != nil {
 		// The error is not returned to the caller: it distinguishes "tampered
 		// with" from "belongs to another project", and neither is something the

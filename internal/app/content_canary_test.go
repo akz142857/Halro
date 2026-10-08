@@ -175,7 +175,7 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := runtime.usage.Snapshot()
+	snapshot := usageSnapshotForTest(t, runtime)
 	if len(snapshot.Requests) != 2 {
 		t.Fatalf("expected both requests to finalize, got %#v", snapshot)
 	}

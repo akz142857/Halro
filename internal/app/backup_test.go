@@ -30,6 +30,7 @@ import (
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/usage"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -423,7 +424,15 @@ func descriptorDigestForBackupTest(t *testing.T, descriptor masterkey.KeySlotDes
 }
 
 func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := enableBackupReferenceBudget(testConfig(t))
+	// Published-archive verification includes a 512 MiB catalog index/spool
+	// alongside the persistent archive and the three private reference owners.
+	cfg.ResourceBudget.TotalDiskBytes += 512 << 20
+	cfg.ResourceBudget.RecoveryDiskBytes += 512 << 20
+	cfg.ResourceBudget.RecoveryReserveDiskBytes += 512 << 20
+	if err := cfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -507,6 +516,17 @@ func TestOfflineEncryptedBackupCapturesConsistentManifestAndAudit(t *testing.T) 
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(cfg.UsagePath(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A published empty archive supplies a real reference set. A missing
+	// manifest plus an orphan must still refuse backup, as the dedicated
+	// unpublished-archive tests assert; it is not an empty archive.
+	exporter, err := usage.NewExporter(cfg.UsagePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, exportErr := exporter.Export(usage.Snapshot{})
+	if err := errors.Join(exportErr, exporter.Close()); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
@@ -950,11 +970,17 @@ func TestBackupRestoreRebuildsRunGovernanceConfigurationAndLedgerState(t *testin
 	if err != nil || !domain.HasGatewayScope(key.Scopes, domain.GatewayScopeRunAttach) {
 		t.Fatalf("restored Gateway Key scopes=%v err=%v", key.Scopes, err)
 	}
-	restoredWorkUnit, ok := restored.accounting.WorkUnit(bootstrap.ProjectID, workUnit.ID)
+	restoredWorkUnit, ok, readErr := restored.accounting.ReadWorkUnit(context.Background(), bootstrap.ProjectID, workUnit.ID)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
 	if !ok || restoredWorkUnit.ID != workUnit.ID {
 		t.Fatalf("restored Work Unit=%#v ok=%v", restoredWorkUnit, ok)
 	}
-	restoredRun, ok := restored.accounting.Run(bootstrap.ProjectID, run.ID)
+	restoredRun, ok, runReadErr := restored.accounting.ReadRun(context.Background(), bootstrap.ProjectID, run.ID)
+	if runReadErr != nil {
+		t.Fatal(runReadErr)
+	}
 	if !ok || restoredRun.WorkUnitID != workUnit.ID || restoredRun.BudgetMicrosUSD != 4321 {
 		t.Fatalf("restored Run=%#v ok=%v", restoredRun, ok)
 	}

@@ -147,26 +147,39 @@ func (r *Runtime) refuseWhileSnapshotsStale(protocol staleErrorProtocol) func(ht
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 			status := r.activation.status()
-			if !status.Stale {
+			metadataFailure := r.store.RecoveryError() != nil
+			stateFailure := r.selectedBusinessHealth(request.Context()) != nil
+			if !status.Stale && !metadataFailure && !stateFailure {
 				next.ServeHTTP(writer, request)
 				return
 			}
 			writer.Header().Set("Cache-Control", "no-store")
 			writer.Header().Set("Retry-After", strconv.FormatInt(int64(activationRetryInterval/time.Second), 10))
 			message := "a durable configuration change has not reached the running snapshots; requests are refused until it does"
+			code := "configuration_stale"
+			if metadataFailure {
+				code = "metadata_recovery_required"
+				message = "metadata persistence failed; requests are refused until close and authenticated recovery"
+				writer.Header().Del("Retry-After")
+			}
+			if stateFailure {
+				code = "state_recovery_required"
+				message = "state authentication is unavailable; requests are refused until authenticated recovery"
+				writer.Header().Del("Retry-After")
+			}
 			if protocol == staleErrorAnthropic {
 				writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
 					"type": "error",
 					"error": map[string]any{
 						"type":    "overloaded_error",
-						"message": "configuration_stale: " + message,
+						"message": code + ": " + message,
 					},
 				})
 				return
 			}
 			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
 				"error": map[string]any{
-					"type": "service_unavailable", "code": "configuration_stale",
+					"type": "service_unavailable", "code": code,
 					"message": message, "param": nil,
 				},
 			})

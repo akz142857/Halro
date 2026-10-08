@@ -66,7 +66,7 @@ func (r *Runtime) sealLedgerGeneration() {
 	// had already found unreadable. The status latches instead, which stops
 	// traffic and says so, and the operator's next step is
 	// `halro ledger verify` on a stopped instance.
-	if _, err := r.ledger.VerifySealed(result.Sealed.Generation); err != nil {
+	if _, err := r.ledger.VerifySealedSummary(result.Sealed.Generation); err != nil {
 		r.logger.Error("a sealed ledger generation does not verify; accounting requires recovery",
 			"generation", result.Sealed.Generation, "error", err,
 			"remedy", "stop the instance and run `halro ledger verify`")
@@ -87,32 +87,41 @@ func (r *Runtime) sealLedgerGeneration() {
 // can move off the box, and compacting in the same order makes "compressed"
 // and "safe to move" mean the same thing.
 func (r *Runtime) compactLedgerSegments() {
+	r.compactLedgerSegmentsContext(context.Background())
+}
+
+func (r *Runtime) compactLedgerSegmentsContext(ctx context.Context) {
 	seal := r.config.Ledger.Seal
 	if !seal.Enabled || !seal.Compress {
 		return
 	}
-	segments := r.ledger.Segments()
-	if len(segments) == 0 {
-		return
+	if err := r.withLedgerMaintenance(ctx, r.compactLedgerSegmentsOwned); err != nil {
+		r.logger.Error("ledger generation compaction refused or interrupted", "error", err)
 	}
+}
+
+func (r *Runtime) compactLedgerSegmentsOwned(ctx context.Context) error {
 	through, ok := r.ledgerArchivedThrough()
 	if !ok {
-		return
+		return nil
 	}
-	for _, segment := range segments {
-		if segment.Compressed || segment.LastSequence > through {
-			continue
-		}
-		compacted, err := r.ledger.Compact(segment.Generation)
-		if err != nil {
-			r.logger.Error("ledger generation was not compacted",
-				"generation", segment.Generation, "error", err)
-			return
-		}
-		r.logger.Info("ledger generation compacted",
-			"generation", compacted.Generation, "bytes", compacted.Length, "file", compacted.File)
-		return
+	segment, found, err := r.ledger.NextCompactableSegment(through)
+	if err != nil {
+		r.logger.Error("ledger compaction candidate could not be read", "error", err)
+		return err
 	}
+	if !found {
+		return nil
+	}
+	compacted, err := r.ledger.CompactContext(ctx, segment.Generation)
+	if err != nil {
+		r.logger.Error("ledger generation was not compacted",
+			"generation", segment.Generation, "error", err)
+		return err
+	}
+	r.logger.Info("ledger generation compacted",
+		"generation", compacted.Generation, "bytes", compacted.Length, "file", compacted.File)
+	return nil
 }
 
 // ledgerArchivedThrough is the highest ledger sequence both derivatives have
@@ -120,6 +129,13 @@ func (r *Runtime) compactLedgerSegments() {
 // only safely archivable once neither the archive nor the checkpoint still
 // needs to read it.
 func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
+	// A fresh derived DB and its archive receipt are not a trusted restart
+	// checkpoint. Disk-mode compaction needs the forthcoming explicit retention
+	// and authenticated recovery protocol; an old Aggregate checkpoint cannot
+	// substitute for that protocol.
+	if r.usage != nil && r.usage.disk != nil {
+		return 0, false
+	}
 	// Replica never exports Parquet. Its compaction gate is therefore the
 	// locally derived Usage checkpoint alone, which is persisted only after the
 	// corresponding confirmed Ledger prefix has been applied. Compression is a
@@ -134,7 +150,9 @@ func (r *Runtime) ledgerArchivedThrough() (uint64, bool) {
 		}
 		return watermark.Sequence, true
 	}
-	manifest, err := r.usageExporter.LoadManifest()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	manifest, err := r.usageExporter.ReadArchivePosition(ctx)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			r.logger.Warn("ledger segments not compacted: the export manifest could not be read", "error", err)
@@ -169,7 +187,7 @@ func (r *Runtime) runReplicaMaintenance(ctx context.Context) {
 		case <-checkpointTicker.C:
 			r.saveReplicaUsageCheckpoint()
 		case <-compactionTicker.C:
-			r.compactLedgerSegments()
+			r.compactLedgerSegmentsContext(ctx)
 		case <-ctx.Done():
 			r.saveReplicaUsageCheckpoint()
 			return

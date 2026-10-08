@@ -1,11 +1,11 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -110,6 +110,19 @@ type summaryTimezoneChange struct {
 // answers it — refusing the combination is how the endpoint avoids returning a
 // number that looks like an answer to a question it never asked.
 func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Request) {
+	release, err := r.backgroundWait.summaries.enter(request.Context())
+	if err != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "usage summary unavailable"})
+		return
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(request.Context(), time.Minute)
+	defer cancel()
+	request = request.WithContext(ctx)
+	if len(request.URL.RawQuery) > 1<<20 {
+		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "summary query exceeds limits"})
+		return
+	}
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -195,53 +208,40 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 		return
 	}
 
-	// What the totals and the chart report, and what the table breaks down, are
-	// two different rows. The totals cover the range whatever the operator
-	// chose to group by, so they come from the stored total row — reading them
-	// off the grouped rows made "completed requests" collapse to zero the
-	// moment a dimension with no request identity was selected.
-	reportDimension := domain.RollupDimensionTotal
-	if filterDimension != "" {
-		reportDimension = filterDimension
+	var body usageSummaryResponse
+	var groups []summaryGroup
+	if r.usage.disk != nil {
+		body, groups, err = r.readDiskUsageSummary(ctx, usage.DiskDailySummaryQuery{
+			Start: start, End: end, Granularity: granularity, GroupBy: groupBy,
+			FilterDimension: filterDimension, FilterValue: filterValue, Sort: sortKey,
+			Order: map[bool]string{true: "asc", false: "desc"}[ascending], Limit: limit,
+		}, timing)
+		if err != nil {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "usage summary unavailable"})
+			return
+		}
+	} else {
+		body, groups, err = r.readLegacyUsageSummary(start, end, granularity, groupBy, filterDimension, filterValue, sortKey, ascending, limit, timing)
+		if err != nil {
+			adminStoreError(writer)
+			return
+		}
 	}
-	wanted := []string{reportDimension}
-	if groupBy != "" && groupBy != reportDimension {
-		wanted = append(wanted, groupBy)
+	if labels, err := r.summaryResourceLabels(request, groupBy, groups); err == nil {
+		body.ResourceLabels = &labels
 	}
-	rows, changes, err := r.collectSummaryRows(start, end, wanted, filterValue)
+	raw, err := marshalUsageSummaryResponse(body)
+	if err == nil {
+		err = r.backgroundWait.summaries.check(ctx)
+	}
 	if err != nil {
-		adminStoreError(writer)
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "usage summary unavailable"})
 		return
 	}
-
-	buckets, totals, groups, truncated, otherCount := summarize(
-		rows[reportDimension], rows[groupBy], granularity, reportDimension, groupBy,
-		summaryOrder{key: sortKey, ascending: ascending}, limit)
-	body := map[string]any{
-		"granularity":        granularity,
-		"start":              start,
-		"end":                end,
-		"buckets":            buckets,
-		"totals":             totals,
-		"timezone_changes":   changes,
-		"watermark_sequence": r.usage.Snapshot().Watermark.Sequence,
-		"time_context":       timing,
-	}
-	if groupBy != "" {
-		body["group_by"] = groupBy
-		body["groups"] = groups
-		body["groups_truncated"] = truncated
-		body["groups_other_count"] = otherCount
-		body["sort"] = sortKey
-		body["order"] = map[bool]string{true: "asc", false: "desc"}[ascending]
-	}
-	if filterDimension != "" {
-		body["filter"] = map[string]string{"dimension": filterDimension, "value": filterValue}
-	}
-	if labels, err := r.summaryResourceLabels(request); err == nil {
-		body["resource_labels"] = labels
-	}
-	writeJSON(writer, http.StatusOK, body)
+	writer.Header().Set("Content-Type", "application/json")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(raw)
 }
 
 // summaryRow is one accounting day's row for the dimension being reported on,
@@ -625,23 +625,10 @@ func summaryBucketCount(start, end time.Time, granularity string) int {
 // summaryResourceLabels names the projects and deployments a grouped response
 // refers to. History outlives the resource it names, so a missing entry means
 // "deleted", and the console falls back to the identifier the ledger carries.
-func (r *Runtime) summaryResourceLabels(request *http.Request) (map[string]string, error) {
-	labels := map[string]string{}
-	projects, err := r.store.ListProjects(request.Context())
-	if err != nil {
-		return nil, err
+func (r *Runtime) summaryResourceLabels(request *http.Request, dimension string, groups []summaryGroup) (map[string]string, error) {
+	keys := make([]string, 0, len(groups))
+	for _, group := range groups {
+		keys = append(keys, group.Key)
 	}
-	for _, project := range projects {
-		labels[project.ID] = project.Name
-	}
-	deployments, err := r.store.ListDeployments(request.Context())
-	if err != nil {
-		return nil, err
-	}
-	for _, deployment := range deployments {
-		if strings.TrimSpace(deployment.Name) != "" {
-			labels[deployment.ID] = deployment.Name
-		}
-	}
-	return labels, nil
+	return r.store.UsageSummaryLabels(request.Context(), dimension, keys)
 }

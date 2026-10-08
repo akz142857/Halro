@@ -56,7 +56,7 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 		t.Fatal(err)
 	}
 	runtime.saveUsageCheckpoint()
-	expected := runtime.usage.Snapshot()
+	expected := usageSnapshotForTest(t, runtime)
 	if expected.Watermark.Sequence == 0 {
 		t.Fatal("checkpoint did not advance")
 	}
@@ -83,7 +83,7 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	actual := reopened.usage.Snapshot()
+	actual := usageSnapshotForTest(t, reopened)
 	if !reflect.DeepEqual(actual, expected) {
 		t.Fatalf("rebuilt aggregate differs:\nactual=%#v\nexpected=%#v", actual, expected)
 	}
@@ -144,14 +144,11 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 				}
 				t.Fatalf("recovered attempt %q is absent from Usage", attempt.AttemptID)
 			}
-			snapshot := recovered.usage.Snapshot()
+			snapshot := usageSnapshotForTest(t, recovered)
 			assertRecovered(snapshot)
 			recovered.saveUsageCheckpoint()
-			if _, err := recovered.usageExporter.Export(snapshot); err != nil {
-				recovered.Close()
-				t.Fatal(err)
-			}
-			if err := recovered.usageExporter.Verify(&snapshot); err != nil {
+			recovered.exportUsageParquet()
+			if _, err := recovered.usageExporter.VerifyDiskArchive(context.Background(), recovered.usage.disk, usage.DefaultArchiveVerifyLimits()); err != nil {
 				recovered.Close()
 				t.Fatal(err)
 			}
@@ -164,7 +161,7 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 				t.Fatal(err)
 			}
 			defer checkpointed.Close()
-			assertRecovered(checkpointed.usage.Snapshot())
+			assertRecovered(usageSnapshotForTest(t, checkpointed))
 		})
 	}
 }

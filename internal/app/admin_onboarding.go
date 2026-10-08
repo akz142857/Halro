@@ -70,6 +70,11 @@ type onboardingResources struct {
 }
 
 func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, request *http.Request) {
+	request, finish, admitted := r.beginUsageRead(writer, request)
+	if !admitted {
+		return
+	}
+	defer finish()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -124,12 +129,20 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 		resources.PriceReady[deployment.ID] = priceErr == nil
 	}
 
-	writeJSON(writer, http.StatusOK, evaluateOnboardingReadiness(
-		now, resources, r.usage.Metrics(), r.usage.Snapshot(),
-	))
+	evidence, err := r.usage.onboarding(request.Context(), resources)
+	if err != nil {
+		r.usageUnavailable(writer)
+		return
+	}
+	r.writeUsageRead(writer, request, evaluateOnboardingWithEvidence(now, resources, evidence))
 }
 
 func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, metrics usage.Metrics, snapshot usage.Snapshot) onboardingReadiness {
+	return evaluateOnboardingWithEvidence(now, resources, onboardingEvidenceFromSnapshot(metrics, snapshot))
+}
+
+func evaluateOnboardingWithEvidence(now time.Time, resources onboardingResources, evidence usage.OnboardingEvidence) onboardingReadiness {
+	metrics := evidence.Metrics
 	credentialReady := make(map[string]domain.Credential)
 	for _, credential := range resources.Credentials {
 		if len(credential.Ciphertext) > 0 && !internalCredentialType(credential.Type) {
@@ -146,8 +159,8 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	// instant is kept and compared rather than just the fact of a probe.
 	deploymentProvider := make(map[string]string, len(resources.Deployments))
 	downstreamProbe := make(map[string]time.Time)
-	successfulDeployment := make(map[string]time.Time)
-	successfulRoute := make(map[string]time.Time)
+	successfulDeployment := evidence.Deployments
+	successfulRoute := evidence.Routes
 	recordProbe := func(providerID string, at *time.Time) {
 		if providerID == "" || at == nil {
 			return
@@ -173,32 +186,9 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 			recordProbe(deploymentProvider[route.DeploymentID], route.LastTestedAt)
 		}
 	}
-	// A finalized successful request is stronger evidence than an explicit
-	// control-plane probe: it proves the selected Route, Deployment, Provider,
-	// credential, Project grant, and Gateway Key worked together. Keep it tied
-	// to the exact attempt IDs and revision timestamps so a later edit still
-	// invalidates the evidence.
-	successfulRequests := make(map[string]struct{})
-	for _, request := range snapshot.Requests {
-		if request.Outcome == "success" {
-			successfulRequests[request.RequestID] = struct{}{}
-		}
-	}
-	for _, attempt := range snapshot.Attempts {
-		if attempt.Status != "success" {
-			continue
-		}
-		if _, ok := successfulRequests[attempt.RequestID]; !ok {
-			continue
-		}
-		if newest := successfulDeployment[attempt.DeploymentID]; attempt.DeploymentID != "" && attempt.CompletedAt.After(newest) {
-			successfulDeployment[attempt.DeploymentID] = attempt.CompletedAt
-		}
-		if newest := successfulRoute[attempt.RouteID]; attempt.RouteID != "" && attempt.CompletedAt.After(newest) {
-			successfulRoute[attempt.RouteID] = attempt.CompletedAt
-		}
-		at := attempt.CompletedAt
-		recordProbe(attempt.ProviderID, &at)
+	// Traffic proofs retain the successful-request join and completion time.
+	for providerID, at := range evidence.Providers {
+		recordProbe(providerID, &at)
 	}
 
 	hasProvider := false
@@ -434,7 +424,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		result.Goals[3].DetailCode = "request_succeeded"
 	} else if accessReady {
 		result.State = onboardingReadyToVerify
-		if verification := latestOnboardingVerification(snapshot); verification != nil && verification.Outcome != "success" {
+		if verification := verificationFromOnboardingEvidence(evidence); verification != nil && verification.Outcome != "success" {
 			result.State = onboardingVerifyFailed
 			result.LastVerification = verification
 			result.Goals[3].DetailCode = "request_failed"

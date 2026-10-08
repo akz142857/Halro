@@ -35,6 +35,7 @@ type adminLoginWindow struct {
 type adminAuditRequest struct {
 	event  audit.Event
 	result chan error
+	bytes  int
 }
 
 type adminContextKey struct{}
@@ -655,48 +656,11 @@ func (r *Runtime) appendAdminAuditWithMetadata(
 	if err != nil {
 		return err
 	}
-	request := adminAuditRequest{event: audit.Event{
+	return r.enqueueAdminAudit(audit.Event{
 		EventID: eventID, OccurredAt: time.Now().UTC(), ActorType: actorType,
 		ActorID: actorID, Action: action, TargetType: targetType, TargetID: targetID,
 		Outcome: outcome, ReasonCode: reason, Metadata: metadata,
-	}, result: make(chan error, 1)}
-	r.auditBatchMu.Lock()
-	r.auditBatchPending = append(r.auditBatchPending, request)
-	leader := !r.auditBatchRunning
-	if leader {
-		r.auditBatchRunning = true
-	}
-	r.auditBatchMu.Unlock()
-	if leader {
-		r.flushAdminAuditBatches()
-	}
-	return <-request.result
-}
-
-func (r *Runtime) flushAdminAuditBatches() {
-	for {
-		time.Sleep(time.Millisecond)
-		r.auditBatchMu.Lock()
-		batch := r.auditBatchPending
-		r.auditBatchPending = nil
-		if len(batch) == 0 {
-			r.auditBatchRunning = false
-			r.auditBatchMu.Unlock()
-			return
-		}
-		r.auditBatchMu.Unlock()
-		events := make([]audit.Event, len(batch))
-		for index := range batch {
-			events[index] = batch[index].event
-		}
-		_, err := r.audit.AppendBatch(context.Background(), events)
-		if err == nil {
-			err = checkpointAudit(r.store, r.audit.Summary())
-		}
-		for index := range batch {
-			batch[index].result <- err
-		}
-	}
+	})
 }
 
 func decodeAdminJSON(request *http.Request, value any) error {

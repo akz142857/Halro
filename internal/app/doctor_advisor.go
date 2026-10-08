@@ -2,6 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
+	"github.com/akz142857/Halro/internal/diskset"
+	"math"
 	"sort"
 
 	"github.com/akz142857/Halro/internal/advisor"
@@ -18,19 +22,62 @@ import (
 // process, and doctor is a read-only view of a directory that may have no
 // process behind it at all.
 func doctorAdvisorInput(ctx context.Context, cfg config.Config, store *boltstore.Store) advisor.Input {
+	input, _ := doctorAdvisorInputChecked(ctx, cfg, store)
+	return input
+}
+
+func doctorAdvisorInputChecked(ctx context.Context, cfg config.Config, store *boltstore.Store) (advisor.Input, error) {
 	input := advisorConfigInput(cfg)
 	if store == nil {
-		return input
+		return input, nil
 	}
-	routes, routeErr := store.ListRoutes(ctx)
-	deployments, deploymentErr := store.ListDeployments(ctx)
-	providers, providerErr := store.ListProviders(ctx)
-	if routeErr != nil || deploymentErr != nil || providerErr != nil {
-		return input
+	widest := advisor.FanOut{}
+	err := withDoctorFanOutCounter(ctx, cfg, func(counts *diskset.Set) error {
+		return store.WalkRoutesMaintenance(ctx, func(route domain.Route) error {
+			if !route.Enabled || route.DeletedAt != nil {
+				return nil
+			}
+			if len(route.PublicModel) > 4096 {
+				return boltstore.ErrPricingRecoveryLimit
+			}
+			deployment, err := store.GetDeploymentMaintenance(ctx, route.DeploymentID)
+			if errors.Is(err, boltstore.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !deployment.Enabled || deployment.DeletedAt != nil {
+				return nil
+			}
+			provider, err := store.GetProviderMaintenance(ctx, deployment.ProviderID)
+			if errors.Is(err, boltstore.ErrNotFound) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if !provider.Enabled || provider.DeletedAt != nil {
+				return nil
+			}
+			count, err := counts.Increment(ctx, sha256.Sum256([]byte(route.PublicModel)))
+			if err != nil {
+				return err
+			}
+			if count > uint64(math.MaxInt) {
+				return boltstore.ErrPricingRecoveryLimit
+			}
+			if int(count) > widest.Candidates || int(count) == widest.Candidates && route.PublicModel < widest.PublicModel {
+				widest = advisor.FanOut{PublicModel: route.PublicModel, Candidates: int(count)}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return input, err
 	}
-	input.TopologyKnown = true
-	input.WidestFanOut = widestFanOut(routes, deployments, providers)
-	return input
+	input.TopologyKnown, input.WidestFanOut = true, widest
+	return input, nil
 }
 
 // advisorConfigInput is the half of the input every caller has, online or off.

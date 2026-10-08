@@ -7,9 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -22,6 +22,7 @@ import (
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
+	"github.com/akz142857/Halro/internal/ownedfile"
 	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -51,6 +52,16 @@ func CreateBackupWithOptions(
 	backupKey []byte,
 	options CreateBackupOptions,
 ) (backup.Manifest, error) {
+	return createBackupWithWriter(ctx, cfg, configPath, outputPath, backupKey, options, backup.Create)
+}
+
+func createBackupWithWriter(ctx context.Context, cfg config.Config, configPath, outputPath string, backupKey []byte, options CreateBackupOptions, writer func(backup.CreateOptions) (backup.Manifest, error)) (result backup.Manifest, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 backup.Manifest
+		return commandScopeZero0, commandScopeErr
+	}
+
 	if err := ctx.Err(); err != nil {
 		return backup.Manifest{}, err
 	}
@@ -75,24 +86,63 @@ func CreateBackupWithOptions(
 	if pathWithin(absoluteOutput, cfg.Storage.DataDir) {
 		return backup.Manifest{}, errors.New("backup output must be outside the live data directory")
 	}
+	if err := checkOperationDiskHeadroom(ctx, cfg, filepath.Dir(absoluteOutput)); err != nil {
+		return backup.Manifest{}, err
+	}
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("acquire offline backup lock: %w", err)
 	}
-	defer dataLock.Close()
+	ctx = withCommandDataLock(ctx, dataLock)
+	var nativeDisk *commandNativeDiskOwner
+	defer func() {
+		resultErr = nativeDisk.finish(resultErr)
+		resultErr = finishCommandDataLock(dataLock, resultErr)
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
+	if options.Replica {
+		if err := refuseLegacySeedMemoryState(ctx, cfg); err != nil {
+			return backup.Manifest{}, err
+		}
+	}
+	var commandPressure *resourcePressureRuntime
+	if cfg.ResourceBudget != nil {
+		_, commandPressure, err = commandBudgetContext(ctx, cfg)
+		if err != nil {
+			return backup.Manifest{}, err
+		}
+	}
+	nativeDisk, err = prepareCommandNativeDisk(ctx, cfg, dataLock)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
 	var metadata *boltstore.Store
 	if options.Replica {
-		metadata, err = boltstore.OpenReplica(cfg.MetadataPath())
+		metadata, err = openCommandMetadataReplica(ctx, cfg, cfg.MetadataPath())
 	} else {
-		metadata, err = boltstore.Open(cfg.MetadataPath())
+		metadata, err = openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	}
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	defer metadata.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, metadata.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	var masterKey []byte
 	if options.Replica {
-		masterKey, err = unlockMemberMasterKey(ctx, cfg)
+		if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
+			// Borrow the already opened actual projection solely for candidate
+			// key inspection; a second bbolt descriptor would wait on this
+			// owner's exclusive lock. Member/source authentication follows.
+			masterKey, err = unlockKMSMasterKey(ctx, cfg, metadata, masterkey.KeySlotPrimary, defaultKMSWrapperFactory)
+		} else {
+			masterKey, err = unlockMemberMasterKey(ctx, cfg)
+		}
 	} else {
 		masterKey, err = unlockMasterKey(ctx, cfg, metadata)
 	}
@@ -104,21 +154,17 @@ func CreateBackupWithOptions(
 	var memberState *replication.MemberState
 	var memberClusterKey []byte
 	if options.Replica {
-		state, stateErr := replication.ReadStateWithMasterKey(cfg.ReplicationStatePath(), masterKey)
+		state, derived, stateErr := readMemberState(cfg, masterKey)
 		if stateErr != nil {
 			clear(masterKey)
 			return backup.Manifest{}, stateErr
 		}
+		defer clear(derived[:])
 		if state.Role != replication.RoleReplica || state.AppliedIndex != state.DurableIndex {
 			clear(masterKey)
 			return backup.Manifest{}, errors.New("Replica backup requires role=replica and applied_index == durable_index")
 		}
 		memberState = &state
-		derived, deriveErr := replication.DeriveClusterKey(masterKey, state.Incarnation)
-		if deriveErr != nil {
-			clear(masterKey)
-			return backup.Manifest{}, deriveErr
-		}
 		memberClusterKey = append([]byte(nil), derived[:]...)
 		clear(derived[:])
 		defer clear(memberClusterKey)
@@ -157,7 +203,7 @@ func CreateBackupWithOptions(
 		}
 		metadataKey, loadErr := loadMetadataJournalHMACKey(metadata, secretVault, masterKey)
 		if loadErr == nil {
-			loadErr = recoverReplicaForBackup(cfg, *memberState, memberClusterKey, ledgerKey, auditKey, governanceKey, metadataKey)
+			loadErr = recoverReplicaForBackup(ctx, cfg, *memberState, memberClusterKey, ledgerKey, auditKey, governanceKey, metadataKey, commandPressure)
 		}
 		clear(governanceKey)
 		clear(metadataKey)
@@ -173,16 +219,21 @@ func CreateBackupWithOptions(
 	clear(masterKey)
 	var auditLog *audit.Log
 	if options.Replica {
-		auditLog, err = audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{Replica: true, RequireExisting: true})
+		auditLog, err = openConfiguredAuditLog(cfg, cfg.AuditPath(), auditKey, audit.Options{Replica: true, RequireExisting: true}, commandPressure.logicalBudget())
 	} else {
-		auditLog, err = audit.Open(cfg.AuditPath(), auditKey)
+		auditLog, err = openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	}
 	clear(auditKey)
 	if err != nil {
 		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
-	defer auditLog.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, auditLog.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	if err := verifyBackupAuditCheckpoint(metadata, auditLog.Summary(), options.Replica); err != nil {
 		clear(ledgerKey)
 		return backup.Manifest{}, err
@@ -194,7 +245,7 @@ func CreateBackupWithOptions(
 		}
 	}
 	manifest, createErr := createBackupSnapshot(
-		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText, ledgerKey, memberState, memberClusterKey,
+		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText, ledgerKey, memberState, memberClusterKey, commandPressure, writer,
 	)
 	clear(ledgerKey)
 	if options.Replica {
@@ -214,31 +265,44 @@ func CreateBackupWithOptions(
 }
 
 func recoverReplicaForBackup(
+	ctx context.Context,
 	cfg config.Config,
 	state replication.MemberState,
 	clusterKey, ledgerKey, auditKey, governanceKey, metadataKey []byte,
-) error {
-	journal, err := replication.OpenExistingOrderingJournal(
+	pressure *resourcePressureRuntime,
+) (resultErr error) {
+	indexDiskOwner, indexLimit, err := newOneShotLedgerSegmentIndexDiskOwnerWithPressure(ctx, cfg, pressure)
+	if err != nil {
+		return err
+	}
+	var source *replication.NativeSource
+	defer func() {
+		resultErr = retireCommandLedgerIndex(indexDiskOwner, source, resultErr)
+	}()
+	journal, err := replication.OpenExistingOrderingJournalWithOptions(
 		cfg.OrderingJournalPath(), clusterKey, state.ClusterID, state.Incarnation,
-		state.DurableIndex, state.OrderingHeadMAC,
+		state.DurableIndex, state.OrderingHeadMAC, orderingJournalOptions(cfg),
 	)
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
+	defer func() { resultErr = errors.Join(resultErr, journal.Close()) }()
 	head, _, headMAC := journal.Head()
 	if head != state.DurableIndex || headMAC != state.OrderingHeadMAC {
 		return errors.New("Replica backup requires runtime recovery because ordering is ahead of authenticated member state")
 	}
-	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
+	nativeOptions := commandNativeOptions(ctx, ledger.Options{})
+	source, err = replication.NewNativeSource(replication.NativeSourceOptions{
 		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
 		MetadataPath: filepathMetadataJournal(cfg), ProviderObjectDir: providerObjectSourceDir(cfg),
 		LedgerKey: ledgerKey, AuditKey: auditKey, GovernanceKey: governanceKey, MetadataKey: metadataKey,
+		LedgerDirectoryIndexMaxBytes: indexLimit,
+		ReserveLedgerFileDisk:        nativeOptions.ReserveNativeFileDisk,
 	})
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { resultErr = errors.Join(resultErr, source.Close()) }()
 	if err := replication.RecoverReplicaStores(journal, source); err != nil {
 		return fmt.Errorf("reconcile Replica stores before backup: %w", err)
 	}
@@ -271,42 +335,6 @@ func verifyBackupAuditCheckpoint(metadata *boltstore.Store, summary audit.Summar
 	if checkpoint.Records > summary.Records || checkpoint.Records == summary.Records &&
 		(checkpoint.Bytes != summary.Bytes || checkpoint.LastHash != summary.LastHash) {
 		return errors.New("audit log does not match its trusted checkpoint")
-	}
-	return nil
-}
-
-func verifyGovernanceReplicaBackup(metadata *boltstore.Store, log *governance.Log, key []byte) error {
-	summary := log.Summary()
-	anchor, err := metadata.GovernanceJournalAnchor()
-	if err != nil {
-		if errors.Is(err, boltstore.ErrNotFound) && summary.Records == 0 {
-			_, replayErr := log.Replay(func(record governance.Record) error { return record.Event.Validate() })
-			return replayErr
-		}
-		return errGovernanceAnchorMismatch
-	}
-	if !governance.VerifyJournalAnchorAuth(key, anchor.Sequence, anchor.Offset, anchor.Hash, anchor.Authentication) ||
-		anchor.Sequence > summary.Records || anchor.Offset > summary.Bytes {
-		return errGovernanceAnchorMismatch
-	}
-	anchorMatched := false
-	_, err = log.Replay(func(record governance.Record) error {
-		if err := record.Event.Validate(); err != nil {
-			return err
-		}
-		if record.Sequence == anchor.Sequence {
-			if record.Offset != anchor.Offset || record.Hash != anchor.Hash {
-				return errGovernanceAnchorMismatch
-			}
-			anchorMatched = true
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if !anchorMatched {
-		return errGovernanceAnchorMismatch
 	}
 	return nil
 }
@@ -384,15 +412,82 @@ func restoreBackupWithFactory(
 	options RestoreOptions,
 	factory kmsWrapperFactory,
 ) (RestoreResult, error) {
+	return restoreBackupWithExtract(ctx, cfg, archivePath, backupKey, confirmBackupID, options, factory, nil)
+}
+
+func restoreBackupWithExtract(
+	ctx context.Context,
+	cfg config.Config,
+	archivePath string,
+	backupKey []byte,
+	confirmBackupID string,
+	options RestoreOptions,
+	factory kmsWrapperFactory,
+	extract func(string, []byte, string) (backup.Manifest, error),
+) (result RestoreResult, resultErr error) {
+	ctx, finish, commandScopeErr := restoreReportContext(ctx, cfg)
+	if commandScopeErr != nil {
+		return RestoreResult{}, commandScopeErr
+	}
+	defer func() {
+		restoreReportConstructorDebt(ctx, resultErr)
+		resultErr = errors.Join(resultErr, finish(), ctx.Err())
+		if resultErr != nil {
+			result = RestoreResult{}
+		}
+	}()
+
+	ctx, commandScopeErr = backupWorkspaceContext(ctx, cfg)
+	if commandScopeErr != nil {
+		return RestoreResult{}, commandScopeErr
+	}
+
 	if err := ctx.Err(); err != nil {
 		return RestoreResult{}, err
 	}
-	manifest, err := backup.Verify(archivePath, backupKey)
-	if err != nil {
-		return RestoreResult{}, err
+	var err error
+	var commandPressure *resourcePressureRuntime
+	var manifest backup.Manifest
+	var verified *backup.VerifiedArchive
+	if extract == nil {
+		verified, err = backup.OpenVerified(ctx, archivePath, backupKey)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		defer func() {
+			if err := restoreReportClose(ctx, verified); err != nil {
+				resultErr = errors.Join(resultErr, err)
+				result = RestoreResult{}
+			}
+		}()
+		summary := verified.Summary()
+		manifest = summary.Manifest
+		// Domain validators and HA selection use the validated compatibility
+		// contract, never infer Replica solely from the new container version.
+		manifest.FormatVersion = summary.CompatibilityVersion
+	} else {
+		// Per-operation legacy extraction seam used by existing confirmation tests.
+		manifest, err = backup.VerifyContext(ctx, archivePath, backupKey)
+		if err != nil {
+			return RestoreResult{}, err
+		}
 	}
 	if confirmBackupID == "" || confirmBackupID != manifest.BackupID {
 		return RestoreResult{}, errors.New("restore confirmation must exactly match the verified backup id")
+	}
+	var restorePayloadBytes int64
+	if verified != nil {
+		restorePayloadBytes, err = verified.PayloadBytes()
+	} else {
+		for _, file := range manifest.Files {
+			if file.Size < 0 || file.Size > int64(^uint64(0)>>1)-restorePayloadBytes {
+				return RestoreResult{}, errors.New("restore payload byte count overflow")
+			}
+			restorePayloadBytes += file.Size
+		}
+	}
+	if err != nil {
+		return RestoreResult{}, err
 	}
 	isHABackup := manifest.FormatVersion == 4
 	if isHABackup {
@@ -419,19 +514,77 @@ func restoreBackupWithFactory(
 	} else if options.ConfirmRecoverySlot != "" {
 		return RestoreResult{}, errors.New("Recovery Slot confirmation requires explicit Recovery restore mode")
 	}
-
 	dataParent := filepath.Dir(cfg.Storage.DataDir)
-	stagingRoot, err := os.MkdirTemp(dataParent, ".halro-restore-stage-*")
+	if err := checkOperationDiskHeadroom(ctx, cfg, dataParent); err != nil {
+		return RestoreResult{}, err
+	}
+	if cfg.ResourceBudget != nil {
+		_, commandPressure, err = commandBudgetContext(ctx, cfg)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+	}
+	restoreWorkspacePermit, err := acquireRestoreWorkspaceDisk(ctx, cfg, commandPressure, restorePayloadBytes)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	defer os.RemoveAll(stagingRoot)
+	indexDiskOwner, indexLimit, err := newOneShotLedgerSegmentIndexDiskOwnerWithPressure(ctx, cfg, commandPressure)
+	if err != nil {
+		return RestoreResult{}, errors.Join(err, restoreWorkspacePermit.Release())
+	}
+	defer func() {
+		if debt := restoreReportReady(ctx, resultErr); debt != nil {
+			resultErr = errors.Join(resultErr, debt)
+		} else {
+			resultErr = errors.Join(resultErr, indexDiskOwner.Release())
+		}
+		if resultErr != nil {
+			result = RestoreResult{}
+		}
+	}()
+
+	stagingRoot, err := os.MkdirTemp(dataParent, ".halro-restore-stage-*")
+	if err != nil {
+		return RestoreResult{}, errors.Join(err, restoreWorkspacePermit.Release())
+	}
+	stagingIdentity, identityErr := os.Lstat(stagingRoot)
+	parentIdentity, parentErr := os.Lstat(dataParent)
+	if err := errors.Join(identityErr, parentErr); err != nil {
+		restoreReportDebt(ctx, err)
+		return RestoreResult{}, err
+	}
+	defer func() {
+		cleanupErr := retireRestoreStage(ctx, stagingRoot, stagingIdentity, parentIdentity, resultErr)
+		restoreReportDebt(ctx, cleanupErr)
+		resultErr = errors.Join(resultErr, cleanupErr)
+		if cleanupErr == nil {
+			resultErr = errors.Join(resultErr, restoreWorkspacePermit.Release())
+		}
+		if resultErr != nil {
+			result = RestoreResult{}
+		}
+	}()
 	if err := os.Chmod(stagingRoot, 0o700); err != nil {
 		return RestoreResult{}, err
 	}
 	extractRoot := filepath.Join(stagingRoot, "extract")
-	if _, err := backup.Extract(archivePath, backupKey, extractRoot); err != nil {
-		return RestoreResult{}, err
+	if verified != nil {
+		if err := verified.Extract(ctx, extractRoot); err != nil {
+			return RestoreResult{}, err
+		}
+		// Before native validation or live publication, retire the ciphertext and
+		// all derivative owners. The first/second stream fence binds confirmation.
+		if err := restoreReportClose(ctx, verified); err != nil {
+			return RestoreResult{}, err
+		}
+	} else {
+		extractedManifest, err := extract(archivePath, backupKey, extractRoot)
+		if err != nil {
+			return RestoreResult{}, err
+		}
+		if !reflect.DeepEqual(manifest, extractedManifest) {
+			return RestoreResult{}, errors.New("backup manifest changed after restore confirmation")
+		}
 	}
 	stageData := filepath.Join(extractRoot, "data")
 	if isHABackup {
@@ -459,26 +612,19 @@ func restoreBackupWithFactory(
 		!errors.Is(err, os.ErrNotExist) {
 		return RestoreResult{}, fmt.Errorf("withdraw the archived metadata journal: %w", err)
 	}
-	if err := validateRestoreStage(ctx, cfg, stageData, manifest, purpose, factory); err != nil {
+	if err := validateRestoreStage(ctx, cfg, stageData, manifest, purpose, factory, indexLimit, commandPressure); err != nil {
 		return RestoreResult{}, err
 	}
-	stageStore, err := boltstore.OpenForWholeFilePublish(stageMetadata)
+	stageStore, err := openCommandMetadataPublish(ctx, cfg, stageMetadata)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
 	}
 	schemaVersionAfter, schemaErr := stageStore.SchemaVersion()
-	gatewayKeys, gatewayKeysErr := stageStore.ListGatewayKeys(ctx)
-	restoredEnabledGatewayKeyIDs := make([]string, 0, len(gatewayKeys))
-	if gatewayKeysErr == nil {
-		for _, key := range gatewayKeys {
-			if key.Enabled && key.DeletedAt == nil {
-				restoredEnabledGatewayKeyIDs = append(restoredEnabledGatewayKeyIDs, key.ID)
-			}
-		}
-	}
+	restoredEnabledGatewayKeyIDs, restoredEnabledGatewayKeyCount, gatewayKeysErr := collectRestoreGatewayIDs(ctx, stageStore)
+
 	quarantined, quarantineErr := stageStore.QuarantineRestoredScheduledPrices(ctx, manifest.CreatedAt.UTC(), time.Now().UTC())
 	invalidateErr := stageStore.InvalidateAdminAuthenticationForRestore(ctx)
-	closeErr := stageStore.Close()
+	closeErr := restoreReportClose(ctx, stageStore)
 	if err := errors.Join(schemaErr, gatewayKeysErr, quarantineErr, invalidateErr, closeErr); err != nil {
 		return RestoreResult{}, fmt.Errorf("invalidate restored admin authentication: %w", err)
 	}
@@ -490,16 +636,19 @@ func restoreBackupWithFactory(
 		}
 	}
 
+	if err := restoreReportReady(ctx, nil); err != nil {
+		return RestoreResult{}, err
+	}
 	liveLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("acquire offline restore lock: %w", err)
 	}
-	defer liveLock.Close()
+	defer func() { resultErr = errors.Join(resultErr, restoreReportClose(ctx, liveLock)) }()
 	stageLock, err := lock.Acquire(stageData)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("lock staged restore: %w", err)
 	}
-	defer stageLock.Close()
+	defer func() { resultErr = errors.Join(resultErr, restoreReportClose(ctx, stageLock)) }()
 	previousDataDir, err := reservePreviousDataPath(dataParent)
 	if err != nil {
 		return RestoreResult{}, err
@@ -539,7 +688,7 @@ func restoreBackupWithFactory(
 		UnlockPath: unlockPath, VaultVerified: true, RecoveryAudited: options.UseRecoverySlot,
 		QuarantinedScheduledPrices: quarantined,
 		SchemaVersionBefore:        manifest.Metadata.SchemaVersion, SchemaVersionAfter: schemaVersionAfter,
-		RestoredEnabledGatewayKeyCount: len(restoredEnabledGatewayKeyIDs),
+		RestoredEnabledGatewayKeyCount: restoredEnabledGatewayKeyCount,
 		RestoredEnabledGatewayKeyIDs:   restoredEnabledGatewayKeyIDs,
 		ClusterIncarnation:             options.NewIncarnation,
 		ClusterRole: func() string {
@@ -558,13 +707,33 @@ func validateRestoreStage(
 	manifest backup.Manifest,
 	purpose masterkey.KeySlotPurpose,
 	factory kmsWrapperFactory,
-) error {
-	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupState(filepath.Join(stageData, cfg.Storage.MetadataFile))
-	metadata, err := boltstore.OpenForWholeFilePublish(filepath.Join(stageData, cfg.Storage.MetadataFile))
+	indexLimit int64,
+	pressure *resourcePressureRuntime,
+) (resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+	var err error
+	pressure, err = commandPressure(ctx, cfg, pressure)
+	if err != nil {
+		return err
+	}
+	stageMetadataPath := filepath.Join(stageData, cfg.Storage.MetadataFile)
+	metadataManager, err := reserveCommandMetadataFile(ctx, cfg, stageMetadataPath)
+	if err != nil {
+		return err
+	}
+	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupStateWithMappingBudget(ctx, stageMetadataPath, metadataLegacyFileCeiling(cfg), metadataManager)
+	if err := restoreReportReady(ctx, legacyStateErr); err != nil {
+		return err
+	}
+	metadata, err := openCommandMetadataPublish(ctx, cfg, filepath.Join(stageData, cfg.Storage.MetadataFile))
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
-	defer metadata.Close()
+	defer func() { resultErr = errors.Join(resultErr, restoreReportClose(ctx, metadata)) }()
 	if manifest.FormatVersion >= 2 {
 		gate, gateErr := metadata.LedgerCompatibilityGate()
 		state, stateErr := metadata.PricingBackupState()
@@ -633,13 +802,14 @@ func validateRestoreStage(
 		clear(auditKey)
 		return err
 	}
+	defer clear(ledgerKey)
 	// Open the restored projection's journal epoch here, while the staged tree
 	// is still staged: the rename below publishes the database and its journal
 	// together, so there is no window in which a data directory follows an
 	// epoch whose file does not exist. Deferring it to the first start left
 	// exactly that window, and `halro doctor` was right to call it a
 	// divergence — which is how it was found.
-	journalErr := attachStagedMetadataJournal(metadata, secretVault, masterKey)
+	journalErr := attachStagedMetadataJournal(metadata, secretVault, masterKey, cfg)
 	secretVault.Close()
 	clear(masterKey)
 	if journalErr != nil {
@@ -654,12 +824,12 @@ func validateRestoreStage(
 		return err
 	}
 	defer clear(governanceKey)
-	auditLog, err := audit.Open(filepath.Join(stageData, "audit", "audit.log"), auditKey)
+	auditLog, err := openConfiguredAuditLog(cfg, filepath.Join(stageData, "audit", "audit.log"), auditKey, audit.Options{}, pressure.logicalBudget())
 	clear(auditKey)
 	if err != nil {
 		return fmt.Errorf("verify staged Audit: %w", err)
 	}
-	defer auditLog.Close()
+	defer func() { resultErr = errors.Join(resultErr, restoreReportClose(ctx, auditLog)) }()
 	if err := reconcileAuditCheckpoint(metadata, auditLog.Summary()); err != nil {
 		return fmt.Errorf("verify staged Audit checkpoint: %w", err)
 	}
@@ -669,26 +839,26 @@ func validateRestoreStage(
 		}
 	}
 	status := ledger.NewStatus()
-	ledgerLog, err := ledger.OpenWithOptions(filepath.Join(stageData, "ledger", "ledger.wal"), status, ledger.Options{ChainKey: ledgerKey})
-	clear(ledgerKey)
+	ledgerLog, err := ledger.OpenWithOptions(filepath.Join(stageData, "ledger", "ledger.wal"), status, ledger.Options{
+		ChainKey: ledgerKey, MaxSegmentDirectoryIndexBytes: indexLimit,
+	})
 	if err != nil {
 		return fmt.Errorf("open staged Ledger: %w", err)
 	}
 	chainHead, chainHash, chainVerified := ledgerLog.ChainHead()
 	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
-	aggregate := usage.NewAggregate()
-	stagedLedgerState := ledger.NewState()
-	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
-		if err := stagedLedgerState.Apply(record); err != nil {
+	report, partial, replayErr := ledger.InspectReplayAuthenticated(filepath.Join(stageData, "ledger", "ledger.wal"), ledgerKey, func(record ledger.Record) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return aggregate.Apply(record)
+		return nil
 	})
-	closeErr := ledgerLog.Close()
+	watermark := report.Head
+	closeErr := restoreReportClose(ctx, ledgerLog)
 	if err := errors.Join(replayErr, closeErr); err != nil {
 		return fmt.Errorf("replay staged Ledger: %w", err)
 	}
-	if watermark != manifest.LedgerWatermark {
+	if partial || watermark != manifest.LedgerWatermark {
 		return errors.New("staged Ledger watermark does not match backup manifest")
 	}
 	// The chain-head comparison runs against what OpenWithOptions's own tail
@@ -701,36 +871,25 @@ func validateRestoreStage(
 			chainOffset != manifest.LedgerChainHeadOffset || chainHash != manifest.LedgerChainHeadHash)) {
 		return errors.New("staged Ledger chain head does not match backup manifest")
 	}
-	if err := metadata.ValidateDeploymentPriceReferences(stagedLedgerState); err != nil {
-		return fmt.Errorf("verify staged pricing references: %w", err)
+	if report.ChainSequence != chainSequence || report.ChainOffset != chainOffset || report.ChainHash != chainHash || report.ChainVerified != chainVerified {
+		return errors.New("staged Ledger chain changed during authenticated replay")
 	}
 	if manifest.FormatVersion >= 3 {
-		governanceLog, err := governance.Open(filepath.Join(stageData, "governance", "governance.journal"), governanceKey)
+		governanceLog, err := governance.OpenWithOptions(filepath.Join(stageData, "governance", "governance.journal"), governanceKey, governanceLogOptions(cfg, pressure.logicalBudget(), governance.Options{}))
 		if err != nil {
 			return fmt.Errorf("open staged Governance Journal: %w", err)
 		}
-		state := governance.NewState()
-		summary, replayErr := governanceLog.Replay(state.Apply)
-		closeErr := governanceLog.Close()
-		if err := errors.Join(replayErr, closeErr); err != nil {
-			return fmt.Errorf("replay staged Governance Journal: %w", err)
-		}
-		if summary.Records != manifest.GovernanceSequence || summary.Bytes != manifest.GovernanceOffset || summary.LastHash != manifest.GovernanceHeadHash {
-			return errors.New("staged Governance Journal head does not match backup manifest")
+		expected := governance.Summary{Records: manifest.GovernanceSequence, Bytes: manifest.GovernanceOffset, LastHash: manifest.GovernanceHeadHash}
+		verifyErr := validateBackupGovernanceProjection(ctx, cfg, metadata, governanceLog, filepath.Join(stageData, "governance", "governance.journal"), governanceKey, expected, filepath.Dir(stageData))
+		closeErr := restoreReportClose(ctx, governanceLog)
+		if err := errors.Join(verifyErr, closeErr); err != nil {
+			return fmt.Errorf("verify staged Governance Journal: %w", err)
 		}
 	}
-	exporter, err := usage.NewExporter(filepath.Join(stageData, "usage"))
-	if err != nil {
-		return err
+	if _, err := withBackupPricingAndUsageReference(ctx, cfg, metadata, filepath.Join(stageData, "usage"), filepath.Join(stageData, "ledger", "ledger.wal"), ledgerKey, report, filepath.Dir(stageData), pressure, nil); err != nil {
+		return fmt.Errorf("verify staged pricing and Usage: %w", err)
 	}
-	if _, err := exporter.LoadManifest(); err == nil {
-		snapshot := aggregate.Snapshot()
-		if err := exporter.Verify(&snapshot); err != nil {
-			return fmt.Errorf("verify staged Usage: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
+
 	if purpose == masterkey.KeySlotRecovery {
 		if err := appendRecoveryRestoreAudit(ctx, metadata, auditLog, cfg.Storage.MasterKey.RecoverySlot); err != nil {
 			return err
@@ -800,23 +959,35 @@ func createBackupSnapshot(
 	ledgerKey []byte,
 	memberState *replication.MemberState,
 	memberClusterKey []byte,
+	pressure *resourcePressureRuntime,
+	writer func(backup.CreateOptions) (backup.Manifest, error),
 ) (backup.Manifest, error) {
-	status := ledger.NewStatus()
-	var ledgerLog *ledger.Log
-	var err error
-	if memberState != nil {
-		ledgerLog, err = ledger.OpenWithOptions(cfg.LedgerPath(), status, ledger.Options{ChainKey: ledgerKey, Replica: true, RequireExisting: true})
-	} else {
-		ledgerLog, err = ledger.Open(cfg.LedgerPath(), status)
+	if scope, ok := ctx.Value(commandResourceScopeKey{}).(*commandResourceScope); ok && scope.selected != nil {
+		return createBackupSnapshotWithLedgerWriter(ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, scope.selected.state.generation.Owners.NativeLedger, ledgerKey, memberState, memberClusterKey, writer, pressure)
 	}
+	status := ledger.NewStatus()
+	indexDiskOwner, indexLimit, err := newOneShotLedgerSegmentIndexDiskOwnerWithPressure(ctx, cfg, pressure)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	manifest, createErr := createBackupSnapshotWithLedger(
-		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey, memberState, memberClusterKey,
+	var ledgerLog *ledger.Log
+	if memberState != nil {
+		ledgerLog, err = ledger.OpenWithOptions(cfg.LedgerPath(), status, commandNativeOptions(ctx, ledger.Options{
+			ChainKey: ledgerKey, Replica: true, RequireExisting: true, MaxSegmentDirectoryIndexBytes: indexLimit,
+		}))
+	} else {
+		ledgerLog, err = ledger.OpenWithOptions(cfg.LedgerPath(), status, commandNativeOptions(ctx, ledger.Options{
+			MaxSegmentDirectoryIndexBytes: indexLimit,
+		}))
+	}
+	if err != nil {
+		return backup.Manifest{}, retireCommandLedgerIndex(indexDiskOwner, ledgerLog, err)
+	}
+	manifest, createErr := createBackupSnapshotWithLedgerWriter(
+		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey, memberState, memberClusterKey, writer, pressure,
 	)
 	closeErr := ledgerLog.Close()
-	return manifest, errors.Join(createErr, closeErr)
+	return manifest, retireCommandLedgerIndex(indexDiskOwner, ledgerLog, errors.Join(createErr, closeErr))
 }
 
 func createBackupSnapshotWithLedger(
@@ -830,46 +1001,141 @@ func createBackupSnapshotWithLedger(
 	ledgerKey []byte,
 	memberState *replication.MemberState,
 	memberClusterKey []byte,
-) (backup.Manifest, error) {
+) (result backup.Manifest, resultErr error) {
+	return createBackupSnapshotWithLedgerWriter(ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey, memberState, memberClusterKey, backup.Create)
+}
+
+func createBackupSnapshotWithLedgerWriter(
+	ctx context.Context,
+	cfg config.Config,
+	configPath, outputPath string,
+	backupKey []byte,
+	metadata *boltstore.Store,
+	masterFingerprint string,
+	ledgerLog *ledger.Log,
+	ledgerKey []byte,
+	memberState *replication.MemberState,
+	memberClusterKey []byte,
+	writer func(backup.CreateOptions) (backup.Manifest, error),
+	pressures ...*resourcePressureRuntime,
+) (result backup.Manifest, resultErr error) {
+	ctx, sharedPressure, scopeErr := commandBudgetContext(ctx, cfg)
+	if scopeErr != nil {
+		return backup.Manifest{}, scopeErr
+	}
 	if err := ctx.Err(); err != nil {
 		return backup.Manifest{}, err
 	}
 	if ledgerLog == nil {
 		return backup.Manifest{}, errors.New("open Ledger is required for backup snapshot")
 	}
+	var pressure *resourcePressureRuntime
+	if len(pressures) > 1 {
+		return backup.Manifest{}, errors.New("backup snapshot accepts one shared command manager")
+	}
+	if len(pressures) > 0 {
+		pressure = pressures[0]
+	}
+	if pressure != nil && pressure.logicalBudget() != sharedPressure.logicalBudget() {
+		return backup.Manifest{}, errors.New("backup snapshot substituted its command manager")
+	}
+	pressure = sharedPressure
 	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	defer clear(governanceKey)
 	var governanceLog *governance.Log
-	if memberState != nil {
-		governanceLog, err = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governance.Options{Replica: true, RequireExisting: true})
+	borrowedGovernance := false
+	if scope, ok := ctx.Value(commandResourceScopeKey{}).(*commandResourceScope); ok && scope.selected != nil {
+		governanceLog, borrowedGovernance = scope.selected.state.generation.Owners.NativeGovernance, true
+	} else if memberState != nil {
+		governanceLog, err = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governanceLogOptions(cfg, pressure.logicalBudget(), governance.Options{Replica: true, RequireExisting: true}))
 	} else {
-		governanceLog, err = governance.Open(cfg.GovernancePath(), governanceKey)
+		governanceLog, err = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governanceLogOptions(cfg, pressure.logicalBudget(), governance.Options{}))
 	}
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("open Governance Journal for backup: %w", err)
 	}
-	if memberState != nil {
-		if err := verifyGovernanceReplicaBackup(metadata, governanceLog, governanceKey); err != nil {
-			governanceLog.Close()
-			return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for Replica backup: %w", err)
+	governanceSummary := governanceLog.Summary()
+	verifyErr := validateBackupGovernanceProjection(ctx, cfg, metadata, governanceLog, cfg.GovernancePath(), governanceKey, governanceSummary, filepath.Dir(outputPath))
+	if verifyErr == nil && memberState == nil && governanceSummary.Records > 0 {
+		// Advance only after complete native/domain validation and scratch
+		// retirement, before taking the Metadata snapshot. Replica is read-only.
+		verifyErr = ctx.Err()
+		if verifyErr == nil {
+			head, authentication := governanceLog.AuthenticatedHead()
+			if head != governanceSummary {
+				verifyErr = errors.New("Governance head changed before backup anchor publication")
+			} else {
+				verifyErr = metadata.PutGovernanceJournalAnchor(head.Records, head.Bytes, head.LastHash, authentication)
+			}
 		}
-	} else if _, err := restoreGovernanceState(metadata, governanceLog, governanceKey); err != nil {
-		governanceLog.Close()
-		return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for backup: %w", err)
 	}
-	governanceSummary, replayErr := governanceLog.Replay(func(record governance.Record) error { return record.Event.Validate() })
-	governanceCloseErr := governanceLog.Close()
-	if err := errors.Join(replayErr, governanceCloseErr); err != nil {
+	var governanceCloseErr error
+	if !borrowedGovernance {
+		governanceCloseErr = governanceLog.Close()
+	}
+	if err := errors.Join(verifyErr, governanceCloseErr); err != nil {
 		return backup.Manifest{}, fmt.Errorf("verify Governance Journal for backup: %w", err)
+	}
+	stagingOwner, err := prepareBackupStagingDisk(ctx, cfg, pressure)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("admit complete backup staging tree before creation: %w", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, stagingOwner.finish(resultErr))
+		resultErr = stagingDebt(stagingOwner, nil, resultErr)
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
+	var reserveStaging func(int64) (ledger.NativeFileDiskReservation, error)
+	if stagingOwner != nil {
+		reserveStaging = stagingOwner.reserve
+		// The actual private root directory and namespace metadata have an
+		// independent conservative envelope before MkdirTemp.
+		if _, err := stagingOwner.reserve(64 << 10); err != nil {
+			return backup.Manifest{}, err
+		}
+	}
+	stagingParent, err := os.Lstat(filepath.Dir(outputPath))
+	if err != nil || !stagingParent.IsDir() {
+		return backup.Manifest{}, errors.Join(err, ownedfile.ErrReplaced)
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(outputPath), ".halro-backup-stage-*")
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	defer os.RemoveAll(staging)
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil || !stagingInfo.IsDir() {
+		return backup.Manifest{}, errors.Join(err, ownedfile.ErrReplaced)
+	}
+	defer func() {
+		// Unknown actual readers and replaced namespaces retain their private
+		// artifacts. Missing names and RemoveAll never authorize fee refunds.
+		if errors.Is(resultErr, ownedfile.ErrRetirement) || errors.Is(resultErr, ledger.ErrSegmentRetirement) || errors.Is(resultErr, boltstore.ErrMetadataFileRetirement) || errors.Is(resultErr, ownedfile.ErrReplaced) {
+			resultErr = errors.Join(resultErr, ownedfile.ErrRetirement)
+			return
+		}
+		parent, parentErr := os.Lstat(filepath.Dir(staging))
+		current, currentErr := os.Lstat(staging)
+		if parentErr != nil || currentErr != nil || !parent.IsDir() || !current.IsDir() || !os.SameFile(parent, stagingParent) || !os.SameFile(current, stagingInfo) {
+			resultErr = errors.Join(resultErr, ownedfile.ErrRetirement, ownedfile.ErrReplaced, parentErr, currentErr)
+			return
+		}
+		var cleanupErr error
+		if stagingOwner != nil && stagingOwner.metadataImage != nil {
+			cleanupErr = stagingOwner.metadataImage.Discard()
+		}
+		if cleanupErr == nil {
+			cleanupErr = os.RemoveAll(staging)
+		}
+		if cleanupErr == nil {
+			cleanupErr = durable.SyncDirectory(filepath.Dir(staging))
+		}
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
 	if err := os.Chmod(staging, 0o700); err != nil {
 		return backup.Manifest{}, err
 	}
@@ -877,7 +1143,7 @@ func createBackupSnapshotWithLedger(
 	if err := os.MkdirAll(filepath.Dir(metadataSnapshot), 0o700); err != nil {
 		return backup.Manifest{}, err
 	}
-	metadataInfo, err := metadata.Snapshot(metadataSnapshot)
+	metadataInfo, err := snapshotBackupMetadata(ctx, cfg, metadata, metadataSnapshot, stagingOwner)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -886,7 +1152,7 @@ func createBackupSnapshotWithLedger(
 	// a journal that cannot explain the database beside it.
 	metadataJournalSnapshot := filepath.Join(staging, boltstore.MetadataJournalFileName)
 	journalStaged := true
-	if err := copyFileForBackup(metadata.MetadataJournalPath(), metadataJournalSnapshot); err != nil {
+	if err := copyFileForBackupWithDisk(ctx, metadata.MetadataJournalPath(), metadataJournalSnapshot, stagingOwner); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return backup.Manifest{}, fmt.Errorf("stage metadata journal: %w", err)
 		}
@@ -901,7 +1167,7 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	ledgerSnapshot := filepath.Join(staging, "ledger.wal")
-	ledgerWatermark, err := ledgerLog.Snapshot(ledgerSnapshot)
+	ledgerWatermark, err := ledgerLog.SnapshotWithDisk(ledgerSnapshot, reserveStaging)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -909,68 +1175,79 @@ func createBackupSnapshotWithLedger(
 	// verifies perfectly and restores an installation whose balances begin at
 	// whatever the last roll left behind — the worst shape a backup defect can
 	// take, because nothing about the restored instance looks wrong.
-	stagedSegments, err := ledgerLog.StageSegments(staging)
+	catalogPermit, catalogLimit, err := acquireBackupWorkspaceDisk(ctx, cfg, pressure)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	snapshotLog, err := ledger.OpenWithOptions(ledgerSnapshot, ledger.NewStatus(), ledger.Options{ChainKey: ledgerKey})
+	sources, err := backup.NewSourceCatalogWithLimit(staging, catalogLimit)
+	if err != nil {
+		return backup.Manifest{}, errors.Join(err, catalogPermit.Release())
+	}
+	defer func() {
+		closeErr := sources.Close()
+		resultErr = errors.Join(resultErr, closeErr)
+		if closeErr == nil {
+			resultErr = errors.Join(resultErr, catalogPermit.Release())
+		} else {
+			resultErr = &backupStagingDebt{owner: stagingOwner, catalog: sources, cause: resultErr}
+		}
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
+	for _, source := range []backup.SourceFile{
+		{ArchivePath: "config/config.yaml", LocalPath: configPath},
+		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
+
+		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
+		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
+		{ArchivePath: "data/governance/governance.journal", LocalPath: cfg.GovernancePath()},
+	} {
+		if err := sources.Add(source); err != nil {
+			return backup.Manifest{}, err
+		}
+	}
+	err = ledgerLog.StageSegmentsEachWithDisk(ctx, staging, reserveStaging, func(name string) error {
+		return sources.Add(backup.SourceFile{
+			ArchivePath: "data/ledger/" + name, LocalPath: filepath.Join(staging, name),
+		})
+	})
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	snapshotLog, err := ledger.OpenWithOptions(ledgerSnapshot, ledger.NewStatus(), ledger.Options{
+		ChainKey: ledgerKey, ReserveNativeFileDisk: reserveStaging,
+	})
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	chainHead, chainHash, chainVerified := snapshotLog.ChainHead()
 	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
-	ledgerAggregate := usage.NewAggregate()
-	ledgerState := ledger.NewState()
-	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
-		if err := ledgerState.Apply(record); err != nil {
+	report, partial, replayErr := ledger.InspectReplayAuthenticated(ledgerSnapshot, ledgerKey, func(record ledger.Record) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return ledgerAggregate.Apply(record)
+		return nil
 	})
+	replayedWatermark := report.Head
 	closeErr := snapshotLog.Close()
 	if err := errors.Join(replayErr, closeErr); err != nil {
 		return backup.Manifest{}, err
 	}
-	if replayedWatermark != ledgerWatermark {
+	if partial || replayedWatermark != ledgerWatermark {
 		return backup.Manifest{}, errors.New("ledger snapshot watermark changed during replay")
 	}
-	if err := metadata.ValidateDeploymentPriceReferences(ledgerState); err != nil {
-		return backup.Manifest{}, fmt.Errorf("validate pricing references before backup: %w", err)
+	if report.ChainSequence != chainSequence || report.ChainOffset != chainOffset || report.ChainHash != chainHash || report.ChainVerified != chainVerified {
+		return backup.Manifest{}, errors.New("ledger snapshot chain changed during authenticated replay")
 	}
-	// A stored checkpoint this build cannot read is a position the archive
-	// cannot name, not a reason to refuse the archive. The Usage checkpoint is
-	// a rebuildable derivative of the Ledger, and startup already answers this
-	// exact question that way: restoreUsageAggregate clears both derivatives
-	// and replays the WAL, whatever the reason. Answering it differently here
-	// gave one data directory two verdicts.
-	//
-	// It also made the previous release's own data directory unbackupable at
-	// the moment a backup matters most. The checkpoint payload version moved
-	// 7 -> 8 in v0.5.0, so a v0.4.0 directory reaches this branch on the first
-	// `backup create` after the upgrade — and by then Open has already migrated
-	// the metadata schema past what the v0.4.0 binary will open, so neither
-	// binary could produce a backup. Recording no checkpoint position costs
-	// nothing: metadata.db is archived byte for byte, so a restored copy rebuilds
-	// exactly as the source directory would on its next start.
-	//
-	// A store-level failure stays fatal. That is a broken database rather than
-	// an unreadable derivative, and it is not a state a previous release
-	// legitimately produces.
-	checkpoint, checkpointHead, err := metadata.UsageCheckpoint()
-	if errors.Is(err, boltstore.ErrNotFound) {
-		checkpoint = ledger.Watermark{}
-	} else if err != nil {
-		return backup.Manifest{}, err
-	} else {
-		checkpointAggregate, restoreErr := usage.RestoreCheckpoint(
-			checkpointHead, metadata.UsageCheckpointSegmentPayload)
-		if restoreErr != nil || checkpointAggregate.Snapshot().Watermark != checkpoint {
-			checkpoint = ledger.Watermark{}
-		}
-	}
-	if checkpoint.After(ledgerWatermark) {
-		return backup.Manifest{}, errors.New("usage checkpoint is ahead of the Ledger")
-	}
+	// Default Runtime reconstructs independent fresh disk Usage from native
+	// facts; this backup selects no trusted saved Usage checkpoint. Record the
+	// zero (no selected checkpoint) position instead of loading historical
+	// payload/segments into an Aggregate. Metadata snapshot retains the original
+	// derivative bytes for older readers; native/Usage archive checks above and
+	// below remain authoritative. Store-level errors are caught by Snapshot and
+	// the actual native/Metadata validations, never hidden by this omission.
+	checkpoint := ledger.Watermark{}
 	usageManifestVersion := 0
 	descriptorDigest := ""
 	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeKeySlots {
@@ -988,33 +1265,25 @@ func createBackupSnapshotWithLedger(
 		digest := sha256.Sum256(encodedDescriptor)
 		descriptorDigest = hex.EncodeToString(digest[:])
 	}
-	var usageManifest *usage.Manifest
-	exporter, err := usage.NewExporter(cfg.UsagePath())
+	position, err := withBackupPricingAndUsageReference(ctx, cfg, metadata, cfg.UsagePath(), ledgerSnapshot, ledgerKey, report, staging, pressure, func(e *usage.Exporter, _ usage.ArchivePosition) error {
+		return e.WalkArchiveBackupFiles(ctx, report.Head, func(relative string) error {
+			source, err := backupUsageFile(cfg.UsagePath(), relative)
+			if err != nil {
+				return err
+			}
+			return sources.Add(source)
+		})
+	})
 	if err != nil {
-		return backup.Manifest{}, err
+		return backup.Manifest{}, fmt.Errorf("verify pricing and Usage before backup: %w", err)
 	}
-	if loaded, err := exporter.LoadManifest(); err == nil {
-		if err := exporter.Verify(pointerTo(ledgerAggregate.Snapshot())); err != nil {
-			return backup.Manifest{}, fmt.Errorf("verify usage before backup: %w", err)
-		}
-		usageManifest = &loaded
-		usageManifestVersion = loaded.SchemaVersion
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return backup.Manifest{}, err
-	}
-	files := []backup.SourceFile{
-		{ArchivePath: "config/config.yaml", LocalPath: configPath},
-		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
+	usageManifestVersion = position.SchemaVersion
 
-		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
-		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
-		{ArchivePath: "data/governance/governance.journal", LocalPath: cfg.GovernancePath()},
-	}
 	var clusterOptions backup.CreateOptions
 	if memberState != nil {
-		journal, err := replication.OpenExistingOrderingJournal(
+		journal, err := replication.OpenExistingOrderingJournalWithOptions(
 			cfg.OrderingJournalPath(), memberClusterKey,
-			memberState.ClusterID, memberState.Incarnation, memberState.DurableIndex, memberState.OrderingHeadMAC,
+			memberState.ClusterID, memberState.Incarnation, memberState.DurableIndex, memberState.OrderingHeadMAC, orderingJournalOptions(cfg),
 		)
 		if err != nil {
 			return backup.Manifest{}, err
@@ -1029,10 +1298,14 @@ func createBackupSnapshotWithLedger(
 			cursor := cursors[store-replication.StoreLedger]
 			perStore[replicationStoreName(store)] = backup.StoreHead{Generation: cursor.Generation, Sequence: cursor.Sequence}
 		}
-		files = append(files,
-			backup.SourceFile{ArchivePath: "data/cluster/state.json", LocalPath: cfg.ReplicationStatePath()},
-			backup.SourceFile{ArchivePath: "data/cluster/ordering.journal", LocalPath: cfg.OrderingJournalPath()},
-		)
+		for _, source := range []backup.SourceFile{
+			{ArchivePath: "data/cluster/state.json", LocalPath: cfg.ReplicationStatePath()},
+			{ArchivePath: "data/cluster/ordering.journal", LocalPath: cfg.OrderingJournalPath()},
+		} {
+			if err := sources.Add(source); err != nil {
+				return backup.Manifest{}, err
+			}
+		}
 		metadataHead := perStore["metadata"]
 		clusterOptions = backup.CreateOptions{
 			ClusterID: memberState.ClusterID, ClusterIncarnation: memberState.Incarnation,
@@ -1046,27 +1319,26 @@ func createBackupSnapshotWithLedger(
 		// reuse it — restore is a whole-file publish and starts a fresh epoch —
 		// but without it the archive cannot show that the metadata snapshot
 		// sits at the position its manifest claims.
-		files = append(files, backup.SourceFile{
+		if err := sources.Add(backup.SourceFile{
 			ArchivePath: "data/" + boltstore.MetadataJournalFileName, LocalPath: metadataJournalSnapshot,
-		})
+		}); err != nil {
+			return backup.Manifest{}, err
+		}
 	}
-	for _, name := range stagedSegments {
-		files = append(files, backup.SourceFile{
-			ArchivePath: "data/ledger/" + name, LocalPath: filepath.Join(staging, name),
-		})
-	}
-	usageFiles, err := backupUsageFiles(cfg.UsagePath(), usageManifest)
+
+	sourceInfo, err := metadata.Info()
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	files = append(files, usageFiles...)
-	objectFiles, err := backupProviderObjectFiles(ctx, metadata, filepath.Join(cfg.Storage.DataDir, "provider-objects"))
-	if err != nil {
+	providerSourceTxID := metadataInfo.TxID
+	if metadata.AuthenticatedMetadata() {
+		providerSourceTxID = sourceInfo.TxID
+	}
+	if err := walkBackupProviderObjectFiles(ctx, metadata, providerSourceTxID, filepath.Join(cfg.Storage.DataDir, "provider-objects"), sources.AddShared); err != nil {
 		return backup.Manifest{}, err
 	}
-	files = append(files, objectFiles...)
 	createOptions := backup.CreateOptions{
-		OutputPath: outputPath, BackupKey: backupKey, Files: files,
+		OutputPath: outputPath, BackupKey: backupKey, SourceCatalog: sources, Context: ctx,
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
 		LedgerChainHeadSequence: chainSequence, LedgerChainHeadOffset: chainOffset,
 		LedgerChainHeadHash: chainHash, LedgerChainVerified: chainVerified,
@@ -1087,81 +1359,72 @@ func createBackupSnapshotWithLedger(
 	createOptions.MetadataJournalEpoch = clusterOptions.MetadataJournalEpoch
 	createOptions.MetadataJournalSequence = clusterOptions.MetadataJournalSequence
 	createOptions.PerStoreHead = clusterOptions.PerStoreHead
-	return backup.Create(createOptions)
+	outputOwner, err := prepareBackupOutputDisk(ctx, cfg, pressure)
+	if err != nil {
+		return backup.Manifest{}, fmt.Errorf("admit encrypted backup output before creation: %w", err)
+	}
+	defer func() {
+		resultErr = outputOwner.finish(resultErr)
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
+	if outputOwner != nil {
+		createOptions.OutputDiskBytes = outputOwner.quota.ceiling
+		createOptions.ReserveOutputDisk = outputOwner.quota.reserveNativeFile
+	}
+	if stagingOwner != nil && stagingOwner.metadataImage != nil {
+		if _, err := stagingOwner.metadataImage.SnapshotInfo(ctx); err != nil {
+			return backup.Manifest{}, err
+		}
+	}
+	return writer(createOptions)
 }
 
-func backupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, root string) ([]backup.SourceFile, error) {
-	resources, err := metadata.ListProviderResources(ctx)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(resources))
-	files := make([]backup.SourceFile, 0, len(resources))
-	for _, resource := range resources {
-		// Both of them. A deferred response holds the request it has not made
-		// yet as well as the answer once it has one, and a backup that took only
-		// the answer would restore an install full of queued records naming a
-		// request that is not in the archive — every one of which can only fail.
+func walkBackupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, snapshotTxID uint64, root string, consume func(backup.SourceFile) error) error {
+	return metadata.WalkProviderObjectReferences(ctx, snapshotTxID, func(resource boltstore.ProviderObjectReference) error {
+		// Include both request and response objects. Shared references are deduped
+		// by identical source facts in the private disk catalog, never a RAM map.
 		for _, name := range []string{resource.ObjectPath, resource.InputObjectPath} {
 			if name == "" {
 				continue
 			}
 			if filepath.IsAbs(name) || filepath.Base(name) != name || filepath.Clean(name) != name {
-				return nil, fmt.Errorf("provider resource %q has an unsafe object path", resource.ID)
-			}
-			if _, exists := seen[name]; exists {
-				continue
+				return fmt.Errorf("provider resource %q has an unsafe object path", resource.ID)
 			}
 			localPath := filepath.Join(root, name)
 			info, err := os.Lstat(localPath)
 			if err != nil {
-				return nil, fmt.Errorf("inspect provider resource object %q: %w", resource.ID, err)
+				return fmt.Errorf("inspect provider resource object %q: %w", resource.ID, err)
 			}
 			if !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("provider resource object %q is not a regular file", resource.ID)
+				return fmt.Errorf("provider resource object %q is not a regular file", resource.ID)
 			}
-			seen[name] = struct{}{}
-			files = append(files, backup.SourceFile{
-				ArchivePath: "data/provider-objects/" + filepath.ToSlash(name),
-				LocalPath:   localPath,
-			})
+			if err := consume(backup.SourceFile{ArchivePath: "data/provider-objects/" + filepath.ToSlash(name), LocalPath: localPath}); err != nil {
+				return err
+			}
 		}
-	}
-	return files, nil
+		return nil
+	})
 }
 
-func backupUsageFiles(root string, manifest *usage.Manifest) ([]backup.SourceFile, error) {
-	if manifest == nil {
-		return nil, nil
+func backupUsageFile(root, relative string) (backup.SourceFile, error) {
+	if relative == "" || filepath.IsAbs(relative) {
+		return backup.SourceFile{}, errors.New("usage manifest contains an unsafe path")
 	}
-	relativePaths := []string{"manifest.json"}
-	for _, entry := range manifest.Files {
-		relativePaths = append(relativePaths, entry.Path)
+	clean := filepath.Clean(filepath.FromSlash(relative))
+	if clean != filepath.FromSlash(relative) || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return backup.SourceFile{}, errors.New("usage manifest path escapes usage directory")
 	}
-	files := make([]backup.SourceFile, 0, len(relativePaths))
-	for _, relative := range relativePaths {
-		if relative == "" || filepath.IsAbs(relative) {
-			return nil, errors.New("usage manifest contains an unsafe path")
-		}
-		clean := filepath.Clean(filepath.FromSlash(relative))
-		if clean != filepath.FromSlash(relative) || clean == ".." ||
-			strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
-			return nil, errors.New("usage manifest path escapes usage directory")
-		}
-		localPath := filepath.Join(root, clean)
-		info, err := os.Lstat(localPath)
-		if err != nil {
-			return nil, err
-		}
-		if !info.Mode().IsRegular() {
-			return nil, fmt.Errorf("usage backup source is not regular file %q", localPath)
-		}
-		files = append(files, backup.SourceFile{
-			ArchivePath: "data/usage/" + filepath.ToSlash(clean),
-			LocalPath:   localPath,
-		})
+	localPath := filepath.Join(root, clean)
+	info, err := os.Lstat(localPath)
+	if err != nil {
+		return backup.SourceFile{}, err
 	}
-	return files, nil
+	if !info.Mode().IsRegular() {
+		return backup.SourceFile{}, fmt.Errorf("usage backup source is not regular file %q", localPath)
+	}
+	return backup.SourceFile{ArchivePath: "data/usage/" + filepath.ToSlash(clean), LocalPath: localPath}, nil
 }
 
 func pointerTo[T any](value T) *T { return &value }
@@ -1199,24 +1462,7 @@ func pathWithin(candidate, directory string) bool {
 // staging and archiving would produce a manifest describing bytes the archive
 // does not contain.
 func copyFileForBackup(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
+	return copyFileForBackupWithDisk(context.Background(), source, destination, nil)
 }
 
 // attachStagedMetadataJournal publishes the next journal epoch into a staged
@@ -1226,9 +1472,62 @@ func copyFileForBackup(source, destination string) error {
 // not an operation inside one — but the attach itself writes the epoch and the
 // applied sequence on the raw transaction, and creates the file. Both travel
 // with the rename.
-func attachStagedMetadataJournal(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte) error {
-	if _, err := attachMetadataJournal(store, secretVault, masterKey, "backup restore"); err != nil {
+func attachStagedMetadataJournal(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, cfg config.Config) error {
+	if _, err := attachConfiguredMetadataJournal(store, secretVault, masterKey, "backup restore", cfg); err != nil {
 		return fmt.Errorf("publish the restored metadata journal epoch: %w", err)
 	}
 	return nil
+}
+
+// The offline caller owns a frozen staged native tree. Always rebuild a new
+// derivative from that authenticated cut; never reopen or publish a cache DB.
+// The temporary tree is removed before either archive or restore publication.
+func validateBackupPricingProjection(ctx context.Context, cfg config.Config, metadata *boltstore.Store, source string, key []byte, report ledger.ChainReport, parent string) (resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if cfg.ResourceBudget != nil && cfg.ResourceBudget.MemoryStateRequired {
+		pressure, err := commandPressure(ctx, cfg, nil)
+		if err != nil {
+			return err
+		}
+		return withPackedBackupReference(ctx, cfg, source, key, report, pressure, parent, false, func(ctx context.Context, d *packedBackupUsageFailure, _ string, _ [32]byte) error {
+			return d.Ledger.WithFreshPricingView(ctx, func(reader ledger.AuthenticatedPricingView) error {
+				return metadata.ValidateDeploymentPriceReferences(ctx, reader)
+			})
+		})
+	}
+	credit, err := acquireBackupProjectionBudget(ctx, cfg, backupLedgerProjection)
+	if err != nil {
+		return err
+	}
+	var cleanupErr error
+	defer func() { resultErr = errors.Join(resultErr, credit.retire(withRetirementDebt(cleanupErr, resultErr))) }()
+	directory, err := os.MkdirTemp(parent, ".halro-pricing-check-*")
+	if err != nil {
+		return err
+	}
+	identity, err := os.Lstat(directory)
+	if err != nil {
+		cleanupErr = err
+		return err
+	}
+	defer func() {
+		cleanupErr = errors.Join(cleanupErr, removeOwnedReferenceDirectory(directory, identity))
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
+	var projection *ledger.LedgerProjection
+	if credit.limit > 0 {
+		projection, err = ledger.BuildLedgerProjectionWithLimit(ctx, source, key, filepath.Join(directory, "ledger.db"), report, credit.limit)
+	} else {
+		projection, err = ledger.BuildLedgerProjection(ctx, source, key, filepath.Join(directory, "ledger.db"), report)
+	}
+	if err != nil {
+		return err
+	}
+	defer func() {
+		cleanupErr = errors.Join(cleanupErr, projection.Discard())
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
+	return metadata.ValidateDeploymentPriceReferences(ctx, projection)
 }

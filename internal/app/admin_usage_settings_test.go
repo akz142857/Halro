@@ -135,7 +135,7 @@ func TestTheTrimFollowsTheStoredWindowRatherThanTheFile(t *testing.T) {
 	seedRetentionUsage(t, runtime, 8, time.Now().UTC().AddDate(0, 0, -60))
 	runtime.exportUsageParquet()
 	runtime.pruneUsageWindow()
-	page, err := runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	page, err := runtime.usage.queryAttempts(context.Background(), usage.AttemptQuery{Limit: 100}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestTheTrimFollowsTheStoredWindowRatherThanTheFile(t *testing.T) {
 	}
 
 	runtime.pruneUsageWindow()
-	page, err = runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	page, err = runtime.usage.queryAttempts(context.Background(), usage.AttemptQuery{Limit: 100}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

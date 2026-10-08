@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	cryptorand "crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,8 @@ import (
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
 	"github.com/akz142857/Halro/internal/replication"
+	"github.com/akz142857/Halro/internal/replicationlimits"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	storelock "github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/vault"
@@ -37,10 +40,19 @@ const memberBinaryVersion uint16 = 1
 
 const reseedRequiredMarker = "reseed-required"
 
+func orderingJournalOptions(cfg config.Config) replication.OrderingJournalOptions {
+	options := replication.OrderingJournalOptions{}
+	if cfg.ResourceBudget != nil {
+		options.MaxDiskBytes = cfg.ResourceBudget.OrderingJournalDiskBytes
+	}
+	return options
+}
+
 // replicationRuntime is the one HA subsystem owned by Runtime. Its internals
 // deliberately stay out of Runtime's already-wide field list: role state,
 // ordering, native-source authentication and peer transport have one lifetime.
 type replicationRuntime struct {
+	peerPhysical      atomic.Pointer[haPeerPhysicalController]
 	role              replication.Role
 	clusterKey        [32]byte
 	publisher         *replication.StatePublisher
@@ -55,7 +67,11 @@ type replicationRuntime struct {
 	startupPeers      map[string]replication.Hello
 	startupIndex      uint64
 	startupPeerQuorum int
-	startupOnce       sync.Once
+	startupMu         sync.Mutex
+	startupClosed     bool
+	startupDone       chan struct{}
+	startupFinish     func(context.Context) error // Installed before transport publication.
+	startupProducers  chan struct{}               // Closed only after confirmed accounting recovery.
 	startupCtx        context.Context
 	startupStop       context.CancelFunc
 	fatal             chan error
@@ -81,13 +97,21 @@ func openReplicaApplication(
 	metricsAuthorizer *bearercred.Authorizer,
 	state replication.MemberState,
 	clusterKey [32]byte,
+	resourcePressure *resourcePressureRuntime,
+	orderingJournalDiskPermit *runtimeProjectionDiskPermit,
+	ledgerSegmentIndexDiskPermit *runtimeProjectionDiskPermit,
+	metadataStoreDiskPermit *runtimeProjectionDiskPermit,
+	ledgerAppendDisk *runtimeLedgerAppendDiskOwner,
 ) (*Runtime, error) {
-	metadata, err := boltstore.OpenReplica(cfg.MetadataPath())
+	metadata, err := boltstore.OpenReplicaWithDiskLimit(cfg.MetadataPath(), metadataStoreDiskCeiling(cfg))
 	if err != nil {
 		return nil, err
 	}
 	failMetadata := func(openErr error) (*Runtime, error) {
 		return nil, errors.Join(openErr, metadata.Close())
+	}
+	if err := configurePricingResources(cfg, resourcePressure.logicalBudget(), metadata); err != nil {
+		return failMetadata(err)
 	}
 	if err := verifyVaultKeyCheck(metadata, secretVault); err != nil {
 		return failMetadata(err)
@@ -114,7 +138,7 @@ func openReplicaApplication(
 	defer clear(metadataKey)
 
 	replicationRuntime, err := openReplicaReplicationFoundation(
-		cfg, state, clusterKey, ledgerKey, auditKey, governanceKey, metadataKey,
+		cfg, state, clusterKey, ledgerKey, auditKey, governanceKey, metadataKey, resourcePressure.logicalBudget(), ledgerAppendDisk,
 	)
 	if err != nil {
 		return failMetadata(err)
@@ -122,7 +146,21 @@ func openReplicaApplication(
 	failReplication := func(openErr error) (*Runtime, error) {
 		return failMetadata(errors.Join(openErr, replicationRuntime.close()))
 	}
-	metadataLog, err := metadatajournal.OpenReplica(filepathMetadataJournal(cfg), metadataKey)
+	metadataJournalDiskPermit, err := acquireMetadataJournalDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		return failReplication(fmt.Errorf("acquire Replica Metadata journal disk ceiling: %w", err))
+	}
+	metadataJournalDiskPermitOwned := true
+	defer func() {
+		if metadataJournalDiskPermitOwned {
+			_ = metadataJournalDiskPermit.Release()
+		}
+	}()
+	metadataJournalMaxBytes := int64(0)
+	if cfg.ResourceBudget != nil {
+		metadataJournalMaxBytes = cfg.ResourceBudget.MetadataJournalDiskBytes
+	}
+	metadataLog, err := metadatajournal.OpenReplicaContextWithLimit(ctx, filepathMetadataJournal(cfg), metadataKey, metadataJournalMaxBytes)
 	if err != nil {
 		return failReplication(fmt.Errorf("open Replica metadata journal: %w", err))
 	}
@@ -142,54 +180,46 @@ func openReplicaApplication(
 	}
 
 	accountingStatus := ledger.NewStatus()
-	ledgerLog, err := ledger.OpenWithOptions(cfg.LedgerPath(), accountingStatus, ledger.Options{ChainKey: ledgerKey, Replica: true})
+	ledgerOptions := ledger.Options{ChainKey: ledgerKey, Replica: true, MaxSegmentDirectoryIndexBytes: ledgerSegmentIndexShareBytes(cfg), ReserveAppendDisk: ledgerAppendDisk.reserve}
+	if ledgerAppendDisk != nil {
+		ledgerOptions.ReserveNativeFileDisk = ledgerAppendDisk.reserveNativeFile
+	}
+	ledgerLog, err := ledger.OpenWithOptions(cfg.LedgerPath(), accountingStatus, ledgerOptions)
 	if err != nil {
 		return failReplication(fmt.Errorf("open Replica Ledger: %w", err))
 	}
+	if err := ledgerAppendDisk.publish(); err != nil {
+		return failReplication(errors.Join(fmt.Errorf("publish Replica Ledger append growth owner: %w", err), ledgerLog.Close()))
+	}
+	var accountingGeneration *replicaAccountingGeneration
 	failLedger := func(openErr error) (*Runtime, error) {
-		return failReplication(errors.Join(openErr, ledgerLog.Close()))
+		// No transport/public owner has been published on failed startup.
+		return failReplication(errors.Join(openErr, accountingGeneration.Close(), ledgerLog.Close()))
 	}
-	ledgerState := ledger.NewState()
-	appliedCursors, err := replicationRuntime.journal.StoreCursorsThrough(state.AppliedIndex)
+	if _, err := replicationRuntime.authenticateHARuntimeCut(ctx, resourcePressure.logicalBudget()); err != nil {
+		return failLedger(fmt.Errorf("authenticate Replica common applied cut before generation construction: %w", err))
+	}
+	accountingGeneration, err = prepareReplicaRuntimeOwner(ctx, cfg, replicationRuntime, ledgerLog, metadata, resourcePressure)
 	if err != nil {
-		return failLedger(err)
-	}
-	ledgerApplied := appliedCursors[replication.StoreLedger-replication.StoreLedger]
-	if _, err := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
-		if record.Sequence > ledgerApplied.Sequence {
-			return nil
-		}
-		return ledgerState.Apply(record)
-	}); err != nil {
-		return failLedger(fmt.Errorf("replay Replica applied Ledger prefix: %w", err))
-	}
-	if ledgerState.Watermark().Sequence != ledgerApplied.Sequence {
-		return failLedger(errors.New("Replica Ledger projection does not reach authenticated applied prefix"))
-	}
-	usageAggregate, usageWatermark, err := restoreUsageAggregate(metadata, ledgerState.Watermark(), logger)
-	if err != nil {
-		return failLedger(fmt.Errorf("restore Replica Usage projection: %w", err))
-	}
-	if _, err := ledgerLog.Replay(usageWatermark, func(record ledger.Record) error {
-		if record.Sequence > ledgerApplied.Sequence {
-			return nil
-		}
-		return usageAggregate.Apply(record)
-	}); err != nil {
-		return failLedger(fmt.Errorf("replay Replica Usage projection: %w", err))
-	}
-	if usageAggregate.Watermark().Sequence != ledgerApplied.Sequence {
-		return failLedger(errors.New("Replica Usage projection does not reach authenticated applied prefix"))
+		return failLedger(fmt.Errorf("prepare Replica accounting generation: %w", err))
 	}
 
-	auditLog, err := audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{Replica: true})
+	auditDiskPermit, err := acquireAuditLogDisk(ctx, cfg, resourcePressure)
 	if err != nil {
-		return failLedger(fmt.Errorf("open Replica Audit log: %w", err))
+		return failLedger(fmt.Errorf("acquire Replica Audit journal disk ceiling: %w", err))
+	}
+	auditLog, err := openConfiguredAuditLog(cfg, cfg.AuditPath(), auditKey, audit.Options{Replica: true}, resourcePressure.logicalBudget())
+	if err != nil {
+		return failLedger(errors.Join(fmt.Errorf("open Replica Audit log: %w", err), auditDiskPermit.Release()))
 	}
 	failAudit := func(openErr error) (*Runtime, error) {
-		return failLedger(errors.Join(openErr, auditLog.Close()))
+		return failLedger(errors.Join(openErr, auditLog.Close(), auditDiskPermit.Release()))
 	}
-	governanceLog, err := governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governance.Options{Replica: true})
+	governanceLogDiskPermit, err := acquireGovernanceLogDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		return failAudit(fmt.Errorf("acquire Replica Governance journal disk ceiling: %w", err))
+	}
+	governanceLog, err := governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governanceLogOptions(cfg, resourcePressure.logicalBudget(), governance.Options{Replica: true}))
 	if err != nil {
 		return failAudit(fmt.Errorf("open Replica Governance journal: %w", err))
 	}
@@ -212,21 +242,47 @@ func openReplicaApplication(
 	if err != nil {
 		return failGovernance(err)
 	}
-	projection, err := replication.NewNativeProjection(ledgerLog, ledgerState, metadata, usageAggregate.Apply)
-	if err != nil {
-		return failGovernance(err)
-	}
-	applier, err := replication.NewReplicaApplier(receiver, replicationRuntime.journal, projection)
+	applier, err := replication.NewReplicaApplier(receiver, replicationRuntime.journal, accountingGeneration)
 	if err != nil {
 		return failGovernance(err)
 	}
 	replicationRuntime.receiver = receiver
 	replicationRuntime.applier = applier
-	if err := replicationRuntime.completeReplicaTransport(cfg, logger); err != nil {
+	if err := replicationRuntime.completeReplicaTransport(cfg, logger, resourcePressure.logicalBudget()); err != nil {
 		return failGovernance(err)
 	}
 	if _, err := applier.ApplyConfirmed(ctx); err != nil {
 		return failGovernance(fmt.Errorf("apply Replica confirmed prefix at startup: %w", err))
+	}
+	if orderingJournalDiskPermit != nil {
+		if err := orderingJournalDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Ordering journal disk owner: %w", err))
+		}
+	}
+	if metadataJournalDiskPermit != nil {
+		if err := metadataJournalDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Metadata journal disk owner: %w", err))
+		}
+	}
+	if metadataStoreDiskPermit != nil {
+		if err := metadataStoreDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Metadata data-file disk owner: %w", err))
+		}
+	}
+	if auditDiskPermit != nil {
+		if err := auditDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Audit journal disk owner: %w", err))
+		}
+	}
+	if governanceLogDiskPermit != nil {
+		if err := governanceLogDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Governance journal disk owner: %w", err))
+		}
+	}
+	if ledgerSegmentIndexDiskPermit != nil {
+		if err := ledgerSegmentIndexDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return failGovernance(fmt.Errorf("publish Replica Ledger segment index disk owner: %w", err))
+		}
 	}
 	memorySessions, err := adminauth.NewMemorySessionStore(metadata)
 	if err != nil {
@@ -239,13 +295,30 @@ func openReplicaApplication(
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime := &Runtime{
 		config: cfg, logger: logger, lock: dataLock, store: metadata,
-		ledger: ledgerLog, state: ledgerState, status: accountingStatus,
-		governance: governanceRuntime{log: governanceLog}, vault: secretVault, audit: auditLog,
+		ledger: ledgerLog, accountingState: runtimeAccountingState{reader: accountingGeneration.ledger, projection: accountingGeneration.ledger, replica: accountingGeneration}, status: accountingStatus,
+		governance: governanceRuntime{log: governanceLog, logDiskPermit: governanceLogDiskPermit}, vault: secretVault, audit: auditLog,
 		adminSessions: adminSessions, startedAt: time.Now(), now: time.Now,
 		backgroundCtx: backgroundContext, backgroundCancel: backgroundCancel,
 		metricsScrapes:   make(chan struct{}, max(1, cfg.Metrics.MaxConcurrentScrapes)),
 		metricsTokenHash: metricsTokenHash, metricsAuthorizer: metricsAuthorizer,
-		usage: usageAggregate, replication: replicationRuntime,
+		usage: &runtimeUsage{disk: accountingGeneration.usageDisk}, replication: replicationRuntime,
+
+		runtimeResourceOwnership: runtimeResourceOwnership{
+			resourcePressure: resourcePressure, auditDiskPermit: auditDiskPermit,
+			maintenanceOwners:            newRuntimeMaintenanceOwners(cfg, resourcePressure),
+			metadataJournalDiskPermit:    metadataJournalDiskPermit,
+			metadataStoreDiskPermit:      metadataStoreDiskPermit,
+			orderingJournalDiskPermit:    orderingJournalDiskPermit,
+			ledgerSegmentIndexDiskPermit: ledgerSegmentIndexDiskPermit,
+			ledgerAppendDisk:             ledgerAppendDisk,
+		},
+	}
+	if resourcePressure != nil {
+		runtime.backgroundWait.Add(1)
+		go func() {
+			defer runtime.backgroundWait.Done()
+			runtime.runResourcePressure(backgroundContext, resourcePressure)
+		}()
 	}
 	// Replica maintenance is intentionally limited to node-derived Usage
 	// checkpointing and node-local Ledger compression. It does not start the
@@ -255,6 +328,7 @@ func openReplicaApplication(
 		defer runtime.backgroundWait.Done()
 		runtime.runReplicaMaintenance(backgroundContext)
 	}()
+	metadataJournalDiskPermitOwned = false
 	return runtime, nil
 }
 
@@ -263,40 +337,51 @@ func openReplicaReplicationFoundation(
 	state replication.MemberState,
 	clusterKey [32]byte,
 	ledgerKey, auditKey, governanceKey, metadataKey []byte,
+	budget *resourcebudget.Manager,
+	ledgerAppendDisk *runtimeLedgerAppendDiskOwner,
 ) (*replicationRuntime, error) {
+	if budget != nil {
+		if cfg.ResourceBudget == nil {
+			return nil, errors.New("Replica reader budget requires resource_budget")
+		}
+		if err := cfg.ResourceBudget.ValidateReplicationCandidates(); err != nil {
+			return nil, fmt.Errorf("Replica resource_budget: %w", err)
+		}
+	}
 	if state.Role != replication.RoleReplica {
 		return nil, fmt.Errorf("member role %q is not a Replica", state.Role)
 	}
 	if err := refuseReseedRequiredMember(cfg); err != nil {
 		return nil, err
 	}
-	journal, err := replication.OpenExistingOrderingJournal(
+	journal, err := replication.OpenExistingOrderingJournalWithOptions(
 		cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation,
-		state.DurableIndex, state.OrderingHeadMAC,
+		state.DurableIndex, state.OrderingHeadMAC, orderingJournalOptions(cfg),
 	)
 	if err != nil {
 		return nil, err
 	}
-	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
+	sourceOptions := replication.NativeSourceOptions{
 		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
 		MetadataPath: filepathMetadataJournal(cfg), LedgerKey: ledgerKey, AuditKey: auditKey,
 		GovernanceKey: governanceKey, MetadataKey: metadataKey,
-		ProviderObjectDir: providerObjectSourceDir(cfg),
-	})
+		ProviderObjectDir:            providerObjectSourceDir(cfg),
+		LedgerDirectoryIndexMaxBytes: ledgerSegmentIndexShareBytes(cfg),
+		ReaderBudget:                 budget, ReaderRAMBytes: replicationReaderRAM(cfg, budget),
+	}
+	if ledgerAppendDisk != nil {
+		sourceOptions.ReserveLedgerFileDisk = ledgerAppendDisk.reserveNativeFile
+	}
+	source, err := replication.NewNativeSource(sourceOptions)
 	if err != nil {
-		_ = journal.Close()
-		return nil, err
+		return nil, errors.Join(err, journal.Close())
 	}
 	if err := replication.RecoverReplicaStores(journal, source); err != nil {
-		source.Close()
-		_ = journal.Close()
-		return nil, err
+		return nil, errors.Join(err, source.Close(), journal.Close())
 	}
 	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
 	if err != nil {
-		source.Close()
-		_ = journal.Close()
-		return nil, err
+		return nil, errors.Join(err, source.Close(), journal.Close())
 	}
 	runtime := &replicationRuntime{
 		role: state.Role, clusterKey: clusterKey, publisher: publisher, journal: journal, source: source,
@@ -309,7 +394,7 @@ func openReplicaReplicationFoundation(
 	return runtime, nil
 }
 
-func (r *replicationRuntime) completeReplicaTransport(cfg config.Config, logger *slog.Logger) error {
+func (r *replicationRuntime) completeReplicaTransport(cfg config.Config, logger *slog.Logger, budget *resourcebudget.Manager) error {
 	handler, err := replication.NewReplicaRecordHandler(r.receiver, r.applier)
 	if err != nil {
 		return err
@@ -319,6 +404,10 @@ func (r *replicationRuntime) completeReplicaTransport(cfg config.Config, logger 
 	for _, peer := range state.Peers {
 		endpoints = append(endpoints, replication.PeerEndpoint{NodeID: peer.Name, Address: peer.Address, SPKISHA256: peer.SPKISHA256})
 	}
+	sessionOptions, err := replicationSessionOptions(cfg, budget)
+	if err != nil {
+		return err
+	}
 	manager, err := replication.NewConnectionManager(replication.ConnectionManagerOptions{
 		LocalNode: state.NodeID,
 		TLS: replication.TLSFiles{
@@ -326,7 +415,7 @@ func (r *replicationRuntime) completeReplicaTransport(cfg config.Config, logger 
 		},
 		ClusterKey: r.clusterKey[:],
 		Peers:      endpoints, LocalHello: r.localHello, OnAuthenticatedHello: r.authorizeReplicaHello,
-		Handle: r.handleRecords(handler.Handle),
+		Handle: r.handleRecords(handler.Handle), Session: sessionOptions,
 		OnSessionError: func(peer string, sessionErr error) {
 			r.noteSessionError(sessionErr)
 			logger.Warn("replication peer session failed", "peer", peer, "error", sessionErr)
@@ -365,8 +454,26 @@ func (s *deferredPeerSender) Send(peer string, encoded []byte) error {
 }
 
 func readMemberState(cfg config.Config, masterKey []byte) (replication.MemberState, [32]byte, error) {
-	state, err := replication.ReadStateWithMasterKey(cfg.ReplicationStatePath(), masterKey)
+	key, incarnation, carried, err := readHAGroupClusterKeyCandidate(cfg, masterKey)
 	if err != nil {
+		return replication.MemberState{}, [32]byte{}, err
+	}
+	var state replication.MemberState
+	if carried {
+		// The encrypted carrier supplies only a key candidate. All Member facts
+		// still come from the original complete authenticated state bytes.
+		state, err = replication.ReadState(cfg.ReplicationStatePath(), key[:])
+		if err == nil && sha256.Sum256([]byte(state.Incarnation)) != incarnation {
+			err = errors.New("HA cluster-key candidate incarnation differs from authenticated Member")
+		}
+	} else {
+		state, err = replication.ReadStateWithMasterKey(cfg.ReplicationStatePath(), masterKey)
+		if err == nil {
+			key, err = replication.DeriveClusterKey(masterKey, state.Incarnation)
+		}
+	}
+	if err != nil {
+		clear(key[:])
 		return replication.MemberState{}, [32]byte{}, err
 	}
 	peers := make([]replication.StatePeer, 0, len(cfg.Replication.Peers))
@@ -374,10 +481,7 @@ func readMemberState(cfg config.Config, masterKey []byte) (replication.MemberSta
 		peers = append(peers, replication.StatePeer{Name: peer.Name, Address: peer.Address, SPKISHA256: peer.SPKISHA256})
 	}
 	if err := replication.ValidateMemberConfiguration(state, cfg.Replication.ClusterID, cfg.Replication.NodeID, peers); err != nil {
-		return replication.MemberState{}, [32]byte{}, err
-	}
-	key, err := replication.DeriveClusterKey(masterKey, state.Incarnation)
-	if err != nil {
+		clear(key[:])
 		return replication.MemberState{}, [32]byte{}, err
 	}
 	return state, key, nil
@@ -389,16 +493,26 @@ func openPrimaryReplication(
 	state replication.MemberState,
 	clusterKey [32]byte,
 	ledgerKey, auditKey, governanceKey, metadataKey []byte,
+	candidateBudget *resourcebudget.Manager,
+	ledgerAppendDisk *runtimeLedgerAppendDiskOwner,
 ) (*replicationRuntime, error) {
+	if candidateBudget != nil {
+		if cfg.ResourceBudget == nil {
+			return nil, errors.New("Primary candidate budget requires resource_budget configuration")
+		}
+		if err := cfg.ResourceBudget.ValidateReplicationCandidates(); err != nil {
+			return nil, fmt.Errorf("Primary resource_budget: %w", err)
+		}
+	}
 	if state.Role != replication.RolePrimary {
 		return nil, fmt.Errorf("member role %q is not a Primary", state.Role)
 	}
 	if err := refuseReseedRequiredMember(cfg); err != nil {
 		return nil, err
 	}
-	journal, err := replication.OpenExistingOrderingJournal(
+	journal, err := replication.OpenExistingOrderingJournalWithOptions(
 		cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation,
-		state.DurableIndex, state.OrderingHeadMAC,
+		state.DurableIndex, state.OrderingHeadMAC, orderingJournalOptions(cfg),
 	)
 	if err != nil {
 		return nil, err
@@ -406,21 +520,25 @@ func openPrimaryReplication(
 	failJournal := func(openErr error) (*replicationRuntime, error) {
 		return nil, errors.Join(openErr, journal.Close())
 	}
-	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
+	sourceOptions := replication.NativeSourceOptions{
 		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
 		MetadataPath: filepathMetadataJournal(cfg), LedgerKey: ledgerKey, AuditKey: auditKey,
 		GovernanceKey: governanceKey, MetadataKey: metadataKey,
-		ProviderObjectDir: providerObjectSourceDir(cfg),
-	})
+		ProviderObjectDir:            providerObjectSourceDir(cfg),
+		LedgerDirectoryIndexMaxBytes: ledgerSegmentIndexShareBytes(cfg),
+		ReaderBudget:                 candidateBudget, ReaderRAMBytes: replicationReaderRAM(cfg, candidateBudget),
+	}
+	if ledgerAppendDisk != nil {
+		sourceOptions.ReserveLedgerFileDisk = ledgerAppendDisk.reserveNativeFile
+	}
+	source, err := replication.NewNativeSource(sourceOptions)
 	if err != nil {
 		return failJournal(err)
 	}
 	failSource := func(openErr error) (*replicationRuntime, error) {
-		source.Close()
-		return failJournal(openErr)
+		return failJournal(errors.Join(openErr, source.Close()))
 	}
-	recovered, err := replication.RecoverLocalCommits(state.ClusterID, state.Incarnation, state.ConfirmedIndex, journal, source)
-	if err != nil {
+	if err := replication.ReconcileLocalStores(state.ClusterID, state.Incarnation, state.ConfirmedIndex, journal, source); err != nil {
 		return failSource(err)
 	}
 	publisher, err := replication.NewStatePublisher(cfg.ReplicationStatePath(), clusterKey[:], state)
@@ -441,9 +559,30 @@ func openPrimaryReplication(
 		publisher.Close()
 		return failSource(err)
 	}
-	coordinator, err := replication.NewPrimaryCoordinator(
+	windowLimits := replication.DefaultPrimaryWindowLimits()
+	if candidateBudget != nil {
+		windowLimits.CandidateBudget = candidateBudget
+		windowLimits.CandidateRAMBytes = cfg.ResourceBudget.ReplicationCandidateRAMBytes
+		if cfg.ResourceBudget.TotalUnconfirmedBytes > 0 {
+			windowLimits.UnconfirmedBudget = candidateBudget
+			windowLimits.MaxUnconfirmedEntries = cfg.ResourceBudget.UnconfirmedMaxEntries
+			windowLimits.UnconfirmedMetadataRAMBytes = replicationlimits.PrimaryUnconfirmedTableRAMBytes
+			windowLimits.RecoveryReserveUnconfirmedBytes = cfg.ResourceBudget.RecoveryReserveUnconfirmedBytes
+		}
+	}
+	sessionOptions, err := replicationSessionOptions(cfg, candidateBudget)
+	if err != nil {
+		publisher.Close()
+		return failSource(err)
+	}
+	if err := windowLimits.ValidateSession(sessionOptions); err != nil {
+		publisher.Close()
+		return failSource(err)
+	}
+	coordinator, err := replication.NewPrimaryCoordinatorFromSource(
 		state.ClusterID, state.Incarnation, state.NodeID, state.Term, state.ConfirmedIndex,
-		peerNames, journal, outbound, publisher.PublishPrimary, recovered...,
+		peerNames, journal, outbound, publisher.PublishPrimary,
+		source, windowLimits,
 	)
 	if err != nil {
 		publisher.Close()
@@ -469,6 +608,8 @@ func openPrimaryReplication(
 		OnAuthenticatedHello: runtime.authorizePrimaryHello,
 		Handle:               runtime.handleRecords(handler.Handle),
 		OnDataSessionReady:   runtime.catchUpPrimaryPeer,
+		OnDataSessionClosed:  coordinator.ForgetPeer,
+		Session:              sessionOptions,
 		OnSessionError: func(peer string, sessionErr error) {
 			runtime.noteSessionError(sessionErr)
 			logger.Warn("replication peer session failed", "peer", peer, "error", sessionErr)
@@ -534,6 +675,13 @@ func filepathMetadataJournal(cfg config.Config) string {
 
 func (r *replicationRuntime) localHello() (replication.Hello, error) {
 	state := r.publisher.Snapshot()
+	if r.source == nil {
+		return replication.Hello{}, errors.New("replication Hello requires actual native source")
+	}
+	metadataVersion, err := r.source.MetadataFormatVersion()
+	if err != nil {
+		return replication.Hello{}, fmt.Errorf("replication Hello metadata capability: %w", err)
+	}
 	hello := replication.Hello{
 		ClusterID: state.ClusterID, Incarnation: state.Incarnation, NodeID: state.NodeID,
 		Role: state.Role, Term: state.Term, PromisedTerm: state.PromisedTerm,
@@ -542,7 +690,7 @@ func (r *replicationRuntime) localHello() (replication.Hello, error) {
 		Protocol: replication.VersionRange{Current: replication.ProtocolVersion, Minimum: replication.ProtocolVersion, Maximum: replication.ProtocolVersion},
 		Schema:   replication.VersionRange{Current: uint16(boltstore.CurrentSchemaVersion()), Minimum: uint16(boltstore.CurrentSchemaVersion()), Maximum: uint16(boltstore.CurrentSchemaVersion())},
 		Ledger:   replication.VersionRange{Current: ledger.ReplicationFormatVersion(), Minimum: ledger.ReplicationFormatVersion(), Maximum: ledger.ReplicationFormatVersion()},
-		Metadata: replication.VersionRange{Current: metadatajournal.ReplicationFormatVersion(), Minimum: metadatajournal.ReplicationFormatVersion(), Maximum: metadatajournal.ReplicationFormatVersion()},
+		Metadata: replication.VersionRange{Current: metadataVersion, Minimum: metadataVersion, Maximum: metadataVersion},
 	}
 	if _, err := cryptorand.Read(hello.Nonce[:]); err != nil {
 		return replication.Hello{}, fmt.Errorf("generate replication Hello nonce: %w", err)
@@ -838,27 +986,9 @@ func (r *Runtime) requireMemberStartup(next http.Handler) http.Handler {
 	})
 }
 
-func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.Hello) error {
-	head, _, _ := r.journal.Head()
-	if hello.DurableIndex > head {
-		return errors.New("Replica durable index exceeds Primary ordering head")
-	}
-	if hello.DurableIndex < head {
-		first := hello.DurableIndex + 1
-		if err := replication.ReconstructRangeEach(
-			hello.ClusterID, hello.Incarnation, first, head, r.journal, r.source,
-			func(commit replication.LocalCommit) error { return r.manager.Send(peer, commit.Encoded) },
-		); err != nil {
-			return fmt.Errorf("catch up Replica %s: %w", peer, err)
-		}
-	}
-	if notice := r.coordinator.PendingCommitNotice(); len(notice) > 0 {
-		if err := r.manager.Send(peer, notice); err != nil {
-			return fmt.Errorf("send current commit notice to Replica %s: %w", peer, err)
-		}
-	}
-	if err := r.coordinator.RetryPending(); err != nil {
-		return fmt.Errorf("retry pending replication after %s catch-up: %w", peer, err)
+func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.Hello, send func([]byte) error) error {
+	if err := r.coordinator.PreparePeer(peer, hello.DurableIndex, hello.AppliedIndex, send); err != nil {
+		return fmt.Errorf("prepare Replica %s send window: %w", peer, err)
 	}
 	r.helloMu.Lock()
 	requiredPeers := r.startupPeerQuorum
@@ -868,29 +998,34 @@ func (r *replicationRuntime) catchUpPrimaryPeer(peer string, hello replication.H
 	allPeers := len(r.startupPeers) >= requiredPeers
 	r.helloMu.Unlock()
 	if allPeers {
-		r.startupOnce.Do(func() {
-			go func() {
-				if err := r.coordinator.WaitConfirmed(r.startupCtx, r.startupIndex); err != nil {
-					if !errors.Is(err, context.Canceled) {
-						r.fail(fmt.Errorf("confirm leadership establishment: %w", err))
-					}
-					return
-				}
-				r.startupReady.Store(true)
-			}()
-		})
+		// Include the complete accepted startup prefix, not only its anchor.
+		head, _, _ := r.journal.Head()
+		r.startPrimaryCompletion(max(r.startupIndex, head))
 	}
 	return nil
 }
 
 func (r *replicationRuntime) ledgerHooks(options *ledger.Options) {
 	options.RequireExisting = true
+	options.BeforeDurable = func(batch ledger.DurableBatch) (ledger.AppendAdmission, error) {
+		if q := r.peerPhysical.Load(); q != nil {
+			if err := q.beforePrimarySource(batch.Context, 0, batch.FirstSequence, batch.LastSequence, len(batch.Frames)); err != nil {
+				return nil, err
+			}
+		}
+		return r.coordinator.ReserveNativeSourceUnconfirmedContext(batch.Context, len(batch.Frames))
+	}
 	options.AfterDurable = func(batch ledger.DurableBatch) (uint64, error) {
 		commit, err := r.coordinator.RecordLedgerBatch(batch)
 		return commit.Index, err
 	}
 	options.WaitConfirmed = r.coordinator.WaitConfirmed
-	options.BeforeRoll = r.coordinator.RequireLedgerConfirmed
+	options.BeforeRoll = func(generation, lastSequence uint64) error {
+		if r.peerPhysical.Load() != nil {
+			return replication.ErrPhysicalCredit
+		}
+		return r.coordinator.RequireLedgerConfirmed(generation, lastSequence)
+	}
 	options.AfterRoll = func(segment ledger.Segment) error {
 		_, err := r.coordinator.RecordLedgerRoll(segment)
 		return err
@@ -898,21 +1033,37 @@ func (r *replicationRuntime) ledgerHooks(options *ledger.Options) {
 }
 
 func (r *replicationRuntime) auditOptions() audit.Options {
-	return audit.Options{RequireExisting: true, AfterDurable: func(batch audit.DurableBatch) error {
+	return audit.Options{RequireExisting: true, BeforeDurable: func(batch audit.DurableBatch) (audit.AppendAdmission, error) {
+		if q := r.peerPhysical.Load(); q != nil {
+			if err := q.beforePrimarySource(batch.Context, 1, batch.FirstSequence, batch.LastSequence, len(batch.Frames)); err != nil {
+				return nil, err
+			}
+		}
+		return r.coordinator.ReserveNativeSourceUnconfirmedContext(batch.Context, len(batch.Frames))
+	}, AfterDurable: func(batch audit.DurableBatch) error {
 		_, err := r.coordinator.RecordAuditBatch(batch)
 		return err
 	}}
 }
 
 func (r *replicationRuntime) governanceOptions() governance.Options {
-	return governance.Options{RequireExisting: true, AfterDurable: func(batch governance.DurableBatch) error {
+	return governance.Options{RequireExisting: true, BeforeDurable: func(batch governance.DurableBatch) (governance.AppendAdmission, error) {
+		if q := r.peerPhysical.Load(); q != nil {
+			if err := q.beforePrimarySource(batch.Context, 2, batch.FirstSequence, batch.LastSequence, len(batch.Frames)); err != nil {
+				return nil, err
+			}
+		}
+		return r.coordinator.ReserveNativeSourceUnconfirmedContext(batch.Context, len(batch.Frames))
+	}, AfterDurable: func(batch governance.DurableBatch) error {
 		_, err := r.coordinator.RecordGovernanceBatch(batch)
 		return err
 	}}
 }
 
 func (r *replicationRuntime) installMetadataHook(store *boltstore.Store) error {
-	return store.SetMetadataJournalAfterDurable(func(batch metadatajournal.DurableBatch) (uint64, error) {
+	return store.SetMetadataJournalAdmission(func(batch metadatajournal.DurableBatch) (metadatajournal.AppendAdmission, error) {
+		return r.coordinator.ReserveNativeSourceUnconfirmedContext(batch.Context, len(batch.Frames))
+	}, func(batch metadatajournal.DurableBatch) (uint64, error) {
 		commit, err := r.coordinator.RecordMetadataBatch(batch)
 		return commit.Index, err
 	}, r.coordinator.WaitConfirmed)
@@ -922,10 +1073,15 @@ func (r *replicationRuntime) replicateProviderObject(ctx context.Context, name s
 	if r == nil || r.role != replication.RolePrimary || r.coordinator == nil {
 		return errors.New("provider-object replication requires the active Primary")
 	}
+	admissions, err := r.coordinator.ReserveProviderObjectAdmissions(name, sealed)
+	if err != nil {
+		return fmt.Errorf("admit provider-object replication before source publication: %w", err)
+	}
 	if err := replication.PersistProviderObjectSource(r.objectSourceDir, name, sealed); err != nil {
+		r.coordinator.RetainUnconfirmedAdmissions(admissions)
 		return fmt.Errorf("persist provider-object replication source: %w", err)
 	}
-	index, err := r.coordinator.RecordProviderObject(name, sealed)
+	index, err := r.coordinator.RecordProviderObjectWithAdmissions(name, sealed, admissions)
 	if err != nil {
 		return err
 	}
@@ -944,20 +1100,29 @@ func (r *replicationRuntime) close() error {
 	if r == nil {
 		return nil
 	}
+	r.stopPrimaryCompletion()
+	if r.coordinator != nil {
+		r.coordinator.Stop()
+	}
+	var err error
+	if r.manager != nil {
+		err = r.manager.Close()
+	}
 	if r.publisher != nil {
 		r.publisher.Close()
-	}
-	if r.startupStop != nil {
-		r.startupStop()
+		err = errors.Join(err, r.publisher.PhysicalCloseError())
 	}
 	clear(r.clusterKey[:])
 	if r.source != nil {
-		r.source.Close()
+		err = errors.Join(err, r.source.Close())
 	}
 	if r.journal != nil {
-		return r.journal.Close()
+		err = errors.Join(err, r.journal.Close())
 	}
-	return nil
+	if err == nil && r.coordinator != nil {
+		err = errors.Join(err, r.coordinator.ReleaseUnconfirmedForShutdown())
+	}
+	return err
 }
 
 func (r *Runtime) replicaGatewayRouter() http.Handler {
@@ -1030,6 +1195,7 @@ func (r *Runtime) replicaMetricsRouter() http.Handler {
 		}
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		output := bufio.NewWriter(writer)
+		r.writeResourcePressureMetrics(output)
 		r.writeReplicationMetrics(output)
 		_ = output.Flush()
 	})
@@ -1077,6 +1243,11 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 	metricHeader(output, "halro_replication_state", "gauge", "Current replication availability state.")
 	fmt.Fprintf(output, "halro_replication_state{state=\"replicating\"} %d\n", boolMetric(!unavailable))
 	fmt.Fprintf(output, "halro_replication_state{state=\"unavailable\"} %d\n", boolMetric(unavailable))
+	if budgetConfig := r.config.ResourceBudget; budgetConfig != nil && budgetConfig.TotalUnconfirmedBytes > 0 && r.replication.coordinator != nil && r.resourcePressure != nil {
+		if manager := r.resourcePressure.logicalBudget(); manager != nil {
+			writePrimaryUnconfirmedMetrics(output, *budgetConfig, manager.Snapshot(), r.replication.coordinator.UnconfirmedAdmissionStatus())
+		}
+	}
 	metricHeader(output, "halro_replication_peer_connected", "gauge", "Whether the authenticated data session for a configured peer is connected.")
 	connections := r.replication.manager.PeerConnections()
 	for _, peer := range state.Peers {
@@ -1088,4 +1259,55 @@ func (r *Runtime) writeReplicationMetrics(output *bufio.Writer) {
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"schema\"} %d\n", boolMetric(r.replication.incompatibleSchema.Load() > 0))
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"key_challenge\"} %d\n", boolMetric(r.replication.incompatibleKey.Load() > 0))
 	fmt.Fprintf(output, "halro_replication_member_incompatible{reason=\"spki\"} %d\n", boolMetric(r.replication.incompatibleSPKI.Load() > 0))
+}
+
+func writePrimaryUnconfirmedMetrics(output *bufio.Writer, budgetConfig config.ResourceBudget, budgetStats resourcebudget.Stats, admission replication.UnconfirmedAdmissionStatus) {
+	metricHeader(output, "halro_replication_unconfirmed_bytes", "gauge", "Configured and currently charged Primary unconfirmed-byte capacity.")
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"configured_total\"} %d\n", budgetConfig.TotalUnconfirmedBytes)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"configured_io\"} %d\n", budgetConfig.IOUnconfirmedBytes)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"configured_recovery_class\"} %d\n", budgetConfig.RecoveryUnconfirmedBytes)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"configured_recovery_reserve\"} %d\n", budgetConfig.RecoveryReserveUnconfirmedBytes)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"used_total\"} %d\n", budgetStats.Used.Unconfirmed)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"used_io\"} %d\n", budgetStats.Classes[resourcebudget.IO].Unconfirmed)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_bytes{kind=\"used_recovery\"} %d\n", budgetStats.Classes[resourcebudget.Recovery].Unconfirmed)
+	metricHeader(output, "halro_replication_unconfirmed_entries", "gauge", "Current bounded Primary unconfirmed entries and configured append limit.")
+	fmt.Fprintf(output, "halro_replication_unconfirmed_entries{kind=\"used\"} %d\n", admission.Entries)
+	fmt.Fprintf(output, "halro_replication_unconfirmed_entries{kind=\"configured_limit\"} %d\n", budgetConfig.UnconfirmedMaxEntries)
+	metricHeader(output, "halro_replication_unconfirmed_recovery_debt_bytes", "gauge", "Recovered suffix bytes not currently charged while over the configured Recovery reserve.")
+	fmt.Fprintf(output, "halro_replication_unconfirmed_recovery_debt_bytes %d\n", max(int64(0), admission.RecoveryBytes-admission.RecoveryCharged))
+	metricHeader(output, "halro_replication_unconfirmed_recovery_over_limit", "gauge", "Whether a recovered suffix currently blocks new Primary appends.")
+	fmt.Fprintf(output, "halro_replication_unconfirmed_recovery_over_limit %d\n", boolMetric(admission.OverLimit))
+	metricHeader(output, "halro_replication_unconfirmed_admission_refusals_total", "counter", "Primary append admissions refused by the configured unconfirmed entry or byte limits.")
+	fmt.Fprintf(output, "halro_replication_unconfirmed_admission_refusals_total %d\n", admission.AdmissionRefusals)
+	metricHeader(output, "halro_replication_unconfirmed_last_progress_timestamp_seconds", "gauge", "Unix timestamp of the latest Primary confirmation-state publication in this process (startup recovery or ACK).")
+	if !admission.LastProgress.IsZero() {
+		fmt.Fprintf(output, "halro_replication_unconfirmed_last_progress_timestamp_seconds %.3f\n", float64(admission.LastProgress.UnixNano())/1e9)
+	}
+}
+
+func replicationSessionOptions(cfg config.Config, budget *resourcebudget.Manager) (replication.PeerSessionOptions, error) {
+	options := replication.PeerSessionOptions{}
+	if budget == nil {
+		return options, nil
+	}
+	if cfg.ResourceBudget == nil {
+		return options, errors.New("peer queue budget requires resource_budget")
+	}
+	if err := cfg.ResourceBudget.ValidateReplicationCandidates(); err != nil {
+		return options, err
+	}
+	queue, err := replication.NewPeerSessionBudget(budget, cfg.ResourceBudget.ReplicationQueueRAMBytes, cfg.ResourceBudget.ReplicationReadRAMBytes, 3)
+	if err != nil {
+		return options, err
+	}
+	options.QueueBudget = queue
+	return options, nil
+}
+
+// Called after HA budget config validation. Unbudgeted/offline paths retain zero.
+func replicationReaderRAM(cfg config.Config, budget *resourcebudget.Manager) int64 {
+	if budget == nil {
+		return 0
+	}
+	return cfg.ResourceBudget.ReplicationReaderRAMBytes
 }

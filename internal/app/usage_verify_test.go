@@ -53,7 +53,7 @@ func TestVerifyUsageFailsWhenAnEmptyLedgerSitsUnderAManifestMissingItsPartition(
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := CompactUsage(context.Background(), source)
+	manifest, err := exportLegacyUsageFixture(source)
 	if err != nil {
 		t.Fatal(err)
 	}

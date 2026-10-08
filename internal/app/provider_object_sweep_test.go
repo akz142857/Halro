@@ -115,3 +115,34 @@ func TestTheSweepKeepsWhatARecordStillNames(t *testing.T) {
 		t.Fatal("a temporary name left by a dead write survived")
 	}
 }
+
+// sweepableObjects is the decision the sweep makes, separated from the removal
+// so it can be stated as a test rather than as a data directory.
+//
+// Two conditions, and both are needed. A file a record still names belongs to
+// that record's TTL however old it is. A file nothing names may still be a live
+// write: an object is renamed into place before its record is stored, so for a
+// moment every legitimate write is indistinguishable from an orphan, and only
+// age separates them.
+//
+// Dot-prefixed entries are the temporary name a write holds before its rename,
+// and are swept on the same rule: one that old is a write that died between
+// create and rename.
+func sweepableObjects(entries []os.DirEntry, named map[string]struct{}, cutoff time.Time) []string {
+	var sweepable []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if _, stillNamed := named[name]; stillNamed {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().UTC().After(cutoff) {
+			continue
+		}
+		sweepable = append(sweepable, name)
+	}
+	return sweepable
+}

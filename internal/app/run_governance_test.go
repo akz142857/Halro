@@ -14,6 +14,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
 )
 
@@ -118,6 +119,45 @@ func TestOutcomeHTTPFreezesDefinitionAndReplaysIdempotently(t *testing.T) {
 	}
 }
 
+func TestWorkUnitDetailAndOutcomeHTTPUseAccountingOwnerAndRefuseRetiredReads(t *testing.T) {
+	runtime, bootstrap, _ := openBootstrappedRuntime(t)
+	defer runtime.Close()
+	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
+	router := runtime.gatewayRouter()
+	created := httptest.NewRecorder()
+	router.ServeHTTP(created, governanceRequest(http.MethodPost, "/halro/v1/work-units", bootstrap.GatewayKey, "detail-owner", `{}`))
+	var wu domain.WorkUnit
+	if err := json.Unmarshal(created.Body.Bytes(), &wu); err != nil || created.Code != http.StatusCreated {
+		t.Fatal(created.Code, created.Body.String(), err)
+	}
+	// A direct Runtime State alias can no longer answer this route. The
+	// accounting Manager still owns its selected view until retirement.
+	oldState := runtime.accountingState.reader
+	runtime.accountingState.reader = nil
+	defer func() { runtime.accountingState.reader = oldState }()
+	path := "/halro/v1/work-units/" + wu.ID
+	detail := httptest.NewRecorder()
+	router.ServeHTTP(detail, governanceRequest(http.MethodGet, path, bootstrap.GatewayKey, "", ""))
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), wu.ID) {
+		t.Fatal(detail.Code, detail.Body.String())
+	}
+	if err := runtime.accounting.Retire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	before := runtime.ledger.Stats().Records
+	detail = httptest.NewRecorder()
+	router.ServeHTTP(detail, governanceRequest(http.MethodGet, path, bootstrap.GatewayKey, "", ""))
+	if detail.Code != http.StatusServiceUnavailable {
+		t.Fatal("retired detail returned data", detail.Code, detail.Body.String())
+	}
+	reported := httptest.NewRecorder()
+	body := `{"definition_id":"odef_result","value":"accepted","observed_at":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
+	router.ServeHTTP(reported, governanceRequest(http.MethodPost, path+"/outcomes", bootstrap.GatewayKey, "retired-outcome", body))
+	if reported.Code != http.StatusServiceUnavailable || runtime.ledger.Stats().Records != before || runtime.governance.log.Summary().Records != 0 {
+		t.Fatal("Outcome bypassed retired accounting owner", reported.Code, reported.Body.String())
+	}
+}
+
 func TestGovernanceCorruptionDoesNotBlockRuntimeOrAccounting(t *testing.T) {
 	runtime, bootstrap, reopen := openBootstrappedRuntime(t)
 	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
@@ -201,8 +241,22 @@ func TestGovernanceSummaryCheckedAdditionRejectsOverflow(t *testing.T) {
 }
 
 func TestGovernanceSummaryKeepsAcceptedRequestInProgressUntilFinalized(t *testing.T) {
+	for _, projected := range []bool{false, true} {
+		t.Run(map[bool]string{false: "state_governance", true: "disk_governance"}[projected], func(t *testing.T) {
+			testGovernanceSummaryMaturity(t, projected)
+		})
+	}
+}
+
+func testGovernanceSummaryMaturity(t *testing.T, projected bool) {
 	runtime, bootstrap, _ := openBootstrappedRuntime(t)
 	defer runtime.Close()
+	var governanceProjection *governance.GovernanceProjection
+	if projected {
+		governanceProjection = installTestGovernanceProjection(t, runtime)
+	} else {
+		installTestGovernanceState(t, runtime)
+	}
 	enableRunGovernanceForTest(t, runtime, bootstrap.ProjectID, bootstrap.KeyID)
 	project, err := runtime.store.GetProject(context.Background(), bootstrap.ProjectID)
 	if err != nil {
@@ -238,6 +292,13 @@ func TestGovernanceSummaryKeepsAcceptedRequestInProgressUntilFinalized(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	attempt, err := runtime.accounting.ReserveAttempt(context.Background(), requestLease, project.DailyBudgetMicrosUSD, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.accounting.Settle(context.Background(), attempt, budget.Settlement{CommittedMicrosUSD: 3, CostEstimated: true, Outcome: "success"}); err != nil {
+		t.Fatal(err)
+	}
 	closed := httptest.NewRecorder()
 	router.ServeHTTP(closed, governanceRequest(http.MethodPost, "/halro/v1/work-units/"+workUnit.ID+"/close", bootstrap.GatewayKey, "maturity-close", `{}`))
 	if closed.Code != http.StatusCreated {
@@ -257,14 +318,71 @@ func TestGovernanceSummaryKeepsAcceptedRequestInProgressUntilFinalized(t *testin
 		}
 		return summary
 	}
-	if summary := readSummary(); summary.MaturedUnits != 0 || summary.EvaluatedUnits != 0 || summary.InProgressCostMicrosUSD != 0 {
+	if summary := readSummary(); summary.MaturedUnits != 0 || summary.EvaluatedUnits != 0 || summary.InProgressCostMicrosUSD != 3 {
 		t.Fatalf("accepted request was prematurely matured: %#v", summary)
 	}
 	if err := runtime.accounting.Finalize(context.Background(), requestLease, "success"); err != nil {
 		t.Fatal(err)
 	}
-	if summary := readSummary(); summary.MaturedUnits != 1 || summary.EvaluatedUnits != 1 || summary.SuccessfulUnits != 1 {
+	if summary := readSummary(); summary.MaturedUnits != 1 || summary.EvaluatedUnits != 1 || summary.SuccessfulUnits != 1 || summary.KnownCostMicrosUSD != 3 || summary.EstimatedCostMicrosUSD != 3 || summary.CostPerSuccessMicrosUSD == nil || *summary.CostPerSuccessMicrosUSD != 3 {
 		t.Fatalf("finalized request did not mature Work Unit: %#v", summary)
+	}
+	// Reconstruct the exact native prefix into a fresh disk owner after the
+	// real production drain. Test-only handoff stays draining; it is not a
+	// runtime generation publication. The summary handler must use that owner.
+	want := readSummary()
+	ctx := context.Background()
+	oldGovernanceState := runtime.governance.manager.State()
+	if err := runtime.drainAccountingBusiness(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	master, err := unlockMasterKey(ctx, runtime.config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := loadLedgerHMACKey(runtime.store, runtime.vault, master)
+	clear(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(key)
+	lease, projection := projectedWriterCandidate(t, runtime.ledger, runtime.config.LedgerPath(), key)
+	next, err := budget.NewWithProjection(ctx, runtime.ledger, projection, runtime.periods, lease, budget.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime.accounting = next
+	// Drain also permanently retired Governance. Compose a fresh Manager bound
+	// to the new accounting dependency; never reopen the retired Manager.
+	if projected {
+		runtime.governance.manager, err = governance.NewProjectedManager(ctx, runtime.governance.log, governanceProjection, next, runtime.store, runtime.store)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		runtime.governance.manager = governance.NewManager(runtime.governance.log, oldGovernanceState, next, runtime.store, runtime.store)
+	}
+	defer func() { runtime.Close(); projection.Close() }()
+	oldState := runtime.accountingState.reader
+	runtime.accountingState.reader = nil
+	defer func() { runtime.accountingState.reader = oldState }()
+	got := readSummary()
+	got.GeneratedAt = want.GeneratedAt
+	gotJSON, _ := json.Marshal(got)
+	wantJSON, _ := json.Marshal(want)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("disk summary changed accounting or independent governance cut: got=%s want=%s", gotJSON, wantJSON)
+	}
+	if err := next.Retire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	runtime.adminGovernanceSummary(response, httptest.NewRequest(http.MethodGet, query, nil))
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "governance_summary_unavailable") || strings.Contains(response.Body.String(), "eligible_units") {
+		t.Fatalf("retired owner became successful/partial summary: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -365,8 +483,9 @@ func TestRunGovernanceHTTPRejectsBodyBeforeMutation(t *testing.T) {
 			}
 		})
 	}
-	if got := len(runtime.accounting.WorkUnits(bootstrap.ProjectID)); got != 0 {
-		t.Fatalf("invalid requests created %d Work Units", got)
+	page, err := runtime.accounting.ReadWorkUnitPage(context.Background(), ledger.WorkUnitListQuery{ProjectID: bootstrap.ProjectID, GovernanceListOptions: ledger.GovernanceListOptions{Limits: ledger.ProjectionPageLimits{Rows: 1, Bytes: ledger.GovernanceListMaxBytes}}})
+	if err != nil || len(page.Items) != 0 || page.NextID != "" {
+		t.Fatalf("invalid requests created Work Units: %#v %v", page, err)
 	}
 }
 

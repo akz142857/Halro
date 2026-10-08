@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -20,10 +22,12 @@ import (
 	"github.com/akz142857/Halro/internal/alert"
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/auth"
+	"github.com/akz142857/Halro/internal/authenticatedstate"
 	"github.com/akz142857/Halro/internal/bearercred"
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/diskinventory"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	gatewaycore "github.com/akz142857/Halro/internal/gateway"
@@ -36,8 +40,10 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/redaction"
 	"github.com/akz142857/Halro/internal/replication"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/routegate"
 	"github.com/akz142857/Halro/internal/sourcelimit"
+	"github.com/akz142857/Halro/internal/startupaudit"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/tokenguard"
@@ -48,15 +54,15 @@ import (
 )
 
 type Runtime struct {
-	config     config.Config
-	logger     *slog.Logger
-	lock       *lock.Lock
-	store      *boltstore.Store
-	ledger     *ledger.Log
-	state      *ledger.State
-	status     *ledger.Status
-	governance governanceRuntime
-	vault      *vault.Vault
+	config          config.Config
+	logger          *slog.Logger
+	lock            *lock.Lock
+	store           *boltstore.Store
+	ledger          *ledger.Log
+	accountingState runtimeAccountingState
+	status          *ledger.Status
+	governance      governanceRuntime
+	vault           *vault.Vault
 	// failureCapture holds the payloads of failed requests. Nil when the
 	// operator has not switched it on, which is the default; every read path
 	// treats nil as "the feature is off" rather than as an error.
@@ -73,13 +79,12 @@ type Runtime struct {
 	redactor       *redaction.Engine
 	alerts         *alert.Dispatcher
 	audit          *audit.Log
+	runtimeResourceOwnership
 	// auditDeliveryFailures counts appends of a durable mutation's audit record
 	// that did not land. It is the loud half of the signal the pending gauge
 	// gives quietly.
 	auditDeliveryFailures atomic.Uint64
-	auditBatchMu          sync.Mutex
-	auditBatchPending     []adminAuditRequest
-	auditBatchRunning     bool
+	auditBatches          adminAuditBatchOwner
 	gatewayHandlerOnce    sync.Once
 	gatewayHandlerValue   http.Handler
 	adminTopologyMu       sync.Mutex
@@ -134,8 +139,8 @@ type Runtime struct {
 	setupTokenNeeded bool
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
-	backgroundWait   sync.WaitGroup
-	usage            *usage.Aggregate
+	backgroundWait   runtimeBackground
+	usage            *runtimeUsage
 	usageCollector   *usage.Collector
 	usageExporter    *usage.Exporter
 	periods          *budget.PeriodResolver
@@ -163,10 +168,49 @@ type Runtime struct {
 	replication *replicationRuntime
 }
 
+// runtimeResourceOwnership groups the shared physical-pressure/budget owner
+// and the persistent and transient claims charged to that owner. Retaining this
+// state after Close keeps files that survive the process charged to their pool;
+// individual owners still release only after their physical lifetime ends.
+type runtimeResourceOwnership struct {
+	liveCheckpoint             runtimeLiveCheckpoint
+	persistentInventory        *diskinventory.Baseline
+	ledgerAppendDisk           *runtimeLedgerAppendDiskOwner
+	resourcePressure           *resourcePressureRuntime
+	maintenanceOwners          *runtimeMaintenanceOwners
+	selectedState              *runtimeSelectedState
+	haSelectedState            *haSelectedRuntimeFoundation
+	haSelectedApplicationOwner bool
+	// The native Audit journal persists after Runtime.Close, so keep its
+	// configured logical disk ceiling with the live Runtime budget owner.
+	auditDiskPermit *runtimeProjectionDiskPermit
+	// Metadata's authoritative native journal persists after Runtime.Close.
+	metadataJournalDiskPermit *runtimeProjectionDiskPermit
+	// The metadata data file persists too; it is a separate shared owner.
+	metadataStoreDiskPermit *runtimeProjectionDiskPermit
+	// The HA ordering journal is an authoritative persistent file and survives
+	// Runtime.Close, so its configured disk ceiling stays charged to Runtime.
+	orderingJournalDiskPermit *runtimeProjectionDiskPermit
+	// The authenticated Ledger sidecar may survive Runtime.Close; retain its
+	// aggregate ceiling charge when that persistent owner exists.
+	ledgerSegmentIndexDiskPermit *runtimeProjectionDiskPermit
+	// Usage archive files survive Runtime.Close, so keep their configured
+	// ceiling charged to the shared Manager for the archive's lifetime.
+	usageArchiveDiskPermit *runtimeProjectionDiskPermit
+	// The Runtime archive's transient work moves from Recovery to IO after the
+	// startup role gate, including roles without a disk-backed Usage owner.
+	usageArchiveDiskBudget *runtimeUsageArchiveDiskBudget
+}
+
 type governanceRuntime struct {
+	exports governanceExportLifecycle
 	log     *governance.Log
 	manager *governance.Manager
-	rate    keylimit.Limiter
+	owner   *runtimeGovernanceOwner
+	// The native journal persists after Runtime.Close, so its disk claim is
+	// intentionally held for the Runtime budget lifetime rather than refunded.
+	logDiskPermit *runtimeProjectionDiskPermit
+	rate          keylimit.Limiter
 }
 
 type capabilityResolutionRuntime struct {
@@ -177,6 +221,17 @@ type capabilityResolutionRuntime struct {
 
 type OpenOptions struct {
 	AllowGeneratedSetupToken bool
+	// Offline maintenance verifies startup/recovery and real shutdown without
+	// starting workers that can issue provider requests or external delivery.
+	offlineVerification          bool
+	selectedRotationVerification *selectedRotationVerification
+	// Private fault seam: retain an actual disk reader through failed startup
+	// cleanup, and observe the cleanup boundary without scheduler assumptions.
+	accountingPrepared       func(*ledger.LedgerProjection) func()
+	governancePrepared       func(*governance.GovernanceProjection) func()
+	resourceSampleSource     resourcebudget.SampleSource                        // Test only: drive the real pressure monitor.
+	selectedAuditProgress    func(context.Context, startupaudit.Progress) error // Test only: pause actual historical readers.
+	physicalPreparationPhase func(string) error                                 // Test only: stop actual qualified preparation phases.
 }
 
 func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime, error) {
@@ -184,6 +239,30 @@ func Open(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Runtime
 }
 
 func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger, options OpenOptions) (*Runtime, error) {
+	if options.physicalPreparationPhase != nil {
+		ctx = authenticatedstate.WithPhysicalPreparationObserver(ctx, options.physicalPreparationPhase)
+	}
+	if options.offlineVerification && cfg.Replication != nil {
+		return nil, errors.New("offline Runtime verification requires Standalone")
+	}
+	if cfg.Replication == nil {
+		if err := validateStandaloneProjectionPath(ctx, cfg); err != nil {
+			return nil, err
+		}
+	}
+	var resourcePressure *resourcePressureRuntime
+	var err error
+	if rotation, ok := ctx.Value(selectedRotationPressureKey{}).(*selectedRotationPressureOwner); ok && rotation != nil {
+		if !options.offlineVerification || options.selectedRotationVerification == nil || keyScope(ctx) == nil || keyScope(ctx).root.pressure != rotation.pressure || rotation.owner.pressureCancel == nil {
+			return nil, ErrSelectedKeyRotationPending
+		}
+		resourcePressure = rotation.pressure
+	} else {
+		resourcePressure, err = newResourcePressureWithSource(cfg, options.resourceSampleSource)
+		if err != nil {
+			return nil, err
+		}
+	}
 	member := cfg.Replication != nil
 	guard := replication.GuardUnavailableRuntime
 	if member {
@@ -196,8 +275,18 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if err != nil {
 		return nil, err
 	}
+	dataLockOwned := true
+	defer func() {
+		if dataLockOwned {
+			_ = dataLock.Close()
+		}
+	}()
+	var inventory *diskinventory.Baseline
+	var ledgerAppendDisk *runtimeLedgerAppendDiskOwner
 	fail := func(err error) (*Runtime, error) {
-		dataLock.Close()
+		if inventory != nil {
+			return nil, &persistentInventoryFailure{error: err, owner: inventory, ledgerAppendOwner: ledgerAppendDisk}
+		}
 		return nil, err
 	}
 	// Close the inspection-to-lock race. The first check avoids touching a
@@ -206,6 +295,43 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if err := guard(cfg.Storage.DataDir, member, "open runtime"); err != nil {
 		return fail(err)
 	}
+	if err := checkSelectedRotationPending(cfg, options.selectedRotationVerification); err != nil {
+		return fail(err)
+	}
+	if runtime, handled, err := tryOpenHASelectedApplication(ctx, cfg, logger, dataLock, resourcePressure); handled {
+		dataLockOwned = false // The actual HA owner retains even uncertain cleanup.
+		return runtime, err
+	} else if err != nil {
+		return fail(err)
+	}
+	if activated, err := memoryRuntimeActivated(cfg); err != nil {
+		return fail(err)
+	} else if cfg.ResourceBudget != nil && cfg.ResourceBudget.MemoryStateRequired && !activated {
+		return fail(errors.New("memory_state_required needs an independently activated seven-root Runtime before legacy database Open"))
+	}
+	inventory, err = preparePersistentInventory(ctx, cfg, dataLock, resourcePressure)
+	if err != nil {
+		return fail(fmt.Errorf("reconcile persistent data-directory inventory before native Open: %w", err))
+	}
+	ledgerAppendDisk, err = prepareRuntimeLedgerAppendDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		return fail(fmt.Errorf("acquire native Ledger append growth ceiling: %w", err))
+	}
+	metadataStoreDiskPermit, err := acquireMetadataStoreDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		return fail(fmt.Errorf("acquire Metadata data-file disk ceiling: %w", err))
+	}
+	metadataStoreDiskPermitOwned := true
+	if cfg.ResourceBudget != nil && metadataStoreDiskPermit != nil {
+		ctx = context.WithValue(ctx, runtimeMetadataBootstrapKey{}, runtimeMetadataBootstrap{
+			pressure: resourcePressure, owner: metadataStoreDiskPermit, budget: *cfg.ResourceBudget, policy: *cfg.ResourcePressure, path: cfg.MetadataPath(),
+		})
+	}
+	defer func() {
+		if metadataStoreDiskPermitOwned {
+			_ = metadataStoreDiskPermit.Release()
+		}
+	}()
 	kmsAudit := &kmsAuditRecorder{}
 	var masterKey []byte
 	if member {
@@ -268,26 +394,89 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if err != nil {
 		return fail(err)
 	}
+	orderingJournalDiskPermit, err := acquireOrderingJournalDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		secretVault.Close()
+		return fail(fmt.Errorf("acquire Ordering journal disk ceiling: %w", err))
+	}
+	orderingJournalDiskPermitOwned := true
+	defer func() {
+		if orderingJournalDiskPermitOwned {
+			_ = orderingJournalDiskPermit.Release()
+		}
+	}()
+	ledgerSegmentIndexDiskPermit, err := acquireLedgerSegmentIndexDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		secretVault.Close()
+		return fail(fmt.Errorf("acquire Ledger segment index disk ceiling: %w", err))
+	}
+	ledgerSegmentIndexDiskPermitOwned := true
+	defer func() {
+		if ledgerSegmentIndexDiskPermitOwned {
+			_ = ledgerSegmentIndexDiskPermit.Release()
+		}
+	}()
 	if memberState.Role == replication.RoleReplica {
 		runtime, replicaErr := openReplicaApplication(
 			ctx, cfg, logger, dataLock, secretVault, masterKey, adminSessionKey,
-			metricsTokenHash, metricsAuthorizer, memberState, clusterKey,
+			metricsTokenHash, metricsAuthorizer, memberState, clusterKey, resourcePressure, orderingJournalDiskPermit, ledgerSegmentIndexDiskPermit, metadataStoreDiskPermit, ledgerAppendDisk,
 		)
 		if replicaErr != nil {
 			secretVault.Close()
 			return fail(fmt.Errorf("open Replica runtime: %w", replicaErr))
 		}
+		dataLockOwned = false
+		runtime.persistentInventory = inventory
+		orderingJournalDiskPermitOwned = false
+		ledgerSegmentIndexDiskPermitOwned = false
+		metadataStoreDiskPermitOwned = false
 		return runtime, nil
 	}
+	metadataJournalDiskPermit, err := acquireMetadataJournalDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		secretVault.Close()
+		return fail(fmt.Errorf("acquire Metadata journal disk ceiling: %w", err))
+	}
+	metadataJournalDiskPermitOwned := true
+	defer func() {
+		if metadataJournalDiskPermitOwned {
+			_ = metadataJournalDiskPermit.Release()
+		}
+	}()
+	var selectedState *runtimeSelectedState
+	selectedStateOwned := true
+	defer func() {
+		if selectedStateOwned {
+			_ = selectedState.close()
+		}
+	}()
+	if !member {
+		selectedState, err = tryOpenSelectedRuntimeState(ctx, cfg, secretVault, dataLock, resourcePressure, ledgerAppendDisk, options.selectedAuditProgress)
+		if err != nil {
+			secretVault.Close()
+			return fail(fmt.Errorf("open selected memory-bounded state: %w", err))
+		}
+	}
+	if cfg.ResourceBudget != nil && cfg.ResourceBudget.MemoryStateRequired && selectedState == nil {
+		secretVault.Close()
+		return fail(errors.New("memory_state_required forbids legacy Runtime fallback without independently selected seven roots"))
+	}
 	var metadata *boltstore.Store
-	if member {
-		metadata, err = boltstore.OpenPrimary(cfg.MetadataPath())
+	if selectedState != nil {
+		metadata = selectedState.services.Metadata
+	} else if member {
+		metadata, err = boltstore.OpenPrimaryWithDiskLimit(cfg.MetadataPath(), metadataStoreDiskCeiling(cfg))
 	} else {
-		metadata, err = boltstore.Open(cfg.MetadataPath())
+		metadata, err = boltstore.OpenWithDiskLimit(cfg.MetadataPath(), metadataStoreDiskCeiling(cfg))
 	}
 	if err != nil {
 		secretVault.Close()
 		return fail(err)
+	}
+	if err := configurePricingResources(cfg, resourcePressure.logicalBudget(), metadata); err != nil {
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("configure pricing resources: %w", err))
 	}
 	// Before anything reads or writes authoritative metadata: the journal is
 	// where those writes are recorded, and bringing the projection level with
@@ -295,12 +484,30 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	// commit back into a consistent database. A divergence it cannot close
 	// stops the start rather than being papered over.
 	var journalState boltstore.JournalState
-	if !member {
-		journalState, err = attachMetadataJournal(metadata, secretVault, masterKey, "start")
+	metadataJournalMaxBytes := int64(0)
+	if cfg.ResourceBudget != nil {
+		metadataJournalMaxBytes = cfg.ResourceBudget.MetadataJournalDiskBytes
+	}
+	if !member && selectedState == nil {
+		journalState, err = attachMetadataJournal(metadata, secretVault, masterKey, "start", metadataJournalMaxBytes)
 		if err != nil {
 			metadata.Close()
 			secretVault.Close()
 			return fail(err)
+		}
+		if metadataJournalDiskPermit != nil {
+			if err := metadataJournalDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("publish Metadata journal disk owner: %w", err))
+			}
+		}
+		if metadataStoreDiskPermit != nil {
+			if err := metadataStoreDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("publish Metadata data-file disk owner: %w", err))
+			}
 		}
 		if journalState.Replayed > 0 {
 			logger.Warn("metadata journal replayed transactions the projection had not applied",
@@ -402,6 +609,9 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(err)
 	}
 	defer clear(governanceKey)
+	if selectedState != nil && (!bytes.Equal(ledgerKey, selectedState.bootstrap.LedgerKey) || !bytes.Equal(auditKey, selectedState.bootstrap.AuditKey) || !bytes.Equal(governanceKey, selectedState.bootstrap.GovernanceKey)) {
+		return fail(errors.New("selected native key changed without a new authenticated generation"))
+	}
 	metadataJournalKey, err := loadMetadataJournalHMACKey(metadata, secretVault, masterKey)
 	if err != nil {
 		metadata.Close()
@@ -419,6 +629,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	if member {
 		memberReplication, err = openPrimaryReplication(
 			cfg, logger, memberState, clusterKey, ledgerKey, auditKey, governanceKey, metadataJournalKey,
+			resourcePressure.logicalBudget(), ledgerAppendDisk,
 		)
 		if err != nil {
 			metadata.Close()
@@ -426,9 +637,22 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			return fail(fmt.Errorf("open Primary replication runtime: %w", err))
 		}
 		memberReplicationOwned = true
-		journalState, err = metadata.AttachMetadataJournal(metadataJournalKey, "Primary start")
+		if orderingJournalDiskPermit != nil {
+			if err := orderingJournalDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("publish Ordering journal disk owner: %w", err))
+			}
+		}
+		journalState, err = metadata.AttachMetadataJournal(metadataJournalKey, "Primary start", metadataJournalMaxBytes)
 		if err == nil {
 			err = memberReplication.installMetadataHook(metadata)
+		}
+		if err == nil && metadataJournalDiskPermit != nil {
+			err = metadataJournalDiskPermit.Reclassify(resourcebudget.Background)
+		}
+		if err == nil && metadataStoreDiskPermit != nil {
+			err = metadataStoreDiskPermit.Reclassify(resourcebudget.Background)
 		}
 		if err != nil {
 			metadata.Close()
@@ -454,10 +678,15 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	}
 	accountingStatus := ledger.NewStatus()
 	ledgerOptions := ledger.Options{
-		QueueCapacity: cfg.Usage.WALQueueCapacity,
-		MaxBatch:      cfg.Usage.WALMaxBatch,
-		FlushInterval: cfg.Usage.WALFlushInterval.Value(),
-		ChainKey:      ledgerKey,
+		ReserveAppendDisk:             ledgerAppendDisk.reserve,
+		QueueCapacity:                 cfg.Usage.WALQueueCapacity,
+		MaxBatch:                      cfg.Usage.WALMaxBatch,
+		FlushInterval:                 cfg.Usage.WALFlushInterval.Value(),
+		ChainKey:                      ledgerKey,
+		MaxSegmentDirectoryIndexBytes: ledgerSegmentIndexShareBytes(cfg),
+	}
+	if ledgerAppendDisk != nil {
+		ledgerOptions.ReserveNativeFileDisk = ledgerAppendDisk.reserveNativeFile
 	}
 	if memberReplication != nil {
 		memberReplication.ledgerHooks(&ledgerOptions)
@@ -466,30 +695,110 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		ledgerOptions.MaxBatch = 1
 		ledgerOptions.FlushInterval = 0
 	}
-	ledgerLog, err := ledger.OpenWithOptions(cfg.LedgerPath(), accountingStatus, ledgerOptions)
+	var ledgerLog *ledger.Log
+	if selectedState != nil {
+		ledgerLog = selectedState.generation.Owners.NativeLedger
+		accountingStatus = ledgerLog.Status()
+	} else {
+		ledgerLog, err = ledger.OpenWithOptions(cfg.LedgerPath(), accountingStatus, ledgerOptions)
+	}
 	if err != nil {
 		metadata.Close()
 		secretVault.Close()
 		return fail(err)
 	}
-	ledgerState := ledger.NewState()
-	ledgerHead, err := ledgerLog.Replay(ledger.Watermark{}, ledgerState.Apply)
+	if err := ledgerAppendDisk.publish(); err != nil {
+		ledgerLog.Close()
+		metadata.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("publish native Ledger append growth owner: %w", err))
+	}
+	if ledgerSegmentIndexDiskPermit != nil {
+		if err := ledgerSegmentIndexDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			ledgerLog.Close()
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("publish Ledger segment index disk owner: %w", err))
+		}
+	}
+	var accountingState runtimeAccountingState
+	var startupLease *ledger.MaintenanceLease
+	var ledgerHead ledger.Watermark
+	if selectedState != nil {
+		accountingState = runtimeAccountingState{reader: selectedState.generation.Owners.Ledger, recovery: &atomic.Bool{}}
+		startupLease = selectedState.generation.Owners.Lease
+		ledgerHead, _, err = selectedState.generation.Owners.Ledger.ReadPosition(ctx)
+	} else {
+		accountingState, startupLease, ledgerHead, err = prepareRuntimeAccountingState(ctx, cfg, ledgerLog, resourcePressure, memberReplication)
+	}
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
-		return fail(fmt.Errorf("replay ledger: %w", err))
+		return fail(fmt.Errorf("prepare Ledger accounting owner: %w", err))
 	}
-	governanceState := governance.NewState()
+	accountingStateOwned := true
+	if memberReplication != nil {
+		accountingState.startupLease = startupLease
+	}
+	var observeAccountingCleanup func()
+	if options.accountingPrepared != nil && accountingState.projection != nil {
+		observeAccountingCleanup = options.accountingPrepared(accountingState.projection)
+	}
+	defer func() {
+		if accountingStateOwned {
+			// No business callback has been published on an unsuccessful Open.
+			_ = startupLease.Close()
+			_ = ledgerLog.Close()
+			if observeAccountingCleanup != nil {
+				observeAccountingCleanup()
+			}
+			_ = accountingState.close()
+		}
+	}()
+	var governanceOwner *runtimeGovernanceOwner
+	governanceOwned := true
+	var observeGovernanceCleanup func()
 	var governanceLog *governance.Log
 	var governanceOpenErr error
-	if memberReplication != nil {
-		governanceLog, governanceOpenErr = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, memberReplication.governanceOptions())
+	governanceLogDiskPermit, err := acquireGovernanceLogDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		return fail(fmt.Errorf("acquire Governance journal disk ceiling: %w", err))
+	}
+	if selectedState != nil {
+		governanceLog = selectedState.generation.Owners.NativeGovernance
+	} else if memberReplication != nil {
+		governanceLog, governanceOpenErr = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governanceLogOptions(cfg, resourcePressure.logicalBudget(), memberReplication.governanceOptions()))
 	} else {
-		governanceLog, governanceOpenErr = governance.Open(cfg.GovernancePath(), governanceKey)
+		governanceLog, governanceOpenErr = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governanceLogOptions(cfg, resourcePressure.logicalBudget(), governance.Options{}))
+	}
+	if governanceOpenErr == nil && governanceLogDiskPermit != nil {
+		if err := governanceLogDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+			return fail(fmt.Errorf("publish Governance journal disk owner: %w", err))
+		}
 	}
 	var governanceManager *governance.Manager
+	if selectedState != nil {
+		governanceManager = selectedState.services.Governance
+	}
+	defer func() {
+		if governanceOwned {
+			if governanceManager != nil {
+				_ = governanceManager.Retire(context.Background())
+			}
+			if observeGovernanceCleanup != nil {
+				observeGovernanceCleanup()
+			}
+			_ = governanceOwner.close()
+			if governanceLog != nil {
+				_ = governanceLog.Close()
+			}
+		}
+	}()
 	if governanceOpenErr != nil {
+		if governanceLogDiskPermit != nil {
+			return fail(fmt.Errorf("open Governance journal within configured disk ceiling: %w", governanceOpenErr))
+		}
 		if memberReplication != nil {
 			ledgerLog.Close()
 			metadata.Close()
@@ -499,16 +808,23 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		logger.Error("Governance Journal unavailable; ordinary inference remains available", "error", governanceOpenErr)
 		governanceManager = governance.NewUnavailable(governanceOpenErr)
 		governanceLog = nil
-	} else {
-		governanceState, governanceOpenErr = restoreGovernanceState(metadata, governanceLog, governanceKey)
+	} else if selectedState == nil {
+		governanceOwner, governanceOpenErr = prepareRuntimeGovernance(ctx, cfg, metadata, governanceLog, governanceKey, memberReplication, resourcePressure)
+		if governanceOpenErr == nil && options.governancePrepared != nil {
+			observeGovernanceCleanup = options.governancePrepared(governanceOwner.projection)
+		}
 		replayErr := governanceOpenErr
 		if replayErr != nil {
+			if memberReplication != nil {
+				ledgerLog.Close()
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("prepare Primary Governance owner: %w", replayErr))
+			}
 			logger.Error("Governance Journal replay failed; ordinary inference remains available", "error", replayErr)
 			governanceLog.Close()
 			governanceLog = nil
 			governanceManager = governance.NewUnavailable(replayErr)
-		} else {
-			governanceManager = governance.NewManager(governanceLog, governanceState, ledgerState, metadata, metadata)
 		}
 	}
 	if err := reconcileLedgerChainCheckpoint(metadata, ledgerLog); err != nil {
@@ -517,26 +833,109 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
-	usageAggregate, usageWatermark, err := restoreUsageAggregate(metadata, ledgerHead, logger)
-	if err != nil {
-		ledgerLog.Close()
-		metadata.Close()
-		secretVault.Close()
-		return fail(err)
+	var usageView *runtimeUsage
+	var usageAggregate *usage.Aggregate
+	var usageCollector *usage.Collector
+	var usageExporter *usage.Exporter
+	var usageArchiveDiskPermit *runtimeProjectionDiskPermit
+	var usageArchiveDiskBudget *runtimeUsageArchiveDiskBudget
+	usageOwned := true
+	defer func() {
+		if usageOwned {
+			if usageExporter != nil {
+				_ = usageExporter.Close()
+			}
+			if usageView != nil {
+				_ = usageView.closeOwner()
+			}
+			if usageArchiveDiskPermit != nil {
+				_ = usageArchiveDiskPermit.Release()
+			}
+		}
+	}()
+	if selectedState != nil {
+		usageView, usageCollector, usageExporter, err = bindSelectedRuntimeUsage(ctx, cfg, selectedState, resourcePressure)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("bind selected Runtime Usage: %w", err))
+		}
+	} else if accountingState.projection != nil && cfg.Replication == nil {
+		usageView, usageCollector, err = prepareStandaloneUsage(ctx, cfg, ledgerLog, accountingState.projection, startupLease, resourcePressure)
+		if err == nil {
+			usageExporter, err = usageView.owner.bindArchive(ctx, cfg, ledgerLog, ledgerKey)
+		}
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("prepare Standalone Usage owner: %w", err))
+		}
+	} else if memberReplication != nil {
+		usageView, usageCollector, err = preparePrimaryUsageOwner(ctx, cfg, ledgerLog, memberReplication, accountingState.projection, startupLease, resourcePressure)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("prepare Primary Usage owner: %w", err))
+		}
+		usageExporter, err = usageView.owner.bindNativeArchive(ctx, cfg, ledgerLog, ledgerKey)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("bind Primary Usage archive: %w", err))
+		}
+	} else {
+		usageArchiveDiskPermit, err = acquireUsageArchiveDisk(ctx, cfg, resourcePressure)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("reserve Usage archive disk ceiling: %w", err))
+		}
+		usageArchiveDiskBudget = newRuntimeUsageArchiveDiskBudget(cfg, resourcePressure)
+		var reserveArchiveDisk func(context.Context, int64) (func() error, error)
+		var reserveArchiveRAM func(context.Context) (func() error, error)
+		if usageArchiveDiskBudget != nil {
+			reserveArchiveDisk = usageArchiveDiskBudget.reserve
+			reserveArchiveRAM = usageArchiveDiskBudget.readerReservation(cfg)
+		}
+		usageExporter, err = usage.NewExporterWithContext(ctx, cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat, ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: reserveArchiveRAM, ReserveArchiveWorkRAM: usageArchiveDiskBudget.workReservation()})
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("create Usage exporter: %w", err))
+		}
+		if usageArchiveDiskPermit != nil {
+			if err := usageArchiveDiskPermit.Reclassify(resourcebudget.Background); err != nil {
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("retain Usage archive disk ceiling: %w", err))
+			}
+		}
+		position, archiveErr := usageExporter.ReadArchivePosition(ctx)
+		if archiveErr != nil && !errors.Is(archiveErr, os.ErrNotExist) {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("read Usage archive format: %w", archiveErr))
+		}
+		if archiveErr == nil && position.CatalogVersion == 1 {
+			metadata.Close()
+			secretVault.Close()
+			return fail(errors.New("paged Usage archive requires disk Runtime startup migration on this role"))
+		}
+		var watermark ledger.Watermark
+		usageAggregate, watermark, err = restoreUsageAggregateWithReader(metadata, ledgerHead, logger, accountingState.projection)
+		if err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(err)
+		}
+		if _, err := ledgerLog.Replay(watermark, usageAggregate.Apply); err != nil {
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("replay Usage aggregate: %w", err))
+		}
+		usageView = &runtimeUsage{Aggregate: usageAggregate}
 	}
-	if _, err := ledgerLog.Replay(usageWatermark, usageAggregate.Apply); err != nil {
-		ledgerLog.Close()
-		metadata.Close()
-		secretVault.Close()
-		return fail(fmt.Errorf("replay usage aggregate: %w", err))
-	}
-	usageExporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
-	if err != nil {
-		ledgerLog.Close()
-		metadata.Close()
-		secretVault.Close()
-		return fail(fmt.Errorf("create usage exporter: %w", err))
-	}
+
 	authSnapshot := auth.NewSnapshot()
 	if err := authSnapshot.Refresh(ctx, metadata); err != nil {
 		ledgerLog.Close()
@@ -561,28 +960,69 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(fmt.Errorf("resolve accounting timezone: %w", err))
 	}
-	accounting, err := budget.New(ledgerLog, ledgerState, periods)
+	var accounting *budget.Manager
+	if selectedState != nil {
+		accounting = selectedState.services.Accounting
+	} else {
+		accounting, err = budget.NewWithProjection(ctx, ledgerLog, accountingState.projection, periods, startupLease, budget.Options{})
+	}
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("create accounting manager: %w", err))
 	}
-	usageCollector, err := usage.NewCollector(usageAggregate, ledgerLog, cfg.Usage.AnalyticsQueueCapacity)
+	if governanceLog != nil && governanceManager == nil {
+		// Governance uses the selected accounting owner's lifetime and coherent
+		// reads. It must not retain a second direct reference to legacy State.
+		if governanceOwner != nil {
+			governanceManager, err = governance.NewProjectedManager(ctx, governanceLog, governanceOwner.projection, accounting, metadata, metadata)
+			if err != nil {
+				ledgerLog.Close()
+				metadata.Close()
+				secretVault.Close()
+				return fail(fmt.Errorf("create Governance owner manager: %w", err))
+			}
+		}
+	}
+	if usageCollector == nil {
+		usageCollector, err = usage.NewCollector(usageAggregate, ledgerLog, cfg.Usage.AnalyticsQueueCapacity)
+	}
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("create usage collector: %w", err))
 	}
-	accounting.AddObserver(usageCollector.Observe)
-	if err := metadata.RecoverDeploymentPricePins(ctx, ledgerState); err != nil {
+	if selectedState == nil {
+		if err := accounting.AddObserver(usageCollector.Observe); err != nil {
+			return fail(err)
+		}
+	}
+	if err := metadata.RecoverDeploymentPricePins(ctx, accountingState.reader); err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(fmt.Errorf("recover deployment price pins: %w", err))
 	}
-	if err := accounting.RecoverPendingLeases(ctx); err != nil {
+	if selectedState != nil {
+		err = nil // Real two-level recovery and price pins completed before service publication.
+	} else if memberReplication != nil {
+		// Recovery needs live transport; keep the native lease and nonready
+		// accounting owner until the completion continuation runs after Open.
+		err = nil
+	} else if accountingState.projection != nil {
+		err = recoverStandaloneAccounting(ctx, cfg, ledgerLog, accountingState, startupLease, resourcePressure)
+		if err == nil {
+			err = usageCollector.CatchUp(ctx)
+		}
+	} else {
+		err = accounting.RecoverPendingLeases(ctx)
+		if err == nil {
+			err = usageCollector.CatchUp(ctx)
+		}
+	}
+	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
@@ -665,7 +1105,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	// stopping their collection, and nothing would ever have removed them.
 	// What `enabled` decides is whether the gateway writes; expiring what is
 	// already on disk is not optional.
-	captureStore, err := openFailureCapture(cfg, secretVault)
+	captureStore, err := openFailureCaptureContext(ctx, cfg, secretVault)
 	if err != nil {
 		alertDispatcher.Close()
 		ledgerLog.Close()
@@ -699,8 +1139,18 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 	}
 	providerRegistry.SetEligibility(routeGate)
 	var resourceObjectReplicator func(context.Context, string, []byte) error
+	var terminalAdmission func(context.Context, int) (context.Context, func() error, error)
 	if memberReplication != nil {
 		resourceObjectReplicator = memberReplication.replicateProviderObject
+		if cfg.ResourceBudget != nil && cfg.ResourceBudget.CompletionUnconfirmedBytes > 0 {
+			terminalAdmission = memberReplication.reserveTerminalRequest
+		}
+	}
+	if cfg.ResourceBudget != nil && cfg.ResourceBudget.PhysicalTerminalReserve {
+		terminalAdmission, err = prepareStandalonePhysicalTerminal(ctx, cfg, selectedState, memberReplication, ledgerAppendDisk)
+		if err != nil {
+			return nil, err
+		}
 	}
 	gatewayService, err := gatewaycore.NewServiceWithOptions(
 		authSnapshot,
@@ -708,6 +1158,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		accounting,
 		gatewaycore.ServiceOptions{
 			MaxAttempts:                   cfg.Gateway.MaxTotalAttempts,
+			TerminalAdmission:             terminalAdmission,
 			MaxAttemptsPerTarget:          cfg.Retry.MaxAttemptsPerTarget,
 			RetryBaseDelay:                cfg.Retry.BaseDelay.Value(),
 			RetryMaxDelay:                 cfg.Retry.MaxDelay.Value(),
@@ -720,6 +1171,12 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			ResourceObjectSealer:          secretVault,
 			ResourceObjectReplicator:      resourceObjectReplicator,
 			DeferredExecutionTimeout:      cfg.Gateway.RouteTotalTimeout.Value(),
+			ResourceBudget:                resourcePressure.logicalBudget(),
+			DeferredRAMBytes:              resourcePressure.deferredEnvelope(),
+			CompletionRAMBytes:            resourcePressure.completionRAMEnvelope(),
+			CompletionDiskBytes:           resourcePressure.completionDiskEnvelope(),
+			CompletionWorkspace:           resourcePressure.completionProfile(),
+			CaptureRAMBytes:               resourcePressure.captureEnvelope(),
 			DeferredResponseWorkers:       cfg.Gateway.DeferredResponseWorkers,
 			Pricing:                       metadata,
 			PricingClockRollbackTolerance: cfg.Gateway.PricingClockRollbackTolerance.Value(),
@@ -777,10 +1234,37 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(fmt.Errorf("create gateway handler: %w", err))
 	}
 	var auditLog *audit.Log
+	auditDiskPermit, err := acquireAuditLogDisk(ctx, cfg, resourcePressure)
+	if err != nil {
+		alertDispatcher.Close()
+		ledgerLog.Close()
+		metadata.Close()
+		providerRegistry.Close()
+		secretVault.Close()
+		return fail(fmt.Errorf("acquire Audit journal disk ceiling: %w", err))
+	}
+	auditOwned := true
+	defer func() {
+		if auditOwned {
+			if auditLog != nil {
+				_ = auditLog.Close()
+			}
+			_ = auditDiskPermit.Release()
+		}
+	}()
+	var auditOptions audit.Options
 	if memberReplication != nil {
-		auditLog, err = audit.OpenWithOptions(cfg.AuditPath(), auditKey, memberReplication.auditOptions())
+		auditOptions = memberReplication.auditOptions()
 	} else {
-		auditLog, err = audit.Open(cfg.AuditPath(), auditKey)
+		auditOptions = audit.Options{}
+	}
+	if selectedState != nil {
+		auditLog = selectedState.generation.Owners.Audit
+	} else {
+		auditLog, err = openConfiguredAuditLog(cfg, cfg.AuditPath(), auditKey, auditOptions, resourcePressure.logicalBudget())
+	}
+	if err == nil && auditDiskPermit != nil {
+		err = auditDiskPermit.Reclassify(resourcebudget.Background)
 	}
 	if err != nil {
 		alertDispatcher.Close()
@@ -872,28 +1356,42 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(fmt.Errorf("seed instance ID: %w", err))
 	}
 	runtime := &Runtime{
-		config:              cfg,
-		logger:              logger,
-		lock:                dataLock,
-		store:               metadata,
-		ledger:              ledgerLog,
-		state:               ledgerState,
-		status:              accountingStatus,
-		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
-		vault:               secretVault,
-		failureCapture:      captureStore,
-		auth:                authSnapshot,
-		providers:           providerRegistry,
-		routes:              routeGate,
-		providerEgress:      newProviderEgressManager(providerEgressRegistry),
-		accounting:          accounting,
-		gateway:             gatewayHandler,
-		gatewayService:      gatewayService,
-		sourceLimiter:       sourceLimiter,
-		tokenGuard:          tokenGuard,
-		redactor:            redactor,
-		alerts:              alertDispatcher,
-		audit:               auditLog,
+		config:          cfg,
+		logger:          logger,
+		lock:            dataLock,
+		store:           metadata,
+		ledger:          ledgerLog,
+		accountingState: accountingState,
+		status:          accountingStatus,
+		governance:      governanceRuntime{log: governanceLog, manager: governanceManager, owner: governanceOwner, logDiskPermit: governanceLogDiskPermit},
+		vault:           secretVault,
+		failureCapture:  captureStore,
+		auth:            authSnapshot,
+		providers:       providerRegistry,
+		routes:          routeGate,
+		providerEgress:  newProviderEgressManager(providerEgressRegistry),
+		accounting:      accounting,
+		gateway:         gatewayHandler,
+		gatewayService:  gatewayService,
+		sourceLimiter:   sourceLimiter,
+		tokenGuard:      tokenGuard,
+		redactor:        redactor,
+		alerts:          alertDispatcher,
+		audit:           auditLog,
+		runtimeResourceOwnership: runtimeResourceOwnership{
+			persistentInventory:          inventory,
+			ledgerAppendDisk:             ledgerAppendDisk,
+			maintenanceOwners:            newRuntimeMaintenanceOwners(cfg, resourcePressure),
+			auditDiskPermit:              auditDiskPermit,
+			metadataJournalDiskPermit:    metadataJournalDiskPermit,
+			metadataStoreDiskPermit:      metadataStoreDiskPermit,
+			orderingJournalDiskPermit:    orderingJournalDiskPermit,
+			ledgerSegmentIndexDiskPermit: ledgerSegmentIndexDiskPermit,
+			usageArchiveDiskPermit:       usageArchiveDiskPermit,
+			usageArchiveDiskBudget:       usageArchiveDiskBudget,
+			resourcePressure:             resourcePressure,
+			selectedState:                selectedState,
+		},
 		replication:         memberReplication,
 		metricsTokenHash:    metricsTokenHash,
 		metricsAuthorizer:   metricsAuthorizer,
@@ -910,7 +1408,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		adminElevation:      adminElevationState{grants: make(map[[32]byte]adminElevationGrant)},
 		setupToken:          setupToken,
 		setupTokenNeeded:    setupTokenNeeded,
-		usage:               usageAggregate,
+		usage:               usageView,
 		usageCollector:      usageCollector,
 		usageExporter:       usageExporter,
 		periods:             periods,
@@ -1065,6 +1563,26 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(fmt.Errorf("initialize usage settings: %w", err))
 	}
 	runtime.usageSettings.Store(&usageSettings)
+	if usageView.disk != nil && memberReplication == nil && selectedState == nil {
+		windowLease, windowErr := ledgerLog.BeginMaintenance(ctx)
+		if windowErr == nil {
+			_, windowErr = runtime.restoreUsageDiskWindow(ctx, windowLease, time.Now())
+			windowErr = errors.Join(windowErr, windowLease.Close())
+		}
+		if windowErr != nil {
+			_ = auditLog.Close()
+			alertDispatcher.Close()
+			providerRegistry.Close()
+			metadata.Close()
+			secretVault.Close()
+			return fail(fmt.Errorf("restore Standalone Usage window: %w", windowErr))
+		}
+	}
+	if selectedState != nil {
+		if err := runtime.restoreSelectedUsageDiskWindow(ctx, time.Now()); err != nil {
+			return fail(fmt.Errorf("restore selected Usage archive/window: %w", err))
+		}
+	}
 	// The window is stored, the archive's retention is in the file, and the two
 	// can be edited independently — so the invariant they are validated against
 	// at write time can be broken afterwards by lowering retention alone. Say
@@ -1078,161 +1596,137 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			"consequence", "the console can page back further than the archive can rebuild after a restart",
 			"remedy", "shorten the window under Settings -> Instance, or raise usage.retention_days")
 	}
+	if memberReplication == nil && usageView != nil && usageView.owner != nil {
+		usageView.owner.activateArchiveIO()
+	}
+	if memberReplication == nil {
+		runtime.usageArchiveDiskBudget.activateIO()
+	}
 	cleanupAdminSessions = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
-	runtime.alerts.Start()
-	runtime.backgroundWait.Add(10)
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.usageCollector.Run(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runAuditAnchorMaintenance(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		forwardTokenGuardAlerts(
-			backgroundContext, runtime.tokenGuard.Events(), runtime.alerts,
-			runtime.auditAlertSubmission,
-		)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runUsageMaintenance(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runActiveDeploymentProbes(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runCapabilityDetectionMaintenance(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runProviderResourceMaintenance(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.gatewayService.RunDeferredResponses(backgroundContext)
-	}()
-	go func() {
-		defer runtime.backgroundWait.Done()
-		runtime.runActivationRecovery(backgroundContext, activationRetryInterval)
-	}()
-	// Read the manager here, on the goroutine that installed it, rather than
-	// inside the worker. The field is written once during Open and never again
-	// in production, but reading it from the worker leaves the only unguarded
-	// access to Runtime state after Open returns — enough for the race detector
-	// to fire against anything that reaches in afterwards.
-	catalogWorker := runtime.capabilityResolution.catalog
-	go func() {
-		defer runtime.backgroundWait.Done()
-		if catalogWorker != nil {
-			catalogWorker.Run(backgroundContext)
-		}
-	}()
+	if memberReplication != nil {
+		memberReplication.startupProducers = make(chan struct{})
+		memberReplication.startupFinish = runtime.finishPrimaryAccountingStartup
+		runtime.backgroundWait.Add(1)
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if runtime.awaitPrimaryStartup(backgroundContext) {
+				runtime.alerts.Start()
+			}
+		}()
+	} else if !options.offlineVerification {
+		runtime.alerts.Start()
+	}
+	if runtime.resourcePressure != nil {
+		pressure := runtime.resourcePressure
+		runtime.backgroundWait.Add(1)
+		go func() { defer runtime.backgroundWait.Done(); runtime.runResourcePressure(backgroundContext, pressure) }()
+	}
+	if !options.offlineVerification {
+		runtime.backgroundWait.Add(10)
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.usageCollector.Run(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runAuditAnchorMaintenance(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			forwardTokenGuardAlerts(
+				backgroundContext, runtime.tokenGuard.Events(), runtime.alerts,
+				runtime.auditAlertSubmission,
+			)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runUsageMaintenance(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runActiveDeploymentProbes(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runCapabilityDetectionMaintenance(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runProviderResourceMaintenance(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.gatewayService.RunDeferredResponses(backgroundContext)
+		}()
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			runtime.runActivationRecovery(backgroundContext, activationRetryInterval)
+		}()
+		// Read the manager here, on the goroutine that installed it, rather than
+		// inside the worker. The field is written once during Open and never again
+		// in production, but reading it from the worker leaves the only unguarded
+		// access to Runtime state after Open returns — enough for the race detector
+		// to fire against anything that reaches in afterwards.
+		catalogWorker := runtime.capabilityResolution.catalog
+		go func() {
+			defer runtime.backgroundWait.Done()
+			if !runtime.awaitPrimaryStartup(backgroundContext) {
+				return
+			}
+			if catalogWorker != nil {
+				catalogWorker.Run(backgroundContext)
+			}
+		}()
+	}
 	cleanupProviderEgress = false
 	setupTokenOwned = false
 	memberReplicationOwned = false
+	selectedStateOwned = false
+	accountingStateOwned = false
+	usageOwned = false
+	usageArchiveDiskPermit = nil
+	governanceOwned = false
+	auditOwned = false
+	dataLockOwned = false
+	metadataJournalDiskPermitOwned = false
+	metadataStoreDiskPermitOwned = false
+	orderingJournalDiskPermitOwned = false
+	ledgerSegmentIndexDiskPermitOwned = false
 	return runtime, nil
 }
 
-var (
-	errGovernanceAnchorMismatch     = errors.New("governance journal does not match its authenticated terminal anchor")
-	errGovernanceCheckpointMismatch = errors.New("governance checkpoint does not match its journal frame")
-)
-
-func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance.Log, governanceKey []byte) (*governance.State, error) {
-	journalSummary := governanceLog.Summary()
-	anchor, anchorErr := metadata.GovernanceJournalAnchor()
-	hasAnchor := anchorErr == nil
-	if anchorErr != nil && !errors.Is(anchorErr, boltstore.ErrNotFound) {
-		return nil, fmt.Errorf("load governance journal anchor: %w", anchorErr)
-	}
-	if !hasAnchor && journalSummary.Records > 0 {
-		return nil, errGovernanceAnchorMismatch
-	}
-	if hasAnchor {
-		if !governance.VerifyJournalAnchorAuth(governanceKey, anchor.Sequence, anchor.Offset, anchor.Hash, anchor.Authentication) ||
-			anchor.Sequence > journalSummary.Records || anchor.Offset > journalSummary.Bytes {
-			return nil, errGovernanceAnchorMismatch
-		}
-	}
-
-	checkpoint, checkpointErr := metadata.LoadGovernanceCheckpoint()
-	checkpointSequence := uint64(0)
-	state := governance.NewState()
-	if checkpointErr == nil {
-		var snapshot governance.Snapshot
-		valid := checkpoint.Version == governance.SnapshotVersion && checkpoint.Sequence <= journalSummary.Records && checkpoint.Offset <= journalSummary.Bytes &&
-			governance.VerifyCheckpointAuth(governanceKey, checkpoint.Sequence, checkpoint.Offset, checkpoint.JournalHash,
-				checkpoint.PayloadSHA256, checkpoint.Authentication) &&
-			json.Unmarshal(checkpoint.Payload, &snapshot) == nil && snapshot.Sequence == checkpoint.Sequence && state.Restore(snapshot) == nil
-		if valid {
-			checkpointSequence = checkpoint.Sequence
-		} else {
-			_ = metadata.ResetGovernanceCheckpoint()
-			state = governance.NewState()
-		}
-	} else if !errors.Is(checkpointErr, boltstore.ErrNotFound) {
-		_ = metadata.ResetGovernanceCheckpoint()
-	}
-
-	replay := func(target *governance.State, skip uint64) error {
-		anchorMatched := !hasAnchor
-		checkpointMatched := skip == 0
-		_, err := governanceLog.Replay(func(record governance.Record) error {
-			if hasAnchor && record.Sequence == anchor.Sequence {
-				if record.Offset != anchor.Offset || record.Hash != anchor.Hash {
-					return errGovernanceAnchorMismatch
-				}
-				anchorMatched = true
-			}
-			if skip > 0 && record.Sequence == skip {
-				if record.Offset != checkpoint.Offset || record.Hash != checkpoint.JournalHash {
-					return errGovernanceCheckpointMismatch
-				}
-				checkpointMatched = true
-			}
-			if record.Sequence <= skip {
-				return nil
-			}
-			return target.Apply(record)
-		})
-		if err != nil {
-			return err
-		}
-		if !anchorMatched {
-			return errGovernanceAnchorMismatch
-		}
-		if !checkpointMatched {
-			return errGovernanceCheckpointMismatch
-		}
-		return nil
-	}
-	if err := replay(state, checkpointSequence); errors.Is(err, errGovernanceCheckpointMismatch) {
-		_ = metadata.ResetGovernanceCheckpoint()
-		state = governance.NewState()
-		if err := replay(state, 0); err != nil {
-			return nil, err
-		}
-	} else if err != nil {
-		return nil, err
-	}
-
-	if journalSummary.Records > 0 {
-		head, authentication := governanceLog.AuthenticatedHead()
-		if err := metadata.PutGovernanceJournalAnchor(head.Records, head.Bytes, head.LastHash, authentication); err != nil {
-			return nil, fmt.Errorf("advance governance journal anchor: %w", err)
-		}
-	}
-	return state, nil
-}
+var errGovernanceAnchorMismatch = errors.New("governance journal does not match its authenticated terminal anchor")
 
 // head is the watermark the ledger actually replayed to. A checkpoint that
 // claims to have consumed more of the WAL than the WAL contains describes a
@@ -1252,13 +1746,25 @@ func restoreUsageAggregate(
 	head ledger.Watermark,
 	logger *slog.Logger,
 ) (*usage.Aggregate, ledger.Watermark, error) {
-	aggregate, watermark, reason := loadUsageCheckpoint(store, head)
+	return restoreUsageAggregateWithReader(store, head, logger, nil)
+}
+
+func restoreUsageAggregateWithReader(store *boltstore.Store, head ledger.Watermark, logger *slog.Logger, reader usage.FinalizationReader) (*usage.Aggregate, ledger.Watermark, error) {
+	// A typed nil projection must not become a nonnil reader on member paths.
+	if p, ok := reader.(*ledger.LedgerProjection); ok && p == nil {
+		reader = nil
+	}
+	aggregate, watermark, reason := loadUsageCheckpointWithReader(store, head, reader)
 	if reason == "" {
 		return aggregate, watermark, nil
 	}
 	logger.Warn("usage derivatives rebuilt from the ledger", "reason", reason)
 	if err := store.ResetUsageDerivatives(); err != nil {
 		return nil, ledger.Watermark{}, fmt.Errorf("reset usage derivatives: %w", err)
+	}
+	if reader != nil {
+		a, err := usage.NewAggregateWithFinalizationReader(reader)
+		return a, ledger.Watermark{}, err
 	}
 	return usage.NewAggregate(), ledger.Watermark{}, nil
 }
@@ -1267,6 +1773,10 @@ func restoreUsageAggregate(
 // be trusted. Every rejection path names itself so the log says which one fired
 // rather than only that something was ignored.
 func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.Aggregate, ledger.Watermark, string) {
+	return loadUsageCheckpointWithReader(store, head, nil)
+}
+
+func loadUsageCheckpointWithReader(store *boltstore.Store, head ledger.Watermark, reader usage.FinalizationReader) (*usage.Aggregate, ledger.Watermark, string) {
 	watermark, headPayload, err := store.UsageCheckpoint()
 	if errors.Is(err, boltstore.ErrNotFound) {
 		return nil, ledger.Watermark{}, "no usage checkpoint"
@@ -1274,11 +1784,16 @@ func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint unreadable: %v", err)
 	}
-	aggregate, err := usage.RestoreCheckpoint(headPayload, store.UsageCheckpointSegmentPayload)
+	var aggregate *usage.Aggregate
+	if reader != nil {
+		aggregate, err = usage.RestoreCheckpointWithFinalizationReader(headPayload, store.UsageCheckpointSegmentPayload, reader)
+	} else {
+		aggregate, err = usage.RestoreCheckpoint(headPayload, store.UsageCheckpointSegmentPayload)
+	}
 	if err != nil {
 		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint rejected: %v", err)
 	}
-	if aggregate.Snapshot().Watermark != watermark {
+	if aggregate.Watermark() != watermark {
 		return nil, ledger.Watermark{}, "usage checkpoint envelope does not match its payload"
 	}
 	if watermark.After(head) {
@@ -1311,6 +1826,14 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 	for {
 		select {
 		case <-checkpointTicker.C:
+			if r.selectedState != nil {
+				checkpointCtx, cancel := context.WithTimeout(ctx, r.config.Server.ShutdownTimeout.Value())
+				if err := r.CheckpointMemoryState(checkpointCtx); err != nil {
+					r.logger.Warn("memory state common checkpoint deferred", "error", err)
+				}
+				cancel()
+				continue
+			}
 			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
 			// Settles the stored record once a scheduled timezone change is
@@ -1321,27 +1844,29 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 				r.logger.Warn("scheduled accounting timezone change not applied", "error", err)
 			}
 		case <-parquetTicker.C:
-			r.exportUsageParquet()
-			// After the export, never before: the trim is bounded by how far
-			// the export has got, and reading that watermark before writing it
-			// would hold the window one tick behind for no reason.
-			r.pruneUsageWindow()
-			// And the archive last, so a partition is only ever removed after
-			// the console window that might still have been reading it has
-			// already moved past.
-			r.pruneUsageArchive()
+			if r.usage.disk != nil {
+				// Finish an unpublished date intent before append can change its
+				// old root. Window permission is rebound before finite export/trim.
+				if err := r.maintainUsageDiskCycle(ctx, time.Now()); err != nil {
+					r.logger.Warn("Usage disk maintenance deferred", "error", err)
+				}
+			} else {
+				r.exportUsageParquet()
+				r.pruneUsageWindow()
+				r.pruneUsageArchive()
+			}
 			// Retention is swept on the same tick rather than on a timer of its
 			// own: this store's promise is that captured caller material is
 			// gone after the window, and a promise kept by a goroutine nobody
 			// notices stopping is not one.
-			r.purgeFailureCaptures()
+			r.purgeFailureCapturesContext(ctx)
 			// Sealing rides the same tick and comes last, after both
 			// derivatives have advanced: the roll is bounded by size alone, but
 			// compaction is bounded by how far the export and the checkpoint
 			// have got, and reading those before advancing them would hold a
 			// generation uncompressed for an extra interval for no reason.
 			r.sealLedgerGeneration()
-			r.compactLedgerSegments()
+			r.compactLedgerSegmentsContext(ctx)
 			// Same tick, same shape: a size threshold on an append-only file
 			// whose prefix is already held somewhere else. The journal's
 			// prefix is held by bbolt, which is what makes the applied
@@ -1354,7 +1879,9 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			// A process whose uptime never reaches one export interval — a
 			// crash loop, a restart per config change, a long interval — would
 			// otherwise never sweep at all.
-			r.purgeFailureCaptures()
+			purgeCtx, purgeCancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
+			r.purgeFailureCapturesContext(purgeCtx)
+			purgeCancel()
 			return
 		}
 	}
@@ -1372,10 +1899,22 @@ func (r *Runtime) saveTokenGuardCheckpoint() {
 }
 
 func (r *Runtime) saveUsageCheckpoint() {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		r.saveReplicaUsageCheckpoint()
+		return
+	}
+	// Native deletion protection is independent of derivative progress. A
+	// failed CatchUp or legacy checkpoint must not leave new durable facts
+	// outside the external chain anchor.
+	r.advanceLedgerChainCheckpoint()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.usageCollector.CatchUp(ctx); err != nil {
 		r.logger.Warn("usage checkpoint catch-up failed", "error", err)
+		return
+	}
+	// Fresh disk commits are not trusted restart checkpoints.
+	if r.usage.disk != nil {
 		return
 	}
 	r.usage.WithRollupCheckpoint(r.saveUsageCheckpointCoordinated)
@@ -1387,7 +1926,7 @@ func (r *Runtime) saveUsageCheckpoint() {
 // old stored rows plus the old pending increment, or the new stored rows plus
 // the new increment, never the drained gap or both copies.
 func (r *Runtime) saveUsageCheckpointCoordinated() {
-	r.persistUsageCheckpointCoordinated(true)
+	r.persistUsageCheckpointCoordinated()
 }
 
 // saveReplicaUsageCheckpoint persists only the node-derived Usage view. It
@@ -1396,15 +1935,15 @@ func (r *Runtime) saveUsageCheckpointCoordinated() {
 // locally durable, not-yet-applied suffix, while every Replica derivative is
 // bounded by its authenticated applied/confirmed prefix.
 func (r *Runtime) saveReplicaUsageCheckpoint() {
-	if r.usage == nil {
+	if r.usage == nil || r.usage.disk != nil {
 		return
 	}
 	r.usage.WithRollupCheckpoint(func() {
-		r.persistUsageCheckpointCoordinated(false)
+		r.persistUsageCheckpointCoordinated()
 	})
 }
 
-func (r *Runtime) persistUsageCheckpointCoordinated(advanceLedgerChain bool) {
+func (r *Runtime) persistUsageCheckpointCoordinated() {
 	snapshot, err := r.usage.TakeCheckpoint()
 	if err != nil {
 		r.logger.Warn("usage checkpoint encode failed", "error", err)
@@ -1436,9 +1975,6 @@ func (r *Runtime) persistUsageCheckpointCoordinated(advanceLedgerChain bool) {
 	// failed above leaves it proposing the same round again on the next tick,
 	// which is why nothing has to be unwound but the increment.
 	r.usage.CommitCheckpoint(snapshot)
-	if advanceLedgerChain {
-		r.advanceLedgerChainCheckpoint()
-	}
 }
 
 // usageCheckpointSegments hands the round's segments to the store in its own
@@ -1467,8 +2003,12 @@ func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
 // the frames written before it started: everything since could be truncated
 // back to that point and still reconcile cleanly on the next boot. Riding the
 // usage checkpoint's ticker bounds that window to one interval and costs a
-// small bbolt write on a path that already does a larger one.
+// small bbolt write even if the independently derived Usage job fails.
+// This protects native durability, not role eligibility or trusted Usage state.
 func (r *Runtime) advanceLedgerChainCheckpoint() {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		return
+	}
 	head, hash, ok := r.ledger.ChainHead()
 	if !ok {
 		return
@@ -1490,10 +2030,19 @@ func (r *Runtime) advanceLedgerChainCheckpoint() {
 }
 
 func (r *Runtime) exportUsageParquet() {
+	if r.replication != nil && r.replication.role == replication.RoleReplica {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.usageCollector.CatchUp(ctx); err != nil {
 		r.logger.Warn("usage parquet catch-up failed", "error", err)
+		return
+	}
+	if r.usage.disk != nil {
+		if _, err := r.usageExporter.ExportDiskStep(ctx, r.usage.disk, usage.DefaultDiskExportStepLimits()); err != nil {
+			r.logger.Warn("usage disk archive export failed", "error", err)
+		}
 		return
 	}
 	if _, err := r.usageExporter.Export(r.usage.Snapshot()); err != nil {
@@ -1712,6 +2261,9 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 		// Continue to graceful shutdown.
 	case err := <-errs:
 		r.draining.Store(true)
+		r.backgroundWait.summaries.withdraw()
+		r.withdrawUsageReads()
+		r.withdrawUsageMetrics()
 		if replicationCancel != nil {
 			replicationCancel()
 		}
@@ -1765,21 +2317,15 @@ func (r *Runtime) RunWithReady(ctx context.Context, ready func() error) error {
 	r.logger.Info("draining listeners", "drain_budget", r.config.Server.ShutdownTimeout.Value().String())
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.config.Server.ShutdownTimeout.Value())
 	defer cancel()
-	shutdownErrors := r.shutdownHTTPServers(shutdownCtx, shutdownServers)
-	// HTTP drain stops new requests, but deferred settlements and alert-delivery
-	// observers can still append ordered frames. Stop and join those producers
-	// while replication is available, before choosing the final audit index.
-	r.stopBackgroundWork()
-	if err := shutdownCtx.Err(); err != nil && len(shutdownErrors) == 0 {
-		// A slow background worker can exhaust the budget after HTTP drain has
-		// succeeded. Do not report a clean stop when final confirmation is skipped.
-		shutdownErrors = append(shutdownErrors, fmt.Errorf("finish background shutdown: %w", err))
+	var shutdownErrors []error
+	if err := r.drainAccountingBusiness(shutdownCtx, shutdownServers); err != nil {
+		shutdownErrors = append(shutdownErrors, err)
 	}
 	// Keep the replication channel alive until the Primary's final audit and
 	// metadata checkpoint are confirmed. Close runs after this channel stops;
 	// appending there would leave a durable but unconfirmed tail on every clean
 	// shutdown and make an otherwise caught-up snapshot ineligible for seeding.
-	if shutdownCtx.Err() == nil && r.replication != nil && r.replication.role == replication.RolePrimary &&
+	if len(shutdownErrors) == 0 && shutdownCtx.Err() == nil && r.replication != nil && r.replication.role == replication.RolePrimary &&
 		r.replication.publisher.Snapshot().Role == replication.RolePrimary {
 		r.advanceLedgerChainCheckpoint()
 		if err := appendSystemAudit(r.audit, r.store, "system.shutdown"); err != nil {
@@ -1810,12 +2356,13 @@ func (r *Runtime) installPlannedStepdownDrain(servers []shutdownHTTPServer) {
 	r.replication.plannedStepdownDrain = func() error {
 		// Readiness changes before listeners close so an external load balancer
 		// stops routing new work during net/http's drain window. Shutdown then
-		// waits for every handler already admitted through those listeners.
+		// waits for every handler already admitted through those listeners,
+		// then deferred/background producers, Usage and the old Manager.
 		r.draining.Store(true)
 		r.replication.startupReady.Store(false)
 		drainCtx, cancel := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		defer cancel()
-		return errors.Join(r.shutdownHTTPServers(drainCtx, servers)...)
+		return r.drainAccountingBusiness(drainCtx, servers)
 	}
 }
 
@@ -1825,6 +2372,9 @@ type shutdownHTTPServer interface {
 }
 
 func (r *Runtime) shutdownHTTPServers(ctx context.Context, servers []shutdownHTTPServer) []error {
+	// Error exits also attempt HTTP drain, but cannot prove the full business
+	// sequence. Keep Close from treating them as an offline clean shutdown.
+	r.backgroundWait.drainState.CompareAndSwap(businessDrainUnstarted, businessDrainStarted)
 	return gracefullyShutdownHTTPServers(ctx, servers, r.activeProviderAttemptCount, r.recordShutdownTruncatedAttempts)
 }
 
@@ -1883,35 +2433,55 @@ func (r *Runtime) recordShutdownTruncatedAttempts(delta uint64) error {
 }
 
 func (r *Runtime) stopBackgroundWork() {
-	if r.backgroundCancel != nil {
-		r.backgroundCancel()
-	}
-	r.backgroundWait.Wait()
-	if r.alerts != nil {
-		// Delivery callbacks append Audit records. Close waits for every callback,
-		// and is safe to call again from Close after RunWithReady returns.
-		r.alerts.Close()
-	}
+	_ = r.stopBackgroundWorkContext(context.Background())
 }
 
 func (r *Runtime) Close() error {
 	r.closeOnce.Do(func() {
+		var ledgerIndexPersistent bool
 		// Listeners have already drained by the time Close runs — Serve does
 		// that and logs it. This pair brackets the rest: the ledger, audit,
 		// vault and data lock being closed in order, which is what decides
 		// whether the next start finds a clean directory.
 		r.logger.Info("closing runtime")
 		r.draining.Store(true)
+		r.backgroundWait.summaries.withdraw()
+		r.withdrawUsageReads()
+		r.withdrawUsageMetrics()
+		if r.replication != nil {
+			r.replication.stopPrimaryCompletion()
+		}
+		auditBatchErr := r.closeAdminAuditBatches()
+		// Direct/offline Close has no HTTP Shutdown proof. Keep Metadata,
+		// Governance and audit files alive through accepted export publication.
+		_ = r.governance.exports.drain(context.Background())
+		_ = r.backgroundWait.summaries.drain(context.Background())
+		_ = r.drainUsageReads(context.Background())
+		_ = r.drainUsageMetrics(context.Background())
+		if r.haSelectedApplicationOwner {
+			r.closeErr = errors.Join(auditBatchErr, r.closeHASelectedApplication())
+			return
+		}
 		if r.replication != nil && r.replication.role == replication.RoleReplica {
 			r.stopBackgroundWork()
+			ledgerIndexPersistent = r.ledger != nil && r.ledger.HasPersistentDirectoryIndex()
+			if r.governance.manager != nil {
+				_ = r.governance.manager.Retire(context.Background())
+			}
+			if r.accounting != nil {
+				r.accounting.WithdrawAdmission()
+			}
 			r.closeErr = errors.Join(
+				auditBatchErr,
 				func() error {
 					if r.adminSessions != nil {
 						r.adminSessions.Close()
 					}
 					return nil
 				}(),
-				r.ledger.Close(),
+				r.closeUsageArchive(),
+				r.closeAccountingOwner(),
+				r.governance.owner.close(),
 				func() error {
 					if r.governance.log != nil {
 						return r.governance.log.Close()
@@ -1919,28 +2489,58 @@ func (r *Runtime) Close() error {
 					return nil
 				}(),
 				r.audit.Close(),
-				r.store.Close(),
+				r.closeMetadataStore(),
 				r.replication.close(),
+				func() error {
+					if !ledgerIndexPersistent && r.ledgerSegmentIndexDiskPermit != nil {
+						err := r.ledgerSegmentIndexDiskPermit.Release()
+						if err == nil {
+							r.ledgerSegmentIndexDiskPermit = nil
+						}
+						return err
+					}
+					return nil
+				}(),
 				func() error { r.vault.Close(); return nil }(),
+				r.persistentInventory.Close(),
+				r.ledgerAppendDisk.close(),
 				r.lock.Close(),
 			)
 			return
 		}
 		r.clearSetupToken()
 		r.stopBackgroundWork()
+		ledgerIndexPersistent = r.ledger != nil && r.ledger.HasPersistentDirectoryIndex()
+		if r.governance.manager != nil {
+			_ = r.governance.manager.Retire(context.Background())
+		}
+		if r.accounting != nil {
+			r.accounting.WithdrawAdmission()
+		}
 		authorityInvalidated := r.replication != nil && r.replication.publisher.Snapshot().Role != replication.RolePrimary
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)
 		cancelCapture()
+		// Queue cancellation can return ahead of a stalled sealed-file syscall.
+		// Join the store's real writer before closing the vault or directory lock.
+		captureErr = errors.Join(captureErr, r.failureCapture.Close())
 		// Frames written since the last tick would otherwise sit outside the
 		// checkpoint until the next start, which is precisely the window a
 		// shutdown-then-truncate would use.
 		var auditErr error
-		if !authorityInvalidated && r.replication == nil {
-			r.advanceLedgerChainCheckpoint()
-			auditErr = appendSystemAudit(r.audit, r.store, "system.shutdown")
+		// An offline Close has no listener drain to prove. If Run/stepdown did
+		// attempt one, a failed phase must not become a successful shutdown
+		// audit merely because terminal Close later joins the remaining work.
+		if !authorityInvalidated && r.replication == nil && r.backgroundWait.drainState.Load() != businessDrainStarted {
+			if r.canAppendShutdownAudit() {
+				r.advanceLedgerChainCheckpoint()
+				auditErr = appendSystemAudit(r.audit, r.store, "system.shutdown")
+			} else {
+				r.logger.Info("closing accepted state without admitting a shutdown audit under resource pressure")
+			}
 		}
 		r.closeErr = errors.Join(
+			auditBatchErr,
 			auditErr,
 			captureErr,
 			func() error {
@@ -1951,7 +2551,9 @@ func (r *Runtime) Close() error {
 				r.providerEgress.Close()
 				return nil
 			}(),
-			r.ledger.Close(),
+			r.closeUsageArchive(),
+			r.closeAccountingOwner(),
+			r.governance.owner.close(),
 			func() error {
 				if r.governance.log != nil {
 					return r.governance.log.Close()
@@ -1963,7 +2565,7 @@ func (r *Runtime) Close() error {
 				r.adminSessions.Close()
 				return nil
 			}(),
-			r.store.Close(),
+			r.closeMetadataStore(),
 			func() error {
 				if r.replication != nil {
 					return r.replication.close()
@@ -1971,9 +2573,21 @@ func (r *Runtime) Close() error {
 				return nil
 			}(),
 			func() error {
+				if !ledgerIndexPersistent && r.ledgerSegmentIndexDiskPermit != nil {
+					err := r.ledgerSegmentIndexDiskPermit.Release()
+					if err == nil {
+						r.ledgerSegmentIndexDiskPermit = nil
+					}
+					return err
+				}
+				return nil
+			}(),
+			func() error {
 				r.vault.Close()
 				return nil
 			}(),
+			r.persistentInventory.Close(),
+			r.ledgerAppendDisk.close(),
 			r.lock.Close(),
 		)
 		if r.closeErr != nil {
@@ -2138,6 +2752,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	}
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
+	router.Use(r.withMemoryCheckpointRequest)
 	router.Use(r.requireMemberStartup)
 	// Before the source limiter and the key guard: the first-byte clock has to
 	// start when the request arrived, not when a handler finally got it.
@@ -2157,27 +2772,27 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
 		guarded.Use(r.gateway.LimitOpenAI)
 		guarded.Use(r.gateway.GuardOpenAI)
-		guarded.Post("/v1/chat/completions", r.gateway.ChatCompletions)
-		guarded.Post("/v1/responses", r.gateway.Responses)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/chat/completions", r.gateway.ChatCompletions)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/responses", r.gateway.Responses)
 		guarded.Get("/v1/responses/{responseID}", r.gateway.GetDeferredResponse)
 		guarded.Post("/v1/responses/{responseID}/cancel", r.gateway.CancelDeferredResponse)
 		guarded.Delete("/v1/responses/{responseID}", r.gateway.DeleteDeferredResponse)
-		guarded.Post("/v1/embeddings", r.gateway.Embeddings)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/embeddings", r.gateway.Embeddings)
 		guarded.Get("/v1/models", r.gateway.ListModels)
 		guarded.Get("/v1/models/*", r.gateway.GetModel)
-		guarded.Post("/v1/moderations", r.gateway.Moderations)
-		guarded.Post("/v1/images/generations", r.gateway.Images)
-		guarded.Post("/v1/audio/speech", r.gateway.Speech)
-		guarded.Post("/v1/audio/transcriptions", r.gateway.Transcriptions)
-		guarded.Post("/v1/rerank", r.gateway.Rerank)
-		guarded.Post("/v1/async/invocations", r.gateway.StartAsyncInvoke)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/moderations", r.gateway.Moderations)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/images/generations", r.gateway.Images)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/audio/speech", r.gateway.Speech)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/audio/transcriptions", r.gateway.Transcriptions)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/rerank", r.gateway.Rerank)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/async/invocations", r.gateway.StartAsyncInvoke)
 		guarded.Get("/v1/async/invocations/{asyncID}", r.gateway.GetAsyncInvoke)
 		guarded.Post("/v1/async/invocations/{asyncID}/cancel", r.gateway.CancelAsyncInvoke)
-		guarded.Post("/v1/files", r.gateway.CreateFile)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/files", r.gateway.CreateFile)
 		guarded.Get("/v1/files/{fileID}", r.gateway.GetFile)
 		guarded.Get("/v1/files/{fileID}/content", r.gateway.DownloadFile)
 		guarded.Delete("/v1/files/{fileID}", r.gateway.DeleteFile)
-		guarded.Post("/v1/batches", r.gateway.CreateBatch)
+		guarded.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/v1/batches", r.gateway.CreateBatch)
 		guarded.Get("/v1/batches/{batchID}", r.gateway.GetBatch)
 		guarded.Post("/v1/batches/{batchID}/cancel", r.gateway.CancelBatch)
 	})
@@ -2186,8 +2801,8 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		guarded.Use(r.refuseWhileSnapshotsStale(staleErrorAnthropic))
 		guarded.Use(r.gateway.LimitAnthropic)
 		guarded.Use(r.gateway.GuardAnthropic)
-		guarded.Post("/v1/messages", r.gateway.Messages)
-		guarded.Post("/v1/messages/count_tokens", r.gateway.CountTokens)
+		guarded.With(r.requireResourcePressure(staleErrorAnthropic)).Post("/v1/messages", r.gateway.Messages)
+		guarded.With(r.requireResourcePressure(staleErrorAnthropic)).Post("/v1/messages/count_tokens", r.gateway.CountTokens)
 	})
 	router.Group(func(governance chi.Router) {
 		governance.Use(r.refuseWhileSnapshotsStale(staleErrorOpenAI))
@@ -2195,11 +2810,11 @@ func (r *Runtime) gatewayRouter() http.Handler {
 		governance.Use(r.gateway.GuardOpenAI)
 		governance.Use(r.gateway.WithSourceIPOpenAI)
 		governance.Use(r.withGovernanceRequestID)
-		governance.Post("/halro/v1/work-units", r.createWorkUnit)
+		governance.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/halro/v1/work-units", r.createWorkUnit)
 		governance.Get("/halro/v1/work-units/{workUnitID}", r.getWorkUnit)
 		governance.Post("/halro/v1/work-units/{workUnitID}/close", r.closeWorkUnit)
 		governance.Post("/halro/v1/work-units/{workUnitID}/outcomes", r.reportOutcome)
-		governance.Post("/halro/v1/runs", r.createRun)
+		governance.With(r.requireResourcePressure(staleErrorOpenAI)).Post("/halro/v1/runs", r.createRun)
 		governance.Get("/halro/v1/runs/{runID}", r.getRun)
 		governance.Post("/halro/v1/runs/{runID}/close", r.closeRun)
 	})
@@ -2220,6 +2835,7 @@ func (r *Runtime) adminRouter() http.Handler {
 	}
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
+	router.Use(r.withMemoryCheckpointRequest)
 	router.Use(adminSecurityHeaders)
 	router.Use(r.requireMemberStartup)
 	router.Get("/health/live", r.live)
@@ -2439,6 +3055,23 @@ func (r *Runtime) live(writer http.ResponseWriter, _ *http.Request) {
 }
 
 func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
+	r.liveCheckpoint.mu.Lock()
+	checkpointing := r.liveCheckpoint.paused != nil
+	r.liveCheckpoint.mu.Unlock()
+	if checkpointing {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"status": "checkpointing"})
+		return
+	}
+	if r.selectedBusinessHealth(request.Context()) != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "state": "recovery_required"})
+		return
+	}
+	if r.store.RecoveryError() != nil {
+		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
+			"status": "not_ready", "metadata": "recovery_required",
+		})
+		return
+	}
 	if r.draining.Load() {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{
 			"status": "draining",
@@ -2467,6 +3100,13 @@ func (r *Runtime) ready(writer http.ResponseWriter, request *http.Request) {
 			"status": "not_ready", "replication": "awaiting_peer_adjudication",
 		})
 		return
+	}
+	if r.resourcePressure != nil {
+		p := r.resourcePressure.monitor.Snapshot()
+		if p.State != resourcebudget.Healthy {
+			writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "resource_pressure": pressureName(p.State), "signals": pressureIssueNames(p.Issues)})
+			return
+		}
 	}
 	if r.status.Load() != ledger.AccountingHealthy {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]any{
@@ -2501,4 +3141,14 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+func (r *Runtime) closeUsageArchive() error {
+	if r.usage != nil {
+		r.usage.owner.retireMaintenance()
+	}
+	if r.usageExporter != nil {
+		return r.usageExporter.Close()
+	}
+	return nil
 }

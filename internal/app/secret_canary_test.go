@@ -116,7 +116,7 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := runtime.usage.Snapshot()
+	snapshot := usageSnapshotForTest(t, runtime)
 	if len(snapshot.Attempts) != 1 || len(snapshot.Requests) != 1 {
 		t.Fatalf("usage was not finalized: %#v", snapshot)
 	}

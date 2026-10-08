@@ -12,23 +12,35 @@ import (
 	"github.com/akz142857/Halro/internal/vault"
 )
 
-func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) {
+func VerifyAudit(ctx context.Context, cfg config.Config) (result audit.Summary, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 audit.Summary
+		return commandScopeZero0, commandScopeErr
+	}
+
 	if err := ctx.Err(); err != nil {
 		return audit.Summary{}, err
 	}
-	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
 		return audit.Summary{}, err
 	}
-	defer dataLock.Close()
-	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() {
+		resultErr = finishCommandDataLock(dataLock, resultErr)
+		if resultErr != nil {
+			result = audit.Summary{}
+		}
+	}()
+	if err := assertConfiguredMetadataSchemaCurrent(ctx, cfg); err != nil {
 		return audit.Summary{}, err
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return audit.Summary{}, err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return audit.Summary{}, err
@@ -52,7 +64,15 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 		return audit.Summary{}, fmt.Errorf("load administrator bootstrap completion: %w", completionErr)
 	}
 	foundBootstrap := false
-	summary, err := audit.VerifyWithVisitor(cfg.AuditPath(), auditKey, func(record audit.Record) error {
+	checkpoint, err := store.AuditCheckpoint()
+	if err != nil {
+		return audit.Summary{}, fmt.Errorf("load audit checkpoint: %w", err)
+	}
+	foundCheckpoint := checkpoint.Records == 0 && checkpoint.Bytes == 0 && checkpoint.LastHash == ([32]byte{})
+	summary, err := inspectCommandAudit(ctx, cfg, auditKey, func(record audit.Record) error {
+		if record.Sequence == checkpoint.Records {
+			foundCheckpoint = record.Offset == checkpoint.Bytes && record.Hash == checkpoint.LastHash
+		}
 		if completionErr != nil || record.Event.EventID != completion.AuditEventID {
 			return nil
 		}
@@ -70,9 +90,14 @@ func VerifyAudit(ctx context.Context, cfg config.Config) (audit.Summary, error) 
 	if completionErr == nil && !foundBootstrap {
 		return audit.Summary{}, errors.New("administrator bootstrap completion has no matching audit event")
 	}
-	checkpoint, err := store.AuditCheckpoint()
-	if err != nil {
-		return audit.Summary{}, fmt.Errorf("load audit checkpoint: %w", err)
+	if store.AuthenticatedMetadata() {
+		// Node-local checkpoint rows may lag the selected common cut. The
+		// complete scan must match both this historical row and the independent
+		// common Audit position, checked by inspectCommandAudit.
+		if !foundCheckpoint {
+			return audit.Summary{}, errors.New("audit log does not match its trusted checkpoint prefix")
+		}
+		return summary, nil
 	}
 	if checkpoint.Records != summary.Records || checkpoint.Bytes != summary.Bytes ||
 		checkpoint.LastHash != summary.LastHash {

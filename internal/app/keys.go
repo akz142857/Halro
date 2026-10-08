@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,17 +21,29 @@ type CreatedGatewayKey struct {
 	GatewayKey string `json:"gateway_key"`
 }
 
-func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name string) (CreatedGatewayKey, error) {
+func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name string) (selectedCommandResult CreatedGatewayKey, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 CreatedGatewayKey
+		return commandScopeZero0, commandScopeErr
+	}
+
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return CreatedGatewayKey{}, err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return CreatedGatewayKey{}, err
 	}
-	defer store.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, store.Close())
+		if resultErr != nil {
+			selectedCommandResult = CreatedGatewayKey{}
+		}
+	}()
 	if err := attachMetadataJournalForCLI(ctx, cfg, store, "create project key"); err != nil {
 		return CreatedGatewayKey{}, err
 	}
@@ -54,17 +67,24 @@ func CreateProjectKey(ctx context.Context, cfg config.Config, projectID, name st
 	return CreatedGatewayKey{KeyID: key.ID, ProjectID: projectID, GatewayKey: plaintext}, nil
 }
 
-func DisableProjectKey(ctx context.Context, cfg config.Config, keyID string) error {
+func DisableProjectKey(ctx context.Context, cfg config.Config, keyID string) (resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	if err := attachMetadataJournalForCLI(ctx, cfg, store, "disable project key"); err != nil {
 		return err
 	}
@@ -113,7 +133,7 @@ func appendOfflineAudit(
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}
@@ -155,7 +175,7 @@ func deliverPendingOfflineAudit(ctx context.Context, cfg config.Config, store *b
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}

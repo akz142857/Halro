@@ -62,12 +62,26 @@ func (r *Runtime) authorizeMetrics(request *http.Request) bool {
 }
 
 func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) error {
-	usageMetrics := r.usage.Metrics()
+	// Response ownership survives cancellation until the actual Flush returns.
+	finish, err := r.usage.metrics.enter(r.config.Metrics.MaxConcurrentScrapes)
+	if err != nil {
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		return err
+	}
+	defer finish()
+	observation, usageErr := r.usage.observe(ctx)
+	usageMetrics := observation.Metrics
+	if usageErr != nil {
+		r.logger.Warn("Usage metrics unavailable", "error", usageErr)
+	}
 	ledgerStats := r.ledger.Stats()
 	collectorStats := r.usageCollector.Stats()
 	alertStats := r.alerts.Stats()
 	rejections := r.gatewayService.RejectionMetrics()
-	pendingLeases, oldestPendingAge := r.state.PendingLeaseStats(time.Now())
+	pendingStats, pendingStatsErr := r.accounting.ReadPendingLeaseStats(ctx, time.Now())
+	if pendingStatsErr != nil {
+		r.logger.Warn("accounting pending lease metrics unavailable", "error", pendingStatsErr)
+	}
 	recoveryStats := r.accounting.RecoveryStats()
 	projectLockStats := r.accounting.ProjectLockStats()
 	metadataWriteStats := r.store.MetadataWriteStats()
@@ -100,34 +114,37 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.WriteHeader(http.StatusOK)
 	output := bufio.NewWriter(writer)
+	r.writeResourcePressureMetrics(output)
 
-	metricHeader(output, "halro_requests_total", "counter", "Completed Gateway requests.")
-	fmt.Fprintf(output, "halro_requests_total{status=\"success\"} %d\n", usageMetrics.RequestsSuccess)
-	fmt.Fprintf(output, "halro_requests_total{status=\"error\"} %d\n", usageMetrics.RequestsError)
-	metricHeader(output, "halro_attempts_total", "counter", "Completed Provider attempts.")
-	fmt.Fprintf(output, "halro_attempts_total{status=\"success\"} %d\n", usageMetrics.AttemptsSuccess)
-	fmt.Fprintf(output, "halro_attempts_total{status=\"error\"} %d\n", usageMetrics.AttemptsError)
-	metricHeader(output, "halro_tokens_total", "counter", "Provider tokens accounted by direction.")
-	fmt.Fprintf(output, "halro_tokens_total{direction=\"input\"} %d\n", usageMetrics.InputTokens)
-	fmt.Fprintf(output, "halro_tokens_total{direction=\"output\"} %d\n", usageMetrics.OutputTokens)
-	metricHeader(output, "halro_cost_usd_total", "counter", "Provider cost accounted in USD.")
-	fmt.Fprintf(output, "halro_cost_usd_total %s\n", microsUSD(usageMetrics.CostMicrosUSD))
-	metricHeader(output, "halro_request_duration_seconds", "summary", "Completed Gateway request duration.")
-	requestCount := usageMetrics.RequestsSuccess + usageMetrics.RequestsError
-	fmt.Fprintf(output, "halro_request_duration_seconds_sum %s\n",
-		millisecondsSeconds(usageMetrics.RequestLatencyMillis))
-	fmt.Fprintf(output, "halro_request_duration_seconds_count %d\n", requestCount)
-	metricHeader(output, "halro_attempt_duration_seconds", "summary", "Completed Provider attempt duration.")
-	attemptCount := usageMetrics.AttemptsSuccess + usageMetrics.AttemptsError
-	fmt.Fprintf(output, "halro_attempt_duration_seconds_sum %s\n",
-		millisecondsSeconds(usageMetrics.AttemptLatencyMillis))
-	fmt.Fprintf(output, "halro_attempt_duration_seconds_count %d\n", attemptCount)
-	writeLatencyHistogram(output, "halro_request_latency_seconds",
-		"Completed Gateway request latency distribution.", usageMetrics.RequestLatencyBuckets,
-		usageMetrics.RequestLatencyMillis, requestCount)
-	writeLatencyHistogram(output, "halro_attempt_latency_seconds",
-		"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
-		usageMetrics.AttemptLatencyMillis, attemptCount)
+	if usageErr == nil {
+		metricHeader(output, "halro_requests_total", "counter", "Completed Gateway requests.")
+		fmt.Fprintf(output, "halro_requests_total{status=\"success\"} %d\n", usageMetrics.RequestsSuccess)
+		fmt.Fprintf(output, "halro_requests_total{status=\"error\"} %d\n", usageMetrics.RequestsError)
+		metricHeader(output, "halro_attempts_total", "counter", "Completed Provider attempts.")
+		fmt.Fprintf(output, "halro_attempts_total{status=\"success\"} %d\n", usageMetrics.AttemptsSuccess)
+		fmt.Fprintf(output, "halro_attempts_total{status=\"error\"} %d\n", usageMetrics.AttemptsError)
+		metricHeader(output, "halro_tokens_total", "counter", "Provider tokens accounted by direction.")
+		fmt.Fprintf(output, "halro_tokens_total{direction=\"input\"} %d\n", usageMetrics.InputTokens)
+		fmt.Fprintf(output, "halro_tokens_total{direction=\"output\"} %d\n", usageMetrics.OutputTokens)
+		metricHeader(output, "halro_cost_usd_total", "counter", "Provider cost accounted in USD.")
+		fmt.Fprintf(output, "halro_cost_usd_total %s\n", microsUSD(usageMetrics.CostMicrosUSD))
+		metricHeader(output, "halro_request_duration_seconds", "summary", "Completed Gateway request duration.")
+		requestCount := usageMetrics.RequestsSuccess + usageMetrics.RequestsError
+		fmt.Fprintf(output, "halro_request_duration_seconds_sum %s\n",
+			millisecondsSeconds(usageMetrics.RequestLatencyMillis))
+		fmt.Fprintf(output, "halro_request_duration_seconds_count %d\n", requestCount)
+		metricHeader(output, "halro_attempt_duration_seconds", "summary", "Completed Provider attempt duration.")
+		attemptCount := usageMetrics.AttemptsSuccess + usageMetrics.AttemptsError
+		fmt.Fprintf(output, "halro_attempt_duration_seconds_sum %s\n",
+			millisecondsSeconds(usageMetrics.AttemptLatencyMillis))
+		fmt.Fprintf(output, "halro_attempt_duration_seconds_count %d\n", attemptCount)
+		writeLatencyHistogram(output, "halro_request_latency_seconds",
+			"Completed Gateway request latency distribution.", usageMetrics.RequestLatencyBuckets,
+			usageMetrics.RequestLatencyMillis, requestCount)
+		writeLatencyHistogram(output, "halro_attempt_latency_seconds",
+			"Completed Provider attempt latency distribution.", usageMetrics.AttemptLatencyBuckets,
+			usageMetrics.AttemptLatencyMillis, attemptCount)
+	}
 	writeStreamFirstByte(output, r.gateway.StreamFirstByte())
 	writeCapabilityMetrics(output, r.capabilityMetrics.snapshot(), capabilityGauges, capabilityGaugesReadable)
 	metricHeader(output, "halro_activation_stale", "gauge", "Whether any live configuration snapshot is known to be behind the durable store.")
@@ -145,8 +162,10 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	}
 	metricHeader(output, "halro_activation_stale_seconds", "gauge", "Seconds since the oldest live configuration snapshot became stale, or 0 when current.")
 	fmt.Fprintf(output, "halro_activation_stale_seconds %.6f\n", staleSeconds)
-	metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
-	fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
+	if usageErr == nil {
+		metricHeader(output, "halro_active_requests", "gauge", "Requests accepted but not finalized.")
+		fmt.Fprintf(output, "halro_active_requests %d\n", usageMetrics.ActiveRequests)
+	}
 	// The console window's working set and its lower edge. Together they answer
 	// the question the window exists for: is the in-memory history bounded, or
 	// is it still growing? A resident count that keeps climbing while the floor
@@ -184,58 +203,67 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_failure_capture_saturated", "gauge",
 		"1 when the current day's capture budget has been reached and failures are no longer captured.")
 	fmt.Fprintf(output, "halro_failure_capture_saturated %d\n", boolMetric(capture.Saturated))
-	windowed := r.usage.Windowed()
-	metricHeader(output, "halro_usage_window_attempts", "gauge",
-		"Attempts resident in the usage aggregate the console reads.")
-	fmt.Fprintf(output, "halro_usage_window_attempts %d\n", windowed.Attempts)
-	metricHeader(output, "halro_usage_window_requests", "gauge",
-		"Request summaries resident in the usage aggregate the console reads.")
-	fmt.Fprintf(output, "halro_usage_window_requests %d\n", windowed.Summaries)
-	metricHeader(output, "halro_usage_window_floor_sequence", "gauge",
-		"Lowest ledger sequence the usage aggregate still holds; 0 when it has never been trimmed.")
-	fmt.Fprintf(output, "halro_usage_window_floor_sequence %d\n", windowed.Floor)
-	metricHeader(output, "halro_usage_window_trimmed_total", "counter",
-		"Attempts removed from the usage aggregate by the console window.")
-	fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
+	metricHeader(output, "halro_usage_projection_selected", "gauge", "1 when Usage reads select a fresh disk projection; 0 for resident Aggregate.")
+	fmt.Fprintf(output, "halro_usage_projection_selected %d\n", boolMetric(r.usage.disk != nil))
+	metricHeader(output, "halro_usage_read_unavailable", "gauge", "1 when the selected Usage observation could not be read; Usage-dependent series are omitted.")
+	fmt.Fprintf(output, "halro_usage_read_unavailable %d\n", boolMetric(usageErr != nil))
+	if usageErr == nil {
+		metricHeader(output, "halro_usage_watermark_sequence", "gauge", "Native Ledger sequence covered by the selected Usage owner.")
+		fmt.Fprintf(output, "halro_usage_watermark_sequence %d\n", observation.Watermark.Sequence)
+		if r.usage.disk != nil {
+			metricHeader(output, "halro_usage_projection_logical_bytes", "gauge", "Committed page extent of the fresh Usage DB; not physical file allocation or resident memory.")
+			fmt.Fprintf(output, "halro_usage_projection_logical_bytes %d\n", observation.LogicalBytes)
+		}
+	}
+	if windowed := observation.Window; usageErr == nil && windowed != nil {
+		metricHeader(output, "halro_usage_window_attempts", "gauge",
+			"Attempts resident in the usage aggregate the console reads.")
+		fmt.Fprintf(output, "halro_usage_window_attempts %d\n", windowed.Attempts)
+		metricHeader(output, "halro_usage_window_requests", "gauge",
+			"Request summaries resident in the usage aggregate the console reads.")
+		fmt.Fprintf(output, "halro_usage_window_requests %d\n", windowed.Summaries)
+		metricHeader(output, "halro_usage_window_floor_sequence", "gauge",
+			"Lowest ledger sequence the usage aggregate still holds; 0 when it has never been trimmed.")
+		fmt.Fprintf(output, "halro_usage_window_floor_sequence %d\n", windowed.Floor)
+		metricHeader(output, "halro_usage_window_trimmed_total", "counter",
+			"Attempts removed from the usage aggregate by the console window.")
+		fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
+	}
 	// What the stored checkpoint costs, which is a different question from what
 	// the window holds. The bytes gauge is the whole checkpoint; the last-write
 	// gauge is what one tick actually rewrote. The gap between them is the
 	// point of the segmented format, and the two converging would mean it has
 	// stopped working — a tick rewriting the window again.
-	checkpointed := r.usage.Checkpointed()
-	metricHeader(output, "halro_usage_checkpoint_segments", "gauge",
-		"Segments holding the stored usage checkpoint.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_segments %d\n", checkpointed.Segments)
-	metricHeader(output, "halro_usage_checkpoint_bytes", "gauge",
-		"Bytes the stored usage checkpoint occupies across all its segments.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_bytes %d\n", checkpointed.Bytes)
-	metricHeader(output, "halro_usage_checkpoint_open_segment_bytes", "gauge",
-		"Bytes in the one segment a checkpoint tick rewrites.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_open_segment_bytes %d\n", checkpointed.OpenSegmentBytes)
+	if checkpointed := observation.Checkpoint; usageErr == nil && checkpointed != nil {
+		metricHeader(output, "halro_usage_checkpoint_segments", "gauge",
+			"Segments holding the stored usage checkpoint.")
+		fmt.Fprintf(output, "halro_usage_checkpoint_segments %d\n", checkpointed.Segments)
+		metricHeader(output, "halro_usage_checkpoint_bytes", "gauge",
+			"Bytes the stored usage checkpoint occupies across all its segments.")
+		fmt.Fprintf(output, "halro_usage_checkpoint_bytes %d\n", checkpointed.Bytes)
+		metricHeader(output, "halro_usage_checkpoint_open_segment_bytes", "gauge",
+			"Bytes in the one segment a checkpoint tick rewrites.")
+		fmt.Fprintf(output, "halro_usage_checkpoint_open_segment_bytes %d\n", checkpointed.OpenSegmentBytes)
+	}
 	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
 	// what it moved out of the way and is still keeping. Read together they say
 	// whether the growth an operator is watching is in the file being written
 	// or in the archive behind it — two very different problems, and before
 	// sealing there was no way to tell them apart because there was only one
 	// number.
-	sealed := r.ledger.Segments()
-	var sealedBytes, sealedStored int64
-	for _, segment := range sealed {
-		sealedBytes += segment.Length
-		sealedStored += segment.StoredLength
-	}
+	sealed := r.ledger.SealedSummary()
 	metricHeader(output, "halro_ledger_active_bytes", "gauge",
 		"Bytes in the ledger generation currently being appended to.")
 	fmt.Fprintf(output, "halro_ledger_active_bytes %d\n", r.ledger.ActiveBytes())
 	metricHeader(output, "halro_ledger_sealed_generations", "gauge",
 		"Sealed ledger generations this data directory holds.")
-	fmt.Fprintf(output, "halro_ledger_sealed_generations %d\n", len(sealed))
+	fmt.Fprintf(output, "halro_ledger_sealed_generations %d\n", sealed.Generations)
 	metricHeader(output, "halro_ledger_sealed_bytes", "gauge",
 		"Frame bytes held in sealed ledger generations, before compression.")
-	fmt.Fprintf(output, "halro_ledger_sealed_bytes %d\n", sealedBytes)
+	fmt.Fprintf(output, "halro_ledger_sealed_bytes %d\n", sealed.PlainBytes)
 	metricHeader(output, "halro_ledger_sealed_stored_bytes", "gauge",
 		"Disk bytes the sealed ledger generations occupy, after compression.")
-	fmt.Fprintf(output, "halro_ledger_sealed_stored_bytes %d\n", sealedStored)
+	fmt.Fprintf(output, "halro_ledger_sealed_stored_bytes %d\n", sealed.StoredBytes)
 	// Deliberately unlabelled: the interesting dimension here is the source
 	// address, and that is exactly the label that would make this series
 	// unbounded — and would publish caller addresses through the metrics port.
@@ -253,6 +281,20 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	runtime.ReadMemStats(&memory)
 	metricHeader(output, "go_memstats_heap_alloc_bytes", "gauge", "Bytes of allocated heap objects.")
 	fmt.Fprintf(output, "go_memstats_heap_alloc_bytes %d\n", memory.HeapAlloc)
+	metricHeader(output, "go_memstats_sys_bytes", "gauge", "Bytes obtained from the OS by the Go runtime; not process RSS.")
+	fmt.Fprintf(output, "go_memstats_sys_bytes %d\n", memory.Sys)
+	metricHeader(output, "go_memstats_heap_sys_bytes", "gauge", "Bytes obtained from the OS for the Go heap.")
+	fmt.Fprintf(output, "go_memstats_heap_sys_bytes %d\n", memory.HeapSys)
+	metricHeader(output, "go_memstats_heap_inuse_bytes", "gauge", "Bytes in in-use heap spans.")
+	fmt.Fprintf(output, "go_memstats_heap_inuse_bytes %d\n", memory.HeapInuse)
+	metricHeader(output, "go_memstats_heap_idle_bytes", "gauge", "Bytes in idle heap spans.")
+	fmt.Fprintf(output, "go_memstats_heap_idle_bytes %d\n", memory.HeapIdle)
+	metricHeader(output, "go_memstats_heap_released_bytes", "gauge", "Idle heap bytes returned to the OS.")
+	fmt.Fprintf(output, "go_memstats_heap_released_bytes %d\n", memory.HeapReleased)
+	metricHeader(output, "go_memstats_stack_inuse_bytes", "gauge", "Bytes in in-use stack spans.")
+	fmt.Fprintf(output, "go_memstats_stack_inuse_bytes %d\n", memory.StackInuse)
+	metricHeader(output, "go_memstats_next_gc_bytes", "gauge", "Target heap size for the next GC cycle.")
+	fmt.Fprintf(output, "go_memstats_next_gc_bytes %d\n", memory.NextGC)
 	metricHeader(output, "go_memstats_gc_cycles_total", "counter", "Completed garbage collection cycles.")
 	fmt.Fprintf(output, "go_memstats_gc_cycles_total %d\n", memory.NumGC)
 	metricHeader(output, "process_start_time_seconds", "gauge", "Start time of the process since unix epoch in seconds.")
@@ -318,16 +360,20 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_admin_audit_delivery_failures_total", "counter",
 		"Failed attempts to append a durable administrative mutation's audit record.")
 	fmt.Fprintf(output, "halro_admin_audit_delivery_failures_total %d\n", r.auditDeliveryFailures.Load())
-	metricHeader(output, "halro_fallbacks_total", "counter", "Provider fallback transitions.")
-	fmt.Fprintf(output, "halro_fallbacks_total %d\n", usageMetrics.Fallbacks)
+	if usageErr == nil {
+		metricHeader(output, "halro_fallbacks_total", "counter", "Provider fallback transitions.")
+		fmt.Fprintf(output, "halro_fallbacks_total %d\n", usageMetrics.Fallbacks)
+	}
 	metricHeader(output, "halro_usage_queue_depth", "gauge", "Current durable Ledger append queue depth.")
 	fmt.Fprintf(output, "halro_usage_queue_depth %d\n", ledgerStats.QueueDepth)
 	metricHeader(output, "halro_usage_queue_capacity", "gauge", "Durable Ledger append queue capacity.")
 	fmt.Fprintf(output, "halro_usage_queue_capacity %d\n", ledgerStats.QueueCapacity)
-	metricHeader(output, "halro_accounting_pending_leases", "gauge", "Durable Accounting Leases awaiting recovery or settlement.")
-	fmt.Fprintf(output, "halro_accounting_pending_leases %d\n", pendingLeases)
-	metricHeader(output, "halro_accounting_oldest_pending_lease_age_seconds", "gauge", "Age of the oldest pending Accounting Lease.")
-	fmt.Fprintf(output, "halro_accounting_oldest_pending_lease_age_seconds %.6f\n", oldestPendingAge.Seconds())
+	if pendingStatsErr == nil {
+		metricHeader(output, "halro_accounting_pending_leases", "gauge", "Durable Accounting Leases awaiting recovery or settlement.")
+		fmt.Fprintf(output, "halro_accounting_pending_leases %d\n", pendingStats.Count)
+		metricHeader(output, "halro_accounting_oldest_pending_lease_age_seconds", "gauge", "Age of the oldest pending Accounting Lease.")
+		fmt.Fprintf(output, "halro_accounting_oldest_pending_lease_age_seconds %.6f\n", pendingStats.OldestAge.Seconds())
+	}
 	normalPendingLeaseAge := max(r.config.Gateway.RouteTotalTimeout.Value(), r.config.Gateway.StreamMaxDuration.Value())
 	metricHeader(output, "halro_accounting_pending_lease_normal_max_age_seconds", "gauge", "Configured maximum normal age of an in-flight Accounting Lease before alert grace.")
 	fmt.Fprintf(output, "halro_accounting_pending_lease_normal_max_age_seconds %.6f\n", normalPendingLeaseAge.Seconds())
@@ -337,11 +383,14 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	fmt.Fprintf(output, "halro_accounting_recovery_total{status=\"failed\"} %d\n", recoveryStats.Failures)
 	metricHeader(output, "halro_pricing_quarantined_deployments", "gauge", "Deployments blocked by pricing clock or restore quarantine.")
 	fmt.Fprintf(output, "halro_pricing_quarantined_deployments %d\n", pricingQuarantines)
-	metricHeader(output, "halro_pricing_unknown_attempts_total", "counter", "Provider attempts settled without known price evidence.")
-	fmt.Fprintf(output, "halro_pricing_unknown_attempts_total %d\n", usageMetrics.UnknownAttempts)
-	pendingPricingIntents, _ := r.store.ListPendingPricingAuditIntents(context.Background())
-	metricHeader(output, "halro_pricing_recovery_pending_intents", "gauge", "Durable pricing intents awaiting delivery.")
-	fmt.Fprintf(output, "halro_pricing_recovery_pending_intents %d\n", len(pendingPricingIntents))
+	if usageErr == nil {
+		metricHeader(output, "halro_pricing_unknown_attempts_total", "counter", "Provider attempts settled without known price evidence.")
+		fmt.Fprintf(output, "halro_pricing_unknown_attempts_total %d\n", usageMetrics.UnknownAttempts)
+	}
+	if pendingPricingIntents, err := r.store.PendingPricingAuditIntentCount(context.Background()); err == nil {
+		metricHeader(output, "halro_pricing_recovery_pending_intents", "gauge", "Durable pricing intents awaiting delivery.")
+		fmt.Fprintf(output, "halro_pricing_recovery_pending_intents %d\n", pendingPricingIntents)
+	}
 	metricHeader(output, "halro_wal_append_errors_total", "counter", "Ledger records failed during write or fsync.")
 	fmt.Fprintf(output, "halro_wal_append_errors_total %d\n", ledgerStats.Errors)
 	// Records divided by batches is the mean group-commit size. It is the signal
@@ -357,10 +406,11 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_wal_sync_seconds", "summary", "Cumulative time spent in Ledger durability barriers.")
 	fmt.Fprintf(output, "halro_wal_sync_seconds_sum %.6f\n", ledgerStats.SyncDuration.Seconds())
 	fmt.Fprintf(output, "halro_wal_sync_seconds_count %d\n", ledgerStats.Syncs)
-	// Per-project accounting serialization: the write path holds this lock across
-	// the durable append, which is the per-project request-rate ceiling (ADR
-	// 0018). Aggregate on purpose — project count is unbounded, so it cannot be a
-	// label.
+	// Per-project money decisions end before the append (ADR 0018). Registry
+	// identities remain only for users/waiters or pending admission/close state.
+	// Aggregate counts carry no project identity labels.
+	metricHeader(output, "halro_accounting_project_lock_live", "gauge", "Project admission identities retained for current users or pending obligations; excludes idle and durable-only projects.")
+	fmt.Fprintf(output, "halro_accounting_project_lock_live %d\n", projectLockStats.LiveProjects)
 	metricHeader(output, "halro_accounting_project_lock_acquisitions_total", "counter", "Per-project accounting lock acquisitions.")
 	fmt.Fprintf(output, "halro_accounting_project_lock_acquisitions_total %d\n", projectLockStats.Acquisitions)
 	metricHeader(output, "halro_accounting_project_lock_wait_seconds", "summary", "Cumulative time waiting for the per-project accounting lock.")

@@ -28,7 +28,7 @@ import (
 
 func seedRetentionUsage(t *testing.T, runtime *Runtime, requests int, at time.Time) {
 	t.Helper()
-	var sequence uint64
+	runtime.stopBackgroundWork()
 	for index := range requests {
 		requestID := fmt.Sprintf("req_retention_%04d", index)
 		occurred := at.Add(time.Duration(index) * time.Second)
@@ -53,14 +53,45 @@ func seedRetentionUsage(t *testing.T, runtime *Runtime, requests int, at time.Ti
 				RequestedModel: "chat", OccurredAt: occurred.Add(time.Second), Outcome: "success",
 			},
 		} {
-			sequence++
-			if err := runtime.usage.Apply(ledger.Record{
-				Generation: 1,
-				Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
-			}); err != nil {
-				t.Fatal(err)
-			}
+			appendSeededUsageFact(t, runtime, event)
 		}
+	}
+}
+
+// Seed the same selected Ledger reader that Usage consults. Settlement fixtures
+// include their actual lease, and every position comes from the native writer.
+// Callers stop background scans before writing these deterministic fixtures.
+func appendSeededUsageFact(t *testing.T, runtime *Runtime, event ledger.Event) {
+	t.Helper()
+	event.PeriodTimezone = "UTC"
+	event.PeriodTimezoneVersion = 1
+	projection := runtime.accountingState.projection
+	if projection == nil {
+		t.Fatal("fixture requires the default Standalone disk Ledger")
+	}
+	if event.Kind == ledger.EventAttemptSettled {
+		lease := event
+		lease.Kind = ledger.EventReservationCreated
+		lease.EventID += "_lease"
+		lease.ReservationMicrosUSD = event.CommittedMicrosUSD
+		lease.CommittedMicrosUSD = nil
+		appendSeededUsageFact(t, runtime, lease)
+	}
+	record, _, err := runtime.ledger.AppendRecordWithReceipt(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.Apply(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	var usageErr error
+	if runtime.usage.disk != nil {
+		usageErr = runtime.usage.owner.derivative.Apply(record)
+	} else {
+		usageErr = runtime.usage.Apply(record)
+	}
+	if err := usageErr; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -131,11 +162,24 @@ func TestTheSummarySurvivesAnEmptiedAttemptList(t *testing.T) {
 
 	// What a console window will do, in its most extreme form: every attempt
 	// and every request summary gone, the durable rollup untouched.
-	runtime.usage = usage.NewAggregate()
-	if page, err := runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 10}); err != nil {
+	runtime.stopBackgroundWork()
+	runtime.exportUsageParquet()
+	if _, err := runtime.usageExporter.VerifyDiskArchive(context.Background(), runtime.usage.disk, usage.DefaultArchiveVerifyLimits()); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		out, err := runtime.usageExporter.PruneVerifiedWindowStep(context.Background(), runtime.usage.disk, time.Now().UTC().AddDate(1, 0, 0), usage.DiskWindowLimits{Rows: 128, InputBytes: 8 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Done {
+			break
+		}
+	}
+	if page, err := runtime.usage.queryAttempts(context.Background(), usage.AttemptQuery{Limit: 10}, ""); err != nil {
 		t.Fatal(err)
 	} else if len(page.Attempts) != 0 {
-		t.Fatal("the replacement aggregate is not empty")
+		t.Fatal("the verified disk window is not empty")
 	}
 
 	after := readRetentionSummary(t, runtime, cookie)
@@ -167,34 +211,34 @@ func TestTheConsoleWindowTrimsOnlyWhatWasExported(t *testing.T) {
 	// Nothing exported yet: the watermark is unknown, so nothing is trimmed
 	// however old it is. This is the whole safety property.
 	runtime.pruneUsageWindow()
-	page, err := runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	page, err := runtime.usage.queryAttempts(context.Background(), usage.AttemptQuery{Limit: 100}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Attempts) != 12 {
 		t.Fatalf("%d attempts survived an unexported prune, want all 12", len(page.Attempts))
 	}
-	if runtime.usage.Floor() != 0 {
-		t.Fatalf("the window moved with nothing exported: floor=%d", runtime.usage.Floor())
+	if usageFloorForTest(t, runtime) != 0 {
+		t.Fatalf("the window moved with nothing exported: floor=%d", usageFloorForTest(t, runtime))
 	}
 
 	// Export, then trim. Now the same records are archived and may go.
 	runtime.exportUsageParquet()
 	runtime.pruneUsageWindow()
-	page, err = runtime.usage.QueryAttempts(usage.AttemptQuery{Limit: 100})
+	page, err = runtime.usage.queryAttempts(context.Background(), usage.AttemptQuery{Limit: 100}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Attempts) != 0 {
 		t.Fatalf("%d attempts survived an exported prune, want none", len(page.Attempts))
 	}
-	if runtime.usage.Floor() == 0 {
+	if usageFloorForTest(t, runtime) == 0 {
 		t.Fatal("records were trimmed without recording where the window now starts")
 	}
 
 	// And the archive still reconciles against the windowed aggregate, which
 	// is what keeps doctor and `usage verify` green.
-	if _, err := runtime.usageExporter.Reconcile(runtime.usage.Snapshot()); err != nil {
+	if _, err := verifyUsageArchiveForTest(t, runtime); err != nil {
 		t.Fatalf("a trimmed aggregate no longer reconciles: %v", err)
 	}
 
@@ -237,25 +281,25 @@ func TestTheArchiveIsPrunedWithoutStoppingTheGateway(t *testing.T) {
 	// One partition well outside the window, one inside it.
 	seedRetentionUsage(t, runtime, 4, time.Now().UTC().AddDate(0, 0, -90))
 	runtime.exportUsageParquet()
-	before, err := runtime.usageExporter.LoadManifest()
+	before, err := runtime.usageExporter.ReadArchivePosition(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(before.Files) == 0 {
+	if before.Files == 0 {
 		t.Fatal("nothing was exported, so this test proves nothing")
 	}
 
 	runtime.pruneUsageArchive()
-	after, err := runtime.usageExporter.LoadManifest()
+	after, err := runtime.usageExporter.ReadArchivePosition(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(after.Files) != 0 {
-		t.Fatalf("%d partitions survived past the retention window", len(after.Files))
+	if after.Files != 0 {
+		t.Fatalf("%d partitions survived past the retention window", after.Files)
 	}
 	// And the archive is still internally consistent after the sweep, which is
 	// what `halro usage verify` and doctor check.
-	if err := runtime.usageExporter.Verify(nil); err != nil {
+	if err := runtime.usageExporter.VerifyArchiveFileChecksums(context.Background()); err != nil {
 		t.Fatalf("the pruned archive does not verify: %v", err)
 	}
 }
@@ -280,11 +324,10 @@ func TestExportedPartitionsStillReadBackAfterTheCodecChange(t *testing.T) {
 
 	seedRetentionUsage(t, runtime, 20, time.Now().UTC().Add(-time.Hour))
 	runtime.exportUsageParquet()
-	snapshot := runtime.usage.Snapshot()
-	if err := runtime.usageExporter.Verify(&snapshot); err != nil {
+	if _, err := verifyUsageArchiveForTest(t, runtime); err != nil {
 		t.Fatalf("a compressed partition does not verify against the aggregate: %v", err)
 	}
-	report, err := runtime.usageExporter.Reconcile(snapshot)
+	report, err := verifyUsageArchiveForTest(t, runtime)
 	if err != nil {
 		t.Fatalf("a compressed partition does not reconcile: %v", err)
 	}

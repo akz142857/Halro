@@ -63,7 +63,14 @@ type providerEgressRegistry struct {
 }
 
 func newProviderEgressRegistry(ctx context.Context, store *boltstore.Store, secretVault *vault.Vault) (*providerEgressRegistry, error) {
-	definitions, err := store.ListProviderEgressProxies(ctx)
+	definitions := make([]domain.ProviderEgressProxy, 0, domain.MaxProviderEgressProxies)
+	err := store.WalkProviderEgressProxiesMaintenance(ctx, func(item domain.ProviderEgressProxy) error {
+		if len(definitions) >= domain.MaxProviderEgressProxies || len(item.ID)+len(item.Name)+len(item.Kind)+len(item.Endpoint)+len(item.BasicAuthCredentialID) > 16<<10 {
+			return boltstore.ErrPricingRecoveryLimit
+		}
+		definitions = append(definitions, item)
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list Provider egress proxies: %w", err)
 	}
@@ -86,7 +93,7 @@ func newProviderEgressRegistry(ctx context.Context, store *boltstore.Store, secr
 		var auth *safetransport.BasicAuth
 		credentialVersion := uint16(0)
 		if definition.BasicAuthCredentialID != "" {
-			credential, credentialErr := store.GetCredential(ctx, definition.BasicAuthCredentialID)
+			credential, credentialErr := store.GetCredentialMaintenance(ctx, definition.BasicAuthCredentialID)
 			if credentialErr != nil || credential.Type != providerEgressCredentialType || credential.Audience != definition.Endpoint {
 				return fail(fmt.Errorf("build Provider egress proxy %q: authentication is unavailable", definition.ID))
 			}

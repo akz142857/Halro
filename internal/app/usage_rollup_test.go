@@ -134,6 +134,7 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	installLegacyUsageForTest(t, runtime) // Deliberately construct legacy Metadata derivatives.
 	billOneRequest(t, runtime, "request_1")
 	runtime.saveUsageCheckpoint()
 	if err := runtime.Close(); err != nil {
@@ -168,10 +169,14 @@ func TestRejectedUsageCheckpointDoesNotDoubleTheRollup(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened.saveUsageCheckpoint()
+	stats, err := reopened.usage.disk.ReadStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rebuilt := storedRollupTotal(t, cfg.MetadataPath())
+	rebuilt := stats.Totals
 	if rebuilt.Attempts != single.Attempts || rebuilt.Requests != single.Requests ||
 		rebuilt.CostMicrosUSD != single.CostMicrosUSD {
 		t.Fatalf("rebuilt rollup=%#v want=%#v", rebuilt, single)
@@ -190,6 +195,7 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	installLegacyUsageForTest(t, runtime) // Deliberately construct legacy Metadata derivatives.
 	billOneRequest(t, runtime, "request_1")
 	runtime.saveUsageCheckpoint()
 	billOneRequest(t, runtime, "request_2")
@@ -232,10 +238,14 @@ func TestUnreadableRollupForcesAFullRebuild(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopened.saveUsageCheckpoint()
+	stats, err := reopened.usage.disk.ReadStats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rebuilt := storedRollupTotal(t, cfg.MetadataPath())
+	rebuilt := stats.Totals
 	if rebuilt.Attempts != expected.Attempts || rebuilt.CostMicrosUSD != expected.CostMicrosUSD {
 		t.Fatalf("rebuilt rollup=%#v want=%#v", rebuilt, expected)
 	}
@@ -271,6 +281,7 @@ func TestRebuildUsageSummaryReproducesTheIncrementalRollup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	installLegacyUsageForTest(t, runtime) // Deliberately construct legacy Metadata derivatives.
 	// Several checkpoint rounds, so the incremental path writes the day in
 	// pieces rather than in one increment that trivially matches a single pass.
 	for _, id := range []string{"request_1", "request_2"} {
@@ -278,6 +289,7 @@ func TestRebuildUsageSummaryReproducesTheIncrementalRollup(t *testing.T) {
 		runtime.saveUsageCheckpoint()
 	}
 	billOneRequest(t, runtime, "request_3")
+	runtime.saveUsageCheckpoint() // The explicit legacy fixture has joined its worker.
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}

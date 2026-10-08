@@ -92,8 +92,13 @@ const (
 	// authenticated role state, ordering journal, native source and peer
 	// transport must open and close together. Spreading them into Runtime would
 	// add several fields and make partial cleanup states representable.
-	runtimeFieldBudget = 78
-	runtimeMutexBudget = 10
+	// 79: resourcePressure. One per-runtime calibrated physical admission
+	// controller, sampling lifecycle and rejection counter; shared by readiness
+	// and Gateway new-work routes, not a process global or per-handler controller.
+	// 77: bounded Admin Audit batching groups its queue, job lifetime and
+	// admission/close state in one owner instead of three coordination fields.
+	runtimeFieldBudget = 77
+	runtimeMutexBudget = 9
 )
 
 func TestRuntimeStaysWithinItsDeclaredBreadth(t *testing.T) {

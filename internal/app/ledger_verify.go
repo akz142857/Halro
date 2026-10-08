@@ -19,23 +19,35 @@ import (
 // checkpoint the way the fail-closed startup gate already does. Unlike the
 // startup gate, this reports rather than refuses — an operator asking "is my
 // ledger intact" wants an answer even when the answer is no.
-func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, error) {
+func VerifyLedger(ctx context.Context, cfg config.Config) (result ledger.ChainReport, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 ledger.ChainReport
+		return commandScopeZero0, commandScopeErr
+	}
+
 	if err := ctx.Err(); err != nil {
 		return ledger.ChainReport{}, err
 	}
-	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
+	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
 	if err != nil {
 		return ledger.ChainReport{}, err
 	}
-	defer dataLock.Close()
-	if err := assertMetadataSchemaCurrent(cfg.MetadataPath()); err != nil {
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() {
+		resultErr = finishCommandDataLock(dataLock, resultErr)
+		if resultErr != nil {
+			result = ledger.ChainReport{}
+		}
+	}()
+	if err := assertConfiguredMetadataSchemaCurrent(ctx, cfg); err != nil {
 		return ledger.ChainReport{}, err
 	}
-	store, err := boltstore.Open(cfg.MetadataPath())
+	store, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return ledger.ChainReport{}, err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return ledger.ChainReport{}, err
@@ -54,11 +66,21 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 		return ledger.ChainReport{}, err
 	}
 	defer clear(ledgerKey)
+	if report, selected, err := verifySelectedCommandLedgerPrefix(ctx, cfg, ledgerKey); selected {
+		if err != nil {
+			return ledger.ChainReport{}, err
+		}
+		checkpoint, err := store.LedgerChainCheckpoint()
+		if err != nil {
+			return ledger.ChainReport{}, err
+		}
+		return report, verifyLedgerCheckpoint(report, checkpoint)
+	}
 	// Sealed generations first, and every one of them: the chain runs through
 	// them into the active file, so verifying only what is still being appended
 	// to would answer a smaller question after every roll — and eventually,
 	// once the active file has just rolled, almost none of one.
-	sealed, err := ledger.VerifySegments(filepath.Dir(cfg.LedgerPath()), ledgerKey, 0)
+	sealed, err := ledger.VerifySegmentsSummary(filepath.Dir(cfg.LedgerPath()), ledgerKey, 0)
 	if err != nil {
 		return ledger.ChainReport{}, err
 	}
@@ -66,11 +88,9 @@ func VerifyLedger(ctx context.Context, cfg config.Config) (ledger.ChainReport, e
 	if err != nil {
 		return ledger.ChainReport{}, err
 	}
-	report.SealedGenerations = uint64(len(sealed))
-	for _, segment := range sealed {
-		report.SealedAuthenticated += segment.Authenticated
-		report.ChecksumOnly += segment.ChecksumOnly
-	}
+	report.SealedGenerations = sealed.Generations
+	report.SealedAuthenticated = sealed.Authenticated
+	report.ChecksumOnly += sealed.ChecksumOnly
 	if partial {
 		return ledger.ChainReport{}, errors.New("ledger has a partial tail; run `halro doctor` or start Halro to repair it before verifying")
 	}

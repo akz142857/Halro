@@ -44,7 +44,13 @@ func BootstrapAdminWithOptions(
 	username string,
 	password []byte,
 	options BootstrapAdminOptions,
-) (BootstrapAdminResult, error) {
+) (result BootstrapAdminResult, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 BootstrapAdminResult
+		return commandScopeZero0, commandScopeErr
+	}
+
 	operationID := options.OperationID
 	if operationID == "" {
 		if options.IfNeeded {
@@ -60,12 +66,13 @@ func BootstrapAdminWithOptions(
 	if err != nil {
 		return "", err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return "", err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	user, err := adminauth.NewUser(username, password, domain.AdminRoleAdministrator, time.Now().UTC())
 	if err != nil {
 		return "", err
@@ -85,7 +92,7 @@ func BootstrapAdminWithOptions(
 	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
 		return "", err
 	}
-	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin bootstrap"); err != nil {
+	if _, err := attachConfiguredMetadataJournal(store, secretVault, masterKey, "admin bootstrap", cfg); err != nil {
 		return "", err
 	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
@@ -93,7 +100,7 @@ func BootstrapAdminWithOptions(
 		return "", err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return "", err
 	}
@@ -221,17 +228,24 @@ func ResetAdminPassword(
 	cfg config.Config,
 	username string,
 	password []byte,
-) error {
+) (resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	current, err := store.GetAdminUser(ctx, username)
 	if err != nil {
 		return errors.New("admin user was not found")
@@ -260,7 +274,7 @@ func ResetAdminPassword(
 	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
 		return err
 	}
-	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin password reset"); err != nil {
+	if _, err := attachConfiguredMetadataJournal(store, secretVault, masterKey, "admin password reset", cfg); err != nil {
 		return err
 	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
@@ -268,7 +282,7 @@ func ResetAdminPassword(
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}
@@ -298,17 +312,24 @@ func ResetAdminPassword(
 
 // ResetAdminMFA is an offline break-glass operation. It removes all second
 // factors and invalidates every session for the selected administrator.
-func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) error {
+func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) (resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
 	if err != nil {
 		return err
 	}
-	defer dataLock.Close()
-	store, err := boltstore.Open(cfg.MetadataPath())
+	ctx = withCommandDataLock(ctx, dataLock)
+	defer func() { resultErr = finishCommandDataLock(dataLock, resultErr) }()
+	store, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
-	defer store.Close()
+	defer func() { resultErr = errors.Join(resultErr, store.Close()) }()
 	if _, err := store.GetAdminUser(ctx, username); err != nil {
 		return errors.New("admin user was not found")
 	}
@@ -325,7 +346,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 	if err = verifyVaultKeyCheck(store, secretVault); err != nil {
 		return err
 	}
-	if _, err := attachMetadataJournal(store, secretVault, masterKey, "admin MFA reset"); err != nil {
+	if _, err := attachConfiguredMetadataJournal(store, secretVault, masterKey, "admin MFA reset", cfg); err != nil {
 		return err
 	}
 	auditKey, err := loadAuditHMACKey(store, secretVault, masterKey)
@@ -333,7 +354,7 @@ func ResetAdminMFA(ctx context.Context, cfg config.Config, username string) erro
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{})
 	if err != nil {
 		return err
 	}

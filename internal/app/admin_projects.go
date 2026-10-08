@@ -142,11 +142,10 @@ func (r *Runtime) updateAdminProject(writer http.ResponseWriter, request *http.R
 	}
 	replacement.DeletedAt = current.DeletedAt
 	if current.RunGovernance.Enabled && !replacement.RunGovernance.Enabled {
-		activeRuns := 0
-		for _, run := range r.accounting.Runs(current.ID, "") {
-			if domain.EffectiveRunStatus(run, r.clockNow()) == domain.RunActive {
-				activeRuns++
-			}
+		activeRuns, err := r.accounting.ReadActiveRunCount(request.Context(), current.ID, r.clockNow())
+		if err != nil {
+			writeGovernanceOperationError(writer, err, "run")
+			return
 		}
 		if activeRuns > 0 {
 			writeJSON(writer, http.StatusConflict, map[string]any{

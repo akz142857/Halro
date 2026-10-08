@@ -1,13 +1,16 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/tokenguard"
 )
 
@@ -150,6 +153,19 @@ func TestCorruptEWMACheckpointFallsBackToFixedLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("corrupt detect-only state prevented startup: %v", err)
 	}
+	manager, err := tokenguard.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := manager.MarshalCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := runtime.tokenGuard.MarshalCheckpoint()
+	if err != nil || !bytes.Equal(actual, expected) {
+		runtime.Close()
+		t.Fatalf("startup retained corrupt advisory state: %s, %v", actual, err)
+	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -159,14 +175,20 @@ func TestCorruptEWMACheckpointFallsBackToFixedLimits(t *testing.T) {
 	}
 	defer store.Close()
 	payload, err := store.TokenGuardCheckpoint()
-	if err != nil {
-		t.Fatal(err)
+	// The corrupt checkpoint is deleted during startup. An immediate Close
+	// may retire maintenance before its first callback, so an absent advisory
+	// checkpoint is also the safe fixed-limit state proved above.
+	if errors.Is(err, boltstore.ErrNotFound) {
+		return
 	}
-	manager, err := tokenguard.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := manager.RestoreCheckpoint(payload); err != nil {
 		t.Fatalf("corrupt checkpoint was not replaced by safe state: %v", err)
+	}
+	restored, err := manager.MarshalCheckpoint()
+	if err != nil || !bytes.Equal(restored, expected) {
+		t.Fatalf("persisted checkpoint retained corrupt state: %s, %v", restored, err)
 	}
 }

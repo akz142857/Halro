@@ -16,6 +16,7 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/failurecapture"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/provider"
 )
 
 type failureRow struct {
@@ -36,23 +37,15 @@ type failuresEnvelope struct {
 	NextCursor string       `json:"next_cursor"`
 }
 
-// seedFailures applies one succeeded, one provider-failed and one rejected
-// request straight into the runtime's aggregate. Driving real traffic through
-// the gateway would exercise the accounting path this endpoint deliberately
-// only reads from, and would not let the test choose a rejection.
+// seedFailures writes actual accounting facts for one succeeded, one
+// provider-failed and one rejected request without invoking a provider.
 func seedFailures(t *testing.T, runtime *Runtime) {
 	t.Helper()
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
-	var sequence uint64
+	runtime.stopBackgroundWork()
 	apply := func(event ledger.Event) {
 		t.Helper()
-		sequence++
-		if err := runtime.usage.Apply(ledger.Record{
-			Generation: 1,
-			Sequence:   sequence, Offset: int64(sequence * 100), Event: event,
-		}); err != nil {
-			t.Fatal(err)
-		}
+		appendSeededUsageFact(t, runtime, event)
 	}
 	request := func(requestID, outcome string, at time.Time, attempts ...ledger.Event) {
 		apply(ledger.Event{
@@ -70,15 +63,20 @@ func seedFailures(t *testing.T, runtime *Runtime) {
 		})
 	}
 	settled := func(requestID, attemptID, outcome, class string, status int) ledger.Event {
-		return ledger.Event{
+		event := ledger.Event{
 			EventID: attemptID + "_settled", Kind: ledger.EventAttemptSettled,
 			RequestID: requestID, AttemptID: attemptID, AttemptNumber: 1,
 			ProjectID: "project_1", PeriodID: "2026-08-21", ProviderID: "provider_1",
 			DeploymentID: "dep_1", ProviderModel: "gpt-4o", RequestedModel: "chat",
 			OfferingID: domain.OfferingOpenAIAPI, ProfileID: domain.ProfileOpenAIChatEmbeddings,
-			OccurredAt: now, Outcome: outcome, ErrorClass: class, HTTPStatus: status,
+			ProviderPrimitive: provider.PrimitiveOpenAIChatCompletions,
+			OccurredAt:        now, Outcome: outcome, ErrorClass: class, HTTPStatus: status,
 			CommittedMicrosUSD: ledger.MicrosUSD(1),
 		}
+		if class != "" {
+			event.FailurePhase = "provider"
+		}
+		return event
 	}
 	request("req_ok", "success", now, settled("req_ok", "att_ok", "success", "", 0))
 	request("req_failed", "provider_error", now.Add(time.Minute),
@@ -125,8 +123,8 @@ func TestUsageFailuresListsEveryFailedRequestOncePerRequest(t *testing.T) {
 	runtime, cookie := openSeededRuntime(t)
 	envelope := readFailures(t, runtime, cookie, "/admin/api/v1/usage/failures")
 
-	if uint64(len(envelope.Items)) != runtime.usage.Metrics().RequestsError {
-		t.Fatalf("%d rows for %d failed requests", len(envelope.Items), runtime.usage.Metrics().RequestsError)
+	if uint64(len(envelope.Items)) != usageMetricsForTest(t, runtime).RequestsError {
+		t.Fatalf("%d rows for %d failed requests", len(envelope.Items), usageMetricsForTest(t, runtime).RequestsError)
 	}
 	if len(envelope.Items) != 2 {
 		t.Fatalf("items=%#v", envelope.Items)

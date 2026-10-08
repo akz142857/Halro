@@ -14,6 +14,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/adminauth"
 	"github.com/akz142857/Halro/internal/audit"
+	"github.com/akz142857/Halro/internal/authenticatedstate"
 	"github.com/akz142857/Halro/internal/backup"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
@@ -21,6 +22,7 @@ import (
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/metadatajournal"
+	"github.com/akz142857/Halro/internal/ownedfile"
 	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -49,7 +51,11 @@ type PromoteMemberResult struct {
 // snapshot into one cluster member. Seed transport is responsible for copying
 // and digest-verifying that snapshot first; this function atomically publishes
 // only the node-local authenticated cluster state and never edits native data.
-func EstablishMemberState(ctx context.Context, cfg config.Config, role replication.Role, incarnation string, term uint64) error {
+func EstablishMemberState(ctx context.Context, cfg config.Config, role replication.Role, incarnation string, term uint64) (resultErr error) {
+	ctx, _, scopeErr := commandBudgetContext(ctx, cfg)
+	if scopeErr != nil {
+		return scopeErr
+	}
 	if cfg.Replication == nil {
 		return errors.New("replication configuration is required to establish member state")
 	}
@@ -80,7 +86,7 @@ func EstablishMemberState(ctx context.Context, cfg config.Config, role replicati
 		return err
 	}
 	defer secretVault.Close()
-	metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	metadata, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -108,15 +114,24 @@ func EstablishMemberState(ctx context.Context, cfg config.Config, role replicati
 		return err
 	}
 	defer clear(metadataKey)
+	indexDiskOwner, indexLimit, err := newOneShotLedgerSegmentIndexDiskOwner(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !errors.Is(resultErr, ownedfile.ErrRetirement) && !errors.Is(resultErr, ledger.ErrSegmentRetirement) {
+			resultErr = errors.Join(resultErr, indexDiskOwner.Release())
+		}
+	}()
 	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
 		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
 		MetadataPath: metadata.MetadataJournalPath(), LedgerKey: ledgerKey, AuditKey: auditKey,
-		GovernanceKey: governanceKey, MetadataKey: metadataKey,
+		GovernanceKey: governanceKey, MetadataKey: metadataKey, LedgerDirectoryIndexMaxBytes: indexLimit,
 	})
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() { resultErr = errors.Join(resultErr, source.Close()) }()
 	header := replication.OrderingHeader{ClusterID: cfg.Replication.ClusterID, Incarnation: incarnation}
 	for store := replication.StoreLedger; store <= replication.StoreMetadata; store++ {
 		cursor, err := source.Cursor(store)
@@ -156,8 +171,9 @@ func EstablishMemberState(ctx context.Context, cfg config.Config, role replicati
 	if err := os.Chmod(staging, 0o700); err != nil {
 		return err
 	}
-	journal, err := replication.OpenOrderingJournal(
+	journal, err := replication.OpenOrderingJournalWithOptions(
 		filepath.Join(staging, "ordering.journal"), clusterKey[:], header, 0, [32]byte{},
+		orderingJournalOptions(cfg),
 	)
 	if err != nil {
 		return err
@@ -238,6 +254,14 @@ func PromoteMember(ctx context.Context, cfg config.Config, options PromoteMember
 		return PromoteMemberResult{}, fmt.Errorf("promotion requires the local Halro process to be stopped: %w", err)
 	}
 	defer dataLock.Close()
+	if info, err := os.Lstat(haMemoryStateBootstrapPath(cfg)); err == nil {
+		if !info.Mode().IsRegular() {
+			return PromoteMemberResult{}, authenticatedstate.ErrSealIneligible
+		}
+		return promoteHASelectedMember(ctx, cfg, dataLock, options, nil)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return PromoteMemberResult{}, err
+	}
 	masterKey, err := unlockMemberMasterKey(ctx, cfg)
 	if err != nil {
 		return PromoteMemberResult{}, err
@@ -333,9 +357,15 @@ func appendOfflinePromotionAudit(
 	promises []replication.PromotionPromise,
 	options PromoteMemberOptions,
 ) error {
-	journal, err := replication.OpenExistingOrderingJournal(
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
+	journal, err := replication.OpenExistingOrderingJournalWithOptions(
 		cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation,
-		state.DurableIndex, state.OrderingHeadMAC,
+		state.DurableIndex, state.OrderingHeadMAC, orderingJournalOptions(cfg),
 	)
 	if err != nil {
 		return err
@@ -362,7 +392,7 @@ func appendOfflinePromotionAudit(
 	if _, err := coordinator.RecordDurable(replication.Frame{Kind: replication.KindLeadershipEstablished, Store: replication.StoreNone}); err != nil {
 		return err
 	}
-	metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	metadata, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -377,7 +407,7 @@ func appendOfflinePromotionAudit(
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{
 		RequireExisting: true,
 		AfterDurable: func(batch audit.DurableBatch) error {
 			_, recordErr := coordinator.RecordAuditBatch(batch)
@@ -462,11 +492,26 @@ func promotionHello(state replication.MemberState) replication.Hello {
 }
 
 func authenticateClusterOperator(ctx context.Context, cfg config.Config, masterKey []byte, username string, password []byte, totpCode string) error {
-	metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
+	metadata, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
 	defer metadata.Close()
+	return authenticateClusterOperatorMetadata(ctx, cfg, masterKey, metadata, username, password, totpCode)
+}
+
+type clusterOperatorMetadata interface {
+	GetAdminUser(context.Context, string) (domain.AdminUser, error)
+	ListAdminMFAAuthenticators(context.Context, string) ([]domain.AdminMFAAuthenticator, error)
+}
+
+func authenticateClusterOperatorMetadata(ctx context.Context, cfg config.Config, masterKey []byte, metadata clusterOperatorMetadata, username string, password []byte, totpCode string) error {
 	user, err := metadata.GetAdminUser(ctx, username)
 	if err != nil {
 		adminauth.DummyVerify(password)
@@ -491,7 +536,7 @@ func authenticateClusterOperator(ctx context.Context, cfg config.Config, masterK
 	if totpCode == "" {
 		return errors.New("administrator TOTP code is required")
 	}
-	watermarks, err := readTOTPWatermarks(cfg)
+	watermarks, err := readTOTPWatermarksContext(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -529,7 +574,11 @@ func totpWatermarkPath(cfg config.Config) string {
 }
 
 func readTOTPWatermarks(cfg config.Config) (map[string]int64, error) {
-	payload, err := os.ReadFile(totpWatermarkPath(cfg))
+	return readTOTPWatermarksContext(context.Background(), cfg)
+}
+
+func readTOTPWatermarksContext(ctx context.Context, cfg config.Config) (map[string]int64, error) {
+	payload, err := readBoundedRegularFile(ctx, totpWatermarkPath(cfg), 64<<10)
 	if errors.Is(err, os.ErrNotExist) {
 		return make(map[string]int64), nil
 	}
@@ -552,6 +601,21 @@ func readTOTPWatermarks(cfg config.Config) (map[string]int64, error) {
 }
 
 func writeTOTPWatermarks(cfg config.Config, watermarks map[string]int64) error {
+	// Validate the graph and worst escaped key bytes before Marshal allocates
+	// its entire output. The read format already limits keys to 128 bytes.
+	if len(watermarks) > 4096 {
+		return errors.New("TOTP watermark map exceeds its entry bound")
+	}
+	remaining := (64 << 10) - 2
+	for id, step := range watermarks {
+		if id == "" || len(id) > 128 || step < 0 {
+			return errors.New("TOTP watermark map contains an invalid entry")
+		}
+		remaining -= 6*len(id) + 24
+		if remaining < 0 {
+			return errors.New("TOTP watermark map exceeds its encoded size bound")
+		}
+	}
 	payload, err := json.Marshal(watermarks)
 	if err != nil {
 		return err
@@ -589,6 +653,58 @@ func writeTOTPWatermarks(cfg config.Config, watermarks map[string]int64) error {
 // replicates and confirms that suffix before readiness, so a backup report can
 // never be a local-only Audit frame.
 func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath string, backupKey []byte, username string, password []byte, totpCode string) (backup.Manifest, error) {
+	ctx, scopeErr := backupWorkspaceContext(ctx, cfg)
+	if scopeErr != nil {
+		return backup.Manifest{}, scopeErr
+	}
+	return reportReplicaBackup(ctx, cfg, username, password, totpCode, func() (backup.Manifest, string, error) {
+		m, err := backup.VerifyContext(ctx, archivePath, backupKey)
+		if err != nil {
+			return backup.Manifest{}, "", err
+		}
+		encoded, err := json.Marshal(m)
+		if err != nil {
+			return backup.Manifest{}, "", err
+		}
+		digest := sha256.Sum256(encoded)
+		return m, hex.EncodeToString(digest[:]), nil
+	})
+}
+
+func ReportReplicaBackupSummary(ctx context.Context, cfg config.Config, archivePath string, backupKey []byte, username string, password []byte, totpCode string) (backup.ArchiveSummary, error) {
+	ctx, scopeErr := backupWorkspaceContext(ctx, cfg)
+	if scopeErr != nil {
+		return backup.ArchiveSummary{}, scopeErr
+	}
+	var summary backup.ArchiveSummary
+	_, err := reportReplicaBackup(ctx, cfg, username, password, totpCode, func() (backup.Manifest, string, error) {
+		h, err := backup.OpenVerified(ctx, archivePath, backupKey)
+		if err != nil {
+			return backup.Manifest{}, "", err
+		}
+		summary = h.Summary()
+		digest, err := h.ManifestDigest()
+		err = errors.Join(err, h.Close())
+		if err != nil {
+			return backup.Manifest{}, "", err
+		}
+		m := summary.Manifest
+		m.FormatVersion = summary.CompatibilityVersion
+		return m, digest, nil
+	})
+	if err != nil {
+		return backup.ArchiveSummary{}, err
+	}
+	return summary, nil
+}
+
+func reportReplicaBackup(ctx context.Context, cfg config.Config, username string, password []byte, totpCode string, verify func() (backup.Manifest, string, error)) (result backup.Manifest, resultErr error) {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+		var commandScopeZero0 backup.Manifest
+		return commandScopeZero0, commandScopeErr
+	}
+
 	if cfg.Replication == nil {
 		return backup.Manifest{}, errors.New("replication configuration is required")
 	}
@@ -599,7 +715,12 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("backup reporting requires the Primary process to be stopped: %w", err)
 	}
-	defer dataLock.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, dataLock.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	masterKey, err := unlockMemberMasterKey(ctx, cfg)
 	if err != nil {
 		return backup.Manifest{}, err
@@ -616,7 +737,7 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 	if err := authenticateClusterOperator(ctx, cfg, masterKey, username, password, totpCode); err != nil {
 		return backup.Manifest{}, err
 	}
-	manifest, err := backup.Verify(archivePath, backupKey)
+	manifest, manifestDigest, err := verify()
 	if err != nil {
 		return backup.Manifest{}, err
 	}
@@ -630,11 +751,16 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 		return backup.Manifest{}, err
 	}
 	defer publisher.Close()
-	journal, err := replication.OpenExistingOrderingJournal(cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation, state.DurableIndex, state.OrderingHeadMAC)
+	journal, err := replication.OpenExistingOrderingJournalWithOptions(cfg.OrderingJournalPath(), clusterKey[:], state.ClusterID, state.Incarnation, state.DurableIndex, state.OrderingHeadMAC, orderingJournalOptions(cfg))
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	defer journal.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, journal.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	peerNames := make([]string, 0, len(state.Peers))
 	for _, peer := range state.Peers {
 		peerNames = append(peerNames, peer.Name)
@@ -653,11 +779,16 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 			return backup.Manifest{}, fmt.Errorf("record offline Primary leadership before backup report: %w", err)
 		}
 	}
-	metadata, err := boltstore.OpenReadOnly(cfg.MetadataPath())
+	metadata, err := openCommandMetadataReadOnly(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	defer metadata.Close()
+	defer func() {
+		resultErr = errors.Join(resultErr, metadata.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	secretVault, err := vault.New(masterKey)
 	if err != nil {
 		return backup.Manifest{}, err
@@ -668,19 +799,19 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 		return backup.Manifest{}, err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{RequireExisting: true, AfterDurable: func(batch audit.DurableBatch) error {
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{RequireExisting: true, AfterDurable: func(batch audit.DurableBatch) error {
 		_, appendErr := coordinator.RecordAuditBatch(batch)
 		return appendErr
 	}})
 	if err != nil {
 		return backup.Manifest{}, err
 	}
-	defer auditLog.Close()
-	manifestJSON, err := json.Marshal(manifest)
-	if err != nil {
-		return backup.Manifest{}, err
-	}
-	manifestDigest := sha256.Sum256(manifestJSON)
+	defer func() {
+		resultErr = errors.Join(resultErr, auditLog.Close())
+		if resultErr != nil {
+			result = backup.Manifest{}
+		}
+	}()
 	eventID, err := id.New("evt")
 	if err != nil {
 		return backup.Manifest{}, err
@@ -690,7 +821,7 @@ func ReportReplicaBackup(ctx context.Context, cfg config.Config, archivePath str
 		Action: "cluster.backup.reported", TargetType: "backup", TargetID: manifest.BackupID, Outcome: "success",
 		Metadata: map[string]any{
 			"backup_id": manifest.BackupID, "source_node_id": manifest.SourceNodeID,
-			"applied_index": manifest.AppliedIndex, "manifest_digest": "sha256:" + hex.EncodeToString(manifestDigest[:]),
+			"applied_index": manifest.AppliedIndex, "manifest_digest": "sha256:" + manifestDigest,
 			"verification": "passed",
 		},
 	})
@@ -713,6 +844,12 @@ func stateHasPeer(state replication.MemberState, nodeID string) bool {
 // into Standalone data. The final member identity is appended to that
 // directory's own Audit chain before cluster/ is removed.
 func LeaveMember(ctx context.Context, cfg config.Config, confirm, username string, password []byte) error {
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
 	if cfg.Replication == nil {
 		return errors.New("replication configuration is required")
 	}
@@ -784,7 +921,7 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 		return err
 	}
 	defer clear(clusterKey[:])
-	metadata, err := boltstore.OpenPrimary(cfg.MetadataPath())
+	metadata, err := openCommandMetadataPrimary(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -803,7 +940,7 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 		return err
 	}
 	defer clear(auditKey)
-	auditLog, err := audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{RequireExisting: true})
+	auditLog, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), auditKey, audit.Options{RequireExisting: true})
 	if err != nil {
 		return err
 	}
@@ -836,7 +973,13 @@ func LeaveMember(ctx context.Context, cfg config.Config, confirm, username strin
 }
 
 func authenticateLeaveAdministrator(ctx context.Context, cfg config.Config, username string, password []byte) error {
-	metadata, err := boltstore.OpenPrimary(cfg.MetadataPath())
+	ctx, _, commandScopeErr := commandBudgetContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
+	metadata, err := openCommandMetadataPrimary(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}

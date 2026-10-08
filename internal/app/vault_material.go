@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/config"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
@@ -199,7 +200,7 @@ func loadMetadataJournalHMACKey(store *boltstore.Store, secretVault *vault.Vault
 // reason is written into the epoch header when this attach publishes a new
 // epoch, so an operator reading a journal can see what replaced the one before.
 func attachMetadataJournal(
-	store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, reason string,
+	store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, reason string, maxBytes ...int64,
 ) (boltstore.JournalState, error) {
 	_, envelopeErr := store.MetadataJournalHMACEnvelope()
 	key, err := loadMetadataJournalHMACKey(store, secretVault, masterKey)
@@ -207,7 +208,7 @@ func attachMetadataJournal(
 		return boltstore.JournalState{}, err
 	}
 	defer clear(key)
-	state, err := store.AttachMetadataJournal(key, reason)
+	state, err := store.AttachMetadataJournal(key, reason, maxBytes...)
 	if err != nil {
 		return state, fmt.Errorf("attach metadata journal: %w", err)
 	}
@@ -230,6 +231,17 @@ func attachMetadataJournal(
 	return state, nil
 }
 
+func attachConfiguredMetadataJournal(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte, reason string, cfg config.Config) (boltstore.JournalState, error) {
+	if store.AuthenticatedMetadata() {
+		return validateSelectedCommandMetadataJournal(cfg, store)
+	}
+	maxBytes := int64(0)
+	if cfg.ResourceBudget != nil {
+		maxBytes = cfg.ResourceBudget.MetadataJournalDiskBytes
+	}
+	return attachMetadataJournal(store, secretVault, masterKey, reason, maxBytes)
+}
+
 // attachMetadataJournalForCLI is the attach an offline command makes before it
 // writes. It unwraps the Master Key the way every other command does, so the
 // caller does not have to hold one just to record its own writes.
@@ -241,6 +253,10 @@ func attachMetadataJournal(
 func attachMetadataJournalForCLI(
 	ctx context.Context, cfg config.Config, store *boltstore.Store, reason string,
 ) error {
+	if store.AuthenticatedMetadata() {
+		_, err := validateSelectedCommandMetadataJournal(cfg, store)
+		return err
+	}
 	masterKey, err := unlockMasterKey(ctx, cfg, store)
 	if err != nil {
 		return err
@@ -251,6 +267,19 @@ func attachMetadataJournalForCLI(
 		return err
 	}
 	defer secretVault.Close()
-	_, err = attachMetadataJournal(store, secretVault, masterKey, reason)
+	_, err = attachConfiguredMetadataJournal(store, secretVault, masterKey, reason, cfg)
 	return err
+}
+
+func validateSelectedCommandMetadataJournal(cfg config.Config, store *boltstore.Store) (boltstore.JournalState, error) {
+	state, err := store.MetadataJournalState()
+	if err != nil {
+		return state, err
+	}
+	if active, err := memoryRuntimeActivated(cfg); err != nil {
+		return state, err
+	} else if !active || state.Path != filepath.Join(memoryStateDirectory(cfg), "metadata.journal") {
+		return state, errors.New("CLI Metadata backend does not match selected format2 journal")
+	}
+	return state, nil
 }

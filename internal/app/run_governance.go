@@ -18,7 +18,6 @@ import (
 	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/idempotency"
-	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/requestmeta"
 	"github.com/go-chi/chi/v5"
 )
@@ -189,30 +188,30 @@ func (r *Runtime) getWorkUnit(writer http.ResponseWriter, request *http.Request)
 		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
 		return
 	}
-	accounting, err := r.state.GovernanceSnapshot(request.Context(), ledger.GovernanceSnapshotOptions{
-		ProjectID: principal.Project.ID, WorkUnitID: workUnitID, IncludeRuns: true,
-	})
+	accounting, found, err := r.accounting.ReadWorkUnitAccounting(request.Context(), principal.Project.ID, workUnitID, true)
 	if err != nil {
 		writeGovernanceError(writer, http.StatusServiceUnavailable, "run_governance_unavailable", "run governance state is unavailable")
 		return
 	}
-	if len(accounting.WorkUnits) != 1 {
+	if !found {
 		writeGovernanceError(writer, http.StatusNotFound, "work_unit_not_found", "work unit was not found")
 		return
 	}
-	workUnit := accounting.WorkUnits[0]
+	workUnit := accounting.WorkUnit
 	runs := accounting.Runs
 	for index := range runs {
 		runs[index].Status = domain.EffectiveRunStatus(runs[index], r.clockNow())
 	}
-	outcomeSnapshot, err := r.governance.manager.ReadOutcomeSnapshot(request.Context(), principal.Project.ID, workUnit.ID, "")
+	outcomeSnapshot, err := r.governance.manager.ReadWorkUnitOutcomes(request.Context(), governance.WorkUnitOutcomeQuery{
+		ProjectID: principal.Project.ID, WorkUnitID: workUnit.ID, Definitions: workUnit.OutcomeDefinitions,
+	})
 	if err != nil {
 		writeOutcomeError(writer, err)
 		return
 	}
 	outcomes := outcomeSnapshot.Outcomes
 	for index := range outcomes {
-		outcomes[index].Provisional = workUnit.Status == domain.WorkUnitOpen || accounting.InflightWorkUnit[workUnit.ID]
+		outcomes[index].Provisional = workUnit.Status == domain.WorkUnitOpen || accounting.Inflight
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"work_unit": workUnit, "runs": runs, "outcomes": outcomes})
 }
@@ -361,7 +360,11 @@ func (r *Runtime) getRun(writer http.ResponseWriter, request *http.Request) {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return
 	}
-	run, found := r.accounting.Run(principal.Project.ID, runID)
+	run, found, err := r.accounting.ReadRun(request.Context(), principal.Project.ID, runID)
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "run")
+		return
+	}
 	if !found {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return
@@ -392,7 +395,11 @@ func (r *Runtime) closeRun(writer http.ResponseWriter, request *http.Request) {
 		writeGovernanceError(writer, http.StatusBadRequest, "invalid_close_reason", "close reason must contain 1 to 64 characters")
 		return
 	}
-	run, found := r.accounting.Run(principal.Project.ID, runID)
+	run, found, err := r.accounting.ReadRun(request.Context(), principal.Project.ID, runID)
+	if err != nil {
+		writeGovernanceOperationError(writer, err, "run")
+		return
+	}
 	if !found {
 		writeGovernanceError(writer, http.StatusNotFound, "run_not_found", "run was not found")
 		return

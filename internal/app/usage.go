@@ -3,97 +3,22 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
-	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
-	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/usage"
-	"github.com/akz142857/Halro/internal/vault"
 )
 
-func CompactUsage(ctx context.Context, cfg config.Config) (usage.Manifest, error) {
-	aggregate, exporter, closeResources, err := openUsageOffline(ctx, cfg)
-	if err != nil {
-		return usage.Manifest{}, err
-	}
-	defer closeResources()
-	manifest, err := exporter.Export(aggregate.Snapshot())
-	if err != nil {
-		return usage.Manifest{}, fmt.Errorf("compact usage: %w", err)
-	}
-	snapshot := aggregate.Snapshot()
-	if err := exporter.Verify(&snapshot); err != nil {
-		return usage.Manifest{}, fmt.Errorf("verify compacted usage: %w", err)
-	}
-	return manifest, nil
-}
-
 func VerifyUsage(ctx context.Context, cfg config.Config) (usage.ReconciliationReport, error) {
-	aggregate, exporter, closeResources, err := openUsageOffline(ctx, cfg)
-	if err != nil {
-		return usage.ReconciliationReport{}, err
-	}
-	defer closeResources()
-	snapshot := aggregate.Snapshot()
-	report, err := exporter.Reconcile(snapshot)
-	if err != nil {
-		// A directory that has not exported yet has no manifest, and the bare
-		// "open .../manifest.json: no such file or directory" this used to
-		// print reads as data loss on an install that has none. It is still a
-		// failure — an absent manifest under a ledger that was erased looks the
-		// same — but the answer now says which state it cannot tell apart.
-		//
-		// The distinction is taken from the filesystem, not from the error:
-		// Verify hashes every partition the manifest lists and returns the same
-		// *os.PathError when one of those files is gone, which is exactly the
-		// divergence this command exists to catch.
-		if manifestAbsent(cfg) && !snapshotHoldsUsage(snapshot) {
-			return usage.ReconciliationReport{}, errors.New(
-				"usage holds no manifest: expected on a directory that has not exported usage yet, " +
-					"and indistinguishable from one whose usage tree was erased")
-		}
-		return usage.ReconciliationReport{}, fmt.Errorf("verify usage: %w", err)
-	}
-	return report, nil
+	return verifyUsageScopePolicy(ctx, cfg, 0, nil, nil, true)
 }
 
 func manifestAbsent(cfg config.Config) bool {
 	_, err := os.Stat(filepath.Join(cfg.UsagePath(), "manifest.json"))
 	return errors.Is(err, os.ErrNotExist)
-}
-
-// snapshotHoldsUsage reports whether the aggregate has anything a manifest
-// could have been expected to cover. The watermark is the authority: Apply
-// advances it for every record it applies, and retention only ever raises the
-// floor above records that were once there.
-func snapshotHoldsUsage(snapshot usage.Snapshot) bool {
-	return snapshot.Watermark.Sequence > 0 || snapshot.Floor > 0
-}
-
-func PruneUsage(
-	ctx context.Context,
-	cfg config.Config,
-	cutoff time.Time,
-) (usage.RetentionReport, error) {
-	_, exporter, closeResources, err := openUsageOffline(ctx, cfg)
-	if err != nil {
-		return usage.RetentionReport{}, err
-	}
-	defer closeResources()
-	report, err := exporter.PruneBefore(cutoff)
-	if err != nil {
-		return usage.RetentionReport{}, fmt.Errorf("prune usage: %w", err)
-	}
-	if err := exporter.Verify(nil); err != nil {
-		return usage.RetentionReport{}, fmt.Errorf("verify retained usage: %w", err)
-	}
-	return report, nil
 }
 
 // SummaryRebuildReport is what a rebuild wrote, so an operator can compare it
@@ -103,143 +28,6 @@ type SummaryRebuildReport struct {
 	RollupVersion  int              `json:"rollup_version"`
 	RollupRows     int              `json:"rollup_rows"`
 	AccountingDays int              `json:"accounting_days"`
-}
-
-// RebuildUsageSummary discards both Usage derivatives and rewrites them from
-// the Ledger.
-//
-// It needs a writable metadata handle, which is what separates it from compact,
-// verify and prune — those only read a derived view. It also replays into a
-// full aggregate rather than streaming straight into rollup rows: the rollup
-// and the checkpoint have to be written in one transaction describing one
-// position in the WAL, and the checkpoint payload only exists if the aggregate
-// does. That makes the command pay the same memory cost as `usage compact`
-// already does on a long-lived instance.
-//
-// The instance must be stopped: the data lock is exclusive, by design, because
-// one process owns one data directory.
-func RebuildUsageSummary(ctx context.Context, cfg config.Config) (SummaryRebuildReport, error) {
-	aggregate, _, closeResources, err := openUsageOffline(ctx, cfg)
-	if err != nil {
-		return SummaryRebuildReport{}, err
-	}
-	defer closeResources()
-	store, err := boltstore.Open(cfg.MetadataPath())
-	if err != nil {
-		return SummaryRebuildReport{}, fmt.Errorf("open metadata: %w", err)
-	}
-	defer store.Close()
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		return SummaryRebuildReport{}, err
-	}
-	// Clear first: a stale row that the rebuild does not happen to overwrite
-	// would survive as a phantom day, and the increments are additive, so a
-	// surviving row would be added to rather than replaced.
-	if err := store.ResetUsageDerivatives(); err != nil {
-		return SummaryRebuildReport{}, fmt.Errorf("reset usage derivatives: %w", err)
-	}
-	report := SummaryRebuildReport{
-		Watermark: snapshot.Watermark, RollupVersion: domain.RollupVersion,
-		RollupRows: len(snapshot.Rollup),
-	}
-	days := make(map[string]struct{})
-	for encoded := range snapshot.Rollup {
-		key, err := domain.DecodeRollupKey(encoded)
-		if err != nil {
-			return SummaryRebuildReport{}, err
-		}
-		days[domain.RollupDayPrefix(key.PeriodID, key.TimezoneVersion)] = struct{}{}
-	}
-	report.AccountingDays = len(days)
-	if snapshot.Watermark.Sequence == 0 {
-		// An empty ledger has nothing to write, and PutUsageCheckpoint refuses a
-		// zero watermark. Both views are already cleared, which is the correct
-		// state for an instance that has billed nothing.
-		return report, nil
-	}
-	if err := store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
-		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
-	); err != nil {
-		return SummaryRebuildReport{}, fmt.Errorf("write usage derivatives: %w", err)
-	}
-	aggregate.CommitCheckpoint(snapshot)
-	return report, nil
-}
-
-func openUsageOffline(
-	ctx context.Context,
-	cfg config.Config,
-) (*usage.Aggregate, *usage.Exporter, func() error, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, nil, err
-	}
-	dataLock, err := lock.AcquireExistingReadOnly(cfg.Storage.DataDir)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	closeResources := func() error { return dataLock.Close() }
-	aggregate := usage.NewAggregate()
-	if err := replayUsageLedger(ctx, cfg, aggregate); err != nil {
-		closeResources()
-		return nil, nil, nil, fmt.Errorf("replay usage ledger: %w", err)
-	}
-	exporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
-	if err != nil {
-		closeResources()
-		return nil, nil, nil, err
-	}
-	return aggregate, exporter, closeResources, nil
-}
-
-// Authenticate before opening an exporter or a writable metadata handle. A
-// failed replay must leave both the authority and its existing derivatives
-// alone; even a partial tail is refused rather than repaired or published.
-func replayUsageLedger(ctx context.Context, cfg config.Config, aggregate *usage.Aggregate) error {
-	store, err := boltstore.OpenReadOnly(cfg.MetadataPath())
-	if err != nil {
-		if errors.Is(err, boltstore.ErrSchemaVersionMismatch) {
-			return fmt.Errorf("%w; usage commands do not migrate metadata. Take a backup with the old binary before running `halro start` to upgrade, or use the binary that wrote this directory", err)
-		}
-		return fmt.Errorf("open metadata for ledger authentication: %w", err)
-	}
-	defer store.Close()
-	masterKey, err := unlockMasterKey(ctx, cfg, store)
-	if err != nil {
-		return err
-	}
-	defer clear(masterKey)
-	secretVault, err := vault.New(masterKey)
-	if err != nil {
-		return err
-	}
-	defer secretVault.Close()
-	if err := verifyVaultKeyCheck(store, secretVault); err != nil {
-		return err
-	}
-	ledgerKey, err := loadLedgerHMACKey(store, secretVault, masterKey)
-	if err != nil {
-		return err
-	}
-	defer clear(ledgerKey)
-	report, partial, err := ledger.InspectReplayAuthenticated(cfg.LedgerPath(), ledgerKey, func(record ledger.Record) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		return aggregate.Apply(record)
-	})
-	if err != nil {
-		return err
-	}
-	if partial {
-		return errors.New("ledger has a partial tail; start Halro to repair it before running usage commands")
-	}
-	checkpoint, err := store.LedgerChainCheckpoint()
-	if err != nil {
-		return fmt.Errorf("load ledger chain checkpoint: %w", err)
-	}
-	return verifyLedgerCheckpoint(report, checkpoint)
 }
 
 // pruneUsageWindow trims the console's aggregate back to its window.
@@ -254,11 +42,35 @@ func replayUsageLedger(ctx context.Context, cfg config.Config, aggregate *usage.
 //
 // It runs after the export, on the same tick, for the same reason.
 func (r *Runtime) pruneUsageWindow() {
+	if r.usage.disk != nil {
+		// One finite transaction per tick. The exporter requires a proof for
+		// this fresh owner/root; a persisted watermark alone cannot authorize
+		// removal. Member retention needs its separate role-owned protocol.
+		if r.replication != nil || r.consoleWindowDays() < 1 {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cutoff := time.Now().UTC().AddDate(0, 0, -r.consoleWindowDays())
+		result, err := r.usageExporter.PruneVerifiedWindowStep(ctx, r.usage.disk, cutoff, usage.DiskWindowLimits{Rows: 128, InputBytes: 8 << 20})
+		if err != nil {
+			r.logger.Warn("usage disk window not trimmed", "error", err)
+			return
+		}
+		if result.Attempts != 0 || result.Summaries != 0 || result.Versions != 0 {
+			r.logger.Info("usage disk window trimmed", "attempts", result.Attempts,
+				"requests", result.Summaries, "versions", result.Versions,
+				"floor", result.Window.Floor, "done", result.Done)
+		}
+		return
+	}
 	window := r.consoleWindowDays()
 	if window < 1 {
 		return
 	}
-	manifest, err := r.usageExporter.LoadManifest()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	manifest, err := r.usageExporter.ReadArchivePosition(ctx)
 	if err != nil {
 		// No manifest is the ordinary state of an instance that has not
 		// exported yet, and any other read failure is the export being unwell.
@@ -290,6 +102,14 @@ func (r *Runtime) pruneUsageWindow() {
 // The cutoff keeps one extra day on purpose; usage.RetentionCutoff says why,
 // and is the same rule the offline `usage prune` command applies.
 func (r *Runtime) pruneUsageArchive() {
+	if r.usage.disk != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if _, err := r.maintainUsageDiskDates(ctx, time.Now()); err != nil {
+			r.logger.Warn("usage disk archive not pruned", "error", err)
+		}
+		return
+	}
 	days := r.config.Usage.RetentionDays
 	if days < 1 {
 		return

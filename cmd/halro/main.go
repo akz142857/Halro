@@ -31,6 +31,7 @@ import (
 	"github.com/akz142857/Halro/internal/bearercred"
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/diagnostics"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/hostsecurity"
 	"github.com/akz142857/Halro/internal/logging"
@@ -199,8 +200,8 @@ var (
 	rewrapKMSCommand       = app.RewrapKMSKey
 	revokeKMSCommand       = app.RevokeKMSKeySlot
 	inspectKMSSlotsCommand = app.InspectKMSKeySlots
-	doctorCommand          = app.DoctorWithOptions
-	restoreBackupCommand   = app.RestoreBackupWithOptions
+	doctorCommand          = app.DoctorWithReport
+	restoreBackupCommand   = app.RestoreBackupWithReport
 	hardenRuntimeCommand   = hostsecurity.Harden
 )
 
@@ -217,10 +218,11 @@ var topLevelCommands = []commandDescriptor{
 	{"init", "halro init [--config <path>]", "initialize an offline data directory"},
 	{"bootstrap", "halro bootstrap [flags]", "bootstrap the first provider, route, project, and Gateway key"},
 	{"admin", "halro admin <bootstrap|reset-password|reset-mfa|setup-token> [flags]", "manage administrator access offline"},
-	{"key", "halro key <create|disable|rotate|rewrap|recover|slot> [flags]", "manage API and Master Key state"},
+	{"key", "halro key <create|disable|rotate|rotate-group|rewrap|recover|slot> [flags]", "manage API and Master Key state"},
 	{"backup", "halro backup <create|verify|restore> [flags]", "create, verify, or restore encrypted backups"},
 	{"restore", "halro restore [flags]", "restore an encrypted backup (legacy alias)"},
 	{"pricing", "halro pricing migrate [flags]", "inspect or apply pricing migrations"},
+	{"metadata", "halro metadata <migrate|ha-prepare|ha-install|ha-maintain|ha-activate|ha-checkpoint> [flags]", "migrate Standalone roots or explicitly prepare, install and confirm an HA Metadata baseline"},
 	{"usage", "halro usage <compact|verify|prune|rebuild-summary> [flags]", "maintain durable usage data"},
 	{"ledger", "halro ledger <verify|seal> [flags]", "verify or seal the accounting Ledger"},
 	{"route", "halro route <suspensions|clear-suspension> [flags]", "inspect or clear durable route suspensions"},
@@ -231,7 +233,7 @@ var topLevelCommands = []commandDescriptor{
 	{"serve", "halro serve [flags]", "serve a prepared data directory"},
 	{"healthcheck", "halro healthcheck [flags]", "check loopback readiness"},
 	{"config", "halro config <check|migrate> [--config <path>]", "validate or migrate configuration without starting Halro"},
-	{"cluster", "halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]", "seed, inspect, promote, hand off, maintain, report backup evidence, or leave an authenticated HA member"},
+	{"cluster", "halro cluster <establish|seed-approve|seed-install|status|promote|ha-rejoin|ha-receive-restart|stepdown|report-backup|maintenance|leave> [flags]", "seed, inspect, promote, rejoin a durably promised selected peer, hand off, maintain, report backup evidence, or leave an authenticated HA member"},
 	{"version", "halro version", "print build and time-zone database identity"},
 }
 
@@ -274,9 +276,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	}
 	switch arguments[0] {
+	case "metadata":
+		return runMetadataCommand(arguments[1:], os.Stdout)
 	case "cluster":
 		if len(arguments) < 2 {
-			return errors.New("usage: halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]")
+			return errors.New("usage: halro cluster <establish|seed-approve|seed-install|status|promote|ha-rejoin|ha-receive-restart|stepdown|report-backup|maintenance|leave> [flags]")
 		}
 		switch arguments[1] {
 		case "establish":
@@ -390,6 +394,10 @@ func run(arguments []string, logger *slog.Logger) error {
 				"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
 				"applied_index": state.AppliedIndex, "projection": state.Projection, "peers": state.Peers,
 			})
+		case "ha-receive-restart":
+			return runHAReceiveRestart(arguments[2:], logger, os.Stdout)
+		case "ha-rejoin":
+			return runHAPeerRejoin(arguments[2:], logger, os.Stdout)
 		case "promote":
 			flags := flag.NewFlagSet("cluster promote", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")
@@ -542,7 +550,7 @@ func run(arguments []string, logger *slog.Logger) error {
 				totpCode = strings.TrimSpace(string(payload))
 				clear(payload)
 			}
-			manifest, err := app.ReportReplicaBackup(context.Background(), cfg, *backupPath, key, *username, password, totpCode)
+			manifest, err := app.ReportReplicaBackupSummary(context.Background(), cfg, *backupPath, key, *username, password, totpCode)
 			if err != nil {
 				return err
 			}
@@ -958,9 +966,11 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 	case "key":
 		if len(arguments) < 2 {
-			return errors.New("usage: halro key <create|disable|rotate|rewrap|recover|slot>")
+			return errors.New("usage: halro key <create|disable|rotate|rotate-group|rewrap|recover|slot>")
 		}
 		switch arguments[1] {
+		case "rotate-group":
+			return runKeyGroupRotation(arguments[2:])
 		case "slot":
 			if len(arguments) < 3 {
 				return errors.New("usage: halro key slot <status|revoke>")
@@ -1168,15 +1178,10 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			manifest, err := app.CreateBackupWithOptions(
-				context.Background(), cfg, *configPath, absoluteOutput, key, app.CreateBackupOptions{Replica: *replicaBackup},
-			)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(manifest)
+			return app.WriteCreateBackup(context.Background(), cfg, *configPath, absoluteOutput, key, app.CreateBackupOptions{Replica: *replicaBackup}, os.Stdout)
 		case "verify":
 			flags := flag.NewFlagSet("backup verify", flag.ContinueOnError)
+			configPath := flags.String("config", "", "optional calibrated resource budget configuration")
 			backupPath := flags.String("file", "", "encrypted backup file")
 			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
 			if err := flags.Parse(arguments[2:]); err != nil {
@@ -1190,11 +1195,14 @@ func run(arguments []string, logger *slog.Logger) error {
 				return err
 			}
 			defer clear(key)
-			manifest, err := app.VerifyBackup(*backupPath, key)
-			if err != nil {
-				return err
+			if *configPath != "" {
+				cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
+				if err != nil {
+					return err
+				}
+				return app.WriteVerifyBackupWithConfig(context.Background(), cfg, *backupPath, key, os.Stdout)
 			}
-			return json.NewEncoder(os.Stdout).Encode(manifest)
+			return app.WriteVerifyBackup(context.Background(), *backupPath, key, os.Stdout)
 		case "restore":
 			flags := flag.NewFlagSet("backup restore", flag.ContinueOnError)
 			configPath := flags.String("config", "config.yaml", "configuration file")
@@ -1219,15 +1227,14 @@ func run(arguments []string, logger *slog.Logger) error {
 				return err
 			}
 			defer clear(key)
-			result, err := restoreBackupCommand(
+			return restoreBackupCommand(
 				context.Background(), cfg, *backupPath, key, *confirmation,
 				app.RestoreOptions{UseRecoverySlot: *useRecovery, ConfirmRecoverySlot: *confirmRecovery, NewIncarnation: *incarnation},
+				func(result app.RestoreResult, walk func(func(string) error) error) error {
+					writeRestoreStatus(os.Stderr, result)
+					return app.WriteRestoreReportJSON(context.Background(), result, walk, os.Stdout)
+				},
 			)
-			if err != nil {
-				return err
-			}
-			writeRestoreStatus(os.Stderr, result)
-			return json.NewEncoder(os.Stdout).Encode(result)
 		default:
 			return fmt.Errorf("unknown backup command %q", arguments[1])
 		}
@@ -1281,8 +1288,34 @@ func run(arguments []string, logger *slog.Logger) error {
 		flags := flag.NewFlagSet("usage "+arguments[1], flag.ContinueOnError)
 		configPath := flags.String("config", "config.yaml", "configuration file")
 		before := flags.String("before", "", "prune partitions before YYYY-MM-DD")
+		var afterSequence uint64
+		var retainFrom string
+		if arguments[1] == "verify" {
+			flags.StringVar(&retainFrom, "retain-from", "", "verify all native attempts retained from this explicit UTC YYYY-MM-DD (incompatible with --after-sequence)")
+			flags.Uint64Var(&afterSequence, "after-sequence", 0, "verify native interval after this explicit retained sequence (default genesis)")
+		}
 		if err := flags.Parse(arguments[2:]); err != nil {
 			return err
+		}
+		var retainDate time.Time
+		var afterProvided, retainProvided bool
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "retain-from" {
+				retainProvided = true
+			}
+			if f.Name == "after-sequence" {
+				afterProvided = true
+			}
+		})
+		if retainProvided {
+			if afterProvided {
+				return errors.New("--retain-from cannot be combined with --after-sequence")
+			}
+			var err error
+			retainDate, err = time.Parse("2006-01-02", retainFrom)
+			if err != nil || retainDate.IsZero() || retainDate.Year() < 1 || retainDate.Format("2006-01-02") != retainFrom {
+				return fmt.Errorf("invalid --retain-from date %q: expected UTC YYYY-MM-DD", retainFrom)
+			}
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
@@ -1301,7 +1334,13 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(manifest)
 		case "verify":
-			report, err := app.VerifyUsage(context.Background(), cfg)
+			var report usage.ReconciliationReport
+			var err error
+			if retainFrom == "" {
+				report, err = app.VerifyUsageAfter(context.Background(), cfg, afterSequence)
+			} else {
+				report, err = app.VerifyUsageRetainedDates(context.Background(), cfg, retainDate)
+			}
 			if err != nil {
 				return err
 			}
@@ -1375,15 +1414,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err := hardenSecretHandlingCommand(); err != nil {
 				return err
 			}
-			anchors, err := app.LoadAuditAnchorsFile(*anchorsPath)
-			if err != nil {
-				return err
-			}
-			verdicts, err := app.VerifyAuditAnchors(context.Background(), cfg, anchors)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(verdicts)
+			return app.WriteVerifyAuditAnchorsFile(context.Background(), cfg, *anchorsPath, os.Stdout)
 		default:
 			return errors.New("usage: halro audit verify|verify-anchor --config <path> [--anchors <path>]")
 		}
@@ -1405,11 +1436,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			return err
 		}
 		if arguments[1] == "seal" {
-			report, err := app.SealLedger(context.Background(), cfg, *compress)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(report)
+			return app.WriteSealLedger(context.Background(), cfg, *compress, os.Stdout)
 		}
 		report, err := app.VerifyLedger(context.Background(), cfg)
 		if err != nil {
@@ -1453,9 +1480,9 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err := hardenSecretHandlingCommand(); err != nil {
 			return err
 		}
-		report, doctorErr := doctorCommand(context.Background(), cfg, app.DoctorOptions{NoKMS: *noKMS})
-		encodeErr := json.NewEncoder(os.Stdout).Encode(report)
-		return errors.Join(doctorErr, encodeErr)
+		return doctorCommand(context.Background(), cfg, app.DoctorOptions{NoKMS: *noKMS}, func(report app.DoctorReport) error {
+			return json.NewEncoder(os.Stdout).Encode(report)
+		})
 	case "metrics":
 		if len(arguments) < 2 {
 			return errors.New("usage: halro metrics <token|rotate|revoke|list|verify-audit> --config <path>")
@@ -1622,6 +1649,11 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	closeDiagnostics, err := diagnostics.Start(os.Getenv("HALRO_PPROF_LISTEN"), logger)
+	if err != nil {
+		return err
+	}
+	defer closeDiagnostics()
 	guidePrinted := false
 	for {
 		if waited, err := app.WaitForMemberMaintenance(ctx, cfg, logger); err != nil {

@@ -1,13 +1,14 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/dirscan"
 )
 
 var errRetainedVaultCiphertext = errors.New("retained Vault ciphertext prevents Master Key rotation")
@@ -17,6 +18,10 @@ var errRetainedVaultCiphertext = errors.New("retained Vault ciphertext prevents 
 // as one recoverable generation. Rotating only metadata would strand captures,
 // queued inputs and locally held results under the retired key.
 func refuseRotationWithRetainedCiphertext(cfg config.Config) error {
+	return refuseRotationWithRetainedCiphertextContext(context.Background(), cfg)
+}
+
+func refuseRotationWithRetainedCiphertextContext(ctx context.Context, cfg config.Config) error {
 	for _, target := range []struct {
 		name string
 		path string
@@ -24,7 +29,7 @@ func refuseRotationWithRetainedCiphertext(cfg config.Config) error {
 		{name: "failure captures", path: filepath.Join(cfg.Storage.DataDir, "failures")},
 		{name: "provider objects", path: filepath.Join(cfg.Storage.DataDir, "provider-objects")},
 	} {
-		present, err := retainedDirectoryHasObjects(target.path)
+		present, err := retainedDirectoryHasObjectsContext(ctx, target.path)
 		if err != nil {
 			return fmt.Errorf("inspect %s before Master Key rotation: %w", target.name, err)
 		}
@@ -36,18 +41,19 @@ func refuseRotationWithRetainedCiphertext(cfg config.Config) error {
 }
 
 func retainedDirectoryHasObjects(root string) (bool, error) {
+	return retainedDirectoryHasObjectsContext(context.Background(), root)
+}
+
+func retainedDirectoryHasObjectsContext(ctx context.Context, root string) (bool, error) {
 	present := false
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if path == root || entry.IsDir() {
+	err := dirscan.Tree(ctx, root, 32, func(_ string, _ *os.File, entry os.FileInfo) error {
+		if entry.IsDir() {
 			return nil
 		}
 		present = true
-		return fs.SkipAll
+		return dirscan.Stop
 	})
-	if errors.Is(err, os.ErrNotExist) {
+	if dirscan.Missing(err) {
 		return false, nil
 	}
 	return present, err

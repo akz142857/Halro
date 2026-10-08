@@ -3,17 +3,16 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/durable"
 	"github.com/akz142857/Halro/internal/masterkey"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -41,7 +40,25 @@ func rotateMasterKeyWithHook(
 	cfg config.Config,
 	newKeyFile string,
 	hook func(string) error,
-) (KeyRotationResult, error) {
+) (finalResult KeyRotationResult, resultErr error) {
+	if cfg.Replication != nil {
+		return KeyRotationResult{}, ErrHAGroupKeyRotationRequired
+	}
+	if active, err := memoryRuntimeActivated(cfg); err != nil {
+		return KeyRotationResult{}, err
+	} else if active {
+		return rotateSelectedMasterKey(ctx, cfg, newKeyFile, hook, nil)
+	}
+	ctx, finish, scopeErr := keyMaintenanceContext(ctx, cfg)
+	if scopeErr != nil {
+		return KeyRotationResult{}, scopeErr
+	}
+	defer func() {
+		resultErr = finishKeyMaintenance(ctx, finish, resultErr)
+		if resultErr != nil {
+			finalResult = KeyRotationResult{}
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -64,7 +81,12 @@ func rotateMasterKeyWithHook(
 	if err != nil {
 		return KeyRotationResult{}, fmt.Errorf("acquire offline key rotation lock: %w", err)
 	}
-	defer dataLock.Close()
+	if scope := keyScope(ctx); scope != nil {
+		scope.lock = dataLock
+	} else {
+		ctx = withCommandDataLock(ctx, dataLock)
+		defer dataLock.Close()
+	}
 
 	currentKey, err := currentStore.Unlock(ctx)
 	if err != nil {
@@ -94,7 +116,7 @@ func rotateMasterKeyWithHook(
 	}
 	defer newVault.Close()
 
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+	metadata, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -130,9 +152,9 @@ func rotateMasterKeyWithHook(
 	}
 
 	if currentAuthenticates && keysEqual {
-		credentials, listErr := metadata.ListCredentials(ctx)
-		result.Credentials = len(credentials)
-		metadata.Close()
+		count, listErr := countMaintenanceCredentials(ctx, metadata)
+		result.Credentials = count
+		listErr = errors.Join(listErr, metadata.Close())
 		if listErr != nil {
 			return KeyRotationResult{}, listErr
 		}
@@ -155,9 +177,9 @@ func rotateMasterKeyWithHook(
 			metadata.Close()
 			return KeyRotationResult{}, err
 		}
-		credentials, listErr := metadata.ListCredentials(ctx)
-		result.Credentials = len(credentials)
-		metadata.Close()
+		count, listErr := countMaintenanceCredentials(ctx, metadata)
+		result.Credentials = count
+		listErr = errors.Join(listErr, metadata.Close())
 		if listErr != nil {
 			return KeyRotationResult{}, listErr
 		}
@@ -185,16 +207,14 @@ func rotateMasterKeyWithHook(
 		metadata.Close()
 		return KeyRotationResult{}, errors.New("vault keyring version is exhausted")
 	}
-	if err := refuseRotationWithRetainedCiphertext(cfg); err != nil {
+	if err := refuseRotationWithRetainedCiphertextContext(ctx, cfg); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
-	credentials, err := metadata.ListCredentials(ctx)
+	result.Credentials, err = countMaintenanceCredentials(ctx, metadata)
 	if err != nil {
-		metadata.Close()
-		return KeyRotationResult{}, err
+		return KeyRotationResult{}, errors.Join(err, metadata.Close())
 	}
-	result.Credentials = len(credentials)
 	auditKey, err := loadAuditHMACKey(metadata, currentVault, currentKey)
 	if err != nil {
 		metadata.Close()
@@ -215,7 +235,7 @@ func rotateMasterKeyWithHook(
 		return KeyRotationResult{}, err
 	}
 	defer clear(journalKey)
-	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.started"); err != nil {
+	if err := appendRotationAudit(ctx, metadata, cfg, auditKey, "security.master_key_rotation.started"); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
@@ -229,8 +249,7 @@ func rotateMasterKeyWithHook(
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
-	defer os.Remove(stagePath)
-	if _, err := metadata.Snapshot(stagePath); err != nil {
+	if _, err := snapshotCommandMetadata(ctx, cfg, metadata, stagePath); err != nil {
 		metadata.Close()
 		return KeyRotationResult{}, err
 	}
@@ -240,7 +259,7 @@ func rotateMasterKeyWithHook(
 	if err := callRotationHook(hook, "after_metadata_snapshot"); err != nil {
 		return KeyRotationResult{}, err
 	}
-	stage, err := boltstore.OpenForWholeFilePublish(stagePath)
+	stage, err := openCommandMetadataPublish(ctx, cfg, stagePath)
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -271,7 +290,8 @@ func rotateMasterKeyWithHook(
 		stage.Close()
 		return KeyRotationResult{}, err
 	}
-	err = stage.RewriteVaultMaterial(boltstore.VaultRewrite{
+	err = stage.RewriteVaultMaterialStaged(boltstore.VaultRewrite{
+		Context:       ctx,
 		VaultKeyCheck: keyCheck, AuditHMACEnvelope: auditEnvelope, LedgerHMACEnvelope: ledgerEnvelope,
 		MetadataJournalHMACEnvelope: journalEnvelope,
 		Keyring: boltstore.VaultKeyring{
@@ -318,10 +338,9 @@ func rotateMasterKeyWithHook(
 		err = compactPathErr
 	}
 	if compactPath != "" {
-		defer os.Remove(compactPath)
 	}
 	if err == nil {
-		err = stage.CompactSnapshot(compactPath)
+		err = compactCommandMetadata(ctx, cfg, stage, compactPath)
 	}
 	if closeErr := stage.Close(); err == nil {
 		err = closeErr
@@ -330,7 +349,7 @@ func rotateMasterKeyWithHook(
 		return KeyRotationResult{}, err
 	}
 	result.NewKeyVersion = keyring.ActiveKeyVersion + 1
-	compacted, err := boltstore.OpenForWholeFilePublish(compactPath)
+	compacted, err := openCommandMetadataPublish(ctx, cfg, compactPath)
 	if err != nil {
 		return KeyRotationResult{}, err
 	}
@@ -347,7 +366,7 @@ func rotateMasterKeyWithHook(
 	if err := callRotationHook(hook, "before_metadata_publish"); err != nil {
 		return KeyRotationResult{}, err
 	}
-	if err := publishMetadata(compactPath, cfg.MetadataPath()); err != nil {
+	if err := publishKeyMetadata(ctx, compactPath, cfg.MetadataPath()); err != nil {
 		return KeyRotationResult{}, err
 	}
 	if err := callRotationHook(hook, "after_metadata_publish"); err != nil {
@@ -368,8 +387,16 @@ func rotateMasterKeyWithHook(
 	return result, nil
 }
 
-func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault *vault.Vault, newKey []byte, hook func(string) error) error {
-	metadata, err := boltstore.Open(cfg.MetadataPath())
+func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault *vault.Vault, newKey []byte, hook func(string) error) (resultErr error) {
+	ctx, finish, commandScopeErr := keyMaintenanceContext(ctx, cfg)
+	if commandScopeErr != nil {
+
+		return commandScopeErr
+	}
+
+	defer func() { resultErr = finishKeyMaintenance(ctx, finish, resultErr) }()
+
+	metadata, err := openCommandMetadataStore(ctx, cfg, cfg.MetadataPath())
 	if err != nil {
 		return err
 	}
@@ -389,7 +416,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 		return err
 	}
 	defer clear(ledgerKey)
-	if err := appendRotationAudit(metadata, cfg.AuditPath(), auditKey, "security.master_key_rotation.completed"); err != nil {
+	if err := appendRotationAudit(ctx, metadata, cfg, auditKey, "security.master_key_rotation.completed"); err != nil {
 		metadata.Close()
 		return err
 	}
@@ -398,15 +425,14 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 		metadata.Close()
 		return err
 	}
-	defer os.Remove(stagePath)
-	if _, err := metadata.Snapshot(stagePath); err != nil {
+	if _, err := snapshotCommandMetadata(ctx, cfg, metadata, stagePath); err != nil {
 		metadata.Close()
 		return err
 	}
 	if err := metadata.Close(); err != nil {
 		return err
 	}
-	stage, err := boltstore.OpenForWholeFilePublish(stagePath)
+	stage, err := openCommandMetadataPublish(ctx, cfg, stagePath)
 	if err != nil {
 		return err
 	}
@@ -416,19 +442,15 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 	}
 	compactPath, err := newMetadataStagePath(cfg.Storage.DataDir, "cleanup-compact")
 	if err == nil {
-		err = stage.CompactSnapshot(compactPath)
+		err = compactCommandMetadata(ctx, cfg, stage, compactPath)
 	}
 	if closeErr := stage.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
-		if compactPath != "" {
-			os.Remove(compactPath)
-		}
 		return err
 	}
-	defer os.Remove(compactPath)
-	compacted, err := boltstore.OpenForWholeFilePublish(compactPath)
+	compacted, err := openCommandMetadataPublish(ctx, cfg, compactPath)
 	if err != nil {
 		return err
 	}
@@ -442,7 +464,7 @@ func finalizeMasterKeyRotation(ctx context.Context, cfg config.Config, newVault 
 	if err := callRotationHook(hook, "before_bridge_cleanup_publish"); err != nil {
 		return err
 	}
-	if err := publishMetadata(compactPath, cfg.MetadataPath()); err != nil {
+	if err := publishKeyMetadata(ctx, compactPath, cfg.MetadataPath()); err != nil {
 		return err
 	}
 	return callRotationHook(hook, "after_bridge_cleanup_publish")
@@ -470,32 +492,28 @@ func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault
 	if expectBridge != (len(keyring.RecoveryEnvelope) > 0) {
 		return errors.New("rotated keyring recovery state is inconsistent")
 	}
-	credentials, err := store.ListCredentials(ctx)
-	if err != nil {
-		return err
-	}
-	for _, credential := range credentials {
-		plaintext, err := newVault.DecryptCredential(
-			credential.ID, string(credential.Type), credential.Audience, credential.Ciphertext,
-		)
+	if err := store.WalkCredentialsMaintenance(ctx, func(credential domain.Credential) error {
+		plaintext, err := newVault.DecryptCredential(credential.ID, string(credential.Type), credential.Audience, credential.Ciphertext)
 		clear(plaintext)
 		if err != nil {
 			return fmt.Errorf("verify rotated credential %q: %w", credential.ID, err)
 		}
-	}
-	authenticators, err := store.ListAllAdminMFAAuthenticators(ctx)
-	if err != nil {
+		return ctx.Err()
+	}); err != nil {
 		return err
 	}
-	for _, value := range authenticators {
+	if err := store.WalkAdminMFAAuthenticatorsMaintenance(ctx, func(value domain.AdminMFAAuthenticator) error {
 		if value.Status == domain.AdminMFAStatusRevoked {
-			continue
+			return ctx.Err()
 		}
-		plaintext, decErr := newVault.DecryptAdminMFA(value.ID, value.Username, value.SecretCiphertext)
+		plaintext, err := newVault.DecryptAdminMFA(value.ID, value.Username, value.SecretCiphertext)
 		clear(plaintext)
-		if decErr != nil {
-			return fmt.Errorf("verify rotated MFA authenticator %q: %w", value.ID, decErr)
+		if err != nil {
+			return fmt.Errorf("verify rotated MFA authenticator %q: %w", value.ID, err)
 		}
+		return ctx.Err()
+	}); err != nil {
+		return err
 	}
 	loadedAuditKey, err := loadAuditHMACKey(store, newVault, newKey)
 	if err != nil {
@@ -522,8 +540,8 @@ func verifyRotatedMetadata(ctx context.Context, store *boltstore.Store, newVault
 	return nil
 }
 
-func appendRotationAudit(store *boltstore.Store, path string, key []byte, action string) error {
-	log, err := audit.Open(path, key)
+func appendRotationAudit(ctx context.Context, store *boltstore.Store, cfg config.Config, key []byte, action string) error {
+	log, err := openOneShotConfiguredAuditLog(ctx, cfg, cfg.AuditPath(), key, audit.Options{})
 	if err != nil {
 		return err
 	}
@@ -535,29 +553,24 @@ func appendRotationAudit(store *boltstore.Store, path string, key []byte, action
 }
 
 func newMetadataStagePath(dataDir, phase string) (string, error) {
-	file, err := os.CreateTemp(dataDir, ".halro-key-rotate-"+phase+"-*.db")
+	if len(phase) > 64 || filepath.Base(phase) != phase {
+		return "", errors.New("invalid Metadata staging phase")
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	parent, err := filepath.Abs(dataDir)
 	if err != nil {
 		return "", err
 	}
-	path := file.Name()
-	if err := file.Close(); err != nil {
-		os.Remove(path)
-		return "", err
+	path := filepath.Join(parent, ".halro-key-rotate-"+phase+"-"+hex.EncodeToString(random[:])+".db")
+	if len(path) > 4096 {
+		return "", errors.New("Metadata staging path exceeds bounded input")
 	}
-	if err := os.Remove(path); err != nil {
-		return "", err
-	}
+	// Only choose a name. The admitted writer creates it exclusively and keeps
+	// its actual descriptor receipt; no create-close-remove gap is needed.
 	return path, nil
-}
-
-func publishMetadata(stagePath, livePath string) error {
-	if filepath.Dir(stagePath) != filepath.Dir(livePath) {
-		return errors.New("metadata stage must share the live metadata directory")
-	}
-	if err := os.Rename(stagePath, livePath); err != nil {
-		return fmt.Errorf("publish rotated metadata: %w", err)
-	}
-	return durable.SyncDirectory(filepath.Dir(livePath))
 }
 
 func callRotationHook(hook func(string) error, point string) error {
@@ -573,4 +586,19 @@ func callRotationHook(hook func(string) error, point string) error {
 func keyFingerprint(key []byte) string {
 	digest := sha256.Sum256(key)
 	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func countMaintenanceCredentials(ctx context.Context, store *boltstore.Store) (int, error) {
+	count := 0
+	err := store.WalkCredentialsMaintenance(ctx, func(domain.Credential) error {
+		if count == int(^uint(0)>>1) {
+			return errors.New("credential count overflow")
+		}
+		count++
+		return ctx.Err()
+	})
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

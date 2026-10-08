@@ -13,10 +13,14 @@ import (
 // seedLedgerActivity writes one accepted request so the WAL holds at least one
 // epoch-4 frame and the startup reconciliation has a non-zero chain head to
 // checkpoint.
-func seedLedgerActivity(t *testing.T, runtime *Runtime) {
+func seedLedgerActivity(t *testing.T, runtime *Runtime, requestIDs ...string) {
 	t.Helper()
+	requestID := "request_1"
+	if len(requestIDs) > 0 {
+		requestID = requestIDs[0]
+	}
 	request, err := runtime.accounting.BeginRequestDetailed(
-		context.Background(), "project_1", "key_1", "request_1", "chat",
+		context.Background(), "project_1", "key_1", requestID, "chat",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +105,7 @@ func TestUsageCheckpointAheadOfLedgerHeadIsDiscarded(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime.saveUsageCheckpoint()
-	if runtime.usage.Snapshot().Watermark.Offset == 0 {
+	if usageSnapshotForTest(t, runtime).Watermark.Offset == 0 {
 		t.Fatal("expected a non-zero usage watermark to have been checkpointed")
 	}
 	if err := runtime.Close(); err != nil {

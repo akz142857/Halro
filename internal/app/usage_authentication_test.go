@@ -16,9 +16,11 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
 	corekms "github.com/akz142857/Halro/internal/kms"
 	"github.com/akz142857/Halro/internal/ledger"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
+	"github.com/akz142857/Halro/internal/usage"
 )
 
 func offlineUsageCommands() map[string]func(config.Config) error {
@@ -168,6 +170,26 @@ func TestOfflineUsageRebuildsSealedCompressedHistory(t *testing.T) {
 	if _, err := runtime.ledger.Compact(1); err != nil {
 		t.Fatal(err)
 	}
+	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Default startup now owns disk rollups and does not increment the legacy
+	// Metadata table. Compare offline publication to actual live disk rows.
+	before := map[domain.RollupKey]domain.DailyRollup{}
+	var cursor usage.DiskRollupSnapshotCursor
+	for {
+		page, err := runtime.usage.disk.RollupSnapshotPage(context.Background(), cursor, usage.DiskUsagePageLimits{ScanRows: 100, InputBytes: 8 << 20, OutputBytes: 8 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range page.Rows {
+			before[row.Key] = row.Row
+		}
+		if page.Done {
+			break
+		}
+		cursor = page.Next
+	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +202,6 @@ func TestOfflineUsageRebuildsSealedCompressedHistory(t *testing.T) {
 	if _, err := RotateMasterKey(context.Background(), cfg, newKeyFile); err != nil {
 		t.Fatal(err)
 	}
-	before := allRollupRows(t, cfg.MetadataPath())
 	report, err := RebuildUsageSummary(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -60,7 +60,7 @@ func TestMasterKeyRotationKeepsEarlierLedgerFramesVerifiable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after rotation: %v", err)
 	}
-	seedLedgerActivity(t, reopened)
+	seedLedgerActivity(t, reopened, "request_after_rotation")
 	if err := reopened.Close(); err != nil {
 		t.Fatal(err)
 	}

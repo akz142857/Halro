@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -24,6 +26,11 @@ import (
 )
 
 func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Request) {
+	request, finish, admitted := r.beginUsageRead(writer, request)
+	if !admitted {
+		return
+	}
+	defer finish()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -41,9 +48,13 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 	// totals are the work stamped with this period at admission, not the work
 	// that happened to finish inside its interval, so a request that crosses
 	// midnight is reported by exactly one day.
-	dashboard := r.usage.Dashboard(now, usage.Period{
+	dashboard, firstValue, err := r.usage.dashboard(request.Context(), now, usage.Period{
 		ID: period.ID, TimezoneVersion: period.TimezoneVersion,
 	})
+	if err != nil {
+		r.usageUnavailable(writer)
+		return
+	}
 	accountingStatus := r.status.Load()
 	draining := r.draining.Load()
 	activation := r.activation.status()
@@ -52,7 +63,7 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		Draining         bool             `json:"draining"`
 		Activation       activationStatus `json:"activation"`
 	}{
-		AcceptingTraffic: accountingStatus == ledger.AccountingHealthy && !draining && !activation.Stale,
+		AcceptingTraffic: accountingStatus == ledger.AccountingHealthy && !draining && !activation.Stale && r.store.RecoveryError() == nil && r.selectedBusinessHealth(request.Context()) == nil,
 		Draining:         draining,
 		Activation:       activation,
 	}
@@ -61,9 +72,9 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 		adminStoreError(writer)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	r.writeUsageRead(writer, request, map[string]any{
 		"usage":               dashboard,
-		"first_value_reached": r.usage.Metrics().RequestsSuccess > 0,
+		"first_value_reached": firstValue,
 		"governance":          governance,
 		"resource_labels":     labels,
 		"accounting_status":   accountingStatus,
@@ -275,9 +286,13 @@ func (r *Runtime) dashboardGovernance(request *http.Request, now time.Time, peri
 		labels[deployment.ID] = deployment.Name
 	}
 	rejections := r.gatewayService.RejectionMetrics()
+	pressure, err := budgetPressure(request.Context(), projects, r.accounting, period)
+	if err != nil {
+		return dashboardGovernance{}, nil, err
+	}
 	governance := dashboardGovernance{
 		PolicyRejections: summarizeRejections(rejections),
-		Budget:           budgetPressure(projects, r.state, period),
+		Budget:           pressure,
 		Capacity: capacityPressure(
 			providers, deployments,
 			r.gatewayService.ActiveProviderRequests(), r.providers.ProviderConcurrencyLimits(),
@@ -312,15 +327,21 @@ func summarizeRejections(source gatewaycore.RejectionMetrics) policyRejectionSum
 	return result
 }
 
-func budgetPressure(projects []domain.Project, state interface {
-	Balance(string, string, uint64) ledger.Balance
-}, period budget.Period) pressureSummary {
+func budgetPressure(ctx context.Context, projects []domain.Project, reader interface {
+	ReadBalance(context.Context, ledger.BalanceKey) (ledger.Balance, error)
+}, period budget.Period) (pressureSummary, error) {
 	result := pressureSummary{Items: make([]pressureItem, 0, len(projects))}
 	for _, project := range projects {
 		if !project.Enabled || project.DailyBudgetMicrosUSD <= 0 {
 			continue
 		}
-		balance := state.Balance(project.ID, period.ID, period.TimezoneVersion)
+		balance, err := reader.ReadBalance(ctx, ledger.BalanceKey{ProjectID: project.ID, PeriodID: period.ID, TimezoneVersion: period.TimezoneVersion})
+		if err != nil {
+			return pressureSummary{}, err
+		}
+		if balance.CommittedMicrosUSD < 0 || balance.ReservedMicrosUSD < 0 || balance.CommittedMicrosUSD > math.MaxInt64-balance.ReservedMicrosUSD {
+			return pressureSummary{}, fmt.Errorf("accounting budget pressure has invalid financial bounds")
+		}
 		current := balance.CommittedMicrosUSD + balance.ReservedMicrosUSD
 		utilization := float64(current) / float64(project.DailyBudgetMicrosUSD)
 		if utilization >= .8 {
@@ -333,7 +354,7 @@ func budgetPressure(projects []domain.Project, state interface {
 		})
 	}
 	result.Items = topPressure(result.Items, 5)
-	return result
+	return result, nil
 }
 
 func capacityPressure(
@@ -382,6 +403,11 @@ func topPressure(items []pressureItem, limit int) []pressureItem {
 }
 
 func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) {
+	request, release, ok := r.beginUsageRead(writer, request)
+	if !ok {
+		return
+	}
+	defer release()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -402,7 +428,7 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
-	cursor, err := usage.DecodeCursor(request.URL.Query().Get("cursor"))
+	cursor, err := r.usage.decodeCursor(request.URL.Query().Get("cursor"))
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -448,12 +474,12 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 	if !ok {
 		return
 	}
-	page, err := r.usage.QueryAttempts(query)
+	page, err := r.usage.queryAttempts(request.Context(), query, request.URL.Query().Get("cursor"))
 	if err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		r.usageReadError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	r.writeUsageRead(writer, request, map[string]any{
 		"items": page.Attempts, "next_cursor": page.NextCursor, "time_context": timing,
 	})
 }
@@ -467,6 +493,11 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 // request_errors comes from, so the list and the figure that links to it cannot
 // disagree.
 func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.Request) {
+	request, release, ok := r.beginUsageRead(writer, request)
+	if !ok {
+		return
+	}
+	defer release()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -487,7 +518,7 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
-	cursor, err := usage.DecodeCursor(request.URL.Query().Get("cursor"))
+	cursor, err := r.usage.decodeCursor(request.URL.Query().Get("cursor"))
 	if err != nil {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -530,17 +561,22 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	page, err := r.usage.QueryFailedRequests(query)
+	page, err := r.usage.queryFailures(request.Context(), query, request.URL.Query().Get("cursor"))
 	if err != nil {
-		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		r.usageReadError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	r.writeUsageRead(writer, request, map[string]any{
 		"items": page.Failures, "next_cursor": page.NextCursor, "time_context": timing,
 	})
 }
 
 func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Request) {
+	request, release, ok := r.beginUsageRead(writer, request)
+	if !ok {
+		return
+	}
+	defer release()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
@@ -549,20 +585,34 @@ func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
-	detail, exists := r.usage.RequestDetail(requestID)
+	detail, exists, err := r.usage.requestDetail(request.Context(), requestID)
+	if err != nil {
+		r.usageReadError(writer, err)
+		return
+	}
 	if !exists {
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "usage request not found"})
 		return
 	}
-	writeJSON(writer, http.StatusOK, detail)
+	r.writeUsageRead(writer, request, detail)
 }
 
 func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Request) {
+	request, finish, admitted := r.beginUsageRead(writer, request)
+	if !admitted {
+		return
+	}
+	defer finish()
 	if !r.syncUsageAdmin(writer, request) {
 		return
 	}
 	timing, ok := r.writeTimeContext(writer, time.Now())
 	if !ok {
+		return
+	}
+	usagePosition, err := r.usage.readPosition(request.Context())
+	if err != nil {
+		r.usageUnavailable(writer)
 		return
 	}
 	auditSummary := r.audit.Summary()
@@ -580,7 +630,7 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 		"write_path":        r.writePathSummary(),
 		"audit":             auditSummary,
 		"alerts":            r.alerts.Stats(),
-		"usage_watermark":   r.usage.Watermark(),
+		"usage_watermark":   usagePosition,
 		"governance":        governanceWatermark,
 		"time_context":      timing,
 		// The commit protocol makes "durable" and "in force" two different
@@ -602,7 +652,7 @@ func (r *Runtime) adminSystemStatus(writer http.ResponseWriter, request *http.Re
 	if database, err := timezone.Describe(r.config.Usage.Timezone); err == nil {
 		payload["tzdata"] = database
 	}
-	writeJSON(writer, http.StatusOK, payload)
+	r.writeUsageRead(writer, request, payload)
 }
 
 // adminSystemConfig renders the effective, normalized config.yaml back as

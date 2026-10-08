@@ -255,7 +255,7 @@ func runUntilKilled(t *testing.T, root string) []string {
 // terminal record for.
 func settledRequestIDs(t *testing.T, runtime *Runtime) map[string]struct{} {
 	t.Helper()
-	snapshot := runtime.usage.Snapshot()
+	snapshot := usageSnapshotForTest(t, runtime)
 	found := make(map[string]struct{}, len(snapshot.Attempts))
 	for _, attempt := range snapshot.Attempts {
 		found[attempt.RequestID] = struct{}{}

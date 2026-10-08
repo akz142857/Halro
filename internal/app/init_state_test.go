@@ -9,7 +9,10 @@ import (
 )
 
 func TestInitializeIfNeededIsIdempotentAndFailClosed(t *testing.T) {
-	cfg := testConfig(t)
+	cfg := enableLedgerSegmentIndexBudget(testConfig(t))
+	if err := cfg.Validate(config.LoadOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	state, err := InspectInitialization(cfg)
 	if err != nil || state != InitializationEmpty {
 		t.Fatalf("initial state=%q err=%v", state, err)

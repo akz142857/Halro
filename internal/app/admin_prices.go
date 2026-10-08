@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +16,7 @@ import (
 	"github.com/akz142857/Halro/internal/audit"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/id"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/go-chi/chi/v5"
 )
@@ -125,37 +126,36 @@ func parseClockMinute(value string) (int, error) {
 	return parsed.Hour()*60 + parsed.Minute(), nil
 }
 
-type priceVersionView struct {
-	domain.DeploymentPriceVersion
-	Status    domain.PriceLifecycleStatus `json:"status"`
-	cursorKey string
+func (r *Runtime) listAdminDeploymentPrices(writer http.ResponseWriter, request *http.Request) {
+	if !allowQueryKeys(writer, request, map[string]struct{}{"cursor": {}, "limit": {}}) {
+		return
+	}
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			adminBadRequest(writer, "page limit must be between 1 and 100")
+			return
+		}
+	}
+	page, err := r.store.DeploymentPriceVersionsPage(request.Context(), chi.URLParam(request, "id"), request.URL.Query().Get("cursor"), limit, time.Now().UTC())
+	if err != nil {
+		writePricePageError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
 }
 
-func (r *Runtime) listAdminDeploymentPrices(writer http.ResponseWriter, request *http.Request) {
-	deploymentID := chi.URLParam(request, "id")
-	if _, err := r.store.GetDeployment(request.Context(), deploymentID); err != nil {
-		adminNotFound(writer)
-		return
-	}
-	prices, err := r.store.ListDeploymentPriceVersions(request.Context(), deploymentID)
-	if err != nil {
-		adminStoreError(writer)
-		return
-	}
-	now := time.Now().UTC()
-	states, err := domain.DerivePriceLifecycle(prices, deploymentID, now)
-	if err != nil {
+func writePricePageError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, boltstore.ErrPricingPageCursor), errors.Is(err, boltstore.ErrPricingPageChanged), errors.Is(err, boltstore.ErrPricingRecoveryChanged), errors.Is(err, boltstore.ErrNotFound), errors.Is(err, domain.ErrPriceTimelineConflict), errors.Is(err, resourcebudget.ErrExhausted), errors.Is(err, resourcebudget.ErrPressure), errors.Is(err, resourcebudget.ErrClosed):
 		writePriceError(writer, err)
-		return
+	default:
+		// Persisted decode/validation and physical IO failures are server errors,
+		// never invalid requests. Preserve the list endpoint's previous boundary.
+		adminStoreError(writer)
 	}
-	views := make([]priceVersionView, 0, len(prices))
-	for _, price := range prices {
-		views = append(views, priceVersionView{
-			DeploymentPriceVersion: price, Status: states[price.ID], cursorKey: priceCursorKey(price),
-		})
-	}
-	sort.Slice(views, func(i, j int) bool { return views[i].cursorKey < views[j].cursorKey })
-	writeResourcePage(writer, request, views, func(item priceVersionView) string { return item.cursorKey })
 }
 
 func (r *Runtime) createAdminDeploymentPrice(writer http.ResponseWriter, request *http.Request) {
@@ -448,14 +448,24 @@ type createPriceProposalInput struct {
 }
 
 func (r *Runtime) listAdminDeploymentPriceProposals(writer http.ResponseWriter, request *http.Request) {
-	proposals, err := r.store.ListDeploymentPriceProposals(request.Context(), chi.URLParam(request, "id"))
-	if err != nil {
-		adminStoreError(writer)
+	if !allowQueryKeys(writer, request, map[string]struct{}{"cursor": {}, "limit": {}}) {
 		return
 	}
-	writeResourcePage(writer, request, proposals, func(item domain.DeploymentPriceProposal) string {
-		return item.CreatedAt.Format(time.RFC3339Nano) + "\x00" + item.ID
-	})
+	limit := 50
+	if raw := request.URL.Query().Get("limit"); raw != "" {
+		var err error
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			adminBadRequest(writer, "page limit must be between 1 and 100")
+			return
+		}
+	}
+	page, err := r.store.DeploymentPriceProposalsPage(request.Context(), chi.URLParam(request, "id"), request.URL.Query().Get("cursor"), limit)
+	if err != nil {
+		writePricePageError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (r *Runtime) createAdminDeploymentPriceProposal(writer http.ResponseWriter, request *http.Request) {
@@ -826,16 +836,7 @@ func (r *Runtime) deliverPricingAuditIntent(ctx context.Context, intent domain.P
 }
 
 func (r *Runtime) drainPricingAuditIntents(ctx context.Context) error {
-	intents, err := r.store.ListPendingPricingAuditIntents(ctx)
-	if err != nil {
-		return err
-	}
-	for _, intent := range intents {
-		if err := r.deliverPricingAuditIntent(ctx, intent); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.store.RecoverPendingPricingAuditIntents(ctx, r.deliverPricingAuditIntent, r.audit.HasRetainedEventID)
 }
 
 // verifyReauthenticationMaterial checks step-up material: the caller's current
@@ -879,6 +880,12 @@ func (r *Runtime) verifyPricingPassword(writer http.ResponseWriter, request *htt
 func writePriceError(writer http.ResponseWriter, err error) {
 	status, code := http.StatusBadRequest, "invalid_price"
 	switch {
+	case errors.Is(err, boltstore.ErrPricingPageCursor):
+		code = "pricing_page_cursor"
+	case errors.Is(err, boltstore.ErrPricingPageChanged), errors.Is(err, boltstore.ErrPricingRecoveryChanged):
+		status, code = http.StatusConflict, "pricing_page_changed"
+	case errors.Is(err, resourcebudget.ErrExhausted), errors.Is(err, resourcebudget.ErrPressure), errors.Is(err, resourcebudget.ErrClosed):
+		status, code = http.StatusServiceUnavailable, "resource_budget"
 	// These two carry a stable code because the Admin console has to say
 	// something specific about them in the operator's own language; the English
 	// message is a fallback, not the contract.
@@ -898,10 +905,6 @@ func writePriceError(writer http.ResponseWriter, err error) {
 		status, code = http.StatusConflict, "idempotency_conflict"
 	}
 	writeJSON(writer, status, map[string]string{"error": err.Error(), "code": code})
-}
-
-func priceCursorKey(price domain.DeploymentPriceVersion) string {
-	return price.EffectiveFrom.UTC().Format("20060102T150405.000000000Z") + "\x00" + price.ID
 }
 
 func pricingIdempotencyDigest(actor, deploymentID, key string) string {
