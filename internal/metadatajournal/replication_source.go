@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 )
 
 func ReplicationCursor(path string, key []byte) (uint64, uint64, error) {
 	head, err := Verify(path, key)
 	if err != nil {
 		return 0, 0, err
+	}
+	if head.FormatVersion != frameVersion {
+		return 0, 0, errors.New("bound metadata replication requires a qualified format2 reader")
 	}
 	return head.Epoch, head.Sequence, nil
 }
@@ -21,6 +25,9 @@ func ReplicationHeadAt(path string, key []byte, epoch, sequence uint64) ([32]byt
 	}
 	var chainHead [32]byte
 	head, err := Replay(path, key, func(record Record) error {
+		if record.FormatVersion != frameVersion {
+			return errors.New("bound metadata replication requires a qualified format2 reader")
+		}
 		if record.Epoch != epoch {
 			return nil
 		}
@@ -43,17 +50,25 @@ func ReplicationHeadAt(path string, key []byte, epoch, sequence uint64) ([32]byt
 	return chainHead, nil
 }
 
-func ReadReplicationFrames(path string, key []byte, epoch, first, last uint64) ([]byte, error) {
+func ReadReplicationFrames(path string, key []byte, epoch, first, last uint64) (result []byte, resultErr error) {
 	if epoch == 0 || first == 0 || last < first {
 		return nil, errors.New("metadata replication range is invalid")
 	}
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if err := closeDescriptor(file); err != nil {
+			result = nil
+			resultErr = errors.Join(resultErr, err)
+		}
+	}()
 	var start, end int64 = -1, -1
-	head, err := Replay(path, key, func(record Record) error {
+	head, partial, err := scan(file, key, func(record Record) error {
+		if record.FormatVersion != frameVersion {
+			return errors.New("bound metadata replication requires a qualified format2 reader")
+		}
 		if record.Epoch != epoch || record.Kind != KindOperations {
 			return nil
 		}
@@ -68,24 +83,27 @@ func ReadReplicationFrames(path string, key []byte, epoch, first, last uint64) (
 	if err != nil {
 		return nil, err
 	}
-	if head.Epoch != epoch || start < 0 || end < start {
+	if partial || head.Epoch != epoch || start < 0 || end < start {
 		return nil, errors.New("metadata replication range is outside the durable journal")
 	}
 	frames := make([]byte, end-start)
-	if _, err := file.ReadAt(frames, start); err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
+	if n, err := file.ReadAt(frames, start); err != nil || n != len(frames) {
+		return nil, errors.Join(io.ErrUnexpectedEOF, err)
 	}
 	return frames, nil
 }
 
-func TruncateReplicationTail(path string, key []byte, epoch, sequence uint64) error {
-	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+func TruncateReplicationTail(path string, key []byte, epoch, sequence uint64) (resultErr error) {
+	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { resultErr = errors.Join(resultErr, closeDescriptor(file)) }()
 	offset := int64(-1)
 	head, partial, err := scan(file, key, func(record Record) error {
+		if record.FormatVersion != frameVersion {
+			return errors.New("bound metadata truncation requires qualified baseline and ordering evidence")
+		}
 		if record.Epoch != epoch {
 			return nil
 		}
@@ -115,15 +133,18 @@ func TruncateReplicationTail(path string, key []byte, epoch, sequence uint64) er
 // RepairReplicaTail removes only torn bytes after the complete authenticated
 // prefix named by ordering. The caller must supply the epoch and sequence from
 // the authenticated ordering scan, never from the partial native tail.
-func RepairReplicaTail(path string, key []byte, expectedEpoch, expectedSequence uint64) error {
-	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+func RepairReplicaTail(path string, key []byte, expectedEpoch, expectedSequence uint64) (resultErr error) {
+	file, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { resultErr = errors.Join(resultErr, closeDescriptor(file)) }()
 	head, partial, err := scan(file, key, nil)
 	if err != nil {
 		return err
+	}
+	if head.FormatVersion != frameVersion {
+		return errors.New("bound metadata repair requires qualified baseline and ordering evidence")
 	}
 	if head.Epoch != expectedEpoch || head.Sequence != expectedSequence {
 		return errors.New("metadata journal complete prefix does not match ordering cursor")

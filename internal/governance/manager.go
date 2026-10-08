@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -16,6 +15,7 @@ import (
 
 var (
 	ErrUnavailable      = errors.New("governance journal is unavailable")
+	ErrRetired          = errors.Join(ErrUnavailable, errors.New("governance manager is retired"))
 	ErrNotFound         = errors.New("governance resource was not found")
 	ErrDefinitionDenied = errors.New("outcome definition was not declared by work unit")
 	ErrRevisionConflict = errors.New("outcome revision conflict")
@@ -249,17 +249,26 @@ func (s *State) Restore(snapshot Snapshot) error {
 }
 
 type Manager struct {
-	mu          sync.Mutex
-	log         *Log
-	state       *State
-	accounting  *ledger.State
-	definitions DefinitionReader
-	checkpoint  CheckpointStore
-	now         func() time.Time
-	unavailable error
+	haSelected       bool
+	haReadOnly       bool
+	operationMu      sync.Mutex
+	activeOperations uint64
+	operationDrain   chan struct{}
+	retiring         bool
+	paused           *governancePause
+	mu               sync.Mutex
+	pageKey          []byte // finite, ephemeral owner key for Outcome page cursors
+	log              *Log
+	state            *State
+	projection       *GovernanceProjection
+	accounting       ledger.AccountingWorkUnitReader
+	definitions      DefinitionReader
+	checkpoint       CheckpointStore
+	now              func() time.Time
+	unavailable      error
 }
 
-func NewManager(log *Log, state *State, accounting *ledger.State, definitions DefinitionReader, checkpoint CheckpointStore) *Manager {
+func NewManager(log *Log, state *State, accounting ledger.AccountingWorkUnitReader, definitions DefinitionReader, checkpoint CheckpointStore) *Manager {
 	return &Manager{log: log, state: state, accounting: accounting, definitions: definitions, checkpoint: checkpoint, now: time.Now}
 }
 
@@ -268,35 +277,74 @@ func NewUnavailable(err error) *Manager {
 }
 
 func (m *Manager) Ready() (bool, error) {
+	_, release, err := m.enterOperation(context.Background())
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.projection != nil {
+		_, err := m.ownerHead(context.Background())
+		return err == nil, err
+	}
 	return m.unavailable == nil, m.unavailable
 }
-func (m *Manager) State() *State { return m.state }
+
+// State is a legacy alias for tests/compatibility, not a lifetime loan. A caller
+// retaining it owns that alias independently; retired Managers return nil.
+func (m *Manager) State() *State {
+	_, release, err := m.enterOperation(context.Background())
+	if err != nil {
+		return nil
+	}
+	defer release()
+	return m.state
+}
 
 func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome, bool, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
+	defer release()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.unavailable != nil || m.log == nil || m.accounting == nil || m.definitions == nil {
+	if m.haReadOnly || m.unavailable != nil || m.log == nil || m.accounting == nil || m.definitions == nil {
 		return domain.Outcome{}, false, ErrUnavailable
 	}
-	if previous, ok := m.state.Idempotency(input.ProjectID, input.Intent.IdempotencyKeyHash); ok {
+	if err := ctx.Err(); err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
+	if _, err := m.ownerHead(ctx); err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
+	previous, ok, err := m.readIdempotency(ctx, input.ProjectID, input.Intent.IdempotencyKeyHash)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
+	if ok {
 		if previous.Fingerprint != input.Intent.RequestFingerprint {
 			return domain.Outcome{}, false, ErrIdempotency
 		}
-		outcome, found := m.state.Outcome(previous.OutcomeID)
-		if !found {
-			return domain.Outcome{}, false, ErrUnavailable
+		outcome, found, err := m.readOutcome(ctx, previous.OutcomeID)
+		if err != nil || !found {
+			return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
 		}
 		if outcome.ProjectID != input.ProjectID || outcome.WorkUnitID != input.WorkUnitID || outcome.DefinitionID != input.DefinitionID {
 			return domain.Outcome{}, false, ErrIdempotency
 		}
-		return outcome, true, nil
+		outcome, err = m.withAccountingStatus(ctx, outcome)
+		return outcome, true, err
 	}
-	workUnit, ok := m.accounting.WorkUnit(input.WorkUnitID)
-	if !ok || workUnit.ProjectID != input.ProjectID {
+	accounting, ok, err := m.accounting.ReadWorkUnitAccounting(ctx, input.ProjectID, input.WorkUnitID, false)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
+	if !ok {
 		return domain.Outcome{}, false, ErrNotFound
 	}
+	workUnit := accounting.WorkUnit
 	var reference domain.OutcomeDefinitionRef
 	for _, item := range workUnit.OutcomeDefinitions {
 		if item.ID == input.DefinitionID {
@@ -327,7 +375,10 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 	if workUnit.ClosedAt != nil && now.After(workUnit.ClosedAt.Add(domain.OutcomeWriteWindow)) {
 		return domain.Outcome{}, false, ErrWriteWindow
 	}
-	current, hasCurrent := m.state.Current(input.ProjectID, input.WorkUnitID, reference.ID, reference.Version)
+	current, hasCurrent, err := m.readCurrent(ctx, input.ProjectID, input.WorkUnitID, reference.ID, reference.Version)
+	if err != nil {
+		return domain.Outcome{}, false, errors.Join(ErrUnavailable, err)
+	}
 	revision := uint64(1)
 	if hasCurrent {
 		if input.SupersedesOutcomeID != current.ID {
@@ -359,7 +410,11 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 		m.unavailable = errors.Join(ErrUnavailable, err)
 		return domain.Outcome{}, false, m.unavailable
 	}
-	if err := m.state.Apply(record); err != nil {
+	// Append has durably accepted the fact. Caller cancellation must not leave
+	// that fact unapplied or turn a completed write into a poisoned owner.
+	// m.mu continues to own/join this completion before another operation.
+	completionCtx := context.WithoutCancel(ctx)
+	if err := m.applyOutcome(completionCtx, record); err != nil {
 		m.unavailable = errors.Join(ErrUnavailable, err)
 		return domain.Outcome{}, false, m.unavailable
 	}
@@ -370,29 +425,50 @@ func (m *Manager) Report(ctx context.Context, input ReportInput) (domain.Outcome
 			return domain.Outcome{}, false, m.unavailable
 		}
 	}
-	outcome, _ := m.state.Outcome(outcomeID)
-	outcome.Provisional = workUnit.Status == domain.WorkUnitOpen || m.workUnitInflight(workUnit.ID)
-	return outcome, false, nil
-}
-
-func (m *Manager) workUnitInflight(workUnitID string) bool {
-	workUnit, ok := m.accounting.WorkUnit(workUnitID)
-	if !ok {
-		return true
+	outcome, found, err := m.readOutcome(completionCtx, outcomeID)
+	if err != nil || !found {
+		m.unavailable = errors.Join(ErrUnavailable, err)
+		return domain.Outcome{}, false, m.unavailable
 	}
-	snapshot, err := m.accounting.GovernanceSnapshot(context.Background(), ledger.GovernanceSnapshotOptions{
-		ProjectID: workUnit.ProjectID, WorkUnitID: workUnitID,
-	})
-	return err != nil || snapshot.InflightWorkUnit[workUnitID]
+	outcome, err = m.withAccountingStatus(ctx, outcome)
+	return outcome, false, err
 }
 
-func (m *Manager) Outcomes(projectID, workUnitID, definitionID string) []domain.Outcome {
-	items := m.state.Outcomes(projectID, workUnitID, definitionID)
+func (m *Manager) withAccountingStatus(ctx context.Context, outcome domain.Outcome) (domain.Outcome, error) {
+	if m.accounting == nil {
+		return domain.Outcome{}, ErrUnavailable
+	}
+	view, found, err := m.accounting.ReadWorkUnitAccounting(ctx, outcome.ProjectID, outcome.WorkUnitID, false)
+	if err != nil || !found {
+		return domain.Outcome{}, errors.Join(ErrUnavailable, err)
+	}
+	outcome.Provisional = view.WorkUnit.Status == domain.WorkUnitOpen || view.Inflight
+	return outcome, nil
+}
+
+// OutcomesContext reports read failure instead of crediting a closed WorkUnit
+// with a final outcome. This list still belongs to the legacy Governance State;
+// I-10 supplies its separate persistent paging backend.
+func (m *Manager) OutcomesContext(ctx context.Context, projectID, workUnitID, definitionID string) ([]domain.Outcome, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	if m.state == nil {
+		return nil, ErrUnavailable
+	}
+	items, err := m.state.OutcomesContext(ctx, projectID, workUnitID, definitionID)
+	if err != nil {
+		return nil, err
+	}
 	for index := range items {
-		wu, ok := m.accounting.WorkUnit(items[index].WorkUnitID)
-		items[index].Provisional = !ok || wu.Status == domain.WorkUnitOpen || m.workUnitInflight(wu.ID)
+		items[index], err = m.withAccountingStatus(ctx, items[index])
+		if err != nil {
+			return nil, err
+		}
 	}
-	return slices.Clone(items)
+	return items, nil
 }
 
 type OutcomeSnapshot struct {
@@ -405,9 +481,14 @@ type OutcomeSnapshot struct {
 // that produced them. It deliberately leaves accounting-derived provisional
 // state to the caller's separate accounting snapshot.
 func (m *Manager) ReadOutcomeSnapshot(ctx context.Context, projectID, workUnitID, definitionID string) (OutcomeSnapshot, error) {
+	ctx, release, err := m.enterOperation(ctx)
+	if err != nil {
+		return OutcomeSnapshot{}, err
+	}
+	defer release()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.unavailable != nil || m.log == nil {
+	if m.unavailable != nil || m.log == nil || m.state == nil {
 		return OutcomeSnapshot{}, ErrUnavailable
 	}
 	items, err := m.state.OutcomesContext(ctx, projectID, workUnitID, definitionID)

@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/akz142857/Halro/internal/resourcebudget"
 )
 
 type failingDurability struct {
@@ -53,6 +55,122 @@ func TestMetadataDurableHookRunsAfterFsyncAndPoisonsOnFailure(t *testing.T) {
 	}
 	if err := log.SetAfterDurable(func(DurableBatch) (uint64, error) { return 1, nil }, func(context.Context, uint64) error { return nil }); err == nil || !strings.Contains(err.Error(), "already installed") {
 		t.Fatalf("second callback error=%v", err)
+	}
+}
+
+type metadataAppendAdmissionFixture struct{ releases int }
+
+func (a *metadataAppendAdmissionFixture) Release() error { a.releases++; return nil }
+
+type metadataAdmissionFaultDurability struct {
+	file *os.File
+	mode string
+}
+
+func (d *metadataAdmissionFaultDurability) Write(value []byte) (int, error) {
+	if d.mode == "write" {
+		return 0, errors.New("injected native write failure")
+	}
+	return d.file.Write(value)
+}
+func (d *metadataAdmissionFaultDurability) Sync() error {
+	if d.mode == "sync" {
+		return errors.New("injected native sync failure")
+	}
+	return d.file.Sync()
+}
+
+func TestMetadataAdmissionRunsBeforeNativeWriteAndTransfersToOrderingHook(t *testing.T) {
+	path, log := newJournal(t)
+	initialInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := &metadataAppendAdmissionFixture{}
+	var received AppendAdmission
+	err = log.SetReplicationAdmissionAndAfterDurable(func(batch DurableBatch) (AppendAdmission, error) {
+		info, statErr := os.Stat(path)
+		if statErr != nil || info.Size() != initialInfo.Size() || len(batch.Frames) == 0 {
+			t.Fatalf("metadata admission did not precede native write: info=%v err=%v", info, statErr)
+		}
+		return reserved, nil
+	}, func(batch DurableBatch) (uint64, error) { received = batch.Admission; return 1, nil }, func(context.Context, uint64) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append([]Op{put("projects", "p1", "one")}); err != nil {
+		t.Fatal(err)
+	}
+	if received != reserved || reserved.releases != 0 {
+		t.Fatal("metadata did not transfer the admission to ordering", received, reserved.releases)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if reserved.releases != 0 {
+		t.Fatal("metadata source released an ordering-owned admission", reserved.releases)
+	}
+}
+
+func TestMetadataAdmissionRefusalLeavesNativeHeadAndFileUnchanged(t *testing.T) {
+	path, log := newJournal(t)
+	defer log.Close()
+	beforeHead := log.Head()
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.SetReplicationAdmissionAndAfterDurable(
+		func(DurableBatch) (AppendAdmission, error) { return nil, resourcebudget.ErrExhausted },
+		func(DurableBatch) (uint64, error) { return 1, nil },
+		func(context.Context, uint64) error { return nil },
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append([]Op{put("projects", "admission_refused", "value")}); !errors.Is(err, resourcebudget.ErrExhausted) {
+		t.Fatalf("admission refusal error=%v", err)
+	}
+	afterHead := log.Head()
+	afterInfo, err := os.Stat(path)
+	if err != nil || beforeHead != afterHead || beforeInfo.Size() != afterInfo.Size() {
+		t.Fatalf("refused append changed Metadata source: before=(%+v,%d) after=(%+v,%v,%v)", beforeHead, beforeInfo.Size(), afterHead, afterInfo, err)
+	}
+}
+
+func TestMetadataUncertainNativeAppendRetainsAdmissionUntilClose(t *testing.T) {
+	for _, mode := range []string{"write", "sync"} {
+		t.Run(mode, func(t *testing.T) {
+			previous := WrapDurability
+			var fault *metadataAdmissionFaultDurability
+			WrapDurability = func(file *os.File) DurabilityWriter {
+				fault = &metadataAdmissionFaultDurability{file: file}
+				return fault
+			}
+			t.Cleanup(func() { WrapDurability = previous })
+			path, log := newJournal(t)
+			reserved := &metadataAppendAdmissionFixture{}
+			var afterCalls int
+			if err := log.SetReplicationAdmissionAndAfterDurable(
+				func(DurableBatch) (AppendAdmission, error) { return reserved, nil },
+				func(DurableBatch) (uint64, error) { afterCalls++; return 1, nil },
+				func(context.Context, uint64) error { return nil },
+			); err != nil {
+				t.Fatal(err)
+			}
+			fault.mode = mode
+			if _, err := log.Append([]Op{put("projects", "uncertain_"+mode, "value")}); err == nil {
+				t.Fatal("injected uncertain append unexpectedly succeeded")
+			}
+			if afterCalls != 0 || reserved.releases != 0 {
+				t.Fatalf("uncertain append lost the source-owned admission: after=%d releases=%d", afterCalls, reserved.releases)
+			}
+			if err := log.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if reserved.releases != 1 {
+				t.Fatalf("closing uncertain source %s did not retire its in-process admission: releases=%d", path, reserved.releases)
+			}
+		})
 	}
 }
 

@@ -45,8 +45,9 @@ import (
 )
 
 const (
-	frameMagic   = "HMJL"
-	frameVersion = 1
+	frameMagic        = "HMJL"
+	frameVersion      = 1
+	boundFrameVersion = 2
 	// frameHeaderSize is magic(4) version(1) kind(1) reserved(2) epoch(8)
 	// sequence(8) payload length(4) previous hash(32).
 	frameHeaderSize = 60
@@ -174,26 +175,32 @@ type EpochHeader struct {
 	// Reason names the publish that started the epoch — a restore, a key
 	// rotation, a compaction, a migration. It is an operator-facing fact and
 	// carries no identifiers.
-	Reason string `json:"reason"`
+	Reason       string           `json:"reason"`
+	Baseline     *BaselineBinding `json:"baseline,omitempty"`
+	FileRevision uint64           `json:"file_revision,omitempty"`
 }
 
 // TrimAnchor is KindTrim's payload: where the head was cut, and what the chain
 // head was at the cut. Without it a trimmed file and a file whose head was
 // deleted by someone else read identically.
 type TrimAnchor struct {
-	Epoch              uint64 `json:"epoch"`
-	TrimmedThrough     uint64 `json:"trimmed_through"`
-	ChainHeadAtTrim    []byte `json:"chain_head_at_trim"`
-	TrimmedFrameCount  uint64 `json:"trimmed_frame_count"`
-	TrimmedByteCount   int64  `json:"trimmed_byte_count"`
-	RetainedFromSeqMin uint64 `json:"retained_from_sequence"`
+	State              *TrimStateBinding `json:"state,omitempty"`
+	Epoch              uint64            `json:"epoch"`
+	TrimmedThrough     uint64            `json:"trimmed_through"`
+	ChainHeadAtTrim    []byte            `json:"chain_head_at_trim"`
+	TrimmedFrameCount  uint64            `json:"trimmed_frame_count"`
+	TrimmedByteCount   int64             `json:"trimmed_byte_count"`
+	RetainedFromSeqMin uint64            `json:"retained_from_sequence"`
+	Baseline           *BaselineBinding  `json:"baseline,omitempty"`
+	FileRevision       uint64            `json:"file_revision,omitempty"`
 }
 
 // Record is one authenticated frame.
 type Record struct {
-	Kind     Kind
-	Epoch    uint64
-	Sequence uint64
+	FormatVersion uint8
+	Kind          Kind
+	Epoch         uint64
+	Sequence      uint64
 	// Ops is populated for KindOperations and empty otherwise.
 	Ops []Op
 	// Epoch header and trim anchor payloads, populated for their kinds.
@@ -208,9 +215,12 @@ type Record struct {
 
 // encodeFrame builds one authenticated frame and returns it with its hash.
 func encodeFrame(key []byte, kind Kind, epoch, sequence uint64, previous [32]byte, payload []byte) ([]byte, [32]byte) {
+	return encodeFrameVersion(frameVersion, key, kind, epoch, sequence, previous, payload)
+}
+func encodeFrameVersion(version uint8, key []byte, kind Kind, epoch, sequence uint64, previous [32]byte, payload []byte) ([]byte, [32]byte) {
 	frame := make([]byte, frameHeaderSize+len(payload)+frameMACSize)
 	copy(frame[:4], frameMagic)
-	frame[4] = frameVersion
+	frame[4] = version
 	frame[5] = byte(kind)
 	binary.BigEndian.PutUint64(frame[8:16], epoch)
 	binary.BigEndian.PutUint64(frame[16:24], sequence)
@@ -246,6 +256,11 @@ func encodePayload(kind Kind, ops []Op, header EpochHeader, anchor TrimAnchor) (
 func decodePayload(kind Kind, payload []byte, record *Record) error {
 	switch kind {
 	case KindOperations:
+		if record.FormatVersion == boundFrameVersion {
+			ops, err := decodeBoundOps(payload)
+			record.Ops = ops
+			return err
+		}
 		var ops []Op
 		if err := json.Unmarshal(payload, &ops); err != nil {
 			return err

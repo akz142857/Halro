@@ -1,10 +1,13 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -286,7 +289,7 @@ func TestDedupIndexKeepsABoundedTailWindow(t *testing.T) {
 		t.Fatalf("dedup index holds %d records after %d events, want at most %d",
 			tracked, total, maxTrackedEventIDs)
 	}
-	if ordered := len(log.trackedOrder); ordered != len(log.recordsByEventID) {
+	if ordered := log.trackedCount; ordered != len(log.recordsByEventID) {
 		t.Fatalf("eviction order holds %d ids for %d indexed records", ordered, len(log.recordsByEventID))
 	}
 
@@ -333,5 +336,73 @@ func validEvent(index int, action string) Event {
 		OccurredAt: time.Date(2026, 7, 31, 12, index, 0, 0, time.UTC),
 		ActorType:  "system", Action: action, TargetType: "gateway",
 		TargetID: "local", Outcome: "success",
+	}
+}
+
+func TestHasRetainedEventIDIsOnlyCurrentWindowHint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := bytes.Repeat([]byte{0x33}, 32)
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := make([]Event, maxTrackedEventIDs+1)
+	for i := range events {
+		events[i] = sequencedEvent(i)
+	}
+	for start := 0; start < len(events); start += MaxBatchEvents {
+		end := min(start+MaxBatchEvents, len(events))
+		if _, err := log.AppendBatch(context.Background(), events[start:end]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if log.HasRetainedEventID(events[0].EventID) || !log.HasRetainedEventID(events[len(events)-1].EventID) || log.HasRetainedEventID("missing") {
+		t.Fatal("hint expanded beyond retry window")
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if log.HasRetainedEventID(events[len(events)-1].EventID) {
+		t.Fatal("closed log supplied a receipt hint")
+	}
+}
+
+func TestAuditRetryUsesNativeContentForTypedMetadataAndExactIntegers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	key := randomKey(t)
+	log, err := Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := sequencedEvent(1)
+	effective := event.OccurredAt.Add(time.Hour)
+	event.Metadata = map[string]any{"version": uint64(math.MaxUint64), "effective_from": &effective, "nested": map[string]any{"count": uint64(9007199254740993)}, "nil_time": (*time.Time)(nil)}
+	first, err := log.Append(context.Background(), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+	log, err = Open(path, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	second, err := log.Append(context.Background(), event)
+	if err != nil || second.Sequence != first.Sequence || log.Summary().Records != 1 {
+		t.Fatal(second, err)
+	}
+	version, ok := second.Event.Metadata["version"].(json.Number)
+	if !ok || version.String() != "18446744073709551615" {
+		t.Fatal("native number lost precision", version)
+	}
+	event.Metadata["version"] = uint64(math.MaxUint64 - 1)
+	if _, err := log.Append(context.Background(), event); err == nil {
+		t.Fatal("different exact integer reused receipt")
+	}
+	var malformed Event
+	if err := decodeAuditEvent([]byte(`{} {}`), &malformed); err == nil {
+		t.Fatal("multiple JSON values accepted")
 	}
 }
