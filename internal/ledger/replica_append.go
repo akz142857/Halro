@@ -10,6 +10,11 @@ import (
 // AppendReplicated authenticates a native frame batch against the current
 // Ledger chain before writing any byte, then fsyncs it.
 func (l *Log) AppendReplicated(generation, firstSequence, lastSequence uint64, frames []byte) error {
+	finish, err := l.beginMutation(nil)
+	if err != nil {
+		return err
+	}
+	defer finish()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.options.Replica {
@@ -50,18 +55,35 @@ func (l *Log) AppendReplicated(generation, firstSequence, lastSequence uint64, f
 		}
 		return err
 	}
+	if l.physical.Load() != nil {
+		if err := l.admitPhysicalReplicaLocked(lastSequence-firstSequence+1, int64(len(frames))); err != nil {
+			return err
+		}
+	} else if l.options.ReserveAppendDisk != nil {
+		if err := l.options.ReserveAppendDisk(int64(len(frames))); err != nil {
+			return fmt.Errorf("admit replicated Ledger native growth before source IO: %w", err)
+		}
+	}
 	if _, err := l.file.Seek(l.offset, io.SeekStart); err != nil {
 		return err
 	}
+	if o := l.physical.Load(); o != nil {
+		// Once original source IO begins, an uncertain write must retain every
+		// corresponding COW target until independently authenticated reopen.
+		o.projection.physicalReplica.replicaReceived += int(lastSequence - firstSequence + 1)
+		o.commonQualified = false
+	}
 	if err := writeFull(l.durability, frames); err != nil {
 		l.status.MarkUnavailable()
-		return err
+		return l.holdPhysicalReplicaFailureLocked(err)
 	}
 	if err := l.durability.Sync(); err != nil {
 		l.status.MarkUnavailable()
-		return err
+		return l.holdPhysicalReplicaFailureLocked(err)
 	}
-	l.plainDigest.Write(frames)
+	if l.plainDigest != nil {
+		l.plainDigest.Write(frames)
+	}
 	l.sequence, l.offset = head.Sequence, head.Offset
 	l.chainHash, l.chainSequence, l.chainOffset = verifier.hash, verifier.sequence, verifier.offset
 	l.chainSawFrames, l.chainEpoch = verifier.sawFrames, verifier.epoch

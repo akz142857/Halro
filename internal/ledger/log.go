@@ -17,6 +17,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/akz142857/Halro/internal/authenticatedstate"
+	"github.com/akz142857/Halro/internal/boundedfilecache"
+	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/ownedfile"
+	"github.com/akz142857/Halro/internal/resourcebudget"
 )
 
 const (
@@ -106,22 +112,33 @@ func authenticatedFrameEpoch(epoch byte) bool {
 func (v *chainVerifier) verify() bool { return v != nil && len(v.key) == 32 }
 
 type Log struct {
-	mu             sync.Mutex
-	lifecycle      sync.RWMutex
-	file           *os.File
-	durability     DurabilityWriter
-	path           string
-	sequence       uint64
-	offset         int64
-	status         *Status
-	options        Options
-	appendQueue    chan appendRequest
-	closeSignal    chan struct{}
-	writerDone     chan struct{}
-	closed         bool
-	batches        atomic.Uint64
-	writtenRecords atomic.Uint64
-	appendErrors   atomic.Uint64
+	mu                  sync.Mutex
+	lifecycle           sync.RWMutex
+	admission           sync.Mutex
+	mutating            int
+	drain               chan struct{}
+	maintenance         *MaintenanceLease
+	file                *os.File
+	durability          DurabilityWriter
+	path                string
+	sequence            uint64
+	offset              int64
+	status              *Status
+	options             Options
+	uncertainAdmissions []AppendAdmission
+	appendQueue         chan appendRequest
+	closeSignal         chan struct{}
+	closeContext        context.Context
+	closeCancel         context.CancelFunc
+	writerDone          chan struct{}
+	closed              bool
+	closeErr            error
+	closeJoinMu         sync.Mutex
+	closeJoinErr        error // closeJoinMu; unknown original joins remain debt
+	ioClosed            bool  // under mu; the actual IO retirement is attempted once
+	batches             atomic.Uint64
+	writtenRecords      atomic.Uint64
+	appendErrors        atomic.Uint64
 	// syncs and syncNanos accumulate the cost of the one durability barrier per
 	// batch. Every throughput ceiling in this process is bounded by it, and its
 	// cost differs by orders of magnitude between an APFS laptop and an NVMe
@@ -158,11 +175,17 @@ type Log struct {
 	// history in ascending order; chainAnchor and startSequence are where this
 	// generation began, which a roll needs in order to record what it sealed
 	// and which the next generation inherits.
-	directory     string
-	generation    uint64
-	segments      []Segment
-	chainAnchor   [32]byte
-	startSequence uint64
+	directory        string
+	directoryInfo    os.FileInfo
+	generation       uint64
+	segmentDirectory *segmentDirectoryIndex
+	segmentSummary   SegmentSummary
+	// compacting admits one compression workspace without queueing callers.
+	// Guarded by mu and held through publication and physical cleanup.
+	maintenancePhase func(string) error // private per-owner filesystem boundary seam; guarded by mu
+	compacting       bool
+	chainAnchor      [32]byte
+	startSequence    uint64
 	// plainDigest is the SHA-256 of the active generation's committed prefix,
 	// carried forward as frames are appended rather than recomputed when a roll
 	// needs it.
@@ -175,13 +198,41 @@ type Log struct {
 	// that wait is the gateway's. Hashing each batch as it commits costs the
 	// same bytes spread across the writes that produced them, and leaves the
 	// roll with nothing to read.
-	plainDigest hash.Hash
+	plainDigest         hash.Hash
+	startupAuditPending bool // guarded by mu; saved-prefix Open excludes ordinary writes until audited
+	startupBudget       *resourcebudget.Manager
+	startupSaved        ReplayAnchor
+	startupProvenance   *selectedStartupProvenance
+	startupAudit        *StartupAudit
+	startupAuditPtr     atomic.Pointer[StartupAudit]
+	startupVerified     atomic.Bool
+	startupAuditWG      sync.WaitGroup
+	startupAuditDone    chan struct{} // mu; actual complete callback/FD exit
+	startupReaderDebt   *startupAuditReaderDebt
+	replayReaderDebt    *segmentReader
+	replaySegmentOpen   func(string, Segment) (*segmentReader, error) // private actual-stream lifecycle test seam
+	startupCleanup      *selectedStartupCleanup
+	physical            atomic.Pointer[nativePhysicalOwner]
 }
 
 type Options struct {
-	QueueCapacity int
-	MaxBatch      int
-	FlushInterval time.Duration
+	selectedStartup *selectedNativeStartup // established only by OpenWithSelectedSeal
+	// ReserveAppendDisk consumes already owned native-growth capacity for the
+	// complete encoded frame batch before source IO. It is independent of HA
+	// confirmation admission, runs under the writer lock and must not reenter
+	// this Log. Failure is a definite pre-write rejection and keeps the log
+	// healthy. Success remains owned across partial IO, Roll and Close; this
+	// hook does not charge compaction, manifest replacement or snapshots.
+	ReserveAppendDisk func(int64) error
+	// ReserveNativeFileDisk prepays one manifest/compression output envelope.
+	// Published or uncertain inode fees outlive the transient token and Close.
+	ReserveNativeFileDisk func(int64) (NativeFileDiskReservation, error)
+	QueueCapacity         int
+	MaxBatch              int
+	FlushInterval         time.Duration
+	// MaxSegmentDirectoryIndexBytes caps the rebuildable fixed-slot directory
+	// locator created under scratch storage. Zero leaves the ceiling disabled.
+	MaxSegmentDirectoryIndexBytes int64
 	// WrapDurability is an internal test/integration seam for deterministic
 	// write and fsync fault injection. Production callers leave it nil.
 	WrapDurability func(*os.File) DurabilityWriter
@@ -198,6 +249,12 @@ type Options struct {
 	// must not wait on the network while holding the writer lock. Nil preserves
 	// the Standalone path exactly.
 	AfterDurable func(DurableBatch) (uint64, error)
+	// BeforeDurable reserves ownership for the complete encoded batch before
+	// the first source write. The returned admission is transferred to
+	// AfterDurable on success. A definite pre-write failure releases it; an
+	// uncertain write/fsync failure keeps it until Close so startup recovery can
+	// account for the exact durable suffix before readiness.
+	BeforeDurable func(DurableBatch) (AppendAdmission, error)
 	// WaitConfirmed is called by the accounting manager only after the durable
 	// record has been applied to the local State, and only for the two event
 	// kinds whose request path must wait for a Replica ACK. The uint64 is the
@@ -218,11 +275,23 @@ type Options struct {
 }
 
 type DurableBatch struct {
+	// Context belongs to an isolated terminal fact, never to unrelated work
+	// combined in the same fsync batch. It grants no native role authority.
+	Context              context.Context
 	Generation           uint64
 	FirstSequence        uint64
 	LastSequence         uint64
 	RequiresConfirmation bool
 	Frames               []byte
+	Admission            AppendAdmission
+}
+
+// AppendAdmission represents capacity reserved before a native durable append.
+// The replication owner releases it only after the corresponding prefix is
+// durably confirmed. A source that cannot establish the append outcome retains
+// it until shutdown and lets startup recovery account for the exact suffix.
+type AppendAdmission interface {
+	Release() error
 }
 
 // ChainHead reports the verified epoch-4 chain state as of the most recent
@@ -283,9 +352,11 @@ func (s AppendStats) MarshalJSON() ([]byte, error) {
 }
 
 type appendRequest struct {
+	ctx     context.Context
 	event   Event
 	payload []byte
 	result  chan appendResult
+	record  *Record
 }
 
 type appendResult struct {
@@ -322,40 +393,86 @@ func Inspect(path string) (Watermark, bool, error) {
 // active generation would not report an error; it would report a smaller
 // ledger, which is the shape of failure that gets believed.
 func InspectReplay(path string, visit func(Record) error) (Watermark, bool, error) {
+	return InspectReplayContext(context.Background(), path, visit)
+}
+
+// InspectReplayContext retains the read-only checksum-only contract while
+// checking cancellation during both manifest passes and every physical frame.
+func InspectReplayContext(ctx context.Context, path string, visit func(Record) error) (head Watermark, partial bool, resultErr error) {
+	if err := ctx.Err(); err != nil {
+		return Watermark{}, false, err
+	}
 	directory := filepath.Dir(path)
-	segments, _, err := resolveSegments(directory)
+	manifest, err := openInspectionManifest(directory)
 	if err != nil {
 		return Watermark{}, false, err
 	}
-	if err := checkSegmentsPresent(directory, segments); err != nil {
+	defer func() {
+		resultErr = errors.Join(resultErr, manifest.close(), ctx.Err())
+		if resultErr != nil {
+			head, partial = Watermark{}, false
+		}
+	}()
+	first, firstDigest, err := manifest.walk(func(segment Segment) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return checkSegmentPresent(directory, segment)
+	})
+	if err != nil {
 		return Watermark{}, false, err
 	}
 	var sequence uint64
-	for _, segment := range segments {
+	consume := func(record Record) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if visit != nil {
+			return visit(record)
+		}
+		return nil
+	}
+	second, secondDigest, err := manifest.walk(func(segment Segment) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		reader, err := openSegment(directory, segment)
 		if err != nil {
-			return Watermark{}, false, err
+			return err
 		}
-		head, partial, err := scan(reader, segment.Generation, 0, sequence, visit, nil)
+		head, partial, err := scan(reader, segment.Generation, 0, sequence, consume, nil)
 		closeErr := reader.Close()
 		if err := errors.Join(err, closeErr); err != nil {
-			return Watermark{}, false, err
+			return err
 		}
 		// A sealed generation is immutable, so a short read is damage rather
 		// than a torn tail an open would repair.
 		if partial || head.Offset != segment.Length || head.Sequence != segment.LastSequence {
-			return Watermark{}, false, fmt.Errorf("%w: sealed generation %d ends at %d/%d, manifest says %d/%d",
+			return fmt.Errorf("%w: sealed generation %d ends at %d/%d, manifest says %d/%d",
 				ErrCorrupt, segment.Generation, head.Offset, head.Sequence,
 				segment.Length, segment.LastSequence)
 		}
 		sequence = head.Sequence
+		return nil
+	})
+	if err != nil {
+		return Watermark{}, false, err
+	}
+	if first != second || firstDigest != secondDigest {
+		return Watermark{}, false, fmt.Errorf("%w: ledger segment manifest changed between replay passes", ErrCorrupt)
+	}
+	if err := manifest.check(); err != nil {
+		return Watermark{}, false, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
 		return Watermark{}, false, err
 	}
-	defer file.Close()
-	return scan(file, activeGeneration(segments), 0, sequence, visit, nil)
+	head, partial, scanErr := scan(file, second.active, 0, sequence, consume, nil)
+	if err := errors.Join(scanErr, file.Close(), manifest.check()); err != nil {
+		return Watermark{}, false, err
+	}
+	return head, partial, nil
 }
 
 // ChainReport summarizes epoch-4 MAC/chain verification of the committed WAL
@@ -404,17 +521,21 @@ func (r ChainReport) HoldsFrames() bool {
 // The active generation, not the whole history: once a log has sealed anything,
 // the frames before the last roll live in files this does not open, and it
 // seeds itself from the manifest's record of where they left the chain.
-// VerifySegments is the other half, and a caller that means "verify the ledger"
+// VerifySegmentsSummary is the other half, and a caller that means "verify the ledger"
 // needs both — which is why the report has somewhere to put the sealed counts.
 func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
-	segments, _, err := resolveSegments(filepath.Dir(path))
+	manifest, err := walkReplicationManifest(filepath.Dir(path), nil)
 	if err != nil {
 		return ChainReport{}, false, err
 	}
-	anchor, sealedSequence, sealedEpoch, err := sealedTail(segments)
+	anchor, err := decodeChainHash(manifest.segment.EndHash)
+	if !manifest.sealed {
+		anchor = [32]byte{}
+	}
 	if err != nil {
 		return ChainReport{}, false, err
 	}
+	sealedSequence, sealedEpoch := manifest.segment.LastSequence, segmentEndEpoch(manifest.segment)
 	file, err := os.Open(path)
 	if err != nil {
 		return ChainReport{}, false, err
@@ -425,10 +546,10 @@ func VerifyChain(path string, key []byte) (ChainReport, bool, error) {
 	// tampering on every sealed instance, which is the failure mode a chain
 	// check must not have.
 	verifier := &chainVerifier{
-		key: key, hash: anchor, sequence: sealedSequence, sawFrames: len(segments) > 0, epoch: sealedEpoch,
+		key: key, hash: anchor, sequence: sealedSequence, sawFrames: manifest.sealed, epoch: sealedEpoch,
 	}
 	var report ChainReport
-	watermark, partial, err := scan(file, activeGeneration(segments), 0, sealedSequence, func(record Record) error {
+	watermark, partial, err := scan(file, manifest.active, 0, sealedSequence, func(record Record) error {
 		if authenticatedFrameEpoch(record.Epoch) && verifier.verify() {
 			report.Authenticated++
 		} else {
@@ -464,8 +585,14 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	if len(options.ChainKey) != 0 && len(options.ChainKey) != 32 {
 		return nil, errors.New("ledger chain key must be 32 bytes")
 	}
+	if options.MaxSegmentDirectoryIndexBytes < 0 {
+		return nil, errors.New("ledger segment directory index disk limit cannot be negative")
+	}
 	if (options.AfterDurable == nil) != (options.WaitConfirmed == nil) {
 		return nil, errors.New("ledger replication durability and confirmation callbacks must be configured together")
+	}
+	if options.BeforeDurable != nil && options.AfterDurable == nil {
+		return nil, errors.New("ledger append admission requires a durable replication owner")
 	}
 	if (options.BeforeRoll == nil) != (options.AfterRoll == nil) {
 		return nil, errors.New("ledger replication roll callbacks must be configured together")
@@ -478,15 +605,7 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	// mid-flight, so the chain the scan below verifies is the one the manifest
 	// claims. Doing it after would verify the active file against the wrong
 	// anchor and report tampering.
-	var segments []Segment
-	var err error
-	if options.Replica {
-		var pending bool
-		segments, pending, err = resolveSegments(directory)
-		if err == nil && pending {
-			err = errors.New("replica ledger has an interrupted Roll that must be reconciled against ordering")
-		}
-	} else {
+	if !options.Replica {
 		if options.RequireExisting {
 			if info, statErr := os.Stat(directory); statErr != nil || !info.IsDir() {
 				if statErr == nil {
@@ -494,35 +613,44 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 				}
 				return nil, fmt.Errorf("open seeded ledger directory: %w", statErr)
 			}
-		} else {
-			if err := os.MkdirAll(directory, 0o700); err != nil {
-				return nil, fmt.Errorf("create ledger directory: %w", err)
-			}
+		} else if err := os.MkdirAll(directory, 0o700); err != nil {
+			return nil, fmt.Errorf("create ledger directory: %w", err)
 		}
-		segments, err = repairSegments(directory)
 	}
+	directoryInfo, err := os.Lstat(directory)
+	if err != nil || !directoryInfo.IsDir() {
+		return nil, errors.Join(err, errors.New("Ledger native parent must be a real directory"))
+	}
+	segmentDirectory, err := openRuntimeSegmentDirectoryForStartupWithDisk(directory, options.Replica, options.MaxSegmentDirectoryIndexBytes, options.ChainKey, options.selectedStartup, options.ReserveNativeFileDisk)
 	if err != nil {
 		status.RequireRecovery()
 		return nil, err
 	}
-	// Fail-closed on a history that is no longer all there. Starting with a
-	// shorter archive than the manifest claims would rebuild balances from part
-	// of the ledger and report nothing wrong.
-	if err := checkSegmentsPresent(directory, segments); err != nil {
-		status.RequireRecovery()
-		return nil, err
+	transferredDirectory := false
+	defer func() {
+		if !transferredDirectory {
+			retireSelectedStartupDirectory(segmentDirectory, options.selectedStartup)
+		}
+	}()
+	summary := segmentDirectory.summary
+	var anchor [32]byte
+	var sealedSequence uint64
+	var sealedEpoch byte
+	if segmentDirectory.parsed.count > 0 {
+		last := segmentDirectory.parsed.last
+		anchor, err = decodeChainHash(last.EndHash)
+		if err != nil {
+			status.RequireRecovery()
+			return nil, err
+		}
+		sealedSequence, sealedEpoch = last.LastSequence, segmentEndEpoch(last)
 	}
-	anchor, sealedSequence, sealedEpoch, err := sealedTail(segments)
-	if err != nil {
-		status.RequireRecovery()
-		return nil, err
-	}
-	generation := activeGeneration(segments)
+	generation := segmentDirectory.parsed.count + 1
 	flags := os.O_RDWR
 	if !options.Replica && !options.RequireExisting {
 		flags |= os.O_CREATE
 	}
-	file, err := os.OpenFile(path, flags, 0o600)
+	file, err := openNativeActiveWithDisk(path, flags, options.ReserveNativeFileDisk)
 	if err != nil {
 		status.MarkUnavailable()
 		return nil, fmt.Errorf("open ledger: %w", err)
@@ -532,74 +660,116 @@ func OpenWithOptions(path string, status *Status, options Options) (*Log, error)
 	// directory that has never been sealed seeds at zero, which is what every
 	// log did before sealing existed.
 	verifier := &chainVerifier{key: options.ChainKey, hash: anchor, sequence: sealedSequence, epoch: sealedEpoch}
-	last, partial, err := scan(file, generation, 0, sealedSequence, nil, verifier)
+	fromOffset, fromSequence := int64(0), sealedSequence
+	if selected := options.selectedStartup; selected != nil {
+		if err := selected.validateDirectory(segmentDirectory, generation, file); err != nil {
+			retireSelectedStartupFile(file, options.selectedStartup)
+			status.RequireRecovery()
+			return nil, err
+		}
+		fromOffset, fromSequence = selected.anchor.Head.Offset, selected.anchor.Head.Sequence
+		verifier.hash, verifier.sequence, verifier.epoch = selected.anchor.Hash, fromSequence, selected.anchor.Epoch
+		verifier.offset, verifier.sawFrames = fromOffset, selected.anchor.Hash != ([32]byte{})
+		if generation > selected.anchor.Head.Generation {
+			if err := selected.verifyRolledSuffix(segmentDirectory, directory, generation, verifier); err != nil {
+				retireSelectedStartupFile(file, selected)
+				status.RequireRecovery()
+				return nil, err
+			}
+			fromOffset, fromSequence = 0, verifier.sequence
+			verifier.offset = 0
+		}
+	}
+	var startupVisit func(Record) error
+	if selected := options.selectedStartup; selected != nil {
+		startupVisit = func(Record) error { selected.decoded++; return selected.ctx.Err() }
+	}
+	last, partial, err := scan(file, generation, fromOffset, fromSequence, startupVisit, verifier)
 	if err != nil {
-		file.Close()
+		retireSelectedStartupFile(file, options.selectedStartup)
 		status.RequireRecovery()
 		return nil, err
 	}
+	if selected := options.selectedStartup; selected != nil {
+		if err := selected.validateActive(file); err != nil {
+			retireSelectedStartupFile(file, selected)
+			status.RequireRecovery()
+			return nil, err
+		}
+	}
 	if partial {
 		if options.Replica {
-			file.Close()
+			retireSelectedStartupFile(file, options.selectedStartup)
 			status.RequireRecovery()
 			return nil, fmt.Errorf("%w: replica Ledger has a partial tail that must be reconciled against ordering", ErrCorrupt)
 		}
 		if err := file.Truncate(last.Offset); err != nil {
-			file.Close()
+			retireSelectedStartupFile(file, options.selectedStartup)
 			status.RequireRecovery()
 			return nil, fmt.Errorf("truncate partial ledger tail: %w", err)
 		}
 		if err := file.Sync(); err != nil {
-			file.Close()
+			retireSelectedStartupFile(file, options.selectedStartup)
 			status.RequireRecovery()
 			return nil, fmt.Errorf("sync repaired ledger tail: %w", err)
 		}
 	}
 	if _, err := file.Seek(last.Offset, io.SeekStart); err != nil {
-		file.Close()
+		retireSelectedStartupFile(file, options.selectedStartup)
 		return nil, fmt.Errorf("seek ledger end: %w", err)
 	}
 	// Seed the rolling checksum from what is already on disk. This is the one
 	// full pass over the active generation, and it happens on a path that has
 	// just read every one of those bytes anyway; every roll afterwards reads
 	// none of them.
-	plainDigest, err := digestFilePrefix(path, last.Offset)
+	var plainDigest hash.Hash
+	if options.selectedStartup == nil {
+		plainDigest, err = digestFilePrefix(path, last.Offset)
+	}
 	if err != nil {
-		file.Close()
+		retireSelectedStartupFile(file, options.selectedStartup)
 		status.RequireRecovery()
 		return nil, err
 	}
+	closeContext, closeCancel := context.WithCancel(context.Background())
 	log := &Log{
-		file:           file,
-		durability:     file,
-		path:           path,
-		sequence:       last.Sequence,
-		offset:         last.Offset,
-		status:         status,
-		options:        options,
-		appendQueue:    make(chan appendRequest, options.QueueCapacity),
-		closeSignal:    make(chan struct{}),
-		writerDone:     make(chan struct{}),
-		chainKey:       append([]byte(nil), options.ChainKey...),
-		chainHash:      verifier.hash,
-		chainSequence:  verifier.sequence,
-		chainOffset:    verifier.offset,
-		chainSawFrames: verifier.sawFrames || len(segments) > 0,
-		chainEpoch:     verifier.epoch,
-		directory:      directory,
-		generation:     generation,
-		segments:       segments,
-		chainAnchor:    anchor,
-		startSequence:  sealedSequence,
-		plainDigest:    plainDigest,
+		file:                file,
+		durability:          file,
+		path:                path,
+		sequence:            last.Sequence,
+		offset:              last.Offset,
+		status:              status,
+		options:             options,
+		appendQueue:         make(chan appendRequest, options.QueueCapacity),
+		closeSignal:         make(chan struct{}),
+		closeContext:        closeContext,
+		closeCancel:         closeCancel,
+		writerDone:          make(chan struct{}),
+		chainKey:            append([]byte(nil), options.ChainKey...),
+		chainHash:           verifier.hash,
+		chainSequence:       verifier.sequence,
+		chainOffset:         verifier.offset,
+		chainSawFrames:      verifier.sawFrames || segmentDirectory.parsed.count > 0,
+		chainEpoch:          verifier.epoch,
+		directory:           directory,
+		directoryInfo:       directoryInfo,
+		generation:          generation,
+		segmentDirectory:    segmentDirectory,
+		segmentSummary:      summary,
+		chainAnchor:         anchor,
+		startSequence:       sealedSequence,
+		plainDigest:         plainDigest,
+		startupAuditPending: options.selectedStartup != nil,
 	}
 	if options.WrapDurability != nil {
 		log.durability = options.WrapDurability(file)
 		if log.durability == nil {
-			file.Close()
+			closeCancel()
+			retireSelectedStartupFile(file, options.selectedStartup)
 			return nil, errors.New("ledger durability wrapper returned nil")
 		}
 	}
+	transferredDirectory = true
 	go log.writerLoop()
 	return log, nil
 }
@@ -613,6 +783,59 @@ func (l *Log) Append(ctx context.Context, event Event) (Watermark, error) {
 // It deliberately does not wait for a network ACK: the accounting manager
 // must first apply the event to local State, then call WaitConfirmed.
 func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt, error) {
+	return l.appendWithReceipt(ctx, event, nil, nil, nil)
+}
+
+// AppendRecordWithReceipt returns the exact event snapshot, epoch, position and
+// chain hash written by this append, only after native fsync and any ordering
+// hook succeed. It permits a derived projection to Apply without rereading the
+// history. The receipt is not a quorum confirmation or permission to publish a
+// projection; callers still own ordering, maintenance and role authorization.
+func (l *Log) AppendRecordWithReceipt(ctx context.Context, event Event) (Record, AppendReceipt, error) {
+	var record Record
+	receipt, err := l.appendWithReceipt(ctx, event, &record, nil, nil)
+	if err != nil {
+		return Record{}, receipt, err
+	}
+	return record, receipt, nil
+}
+
+// AppendApplyRecordWithReceipt keeps normal mutation admission registered
+// through the durable record's synchronous Apply callback. Maintenance/Close
+// join that callback before taking ownership or clearing native resources.
+// Apply runs outside the native writer lock; it must not reenter this Log's
+// append, maintenance or Close operations. The callback context is canceled by
+// Log.Close, not by cancellation of an already accepted caller. Callback errors
+// keep receipt facts but return no record and latch recovery-required.
+// Confirmation remains an explicit operation after local Apply; this primitive
+// is not a business drain or an HA role/publication authorization protocol.
+func (l *Log) AppendApplyRecordWithReceipt(ctx context.Context, event Event, apply func(context.Context, Record) error) (Record, AppendReceipt, error) {
+	if apply == nil {
+		return Record{}, AppendReceipt{}, errors.New("Ledger apply callback is required")
+	}
+	var record Record
+	receipt, err := l.appendWithReceipt(ctx, event, &record, nil, func(r Record) error {
+		// Preserve resource/operation ownership, but an accepted fact outlives
+		// its caller's cancellation. Only actual native Close cancels Apply.
+		applyCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		stop := context.AfterFunc(l.closeContext, cancel)
+		defer cancel()
+		defer stop()
+		if l.closeContext.Err() != nil {
+			cancel()
+		}
+		return apply(applyCtx, r)
+	})
+	if err != nil {
+		return Record{}, receipt, err
+	}
+	return record, receipt, nil
+}
+
+func (l *Log) appendWithReceipt(ctx context.Context, event Event, record *Record, owner *MaintenanceLease, apply func(Record) error) (AppendReceipt, error) {
+	if l.startupBudget != nil && !l.SelectedStartupReady() {
+		return AppendReceipt{}, ErrStartupAuditPending
+	}
 	if l.options.Replica {
 		return AppendReceipt{}, errors.New("ledger is replica-owned and refuses local append")
 	}
@@ -622,6 +845,11 @@ func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt
 	if err := ctx.Err(); err != nil {
 		return AppendReceipt{}, err
 	}
+	finish, err := l.beginMutation(owner)
+	if err != nil {
+		return AppendReceipt{}, err
+	}
+	defer finish()
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return AppendReceipt{}, fmt.Errorf("encode ledger event: %w", err)
@@ -629,16 +857,25 @@ func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt
 	if len(payload) > maxPayloadSize {
 		return AppendReceipt{}, fmt.Errorf("ledger payload exceeds %d bytes", maxPayloadSize)
 	}
+	if record != nil {
+		// Event has pointer/slice fields. Decode the already-frozen bytes so the
+		// returned evidence cannot alias caller-owned objects or diverge from WAL.
+		var frozen Event
+		if err := json.Unmarshal(payload, &frozen); err != nil {
+			return AppendReceipt{}, fmt.Errorf("decode ledger append snapshot: %w", err)
+		}
+		event = frozen
+	}
 
 	if l.status.Load() != AccountingHealthy {
 		return AppendReceipt{}, errors.New("accounting is not healthy")
 	}
 
 	request := appendRequest{
-		event: event, payload: payload, result: make(chan appendResult, 1),
+		ctx: context.WithoutCancel(ctx), event: event, payload: payload, result: make(chan appendResult, 1), record: record,
 	}
 	l.lifecycle.RLock()
-	if l.closed {
+	if l.closed || l.closeContext.Err() != nil {
 		l.lifecycle.RUnlock()
 		return AppendReceipt{}, errors.New("ledger is closed")
 	}
@@ -648,7 +885,7 @@ func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt
 	case <-ctx.Done():
 		l.lifecycle.RUnlock()
 		return AppendReceipt{}, ctx.Err()
-	case <-l.closeSignal:
+	case <-l.closeContext.Done():
 		l.lifecycle.RUnlock()
 		return AppendReceipt{}, errors.New("ledger is closed")
 	}
@@ -656,6 +893,12 @@ func (l *Log) AppendWithReceipt(ctx context.Context, event Event) (AppendReceipt
 	// canceled: returning early would make an eventually committed event look
 	// uncommitted to its caller.
 	result := <-request.result
+	if result.err == nil && apply != nil {
+		if err := apply(*record); err != nil {
+			l.status.RequireRecovery()
+			return result.receipt, fmt.Errorf("apply durable Ledger record: %w", err)
+		}
+	}
 	return result.receipt, result.err
 }
 
@@ -674,8 +917,11 @@ func (l *Log) WaitConfirmed(ctx context.Context, receipt AppendReceipt) error {
 func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file == nil {
+	if l.closeContext.Err() != nil || l.file == nil {
 		return Watermark{}, errors.New("ledger is closed")
+	}
+	if l.replayReaderDebt != nil {
+		return Watermark{}, errors.Join(ErrProjectionUnavailable, l.closeErr)
 	}
 	if from.Generation > l.generation {
 		return Watermark{}, fmt.Errorf("unsupported ledger generation %d", from.Generation)
@@ -698,7 +944,14 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 		}
 		return Watermark{}, err
 	}
-	for _, segment := range l.segments {
+	for generation := uint64(1); generation < l.generation; generation++ {
+		segment, found, err := l.lookupSegmentLocked(generation)
+		if err != nil {
+			return fail(err)
+		}
+		if !found {
+			return fail(ErrSegmentMissing)
+		}
 		if !started {
 			if segment.Generation != from.Generation {
 				continue
@@ -729,7 +982,10 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 		// seeded from the manifest's recorded chain head for the generation,
 		// and the scan's own end state is checked against it below, so a
 		// manifest edited to match a tampered file fails on the frames.
-		verifier := l.sealedVerifier(segment, offset)
+		verifier, err := l.sealedVerifier(segment, offset)
+		if err != nil {
+			return fail(err)
+		}
 		head, partial, err := scan(reader, segment.Generation, offset, sequence, visit, verifier)
 		closeErr := reader.Close()
 		if err != nil {
@@ -784,87 +1040,253 @@ func (l *Log) Replay(from Watermark, visit func(Record) error) (Watermark, error
 // before the resume point were authenticated when whatever wrote the watermark
 // replayed them, and every later generation is entered at zero and verified in
 // full.
-func (l *Log) sealedVerifier(segment Segment, offset int64) *chainVerifier {
+func (l *Log) sealedVerifier(segment Segment, offset int64) (*chainVerifier, error) {
 	if len(l.chainKey) != 32 || offset != 0 {
-		return nil
+		return nil, nil
 	}
 	start, err := decodeChainHash(segment.StartHash)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &chainVerifier{
-		key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1,
-		epoch: l.segmentStartEpoch(segment.Generation),
+	epoch, err := l.segmentStartEpoch(segment.Generation)
+	if err != nil {
+		return nil, err
 	}
+	return &chainVerifier{key: l.chainKey, hash: start, sequence: segment.FirstSequence - 1, epoch: epoch}, nil
 }
-
-func (l *Log) segmentStartEpoch(generation uint64) byte {
-	for index, segment := range l.segments {
-		if segment.Generation != generation {
-			continue
-		}
-		if index == 0 {
-			return 0
-		}
-		return segmentEndEpoch(l.segments[index-1])
+func (l *Log) segmentStartEpoch(generation uint64) (byte, error) {
+	if generation <= 1 {
+		return 0, nil
 	}
-	return 0
+	previous, found, err := l.lookupSegmentLocked(generation - 1)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, ErrSegmentMissing
+	}
+	return segmentEndEpoch(previous), nil
 }
 
 // Snapshot copies exactly the committed prefix while holding the writer lock.
 // Appends may queue concurrently, but no frame after the returned watermark can
 // enter the snapshot file.
 func (l *Log) Snapshot(path string) (Watermark, error) {
+	return l.SnapshotWithDisk(path, nil)
+}
+
+// SnapshotWithDisk consumes an independent fixed staging-tree owner's quota.
+// Successful output remains charged after native Close. Only a failed,
+// exclusively created output with known Close/Retire/Sync can recycle quota.
+func (l *Log) SnapshotWithDisk(path string, reserve func(int64) (NativeFileDiskReservation, error)) (result Watermark, resultErr error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return Watermark{}, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file == nil {
+	if l.closeContext.Err() != nil || l.file == nil {
 		return Watermark{}, errors.New("ledger is closed")
 	}
-	output, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return Watermark{}, fmt.Errorf("create ledger snapshot: %w", err)
+	var reservation NativeFileDiskReservation
+	var envelope int64
+	var err error
+	if reserve != nil {
+		envelope, err = nativeFileEnvelope(l.offset)
+		if err != nil {
+			return Watermark{}, err
+		}
+		reservation, err = reserve(envelope)
+		if err != nil {
+			return Watermark{}, err
+		}
 	}
-	complete := false
+	output, owner, err := ownedfile.Create(path, os.O_WRONLY, 0600)
+	if err != nil {
+		return Watermark{}, keepNativeFileDiskDebt(reservation, fmt.Errorf("create ledger snapshot: %w", err))
+	}
+	closed := false
 	defer func() {
-		output.Close()
-		if !complete {
-			os.Remove(path)
+		if !closed {
+			closeErr := ownedfile.CloseFile(output)
+			if closeErr != nil {
+				resultErr = errors.Join(resultErr, ErrSegmentRetirement, closeErr)
+			}
+		}
+		if resultErr != nil && !errors.Is(resultErr, ownedfile.ErrRetirement) && !errors.Is(resultErr, ErrSegmentRetirement) {
+			retireErr := owner.Retire()
+			if retireErr == nil {
+				retireErr = durable.SyncDirectory(filepath.Dir(path))
+			}
+			if retireErr == nil && reservation != nil {
+				retireErr = reservation.RetireKnown()
+				if retireErr == nil {
+					reservation = nil
+				}
+			}
+			resultErr = errors.Join(resultErr, retireErr)
+		}
+		resultErr = keepNativeFileDiskDebt(reservation, resultErr)
+		if resultErr != nil {
+			result = Watermark{}
+		}
+		if errors.Is(resultErr, ownedfile.ErrRetirement) || errors.Is(resultErr, ErrSegmentRetirement) {
+			l.closeErr = errors.Join(l.closeErr, resultErr)
 		}
 	}()
-	if _, err := io.CopyN(output, io.NewSectionReader(l.file, 0, l.offset), l.offset); err != nil {
+	var writer io.Writer = output
+	if reservation != nil {
+		writer = &nativeDiskWriter{output: output, limit: envelope}
+	}
+	if _, err := io.CopyN(writer, io.NewSectionReader(l.file, 0, l.offset), l.offset); err != nil {
 		return Watermark{}, fmt.Errorf("copy ledger snapshot: %w", err)
 	}
 	if err := output.Sync(); err != nil {
 		return Watermark{}, fmt.Errorf("sync ledger snapshot: %w", err)
 	}
-	if err := output.Close(); err != nil {
-		return Watermark{}, fmt.Errorf("close ledger snapshot: %w", err)
+	if err := owner.VerifyFile(output); err != nil {
+		return Watermark{}, err
 	}
-	complete = true
+	if reservation != nil {
+		if err := verifyNativeFileEnvelope(output, envelope); err != nil {
+			return Watermark{}, err
+		}
+	}
+	closeErr := ownedfile.CloseFile(output)
+	closed = true
+	if closeErr != nil {
+		return Watermark{}, errors.Join(ErrSegmentRetirement, fmt.Errorf("close ledger snapshot: %w", closeErr))
+	}
+	if err := errors.Join(durable.SyncDirectory(filepath.Dir(path)), owner.VerifyName()); err != nil {
+		return Watermark{}, errors.Join(ErrSegmentRetirement, err)
+	}
 	return Watermark{Generation: l.generation, Offset: l.offset, Sequence: l.sequence}, nil
 }
 
 func (l *Log) Close() error {
-	l.lifecycle.Lock()
+	return l.CloseContext(context.Background())
+}
+
+// CloseContext can borrow the original shutdown/checkpoint workspace for
+// physical selection qualification. An expired original join retains retirement
+// debt; only an actually completed join permits descriptor retirement.
+func (l *Log) CloseContext(ctx context.Context) error {
+	// Withdraw enqueue before waiting for its lifecycle readers: a full queue
+	// can otherwise keep a reader blocked behind the very writer being joined.
+	// The writer's closeSignal is separate and closes only after all possible
+	// senders have left that gate, so its final drain cannot miss an enqueue.
+	l.closeCancel()
+	if err := lockNativeCloseMutex(ctx, &l.lifecycle); err != nil {
+		return l.retainUnknownCloseJoin(err)
+	}
 	if !l.closed {
 		l.closed = true
 		close(l.closeSignal)
 	}
 	l.lifecycle.Unlock()
-	<-l.writerDone
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	clear(l.chainKey)
-	l.chainKey = nil
-	if l.file == nil {
-		return nil
+	l.admission.Lock()
+	if l.maintenance != nil {
+		l.maintenance.closed = true
+		l.maintenance.cancel()
 	}
-	err := l.file.Close()
-	l.file = nil
-	return err
+	l.admission.Unlock()
+	if err := waitNativeCloseJoin(ctx, l.writerDone); err != nil {
+		return l.retainUnknownCloseJoin(err)
+	}
+	if err := l.joinCloseMutations(ctx); err != nil {
+		return l.retainUnknownCloseJoin(err)
+	}
+	if err := l.lockNativeClose(ctx); err != nil {
+		return l.retainUnknownCloseJoin(err)
+	}
+	if l.startupAudit != nil {
+		l.startupAudit.Cancel()
+	}
+	auditJob := l.startupAudit
+	auditDone := l.startupAuditDone
+	l.mu.Unlock()
+	if auditDone != nil {
+		if err := waitNativeCloseJoin(ctx, auditDone); err != nil {
+			return l.retainUnknownCloseJoin(err)
+		}
+	}
+	if auditJob != nil {
+		if err := auditJob.Wait(ctx); err != nil && ctx.Err() != nil && !auditJob.Snapshot().Complete {
+			return l.retainUnknownCloseJoin(ctx.Err())
+		}
+	}
+	l.closeJoinMu.Lock()
+	joinErr := l.closeJoinErr
+	l.closeJoinMu.Unlock()
+	if err := l.lockNativeClose(ctx); err != nil {
+		return l.retainUnknownCloseJoin(err)
+	}
+	defer l.mu.Unlock()
+	if l.ioClosed {
+		return l.closeErr
+	}
+	l.ioClosed = true
+	var fileErr error
+	if physical := l.physical.Load(); physical != nil && physical.failure == nil && physical.debt == 0 && physical.active == 0 {
+		fileErr = l.checkPhysicalCloseSelectionLocked(ctx)
+		if fileErr == nil {
+			fileErr = l.preparePhysicalDerivedLocked(ctx, PhysicalDerivedClose, 0)
+		}
+		if fileErr == nil {
+			fileErr = l.retirePhysicalRollTailLocked()
+		} else {
+			fileErr = errors.Join(fileErr, physical.projection.store.HoldPhysicalPreparationForRecovery(context.Background()))
+		}
+		if fileErr != nil {
+			physical.failure = fileErr
+			l.status.RequireRecovery()
+		}
+	}
+	if l.file != nil {
+		closeErr := ownedfile.CloseFile(l.file)
+		if closeErr != nil {
+			fileErr = errors.Join(fileErr, ErrSegmentRetirement, closeErr)
+		} else {
+			l.file = nil
+		}
+	}
+	directoryErr := l.segmentDirectory.Close()
+	if directoryErr == nil {
+		l.segmentDirectory = nil
+	}
+	err := errors.Join(l.closeErr, joinErr, fileErr, directoryErr)
+	if physical := l.physical.Load(); physical != nil && (physical.failure != nil || physical.debt != 0 || physical.active != 0) {
+		err = errors.Join(err, authenticatedstate.ErrRecovery, physical.failure)
+	}
+	if l.startupReaderDebt != nil {
+		err = errors.Join(err, l.startupReaderDebt.err)
+	}
+	if l.startupCleanup != nil {
+		err = errors.Join(err, l.startupCleanup.close())
+	}
+	if errors.Is(err, ownedfile.ErrRetirement) || errors.Is(err, ErrSegmentRetirement) {
+		l.status.RequireRecovery()
+	} else {
+		clear(l.chainKey)
+		l.chainKey = nil
+	}
+	if err == nil {
+		if physical := l.physical.Load(); physical != nil && physical.feeHeld {
+			err = errors.Join(err, physical.fee.Release())
+			if err == nil {
+				physical.feeHeld = false
+			}
+		}
+		for _, admission := range l.uncertainAdmissions {
+			if admission != nil {
+				err = errors.Join(err, admission.Release())
+			}
+		}
+		if err == nil {
+			l.uncertainAdmissions = nil
+		}
+	}
+	l.closeErr = err
+	return l.closeErr
 }
 
 // Status exposes the accounting health this log already reports into. A caller
@@ -872,6 +1294,14 @@ func (l *Log) Close() error {
 // state instead of keeping a second, invisible one beside it.
 func (l *Log) Status() *Status {
 	return l.status
+}
+
+// HasPersistentDirectoryIndex reports whether this Log owns the authenticated
+// on-disk locator whose configured disk claim must outlive the Log.
+func (l *Log) HasPersistentDirectoryIndex() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.segmentDirectory != nil && l.segmentDirectory.persistent
 }
 
 func (l *Log) Stats() AppendStats {
@@ -896,14 +1326,14 @@ func (l *Log) writerLoop() {
 			// derived ceiling optimistic.
 			started := time.Now()
 			batch := l.collectBatch(first)
-			l.writeBatch(batch)
+			l.writeCollectedBatch(batch)
 			l.batchNanos.Add(int64(time.Since(started)))
 		case <-l.closeSignal:
 			for {
 				select {
 				case request := <-l.appendQueue:
 					started := time.Now()
-					l.writeBatch(l.collectBatch(request))
+					l.writeCollectedBatch(l.collectBatch(request))
 					l.batchNanos.Add(int64(time.Since(started)))
 				default:
 					return
@@ -942,9 +1372,35 @@ func (l *Log) collectBatch(first appendRequest) []appendRequest {
 	return batch
 }
 
+func (l *Log) writeCollectedBatch(batch []appendRequest) {
+	if l.physical.Load() != nil {
+		for i := range batch {
+			l.writeBatch(batch[i : i+1])
+		}
+		return
+	}
+	start := 0
+	for i, request := range batch {
+		if (request.event.Kind == EventAttemptSettled || request.event.Kind == EventRequestFinalized) && resourcebudget.InCompletionContinuation(request.ctx) {
+			if start < i {
+				l.writeBatch(batch[start:i])
+			}
+			l.writeBatch(batch[i : i+1])
+			start = i + 1
+		}
+	}
+	if start < len(batch) {
+		l.writeBatch(batch[start:])
+	}
+}
+
 func (l *Log) writeBatch(batch []appendRequest) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if !l.selectedStartupAppendAllowedLocked() {
+		respondBatch(batch, nil, ErrStartupAuditPending)
+		return
+	}
 	if l.file == nil {
 		respondBatch(batch, nil, errors.New("ledger is closed"))
 		return
@@ -976,6 +1432,52 @@ func (l *Log) writeBatch(batch []appendRequest) {
 		offset += int64(len(frame))
 		previousHash = nextHash
 		watermarks[index] = Watermark{Generation: l.generation, Offset: offset, Sequence: sequence}
+		if request.record != nil {
+			*request.record = Record{Generation: l.generation, Sequence: sequence, Offset: offset,
+				Epoch: frameVersionRunAttribution, Event: request.event, Hash: nextHash}
+		}
+	}
+	durableBatch := DurableBatch{
+		Generation: l.generation, FirstSequence: watermarks[0].Sequence,
+		LastSequence:         watermarks[len(watermarks)-1].Sequence,
+		RequiresConfirmation: requiresConfirmation,
+		Frames:               append([]byte(nil), encoded.Bytes()...),
+	}
+	if len(batch) == 1 {
+		durableBatch.Context = batch[0].ctx
+	}
+	if l.options.BeforeDurable != nil {
+		admission, err := l.options.BeforeDurable(durableBatch)
+		if err != nil {
+			l.appendErrors.Add(uint64(len(batch)))
+			respondBatch(batch, nil, fmt.Errorf("admit ledger batch before durable append: %w", err))
+			return
+		}
+		durableBatch.Admission = admission
+	}
+	releaseAdmission := func() {
+		if durableBatch.Admission != nil {
+			_ = durableBatch.Admission.Release()
+			durableBatch.Admission = nil
+		}
+	}
+	physicalAppend, physicalErr := l.validatePhysicalAppendLocked(batch, int64(encoded.Len()))
+	if physicalErr != nil {
+		releaseAdmission()
+		respondBatch(batch, nil, physicalErr)
+		return
+	}
+	reserveAppendDisk := l.options.ReserveAppendDisk
+	if physicalAppend != nil {
+		reserveAppendDisk = l.physical.Load().capacity.ConsumePhysicalRange
+	}
+	if reserveAppendDisk != nil {
+		if err := reserveAppendDisk(int64(encoded.Len())); err != nil {
+			releaseAdmission()
+			l.appendErrors.Add(uint64(len(batch)))
+			respondBatch(batch, nil, fmt.Errorf("admit Ledger native growth before source IO: %w", err))
+			return
+		}
 	}
 	// Position the write at the committed tail the log tracks, never at
 	// wherever the shared descriptor's cursor happens to sit. Replay scans
@@ -983,12 +1485,20 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	// a corrupt frame — leaves the cursor mid-file; a write that trusted it
 	// would land inside already-durable frames and silently overwrite them.
 	if _, err := l.file.Seek(l.offset, io.SeekStart); err != nil {
+		releaseAdmission()
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
 		respondBatch(batch, nil, fmt.Errorf("seek ledger tail: %w", err))
 		return
 	}
+	if physicalAppend != nil {
+		physicalAppend.accepted.Store(true)
+	}
 	if err := writeFull(l.durability, encoded.Bytes()); err != nil {
+		if durableBatch.Admission != nil {
+			l.uncertainAdmissions = append(l.uncertainAdmissions, durableBatch.Admission)
+			durableBatch.Admission = nil
+		}
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
 		respondBatch(batch, nil, fmt.Errorf("append ledger: %w", err))
@@ -1002,6 +1512,10 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	l.syncNanos.Add(int64(time.Since(syncStarted)))
 	l.syncs.Add(1)
 	if syncErr != nil {
+		if durableBatch.Admission != nil {
+			l.uncertainAdmissions = append(l.uncertainAdmissions, durableBatch.Admission)
+			durableBatch.Admission = nil
+		}
 		l.status.MarkUnavailable()
 		l.appendErrors.Add(uint64(len(batch)))
 		respondBatch(batch, nil, fmt.Errorf("sync ledger: %w", syncErr))
@@ -1010,7 +1524,9 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	// Past the barrier: these bytes are committed, so they join the generation's
 	// running checksum here and nowhere else. Hashing before the sync would
 	// fold in a write that may not have survived.
-	l.plainDigest.Write(encoded.Bytes())
+	if l.plainDigest != nil {
+		l.plainDigest.Write(encoded.Bytes())
+	}
 	l.sequence = sequence
 	l.offset = offset
 	l.chainHash = previousHash
@@ -1023,12 +1539,7 @@ func (l *Log) writeBatch(batch []appendRequest) {
 	replicationIndex := uint64(0)
 	if l.options.AfterDurable != nil {
 		var err error
-		replicationIndex, err = l.options.AfterDurable(DurableBatch{
-			Generation: l.generation, FirstSequence: watermarks[0].Sequence,
-			LastSequence:         watermarks[len(watermarks)-1].Sequence,
-			RequiresConfirmation: requiresConfirmation,
-			Frames:               append([]byte(nil), encoded.Bytes()...),
-		})
+		replicationIndex, err = l.options.AfterDurable(durableBatch)
 		if err != nil {
 			l.status.MarkUnavailable()
 			l.appendErrors.Add(uint64(len(batch)))
@@ -1041,6 +1552,8 @@ func (l *Log) writeBatch(batch []appendRequest) {
 			respondBatch(batch, nil, errors.New("record durable ledger batch for replication: callback returned index zero"))
 			return
 		}
+	} else {
+		releaseAdmission()
 	}
 	respondBatchWithReplication(batch, watermarks, replicationIndex, nil)
 }
@@ -1130,6 +1643,26 @@ func scan(file io.ReadSeeker, generation uint64, fromOffset int64, initialSequen
 }
 
 func scanFrom(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset int64, initialSequence uint64, visit func(Record) error, verifier *chainVerifier) (Watermark, bool, error) {
+	return scanFromFrames(file, generation, sourceOffset, logicalOffset, initialSequence, visit, nil, verifier)
+}
+
+// nativeFrameParts borrows the exact bytes just authenticated by the scanner.
+// A frame consumer must copy what it needs before returning. No re-encoding,
+// second disk read, or additional whole-frame allocation is needed.
+type nativeFrameParts struct {
+	header, chainTail, payload []byte
+}
+
+func (f nativeFrameParts) size() int { return len(f.header) + len(f.chainTail) + len(f.payload) }
+
+func scanFromFrames(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset int64, initialSequence uint64, visit func(Record) error, frames func(Record, nativeFrameParts) error, verifier *chainVerifier) (Watermark, bool, error) {
+	if actual, ok := file.(*os.File); ok {
+		info, err := actual.Stat()
+		if err != nil {
+			return Watermark{}, false, err
+		}
+		file = boundedfilecache.NewReader(actual, info.Size())
+	}
 	if sourceOffset < 0 || logicalOffset < 0 {
 		return Watermark{}, false, errors.New("ledger offset cannot be negative")
 	}
@@ -1206,8 +1739,9 @@ func scanFrom(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset
 		// callers without one get the same checksum-only treatment epochs
 		// 1-3 always get.
 		var previousHash, frameMAC [chainMACSize]byte
+		var chainTail []byte
 		if authenticatedFrameEpoch(epoch) {
-			chainTail := make([]byte, chainPreviousHashSize+chainMACSize)
+			chainTail = make([]byte, chainPreviousHashSize+chainMACSize)
 			if _, err := io.ReadFull(file, chainTail); err != nil {
 				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 					return Watermark{Generation: generation, Offset: offset, Sequence: lastSequence}, true, nil
@@ -1269,13 +1803,21 @@ func scanFrom(file io.ReadSeeker, generation uint64, sourceOffset, logicalOffset
 		if authenticatedFrameEpoch(epoch) && verifier.verify() {
 			verifier.offset = nextOffset
 		}
-		if visit != nil {
+		if visit != nil || frames != nil {
 			var recordHash [32]byte
 			if authenticatedFrameEpoch(epoch) && verifier.verify() {
 				recordHash = verifier.hash
 			}
-			if err := visit(Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event, Hash: recordHash}); err != nil {
-				return Watermark{}, false, visitError{err}
+			record := Record{Generation: generation, Sequence: sequence, Offset: nextOffset, Epoch: epoch, Event: event, Hash: recordHash}
+			if visit != nil {
+				if err := visit(record); err != nil {
+					return Watermark{}, false, visitError{err}
+				}
+			}
+			if frames != nil {
+				if err := frames(record, nativeFrameParts{header: header, chainTail: chainTail, payload: payload}); err != nil {
+					return Watermark{}, false, visitError{err}
+				}
 			}
 		}
 		offset = nextOffset

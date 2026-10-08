@@ -154,7 +154,7 @@ func TestARollRecordsTheChecksumOfWhatItSealedWithoutReadingIt(t *testing.T) {
 		t.Fatalf("after a reopen, generation %d records checksum %s, the file hashes to %s",
 			third.Sealed.Generation, third.Sealed.PlainChecksum, checksum)
 	}
-	if _, err := VerifySegments(directory, testChainKey, 0); err != nil {
+	if _, err := VerifySegmentsSummary(directory, testChainKey, 0); err != nil {
 		t.Fatalf("the sealed archive does not verify: %v", err)
 	}
 }

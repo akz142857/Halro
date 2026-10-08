@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"bufio"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,7 +14,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/boundedfilecache"
+	"github.com/akz142857/Halro/internal/ownedfile"
 )
 
 // Sealing: how a write-ahead log that is the accounting authority stops growing
@@ -70,101 +72,218 @@ type Segment struct {
 	SealedAt       time.Time `json:"sealed_at"`
 }
 
-// segmentManifest is the durable record of which generations exist.
-//
-// Pending is the crash window made explicit. A roll writes the intent here
-// before renaming the active file aside, and clears it after the successor is
-// in place; an open that finds one decides which side of the rename it is on by
-// looking for the rolled file, and finishes or abandons the roll accordingly.
-// Without it, a crash mid-roll leaves a manifest and a set of files that
-// disagree about what the active file contains, and the chain check would
-// report tampering on a log nothing had tampered with.
-type segmentManifest struct {
-	Version  int       `json:"version"`
-	Segments []Segment `json:"segments"`
-	Pending  *Segment  `json:"pending,omitempty"`
-}
-
 func segmentManifestPath(directory string) string {
 	return filepath.Join(directory, segmentManifestName)
 }
 
-func loadSegmentManifest(directory string) (segmentManifest, error) {
-	raw, err := os.ReadFile(segmentManifestPath(directory))
-	if errors.Is(err, os.ErrNotExist) {
-		return segmentManifest{Version: segmentManifestVersion}, nil
-	}
-	if err != nil {
-		return segmentManifest{}, fmt.Errorf("read ledger segment manifest: %w", err)
-	}
-	var manifest segmentManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return segmentManifest{}, fmt.Errorf("%w: ledger segment manifest is unreadable: %v", ErrCorrupt, err)
-	}
-	// An exact-equality gate here would refuse a directory this build can read
-	// perfectly well the moment the manifest gains a field. A range accepts
-	// everything up to what this build understands and refuses only what was
-	// written by something newer.
-	if manifest.Version < 1 || manifest.Version > segmentManifestVersion {
-		return segmentManifest{}, fmt.Errorf("%w: ledger segment manifest version %d", ErrUnsupportedVersion, manifest.Version)
-	}
-	// Generations are numbered from one and never skipped, so the manifest has
-	// to read as an unbroken run. Ordering alone was not enough: a manifest
-	// edited to drop its oldest generations is still ordered, and every later
-	// check — the presence check, the chain anchor, `ledger verify` — is
-	// defined relative to what the manifest claims exists. A full replay would
-	// then rebuild balances from a suffix of the history and report nothing
-	// wrong, which is the one failure the accounting authority must not have.
-	//
-	// This is why moving old generations off the box is not yet a supported
-	// operation, only a described one; taking them away needs a record of what
-	// was taken, and there is not one.
-	for position, segment := range manifest.Segments {
-		if segment.Generation != uint64(position)+1 {
-			return segmentManifest{}, fmt.Errorf(
-				"%w: ledger segment %d is generation %d; the sealed history must run from 1 without gaps",
-				ErrCorrupt, position, segment.Generation)
-		}
-	}
-	if manifest.Pending != nil && manifest.Pending.Generation != uint64(len(manifest.Segments))+1 {
-		return segmentManifest{}, fmt.Errorf(
-			"%w: ledger roll intent names generation %d after %d sealed generations",
-			ErrCorrupt, manifest.Pending.Generation, len(manifest.Segments))
-	}
-	return manifest, nil
+// renamed distinguishes a failed preparation from an uncertain directory
+// durability barrier. After rename, either manifest may survive a power loss;
+// callers must retain files required by both instead of deleting the new one.
+func saveSegmentManifestSourceWithSync(directory string, source segmentManifestSource, syncDirectory func(string) error) (renamed bool, err error) {
+	return saveSegmentManifestSourceWithDisk(directory, source, syncDirectory, nil)
 }
 
-func saveSegmentManifest(directory string, manifest segmentManifest) error {
-	manifest.Version = segmentManifestVersion
-	encoded, err := json.Marshal(manifest)
+func saveSegmentManifestSourceWithDisk(directory string, source segmentManifestSource, syncDirectory func(string) error, reserve reserveNativeFileDisk) (renamed bool, err error) {
+	var reservation NativeFileDiskReservation
+	var envelope int64
+	knownRetired := false
+	if reserve != nil {
+		counter := &nativeCountWriter{}
+		if err := writeSegmentManifestSource(counter, source); err != nil {
+			return false, err
+		}
+		var limitErr error
+		envelope, limitErr = nativeFileEnvelope(counter.bytes)
+		if limitErr != nil {
+			return false, limitErr
+		}
+		reservation, err = reserve(envelope)
+		if err != nil {
+			return false, err
+		}
+	}
+	// Registered first: every actual Close/retirement defer exits before this
+	// refund decision. A parent Close failure cannot disappear behind refund.
+	defer func() {
+		if reservation != nil && !renamed && knownRetired && !errors.Is(err, ownedfile.ErrRetirement) && !errors.Is(err, ErrSegmentRetirement) {
+			err = errors.Join(err, reservation.RetireKnown())
+		} else if err != nil {
+			err = keepNativeFileDiskDebt(reservation, err)
+		}
+	}()
+	parentInfo, err := os.Lstat(directory)
+	if err != nil || !parentInfo.IsDir() {
+		return false, errors.Join(ownedfile.ErrReplaced, err)
+	}
+	parent, err := os.Open(directory)
 	if err != nil {
-		return fmt.Errorf("encode ledger segment manifest: %w", err)
+		return false, err
+	}
+	defer func() {
+		if closeErr := ownedfile.CloseFile(parent); closeErr != nil {
+			err = errors.Join(err, ErrSegmentRetirement, closeErr)
+		}
+	}()
+	actualParent, err := parent.Stat()
+	if err != nil || !os.SameFile(parentInfo, actualParent) {
+		return false, errors.Join(ownedfile.ErrReplaced, err)
+	}
+	checkParent := func() error {
+		named, err := os.Lstat(directory)
+		if err != nil || !os.SameFile(parentInfo, named) {
+			return errors.Join(ownedfile.ErrReplaced, err)
+		}
+		return nil
 	}
 	path := segmentManifestPath(directory)
 	temporary := path + segmentTempSuffix
-	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("write ledger segment manifest: %w", err)
+	previous, statErr := os.Lstat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return false, statErr
 	}
-	if err := writeFull(file, encoded); err != nil {
-		file.Close()
-		os.Remove(temporary)
-		return fmt.Errorf("write ledger segment manifest: %w", err)
+	if statErr == nil && !previous.Mode().IsRegular() {
+		return false, ownedfile.ErrReplaced
+	}
+	file, owner, err := ownedfile.Create(temporary, os.O_WRONLY, 0600)
+	if err != nil {
+		return false, fmt.Errorf("write ledger segment manifest: %w", err)
+	}
+	closed := false
+	closeUncertain := false
+	defer func() {
+		if !closed {
+			closeErr := ownedfile.CloseFile(file)
+			err = errors.Join(err, closeErr)
+			if closeErr != nil {
+				err = errors.Join(err, ErrSegmentRetirement)
+				return
+			} // Actual retirement unproven.
+		}
+		if closeUncertain {
+			return
+		}
+		if !renamed {
+			retireErr := owner.Retire()
+			if retireErr == nil {
+				retireErr = errors.Join(syncDirectory(directory), checkParent())
+			}
+			knownRetired = retireErr == nil
+			err = errors.Join(err, retireErr)
+		}
+	}()
+	var output io.Writer = file
+	if reservation != nil {
+		output = &nativeDiskWriter{output: file, limit: envelope}
+	}
+	if err := writeSegmentManifestSource(output, source); err != nil {
+		return false, fmt.Errorf("write ledger segment manifest: %w", err)
+	}
+	if err := checkParent(); err != nil {
+		return false, err
+	}
+	if err := owner.VerifyFile(file); err != nil {
+		return false, err
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		os.Remove(temporary)
-		return fmt.Errorf("sync ledger segment manifest: %w", err)
+		return false, fmt.Errorf("sync ledger segment manifest: %w", err)
 	}
-	if err := file.Close(); err != nil {
-		os.Remove(temporary)
-		return fmt.Errorf("close ledger segment manifest: %w", err)
+	if reservation != nil {
+		if err := verifyNativeFileEnvelope(file, envelope); err != nil {
+			return false, err
+		}
 	}
-	if err := os.Rename(temporary, path); err != nil {
-		os.Remove(temporary)
-		return fmt.Errorf("commit ledger segment manifest: %w", err)
+	closeErr := ownedfile.CloseFile(file)
+	closed = true // Close exactly once, including an uncertain Close failure.
+	if closeErr != nil {
+		// Do not unlink while the actual descriptor's retirement is uncertain.
+		closeUncertain = true
+		return false, errors.Join(ErrSegmentRetirement, fmt.Errorf("close ledger segment manifest: %w", closeErr))
 	}
-	return durable.SyncDirectory(directory)
+	if previous != nil {
+		if err := owner.ReplaceCaptured(path, previous); err != nil {
+			return false, err
+		}
+		renamed = true
+	} else {
+		alias, linkErr := owner.LinkCaptured(path)
+		renamed = alias != nil
+		if linkErr != nil {
+			return renamed, linkErr
+		}
+		if err := owner.Retire(); err != nil {
+			return true, err
+		}
+	}
+	return true, errors.Join(syncDirectory(directory), checkParent())
+}
+
+type segmentManifestSource struct {
+	each        func(func(Segment) error) error
+	nilSegments bool
+	pending     *Segment
+}
+
+func writeSegmentManifestSource(output io.Writer, source segmentManifestSource) error {
+	buffer := bufio.NewWriterSize(output, replicationManifestValueLimit)
+	if _, err := fmt.Fprintf(buffer, `{"version":%d,"segments":`, segmentManifestVersion); err != nil {
+		return err
+	}
+	if source.nilSegments {
+		if _, err := buffer.WriteString("null"); err != nil {
+			return err
+		}
+	} else {
+		if err := buffer.WriteByte('['); err != nil {
+			return err
+		}
+		first := true
+		if err := source.each(func(segment Segment) error {
+			if !first {
+				if err := buffer.WriteByte(','); err != nil {
+					return err
+				}
+			}
+			first = false
+			return writeManifestSegment(buffer, segment)
+		}); err != nil {
+			return err
+		}
+		if err := buffer.WriteByte(']'); err != nil {
+			return err
+		}
+	}
+	if source.pending != nil {
+		if _, err := buffer.WriteString(`,"pending":`); err != nil {
+			return err
+		}
+		if err := writeManifestSegment(buffer, *source.pending); err != nil {
+			return err
+		}
+	}
+	if err := buffer.WriteByte('}'); err != nil {
+		return err
+	}
+	return buffer.Flush()
+}
+
+func writeManifestSegment(output io.Writer, segment Segment) error {
+	// Bound input strings before json.Marshal's escaping allocation. The
+	// encoded descriptor is then checked against the exact reader limit.
+	remaining := replicationManifestValueLimit
+	for _, field := range []string{segment.File, segment.StartHash, segment.EndHash, segment.PlainChecksum, segment.StoredChecksum} {
+		if len(field) > remaining {
+			return fmt.Errorf("%w: segment descriptor exceeds manifest limit", ErrCorrupt)
+		}
+		remaining -= len(field)
+	}
+	encoded, err := json.Marshal(segment)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > replicationManifestValueLimit {
+		return fmt.Errorf("%w: encoded segment descriptor exceeds manifest limit", ErrCorrupt)
+	}
+	return writeFull(output, encoded)
 }
 
 // digestFilePrefix hashes the first length bytes of a file and returns the
@@ -213,12 +332,20 @@ func hashFile(path string) (string, int64, error) {
 // resumes inside a sealed generation, which happens after a crash, not on the
 // hot path.
 type segmentReader struct {
-	open   func() (io.ReadCloser, error)
-	reader io.ReadCloser
-	offset int64
+	open     func() (io.ReadCloser, error)
+	reader   io.ReadCloser
+	offset   int64
+	closed   bool
+	closeErr error
 }
 
 func openSegment(directory string, segment Segment) (*segmentReader, error) {
+	return openSegmentWithStream(directory, segment, func(path string) (io.ReadCloser, error) { return os.Open(path) })
+}
+
+// A failed opener returns a stream only when its actual retirement is unknown.
+// The private opener seam belongs to this reader, never to a global IO hook.
+func openSegmentWithStream(directory string, segment Segment, openFile func(string) (io.ReadCloser, error)) (*segmentReader, error) {
 	path := filepath.Join(directory, segment.File)
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -228,21 +355,42 @@ func openSegment(directory string, segment Segment) (*segmentReader, error) {
 	}
 	compressed := segment.Compressed
 	open := func() (io.ReadCloser, error) {
-		file, err := os.Open(path)
+		file, err := openFile(path)
 		if err != nil {
-			return nil, err
+			return file, err
+		}
+		var input io.Reader = file
+		if actual, ok := file.(*os.File); ok {
+			info, err := actual.Stat()
+			if err != nil {
+				closeErr := actual.Close()
+				if closeErr != nil {
+					return actual, errors.Join(err, closeErr, ownedfile.ErrRetirement)
+				}
+				return nil, err
+			}
+			input = boundedfilecache.NewReader(actual, info.Size())
 		}
 		if !compressed {
-			return file, nil
+			return capturedSegmentReadCloser{Reader: input, Closer: file}, nil
 		}
-		decompressed, err := gzip.NewReader(file)
+		decompressed, err := gzip.NewReader(input)
 		if err != nil {
-			file.Close()
-			return nil, fmt.Errorf("%w: generation %d is not readable: %v", ErrCorrupt, segment.Generation, err)
+			openErr := fmt.Errorf("%w: generation %d is not readable: %v", ErrCorrupt, segment.Generation, err)
+			closeErr := file.Close()
+			if closeErr != nil {
+				return file, errors.Join(openErr, ErrSegmentRetirement, ownedfile.ErrRetirement, closeErr)
+			}
+			return nil, openErr
 		}
 		return gzipReadCloser{Reader: decompressed, under: file}, nil
 	}
 	return &segmentReader{open: open}, nil
+}
+
+type capturedSegmentReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 type gzipReadCloser struct {
@@ -251,14 +399,17 @@ type gzipReadCloser struct {
 }
 
 func (r gzipReadCloser) Close() error {
-	err := r.Reader.Close()
-	if closeErr := r.under.Close(); err == nil {
-		err = closeErr
+	err := errors.Join(r.Reader.Close(), r.under.Close())
+	if err != nil {
+		return errors.Join(ErrSegmentRetirement, err)
 	}
-	return err
+	return nil
 }
 
 func (r *segmentReader) Read(buffer []byte) (int, error) {
+	if r.closed {
+		return 0, errors.Join(os.ErrClosed, r.closeErr)
+	}
 	if r.reader == nil {
 		if _, err := r.Seek(0, io.SeekStart); err != nil {
 			return 0, err
@@ -270,6 +421,9 @@ func (r *segmentReader) Read(buffer []byte) (int, error) {
 }
 
 func (r *segmentReader) Seek(offset int64, whence int) (int64, error) {
+	if r.closed {
+		return 0, errors.Join(os.ErrClosed, r.closeErr)
+	}
 	if whence != io.SeekStart {
 		return 0, errors.New("ledger segments seek only from the start")
 	}
@@ -280,17 +434,29 @@ func (r *segmentReader) Seek(offset int64, whence int) (int64, error) {
 		if offset == r.offset {
 			return offset, nil
 		}
-		r.reader.Close()
+		if err := r.reader.Close(); err != nil {
+			r.closed = true
+			r.closeErr = errors.Join(ErrSegmentRetirement, err)
+			return 0, r.closeErr
+		}
 		r.reader = nil
 	}
 	stream, err := r.open()
 	if err != nil {
+		if stream != nil || errors.Is(err, ErrSegmentRetirement) || errors.Is(err, ownedfile.ErrRetirement) {
+			r.reader, r.closed = stream, true
+			r.closeErr = errors.Join(ErrSegmentRetirement, err)
+			return 0, r.closeErr
+		}
 		return 0, err
 	}
 	if offset > 0 {
 		if _, err := io.CopyN(io.Discard, stream, offset); err != nil {
-			stream.Close()
-			return 0, err
+			if closeErr := stream.Close(); closeErr != nil {
+				r.reader, r.closed = stream, true
+				r.closeErr = errors.Join(ErrSegmentRetirement, closeErr)
+			}
+			return 0, errors.Join(err, r.closeErr)
 		}
 	}
 	r.reader = stream
@@ -299,73 +465,19 @@ func (r *segmentReader) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (r *segmentReader) Close() error {
+	if r.closed {
+		return r.closeErr
+	}
+	r.closed = true
 	if r.reader == nil {
 		return nil
 	}
-	err := r.reader.Close()
+	if err := r.reader.Close(); err != nil {
+		r.closeErr = errors.Join(ErrSegmentRetirement, err)
+		return r.closeErr
+	}
 	r.reader = nil
-	return err
-}
-
-// compressSegmentFile writes source through gzip to destination and reads the
-// result back, so the compressed copy is proven to reproduce the plaintext
-// before anything points at it.
-func compressSegmentFile(source, destination string, expectedChecksum string, expectedLength int64) (string, int64, error) {
-	input, err := os.Open(source)
-	if err != nil {
-		return "", 0, err
-	}
-	defer input.Close()
-	temporary := destination + segmentTempSuffix
-	output, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return "", 0, err
-	}
-	// Fastest rather than best: the measured difference on real ledger frames
-	// is a few percent of size for several times the CPU, and this runs on the
-	// maintenance tick of a process that is also serving traffic.
-	writer, err := gzip.NewWriterLevel(output, gzip.BestSpeed)
-	if err != nil {
-		output.Close()
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if _, err := io.Copy(writer, input); err != nil {
-		writer.Close()
-		output.Close()
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := writer.Close(); err != nil {
-		output.Close()
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := output.Sync(); err != nil {
-		output.Close()
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := output.Close(); err != nil {
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := verifyCompressedSegment(temporary, expectedChecksum, expectedLength); err != nil {
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := os.Rename(temporary, destination); err != nil {
-		os.Remove(temporary)
-		return "", 0, err
-	}
-	if err := durable.SyncDirectory(filepath.Dir(destination)); err != nil {
-		return "", 0, err
-	}
-	checksum, storedLength, err := hashFile(destination)
-	if err != nil {
-		return "", 0, err
-	}
-	return checksum, storedLength, nil
+	return nil
 }
 
 func verifyCompressedSegment(path, expectedChecksum string, expectedLength int64) error {
@@ -411,108 +523,27 @@ func decodeChainHash(value string) ([32]byte, error) {
 	return hash, nil
 }
 
-// resolveSegments decides what the sealed history is, including which side of
-// an interrupted roll the directory is on, without writing anything.
-//
-// The decision is made from the files, not from a flag: a roll's rename either
-// happened or it did not, and the rolled file's presence and checksum say
-// which. Reading it this way means the offline inspection paths reach the same
-// verdict as the opening one, from the same evidence.
-func resolveSegments(directory string) ([]Segment, bool, error) {
-	manifest, err := loadSegmentManifest(directory)
-	if err != nil {
-		return nil, false, err
-	}
-	if manifest.Pending == nil {
-		return manifest.Segments, false, nil
-	}
-	pending := *manifest.Pending
-	rolled := filepath.Join(directory, pending.File)
-	checksum, length, err := hashFile(rolled)
+// checkSegmentPresent refuses a manifest entry whose file is missing or has a
+// different stored length. Full checksums are verified by the inspection path.
+func checkSegmentPresent(directory string, segment Segment) error {
+	info, err := os.Stat(filepath.Join(directory, segment.File))
 	if errors.Is(err, os.ErrNotExist) {
-		// The rename never ran, so the active file still holds this generation
-		// whole. Abandoning the intent restores exactly the state before the
-		// roll started.
-		return manifest.Segments, true, nil
+		return fmt.Errorf("%w: generation %d (%s)", ErrSegmentMissing, segment.Generation, segment.File)
 	}
 	if err != nil {
-		return nil, false, err
+		return err
 	}
-	if length != pending.Length || checksum != pending.PlainChecksum {
-		return nil, false, fmt.Errorf("%w: interrupted ledger roll left generation %d unreadable",
-			ErrCorrupt, pending.Generation)
+	// StoredLength is zero on nothing this build writes; a manifest without
+	// it is one this build did not produce.
+	if segment.StoredLength <= 0 {
+		return fmt.Errorf("%w: generation %d does not record its stored size",
+			ErrCorrupt, segment.Generation)
 	}
-	return append(manifest.Segments, pending), true, nil
-}
-
-// repairSegments resolves an interrupted roll and makes the verdict durable.
-func repairSegments(directory string) ([]Segment, error) {
-	segments, hadPending, err := resolveSegments(directory)
-	if err != nil {
-		return nil, err
-	}
-	if !hadPending {
-		return segments, nil
-	}
-	if err := saveSegmentManifest(directory, segmentManifest{Segments: segments}); err != nil {
-		return nil, err
-	}
-	return segments, nil
-}
-
-// checkSegmentsPresent refuses a directory whose manifest names history the
-// files no longer hold.
-//
-// Existence and size, not checksums: this runs on every open, and re-hashing
-// the whole archive at each start would make sealing cost more than it saves.
-// What it catches is the failure that actually happens — a generation deleted
-// or truncated by housekeeping — and it catches it at the open rather than
-// letting the instance start with a history that is quietly shorter than the
-// one its balances were computed from.
-func checkSegmentsPresent(directory string, segments []Segment) error {
-	for _, segment := range segments {
-		info, err := os.Stat(filepath.Join(directory, segment.File))
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%w: generation %d (%s)", ErrSegmentMissing, segment.Generation, segment.File)
-		}
-		if err != nil {
-			return err
-		}
-		// StoredLength is zero on nothing this build writes; a manifest without
-		// it is one this build did not produce.
-		if segment.StoredLength <= 0 {
-			return fmt.Errorf("%w: generation %d does not record its stored size",
-				ErrCorrupt, segment.Generation)
-		}
-		if info.Size() != segment.StoredLength {
-			return fmt.Errorf("%w: generation %d is %d bytes, manifest says %d",
-				ErrCorrupt, segment.Generation, info.Size(), segment.StoredLength)
-		}
+	if info.Size() != segment.StoredLength {
+		return fmt.Errorf("%w: generation %d is %d bytes, manifest says %d",
+			ErrCorrupt, segment.Generation, info.Size(), segment.StoredLength)
 	}
 	return nil
-}
-
-// activeGeneration is the generation the active WAL is writing, given the
-// sealed history. Generation numbering starts at 1 and is never reused.
-func activeGeneration(segments []Segment) uint64 {
-	if len(segments) == 0 {
-		return 1
-	}
-	return segments[len(segments)-1].Generation + 1
-}
-
-// sealedTail is where the active WAL picks up: the last sealed generation's
-// chain head and sequence, or the zero value when nothing has been sealed.
-func sealedTail(segments []Segment) (hash [32]byte, sequence uint64, epoch byte, err error) {
-	if len(segments) == 0 {
-		return hash, 0, 0, nil
-	}
-	last := segments[len(segments)-1]
-	hash, err = decodeChainHash(last.EndHash)
-	if err != nil {
-		return hash, 0, 0, err
-	}
-	return hash, last.LastSequence, segmentEndEpoch(last), nil
 }
 
 func segmentEndEpoch(segment Segment) byte {

@@ -151,10 +151,18 @@ func TestSnapshotIsExactDuringOneHundredConcurrentAppends(t *testing.T) {
 		}
 	}
 	durability.block.Store(true)
+	var releaseFirst sync.Once
+	defer releaseFirst.Do(func() { close(durability.release) })
+	suffixStart := make(chan struct{})
+	var startSuffix sync.Once
+	defer startSuffix.Do(func() { close(suffixStart) })
 	errorsByAppend := make(chan error, 100)
 	for index := 0; index < 100; index++ {
 		index := index
 		go func() {
+			if index != 0 {
+				<-suffixStart
+			}
 			_, err := log.Append(context.Background(), validReservation(
 				fmt.Sprintf("concurrent_%03d", index), fmt.Sprintf("concurrent_attempt_%03d", index),
 			))
@@ -171,13 +179,40 @@ func TestSnapshotIsExactDuringOneHundredConcurrentAppends(t *testing.T) {
 		err       error
 	}
 	snapshotDone := make(chan snapshotResult, 1)
+	snapshotLocked := make(chan struct{})
+	snapshotRelease := make(chan struct{})
+	var releaseSnapshot sync.Once
+	defer releaseSnapshot.Do(func() { close(snapshotRelease) })
 	snapshotPath := filepath.Join(root, "snapshot.wal")
 	go func() {
-		watermark, err := log.Snapshot(snapshotPath)
+		// This callback runs under the actual snapshot writer lock. Gate the
+		// suffix there instead of assuming a 10ms sleep lets Snapshot start.
+		watermark, err := log.SnapshotWithDisk(snapshotPath, func(int64) (NativeFileDiskReservation, error) {
+			close(snapshotLocked)
+			<-snapshotRelease
+			return nil, nil
+		})
 		snapshotDone <- snapshotResult{watermark: watermark, err: err}
 	}()
-	time.Sleep(10 * time.Millisecond)
-	close(durability.release)
+	releaseFirst.Do(func() { close(durability.release) })
+	select {
+	case <-snapshotLocked:
+	case result := <-snapshotDone:
+		t.Fatalf("snapshot did not acquire its writer lock: %v", result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("snapshot did not acquire its writer lock")
+	}
+	startSuffix.Do(func() { close(suffixStart) })
+	// MaxBatch=1 allows at most one suffix request to leave the queue and
+	// block on that same lock. The other 98 must really enqueue before copy.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(log.appendQueue) < 98 {
+		if time.Now().After(deadline) {
+			t.Fatal("concurrent suffix did not enqueue behind snapshot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	releaseSnapshot.Do(func() { close(snapshotRelease) })
 	result := <-snapshotDone
 	if result.err != nil {
 		t.Fatal(result.err)
@@ -187,7 +222,7 @@ func TestSnapshotIsExactDuringOneHundredConcurrentAppends(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if result.watermark.Sequence < 6 || result.watermark.Sequence >= 105 {
+	if result.watermark.Sequence != 6 {
 		t.Fatalf("snapshot did not split the concurrent suffix: %#v", result.watermark)
 	}
 	snapshot, err := Open(snapshotPath, NewStatus())

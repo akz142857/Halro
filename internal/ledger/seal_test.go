@@ -125,12 +125,12 @@ func TestVerificationCoversSealedGenerationsAndCatchesEditsInThem(t *testing.T) 
 	}
 	appendReservations(t, log, 6, 1)
 
-	reports, err := log.VerifySealed(0)
+	verified, err := log.VerifySealedSummary(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reports) != 2 || reports[0].Authenticated != 3 || reports[1].Authenticated != 2 {
-		t.Fatalf("sealed verification = %#v", reports)
+	if verified != (SegmentVerification{Generations: 2, Authenticated: 5}) {
+		t.Fatalf("sealed verification = %+v", verified)
 	}
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestVerificationCoversSealedGenerationsAndCatchesEditsInThem(t *testing.T) 
 	if err := os.WriteFile(sealed, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifySegments(directory, testChainKey, 0); err == nil {
+	if _, err := VerifySegmentsSummary(directory, testChainKey, 0); err == nil {
 		t.Fatal("an edited sealed generation verified clean")
 	}
 
@@ -158,7 +158,7 @@ func TestVerificationCoversSealedGenerationsAndCatchesEditsInThem(t *testing.T) 
 	if err := os.Remove(sealed); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifySegments(directory, testChainKey, 0); !errors.Is(err, ErrSegmentMissing) {
+	if _, err := VerifySegmentsSummary(directory, testChainKey, 0); !errors.Is(err, ErrSegmentMissing) {
 		t.Fatalf("removing a sealed generation: err=%v, want ErrSegmentMissing", err)
 	}
 }
@@ -268,11 +268,18 @@ func TestStagingABackupCarriesEverySealedGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	staged, err := log.StageSegments(staging)
+	staged := make(map[string]struct{})
+	err = log.StageSegmentsEach(context.Background(), staging, func(name string) error {
+		staged[name] = struct{}{}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(staged, "ledger-1.seg.gz") || !slices.Contains(staged, segmentManifestName) {
+	if _, ok := staged["ledger-1.seg.gz"]; !ok {
+		t.Fatalf("staged files = %v", staged)
+	}
+	if _, ok := staged[segmentManifestName]; !ok {
 		t.Fatalf("staged = %v", staged)
 	}
 	if err := log.Close(); err != nil {
@@ -292,7 +299,7 @@ func TestStagingABackupCarriesEverySealedGeneration(t *testing.T) {
 		t.Fatalf("heads disagree: source=%#v restored=%#v snapshot=%#v",
 			originalHead, restoredHead, snapshotHead)
 	}
-	if _, err := restored.VerifySealed(0); err != nil {
+	if _, err := restored.VerifySealedSummary(0); err != nil {
 		t.Fatalf("the restored ledger's sealed history does not verify: %v", err)
 	}
 }
@@ -329,9 +336,12 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 
 		reopened := openChained(t, path, nil)
 		defer reopened.Close()
-		if reopened.Generation() != 1 || len(reopened.Segments()) != 0 {
+		if reopened.Generation() != 1 || len(segmentsForTest(t, reopened)) != 0 {
 			t.Fatalf("an abandoned roll left generation=%d segments=%d",
-				reopened.Generation(), len(reopened.Segments()))
+				reopened.Generation(), len(segmentsForTest(t, reopened)))
+		}
+		if got := assertSegmentSummary(t, reopened); got != (SegmentSummary{}) {
+			t.Fatalf("abandoned intent counted as committed: %+v", got)
 		}
 		got, gotHead := replayedEventIDs(t, reopened, Watermark{})
 		if !slices.Equal(got, expected) || gotHead != expectedHead {
@@ -368,9 +378,12 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 
 		reopened := openChained(t, path, nil)
 		defer reopened.Close()
-		if reopened.Generation() != 2 || len(reopened.Segments()) != 1 {
+		if reopened.Generation() != 2 || len(segmentsForTest(t, reopened)) != 1 {
 			t.Fatalf("a finished roll left generation=%d segments=%d",
-				reopened.Generation(), len(reopened.Segments()))
+				reopened.Generation(), len(segmentsForTest(t, reopened)))
+		}
+		if got := assertSegmentSummary(t, reopened); got != (SegmentSummary{Generations: 1, PlainBytes: length, StoredBytes: length}) {
+			t.Fatalf("repaired roll summary=%+v", got)
 		}
 		got, gotHead := replayedEventIDs(t, reopened, Watermark{})
 		if !slices.Equal(got, expected) {
@@ -381,7 +394,7 @@ func TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone(t *testing.T) {
 		}
 		// And it is writable from there, which is the whole point of finishing.
 		appendReservations(t, reopened, 4, 1)
-		if _, err := reopened.VerifySealed(0); err != nil {
+		if _, err := reopened.VerifySealedSummary(0); err != nil {
 			t.Fatal(err)
 		}
 	})

@@ -1,6 +1,8 @@
 package ledger
 
 import (
+	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/akz142857/Halro/internal/durable"
+	"github.com/akz142857/Halro/internal/ownedfile"
 )
 
 // ReplicationCursor authenticates the complete Ledger history and returns the
@@ -65,25 +68,37 @@ func ReplicationHeadAt(path string, key []byte, generation, sequence uint64) ([3
 // intent, and the returned Segment is accepted only after the whole chain has
 // been authenticated.
 func ReplicationSegment(path string, key []byte, generation uint64) (Segment, error) {
+	return ReplicationSegmentContext(context.Background(), path, key, generation)
+}
+
+// ReplicationSegmentContext retains complete native authentication while
+// allowing cancellation per record. Directory lookup remains the transitional
+// streaming manifest walk; repeated roll lookups still cost historical IO.
+func ReplicationSegmentContext(ctx context.Context, path string, key []byte, generation uint64) (Segment, error) {
+	if err := ctx.Err(); err != nil {
+		return Segment{}, err
+	}
 	if generation == 0 {
 		return Segment{}, errors.New("ledger replication generation must be positive")
 	}
-	_, partial, err := InspectReplayAuthenticated(path, key, nil)
+	_, partial, err := inspectReplayAuthenticated(ctx, path, key, nil, nil)
 	if err != nil {
 		return Segment{}, err
 	}
 	if partial {
 		return Segment{}, fmt.Errorf("%w: active ledger ends mid-frame", ErrCorrupt)
 	}
-	segments, _, err := resolveSegments(filepath.Dir(path))
+	layout, err := findReplicationGeneration(filepath.Dir(path), generation)
 	if err != nil {
 		return Segment{}, err
 	}
-	segment, index := findSegment(segments, generation)
-	if index < 0 {
+	if err := ctx.Err(); err != nil {
+		return Segment{}, err
+	}
+	if !layout.sealed {
 		return Segment{}, errors.New("ledger replication generation is not sealed")
 	}
-	return segment, nil
+	return layout.segment, nil
 }
 
 // ReadReplicationFrames returns exact plaintext Ledger frame bytes. A sealed
@@ -138,17 +153,16 @@ func ReadReplicationFrames(path string, key []byte, generation, first, last uint
 // undoing a published manifest/rename is a different transaction and must be
 // driven by the Roll protocol rather than guessed from two cursors.
 func TruncateReplicationTail(path string, key []byte, generation, sequence uint64) error {
-	segments, _, err := resolveSegments(filepath.Dir(path))
+	manifest, err := walkReplicationManifest(filepath.Dir(path), nil)
 	if err != nil {
 		return err
 	}
-	active := activeGeneration(segments)
-	if generation != active {
+	if generation != manifest.active {
 		return errors.New("ledger truncation may only target the active generation")
 	}
 	sealedSequence := uint64(0)
-	if len(segments) > 0 {
-		sealedSequence = segments[len(segments)-1].LastSequence
+	if manifest.sealed {
+		sealedSequence = manifest.segment.LastSequence
 	}
 	if sequence < sealedSequence {
 		return errors.New("ledger truncation cursor precedes the active generation")
@@ -184,11 +198,11 @@ func TruncateReplicationTail(path string, key []byte, generation, sequence uint6
 // Ledger prefix is exactly the cursor recovered from ordering. Interrupted
 // Roll intents remain a separate structural transaction and are refused here.
 func RepairReplicaTail(path string, key []byte, expectedGeneration, expectedSequence uint64) error {
-	_, pending, err := resolveSegments(filepath.Dir(path))
+	manifest, err := walkReplicationManifest(filepath.Dir(path), nil)
 	if err != nil {
 		return err
 	}
-	if pending {
+	if manifest.pending {
 		return errors.New("replica Ledger interrupted Roll requires ordering-aware structural reconciliation")
 	}
 	report, partial, err := InspectReplayAuthenticated(path, key, nil)
@@ -217,22 +231,46 @@ func RepairReplicaTail(path string, key []byte, expectedGeneration, expectedSequ
 // successor creation did not, it publishes the empty successor before making
 // the resolved manifest durable. A retransmitted Roll then follows the normal
 // idempotent ApplyReplicatedRoll path and supplies the ordering record.
-func RepairReplicaRoll(path string, key []byte, expectedGeneration, expectedSequence uint64) error {
+func RepairReplicaRoll(path string, key []byte, expectedGeneration, expectedSequence uint64) (resultErr error) {
+	return RepairReplicaRollWithDisk(path, key, expectedGeneration, expectedSequence, nil)
+}
+
+// RepairReplicaRollWithDisk funds every newly created successor and manifest
+// before its IO. Existing native facts remain independently inventoried; new
+// published/uncertain repair artifacts retain their charges after failure.
+func RepairReplicaRollWithDisk(path string, key []byte, expectedGeneration, expectedSequence uint64, reserve func(int64) (NativeFileDiskReservation, error)) (resultErr error) {
 	directory := filepath.Dir(path)
-	manifest, err := loadSegmentManifest(directory)
+	manifest, err := openInspectionManifest(directory)
 	if err != nil {
 		return err
 	}
-	if manifest.Pending == nil {
+	defer func() { resultErr = errors.Join(resultErr, manifest.close()) }()
+	if manifest.file == nil {
+		return manifest.check()
+	}
+	hash := sha256.New()
+	parsed, err := parseSegmentManifest(io.TeeReader(io.NewSectionReader(manifest.file, 0, manifest.info.Size()), hash), nil)
+	if err != nil {
+		return err
+	}
+	if err := manifest.check(); err != nil {
+		return err
+	}
+	if parsed.pending == nil {
 		return nil
 	}
-	pending := *manifest.Pending
+	pending := *parsed.pending
 	if pending.Generation != expectedGeneration || pending.LastSequence != expectedSequence {
 		return errors.New("replica Ledger pending Roll does not match ordering cursor")
 	}
-	segments, _, err := resolveSegments(directory)
+	var originalDigest [32]byte
+	copy(originalDigest[:], hash.Sum(nil))
+	layout, digest, err := manifest.walk(nil)
 	if err != nil {
 		return err
+	}
+	if digest != originalDigest {
+		return fmt.Errorf("%w: replica Roll manifest changed before repair", ErrCorrupt)
 	}
 	rolled := filepath.Join(directory, pending.File)
 	_, rolledErr := os.Stat(rolled)
@@ -240,15 +278,24 @@ func RepairReplicaRoll(path string, key []byte, expectedGeneration, expectedSequ
 		info, statErr := os.Stat(path)
 		switch {
 		case errors.Is(statErr, os.ErrNotExist):
-			file, createErr := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0o600)
+			var reservation NativeFileDiskReservation
+			if reserve != nil {
+				reservation, err = reserve(64 << 10)
+				if err != nil {
+					return err
+				}
+			}
+			// The empty successor is recoverable authority, not disposable
+			// scratch: preserve it and its fee even if a later barrier fails.
+			defer func() { resultErr = keepNativeFileDiskDebt(reservation, resultErr) }()
+			file, _, createErr := ownedfile.Create(path, os.O_RDWR, 0o600)
 			if createErr != nil {
 				return createErr
 			}
 			if syncErr := file.Sync(); syncErr != nil {
-				file.Close()
-				return syncErr
+				return errors.Join(syncErr, ownedfile.CloseFile(file))
 			}
-			if closeErr := file.Close(); closeErr != nil {
+			if closeErr := ownedfile.CloseFile(file); closeErr != nil {
 				return closeErr
 			}
 			if syncErr := durable.SyncDirectory(directory); syncErr != nil {
@@ -279,21 +326,29 @@ func RepairReplicaRoll(path string, key []byte, expectedGeneration, expectedSequ
 	if report.Head.Generation != wantGeneration || report.Head.Sequence != expectedSequence {
 		return errors.New("replica Ledger pending Roll history does not match ordering cursor")
 	}
-	return saveSegmentManifest(directory, segmentManifest{Segments: segments})
+	// Resolve and emit one descriptor at a time into an unpublished temporary
+	// manifest. Any changed source or pending verdict prevents its publication.
+	source := segmentManifestSource{each: func(emit func(Segment) error) error {
+		currentLayout, currentDigest, err := manifest.walk(emit)
+		if err != nil {
+			return err
+		}
+		if currentLayout != layout || currentDigest != originalDigest {
+			return fmt.Errorf("%w: replica Roll manifest changed during repair", ErrCorrupt)
+		}
+		return nil
+	}}
+	_, err = saveSegmentManifestSourceWithDisk(directory, source, durable.SyncDirectory, reserve)
+	return err
 }
 
 func replicationGenerationReader(path string, generation uint64) (io.ReadSeekCloser, error) {
-	segments, _, err := resolveSegments(filepath.Dir(path))
+	manifest, err := findReplicationGeneration(filepath.Dir(path), generation)
 	if err != nil {
 		return nil, err
 	}
-	for _, segment := range segments {
-		if segment.Generation == generation {
-			return openSegment(filepath.Dir(path), segment)
-		}
-	}
-	if generation != activeGeneration(segments) {
-		return nil, errors.New("ledger generation is not present")
+	if manifest.sealed {
+		return openSegment(filepath.Dir(path), manifest.segment)
 	}
 	return os.Open(path)
 }

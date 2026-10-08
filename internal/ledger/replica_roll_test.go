@@ -60,6 +60,9 @@ func TestReplicatedRollVerifiesWholeSegmentBeforePublish(t *testing.T) {
 	if replica.Generation() != 1 {
 		t.Fatalf("mismatched roll advanced generation to %d", replica.Generation())
 	}
+	if got := assertSegmentSummary(t, replica); got != (SegmentSummary{}) {
+		t.Fatalf("rejected replicated roll advanced summary: %+v", got)
+	}
 	replicaResult, err := replica.ApplyReplicatedRoll(result.Sealed)
 	if err != nil {
 		t.Fatal(err)
@@ -67,12 +70,19 @@ func TestReplicatedRollVerifiesWholeSegmentBeforePublish(t *testing.T) {
 	if !replicaResult.Rolled || replica.Generation() != 2 {
 		t.Fatalf("replica result=%#v generation=%d", replicaResult, replica.Generation())
 	}
+	committed := assertSegmentSummary(t, replica)
+	if committed != primary.SealedSummary() {
+		t.Fatalf("replica summary=%+v primary=%+v", committed, primary.SealedSummary())
+	}
 	duplicate, err := replica.ApplyReplicatedRoll(result.Sealed)
 	if err != nil {
 		t.Fatalf("idempotent Roll replay failed: %v", err)
 	}
 	if duplicate.Rolled || duplicate.Sealed.Generation != result.Sealed.Generation || replica.Generation() != 2 {
 		t.Fatalf("idempotent replay changed the Ledger: result=%#v generation=%d", duplicate, replica.Generation())
+	}
+	if got := assertSegmentSummary(t, replica); got != committed {
+		t.Fatalf("duplicate replicated roll counted twice: %+v", got)
 	}
 	if _, err := replica.ApplyReplicatedRoll(wrong); err == nil {
 		t.Fatal("completed Roll accepted different Segment metadata")
@@ -153,6 +163,10 @@ func TestRepairReplicaRollRequiresOrderingCursorAndResolvesBothCrashSides(t *tes
 			}
 			if replica.Generation() != wantGeneration {
 				t.Fatalf("generation=%d want=%d", replica.Generation(), wantGeneration)
+			}
+			summary := assertSegmentSummary(t, replica)
+			if (!renamed && summary != (SegmentSummary{})) || (renamed && summary != primary.SealedSummary()) {
+				t.Fatalf("repaired replica summary=%+v renamed=%t", summary, renamed)
 			}
 			if renamed {
 				duplicate, err := replica.ApplyReplicatedRoll(result.Sealed)
