@@ -143,11 +143,44 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test -count=1 ./...
-      - run: go test -race -count=1 -timeout=20m ./...
+      - run: scripts/go-test-shard.sh check 4 && scripts/go-test-shard.sh check 8
+      - run: scripts/go-test-shard.sh rest -count=1 -timeout=20m
+      - run: scripts/go-test-shard.sh rest -race -count=1 -timeout=20m
       - run: go vet ./...
       - name: Go vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  # internal/app runs for about half an hour as one binary; it is split into
+  # fixed shards (scripts/go-test-shard.sh), each under the same 20m timeout.
+  go-app:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: scripts/go-test-shard.sh app ${{ matrix.shard }} 4 -count=1 -timeout=20m
+
+  go-app-race:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: scripts/go-test-shard.sh app ${{ matrix.shard }} 8 -race -count=1 -timeout=20m
 
   sdk-compatibility:
     needs: prepare
@@ -208,6 +241,10 @@ jobs:
           cache: true
       - name: 1000 concurrent SSE cleanup gate
         run: HALRO_STRESS=1 go test ./tests/stress -run TestThousandConcurrentSSEConnectionsCleanup -count=1 -v
+      # Ordinary runs take a representative subset of these crash-point and
+      # legacy recovery matrices; the release runs every case.
+      - name: Full crash-point and legacy recovery matrices
+        run: HALRO_STRESS=1 go test ./internal/budget ./internal/app -run 'TestLegacyRecovery|ActualSIGKILL|SIGKILLResumes|PendingPublicationResumes|TestHAMemoryActivationActualSIGKILLResume' -count=1 -timeout=60m
 
   web:
     needs: prepare
@@ -236,7 +273,7 @@ jobs:
           path: internal/webui/dist
 
   binaries:
-    needs: [prepare, quality, sdk-compatibility, web, stress]
+    needs: [prepare, quality, go-app, go-app-race, sdk-compatibility, web, stress]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -297,7 +334,7 @@ jobs:
           path: release/halro-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   container:
-    needs: [prepare, quality, sdk-compatibility, stress]
+    needs: [prepare, quality, go-app, go-app-race, sdk-compatibility, stress]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

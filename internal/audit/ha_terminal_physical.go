@@ -12,6 +12,7 @@ import (
 
 // PhysicalBatchBytes covers every legal encoded batch, including all frames.
 const PhysicalBatchBytes int64 = MaxBatchPayloadBytes + MaxBatchEvents*(frameHeaderSize+frameMACSize)
+
 // PhysicalBatchRAMBytes is the fee for the one batch encoder. A maximum batch
 // allocates about 25 MiB in total (payload marshal, the exact frame buffer and
 // transient garbage); TestAuditHAMaximumBatchAllocationFitsPhysicalBatchFee guards it.

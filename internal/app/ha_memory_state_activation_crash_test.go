@@ -75,6 +75,7 @@ func TestHAMemoryActivationSIGKILLChild(t *testing.T) {
 func TestHAMemoryActivationActualSIGKILLResume(t *testing.T) {
 	for _, phase := range []string{"sources-qualified", "namespace-created", "seven-roots-built", "bootstrap-pending-synced", "common-seal-published", "bootstrap-activated"} {
 		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "sources-qualified", "common-seal-published", "bootstrap-activated")
 			f := prepareHAMetadataMaintenanceFixture(t)
 			prepareHAMetadataMaintenanceArtifacts(t, f)
 			completeHAMemoryActivationBoundary(t, f)

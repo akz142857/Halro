@@ -71,6 +71,7 @@ func TestHASelectedCheckpointActualSIGKILLRetainsFixedNamespacesAndReopens(t *te
 	for role := range 2 {
 		for _, phase := range []string{"roots-ready", "audit-capsule", "governance-capsule", "published"} {
 			t.Run([]string{"primary", "replica"}[role]+"/"+phase, func(t *testing.T) {
+				stressMatrixCase(t, role == 0 && (phase == "roots-ready" || phase == "governance-capsule") || role == 1 && phase == "published")
 				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 				defer cancel()
 				fixture, owners, _ := prepareHASelectedTransportFixture(t, ctx)

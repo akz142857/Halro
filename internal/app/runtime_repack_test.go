@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/usage"
 	"io"
 	"log/slog"
 	"os"
@@ -116,9 +118,16 @@ func TestSelectedRuntimeOnlineCheckpointReclaimsActualMetadataAndReopens(t *test
 			if err != nil || got.Revision != project.Revision || got.RPM != project.RPM || len(got.AllowedModels) != 1 || got.AllowedModels[0] != project.AllowedModels[0] {
 				t.Fatal("checkpoint/restart lost actual Metadata", cycle, err)
 			}
-			usage, err := r.usage.disk.ReadStats(ctx)
-			if err != nil || usage.Totals.Requests != int64(cycle+1) || usage.Totals.CostMicrosUSD != int64(7*(cycle+1)) || usage.Metrics.ActiveRequests != 0 {
-				t.Fatal("checkpoint/restart lost actual accounting/Usage", cycle, usage, err)
+			// ReadStats fails fast while the reopened Runtime's own Usage
+			// catch-up holds a reader slot; that is transient, so retry it
+			// within a bound. A leaked slot still fails at the deadline.
+			stats, err := r.usage.disk.ReadStats(ctx)
+			for deadline := time.Now().Add(30 * time.Second); errors.Is(err, usage.ErrDiskUsageBusy) && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+				stats, err = r.usage.disk.ReadStats(ctx)
+			}
+			if err != nil || stats.Totals.Requests != int64(cycle+1) || stats.Totals.CostMicrosUSD != int64(7*(cycle+1)) || stats.Metrics.ActiveRequests != 0 {
+				t.Fatal("checkpoint/restart lost actual accounting/Usage", cycle, stats, err)
 			}
 		}
 		assertData()

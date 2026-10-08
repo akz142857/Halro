@@ -68,6 +68,7 @@ func selectedRotationChildPause(marker, phase string) error {
 func TestSelectedKeyRotationSIGKILLResumesActualRuntime(t *testing.T) {
 	for _, phase := range []string{"selected_after_intent", "selected_after_build_root", "selected_after_build_epoch", "selected_before_seal", "selected_after_seal", "selected_after_bootstrap", "selected_after_unlock", "selected_after_key", "selected_after_native_archive", "selected_before_old_root_retirement", "selected_after_old_root_retirement"} {
 		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "selected_after_intent", "selected_after_seal", "selected_after_key", "selected_after_old_root_retirement")
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			cfg, _, cfgPath, sample := selectedLegacyExportFixture(t, ctx, true)

@@ -134,6 +134,7 @@ func TestHASelectedPeerRejoinSIGKILLChild(t *testing.T) {
 func TestHASelectedPeerRejoinActualSIGKILLRestoresOnlyOwnLeadership(t *testing.T) {
 	for _, phase := range []string{"peer-candidate-carrier", "peer-adopted", "peer-leadership-received", "peer-leadership-applied", "audit-capsule", "governance-capsule", "peer-published"} {
 		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "peer-candidate-carrier", "peer-leadership-applied", "peer-published")
 			ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 			defer cancel()
 			fixture, before, _ := prepareGenuinePeerRejoinFixture(t, ctx)

@@ -110,6 +110,7 @@ func TestTwoLevelRecoveryActualSIGKILLClosesOrphansAndLatePending(t *testing.T) 
 				name = "run/" + stage
 			}
 			t.Run(name, func(t *testing.T) {
+				stressPhase(t, name, "run/accepted", "run/finalized-pending", "plain/started")
 				root := t.TempDir()
 				cfg := crashConfig(root)
 				if err := Initialize(cfg); err != nil {

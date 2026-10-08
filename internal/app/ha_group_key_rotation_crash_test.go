@@ -75,6 +75,7 @@ func TestHAGroupRotationSIGKILLChild(t *testing.T) {
 func TestHAGroupRotationActualSIGKILLMixedKeyResume(t *testing.T) {
 	for _, phase := range []string{"member_0_intent", "intents_durable", "group_confirmed", "member_0_common", "member_0_file_0", "member_0_file_2"} {
 		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "member_0_intent", "group_confirmed", "member_0_file_2")
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
 			defer cancel()
 			fixture, members := prepareHAGroupRotationColdMembers(t, ctx)

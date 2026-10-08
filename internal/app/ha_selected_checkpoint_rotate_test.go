@@ -34,7 +34,10 @@ func TestHASelectedChangedCapsulesRecycleThroughActualTLSAndFreshReopen(t *testi
 
 func TestHASelectedChangedCapsulesActualSIGKILLRecyclesIndependentSelectedSlot(t *testing.T) {
 	for _, phase := range []string{"audit-pending", "audit-capsule", "governance-pending", "governance-capsule"} {
-		t.Run(phase, func(t *testing.T) { exerciseHACacheCycles(t, phase) })
+		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "audit-pending", "governance-capsule")
+			exerciseHACacheCycles(t, phase)
+		})
 	}
 }
 

@@ -28,8 +28,12 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_fresh_go_evidence_is_explicit(self):
         for name, workflow in (("CI", self.ci_workflow), ("release", self.workflow)):
             with self.subTest(workflow=name):
-                self.assertIn("go test -count=1 ./...", workflow)
-                self.assertIn("go test -race -count=1 -timeout=20m ./...", workflow)
+                # internal/app is sharded; `check` proves the shards partition it.
+                self.assertIn("scripts/go-test-shard.sh check 4 && scripts/go-test-shard.sh check 8", workflow)
+                self.assertIn("scripts/go-test-shard.sh rest -count=1 -timeout=20m", workflow)
+                self.assertIn("scripts/go-test-shard.sh rest -race -count=1 -timeout=20m", workflow)
+                self.assertIn("scripts/go-test-shard.sh app ${{ matrix.shard }} 4 -count=1 -timeout=20m", workflow)
+                self.assertIn("scripts/go-test-shard.sh app ${{ matrix.shard }} 8 -race -count=1 -timeout=20m", workflow)
                 self.assertIn("go -C tests/compatibility/go test -count=1 ./...", workflow)
 
     def test_downstream_preflight_precedes_irreversible_publish(self):

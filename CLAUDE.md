@@ -27,11 +27,15 @@ make frontend          # npm ci + npm run build for web/, output embedded at int
 
 The full gate, run once before pushing — not per commit, and not after every edit:
 ```bash
-go test -timeout=20m ./...
+make test             # every package; internal/app in 4 shards (scripts/go-test-shard.sh), each -timeout=20m
 go vet ./...
 cd web && npm ci --ignore-scripts && npm run typecheck && npm test -- --run && npm run build && cd ..
 git diff --exit-code -- internal/webui/dist   # fails if the embedded bundle is stale after web/ changes
 ```
+`internal/app` runs for about half an hour as one binary, so the gate splits it
+into fixed shards that CI runs in parallel; ordinary runs take a representative
+subset of the crash-point and legacy-recovery matrices, and `HALRO_STRESS=1`
+(the release stress job) runs all of them.
 Or run it as one target: `make full-check`. That is the gate — it is what the
 release assessments from v0.8.2 onward record, and it needs Node 22 to match CI,
 because it rebuilds the committed bundle and compares it.

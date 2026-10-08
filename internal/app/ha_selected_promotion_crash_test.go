@@ -69,6 +69,7 @@ func TestHASelectedPromotionSIGKILLChild(t *testing.T) {
 func TestHASelectedPromotionActualSIGKILLResumesExactProposalAndTerm(t *testing.T) {
 	for _, phase := range []string{"prepared", "promised", "fulfilled", "promoted", "leadership", "audit-native", "audit-ordered", "audit-capsule", "governance-capsule", "published"} {
 		t.Run(phase, func(t *testing.T) {
+			stressPhase(t, phase, "prepared", "leadership", "published")
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			fixture, owners, _ := prepareHASelectedTransportFixture(t, ctx)
