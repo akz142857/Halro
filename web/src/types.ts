@@ -3,6 +3,15 @@ export interface Page<T> {
   next_cursor: string;
 }
 
+export interface DeploymentPricePage extends Page<DeploymentPriceVersion> {
+  active_price?: DeploymentPriceVersion | null;
+  next_scheduled_price?: DeploymentPriceVersion | null;
+  blocking_price?: DeploymentPriceVersion | null;
+  selected_at?: string;
+  revision?: number;
+}
+
+
 /**
  * Which day a per-day figure covers, decided by the server.
  *

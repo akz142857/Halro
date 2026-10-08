@@ -300,10 +300,10 @@ export function UsagePage() {
       {/* Filtering to nothing rendered a table with only a header, which reads
           as a broken page rather than as an answer. Every other list here says
           so in words. */}
-      {usage.data && attempts.length === 0 && (
+      {usage.data && attempts.length === 0 && !usage.hasNextPage && (
         <EmptyState title={t("usage.emptyTitle")}>{t("usage.emptyDescription")}</EmptyState>
       )}
-      {usage.data && attempts.length > 0 && (
+      {usage.data && (attempts.length > 0 || usage.hasNextPage) && (
         <div className="usage-results-panel">
           <header className="usage-results-header">
             <div>

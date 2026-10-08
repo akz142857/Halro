@@ -82,6 +82,24 @@ describe("UsagePage model filter", () => {
     window.history.replaceState({}, "", "/admin/usage?tab=attempts");
   });
 
+  it("keeps pagination available when a filtered physical page has no matching attempts", async () => {
+    const usage = vi.spyOn(api, "usage")
+      .mockResolvedValueOnce({ items: [], next_cursor: "filtered-prefix" })
+      .mockResolvedValue({ items: [{ event_id: "later", request_id: "req_later", attempt: 1, project_id: "p", requested_model: "chat",
+        provider_model: "gpt-4o", provider_input_tokens: 1, provider_output_tokens: 1, latency_millis: 5,
+        status: "success", completed_at: "2026-08-06T00:00:00Z" }] as never, next_cursor: "" });
+    vi.spyOn(api, "projects").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsagePage /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
+    expect(await screen.findByText("req_later")).toBeVisible();
+    expect(new URLSearchParams(usage.mock.calls[1][0]?.slice(1)).get("cursor")).toBe("filtered-prefix");
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  });
+
   it("offers the route aliases and the models present in history, not a free-text box", async () => {
     vi.spyOn(api, "usage").mockResolvedValue({
       items: [{ event_id: "e1", request_id: "req_1", attempt: 1, project_id: "p", requested_model: "retired-alias",

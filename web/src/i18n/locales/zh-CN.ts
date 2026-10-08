@@ -33,6 +33,8 @@ export const zhCN = {
     none: "无",
     loading: "正在读取网关状态",
     loadingShort: "读取中…",
+    firstPage: "第一页",
+    nextPage: "下一页",
     loadMore: "加载更多",
     requestFailed: "无法完成请求",
     dataUnavailable: "数据暂时不可用",

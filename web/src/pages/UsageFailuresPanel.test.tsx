@@ -47,6 +47,19 @@ describe("UsageFailuresPanel", () => {
     vi.spyOn(api, "deployments").mockResolvedValue({ items: [{ id: "dep_b", name: "Backup" }] as never, next_cursor: "" });
   });
 
+  it("continues an empty physical page before presenting the final failure result", async () => {
+    const failures = vi.spyOn(api, "usageFailures")
+      .mockResolvedValueOnce({ items: [], next_cursor: "pending-join" })
+      .mockResolvedValue({ items: [providerFailure], next_cursor: "" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><UsageFailuresPanel /></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "加载更多" }));
+    expect(await screen.findByRole("link", { name: /req_failed/ })).toBeVisible();
+    expect(new URLSearchParams(failures.mock.calls[1][0]?.slice(1)).get("cursor")).toBe("pending-join");
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  });
+
   it("explains a provider failure with the attempt that decided it", async () => {
     renderPanel([providerFailure]);
 

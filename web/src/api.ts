@@ -56,6 +56,7 @@ import type {
   UsageRequestDetail,
   UsageSummary,
   DeploymentPriceVersion,
+  DeploymentPricePage,
   DeploymentPriceProposal,
   ProviderProfilesCatalog,
 } from "./types";
@@ -511,13 +512,13 @@ export const api = {
       `/deployments/${encodeURIComponent(id)}/capabilities/preflight`,
       json("POST", { capabilities }),
     ).then((value) => value.data),
-  deploymentPrices: (id: string) => request<Page<DeploymentPriceVersion>>(`/deployments/${encodeURIComponent(id)}/prices`).then((value) => value.data),
+  deploymentPrices: (id: string, cursor = "") => request<DeploymentPricePage>(`/deployments/${encodeURIComponent(id)}/prices${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`).then((value) => value.data),
   createDeploymentPrice: (id: string, value: unknown, idempotencyKey: string) =>
     request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(id)}/prices`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   cancelDeploymentPrice: (deploymentID: string, priceID: string, revision: number) =>
     request<DeploymentPriceVersion>(`/deployments/${encodeURIComponent(deploymentID)}/prices/${encodeURIComponent(priceID)}/cancel`, json("POST"), `"${revision}"`).then((result) => result.data),
 	confirmRestoredDeploymentPricing: (deploymentID: string, value: unknown) => request<{ deployment_id: string; pricing_quarantine: false }>(`/deployments/${encodeURIComponent(deploymentID)}/prices/restore-confirm`, json("POST", value)).then((result) => result.data),
-  deploymentPriceProposals: (id: string) => request<Page<DeploymentPriceProposal>>(`/deployments/${encodeURIComponent(id)}/price-proposals`).then((value) => value.data),
+  deploymentPriceProposals: (id: string, cursor = "") => request<Page<DeploymentPriceProposal>>(`/deployments/${encodeURIComponent(id)}/price-proposals${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`).then((value) => value.data),
   createDeploymentPriceProposal: (id: string, value: unknown, idempotencyKey: string) =>
     request<DeploymentPriceProposal>(`/deployments/${encodeURIComponent(id)}/price-proposals`, { ...json("POST", value), headers: { "Idempotency-Key": idempotencyKey } }).then((result) => result.data),
   adoptDeploymentPriceProposal: (deploymentID: string, proposalID: string, revision: number, value: unknown) =>

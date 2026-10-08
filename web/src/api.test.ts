@@ -7,6 +7,17 @@ describe("typed admin API client", () => {
     vi.unstubAllGlobals();
   });
 
+  it("passes explicit proposal continuations without accumulating pages", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => response({ items: [], next_cursor: "next" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await api.deploymentPriceProposals("dep /1");
+    const next = await api.deploymentPriceProposals("dep /1", "opaque+/=");
+    expect(String(fetchMock.mock.calls[0][0])).toBe("/admin/api/v1/deployments/dep%20%2F1/price-proposals");
+    expect(String(fetchMock.mock.calls[1][0])).toBe("/admin/api/v1/deployments/dep%20%2F1/price-proposals?cursor=opaque%2B%2F%3D");
+    expect(next.items).toEqual([]);
+    expect(next.next_cursor).toBe("next");
+  });
+
   it("keeps CSRF in memory and sends mutations as same-origin no-store requests", async () => {
     const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -173,6 +184,24 @@ describe("typed admin API client", () => {
   // the count of enabled routes that disables a deployment's delete button, so
   // a truncated answer must never be handed back looking complete. A cursor
   // that repeats used to loop forever.
+  it.each([
+    ["work-units", () => api.workUnits("?project_id=prj_1&status=closed")],
+    ["runs", () => api.runs("?project_id=prj_1&status=closed")],
+  ])("continues an empty filtered %s page when its cursor advances", async (_resource, list) => {
+    const cursors: Array<string | null> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), "http://localhost");
+      cursors.push(url.searchParams.get("cursor"));
+      expect(url.searchParams.get("project_id")).toBe("prj_1");
+      expect(url.searchParams.get("status")).toBe("closed");
+      return response(url.searchParams.get("cursor")
+        ? { items: [{ id: "last-match" }], next_cursor: "" }
+        : { items: [], next_cursor: "filtered-prefix" });
+    }));
+    await expect(list()).resolves.toEqual({ items: [{ id: "last-match" }], next_cursor: "" });
+    expect(cursors).toEqual([null, "filtered-prefix"]);
+  });
+
   it("fails closed instead of looping when the route cursor stops advancing", async () => {
     const fetchMock = vi.fn(async () =>
       response({ items: [{ id: "rt_1", public_model: "chat" }], next_cursor: "stuck" }));

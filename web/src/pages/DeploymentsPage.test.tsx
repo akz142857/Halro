@@ -2122,6 +2122,74 @@ describe("deployment price panel", () => {
   });
 });
 
+describe("bounded deployment price history", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "providers").mockResolvedValue({ items: [provider], next_cursor: "" });
+    vi.spyOn(api, "deployments").mockResolvedValue({ items: [existingDeployment], next_cursor: "" });
+    vi.spyOn(api, "routes").mockResolvedValue({ items: [], next_cursor: "" });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("uses current and blocking summaries outside the visible history page", async () => {
+    vi.spyOn(api, "deploymentPrices").mockResolvedValue({
+      items: [{ ...activePriceVersion(), id: "old_price", version: 1, status: "superseded" }], next_cursor: "next",
+      active_price: activePriceVersion(), blocking_price: scheduledPriceVersion(), next_scheduled_price: scheduledPriceVersion(),
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "调整价格" }));
+    expect(await screen.findByLabelText("输入 USD / 百万词元")).toHaveValue("1");
+    expect(screen.getByRole("option", { name: /^立即生效/ })).toBeDisabled();
+  });
+
+  it("replaces the history page and discards inactive cached pages", async () => {
+    const read = vi.spyOn(api, "deploymentPrices").mockImplementation(async (_id, cursor) => ({
+      items: [{ ...activePriceVersion(), id: cursor ? "row_two" : "row_one", version: cursor ? 2 : 1, status: "superseded" }],
+      next_cursor: cursor ? "" : "second", active_price: activePriceVersion(), blocking_price: null, next_scheduled_price: null,
+    }));
+    const view = renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    const drawer = screen.getByRole("dialog", { name: "Deployment dep_1 详情" });
+    fireEvent.click(await within(drawer).findByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(read).toHaveBeenCalledWith("dep_1", "second"));
+    await waitFor(() => expect(within(drawer.querySelector("ol.detail-timeline") as HTMLElement).getByText("v2")).toBeVisible());
+    expect(within(drawer.querySelector("ol.detail-timeline") as HTMLElement).queryByText("v1")).not.toBeInTheDocument();
+    await waitFor(() => expect(view.queryClient.getQueryCache().findAll({ queryKey: ["deployment-prices", "dep_1"] })).toHaveLength(1));
+    fireEvent.click(within(drawer).getByRole("button", { name: "第一页" }));
+    await waitFor(() => expect(within(drawer.querySelector("ol.detail-timeline") as HTMLElement).getByText("v1")).toBeVisible());
+  });
+
+  it("restarts after a changed timeline instead of accumulating a mixed prefix", async () => {
+    let firstReads = 0;
+    const read = vi.spyOn(api, "deploymentPrices").mockImplementation(async (_id, cursor) => {
+      if (cursor) throw new ApiError(409, "restart", "pricing_page_changed");
+      firstReads++;
+      return { items: [{ ...activePriceVersion(), version: firstReads === 1 ? 1 : 5 }], next_cursor: firstReads === 1 ? "obsolete" : "", active_price: activePriceVersion() };
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /^查看详情/ }));
+    const drawer = screen.getByRole("dialog", { name: "Deployment dep_1 详情" });
+    fireEvent.click(await within(drawer).findByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(within(drawer.querySelector("ol.detail-timeline") as HTMLElement).getByText("v5")).toBeVisible());
+    expect(within(drawer.querySelector("ol.detail-timeline") as HTMLElement).queryByText("v1")).not.toBeInTheDocument();
+  });
+
+  it("polls the next schedule even when it is outside the current page", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const read = vi.spyOn(api, "deploymentPrices").mockResolvedValue({
+        items: [{ ...activePriceVersion(), status: "superseded" }], next_cursor: "",
+        next_scheduled_price: { ...scheduledPriceVersion(), effective_from: "2000-01-01T00:00:00Z" },
+      });
+      renderPage();
+      await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(OVERDUE_SCHEDULED_PRICE_REFRESH_MS + 500); });
+      expect(read.mock.calls.length).toBeGreaterThan(1);
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 function activePriceVersion(): DeploymentPriceVersion {
   return {
     id: "price_1", deployment_id: "dep_1", version: 3, revision: 1, billing_mode: "metered", currency: "USD",
@@ -2162,11 +2230,11 @@ function renderPage(role: AdminRole = "administrator") {
   // went unrendered and unasserted — which is how a card kept an inline copy of
   // an error the notification channel was already reporting, with no test able
   // to see the duplicate.
-  return render(
+  return Object.assign(render(
     <QueryClientProvider client={queryClient}>
       <NotificationProvider><DeploymentsPage /></NotificationProvider>
     </QueryClientProvider>,
-  );
+  ), { queryClient });
 }
 
 // Detection spends the operator's Provider credential, so the console states

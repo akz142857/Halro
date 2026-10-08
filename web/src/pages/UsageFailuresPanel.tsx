@@ -117,10 +117,10 @@ export function UsageFailuresPanel() {
       </div>
       {failures.isPending && <Loading />}
       {failures.isError && <ErrorState error={failures.error} />}
-      {failures.data && rows.length === 0 && (
+      {failures.data && rows.length === 0 && !failures.hasNextPage && (
         <EmptyState title={t("usage.failures.emptyTitle")}>{t("usage.failures.emptyDescription")}</EmptyState>
       )}
-      {failures.data && rows.length > 0 && (
+      {failures.data && (rows.length > 0 || failures.hasNextPage) && (
         <div className="table-shell">
           <table className="usage-table">
             {/* Four composed cells rather than seven thin ones, the shape the

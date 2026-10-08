@@ -27,6 +27,8 @@ export const enUS = {
     none: "None",
     loading: "Loading gateway status",
     loadingShort: "Loading…",
+    firstPage: "First page",
+    nextPage: "Next page",
     loadMore: "Load more",
     requestFailed: "Unable to complete request",
     dataUnavailable: "Data is temporarily unavailable",

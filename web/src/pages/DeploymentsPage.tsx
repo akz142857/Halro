@@ -228,23 +228,30 @@ function DeploymentRow({
   // Cached with staleTime Infinity and shared across every card, so asking per
   // card costs one fetch for the page rather than one per deployment.
   const profiles = useProviderProfiles();
+  const [priceCursor, setPriceCursor] = useState("");
   const prices = useQuery({
-    queryKey: ["deployment-prices", deployment.id],
-    queryFn: () => api.deploymentPrices(deployment.id),
+    queryKey: ["deployment-prices", deployment.id, priceCursor],
+    queryFn: () => api.deploymentPrices(deployment.id, priceCursor),
     enabled: priceSlotReady,
-    refetchInterval: (query) => scheduledPriceRefreshInterval(query.state.data?.items),
+    // Each card retains the currently observed page, without caching history.
+    gcTime: 0,
+    refetchInterval: (query) => scheduledPriceRefreshInterval(query.state.data?.next_scheduled_price ? [query.state.data.next_scheduled_price] : query.state.data?.items),
   });
+  useEffect(() => {
+    if (priceCursor && prices.error instanceof ApiError && ["pricing_page_changed", "pricing_page_cursor"].includes(prices.error.code)) setPriceCursor("");
+  }, [priceCursor, prices.error]);
   const priceItems = prices.data?.items ?? [];
-  const activePrice = priceItems.find((price) => price.status === "active");
+  const activePrice = prices.data?.active_price !== undefined
+    ? prices.data.active_price ?? undefined
+    : priceItems.find((price) => price.status === "active");
   const scheduledPrices = priceItems.filter((price) => price.status === "scheduled");
-  // The server refuses any version that is not strictly later than every
-  // non-cancelled one, so a scheduled version makes "immediately" unreachable
-  // until it is cancelled. The form has to know that before it offers the
-  // choice, or the operator is sent down a path that always ends in 409.
-  const blockingPrice = scheduledPrices.reduce<DeploymentPriceVersion | undefined>(
-    (latest, price) => (!latest || price.effective_from > latest.effective_from ? price : latest),
-    undefined,
-  );
+  // The page summary includes the last non-cancelled schedule even when the
+  // visible history page does not contain it. Older API fixtures use the page.
+  const blockingPrice = prices.data?.blocking_price !== undefined
+    ? prices.data.blocking_price ?? undefined
+    : scheduledPrices.reduce<DeploymentPriceVersion | undefined>(
+      (latest, price) => (!latest || price.effective_from > latest.effective_from ? price : latest), undefined,
+    );
   const { notify } = useNotify();
   const cancelPrice = useMutation({ mutationFn: (price: DeploymentPriceVersion) => api.cancelDeploymentPrice(deployment.id, price.id, price.revision), onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployment-prices", deployment.id] }) });
   const test = useMutation({
@@ -538,6 +545,10 @@ function DeploymentRow({
                 ))}
               </ol>
             ) : <p className="detail-empty">{prices.isPending ? t("common.loadingShort") : prices.isError ? t("deployments.priceUnavailable") : t("deployments.noPriceVersions")}</p>}
+            {(priceCursor || prices.data?.next_cursor) && <div className="form-actions">
+              {priceCursor && <button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => setPriceCursor("")}>{t("common.firstPage")}</button>}
+              {prices.data?.next_cursor && <button className="button secondary" type="button" disabled={prices.isFetching} onClick={() => setPriceCursor(prices.data?.next_cursor ?? "")}>{t("common.nextPage")}</button>}
+            </div>}
           </section>
 
           <section className="detail-section">
