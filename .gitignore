@@ -43,3 +43,5 @@ __pycache__/
 skills-lock.json
 .vscode/*
 artifacts/*
+/docs/verification/performance/
+/docs/architecture/evidence/
