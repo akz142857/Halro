@@ -288,3 +288,9 @@ S0 首项已完成：I-06 夹具 `TestReplicaGenerationPublicOpenFailureRetriesP
 结论：预检向量只覆盖必要 owner，不含运行时普通读取；在原 1387 MiB Recovery 下，必要 owner 占满后没有正常读写余量。继续沿“逐项抠字节”推进不会得到有安全余量的配置，需要路线裁定（见汇报）。
 
 仍开放：启动失败后关闭时 Usage 报告 `ownedfile.ErrRetirement` 且留下共享成员——`usage` 包内 45 处可能来源，需在 Linux 上复现失败启动后逐层追踪，未定位。原计数 **5 完成 / 20 开放**。
+
+## 17. `internal/app` 分片与本轮暂停点
+
+`internal/app` 空闲单跑 1924.5 秒，长尾为主，改为固定分片（`scripts/go-test-shard.sh`，`check` 模式证明分片不重不漏）：CI 与发布普通测试 4 片、race 8 片并行，Makefile 依次运行。9 个崩溃时点矩阵默认跑代表时点，发布 `stress` 任务以 `HALRO_STRESS=1` 运行全部。修复：上一批改坏的发布契约测试、两个未登记的 `authenticatedstate` fuzz 目标、`runtime_repack` 中 `ReadStats` 遇 `ErrDiskUsageBusy` 的时序竞争（改前 6/6 失败、改后 6/6 通过；改前提交同样复现，非本轮引入）。race 最重分片未实测，完整门禁未跑。
+
+本轮在此暂停，续作见[续作交接](memory-bounded-resume.zh-CN.md)。待用户回答：HA 目标拓扑为两节点还是三节点（决定 Recovery reserve 中 3 组会话能否按 peer 数推导）。

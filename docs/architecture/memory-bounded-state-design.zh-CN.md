@@ -1,5 +1,7 @@
 # Halro 内存有界状态与历史持久化改造方案
 
+**续作入口（2026-10-09）：[续作交接](memory-bounded-resume.zh-CN.md)**——当前提交、用户裁定、卡点、待回答问题和下次顺序都在那里。
+
 2026-10-08 路线调整（用户裁定）：D-04 拆为 D-04a 本地容量与 D-04b 生产校准；允许 Ledger 请求池与 Metadata 窗口并入共享执行池，池内保留终结优先槽；十万冷迁移归入 M3。新顺序为 S0 稳住工作树 → S1 预算闭合 → S2 逐项接受 → S3(M3) 冷构建，见[进度看板 §14](memory-bounded-convergence-plan.zh-CN.md#14-2026-10-08-用户裁定与路线调整)。任务总数因拆分变为 25 项（5 完成 / 20 开放，其中 D-04b 随 D-01 暂缓）。
 
 2026-10-08 P1 最新检查点：Directory/Usage/Governance 三个真实后台消费者已接入 foundation 持有的有限共享 RAM 池，嵌套/排队/最终释放及实际双角色 TLS/ext4/race 验证通过。实际节约 **269135872 B（256.667 MiB）**；修正后的必要 normal 为 **789.386 MiB / 54 claims**，原 2 GiB 配置仍缺 **128.386 MiB**，完整阶段峰值和容量接受未通过。Ledger 请求与 Metadata 窗口仍独立保留。原24项仍5完成/19开放，P2尚未进入。详见[预算可行性裁定](memory-bounded-budget-feasibility.zh-CN.md)与[进度看板](memory-bounded-convergence-plan.zh-CN.md)。此前未共享必要下界1046.053 MiB、旧金额与失败结果保留当时范围。
