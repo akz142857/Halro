@@ -65,6 +65,19 @@ halro backup verify \
   --key-file ./backup.key
 ```
 
+The default create command writes format 5 with a paged file catalog. Verify
+and restore continue to read formats 1–4. Create and verify print the complete
+file inventory as JSON, including `compatibility_version`, `file_catalog`, and
+`files`; this report is distinct from the bounded root stored in the archive.
+File order in the report is not a sorting contract.
+
+Verification needs an existing writable temporary directory for its private
+file inventory and complete report spool. Set `TMPDIR` to a filesystem with
+sufficient free space; the encrypted archive is opened read-only. A command
+report is successful only with complete JSON and a successful exit status.
+Restore verifies and extracts the same opened ciphertext, retires that owner,
+and validates staged native data before publishing it.
+
 The key file must be a regular file containing exactly 32 bytes and must not
 be accessible by group or other users. Losing this key makes the backup
 unrecoverable. Store it independently from both the backup and Halro Master

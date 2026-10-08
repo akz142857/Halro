@@ -49,6 +49,31 @@ an authentication boundary.
 | Metric | Type | Labels |
 |---|---|---|
 | `halro_requests_total` | counter | `status` |
+| `halro_resource_pressure_enabled` | gauge | none |
+| `halro_resource_pressure_state` | gauge | `state` |
+| `halro_resource_pressure_samples_total` | counter | none |
+| `halro_resource_pressure_rejections_total` | counter | none |
+| `halro_resource_pressure_signal_issue` | gauge | `reason` |
+| `halro_resource_pressure_runtime_bytes` | gauge | none |
+| `halro_resource_pressure_cgroup_bytes` | gauge | none |
+| `halro_resource_pressure_disk_available_bytes` | gauge | none |
+| `halro_resource_pressure_inodes_available` | gauge | none |
+| `halro_replication_unconfirmed_bytes` | gauge | `kind` (`configured_*`, `used_*`) |
+| `halro_replication_unconfirmed_entries` | gauge | `kind` (`used`, `configured_limit`) |
+| `halro_replication_unconfirmed_recovery_debt_bytes` | gauge | none |
+| `halro_replication_unconfirmed_recovery_over_limit` | gauge | none |
+| `halro_replication_unconfirmed_admission_refusals_total` | counter | none |
+| `halro_replication_unconfirmed_last_progress_timestamp_seconds` | gauge | none |
+| `halro_resource_budget_enabled` | gauge | none |
+| `halro_resource_budget_ram_bytes` | gauge | none |
+| `halro_resource_budget_disk_bytes` | gauge | none |
+| `halro_resource_budget_class_ram_bytes` | gauge | `class` |
+| `halro_resource_budget_class_disk_bytes` | gauge | `class` |
+| `halro_resource_budget_acquired_total` | counter | `class` |
+| `halro_resource_budget_rejections_total` | counter | `class` |
+| `halro_resource_budget_claims` | gauge | `pool` |
+| `halro_resource_budget_owners` | gauge | none |
+| `halro_resource_budget_pressure_state` | gauge | `state` |
 | `halro_attempts_total` | counter | `status` |
 | `halro_tokens_total` | counter | `direction` |
 | `halro_cost_usd_total` | counter | none |
@@ -97,6 +122,7 @@ an authentication boundary.
 | `halro_wal_append_batches_total` | counter | none |
 | `halro_wal_sync_seconds` | summary sum/count | none |
 | `halro_accounting_project_lock_acquisitions_total` | counter | none |
+| `halro_accounting_project_lock_live` | gauge | none |
 | `halro_accounting_project_lock_wait_seconds` | summary sum/count | none |
 | `halro_accounting_project_lock_held_seconds` | summary sum/count | none |
 | `halro_metadata_batch_calls_total` | counter | none |
@@ -171,6 +197,15 @@ an authentication boundary.
 | `go_memstats_gc_cycles_total` | counter | none |
 | `process_start_time_seconds` | gauge | none |
 
+The three `halro_ledger_sealed_*` gauges use a fixed-size committed manifest
+summary. Scraping them does not copy or walk the segment directory. Generations
+counts manifest entries, bytes sums uncompressed frame lengths, and stored bytes
+sums the lengths of the files named by those entries. Stored bytes excludes
+orphan/temporary files and filesystem allocation overhead; it is not a physical
+disk, page-cache, RSS or retention-authorization measurement. Open reconstructs
+the summary after manifest repair, and Roll/Compact update it together with the
+in-memory committed directory. The resident directory itself remains unbounded.
+
 ### Counter reset semantics
 
 Two kinds of counter are exported here and they do not reset together.
@@ -187,7 +222,7 @@ metadata store before closing sockets. The next process therefore exposes the
 terminal event that the previous process could no longer serve to Prometheus.
 
 `halro_wal_append_*`, `halro_wal_sync_seconds`,
-`halro_accounting_project_lock_*` and `halro_metadata_*` count work this
+the project-lock acquisitions/wait/held families and `halro_metadata_*` count work this
 *process* performed, so they start at zero on every restart — replay appends
 nothing and takes no locks.
 
@@ -195,6 +230,14 @@ The pair is therefore expected to disagree after a restart: a freshly started
 instance can report thousands of requests and zero WAL appends without anything
 being wrong. `rate()` over either is unaffected; only an absolute comparison
 between the two families is meaningless.
+
+`halro_accounting_project_lock_live` is a current gauge of registry identities
+retained by lock users/waiters, admitted money or Run-close obligations. Cold
+projects and durable-only reservations do not retain entries. It has no project
+label and requires no historical scan. Deleting an entry preserves its Ledger
+facts. A lower count does not prove lower RAM: registry backing capacity is
+released when entirely empty, and active obligation maps/allocator peaks and
+shared physical resource charges are separate boundaries.
 
 The model-capability detection families are process-local control-plane
 counters. A possibly billable probe is durably reserved in the detection
@@ -270,3 +313,143 @@ be behind the durable store, so the data plane is intentionally refusing all
 requests. `halro_activation_stale_seconds` measures from the oldest affected
 domain and is `0` when every domain is current. These gauges have no labels;
 use `/admin/api/v1/system/status` to identify the affected domains and reasons.
+
+## Physical resource pressure admission
+
+Optional `resource_pressure` calibration activates one bounded sampler per runtime.
+No production threshold is inferred from the container limit. `enabled` reports the
+active physical guard, not completion of shared logical resource budgets. New
+Gateway inference, object/job creation, Work Unit and Run creation return HTTP 503
+before their bodies are read while the guard is unknown or pressured. Existing
+queries, cancellation, deletion, outcome reporting and close bypass new-work admission.
+The OpenAI error code is `resource_pressure`; Anthropic uses `overloaded_error`.
+Already admitted requests are not cancelled by this guard. Liveness remains available;
+Standalone/Primary readiness includes pressure, while Replica readiness retains its
+replication-candidate meaning. Replication and existing recovery are not gated.
+
+`state` is one-hot over `unknown`, `healthy`, `pressured`. `signal_issue` has a fixed
+reason vocabulary: `runtime_unavailable`, `cgroup_unavailable`, `disk_unavailable`,
+`sample_cancelled`, `signal_invalid`, `sample_stale`, `clock_invalid`, `sample_repeated`,
+`sample_gap`, `source_changed`, `runtime_high`, `cgroup_high`, `cgroup_headroom_low`,
+`disk_low`, `inodes_low`, `cooling`, `monitor_inactive`. No paths or object IDs are labels.
+State/issues/counts remain visible when physical measurements are missing. Runtime,
+cgroup, available-space and inode gauges are omitted before the first sample,
+after invalid/stale evidence or cancellation/stop, and for their unavailable signal.
+A missing gauge is not zero usage or unlimited space. Go runtime bytes are
+`total - released`, not RSS; runtime and cgroup scopes must not be summed.
+
+Alert on `halro_resource_pressure_state{state="unknown"} == 1` or
+`halro_resource_pressure_state{state="pressured"} == 1` for a calibrated sustained
+interval; inspect fixed `signal_issue` reasons. This is a physical admission guard:
+it does not reconcile historical disk charges, preallocate completion space, or
+provide complete owner reconciliation or an ENOSPC guarantee. The optional
+logical disk ceilings account only for owners that acquire permits; a
+filesystem without inode capacity statistics remains unknown; supported dynamic
+inode policy and target capacity qualification remain open.
+
+Optional `resource_budget` requires that calibrated physical guard and adds a
+single shared logical RAM and disk manager. Filesystem disk charges from enabled
+owners remain until qualified physical cleanup. The Recovery reserve is isolated
+from normal work; Completion credits are acquired atomically with active work and
+remain charged through that work’s terminal operation. Every new HTTP work route acquires an Active
+envelope before body reads and releases after the entire handler returns, including
+sync finalization and downstream output. Deferred workers acquire a Background
+envelope before reading stored input; refusal keeps already accepted work queued
+and uses the existing dispatcher backoff. HTTP, deferred work and independent capture copies compete for the
+same total, claim metadata and normal capacity excluding the recovery reserve.
+Failure capture acquires its own Background envelope before JSON encoding.
+The calibrated cost includes full encoding before truncation, plaintext and
+sealed copies, not just the retained payload limit. Refusal drops only the
+best-effort diagnostic. Packet, Store call and sealed writer share one claim
+with explicitly retained owners; cancellation does not refund a still-running
+writer. Queue cancellation clears all tail references before releasing their
+owners. Runtime joins the concrete Store before releasing its directory lock.
+With HA enabled, source-coordinator constructor streaming validation and peer
+window reconstruction acquire a Recovery envelope before reading native bytes.
+Each peer can retain one byte-blocked candidate; duplicate ACK/retry reuses it.
+References are cleared before refund, after synchronous queue copying or session
+failure/forget/stop. Global source/state failure clears both candidates and leases.
+Unknown/pressured physical state preserves dedicated Recovery admission.
+`replication_candidate_ram_bytes` requires explicit calibration; the wire-size
+lower bound and capacity for two candidates plus one additional reconstruction
+are not proof of a sufficient native decoding peak. Runtime session queues
+independently reserve `replication_queue_ram_bytes` before channel/copy allocation,
+covering full outbound capacity including the active writer and queue metadata.
+Three live/retiring session slots cover two peers and one replacement/control
+session. Closing clears unsent tails but retains fees/slots until socket Close completes and the actual
+writer returns, even after a SendSync waiter has been released. Writing a record
+frees byte capacity, not the session-wide reservation. Configuration now requires
+Recovery capacity and eight claims for three reconstructions, three queue/read
+owners, one NativeSource reader owner and one Governance cache owner.
+Without shared accounting, ConnectionManager still bounds authenticated data
+and control-only sessions to configured peers plus one. TLS internals, inbound
+read/decode, handshakes, long-lived readers/IO, PendingFrom pages, preliminary
+reconcile and live append encoding still require integration.
+
+Default native Governance logs retain 4096 fixed identity/content fingerprints
+and native positions, rather than complete Event payloads or string keys.
+With shared budgeting enabled, `governance_log_ram_bytes` reserves one Recovery
+lifetime claim before cache construction or file IO, including Standalone and
+Replica. Its calibrated envelope has a 2 MiB lower bound; replay/decode and batch
+encoding temporaries require separate fees. Native Close joins readers/writers,
+closes the actual file and clears cache backing storage before refund. Physical
+close errors retain the charge. Budgeted HA now requires eight dedicated claims
+and RAM for `3*(candidate+queue+read)+reader+governance_log` plus their control
+costs. Unknown/pressured state continues to permit dedicated Recovery.
+
+Logical refusal uses OpenAI `resource_budget` or Anthropic `overloaded_error`, HTTP
+503 and `Cache-Control: no-store`. Existing-work routes bypass this new admission.
+
+The Primary unconfirmed families are emitted only when optional unconfirmed
+budgets are configured. They expose fixed configured/used byte dimensions, the
+bounded entry count, any recovered suffix debt, admission refusals and the time
+of the latest confirmed-state publication in this process. These metrics carry no peer, request, or object
+identity labels. The existing `halro_replication_confirmed_index` remains the
+authoritative confirmed prefix value.
+
+Budget `class` labels are fixed: `configuration`, `active`, `cache`, `io`,
+`background`, `completion`, `recovery`, `control`; `pool` is `normal` or `recovery`.
+RAM gauges report charged estimates, not actual allocation or reclaimed OS pages.
+`pressure_state` includes the monitor owner's lifecycle and original lease age;
+sampling cancellation immediately closes new normal claims even during blocked IO.
+Unchanged healthy samples renew that lease. A decision that expires between
+observation and application publishes unknown, resets cooldown and retries fresh
+samples; it does not permanently stop the sampler. Counts include refused claim
+attempts, so deferred retries may increment them repeatedly.
+
+`halro_accounting_pending_leases` and
+`halro_accounting_oldest_pending_lease_age_seconds` describe one accounting
+owner's coherent pending cut. If that owner is retired, the read fails or the
+scrape context is cancelled, both families are omitted; a failed observation
+must not appear as zero pending work. Other metric families continue to render,
+including the independently configured normal maximum lease age. A successful
+empty pending view emits zero. The fresh disk projection candidate maintains
+count and an ordered reservation-time index atomically with native Apply; this
+does not grant trust to a reopened DB or mean the default Runtime has migrated.
+
+This RAM integration covers HTTP, deferred work, capture and part of HA reconstruction. Fixed runtime
+objects, historical maps/caches, pending enumeration, production recovery/finalization,
+disk and confirmation owners still require integration and capacity calibration.
+`enabled=1` does not mean the shared total covers every consumer or that durable
+settlement has reserved space. Budget calibration changes require a restart.
+
+### Selected Usage projection observations
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `halro_usage_projection_selected` | gauge | 1 for the selected fresh disk owner, 0 for resident Aggregate. |
+| `halro_usage_read_unavailable` | gauge | 1 if the selected observation failed; Usage-dependent counters/histograms and gauges are omitted, while other scrape families remain available. |
+| `halro_usage_watermark_sequence` | gauge | Ledger sequence covered by the selected owner, emitted only after a successful read. |
+| `halro_usage_projection_logical_bytes` | gauge | Committed DB page extent from the same transaction as the disk Usage counters; neither physical file allocation nor RSS. Emitted only for readable disk owners. |
+
+The resident window/checkpoint families apply only to Aggregate. A disk owner
+omits them instead of reporting fabricated zero counts or borrowing a retired
+checkpoint. Usage reads do not reconstruct historical Snapshot data. Metrics
+remain readable during business drain; terminal Close withdraws fresh scrapes
+and joins admitted response writes before closing dependencies.
+
+`halro_pricing_recovery_pending_intents` reads the schema-43 authoritative
+pending counter maintained atomically with pricing intent facts. It does not
+materialize the intent history. Missing/malformed counter state or unavailable
+Metadata omits this series instead of reporting zero; other readable metric
+families remain available. This point read is not a fresh history authentication.

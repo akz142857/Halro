@@ -1,0 +1,2114 @@
+{
+  "version": 1,
+  "source": "docs/architecture/memory-bounded-state-design.zh-CN.md §9.1",
+  "scenarios": [
+    {
+      "id": "V01-01",
+      "contract": "新旧视图对同一认证前缀一致",
+      "checks": [
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerProjectionDifferentialLifecycleAndIdempotency"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestDiskUsageProjectionPreservesReducerSemantics"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestRestoredUsageAdvancePermittedPrefixAndLateSettlement"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataImageCompleteBinaryBucketsDeltaAndTrimMatchSelectedRoot"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestAuthenticatedSeekNearestAndStrictTraversalMatchesCompleteRows"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestTransactionSeekSeesPrivateInsertDeleteAndStrictNearest"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageDirectRowsMatchCompleteOrdinaryReducerAndQueries"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSealFreezesCompleteNamespaceAndReopensPublisher"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneReopensAllSelectedRootsAndRepublishesSameCut"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSavedRootsApplyOnlyLaterLedgerUsageFacts"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSelectedMetadataDAOAdvancesAndRepublishesNativeCut"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonSelectedUsageRestoresRealRootAndOnlyNativeDelta"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedLedgerProjectionOpensActualSelectedRootAndOnlyDelta"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonSelectedIncrementalReopenAllRootsMetadataDAOAndRepublish"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackPublishesReclaimsAndReopensAcrossRepeatedSlots"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedRuntimeOnlineCheckpointReclaimsActualMetadataAndReopens"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedLegacyExportEmptyMigrationReopens"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestPackedAuthenticatedLedgerBuildMatchesCompleteAndPermittedNamespaces"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestPackedTypedUsageMatchesOrdinaryReducerAndAuthenticatesCompleteCut"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestPackedTypedGovernanceMatchesOrdinaryReducerAtFixed64MiB"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonSelectedCompletedRollRestoresAllRootsAndPublishes"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupAuthenticatesPostSealRollSuffix"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedDirectoryCompletedRollDescriptorsUseBoundedPages"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestDiskUsageFinalizationEvidenceBorrowsValidatedInputStrings"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestBoundMetadataNativeSourceSinkAndActualOrderingConfirmation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestReplicationHelloUsesQualifiedActualMetadataVersion"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedRuntimeInterruptedRollReopensActualBusiness"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataZeroSequenceDerivedRootNeedsActualCommonSelection"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedRuntimeCompressionReopensOldCommonRootAndPublishesPhysicalLocator"
+        }
+      ],
+      "remaining": [
+        "HA 全组件共同 cut 与最终 Seal Runtime 差分；Standalone 默认入口已覆盖当前具名功能 fixture"
+      ]
+    },
+    {
+      "id": "V01-02",
+      "contract": "事件幂等与冲突，跨批次和重启",
+      "checks": [
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerProjectionBatchRollbackAndPhysicalDuplicate"
+        },
+        {
+          "package": "internal/budget",
+          "test": "TestProjectedRecoveryDurableTerminalRebuildDoesNotDuplicateSummary"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestAuthenticatedGovernanceRestoreManagerContinuesRevisionsAndIdempotency"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditBatchRejectsAllConflictsBeforeNativeWrite"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceBatchRejectsAllConflictsBeforeNativeWrite"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestProviderConditionalRetirementExcludesWritersAndPreservesReclaimedKey"
+        },
+        {
+          "package": "internal/diskset",
+          "test": "TestDisposableCounterDuplicatesStayFixedAndOldCountsCannotReplay"
+        },
+        {
+          "package": "internal/diskset",
+          "test": "TestDisposableCounterOverflowAndCancellationPrecedeMutation"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceManagerReadsAndWritesWithoutMaterializedEngine"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "id": "V01-03",
+      "contract": "跨日恢复及价格pin",
+      "checks": [
+        {
+          "package": "internal/app",
+          "test": "TestStandaloneDefaultDiskOwnerLegacyCrossPeriodLeasesKeepOwnBalances"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestPricePinRecoveryCommitsOnlyCompletePagesAndRetries"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestRestorePricingFiniteNativePagesPreserveLatestAndExistingHighWater"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestRestorePricingRejectsUnqualifiedIndexAndChangedSourceBeforeMutation"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestRestorePricingInterruptedCommittedPrefixRemainsRetryable"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataFacadePriceRecoveryNoOpPagesPreserveActualRevision"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "id": "V01-04",
+      "contract": "fsync/投影/文件/manifest各边界SIGKILL",
+      "checks": [
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreActualSIGKILLRetainsWholeEligibleRoot"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSealCandidateActualSIGKILLRecoversCommittedEnvelope"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSIGKILLLeavesEveryReportedRequestRecoverable"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultRewriteStagedSIGKILLPreservesOriginalAndRejectsStage"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerRollCompactActualSIGKILLPreservesAuthenticatedFacts"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandalonePublishesWithActualDurableStartupCaches"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackActualSIGKILLSelectsCompletePackAndRetries"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedOfflineUsageSourceLeaseCloseCancelsAndJoins"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedPendingRollActualSIGKILLRecoversOnlyQualifiedFacts"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedPendingRollRecoveryActualSIGKILLIsRestartable"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedCompressionActualSIGKILLReopensSignedPlaintext"
+        }
+      ],
+      "remaining": [
+        "Ledger Roll/Compact manifest 暂存文件写入/Sync/Close/rename 内部及归档 manifest 每个发布时点的真实 SIGKILL",
+        "跨组件整文件发布真实SIGKILL"
+      ]
+    },
+    {
+      "id": "V01-05",
+      "contract": "Usage失败、溢出、迟到无缺失重复",
+      "checks": [
+        {
+          "package": "internal/usage",
+          "test": "TestDiskExportStepFailureNeverCreditsPartialSinkAndRetryPreservesRows"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestDiskWindowLateSettlementDoesNotReviveFinalizedSummary"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestPruneUsageDiskKeepsNativeFactsAndResumesDatePolicy"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageLiveCatchUpAfterMaintenanceReleasePreservesBothOrders"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestDiskUsageReplayCompactedEvidencePreservesAtomicFailure"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestDiskUsageReplayWideFutureFinalizationRetainedHeapIsBounded"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedPhysicalUsageHistoricalStartupPruneAndReopen"
+        }
+      ],
+      "remaining": [
+        "磁盘物理失败与Collector溢出同时发生的Runtime组合矩阵"
+      ]
+    },
+    {
+      "id": "V01-06",
+      "contract": "Snapshot/日志/角色位置不符拒绝",
+      "checks": [
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerReopenRefusesUnprovenCutsAndOwnersWithoutChangingFiles"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestAuthenticatedImageStreamsExactSelectedNamespace"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSelectedHistoricalRootPreservesAheadPagesAndAppendsNewBranch"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerReopenOldCommonSealAfterAheadComponentPublication"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestRestoredGovernanceAdvanceAuthenticatesExcludedSuffixAndAppliesOnlyPermittedDelta"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestInspectionCancellationAndManifestReplacementNeverPublishHead"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestProviderConditionalRetirementRejectsChangedRowAndRollsBackFailure"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestProviderPlaintextRetirementPreservesRefreshedRowAndSealedReplacement"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestProviderPlaintextOrphanSweepRequiresCompleteCurrentReferences"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataMaintenanceFiniteWalkAndPointReads"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataMaintenanceRejectsStructureBeforeDomainAllocation"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceReopenUsesSelectedRootAndPermittedDelta"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceSelectedSchemaAndCutRefusedBeforeRootRepair"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceHistoricalSelectedRootKeepsFuturePhysicalPages"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestTransactionSeekIgnoredLimitAbortsPublication"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestAuthenticatedPinnedCommittedExtentDoesNotFollowLaterPublication"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestDerivedUpdateKeepsNativeCutAndPreservesPinnedPreviousContent"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestDerivedUpdateCannotAdvanceCutOrPublishRejectedPermission"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceFrozenReadCandidateRejectionPreservesNativeAuthority"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceFrozenReadRealNativeCorruptionStillRequiresRecovery"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceAcceptedApplyReadCannotTransferToAnotherLease"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerFrozenSealQualifiesIdentityAndKeepsExactReceipt"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageSelectedRootReadsWithoutMaterializedEngineAndRejectsMismatchBeforeRepair"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageCannotSkipNativeFactsAndBatchPublishesOneRoot"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageWindowMaintenanceKeepsNativeCutAndCumulativeTotals"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageEmptyNativeAndPhysicalRollBoundaryPreserveCompleteCut"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageFrozenSealQualifiesIdentityAndExcludesApply"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceFrozenSealQualifiesIdentityAndKeepsCompleteCut"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditFrozenHeadExcludesSemanticPhysicalWritesAndPreservesCandidateRejection"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditFrozenHeadActualReaderExitDebtRetainsWholeJob"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceFrozenHeadExcludesSemanticPhysicalWritesAndPreservesCandidateRejection"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceFrozenHeadActualReaderExitDebtRetainsWholeJob"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataFrozenHeadBothFormatsExcludeWritesTrimAndHooks"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataFrozenSealQualifiesBackupIdentityAndKeepsRootNativeReceipt"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingFrozenHeadAuthenticatesFourCursorsAndExcludesAppend"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityActualSourceAndScopedOncePublication"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSealRejectsWrongCutAndOwnerBeforePublication"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSealReauthenticatesActualOldLedgerBytes"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneReopenRefusesUnselectedCutBeforeOrphanRepair"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageLiveCatchUpStopsAtActualLedgerOwnerNotDurableTail"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLiveUsageSourceCloseCancelsAndJoinsWholeJob"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLiveUsageSourceWrongOwnerAndReentryRemainKnownRefusals"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedLedgerProjectionRejectsForgedCallerRootOrOrdinaryNative"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonSelectedIncrementalRefusesForeignNativeAndUnselectedAuthority"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataSelectedReadOnlyPreservesActualSourceAndRefusesMutation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHARuntimeCommonCutRejectsSignedMetadataCursorOutsideAppliedOrdering"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHARuntimeOpenRefusesAheadMetadataBeforeConstructingReplicaGeneration"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackOpaquePreservationActualSIGKILLRetriesAndKeepsSourceInode"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationIndependentAuthorityAndPhysicalFrames"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationRepairRequiresIndependentOrderingPrefix"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestBoundMetadataNativeSourceDefaultRefusesAndQualifiedRepairRevokesReaders"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestLegacySeedRejectsUnqualifiedMemoryStateBeforePublication"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestReplicaBackupRejectsWrongMemberConfigurationAndMemoryState"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedPendingRollWithdrawnSelectionOrCancelDoesNotCreateSuccessor"
+        }
+      ],
+      "remaining": [
+        "HA Runtime 独立 Seal/角色选择及位置缩小拒绝；Standalone 实际 bootstrap/common-cut 与损坏拒绝已覆盖"
+      ]
+    },
+    {
+      "id": "V01-07",
+      "contract": "Governance修订、cohort和分页",
+      "checks": [
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceProjectionManagerPreservesRevisionsIdempotencyAndNoStateAlias"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceProjectionPagesBoundFilteredWorkAndFreezeNativeFacts"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestPrimaryGovernanceDefaultRebuildAndConfirmedReport"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernancePagesPreserveFilteredProgressAndFrozenCut"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "id": "V01-08",
+      "contract": "首次构造和迁移中断",
+      "checks": [
+        {
+          "package": "internal/store/bolt",
+          "test": "TestPricingMigrationSIGKILLReopensDurableBlockAndEpochFile"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestStandaloneDefaultDiskOwnerRecoversBothLevelsBeforePublication"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestCreationAliasHasIndependentRetirementAndNeverOverwrites"
+        },
+        {
+          "package": "internal/gateway",
+          "test": "TestProviderObjectPublicationJoinsMutationAndReleasesBeforeReplication"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSnapshotConstructorUnknownCloseRetainsOriginalAdmission"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSealPublisherConstructorDebtRetainsPublisherAndWriteFees"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestMaterializedImageFailedActualEngineHandoffRetainsInodeAndCredit"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestBackupWorkspaceConstructorDebtKeepsOriginalReservation"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestExclusiveBoltActualHandoffFailurePreservesCreationReceipt"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestExclusiveBoltRefusesExistingFileWithoutHandoffDebt"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestNativeConstructorActualCloseDebtCannotRefundCache"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestNativeConstructorActualCloseDebtCannotRefundCache"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceDirectBuildUsesFixedRAMAndPreservesForeignScratch"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceDirectBuildCancellationDuringActualSourceExitIsNotPublication"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageCallerWidthAndCandidateCapacityRejectBeforeAuthorityChanges"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditFrozenHeadSourceAdmissionRejectsBeforeCallbackWithoutPoison"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceFrozenHeadSourceAdmissionRejectsBeforeCallbackWithoutPoison"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataFrozenHeadAdmissionRejectsBeforeSourceOrCallback"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingFrozenHeadAdmissionRejectsBeforeCallback"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryRebuildsExistingTreeAndKeepsPersistentFeesAfterClose"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryRefusesUnqualifiedAliasesAndObjectsWithoutMutation"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryCeilingAndDepthRejectWithoutPartialClaim"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryWrongGuardFailsBeforeIOAndCharge"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryUnknownActualCloseKeepsWholeEnvelope"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryCancellationJoinsActualBlockedClose"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryChangedDirectoryRefusesObservation"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryWideTreeUsesOnePersistentClaim"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryFailedPublicationPreservesBaselineFee"
+        },
+        {
+          "package": "internal/diskinventory",
+          "test": "TestInventoryUnlinkedOpenOldInodeNeverRefundsBaseline"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryDefaultOpenCloseAndFreshManagerRebuild"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryCapacityRejectsBeforeNativeTailRepair"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryOutsideNativePathRejectedBeforeScanning"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryDisabledPreservesExistingStartupPath"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryLaterStartupFailureRetainsBaselineOwner"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimePersistentInventoryRebuildsAfterActualProcessExit"
+        },
+        {
+          "package": "internal/config",
+          "test": "TestResourceBudgetPersistentInventoryHasIndependentCeilingAndStartupWorkspace"
+        },
+        {
+          "package": "internal/config",
+          "test": "TestResourceBudgetPersistentInventoryHARequiresAnotherClaimWithoutMappingRAM"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceRealSIGKILLPreservesOldCandidateAndRebuildsAuthenticatedBackup"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceRejectsForeignSourceReplacementAndCommittedSeal"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceFirstRunRealSIGKILLAllPublicationBoundaries"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceRestartRealSIGKILLAllPreservationBoundaries"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceOpaqueCandidatesArePreservedWithoutAuthority"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestMigrationNamespaceRejectsReplacementDuringPublication"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestMemoryNamespaceEarliestSIGKILLCompletesActivationAndRuntimeBusiness"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestMemoryNamespacePendingNamesRefuseLegacyStartupWithoutTrust"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHAMetadataInstallActualSIGKILLReimportsOrRequalifies"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHAMetadataInstallRestartPreservesForeignAndRefusesExhaustion"
+        }
+      ],
+      "remaining": [
+        "Standalone真实空Ledger已覆盖；HA各角色的同组首次迁移/中断和格式切换组合仍未完成"
+      ]
+    },
+    {
+      "id": "V01-09",
+      "contract": "同anchor内容/键集合篡改不能被信任",
+      "checks": [
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerReopenRejectsSavedRootAndPositionCorruption"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestStandaloneAccountingOwnerAuthenticationFailureRejectsSavedCandidate"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestHistoricalRootCommitmentAndPageRefuseBeforeCleanup"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestCandidateSealV2CarriesCompleteStateAndRejectsKindDowngrade"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestRestoredUsageAdvanceRefusesExcludedTailTamperBeforeMutation"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestRestoredGovernanceAdvanceRefusesUnprovedCutsAndCorruptExcludedTailBeforeApply"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedDirectoryRejectsWrongSelectedRootBeforeOrphanCleanup"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestVerifyUsageCurrentPolicyRequiresIndependentReceiptAndStaysReadOnly"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestPinnedCreationAndRetirementPreserveChangedParentNamespace"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestOwnedRemovalDoesNotRefundMissingOrRedirectedOriginal"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestExtractionActualDescriptorCloseAndParentReplacementDenyCompletion"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestExtractionCancellationAndExclusiveOutputPreserveForeignFile"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRestoreStageReplacementPreservesBothDirectoryTrees"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceApplyRefusesForgedNativeRecordWithoutRootMutation"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceChangedNativeNextFrameWithdrawsBothOwners"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestAuthenticatedSeekCorruptContentReturnsNoRowAndPoisonsOwner"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceDirectBuildPostReductionMutationAndCancellationRetireOnlyCandidate"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageCopiedNativeHashCannotAuthorizeForgedPayload"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageAuthenticationErrorNeverReturnsFalseAbsence"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageActualOldNativeTamperWithdrawsAllReadsDespiteRestoredTime"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageAcceptedScopeStillRejectsCopiedHashForgedPayload"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditFrozenHeadActualOldByteTamperWithdrawsWrites"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceFrozenHeadActualOldByteTamperWithdrawsWrites"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataFrozenHeadActualOldByteTamperWithdrawsWriter"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingFrozenHeadActualOldBytesAndHeaderCannotHideBehindMtime"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityChangedRealFileCannotAuthorizePublication"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneStartupCacheTamperAndClosedOwnerRefusePublication"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedLedgerProjectionNoDeltaDoesNotReadOldNativeBytes"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonSelectedServicesUseActualFiniteAuditGrantBeforeHistoryCompletes"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeRolledSuffixRefusesDamageBeforeActiveTailRepair"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeRolledDescriptorRejectsUnqualifiedAttributionAndChecksum"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationForeignMACValidReplacementCannotReusePrefix"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationInterruptedReplicaWriteRequiresActualCloseAndOrderedRepair"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedPendingRollTamperRefusesBeforeNativeRepair"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedCompressionRejectsCorruptGzipBeforeActiveRepair"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHAMetadataInstallActualQualificationAndRefusals"
+        }
+      ],
+      "remaining": [
+        "所有保存根逐关键记录删除/替换及 HA Runtime 矩阵；当前默认 Standalone 已覆盖 bootstrap、共同 Seal、Audit capsule 与 Metadata pack 损坏拒绝"
+      ]
+    },
+    {
+      "id": "V01-10",
+      "contract": "Apply提交但未确认，SIGKILL后角色前缀缩小",
+      "checks": [
+        {
+          "package": "internal/app",
+          "test": "TestReplicaAccountingGenerationFreshRoleCutAndLateConfirmedApply"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestPrimaryConfirmedStateFailureReconstructsAdmissionAfterRestart"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHARuntimeRebuildsSmallerPermittedPrefixWithoutReusingOldGeneration"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestPackedAuthenticatedLedgerBuildPreservesForeignScratchAndRejectsWrongNativeHead"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestPackedTypedUsageAuthenticatesExcludedNativeTailBeforeScratch"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackOpaquePreIntentRejectsForeignAndExhaustedShapes"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationQualifiedPrimaryUsesAdmissionOrderingAndConfirmation"
+        }
+      ],
+      "remaining": [
+        "真实SIGKILL与三节点降级/晋升，确认尾部不残留"
+      ]
+    },
+    {
+      "id": "V01-11",
+      "contract": "大遗留pending和恢复再次SIGKILL",
+      "checks": [
+        {
+          "package": "internal/budget",
+          "test": "TestProjectedRecoveryIndependentSetsPreserveAttributionAndUsage"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestPricePinRecoveryUsesFreshDiskProjectionAcrossPages"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataActualWriterCloseDebtPreservesAdmissionAndReceipt"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataConstructorActualCloseFailureIsTyped"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataTrimActualOldDescriptorCloseDebtKeepsPublishedInode"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataCloseJoinsActualPreparedPublication"
+        },
+        {
+          "package": "internal/durable",
+          "test": "TestSyncDirectoryActualCloseDebtIsNotSuccess"
+        },
+        {
+          "package": "internal/durable",
+          "test": "TestSyncDirectoryRefusesSymlinkAndRegularFile"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestAuthenticatedGovernanceActualImageExitPreservesOriginalFees"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestAuthenticatedUsageActualImageCloseDebtKeepsSameManagerFees"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestActualCloseDebtRetainsDescriptorInReturnedError"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataDiscardActualDirectoryCloseDebtCannotRetryToSuccess"
+        }
+      ],
+      "remaining": [
+        "远超限额规模及恢复逐批真实SIGKILL"
+      ]
+    },
+    {
+      "id": "V01-12",
+      "contract": "带Run请求各故障阶段终结幂等",
+      "checks": [
+        {
+          "package": "internal/budget",
+          "test": "TestProjectedRecoveryDurableSettlementRebuildDoesNotSettleTwice"
+        },
+        {
+          "package": "internal/budget",
+          "test": "TestProjectedRecoveryTerminalConfirmationFailureRetriesEmptySetWithConfirmation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestTwoLevelRecoveryActualSIGKILLClosesOrphansAndLatePending"
+        }
+      ],
+      "remaining": [
+        "恢复终结append/Apply/ACK各边界真实SIGKILL"
+      ]
+    },
+    {
+      "id": "V01-13",
+      "contract": "finalized遗留pending与迟后settlement",
+      "checks": [
+        {
+          "package": "internal/usage",
+          "test": "TestFinalizationReaderLateSettlementPreservesTerminalSummaryAndNoActiveRequest"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestPrimaryDiskDefaultRecoversAcceptedAndFinalizedPendingRequests"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageNativeDeltaAppliesOnlySelectedPrefixAndPreservesLateSettlement"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageActualMaintenanceDerivativeBeforeLedgerApplyPreservesBothOrders"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageWithoutActualAppendScopeCannotLeadSelectedOwner"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "id": "V01-14",
+      "contract": "HA停机/维护/确认门禁",
+      "checks": [
+        {
+          "package": "internal/app",
+          "test": "TestPrimaryDiskDefaultNoPeerCloseReleasesStartupLeaseAndOwnedFiles"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAuthenticatedRecoveryWriterRealPrimaryConfirmationAndStepdown"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestRestoredUsageCloseCancelsAndJoinsWholeAdvance"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestRestoredGovernanceAdvanceCloseCancelsAndJoinsActualSourceWork"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAdminAuditBatchOwnerBoundsOutstandingAndJoinsActualNativeIO"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestCommandResourceScopeSharesIndexArchiveAndAuditActualOwners"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAdminAuditQueueOwnsMetadataBeforeWaitingForNativeIO"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestNativeCloseJoinsActualSealReaderAndRetainsUnknownIOFee"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestNativeCloseJoinsActualSealReaderAndRetainsUnknownIOFee"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestNativeSourceActualProviderReaderCloseDebtKeepsOriginalFeeAndAllSetsWithdrawn"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestNativeProviderFixedSlotsRefuseFourthReaderAndJoinActualClose"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceFrozenReadCloseCancelsAndJoinsCompleteVisitor"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerNativeActualCloseDebtKeepsDescriptorKeyAndAdmission"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerConcurrentKnownCloseJoinsOnceAndReleasesAdmission"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceAcceptedApplyReadUsesActualScopeAndRevokesEscapedContext"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceAcceptedApplyReadJoinsBorrowerBeforeNativeMutationReturns"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerFrozenSealCloseCancelsAndJoinsCallback"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedDirectoryFrozenSealDiscardCancelsAndJoinsCallback"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageCloseCancelsAndJoinsEntireNativeDeltaJob"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestTypedUsageFrozenSealCloseCancelsAndJoinsActualCallback"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceFrozenSealCloseCancelsAndJoinsCallback"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditFrozenHeadCloseCancelsAndJoinsWholeCallback"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceFrozenHeadCloseCancelsAndJoinsWholeCallback"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestMetadataFrozenHeadCloseCancelsAndJoinsActualCallback"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataFrozenSealCloseCancelsAndJoinsCallback"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingFrozenHeadCloseCancelsAndJoinsWholeCallback"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingActualCloseDebtPreservesDescriptorAndKey"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityIgnoredBarrierFailureCannotReturnSuccess"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityHigherTermPromiseRevokesWithoutWaitingForScan"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityProgressChangeRevokesSelectedCut"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityCloseCancelsJoinsAndRejectsLaterTransitions"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestMemberReadAuthorityActualReaderCloseDebtRetainsKeyAndFee"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSealDirectoryRetirementCancelsAndJoinsWholeJob"
+        },
+        {
+          "package": "internal/statecut",
+          "test": "TestCommonStandaloneSealCannotRelabelInstalledReplicationOwner"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockOwnedCleanupJoinsBeforeOriginalExclusionRetires"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockOwnedCleanupDebtPreservesOriginalDescriptorAndFiniteAdmission"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestHARuntimeCommonCutAllowsPrimaryLocalAppliedAheadOfConfirmation"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackPinRefusalAndCanceledCandidatePreserveSelectedPack"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackCommitRejectsOriginalInodeReplacementAndRetainsFees"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreRepackCommitUsesSelectedCopyWithoutReauditingObsoleteRows"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestPackedAuthenticatedLedgerBuildRetainsActualRenamedScratchOwnerAndFees"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestPackedTypedGovernanceRetainsFeesAfterSourceRetirementFailure"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSealCandidateConcurrentReadQualificationsShareBoundedOwner"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedStartupSourceJoinsActualAuditDescriptorRead"
+        }
+      ],
+      "remaining": [
+        "三节点整体停机、离线准备命令、在线维护中断矩阵"
+      ]
+    },
+    {
+      "id": "V01-15",
+      "contract": "Ledger目录迁移/Roll/Compact与缺失检测",
+      "checks": [
+        {
+          "package": "internal/ledger",
+          "test": "TestPersistentDirectoryIndexCorruptionRebuildsFromManifest"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAManifestThatDropsGenerationsIsRefused"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAnInterruptedRollIsFinishedOrAbandonedByTheFilesAlone"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedDirectoryCapturesCompleteOrdinalScopeAndReopensOldSelectedCut"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompactionPreservesForeignPartial"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompactionRejectsLateNativeReplacementWithoutRemovingForeign"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompactionBorrowsVerifiedOrphanWithoutCleanupAuthority"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompressedReaderRejectsInflationBeyondAuthenticatedLength"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestManifestPreparationPreservesForeignPartialAndLateReplacements"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestStageSegmentOwnedCopyRejectsDamageAndPreservesLateReplacement"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSegmentDirectoryRetirementRequiresActualCloseAndOriginalName"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestPersistentDirectoryPublishRetainsPublishedStateAfterSyncFailure"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestPersistentDirectoryPublishPreservesLateForeignTarget"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestBorrowedInvalidDirectoryCacheDoesNotGrantRemovalAuthority"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestInspectionManifestRejectsSymlinkParentReplacementAndUncertainClose"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorWholeJobAndActualOutputShareOriginalEnvelope"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorCounterAdmissionAndForeignCleanupRetainOriginalFees"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorFiniteAdvisorCountsReachableRoutesAndBreaksTies"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorReportCapacityFailsExplicitlyBeforeOutput"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestLedgerRangeActualStreamCloseDebtSurvivesResetAndClose"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSegmentActualCloseFailureCannotReopenOrEraseDebt"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedDirectoryFrozenSealQualifiesIdentityAndKeepsReceipt"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupReadsOnlyDeltaAndAuditGatesWrites"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupOldByteTamperKeepsReadinessClosed"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupRejectsUnselectedAuthorityBeforeTailRepair"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupRejectsPostSealRoll"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupRefusesChangedDirectoryAndMissingHistory"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupAuthenticatesLaterFactsBeforeTailRepair"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupCanceledAuditRetainsOnlyItsGate"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedNativeStartupUncertainActualCloseKeepsOwnerAndJobCharge"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedDirectoryCompletedRollResumesUnpublishedFirstPage"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedCompressionRefreshesSeventyPhysicalDescriptorsInFinitePages"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedRuntimeSeventyLiveRollsAndCompressionUseFiniteDirectoryPages"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedDirectoryPartialFinitePageCannotPublishAndReopensSavedRoot"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedRuntimeRejectsCommittedDirectoryRollback"
+        }
+      ],
+      "remaining": [
+        "全部Roll/Compact发布阶段真实SIGKILL与多reader空间上限"
+      ]
+    },
+    {
+      "id": "V01-16",
+      "contract": "回滚保留新确认事实，不兼容reader拒绝降级",
+      "checks": [
+        {
+          "package": "internal/app",
+          "test": "TestRestoreReportJSONCompleteIDsAndActualWriterFailures"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRestoreReportStreamsAllEnabledIDsAndRetainsFeeThroughOutput"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRestoreReportForeignCatalogKeepsFilesAndOriginalFee"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSelectedLegacyExportPreservesLatestFactsAndIndependentRotation"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationReplicaRetryActualCloseDebtRemainsOwned"
+        },
+        {
+          "package": "internal/metadatajournal",
+          "test": "TestBoundReplicationCancelledAdmittedReadJoinsCloseBeforeKeyRetirement"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSegmentGzipFailedOpenRetainsActualCloseOwner"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestSelectedRolledSuffixReverifyActualCloseDebtPinsOwnerKeyAndFee"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestConnectionManagerCloseJoinsAuthenticatedCallbacks"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestConnectionManagerPreparationFailureRetainsActualSessionThroughCleanupCallback"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestNativeCloseDeadlineWithdrawsFullQueueBeforeLifecycleJoin"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestNativeCloseDeadlineRetainsOriginalLifecycleReader"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestNativeCloseDeadlineRetainsOriginalDurableWriterUntilActualExit"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestNativeCloseDeadlineRetainsOriginalAcceptedMutation"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestNativeCloseDeadlineRetainsActualStartupReaderAndItsPaidWork"
+        }
+      ],
+      "remaining": [
+        "当前构建的独立目录最新状态回退和目标轮换已有实际Runtime证据；任意旧版本reader/feature兼容矩阵、selected原目录DEK轮换和HA升级仍开放"
+      ]
+    },
+    {
+      "id": "V01-17",
+      "contract": "ENOSPC停止新准入、保留终结并可恢复",
+      "checks": [
+        {
+          "package": "internal/usage",
+          "test": "TestDiskUsageProjectionDataFileCeilingRollsBack"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestResourceBudgetHTTPReservesCompletionRAMAndDiskAtomically"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestMaterializedImageTransfersExactFDAndKeepsCreditUntilRemoval"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataImageWholeFilePublishRequiresCurrentReceiptAndCapturedDestination"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataImageRefusesWrongRootPressureCeilingAndExistingDestination"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditNativeCacheBudgetRefusesBeforeIOAndRefundsFailedOpen"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditNativeCacheLifetimeJoinsReplayBeforeRefund"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditBatchBoundsRowsAndWidePayloadBeforeNativeWrite"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceBatchBoundsRowsAndWidePayloadBeforeNativeWrite"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAdminAuditBatchOwnerSharedEnvelopeRefusesBeforeNativeWrite"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestUsageReferenceSharedLifetimeAndOwnedRemoval"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestUsageReferenceBudgetRefusesBeforeScratchAndNeverUsesRecoveryForOnline"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditRejectsUnboundedInputBeforeCodecOrNativeWrite"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAdminAuditInvalidEncodingRefundsEnvelopeBeforeQueue"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataPostNativeCommitFailurePermanentlyRevokesOwner"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataAlreadyAdmittedWriterCannotCrossCommitFailure"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataDefiniteCallbackRefusalDoesNotRetireStore"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataUnrecordedProjectionCommitFailureRetiresOwner"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataPostDurableOrderingFailureRetiresOwner"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataDataFileCeilingPreservesDurableFactAndRequiresRecovery"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataDataFileCeilingRejectsExistingOversizeWithoutMutation"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataDataFileCeilingPreservesNoCreateAndRejectsNegative"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataMappingAdmissionPrecedesFileIO"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataMappingFeeJoinsActualViewAndClose"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataMappingReservationRequiresSameLiveOwner"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataCompactionRequiresSeparateDestinationMapping"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimeMetadataDataFileCeilingOwnsPersistentFileAndReconciles"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestMetadataDataFileBudgetRefusesWithoutSharedManagerOrOnCancellation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestMetadataMappingRetirementRequiresActualCloseAndKeepsDisk"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestCommandMetadataSharesActualFilesMappingAndAudit"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestCommandMetadataRejectsDroppedScopeBeforeIO"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimeKeySlotsMetadataMappingBorrowsExactRootOwner"
+        },
+        {
+          "package": "internal/config",
+          "test": "TestResourceBudgetMetadataFileAlsoReservesMappingAndConcurrentWork"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBackupUsageReferenceSharedBudgetAndReplacementPreservation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBackupGovernanceReferenceSharedBudgetAndNativePreservation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBackupPricingBudgetRefusesBeforePrivateDirectory"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestReferenceDirectoryReplacementAndUnknownEntryArePreserved"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBudgetedBackupRestoreUsesSharedReferencesEndToEnd"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestArchiveScratchRetirementPreservesUnknownAndReplacementInodes"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestArchiveComparisonWorkspaceAdmissionAndDateSessionRetirement"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestLegacyPricingBackupMappingIsReadOnlyBoundedAndRetires"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestLegacyPricingHashDepthAndWideIntentAreBounded"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestArchiveComparisonLateFeeFailureNeverMintsWindowProof"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestUsageArchiveWorkRAMRemainsSharedWhenFileCeilingsAreDisabled"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestProjectionMappingAdmissionPrecedesFileMutationAndRetirementPreservesForeignFile"
+        },
+        {
+          "package": "internal/config",
+          "test": "TestResourceBudgetAllProjectionMappingsReserveRecoveryBackgroundAndConcurrentRAM"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestStandaloneLedgerDiskCeilingIsChargedThroughOwnedRemoval"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestStandaloneUsageDiskCeilingIsChargedThroughOwnedRemoval"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestReplicaLedgerDiskCeilingIsChargedThroughGenerationClose"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimeGovernanceProjectionDiskCeilingFollowsPhysicalOwner"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBackupWorkspaceDiskOwnerUsesCommandRecoveryManager"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestBackupWorkspaceIndexAdmissionAndRealReaderRetirement"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestBackupWorkspaceRefusalReplacementAndMissingNameKeepOwnership"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestBackupWorkspacePinnedHandleAndReportKeepOriginalBudget"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestBackupWorkspaceLateIndexRetirementErrorSuppressesReport"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBudgetedBackupCreateReportVerifyAndRestoreShareOneRootManager"
+        },
+        {
+          "package": "cmd/halro",
+          "test": "TestBackupCLIUsesPagedCreationAndCompleteVerification"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestRetirementRequiresOwnUnlinkBeforeIdempotentSuccess"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestStoreDiscardMissingNamePreservesWholePersistentCreditAndOtherFiles"
+        },
+        {
+          "package": "internal/dirscan",
+          "test": "TestDirectoryScanFixedChunksCancellationAndIdentity"
+        },
+        {
+          "package": "internal/failurecapture",
+          "test": "TestCaptureDirectoryHistoryPreservesLookupOrderRetentionAndCancellation"
+        },
+        {
+          "package": "internal/failurecapture",
+          "test": "TestCaptureMetadataAndCiphertextRefuseBeforeUnboundedAllocation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestFailureCaptureReadBudgetRefusesBeforeReadAndRetainsAuditedResponse"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorDiskReferenceCompleteHistoryReadOnlyAndSharedBudget"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestDoctorDiskReferenceRefusesBeforeSourceAndCapsDerivative"
+        },
+        {
+          "package": "internal/diskset",
+          "test": "TestDisposableSetDeepPathsAndOldValidNodesCannotInventAbsence"
+        },
+        {
+          "package": "internal/diskset",
+          "test": "TestDisposableSetCapCancellationAndExactRetirement"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestProviderMaintenancePagesAllowCleanupAndKeepFiniteUpperKey"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestProviderReferenceSnapshotExcludesWritersWithoutChangingNativeFacts"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestProviderSweepDiskReferencesPreserveNamedFreshAndUnknownObjects"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestProviderMaintenanceSharedRefusalCancellationAndUncertainRetirement"
+        },
+        {
+          "package": "internal/dirscan",
+          "test": "TestTreePostorderCancellationDepthAndActualFDIdentity"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSeedManifestBoundedDecoderRefusesBeforeGraphGrowthOrSourceRead"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSeedSharedScopeBeforeIOAndManifestPersistentDiskAlias"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSeedOrderingVerificationRefusesPartialTailWithoutRepairAndSharesRoot"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingInspectionFileCeilingRefusesWholeSourceWithoutRepair"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAuditWitnessBoundsBeforeReadGraphAndNativeRepair"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestAuditWitnessOriginalSharedRootAndActualOutputJoin"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRetainedCiphertextFixedTreeStopCancellationAndUnknown"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestTOTPWatermarkSizeCheckedBeforeReadAndEncode"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestReadOnlyInspectionCeilingCancellationReplacementAndPartialTail"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditNativeSourceCeilingBeforeDecodeAndLinkRefusal"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestGovernanceNativeSourceCeilingBeforeDecodeAndLinkRefusal"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestOnlineLedgerMaintenanceUsesOriginalIOPoolAndJoinsCancellation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSealCommandSharedWorkspaceRefusesBeforeSourceIO"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSealReportKeepsOriginalFeesUntilActualOutputRetires"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestSealReportFileCeilingAndUncertainUnlink"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultRewriteStagedUsesFiniteTransactionsAndPreservesFacts"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultRewriteStagedCancellationAndChangedSourceCannotOpen"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultRewriteStagedPreflightAndWideRows"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultRewriteGraphBoundsPrecedeCustomCodec"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestVaultMaintenanceWalkDetectsWritesBehindCursor"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataOwnedSnapshotPreservesForeignAndUnknownClose"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataOwnedCopyCancellationAndCeilingsPrecedeOutput"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataOwnedCompactionPreservesCompleteBucketsAndSequences"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataOwnedCompactionRefusesOverdeepAndForeignOutput"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataFailedEngineOpenKeepsUnprovenMappingFee"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestExistingMetadataOpenDoesNotInitializeEmptyOrFollowSymlink"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestKeyMaintenanceOriginalWorkspaceCoversActualOwnedFiles"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestKeyMaintenanceForeignStageAndTargetPreserved"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestKeyMaintenanceCancellationJoinsActualCloseAndKeepsUnknownFee"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestKeyMaintenanceRefusesBeforeSourceIOAndForeignRoot"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestKeyMaintenanceMasterKeyCloseUncertaintyRetainsWholeFee"
+        },
+        {
+          "package": "internal/vault",
+          "test": "TestMasterKeyActualCloseAndLateIdentityRevokeRead"
+        },
+        {
+          "package": "internal/vault",
+          "test": "TestMasterKeyReplacementKeepsUnknownAndForeignFiles"
+        },
+        {
+          "package": "internal/vault",
+          "test": "TestMasterKeyInitializationPreservesUnknownAndForeignInodes"
+        },
+        {
+          "package": "internal/masterkey",
+          "test": "TestFileStoreReplacementRequiresOriginalUnlockedIdentity"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSealFileActualIdentityAndUnknownCloseRejectResult"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestSealPublisherActualCloseAndRenamedPendingKeepWorkspace"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompactedNativeRetirementPreservesForeignParentAndActualCloseDebt"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestDirectoryRefreshPreservesLateForeignLocatorAfterManifestCommit"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestRollRefusesForeignNativeFilesAndKeepsActualCloseDebt"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestCompactedRetryAuthenticatesBothActualFilesBeforeRetirement"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataCompatibilityCopyRefusesExistingOutputsAndCancelledIO"
+        },
+        {
+          "package": "internal/store/bolt",
+          "test": "TestMetadataCopyFailureRetiresOnlyKnownClosedCreation"
+        },
+        {
+          "package": "internal/ownedfile",
+          "test": "TestPinnedRetirementLatchesActualDescriptorCloseDebt"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestCOWRootPublicationTracksActualRenameAndCloseDebt"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestCOWSnapshotActualCloseFailureRetainsPinAndResidentFees"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestMaterializedImageActualCloseDebtCannotBeRetriedAway"
+        },
+        {
+          "package": "internal/backup",
+          "test": "TestVerifiedFileActualCloseDebtRetainsSelectedInodeAndDisk"
+        },
+        {
+          "package": "internal/metadatastate",
+          "test": "TestMetadataImageActualReaderCloseDebtBlocksDiscardAndPublication"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRuntimeProjectionConstructorCloseDebtKeepsFeesDespiteMissingName"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestIndependentScratchRetirementCannotRefundConstructorDebt"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestRestoreStageActualCloseDebtPreservesCandidateAndOriginalFees"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestNativeActualCloseDebtIsPermanentAndKeepsCacheFees"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestNativeActualCloseDebtIsPermanentAndKeepsCacheFees"
+        },
+        {
+          "package": "internal/audit",
+          "test": "TestAuditReplayActualReaderCloseDebtWithdrawsOwnerAndKeepsCache"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestRestoredGovernanceAdvanceActualReaderCloseDebtRetainsGenerationAndJobFees"
+        },
+        {
+          "package": "internal/replicationrange",
+          "test": "TestActualRangeDescriptorCloseFailureWithdrawsCursorAndSurvivesReset"
+        },
+        {
+          "package": "internal/replication",
+          "test": "TestOrderingActualCloseAndConstructorDebtRemainObservable"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceNativeReaderCloseDebtKeepsPackAndWorkspace"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceCloseCancelsAndJoinsWholeNativeJob"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestCOWPackActualCloseDebtKeepsDescriptorKeysAndOriginalCredit"
+        },
+        {
+          "package": "internal/authenticatedstate",
+          "test": "TestCOWDiscardDirectoryCloseDebtCannotRetryToSuccess"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockActualCloseDebtRetainsDescriptorAndCannotRetryToSuccess"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockPublicationActualCloseDebtRefusesDataLockPublication"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockRefusesSymlinkAndHardlinkBeforeRewritingForeignFile"
+        },
+        {
+          "package": "internal/store/lock",
+          "test": "TestLockConcurrentCloseAndCoverageJoin"
+        },
+        {
+          "package": "internal/governance",
+          "test": "TestTypedGovernanceDirectBuildActualSourceCloseDebtKeepsCreatedRoot"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAuthenticatedLedgerBuildRetainsSourceCreditOnActualReaderCloseFailure"
+        },
+        {
+          "package": "internal/usage",
+          "test": "TestArchiveVerifyFitsActualSmallTreeAndCountsReservedIndexOnce"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestPreAdmittedWorkspaceSurvivesPressureWithoutNewClaims"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestPreAdmittedWorkspaceJoinsRetainedTransferredChildren"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestPreAdmittedWorkspacePreservesUnknownPhysicalRetirement"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestPreAdmittedWorkspaceRefusesBeforeCallbackAndReturnsPartialFees"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestPreAdmittedWorkspacePhaseRetiresOnlyAfterActualChildren"
+        },
+        {
+          "package": "internal/budget",
+          "test": "TestAuthenticatedPreAppendWorkspaceFinishesActualFactAfterPressure"
+        },
+        {
+          "package": "internal/budget",
+          "test": "TestAuthenticatedPreAppendWorkspaceRefusesBeforeNativeFact"
+        },
+        {
+          "package": "internal/budget",
+          "test": "TestAuthenticatedDurableApplyRetainsActualRecoveryScopeUnderPressure"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestAppendApplyRecordRetainsOwnedContextAfterCallerCancellation"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestCompletableWorkReusesActualCreditsAfterPressureAndCancellation"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestCompletableWorkUnknownChildRetainsOriginalPool"
+        },
+        {
+          "package": "internal/resourcebudget",
+          "test": "TestCompletableWorkAdmissionIsAtomicAndLoansAreScoped"
+        },
+        {
+          "package": "internal/gateway",
+          "test": "TestGatewayActualAuthenticatedCompletionAfterProviderPressureAndCancel"
+        },
+        {
+          "package": "internal/ledger",
+          "test": "TestMaintenanceAcceptedApplyRetainsOwnerAndNativeReadAfterCallerCancellation"
+        },
+        {
+          "package": "internal/app",
+          "test": "TestBudgetedBackupActualLinuxENOSPCRetiresOnlyOwnCiphertext"
+        }
+      ],
+      "remaining": [
+        "完整 Runtime/HA 的储备保护、归档/临时多文件发布及迁移中的物理 ENOSPC 和实际终结确认接受"
+      ],
+      "linux_checks": {
+        "runner": "tools/memory-state/run_native_enospc.py",
+        "cases": 9,
+        "scope": "five native journals, Ledger projection, Metadata projection, Standalone Runtime Metadata failure/reopen and command encrypted backup output",
+        "evidence": [
+          "docs/verification/performance/2026-10-06-memory-bounded-resume/linux-enospc-metadata-retirement",
+          "docs/verification/performance/2026-10-06-memory-bounded-resume/linux-enospc-runtime-reopen",
+          "docs/verification/performance/2026-10-08-i03-acceptance/linux-backup-enospc-wake-final"
+        ],
+        "requires_dedicated_small_tmpfs": true,
+        "included_in_host_named_test_gate": false,
+        "new_case_only_verified_this_batch": "TestBudgetedBackupActualLinuxENOSPCRetiresOnlyOwnCiphertext",
+        "previous_cases_not_rerun_this_batch": 8
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+# Outcome list pagination
+
+`GET /admin/api/v1/governance/outcomes` accepts `project_id`, `work_unit_id`, `definition_id`, `limit`, and `cursor`. Filters compose. The default limit is 50; the maximum is 200. Every revision remains a separate immutable Outcome row, ordered by ID. The server returns a bounded page rather than copying all matching history before slicing it.
+
+The response keeps `items` and `next_cursor` and adds:
+
+- `governance_watermark`: the sequence and offset of the fact prefix selected by the first page.
+- `accounting_watermark`: the exact Ledger cut used for this page's provisional observations.
+
+Treat cursors as opaque. New cursors bind the filters, position, fixed Governance prefix and current Manager. Changing filters, modifying the cursor, or using it after Manager replacement returns HTTP 400; restart from an empty cursor. Changing the page limit is allowed. Later reported Outcomes do not enter an existing continuation, including later IDs that sort before its current position. A fresh listing includes them. Legacy ID-only cursors start a new current Governance prefix, then return the new opaque cursor format.
+
+Provisional status is a current accounting observation for each page, independent of the frozen Governance facts. A missing or cross-project WorkUnit is provisional; an open WorkUnit or one with an accepted request/pending attempt is provisional. Finalized requests can still own unresolved attempts. Accounting can advance between client pages, so provisional values may change; the separate accounting watermark records this. The response does not claim a transaction spanning both journals or one frozen accounting cut across all client pages.
+
+Outcome page rows have a 1 MiB JSON sum limit. The accounting batch has at most 200 references, at most 1 MiB of reference identities and at most 1 MiB of decoded-source raw inputs. Repeated scoped WorkUnit references are read once in the same transaction, while outputs retain their original order and multiplicity. Byte-limited pages return a continuation, never silently truncate remaining revisions. An Outcome that cannot fit returns a page error. Too-wide accounting source inputs or unavailable/retired/canceled/corrupt accounting fail the entire page with HTTP 503; no partial `items` are published. Reducing the limit can help a batch of distinct wide inputs; deployment sizing remains subject to capacity validation.
+
+A page may contain fewer than `limit` items, including zero items with a nonempty `next_cursor`. Continue until `next_cursor` is empty; item count does not prove exhaustion. The disk candidate limits each transaction to 200 examined index rows and 1 MiB of source JSON before decode, even when filters or the frozen fact cut exclude those rows. Continuations advance past examined excluded rows while preserving eligible rows that did not fit the output byte limit.
+
+The default Runtime still uses Governance's resident State and scans historical entries to select at most limit+1 candidates. A transitional disk candidate now supports bounded index pages and the same Manager's Report/idempotency/current-head/Apply without retaining a State alias. It requires a fresh exclusive DB rebuilt from the complete authenticated, quiescent journal and a trusted role-permitted native head; it cannot reopen an existing cache as trusted state. Cursor signing does not authenticate persisted content or key sets. Summary uses [fixed-prefix minimal batches](governance-summary-batches.md), and WorkUnit detail uses [bounded complete revision history](work-unit-outcome-history.md). Default Runtime/Replica selection, authenticated restart, export snapshots, shared resource ownership and production capacity acceptance remain unfinished.
