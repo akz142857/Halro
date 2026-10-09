@@ -1,3 +1,8 @@
+//go:build !race
+
+// The encoder fee is calibrated for production builds. Race instrumentation
+// moves stack allocations to the heap, so TotalAlloc there overstates it.
+
 package audit
 
 import (
