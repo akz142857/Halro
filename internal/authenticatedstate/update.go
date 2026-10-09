@@ -466,6 +466,17 @@ func (s *Store) update(ctx context.Context, cut [32]byte, limits updateLimits, a
 	if e := ctx.Err(); e != nil {
 		return result, e
 	}
+	// A transaction appends at most appendLimit. Refuse it whole rather than
+	// meet the ceiling part-way, which would poison a healthy store. Physical
+	// mode reserves the same bound per update through its own allocation.
+	if s.physical == nil {
+		if s.appendLimit <= 0 || s.ceiling < 0 || s.physicalExtent > uint64(s.ceiling) {
+			return result, ErrLimit
+		}
+		if uint64(s.ceiling)-s.physicalExtent < uint64(s.appendLimit) {
+			return result, ErrCapacity
+		}
+	}
 	if e := errors.Join(s.checkPack(), s.checkRoot()); e != nil {
 		s.poison(e)
 		return result, e

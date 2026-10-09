@@ -396,7 +396,7 @@ func (s *Store) prepareRepack(ctx context.Context, publisher *SealCandidatePubli
 	if err := errors.Join(ctx.Err(), s.fault(), s.checkPack(), s.checkRoot()); err != nil {
 		return nil, err
 	}
-	if s.physicalExtent < uint64(s.ceiling/2) && (!physicalHeadroom || !s.physicalHeadroomExhaustedLocked()) {
+	if s.physicalExtent < uint64(s.ceiling/2) && !s.appendRoomLowLocked() && (!physicalHeadroom || !s.physicalHeadroomExhaustedLocked()) {
 		return nil, nil
 	}
 	for i := range s.pins {
@@ -720,3 +720,14 @@ func (c *StoreRepack) Rollback() error { return c.RollbackContext(context.Backgr
 // actual selection reads; they do not change the independent common gate.
 func (c *StoreRepack) CommitContext(ctx context.Context) error   { return c.finish(ctx, true) }
 func (c *StoreRepack) RollbackContext(ctx context.Context) error { return c.finish(ctx, false) }
+
+// appendRoomLowLocked reports a pack with less than two worst-case updates of
+// room. Updates stop one transaction short of the ceiling, so where that bound
+// reaches half the ceiling the half-full benefit test alone could never pass
+// and the pack would stay full of obsolete pages.
+func (s *Store) appendRoomLowLocked() bool {
+	if s.appendLimit <= 0 || s.ceiling <= 0 || s.physicalExtent > uint64(s.ceiling) {
+		return false
+	}
+	return uint64(s.ceiling)-s.physicalExtent < 2*uint64(s.appendLimit)
+}

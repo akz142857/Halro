@@ -27,10 +27,15 @@ type repackFixture struct {
 
 func newRepackFixture(t *testing.T) *repackFixture {
 	t.Helper()
+	return newRepackFixtureSized(t, 64<<10, 16<<10)
+}
+
+func newRepackFixtureSized(t *testing.T, disk, appendBytes int64) *repackFixture {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	o := storeOptions(t)
-	o.MaxDiskBytes, o.MaxAppendBytes = 64<<10, 16<<10
+	o.MaxDiskBytes, o.MaxAppendBytes = disk, appendBytes
 	i := 0
 	creator, err := CreateStore(ctx, filepath.Join(dir, "state"), o, func() (Row, bool, error) {
 		if i == 8 {
