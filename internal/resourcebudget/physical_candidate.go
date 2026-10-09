@@ -53,7 +53,9 @@ func PreparePhysicalCandidateObserved(ctx context.Context, path string, bytes in
 	if err != nil {
 		return nil, err
 	}
-	work, err := manager.TryAcquireContext(ctx, Background, Cost{RAM: 4096})
+	// The slot's control claim outlives any caller loan (RetainIndependentWorkspace
+	// keeps it), so it pays ordinary admission even inside a parent workspace.
+	work, err := manager.TryAcquireContext(WithoutRAMWorkspace(ctx), Background, Cost{RAM: 4096})
 	if err != nil {
 		return nil, errors.Join(err, disk.Release())
 	}
@@ -373,7 +375,7 @@ func restorePhysicalCandidate(ctx context.Context, path string, expected Physica
 	}
 	var work Permit
 	if originalWork.claim == nil {
-		work, err = manager.TryAcquireContext(ctx, Background, Cost{RAM: 4096})
+		work, err = manager.TryAcquireContext(WithoutRAMWorkspace(ctx), Background, Cost{RAM: 4096})
 	} else {
 		work, err = retainPhysicalCandidateWorkspace(originalWork, manager)
 	}
