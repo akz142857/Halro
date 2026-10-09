@@ -58,7 +58,7 @@ func TestHAPhysicalThreeMemberPressuredTerminalAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, false, true)
+	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, haPhysicalGenerationPressuredClose)
 	logHAPhysicalFixtureSpace(t, 0)
-	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, false, false)
+	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
 }

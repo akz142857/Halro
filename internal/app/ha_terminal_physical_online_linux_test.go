@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,7 +31,7 @@ import (
 // real OS pressure / public Default Runtime capacity evidence.
 func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute)
-	runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, 0, nil, nil, false, false)
+	runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, 0, nil, nil, haPhysicalGenerationNormal)
 }
 
 // Both roles run start, replicated requests, online checkpoints and the full
@@ -43,7 +44,7 @@ func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
 	var revisions []uint64
 	for generation := 0; generation < 3; generation++ {
 		var ids []string
-		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, false, false)
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, haPhysicalGenerationNormal)
 		written = append(written, ids...)
 	}
 }
@@ -76,7 +77,7 @@ func TestHAPhysicalFailedStartupIsReplayedByTheNextStart(t *testing.T) {
 	var after [3]uint64
 	for generation := 1; generation < 3; generation++ {
 		var ids []string
-		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, false, false)
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, haPhysicalGenerationNormal)
 		written = append(written, ids...)
 		after[generation] = haPhysicalFixtureSpace(t)
 	}
@@ -85,6 +86,20 @@ func TestHAPhysicalFailedStartupIsReplayedByTheNextStart(t *testing.T) {
 	}
 	if diff := int64(after[1]) - int64(after[2]); diff < -(1<<20) || diff > 1<<20 {
 		t.Fatal("restart after replay accumulated space", after[1], after[2])
+	}
+}
+
+// Both roles finish and close at actual ENOSPC after replicated facts and
+// online checkpoints. Once an operator frees the foreign fill, the next start
+// must serve every fact on the Replica from a Seal no older than the close
+// and reclaim nothing: a complete close holds no replayable vector.
+func TestHAPhysicalActualENOSPCTerminalAndBothRolesRestart(t *testing.T) {
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
+	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, 0, nil, nil, haPhysicalGenerationENOSPCClose)
+	closed := haPhysicalFixtureSpace(t)
+	runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
+	if reclaimed := int64(haPhysicalFixtureSpace(t)) - int64(closed); reclaimed > 1<<20 {
+		t.Fatal("restart reclaimed space the ENOSPC close held", reclaimed)
 	}
 }
 
@@ -109,7 +124,7 @@ func TestHAPhysicalFailedStartupHelper(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	runHAPhysicalOnlineGeneration(t, ctx, request.Configs[:], request.Keys.Master, logger, 0, nil, nil, true, false)
+	runHAPhysicalOnlineGeneration(t, ctx, request.Configs[:], request.Keys.Master, logger, 0, nil, nil, haPhysicalGenerationFailedStart)
 }
 
 func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
@@ -160,11 +175,8 @@ func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (contex
 // them, then finishes, joins and releases both data directories. It returns
 // the new facts and each role's final Seal revision. Member 0 is the Primary;
 // every other member is a Replica (two Replicas make a three-node group).
-// failStartup instead pressures the first Replica before its Metadata receive
-// window and closes every role without the terminal sequence. pressuredClose
-// runs the terminal sequence and Close with every member at full pressure,
-// where any new normal admission is refused.
-func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []config.Config, master []byte, logger *slog.Logger, generation int, earlier []string, previous []uint64, failStartup, pressuredClose bool) ([]string, []uint64) {
+// The mode selects how the generation ends; see haPhysicalGenerationMode.
+func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []config.Config, master []byte, logger *slog.Logger, generation int, earlier []string, previous []uint64, mode haPhysicalGenerationMode) ([]string, []uint64) {
 	t.Helper()
 	owners := make([]*haSelectedRuntimeFoundation, len(configs))
 	guards := make([]*lock.Lock, len(configs))
@@ -240,7 +252,7 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 				t.Fatal(generation, err)
 			}
 		}
-		if i == 1 && failStartup {
+		if i == 1 && mode == haPhysicalGenerationFailedStart {
 			if err := manager.SetPressure(resourcebudget.Pressured); err != nil {
 				t.Fatal(err)
 			}
@@ -346,6 +358,16 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 			}
 		}
 	}
+	// Reads are refused at pressure too, so a write refused at an earlier
+	// generation's ENOSPC is proved absent here, on every member.
+	for g := 0; g < generation; g++ {
+		refused := fmt.Sprintf("prj_refused_physical_%d", g)
+		for i, f := range owners {
+			if _, err := f.metadataStore.GetProject(ctx, refused); !errors.Is(err, boltstore.ErrNotFound) {
+				t.Fatal("refused fact observed after restart", generation, i, refused, err)
+			}
+		}
+	}
 	cost, err := haPeerPhysicalTerminalCost(2)
 	if err != nil {
 		t.Fatal(err)
@@ -383,15 +405,63 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 		}
 		waitWindow()
 	}
-	if pressuredClose {
+	root := os.Getenv("HALRO_EXT4_ROOT")
+	if mode == haPhysicalGenerationENOSPCClose {
+		if err := exhaustHAPhysicalFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-terminal-fill-%d", generation)), haPhysicalFixtureFillBound); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mode == haPhysicalGenerationPressuredClose || mode == haPhysicalGenerationENOSPCClose {
 		for _, m := range budgets {
 			if err := m.SetPressure(resourcebudget.Pressured); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	for _, f := range owners {
-		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
+	if mode == haPhysicalGenerationENOSPCClose {
+		// The Replica grants credit from its paid lanes, so the session stays
+		// up; the write itself is refused by pressure and its credit released.
+		// A refused write leaves no fact, proved after the restart. The bound
+		// turns a dropped session, which would leave the reply unanswered,
+		// into a failure rather than a wait for the test deadline.
+		refused := fmt.Sprintf("prj_refused_physical_%d", generation)
+		reserveCtx, cancelReserve := context.WithTimeout(ctx, 30*time.Second)
+		capCtx, ticket, err := q.reserve(reserveCtx, sha256.Sum256([]byte{byte(generation), 200}), cost)
+		if err != nil {
+			t.Fatal("peer credit at actual ENOSPC", generation, err)
+		}
+		_, err = primary.metadataStore.PutProject(capCtx, domain.Project{ID: refused, Name: "refused at ENOSPC", Enabled: true}, 0, nil)
+		cancelReserve()
+		if !errors.Is(err, resourcebudget.ErrPressure) {
+			t.Fatal("new replicated fact not refused by pressure at actual ENOSPC", generation, err)
+		}
+		if err := q.finishTicket(ctx, ticket); err != nil {
+			t.Fatal("refused write kept its peer credit", generation, err)
+		}
+		q.mu.Lock()
+		live := q.live
+		q.mu.Unlock()
+		if live != nil {
+			t.Fatal("refused write left a live peer ticket", generation)
+		}
+	}
+	for i, f := range owners {
+		finishCtx := ctx
+		if mode == haPhysicalGenerationENOSPCClose {
+			// A member's retirement can return its own blocks. Take them back
+			// before the next member finishes so no member's terminal sequence
+			// borrows capacity another member freed.
+			if err := exhaustHAPhysicalFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-terminal-fill-%d-%d", generation, i)), haPhysicalFixtureFillBound); err != nil {
+				t.Fatal(err)
+			}
+			finishCtx = context.WithValue(ctx, haPhysicalFinishObserverKey{}, func(stage string) error {
+				if stage == "common-ready" {
+					return exhaustHAPhysicalFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-terminal-publication-fill-%d-%d", generation, i)), haPhysicalFixtureFillBound)
+				}
+				return nil
+			})
+		}
+		if err := f.finishHAPhysicalBusiness(finishCtx); err != nil {
 			t.Fatal("actual final whole common", generation, err)
 		}
 		if err := f.closeHAPhysicalNative(ctx); err != nil {
@@ -413,8 +483,76 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 		}
 	}
 	closed = true
+	if mode == haPhysicalGenerationENOSPCClose {
+		for i, cfg := range configs {
+			if left := haPhysicalOwnedTemporaries(t, cfg.Storage.DataDir); len(left) != 0 {
+				t.Fatal("terminal close at actual ENOSPC left owned temporaries", generation, i, left)
+			}
+		}
+		fills, err := filepath.Glob(filepath.Join(root, "foreign-ha-terminal-*"))
+		if err != nil || len(fills) == 0 {
+			t.Fatal("foreign fills absent", fills, err)
+		}
+		for _, fill := range fills {
+			if err := os.Remove(fill); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	logHAPhysicalFixtureSpace(t, generation)
 	return ids, revisions
+}
+
+// haPhysicalGenerationMode selects how runHAPhysicalOnlineGeneration ends.
+type haPhysicalGenerationMode int
+
+const (
+	// The terminal sequence and Close run with admission open.
+	haPhysicalGenerationNormal haPhysicalGenerationMode = iota
+	// The first Replica is pressured before its Metadata receive window and
+	// every opened role closes without the terminal sequence.
+	haPhysicalGenerationFailedStart
+	// The terminal sequence and Close run with every member at full pressure,
+	// where any new normal admission is refused.
+	haPhysicalGenerationPressuredClose
+	// As pressured, on a filesystem a foreign file has filled to actual
+	// ENOSPC, refilled before each member finishes. A new replicated write
+	// must be refused, and Close must leave no owned temporary behind. The
+	// fills are removed once every member has closed.
+	haPhysicalGenerationENOSPCClose
+)
+
+// haPhysicalFixtureFillBound bounds a foreign fill of the 3 GiB and 6 GiB
+// lifecycle images.
+const haPhysicalFixtureFillBound = 6 << 30
+
+// haPhysicalOwnedTemporaries lists files under dataDir named by the
+// temporary patterns the persistent owners create before a rename.
+func haPhysicalOwnedTemporaries(t *testing.T, dataDir string) []string {
+	t.Helper()
+	prefixes := []string{".metadata-journal-", ".selected-rotation-", ".seed-manifest-", ".reseed-required-", ".totp-watermark-", ".maintenance-", ".state-", ".object-source-", ".capture-", ".archive-", ".ndjson-", ".usage-", ".manifest-"}
+	var left []string
+	err := filepath.WalkDir(dataDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		name := d.Name()
+		if strings.HasSuffix(name, ".tmp") {
+			left = append(left, path)
+			return nil
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) {
+				left = append(left, path)
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return left
 }
 
 func logHAPhysicalFixtureSpace(t *testing.T, generation int) {

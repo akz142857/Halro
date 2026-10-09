@@ -181,7 +181,7 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
-		if err := exhaustHAPhysicalBusinessFixture(filepath.Join(root, "foreign-ha-business-fill")); err != nil {
+		if err := exhaustHAPhysicalFixture(filepath.Join(root, "foreign-ha-business-fill"), 1536<<20); err != nil {
 			t.Fatal(err)
 		}
 		for _, f := range owners {
@@ -279,7 +279,7 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 			// Retirement may return genuine owned blocks. Fill those again
 			// before each actual publication so another member cannot borrow
 			// the first member's reclaimed capacity as a hidden prerequisite.
-			if err := exhaustHAPhysicalBusinessFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-common-fill-%d", i))); err != nil {
+			if err := exhaustHAPhysicalFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-common-fill-%d", i)), 1536<<20); err != nil {
 				t.Fatal(err)
 			}
 			finishCtx = context.WithValue(ctx, haPhysicalFinishObserverKey{}, func(stage string) error {
@@ -287,7 +287,7 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 					// Actual collector COW may retire its previous owned root.
 					// Let the independent foreign consumer take those blocks
 					// too before the common publisher begins its source loan.
-					if err := exhaustHAPhysicalBusinessFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-publication-fill-%d", i))); err != nil {
+					if err := exhaustHAPhysicalFixture(filepath.Join(root, fmt.Sprintf("foreign-ha-publication-fill-%d", i)), 1536<<20); err != nil {
 						return err
 					}
 				}
@@ -321,13 +321,16 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 	}
 }
 
-func exhaustHAPhysicalBusinessFixture(path string) error {
+// exhaustHAPhysicalFixture fills the isolated runner ext4 to actual ENOSPC
+// with a foreign file at path. bound refuses a filesystem larger than the
+// fixture expects, so a misdirected root is never filled.
+func exhaustHAPhysicalFixture(path string, bound int64) error {
 	var fs unix.Statfs_t
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if root == "" || filepath.Dir(path) != root {
 		return errors.New("foreign fill requires original isolated runner root")
 	}
-	if err := unix.Statfs(root, &fs); err != nil || fs.Type != unix.EXT4_SUPER_MAGIC || fs.Bsize != 4096 || uint64(fs.Blocks)*uint64(fs.Bsize) > 1536<<20 {
+	if err := unix.Statfs(root, &fs); err != nil || fs.Type != unix.EXT4_SUPER_MAGIC || fs.Bsize != 4096 || uint64(fs.Blocks)*uint64(fs.Bsize) > uint64(bound) {
 		return errors.Join(errors.New("foreign fill filesystem exceeds fixed private bound"), err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR|syscall.O_SYNC, 0600)
@@ -336,7 +339,7 @@ func exhaustHAPhysicalBusinessFixture(path string) error {
 	}
 	var offset int64
 	for step := int64(64 << 20); step >= fs.Bsize; {
-		if offset+step > 1536<<20 {
+		if offset+step > bound {
 			return errors.Join(errors.New("foreign allocation fixed bound exceeded"), f.Close())
 		}
 		err := unix.Fallocate(int(f.Fd()), 0, offset, step)
