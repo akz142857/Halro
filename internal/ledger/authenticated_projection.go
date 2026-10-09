@@ -63,6 +63,7 @@ type AuthenticatedLedgerProjection struct {
 	sealErr              error
 	mu                   sync.RWMutex
 	store                *authenticatedstate.Store
+	pack                 projectionPackObservation
 	ready                bool
 	closeComplete        bool
 	closeErr             error
@@ -381,3 +382,46 @@ func (p *AuthenticatedLedgerProjection) Discard() error {
 
 // Called with mu held; uncertain common publication cannot retire its roots.
 func (p *AuthenticatedLedgerProjection) sealRetirementError() error { return p.sealErr }
+
+// PackUsage reports the page pack's use; see authenticatedstate.Store.
+func (p *AuthenticatedLedgerProjection) PackUsage() (used, usable uint64, ok bool) {
+	if p == nil {
+		return 0, 0, false
+	}
+	return p.store.PackUsage()
+}
+
+// projectionPackObservation keeps the page pack's last observed use and the
+// largest bytes one applied record has appended, for admission that must not
+// wait on the store while an Apply holds it.
+type projectionPackObservation struct {
+	used, usable, recordBytes atomic.Uint64
+}
+
+func (o *projectionPackObservation) updated(store *authenticatedstate.Store, appended int64) {
+	for per := uint64(max(appended, 0)); ; {
+		old := o.recordBytes.Load()
+		if per <= old || o.recordBytes.CompareAndSwap(old, per) {
+			break
+		}
+	}
+	if used, usable, ok := store.PackUsage(); ok {
+		o.used.Store(used)
+		o.usable.Store(usable)
+	}
+}
+
+// PackAdmission reports the page pack's use, refreshed when the store is not
+// busy and otherwise as last observed, and the largest bytes one applied
+// record has appended. Every applied record is its own transaction. Zero
+// recordBytes means none has been observed yet. It never waits.
+func (p *AuthenticatedLedgerProjection) PackAdmission() (used, usable, recordBytes uint64) {
+	if p == nil {
+		return 0, 0, 0
+	}
+	if used, usable, ok := p.store.PackUsage(); ok {
+		p.pack.used.Store(used)
+		p.pack.usable.Store(usable)
+	}
+	return p.pack.used.Load(), p.pack.usable.Load(), p.pack.recordBytes.Load()
+}
