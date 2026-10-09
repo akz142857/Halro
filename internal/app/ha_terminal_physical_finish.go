@@ -121,13 +121,27 @@ type haPhysicalFinishObserverKey struct{}
 // The final native close must run outside the source's own authority callback.
 func (f *haSelectedRuntimeFoundation) closeHAPhysicalNative(ctx context.Context) error {
 	c := f.reopened.Owners.Components
-	if err := f.withSelectedCut(ctx, func(ctx context.Context, _ statecut.HASelectedCut) error {
-		return statecut.RequireNoHAOrderingPeerPromises(ctx, f.reopened.Owners, f.physicalPublication)
-	}); err != nil {
+	check := func(ctx context.Context) error {
+		return f.withSelectedCut(ctx, func(ctx context.Context, _ statecut.HASelectedCut) error {
+			return statecut.RequireNoHAOrderingPeerPromises(ctx, f.reopened.Owners, f.physicalPublication)
+		})
+	}
+	// The cut read pays from the original paid lanes: at full pressure a new
+	// IO admission would be refused and strand the terminal close. Without
+	// the pool, it keeps ordinary admission; the check is never skipped.
+	checked := false
+	err := c.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
+		checked = true
+		return check(ctx)
+	})
+	if !checked {
+		err = check(ctx)
+	}
+	if err != nil {
 		return err
 	}
 	entered := false
-	err := c.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
+	err = c.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
 		entered = true
 		return c.NativeLedger.CloseHAQualifiedPhysicalContext(ctx, c.Lease)
 	})
