@@ -30,7 +30,7 @@ import (
 // real OS pressure / public Default Runtime capacity evidence.
 func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute)
-	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, false)
+	runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, 0, nil, nil, false, false)
 }
 
 // Both roles run start, replicated requests, online checkpoints and the full
@@ -40,10 +40,10 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
 	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
 	var written []string
-	var revisions [2]uint64
+	var revisions []uint64
 	for generation := 0; generation < 3; generation++ {
 		var ids []string
-		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions, false)
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, false, false)
 		written = append(written, ids...)
 	}
 }
@@ -72,11 +72,11 @@ func TestHAPhysicalFailedStartupIsReplayedByTheNextStart(t *testing.T) {
 	held := haPhysicalFixtureSpace(t)
 	t.Log("ext4 available after the failed start exited", held)
 	var written []string
-	var revisions [2]uint64
+	var revisions []uint64
 	var after [3]uint64
 	for generation := 1; generation < 3; generation++ {
 		var ids []string
-		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions, false)
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture.configs[:], fixture.keys.Master, logger, generation, written, revisions, false, false)
 		written = append(written, ids...)
 		after[generation] = haPhysicalFixtureSpace(t)
 	}
@@ -109,8 +109,7 @@ func TestHAPhysicalFailedStartupHelper(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	fixture := haMetadataMaintenanceFixture{configs: request.Configs, keys: request.Keys}
-	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, true)
+	runHAPhysicalOnlineGeneration(t, ctx, request.Configs[:], request.Keys.Master, logger, 0, nil, nil, true, false)
 }
 
 func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
@@ -159,15 +158,19 @@ func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (contex
 // One generation opens both roles from disk, requires every earlier fact on
 // the Replica, replicates three new facts with two online checkpoints between
 // them, then finishes, joins and releases both data directories. It returns
-// the new facts and each role's final Seal revision. failStartup instead
-// pressures the Replica before its Metadata receive window and closes both
-// roles without the terminal sequence.
-func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, logger *slog.Logger, generation int, earlier []string, previous [2]uint64, failStartup bool) ([]string, [2]uint64) {
+// the new facts and each role's final Seal revision. Member 0 is the Primary;
+// every other member is a Replica (two Replicas make a three-node group).
+// failStartup instead pressures the first Replica before its Metadata receive
+// window and closes every role without the terminal sequence. pressuredClose
+// runs the terminal sequence and Close with every member at full pressure,
+// where any new normal admission is refused.
+func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []config.Config, master []byte, logger *slog.Logger, generation int, earlier []string, previous []uint64, failStartup, pressuredClose bool) ([]string, []uint64) {
 	t.Helper()
-	var owners [2]*haSelectedRuntimeFoundation
-	var guards [2]*lock.Lock
+	owners := make([]*haSelectedRuntimeFoundation, len(configs))
+	guards := make([]*lock.Lock, len(configs))
+	budgets := make([]*resourcebudget.Manager, len(configs))
 	closed := false
-	for i, cfg := range fixture.configs {
+	for i, cfg := range configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
 		reserve := haPhysicalRecoveryReserveFixture(t)
@@ -189,7 +192,7 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		limits.LedgerProjectionDiskBytes = 80 << 20
 		limits.LedgerSegmentIndexDiskBytes = 48 << 20
 		limits.UsageProjectionDiskBytes = 128 << 20
-		if i == 1 {
+		if i > 0 {
 			limits.LedgerProjectionDiskBytes = 576 << 20
 			limits.UsageProjectionDiskBytes = 576 << 20
 		}
@@ -203,7 +206,8 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 		guards[i] = guard
 		manager := functionalHAMetadataManager(t, cfg)
-		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, manager, logger)
+		budgets[i] = manager
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, master, guard, manager, logger)
 		if err != nil {
 			t.Fatal("actual foundation", generation, i, err)
 		}
@@ -222,7 +226,7 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 				t.Error(err)
 			}
 		})
-		if f.reopened != nil && f.reopened.Seal.Revision < previous[i] {
+		if f.reopened != nil && i < len(previous) && f.reopened.Seal.Revision < previous[i] {
 			t.Fatal("restart selected an older Seal", generation, i, f.reopened.Seal.Revision, previous[i])
 		}
 		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
@@ -243,8 +247,8 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err == nil {
 				t.Fatal("pressured Replica receive window admitted")
 			}
-			var revisions [2]uint64
-			for j, f := range owners {
+			revisions := make([]uint64, len(owners))
+			for j, f := range owners[:i+1] {
 				revisions[j] = f.reopened.Seal.Revision
 				if err := f.Close(); err != nil && !errors.Is(err, authenticatedstate.ErrRecovery) {
 					t.Fatal("failed start closed without a replayable hold", j, err)
@@ -253,11 +257,14 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 					t.Fatal(j, err)
 				}
 			}
+			if len(owners) > i+1 {
+				t.Fatal("failed start leaves later members unopened; only two-member groups are supported")
+			}
 			closed = true
 			logHAPhysicalFixtureSpace(t, generation)
 			return nil, revisions
 		}
-		if i == 1 {
+		if i > 0 {
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
 				if m, merr := f.reopened.Owners.Components.Ledger.ResourceManager(ctx); merr == nil {
 					t.Logf("receive window refusal: stats=%+v limits=%+v", m.Snapshot(), *cfg.ResourceBudget)
@@ -277,16 +284,22 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		t.Log("actual background shared ownership", generation, i, f.sharedPhysicalWork.Snapshot())
 	}
 
-	primary, replica := owners[0], owners[1]
+	primary, replicas := owners[0], owners[1:]
 	q := primary.replication.peerPhysical.Load()
-	if q == nil || replica.replication.peerPhysical.Load() == nil {
+	if q == nil || len(replicas) == 0 || len(replicas) > len(q.peers) {
 		t.Fatal("original strict controllers absent")
 	}
-	managers := [2]*replication.ConnectionManager{primary.replication.manager, replica.replication.manager}
-	business := [2]*haSelectedBusinessServices{primary.business, replica.business}
-	stores := [2]*boltstore.Store{primary.metadataStore, replica.metadataStore}
+	managers := make([]*replication.ConnectionManager, len(owners))
+	business := make([]*haSelectedBusinessServices, len(owners))
+	stores := make([]*boltstore.Store, len(owners))
+	for i, f := range owners {
+		if i > 0 && f.replication.peerPhysical.Load() == nil {
+			t.Fatal("original strict Replica controller absent", i)
+		}
+		managers[i], business[i], stores[i] = f.replication.manager, f.business, f.metadataStore
+	}
 	runCtx, stop := context.WithCancel(ctx)
-	done := make(chan error, 2)
+	done := make(chan error, len(owners))
 	for _, f := range owners {
 		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
 	}
@@ -297,7 +310,7 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 		joined = true
 		stop()
-		for range 2 {
+		for range owners {
 			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
 			}
@@ -310,7 +323,10 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		defer deadline.Stop()
 		for {
 			q.mu.Lock()
-			ready := q.peers[0].window.Operation == replication.PhysicalCreditWindow
+			ready := true
+			for p := range replicas {
+				ready = ready && q.peers[p].window.Operation == replication.PhysicalCreditWindow
+			}
 			q.mu.Unlock()
 			if ready && primary.replication.startupReady.Load() {
 				return
@@ -323,9 +339,11 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 	}
 	waitWindow()
-	for _, id := range earlier {
-		if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
-			t.Fatal("restarted Replica lost an earlier fact", generation, id, err)
+	for r, replica := range replicas {
+		for _, id := range earlier {
+			if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
+				t.Fatal("restarted Replica lost an earlier fact", generation, r, id, err)
+			}
 		}
 	}
 	cost, err := haPeerPhysicalTerminalCost(2)
@@ -345,8 +363,10 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		if err := q.finishTicket(ctx, ticket); err != nil {
 			t.Fatal("actual full applied peer join", generation, cycle, err)
 		}
-		if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
-			t.Fatal("actual Replica fact", generation, got, err)
+		for r, replica := range replicas {
+			if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
+				t.Fatal("actual Replica fact", generation, r, got, err)
+			}
 		}
 		ids = append(ids, id)
 		if cycle == 2 {
@@ -363,6 +383,13 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 		waitWindow()
 	}
+	if pressuredClose {
+		for _, m := range budgets {
+			if err := m.SetPressure(resourcebudget.Pressured); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, f := range owners {
 		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
 			t.Fatal("actual final whole common", generation, err)
@@ -372,7 +399,7 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 	}
 	join()
-	var revisions [2]uint64
+	revisions := make([]uint64, len(owners))
 	for i, f := range owners {
 		revisions[i] = f.reopened.Seal.Revision
 		if err := f.Close(); err != nil {
