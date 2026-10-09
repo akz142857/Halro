@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§20 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§21 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -24,6 +24,8 @@
 | `f06af594` | budget/ledger/usage 与 app 一样分片；CI/发布 matrix 由契约测试对齐脚本清单 |
 | `2e92187e` | Audit/Governance 批编码器费用测试只在非 race 构建运行 |
 | `af7f2112` | `persistent_inventory_disk_bytes` 下限 = 派生磁盘上限之和 × 2；原 2 GiB 预算改为 3586 MiB（看板 §20） |
+| `0ee44582` | 修复：满压力下终结关闭的截面读取改用已付费通道 |
+| `fc537e71` | caches ENOSPC 测试改为借款结束后再关闭（看板 §21） |
 
 ## 2. 用户已做的裁定
 
@@ -54,7 +56,7 @@
 ### 3.3 其他已登记开放项
 
 1. 已关闭：`persistent_inventory_disk_bytes` 下限由配置推导（看板 §20）。
-2. `internal/app` 两个 ENOSPC 测试在对应 ext4 尺寸下修复前后都失败：`TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles`、`TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`。
+2. 已关闭：两个 ENOSPC 失败（一个产品缺陷、一个过时测试，看板 §21）。
 3. 请求退回共享池时，HA 终结在持有工作区期间等待 `WaitConfirmed`，会串行化终结确认；仅在私有池放不下时发生。
 4. Audit/Governance 批编码器并入共享池（路线 A）未做。
 5. I-06 角色 generation 切换批次：在线切换路径未继续。
@@ -62,9 +64,8 @@
 
 ## 4. 下次建议顺序
 
-1. 确认 `af7f2112` 上的 `make full-check`（Node 22）结果；推送前必须通过。
-2. 排查 §3.3-2 的两个 ENOSPC 测试（ext4 512 MiB 用 `runner-512.py`，1536 MiB 用 `runner-1536.py`，均在 `docs/verification/performance/2026-10-09-ha-lifecycle-restarts/`）。
-3. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
+1. 确认 `fc537e71` 上的 `make full-check`（Node 22）结果；推送前必须通过。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+2. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
 

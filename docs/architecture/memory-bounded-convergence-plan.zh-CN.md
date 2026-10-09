@@ -336,3 +336,12 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 **门禁分片（`f06af594`）。** 第二次完整门禁在空闲机器上仍失败：`ledger`、`usage` 超过 20 分钟，`budget` 1051 秒。三者单独运行分别为 381 / 529 / 约 412 秒，测试都是顺序执行；ledger 在 381 秒里只用了 38 秒 user + 57 秒 sys CPU，所以与其他包并行时变慢几倍，是 fsync 争用而不是 CPU。`go-test-shard.sh` 改为按包分片（`shard PKG INDEX TOTAL`、`check PKG TOTAL`、`check-all`、`all`），`rest` 正好排除脚本中的唯一清单：app 4、budget 2、ledger 2、usage 3，race 翻倍。CI 与发布每片一个 matrix 项；发布契约测试从脚本清单推导两套 matrix 并逐项比较（删掉一项即失败，已验证）。第三次门禁中 `make test` 全部通过，各分片 46～495 秒。
 
 **race 分配测试（`2e92187e`）。** 同一次门禁的 race 阶段，Audit/Governance 最大批次分配测试失败：race 下分配 38160016 B，超过 33554432 B 编码器费用。race 插桩会把栈分配移到堆上，普通构建实际为 25740920 / 26096792 B（约 22% 余量）。按 `scratchstate` 的先例，费用检查只在非 race 构建中运行。
+
+## 21. 两个既有 ENOSPC 失败
+
+两者在 2026-10-07 的证据中通过、在本分支第一个可编译提交 `c1550229` 上已失败；拆分前的历史没有提交，无法 bisect，改为在 `ErrExhausted` / `ErrPressure` 处临时打印调用栈直接定位（插桩已移除）。
+
+1. **产品缺陷，已修复（`0ee44582`）。** `closeHAPhysicalNative` 先经 `withSelectedCut` 确认没有 peer 持有 Ordering 承诺，这次读取申请一个新的 4096 B IO 准入，满压力下被拒，导致终结关闭本身走不完（`TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`）。检查改在 Directory catch-up workspace 内执行，与原生关闭和 `finishHAPhysicalBusiness` 用同一组已付费通道；拿不到该池时仍走正常准入，检查从不跳过，原生关闭仍在截面回调之外。同一树改前改后、同一 1536 MiB 镜像对照：改前失败，改后通过。
+2. **测试过时，已修正（`fc537e71`）。** `TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles` 在预付 work 的借款内关闭 foundation；共享 RAM 池引入后该 work 是池成员，而 Close 最后退役的共享池不能在成员自己的借款内退役（`SharedCompletableWorkspace.Close` 返回 `ErrExhausted`）。改为先退还成员，再在满压力下关闭，保留原测试要守的性质：整个关闭不需要新的正常准入。512 MiB 镜像下通过。
+
+修复后 `internal/app` 全部 Physical Linux 测试：3 GiB 镜像下除这三个需要小镜像的 ENOSPC 测试（填充 helper 拒绝大文件系统）外全部通过；三者在 512 / 1536 MiB 镜像下全部通过。证据：`docs/verification/performance/2026-10-09-enospc-regression/`（被忽略）。
