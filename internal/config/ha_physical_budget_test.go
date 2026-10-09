@@ -171,3 +171,44 @@ func TestHAPhysicalWorkMinimumRejectsOriginal2GiBAndPreservesOptOut(t *testing.T
 		t.Fatal("legacy opt-out changed", err)
 	}
 }
+
+// The original 2 GiB HA production budget. Its Recovery floor is the candidate
+// formula; its ceiling is the physical work vector's normal minimum. Charging
+// the offline backup workspace beside three sessions once left no value between
+// them; without it the window is about 128 MiB wide.
+func TestOriginal2GiBHABudgetLeavesARecoveryWindow(t *testing.T) {
+	b := ResourceBudget{MemoryStateRequired: true, PhysicalTerminalReserve: true,
+		PersistentInventoryDiskBytes: 512 << 20, LedgerAppendDiskBytes: 64 << 20, AccountingRecoveryRAMBytes: 128 << 20,
+		LedgerSegmentIndexDiskBytes: 64 << 20, LedgerProjectionDiskBytes: 256 << 20, UsageProjectionDiskBytes: 256 << 20,
+		UsageArchiveDiskBytes: 64 << 20, UsageArchiveReadRAMBytes: 8 << 20, GovernanceProjectionDiskBytes: 64 << 20,
+		GovernanceLogDiskBytes: 64 << 20, AuditLogDiskBytes: 64 << 20, MetadataStoreDiskBytes: 128 << 20,
+		LegacyMetadataFileDiskBytes: 64 << 20, MetadataJournalDiskBytes: 576 << 20, OrderingJournalDiskBytes: 1 << 20,
+		BackupWorkspaceDiskBytes: 128 << 20, TotalRAMBytes: 2 << 30, TotalDiskBytes: 32 << 30, TotalUnconfirmedBytes: 64 << 20,
+		ConfigurationDiskBytes: 128 << 20, ActiveDiskBytes: 128 << 20, CacheDiskBytes: 128 << 20, IODiskBytes: 1 << 30,
+		IOUnconfirmedBytes: 32 << 20, BackgroundDiskBytes: 16 << 30, CompletionDiskBytes: 128 << 20, CompletionUnconfirmedBytes: 32 << 20,
+		RecoveryDiskBytes: 8 << 30, RecoveryReserveDiskBytes: 8 << 30, RecoveryUnconfirmedBytes: 16 << 20, RecoveryReserveUnconfirmedBytes: 16 << 20,
+		UnconfirmedMaxEntries: 64, ConfigurationRAMBytes: 256 << 20, ActiveRAMBytes: 256 << 20, CacheRAMBytes: 256 << 20,
+		IORAMBytes: 512 << 20, BackgroundRAMBytes: 1 << 30, CompletionRAMBytes: 1 << 30, ControlRAMBytes: 160 << 10,
+		MaxClaims: 160, RecoveryClaims: 32, MaxOwners: 16, RequestRAMBytes: 16 << 20, DeferredRAMBytes: 16 << 20,
+		ReplicationCandidateRAMBytes: 100689312, ReplicationQueueRAMBytes: 67126528, ReplicationReadRAMBytes: 100689312,
+		ReplicationReaderRAMBytes: 384 << 10, AuditLogRAMBytes: 2 << 20, GovernanceLogRAMBytes: 2 << 20,
+		PricingLifetimeRAMBytes: 1 << 20, PricingIORAMBytes: 32 << 20}
+	at := func(r int64) error {
+		c := b
+		c.RecoveryRAMBytes, c.RecoveryReserveRAMBytes = r, r
+		return c.ValidateReplicationCandidates()
+	}
+	const floor, ceiling = 1319742656, 1386 << 20
+	if err := at(floor); err != nil {
+		t.Fatal("candidate floor rejected", err)
+	}
+	if err := at(1259 << 20); err != nil {
+		t.Fatal("1259 MiB rejected", err)
+	}
+	if err := at(ceiling); err != nil {
+		t.Fatal("work vector ceiling rejected", err)
+	}
+	if at(floor-1) == nil || at(1387<<20) == nil {
+		t.Fatal("Recovery window bounds moved")
+	}
+}

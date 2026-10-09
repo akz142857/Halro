@@ -347,6 +347,9 @@ func (b ResourceBudget) Validate(pressure *ResourcePressure, maxRequestBytes int
 // owners, one aggregate NativeSource reader and one native Governance cache
 // plus one fixed pricing owner, pricing startup workspace and accounting recovery
 // workspace fit dedicated Recovery, including before startup pressure is known.
+// Backup and restore workspaces are absent: only offline commands charge them,
+// each to its own command manager, and those processes hold no replication
+// session. Validate keeps them in the standalone startup Recovery sum.
 func (b ResourceBudget) ValidateReplicationCandidates() error {
 	if err := b.validateHAPhysicalWorkMinimum(); err != nil {
 		return err
@@ -381,10 +384,6 @@ func (b ResourceBudget) ValidateReplicationCandidates() error {
 		return fmt.Errorf("Metadata and projection mapping RAM aggregate overflows: %v", err)
 	}
 	mappingRAM := metadataMappingRAM + projectionMappingRAM
-	backupMappingRAM, err := b.backupWorkingRAM()
-	if err != nil {
-		return err
-	}
 	control := int64(12 * resourcebudget.ClaimRAMBytes)
 	minimumClaims := 12
 	unconfirmedMetadataRAM := int64(0)
@@ -400,14 +399,6 @@ func (b ResourceBudget) ValidateReplicationCandidates() error {
 			control += resourcebudget.ClaimRAMBytes
 			minimumClaims++
 		}
-	}
-	if b.BackupWorkspaceDiskBytes > 0 {
-		control += resourcebudget.ClaimRAMBytes
-		minimumClaims++
-	}
-	if b.RestoreWorkspaceDiskBytes > 0 {
-		control += resourcebudget.ClaimRAMBytes
-		minimumClaims++
 	}
 	if b.UsageArchiveDiskBytes > 0 {
 		if b.IODiskBytes <= 0 {
@@ -426,7 +417,7 @@ func (b ResourceBudget) ValidateReplicationCandidates() error {
 		return fmt.Errorf("replication_candidate_ram_bytes, replication_queue_ram_bytes, replication_read_ram_bytes, replication_reader_ram_bytes and Audit/Governance/pricing/accounting require calibrated RAM envelopes")
 	}
 	base := int64(0)
-	for _, value := range []int64{d, g, b.AuditLogRAMBytes, p, io, a, archiveReadRAM, unconfirmedMetadataRAM, mappingRAM, backupMappingRAM, inventoryRAM} {
+	for _, value := range []int64{d, g, b.AuditLogRAMBytes, p, io, a, archiveReadRAM, unconfirmedMetadataRAM, mappingRAM, inventoryRAM} {
 		if value < 0 || value > math.MaxInt64-base {
 			return fmt.Errorf("replication recovery RAM envelopes overflow")
 		}

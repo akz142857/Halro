@@ -761,27 +761,13 @@ func TestResourceBudgetReplicationCandidateCapacityRejectsUnderflowAndOverflow(t
 	if err := withOrderingJournalDisk.ValidateReplicationCandidates(); err != nil {
 		t.Fatal("HA Ordering journal disk owner with a dedicated Recovery claim rejected", err)
 	}
-	withBackupWorkspace := b
-	withBackupWorkspace.BackupWorkspaceDiskBytes = 1
-	if err := withBackupWorkspace.ValidateReplicationCandidates(); err == nil {
-		t.Fatal("HA backup workspace did not reserve its Recovery claim")
-	}
-	withBackupWorkspace.RecoveryClaims = 13
-	withBackupWorkspace.RecoveryReserveRAMBytes += resourcebudget.ClaimRAMBytes
-	withBackupWorkspace.RecoveryRAMBytes += 1 + (32 << 20)
-	withBackupWorkspace.RecoveryReserveRAMBytes += 1 + (32 << 20)
-	if err := withBackupWorkspace.ValidateReplicationCandidates(); err != nil {
-		t.Fatal("HA backup workspace with a dedicated Recovery claim rejected", err)
-	}
-	withRestoreWorkspace := b
-	withRestoreWorkspace.RestoreWorkspaceDiskBytes = 1
-	if err := withRestoreWorkspace.ValidateReplicationCandidates(); err == nil {
-		t.Fatal("HA restore workspace did not reserve its Recovery claim")
-	}
-	withRestoreWorkspace.RecoveryClaims = 13
-	withRestoreWorkspace.RecoveryReserveRAMBytes += resourcebudget.ClaimRAMBytes
-	if err := withRestoreWorkspace.ValidateReplicationCandidates(); err != nil {
-		t.Fatal("HA restore workspace with a dedicated Recovery claim rejected", err)
+	// Only offline commands charge backup/restore workspaces, to their own
+	// managers; a serving member holds them beside no replication session.
+	withOfflineWorkspaces := b
+	withOfflineWorkspaces.BackupWorkspaceDiskBytes = 1
+	withOfflineWorkspaces.RestoreWorkspaceDiskBytes = 1
+	if err := withOfflineWorkspaces.ValidateReplicationCandidates(); err != nil {
+		t.Fatal("offline backup/restore workspaces changed the serving HA Recovery requirement", err)
 	}
 	for _, shape := range []func(*ResourceBudget){
 		func(b *ResourceBudget) { b.ReplicationCandidateRAMBytes = -1 },
