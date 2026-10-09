@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§22 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-09 21:30（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§22 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -27,7 +27,7 @@
 | `0ee44582` | 修复：满压力下终结关闭的截面读取改用已付费通道 |
 | `fc537e71` | caches ENOSPC 测试改为借款结束后再关闭（看板 §21） |
 | `a7bef390` | 三节点满压力终结与重启的真实 Linux 接受测试 |
-| `75fc4012`（分支 `memory-bounded-tls-close`，门禁后合入） | 对端重置时的 close_notify 不再报关闭失败（看板 §22） |
+| `72c1bd8d`（原分支 `memory-bounded-tls-close` 的 `75fc4012`） | 对端重置时的 close_notify 不再报关闭失败（看板 §22） |
 
 ## 2. 用户已做的裁定
 
@@ -53,7 +53,7 @@
 - 普通测试 4 片：按旧逐测试耗时估算最重一片约 600 秒；第 0 片实测 521.7 秒（有并发负载）通过。
 - race 最重分片（第 2 片）实测 **550.6 秒通过**（墙钟 9 分 35 秒，有并发负载），远低于 20 分钟，片数不需调整。
 - `budget` 包单跑 412 秒（有后台负载）；`ledger` 单跑 361 秒。其余包未单独复测。
-- **完整门禁 `make full-check` 尚未在本分支跑过**，推送前必须跑一次。
+- 完整门禁 `make full-check` 已在 `72c1bd8d` 上通过（8716 秒，见 §4-1）。
 
 ### 3.3 其他已登记开放项
 
@@ -66,7 +66,7 @@
 
 ## 4. 下次建议顺序
 
-1. 查看 `72c1bd8d` 上的 `make full-check`（Node 22）结果；推送前必须通过。它于 2026-10-09 13:33 以 `nohup` 在会话外启动（预计 2.5～3 小时），日志持续复制到被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；若末尾是 `gate process ended without exit line`，说明进程被中断，需要重跑。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+1. 已完成：`72c1bd8d` 上的 `make full-check`（Node 22）于 2026-10-09 13:33 启动，耗时 8716 秒，`exit=0`，无 `FAIL`/`panic`；普通与 race 分片、`go vet`、前端 typecheck/vitest（690 项）/构建、bundle 漂移与 observability 均通过。其后只有文档提交。日志在被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`。推送待用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
 2. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
