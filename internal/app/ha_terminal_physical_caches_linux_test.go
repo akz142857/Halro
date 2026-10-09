@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -145,7 +146,14 @@ func TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles(t *testing.
 			if err = unix.Statfs(root, &fs); err != nil || fs.Bavail != 0 {
 				t.Fatal("publication released blocks", fs.Bavail, err)
 			}
-			if err = work.WithWorkspace(ctx, func(ctx context.Context) error { return f.Close() }); err != nil {
+			// The prepaid work is a member of the foundation's shared RAM pool,
+			// which Close retires last and cannot retire inside a member's own
+			// loan. Return the member, then join everything still at full
+			// pressure, where any new normal admission would be refused.
+			if err = errors.Join(work.Close(), work.Active.Release()); err != nil {
+				t.Fatal("prepaid publication member retirement", err)
+			}
+			if err = f.Close(); err != nil {
 				t.Fatal("actual full-pressure source/target join", err)
 			}
 			if err = os.Remove(filler); err != nil {
