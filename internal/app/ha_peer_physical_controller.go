@@ -373,7 +373,16 @@ type haPeerPhysicalPeer struct {
 	response chan replication.PhysicalCreditRecord
 	waiting  bool
 	expected replication.PhysicalCreditRecord
+	// lost is closed when the session carrying a waiting request ends. A
+	// Replica opens every session with its window, so windows counts them and
+	// arrived is replaced each time one lands.
+	lost    chan struct{}
+	windows uint64
+	arrived chan struct{}
 }
+
+// haPeerPhysicalReplyWait bounds one credit exchange, across any resends.
+const haPeerPhysicalReplyWait = 30 * time.Second
 
 func newHAPrimaryPhysicalController(ctx context.Context, f *haSelectedRuntimeFoundation) (*haPeerPhysicalController, error) {
 	if f == nil || f.replication == nil || f.replication.role != replication.RolePrimary || f.replication.manager != nil || f.reopened == nil || f.metadataStore == nil || f.physicalPublication == nil {
@@ -429,6 +438,7 @@ func newHAPrimaryPhysicalController(ctx context.Context, f *haSelectedRuntimeFou
 	}
 	for i := range q.peers {
 		q.peers[i].response = make(chan replication.PhysicalCreditRecord, 1)
+		q.peers[i].arrived = make(chan struct{})
 	}
 	return q, nil
 }
@@ -471,6 +481,9 @@ func (q *haPeerPhysicalController) handle(ctx context.Context, peer replication.
 				return nil
 			}
 			p.window = message
+			p.windows++
+			close(p.arrived)
+			p.arrived = make(chan struct{})
 			return nil // A Window is never passed to coordinator.Acknowledge.
 		}
 		if !p.waiting || message.WindowID != p.expected.WindowID || message.TicketID != p.expected.TicketID || message.RequestDigest != p.expected.RequestDigest || message.Cost != p.expected.Cost || message.CommonIndex != p.expected.CommonIndex || message.CommonMAC != p.expected.CommonMAC || message.TicketSerial != p.expected.TicketSerial {
@@ -493,6 +506,12 @@ func (q *haPeerPhysicalController) handle(ctx context.Context, peer replication.
 	if send == nil || peer.NodeID != q.owner.owners.Baseline.CurrentPrimary() {
 		return replication.ErrPhysicalCredit
 	}
+	observe, _ := ctx.Value(haPeerPhysicalReplicaObserverKey{}).(func(string, replication.PhysicalCreditRecord) error)
+	if observe != nil {
+		if err := observe("received", message); err != nil {
+			return err
+		}
+	}
 	reply, err := q.replicaCredit(ctx, &message)
 	if err != nil && message.Operation == replication.PhysicalCreditReserve {
 		// Return a negative receipt only when a fresh independent read proves that
@@ -505,12 +524,23 @@ func (q *haPeerPhysicalController) handle(ctx context.Context, peer replication.
 	if err != nil {
 		return err
 	}
+	if observe != nil {
+		if err := observe("answered", reply); err != nil {
+			return err
+		}
+	}
 	encoded, err := reply.MarshalBinary()
 	if err != nil {
 		return err
 	}
 	return send(encoded)
 }
+
+// haPeerPhysicalReplicaObserverKey carries a test observer through the
+// Replica's serve context: it sees each credit request before it is applied
+// and each answer before it is sent, and its error ends the session there.
+type haPeerPhysicalReplicaObserverKey struct{}
+
 func (q *haPeerPhysicalController) sendReplicaWindow(ctx context.Context, send func([]byte) error) error {
 	if q.primary || send == nil {
 		return replication.ErrPhysicalCredit
@@ -548,6 +578,9 @@ type haPeerPhysicalTicket struct {
 	remoteRejected  [2]bool
 	remoteAttempted [2]bool
 	completed       [2]bool
+	// orphaned marks a live ticket whose owner returned with an error; under
+	// q.mu, resolveOrphan may then claim and finish it.
+	orphaned bool
 }
 
 func (q *haPeerPhysicalController) beforePrimarySource(ctx context.Context, slot int, first, last uint64, size int) error {
@@ -579,6 +612,12 @@ func (q *haPeerPhysicalController) beforePrimarySource(ctx context.Context, slot
 	ticket.remaining = remaining
 	return nil
 }
+
+// rpc sends one credit request and returns the Replica's answer. A reply
+// lost with its session is never inferred: once the Replica's next session
+// has opened, the identical request is sent again. Reserve and release are
+// idempotent there, and a reserve it cannot grant is durably rejected, so the
+// answer to the resend is the answer to the original.
 func (q *haPeerPhysicalController) rpc(ctx context.Context, index int, request replication.PhysicalCreditRecord) (reply replication.PhysicalCreditRecord, resultErr error) {
 	if index < 0 || index > 1 || !q.primary || q.owner.replication.manager == nil {
 		return reply, replication.ErrPhysicalCredit
@@ -595,28 +634,89 @@ func (q *haPeerPhysicalController) rpc(ctx context.Context, index int, request r
 	}
 	p.waiting, p.expected = true, request
 	q.mu.Unlock()
-	defer func() { q.mu.Lock(); p.waiting = false; p.expected = replication.PhysicalCreditRecord{}; q.mu.Unlock() }()
+	defer func() {
+		q.mu.Lock()
+		p.waiting, p.expected, p.lost = false, replication.PhysicalCreditRecord{}, nil
+		q.mu.Unlock()
+	}()
 	encoded, err := request.MarshalBinary()
 	if err != nil {
 		return reply, err
 	}
-	m := q.owner.replication.publisher.Snapshot()
-	if index >= len(m.Peers) {
-		return reply, replication.ErrPhysicalCredit
-	}
-	if err = q.owner.replication.manager.Send(m.Peers[index].Name, encoded); err != nil {
-		return reply, err
-	}
-	select {
-	case reply = <-p.response:
-		return reply, nil
-	case <-ctx.Done():
-		return reply, ctx.Err()
-	case <-q.owner.ctx.Done():
-		return reply, q.owner.ctx.Err()
+	bound, cancel := context.WithTimeout(ctx, haPeerPhysicalReplyWait)
+	defer cancel()
+	for {
+		q.mu.Lock()
+		lost := make(chan struct{})
+		p.lost = lost
+		sent := p.windows
+		q.mu.Unlock()
+		m := q.owner.replication.publisher.Snapshot()
+		if index >= len(m.Peers) {
+			return reply, replication.ErrPhysicalCredit
+		}
+		if err := q.owner.replication.manager.Send(m.Peers[index].Name, encoded); err == nil {
+			select {
+			case reply = <-p.response:
+				return reply, nil
+			case <-lost:
+			case <-bound.Done():
+				return reply, bound.Err()
+			case <-q.owner.ctx.Done():
+				return reply, q.owner.ctx.Err()
+			}
+		}
+		select {
+		case reply = <-p.response:
+			return reply, nil
+		default:
+		}
+		// Unknown delivery: wait for a window from a session newer than this
+		// send. While a request waits, the Replica sends no other window.
+		for {
+			q.mu.Lock()
+			fresh, arrived := p.windows > sent, p.arrived
+			q.mu.Unlock()
+			if fresh {
+				break
+			}
+			select {
+			case <-arrived:
+			case <-bound.Done():
+				return reply, bound.Err()
+			case <-q.owner.ctx.Done():
+				return reply, q.owner.ctx.Err()
+			}
+		}
 	}
 }
-func (q *haPeerPhysicalController) reserve(ctx context.Context, requestDigest [32]byte, cost replication.PhysicalCreditCost) (context.Context, *haPeerPhysicalTicket, error) {
+
+// sessionClosed wakes a request waiting on the peer's ended session.
+func (q *haPeerPhysicalController) sessionClosed(node string) {
+	if q == nil || !q.primary {
+		return
+	}
+	index, err := q.peerIndex(node)
+	if err != nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if p := &q.peers[index]; p.lost != nil {
+		close(p.lost)
+		p.lost = nil
+	}
+}
+
+func (q *haPeerPhysicalController) reserve(ctx context.Context, requestDigest [32]byte, cost replication.PhysicalCreditCost) (_ context.Context, ticket *haPeerPhysicalTicket, resultErr error) {
+	defer func() {
+		if resultErr != nil {
+			q.orphan(ticket)
+		}
+	}()
+	if err := q.resolveOrphan(ctx); err != nil {
+		return ctx, nil, err
+	}
 	if !q.primary || requestDigest == ([32]byte{}) || cost.OrderingRecords == 0 {
 		return ctx, nil, replication.ErrPhysicalCredit
 	}
@@ -624,7 +724,7 @@ func (q *haPeerPhysicalController) reserve(ctx context.Context, requestDigest [3
 		return ctx, nil, replication.ErrPhysicalCredit
 	}
 	defer q.entry.RUnlock()
-	ticket := &haPeerPhysicalTicket{owner: q, request: requestDigest, cost: cost, remaining: cost, active: true}
+	ticket = &haPeerPhysicalTicket{owner: q, request: requestDigest, cost: cost, remaining: cost, active: true}
 	ticket.self = ticket
 	err := q.owner.reopened.Owners.Components.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
 		return q.owner.withSelectedCut(ctx, func(ctx context.Context, cut statecut.HASelectedCut) error {
@@ -714,7 +814,20 @@ func (q *haPeerPhysicalController) releaseUnexposed(ctx context.Context, t *haPe
 			continue
 		}
 		if t.remoteAttempted[i] && !t.remoteKnown[i] && !t.remoteRejected[i] {
-			return replication.ErrPhysicalCredit
+			// Only the Replica's answer to the identical reserve decides.
+			reply, err := q.rpc(ctx, i, t.messages[i])
+			if err != nil {
+				return err
+			}
+			switch reply.Operation {
+			case replication.PhysicalCreditReserved:
+				t.remoteKnown[i] = true
+			case replication.PhysicalCreditRejected:
+				q.rememberReply(i, reply)
+				t.remoteRejected[i] = true
+			default:
+				return replication.ErrPhysicalCredit
+			}
 		}
 		if t.remoteKnown[i] {
 			request := t.messages[i]
@@ -810,6 +923,7 @@ func (q *haPeerPhysicalController) actualTicketUsage(ctx context.Context, t *haP
 	}
 	return
 }
+
 func (q *haPeerPhysicalController) releaseLocalTicket(ctx context.Context, t *haPeerPhysicalTicket, i int, total replication.PhysicalCreditCost) error {
 	var mirrored replication.PhysicalCreditCost
 	for n := 0; n < t.peers; n++ {
@@ -851,10 +965,15 @@ func (q *haPeerPhysicalController) releaseLocalTicket(ctx context.Context, t *ha
 // finishTicket may run only after the synchronous original completion owner
 // has joined. Revocation precedes the genuine all-peer application wait; an
 // unknown wait leaves the persistent promises and the original ticket owner.
-func (q *haPeerPhysicalController) finishTicket(ctx context.Context, t *haPeerPhysicalTicket) error {
+func (q *haPeerPhysicalController) finishTicket(ctx context.Context, t *haPeerPhysicalTicket) (resultErr error) {
 	if t == nil || t.self != t || t.owner != q {
 		return replication.ErrPhysicalCredit
 	}
+	defer func() {
+		if resultErr != nil {
+			q.orphan(t)
+		}
+	}()
 	t.mu.Lock()
 	t.active = false
 	t.mu.Unlock()
@@ -910,7 +1029,41 @@ func (q *haPeerPhysicalController) finishTicket(ctx context.Context, t *haPeerPh
 	}
 	return nil
 }
+
+// orphan hands a still-live ticket whose owner failed to resolveOrphan.
+func (q *haPeerPhysicalController) orphan(t *haPeerPhysicalTicket) {
+	if t == nil {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.live == t {
+		t.orphaned = true
+	}
+}
+
+// resolveOrphan finishes a live ticket its owner abandoned, so an unknown
+// reply does not hold every later reserve and pause until a restart. A ticket
+// still with its owner is left alone; the caller's own checks refuse it.
+func (q *haPeerPhysicalController) resolveOrphan(ctx context.Context) error {
+	q.mu.Lock()
+	t := q.live
+	if t == nil || !t.orphaned {
+		q.mu.Unlock()
+		return nil
+	}
+	t.orphaned = false
+	q.mu.Unlock()
+	if err := q.finishTicket(ctx, t); err != nil {
+		return fmt.Errorf("abandoned peer ticket remains owned: %w", err)
+	}
+	return nil
+}
+
 func (q *haPeerPhysicalController) closeJoined(ctx context.Context) error {
+	if err := q.resolveOrphan(ctx); err != nil {
+		return errors.Join(ownedfile.ErrRetirement, err)
+	}
 	if err := q.lockEntryContext(ctx); err != nil {
 		return errors.Join(ownedfile.ErrRetirement, err)
 	}
@@ -944,6 +1097,9 @@ func (q *haPeerPhysicalController) closeJoined(ctx context.Context) error {
 func (q *haPeerPhysicalController) withAdmissionPaused(ctx context.Context, visit func(context.Context) error) error {
 	if q == nil || ctx == nil || visit == nil {
 		return replication.ErrPhysicalCredit
+	}
+	if err := q.resolveOrphan(ctx); err != nil {
+		return err
 	}
 	if err := q.lockEntryContext(ctx); err != nil {
 		return err

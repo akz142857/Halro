@@ -251,7 +251,10 @@ func (f *haSelectedRuntimeFoundation) prepareSelectedTransportMode(logger *slog.
 			}
 			return r.coordinator.PreparePeer(peer, hello.DurableIndex, hello.AppliedIndex, send)
 		}
-		opts.OnDataSessionClosed = r.coordinator.ForgetPeer
+		opts.OnDataSessionClosed = func(peer string) {
+			r.coordinator.ForgetPeer(peer)
+			r.peerPhysical.Load().sessionClosed(peer)
+		}
 	} else if r.receiver != nil {
 		opts.OnDataSessionReady = func(node string, peer replication.Hello, send func([]byte) error) error {
 			if err := f.sendSelectedReplicaReadyAck(node, peer, send); err != nil {
