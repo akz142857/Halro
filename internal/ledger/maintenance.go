@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/akz142857/Halro/internal/authenticatedstate"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 )
 
@@ -277,7 +278,7 @@ func (m *MaintenanceLease) WithHead(ctx context.Context, verify func(context.Con
 		// its configured file ceiling is too small. The candidate builder owns
 		// and removes its inode; native facts and the frozen head remain intact,
 		// so this capacity outcome must not poison the authoritative Ledger.
-		if !errors.Is(err, ErrProjectionDiskLimit) {
+		if !errors.Is(err, ErrProjectionDiskLimit) && !onlyBusy(err) {
 			m.log.status.RequireRecovery()
 		}
 		return fmt.Errorf("verify maintenance Ledger prefix: %w", err)
@@ -346,4 +347,11 @@ func (m *MaintenanceLease) Close() error {
 		l.admission.Unlock()
 		<-drain
 	}
+}
+
+// onlyBusy reports a verification refused because a reader or writer lock was
+// momentarily held: nothing was read, so it proves nothing about the prefix. It
+// is not a refusal when it accompanies corruption or a source mismatch.
+func onlyBusy(err error) bool {
+	return errors.Is(err, authenticatedstate.ErrBusy) && !errors.Is(err, ErrProjectionCorrupt) && !errors.Is(err, ErrProjectionSource) && !errors.Is(err, ErrCorrupt) && !errors.Is(err, authenticatedstate.ErrCorrupt)
 }
