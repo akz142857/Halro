@@ -73,7 +73,7 @@
 
 ## 4. 下次建议顺序
 
-1. 已完成：`72c1bd8d` 上的 `make full-check`（Node 22）于 2026-10-09 13:33 启动，耗时 8716 秒，`exit=0`，无 `FAIL`/`panic`；普通与 race 分片、`go vet`、前端 typecheck/vitest（690 项）/构建、bundle 漂移与 observability 均通过。其后只有文档提交。日志在被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`。其后的产品提交（`4363a46c`、`ee252ff0`、`a4fa6384`）需要再跑一次门禁；新一轮门禁见 `docs/verification/performance/2026-10-09-final-gate-2/full-check.log`。推送待用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+1. 已完成：`72c1bd8d` 上的 `make full-check`（Node 22）于 2026-10-09 13:33 启动，耗时 8716 秒，`exit=0`，无 `FAIL`/`panic`；普通与 race 分片、`go vet`、前端 typecheck/vitest（690 项）/构建、bundle 漂移与 observability 均通过。其后只有文档提交。日志在被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`。其后的产品提交（`4363a46c`、`ee252ff0`、`a4fa6384`）需要再跑一次门禁；新一轮门禁于 2026-10-09 22:49 在 `21df8609` 上以 `nohup` 在会话外启动（Node v22.18.0，预计 2.5～3 小时），日志持续复制到被忽略的 `docs/verification/performance/2026-10-09-final-gate-2/full-check.log`：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；末尾是 `gate process ended without exit line` 表示进程被中断，需要重跑。推送待用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
 2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）与回复丢失的有界解决（§24）；I-03 剩余：HA 储备保护、归档多文件发布、迁移故障、三节点真实 ENOSPC 变体、目标容量持续压力。
 3. 之后继续 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
