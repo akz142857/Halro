@@ -313,3 +313,18 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 真实 Linux（逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup、3 GiB ext4）：peer credit 与 online checkpoint 两个双角色测试通过（原 1387 MiB 下两者均失败）。旧二进制在 1259 MiB 下同样通过：这两个夹具走 `validateSelectedHASessionBudget`，不经过配置门禁。因此运行时结论只说明“1259 MiB Recovery 加相应增大的 normal 足够”，配置门禁结论单独由上表证明。证据在被忽略目录 `docs/verification/performance/2026-10-09-recovery-offline-workspaces/`。
 
 仍开放：这两个测试不覆盖启动、请求、checkpoint、两次重启与 Close 的完整生命周期接受；其余各项（accounting/projection/Metadata 映射与会话的真实重叠）未再缩减。若需更大余量，可在此基础上继续逐项论证。race 最重分片（2/8）实测 550.6 秒通过（有并发负载），不需增加片数。
+
+## 19. 完整生命周期接受与失败启动后的重启
+
+**生命周期**（`6663b8a2`）。`TestHAPhysicalLifecycleSurvivesTwoRestarts`：双角色三代（原始 + 两次重启），每代用新 Manager 从磁盘打开，复制 3 条事实、两次在线 checkpoint、完整终结与 Close；重启后的 Replica 必须读到此前所有事实，且 Seal 不回退。真实 Linux（逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup、3 GiB ext4、`GOMEMLIMIT=768MiB`）通过，cgroup 峰值 224350208 B，无 OOM；每代 ext4 可用空间仅减少约 40 KB。
+
+**§3.3-1 结论：失败启动的清理不是缺陷，是 fail-closed 设计。** 跳过终结序列直接 Close 时，`closePhysicalLocked` 与 Usage `closePhysicalUsageLocked` 只关闭描述符，保留名称、extent 与费用供下次启动回放，并返回 `ErrRecovery`；Usage 加上 `ownedfile.ErrRetirement` 表示“保留 credit”，所以共享成员不归零；基础 Close 在该错误处提前返回（Lease、Publisher 等都保留）。同进程再次打开会因进程级 `sealPublishers` 登记返回 `ErrBusy`，这是防止复用被保留目录的守卫。生产路径不会同进程重开：`runRuntime` 只在 `ErrMaintenanceRequested` 且 Close 无错时循环，其余一律退出进程。§3.3-2 的“同一 ext4 残留”因此只是测试隔离问题。
+
+**但下一个进程确实无法启动，查出两处问题：**
+
+1. **缺陷，已修复（`9feaf834`）。** 失败启动保留的 cache target 仍绑定在 Publisher 上，下次启动走 `RestorePhysicalCandidate`；它在 Directory catch-up workspace 内用调用方 ctx 申请 4096 B 控制 claim，被路由成借款子项，随后 `RetainIndependentWorkspace` 正确拒绝，表现为 `HA physical common targets: invalid resource budget input or ownership`。Prepare 与 Restore 改为经 `WithoutRAMWorkspace` 正常准入。ext4 回归测试在修复前失败；resourcebudget/audit/governance/authenticatedstate/app 的 Physical 测试在修复前后结果逐项相同。
+2. **容量契约缺口，未修复，待裁定。** 失败启动后 Replica 数据目录实际占用 1177169920 B（约 1.10 GiB，主要是 projection 物理 bank），启动 inventory 按设计把它计入，超过 `persistent_inventory_disk_bytes` 的 512 MiB，于是拒绝启动。配置校验目前不要求这个上限覆盖“稳态数据 + 一次失败启动保留的物理向量”。把夹具上限设为 1.5 GiB 后，`TestHAPhysicalFailedStartupIsReplayedByTheNextStart`（失败启动在子进程中执行并退出）通过：下次进程把可用空间从 1.83 GB 收回到 3.005 GB，后续两代之间相差约 33 KB。
+
+**环境说明。** 名称含 ENOSPC 的测试要求小 ext4（≤512 MiB 或 ≤1536 MiB），在 3 GiB 镜像上必然失败；按对应尺寸重跑后，resourcebudget/audit/governance/authenticatedstate 全部通过。`internal/app` 中 `TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles`（压力下 join 报 `resource budget exhausted`）与 `TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`（文件系统观测断言）在对应尺寸下修复前后都失败，属于既有问题，已登记待查。
+
+**完整门禁。** `ddca5b72` 上 `make full-check` 失败：`ledger`、`usage` 包在并发负载下总时长超过 20 分钟（超时时刻正在运行的测试只跑了 3～5 秒，没有挂起），另有 `TestProjectedCollectorRetirementJoinsAdmittedWaiterAndBlockedIO` 单独运行时 138/200 失败。后者是测试断言了瞬时状态（等待者被撤回唤醒后释放 slot 本属正确），`3ea5e334` 改为确定性断言，500 次 0 失败、race 200 次通过；它随原工作树拆分提交引入，`main` 上没有。门禁需在空闲机器上重跑。

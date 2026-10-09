@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 09:30（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§18 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-09 13:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§19 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -17,6 +17,10 @@
 | `ceddc1d1` | `internal/app` 测试分片、9 个崩溃时点矩阵代表子集、发布压力任务跑完整矩阵、契约测试与 fuzz 列表修复、`runtime_repack` 时序竞争修复 |
 | `2b9027f5`（及其修订） | 本交接文档、进度看板 §17、总设计开头入口 |
 | `ddca5b72` | HA Recovery 公式移除离线 backup 工作区与 backup/restore claim；原 2 GiB 可行区间约 128 MiB（看板 §18） |
+| `3ea5e334` | usage collector 测试改为确定性断言（原 69% 失败） |
+| `6663b8a2` | 双角色三代生命周期（两次重启）真实 Linux 接受测试 |
+| `9feaf834` | 修复：物理 slot 控制 claim 不再借用调用方 workspace（失败启动后无法重启的根因之一） |
+| `085929c8` | 失败启动在子进程中执行、下一个进程回放的测试（看板 §19） |
 
 ## 2. 用户已做的裁定
 
@@ -33,7 +37,7 @@
 
 - `ddca5b72` 后，原 2 GiB 生产预算的 Recovery 可行区间为 **1258.605 MiB（候选公式下限）～约 1386.95 MiB（物理工作向量的 normal 下限）**；改前此区间为空。依据：backup/restore 工作区只在离线命令自建的管理器中获取，VTA 调用图证明服务进程不可达（看板 §18）。
 - 真实 Linux（逻辑 2 GiB、Recovery **1259 MiB**、实际 2 GiB cgroup、3 GiB ext4）：peer credit 与 online checkpoint 两个双角色测试通过；原 1387 MiB 下二者失败。夹具不经过配置门禁，旧二进制在 1259 下同样通过，所以运行时结论与门禁结论分开成立。
-- **仍未接受**：启动、请求、checkpoint、两次重启、Close 的完整双角色生命周期；三节点（两个 peer 同时在线）的真实运行也没有夹具。
+- 完整双角色生命周期（启动、请求、checkpoint、两次重启、Close）已在 1259 MiB 下真实接受，峰值 214 MiB（看板 §19）。三节点（两个 peer 同时在线）的真实运行仍没有夹具。
 - 公式中其余项（accounting 128、projection 192、Metadata 映射 96 与会话的真实重叠）未再缩减，需要更大余量时再逐项论证。注意：`WithRecoveryScope` 下的 IO/Background 申请会转记到 Recovery，静态调用图只能证明“某所有者在服务进程中完全不存在”，重叠关系需运行时证据。
 
 ### 3.2 测试时限：race 分片未实测
@@ -46,17 +50,18 @@
 
 ### 3.3 其他已登记开放项
 
-1. 启动失败后关闭 foundation 时，Usage 报告 `ownedfile.ErrRetirement`（“owned file actual IO retirement is uncertain”）并留下共享成员；`usage` 包内约 45 处来源，需在 Linux 上复现失败启动后逐层追踪，判断是 fail-closed 设计还是清理缺陷。
-2. 同一 ext4 上前一失败测试的残留会让后一测试报“physical completion allocation unavailable”：测试隔离问题，非产品瓶颈；修复失败清理（上一项）后应消失。
+1. **待裁定：`persistent_inventory_disk_bytes` 未覆盖失败启动保留的物理向量。** 失败启动后 Replica 目录约 1.10 GiB，超过 512 MiB 上限，下次启动被 inventory 拒绝，需运维调大上限才能启动（看板 §19）。
+2. `internal/app` 两个 ENOSPC 测试在对应 ext4 尺寸下修复前后都失败：`TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles`、`TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`。
 3. 请求退回共享池时，HA 终结在持有工作区期间等待 `WaitConfirmed`，会串行化终结确认；仅在私有池放不下时发生。
-4. Audit/Governance 批编码器并入共享池（路线 A）未做：Governance `AppendBatch` 可能在请求持有共享池时嵌套调用，合集需加槽，节约为零，且无并发证据。
-5. I-06 角色 generation 切换批次：失败夹具已修（`replica_generation_retry_test.go`），本批原定的在线切换路径未继续。
+4. Audit/Governance 批编码器并入共享池（路线 A）未做。
+5. I-06 角色 generation 切换批次：在线切换路径未继续。
+6. 原 §3.3-1/§3.3-2（失败启动清理、同一 ext4 残留）已结论为 fail-closed 设计与测试隔离问题（看板 §19）。
 
 ## 4. 下次建议顺序
 
-1. 确认 `make full-check`（Node 22）在 `ddca5b72` 上的结果，推送前必须通过。
-2. 真实 Linux 双角色在原 2 GiB / 1259 MiB 下完成启动、请求、checkpoint、两次重启、Close 的完整生命周期接受（需新夹具或扩展现有夹具）。
-3. 排查 §3.3-1 的失败启动清理。
+1. 在**空闲机器**上重跑 `make full-check`（Node 22），期间不要并行跑 Docker 或其他测试；推送前必须通过。
+2. 裁定 §3.3-1 的 inventory 上限推导方式并实施。
+3. 排查 §3.3-2 的两个 ENOSPC 测试（ext4 512 MiB 用 `runner-512.py`，1536 MiB 用 `runner-1536.py`，均在 `docs/verification/performance/2026-10-09-ha-lifecycle-restarts/`）。
 4. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
