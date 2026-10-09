@@ -251,12 +251,17 @@ func TestProjectedCollectorRetirementJoinsAdmittedWaiterAndBlockedIO(t *testing.
 		t.Fatal(err)
 	}
 	collectorSignal(t, canceled)
+	// The admitted waiter never entered IO: withdrawal wakes it and it leaves.
+	// Only the blocked reader keeps its slot, and retirement still joins it.
+	if err := <-second; !errors.Is(err, ErrCollectorRetired) {
+		t.Fatal(err)
+	}
 	select {
 	case <-c.retiredDone:
 		t.Fatal("retirement released blocked IO")
 	default:
 	}
-	if len(c.slots) != 2 {
+	if len(c.slots) != 1 {
 		t.Fatal("cancellation released admitted work", len(c.slots))
 	}
 	if err := c.CatchUp(context.Background()); !errors.Is(err, ErrCollectorRetired) {
@@ -270,9 +275,6 @@ func TestProjectedCollectorRetirementJoinsAdmittedWaiterAndBlockedIO(t *testing.
 	}
 	unblock()
 	if err := <-first; !errors.Is(err, context.Canceled) {
-		t.Fatal(err)
-	}
-	if err := <-second; !errors.Is(err, ErrCollectorRetired) {
 		t.Fatal(err)
 	}
 	if err := c.Retire(context.Background()); err != nil {
