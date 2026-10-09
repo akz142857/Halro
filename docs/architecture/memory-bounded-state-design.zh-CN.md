@@ -2,7 +2,7 @@
 
 **续作入口（2026-10-09）：[续作交接](memory-bounded-resume.zh-CN.md)**——当前提交、用户裁定、卡点、待回答问题和下次顺序都在那里。
 
-2026-10-09 进展（用户裁定 HA 目标为三节点）：HA Recovery 公式移除只在离线命令中获取的 backup/restore 工作区后，原 2 GiB 配置的 Recovery 可行区间从空变为 1258.6～约 1386.9 MiB；双角色三代生命周期（两次重启）在 1259 MiB、实际 2 GiB cgroup 下真实接受，峰值 214 MiB。失败启动的清理确认为 fail-closed 设计；但下一次启动曾被拒绝，查出物理 slot 控制 claim 误借调用方 workspace 的缺陷（已修复），以及 `persistent_inventory_disk_bytes` 未覆盖失败启动保留的物理向量（用户裁定由配置推导下限，实施中）。原任务计数不变。详见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §18–§19。
+2026-10-09 进展（用户裁定 HA 目标为三节点）：HA Recovery 公式移除只在离线命令中获取的 backup/restore 工作区后，原 2 GiB 配置的 Recovery 可行区间从空变为 1258.6～约 1386.9 MiB；双角色三代生命周期（两次重启）在 1259 MiB、实际 2 GiB cgroup 下真实接受，峰值 214 MiB。失败启动的清理确认为 fail-closed 设计；但下一次启动曾被拒绝，查出物理 slot 控制 claim 误借调用方 workspace 的缺陷（已修复），以及 `persistent_inventory_disk_bytes` 未覆盖失败启动保留的物理向量（按用户裁定改为由配置推导下限：派生磁盘上限之和 × 2，已实施）。另将 budget/ledger/usage 与 app 一样分片，修复完整门禁超时。原任务计数不变。详见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §18–§20。
 
 2026-10-08 路线调整（用户裁定）：D-04 拆为 D-04a 本地容量与 D-04b 生产校准；允许 Ledger 请求池与 Metadata 窗口并入共享执行池，池内保留终结优先槽；十万冷迁移归入 M3。新顺序为 S0 稳住工作树 → S1 预算闭合 → S2 逐项接受 → S3(M3) 冷构建，见[进度看板 §14](memory-bounded-convergence-plan.zh-CN.md#14-2026-10-08-用户裁定与路线调整)。任务总数因拆分变为 25 项（5 完成 / 20 开放，其中 D-04b 随 D-01 暂缓）。
 

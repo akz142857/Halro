@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 13:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§19 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§20 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -21,6 +21,9 @@
 | `6663b8a2` | 双角色三代生命周期（两次重启）真实 Linux 接受测试 |
 | `9feaf834` | 修复：物理 slot 控制 claim 不再借用调用方 workspace（失败启动后无法重启的根因之一） |
 | `085929c8` | 失败启动在子进程中执行、下一个进程回放的测试（看板 §19） |
+| `f06af594` | budget/ledger/usage 与 app 一样分片；CI/发布 matrix 由契约测试对齐脚本清单 |
+| `2e92187e` | Audit/Governance 批编码器费用测试只在非 race 构建运行 |
+| `af7f2112` | `persistent_inventory_disk_bytes` 下限 = 派生磁盘上限之和 × 2；原 2 GiB 预算改为 3586 MiB（看板 §20） |
 
 ## 2. 用户已做的裁定
 
@@ -50,7 +53,7 @@
 
 ### 3.3 其他已登记开放项
 
-1. **待裁定：`persistent_inventory_disk_bytes` 未覆盖失败启动保留的物理向量。** 失败启动后 Replica 目录约 1.10 GiB，超过 512 MiB 上限，下次启动被 inventory 拒绝，需运维调大上限才能启动（看板 §19）。
+1. 已关闭：`persistent_inventory_disk_bytes` 下限由配置推导（看板 §20）。
 2. `internal/app` 两个 ENOSPC 测试在对应 ext4 尺寸下修复前后都失败：`TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles`、`TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`。
 3. 请求退回共享池时，HA 终结在持有工作区期间等待 `WaitConfirmed`，会串行化终结确认；仅在私有池放不下时发生。
 4. Audit/Governance 批编码器并入共享池（路线 A）未做。
@@ -59,10 +62,9 @@
 
 ## 4. 下次建议顺序
 
-1. 在**空闲机器**上重跑 `make full-check`（Node 22），期间不要并行跑 Docker 或其他测试；推送前必须通过。
-2. 裁定 §3.3-1 的 inventory 上限推导方式并实施。
-3. 排查 §3.3-2 的两个 ENOSPC 测试（ext4 512 MiB 用 `runner-512.py`，1536 MiB 用 `runner-1536.py`，均在 `docs/verification/performance/2026-10-09-ha-lifecycle-restarts/`）。
-4. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
+1. 确认 `af7f2112` 上的 `make full-check`（Node 22）结果；推送前必须通过。
+2. 排查 §3.3-2 的两个 ENOSPC 测试（ext4 512 MiB 用 `runner-512.py`，1536 MiB 用 `runner-1536.py`，均在 `docs/verification/performance/2026-10-09-ha-lifecycle-restarts/`）。
+3. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
 

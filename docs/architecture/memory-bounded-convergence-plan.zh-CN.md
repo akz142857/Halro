@@ -328,3 +328,11 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 **环境说明。** 名称含 ENOSPC 的测试要求小 ext4（≤512 MiB 或 ≤1536 MiB），在 3 GiB 镜像上必然失败；按对应尺寸重跑后，resourcebudget/audit/governance/authenticatedstate 全部通过。`internal/app` 中 `TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles`（压力下 join 报 `resource budget exhausted`）与 `TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`（文件系统观测断言）在对应尺寸下修复前后都失败，属于既有问题，已登记待查。
 
 **完整门禁。** `ddca5b72` 上 `make full-check` 失败：`ledger`、`usage` 包在并发负载下总时长超过 20 分钟（超时时刻正在运行的测试只跑了 3～5 秒，没有挂起），另有 `TestProjectedCollectorRetirementJoinsAdmittedWaiterAndBlockedIO` 单独运行时 138/200 失败。后者是测试断言了瞬时状态（等待者被撤回唤醒后释放 slot 本属正确），`3ea5e334` 改为确定性断言，500 次 0 失败、race 200 次通过；它随原工作树拆分提交引入，`main` 上没有。门禁需在空闲机器上重跑。
+
+## 20. inventory 下限、门禁分片与 race 分配测试
+
+**inventory 下限（用户裁定：由配置推导；`af7f2112`）。** 真实 Linux 失败启动后 Replica 保留的文件逐项落在所属域上限内：Ledger/Usage 投影 pages 各 512 MiB（上限 576）、directory pages 32 MiB（段索引 48）、Audit/Governance 日志各 16 MiB（64）、原生 WAL 32 MiB，合计 1177169920 B。单个 pack 由 `allocatePhysicalLocked` 限制在存储上限内，repack 目标在恢复时被限制在上限内，repack 期间新旧两个 pack 槽可以并存。`Validate` 现在要求启用的 `persistent_inventory_disk_bytes` ≥ 各派生磁盘上限之和的两倍（溢出时饱和到不可满足）；原生 Ledger 历史由运维在下限之上另行预留。原 2 GiB 生产预算改为 3586 MiB（下限 3074 + 原生 512），RAM 不变。已启用 inventory 且低于下限的配置会在校验时被拒，需要调大；不需要重新初始化数据目录。边界测试和稀疏文件超限测试都做了反向验证；真实 Linux 在线 / 生命周期 / 失败启动回放三个测试在推导值下通过，峰值 220 MiB，无 OOM。证据：`docs/verification/performance/2026-10-09-inventory-floor/`（被忽略）。
+
+**门禁分片（`f06af594`）。** 第二次完整门禁在空闲机器上仍失败：`ledger`、`usage` 超过 20 分钟，`budget` 1051 秒。三者单独运行分别为 381 / 529 / 约 412 秒，测试都是顺序执行；ledger 在 381 秒里只用了 38 秒 user + 57 秒 sys CPU，所以与其他包并行时变慢几倍，是 fsync 争用而不是 CPU。`go-test-shard.sh` 改为按包分片（`shard PKG INDEX TOTAL`、`check PKG TOTAL`、`check-all`、`all`），`rest` 正好排除脚本中的唯一清单：app 4、budget 2、ledger 2、usage 3，race 翻倍。CI 与发布每片一个 matrix 项；发布契约测试从脚本清单推导两套 matrix 并逐项比较（删掉一项即失败，已验证）。第三次门禁中 `make test` 全部通过，各分片 46～495 秒。
+
+**race 分配测试（`2e92187e`）。** 同一次门禁的 race 阶段，Audit/Governance 最大批次分配测试失败：race 下分配 38160016 B，超过 33554432 B 编码器费用。race 插桩会把栈分配移到堆上，普通构建实际为 25740920 / 26096792 B（约 22% 余量）。按 `scratchstate` 的先例，费用检查只在非 race 构建中运行。
