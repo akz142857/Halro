@@ -66,7 +66,7 @@
 
 ## 4. 下次建议顺序
 
-1. 确认 `fc537e71` 上的 `make full-check`（Node 22）结果；推送前必须通过。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+1. 查看 `72c1bd8d` 上的 `make full-check`（Node 22）结果；推送前必须通过。它于 2026-10-09 13:33 以 `nohup` 在会话外启动（预计 2.5～3 小时），日志持续复制到被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；若末尾是 `gate process ended without exit line`，说明进程被中断，需要重跑。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
 2. 之后回到 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
