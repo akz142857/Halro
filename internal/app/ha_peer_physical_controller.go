@@ -85,53 +85,66 @@ func (q *haPeerPhysicalController) withReplicaObservation(ctx context.Context, v
 func (q *haPeerPhysicalController) withReplicaObservationMode(ctx context.Context, startup bool, visit func(context.Context, haPeerPhysicalVector, replication.PeerPhysicalFutureObservation) error) error {
 	f := q.owner
 	return f.replication.applier.WithPhysicalReceiveReadBarrier(ctx, func(ctx context.Context, p replication.ReplicaConfirmedPosition, ack replication.Acknowledgement) error {
-		q.mu.Lock()
-		defer q.mu.Unlock()
-		if q.closing || q.failure != nil || f.ctx.Err() != nil {
-			return errors.Join(replication.ErrPhysicalCredit, q.failure, f.ctx.Err())
-		}
-		v, err := f.capturePeerPhysicalVector(ctx)
-		if err != nil {
-			return err
-		}
-		m := v.Member
-		if p.NodeID != m.NodeID || p.Term != m.Term || p.PromisedTerm != m.Term || p.Durable != m.DurableIndex || p.Confirmed != m.ConfirmedIndex || p.Applied != m.AppliedIndex || p.Projection != m.Projection || ack.Index != m.DurableIndex {
-			return replication.ErrPhysicalCredit
-		}
-		var original replication.PeerPhysicalFutureObservation
-		if err = f.withSelectedCut(ctx, func(ctx context.Context, cut statecut.HASelectedCut) error {
-			if cut.Seal != v.Seal || cut.Member.OrderingHeadMAC != m.OrderingHeadMAC {
-				return replication.ErrPhysicalCredit
-			}
-			var err error
-			original, err = f.physicalPublication.ObservePeerPhysicalPromisesFrozen(ctx)
-			return err
-		}); err != nil {
-			return err
-		}
-		spent, err := haPeerPhysicalSpent(v)
-		if err != nil {
-			return err
-		}
-		if original.WindowID != ([32]byte{}) && original.WindowID != v.Window {
-			if !startup || f.replication.manager != nil || v.Seal.OrderingIndex != m.DurableIndex || !spent.IsZero() {
-				return replication.ErrPhysicalCredit
-			}
-			for _, ticket := range original.Tickets {
-				if ticket.Active {
-					return replication.ErrPhysicalCredit
-				}
-			}
-		}
-		if original.WindowID != ([32]byte{}) && !original.Granted.Covers(spent) {
-			return replication.ErrPhysicalCredit
-		}
-		q.vector, q.spent, q.grant, q.active = v, spent, original.Granted, original.Tickets
-		if err = visit(ctx, v, original); err != nil {
-			return err
-		}
-		return errors.Join(ctx.Err(), f.ctx.Err())
+		// Observation, grant and negative receipt pay from the paid catch-up
+		// lanes, as the Primary's reserve does. At full pressure a new IO
+		// admission is refused; the handler's error would end the session,
+		// and the next session's window could not be sent either.
+		return f.reopened.Owners.Components.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
+			return q.observeReplicaLocked(ctx, startup, p, ack, visit)
+		})
 	})
+}
+
+// observeReplicaLocked runs inside the receive-read barrier and the paid
+// catch-up workspace, in that order, the order every Replica path takes them.
+func (q *haPeerPhysicalController) observeReplicaLocked(ctx context.Context, startup bool, p replication.ReplicaConfirmedPosition, ack replication.Acknowledgement, visit func(context.Context, haPeerPhysicalVector, replication.PeerPhysicalFutureObservation) error) error {
+	f := q.owner
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closing || q.failure != nil || f.ctx.Err() != nil {
+		return errors.Join(replication.ErrPhysicalCredit, q.failure, f.ctx.Err())
+	}
+	v, err := f.capturePeerPhysicalVector(ctx)
+	if err != nil {
+		return err
+	}
+	m := v.Member
+	if p.NodeID != m.NodeID || p.Term != m.Term || p.PromisedTerm != m.Term || p.Durable != m.DurableIndex || p.Confirmed != m.ConfirmedIndex || p.Applied != m.AppliedIndex || p.Projection != m.Projection || ack.Index != m.DurableIndex {
+		return replication.ErrPhysicalCredit
+	}
+	var original replication.PeerPhysicalFutureObservation
+	if err = f.withSelectedCut(ctx, func(ctx context.Context, cut statecut.HASelectedCut) error {
+		if cut.Seal != v.Seal || cut.Member.OrderingHeadMAC != m.OrderingHeadMAC {
+			return replication.ErrPhysicalCredit
+		}
+		var err error
+		original, err = f.physicalPublication.ObservePeerPhysicalPromisesFrozen(ctx)
+		return err
+	}); err != nil {
+		return err
+	}
+	spent, err := haPeerPhysicalSpent(v)
+	if err != nil {
+		return err
+	}
+	if original.WindowID != ([32]byte{}) && original.WindowID != v.Window {
+		if !startup || f.replication.manager != nil || v.Seal.OrderingIndex != m.DurableIndex || !spent.IsZero() {
+			return replication.ErrPhysicalCredit
+		}
+		for _, ticket := range original.Tickets {
+			if ticket.Active {
+				return replication.ErrPhysicalCredit
+			}
+		}
+	}
+	if original.WindowID != ([32]byte{}) && !original.Granted.Covers(spent) {
+		return replication.ErrPhysicalCredit
+	}
+	q.vector, q.spent, q.grant, q.active = v, spent, original.Granted, original.Tickets
+	if err = visit(ctx, v, original); err != nil {
+		return err
+	}
+	return errors.Join(ctx.Err(), f.ctx.Err())
 }
 
 func haPeerPhysicalSpent(v haPeerPhysicalVector) (out replication.PhysicalCreditCost, err error) {
