@@ -23,6 +23,27 @@ import (
 // Ledger and Usage banks. Functional Manager evidence is not cfg.Validate or
 // real OS pressure / public Default Runtime capacity evidence.
 func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute)
+	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{})
+}
+
+// Both roles run start, replicated requests, online checkpoints and the full
+// terminal Close three times over the same data directories: the original
+// generation and two restarts, each from a fresh Manager. Every earlier
+// generation's facts must be served by the restarted Replica.
+func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
+	var written []string
+	var revisions [2]uint64
+	for generation := 0; generation < 3; generation++ {
+		var ids []string
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions)
+		written = append(written, ids...)
+	}
+}
+
+func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
+	t.Helper()
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if root == "" {
 		t.Skip("requires isolated ext4 with original 32-frame bank capacity")
@@ -34,8 +55,8 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 	if uint64(fs.Blocks)*uint64(fs.Bsize) < 2700<<20 {
 		t.Skip("original full 32-frame Ledger and Usage vector requires at least 2700 MiB usable ext4 capacity (3072 MiB backing)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
 	fixture := prepareHAMetadataMaintenanceFixture(t)
 	// The independent baseline binds this ceiling. Set it before publication;
 	// changing it only at reopen must be rejected by production qualification.
@@ -61,7 +82,18 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	return ctx, fixture, logger
+}
+
+// One generation opens both roles from disk, requires every earlier fact on
+// the Replica, replicates three new facts with two online checkpoints between
+// them, then finishes, joins and releases both data directories. It returns
+// the new facts and each role's final Seal revision.
+func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, logger *slog.Logger, generation int, earlier []string, previous [2]uint64) ([]string, [2]uint64) {
+	t.Helper()
 	var owners [2]*haSelectedRuntimeFoundation
+	var guards [2]*lock.Lock
+	closed := false
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
@@ -93,31 +125,38 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		guards[i] = guard
 		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
 		if err != nil {
-			t.Fatal("actual foundation", i, err)
+			t.Fatal("actual foundation", generation, i, err)
 		}
 		owners[i] = f
 		t.Cleanup(func() {
+			if closed {
+				return
+			}
 			if err := f.Close(); err != nil {
-				t.Error("actual foundation join", i, err)
+				t.Error("actual foundation join", generation, i, err)
 			}
 			if stats := f.sharedPhysicalWork.Snapshot(); !stats.Closed || stats.Members != 0 || stats.Waiting != 0 || stats.InUse {
-				t.Error("actual shared final owner retained", i, stats)
+				t.Error("actual shared final owner retained", generation, i, stats)
 			}
 			if err := guard.Close(); err != nil {
 				t.Error(err)
 			}
 		})
+		if f.reopened != nil && f.reopened.Seal.Revision < previous[i] {
+			t.Fatal("restart selected an older Seal", generation, i, f.reopened.Seal.Revision, previous[i])
+		}
 		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
-			t.Fatal("actual original vector", i, err)
+			t.Fatal("actual original vector", generation, i, err)
 		}
 		if err := f.installHASelectedGovernanceService(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if i == 0 {
 			if err := f.prepareHASelectedPrimaryStartup(ctx); err != nil {
-				t.Fatal(err)
+				t.Fatal(generation, err)
 			}
 		}
 		if i == 1 {
@@ -125,19 +164,19 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 				if m, merr := f.reopened.Owners.Components.Ledger.ResourceManager(ctx); merr == nil {
 					t.Logf("receive window refusal: stats=%+v limits=%+v", m.Snapshot(), *cfg.ResourceBudget)
 				}
-				t.Fatal("actual pre-exposure Metadata receive window", err)
+				t.Fatal("actual pre-exposure Metadata receive window", generation, err)
 			}
 		}
 		if err := f.prepareSelectedTransportWithPhysicalCredit(logger); err != nil {
-			t.Fatal("actual transport consumer", i, err)
+			t.Fatal("actual transport consumer", generation, i, err)
 		}
 		if f.sharedPhysicalWork == nil {
-			t.Fatal("actual foundation omitted shared RAM owner", i)
+			t.Fatal("actual foundation omitted shared RAM owner", generation, i)
 		}
 		if stats := f.sharedPhysicalWork.Snapshot(); stats.Members != 3 || stats.Closing || stats.Closed {
-			t.Fatal("actual Directory/Usage/Governance did not share", i, stats)
+			t.Fatal("actual Directory/Usage/Governance did not share", generation, i, stats)
 		}
-		t.Log("actual background shared ownership", i, f.sharedPhysicalWork.Snapshot())
+		t.Log("actual background shared ownership", generation, i, f.sharedPhysicalWork.Snapshot())
 	}
 
 	primary, replica := owners[0], owners[1]
@@ -153,14 +192,20 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 	for _, f := range owners {
 		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
 	}
-	defer func() {
+	joined := false
+	join := func() {
+		if joined {
+			return
+		}
+		joined = true
 		stop()
 		for range 2 {
 			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 				t.Error(err)
 			}
 		}
-	}()
+	}
+	defer join()
 	waitWindow := func() {
 		t.Helper()
 		deadline := time.NewTimer(10 * time.Second)
@@ -174,51 +219,74 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 			}
 			select {
 			case <-deadline.C:
-				t.Fatal("actual TLS fresh bank absent")
+				t.Fatal("actual TLS fresh bank absent", generation)
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
 	}
 	waitWindow()
+	for _, id := range earlier {
+		if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
+			t.Fatal("restarted Replica lost an earlier fact", generation, id, err)
+		}
+	}
 	cost, err := haPeerPhysicalTerminalCost(2)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var ids []string
 	for cycle := 0; cycle < 3; cycle++ {
-		capCtx, ticket, err := q.reserve(ctx, sha256.Sum256([]byte{byte(100 + cycle)}), cost)
+		capCtx, ticket, err := q.reserve(ctx, sha256.Sum256([]byte{byte(generation), byte(100 + cycle)}), cost)
 		if err != nil {
-			t.Fatal("actual future after original online renewal", cycle, err)
+			t.Fatal("actual future after original online renewal", generation, cycle, err)
 		}
-		id := fmt.Sprintf("prj_online_physical_%d", cycle)
+		id := fmt.Sprintf("prj_online_physical_%d_%d", generation, cycle)
 		if _, err := primary.metadataStore.PutProject(capCtx, domain.Project{ID: id, Name: "same online owner", Enabled: true}, 0, nil); err != nil {
-			t.Fatal("actual native Metadata after renewal", cycle, err)
+			t.Fatal("actual native Metadata after renewal", generation, cycle, err)
 		}
 		if err := q.finishTicket(ctx, ticket); err != nil {
-			t.Fatal("actual full applied peer join", cycle, err)
+			t.Fatal("actual full applied peer join", generation, cycle, err)
 		}
 		if got, err := replica.metadataStore.GetProject(ctx, id); err != nil || got.ID != id {
-			t.Fatal("actual Replica fact", got, err)
+			t.Fatal("actual Replica fact", generation, got, err)
 		}
+		ids = append(ids, id)
 		if cycle == 2 {
 			break
 		}
 		for i, f := range owners {
 			before := f.reopened.Seal.Revision
 			if err := f.checkpointHAPhysicalOnline(ctx); err != nil {
-				t.Fatal("actual online same owner checkpoint", cycle, i, err)
+				t.Fatal("actual online same owner checkpoint", generation, cycle, i, err)
 			}
 			if f.reopened.Seal.Revision != before+1 || f.business != business[i] || f.metadataStore != stores[i] || f.replication.manager != managers[i] || f.recovery.Load() {
-				t.Fatal("online maintenance replaced or retired actual service/transport owner", cycle, i)
+				t.Fatal("online maintenance replaced or retired actual service/transport owner", generation, cycle, i)
 			}
 		}
 		waitWindow()
 	}
 	for _, f := range owners {
 		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
-			t.Fatal("actual final whole common", err)
+			t.Fatal("actual final whole common", generation, err)
 		}
 		if err := f.closeHAPhysicalNative(ctx); err != nil {
-			t.Fatal("actual final native join", err)
+			t.Fatal("actual final native join", generation, err)
 		}
 	}
+	join()
+	var revisions [2]uint64
+	for i, f := range owners {
+		revisions[i] = f.reopened.Seal.Revision
+		if err := f.Close(); err != nil {
+			t.Fatal("actual foundation join", generation, i, err)
+		}
+		if stats := f.sharedPhysicalWork.Snapshot(); !stats.Closed || stats.Members != 0 || stats.Waiting != 0 || stats.InUse {
+			t.Fatal("actual shared final owner retained", generation, i, stats)
+		}
+		if err := guards[i].Close(); err != nil {
+			t.Fatal(generation, i, err)
+		}
+	}
+	closed = true
+	return ids, revisions
 }
