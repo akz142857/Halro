@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 23:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§22 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-10 00:30（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§22 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -30,6 +30,9 @@
 | `72c1bd8d`（原分支 `memory-bounded-tls-close` 的 `75fc4012`） | 对端重置时的 close_notify 不再报关闭失败（看板 §22） |
 | `4363a46c` | 修复：Replica 的 credit 观察走已付费 catch-up 通道，满压力下 reserve 不再断开复制会话（看板 §23） |
 | `1f23dca5` | 真实 ENOSPC 下拒绝新写入、双角色终结关闭与重启接受测试（看板 §23） |
+| `ee252ff0` | 修复：credit 回复丢失时在新会话上原样重发（30 秒上限），被放弃的 ticket 由后续操作完成（看板 §24） |
+| `a4fa6384` | 修复：三节点下已记录未发出的镜像先发送再释放，避免与 Replica 序号分叉（看板 §24） |
+| `f62769f1` | 两节点与三节点回复丢失测试（看板 §24） |
 
 ## 2. 用户已做的裁定
 
@@ -64,14 +67,14 @@
 3. 请求退回共享池时，HA 终结在持有工作区期间等待 `WaitConfirmed`，会串行化终结确认；仅在私有池放不下时发生。
 4. Audit/Governance 批编码器并入共享池（路线 A）未做。
 5. I-06 角色 generation 切换批次：在线切换路径未继续。
-6. Primary `rpc` 在会话断开时只等调用方 ctx，远端未知的 ticket 挡住后续 reserve/checkpoint 直到重启；解除歧义需要协议裁定（看板 §23-1）。
-7. 单机压缩测试在 `Physical` 批次中偶发失败（修复后 1/7、未修复 0/4、单独 10/10），未归因（看板 §23-2）。
+6. 已关闭：会话断开导致 ticket 结果未知的问题，按用户裁定采用原样重发（看板 §24）。剩余：管理审计批次所有者在结果未知时仍被标记退休。
+7. 单机压缩测试在 `Physical` 批次中偶发失败（修复后 1/7、未修复 0/4、单独 10/10；§24 最终版本的批次中未再出现），未归因（看板 §23-2）。
 6. 原 §3.3-1/§3.3-2（失败启动清理、同一 ext4 残留）已结论为 fail-closed 设计与测试隔离问题（看板 §19）。
 
 ## 4. 下次建议顺序
 
-1. 已完成：`72c1bd8d` 上的 `make full-check`（Node 22）于 2026-10-09 13:33 启动，耗时 8716 秒，`exit=0`，无 `FAIL`/`panic`；普通与 race 分片、`go vet`、前端 typecheck/vitest（690 项）/构建、bundle 漂移与 observability 均通过。其后只有文档提交。日志在被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`。推送待用户确认；其后的 `4363a46c` 改了产品代码，推送前需要再跑一次门禁。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
-2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）；I-03 剩余：§3.3-6 的裁定、HA 储备保护、归档多文件发布、迁移故障、三节点真实 ENOSPC 变体、目标容量持续压力。
+1. 已完成：`72c1bd8d` 上的 `make full-check`（Node 22）于 2026-10-09 13:33 启动，耗时 8716 秒，`exit=0`，无 `FAIL`/`panic`；普通与 race 分片、`go vet`、前端 typecheck/vitest（690 项）/构建、bundle 漂移与 observability 均通过。其后只有文档提交。日志在被忽略的 `docs/verification/performance/2026-10-09-final-gate/full-check.log`。其后的产品提交（`4363a46c`、`ee252ff0`、`a4fa6384`）需要再跑一次门禁；新一轮门禁见 `docs/verification/performance/2026-10-09-final-gate-2/full-check.log`。推送待用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）与回复丢失的有界解决（§24）；I-03 剩余：HA 储备保护、归档多文件发布、迁移故障、三节点真实 ENOSPC 变体、目标容量持续压力。
 3. 之后继续 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令

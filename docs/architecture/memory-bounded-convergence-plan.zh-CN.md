@@ -363,6 +363,20 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 **证据**（真实 Linux，逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）。同一测试、同一 3 GiB 镜像：去掉修复（已确认回退生效）后在 reserve 的 30 秒上限处失败，加上后通过，另重复 3 次通过；新测试与在线 checkpoint、两次重启生命周期、失败启动回放、TLS peer credit 同批通过，cgroup 峰值 250 MB，无 OOM；1536 MiB 业务 ENOSPC、512 MiB caches/derived ENOSPC、6 GiB 三节点满压力测试全部通过；3 GiB 下全部 `Physical` 测试除三个小镜像用例外通过。证据：`docs/verification/performance/2026-10-09-enospc-restart/`（被忽略）。
 
 **仍开放。**
-1. 会话在 `rpc` 等待期间因其他原因（网络）断开时，Primary 仍只等调用方 ctx，并持有 entry 读锁；远端结果未知的 ticket 按 fail-closed 保留，后续 reserve 与 checkpoint 被挡到重启回放。修复需要决定：会话关闭时让等待者立即失败，以及重连时能否用 Replica 新窗口的 `TicketSerial` 作为“未持久化”的证明来解除歧义——后者是协议裁定。
+1. 已关闭（§24）：会话在 `rpc` 等待期间断开导致 ticket 结果未知、挡到重启的问题。用户裁定采用原样重发，不采用窗口序号推断。
 2. `TestSelectedRuntimeCompressionReopensOldCommonRootAndPublishesPhysicalLocator`（单机，不经过 HA 路径）在 3 GiB 全部 `Physical` 批次中偶发失败：修复后 7 次中 1 次（`disk Usage projection is retired` + `context canceled`），未修复 4 次中 0 次，单独运行 10/10 通过。未归因于本次修改，待查。
+
+## 24. 回复丢失：原样重发与被放弃 ticket 的解决（I-03 有限等待）
+
+**裁定。** 用户采用方案 B：会话断开导致 credit 回复丢失时，只以 Replica 对同一请求的回答为准，不用新窗口的 `TicketSerial` 推断“未持久化”。依据：Replica 上 Reserve 对同一 ticket 幂等（`old.Active` 且参数一致返回成功），Release 对已失效 ticket 幂等，无法授予的 Reserve 会持久记录拒绝并占用该序号（`s.Serial = serial`），之后同一 ticket 不可能再被接受；序号推断没有这种持久隔离。
+
+**实现（`ee252ff0`）。** 一次 credit 交换上限 30 秒（含重发）；对端会话结束（`OnDataSessionClosed`）立即唤醒等待者，等 Replica 新会话的窗口到达后原样重发。`releaseUnexposed` 对结果未知的 Reserve 同样重发取得确定结果，不再直接拒绝。所有者出错返回时 ticket 标记为被放弃，下一次 reserve、准入暂停或关闭会先完成它；仍在所有者手中的 ticket 不动。此前 `peerPhysicalTerminalAdmission` 在 reserve 出错时直接丢下 ticket，没有任何代码再完成它。Replica credit handler 增加 context 观察者（沿用 `haPhysicalFinishObserverKey` 惯例，生产中不存在），供测试在指定点结束会话。
+
+**顺带发现的既有缺陷（`a4fa6384`）。** reserve 在发送任何请求前先为每个 peer 记录本地镜像。三节点下若第一个 peer 拒绝或未回答，第二个 peer 的镜像已持久化但请求从未发出，本地释放后镜像已消耗该 peer 的下一个序号，Replica 仍期望这个序号，于是之后对该 peer 的每次 reserve 都被拒，直到换新窗口（在线 checkpoint）或重启。现在对“镜像已记录但未发出”的槽位先原样发送，让 Replica 以授予（随后释放）或持久拒绝消耗同一序号；镜像未记录的槽位照旧本地释放。由三节点回复丢失测试发现。
+
+**测试（`f62769f1`）。** `TestHAPhysicalLostCreditRepliesResolveByResend`（两节点）与 `TestHAPhysicalThreeMemberLostCreditRepliesResolveByResend`（三节点）：Replica 在 Reserve 持久化之后、应用之前、以及每次尝试直到超过上限时结束会话；前两种必须在新会话上恰好重发一次解决（各约 0.3～0.5 秒），第三种留下被放弃的 ticket，由下一次 reserve 先完成；所有事实到达 Replica 并在重启后保留。三节点变体覆盖一个 peer 已回答、另一个未发出的混合状态。三节点夹具准备提取为 `prepareHAPhysicalThreeMemberFixture`。
+
+**证据**（真实 Linux，逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）。反向验证：去掉重发与被放弃 ticket 处理（只保留观察者，已确认回退生效），两节点测试在第一种情况卡到夹具 4 分钟期限后失败；去掉 `a4fa6384`，三节点测试在被放弃 ticket 之后的 reserve 失败。最终版本：3 GiB 下全部 `Physical` 测试 30 项通过（三个小镜像用例除外，它们在 512/1536 MiB 下通过）；6 GiB 三节点两项通过；两节点重发测试累计 5 次通过。首次在容器内用官方 go1.26.6 linux-arm64（sha256 已核对）构建 race 版：两节点/三节点重发、TLS peer credit、在线 checkpoint、两次重启生命周期、失败启动回放、真实 ENOSPC 重启、三节点满压力全部通过，无数据竞争，cgroup 峰值约 585 MB。证据：`docs/verification/performance/2026-10-09-lost-reply/`（被忽略）。
+
+**仍开放。** 管理审计批次路径（`admin_audit_physical.go`）在 ticket 结果未知时仍把审计批次所有者标记为退休；ticket 现在会被后续操作解决，但该所有者本身的退休状态未改。会话旧连接的关闭通知若晚于新会话上的重发到达，会让这次重发被视为丢失，最坏情况是等到 30 秒上限，再由后续操作解决，不会产生错误结果。
 
