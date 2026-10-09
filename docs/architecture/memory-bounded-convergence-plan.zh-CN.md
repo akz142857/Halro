@@ -140,7 +140,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 所有权移交 | 三后台共享、实际嵌套/退出及备份 source/stage/output 同一 Manager；本批超时只退等待者费用 | 全部持久化消费者和命令交接覆盖，生产启动磁盘身份 reconciliation |
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生 | 目标容量下持续压力/恢复，动态输出盘完整接受 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
-| 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21） | 三节点（两个 peer 同时在线）下的压力终结；目标容量下的持续压力 |
+| 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22） | 目标容量下的持续压力 |
 | ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留 | HA 储备保护、归档多文件发布、迁移故障及重启双端确认矩阵 |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
@@ -345,3 +345,11 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 2. **测试过时，已修正（`fc537e71`）。** `TestHASelectedPhysicalCommonCachesActualENOSPCAndFreshBothRoles` 在预付 work 的借款内关闭 foundation；共享 RAM 池引入后该 work 是池成员，而 Close 最后退役的共享池不能在成员自己的借款内退役（`SharedCompletableWorkspace.Close` 返回 `ErrExhausted`）。改为先退还成员，再在满压力下关闭，保留原测试要守的性质：整个关闭不需要新的正常准入。512 MiB 镜像下通过。
 
 修复后 `internal/app` 全部 Physical Linux 测试：3 GiB 镜像下除这三个需要小镜像的 ENOSPC 测试（填充 helper 拒绝大文件系统）外全部通过；三者在 512 / 1536 MiB 镜像下全部通过。证据：`docs/verification/performance/2026-10-09-enospc-regression/`（被忽略）。
+
+## 22. 三节点满压力终结与重启（I-03）
+
+生命周期辅助函数推广为任意成员数：成员 0 为 Primary，其余为 Replica（各自的 bank 上限、接收窗口和必须就绪的 peer credit 窗口），每个事实必须到达每个 Replica；新增 `pressuredClose`，在所有成员满压力下执行终结与 Close。`TestHAPhysicalThreeMemberPressuredTerminalAndRestart`（`a7bef390`）基于三成员夹具，搭建目标三节点组（1 Primary + 2 Replica），走真实 TLS 物理 credit 复制事实并在线 checkpoint，三个成员全部在满压力下完成终结与关闭，重启后两个 Replica 都读到事实。
+
+真实 Linux（逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）。三个成员共用同一 ext4，4 GiB 镜像放不下两个 Replica 的完整 bank（第二个 Replica 接收窗口物理分配失败），改用 6 GiB；生产中每个节点各有磁盘。结果 5/5 通过，cgroup 峰值 122～169 MiB，无 OOM。未含 `0ee44582` 时，每次都失败在 `actual final native join: new resource admission stopped by pressure`。
+
+**顺带修复（`75fc4012`）。** 三成员夹具约每 3 次失败 1 次：`SessionRegistry.Close` 把对端先关闭时的 `tls: failed to send closeNotify alert (but connection was closed anyway): ... connection reset by peer` 当作关闭失败。`crypto/tls` 只在自身 socket 关闭成功后才报这个告警，没有资源遗留；`PeerSession.Close` 原已对超时这样处理，现在把 ECONNRESET / EPIPE 一并视为无害（`retiredCloseNotifyError`），其他关闭错误照常返回。生产中 Close 出错会结束 Replica 维护循环（进程退出），所以这也是真实影响。单元测试已做反向验证。证据：`docs/verification/performance/2026-10-09-three-member/`（被忽略）。

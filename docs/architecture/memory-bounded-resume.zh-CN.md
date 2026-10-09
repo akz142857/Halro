@@ -1,6 +1,6 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§21 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-09 18:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§22 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
@@ -26,6 +26,8 @@
 | `af7f2112` | `persistent_inventory_disk_bytes` 下限 = 派生磁盘上限之和 × 2；原 2 GiB 预算改为 3586 MiB（看板 §20） |
 | `0ee44582` | 修复：满压力下终结关闭的截面读取改用已付费通道 |
 | `fc537e71` | caches ENOSPC 测试改为借款结束后再关闭（看板 §21） |
+| `a7bef390` | 三节点满压力终结与重启的真实 Linux 接受测试 |
+| `75fc4012`（分支 `memory-bounded-tls-close`，门禁后合入） | 对端重置时的 close_notify 不再报关闭失败（看板 §22） |
 
 ## 2. 用户已做的裁定
 
@@ -42,7 +44,7 @@
 
 - `ddca5b72` 后，原 2 GiB 生产预算的 Recovery 可行区间为 **1258.605 MiB（候选公式下限）～约 1386.95 MiB（物理工作向量的 normal 下限）**；改前此区间为空。依据：backup/restore 工作区只在离线命令自建的管理器中获取，VTA 调用图证明服务进程不可达（看板 §18）。
 - 真实 Linux（逻辑 2 GiB、Recovery **1259 MiB**、实际 2 GiB cgroup、3 GiB ext4）：peer credit 与 online checkpoint 两个双角色测试通过；原 1387 MiB 下二者失败。夹具不经过配置门禁，旧二进制在 1259 下同样通过，所以运行时结论与门禁结论分开成立。
-- 完整双角色生命周期（启动、请求、checkpoint、两次重启、Close）已在 1259 MiB 下真实接受，峰值 214 MiB（看板 §19）。三节点（两个 peer 同时在线）的真实运行仍没有夹具。
+- 完整双角色生命周期（启动、请求、checkpoint、两次重启、Close）已在 1259 MiB 下真实接受，峰值 214 MiB（看板 §19）。三节点（1 Primary + 2 Replica）满压力终结与重启已真实通过（看板 §22），需 6 GiB 镜像：`docs/verification/performance/2026-10-09-three-member/runner-6144.py`。
 - 公式中其余项（accounting 128、projection 192、Metadata 映射 96 与会话的真实重叠）未再缩减，需要更大余量时再逐项论证。注意：`WithRecoveryScope` 下的 IO/Background 申请会转记到 Recovery，静态调用图只能证明“某所有者在服务进程中完全不存在”，重叠关系需运行时证据。
 
 ### 3.2 测试时限：race 分片未实测
