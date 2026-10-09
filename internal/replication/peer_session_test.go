@@ -6,9 +6,12 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -348,5 +351,25 @@ func TestPeerSessionBoundsQueuedBytesAndKeepsSameRoleHelloControlOnly(t *testing
 	}
 	if err := control.Send(frame); err == nil || !strings.Contains(err.Error(), "control-only") {
 		t.Fatalf("control-only send error=%v", err)
+	}
+}
+
+func TestRetiredCloseNotifyErrorKeepsGenuineCloseFailures(t *testing.T) {
+	// crypto/tls wraps the alert write failure this way after closing its socket.
+	alert := func(errno error) error {
+		return fmt.Errorf("tls: failed to send closeNotify alert (but connection was closed anyway): %w", &net.OpError{Op: "write", Net: "tcp", Err: os.NewSyscallError("write", errno)})
+	}
+	for _, errno := range []error{syscall.ECONNRESET, syscall.EPIPE} {
+		if !retiredCloseNotifyError(alert(errno)) {
+			t.Fatal("peer-gone close_notify reported as a shutdown failure", errno)
+		}
+	}
+	if !retiredCloseNotifyError(alert(os.ErrDeadlineExceeded)) {
+		t.Fatal("timed-out close_notify reported as a shutdown failure")
+	}
+	for _, err := range []error{nil, errors.New("close tcp: bad file descriptor"), alert(syscall.EIO), net.ErrClosed} {
+		if retiredCloseNotifyError(err) {
+			t.Fatal("genuine close outcome hidden", err)
+		}
 	}
 }

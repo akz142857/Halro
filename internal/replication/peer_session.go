@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/akz142857/Halro/internal/replicationlimits"
@@ -480,6 +481,17 @@ func (s *PeerSession) retainCallbackOwner() (func(), error) {
 	}, nil
 }
 
+// The authenticated stream is already being retired and the socket is closed
+// even when TLS cannot deliver close_notify before its deadline or to a peer
+// that already reset the connection: tls.Conn.Close reports that alert only
+// after its own socket close succeeded. Treating the advisory alert as a
+// manager shutdown failure makes a healthy peer race look like lost
+// replicated data.
+func retiredCloseNotifyError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout() || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE)
+}
+
 func (s *PeerSession) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
@@ -498,12 +510,7 @@ func (s *PeerSession) Close() error {
 		s.releaseQueueLocked()
 		s.runMu.Unlock()
 		err = s.conn.Close()
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			// The authenticated stream is already being retired and the socket is
-			// closed even when TLS cannot deliver close_notify before its deadline.
-			// Treating that advisory alert as a manager shutdown failure makes a
-			// healthy peer race look like lost replicated data.
+		if retiredCloseNotifyError(err) {
 			err = nil
 		}
 		s.runMu.Lock()
