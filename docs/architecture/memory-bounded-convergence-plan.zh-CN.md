@@ -293,4 +293,23 @@ S0 首项已完成：I-06 夹具 `TestReplicaGenerationPublicOpenFailureRetriesP
 
 `internal/app` 空闲单跑 1924.5 秒，长尾为主，改为固定分片（`scripts/go-test-shard.sh`，`check` 模式证明分片不重不漏）：CI 与发布普通测试 4 片、race 8 片并行，Makefile 依次运行。9 个崩溃时点矩阵默认跑代表时点，发布 `stress` 任务以 `HALRO_STRESS=1` 运行全部。修复：上一批改坏的发布契约测试、两个未登记的 `authenticatedstate` fuzz 目标、`runtime_repack` 中 `ReadStats` 遇 `ErrDiskUsageBusy` 的时序竞争（改前 6/6 失败、改后 6/6 通过；改前提交同样复现，非本轮引入）。race 最重分片未实测，完整门禁未跑。
 
-本轮在此暂停，续作见[续作交接](memory-bounded-resume.zh-CN.md)。待用户回答：HA 目标拓扑为两节点还是三节点（决定 Recovery reserve 中 3 组会话能否按 peer 数推导）。
+本轮在此暂停，续作见[续作交接](memory-bounded-resume.zh-CN.md)。拓扑问题已由用户裁定为三节点，见 §18。
+
+## 18. Recovery reserve 论证：离线备份工作区不属于服务进程
+
+用户裁定目标拓扑为**三节点**，3 组会话（2 peer + 1 替换）保留。逐项分解原 2 GiB 配置下 1453961408 B 的 `ValidateReplicationCandidates` 下限：会话 3×(96.02+64.02+96.02)=768.2 MiB、projection 工作区 192、accounting 128、**backup 工作区 128**、Metadata 映射 96、pricing IO 与归档读取各 32、其余约 10.5 MiB。
+
+backup/restore 工作区只由离线命令获取，每个命令经 `commandBudgetContext` 自建管理器；没有命令作用域时 `acquireBackupProjectionBudget` 直接报错，无法记入服务进程的管理器。以 `OpenWithOptions`、`WaitForMemberMaintenance` 与全部 `*Runtime` 方法为根的 VTA 调用图（对 `Monitor.WithSampling` 按调用点传入的闭包做上下文敏感处理；`start`/`serve` 都经 `runRuntime` 进入）到达不了任何 backup、backup projection、staging、output、restore 所有者。离线命令进程不持有复制会话，其峰值仍由 `Validate` 的单机启动 Recovery 求和覆盖。
+
+提交 `ddca5b72` 把 backup 工作区 RAM 与 backup/restore 两个 claim 移出 HA 公式。原 2 GiB 生产预算：
+
+| | 候选公式下限 | 物理工作向量上限 | 2 GiB 可行区间 |
+| --- | --- | --- | --- |
+| 改前 | 1453961408 B（1386.606 MiB） | 约 1386.95 MiB | 实际为空（1387 被 normal 下限拒绝） |
+| 改后 | 1319742656 B（1258.605 MiB） | 约 1386.95 MiB | 约 128 MiB |
+
+新增 `TestOriginal2GiBHABudgetLeavesARecoveryWindow` 固定上下界；改写的 backup/restore 断言与新测试在改前公式下均失败（已确认回退确实生效）。
+
+真实 Linux（逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup、3 GiB ext4）：peer credit 与 online checkpoint 两个双角色测试通过（原 1387 MiB 下两者均失败）。旧二进制在 1259 MiB 下同样通过：这两个夹具走 `validateSelectedHASessionBudget`，不经过配置门禁。因此运行时结论只说明“1259 MiB Recovery 加相应增大的 normal 足够”，配置门禁结论单独由上表证明。证据在被忽略目录 `docs/verification/performance/2026-10-09-recovery-offline-workspaces/`。
+
+仍开放：这两个测试不覆盖启动、请求、checkpoint、两次重启与 Close 的完整生命周期接受；其余各项（accounting/projection/Metadata 映射与会话的真实重叠）未再缩减。若需更大余量，可在此基础上继续逐项论证。race 最重分片（2/8）实测 550.6 秒通过（有并发负载），不需增加片数。
