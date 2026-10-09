@@ -404,11 +404,12 @@ func selectedCapacityBudget() config.ResourceBudget {
 	// Disk capacities are declared once for the million-request profile. They
 	// are logical ceilings, not allocations; the same fixed RAM/OS thresholds
 	// apply at every history size, including scratch+old/new coexistence.
-	b.TotalDiskBytes, b.BackgroundDiskBytes = 96<<30, 48<<30
-	b.RecoveryDiskBytes, b.RecoveryReserveDiskBytes = 48<<30, 48<<30
+	b.TotalDiskBytes, b.BackgroundDiskBytes = 192<<30, 96<<30
+	b.RecoveryDiskBytes, b.RecoveryReserveDiskBytes = 96<<30, 96<<30
 	b.IODiskBytes, b.BackupWorkspaceDiskBytes = 8<<30, 8<<30
-	b.PersistentInventoryDiskBytes, b.LedgerAppendDiskBytes = 8<<30, 8<<30
+	b.LedgerAppendDiskBytes = 8 << 30
 	b.LedgerProjectionDiskBytes, b.UsageProjectionDiskBytes = 8<<30, 8<<30
+	b.PersistentInventoryDiskBytes = b.MinimumPersistentInventoryDiskBytes() + 8<<30
 	return b
 }
 

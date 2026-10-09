@@ -114,11 +114,12 @@ func TestPackedBackupCreateAndStagedRestoreReuseOneActualSamplingOwner(t *testin
 	limits.MemoryStateRequired = true
 	limits.TotalRAMBytes, limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 2<<30, 1<<30, 1<<30
 	limits.BackgroundRAMBytes = 1 << 30
-	limits.TotalDiskBytes, limits.BackgroundDiskBytes = 96<<30, 48<<30
-	limits.RecoveryDiskBytes, limits.RecoveryReserveDiskBytes = 48<<30, 48<<30
+	limits.TotalDiskBytes, limits.BackgroundDiskBytes = 192<<30, 96<<30
+	limits.RecoveryDiskBytes, limits.RecoveryReserveDiskBytes = 96<<30, 96<<30
 	limits.IODiskBytes, limits.BackupWorkspaceDiskBytes = 8<<30, 8<<30
-	limits.PersistentInventoryDiskBytes, limits.LedgerAppendDiskBytes = 8<<30, 8<<30
+	limits.LedgerAppendDiskBytes = 8 << 30
 	limits.LedgerProjectionDiskBytes, limits.UsageProjectionDiskBytes = 8<<30, 8<<30
+	limits.PersistentInventoryDiskBytes = limits.MinimumPersistentInventoryDiskBytes() + 8<<30
 	cfg.ResourceBudget = &limits
 	pressure, err := newResourcePressureWithSource(cfg, pressureSampleFunc(func(context.Context) resourcebudget.Sample { return runtimeLowSample() }))
 	if err != nil {

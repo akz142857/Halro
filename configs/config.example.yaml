@@ -1121,8 +1121,8 @@ logging:
 #   pricing_io_ram_bytes: 0
 #   # @title.zh-CN 持久目录启动清点磁盘上限
 #   # @title.en-US Persistent startup inventory disk ceiling
-#   # @description.zh-CN 大于零时，在打开业务写入者之前对现有 DataDir 树执行有界清点并单独计费；此基线与各消费者后续增长和替换上限相加。零保持原启动路径。逻辑费用不预留物理块，须按实际目录和文件系统余量校准。
-#   # @description.en-US When positive, reconcile and charge the existing DataDir tree before business writers open. This baseline is additional to consumer growth and replacement ceilings. Zero preserves legacy startup. Logical accounting does not reserve filesystem blocks; calibrate against the actual tree and filesystem headroom.
+#   # @description.zh-CN 大于零时，在打开业务写入者之前对现有 DataDir 树执行有界清点并单独计费；此基线与各消费者后续增长和替换上限相加。零保持原启动路径。逻辑费用不预留物理块，须按实际目录和文件系统余量校准。下限为各派生磁盘上限（段索引、各投影、Usage 归档、Governance/Audit/Metadata/Ordering 日志与 Metadata 存储）之和的两倍：失败或中断的启动可能为每个域保留当前文件和一个替换候选，低于下限的配置在校验时拒绝；原生 Ledger 历史另需在下限之上预留。
+#   # @description.en-US When positive, reconcile and charge the existing DataDir tree before business writers open. This baseline is additional to consumer growth and replacement ceilings. Zero preserves legacy startup. Logical accounting does not reserve filesystem blocks; calibrate against the actual tree and filesystem headroom. The floor is twice the sum of the derived disk ceilings (segment index, projections, Usage archive, Governance/Audit/Metadata/Ordering journals and the Metadata store): a failed or interrupted start may hold each domain's current file and one replacement, and a lower value is refused at validation. Native Ledger history needs room above the floor.
 #   persistent_inventory_disk_bytes: 0
 #   # @title.zh-CN Ledger 原生追加与辅助文件磁盘额度
 #   # @title.en-US Ledger native append and auxiliary disk capacity

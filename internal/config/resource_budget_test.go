@@ -898,3 +898,43 @@ func TestResourceBudgetAllProjectionMappingsReserveRecoveryBackgroundAndConcurre
 		}
 	}
 }
+
+// A start after a failed or interrupted one inventories each derived domain's
+// current file and one held replacement; the configured inventory ceiling must
+// cover both or that start is refused after the fact.
+func TestResourceBudgetPersistentInventoryCoversHeldReplacements(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig + pressureConfigFixture + ramBudgetConfigFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	b := cfg.ResourceBudget
+	b.OrderingJournalDiskBytes = 8
+	b.RecoveryClaims += 2
+	b.MaxClaims += 4
+	b.ControlRAMBytes += 4 * resourcebudget.ClaimRAMBytes
+	b.RecoveryRAMBytes += diskinventory.WorkspaceRAMBytes
+	b.RecoveryReserveRAMBytes += diskinventory.WorkspaceRAMBytes + 2*resourcebudget.ClaimRAMBytes
+	b.TotalRAMBytes += diskinventory.WorkspaceRAMBytes + 4*resourcebudget.ClaimRAMBytes
+	if got := b.MinimumPersistentInventoryDiskBytes(); got != 16 {
+		t.Fatal("floor is not each derived ceiling twice", got)
+	}
+	b.PersistentInventoryDiskBytes = 16
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatal("exact floor rejected", err)
+	}
+	b.PersistentInventoryDiskBytes = 15
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "persistent_inventory_disk_bytes must cover") {
+		t.Fatal("inventory below its held-replacement floor accepted", err)
+	}
+	b.PersistentInventoryDiskBytes = 0
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatal("disabled inventory charged a floor", err)
+	}
+	huge := ResourceBudget{LedgerProjectionDiskBytes: math.MaxInt64 / 2, UsageProjectionDiskBytes: math.MaxInt64 / 2}
+	if got := huge.MinimumPersistentInventoryDiskBytes(); got != math.MaxInt64 {
+		t.Fatal("overflowing floor did not saturate", got)
+	}
+}

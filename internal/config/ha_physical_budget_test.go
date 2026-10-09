@@ -178,7 +178,7 @@ func TestHAPhysicalWorkMinimumRejectsOriginal2GiBAndPreservesOptOut(t *testing.T
 // them; without it the window is about 128 MiB wide.
 func TestOriginal2GiBHABudgetLeavesARecoveryWindow(t *testing.T) {
 	b := ResourceBudget{MemoryStateRequired: true, PhysicalTerminalReserve: true,
-		PersistentInventoryDiskBytes: 512 << 20, LedgerAppendDiskBytes: 64 << 20, AccountingRecoveryRAMBytes: 128 << 20,
+		PersistentInventoryDiskBytes: 3586 << 20, LedgerAppendDiskBytes: 64 << 20, AccountingRecoveryRAMBytes: 128 << 20,
 		LedgerSegmentIndexDiskBytes: 64 << 20, LedgerProjectionDiskBytes: 256 << 20, UsageProjectionDiskBytes: 256 << 20,
 		UsageArchiveDiskBytes: 64 << 20, UsageArchiveReadRAMBytes: 8 << 20, GovernanceProjectionDiskBytes: 64 << 20,
 		GovernanceLogDiskBytes: 64 << 20, AuditLogDiskBytes: 64 << 20, MetadataStoreDiskBytes: 128 << 20,
@@ -193,6 +193,10 @@ func TestOriginal2GiBHABudgetLeavesARecoveryWindow(t *testing.T) {
 		ReplicationCandidateRAMBytes: 100689312, ReplicationQueueRAMBytes: 67126528, ReplicationReadRAMBytes: 100689312,
 		ReplicationReaderRAMBytes: 384 << 10, AuditLogRAMBytes: 2 << 20, GovernanceLogRAMBytes: 2 << 20,
 		PricingLifetimeRAMBytes: 1 << 20, PricingIORAMBytes: 32 << 20}
+	// Inventory: each derived ceiling twice (3074 MiB) plus 512 MiB of native history.
+	if b.PersistentInventoryDiskBytes != b.MinimumPersistentInventoryDiskBytes()+512<<20 {
+		t.Fatal("original budget inventory no longer matches its derived floor", b.MinimumPersistentInventoryDiskBytes())
+	}
 	at := func(r int64) error {
 		c := b
 		c.RecoveryRAMBytes, c.RecoveryReserveRAMBytes = r, r

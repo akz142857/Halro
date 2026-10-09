@@ -291,11 +291,12 @@ func TestLedgerAppendDiskActualPrimaryReplicaShareFundedNativePath(t *testing.T)
 		t.Fatal(err)
 	}
 	b := runtimeCandidateBudgetFixture()
-	b.PersistentInventoryDiskBytes, b.LedgerAppendDiskBytes = 64<<20, 1<<20
+	b.LedgerAppendDiskBytes = 1 << 20
 	b.TotalDiskBytes, b.BackgroundDiskBytes = 4<<30, 1<<30
 	b.RecoveryDiskBytes, b.RecoveryReserveDiskBytes = 1<<30, 1<<30
 	b.LedgerProjectionDiskBytes, b.LedgerSegmentIndexDiskBytes = 64<<20, 64<<20
 	b.UsageProjectionDiskBytes, b.UsageArchiveDiskBytes, b.IODiskBytes = 64<<20, 32<<20, 64<<20
+	b.PersistentInventoryDiskBytes = b.MinimumPersistentInventoryDiskBytes() + 64<<20
 	addProjectionMappingFixtureRAM(t, &b)
 	b.RecoveryRAMBytes += (512 << 20) + diskinventory.WorkspaceRAMBytes
 	b.RecoveryClaims, b.MaxClaims = 32, 48

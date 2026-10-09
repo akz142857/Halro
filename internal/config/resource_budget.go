@@ -198,6 +198,15 @@ func (b ResourceBudget) Validate(pressure *ResourcePressure, maxRequestBytes int
 			derivedOwners++
 		}
 	}
+	if b.PersistentInventoryDiskBytes > 0 {
+		// The next start inventories every file a failed or interrupted one left:
+		// each derived domain's current file plus one held replacement (a
+		// repack target or a physical bank), each within that domain's ceiling.
+		// Native history beyond this floor is the operator's to size.
+		if floor := b.MinimumPersistentInventoryDiskBytes(); b.PersistentInventoryDiskBytes < floor {
+			return fmt.Errorf("persistent_inventory_disk_bytes must cover each derived disk ceiling twice (%d bytes) so a start after a failed or interrupted one can inventory its held replacements", floor)
+		}
+	}
 	if b.BackupWorkspaceDiskBytes < 0 || b.BackupWorkspaceDiskBytes > 1<<50 || b.RestoreWorkspaceDiskBytes < 0 {
 		return fmt.Errorf("backup_workspace_disk_bytes must be zero or a finite ceiling at most 1PiB; restore_workspace_disk_bytes cannot be negative")
 	}
@@ -341,6 +350,22 @@ func (b ResourceBudget) Validate(pressure *ResourcePressure, maxRequestBytes int
 		return fmt.Errorf("capture_ram_bytes must cover request_ram_bytes, fit shared Background capacity and allow at least 3 owners")
 	}
 	return nil
+}
+
+// MinimumPersistentInventoryDiskBytes is the startup inventory floor: every
+// derived domain's ceiling twice, for its current file and one replacement
+// a failed or interrupted start may hold. Native Ledger history is extra.
+func (b ResourceBudget) MinimumPersistentInventoryDiskBytes() int64 {
+	var sum int64
+	for _, value := range []int64{b.LedgerSegmentIndexDiskBytes, b.LedgerProjectionDiskBytes, b.UsageProjectionDiskBytes, b.UsageArchiveDiskBytes, b.GovernanceProjectionDiskBytes, b.GovernanceLogDiskBytes, b.AuditLogDiskBytes, b.MetadataStoreDiskBytes, b.MetadataJournalDiskBytes, b.OrderingJournalDiskBytes} {
+		if value > 0 {
+			if value > math.MaxInt64/2-sum {
+				return math.MaxInt64 // unsatisfiable: no inventory ceiling exceeds 1<<50
+			}
+			sum += value
+		}
+	}
+	return 2 * sum
 }
 
 // Two candidates plus an additional reconstruction, three session queue/read

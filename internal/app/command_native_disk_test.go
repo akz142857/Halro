@@ -19,7 +19,7 @@ import (
 func commandNativeDiskFixture(t *testing.T) config.Config {
 	t.Helper()
 	cfg := budgetedBackupOperationFixture(t)
-	cfg.ResourceBudget.PersistentInventoryDiskBytes = 16 << 20
+	cfg.ResourceBudget.PersistentInventoryDiskBytes = cfg.ResourceBudget.MinimumPersistentInventoryDiskBytes() + 16<<20
 	cfg.ResourceBudget.LedgerAppendDiskBytes = 8 << 20
 	return cfg
 }
@@ -135,7 +135,16 @@ func TestCommandNativeSealFundsRealRollAndRejectsBeforeMutation(t *testing.T) {
 
 func TestCommandNativeBackupInventoryRejectsBeforeActualTailRepair(t *testing.T) {
 	cfg := commandNativeDiskFixture(t)
-	cfg.ResourceBudget.PersistentInventoryDiskBytes = 1
+	// The smallest valid ceiling, exceeded by a sparse file's logical size: the
+	// inventory charges the larger of logical and allocated bytes.
+	cfg.ResourceBudget.PersistentInventoryDiskBytes = cfg.ResourceBudget.MinimumPersistentInventoryDiskBytes()
+	sparse, err := os.Create(filepath.Join(cfg.Storage.DataDir, "foreign-sparse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(sparse.Truncate(cfg.ResourceBudget.PersistentInventoryDiskBytes+1), sparse.Close()); err != nil {
+		t.Fatal(err)
+	}
 	file, err := os.OpenFile(cfg.AuditPath(), os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatal(err)

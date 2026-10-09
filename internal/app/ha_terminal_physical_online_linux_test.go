@@ -29,7 +29,7 @@ import (
 // Ledger and Usage banks. Functional Manager evidence is not cfg.Validate or
 // real OS pressure / public Default Runtime capacity evidence.
 func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
-	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute, 0)
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute)
 	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, false)
 }
 
@@ -38,7 +38,7 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 // generation and two restarts, each from a fresh Manager. Every earlier
 // generation's facts must be served by the restarted Replica.
 func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
-	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute, 0)
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
 	var written []string
 	var revisions [2]uint64
 	for generation := 0; generation < 3; generation++ {
@@ -54,10 +54,7 @@ func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
 // directories must replay it, reclaim the held space and run two complete
 // generations on the same fixed ext4 capacity.
 func TestHAPhysicalFailedStartupIsReplayedByTheNextStart(t *testing.T) {
-	// The startup inventory counts the held Replica vector (about 1.1 GiB of
-	// projection banks here) beside native bytes; the default 512 MiB ceiling
-	// refuses the replaying start. Config does not yet derive this ceiling.
-	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute, 1536<<20)
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
 	raw, err := json.Marshal(haPhysicalFailedStartRequest{Configs: fixture.configs, Keys: fixture.keys})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +113,7 @@ func TestHAPhysicalFailedStartupHelper(t *testing.T) {
 	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, true)
 }
 
-func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration, inventory int64) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
+func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
 	t.Helper()
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if root == "" {
@@ -137,9 +134,6 @@ func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration, invento
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.MetadataJournalDiskBytes = 576 << 20
-		if inventory > 0 {
-			limits.PersistentInventoryDiskBytes = inventory
-		}
 		cfg.ResourceBudget = &limits
 		fixture.configs[i] = cfg
 	}
@@ -199,6 +193,9 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 			limits.LedgerProjectionDiskBytes = 576 << 20
 			limits.UsageProjectionDiskBytes = 576 << 20
 		}
+		// The startup inventory counts held replacements of every derived domain
+		// (about 1.1 GiB on the Replica after a failed start) beside native bytes.
+		limits.PersistentInventoryDiskBytes = limits.MinimumPersistentInventoryDiskBytes() + 512<<20
 		cfg.ResourceBudget = &limits
 		guard, err := lock.Acquire(cfg.Storage.DataDir)
 		if err != nil {

@@ -43,6 +43,8 @@ func selectedRuntimeBudgetFixture() config.ResourceBudget {
 	b.LedgerSegmentIndexDiskBytes = 16 << 20
 	b.MetadataStoreDiskBytes, b.MetadataJournalDiskBytes, b.AuditLogDiskBytes, b.GovernanceLogDiskBytes = 64<<20, 64<<20, 64<<20, 64<<20
 	b.UsageArchiveDiskBytes, b.BackupWorkspaceDiskBytes, b.UsageArchiveReadRAMBytes = 64<<20, 128<<20, 8<<20
+	// Held replacements of every derived domain plus 512 MiB of native history.
+	b.PersistentInventoryDiskBytes = b.MinimumPersistentInventoryDiskBytes() + 512<<20
 	return b
 }
 
