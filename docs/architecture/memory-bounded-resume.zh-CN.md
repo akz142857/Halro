@@ -68,9 +68,10 @@
 
 ```bash
 # 分片自检与运行
-scripts/go-test-shard.sh check 4 && scripts/go-test-shard.sh check 8
+scripts/go-test-shard.sh check-all
 scripts/go-test-shard.sh rest -count=1 -timeout=20m
-scripts/go-test-shard.sh app 0 4 -count=1 -timeout=20m
+scripts/go-test-shard.sh shard ./internal/ledger 0 2 -count=1 -timeout=20m
+scripts/go-test-shard.sh all -count=1 -timeout=20m   # make test 的全部内容
 # 完整矩阵（发布压力门禁同款）
 HALRO_STRESS=1 go test ./internal/budget ./internal/app -run 'TestLegacyRecovery|ActualSIGKILL|SIGKILLResumes|PendingPublicationResumes|TestHAMemoryActivationActualSIGKILLResume' -count=1 -timeout=60m
 # 预检向量与真实 Manager 对账

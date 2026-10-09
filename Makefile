@@ -181,12 +181,10 @@ frontend-production-check: $(WEB_DEPS_STAMP)
 # The memory-bounded packages (app, budget, ledger, usage, store/bolt) each run
 # for minutes; under package parallelism several crossed Go's 10m default while
 # still passing. Like `race`, the gate owns its timeout explicitly, and
-# internal/app (about half an hour as one binary) runs in the same fixed shards
-# CI runs in parallel (scripts/go-test-shard.sh).
+# internal/app, budget, ledger and usage run in the same fixed shards CI runs
+# in parallel (scripts/go-test-shard.sh owns the list).
 test:
-	scripts/go-test-shard.sh check 4
-	scripts/go-test-shard.sh rest -count=1 -shuffle=on -timeout=20m
-	@for shard in 0 1 2 3; do scripts/go-test-shard.sh app $$shard 4 -count=1 -shuffle=on -timeout=20m || exit 1; done
+	scripts/go-test-shard.sh all -count=1 -shuffle=on -timeout=20m
 
 # Coverage is not gated on a number. It exists so "which branch has no test"
 # is a question the tooling answers rather than one somebody greps for by hand.
@@ -199,9 +197,7 @@ race:
 	# times. Under the race detector the package can exceed Go's 10m default on
 	# developer machines even while making progress, so the evidence gate owns
 	# an explicit package timeout instead of inheriting an accidental default.
-	scripts/go-test-shard.sh check 8
-	scripts/go-test-shard.sh rest -race -count=1 -timeout=20m
-	@for shard in 0 1 2 3 4 5 6 7; do scripts/go-test-shard.sh app $$shard 8 -race -count=1 -timeout=20m || exit 1; done
+	scripts/go-test-shard.sh all -race -count=1 -timeout=20m
 
 vet:
 	go vet ./...

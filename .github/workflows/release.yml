@@ -143,44 +143,79 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: scripts/go-test-shard.sh check 4 && scripts/go-test-shard.sh check 8
+      - run: scripts/go-test-shard.sh check-all
       - run: scripts/go-test-shard.sh rest -count=1 -timeout=20m
       - run: scripts/go-test-shard.sh rest -race -count=1 -timeout=20m
       - run: go vet ./...
       - name: Go vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
-  # internal/app runs for about half an hour as one binary; it is split into
-  # fixed shards (scripts/go-test-shard.sh), each under the same 20m timeout.
-  go-app:
+  # internal/app, budget, ledger and usage each run their tests in sequence for
+  # many minutes as one binary; they are split into fixed shards
+  # (scripts/go-test-shard.sh owns the list), each under the same 20m timeout.
+  # Race runs use twice as many shards.
+  go-shard:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        include:
+          - {pkg: ./internal/app, index: 0, total: 4}
+          - {pkg: ./internal/app, index: 1, total: 4}
+          - {pkg: ./internal/app, index: 2, total: 4}
+          - {pkg: ./internal/app, index: 3, total: 4}
+          - {pkg: ./internal/budget, index: 0, total: 2}
+          - {pkg: ./internal/budget, index: 1, total: 2}
+          - {pkg: ./internal/ledger, index: 0, total: 2}
+          - {pkg: ./internal/ledger, index: 1, total: 2}
+          - {pkg: ./internal/usage, index: 0, total: 3}
+          - {pkg: ./internal/usage, index: 1, total: 3}
+          - {pkg: ./internal/usage, index: 2, total: 3}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
-      - run: scripts/go-test-shard.sh app ${{ matrix.shard }} 4 -count=1 -timeout=20m
+      - run: scripts/go-test-shard.sh shard ${{ matrix.pkg }} ${{ matrix.index }} ${{ matrix.total }} -count=1 -timeout=20m
 
-  go-app-race:
+  go-shard-race:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        include:
+          - {pkg: ./internal/app, index: 0, total: 8}
+          - {pkg: ./internal/app, index: 1, total: 8}
+          - {pkg: ./internal/app, index: 2, total: 8}
+          - {pkg: ./internal/app, index: 3, total: 8}
+          - {pkg: ./internal/app, index: 4, total: 8}
+          - {pkg: ./internal/app, index: 5, total: 8}
+          - {pkg: ./internal/app, index: 6, total: 8}
+          - {pkg: ./internal/app, index: 7, total: 8}
+          - {pkg: ./internal/budget, index: 0, total: 4}
+          - {pkg: ./internal/budget, index: 1, total: 4}
+          - {pkg: ./internal/budget, index: 2, total: 4}
+          - {pkg: ./internal/budget, index: 3, total: 4}
+          - {pkg: ./internal/ledger, index: 0, total: 4}
+          - {pkg: ./internal/ledger, index: 1, total: 4}
+          - {pkg: ./internal/ledger, index: 2, total: 4}
+          - {pkg: ./internal/ledger, index: 3, total: 4}
+          - {pkg: ./internal/usage, index: 0, total: 6}
+          - {pkg: ./internal/usage, index: 1, total: 6}
+          - {pkg: ./internal/usage, index: 2, total: 6}
+          - {pkg: ./internal/usage, index: 3, total: 6}
+          - {pkg: ./internal/usage, index: 4, total: 6}
+          - {pkg: ./internal/usage, index: 5, total: 6}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
           cache: true
-      - run: scripts/go-test-shard.sh app ${{ matrix.shard }} 8 -race -count=1 -timeout=20m
+      - run: scripts/go-test-shard.sh shard ${{ matrix.pkg }} ${{ matrix.index }} ${{ matrix.total }} -race -count=1 -timeout=20m
 
   sdk-compatibility:
     needs: prepare
@@ -273,7 +308,7 @@ jobs:
           path: internal/webui/dist
 
   binaries:
-    needs: [prepare, quality, go-app, go-app-race, sdk-compatibility, web, stress]
+    needs: [prepare, quality, go-shard, go-shard-race, sdk-compatibility, web, stress]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -334,7 +369,7 @@ jobs:
           path: release/halro-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   container:
-    needs: [prepare, quality, go-app, go-app-race, sdk-compatibility, stress]
+    needs: [prepare, quality, go-shard, go-shard-race, sdk-compatibility, stress]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

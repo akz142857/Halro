@@ -16,6 +16,7 @@ VERIFY_RELEASE = Path(__file__).resolve().parents[2] / "packaging" / "apt-reposi
 BUILD_DEB = Path(__file__).resolve().parents[2] / "tools" / "release" / "build_deb.sh"
 RELEASE_NOTES = Path(__file__).resolve().parents[2] / "tools" / "release" / "release_notes.sh"
 CHANGELOG = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+SHARD_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "go-test-shard.sh"
 
 
 class ReleaseWorkflowContractTests(unittest.TestCase):
@@ -28,13 +29,28 @@ class ReleaseWorkflowContractTests(unittest.TestCase):
     def test_fresh_go_evidence_is_explicit(self):
         for name, workflow in (("CI", self.ci_workflow), ("release", self.workflow)):
             with self.subTest(workflow=name):
-                # internal/app is sharded; `check` proves the shards partition it.
-                self.assertIn("scripts/go-test-shard.sh check 4 && scripts/go-test-shard.sh check 8", workflow)
+                # Heavy packages are sharded; `check-all` proves the shards partition them.
+                self.assertIn("scripts/go-test-shard.sh check-all", workflow)
                 self.assertIn("scripts/go-test-shard.sh rest -count=1 -timeout=20m", workflow)
                 self.assertIn("scripts/go-test-shard.sh rest -race -count=1 -timeout=20m", workflow)
-                self.assertIn("scripts/go-test-shard.sh app ${{ matrix.shard }} 4 -count=1 -timeout=20m", workflow)
-                self.assertIn("scripts/go-test-shard.sh app ${{ matrix.shard }} 8 -race -count=1 -timeout=20m", workflow)
+                self.assertIn("scripts/go-test-shard.sh shard ${{ matrix.pkg }} ${{ matrix.index }} ${{ matrix.total }} -count=1 -timeout=20m", workflow)
+                self.assertIn("scripts/go-test-shard.sh shard ${{ matrix.pkg }} ${{ matrix.index }} ${{ matrix.total }} -race -count=1 -timeout=20m", workflow)
                 self.assertIn("go -C tests/compatibility/go test -count=1 ./...", workflow)
+
+    def test_shard_matrices_match_the_script_list(self):
+        # rest excludes exactly the script's list, so a package missing from a
+        # matrix would silently never run in CI.
+        listed = re.search(r'^sharded="([^"]*)"$', SHARD_SCRIPT.read_text(encoding="utf-8"), re.M)
+        self.assertIsNotNone(listed)
+        packages = [entry.rsplit(":", 1) for entry in listed.group(1).split()]
+        for name, workflow in (("CI", self.ci_workflow), ("release", self.workflow)):
+            for job, factor in (("go-shard", 1), ("go-shard-race", 2)):
+                with self.subTest(workflow=name, job=job):
+                    start = workflow.index(f"\n  {job}:\n")
+                    end = workflow.index("\n\n", start + 1)
+                    got = re.findall(r"- \{pkg: (\S+), index: (\d+), total: (\d+)\}", workflow[start:end])
+                    want = [(pkg, str(i), str(factor * int(total))) for pkg, total in packages for i in range(factor * int(total))]
+                    self.assertEqual(want, got)
 
     def test_downstream_preflight_precedes_irreversible_publish(self):
         preflight = self.workflow.index("\n  downstream-preflight:\n")

@@ -2,6 +2,8 @@
 
 **续作入口（2026-10-09）：[续作交接](memory-bounded-resume.zh-CN.md)**——当前提交、用户裁定、卡点、待回答问题和下次顺序都在那里。
 
+2026-10-09 进展（用户裁定 HA 目标为三节点）：HA Recovery 公式移除只在离线命令中获取的 backup/restore 工作区后，原 2 GiB 配置的 Recovery 可行区间从空变为 1258.6～约 1386.9 MiB；双角色三代生命周期（两次重启）在 1259 MiB、实际 2 GiB cgroup 下真实接受，峰值 214 MiB。失败启动的清理确认为 fail-closed 设计；但下一次启动曾被拒绝，查出物理 slot 控制 claim 误借调用方 workspace 的缺陷（已修复），以及 `persistent_inventory_disk_bytes` 未覆盖失败启动保留的物理向量（用户裁定由配置推导下限，实施中）。原任务计数不变。详见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §18–§19。
+
 2026-10-08 路线调整（用户裁定）：D-04 拆为 D-04a 本地容量与 D-04b 生产校准；允许 Ledger 请求池与 Metadata 窗口并入共享执行池，池内保留终结优先槽；十万冷迁移归入 M3。新顺序为 S0 稳住工作树 → S1 预算闭合 → S2 逐项接受 → S3(M3) 冷构建，见[进度看板 §14](memory-bounded-convergence-plan.zh-CN.md#14-2026-10-08-用户裁定与路线调整)。任务总数因拆分变为 25 项（5 完成 / 20 开放，其中 D-04b 随 D-01 暂缓）。
 
 2026-10-08 P1 最新检查点：Directory/Usage/Governance 三个真实后台消费者已接入 foundation 持有的有限共享 RAM 池，嵌套/排队/最终释放及实际双角色 TLS/ext4/race 验证通过。实际节约 **269135872 B（256.667 MiB）**；修正后的必要 normal 为 **789.386 MiB / 54 claims**，原 2 GiB 配置仍缺 **128.386 MiB**，完整阶段峰值和容量接受未通过。Ledger 请求与 Metadata 窗口仍独立保留。原24项仍5完成/19开放，P2尚未进入。详见[预算可行性裁定](memory-bounded-budget-feasibility.zh-CN.md)与[进度看板](memory-bounded-convergence-plan.zh-CN.md)。此前未共享必要下界1046.053 MiB、旧金额与失败结果保留当时范围。
