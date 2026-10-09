@@ -3,10 +3,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/authenticatedstate"
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/resourcebudget"
@@ -15,6 +19,8 @@ import (
 	"golang.org/x/sys/unix"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -23,8 +29,8 @@ import (
 // Ledger and Usage banks. Functional Manager evidence is not cfg.Validate or
 // real OS pressure / public Default Runtime capacity evidence.
 func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
-	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute)
-	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{})
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 2*time.Minute, 0)
+	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, false)
 }
 
 // Both roles run start, replicated requests, online checkpoints and the full
@@ -32,17 +38,85 @@ func TestHAPhysicalOnlineCheckpointKeepsActualServicesAndTLS(t *testing.T) {
 // generation and two restarts, each from a fresh Manager. Every earlier
 // generation's facts must be served by the restarted Replica.
 func TestHAPhysicalLifecycleSurvivesTwoRestarts(t *testing.T) {
-	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute)
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute, 0)
 	var written []string
 	var revisions [2]uint64
 	for generation := 0; generation < 3; generation++ {
 		var ids []string
-		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions)
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions, false)
 		written = append(written, ids...)
 	}
 }
 
-func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
+// A start that fails after both roles opened their physical windows closes
+// fail-closed: Close keeps every name, extent and fee for replay and reports
+// ErrRecovery, and the process exits. The next process on the same
+// directories must replay it, reclaim the held space and run two complete
+// generations on the same fixed ext4 capacity.
+func TestHAPhysicalFailedStartupIsReplayedByTheNextStart(t *testing.T) {
+	// The startup inventory counts the held Replica vector (about 1.1 GiB of
+	// projection banks here) beside native bytes; the default 512 MiB ceiling
+	// refuses the replaying start. Config does not yet derive this ceiling.
+	ctx, fixture, logger := prepareHAPhysicalOnlineFixture(t, 6*time.Minute, 1536<<20)
+	raw, err := json.Marshal(haPhysicalFailedStartRequest{Configs: fixture.configs, Keys: fixture.keys})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestPath := filepath.Join(t.TempDir(), "request.json")
+	if err := os.WriteFile(requestPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHAPhysicalFailedStartupHelper$", "-test.count=1", "-test.v")
+	command.Env = append(os.Environ(), "HALRO_HA_PHYSICAL_FAILED_START_REQUEST="+requestPath)
+	output, err := command.CombinedOutput()
+	if err != nil || !bytes.Contains(output, []byte("--- PASS: TestHAPhysicalFailedStartupHelper")) {
+		t.Fatalf("failed-start process: %v\n%s", err, output)
+	}
+	held := haPhysicalFixtureSpace(t)
+	t.Log("ext4 available after the failed start exited", held)
+	var written []string
+	var revisions [2]uint64
+	var after [3]uint64
+	for generation := 1; generation < 3; generation++ {
+		var ids []string
+		ids, revisions = runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, generation, written, revisions, false)
+		written = append(written, ids...)
+		after[generation] = haPhysicalFixtureSpace(t)
+	}
+	if after[1] <= held {
+		t.Fatal("next start did not reclaim the failed start's held space", held, after[1])
+	}
+	if diff := int64(after[1]) - int64(after[2]); diff < -(1<<20) || diff > 1<<20 {
+		t.Fatal("restart after replay accumulated space", after[1], after[2])
+	}
+}
+
+type haPhysicalFailedStartRequest struct {
+	Configs [2]config.Config
+	Keys    HAMetadataKeys
+}
+
+func TestHAPhysicalFailedStartupHelper(t *testing.T) {
+	path := os.Getenv("HALRO_HA_PHYSICAL_FAILED_START_REQUEST")
+	if path == "" {
+		t.Skip("actual subprocess only")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request haPhysicalFailedStartRequest
+	if err := json.Unmarshal(raw, &request); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	fixture := haMetadataMaintenanceFixture{configs: request.Configs, keys: request.Keys}
+	runHAPhysicalOnlineGeneration(t, ctx, fixture, logger, 0, nil, [2]uint64{}, true)
+}
+
+func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration, inventory int64) (context.Context, haMetadataMaintenanceFixture, *slog.Logger) {
 	t.Helper()
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if root == "" {
@@ -63,6 +137,9 @@ func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (contex
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.MetadataJournalDiskBytes = 576 << 20
+		if inventory > 0 {
+			limits.PersistentInventoryDiskBytes = inventory
+		}
 		cfg.ResourceBudget = &limits
 		fixture.configs[i] = cfg
 	}
@@ -88,8 +165,10 @@ func prepareHAPhysicalOnlineFixture(t *testing.T, timeout time.Duration) (contex
 // One generation opens both roles from disk, requires every earlier fact on
 // the Replica, replicates three new facts with two online checkpoints between
 // them, then finishes, joins and releases both data directories. It returns
-// the new facts and each role's final Seal revision.
-func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, logger *slog.Logger, generation int, earlier []string, previous [2]uint64) ([]string, [2]uint64) {
+// the new facts and each role's final Seal revision. failStartup instead
+// pressures the Replica before its Metadata receive window and closes both
+// roles without the terminal sequence.
+func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, logger *slog.Logger, generation int, earlier []string, previous [2]uint64, failStartup bool) ([]string, [2]uint64) {
 	t.Helper()
 	var owners [2]*haSelectedRuntimeFoundation
 	var guards [2]*lock.Lock
@@ -126,7 +205,8 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 			t.Fatal(err)
 		}
 		guards[i] = guard
-		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
+		manager := functionalHAMetadataManager(t, cfg)
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, manager, logger)
 		if err != nil {
 			t.Fatal("actual foundation", generation, i, err)
 		}
@@ -158,6 +238,27 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 			if err := f.prepareHASelectedPrimaryStartup(ctx); err != nil {
 				t.Fatal(generation, err)
 			}
+		}
+		if i == 1 && failStartup {
+			if err := manager.SetPressure(resourcebudget.Pressured); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err == nil {
+				t.Fatal("pressured Replica receive window admitted")
+			}
+			var revisions [2]uint64
+			for j, f := range owners {
+				revisions[j] = f.reopened.Seal.Revision
+				if err := f.Close(); err != nil && !errors.Is(err, authenticatedstate.ErrRecovery) {
+					t.Fatal("failed start closed without a replayable hold", j, err)
+				}
+				if err := guards[j].Close(); err != nil {
+					t.Fatal(j, err)
+				}
+			}
+			closed = true
+			logHAPhysicalFixtureSpace(t, generation)
+			return nil, revisions
 		}
 		if i == 1 {
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
@@ -288,5 +389,20 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, fixture ha
 		}
 	}
 	closed = true
+	logHAPhysicalFixtureSpace(t, generation)
 	return ids, revisions
+}
+
+func logHAPhysicalFixtureSpace(t *testing.T, generation int) {
+	t.Helper()
+	t.Log("ext4 available after generation", generation, haPhysicalFixtureSpace(t))
+}
+
+func haPhysicalFixtureSpace(t *testing.T) uint64 {
+	t.Helper()
+	var fs unix.Statfs_t
+	if err := unix.Statfs(os.Getenv("HALRO_EXT4_ROOT"), &fs); err != nil {
+		t.Fatal(err)
+	}
+	return uint64(fs.Bavail) * uint64(fs.Bsize)
 }
