@@ -141,7 +141,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生 | 目标容量下持续压力/恢复，动态输出盘完整接受 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
 | 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22） | 目标容量下的持续压力 |
-| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留 | HA 储备保护、归档多文件发布、迁移故障及重启双端确认矩阵 |
+| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护、归档多文件发布、迁移故障；三节点下的真实 ENOSPC 变体 |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
 
@@ -353,3 +353,16 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 真实 Linux（逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）。三个成员共用同一 ext4，4 GiB 镜像放不下两个 Replica 的完整 bank（第二个 Replica 接收窗口物理分配失败），改用 6 GiB；生产中每个节点各有磁盘。结果 5/5 通过，cgroup 峰值 122～169 MiB，无 OOM。未含 `0ee44582` 时，每次都失败在 `actual final native join: new resource admission stopped by pressure`。
 
 **顺带修复（`75fc4012`）。** 三成员夹具约每 3 次失败 1 次：`SessionRegistry.Close` 把对端先关闭时的 `tls: failed to send closeNotify alert (but connection was closed anyway): ... connection reset by peer` 当作关闭失败。`crypto/tls` 只在自身 socket 关闭成功后才报这个告警，没有资源遗留；`PeerSession.Close` 原已对超时这样处理，现在把 ECONNRESET / EPIPE 一并视为无害（`retiredCloseNotifyError`），其他关闭错误照常返回。生产中 Close 出错会结束 Replica 维护循环（进程退出），所以这也是真实影响。单元测试已做反向验证。证据：`docs/verification/performance/2026-10-09-three-member/`（被忽略）。
+
+## 23. 真实 ENOSPC 下的终结、拒绝与双端重启（I-03）
+
+`TestHAPhysicalActualENOSPCTerminalAndBothRolesRestart`（`1f23dca5`）沿用双角色生命周期夹具：复制事实并在线 checkpoint 后，用外部文件把隔离 ext4 填到真实 ENOSPC 并置满压力；新的复制写入必须因 `ErrPressure` 被拒绝且 peer credit 释放；每个成员终结与关闭前都重新填满（不借用其他成员释放的块），关闭后不得残留自有临时文件；移除填充后下一次启动，Replica 必须读到全部事实，被拒事实在每个成员上都不存在，且启动不回收任何空间（完整关闭不保留回放向量）。生命周期辅助函数的两个布尔参数改为模式枚举。
+
+**发现并修复的缺陷（`4363a46c`）。** 满压力下 Primary 申请 peer credit 会断开复制会话：Primary 的 reserve 在 Directory catch-up workspace 内读取截面，Replica 的应答却用 `withSelectedCut` 申请新的 4096 B IO 准入，被压力拒绝；负回执同样失败，handler 返回错误，会话结束。之后每次重连都失败（发送 Replica 窗口需要同一读取），Primary 的 `rpc` 只等调用方 ctx（期间持有 controller 的 entry 读锁），ticket 保持 live。调用栈经临时插桩确认（已移除）。修复：Replica 观察在接收读屏障内借用 catch-up workspace（与在线 checkpoint、confirmed-prefix 应用相同的加锁顺序），授予、负回执、窗口发送与构造都走已付费通道；写入本身仍在 Primary 上被压力拒绝。
+
+**证据**（真实 Linux，逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）。同一测试、同一 3 GiB 镜像：去掉修复（已确认回退生效）后在 reserve 的 30 秒上限处失败，加上后通过，另重复 3 次通过；新测试与在线 checkpoint、两次重启生命周期、失败启动回放、TLS peer credit 同批通过，cgroup 峰值 250 MB，无 OOM；1536 MiB 业务 ENOSPC、512 MiB caches/derived ENOSPC、6 GiB 三节点满压力测试全部通过；3 GiB 下全部 `Physical` 测试除三个小镜像用例外通过。证据：`docs/verification/performance/2026-10-09-enospc-restart/`（被忽略）。
+
+**仍开放。**
+1. 会话在 `rpc` 等待期间因其他原因（网络）断开时，Primary 仍只等调用方 ctx，并持有 entry 读锁；远端结果未知的 ticket 按 fail-closed 保留，后续 reserve 与 checkpoint 被挡到重启回放。修复需要决定：会话关闭时让等待者立即失败，以及重连时能否用 Replica 新窗口的 `TicketSerial` 作为“未持久化”的证明来解除歧义——后者是协议裁定。
+2. `TestSelectedRuntimeCompressionReopensOldCommonRootAndPublishesPhysicalLocator`（单机，不经过 HA 路径）在 3 GiB 全部 `Physical` 批次中偶发失败：修复后 7 次中 1 次（`disk Usage projection is retired` + `context canceled`），未修复 4 次中 0 次，单独运行 10/10 通过。未归因于本次修改，待查。
+
