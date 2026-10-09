@@ -20,6 +20,23 @@ import (
 // where any new normal admission is refused. A restart must serve the facts on
 // both Replicas. Functional Managers, not cfg.Validate or OS pressure.
 func TestHAPhysicalThreeMemberPressuredTerminalAndRestart(t *testing.T) {
+	ctx, f, logger := prepareHAPhysicalThreeMemberFixture(t, 6*time.Minute)
+	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, haPhysicalGenerationPressuredClose)
+	logHAPhysicalFixtureSpace(t, 0)
+	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
+}
+
+// With two Replicas a ticket holds one promise per peer, so a lost reply can
+// leave one peer known and the other unknown; see
+// TestHAPhysicalLostCreditRepliesResolveByResend.
+func TestHAPhysicalThreeMemberLostCreditRepliesResolveByResend(t *testing.T) {
+	ctx, f, logger := prepareHAPhysicalThreeMemberFixture(t, 6*time.Minute)
+	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, haPhysicalGenerationLostReplies)
+	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
+}
+
+func prepareHAPhysicalThreeMemberFixture(t *testing.T, timeout time.Duration) (context.Context, haThreeGroupFixture, *slog.Logger) {
+	t.Helper()
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if root == "" {
 		t.Skip("requires isolated ext4 with three members' original bank capacity")
@@ -31,8 +48,8 @@ func TestHAPhysicalThreeMemberPressuredTerminalAndRestart(t *testing.T) {
 	if uint64(fs.Blocks)*uint64(fs.Bsize) < 3800<<20 {
 		t.Skip("two Replicas' full Ledger and Usage banks need at least 3800 MiB usable ext4 capacity (4096 MiB backing)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	t.Cleanup(cancel)
 	standalone, _, _ := openBootstrappedRuntime(t)
 	f := prepareHAThreeGroupFixture(t, standalone)
 	// The independent baseline binds this ceiling; set it before publication.
@@ -58,7 +75,5 @@ func TestHAPhysicalThreeMemberPressuredTerminalAndRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, haPhysicalGenerationPressuredClose)
-	logHAPhysicalFixtureSpace(t, 0)
-	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
+	return ctx, f, logger
 }

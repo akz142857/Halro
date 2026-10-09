@@ -312,8 +312,13 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 	}
 	runCtx, stop := context.WithCancel(ctx)
 	done := make(chan error, len(owners))
-	for _, f := range owners {
-		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
+	faults := &haPeerPhysicalLostReplies{}
+	for i, f := range owners {
+		serveCtx := runCtx
+		if i > 0 && mode == haPhysicalGenerationLostReplies {
+			serveCtx = context.WithValue(runCtx, haPeerPhysicalReplicaObserverKey{}, faults.observe)
+		}
+		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(serveCtx) }(f)
 	}
 	joined := false
 	join := func() {
@@ -404,6 +409,9 @@ func runHAPhysicalOnlineGeneration(t *testing.T, ctx context.Context, configs []
 			}
 		}
 		waitWindow()
+	}
+	if mode == haPhysicalGenerationLostReplies {
+		ids = append(ids, exerciseHAPhysicalLostReplies(t, ctx, q, primary, replicas, generation, cost, faults)...)
 	}
 	root := os.Getenv("HALRO_EXT4_ROOT")
 	if mode == haPhysicalGenerationENOSPCClose {
@@ -520,6 +528,9 @@ const (
 	// must be refused, and Close must leave no owned temporary behind. The
 	// fills are removed once every member has closed.
 	haPhysicalGenerationENOSPCClose
+	// After the ordinary facts, credit replies are lost with their sessions;
+	// see exerciseHAPhysicalLostReplies.
+	haPhysicalGenerationLostReplies
 )
 
 // haPhysicalFixtureFillBound bounds a foreign fill of the 3 GiB and 6 GiB
