@@ -813,6 +813,16 @@ func (q *haPeerPhysicalController) releaseUnexposed(ctx context.Context, t *haPe
 		if !t.localWritten[i] || t.completed[i] {
 			continue
 		}
+		if !t.remoteKnown[i] && !t.remoteRejected[i] && !t.remoteAttempted[i] {
+			// A persisted mirror consumed the peer's next serial on this side
+			// only; released unsent, every later reserve to that peer would carry
+			// a serial the mirror has passed. Send it so both sides consume it.
+			mirrored, err := q.mirrorPersisted(ctx, t, i)
+			if err != nil {
+				return err
+			}
+			t.remoteAttempted[i] = mirrored
+		}
 		if t.remoteAttempted[i] && !t.remoteKnown[i] && !t.remoteRejected[i] {
 			// Only the Replica's answer to the identical reserve decides.
 			reply, err := q.rpc(ctx, i, t.messages[i])
@@ -921,6 +931,28 @@ func (q *haPeerPhysicalController) actualTicketUsage(ctx context.Context, t *haP
 	if err != nil {
 		used, total = replication.PhysicalCreditCost{}, replication.PhysicalCreditCost{}
 	}
+	return
+}
+
+// mirrorPersisted reports whether slot i's local mirror of t was recorded.
+func (q *haPeerPhysicalController) mirrorPersisted(ctx context.Context, t *haPeerPhysicalTicket, i int) (found bool, resultErr error) {
+	resultErr = q.owner.reopened.Owners.Components.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
+		return q.owner.withSelectedCut(ctx, func(ctx context.Context, _ statecut.HASelectedCut) error {
+			original, err := q.owner.physicalPublication.ObservePeerPhysicalPromisesFrozen(ctx)
+			if err != nil {
+				return err
+			}
+			for _, old := range original.Tickets {
+				if old.ID == t.messages[i].TicketID {
+					if old.Window != t.messages[i].WindowID || old.Request != t.request {
+						return replication.ErrPhysicalCredit
+					}
+					found = true
+				}
+			}
+			return nil
+		})
+	})
 	return
 }
 
