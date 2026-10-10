@@ -712,3 +712,16 @@ I-03 仍不关闭，还缺：
 - 其他后台写入方在 ENOSPC 下的争用（§31）。
 
 实验过程中修正了 5 个测试或夹具问题，没有发现产品缺陷。本批 23:40 开始，约 1 小时 15 分钟完成。
+
+## 34. 三节点下 HA 物理终结储备的持续压力（I-03）
+
+本节第一部分在运行实验前提交，结果按设计 §9.2 写在后面，门槛事后不调宽。本批 2026-10-11 01:10 开始，基于 `369af07e`。
+
+**范围。** §33 结论里“三节点版本”一条。目标拓扑是三节点（§2-6 用户裁定），每个请求要从两个 Replica 各取得 credit，两者都必须应用终结。其余不覆盖项与 §33 相同：压力状态由测试设置，不经过真实采样器；不含其他后台写入方的争用和历史规模。
+
+**固定配置（运行前提交）。** `TestHAPhysicalThreeMemberReserveSustainedPressure`（opt-in `HALRO_HA_SUSTAINED_PRESSURE=1`，需隔离 ext4）：
+- 与 §33 v6 共用同一测试主体 `exerciseHAPhysicalReserveSustainedPressure`，成员数为 3（1 Primary + 2 Replica）。夹具辅助函数从两成员推广到 N 成员（`openHAPhysicalBusinessGroup`）：每个 Replica 用 Replica 上限与接收窗口，Primary 等待两个 Replica 的 credit 窗口。三节点 fixture 沿用 §27 的 `prepareHAPhysicalThreeMemberFixture`（Metadata journal 上限在激活前设定）。
+- 环境：容器内存 2 GiB、无 swap、2 CPU，`GOMAXPROCS=2`、`GOMEMLIMIT=768MiB`；ext4 镜像 6 GiB（与 §27 相同，两个 Replica 的完整 bank 需要至少 3800 MiB）。测试进程时限 10 分钟。
+- 流程与 §33 v6 完全相同，只是“Replica 应用”“Replica 读到终结”“等待 credit 窗口”对两个 Replica 都要成立，压力设置、checkpoint、ENOSPC 关闭与重开对三个成员都要成立。
+- 硬门槛与 §33 v6 相同，数值不变：终结 ≤ 5 秒；确认 + 两个 Replica 应用 ≤ 5 秒；每轮新准入被拒（未观测轮无在途时须为 `ErrPhysicalAllocation`），恢复后第一次准入成功；每轮费用 5 秒内回到打开快照；checkpoint 推迟须 5 秒内解除；heap ≤ 基线 + 32 MiB，ext4 可用空间 ≥ 基线 − 32 MiB，FD ≤ 基线，三端 `Used`/normal claims 不高于基线；三端 ENOSPC 关闭无自有临时文件；重开后三端读到全部 24 个终结；cgroup 峰值 ≤ 1.5 GiB，`max`/`oom`/`oom_kill` 为 0。
+- 通过标准：连续两次通过；两成员版本在改动后的辅助函数上复跑一次通过；反向验证（同 §33 注入）须让三节点版本失败。

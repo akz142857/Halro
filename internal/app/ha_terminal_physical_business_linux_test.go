@@ -229,14 +229,16 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 // budget after the fixed physical profile is applied.
 func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(member int, limits *config.ResourceBudget)) [2]*haSelectedRuntimeFoundation {
 	t.Helper()
-	return openHAPhysicalBusinessPair(t, ctx, activateHAPhysicalBusinessFixture(t, ctx, false), false, adjust).owners
+	fixture := activateHAPhysicalBusinessFixture(t, ctx, false)
+	return [2]*haSelectedRuntimeFoundation(openHAPhysicalBusinessGroup(t, ctx, fixture.configs[:], fixture.keys.Master, false, adjust).owners)
 }
 
-// haPhysicalBusinessPair is an open Primary and Replica. release stops the
-// transport, then closes each foundation and its directory lock; it runs once,
-// at the latest on cleanup, so a test can reopen the same directories.
-type haPhysicalBusinessPair struct {
-	owners  [2]*haSelectedRuntimeFoundation
+// haPhysicalBusinessGroup is an open Primary (member 0) and its Replicas.
+// release stops the transport, then closes each foundation and its directory
+// lock; it runs once, at the latest on cleanup, so a test can reopen the same
+// directories.
+type haPhysicalBusinessGroup struct {
+	owners  []*haSelectedRuntimeFoundation
 	release func()
 }
 
@@ -277,18 +279,18 @@ func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context, strict
 	return fixture
 }
 
-// openHAPhysicalBusinessPair opens an activated fixture's members with the
-// fixed physical profile, each from a fresh Manager, and serves their TLS
-// transport until the Primary is startup ready. strict serves the transport
-// the Runtime uses with the physical reserve, with the peer credit controller
-// that admission and online checkpoints go through, and waits for the
-// Replica's first credit window; it carries the lifecycle fixture's Metadata
-// and inventory ceilings.
-func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, strict bool, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessPair {
+// openHAPhysicalBusinessGroup opens activated members (member 0 the Primary)
+// with the fixed physical profile, each from a fresh Manager, and serves their
+// TLS transport until the Primary is startup ready. strict serves the
+// transport the Runtime uses with the physical reserve, with the peer credit
+// controller that admission and online checkpoints go through, and waits for
+// every Replica's first credit window; it carries the lifecycle fixture's
+// Metadata and inventory ceilings.
+func openHAPhysicalBusinessGroup(t *testing.T, ctx context.Context, configs []config.Config, master []byte, strict bool, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessGroup {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	var owners [2]*haSelectedRuntimeFoundation
-	var guards [2]*lock.Lock
+	owners := make([]*haSelectedRuntimeFoundation, len(configs))
+	guards := make([]*lock.Lock, len(configs))
 	var stop context.CancelFunc
 	var done chan error
 	var once sync.Once
@@ -296,7 +298,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		once.Do(func() {
 			if stop != nil {
 				stop()
-				for range 2 {
+				for range owners {
 					if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
 						t.Error(err)
 					}
@@ -316,7 +318,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		})
 	}
 	t.Cleanup(release)
-	for i, cfg := range fixture.configs {
+	for i, cfg := range configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
 		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
@@ -336,7 +338,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		limits.LedgerProjectionDiskBytes = 80 << 20
 		limits.LedgerSegmentIndexDiskBytes = 48 << 20
 		limits.UsageProjectionDiskBytes = 128 << 20
-		if i == 1 {
+		if i > 0 {
 			// Each of the finite 32 received records owes its own worst-case
 			// 16 MiB Ledger and Usage COW extent before native acceptance.
 			limits.LedgerProjectionDiskBytes = 576 << 20
@@ -357,7 +359,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		if err != nil {
 			t.Fatal(err)
 		}
-		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, master, guard, functionalHAMetadataManager(t, cfg), logger)
 		if err != nil {
 			_ = guard.Close()
 			t.Fatal("actual physical business foundation", i, err)
@@ -380,7 +382,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 			}
 			continue
 		}
-		if i == 1 {
+		if i > 0 {
 			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
 				t.Fatal("Replica Metadata receive window", err)
 			}
@@ -390,7 +392,7 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		}
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
-	stop, done = cancelRun, make(chan error, 2)
+	stop, done = cancelRun, make(chan error, len(owners))
 	for _, f := range owners {
 		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
 	}
@@ -405,9 +407,9 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 		}
 	}
 	if strict {
-		waitHAPhysicalCreditWindow(t, ctx, primary)
+		waitHAPhysicalCreditWindow(t, ctx, primary, len(owners)-1)
 	}
-	return haPhysicalBusinessPair{owners, release}
+	return haPhysicalBusinessGroup{owners, release}
 }
 
 // exhaustHAPhysicalFixture fills the isolated runner ext4 to actual ENOSPC
@@ -459,9 +461,9 @@ func exhaustHAPhysicalFixture(path string, bound int64) error {
 	return nil
 }
 
-// waitHAPhysicalCreditWindow waits until every Replica has sent the Primary a
-// fresh physical credit window.
-func waitHAPhysicalCreditWindow(t *testing.T, ctx context.Context, primary *haSelectedRuntimeFoundation) {
+// waitHAPhysicalCreditWindow waits until each of the Primary's replicas has
+// sent it a fresh physical credit window.
+func waitHAPhysicalCreditWindow(t *testing.T, ctx context.Context, primary *haSelectedRuntimeFoundation, replicas int) {
 	t.Helper()
 	q := primary.replication.peerPhysical.Load()
 	if q == nil {
@@ -471,7 +473,10 @@ func waitHAPhysicalCreditWindow(t *testing.T, ctx context.Context, primary *haSe
 	defer deadline.Stop()
 	for {
 		q.mu.Lock()
-		ready := q.peers[0].window.Operation == replication.PhysicalCreditWindow
+		ready := replicas <= len(q.peers)
+		for p := 0; ready && p < replicas; p++ {
+			ready = q.peers[p].window.Operation == replication.PhysicalCreditWindow
+		}
 		q.mu.Unlock()
 		if ready {
 			return

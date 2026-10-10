@@ -21,7 +21,7 @@ import (
 
 // Thresholds of the HA physical-reserve sustained-pressure experiment, fixed
 // before any run (design §9.2, board §33). They are screening values for a
-// local two-member fixture, not production SLOs, and are never widened after
+// local two- or three-member fixture, not production SLOs, and are never widened after
 // a run.
 const (
 	haSustainedRounds          = 24 // alternating unobserved and observed ENOSPC
@@ -55,6 +55,17 @@ const (
 // members must close at ENOSPC without owned temporaries, and a fresh open of
 // the same directories must serve every terminal on both members.
 func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
+	exerciseHAPhysicalReserveSustainedPressure(t, 2)
+}
+
+// The three-node variant (board §34): every accepted request needs credit from
+// both Replicas, both must apply every terminal, and all three members close
+// at ENOSPC and reopen. Thresholds are the two-member ones.
+func TestHAPhysicalThreeMemberReserveSustainedPressure(t *testing.T) {
+	exerciseHAPhysicalReserveSustainedPressure(t, 3)
+}
+
+func exerciseHAPhysicalReserveSustainedPressure(t *testing.T, members int) {
 	if os.Getenv("HALRO_HA_SUSTAINED_PRESSURE") != "1" {
 		t.Skip("opt-in sustained HA reserve experiment")
 	}
@@ -66,8 +77,6 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	if err := unix.Statfs(root, &fs); err != nil || fs.Type != unix.EXT4_SUPER_MAGIC {
 		t.Fatal("actual ext4 fixture", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
 	profile := ledger.HASelectedCompletionWorkspaceRequirements()
 	var completionRAM int64
 	for _, slot := range profile {
@@ -76,9 +85,27 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	// v5: the fixed physical profile, with the strict pair's Metadata and
 	// inventory ceilings; one request is in flight at a time.
 	var adjust func(int, *config.ResourceBudget)
-	fixture := activateHAPhysicalBusinessFixture(t, ctx, true)
-	pair := openHAPhysicalBusinessPair(t, ctx, fixture, true, adjust)
-	primary, replica := pair.owners[0], pair.owners[1]
+	var (
+		ctx     context.Context
+		configs []config.Config
+		master  []byte
+	)
+	switch members {
+	case 2:
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		fixture := activateHAPhysicalBusinessFixture(t, ctx, true)
+		configs, master = fixture.configs[:], fixture.keys.Master
+	case 3:
+		var fixture haThreeGroupFixture
+		ctx, fixture, _ = prepareHAPhysicalThreeMemberFixture(t, 8*time.Minute)
+		configs, master = fixture.configs[:], fixture.keys.Master
+	default:
+		t.Fatal("unsupported member count", members)
+	}
+	pair := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, adjust)
+	primary, replicas := pair.owners[0], pair.owners[1:]
 	c := primary.reopened.Owners.Components
 	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill"), filepath.Join(root, "foreign-sustained-idle-fill")}
 	t.Cleanup(func() {
@@ -91,7 +118,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		baselineHeap  uint64
 		baselineSpace uint64
 		baselineFDs   int
-		baselineStats [2]resourcebudget.Stats
+		baselineStats = make([]resourcebudget.Stats, members)
 		terminalMax   time.Duration
 		checkpoints   int
 		deferrals     int
@@ -100,7 +127,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	// v2: the HA fixture's resident owners hold Completion RAM and a
 	// completion reservation from startup, so each round's fees are compared
 	// with this idle snapshot rather than with zero.
-	var opened [2]resourcebudget.Stats
+	opened := make([]resourcebudget.Stats, members)
 	for i, f := range pair.owners {
 		opened[i] = f.reopened.Owners.Components.Budget.Snapshot()
 		t.Logf("HA_SUSTAINED_OPENED %d completion_reserved=%+v active=%+v completion=%+v", i, opened[i].CompletionReserved, opened[i].Classes[resourcebudget.Active], opened[i].Classes[resourcebudget.Completion])
@@ -120,7 +147,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		if err != nil {
 			t.Fatal("RequestAccepted", round, err)
 		}
-		waitHASustainedApplied(t, ctx, primary, replica, round)
+		waitHASustainedApplied(t, ctx, primary, replicas, round)
 		if err := exhaustHAPhysicalFixture(fills[0], haPhysicalFixtureFillBound); err != nil {
 			t.Fatal(round, err)
 		}
@@ -174,7 +201,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		if err := errors.Join(work.Close(), work.Active.Release()); err != nil {
 			t.Fatal("accepted request RAM retirement", round, err)
 		}
-		waitHASustainedApplied(t, ctx, primary, replica, round)
+		waitHASustainedApplied(t, ctx, primary, replicas, round)
 		if err := retire(); err != nil {
 			t.Fatal("accepted completion owners", round, err)
 		}
@@ -211,8 +238,10 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		}
 		// Reading the fact is new work, refused while pressured; check it
 		// after recovery (v3).
-		if _, found, err := replica.reopened.Owners.Components.Ledger.ReadFinalization(ctx, request.RequestID); err != nil || !found {
-			t.Fatal("Replica did not apply the accepted terminal", round, found, err)
+		for r, replica := range replicas {
+			if _, found, err := replica.reopened.Owners.Components.Ledger.ReadFinalization(ctx, request.RequestID); err != nil || !found {
+				t.Fatal("Replica did not apply the accepted terminal", round, r, found, err)
+			}
 		}
 		// Neither refusal may outlive the shortage: the first admission
 		// after recovery must succeed.
@@ -246,7 +275,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 					t.Fatal("online checkpoint did not renew in place", round, i, before, f.reopened.Seal.Revision)
 				}
 			}
-			waitHAPhysicalCreditWindow(t, ctx, primary)
+			waitHAPhysicalCreditWindow(t, ctx, primary, len(replicas))
 			checkpoints++
 			if checkpoints == 1 {
 				runtime.GC()
@@ -293,7 +322,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		}
 	}
 	pair.release()
-	for i, cfg := range fixture.configs {
+	for i, cfg := range configs {
 		if left := haPhysicalOwnedTemporaries(t, cfg.Storage.DataDir); len(left) != 0 {
 			t.Fatal("owned temporaries survived", i, left)
 		}
@@ -303,7 +332,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reopened := openHAPhysicalBusinessPair(t, ctx, fixture, true, adjust)
+	reopened := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, adjust)
 	for i, f := range reopened.owners {
 		for _, id := range finalized {
 			if _, found, err := f.reopened.Owners.Components.Ledger.ReadFinalization(ctx, id); err != nil || !found {
@@ -327,9 +356,9 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	reopened.release()
 }
 
-// waitHASustainedApplied is waitHAPhysicalApplied under the experiment's
-// fixed bound.
-func waitHASustainedApplied(t *testing.T, ctx context.Context, primary, replica *haSelectedRuntimeFoundation, round int) {
+// waitHASustainedApplied is waitHAPhysicalApplied for every Replica under the
+// experiment's fixed bound.
+func waitHASustainedApplied(t *testing.T, ctx context.Context, primary *haSelectedRuntimeFoundation, replicas []*haSelectedRuntimeFoundation, round int) {
 	t.Helper()
 	bounded, stop := context.WithTimeout(ctx, haSustainedAppliedWithin)
 	defer stop()
@@ -337,11 +366,13 @@ func waitHASustainedApplied(t *testing.T, ctx context.Context, primary, replica 
 	if err := primary.replication.coordinator.WaitConfirmed(bounded, through); err != nil {
 		t.Fatal("durable prefix confirmation", round, err)
 	}
-	for replica.replication.publisher.Snapshot().AppliedIndex < through {
-		select {
-		case <-bounded.Done():
-			t.Fatal("Replica apply", round, bounded.Err())
-		case <-time.After(10 * time.Millisecond):
+	for r, replica := range replicas {
+		for replica.replication.publisher.Snapshot().AppliedIndex < through {
+			select {
+			case <-bounded.Done():
+				t.Fatal("Replica apply", round, r, bounded.Err())
+			case <-time.After(10 * time.Millisecond):
+			}
 		}
 	}
 }
