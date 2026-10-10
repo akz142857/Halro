@@ -664,3 +664,10 @@ I-03 剩余：见 §32 结论。
 - 每轮：接受 1 个请求 → 填满（奇数轮设压力）→ 在途时新准入必须被拒（原因只记录）→ checkpoint 可拒不得进恢复 → 再填满、零空闲块下完成终结，Replica 应用，释放 ticket → **仍满盘、无在途时新准入必须被拒；偶数轮（未观测）必须是 `ErrPhysicalAllocation`** → 删除填充、解除压力 → Replica 读到终结、第一次准入成功 → 费用在 5 秒内回到打开快照。
 - 每 3 轮的 checkpoint 之后等待 Replica 的新 credit 窗口（与生命周期测试相同）；v4 的推迟重试（5 秒）保留。
 - 重开同样用严格模式。其余门槛（终结 ≤ 5 秒、确认与应用 ≤ 5 秒、heap/空间/FD/预算漂移、ENOSPC 关闭无临时文件、重开读到全部终结、cgroup）不变。
+
+**v5 结果：未通过。** 第 1 次运行（cgroup 峰值 204 MB，`max`/`oom`/`oom_kill` 均为 0）：
+- 打开快照：Primary Completion 类 270393344 B，Replica 371671040 B，`CompletionReserved` 均为 0。
+- 第 0、1 轮通过。在途时的新准入在两轮都以 `ErrPhysicalCredit`（live ticket）被拒；无在途时，第 0 轮（未观测）以 `HA original Ledger terminal window: physical completion allocation unavailable` 被拒，第 1 轮（已观测）以压力被拒。
+- 第 2 轮（未观测）无在途时的新准入**成功**。前提有误：已接受请求的储备释放后可能把预分配的块还给文件系统（§31 在终结发布前再填一次就是这个原因），此时已不是 ENOSPC；第 0 轮被拒只是那次释放没有还回足够的块。
+
+**v6 登记（运行前提交）。** 释放已接受请求后再填一次，确认空闲块为 0，再做无在途准入的判定；其余不变。

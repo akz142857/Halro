@@ -80,7 +80,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	pair := openHAPhysicalBusinessPair(t, ctx, fixture, true, adjust)
 	primary, replica := pair.owners[0], pair.owners[1]
 	c := primary.reopened.Owners.Components
-	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill")}
+	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill"), filepath.Join(root, "foreign-sustained-idle-fill")}
 	t.Cleanup(func() {
 		for _, fill := range fills {
 			_ = os.Remove(fill)
@@ -179,8 +179,15 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal("accepted completion owners", round, err)
 		}
 		finalized = append(finalized, request.RequestID)
-		// Nothing is in flight and the filesystem is still full: a new
-		// admission must stop at the physical reserve, unobserved or not.
+		// Nothing is in flight. Releasing the accepted reserve can return its
+		// blocks (v6), so fill again: at actual ENOSPC a new admission must
+		// stop at the physical reserve, unobserved or not.
+		if err := exhaustHAPhysicalFixture(fills[2], haPhysicalFixtureFillBound); err != nil {
+			t.Fatal(round, err)
+		}
+		if err := unix.Statfs(root, &fs); err != nil || fs.Bavail != 0 {
+			t.Fatal("idle admission would not run at ENOSPC", round, fs.Bavail, err)
+		}
 		if _, closeNew, err := primary.peerPhysicalTerminalAdmission(ctx, 2); err == nil {
 			_ = closeNew()
 			t.Fatal("new admission succeeded at actual ENOSPC with nothing in flight", round, observed)
@@ -291,7 +298,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal("owned temporaries survived", i, left)
 		}
 	}
-	for _, fill := range fills[2:] {
+	for _, fill := range fills[3:] {
 		if err := os.Remove(fill); err != nil {
 			t.Fatal(err)
 		}
