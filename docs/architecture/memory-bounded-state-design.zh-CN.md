@@ -27,7 +27,7 @@
 | C-3 HA 与完整物理模式 | 业务七根/TLS 已接；公共 HA physical opening 仍拒绝 | 全角色原目标预备、确认、在线维护、切换及压力/故障接受 |
 | D-01 / R-01 | 按先前用户指示暂缓生产取证和发布观察 | 提供现场入口、窗口与实际发布镜像后另行取证 |
 
-§8.2 的原始完成条件保持，24 项中 5 项完成、19 项开放，不换算工作量百分比。逐项本轮状态见[剩余任务清单](../verification/performance/2026-10-07-memory-state-authentication-reuse/remaining-task-register.json)。当前运行边界见[维护契约](../contracts/memory-bounded-maintenance.zh-CN.md)，原逐轮日志保存在[历史附件](memory-bounded-state-progress-history.zh-CN.md)，其中当时的“未接入”“正在运行”不代表当前状态。
+§8.2 的原始完成条件保持，25 项（D-04 于 2026-10-08 拆为 D-04a/D-04b）中 5 项完成、20 项开放，不换算工作量百分比。逐项本轮状态见[剩余任务清单](../verification/performance/2026-10-07-memory-state-authentication-reuse/remaining-task-register.json)。当前运行边界见[维护契约](../contracts/memory-bounded-maintenance.zh-CN.md)，原逐轮日志保存在[历史附件](memory-bounded-state-progress-history.zh-CN.md)，其中当时的“未接入”“正在运行”不代表当前状态。
 
 
 - 日期：2026-10-02
@@ -479,11 +479,11 @@ Replica 应用、晋升、回退和重建要核对 confirmed ordering index 与�
 
 当前实现以[维护契约](../contracts/memory-bounded-maintenance.zh-CN.md)和本文开头的当前裁定为准。旧的逐轮实施日志移入[历史附件](memory-bounded-state-progress-history.zh-CN.md)，保留源码范围、原命令、失败与未验证项；历史局部通过不能叠加为当前整体接受。
 
-- 原任务总计 24 项，A-01～A-03、I-01～I-02 已完成；其余 19 项按 §8.2 原条件开放。
+- 原任务总计 25 项（D-04 于 2026-10-08 拆为 D-04a/D-04b），A-01～A-03、I-01～I-02 已完成；其余 20 项按 §8.2 原条件开放：17 项进行中，D-01、D-04b、R-01 按用户指示暂缓、未开始。
 - 本地实现、当前源码门禁、目标 Linux 功能证据、目标容量和生产接受分别记录；缺少任一任务条件，不写完成。
 - 性能候选先写职责和阈值、冻结所有编译输入与二进制，再运行；失败不延长 deadline、不扩大容量、不省略认证或实际 owner 退出。
 - 本轮仅新增筛选失败且默认关闭的私有认证复用选项和 Roll 夹具纠正；未开放 HA 物理启动、未发布、未写生产。
-- 19 项逐项原条件及本轮证据索引见[机器清单](../verification/performance/2026-10-07-memory-state-authentication-reuse/remaining-task-register.json)。
+- 拆分前 19 项逐项原条件及 2026-10-07 证据索引见[机器清单](../verification/performance/2026-10-07-memory-state-authentication-reuse/remaining-task-register.json)。
 
 ### 8.2 任务、依赖与完成条件
 
@@ -586,7 +586,7 @@ M1 不是默认生产发布点。若 profile 表明仍有显著消费者未改�
 
 ## 10. 当前完成状态
 
-截至 2026-10-08，24 项中 5 项完成、19 项开放。显式迁移后的 Standalone 默认 Runtime 使用七根增量和共同维护；已激活的 HA Primary/Replica 业务 Runtime 接七根、真实 TLS 确认和增量恢复。整阶段接受仍未完成。
+截至 2026-10-10，25 项（D-04 于 2026-10-08 拆为 D-04a/D-04b）中 5 项完成、20 项开放（17 项进行中、3 项暂缓未开始）。显式迁移后的 Standalone 默认 Runtime 使用七根增量和共同维护；已激活的 HA Primary/Replica 业务 Runtime 接七根、真实 TLS 确认和增量恢复。整阶段接受仍未完成。
 
 2026-10-08 已按用户确认开始原 I-03 的实际开发：为共享工作池、账务与复制读取权限、Ledger/Metadata 读取、维护恢复、Usage 排队加入每阶段 30 秒硬上限；已进入的 IO/确认/物理 join 保留原上下文与费用。新增命令备份密文实际 Linux ENOSPC、精确临时输出清理与源事实保留验证。条件级进展见[进度看板 §9](memory-bounded-convergence-plan.zh-CN.md#9-原-i-03本批实现和未满足条件)。本批未消除容量缺口：三后台共享后的必要 normal 为 789.386 MiB/54 claims，原 2 GiB/1387 MiB Recovery 仍缺 128.386 MiB；不能靠等待超时退掉已接纳费用制造达标。I-03 的完整 HA 物理 ENOSPC/终结保护、持续压力、消费者覆盖及目标容量条件仍未满足。
 
