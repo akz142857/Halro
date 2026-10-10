@@ -380,3 +380,29 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 
 **仍开放。** 管理审计批次路径（`admin_audit_physical.go`）在 ticket 结果未知时仍把审计批次所有者标记为退休；ticket 现在会被后续操作解决，但该所有者本身的退休状态未改。会话旧连接的关闭通知若晚于新会话上的重发到达，会让这次重发被视为丢失，最坏情况是等到 30 秒上限，再由后续操作解决，不会产生错误结果。
 
+
+## 25. 维护 head 校验遇锁忙不再锁死恢复
+
+**起因。** 门禁第 3 轮在 race 分片失败：`TestSelectedRuntimeSeventyLiveRollsAndCompressionUseFiniteDirectoryPages` 报 “create selected accounting manager: verify maintenance Ledger prefix: authenticated snapshot reader busy”。`ValidateNativeWriter` 在维护 head 下校验 projection 与 native writer，这些校验只尝试加锁；读者或写者短暂持锁时返回 `ErrBusy`，`MaintenanceLease.WithHead` 把它当作校验失败并锁定 accounting recovery，选定运行时启动失败。
+
+**修复（`deb9f257`，合入 `d237342c`）。** 只因锁忙被拒的校验什么也没读，不能证明前缀有问题，`WithHead` 不再为此锁定恢复；忙与损坏或来源不一致同时出现时照旧锁定。`ValidateNativeWriter` 对这种拒绝按退避重试，上限 30 秒，与其他准入等待阶段一致。
+
+**测试。** `TestAuthenticatedWriterValidationWaitsOutAMomentarilyHeldLock` 持 projection 锁 50 ms：修复前复现与门禁完全相同的错误，修复后通过。
+
+## 26. projection 页包的准入背压
+
+**裁定。** 用户选择方案 1：在页包写满之前回收并削减新业务，而不是放大页包上限。
+
+**问题。** 公共 checkpoint 的 repack 是回收过时页的唯一途径，但只按定时器运行。突发负载先写满 Usage 页包；满页包无法归约 checkpoint 必须发布的积压，于是此后每次 checkpoint 都失败；Ledger 页包写满会在 append 内拒绝 Apply 并锁定 accounting recovery。`authenticatedstate` 也只在 append 中途碰到上限时才发现，失败事务已写入页面，store 自我中毒，所有者随之退休。
+
+**实现。**
+1. `authenticatedstate`（`f676433d`）：剩余空间不足一个 append 上限时，整笔更新在写入任何页面前以 `ErrCapacity` 拒绝，store 保持健康且为最新；剩余空间放不下两次更新时 repack 即可进行；`PackUsage` 无等待报告页包用量。
+2. `usage`（`290b0b93`）：归约遇 `ErrCapacity` 干净停止，之前的更新连同水位完整提交，下次追账从停止处继续；不再算作导致退休的变更，live 路径不再包装为 `ErrRecovery`。live 追账每笔事务归约至多 8 条记录、共享页路径重写；`PackAdmission` 报告单条记录最大追加字节与用量。
+3. `ledger`（`2fad7085`）：同样记录并通过 `PackAdmission`/`PackUsage` 报告。
+4. `app`（`5621ee6d`，`runtime_projection_pack.go`）：任一页包用掉上次 checkpoint 后剩余空间的一半即触发 checkpoint；页包剩余空间不足“观测到的单条最大字节 × 2 × 仍欠记录数”（Usage 未归约后缀加每个已准入请求 8 条）时，网关以 503 加 `Retry-After` 削减新业务（与 checkpoint 期间相同），并立即唤醒 checkpoint。已准入请求照常完成；没有观测记录的页包不削减。
+
+**测试。** 800 个请求进 64 MiB Usage 页包、600 个请求进 16 MiB Ledger 页包，经同一 handler 票据全部落地，Usage 合计正确，Close 干净；无准入时 Usage 突发约在第 300 个请求写满页包，Close 失败。另有 1800 请求长突发通过。`authenticatedstate` 新增 `TestStoreRefusesUpdateWithoutAppendRoomAndRecoversAfterRepack`、`TestStoreRepackQualifiesWhenAppendRoomIsLow`。
+
+**合入（`dcb6746a`）后的回归。** 见续作交接 §4-1；随后在合入后的提交上跑门禁第 5 轮。
+
+**仍开放。** 单机压缩测试的偶发失败（`context canceled` 原因链，§23-2）仍未归因，与 §25 的锁忙失败不是同一现象。
