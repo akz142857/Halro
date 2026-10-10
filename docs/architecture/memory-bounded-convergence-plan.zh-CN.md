@@ -405,6 +405,8 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 
 **合入（`dcb6746a`）后发现的缺陷（`3db39877`）。** 补跑 race 时 `TestSelectedRuntimeLedgerBurstReclaimsPackBeforeItFills` 在第 384 个请求失败：“apply durable Ledger record: … authenticated snapshot reader busy”。`Store.PackUsage` 以 `TryLock` 取 store 锁读取用量，而 `update` 对同一把锁也只尝试加锁、失败即 `ErrBusy`；准入对每个请求轮询 `PackUsage`，于是轮询恰好持锁时，另一个请求 append 内的 Apply 被拒，accounting 进入恢复。现在 store 在持锁改动 extent、物理所有者或关闭状态处把用量发布到原子视图，`PackUsage` 不再加锁。新增 `TestPackUsageNeverHoldsTheStoreLockAgainstAnUpdate`：修复前 0.1 秒内以同一错误失败（已确认测试确实加入旧代码），修复后通过。
 
-**回归。** 见续作交接 §4-1；随后在合入后的提交上跑门禁第 5 轮。
+**门禁第 5 轮失败与测试修复（`9c88ee24`）。** `88bff47f` 上的第 5 轮在 app 第 4 分片失败：`TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness/refuse_damage_data_memory-audit-1.cache` 报 “damaged selected artifact opened business”。在 `c640bd40`、`d237342c` 上各 3 次通过，从 `f676433d`（本分支第一个提交）起每次失败。原因：repack 在放不下两次更新时也会进行，夹具的在线 checkpoint 因此多发布一次 revision（`liveRevisions` 2 → 3，最终 revision 13 → 14）；启动按 `revision % 2` 读取缓存槽位，最终 revision 为偶数时 1 号槽是不被读取的旧槽，测试写死损坏 1 号槽，Open 正确地忽略了它。产品的 fail-closed 行为未变：损坏所选的 0 号槽仍被拒绝。测试改为损坏最终 revision 对应的槽位，在本分支（0 号槽）与 `c640bd40`（1 号槽）上均通过。
+
+**回归。** 见续作交接 §4-1；随后在测试修复后的提交上跑门禁第 6 轮。
 
 **仍开放。** 单机压缩测试的偶发失败（`context canceled` 原因链，§23-2）仍未归因，与 §25 的锁忙失败不是同一现象。
