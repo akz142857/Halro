@@ -15,6 +15,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 	"golang.org/x/sys/unix"
 )
@@ -29,8 +30,13 @@ const (
 	haSustainedTerminalWithin  = 5 * time.Second
 	haSustainedAppliedWithin   = 5 * time.Second
 	haSustainedQuiesceWithin   = 5 * time.Second
-	haSustainedHeapDrift       = 32 << 20
-	haSustainedSpaceDrift      = 32 << 20
+	// v4: a checkpoint refused with ErrPhysicalCredit while a Replica
+	// promise is outstanding is the designed deferral the scheduled loop
+	// retries on its next tick; it may be retried here and must clear
+	// within this bound.
+	haSustainedDeferWithin = 5 * time.Second
+	haSustainedHeapDrift   = 32 << 20
+	haSustainedSpaceDrift  = 32 << 20
 	// The cgroup peak ≤ 1.5 GiB with no max/oom/oom_kill event is read from
 	// the runner's cgroup record after the run.
 )
@@ -90,6 +96,8 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		baselineStats [2]resourcebudget.Stats
 		terminalMax   time.Duration
 		checkpoints   int
+		deferrals     int
+		deferMax      time.Duration
 	)
 	// v2: the HA fixture's resident owners hold Completion RAM and a
 	// completion reservation from startup, so each round's fees are compared
@@ -210,9 +218,19 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		if (round+1)%haSustainedCheckpointEvery == 0 {
 			for i, f := range pair.owners {
 				before := f.reopened.Seal.Revision
-				if err := f.checkpointHAPhysicalOnline(ctx); err != nil {
-					t.Fatal("online checkpoint with space", round, i, err)
+				deferStart := time.Now()
+				for {
+					err := f.checkpointHAPhysicalOnline(ctx)
+					if err == nil {
+						break
+					}
+					if !errors.Is(err, replication.ErrPhysicalCredit) || f.recovery.Load() || time.Since(deferStart) > haSustainedDeferWithin {
+						t.Fatal("online checkpoint with space", round, i, time.Since(deferStart), err)
+					}
+					deferrals++
+					time.Sleep(50 * time.Millisecond)
 				}
+				deferMax = max(deferMax, time.Since(deferStart))
 				if f.reopened.Seal.Revision != before+1 || f.recovery.Load() {
 					t.Fatal("online checkpoint did not renew in place", round, i, before, f.reopened.Seal.Revision)
 				}
@@ -247,8 +265,8 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	for i, f := range pair.owners {
 		waitHASustainedQuiescent(t, ctx, f, opened[i], baselineStats[i], true)
 	}
-	t.Logf("HA_SUSTAINED_SUMMARY rounds=%d checkpoints=%d terminal_max=%s heap=%d/%d space=%d/%d elapsed=%s",
-		haSustainedRounds, checkpoints, terminalMax, ms.HeapAlloc, baselineHeap, haPhysicalFixtureSpace(t), baselineSpace, time.Since(started))
+	t.Logf("HA_SUSTAINED_SUMMARY rounds=%d checkpoints=%d deferrals=%d defer_max=%s terminal_max=%s heap=%d/%d space=%d/%d elapsed=%s",
+		haSustainedRounds, checkpoints, deferrals, deferMax, terminalMax, ms.HeapAlloc, baselineHeap, haPhysicalFixtureSpace(t), baselineSpace, time.Since(started))
 	for i, f := range pair.owners {
 		fill := filepath.Join(root, fmt.Sprintf("foreign-sustained-finish-fill-%d", i))
 		fills = append(fills, fill)

@@ -647,3 +647,7 @@ I-03 剩余：见 §32 结论。
 **v3 登记（运行前提交）。** 两处，均不调宽门槛：
 - Replica 读取终结事实移到解除压力之后。
 - 每轮的费用检查改为在已登记的 5 秒静默上限内等待回到打开快照（v1 的瞬时值说明退还是异步完成的）；超过 5 秒仍判失败。
+
+**v3 结果：未通过。** 第 1 次运行（cgroup 峰值 192 MB，无 OOM）：第 0、1 轮全部通过（含已观测轮的 Replica 读取与费用回到快照），第 2 轮结束时有空间的在线 checkpoint 在 Primary 上返回 `original Replica physical IO promise unavailable or changed`（`ErrPhysicalCredit`），未进入恢复。对照代码：checkpoint 入口 `withAdmissionPaused` 经 `RequireNoPeerPhysicalPromises` 要求没有未了结的 Replica 物理承诺，否则拒绝；生产中定时 checkpoint（`runUsageMaintenance`）对任何错误只记 `memory state common checkpoint deferred`，下个周期再试。这是设计内的推迟，v3 只按一次严格调用判读，没有预料到它。
+
+**v4 登记（运行前提交）。** 有空间的在线 checkpoint 若以 `ErrPhysicalCredit` 被拒，且节点未进入恢复，可每 50 ms 重试，须在 5 秒内成功；推迟次数与最长等待只记录。其他错误、进入恢复或超过 5 秒仍判失败。其余门槛不变。
