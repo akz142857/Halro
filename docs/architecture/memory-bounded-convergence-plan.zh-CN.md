@@ -403,6 +403,8 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 
 **测试。** 800 个请求进 64 MiB Usage 页包、600 个请求进 16 MiB Ledger 页包，经同一 handler 票据全部落地，Usage 合计正确，Close 干净；无准入时 Usage 突发约在第 300 个请求写满页包，Close 失败。另有 1800 请求长突发通过。`authenticatedstate` 新增 `TestStoreRefusesUpdateWithoutAppendRoomAndRecoversAfterRepack`、`TestStoreRepackQualifiesWhenAppendRoomIsLow`。
 
-**合入（`dcb6746a`）后的回归。** 见续作交接 §4-1；随后在合入后的提交上跑门禁第 5 轮。
+**合入（`dcb6746a`）后发现的缺陷（`3db39877`）。** 补跑 race 时 `TestSelectedRuntimeLedgerBurstReclaimsPackBeforeItFills` 在第 384 个请求失败：“apply durable Ledger record: … authenticated snapshot reader busy”。`Store.PackUsage` 以 `TryLock` 取 store 锁读取用量，而 `update` 对同一把锁也只尝试加锁、失败即 `ErrBusy`；准入对每个请求轮询 `PackUsage`，于是轮询恰好持锁时，另一个请求 append 内的 Apply 被拒，accounting 进入恢复。现在 store 在持锁改动 extent、物理所有者或关闭状态处把用量发布到原子视图，`PackUsage` 不再加锁。新增 `TestPackUsageNeverHoldsTheStoreLockAgainstAnUpdate`：修复前 0.1 秒内以同一错误失败（已确认测试确实加入旧代码），修复后通过。
+
+**回归。** 见续作交接 §4-1；随后在合入后的提交上跑门禁第 5 轮。
 
 **仍开放。** 单机压缩测试的偶发失败（`context canceled` 原因链，§23-2）仍未归因，与 §25 的锁忙失败不是同一现象。
