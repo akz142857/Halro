@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/statecut"
@@ -47,110 +48,8 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	fixture := prepareHAMetadataMaintenanceFixture(t)
-	prepareHAMetadataMaintenanceArtifacts(t, fixture)
-	completeHAMemoryActivationBoundary(t, fixture)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	for _, cfg := range fixture.configs {
-		guard, err := lock.Acquire(cfg.Storage.DataDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		activation, err := ActivateHAMemoryRuntime(ctx, cfg, fixture.keys, guard, functionalHAMetadataManager(t, cfg), logger)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := activation.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := guard.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	var owners [2]*haSelectedRuntimeFoundation
-	for i, cfg := range fixture.configs {
-		limits := *cfg.ResourceBudget
-		limits.TotalRAMBytes = 2 << 30
-		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
-		limits.CompletionRAMBytes = 1 << 30
-		limits.TotalUnconfirmedBytes = 64 << 20
-		limits.IOUnconfirmedBytes = 32 << 20
-		limits.CompletionUnconfirmedBytes = 32 << 20
-		limits.RecoveryUnconfirmedBytes = 16 << 20
-		limits.RecoveryReserveUnconfirmedBytes = 16 << 20
-		limits.UnconfirmedMaxEntries = 64
-		// The actual fixed Directory catch-up pool remains resident while the
-		// independently paid confirmation, Metadata and Ledger request slots live.
-		// The nonphysical fixture's 96 normal claims cannot fund that overlap.
-		limits.MaxClaims += 32
-		limits.ControlRAMBytes += 32 * resourcebudget.ClaimRAMBytes
-		limits.PhysicalTerminalReserve = true
-		limits.LedgerProjectionDiskBytes = 80 << 20
-		limits.LedgerSegmentIndexDiskBytes = 48 << 20
-		limits.UsageProjectionDiskBytes = 128 << 20
-		if i == 1 {
-			// Each of the finite 32 received records owes its own worst-case
-			// 16 MiB Ledger and Usage COW extent before native acceptance.
-			limits.LedgerProjectionDiskBytes = 576 << 20
-			limits.UsageProjectionDiskBytes = 576 << 20
-		}
-		cfg.ResourceBudget = &limits
-		fixture.configs[i] = cfg
-		guard, err := lock.Acquire(cfg.Storage.DataDir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
-		if err != nil {
-			t.Fatal("actual physical business foundation", i, err)
-		}
-		owners[i] = f
-		t.Cleanup(func() {
-			if err := f.Close(); err != nil {
-				t.Error("original foundation cleanup", i, err)
-			}
-			if err := guard.Close(); err != nil {
-				t.Error(err)
-			}
-		})
-		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
-			t.Fatal("actual whole physical service preparation", i, err, f.owners.Components.Budget.Snapshot())
-		}
-		if err := f.installHASelectedGovernanceService(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if i == 0 {
-			if err := f.prepareHASelectedPrimaryStartup(ctx); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if err := f.prepareSelectedTransport(logger); err != nil {
-			t.Fatal("actual whole physical transport", i, err)
-		}
-	}
-	runCtx, stop := context.WithCancel(ctx)
-	done := make(chan error, 2)
-	for _, f := range owners {
-		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
-	}
-	defer func() {
-		stop()
-		for range 2 {
-			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-				t.Error(err)
-			}
-		}
-	}()
+	owners := startHAPhysicalBusinessPair(t, ctx, nil)
 	primary := owners[0]
-	for !primary.replication.startupReady.Load() {
-		select {
-		case err := <-primary.replication.fatal:
-			t.Fatal("actual physical Primary startup", err)
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
 	admitted, retire, err := primary.physicalTerminalAdmission(ctx, 2)
 	if err != nil {
 		t.Fatal("original confirmed/Metadata/Ledger physical admission", err)
@@ -319,6 +218,123 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 			t.Log("actual post-common owned retirement returned blocks", i, fs.Bavail)
 		}
 	}
+}
+
+// startHAPhysicalBusinessPair activates a Primary and a Replica on the
+// isolated ext4 with the physical terminal reserve and serves their actual
+// TLS transport until the Primary is startup ready. Cleanup stops transport
+// before closing the foundations. adjust, when set, edits each member's
+// budget after the fixed physical profile is applied.
+func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(member int, limits *config.ResourceBudget)) [2]*haSelectedRuntimeFoundation {
+	t.Helper()
+	fixture := prepareHAMetadataMaintenanceFixture(t)
+	prepareHAMetadataMaintenanceArtifacts(t, fixture)
+	completeHAMemoryActivationBoundary(t, fixture)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	for _, cfg := range fixture.configs {
+		guard, err := lock.Acquire(cfg.Storage.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		activation, err := ActivateHAMemoryRuntime(ctx, cfg, fixture.keys, guard, functionalHAMetadataManager(t, cfg), logger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := activation.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := guard.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var owners [2]*haSelectedRuntimeFoundation
+	for i, cfg := range fixture.configs {
+		limits := *cfg.ResourceBudget
+		limits.TotalRAMBytes = 2 << 30
+		limits.RecoveryRAMBytes, limits.RecoveryReserveRAMBytes = 896<<20, 896<<20
+		limits.CompletionRAMBytes = 1 << 30
+		limits.TotalUnconfirmedBytes = 64 << 20
+		limits.IOUnconfirmedBytes = 32 << 20
+		limits.CompletionUnconfirmedBytes = 32 << 20
+		limits.RecoveryUnconfirmedBytes = 16 << 20
+		limits.RecoveryReserveUnconfirmedBytes = 16 << 20
+		limits.UnconfirmedMaxEntries = 64
+		// The actual fixed Directory catch-up pool remains resident while the
+		// independently paid confirmation, Metadata and Ledger request slots live.
+		// The nonphysical fixture's 96 normal claims cannot fund that overlap.
+		limits.MaxClaims += 32
+		limits.ControlRAMBytes += 32 * resourcebudget.ClaimRAMBytes
+		limits.PhysicalTerminalReserve = true
+		limits.LedgerProjectionDiskBytes = 80 << 20
+		limits.LedgerSegmentIndexDiskBytes = 48 << 20
+		limits.UsageProjectionDiskBytes = 128 << 20
+		if i == 1 {
+			// Each of the finite 32 received records owes its own worst-case
+			// 16 MiB Ledger and Usage COW extent before native acceptance.
+			limits.LedgerProjectionDiskBytes = 576 << 20
+			limits.UsageProjectionDiskBytes = 576 << 20
+		}
+		if adjust != nil {
+			adjust(i, &limits)
+		}
+		cfg.ResourceBudget = &limits
+		fixture.configs[i] = cfg
+		guard, err := lock.Acquire(cfg.Storage.DataDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
+		if err != nil {
+			t.Fatal("actual physical business foundation", i, err)
+		}
+		owners[i] = f
+		t.Cleanup(func() {
+			if err := f.Close(); err != nil {
+				t.Error("original foundation cleanup", i, err)
+			}
+			if err := guard.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
+			t.Fatal("actual whole physical service preparation", i, err, f.owners.Components.Budget.Snapshot())
+		}
+		if err := f.installHASelectedGovernanceService(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if err := f.prepareHASelectedPrimaryStartup(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.prepareSelectedTransport(logger); err != nil {
+			t.Fatal("actual whole physical transport", i, err)
+		}
+	}
+	runCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 2)
+	for _, f := range owners {
+		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
+	}
+	t.Cleanup(func() {
+		stop()
+		for range 2 {
+			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+				t.Error(err)
+			}
+		}
+	})
+	primary := owners[0]
+	for !primary.replication.startupReady.Load() {
+		select {
+		case err := <-primary.replication.fatal:
+			t.Fatal("actual physical Primary startup", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return owners
 }
 
 // exhaustHAPhysicalFixture fills the isolated runner ext4 to actual ENOSPC
