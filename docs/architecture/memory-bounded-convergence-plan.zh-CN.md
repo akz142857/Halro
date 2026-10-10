@@ -633,3 +633,7 @@ I-03 剩余：见 §32 结论。
   - 两端 ENOSPC 关闭无自有临时文件；重开后两端读到全部终结。
   - cgroup 峰值 ≤ 1.5 GiB，`max`/`oom`/`oom_kill` 均为 0（由 runner 记录判读）。
 - 只记录：每轮拒绝的错误、终结最长耗时、每轮可用空间、总耗时。
+
+**v1 结果：未通过，判据本身写错。** 第 1 次运行在第 0 轮结束时的费用检查失败（cgroup 峰值 220 MB，无 OOM）。该轮其余步骤都已通过：新准入以 `physical completion allocation unavailable` 被物理层拒绝，已接受终结在零空闲块下完成并被 Replica 应用，恢复后第一次准入成功。失败时 Primary 的 Completion 类占用 270393344 B，`CompletionReserved` 为 230080160 B。“两端准入费用为零”照搬了 §32 的单机判据，但 HA 物理夹具的常驻所有者在启动时就持有 Completion RAM 和终结预留，零不是这个夹具的空闲值。按规则判 v1 未通过。
+
+**v2 登记（运行前提交）。** 只改参照：每轮结束时两端的 `CompletionReserved` 与 Active/Completion 类占用，必须等于打开后、第 0 轮之前的空闲快照（日志 `HA_SUSTAINED_OPENED`），结束时的静默检查也以它为准。其余门槛全部不变。

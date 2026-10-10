@@ -91,6 +91,14 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		terminalMax   time.Duration
 		checkpoints   int
 	)
+	// v2: the HA fixture's resident owners hold Completion RAM and a
+	// completion reservation from startup, so each round's fees are compared
+	// with this idle snapshot rather than with zero.
+	var opened [2]resourcebudget.Stats
+	for i, f := range pair.owners {
+		opened[i] = f.reopened.Owners.Components.Budget.Snapshot()
+		t.Logf("HA_SUSTAINED_OPENED %d completion_reserved=%+v active=%+v completion=%+v", i, opened[i].CompletionReserved, opened[i].Classes[resourcebudget.Active], opened[i].Classes[resourcebudget.Completion])
+	}
 	started := time.Now()
 	for round := range haSustainedRounds {
 		observed := round%2 == 1
@@ -194,8 +202,8 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		}
 		for i, f := range pair.owners {
 			got := f.reopened.Owners.Components.Budget.Snapshot()
-			if got.CompletionReserved != (resourcebudget.Cost{}) || got.Classes[resourcebudget.Active] != (resourcebudget.Cost{}) || got.Classes[resourcebudget.Completion] != (resourcebudget.Cost{}) {
-				t.Fatal("admitted work fees did not exit", round, i, got)
+			if got.CompletionReserved != opened[i].CompletionReserved || got.Classes[resourcebudget.Active] != opened[i].Classes[resourcebudget.Active] || got.Classes[resourcebudget.Completion] != opened[i].Classes[resourcebudget.Completion] {
+				t.Fatal("admitted work fees did not exit", round, i, opened[i], got)
 			}
 		}
 		if (round+1)%haSustainedCheckpointEvery == 0 {
@@ -217,7 +225,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 				baselineSpace = haPhysicalFixtureSpace(t)
 				baselineFDs = len(sustainedOpenFDs(t))
 				for i, f := range pair.owners {
-					baselineStats[i] = waitHASustainedQuiescent(t, ctx, f, resourcebudget.Stats{}, false)
+					baselineStats[i] = waitHASustainedQuiescent(t, ctx, f, opened[i], resourcebudget.Stats{}, false)
 				}
 			}
 		}
@@ -236,7 +244,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		t.Fatal("FD drift across sustained pressure", baselineFDs, fds)
 	}
 	for i, f := range pair.owners {
-		waitHASustainedQuiescent(t, ctx, f, baselineStats[i], true)
+		waitHASustainedQuiescent(t, ctx, f, opened[i], baselineStats[i], true)
 	}
 	t.Logf("HA_SUSTAINED_SUMMARY rounds=%d checkpoints=%d terminal_max=%s heap=%d/%d space=%d/%d elapsed=%s",
 		haSustainedRounds, checkpoints, terminalMax, ms.HeapAlloc, baselineHeap, haPhysicalFixtureSpace(t), baselineSpace, time.Since(started))
@@ -307,16 +315,16 @@ func waitHASustainedApplied(t *testing.T, ctx context.Context, primary, replica 
 	}
 }
 
-// waitHASustainedQuiescent returns a member's budget once no admitted work is
-// open. With compare set, Used and the normal claims must also come back to
-// the baseline within the bound: background owners hold steady, so anything
-// above it is a fee the rounds left behind.
-func waitHASustainedQuiescent(t *testing.T, ctx context.Context, f *haSelectedRuntimeFoundation, baseline resourcebudget.Stats, compare bool) resourcebudget.Stats {
+// waitHASustainedQuiescent returns a member's budget once its admission fees
+// are back at the opened snapshot. With compare set, Used and the normal
+// claims must also come back to the baseline within the bound: background
+// owners hold steady, so anything above it is a fee the rounds left behind.
+func waitHASustainedQuiescent(t *testing.T, ctx context.Context, f *haSelectedRuntimeFoundation, opened, baseline resourcebudget.Stats, compare bool) resourcebudget.Stats {
 	t.Helper()
 	deadline := time.Now().Add(haSustainedQuiesceWithin)
 	for {
 		got := f.reopened.Owners.Components.Budget.Snapshot()
-		idle := got.CompletionReserved == (resourcebudget.Cost{}) && got.Classes[resourcebudget.Active] == (resourcebudget.Cost{}) && got.Classes[resourcebudget.Completion] == (resourcebudget.Cost{})
+		idle := got.CompletionReserved == opened.CompletionReserved && got.Classes[resourcebudget.Active] == opened.Classes[resourcebudget.Active] && got.Classes[resourcebudget.Completion] == opened.Classes[resourcebudget.Completion]
 		if idle && (!compare || got.Used.RAM <= baseline.Used.RAM && got.Used.Disk <= baseline.Used.Disk && got.NormalClaims <= baseline.NormalClaims) {
 			return got
 		}
