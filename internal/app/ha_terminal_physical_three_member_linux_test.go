@@ -26,6 +26,22 @@ func TestHAPhysicalThreeMemberPressuredTerminalAndRestart(t *testing.T) {
 	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
 }
 
+// The three-node variant of TestHAPhysicalActualENOSPCTerminalAndBothRolesRestart.
+// The filesystem is filled to actual ENOSPC and refilled before each member
+// finishes. A new write needs credit from both Replicas and must still be
+// refused with that credit released; every member must close leaving no owned
+// temporary; and once the fills are freed, the next start must serve every
+// fact on both Replicas, the refused one on none, and reclaim nothing.
+func TestHAPhysicalThreeMemberActualENOSPCTerminalAndRestart(t *testing.T) {
+	ctx, f, logger := prepareHAPhysicalThreeMemberFixture(t, 8*time.Minute)
+	written, revisions := runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 0, nil, nil, haPhysicalGenerationENOSPCClose)
+	closed := haPhysicalFixtureSpace(t)
+	runHAPhysicalOnlineGeneration(t, ctx, f.configs[:], f.keys.Master, logger, 1, written, revisions, haPhysicalGenerationNormal)
+	if reclaimed := int64(haPhysicalFixtureSpace(t)) - int64(closed); reclaimed > 1<<20 {
+		t.Fatal("restart reclaimed space the ENOSPC close held", reclaimed)
+	}
+}
+
 // With two Replicas a ticket holds one promise per peer, so a lost reply can
 // leave one peer known and the other unknown; see
 // TestHAPhysicalLostCreditRepliesResolveByResend.
