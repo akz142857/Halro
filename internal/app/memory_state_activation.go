@@ -127,7 +127,19 @@ func (a *MemoryRuntimeActivation) Close() error {
 // bootstrap. The actual locked preparation must live at the reserved directory.
 // The original bbolt DB and format1 journal remain as the migration backup; no
 // ordinary startup automatically converts or trusts them.
-func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *metadatastate.MigrationPreparation, guard *lock.Lock, manager *resourcebudget.Manager, ledgerKey, sourceJournalKey []byte) (result *MemoryRuntimeActivation, resultErr error) {
+func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *metadatastate.MigrationPreparation, guard *lock.Lock, manager *resourcebudget.Manager, ledgerKey, sourceJournalKey []byte) (*MemoryRuntimeActivation, error) {
+	return activatePreparedMemoryRuntime(ctx, cfg, p, guard, manager, ledgerKey, sourceJournalKey, nil)
+}
+
+// phase observes durable activation boundaries for fault tests; it must not
+// mutate the namespace or source files.
+func activatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *metadatastate.MigrationPreparation, guard *lock.Lock, manager *resourcebudget.Manager, ledgerKey, sourceJournalKey []byte, phase func(string) error) (result *MemoryRuntimeActivation, resultErr error) {
+	checkpoint := func(name string) error {
+		if phase != nil {
+			return phase(name)
+		}
+		return nil
+	}
 	if cfg.Replication != nil || cfg.ResourceBudget == nil || p == nil || manager == nil || guard == nil || !guard.CoversDataDirectory(cfg.Storage.DataDir) || len(ledgerKey) != 32 || len(sourceJournalKey) != 32 {
 		return nil, authenticatedstate.ErrSealIneligible
 	}
@@ -205,6 +217,9 @@ func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *me
 	if err := old.Close(); err != nil {
 		return nil, err
 	}
+	if err := checkpoint("sources-qualified"); err != nil {
+		return nil, err
+	}
 	limits := cfg.ResourceBudget
 	appendBytes := func(ceiling int64) int64 { return min(ceiling/2, 16<<20) }
 	identity := p.Receipt.Evidence.Identity
@@ -266,6 +281,9 @@ func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *me
 	if err != nil {
 		return nil, err
 	}
+	if err := checkpoint("roots-built"); err != nil {
+		return nil, err
+	}
 	static := authenticatedstate.SealEligibility{Instance: identity, SchemaVersion: 1, ApplyVersion: 1, IndexVersion: 1, KeyDerivation: 1, Role: authenticatedstate.SealStandalone, Coverage: authenticatedstate.SealCoverageAuthenticated}
 	if _, err := rand.Read(static.Incarnation[:]); err != nil {
 		return nil, err
@@ -296,6 +314,9 @@ func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *me
 	if err := errors.Join(writeErr, file.Sync(), owner.VerifyFile(file), ownedfile.CloseFile(file), durable.SyncDirectory(cfg.Storage.DataDir)); err != nil {
 		return nil, err
 	}
+	if err := checkpoint("bootstrap-pending-synced"); err != nil {
+		return nil, err
+	}
 	err = p.WithBaseline(ctx, func(baseline *metadatastate.Baseline) error {
 		if err := baseline.ValidatePublicationPaths(filepath.Join(directory, "metadata-root"), filepath.Join(directory, "metadata.journal")); err != nil {
 			return err
@@ -309,6 +330,9 @@ func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *me
 		if err != nil {
 			return err
 		}
+		if err := checkpoint("startup-caches-persisted"); err != nil {
+			return err
+		}
 		hard := statecut.HardLimits()
 		publication, err := statecut.PublishStandaloneWithStartupCaches(ctx, a.owners, authenticatedstate.CandidateSeal{Generation: 1, Revision: 1, MaxPageBytes: hard.MaxPageBytes, MaxValueBytes: hard.MaxValueBytes, MaxTreeHeight: hard.MaxTreeHeight}, authority, a.caches)
 		a.Receipt = publication.Receipt
@@ -317,11 +341,17 @@ func ActivatePreparedMemoryRuntime(ctx context.Context, cfg config.Config, p *me
 	if err != nil {
 		return nil, err
 	}
+	if err := checkpoint("common-seal-published"); err != nil {
+		return nil, err
+	}
 	a.bootstrapAlias, err = owner.LinkCaptured(memoryStateBootstrapPath(cfg))
 	if err != nil {
 		return nil, err
 	}
 	if err := durable.SyncDirectory(cfg.Storage.DataDir); err != nil {
+		return nil, err
+	}
+	if err := checkpoint("bootstrap-activated"); err != nil {
 		return nil, err
 	}
 	if err := owner.Retire(); err != nil {
