@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"testing"
 	"time"
 
@@ -42,12 +41,16 @@ const (
 )
 
 // TestHAPhysicalReserveSustainedPressure repeats the §31 reserve cycle on an
-// HA pair over real TLS: each round accepts one request, proves the logical
-// budget still has room, fills the isolated ext4 to actual ENOSPC, refuses a
-// new admission, finishes the accepted terminal from the reserve at zero free
-// blocks, has the Replica apply it, and recovers. Even rounds leave pressure
-// unobserved (Healthy, the sampling-delay window); odd rounds also set both
-// members Pressured, as an observed stop line would. Online checkpoints run
+// HA pair over the strict TLS transport the Runtime serves with the physical
+// reserve, admitting through peer credit and the local reserve together
+// (v5: the ordinary business pair has no credit controller, so its online
+// checkpoints cannot run at all): each round accepts one request, fills the
+// isolated ext4 to actual ENOSPC, refuses a new admission beside it, finishes
+// the accepted terminal from the reserve at zero free blocks, has the Replica
+// apply it, refuses a new admission at the physical stop with nothing in
+// flight, and recovers. Even rounds leave pressure unobserved (Healthy, the
+// sampling-delay window); odd rounds also set both members Pressured, as an
+// observed stop line would. Online checkpoints run
 // throughout. Fees, claims, ext4 space, FDs and live heap must not drift; both
 // members must close at ENOSPC without owned temporaries, and a fresh open of
 // the same directories must serve every terminal on both members.
@@ -70,16 +73,11 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	for _, slot := range profile {
 		completionRAM += slot.RAM
 	}
-	// The same room as the §31 one-accepted case, so a control admission can
-	// prove each refusal physical; this is not a capacity claim.
-	adjust := func(_ int, limits *config.ResourceBudget) {
-		limits.TotalRAMBytes += completionRAM
-		limits.CompletionRAMBytes += completionRAM
-		limits.LedgerProjectionDiskBytes = 576 << 20
-		limits.UsageProjectionDiskBytes = 576 << 20
-	}
-	fixture := activateHAPhysicalBusinessFixture(t, ctx)
-	pair := openHAPhysicalBusinessPair(t, ctx, fixture, adjust)
+	// v5: the fixed physical profile, with the strict pair's Metadata and
+	// inventory ceilings; one request is in flight at a time.
+	var adjust func(int, *config.ResourceBudget)
+	fixture := activateHAPhysicalBusinessFixture(t, ctx, true)
+	pair := openHAPhysicalBusinessPair(t, ctx, fixture, true, adjust)
 	primary, replica := pair.owners[0], pair.owners[1]
 	c := primary.reopened.Owners.Components
 	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill")}
@@ -110,7 +108,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 	started := time.Now()
 	for round := range haSustainedRounds {
 		observed := round%2 == 1
-		admitted, retire, err := primary.physicalTerminalAdmission(ctx, 2)
+		admitted, retire, err := primary.peerPhysicalTerminalAdmission(ctx, 2)
 		if err != nil {
 			t.Fatal("physical admission with space", round, err)
 		}
@@ -121,11 +119,6 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		request, err := primary.business.accounting.BeginRequestDetailed(work.Bind(admitted), "prj_physical", "key_physical", fmt.Sprintf("sustained-accepted-%d", round), "model")
 		if err != nil {
 			t.Fatal("RequestAccepted", round, err)
-		}
-		if _, closeControl, err := primary.physicalTerminalAdmission(ctx, 2); err != nil {
-			t.Fatal("control admission before the fill", round, err)
-		} else if err := closeControl(); err != nil {
-			t.Fatal("control window retirement", round, err)
 		}
 		waitHASustainedApplied(t, ctx, primary, replica, round)
 		if err := exhaustHAPhysicalFixture(fills[0], haPhysicalFixtureFillBound); err != nil {
@@ -145,14 +138,14 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 				}
 			}
 		}
-		if _, closeNew, err := primary.physicalTerminalAdmission(ctx, 2); err == nil {
+		// v5: the Primary's credit controller holds one live ticket, so this
+		// refusal need not be physical; the physical one is checked once the
+		// accepted ticket is released, below.
+		if _, closeNew, err := primary.peerPhysicalTerminalAdmission(ctx, 2); err == nil {
 			_ = closeNew()
-			t.Fatal("new physical admission succeeded at actual ENOSPC", round, observed)
+			t.Fatal("new admission succeeded beside an accepted request at actual ENOSPC", round, observed)
 		} else {
-			if !observed && errors.Is(err, resourcebudget.ErrExhausted) && !errors.Is(err, syscall.ENOSPC) {
-				t.Fatal("refusal after a successful control is the logical budget, not the physical stop", round, err)
-			}
-			t.Log("HA_SUSTAINED_REFUSAL", round, observed, err)
+			t.Log("HA_SUSTAINED_REFUSAL_LIVE", round, observed, err)
 		}
 		for i, f := range pair.owners {
 			checkpointCtx, stop := context.WithTimeout(ctx, 5*time.Second)
@@ -186,6 +179,17 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal("accepted completion owners", round, err)
 		}
 		finalized = append(finalized, request.RequestID)
+		// Nothing is in flight and the filesystem is still full: a new
+		// admission must stop at the physical reserve, unobserved or not.
+		if _, closeNew, err := primary.peerPhysicalTerminalAdmission(ctx, 2); err == nil {
+			_ = closeNew()
+			t.Fatal("new admission succeeded at actual ENOSPC with nothing in flight", round, observed)
+		} else {
+			if !observed && !errors.Is(err, resourcebudget.ErrPhysicalAllocation) {
+				t.Fatal("unobserved ENOSPC refusal is not the physical stop", round, err)
+			}
+			t.Log("HA_SUSTAINED_REFUSAL_IDLE", round, observed, err)
+		}
 		for _, fill := range fills {
 			if err := os.Remove(fill); err != nil {
 				t.Fatal(round, err)
@@ -205,7 +209,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		}
 		// Neither refusal may outlive the shortage: the first admission
 		// after recovery must succeed.
-		if _, closeAgain, err := primary.physicalTerminalAdmission(ctx, 2); err != nil {
+		if _, closeAgain, err := primary.peerPhysicalTerminalAdmission(ctx, 2); err != nil {
 			t.Fatal("admission after recovery", round, err)
 		} else if err := closeAgain(); err != nil {
 			t.Fatal(round, err)
@@ -235,6 +239,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 					t.Fatal("online checkpoint did not renew in place", round, i, before, f.reopened.Seal.Revision)
 				}
 			}
+			waitHAPhysicalCreditWindow(t, ctx, primary)
 			checkpoints++
 			if checkpoints == 1 {
 				runtime.GC()
@@ -291,7 +296,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reopened := openHAPhysicalBusinessPair(t, ctx, fixture, adjust)
+	reopened := openHAPhysicalBusinessPair(t, ctx, fixture, true, adjust)
 	for i, f := range reopened.owners {
 		for _, id := range finalized {
 			if _, found, err := f.reopened.Owners.Components.Ledger.ReadFinalization(ctx, id); err != nil || !found {
@@ -299,7 +304,7 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			}
 		}
 	}
-	if _, closeAgain, err := reopened.owners[0].physicalTerminalAdmission(ctx, 2); err != nil {
+	if _, closeAgain, err := reopened.owners[0].peerPhysicalTerminalAdmission(ctx, 2); err != nil {
 		t.Fatal("admission after reopen", err)
 	} else if err := closeAgain(); err != nil {
 		t.Fatal(err)

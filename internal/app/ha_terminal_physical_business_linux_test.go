@@ -16,6 +16,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 	"github.com/akz142857/Halro/internal/statecut"
 	"github.com/akz142857/Halro/internal/store/lock"
@@ -228,7 +229,7 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 // budget after the fixed physical profile is applied.
 func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(member int, limits *config.ResourceBudget)) [2]*haSelectedRuntimeFoundation {
 	t.Helper()
-	return openHAPhysicalBusinessPair(t, ctx, activateHAPhysicalBusinessFixture(t, ctx), adjust).owners
+	return openHAPhysicalBusinessPair(t, ctx, activateHAPhysicalBusinessFixture(t, ctx, false), false, adjust).owners
 }
 
 // haPhysicalBusinessPair is an open Primary and Replica. release stops the
@@ -240,10 +241,20 @@ type haPhysicalBusinessPair struct {
 }
 
 // activateHAPhysicalBusinessFixture prepares the two members' directories
-// and completes their memory-state activation, leaving both closed.
-func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context) haMetadataMaintenanceFixture {
+// and completes their memory-state activation, leaving both closed. A strict
+// pair's Metadata journal ceiling is bound by the independent baseline, so it
+// is set here, before publication.
+func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context, strict bool) haMetadataMaintenanceFixture {
 	t.Helper()
 	fixture := prepareHAMetadataMaintenanceFixture(t)
+	if strict {
+		for i, cfg := range fixture.configs {
+			limits := *cfg.ResourceBudget
+			limits.MetadataJournalDiskBytes = 576 << 20
+			cfg.ResourceBudget = &limits
+			fixture.configs[i] = cfg
+		}
+	}
 	prepareHAMetadataMaintenanceArtifacts(t, fixture)
 	completeHAMemoryActivationBoundary(t, fixture)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -268,8 +279,12 @@ func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context) haMeta
 
 // openHAPhysicalBusinessPair opens an activated fixture's members with the
 // fixed physical profile, each from a fresh Manager, and serves their TLS
-// transport until the Primary is startup ready.
-func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessPair {
+// transport until the Primary is startup ready. strict serves the transport
+// the Runtime uses with the physical reserve, with the peer credit controller
+// that admission and online checkpoints go through, and waits for the
+// Replica's first credit window; it carries the lifecycle fixture's Metadata
+// and inventory ceilings.
+func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, strict bool, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessPair {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	var owners [2]*haSelectedRuntimeFoundation
@@ -327,8 +342,15 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 			limits.LedgerProjectionDiskBytes = 576 << 20
 			limits.UsageProjectionDiskBytes = 576 << 20
 		}
+		if strict {
+			limits.MetadataStoreDiskBytes = 576 << 20
+			limits.MetadataJournalDiskBytes = 576 << 20
+		}
 		if adjust != nil {
 			adjust(i, &limits)
+		}
+		if strict {
+			limits.PersistentInventoryDiskBytes = limits.MinimumPersistentInventoryDiskBytes() + 512<<20
 		}
 		cfg.ResourceBudget = &limits
 		guard, err := lock.Acquire(cfg.Storage.DataDir)
@@ -352,8 +374,19 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 				t.Fatal(err)
 			}
 		}
-		if err := f.prepareSelectedTransport(logger); err != nil {
-			t.Fatal("actual whole physical transport", i, err)
+		if !strict {
+			if err := f.prepareSelectedTransport(logger); err != nil {
+				t.Fatal("actual whole physical transport", i, err)
+			}
+			continue
+		}
+		if i == 1 {
+			if err := f.reopened.Owners.Components.Metadata.PrepareHAReplicaPhysicalEscrow(ctx, resourcebudget.MaxCompletionBatch); err != nil {
+				t.Fatal("Replica Metadata receive window", err)
+			}
+		}
+		if err := f.prepareSelectedTransportWithPhysicalCredit(logger); err != nil {
+			t.Fatal("actual strict physical transport", i, err)
 		}
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
@@ -370,6 +403,9 @@ func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMet
 			t.Fatal(ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+	if strict {
+		waitHAPhysicalCreditWindow(t, ctx, primary)
 	}
 	return haPhysicalBusinessPair{owners, release}
 }
@@ -421,4 +457,31 @@ func exhaustHAPhysicalFixture(path string, bound int64) error {
 	}
 	fmt.Printf("actual HA business ext4 ENOSPC foreign_extent_bytes=%d bavail=%d\n", info.Size(), fs.Bavail)
 	return nil
+}
+
+// waitHAPhysicalCreditWindow waits until every Replica has sent the Primary a
+// fresh physical credit window.
+func waitHAPhysicalCreditWindow(t *testing.T, ctx context.Context, primary *haSelectedRuntimeFoundation) {
+	t.Helper()
+	q := primary.replication.peerPhysical.Load()
+	if q == nil {
+		t.Fatal("strict Primary credit controller absent")
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		q.mu.Lock()
+		ready := q.peers[0].window.Operation == replication.PhysicalCreditWindow
+		q.mu.Unlock()
+		if ready {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("Replica credit window absent")
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }

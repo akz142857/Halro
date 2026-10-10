@@ -484,7 +484,7 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 
 **测试（`d8a9131a`）。** `TestHAPhysicalReserveHoldsAtUnobservedENOSPC` 跑两节点真实 TLS，分 `one-accepted`、`two-accepted` 两个子测试。先接受请求并等确认前缀被 Replica 应用，再用外部文件把隔离 ext4 填满，**不切换压力**。判据：
 - 新准入必须被拒绝。单请求子测试先做一次对照准入并关闭，证明逻辑预算还有余量，因此填满后的拒绝只能来自物理层。实测为 `physical completion allocation unavailable`。
-- 两端在线 checkpoint（后台写入方）可以运行也可以拒绝，但不得迫使节点进入恢复。实测在有活动窗口时，它在写入前就以 `ErrPhysicalCredit` 拒绝，从 `withAdmissionPaused` 入口返回，不污染 controller。
+- 两端在线 checkpoint（后台写入方）可以运行也可以拒绝，但不得迫使节点进入恢复。实测在有活动窗口时，它在写入前就以 `ErrPhysicalCredit` 拒绝，从 `withAdmissionPaused` 入口返回，不污染 controller。**（2026-10-11 更正，见 §33：这个夹具用的是普通传输，没有 peer credit controller，`withHAPhysicalAdmissionPaused` 在入口就返回 `ErrPhysicalCredit`，与是否有活动窗口无关；这一条只证明 checkpoint 没有写入，没有覆盖“有空间也能 checkpoint”。在生产形态的严格传输下，有活动窗口时 checkpoint 同样以 `ErrPhysicalCredit` 拒绝、窗口结束后有空间即可完成，由 §33 的诊断证实。）**
 - 被拒绝的分配可能回退它短暂占用的块，所以终结前再填一次，确认可用块为 0。随后每个已接受请求都必须完成终结，且 Replica 应用了终结事实。
 - 释放空间后，同一成员必须能再次准入，证明两种拒绝都不会遗留状态。
 - 两端在重新填满的盘上完成公共发布和关闭，不残留自有临时文件。
@@ -651,3 +651,16 @@ I-03 剩余：见 §32 结论。
 **v3 结果：未通过。** 第 1 次运行（cgroup 峰值 192 MB，无 OOM）：第 0、1 轮全部通过（含已观测轮的 Replica 读取与费用回到快照），第 2 轮结束时有空间的在线 checkpoint 在 Primary 上返回 `original Replica physical IO promise unavailable or changed`（`ErrPhysicalCredit`），未进入恢复。对照代码：checkpoint 入口 `withAdmissionPaused` 经 `RequireNoPeerPhysicalPromises` 要求没有未了结的 Replica 物理承诺，否则拒绝；生产中定时 checkpoint（`runUsageMaintenance`）对任何错误只记 `memory state common checkpoint deferred`，下个周期再试。这是设计内的推迟，v3 只按一次严格调用判读，没有预料到它。
 
 **v4 登记（运行前提交）。** 有空间的在线 checkpoint 若以 `ErrPhysicalCredit` 被拒，且节点未进入恢复，可每 50 ms 重试，须在 5 秒内成功；推迟次数与最长等待只记录。其他错误、进入恢复或超过 5 秒仍判失败。其余门槛不变。
+
+**v4 结果：未通过。** 第 1 次运行（cgroup 峰值 206 MB，无 OOM）：第 0、1 轮通过，第 2 轮有空间的 checkpoint 在 5 秒内一直以 `ErrPhysicalCredit` 被拒，不是瞬时推迟。
+
+**诊断（临时测试，未提交；证据 `diag-1`…`diag-4-*`）。**
+- 在原夹具上，连一个请求都没有的情况下有空间的 checkpoint 也失败：`startHAPhysicalBusinessPair` 用 `prepareSelectedTransport`（普通传输），不安装 peer credit controller，`withHAPhysicalAdmissionPaused` 在入口就返回 `ErrPhysicalCredit`。这个夹具根本不能做在线 checkpoint；§31 对 checkpoint 拒绝原因的解读因此有误，已在 §31 更正。
+- 生产在启用物理储备时用 `prepareSelectedTransportWithPhysicalCredit`（严格传输），准入走 `peerPhysicalTerminalAdmission`（peer credit + 本地物理储备）。给夹具加严格模式（沿用生命周期测试的 Metadata 576 MiB、inventory 下限 + 512 MiB、Replica 接收窗口，Metadata journal 上限须在激活前设定，否则 Seal 与独立基线不符）后：无请求、两个请求、ENOSPC 下终结三种变体中，有空间的 checkpoint 都在 66～303 ms 内成功；ENOSPC 下有活动窗口时 checkpoint 以 `ErrPhysicalCredit` 拒绝，不进入恢复。
+- 严格路径上 Primary 的 credit controller 只有一个 live ticket（`q.live`），有请求在途时任何新准入都直接以 `ErrPhysicalCredit` 拒绝。原登记里的“对照准入”在这条路径上不可能成立，在途时的拒绝也证明不了物理停止线。
+
+**v5 登记（运行前提交）。** 改用生产形态的路径，判据相应调整，数值门槛不变：
+- 夹具：严格传输 + `peerPhysicalTerminalAdmission`，固定物理配置加上述严格模式上限，不再加第二份完成工作区和 576 MiB Primary 投影；同一时刻只有 1 个请求在途。
+- 每轮：接受 1 个请求 → 填满（奇数轮设压力）→ 在途时新准入必须被拒（原因只记录）→ checkpoint 可拒不得进恢复 → 再填满、零空闲块下完成终结，Replica 应用，释放 ticket → **仍满盘、无在途时新准入必须被拒；偶数轮（未观测）必须是 `ErrPhysicalAllocation`** → 删除填充、解除压力 → Replica 读到终结、第一次准入成功 → 费用在 5 秒内回到打开快照。
+- 每 3 轮的 checkpoint 之后等待 Replica 的新 credit 窗口（与生命周期测试相同）；v4 的推迟重试（5 秒）保留。
+- 重开同样用严格模式。其余门槛（终结 ≤ 5 秒、确认与应用 ≤ 5 秒、heap/空间/FD/预算漂移、ENOSPC 关闭无临时文件、重开读到全部终结、cgroup）不变。
