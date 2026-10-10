@@ -91,7 +91,7 @@ func (p *StatePublisher) withReadAuthority(ctx context.Context, budget *resource
 	defer func() {
 		p.mu.Lock()
 		if active && opCtx.Err() != nil {
-			resultErr = fmt.Errorf("actual Member reader canceled (parent=%v closed=%v saved=%d/%d/%d term=%d/%d current=%d/%d/%d term=%d/%d): %w", ctx.Err(), p.closed, saved.DurableIndex, saved.ConfirmedIndex, saved.AppliedIndex, saved.Term, saved.PromisedTerm, p.state.DurableIndex, p.state.ConfirmedIndex, p.state.AppliedIndex, p.state.Term, p.state.PromisedTerm, resultErr)
+			resultErr = fmt.Errorf("actual Member reader canceled (parent=%v closed=%v saved=%d/%d/%d term=%d/%d current=%d/%d/%d term=%d/%d): %w", ctx.Err(), p.closed, saved.DurableIndex, saved.ConfirmedIndex, saved.AppliedIndex, saved.Term, saved.PromisedTerm, p.state.DurableIndex, p.state.ConfirmedIndex, p.state.AppliedIndex, p.state.Term, p.state.PromisedTerm, errors.Join(resultErr, opCtx.Err()))
 		}
 		cancel()
 		if active {
