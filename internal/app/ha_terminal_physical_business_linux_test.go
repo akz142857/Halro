@@ -230,7 +230,7 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(member int, limits *config.ResourceBudget)) [2]*haSelectedRuntimeFoundation {
 	t.Helper()
 	fixture := activateHAPhysicalBusinessFixture(t, ctx, false)
-	return [2]*haSelectedRuntimeFoundation(openHAPhysicalBusinessGroup(t, ctx, fixture.configs[:], fixture.keys.Master, false, adjust).owners)
+	return [2]*haSelectedRuntimeFoundation(openHAPhysicalBusinessGroup(t, ctx, fixture.configs[:], fixture.keys.Master, false, nil, adjust).owners)
 }
 
 // haPhysicalBusinessGroup is an open Primary (member 0) and its Replicas.
@@ -285,8 +285,11 @@ func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context, strict
 // transport the Runtime uses with the physical reserve, with the peer credit
 // controller that admission and online checkpoints go through, and waits for
 // every Replica's first credit window; it carries the lifecycle fixture's
-// Metadata and inventory ceilings.
-func openHAPhysicalBusinessGroup(t *testing.T, ctx context.Context, configs []config.Config, master []byte, strict bool, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessGroup {
+// Metadata and inventory ceilings. With sampled set, each member's Manager is
+// owned by a real sampler on its data directory, wired as the Runtime wires
+// it, and pressure follows the OS rather than the test; the samplers stop
+// after the members close.
+func openHAPhysicalBusinessGroup(t *testing.T, ctx context.Context, configs []config.Config, master []byte, strict bool, sampled *config.ResourcePressure, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessGroup {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	owners := make([]*haSelectedRuntimeFoundation, len(configs))
@@ -294,8 +297,14 @@ func openHAPhysicalBusinessGroup(t *testing.T, ctx context.Context, configs []co
 	var stop context.CancelFunc
 	var done chan error
 	var once sync.Once
+	var samplers []func()
 	release := func() {
 		once.Do(func() {
+			defer func() {
+				for _, stopSampler := range samplers {
+					stopSampler()
+				}
+			}()
 			if stop != nil {
 				stop()
 				for range owners {
@@ -359,7 +368,13 @@ func openHAPhysicalBusinessGroup(t *testing.T, ctx context.Context, configs []co
 		if err != nil {
 			t.Fatal(err)
 		}
-		f, err := openHASelectedRuntimeFoundation(ctx, cfg, master, guard, functionalHAMetadataManager(t, cfg), logger)
+		manager := functionalHAMetadataManager(t, cfg)
+		if sampled != nil {
+			var stopSampler func()
+			manager, stopSampler = sampledHAPhysicalManager(t, ctx, cfg, *sampled)
+			samplers = append(samplers, stopSampler)
+		}
+		f, err := openHASelectedRuntimeFoundation(ctx, cfg, master, guard, manager, logger)
 		if err != nil {
 			_ = guard.Close()
 			t.Fatal("actual physical business foundation", i, err)
@@ -502,4 +517,56 @@ func waitHAPhysicalCreditWindow(t *testing.T, ctx context.Context, primary *haSe
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// sampledHAPhysicalManager builds a member's Manager owned by a real sampler
+// on its data directory, as newResourcePressureWithSource does, runs the
+// monitor and waits for its first Healthy decision. stop cancels and joins
+// the monitor; the group's release calls it after the members close.
+func sampledHAPhysicalManager(t *testing.T, ctx context.Context, cfg config.Config, policy config.ResourcePressure) (*resourcebudget.Manager, func()) {
+	t.Helper()
+	if err := policy.Validate(); err != nil {
+		t.Fatal("sampled pressure policy", err)
+	}
+	manager, err := resourcebudget.New(cfg.ResourceBudget.Limits(policy.MaxAge.Value()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sampler, err := resourcebudget.NewSampler(cfg.Storage.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	monitor, err := resourcebudget.NewMonitor(sampler, policy.Policy(), policy.SampleInterval.Value())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.AttachManager(manager); err != nil {
+		t.Fatal(err)
+	}
+	monitorCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- monitor.Run(monitorCtx, nil) }()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+				t.Error("sampler", err)
+			}
+		})
+	}
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for manager.Snapshot().Pressure != resourcebudget.Healthy {
+		select {
+		case <-deadline.C:
+			stop()
+			t.Fatal("sampler never reported Healthy", monitor.Snapshot())
+		case <-ctx.Done():
+			stop()
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	return manager, stop
 }

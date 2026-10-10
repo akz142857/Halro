@@ -104,7 +104,7 @@ func exerciseHAPhysicalReserveSustainedPressure(t *testing.T, members int) {
 	default:
 		t.Fatal("unsupported member count", members)
 	}
-	pair := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, adjust)
+	pair := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, nil, adjust)
 	primary, replicas := pair.owners[0], pair.owners[1:]
 	c := primary.reopened.Owners.Components
 	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill"), filepath.Join(root, "foreign-sustained-idle-fill")}
@@ -332,7 +332,7 @@ func exerciseHAPhysicalReserveSustainedPressure(t *testing.T, members int) {
 			t.Fatal(err)
 		}
 	}
-	reopened := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, adjust)
+	reopened := openHAPhysicalBusinessGroup(t, ctx, configs, master, true, nil, adjust)
 	for i, f := range reopened.owners {
 		for _, id := range finalized {
 			if _, found, err := f.reopened.Owners.Components.Ledger.ReadFinalization(ctx, id); err != nil || !found {
