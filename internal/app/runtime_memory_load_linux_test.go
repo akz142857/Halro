@@ -85,6 +85,12 @@ func (a *memoryLoadAdapter) Chat(ctx context.Context, call provider.ChatCall) (o
 		Usage:   &openaiapi.Usage{PromptTokens: 7, CompletionTokens: 5, TotalTokens: 12}}, nil
 }
 
+// Probe answers the periodic active deployment probe. The bridge always
+// presents a Prober, and a failed probe suspends the deployment, so a local
+// synthetic upstream that cannot answer would be taken out of routing every
+// probe interval.
+func (a *memoryLoadAdapter) Probe(context.Context, string) error { return nil }
+
 type memoryLoadResponse struct {
 	ID         string
 	Status     int

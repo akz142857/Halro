@@ -562,3 +562,11 @@ I-03 剩余：目标容量持续压力。
 上游挂起没有复现，原因未明，诊断保留在 v3 中。
 
 **v3 登记（运行前提交）。** 对照代码列出 Standalone 业务路径上全部带 `Retry-After` 的设计内让出，只有在线 checkpoint 暂停和 pack 回收两种，其余属于 HA/集群。v3 把这两种都纳入可重试，每次让出须 5 秒内解除；其余门槛不变，其他任何拒绝仍判失败。
+
+**v3 第一次运行：夹具缺陷。** 第 10 轮（约 60 秒）出现 `all_candidates_suspended`（`Retry-After: 29`）。挂起快照显示是 deployment 作用域，原因为空、代码 `unknown`、期限 30 秒，来自周期性主动部署探测。
+
+测试的合成上游经 `LegacyAdapterBridge` 包装。bridge 总是实现 `Prober`；内部适配器没有 `Probe` 时，它返回 `provider profile does not support connection testing`，探测循环随即以阈值 1 挂起该 deployment 30 秒。v2 第一次运行的上游挂起也是这个原因。之前的负载回归只跑 4 秒，到不了 30 秒的探测周期，所以没有暴露。
+
+已给合成上游补 `Probe`，返回健康。门槛不变，提交后重跑。
+
+**顺带登记（不在本批修改）。** `health.go` 的探测循环注释写明“没有探测端点的适配器不得因此被禁用”，但经 bridge 包装后，这条保护对任何未实现 `Probe` 的适配器都失效。生产中的 OpenAI、Anthropic、Gemini、Bedrock、Mantle 适配器都实现了 `Probe`，所以当前没有生产影响，属于潜在的不一致。
