@@ -320,8 +320,13 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatal("join actual Runtime owners", err)
 	}
+	// The fill was opened after the baseline; it is the test's, not Runtime's.
+	t.Log("SUSTAINED_FDS_BEFORE_FILL_CLOSE", fdBefore, sustainedOpenFDs(t))
+	if err := fill.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if after := memoryLoadFDs(t); after > fdBefore {
-		t.Fatal("actual Runtime FD leak", fdBefore, after)
+		t.Fatal("actual Runtime FD leak", fdBefore, after, sustainedOpenFDs(t))
 	}
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRuntimeMemoryLoadFreshProcessHelper$", "-test.count=1", "-test.v")
 	child.Env = append(os.Environ(), "HALRO_RUNTIME_MEMORY_LOAD_MANIFEST="+manifestPath)
@@ -410,6 +415,20 @@ func setSustainedFreeBytes(t *testing.T, fill *os.File, root string, target int6
 	if err := fill.Sync(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func sustainedOpenFDs(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range entries {
+		target, _ := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		out = append(out, e.Name()+"->"+target)
+	}
+	return out
 }
 
 // sustainedPackShed reports the two designed bounded yields: projection pack
