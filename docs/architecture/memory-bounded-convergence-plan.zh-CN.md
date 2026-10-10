@@ -554,3 +554,11 @@ I-03 剩余：目标容量持续压力。
    前 9 轮的压力进入耗时为 22～182 ms，退出耗时为 115～205 ms，均远低于门槛，迟滞区间没有提前离开。
 
 **v2 登记（运行前提交）。** 其余门槛全部不变，只增加一条：被 pack 回收拒绝的请求（以响应正文 `memory state page reclamation is in progress` 识别）可按 `Retry-After` 重试，每次让出必须在 5 秒内解除。让出次数和最长等待只记录，不设门槛。其他任何拒绝仍判失败。延迟只统计成功的那一次尝试。
+
+**v2 结果：未通过。** 两次运行：
+- 第一次在第 6 轮失败，原因是 `provider_unavailable: every provider for this model is suspended`，此时还没有挂起诊断。
+- 第二次加了路由挂起快照，在第 10 轮遇到 `memory state checkpoint is in progress`（503 + `Retry-After: 1`）。这是在线 checkpoint 暂停期间的设计内让出，v2 只认了 pack 回收那一种。
+
+上游挂起没有复现，原因未明，诊断保留在 v3 中。
+
+**v3 登记（运行前提交）。** 对照代码列出 Standalone 业务路径上全部带 `Retry-After` 的设计内让出，只有在线 checkpoint 暂停和 pack 回收两种，其余属于 HA/集群。v3 把这两种都纳入可重试，每次让出须 5 秒内解除；其余门槛不变，其他任何拒绝仍判失败。

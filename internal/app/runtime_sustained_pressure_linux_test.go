@@ -45,6 +45,8 @@ const (
 	// v2, registered after v1 failed on the designed projection pack
 	// reclamation 503 (§26): a call shed by it may wait Retry-After and retry,
 	// and each shed must clear within this bound. Any other refusal fails.
+	// v3 adds the live checkpoint pause, the only other designed Retry-After
+	// yield on the Standalone business path.
 	sustainedShedWithin = 5 * time.Second
 	// The cgroup peak ≤ 1.5 GiB with no max/oom event is enforced on every
 	// sample by memoryLoadPoint, the same fixed acceptance as the load run.
@@ -158,7 +160,7 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 			}
 			latencies = append(latencies, took)
 			if response.Status != http.StatusOK || response.Calls != 1 {
-				t.Fatalf("steady call failed after recovery: cycle=%d %+v monitor=%+v budget=%+v", cycle, response, r.resourcePressure.monitor.Snapshot(), r.resourcePressure.budget.Snapshot())
+				t.Fatalf("steady call failed after recovery: cycle=%d %+v suspended=%+v monitor=%+v budget=%+v", cycle, response, r.routes.Snapshot(time.Now()), r.resourcePressure.monitor.Snapshot(), r.resourcePressure.budget.Snapshot())
 			}
 			providerCalls += response.Calls
 			succeeded++
@@ -410,9 +412,11 @@ func setSustainedFreeBytes(t *testing.T, fill *os.File, root string, target int6
 	}
 }
 
-// sustainedPackShed reports the projection pack reclamation refusal (§26).
+// sustainedPackShed reports the two designed bounded yields: projection pack
+// reclamation (§26) and the live checkpoint pause.
 func sustainedPackShed(response memoryLoadResponse) bool {
-	return response.Status == http.StatusServiceUnavailable && response.Calls == 0 && response.RetryAfter == "1" && strings.Contains(response.Body, "memory state page reclamation is in progress")
+	return response.Status == http.StatusServiceUnavailable && response.Calls == 0 && response.RetryAfter == "1" &&
+		(strings.Contains(response.Body, "memory state page reclamation is in progress") || strings.Contains(response.Body, "memory state checkpoint is in progress"))
 }
 
 func waitSustainedPressure(t *testing.T, r *Runtime, state resourcebudget.Pressure, within time.Duration) {
