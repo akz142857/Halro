@@ -1,0 +1,332 @@
+//go:build linux
+
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/ledger"
+	"github.com/akz142857/Halro/internal/resourcebudget"
+	"golang.org/x/sys/unix"
+)
+
+// Thresholds of the HA physical-reserve sustained-pressure experiment, fixed
+// before any run (design §9.2, board §33). They are screening values for a
+// local two-member fixture, not production SLOs, and are never widened after
+// a run.
+const (
+	haSustainedRounds          = 24 // alternating unobserved and observed ENOSPC
+	haSustainedCheckpointEvery = 3  // online checkpoint on both members
+	haSustainedTerminalWithin  = 5 * time.Second
+	haSustainedAppliedWithin   = 5 * time.Second
+	haSustainedQuiesceWithin   = 5 * time.Second
+	haSustainedHeapDrift       = 32 << 20
+	haSustainedSpaceDrift      = 32 << 20
+	// The cgroup peak ≤ 1.5 GiB with no max/oom/oom_kill event is read from
+	// the runner's cgroup record after the run.
+)
+
+// TestHAPhysicalReserveSustainedPressure repeats the §31 reserve cycle on an
+// HA pair over real TLS: each round accepts one request, proves the logical
+// budget still has room, fills the isolated ext4 to actual ENOSPC, refuses a
+// new admission, finishes the accepted terminal from the reserve at zero free
+// blocks, has the Replica apply it, and recovers. Even rounds leave pressure
+// unobserved (Healthy, the sampling-delay window); odd rounds also set both
+// members Pressured, as an observed stop line would. Online checkpoints run
+// throughout. Fees, claims, ext4 space, FDs and live heap must not drift; both
+// members must close at ENOSPC without owned temporaries, and a fresh open of
+// the same directories must serve every terminal on both members.
+func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
+	if os.Getenv("HALRO_HA_SUSTAINED_PRESSURE") != "1" {
+		t.Skip("opt-in sustained HA reserve experiment")
+	}
+	root := os.Getenv("HALRO_EXT4_ROOT")
+	if root == "" {
+		t.Skip("requires explicitly isolated ext4 runner")
+	}
+	var fs unix.Statfs_t
+	if err := unix.Statfs(root, &fs); err != nil || fs.Type != unix.EXT4_SUPER_MAGIC {
+		t.Fatal("actual ext4 fixture", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	profile := ledger.HASelectedCompletionWorkspaceRequirements()
+	var completionRAM int64
+	for _, slot := range profile {
+		completionRAM += slot.RAM
+	}
+	// The same room as the §31 one-accepted case, so a control admission can
+	// prove each refusal physical; this is not a capacity claim.
+	adjust := func(_ int, limits *config.ResourceBudget) {
+		limits.TotalRAMBytes += completionRAM
+		limits.CompletionRAMBytes += completionRAM
+		limits.LedgerProjectionDiskBytes = 576 << 20
+		limits.UsageProjectionDiskBytes = 576 << 20
+	}
+	fixture := activateHAPhysicalBusinessFixture(t, ctx)
+	pair := openHAPhysicalBusinessPair(t, ctx, fixture, adjust)
+	primary, replica := pair.owners[0], pair.owners[1]
+	c := primary.reopened.Owners.Components
+	fills := []string{filepath.Join(root, "foreign-sustained-fill"), filepath.Join(root, "foreign-sustained-refill")}
+	t.Cleanup(func() {
+		for _, fill := range fills {
+			_ = os.Remove(fill)
+		}
+	})
+	var (
+		finalized     []string
+		baselineHeap  uint64
+		baselineSpace uint64
+		baselineFDs   int
+		baselineStats [2]resourcebudget.Stats
+		terminalMax   time.Duration
+		checkpoints   int
+	)
+	started := time.Now()
+	for round := range haSustainedRounds {
+		observed := round%2 == 1
+		admitted, retire, err := primary.physicalTerminalAdmission(ctx, 2)
+		if err != nil {
+			t.Fatal("physical admission with space", round, err)
+		}
+		work, err := c.Budget.TryAcquireCompletableWork(resourcebudget.Active, resourcebudget.Cost{RAM: 4096}, resourcebudget.Cost{RAM: completionRAM}, profile)
+		if err != nil {
+			t.Fatalf("accepted request completion RAM %d: %v %+v", round, err, c.Budget.Snapshot())
+		}
+		request, err := primary.business.accounting.BeginRequestDetailed(work.Bind(admitted), "prj_physical", "key_physical", fmt.Sprintf("sustained-accepted-%d", round), "model")
+		if err != nil {
+			t.Fatal("RequestAccepted", round, err)
+		}
+		if _, closeControl, err := primary.physicalTerminalAdmission(ctx, 2); err != nil {
+			t.Fatal("control admission before the fill", round, err)
+		} else if err := closeControl(); err != nil {
+			t.Fatal("control window retirement", round, err)
+		}
+		waitHASustainedApplied(t, ctx, primary, replica, round)
+		if err := exhaustHAPhysicalFixture(fills[0], haPhysicalFixtureFillBound); err != nil {
+			t.Fatal(round, err)
+		}
+		for i, f := range pair.owners {
+			m := f.reopened.Owners.Components.Budget
+			if p := m.Snapshot().Pressure; p != resourcebudget.Healthy {
+				t.Fatal("pressure before the round's transition", round, i, p)
+			}
+			if observed {
+				if err := m.SetPressure(resourcebudget.Pressured); err != nil {
+					t.Fatal(round, i, err)
+				}
+				if _, err := m.TryAcquire(resourcebudget.IO, resourcebudget.Cost{RAM: 1}); !errors.Is(err, resourcebudget.ErrPressure) {
+					t.Fatal("ordinary new IO admitted at observed ENOSPC", round, i, err)
+				}
+			}
+		}
+		if _, closeNew, err := primary.physicalTerminalAdmission(ctx, 2); err == nil {
+			_ = closeNew()
+			t.Fatal("new physical admission succeeded at actual ENOSPC", round, observed)
+		} else {
+			if !observed && errors.Is(err, resourcebudget.ErrExhausted) && !errors.Is(err, syscall.ENOSPC) {
+				t.Fatal("refusal after a successful control is the logical budget, not the physical stop", round, err)
+			}
+			t.Log("HA_SUSTAINED_REFUSAL", round, observed, err)
+		}
+		for i, f := range pair.owners {
+			checkpointCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+			err := f.checkpointHAPhysicalOnline(checkpointCtx)
+			stop()
+			if f.recovery.Load() {
+				t.Fatal("background checkpoint at ENOSPC forced recovery on an accepted reserve", round, i, err)
+			}
+		}
+		if err := exhaustHAPhysicalFixture(fills[1], haPhysicalFixtureFillBound); err != nil {
+			t.Fatal(round, err)
+		}
+		if err := unix.Statfs(root, &fs); err != nil || fs.Bavail != 0 {
+			t.Fatal("terminal would not run at ENOSPC", round, fs.Bavail, err)
+		}
+		terminalStart := time.Now()
+		terminalCtx, stopTerminal := context.WithTimeout(admitted, haSustainedTerminalWithin)
+		err = work.WithWorkspace(terminalCtx, func(ctx context.Context) error {
+			return primary.business.accounting.Finalize(ctx, request, "success")
+		})
+		stopTerminal()
+		if err != nil {
+			t.Fatal("accepted terminal at ENOSPC", round, err)
+		}
+		terminalMax = max(terminalMax, time.Since(terminalStart))
+		if err := errors.Join(work.Close(), work.Active.Release()); err != nil {
+			t.Fatal("accepted request RAM retirement", round, err)
+		}
+		waitHASustainedApplied(t, ctx, primary, replica, round)
+		if _, found, err := replica.reopened.Owners.Components.Ledger.ReadFinalization(ctx, request.RequestID); err != nil || !found {
+			t.Fatal("Replica did not apply the accepted terminal", round, found, err)
+		}
+		if err := retire(); err != nil {
+			t.Fatal("accepted completion owners", round, err)
+		}
+		finalized = append(finalized, request.RequestID)
+		for _, fill := range fills {
+			if err := os.Remove(fill); err != nil {
+				t.Fatal(round, err)
+			}
+		}
+		if observed {
+			for i, f := range pair.owners {
+				if err := f.reopened.Owners.Components.Budget.SetPressure(resourcebudget.Healthy); err != nil {
+					t.Fatal(round, i, err)
+				}
+			}
+		}
+		// Neither refusal may outlive the shortage: the first admission
+		// after recovery must succeed.
+		if _, closeAgain, err := primary.physicalTerminalAdmission(ctx, 2); err != nil {
+			t.Fatal("admission after recovery", round, err)
+		} else if err := closeAgain(); err != nil {
+			t.Fatal(round, err)
+		}
+		for i, f := range pair.owners {
+			got := f.reopened.Owners.Components.Budget.Snapshot()
+			if got.CompletionReserved != (resourcebudget.Cost{}) || got.Classes[resourcebudget.Active] != (resourcebudget.Cost{}) || got.Classes[resourcebudget.Completion] != (resourcebudget.Cost{}) {
+				t.Fatal("admitted work fees did not exit", round, i, got)
+			}
+		}
+		if (round+1)%haSustainedCheckpointEvery == 0 {
+			for i, f := range pair.owners {
+				before := f.reopened.Seal.Revision
+				if err := f.checkpointHAPhysicalOnline(ctx); err != nil {
+					t.Fatal("online checkpoint with space", round, i, err)
+				}
+				if f.reopened.Seal.Revision != before+1 || f.recovery.Load() {
+					t.Fatal("online checkpoint did not renew in place", round, i, before, f.reopened.Seal.Revision)
+				}
+			}
+			checkpoints++
+			if checkpoints == 1 {
+				runtime.GC()
+				var ms runtime.MemStats
+				runtime.ReadMemStats(&ms)
+				baselineHeap = ms.HeapAlloc
+				baselineSpace = haPhysicalFixtureSpace(t)
+				baselineFDs = len(sustainedOpenFDs(t))
+				for i, f := range pair.owners {
+					baselineStats[i] = waitHASustainedQuiescent(t, ctx, f, resourcebudget.Stats{}, false)
+				}
+			}
+		}
+		t.Logf("HA_SUSTAINED_ROUND %d observed=%t terminal_max=%s space=%d", round, observed, terminalMax, haPhysicalFixtureSpace(t))
+	}
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.HeapAlloc > baselineHeap+haSustainedHeapDrift {
+		t.Fatal("live heap drifted across sustained pressure", baselineHeap, ms.HeapAlloc)
+	}
+	if space := haPhysicalFixtureSpace(t); space+haSustainedSpaceDrift < baselineSpace {
+		t.Fatal("ext4 space drifted across sustained pressure", baselineSpace, space)
+	}
+	if fds := sustainedOpenFDs(t); len(fds) > baselineFDs {
+		t.Fatal("FD drift across sustained pressure", baselineFDs, fds)
+	}
+	for i, f := range pair.owners {
+		waitHASustainedQuiescent(t, ctx, f, baselineStats[i], true)
+	}
+	t.Logf("HA_SUSTAINED_SUMMARY rounds=%d checkpoints=%d terminal_max=%s heap=%d/%d space=%d/%d elapsed=%s",
+		haSustainedRounds, checkpoints, terminalMax, ms.HeapAlloc, baselineHeap, haPhysicalFixtureSpace(t), baselineSpace, time.Since(started))
+	for i, f := range pair.owners {
+		fill := filepath.Join(root, fmt.Sprintf("foreign-sustained-finish-fill-%d", i))
+		fills = append(fills, fill)
+		if err := exhaustHAPhysicalFixture(fill, haPhysicalFixtureFillBound); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
+			t.Fatal("confirmed terminal whole common at ENOSPC", i, err)
+		}
+		if err := f.closeHAPhysicalNative(ctx); err != nil {
+			t.Fatal("physical native close at ENOSPC", i, err)
+		}
+	}
+	pair.release()
+	for i, cfg := range fixture.configs {
+		if left := haPhysicalOwnedTemporaries(t, cfg.Storage.DataDir); len(left) != 0 {
+			t.Fatal("owned temporaries survived", i, left)
+		}
+	}
+	for _, fill := range fills[2:] {
+		if err := os.Remove(fill); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reopened := openHAPhysicalBusinessPair(t, ctx, fixture, adjust)
+	for i, f := range reopened.owners {
+		for _, id := range finalized {
+			if _, found, err := f.reopened.Owners.Components.Ledger.ReadFinalization(ctx, id); err != nil || !found {
+				t.Fatal("reopened member lost an accepted terminal", i, id, found, err)
+			}
+		}
+	}
+	if _, closeAgain, err := reopened.owners[0].physicalTerminalAdmission(ctx, 2); err != nil {
+		t.Fatal("admission after reopen", err)
+	} else if err := closeAgain(); err != nil {
+		t.Fatal(err)
+	}
+	for i, f := range reopened.owners {
+		if err := f.finishHAPhysicalBusiness(ctx); err != nil {
+			t.Fatal("reopened whole common", i, err)
+		}
+		if err := f.closeHAPhysicalNative(ctx); err != nil {
+			t.Fatal("reopened native close", i, err)
+		}
+	}
+	reopened.release()
+}
+
+// waitHASustainedApplied is waitHAPhysicalApplied under the experiment's
+// fixed bound.
+func waitHASustainedApplied(t *testing.T, ctx context.Context, primary, replica *haSelectedRuntimeFoundation, round int) {
+	t.Helper()
+	bounded, stop := context.WithTimeout(ctx, haSustainedAppliedWithin)
+	defer stop()
+	through := primary.replication.publisher.Snapshot().DurableIndex
+	if err := primary.replication.coordinator.WaitConfirmed(bounded, through); err != nil {
+		t.Fatal("durable prefix confirmation", round, err)
+	}
+	for replica.replication.publisher.Snapshot().AppliedIndex < through {
+		select {
+		case <-bounded.Done():
+			t.Fatal("Replica apply", round, bounded.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// waitHASustainedQuiescent returns a member's budget once no admitted work is
+// open. With compare set, Used and the normal claims must also come back to
+// the baseline within the bound: background owners hold steady, so anything
+// above it is a fee the rounds left behind.
+func waitHASustainedQuiescent(t *testing.T, ctx context.Context, f *haSelectedRuntimeFoundation, baseline resourcebudget.Stats, compare bool) resourcebudget.Stats {
+	t.Helper()
+	deadline := time.Now().Add(haSustainedQuiesceWithin)
+	for {
+		got := f.reopened.Owners.Components.Budget.Snapshot()
+		idle := got.CompletionReserved == (resourcebudget.Cost{}) && got.Classes[resourcebudget.Active] == (resourcebudget.Cost{}) && got.Classes[resourcebudget.Completion] == (resourcebudget.Cost{})
+		if idle && (!compare || got.Used.RAM <= baseline.Used.RAM && got.Used.Disk <= baseline.Used.Disk && got.NormalClaims <= baseline.NormalClaims) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("budget did not return to its baseline", baseline, got)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}

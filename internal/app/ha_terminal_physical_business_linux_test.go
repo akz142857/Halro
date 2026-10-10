@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -227,6 +228,21 @@ func exerciseHASelectedPhysicalBusinessActualTLSMode(t *testing.T, pressure, rep
 // budget after the fixed physical profile is applied.
 func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(member int, limits *config.ResourceBudget)) [2]*haSelectedRuntimeFoundation {
 	t.Helper()
+	return openHAPhysicalBusinessPair(t, ctx, activateHAPhysicalBusinessFixture(t, ctx), adjust).owners
+}
+
+// haPhysicalBusinessPair is an open Primary and Replica. release stops the
+// transport, then closes each foundation and its directory lock; it runs once,
+// at the latest on cleanup, so a test can reopen the same directories.
+type haPhysicalBusinessPair struct {
+	owners  [2]*haSelectedRuntimeFoundation
+	release func()
+}
+
+// activateHAPhysicalBusinessFixture prepares the two members' directories
+// and completes their memory-state activation, leaving both closed.
+func activateHAPhysicalBusinessFixture(t *testing.T, ctx context.Context) haMetadataMaintenanceFixture {
+	t.Helper()
 	fixture := prepareHAMetadataMaintenanceFixture(t)
 	prepareHAMetadataMaintenanceArtifacts(t, fixture)
 	completeHAMemoryActivationBoundary(t, fixture)
@@ -247,7 +263,44 @@ func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(
 			t.Fatal(err)
 		}
 	}
+	return fixture
+}
+
+// openHAPhysicalBusinessPair opens an activated fixture's members with the
+// fixed physical profile, each from a fresh Manager, and serves their TLS
+// transport until the Primary is startup ready.
+func openHAPhysicalBusinessPair(t *testing.T, ctx context.Context, fixture haMetadataMaintenanceFixture, adjust func(member int, limits *config.ResourceBudget)) haPhysicalBusinessPair {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	var owners [2]*haSelectedRuntimeFoundation
+	var guards [2]*lock.Lock
+	var stop context.CancelFunc
+	var done chan error
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			if stop != nil {
+				stop()
+				for range 2 {
+					if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+						t.Error(err)
+					}
+				}
+			}
+			for i := len(owners) - 1; i >= 0; i-- {
+				if owners[i] == nil {
+					continue
+				}
+				if err := owners[i].Close(); err != nil {
+					t.Error("original foundation cleanup", i, err)
+				}
+				if err := guards[i].Close(); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	t.Cleanup(release)
 	for i, cfg := range fixture.configs {
 		limits := *cfg.ResourceBudget
 		limits.TotalRAMBytes = 2 << 30
@@ -278,24 +331,16 @@ func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(
 			adjust(i, &limits)
 		}
 		cfg.ResourceBudget = &limits
-		fixture.configs[i] = cfg
 		guard, err := lock.Acquire(cfg.Storage.DataDir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		f, err := openHASelectedRuntimeFoundation(ctx, cfg, fixture.keys.Master, guard, functionalHAMetadataManager(t, cfg), logger)
 		if err != nil {
+			_ = guard.Close()
 			t.Fatal("actual physical business foundation", i, err)
 		}
-		owners[i] = f
-		t.Cleanup(func() {
-			if err := f.Close(); err != nil {
-				t.Error("original foundation cleanup", i, err)
-			}
-			if err := guard.Close(); err != nil {
-				t.Error(err)
-			}
-		})
+		owners[i], guards[i] = f, guard
 		if err := f.prepareSelectedServicesWithLease(ctx, i == 0); err != nil {
 			t.Fatal("actual whole physical service preparation", i, err, f.owners.Components.Budget.Snapshot())
 		}
@@ -311,19 +356,11 @@ func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(
 			t.Fatal("actual whole physical transport", i, err)
 		}
 	}
-	runCtx, stop := context.WithCancel(ctx)
-	done := make(chan error, 2)
+	runCtx, cancelRun := context.WithCancel(ctx)
+	stop, done = cancelRun, make(chan error, 2)
 	for _, f := range owners {
 		go func(f *haSelectedRuntimeFoundation) { done <- f.serveSelectedTransport(runCtx) }(f)
 	}
-	t.Cleanup(func() {
-		stop()
-		for range 2 {
-			if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-				t.Error(err)
-			}
-		}
-	})
 	primary := owners[0]
 	for !primary.replication.startupReady.Load() {
 		select {
@@ -334,7 +371,7 @@ func startHAPhysicalBusinessPair(t *testing.T, ctx context.Context, adjust func(
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	return owners
+	return haPhysicalBusinessPair{owners, release}
 }
 
 // exhaustHAPhysicalFixture fills the isolated runner ext4 to actual ENOSPC
