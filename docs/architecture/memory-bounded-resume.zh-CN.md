@@ -4,7 +4,7 @@
 
 ## 1. 代码在哪里
 
-- 分支 `memory-bounded-state`，**未推送**。基于 `main` 的 `2425ae8e`。
+- 分支 `memory-bounded-state`，已推送到 origin（`dca5324d`，门禁第 6 轮通过）；之后的提交未推送。基于 `main` 的 `2425ae8e`。
 - 本地证据目录 `docs/verification/performance/` 与 `docs/architecture/evidence/` 均被 `.gitignore` 忽略，不在提交里。
 - 原任务计数：**25 项中 5 完成 / 20 开放**（D-04 已拆为 D-04a 本地容量、D-04b 生产校准；D-01、R-01、D-04b 按用户指示暂缓）。
 
@@ -37,6 +37,7 @@
 | `dcb6746a`（分支 `memory-bounded-usage-pack` 的 `f676433d`…`5621ee6d`） | projection 页包准入背压：无空间时整笔拒绝而非中毒、归约干净停止、按用量触发 checkpoint、网关 503 削减新业务（看板 §26） |
 | `3db39877` | 修复：`PackUsage` 不再取 store 锁，避免准入轮询让 Ledger append 内的 Apply 锁忙失败（看板 §26，合入后 race 补跑发现） |
 | `9c88ee24` | 测试：损坏状态检查改为损坏所选 revision 对应的缓存槽位（看板 §26，门禁第 5 轮失败的原因） |
+| `8fa01a1c` | 三节点在真实 ENOSPC 下拒绝新写入、终结关闭与重启的 Linux 接受测试（看板 §27） |
 
 ## 2. 用户已做的裁定
 
@@ -78,8 +79,8 @@
 
 ## 4. 下次建议顺序
 
-1. 门禁记录：`72c1bd8d` 上通过（8716 秒）；`21df8609` 上第 2 轮因诊断代码混入工作树中止；第 3 轮 race 分片失败（锁忙，看板 §25）；`c640bd40` 上第 4 轮于 2026-10-10 00:51 启动，8752 秒，`exit=0`，无 `FAIL`/`panic`。随后合入 `memory-bounded-busy-head`（`d237342c`）与 `memory-bounded-usage-pack`（`dcb6746a`），针对性回归（新增 app 测试及其 race、ledger/authenticatedstate race、authenticatedstate/usage/ledger 整包）发现并修复 `PackUsage` 锁忙缺陷（`3db39877`），复跑受影响测试后在 `88bff47f` 上起第 5 轮门禁（10:50），39 分钟后在 app 第 4 分片失败，原因是测试写死缓存槽位（看板 §26，`9c88ee24` 修复）。第 6 轮门禁在包含本文的提交上运行，日志在被忽略的 `docs/verification/performance/2026-10-10-final-gate-6/full-check.log`：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；末尾是 `gate process ended without exit line` 表示进程被中断，需要重跑。门禁运行期间不得改动主工作区。分支仍未推送，推送待用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
-2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）与回复丢失的有界解决（§24）；I-03 剩余：HA 储备保护、归档多文件发布、迁移故障、三节点真实 ENOSPC 变体、目标容量持续压力。
+1. 门禁记录：`72c1bd8d` 上通过（8716 秒）；`21df8609` 上第 2 轮因诊断代码混入工作树中止；第 3 轮 race 分片失败（锁忙，看板 §25）；`c640bd40` 上第 4 轮于 2026-10-10 00:51 启动，8752 秒，`exit=0`，无 `FAIL`/`panic`。随后合入 `memory-bounded-busy-head`（`d237342c`）与 `memory-bounded-usage-pack`（`dcb6746a`），针对性回归（新增 app 测试及其 race、ledger/authenticatedstate race、authenticatedstate/usage/ledger 整包）发现并修复 `PackUsage` 锁忙缺陷（`3db39877`），复跑受影响测试后在 `88bff47f` 上起第 5 轮门禁（10:50），39 分钟后在 app 第 4 分片失败，原因是测试写死缓存槽位（看板 §26，`9c88ee24` 修复）。第 6 轮门禁在 `dca5324d` 上于 2026-10-10 11:37 启动，9326 秒，`exit=0`，无 `FAIL`/`panic`；该提交已按用户确认推送到 origin。日志在被忽略的 `docs/verification/performance/2026-10-10-final-gate-6/full-check.log`，判读方法：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；末尾是 `gate process ended without exit line` 表示进程被中断，需要重跑。门禁运行期间不得改动主工作区。之后的新提交推送前仍需完整门禁与用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
+2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）、回复丢失的有界解决（§24）与三节点真实 ENOSPC（§27）；I-03 剩余：HA 储备保护、归档多文件发布、迁移故障、目标容量持续压力。
 3. 之后继续 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令

@@ -141,7 +141,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生 | 目标容量下持续压力/恢复，动态输出盘完整接受 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
 | 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22） | 目标容量下的持续压力 |
-| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护、归档多文件发布、迁移故障；三节点下的真实 ENOSPC 变体 |
+| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护、归档多文件发布、迁移故障（三节点真实 ENOSPC 变体已于 2026-10-10 通过，§27） |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
 
@@ -410,3 +410,14 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 **回归。** 见续作交接 §4-1；随后在测试修复后的提交上跑门禁第 6 轮。
 
 **仍开放。** 单机压缩测试的偶发失败（`context canceled` 原因链，§23-2）仍未归因，与 §25 的锁忙失败不是同一现象。
+
+## 27. 三节点真实 ENOSPC 下的终结与重启（I-03）
+
+本批 2026-10-10 14:25 开始，固定输入为 `dca5324d` 加新测试，约 25 分钟完成，未到 2 小时上限。
+
+`TestHAPhysicalThreeMemberActualENOSPCTerminalAndRestart`（`8fa01a1c`）组合 §22 的三成员夹具与 §23 的 ENOSPC 收尾模式：在线 checkpoint 并把事实复制到两个 Replica 后，用外部文件把共用 ext4 以 `fallocate` 填到 4 KiB 粒度的真实 ENOSPC 并置满压力；新写入需要两个 Replica 的 credit，必须因 `ErrPressure` 被拒且 credit 释放、不留 live ticket；每个成员终结前重新填满，关闭后不得残留自有临时文件；移除填充后下一次启动，两个 Replica 都读到全部事实，被拒事实在三个成员上都不存在，且启动不回收空间。没有修改生产代码。
+
+**证据**（真实 Linux，逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup、6 GiB ext4）：4/4 通过，每次约 5.5 秒，cgroup 峰值 130～179 MB，无 OOM。反向验证：回退 `4363a46c`（已确认 revert 生效，`ha_peer_physical_controller.go` 41+/54−）后在 `peer credit at actual ENOSPC … context deadline exceeded` 失败，即 reserve 的 30 秒上限，与两节点测试一致。证据：`docs/verification/performance/2026-10-10-three-member-enospc/`（被忽略）。
+
+**I-03 ENOSPC 条件仍缺：** HA 储备保护、归档多文件发布、迁移故障（对应设计 §9.1 最后一条“迁移、新旧投影共存、bbolt 扩页及归档暂存中的 ENOSPC 注入”）。“HA 储备保护”在文档中未单独定义，下一批先写明判据：到停止线时停止新增工作，且早于储备被侵占（设计 §6.1）。
+
