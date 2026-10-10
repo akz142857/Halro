@@ -725,3 +725,9 @@ I-03 仍不关闭，还缺：
 - 流程与 §33 v6 完全相同，只是“Replica 应用”“Replica 读到终结”“等待 credit 窗口”对两个 Replica 都要成立，压力设置、checkpoint、ENOSPC 关闭与重开对三个成员都要成立。
 - 硬门槛与 §33 v6 相同，数值不变：终结 ≤ 5 秒；确认 + 两个 Replica 应用 ≤ 5 秒；每轮新准入被拒（未观测轮无在途时须为 `ErrPhysicalAllocation`），恢复后第一次准入成功；每轮费用 5 秒内回到打开快照；checkpoint 推迟须 5 秒内解除；heap ≤ 基线 + 32 MiB，ext4 可用空间 ≥ 基线 − 32 MiB，FD ≤ 基线，三端 `Used`/normal claims 不高于基线；三端 ENOSPC 关闭无自有临时文件；重开后三端读到全部 24 个终结；cgroup 峰值 ≤ 1.5 GiB，`max`/`oom`/`oom_kill` 为 0。
 - 通过标准：连续两次通过；两成员版本在改动后的辅助函数上复跑一次通过；反向验证（同 §33 注入）须让三节点版本失败。
+
+**v1 结果：未通过，失败在填盘辅助函数。** 第 1 次运行（cgroup 峰值 207 MB，`max`/`oom`/`oom_kill` 为 0）：
+- 24 轮全部通过，结束时的漂移与静默检查也全部通过：8 次 checkpoint 无推迟，最长 325 ms；终结最长 37.9 ms；heap 26.85 MB，基线 26.84 MB；ext4 可用空间比基线少 19.9 MB；FD 不增加。拒绝原因与 §33 v6 相同：在途时都是 live ticket，无在途满盘时未观测轮是 `ErrPhysicalAllocation`，已观测轮是压力。
+- 结束阶段：Primary 在 ENOSPC 下完成发布与关闭后，为成员 1 填盘时，`exhaustHAPhysicalFixture` 的探测写入没有遇到 ENOSPC。Primary 关闭后两个 Replica 的会话断开，它们异步退还接收窗口持有的块，块在 fallocate 与探测写入之间被释放。两节点版本只有一个 Replica，没有暴露。这是测试辅助函数的竞争，不是被测系统的问题。
+
+**v2 登记（运行前提交）。** `exhaustHAPhysicalFixture` 的探测写入如果找到空间，就继续填，最多 8 遍，直到一次写入真实遇到 ENOSPC；最后的 `Bavail == 0` 检查保留。这个辅助函数也被 §21～§31 的测试使用，改动只让它在并发退还块时多填几遍，结束条件不变，所以对共用它的测试也做回归。其余门槛不变。

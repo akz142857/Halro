@@ -428,28 +428,41 @@ func exhaustHAPhysicalFixture(path string, bound int64) error {
 	if err != nil {
 		return err
 	}
+	// Members still running can return blocks while the file grows (a
+	// Replica retires its receive window when the Primary's session ends), so
+	// a probe write that finds room starts another pass. Only a write that
+	// actually meets ENOSPC ends the fill.
 	var offset int64
-	for step := int64(64 << 20); step >= fs.Bsize; {
-		if offset+step > bound {
-			return errors.Join(errors.New("foreign allocation fixed bound exceeded"), f.Close())
+	var info os.FileInfo
+	for pass := 1; ; pass++ {
+		if pass > 8 {
+			return errors.Join(errors.New("actual foreign write did not observe ENOSPC"), f.Close())
 		}
-		err := unix.Fallocate(int(f.Fd()), 0, offset, step)
-		if errors.Is(err, syscall.ENOSPC) {
-			step /= 2
-			continue
+		for step := int64(64 << 20); step >= fs.Bsize; {
+			if offset+step > bound {
+				return errors.Join(errors.New("foreign allocation fixed bound exceeded"), f.Close())
+			}
+			err := unix.Fallocate(int(f.Fd()), 0, offset, step)
+			if errors.Is(err, syscall.ENOSPC) {
+				step /= 2
+				continue
+			}
+			if err != nil {
+				return errors.Join(err, f.Close())
+			}
+			offset += step
 		}
-		if err != nil {
+		if info, err = f.Stat(); err != nil {
 			return errors.Join(err, f.Close())
 		}
-		offset += step
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return errors.Join(err, f.Close())
-	}
-	_, writeErr := f.WriteAt(make([]byte, 4096), info.Size()+4096)
-	if !errors.Is(writeErr, syscall.ENOSPC) {
-		return errors.Join(errors.New("actual foreign write did not observe ENOSPC"), writeErr, f.Close())
+		_, writeErr := f.WriteAt(make([]byte, 4096), info.Size()+4096)
+		if errors.Is(writeErr, syscall.ENOSPC) {
+			break
+		}
+		if writeErr != nil {
+			return errors.Join(writeErr, f.Close())
+		}
+		fmt.Printf("actual HA business ext4 fill pass %d found returned blocks\n", pass)
 	}
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
 		return err
