@@ -411,8 +411,8 @@ func (o *projectionPackObservation) updated(store *authenticatedstate.Store, app
 	}
 }
 
-// PackAdmission reports the page pack's use, refreshed when the store is not
-// busy and otherwise as last observed, and the largest bytes one applied
+// PackAdmission reports the page pack's use, refreshed while the store reports
+// one and otherwise as last observed, and the largest bytes one applied
 // record has appended. Every applied record is its own transaction. Zero
 // recordBytes means none has been observed yet. It never waits.
 func (p *AuthenticatedLedgerProjection) PackAdmission() (used, usable, recordBytes uint64) {

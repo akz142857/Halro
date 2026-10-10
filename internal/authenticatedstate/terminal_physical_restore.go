@@ -135,6 +135,7 @@ func (s *Store) restorePhysicalTerminalClaimsLocked(ctx context.Context, selecti
 		return nil, 0, false, err
 	}
 	s.physical = &physicalStoreOwner{fee: fee, receipt: r, allocatedEnd: c.COWEnd}
+	s.publishPackLocked()
 	defer func() {
 		if resultErr != nil {
 			s.physical.failure = resultErr

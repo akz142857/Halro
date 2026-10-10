@@ -77,6 +77,7 @@ func (s *Store) EnablePhysicalTerminal(ctx context.Context) error {
 		return err
 	}
 	s.physical = &physicalStoreOwner{fee: fee, allocatedEnd: int64(s.physicalExtent) + 4096}
+	s.publishPackLocked()
 	// Hold the real aggregate fee before any target allocation. A failed
 	// allocation can have allocated a prefix; preserve its owner and fault.
 	if err := resourcebudget.AllocatePhysicalRange(s.pack, int64(s.physicalExtent), 4096); err != nil {

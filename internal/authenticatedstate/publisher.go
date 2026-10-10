@@ -70,6 +70,7 @@ func (s *Store) AdoptClosedSuccessor(next *Store) (resultErr error) {
 		// fee merely because the borrowed writer exited.
 		s.physical, next.physical = next.physical, nil
 	}
+	s.publishPackLocked()
 	return nil
 }
 

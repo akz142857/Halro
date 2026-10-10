@@ -120,3 +120,76 @@ func TestStoreRepackQualifiesWhenAppendRoomIsLow(t *testing.T) {
 		})
 	}
 }
+
+// Admission polls PackUsage from every request while another request's Apply
+// updates the store, and update only tries the store lock. A poll must never
+// make an update fail busy, and it reports the extent each update, repack and
+// close leaves behind.
+func TestPackUsageNeverHoldsTheStoreLockAgainstAnUpdate(t *testing.T) {
+	f := newRepackFixtureSized(t, 2<<20, 16<<10)
+	ctx := context.Background()
+	check := func(open bool) {
+		t.Helper()
+		used, usable, ok := f.store.PackUsage()
+		if ok != open || open && (used != f.store.physicalExtent || usable != uint64(f.store.ceiling-f.store.appendLimit)) {
+			t.Fatal("pack usage", used, usable, ok, f.store.physicalExtent)
+		}
+	}
+	check(true)
+	stop, polled := make(chan struct{}), make(chan int)
+	go func() {
+		n := 0
+		for {
+			select {
+			case <-stop:
+				polled <- n
+				return
+			default:
+				f.store.PackUsage()
+				n++
+			}
+		}
+	}()
+	var err error
+	for i := 0; err == nil && f.store.physicalExtent < uint64(f.store.ceiling/2); i++ {
+		if i > 2000 {
+			err = errors.New("pack never reached half full")
+			break
+		}
+		value := bytes.Repeat([]byte{byte(i)}, 512)
+		_, err = f.store.Update(ctx, nextCut(int(f.store.physicalRevision)), func(tx *Transaction) error { return tx.Put([]byte("key_000001"), value) })
+	}
+	close(stop)
+	if n := <-polled; err != nil || n == 0 {
+		t.Fatal("updates beside a pack poll:", err, n)
+	}
+	check(true)
+	publish := func() {
+		t.Helper()
+		f.seal.Revision++
+		if f.seal.Roots[0], err = f.store.SealRootReference(ctx, f.schema); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.publisher.Publish(ctx, f.seal); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish()
+	before := f.store.physicalExtent
+	candidate, err := f.store.PrepareRepack(ctx, f.publisher, f.guard, f.seal, f.schema, f.reservation)
+	if err != nil || candidate == nil {
+		t.Fatal("repack", err)
+	}
+	if check(true); f.store.physicalExtent >= before {
+		t.Fatal("repack reclaimed nothing", before, f.store.physicalExtent)
+	}
+	publish()
+	if err := candidate.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+}

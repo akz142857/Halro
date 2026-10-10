@@ -140,6 +140,7 @@ type Store struct {
 	borrowed                              bool
 	pins                                  [maxStorePins]atomic.Pointer[Snapshot]
 	failure                               atomic.Pointer[storeFault]
+	packView                              atomic.Pointer[packUsageView] // published under mu, read without it
 	closing, closed, discarded            bool
 	discardPackRetired, discardDirRetired bool
 	closeErr                              error
@@ -247,6 +248,7 @@ func CreateStore(ctx context.Context, dir string, o StoreOptions, next func() (R
 	s.base = base
 	s.current = cowRoot{o.ExpectedCut, 1, base.current}
 	s.physicalExtent, s.physicalRevision = base.current.extent, 1
+	s.publishPackLocked()
 	s.packDigest = base.headerDigest
 	s.info = base.info
 	if e = base.Close(); e != nil {
@@ -361,6 +363,7 @@ func openStore(ctx context.Context, dir string, o StoreOptions, readParent *Stor
 	s.rootDigest = selectedDigest
 	s.physicalRootDigest = sha256.Sum256(raw)
 	s.physicalExtent, s.physicalRevision = physical.content.extent, physical.revision
+	s.publishPackLocked()
 	path := s.slotPath(s.packSlot, "pages")
 	pathInfo, e := os.Lstat(path)
 	if e != nil || !pathInfo.Mode().IsRegular() {
@@ -584,6 +587,7 @@ func (s *Store) publish(ctx context.Context, next cowRoot) (resultErr error) {
 	// publisher may retire its OWN root, while foreign replacements still refuse.
 	s.rootInfo, s.physicalRootDigest = info, sha256.Sum256(b)
 	s.physicalExtent, s.physicalRevision = next.content.extent, next.revision
+	s.publishPackLocked()
 	if e = s.phase("root-renamed"); e != nil {
 		return e
 	}
@@ -676,6 +680,7 @@ func (s *Store) Close() error {
 	}
 	s.closeDone = make(chan struct{})
 	s.closing = true
+	s.publishPackLocked()
 	if s.auditCancel != nil {
 		s.auditCancel()
 	}
@@ -724,6 +729,7 @@ func (s *Store) Close() error {
 		// receipt until Discard physically retires the namespace.
 	}
 	s.closed = true
+	s.publishPackLocked()
 	s.closeErr = e
 	close(s.closeDone)
 	return e
@@ -874,16 +880,29 @@ func retireCaptured(path string, receipt *os.FileInfo) error {
 	return nil
 }
 
+type packUsageView struct{ used, usable uint64 }
+
 // PackUsage reports the appended page bytes and how many are usable before
 // updates are refused: the ceiling less one worst-case transaction. ok is false
-// while the store is busy, closed or physically reserved; callers poll again.
+// while the store is closing, closed or physically reserved. It never takes
+// mu: update only tries that lock and fails busy, so an admission poll holding
+// it for a moment would refuse the Apply inside a Ledger append.
 func (s *Store) PackUsage() (used, usable uint64, ok bool) {
-	if s == nil || !s.mu.TryLock() {
+	if s == nil {
 		return 0, 0, false
 	}
-	defer s.mu.Unlock()
+	v := s.packView.Load()
+	if v == nil {
+		return 0, 0, false
+	}
+	return v.used, v.usable, true
+}
+
+// Called with mu held after any change to what PackUsage reports.
+func (s *Store) publishPackLocked() {
 	if s.closing || s.closed || s.physical != nil || s.appendLimit <= 0 || s.ceiling < s.appendLimit {
-		return 0, 0, false
+		s.packView.Store(nil)
+		return
 	}
-	return s.physicalExtent, uint64(s.ceiling - s.appendLimit), true
+	s.packView.Store(&packUsageView{used: s.physicalExtent, usable: uint64(s.ceiling - s.appendLimit)})
 }

@@ -615,6 +615,7 @@ func (s *Store) prepareRepack(ctx context.Context, publisher *SealCandidatePubli
 	s.packSlot, s.pack, s.info, s.rootInfo, s.current = slot, file, info, rootInfo, next
 	s.rootDigest, s.physicalRootDigest, s.packDigest = sha256.Sum256(raw), sha256.Sum256(raw), sha256.Sum256(header)
 	s.physicalExtent, s.physicalRevision, s.repack = content.extent, next.revision, c
+	s.publishPackLocked()
 	if s.physical != nil {
 		s.physical.allocatedEnd = int64(content.extent)
 	}
@@ -683,6 +684,7 @@ func (c *StoreRepack) finish(ctx context.Context, committed bool) (resultErr err
 		s.packSlot, s.pack, s.info, s.rootInfo, s.current = old.slot, old.file, old.info, old.rootInfo, old.root
 		s.rootDigest, s.packDigest, s.physicalRootDigest = old.rootDigest, old.packDigest, old.physicalDigest
 		s.physicalExtent, s.physicalRevision = old.extent, old.revision
+		s.publishPackLocked()
 		if s.physical != nil {
 			s.physical.allocatedEnd = old.physicalAllocatedEnd
 			if err := c.rollbackPhysicalReceiptLocked(); err != nil {

@@ -216,6 +216,7 @@ func (s *Store) enablePhysicalTerminalQualifiedLocked(ctx context.Context, selec
 		return 0, err
 	}
 	s.physical = &physicalStoreOwner{fee: fee, allocatedEnd: int64(s.physicalExtent)}
+	s.publishPackLocked()
 	end, err := s.openPhysicalReceiptLocked(selection, native, reserveNative)
 	if err != nil {
 		s.physical.failure = err
