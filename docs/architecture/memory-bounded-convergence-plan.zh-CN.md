@@ -141,7 +141,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生 | 目标容量下持续压力/恢复，动态输出盘完整接受 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
 | 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22） | 目标容量下的持续压力 |
-| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护；Standalone `metadata migrate` 迁移的 ENOSPC（三节点真实 ENOSPC 变体 §27、归档多文件发布 §28、HA 激活迁移 §29 已于 2026-10-10 通过） |
+| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护（三节点真实 ENOSPC 变体 §27、归档多文件发布 §28、HA 激活迁移 §29、Standalone 迁移 §30 已于 2026-10-10 通过） |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
 
@@ -445,3 +445,31 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 
 **仍缺。** Standalone 迁移（`halro metadata migrate` → `ActivatePreparedMemoryRuntime`）没有阶段钩子，本批未覆盖其 ENOSPC；设计 §9.1 所列“新旧投影共存、bbolt 扩页”下的 ENOSPC 也未单独注入。I-03 ENOSPC 条件另缺 HA 储备保护。
 
+## 30. Standalone 迁移的真实 ENOSPC（I-03）
+
+本批 2026-10-10 16:57 开始，基于 `b03ebf1a`，约 10 分钟完成，未到 2 小时上限。
+
+**生产代码只加观测点（`e3066371`）。** `ActivatePreparedMemoryRuntime` 之前没有阶段钩子。本批拆出不导出的 `activatePreparedMemoryRuntime`，在六个持久边界调用 `phase`：`sources-qualified`、`roots-built`、`bootstrap-pending-synced`、`startup-caches-persisted`、`common-seal-published`、`bootstrap-activated`。导出函数传 nil，行为不变。
+
+**测试。** `TestStandaloneMigrationAtActualENOSPCRecovers` 按 `halro metadata migrate --activate-runtime` 的顺序执行三步：命名空间、从备份重建 Metadata、七根激活。共 11 个注入点：命名空间 4 个（`before-staging-create`、`intent-created`、`staging-synced`、`namespace-synced`）、Metadata 重建前 1 个、激活 6 个。在注入点用外部文件把隔离 ext4 填到真实 ENOSPC，判据如下：
+- 迁移要么在已持有的空间内完成，要么以该 ENOSPC 失败，不得出现其他错误。
+- 不残留自有临时文件。
+- 原生 Metadata 和日志逐字节不变。
+- 只要还有迁移名字存在，普通启动必须拒绝。
+- 释放空间后按文档恢复：已有公共 seal 用 `--resume-activation`，否则用 `--restart-preparation` 从同一备份重来。
+- 恢复后默认 Runtime 能打开，迁移前已结算的请求费用仍在。
+
+每次尝试使用新的预算 manager，与真实失败进程退出后的情形一致。
+
+**证据**（真实 Linux，3 GiB ext4，Recovery 1259 MiB）：
+- 3/3 通过，cgroup 峰值 199～247 MB，每次结果一致。
+- 前 9 个注入点都以真实 ENOSPC 失败，`--restart-preparation` 均能恢复。
+- `common-seal-published` 和 `bootstrap-activated` 之后只剩硬链接和 unlink，落在已持有空间内，迁移照常完成。所以 `--resume-activation` 在 ENOSPC 下实际不可达，本批没有走到这条路径；它的中断恢复由既有 SIGKILL 测试覆盖。
+- 反向验证：把 restart 保留清单里的 `memory-audit-1.cache` 去掉后，`startup-caches-persisted` 以 `file exists` 失败；还原后通过。
+- macOS 上受影响的激活与 CLI 迁移回归通过。
+
+证据目录：`docs/verification/performance/2026-10-10-standalone-migration-enospc/`（被忽略）。
+
+**运维含义。** restart 会把被中断的世代原样保留在 `.interrupted-N` 和 `.unqualified-N` 里，不删除。因此 ENOSPC 之后，要释放的空间至少能再放下一份完整的迁移输出。连续失败最多保留四代，用尽后须先手动归档。
+
+**仍缺。** I-03 ENOSPC 条件只剩 HA 储备保护；设计 §9.1 所列“新旧投影共存、bbolt 扩页”下的 ENOSPC 也还没有单独注入。
