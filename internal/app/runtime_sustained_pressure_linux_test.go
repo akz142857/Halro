@@ -331,14 +331,14 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRuntimeMemoryLoadFreshProcessHelper$", "-test.count=1", "-test.v")
 	child.Env = append(os.Environ(), "HALRO_RUNTIME_MEMORY_LOAD_MANIFEST="+manifestPath)
 	output, err := child.CombinedOutput()
-	if err != nil {
-		t.Fatalf("fresh process selected reopen failed: %v %s", err, output)
+	if err != nil || !strings.Contains(string(output), "--- PASS: TestRuntimeMemoryLoadFreshProcessHelper") {
+		t.Fatalf("fresh process selected reopen failed or did not run: %v %s", err, output)
 	}
 	after := memoryLoadPoint(t)
 	report := map[string]any{"scope": "local Linux sustained pressure on the fixed capacity profile; not production", "cycles": sustainedCycles, "maintenance_cycles": maintenance, "elapsed_seconds": elapsed.Seconds(),
 		"succeeded": succeeded, "throughput_per_second": float64(succeeded) / elapsed.Seconds(), "burst_refused": burstRefused, "pack_sheds": sheds, "max_shed_wait_ms": maxShedWait.Seconds() * 1000, "refused_under_pressure": refusedUnderPressure, "provider_calls": providerCalls, "provider_peak": a.peak.Load(),
 		"steady_p50_ms": p50.Seconds() * 1000, "steady_p95_ms": p95.Seconds() * 1000, "steady_p99_ms": p99.Seconds() * 1000, "enter_max_ms": slices.Max(enterTimes).Seconds() * 1000, "exit_max_ms": slices.Max(exitTimes).Seconds() * 1000,
-		"baseline_heap_bytes": baselineHeap, "live_after_gc": live, "before": before, "after_close_and_fresh_process": after, "fd_before": fdBefore, "fd_after": memoryLoadFDs(t), "usage": stats, "balance": balance, "native_head": head}
+		"baseline_heap_bytes": baselineHeap, "live_after_gc": live, "before": before, "after_close_and_fresh_process": after, "fd_before": fdBefore, "fd_after": memoryLoadFDs(t), "usage": stats, "balance": balance, "native_head": head, "fresh_process": string(output)}
 	raw, err = json.Marshal(report)
 	if err != nil {
 		t.Fatal(err)
