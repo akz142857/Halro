@@ -634,6 +634,16 @@ I-03 剩余：见 §32 结论。
   - cgroup 峰值 ≤ 1.5 GiB，`max`/`oom`/`oom_kill` 均为 0（由 runner 记录判读）。
 - 只记录：每轮拒绝的错误、终结最长耗时、每轮可用空间、总耗时。
 
-**v1 结果：未通过，判据本身写错。** 第 1 次运行在第 0 轮结束时的费用检查失败（cgroup 峰值 220 MB，无 OOM）。该轮其余步骤都已通过：新准入以 `physical completion allocation unavailable` 被物理层拒绝，已接受终结在零空闲块下完成并被 Replica 应用，恢复后第一次准入成功。失败时 Primary 的 Completion 类占用 270393344 B，`CompletionReserved` 为 230080160 B。“两端准入费用为零”照搬了 §32 的单机判据，但 HA 物理夹具的常驻所有者在启动时就持有 Completion RAM 和终结预留，零不是这个夹具的空闲值。按规则判 v1 未通过。
+**v1 结果：未通过，判据本身写错。** 第 1 次运行在第 0 轮结束时的费用检查失败（cgroup 峰值 220 MB，无 OOM）。该轮其余步骤都已通过：新准入以 `physical completion allocation unavailable` 被物理层拒绝，已接受终结在零空闲块下完成并被 Replica 应用，恢复后第一次准入成功。失败时 Primary 的 Completion 类占用 270393344 B，`CompletionReserved` 为 230080160 B。“两端准入费用为零”照搬了 §32 的单机判据，但 HA 物理夹具的常驻所有者在启动时就持有 Completion RAM，零不是这个夹具的空闲值。按规则判 v1 未通过。（v2 的打开快照修正了这里的判断：常驻的只有 Completion 类 270393344 B，`CompletionReserved` 打开时为 0，v1 看到的 230 MB 是尚未退还的瞬时值，见 v2 结果。）
 
 **v2 登记（运行前提交）。** 只改参照：每轮结束时两端的 `CompletionReserved` 与 Active/Completion 类占用，必须等于打开后、第 0 轮之前的空闲快照（日志 `HA_SUSTAINED_OPENED`），结束时的静默检查也以它为准。其余门槛全部不变。
+
+**v2 结果：未通过。** 第 1 次运行（cgroup 峰值 194 MB，无 OOM）：
+- 打开快照：两端 Completion 类 270393344 B，`CompletionReserved` 与 Active 为 0。
+- 第 0 轮（未观测）全部通过：物理拒绝，终结 10.7 ms，费用回到打开快照。
+- 第 1 轮（已观测）在 Replica 读取终结事实时失败：`new resource admission stopped by pressure`。读取属于新工作，压力下被正确拒绝，与 §32 v1 第 1 条相同，是测试把读取放在了解除压力之前。此前该轮的新准入以 `new resource admission stopped by pressure` 被拒，已接受终结完成，确认与 Replica 应用在 5 秒内完成。
+- 中止后的清理中，两端 Close 报 `owned file actual IO retirement is uncertain`（v1 同样出现）。这是测试在终结发布前中止、直接 Close 的路径，不在本实验判据内，记录待查。
+
+**v3 登记（运行前提交）。** 两处，均不调宽门槛：
+- Replica 读取终结事实移到解除压力之后。
+- 每轮的费用检查改为在已登记的 5 秒静默上限内等待回到打开快照（v1 的瞬时值说明退还是异步完成的）；超过 5 秒仍判失败。

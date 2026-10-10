@@ -174,9 +174,6 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 			t.Fatal("accepted request RAM retirement", round, err)
 		}
 		waitHASustainedApplied(t, ctx, primary, replica, round)
-		if _, found, err := replica.reopened.Owners.Components.Ledger.ReadFinalization(ctx, request.RequestID); err != nil || !found {
-			t.Fatal("Replica did not apply the accepted terminal", round, found, err)
-		}
 		if err := retire(); err != nil {
 			t.Fatal("accepted completion owners", round, err)
 		}
@@ -193,6 +190,11 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 				}
 			}
 		}
+		// Reading the fact is new work, refused while pressured; check it
+		// after recovery (v3).
+		if _, found, err := replica.reopened.Owners.Components.Ledger.ReadFinalization(ctx, request.RequestID); err != nil || !found {
+			t.Fatal("Replica did not apply the accepted terminal", round, found, err)
+		}
 		// Neither refusal may outlive the shortage: the first admission
 		// after recovery must succeed.
 		if _, closeAgain, err := primary.physicalTerminalAdmission(ctx, 2); err != nil {
@@ -200,11 +202,10 @@ func TestHAPhysicalReserveSustainedPressure(t *testing.T) {
 		} else if err := closeAgain(); err != nil {
 			t.Fatal(round, err)
 		}
+		// v3: retirement settles asynchronously, so the fees get the fixed
+		// quiescence bound to come back to the opened snapshot.
 		for i, f := range pair.owners {
-			got := f.reopened.Owners.Components.Budget.Snapshot()
-			if got.CompletionReserved != opened[i].CompletionReserved || got.Classes[resourcebudget.Active] != opened[i].Classes[resourcebudget.Active] || got.Classes[resourcebudget.Completion] != opened[i].Classes[resourcebudget.Completion] {
-				t.Fatal("admitted work fees did not exit", round, i, opened[i], got)
-			}
+			waitHASustainedQuiescent(t, ctx, f, opened[i], resourcebudget.Stats{}, false)
 		}
 		if (round+1)%haSustainedCheckpointEvery == 0 {
 			for i, f := range pair.owners {
