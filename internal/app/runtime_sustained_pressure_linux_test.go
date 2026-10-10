@@ -42,6 +42,10 @@ const (
 	sustainedP95              = 500 * time.Millisecond
 	sustainedP99              = time.Second
 	sustainedHeapDrift        = 32 << 20
+	// v2, registered after v1 failed on the designed projection pack
+	// reclamation 503 (§26): a call shed by it may wait Retry-After and retry,
+	// and each shed must clear within this bound. Any other refusal fails.
+	sustainedShedWithin = 5 * time.Second
 	// The cgroup peak ≤ 1.5 GiB with no max/oom event is enforced on every
 	// sample by memoryLoadPoint, the same fixed acceptance as the load run.
 )
@@ -74,6 +78,11 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 		cfg.Storage.DataDir = filepath.Join(fixture, "data")
 		cfg.Storage.MasterKey.File = filepath.Join(fixture, "master.key")
 		cfg.Retry.MaxAttemptsPerTarget = 2
+		// Every in-process call shares one source address; the per-source
+		// limiter would answer 429 for all of them. 0 is the supported
+		// setting for an install behind a shedding proxy.
+		unlimited := 0
+		cfg.Gateway.SourceRateLimit.RequestsPerMinute = &unlimited
 	})
 	cfg, instance := legacy.config, legacy.instanceID
 	if err := legacy.Close(); err != nil {
@@ -95,11 +104,23 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := installMemoryLoadProvider(t, r, credentials)
+	// Hundreds of calls a minute exceed the fixture Project's RPM/TPM policy,
+	// whose 429s would mask pressure behavior. Lift those two rate limits
+	// only; the concurrency cap and every resource limit stay as fixed.
+	business, err := r.store.GetProject(ctx, credentials.ProjectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	business.RPM, business.TPM = 0, 0
+	if _, err := r.store.PutProject(ctx, business, business.Revision, nil); err != nil {
+		t.Fatal(err)
+	}
 	body := `{"model":"chat","messages":[{"role":"user","content":"sustained"}],"max_tokens":10}`
 	auth := "Bearer " + credentials.GatewayKey
 	var latencies []time.Duration
 	var enterTimes, exitTimes []time.Duration
-	succeeded, refusedUnderPressure, burstRefused, providerCalls := 0, 0, 0, int64(0)
+	succeeded, refusedUnderPressure, burstRefused, providerCalls, sheds := 0, 0, 0, int64(0), 0
+	var maxShedWait time.Duration
 	project, err := r.store.PutProject(ctx, domain.Project{ID: "prj_sustained_churn", Name: "sustained metadata churn", Enabled: true, AllowedModels: []string{strings.Repeat("m", 512<<10)}}, 0, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -116,11 +137,28 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 	for cycle := range sustainedCycles {
 		// Steady business: every sequential call must succeed after recovery.
 		for range sustainedSteadyCalls {
-			begin := time.Now()
-			response := serveMemoryLoadCall(r, credentials, &memoryLoadCall{}, body, auth)
-			latencies = append(latencies, time.Since(begin))
+			var response memoryLoadResponse
+			var took time.Duration
+			shedStart := time.Now()
+			for {
+				begin := time.Now()
+				response = serveMemoryLoadCall(r, credentials, &memoryLoadCall{}, body, auth)
+				took = time.Since(begin)
+				if !sustainedPackShed(response) {
+					break
+				}
+				sheds++
+				if time.Since(shedStart) > sustainedShedWithin {
+					t.Fatal("projection pack shedding did not clear in time", cycle, response)
+				}
+				time.Sleep(time.Second)
+			}
+			if waited := time.Since(shedStart) - took; waited > maxShedWait {
+				maxShedWait = waited
+			}
+			latencies = append(latencies, took)
 			if response.Status != http.StatusOK || response.Calls != 1 {
-				t.Fatal("steady call failed after recovery", cycle, response)
+				t.Fatalf("steady call failed after recovery: cycle=%d %+v monitor=%+v budget=%+v", cycle, response, r.resourcePressure.monitor.Snapshot(), r.resourcePressure.budget.Snapshot())
 			}
 			providerCalls += response.Calls
 			succeeded++
@@ -152,10 +190,21 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 		entered, release := make(chan struct{}), make(chan struct{})
 		accepted := make(chan memoryLoadResponse, 1)
 		go func() {
-			accepted <- serveMemoryLoadCall(r, credentials, &memoryLoadCall{gate: release, entered: entered}, body, auth)
+			state := &memoryLoadCall{gate: release, entered: entered}
+			deadline := time.Now().Add(sustainedShedWithin)
+			for {
+				response := serveMemoryLoadCall(r, credentials, state, body, auth)
+				if !sustainedPackShed(response) || time.Now().After(deadline) {
+					accepted <- response
+					return
+				}
+				time.Sleep(time.Second)
+			}
 		}()
 		select {
 		case <-entered:
+		case response := <-accepted:
+			t.Fatal("held request was not admitted while healthy", cycle, response, r.resourcePressure.monitor.Snapshot(), r.resourcePressure.budget.Snapshot())
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
@@ -184,7 +233,6 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 		if finished.Status != http.StatusOK {
 			t.Fatal("accepted terminal failed under actual pressure", cycle, disk, finished)
 		}
-		assertMemoryLoadTerminal(t, r, finished, 1)
 		providerCalls += finished.Calls
 		succeeded++
 		memoryLoadPoint(t)
@@ -210,6 +258,9 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 		}
 		waitSustainedPressure(t, r, resourcebudget.Healthy, sustainedExitWithin)
 		exitTimes = append(exitTimes, time.Since(begin))
+		// Reading the fact is new work, refused while pressured; check it now.
+		assertMemoryLoadTerminal(t, r, finished, 1)
+		t.Logf("SUSTAINED_CYCLE %d disk=%t burst_admitted=%d enter=%s exit=%s", cycle, disk, admitted, enterTimes[len(enterTimes)-1], exitTimes[len(exitTimes)-1])
 		if (cycle+1)%sustainedMaintenanceEvery == 0 {
 			sustainedMaintenance(t, ctx, r, limits, &suspension, maintenance)
 			maintenance++
@@ -278,7 +329,7 @@ func TestRuntimeSustainedPressureLinux(t *testing.T) {
 	}
 	after := memoryLoadPoint(t)
 	report := map[string]any{"scope": "local Linux sustained pressure on the fixed capacity profile; not production", "cycles": sustainedCycles, "maintenance_cycles": maintenance, "elapsed_seconds": elapsed.Seconds(),
-		"succeeded": succeeded, "throughput_per_second": float64(succeeded) / elapsed.Seconds(), "burst_refused": burstRefused, "refused_under_pressure": refusedUnderPressure, "provider_calls": providerCalls, "provider_peak": a.peak.Load(),
+		"succeeded": succeeded, "throughput_per_second": float64(succeeded) / elapsed.Seconds(), "burst_refused": burstRefused, "pack_sheds": sheds, "max_shed_wait_ms": maxShedWait.Seconds() * 1000, "refused_under_pressure": refusedUnderPressure, "provider_calls": providerCalls, "provider_peak": a.peak.Load(),
 		"steady_p50_ms": p50.Seconds() * 1000, "steady_p95_ms": p95.Seconds() * 1000, "steady_p99_ms": p99.Seconds() * 1000, "enter_max_ms": slices.Max(enterTimes).Seconds() * 1000, "exit_max_ms": slices.Max(exitTimes).Seconds() * 1000,
 		"baseline_heap_bytes": baselineHeap, "live_after_gc": live, "before": before, "after_close_and_fresh_process": after, "fd_before": fdBefore, "fd_after": memoryLoadFDs(t), "usage": stats, "balance": balance, "native_head": head}
 	raw, err = json.Marshal(report)
@@ -357,6 +408,11 @@ func setSustainedFreeBytes(t *testing.T, fill *os.File, root string, target int6
 	if err := fill.Sync(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// sustainedPackShed reports the projection pack reclamation refusal (§26).
+func sustainedPackShed(response memoryLoadResponse) bool {
+	return response.Status == http.StatusServiceUnavailable && response.Calls == 0 && response.RetryAfter == "1" && strings.Contains(response.Body, "memory state page reclamation is in progress")
 }
 
 func waitSustainedPressure(t *testing.T, r *Runtime, state resourcebudget.Pressure, within time.Duration) {

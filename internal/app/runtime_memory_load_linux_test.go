@@ -86,10 +86,13 @@ func (a *memoryLoadAdapter) Chat(ctx context.Context, call provider.ChatCall) (o
 }
 
 type memoryLoadResponse struct {
-	ID        string
-	Status    int
-	Calls     int64
-	ErrorCode string
+	ID         string
+	Status     int
+	Calls      int64
+	ErrorCode  string
+	Message    string
+	RetryAfter string
+	Body       string
 }
 type memoryLoadManifest struct {
 	Config      config.Config
@@ -156,12 +159,15 @@ func serveMemoryLoadCall(r *Runtime, credentials BootstrapResult, state *memoryL
 	if w.Code >= 400 {
 		var failure struct {
 			Error struct {
-				Code string `json:"code"`
+				Code    string `json:"code"`
+				Message string `json:"message"`
 			} `json:"error"`
 		}
 		if json.Unmarshal(w.Body.Bytes(), &failure) == nil {
-			result.ErrorCode = failure.Error.Code
+			result.ErrorCode, result.Message = failure.Error.Code, failure.Error.Message
 		}
+		result.RetryAfter = w.Header().Get("Retry-After")
+		result.Body = w.Body.String()
 	}
 	return result
 }
