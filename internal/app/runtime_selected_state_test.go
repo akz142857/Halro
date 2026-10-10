@@ -446,7 +446,7 @@ func TestDefaultRuntimeUsesActivatedSevenRootsAndReopensActualBusiness(t *testin
 			t.Fatal("normal shutdown left cache candidate", name, err)
 		}
 	}
-	assertSelectedRuntimeRejectsDamagedSavedState(t, ctx, cfg, logger, opts)
+	assertSelectedRuntimeRejectsDamagedSavedState(t, ctx, cfg, logger, opts, fifth.selectedState.generation.Seal.Revision)
 	selectedBackupPath := filepath.Join(t.TempDir(), "selected-state.hmbk")
 	archiveSummary, err := CreateBackupSummary(newCommandContext(), cfg, configPath, selectedBackupPath, backupKey, CreateBackupOptions{})
 	if err != nil {
@@ -582,7 +582,7 @@ func assertSelectedRuntimeGovernance(t *testing.T, ctx context.Context, r *Runti
 	return outcome
 }
 
-func assertSelectedRuntimeRejectsDamagedSavedState(t *testing.T, ctx context.Context, cfg config.Config, logger *slog.Logger, opts OpenOptions) {
+func assertSelectedRuntimeRejectsDamagedSavedState(t *testing.T, ctx context.Context, cfg config.Config, logger *slog.Logger, opts OpenOptions, revision uint64) {
 	t.Helper()
 	sealPath := filepath.Join(cfg.Storage.DataDir, "active.seal")
 	seal, err := os.ReadFile(sealPath)
@@ -590,7 +590,10 @@ func assertSelectedRuntimeRejectsDamagedSavedState(t *testing.T, ctx context.Con
 		t.Fatal(err)
 	}
 	// These are tiny fixture artifacts; production verification remains streaming.
-	for _, path := range []string{memoryStateBootstrapPath(cfg), sealPath, filepath.Join(cfg.Storage.DataDir, "memory-audit-1.cache"), filepath.Join(memoryStateDirectory(cfg), "metadata-root", "pages")} {
+	// Startup reads the cache slot of the selected revision; the other slot is
+	// stale and never read, so damage must go to the selected one.
+	auditCache := filepath.Join(cfg.Storage.DataDir, fmt.Sprintf("memory-audit-%d.cache", revision%2))
+	for _, path := range []string{memoryStateBootstrapPath(cfg), sealPath, auditCache, filepath.Join(memoryStateDirectory(cfg), "metadata-root", "pages")} {
 		t.Run("refuse_damage_"+filepath.Base(filepath.Dir(path))+"_"+filepath.Base(path), func(t *testing.T) {
 			original, err := os.ReadFile(path)
 			if err != nil || len(original) == 0 {
