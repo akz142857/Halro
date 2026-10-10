@@ -1,10 +1,10 @@
 # 内存有界状态：续作交接
 
-更新：2026-10-10 10:30（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§26 和[总设计](memory-bounded-state-design.zh-CN.md)。
+更新：2026-10-11 01:00（Asia/Singapore）。下次继续时从本文开始；细节与历史见[进度看板](memory-bounded-convergence-plan.zh-CN.md) §14–§33 和[总设计](memory-bounded-state-design.zh-CN.md)。
 
 ## 1. 代码在哪里
 
-- 分支 `memory-bounded-state`，已推送到 origin（`dca5324d`，门禁第 6 轮通过）；之后的提交未推送。基于 `main` 的 `2425ae8e`。
+- 分支 `memory-bounded-state`，已推送到 origin（`9a861004`，门禁第 8 轮通过）；之后的提交未推送。基于 `main` 的 `2425ae8e`。
 - 本地证据目录 `docs/verification/performance/` 与 `docs/architecture/evidence/` 均被 `.gitignore` 忽略，不在提交里。
 - 原任务计数：**25 项中 5 完成 / 20 开放**（D-04 已拆为 D-04a 本地容量、D-04b 生产校准；D-01、R-01、D-04b 按用户指示暂缓）。
 
@@ -43,6 +43,8 @@
 | `e3066371` | Standalone 迁移激活加阶段钩子；11 个注入点的真实 ENOSPC 与恢复测试（看板 §30） |
 | `d8a9131a` | HA 储备保护：采样延迟窗口内的真实 ENOSPC，新准入物理拒绝、已接受终结用储备完成（看板 §31） |
 | `f0cf8ac5`…`574ab8f4` | 固定容量配置下的持续压力实验：预登记门槛、v1/v2 失败记录、v3 连续两次通过（看板 §32） |
+| `9a861004` | 修复：被取消的 Member 读取保留取消原因（门禁第 7 轮 race 失败的根因；第 8 轮门禁通过，已推送） |
+| `5e562cd9`…`b7d3738c` | HA 物理储备下的持续压力：夹具加严格传输模式，预登记门槛，v1～v5 失败记录，v6 连续两次通过；更正 §31 对 checkpoint 拒绝原因的解读（看板 §33） |
 
 ## 2. 用户已做的裁定
 
@@ -85,7 +87,7 @@
 ## 4. 下次建议顺序
 
 1. 门禁记录：`72c1bd8d` 上通过（8716 秒）；`21df8609` 上第 2 轮因诊断代码混入工作树中止；第 3 轮 race 分片失败（锁忙，看板 §25）；`c640bd40` 上第 4 轮于 2026-10-10 00:51 启动，8752 秒，`exit=0`，无 `FAIL`/`panic`。随后合入 `memory-bounded-busy-head`（`d237342c`）与 `memory-bounded-usage-pack`（`dcb6746a`），针对性回归（新增 app 测试及其 race、ledger/authenticatedstate race、authenticatedstate/usage/ledger 整包）发现并修复 `PackUsage` 锁忙缺陷（`3db39877`），复跑受影响测试后在 `88bff47f` 上起第 5 轮门禁（10:50），39 分钟后在 app 第 4 分片失败，原因是测试写死缓存槽位（看板 §26，`9c88ee24` 修复）。第 6 轮门禁在 `dca5324d` 上于 2026-10-10 11:37 启动，9326 秒，`exit=0`，无 `FAIL`/`panic`；该提交已按用户确认推送到 origin。日志在被忽略的 `docs/verification/performance/2026-10-10-final-gate-6/full-check.log`，判读方法：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；末尾是 `gate process ended without exit line` 表示进程被中断，需要重跑。门禁运行期间不得改动主工作区。之后的新提交推送前仍需完整门禁与用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
-2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）、回复丢失的有界解决（§24）、三节点真实 ENOSPC（§27）、归档多文件发布 ENOSPC（§28）、HA 激活迁移 ENOSPC（§29）、Standalone 迁移 ENOSPC（§30）、HA 储备保护（§31）与固定容量配置下的持续压力（§32）；I-03 整项仍开放：历史规模（D-04/P2 阻断）与 HA 物理储备下的持续压力、动态输出盘、所有权移交与有限等待的原有缺口；另登记崩溃后 `.archive-*.tmp` 无人回收（§28）。
+2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）、回复丢失的有界解决（§24）、三节点真实 ENOSPC（§27）、归档多文件发布 ENOSPC（§28）、HA 激活迁移 ENOSPC（§29）、Standalone 迁移 ENOSPC（§30）、HA 储备保护（§31）、固定容量配置下的持续压力（§32）与 HA 物理储备下的持续压力（§33，两节点严格传输）；I-03 整项仍开放：历史规模（D-04/P2 阻断）、三节点与真实采样器下的 HA 持续压力、动态输出盘、所有权移交与有限等待的原有缺口、其他后台写入方的 ENOSPC 争用；另登记崩溃后 `.archive-*.tmp` 无人回收（§28）。
 3. 之后继续 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令

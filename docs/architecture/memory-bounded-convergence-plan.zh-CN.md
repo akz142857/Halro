@@ -140,7 +140,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 所有权移交 | 三后台共享、实际嵌套/退出及备份 source/stage/output 同一 Manager；本批超时只退等待者费用 | 全部持久化消费者和命令交接覆盖，生产启动磁盘身份 reconciliation |
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生。2026-10-10：固定容量配置下 24 轮真实内存/磁盘压力进出与磁盘迟滞区间连续两次通过（§32） | 动态输出盘完整接受；历史规模（D-04/P2）下的持续压力 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
-| 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22）；2026-10-10：固定容量配置下 24 轮压力中每轮已接受终结完成、费用归零（§32） | 历史规模（D-04/P2）下的持续压力；HA 物理储备下的持续压力 |
+| 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22）；2026-10-10：固定容量配置下 24 轮压力中每轮已接受终结完成、费用归零（§32）；HA 两节点严格传输、真实 ENOSPC 下 24 轮储备循环连续两次通过（§33） | 历史规模（D-04/P2）下的持续压力；三节点与真实采样器下的 HA 持续压力 |
 | ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | 设计 §9.1 所列新旧投影共存、bbolt 扩页下的 ENOSPC 未单独注入（三节点真实 ENOSPC 变体 §27、归档多文件发布 §28、HA 激活迁移 §29、Standalone 迁移 §30、HA 储备保护 §31 已于 2026-10-10 通过） |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
@@ -671,3 +671,44 @@ I-03 剩余：见 §32 结论。
 - 第 2 轮（未观测）无在途时的新准入**成功**。前提有误：已接受请求的储备释放后可能把预分配的块还给文件系统（§31 在终结发布前再填一次就是这个原因），此时已不是 ENOSPC；第 0 轮被拒只是那次释放没有还回足够的块。
 
 **v6 登记（运行前提交）。** 释放已接受请求后再填一次，确认空闲块为 0，再做无在途准入的判定；其余不变。
+
+**v6 结果：连续两次通过。** 两次运行的输入相同（`b7d3738c`）。逐项对照门槛，两次结果分别为：
+- cgroup 峰值 221 / 188 MB，不超过 1.5 GiB；`max`/`oom`/`oom_kill` 均为 0。
+- 24 轮全部完成。每个已接受终结都在零空闲块下完成，最长 31.6 / 32.4 ms（门槛 5 秒）；确认与 Replica 应用都在 5 秒内完成。
+- 在途时的新准入 24 次全被拒，原因都是 live ticket（`ErrPhysicalCredit`）。无在途、满盘时的新准入 24 次全被拒：未观测的 12 轮都是 `HA original Metadata terminal window: physical completion allocation unavailable`（`ErrPhysicalAllocation`），已观测的 12 轮都是压力拒绝。
+- 恢复后第一次准入每轮都成功；Replica 每轮都读到终结。
+- 每轮的准入费用都回到打开快照；结束时两端 `Used` 与 normal claims 不高于基线。
+- 8 次有空间的在线 checkpoint 都一次成功，没有推迟；最长 686 / 574 ms。Seal revision 每次恰好 +1，不进入恢复。
+- GC 后 heap 20.76 MB / 20.74 MB，基线 20.66 / 20.73 MB；ext4 可用空间比基线少 13.3 MB（门槛 32 MiB，两次一致，只记录）；FD 不增加。
+- 两端在 ENOSPC 下完成公共发布与原生关闭，无自有临时文件；严格模式重开后两端都读到 24 个终结，新准入成功，正常关闭。
+- 测试耗时 17.0 / 13.4 秒。
+
+**回归。** 共用改动后夹具代码的 4 个既有测试在同一二进制上通过：3 GiB 镜像下 `TestHAPhysicalReserveHoldsAtUnobservedENOSPC`（两个子测试）、`TestHASelectedPhysicalBusinessOriginalWindowActualTLS`、`TestHASelectedPhysicalReplicaSameGenerationDoesNotConsumeCheckpointWindows`；1536 MiB 镜像下 `TestHASelectedPhysicalBusinessOriginalWindowAtENOSPCActualTLS`。
+
+**反向验证。** 把 Ledger 投影终结 COW 更新的预留窗口换成 `nil`（补丁存于证据目录 `reverse-1.patch`，已确认注入生效、构建后已还原），测试在第 0 轮以 `accepted terminal at ENOSPC: physical completion allocation unavailable` 失败。
+
+**只记录。** 两次通过的日志末尾各有两条 Replica 侧 `HA selected replication session failed ... EOF`，按顺序对应两次 release（重开前、结束时）关闭 Primary 传输。v1～v5 中止后的清理里，未完成终结发布就直接 Close 时两端报 `owned file actual IO retirement is uncertain` 或 `authenticated store requires reopen`，这是 fail-closed 的中止路径，不在本实验判据内，未进一步核对。
+
+证据目录：`docs/verification/performance/2026-10-10-ha-sustained/`（被忽略），包括：
+- v1～v5 的失败记录；
+- `diag-*` 诊断运行；
+- v6 的两次通过；
+- `existing-*` 回归；
+- `reverse-1`；
+- 各版基准提交 `base-*.txt` 与 runner。
+
+**结论。** 在两节点、严格传输（生产形态的 peer credit + 本地物理储备）、固定物理配置、压力状态由测试设置、真实 ENOSPC 下，I-03“终结额度”一行的“HA 物理储备下的持续压力”已有可复现的通过证据：
+- 24 轮里停止线在储备被侵占之前生效：未观测时由物理预分配拒绝，已观测时由压力拒绝。
+- 已接受终结都用储备完成，Replica 都应用了终结事实。
+- 费用、空间、heap、FD 都没有漂移，两端可以关闭并重开。
+
+本批另外查明，§31 用的普通传输夹具不能做在线 checkpoint，§31 已更正。严格路径上 Primary 同一时刻只有 1 个在途请求，这是 live ticket 的设计，和固定配置“只容纳 1 个在途请求”一致，不是本批造成的。
+
+I-03 仍不关闭，还缺：
+- 历史规模下的持续压力（受 D-04/P2 阻断）；
+- 三节点版本、真实压力采样器下的 HA 版本；
+- 动态输出盘的完整接受；
+- “所有权移交”“有限等待”两行原有的缺口；
+- 其他后台写入方在 ENOSPC 下的争用（§31）。
+
+实验过程中修正了 5 个测试或夹具问题，没有发现产品缺陷。本批 23:40 开始，约 1 小时 15 分钟完成。
