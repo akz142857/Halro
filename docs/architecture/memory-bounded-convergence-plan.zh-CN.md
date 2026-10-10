@@ -141,7 +141,7 @@ P1 [首次裁定与 owner/阶段表](memory-bounded-budget-feasibility.zh-CN.md)
 | 压力迟滞 | DataDir/临时盘 bytes/inodes、未知信号拒绝和迟滞；备份 ENOSPC 在真实预检后发生 | 目标容量下持续压力/恢复，动态输出盘完整接受 |
 | 有限等待 | 上述排队点硬上限，定向 race 核对超时/重试/已接纳工作保留 | 其余 owner/命令覆盖审计；不响应取消的物理 IO 继续记未退休 |
 | 终结额度 | 原 Completion 池及超时后保留实际接受费用；终结、Close 有组件及实际 TLS 检查。2026-10-09：原 2 GiB 在 Recovery 1259 MiB 下可行（§18），满压力下终结关闭不再申请新准入且在真实 ENOSPC 下完成（§21）；三节点（1 Primary + 2 Replica）满压力终结与重启真实通过（§22） | 目标容量下的持续压力 |
-| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护、迁移故障（三节点真实 ENOSPC 变体 §27、归档多文件发布 §28 已于 2026-10-10 通过） |
+| ENOSPC | 新增命令备份密文实际失败与精确清理，既有八类 native/projection/Runtime 场景保留。2026-10-09：HA 双角色在真实 ENOSPC 下拒绝新复制写入、终结关闭无自有临时文件残留、重启后双端确认事实且无回收（§23） | HA 储备保护；Standalone `metadata migrate` 迁移的 ENOSPC（三节点真实 ENOSPC 变体 §27、归档多文件发布 §28、HA 激活迁移 §29 已于 2026-10-10 通过） |
 
 当前必要 normal 为 **827729920 B（789.386 MiB）/54 claims**；原 Recovery reserve 1387 MiB 后 normal 仅 661 MiB，仍差 **134621184 B（128.386 MiB）**。本批没有新增减费。I-03 整项仍开放，原任务计数保持 **5 完成 / 19 开放**；不按文档或子测试数量报完成率。
 
@@ -434,4 +434,14 @@ backup/restore 工作区只由离线命令获取，每个命令经 `commandBudge
 **登记的相关开放项（不在本批范围）。** 进程在写入中被 SIGKILL 时留下的 `.archive-*.tmp`（分区、列缓冲、条目暂存、目录页、root 等）没有任何启动或维护步骤回收；ENOSPC 路径现在会精确清理，崩溃路径仍会累积。
 
 **I-03 ENOSPC 条件仍缺：** HA 储备保护、迁移故障。
+
+## 29. HA 激活迁移的真实 ENOSPC（I-03）
+
+本批 2026-10-10 14:58 开始，固定输入为 `3cd8780f` 加新测试，约 15 分钟完成，未到 2 小时上限。
+
+**测试（`b4747a2b`）。** `TestHAMemoryActivationAtActualENOSPCResumes` 沿用 SIGKILL 恢复测试的六个激活阶段钩子（`sources-qualified`、`namespace-created`、`seven-roots-built`、`bootstrap-pending-synced`、`common-seal-published`、`bootstrap-activated`），在指定阶段把隔离 ext4 填到真实 ENOSPC。激活只允许在已持有空间内完成，或以该 ENOSPC 失败，不得出现其他错误，且不残留自有临时文件；释放后必须完成激活：与崩溃后相同，默认激活必须拒绝覆盖被中断的状态，`Restart` 才能恢复；结果须通过独立的七根与原生日志审计读取。没有修改生产代码。
+
+**证据**（真实 Linux，3 GiB ext4，逻辑 2 GiB、Recovery 1259 MiB、实际 2 GiB cgroup）：4/4 通过，cgroup 峰值 204～253 MB，每次结果一致——`sources-qualified` 以 ENOSPC 失败、默认重试即完成；`namespace-created`、`seven-roots-built`、`bootstrap-pending-synced` 以 ENOSPC 失败、默认激活拒绝、`Restart` 恢复；`common-seal-published`、`bootstrap-activated` 之后的写入落在已持有空间内，激活完成。四个失败阶段都返回真实 ENOSPC，说明注入确实到达后续写入。证据：`docs/verification/performance/2026-10-10-migration-enospc/`（被忽略）。
+
+**仍缺。** Standalone 迁移（`halro metadata migrate` → `ActivatePreparedMemoryRuntime`）没有阶段钩子，本批未覆盖其 ENOSPC；设计 §9.1 所列“新旧投影共存、bbolt 扩页”下的 ENOSPC 也未单独注入。I-03 ENOSPC 条件另缺 HA 储备保护。
 
