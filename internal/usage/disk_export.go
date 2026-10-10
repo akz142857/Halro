@@ -337,19 +337,20 @@ type archivePagePool struct {
 	ctx       context.Context
 	directory string
 	work      *archiveWork
-	files     int
+	live      map[*archivePageBuffer]struct{}
 	err       error
 }
 type archivePageBuffer struct {
 	*os.File
-	writer *archiveWriter
+	writer   *archiveWriter
+	identity os.FileInfo
 }
 
 func (b *archivePageBuffer) Write(p []byte) (int, error) { return b.writer.Write(p) }
 func (p *archivePagePool) GetBuffer() io.ReadWriteSeeker {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.files >= 128 {
+	if len(p.live) >= 128 {
 		p.err = ErrDiskUsageLimit
 		return &archiveErrorBuffer{p.err}
 	}
@@ -358,17 +359,44 @@ func (p *archivePagePool) GetBuffer() io.ReadWriteSeeker {
 		p.err = err
 		return &archiveErrorBuffer{err}
 	}
-	p.files++
-	return &archivePageBuffer{File: f, writer: &archiveWriter{ctx: p.ctx, out: f, remaining: 16 << 20, work: p.work}}
+	identity, err := f.Stat()
+	if err != nil {
+		p.err = errors.Join(err, f.Close(), os.Remove(f.Name()))
+		return &archiveErrorBuffer{p.err}
+	}
+	b := &archivePageBuffer{File: f, writer: &archiveWriter{ctx: p.ctx, out: f, remaining: 16 << 20, work: p.work}, identity: identity}
+	if p.live == nil {
+		p.live = make(map[*archivePageBuffer]struct{})
+	}
+	p.live[b] = struct{}{}
+	return b
 }
 func (p *archivePagePool) PutBuffer(buffer io.ReadWriteSeeker) {
-	if b, ok := buffer.(*archivePageBuffer); ok {
-		err := errors.Join(b.Close(), os.Remove(b.Name()))
-		p.mu.Lock()
-		p.files--
-		p.err = errors.Join(p.err, err)
-		p.mu.Unlock()
+	b, ok := buffer.(*archivePageBuffer)
+	if !ok {
+		return
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, live := p.live[b]; !live {
+		return
+	}
+	delete(p.live, b)
+	p.err = errors.Join(p.err, cleanupArchiveTemporary(b.File, false, b.identity))
+}
+
+// release retires every buffer the writer did not return. A failed write
+// (ENOSPC among others) abandons the column buffers it holds, so their files
+// are the pool's to close and unlink. It reports how many were abandoned.
+func (p *archivePagePool) release() (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	abandoned := len(p.live)
+	for b := range p.live {
+		delete(p.live, b)
+		p.err = errors.Join(p.err, cleanupArchiveTemporary(b.File, false, b.identity))
+	}
+	return abandoned, p.err
 }
 
 type archiveErrorBuffer struct{ err error }
@@ -452,11 +480,9 @@ func (e *Exporter) publishDiskPartition(ctx context.Context, date string, attemp
 		writer := parquet.NewGenericWriter[parquetAttempt](out, parquet.Compression(&zstd.Codec{Concurrency: 1}), parquet.PageBufferSize(32<<10), parquet.WriteBufferSize(32<<10), parquet.MaxRowsPerRowGroup(256), parquet.ColumnPageBuffers(pool))
 		_, writeErr := writer.Write(rows)
 		closeErr := writer.Close()
-		pool.mu.Lock()
-		poolErr := pool.err
-		files := pool.files
-		pool.mu.Unlock()
-		if files != 0 {
+		abandoned, poolErr := pool.release()
+		// A writer that succeeded must have returned every buffer.
+		if abandoned != 0 && writeErr == nil && closeErr == nil {
 			poolErr = errors.Join(poolErr, ErrDiskUsageCorrupt)
 		}
 		if err := errors.Join(writeErr, closeErr, poolErr); err != nil {
