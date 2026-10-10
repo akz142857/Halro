@@ -174,6 +174,7 @@ type Runtime struct {
 // individual owners still release only after their physical lifetime ends.
 type runtimeResourceOwnership struct {
 	liveCheckpoint             runtimeLiveCheckpoint
+	projectionPack             projectionPackAdmission
 	persistentInventory        *diskinventory.Baseline
 	ledgerAppendDisk           *runtimeLedgerAppendDiskOwner
 	resourcePressure           *resourcePressureRuntime
@@ -1821,17 +1822,36 @@ func loadUsageCheckpointWithReader(store *boltstore.Store, head ledger.Watermark
 func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 	checkpointTicker := time.NewTicker(r.config.Usage.CheckpointInterval.Value())
 	parquetTicker := time.NewTicker(r.config.Usage.ParquetInterval.Value())
+	fillTicker := time.NewTicker(projectionPackPollInterval)
 	defer checkpointTicker.Stop()
 	defer parquetTicker.Stop()
+	defer fillTicker.Stop()
+	var fill projectionPackFill
+	checkpoint := func() {
+		checkpointCtx, cancel := context.WithTimeout(ctx, r.config.Server.ShutdownTimeout.Value())
+		defer cancel()
+		if err := r.CheckpointMemoryState(checkpointCtx); err != nil {
+			r.logger.Warn("memory state common checkpoint deferred", "error", err)
+			return
+		}
+		fill.reclaimed(r.projectionPacks())
+	}
 	for {
 		select {
+		case <-fillTicker.C:
+			if r.selectedState != nil && fill.due(r.projectionPacks(), time.Now()) {
+				checkpoint()
+			}
+		case <-r.projectionPack.wakeup():
+			if r.selectedState != nil && fill.dueWhileShedding(time.Now()) {
+				checkpoint()
+				if r.projectionPackShortfall() {
+					r.logger.Warn("a projection page pack still lacks room for admitted work after reclamation; new requests remain shed until it catches up (usage_projection_disk_bytes or ledger_projection_disk_bytes may be too small for this load)")
+				}
+			}
 		case <-checkpointTicker.C:
 			if r.selectedState != nil {
-				checkpointCtx, cancel := context.WithTimeout(ctx, r.config.Server.ShutdownTimeout.Value())
-				if err := r.CheckpointMemoryState(checkpointCtx); err != nil {
-					r.logger.Warn("memory state common checkpoint deferred", "error", err)
-				}
-				cancel()
+				checkpoint()
 				continue
 			}
 			r.saveUsageCheckpoint()
@@ -2753,6 +2773,7 @@ func (r *Runtime) gatewayRouter() http.Handler {
 	router := chi.NewRouter()
 	router.Use(r.recoverPanics)
 	router.Use(r.withMemoryCheckpointRequest)
+	router.Use(r.withProjectionPackAdmission)
 	router.Use(r.requireMemberStartup)
 	// Before the source limiter and the key guard: the first-byte clock has to
 	// start when the request arrived, not when a handler finally got it.

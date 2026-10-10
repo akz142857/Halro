@@ -31,6 +31,11 @@ const StoreResidentRAMBytes int64 = 4096 + maxNodeBytes
 
 var ErrRecovery = errors.New("authenticated store requires reopen and native eligibility check")
 
+// ErrCapacity refuses an update before it appends anything: the pack lacks one
+// worst-case transaction of room. The store stays healthy and current; a repack
+// after the next common cut reclaims obsolete pages.
+var ErrCapacity = errors.New("authenticated store pack needs reclamation before the next update")
+
 type storeFault struct{ err error }
 type cowRoot struct {
 	cut      [32]byte
@@ -867,4 +872,18 @@ func retireCaptured(path string, receipt *os.FileInfo) error {
 	}
 	*receipt = nil
 	return nil
+}
+
+// PackUsage reports the appended page bytes and how many are usable before
+// updates are refused: the ceiling less one worst-case transaction. ok is false
+// while the store is busy, closed or physically reserved; callers poll again.
+func (s *Store) PackUsage() (used, usable uint64, ok bool) {
+	if s == nil || !s.mu.TryLock() {
+		return 0, 0, false
+	}
+	defer s.mu.Unlock()
+	if s.closing || s.closed || s.physical != nil || s.appendLimit <= 0 || s.ceiling < s.appendLimit {
+		return 0, 0, false
+	}
+	return s.physicalExtent, uint64(s.ceiling - s.appendLimit), true
 }

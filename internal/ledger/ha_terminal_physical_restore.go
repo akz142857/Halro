@@ -85,7 +85,10 @@ func (p *AuthenticatedLedgerProjection) updateHAPhysicalRestoredDeltaLocked(ctx 
 		return nil
 	}
 	if native.startupProvenance == nil || native.startupProvenance.ha == nil || p.physicalRecovery == nil {
-		_, err := p.store.Update(ctx, cut, apply)
+		receipt, err := p.store.Update(ctx, cut, apply)
+		if err == nil {
+			p.pack.updated(p.store, receipt.AppendedBytes)
+		}
 		return err
 	}
 	w, work := p.physicalRecovery, p.physicalRecoveryWork

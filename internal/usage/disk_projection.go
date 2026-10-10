@@ -71,6 +71,7 @@ type DiskProjection struct {
 	summaryMu         sync.RWMutex
 	retired           atomic.Bool
 	retirementCause   atomic.Pointer[usageRetirementCause]
+	pack              usagePackObservation
 	db                *bbolt.DB
 	engine            *usageEngine
 	file              *ownedfile.Owner

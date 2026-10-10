@@ -74,7 +74,7 @@ func (d *LedgerDerivative) catchUpTypedAuthenticated(ctx context.Context, native
 	defer func() {
 		if resultErr != nil {
 			receipt = AuthenticatedUsageAdvance{}
-			if mutated || native.Status().Load() == ledger.AccountingRecoveryRequired || errors.Is(resultErr, ledger.ErrCorrupt) || errors.Is(resultErr, authenticatedstate.ErrCorrupt) {
+			if mutated && !p.capacityStop(resultErr) || native.Status().Load() == ledger.AccountingRecoveryRequired || errors.Is(resultErr, ledger.ErrCorrupt) || errors.Is(resultErr, authenticatedstate.ErrCorrupt) {
 				p.retireBecause(resultErr)
 			}
 		}

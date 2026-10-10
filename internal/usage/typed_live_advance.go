@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -251,7 +252,7 @@ func (d *LedgerDerivative) catchUpTypedPreparedSource(ctx context.Context, nativ
 	defer func() {
 		if resultErr != nil {
 			receipt = AuthenticatedUsageAdvance{}
-			if mutated || native.Status().Load() == ledger.AccountingRecoveryRequired || errors.Is(resultErr, ledger.ErrCorrupt) || errors.Is(resultErr, authenticatedstate.ErrCorrupt) || errors.Is(resultErr, ledger.ErrProjectionCorrupt) || errors.Is(resultErr, ErrDiskUsageCorrupt) || p.engine.cow.NativeFrameRecoveryDebt() != nil {
+			if mutated && !p.capacityStop(resultErr) || native.Status().Load() == ledger.AccountingRecoveryRequired || errors.Is(resultErr, ledger.ErrCorrupt) || errors.Is(resultErr, authenticatedstate.ErrCorrupt) || errors.Is(resultErr, ledger.ErrProjectionCorrupt) || errors.Is(resultErr, ErrDiskUsageCorrupt) || p.engine.cow.NativeFrameRecoveryDebt() != nil {
 				p.retireBecause(resultErr)
 			}
 		}
@@ -318,23 +319,52 @@ func (d *LedgerDerivative) catchUpTypedPreparedSource(ctx context.Context, nativ
 			previousReader := p.reader
 			p.reader = source
 			defer func() { p.reader = previousReader }()
+			// Each transaction rewrites every touched page path once, so up to
+			// typedReduceBatchRecords records share one rewrite. Every batch
+			// commits whole with its watermark.
+			var batch []ledger.Record
+			batchBytes := 0
+			flush := func() error {
+				if len(batch) == 0 {
+					return nil
+				}
+				if phase != nil {
+					phase("before-record-reduce")
+				}
+				if err := p.reduceTypedVerifiedBatchLocked(ctx, batch); err != nil {
+					return err
+				}
+				mutated = true
+				if phase != nil {
+					phase("record-applied")
+				}
+				receipt.AppliedRecords += uint64(len(batch))
+				batch, batchBytes = batch[:0], 0
+				return nil
+			}
 			head, err := source.ReplayAuthenticated(ctx, from, func(r ledger.Record) error {
 				receipt.VerifiedRecords++
 				if r.Sequence <= to.Head.Sequence {
-					if phase != nil {
-						phase("before-record-reduce")
-					}
-					if err := p.reduceTypedVerifiedRecordLocked(ctx, r); err != nil {
+					raw, err := json.Marshal(r)
+					if err != nil {
 						return err
 					}
-					mutated = true
-					if phase != nil {
-						phase("record-applied")
+					if len(batch) == typedReduceBatchRecords || len(raw) > diskReplayBatchBytes-batchBytes {
+						if err := flush(); err != nil {
+							return err
+						}
 					}
-					receipt.AppliedRecords++
+					batch = append(batch, r)
+					batchBytes += len(raw)
 				}
 				return ctx.Err()
 			})
+			if err == nil {
+				err = flush()
+			}
+			if p.capacityStop(err) {
+				return err
+			}
 			if err != nil || head != source.NativeHead().Head {
 				return errors.Join(authenticatedstate.ErrRecovery, err)
 			}

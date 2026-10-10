@@ -278,11 +278,16 @@ func (p *DiskProjection) prepareTypedRecord(ctx context.Context, r ledger.Record
 func (p *DiskProjection) reduceTypedVerifiedRecordLocked(ctx context.Context, r ledger.Record) error {
 	return p.reduceTypedVerifiedBatchLocked(ctx, []ledger.Record{r})
 }
+
+// typedReduceBatchRecords bounds one typed reduction transaction, so a batch
+// stays within the store's per-update append bound.
+const typedReduceBatchRecords = 8
+
 func (p *DiskProjection) reduceTypedVerifiedBatchLocked(ctx context.Context, records []ledger.Record) error {
-	if len(records) == 0 || len(records) > 8 {
+	if len(records) == 0 || len(records) > typedReduceBatchRecords {
 		return ErrDiskUsageLimit
 	}
-	var prepared [8]diskUsageReplayRecord
+	var prepared [typedReduceBatchRecords]diskUsageReplayRecord
 	total := 0
 	for i, r := range records {
 		item, err := p.prepareTypedRecord(ctx, r)
@@ -335,7 +340,8 @@ func (p *DiskProjection) reduceTypedVerifiedBatchLocked(ctx context.Context, rec
 		return ctx.Err()
 	}
 	last := typedUsageRecordAnchor(records[len(records)-1])
-	_, err := p.updatePhysicalUsageFrame(ctx, last, func(update *authenticatedstate.Transaction) error {
+	applied := previous - old.Watermark.Sequence
+	receipt, err := p.updatePhysicalUsageFrame(ctx, last, func(update *authenticatedstate.Transaction) error {
 		tx := &usageTx{update: update, ctx: ctx}
 		state, found, err := diskUsageGet[diskUsageState](tx, "meta", []byte("state"))
 		if err != nil || !found || state != old {
@@ -351,6 +357,9 @@ func (p *DiskProjection) reduceTypedVerifiedBatchLocked(ctx context.Context, rec
 		}
 		return errors.Join(tx.failure, ctx.Err())
 	}, func() error { return ctx.Err() })
+	if err == nil {
+		p.pack.reduced(p.engine.cow, receipt.AppendedBytes, applied, previous)
+	}
 	return err
 }
 
