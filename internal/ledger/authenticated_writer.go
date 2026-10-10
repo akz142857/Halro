@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"path/filepath"
+	"time"
 
 	"github.com/akz142857/Halro/internal/authenticatedstate"
 	"github.com/akz142857/Halro/internal/replicationlimits"
@@ -105,7 +106,7 @@ func (p *AuthenticatedLedgerProjection) ValidateNativeWriter(ctx context.Context
 	if _, err := lease.ValidateOwner(native); err != nil {
 		return err
 	}
-	return lease.WithHead(ctx, func(ctx context.Context, head Watermark, hash [32]byte) error {
+	verify := func(ctx context.Context, head Watermark, hash [32]byte) error {
 		if err := p.checkNativeWriter(native); err != nil {
 			return err
 		}
@@ -117,8 +118,28 @@ func (p *AuthenticatedLedgerProjection) ValidateNativeWriter(ctx context.Context
 			return errors.New("authenticated accounting projection differs from exclusive native position/hash")
 		}
 		return nil
-	})
+	}
+	// The checks only try their locks. A writer or reader holding one for a
+	// moment is not a verdict, so wait it out within a bound.
+	deadline := time.Now().Add(validateNativeWriterBusyWait)
+	for delay := time.Millisecond; ; delay = min(2*delay, 50*time.Millisecond) {
+		err := lease.WithHead(ctx, verify)
+		if !onlyBusy(err) || !time.Now().Before(deadline) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return errors.Join(err, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
+
+// validateNativeWriterBusyWait bounds how long writer validation waits out
+// momentarily held locks, as every other admission wait stage is bounded.
+const validateNativeWriterBusyWait = 30 * time.Second
 
 // ValidateFreshNativeWriter keeps full-build accounting construction separate
 // from selected startup, whose finite native grant must cover every business

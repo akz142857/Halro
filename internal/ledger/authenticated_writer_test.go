@@ -186,3 +186,30 @@ func TestAuthenticatedWriterBindingRejectsEqualHeadOnDifferentSourceAndStaleCut(
 		})
 	}
 }
+
+// Writer validation only tries its locks. A reader holding the projection for
+// a moment used to fail validation inside the maintenance head, which latched
+// accounting recovery and failed a selected startup. It now waits that out and
+// latches nothing.
+func TestAuthenticatedWriterValidationWaitsOutAMomentarilyHeldLock(t *testing.T) {
+	p, native, _ := authenticatedAdvanceFixture(t, 0)
+	lease, err := native.BeginMaintenance(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	p.mu.Lock()
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		p.mu.Unlock()
+		close(released)
+	}()
+	if err := p.ValidateNativeWriter(context.Background(), native, lease); err != nil {
+		t.Fatal("validation refused a momentarily held lock", err)
+	}
+	<-released
+	if native.Status().Load() != AccountingHealthy {
+		t.Fatal("a held lock latched accounting recovery")
+	}
+}
