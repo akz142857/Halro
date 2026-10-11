@@ -402,12 +402,7 @@ func (r *Runtime) createAdminGovernanceExport(writer http.ResponseWriter, reques
 		return
 	}
 	directory := filepath.Join(r.config.GovernanceExportPath(), exportID)
-	manifest, err := r.governance.manager.WriteExportWithDefinitionOwner(request.Context(), directory, r.governanceDefinitionOwner)
-	if errors.Is(err, ledger.ErrGovernanceExportBackend) {
-		// Only the explicitly unsupported legacy accounting owner keeps the
-		// transition path. Corrupt/closed/retired disk owners never fall back.
-		manifest, err = r.writeLegacyGovernanceExport(request.Context(), directory)
-	}
+	manifest, err := r.writeGovernanceExport(request.Context(), directory)
 	if err != nil {
 		code := "governance_export_unavailable"
 		if errors.Is(err, governance.ErrUnavailable) {
@@ -422,6 +417,17 @@ func (r *Runtime) createAdminGovernanceExport(writer http.ResponseWriter, reques
 	admin := request.Context().Value(adminContextKey{}).(adminRequestContext)
 	_ = r.appendAdminAuditWithMetadata("admin_user", admin.session.Username, "governance.export", "governance_export", exportID, "success", "", map[string]any{"directory": exportID})
 	writeJSON(writer, http.StatusCreated, map[string]any{"id": exportID, "directory": directory, "manifest": manifest})
+}
+
+// writeGovernanceExport is the export an operator's request publishes.
+func (r *Runtime) writeGovernanceExport(ctx context.Context, directory string) (governance.ExportManifest, error) {
+	manifest, err := r.governance.manager.WriteExportWithDefinitionOwner(ctx, directory, r.governanceDefinitionOwner)
+	if errors.Is(err, ledger.ErrGovernanceExportBackend) {
+		// Only the explicitly unsupported legacy accounting owner keeps the
+		// transition path. Corrupt/closed/retired disk owners never fall back.
+		manifest, err = r.writeLegacyGovernanceExport(ctx, directory)
+	}
+	return manifest, err
 }
 
 // State still lacks immutable as-of lifecycle positions. Only accounting retains

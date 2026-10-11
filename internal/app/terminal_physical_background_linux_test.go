@@ -117,7 +117,7 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	dataDir := cfg.Storage.DataDir
 	exportRoot := cfg.GovernanceExportPath()
 	exportAt := func(name string) error {
-		_, err := r.governance.manager.WriteExportWithDefinitionOwner(ctx, filepath.Join(exportRoot, name), r.governanceDefinitionOwner)
+		_, err := r.writeGovernanceExport(ctx, filepath.Join(exportRoot, name))
 		return err
 	}
 	writers := []struct {
