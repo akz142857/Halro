@@ -31,7 +31,27 @@ func enableBackupReferenceBudget(cfg config.Config) config.Config {
 	b.RecoveryReserveRAMBytes += 512 << 20
 	b.RecoveryClaims, b.MaxClaims = 24, 48
 	b.ControlRAMBytes = 48 * resourcebudget.ClaimRAMBytes
+	fundUsageMaintenanceIO(b)
 	return cfg
+}
+
+// fundUsageMaintenanceIO raises the IO class to config validation's Usage
+// disk cycle floor, growing Total by the same amount so normal shared
+// capacity grows with it. With no archive ceiling the date sweep's defaults
+// are uncapped, so the floor's Disk is large; it is a logical ceiling.
+func fundUsageMaintenanceIO(b *config.ResourceBudget) {
+	ram, disk, err := b.UsageMaintenanceIOMinimum()
+	if err != nil {
+		panic(err)
+	}
+	if ram > b.IORAMBytes {
+		b.TotalRAMBytes += ram - b.IORAMBytes
+		b.IORAMBytes = ram
+	}
+	if disk > b.IODiskBytes {
+		b.TotalDiskBytes += disk - b.IODiskBytes
+		b.IODiskBytes = disk
+	}
 }
 
 func budgetedBackupOperationFixture(t *testing.T) config.Config {

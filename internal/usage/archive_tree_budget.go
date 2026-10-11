@@ -115,6 +115,32 @@ func inventoryArchiveTree(ctx context.Context, root string, ceiling int64) (int6
 	return total, nil
 }
 
+// archiveVerifyDecoderRAMBytes is the decoder workspace an archive comparison
+// holds beside one spooled file.
+const archiveVerifyDecoderRAMBytes int64 = 32 << 20
+
+// clampArchiveScratch bounds one scratch limit by the archive tree ceiling.
+// Every archive file and scratch index lives under that tree, which charges
+// them against the ceiling, so a larger limit can never be used; reserving it
+// would only make the step inadmissible under the configured IO envelope.
+// Zero is the uncapped tree.
+func clampArchiveScratch(limit, ceiling int64) int64 {
+	if ceiling > 0 {
+		return min(limit, ceiling)
+	}
+	return limit
+}
+
+// DateMaintenanceWorkspace is the IO work a Usage date sweep holds at once
+// under an archive ceiling (zero: none): the retained comparison session's
+// decoder RAM, spool and index beside the retained reference index. A window
+// verification, which runs only before any date policy exists, needs less.
+func DateMaintenanceWorkspace(archiveCeiling int64) (ram, disk int64) {
+	verify, references := DefaultDateCatalogVerifyLimits(), DefaultDateCatalogReferenceLimits()
+	file := clampArchiveScratch(verify.FileBytes, archiveCeiling)
+	return file + archiveVerifyDecoderRAMBytes, file + clampArchiveScratch(verify.IndexBytes, archiveCeiling) + clampArchiveScratch(references.IndexBytes, archiveCeiling)
+}
+
 func newArchiveTreeBudget(ctx context.Context, root string, ceiling int64) (*archiveTreeBudget, error) {
 	if ceiling == 0 {
 		return nil, nil

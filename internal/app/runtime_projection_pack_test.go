@@ -32,6 +32,7 @@ func TestSelectedRuntimeLedgerBurstReclaimsPackBeforeItFills(t *testing.T) {
 	runProjectionPackBurst(t, func(b *config.ResourceBudget) {
 		b.UsageProjectionDiskBytes = 256 << 20
 		b.LedgerProjectionDiskBytes = 16 << 20
+		fundUsageMaintenanceIO(b)
 	}, 600)
 }
 

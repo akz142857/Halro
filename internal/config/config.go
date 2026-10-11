@@ -1093,6 +1093,13 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.ResourceBudget != nil {
 		if err := c.ResourceBudget.Validate(c.ResourcePressure, c.Server.MaxRequestBytes); err != nil {
 			problems = append(problems, fmt.Errorf("resource_budget: %w", err))
+		} else if c.Replication == nil {
+			// HA members are not yet held to this floor: a Replica's projection
+			// ceilings fund received COW debt, and the reference job's mapping
+			// charge then exceeds the profile (board D-04).
+			if err := c.ResourceBudget.ValidateStandaloneUsageMaintenance(); err != nil {
+				problems = append(problems, fmt.Errorf("resource_budget: %w", err))
+			}
 		}
 		if err := c.ResourceBudget.ValidateCapture(c.Gateway.FailureCapture); err != nil {
 			problems = append(problems, fmt.Errorf("resource_budget: %w", err))

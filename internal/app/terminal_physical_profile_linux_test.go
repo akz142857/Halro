@@ -18,5 +18,9 @@ func physicalTerminalBudgetFixture() config.ResourceBudget {
 	// A full request and Roll can leave up to seven source frames waiting for
 	// the original Usage catch-up owner. Keep its existing 16MiB append bound.
 	b.UsageProjectionDiskBytes = 128 << 20
+	// The Usage disk cycle's reference job maps both projections and holds a
+	// date sweep beside the resident Governance and physical catch-up owners:
+	// 536 MiB of IO with these ceilings (config validation's floor).
+	b.IORAMBytes = 576 << 20
 	return b
 }

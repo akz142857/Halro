@@ -106,6 +106,7 @@ func (e *Exporter) prepareDateCatalogReferencesStep(ctx context.Context, retainF
 	if retainFrom.IsZero() || retainFrom.UTC().Year() < 1 || retainFrom.UTC().Year() > 9999 || limits.Pages < 1 || limits.Pages > 16 || limits.ReadBytes < 2*archiveCatalogPageBytes+archiveDateBuildBytes || limits.ReadBytes > 8<<20 || limits.IndexIOBytes < 16<<20 || limits.IndexIOBytes > 1<<30 || limits.IndexBytes < 16*archiveVerifyNodeBytes || limits.IndexBytes > 1<<40 || limits.MaxDuration <= 0 || limits.MaxDuration > time.Minute {
 		return out, ErrDiskUsageLimit
 	}
+	limits.IndexBytes = clampArchiveScratch(limits.IndexBytes, e.archiveDiskCeiling)
 	if err := e.archiveReadError(ctx); err != nil {
 		return out, err
 	}

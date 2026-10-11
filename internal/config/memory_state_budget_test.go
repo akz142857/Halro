@@ -55,8 +55,17 @@ func TestMemoryStateEngineContractPreservesLegacyMappingAndRejectsUnfundedWorksp
 		t.Fatal("legacy engine accepted unpaid historical mappings")
 	}
 	b.MemoryStateRequired = true
+	// The engine itself passes; the Usage disk cycle does not. Its private
+	// reference job still rebuilds both projections as bbolt files and charges
+	// their mappings, so the cycle's IO need follows these disk ceilings. That
+	// rule runs only once the rest of the budget passes, so reaching it means
+	// the engine contract held.
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "must fit the Usage disk cycle") {
+		t.Fatal("explicit fixed engine with independent disk ceilings refused, or an unfundable Usage cycle accepted", err)
+	}
+	addUsageMaintenanceIOConfigFixture(t, b)
 	if err := cfg.Validate(LoadOptions{}); err != nil {
-		t.Fatal("explicit fixed engine with independent disk ceilings refused", err)
+		t.Fatal("explicit fixed engine with a funded Usage cycle refused", err)
 	}
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {

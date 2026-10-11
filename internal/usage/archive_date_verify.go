@@ -216,6 +216,8 @@ func (e *Exporter) verifyDateCatalogStep(ctx context.Context, p *DiskProjection,
 	if p == nil || retainFrom.IsZero() || retainFrom.UTC().Year() < 1 || retainFrom.UTC().Year() > 9999 || limits.Files < 1 || limits.Files > 16 || limits.FileRows < 1 || limits.FileRows > 1<<20 || limits.FileBytes < 1 || limits.FileBytes > 256<<20 || limits.ReadBytes < 2<<20 || limits.ReadBytes > 1<<30 || limits.FileReadBytes < 1<<20 || limits.FileReadBytes > limits.ReadBytes-2*archiveCatalogPageBytes-2*archiveDateBuildBytes || limits.IndexIOBytes < 1<<20 || limits.IndexIOBytes > 1<<40 || limits.IndexBytes < 16*archiveVerifyNodeBytes || limits.IndexBytes > 1<<40 || limits.MaxDuration <= 0 || limits.MaxDuration > time.Minute {
 		return out, ErrDiskUsageLimit
 	}
+	limits.FileBytes = clampArchiveScratch(limits.FileBytes, e.archiveDiskCeiling)
+	limits.IndexBytes = clampArchiveScratch(limits.IndexBytes, e.archiveDiskCeiling)
 	if err := e.archiveReadError(ctx); err != nil {
 		return out, err
 	}
@@ -398,14 +400,14 @@ func (e *Exporter) verifyDateCatalogStep(ctx context.Context, p *DiskProjection,
 		}
 		stateSHA := sha256.Sum256(raw)
 		s := e.dateVerification
-		if s == nil || s.stateSHA != stateSHA || s.source != p.generation || s.window != stats.Window || s.workRAM < limits.FileBytes+(32<<20) || s.workDisk < limits.IndexBytes+limits.FileBytes {
+		if s == nil || s.stateSHA != stateSHA || s.source != p.generation || s.window != stats.Window || s.workRAM < limits.FileBytes+archiveVerifyDecoderRAMBytes || s.workDisk < limits.IndexBytes+limits.FileBytes {
 			if err := e.discardDateVerification(); err != nil {
 				return DiskArchiveCut{}, err
 			}
 			if limits.IndexBytes > math.MaxInt64-limits.FileBytes {
 				return DiskArchiveCut{}, ErrDiskUsageLimit
 			}
-			releaseRAM, err := e.reserveArchiveWorkRAM(ctx, limits.FileBytes+(32<<20))
+			releaseRAM, err := e.reserveArchiveWorkRAM(ctx, limits.FileBytes+archiveVerifyDecoderRAMBytes)
 			if err != nil {
 				return DiskArchiveCut{}, err
 			}
@@ -417,7 +419,7 @@ func (e *Exporter) verifyDateCatalogStep(ctx context.Context, p *DiskProjection,
 			if err != nil {
 				return DiskArchiveCut{}, errors.Join(err, releaseShared(), releaseRAM())
 			}
-			s = &archiveDateVerifySession{archiveVerifyScratch: archiveVerifyScratch{directory: directory, tree: tree, releaseShared: releaseShared, releaseRAM: releaseRAM, workRAM: limits.FileBytes + (32 << 20), workDisk: limits.IndexBytes + limits.FileBytes}, stateSHA: stateSHA, source: p.generation, window: stats.Window, pruneThrough: position.Retention.PruneThroughSequence, state: initialDateVerifyState(build, buildSHA, stats.Watermark), replaying: true}
+			s = &archiveDateVerifySession{archiveVerifyScratch: archiveVerifyScratch{directory: directory, tree: tree, releaseShared: releaseShared, releaseRAM: releaseRAM, workRAM: limits.FileBytes + archiveVerifyDecoderRAMBytes, workDisk: limits.IndexBytes + limits.FileBytes}, stateSHA: stateSHA, source: p.generation, window: stats.Window, pruneThrough: position.Retention.PruneThroughSequence, state: initialDateVerifyState(build, buildSHA, stats.Watermark), replaying: true}
 			s.state.Published = published
 			if published {
 				s.state.ActivationSHA = hex.EncodeToString(activationBinding[:])

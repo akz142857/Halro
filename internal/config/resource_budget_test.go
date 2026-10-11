@@ -10,6 +10,7 @@ import (
 	"github.com/akz142857/Halro/internal/accountinglimits"
 	"github.com/akz142857/Halro/internal/auditlimits"
 	"github.com/akz142857/Halro/internal/diskinventory"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/governancelimits"
 	"github.com/akz142857/Halro/internal/metadatalimits"
 	"github.com/akz142857/Halro/internal/pricinglimits"
@@ -504,6 +505,7 @@ func TestResourceBudgetRequiresCalibratedSharedRAMAndPressure(t *testing.T) {
 	combined.IODiskBytes = 100
 	combined.GovernanceProjectionDiskBytes = 8
 	addProjectionMappingConfigFixture(t, &combined)
+	addUsageMaintenanceIOConfigFixture(t, &combined)
 	combined.GovernanceLogDiskBytes = 8
 	combined.AuditLogDiskBytes = 8
 	combined.MetadataJournalDiskBytes = 8
@@ -862,6 +864,86 @@ func addProjectionMappingConfigFixture(t *testing.T, b *ResourceBudget) {
 	b.RecoveryReserveRAMBytes += ram
 }
 
+// addUsageMaintenanceIOConfigFixture funds the Usage disk cycle's IO peak,
+// growing Total by the same amount so normal shared capacity grows with it.
+func addUsageMaintenanceIOConfigFixture(t *testing.T, b *ResourceBudget) {
+	t.Helper()
+	ram, disk, err := b.UsageMaintenanceIOMinimum()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ram > b.IORAMBytes {
+		b.TotalRAMBytes += ram - b.IORAMBytes
+		b.IORAMBytes = ram
+	}
+	if disk > b.IODiskBytes {
+		b.TotalDiskBytes += disk - b.IODiskBytes
+		b.IODiskBytes = disk
+	}
+}
+
+// A budget that starts but can never fit one Usage disk cycle stops Usage
+// export behind date maintenance every round, so it is refused at load.
+func TestResourceBudgetFundsUsageMaintenanceIO(t *testing.T) {
+	cfg, err := Decode(strings.NewReader(validConfig + pressureConfigFixture + ramBudgetConfigFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	b := cfg.ResourceBudget
+	b.LedgerProjectionDiskBytes, b.UsageProjectionDiskBytes, b.GovernanceProjectionDiskBytes = 1, 1, 1
+	b.RecoveryClaims, b.MaxClaims = 8, 16
+	b.ControlRAMBytes = int64(b.MaxClaims) * resourcebudget.ClaimRAMBytes
+	b.TotalRAMBytes += 6 * resourcebudget.ClaimRAMBytes
+	b.RecoveryReserveRAMBytes += 3 * resourcebudget.ClaimRAMBytes
+	addProjectionMappingConfigFixture(t, b)
+	b.UsageArchiveDiskBytes = 64 << 20
+	b.TotalDiskBytes += 2 * b.UsageArchiveDiskBytes
+	b.BackgroundDiskBytes += b.UsageArchiveDiskBytes
+	b.RecoveryDiskBytes += b.UsageArchiveDiskBytes
+	b.RecoveryReserveDiskBytes += b.UsageArchiveDiskBytes
+	b.IODiskBytes = 1
+	b.RecoveryClaims += 2
+	b.MaxClaims += 2 + usage.ArchiveReaderSlots
+	b.ControlRAMBytes = int64(b.MaxClaims) * resourcebudget.ClaimRAMBytes
+	b.TotalRAMBytes += int64(4+usage.ArchiveReaderSlots) * resourcebudget.ClaimRAMBytes
+	b.RecoveryReserveRAMBytes += 2 * resourcebudget.ClaimRAMBytes
+	ram, disk, err := b.UsageMaintenanceIOMinimum()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sweepRAM, sweepDisk := usage.DateMaintenanceWorkspace(b.UsageArchiveDiskBytes)
+	mapping, _ := accountinglimits.ProjectionMappingRAMBytes(1, 1)
+	if sweepRAM != (64+32)<<20 || sweepDisk != 3*(64<<20) || ram != b.AccountingRecoveryRAMBytes+mapping+sweepRAM+governance.TypedProjectionResidentRAMBytes || disk != 2+sweepDisk {
+		t.Fatal("Usage maintenance minimum lost a part", ram, disk, sweepRAM, sweepDisk)
+	}
+	if err := cfg.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "must fit the Usage disk cycle") {
+		t.Fatal("unfunded Usage disk cycle accepted", err)
+	}
+	addUsageMaintenanceIOConfigFixture(t, b)
+	if err := cfg.Validate(LoadOptions{}); err != nil {
+		t.Fatal("exactly funded Usage disk cycle rejected", err)
+	}
+	for _, shape := range []func(*ResourceBudget){
+		func(b *ResourceBudget) { b.IORAMBytes-- },
+		func(b *ResourceBudget) { b.IODiskBytes-- },
+	} {
+		candidate, copy := cfg, *b
+		shape(&copy)
+		candidate.ResourceBudget = &copy
+		if err := candidate.Validate(LoadOptions{}); err == nil || !strings.Contains(err.Error(), "must fit the Usage disk cycle") {
+			t.Fatal("Usage disk cycle one byte short accepted", err)
+		}
+	}
+	physical := *b
+	physical.PhysicalTerminalReserve = true
+	if got, _, err := physical.UsageMaintenanceIOMinimum(); err != nil || got != ram+usage.PhysicalCatchupActiveRAMBytes {
+		t.Fatal("physical Usage catch-up resident not counted", got, err)
+	}
+}
+
 func TestResourceBudgetAllProjectionMappingsReserveRecoveryBackgroundAndConcurrentRAM(t *testing.T) {
 	cfg, err := Decode(strings.NewReader(validConfig + pressureConfigFixture + ramBudgetConfigFixture))
 	if err != nil {
@@ -880,6 +962,7 @@ func TestResourceBudgetAllProjectionMappingsReserveRecoveryBackgroundAndConcurre
 		t.Fatal("file Disk capacity was credited as unpaid mapping RAM")
 	}
 	addProjectionMappingConfigFixture(t, b)
+	addUsageMaintenanceIOConfigFixture(t, b)
 	if err := cfg.Validate(LoadOptions{}); err != nil {
 		t.Fatal("calibrated mappings with request/deferred capacity rejected", err)
 	}

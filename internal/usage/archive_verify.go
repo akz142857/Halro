@@ -101,16 +101,6 @@ func (e *Exporter) verifyDiskArchive(ctx context.Context, p *DiskProjection, aft
 	if limits.IndexBytes > math.MaxInt64-limits.FileBytes {
 		return report, ErrDiskUsageLimit
 	}
-	releaseRAM, err := e.reserveArchiveWorkRAM(ctx, limits.FileBytes+(32<<20))
-	if err != nil {
-		return report, err
-	}
-	var cleanupErr error
-	defer func() {
-		if cleanupErr == nil {
-			err = errors.Join(err, releaseRAM())
-		}
-	}()
 	tree, err := newArchiveTreeBudget(ctx, e.root, e.archiveDiskCeiling)
 	if err != nil {
 		return report, err
@@ -127,6 +117,18 @@ func (e *Exporter) verifyDiskArchive(ctx context.Context, p *DiskProjection, aft
 		limits.FileBytes = min(limits.FileBytes, available/2)
 		limits.IndexBytes = min(limits.IndexBytes, available-limits.FileBytes)
 	}
+	// The decoder workspace follows the spool it decodes, so it is reserved
+	// only once the ceiling has bounded that spool.
+	releaseRAM, err := e.reserveArchiveWorkRAM(ctx, limits.FileBytes+archiveVerifyDecoderRAMBytes)
+	if err != nil {
+		return report, err
+	}
+	var cleanupErr error
+	defer func() {
+		if cleanupErr == nil {
+			err = errors.Join(err, releaseRAM())
+		}
+	}()
 	releaseDisk, err := e.reserveArchiveDisk(ctx, limits.IndexBytes+limits.FileBytes)
 	if err != nil {
 		return report, err
