@@ -979,3 +979,18 @@ v9 只改夹具：空间恢复后置位，恢复后的调用照常返回；恢�
 - 第 1 次：重开后按字面 ID `req_background_after_space` 读终结，读不到。服务端会自行签发 X-Request-ID（Roll 回归测试已遇到过同一问题）。
 - 第 2 次：关闭后“自有临时文件”检查报出 8 个 `usage/.archive-date-*-v1.json`。这些是 usage 定义的固定名常量（`archiveDateVerifyName` 等），是日期维护可续做的步骤状态，按设计跨重开保留；共用助手 `haPhysicalOwnedTemporaries` 的 `.archive-` 前缀把它们误判为临时文件。第 1 次没报，是因为这次日期维护是否留下这些状态取决于运行时机。
 v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模式 `^\.archive-date-[a-z-]+-v1\.json$` 排除这些固定名状态（带随机后缀的临时名仍算临时文件）。这个助手 HA 测试也在用，排除对它们同样生效。门槛与注入不变。
+
+**§36 v10 结果（在 `8868ed94` 上构建，Linux 512 MiB ext4、真实 OS 采样器）。**
+- 连续两次通过（2.95–3.11 s，cgroup 峰值 247–348 MB）；同一二进制复跑基线 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens` 通过。
+- ENOSPC 下四个写入方：Usage 维护被压力延迟（`new resource admission stopped by pressure`），封存未 Roll，Governance 导出被拒（journal unavailable），公共 checkpoint 成功；每个之后状态健康、`PhysicalTerminalDebt` 仍为 2、链头不变、无新增自有临时文件。在途请求 200 且上游只调用一次，ENOSPC 下新请求 503。
+- 空间恢复后：collector、checkpoint、封存（Roll）、Usage 维护（含日期维护、导出、窗口裁剪）成功；Governance 导出按 v8 门槛如实拒绝且无目标目录；新请求 200；关闭后无自有临时文件；重开后两个终结可读。
+- 反向注入（补丁在证据目录 `inject-*.patch`）：
+  - B（导出入口先建目标目录）：生效（空间恢复后目录被建出；ENOSPC 下建目录本身失败，与登记预期一致），测试在“被拒导出留下目标”处失败。满足登记。
+  - A（去掉 `verifyPhysicalRollNoDebtLocked` 的债务条件）：未生效。诊断打印显示 ENOSPC 下 Roll 根本没走到这里，在 `rollLocked` 开头的同一债务检查（`seal.go`）就被拒。
+  - A2（两处债务检查都去掉）：生效（打印 `Roll past debt guard debt=2`），但 Roll 随即被压力准入拒绝，测试通过。
+  - A3（再让首次 Roll 的 64 KiB 校验内存绕过压力）：Roll 在后面另一处压力准入被拒，测试通过。
+  - C（A2 + 预算管理器对普通准入完全忽略压力，直接违反设计 §6 的“后台延迟”）：生效（ENOSPC 下 Usage 维护真的跑完并返回 nil，导出走到后端，Roll 越过债务和压力），Roll 最终在物理分配处被拒（`physical completion allocation unavailable`），所有硬门槛仍然成立，测试通过。
+  - 结论：ENOSPC 下终结储备至少由四层独立保护（`rollLocked` 债务检查、`verifyPhysicalRollNoDebtLocked`、多处压力准入、物理预分配）；单点或三层同时去掉都没能让储备被动用，所以登记要求的“每个注入在对应门槛失败”对储备类门槛（A 系列）没有达到。要让它失败，需要注入到最后一层，让 Roll 从终结储备已预分配的范围里分配，这已不是“后台写入方行为”层面的故障。
+- 判定：按登记，B 满足；A 系列未满足“在对应门槛失败”。§36 是否接受由用户裁定。2026-10-11 18:42 暂停。
+
+开放项更新：selected 实例 Governance 导出（v8 登记）；HA 成员的 Usage 维护 IO 下限与 reference 作业映射记账（D-04）；Linux 容量剖面 `selectedCapacityBudget` 被新下限拒绝（同 D-04）；`usage` 的 ext4 物理测试不在门禁内（`290b0b93` 的回归因此潜伏两天）。
