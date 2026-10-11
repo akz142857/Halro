@@ -917,3 +917,32 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 逻辑预算（8 GiB 夹具）下 Roll 后的同一维护也报过同样的拒绝（§36 v2 归因记录）。
 
 §36 结论待定：ENOSPC 下的争用门槛（本批要回答的问题）在 v2、v3 都通过，但完整测试因 Roll 后的容量问题无法走完恢复阶段，按登记不算通过。2026-10-11 14:13 暂停，等用户裁定。
+
+**容量问题查清（用户 14:13 后选定“先查清”）。** 结论：与 Roll、ENOSPC 都无关。只要开了资源预算并已存在 Usage 归档，Usage 日期维护每轮必被预算拒绝，导出也跟着停（`maintainUsageDiskCycle` 先跑日期维护、后导出）。证据在 `docs/verification/performance/2026-10-11-background-enospc/`（`cap-*`、`v3e`～`v3g`、诊断补丁 `experiment-*.patch`，均未提交到代码）。
+- 更正 v3 记录两处：拒绝时 IO 类已占 440 MiB，不是 36 MiB（36 MiB 是 Background 类）；触发条件是“已有归档”，不是 Roll。fixture 里 Roll 封存出第一个代后才有第一份归档，所以看起来像 Roll 引起。
+- IO 内存缺口：reference 作业（`usage_reference_budget.go`）按“记账恢复工作区 + 两个私有 bbolt 投影的完整映射”持有 376 MiB；日期校验会话再要 288 MiB（256 MiB 文件 + 32 MiB 解码），另有 Governance typed 投影、物理 Usage 追赶两个常驻者各 32 MiB，合计约 728 MiB，超过 IO 512 MiB。
+- IO 磁盘缺口：日期校验按默认值预留 4 GiB 索引 + 256 MiB 文件，引用扫描再保留 4 GiB 索引，两者同时保留；`archive_verify.go` 那条路径会按归档上限收紧，这两条没有。索引和文件都在归档树内、物理上受归档上限约束，4 GiB 只是账面预留。IO 内存放到 1 GiB、IO 磁盘放到 8 GiB 仍被拒（4 + 0.18 + 4.25 GiB）。
+- 没被发现的原因：日期维护的测试不开预算；唯一开预算调用 Usage 维护的测试期望被拒；配置校验不检查 IO 能否容下这些作业。
+
+**修复（用户“按建议执行”）。**
+- `usage`：日期校验、引用扫描把文件、索引上限收紧到归档磁盘上限（`clampArchiveScratch`）；窗口校验改为先收紧、再按收紧后的文件大小预留解码内存。导出 `DateMaintenanceWorkspace(ceiling)` 作为日期维护峰值的唯一来源。fixture（64 MiB 归档上限）下峰值从 288 MiB / 8.25 GiB 降到 96 MiB / 192 MiB。
+- `config`：新增 `UsageMaintenanceIOMinimum` 与 `ValidateStandaloneUsageMaintenance`：IO 内存、磁盘须容下 reference 作业 + 日期维护峰值 + IO 常驻者（Governance typed 投影总是计入，因为已激活实例不设 `memory_state_required` 也会打开它；物理 Usage 追赶在开物理储备时计入），且不超过 normal 池。装不下的配置在加载时拒绝。
+- 用户裁定一：memory-state 引擎约定测试（2 GiB 内存 + 8 GiB 投影上限）如实改为“引擎检查通过、Usage 维护规则拒绝”，补足 IO 后再验其余负例。原因：reference 作业在 memory-state 下仍建私有 bbolt 并按映射记内存。
+- 用户裁定二：规则本批只对 Standalone（无 replication 配置）生效。HA 物理剖面里 Replica 的 576 MiB 投影上限让这一下限约 1.5 GiB，超过整个 normal 池（1152 MiB）；promote 后 Primary 的 Usage 维护可能装不下。登记为 D-04 开放项：改 reference 作业的记账方式后再把规则扩到 HA。
+- 受影响但未改：Linux 容量剖面 `selectedCapacityBudget`（2 GiB 内存 + 8 GiB 投影）现在会被拒绝，同受上一条 D-04 阻塞；它只在显式设置 `HALRO_RUNTIME_CAPACITY_ROOT` 时运行。
+- fixture 调整：Standalone 物理 fixture IO 内存 512 → 576 MiB（需要 536 MiB）；备份 reference fixture、投影包突发测试用 `fundUsageMaintenanceIO` 补足 IO（补多少同时加多少 Total）。
+
+**验证（17:44 前）。**
+- `usage` 新增两条测试并反向验证：撤掉收紧后，日期维护测试实测 288 MiB / 8.25 GiB 而失败；撤掉重排后，窗口校验测试实测 288 MiB 而失败。`usage` 整包通过（473 s）。
+- `config` 新增规则测试并反向验证（撤掉规则后两条测试失败）；整包通过。
+- `internal/app` macOS 整包（规则当时还对 HA 也生效）失败 21 条，全部是这条新规则拒绝 fixture；改为 Standalone-only 并补足 3 个 Standalone fixture 后，这 21 条重跑全部通过。
+- Linux 512 MiB ext4：`^TestStandalonePhysical` 组与 `TestSelectedPhysicalUsageHistoricalStartupPruneAndReopen` 全部通过（不开真实 OS 采样器，按历史跑法）。
+- `go vet` 三包通过。全仓门禁未跑。
+
+**§36 v4：容量拒绝消失，卡在新的独立缺陷上。** ENOSPC 下四个写入方结果与 v2、v3 相同，全部通过硬门槛；空间恢复后 collector、checkpoint、封存都成功；Usage 磁盘维护报 `authenticated store requires reopen and native eligibility check`（`ErrRecovery`）。拆步定位：
+- 追赶、日期维护、导出单独调用都成功；失败的是窗口裁剪 `PruneVerifiedWindowStep`。不开磁盘压力、不做 Roll，物理模式下同样失败。
+- 拒绝点是 `usage/terminal_physical_window.go` 的队列守卫 `q.failure != nil || q.applied != anchor || q.remaining != 0`：实测 `applied == anchor`，`remaining = 3`。`remaining` 是物理储备为下一个请求预付、尚未消耗的 COW 槽位；处理过请求后稳态下不为 0，所以物理 Standalone 的窗口裁剪在处理过请求的 Runtime 里永远被拒（重开后、首个请求前可以裁剪，这正是现有测试 `TestSelectedPhysicalUsageHistoricalStartupPruneAndReopen` 走的路径）。
+- 后果（按代码推断，未验证）：控制台窗口永不裁剪，Usage 投影一路涨到其磁盘上限；每轮维护返回错误。储备与记账状态不受影响（守卫在 `PreparePhysicalUpdate` 之前返回）。
+- 未改：`PreparePhysicalUpdate(ctx, nil)` 本身会现场分配新槽位，不要求没有预付窗口，守卫看起来比必要的严；但它在物理储备的 fail-closed 路径上，为什么要求 0 尚未核实，不凭推断放宽。
+
+§36 结论仍待定：ENOSPC 门槛在 v2～v4 都通过；完整测试现在被窗口裁剪守卫挡住。2026-10-11 17:44 暂停，等用户裁定。
