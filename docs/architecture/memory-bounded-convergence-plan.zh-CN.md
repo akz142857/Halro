@@ -1039,3 +1039,15 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 **通过标准。** 两节点、三节点各连续两次通过；同一二进制复跑 §35 的 `TestHAPhysicalThreeMemberReserveSampledPressure` 通过。反向注入在读完写入方失败路径后确定，结果中写明理由；每个注入先确认生效，再确认测试在对应门槛处失败。
 
 **v1：夹具错误，无效（两节点，2026-10-11 23:53）。** ENOSPC 下六个写入方都通过了每个成员的硬门槛（不进入恢复、债务不变、链头不变、无自有临时文件）。接受时债务：Primary 2，Replica 31。返回值：collector `nil`；Roll 被 `BeforeRoll` 拒绝（“original Replica physical IO promise unavailable or changed”），没有走到债务检查；Governance 导出 “governance journal is unavailable”；Primary checkpoint 与 Replica checkpoint 都因同一 Replica promise 拒绝。随后在终结前补满时失败：`exhaustHAPhysicalFixture` 只新建不追加，循环里已建过 `foreign-background-refill`。v2 只改夹具：循环中每次补满用按写入方命名的独立文件。门槛不变。
+
+**v2 结果（在 `01396f2d` 上构建，Linux ext4、真实采样器；证据在已忽略的 `docs/verification/performance/2026-10-11-ha-background/`）。**
+- 两节点两次、三节点两次全部通过；cgroup 峰值 209/168/131/133 MB，无 max/oom 事件。同一二进制复跑 §35 `TestHAPhysicalThreeMemberReserveSampledPressure` 通过（24 轮，峰值 1194 MB）。
+- 接受时债务：Primary 2，每个 Replica 31。
+- ENOSPC 下每个写入方的返回值（四次相同）：collector `nil`；Roll 被 `BeforeRoll` 拒绝（`ErrPhysicalCredit`）；Governance 导出 “governance journal is unavailable”；各成员 checkpoint 都以 `ErrPhysicalCredit` 拒绝。空间恢复后：collector `nil`，导出 `ErrGovernanceExportBackend` 且无目标，checkpoint 无推迟、最长约 0.3 秒，新请求完成，重开后所有成员读到两个终结。
+- 新事实：HA 严格物理模式下 `BeforeRoll` 只要装了 peer credit 就返回 `ErrPhysicalCredit`（`replication_runtime.go`），所以 HA 物理 Primary 在任何情况下都不会 Roll。目前没有调用方，但将来给 HA 接维护循环时，活动 WAL 将无法封存。
+
+**反向注入（两节点，各先确认补丁生效）。**
+- B（与单机相同：导出入口先 `MkdirAll` 目标）：失败，但失败在空间恢复后的“拒绝的导出不留目标”，不是 ENOSPC 下的同类门槛。原因：ENOSPC 下 `MkdirAll` 本身也拿不到块，注入没有产生目标。按登记，B 的门槛被测试抓到，但 ENOSPC 一半这条门槛在本夹具下无法由此注入触发。
+- D（`checkpointHAPhysicalOnline` 任何错误都锁存恢复）：在 ENOSPC 下 `checkpoint-0` 后的“不进入恢复”门槛失败。满足。
+- A-HA（去掉 `BeforeRoll` 的 peer credit 拒绝和 `rollLocked` 的债务检查）：测试通过。Roll 改为被压力准入拒绝（“new resource admission stopped by pressure”），储备仍没有被动用。与单机 A 系列相同的结论：储备有多层保护，去掉前两层后还有压力准入；登记的“在对应门槛失败”对储备类门槛未达到，偏差保留，不改写登记。
+- 判定：按登记，两节点、三节点各两次通过，基线通过；D 满足，B 部分满足，A-HA 未满足。§37 是否接受由用户裁定。
