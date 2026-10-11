@@ -321,7 +321,14 @@ func (d *LedgerDerivative) catchUpTypedPreparedSource(ctx context.Context, nativ
 			defer func() { p.reader = previousReader }()
 			// Each transaction rewrites every touched page path once, so up to
 			// typedReduceBatchRecords records share one rewrite. Every batch
-			// commits whole with its watermark.
+			// commits whole with its watermark. The physical reserve prepaid
+			// one COW root per native frame and each update consumes one, so
+			// there every frame stays its own update: a shared one would leave
+			// the rest prepaid and the owner never reaches no remaining debt.
+			batchLimit := typedReduceBatchRecords
+			if p.physical != nil {
+				batchLimit = 1
+			}
 			var batch []ledger.Record
 			batchBytes := 0
 			flush := func() error {
@@ -349,7 +356,7 @@ func (d *LedgerDerivative) catchUpTypedPreparedSource(ctx context.Context, nativ
 					if err != nil {
 						return err
 					}
-					if len(batch) == typedReduceBatchRecords || len(raw) > diskReplayBatchBytes-batchBytes {
+					if len(batch) == batchLimit || len(raw) > diskReplayBatchBytes-batchBytes {
 						if err := flush(); err != nil {
 							return err
 						}

@@ -33,7 +33,12 @@ func (p *DiskProjection) updatePhysicalUsageWindow(ctx context.Context, lease *l
 		}
 		q.mu.Lock()
 		defer q.mu.Unlock()
-		if q.failure != nil || q.applied != anchor || q.remaining != 0 {
+		// Every accepted native frame is applied (applied == anchor == native
+		// head, the lane frozen) and live catch-up consumes one prepaid root
+		// per frame, so what remains prepaid is for frames not yet written: a
+		// Roll prepays the successor's first. The candidate below is allocated
+		// above that debt and never consumes it, so it is no reason to refuse.
+		if q.failure != nil || q.applied != anchor {
 			return errors.Join(authenticatedstate.ErrRecovery, q.failure)
 		}
 		u, err := q.store.PreparePhysicalUpdate(ctx, nil)
