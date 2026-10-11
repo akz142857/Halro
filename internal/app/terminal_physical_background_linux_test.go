@@ -134,8 +134,13 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 			return errBackgroundWriterDeferred
 		}},
 		{"governance-export", func() error { return exportAt("gex_at_enospc") }},
-		{"common-checkpoint", func() error { return r.CheckpointMemoryState(ctx) }},
 	}
+	// The common checkpoint joins every business ticket, so it cannot run on
+	// the request's own goroutine. It starts from the hook on a goroutine of
+	// its own, as the scheduled loop runs it, and finishes at ENOSPC after
+	// the accepted terminal has released its ticket.
+	checkpointDone := make(chan error, 1)
+	var baseTemps []string
 
 	fillerPath := filepath.Join(directory, "foreign-filler")
 	defer os.Remove(fillerPath)
@@ -159,7 +164,7 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 		if err := waitBackgroundPressure(r, true); err != nil {
 			return err
 		}
-		baseTemps := haPhysicalOwnedTemporaries(t, dataDir)
+		baseTemps = haPhysicalOwnedTemporaries(t, dataDir)
 		for _, writer := range writers {
 			if err := unix.Statfs(root, &fs); err != nil || fs.Bavail != 0 {
 				// A writer that freed blocks (a retired tail, say) would let the
@@ -193,6 +198,11 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 				}
 			}
 		}
+		go func() {
+			checkpointCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			checkpointDone <- r.CheckpointMemoryState(checkpointCtx)
+		}()
 		return nil
 	}}
 	profile, _ := provider.BuiltinProfile(domain.ProfileOpenAIChatEmbeddings)
@@ -227,6 +237,15 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	}
 	if response.Code != http.StatusOK || calls.Load() != 1 || r.status.Load() != ledger.AccountingHealthy || r.ledger.PhysicalTerminalDebt() != 0 {
 		t.Fatal("accepted terminal failed after background writers at ENOSPC", response.Code, response.Body.String(), r.status.Load(), r.ledger.PhysicalTerminalDebt(), calls.Load(), filled)
+	}
+	checkpointErr := <-checkpointDone
+	outcomes = append(outcomes, backgroundWriterOutcome{"common-checkpoint", checkpointErr})
+	t.Logf("BACKGROUND_AT_ENOSPC writer=common-checkpoint err=%v", checkpointErr)
+	if status := r.status.Load(); status != ledger.AccountingHealthy {
+		t.Fatal("checkpoint at ENOSPC latched accounting status", status)
+	}
+	if left := haPhysicalOwnedTemporaries(t, dataDir); !slices.Equal(left, baseTemps) {
+		t.Fatal("checkpoint at ENOSPC left own temporaries", left, baseTemps)
 	}
 	if err := r.selectedState.generation.Owners.Directory.WithPhysicalCatchupWorkspace(ctx, func(ctx context.Context) error {
 		q, found, err := r.selectedState.generation.Owners.Ledger.ReadRequest(ctx, requestID)

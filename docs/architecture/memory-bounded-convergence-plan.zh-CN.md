@@ -863,3 +863,13 @@ I-03 仍不关闭，还缺：
 - 通过标准：连续两次通过；基线 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens` 同一二进制复跑通过；反向验证须让本测试失败。注入在读完各写入方失败路径后确定并在结果中写明理由，每个注入须先确认生效、再确认测试在对应门槛处失败。
 
 基线：本批开始时，`024515d0` 上的 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens`（真实 OS 采样器）在 512 MiB ext4 下通过，耗时 8 秒。
+
+**v1：夹具错误，无效。** 四个写入方在 ENOSPC 下都通过了每项硬门槛：不锁定恢复、债务保持 2、链头不变、无自有临时文件。返回值如下：
+- Usage 磁盘维护：`reserve Usage archive RAM ... new resource admission stopped by pressure`，在准入处被压力挡下；
+- 封存：没有换 WAL（Roll 被拒，只记日志）；
+- Governance 导出：`governance journal is unavailable`；
+- checkpoint：`context deadline exceeded`。
+
+checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实时也因期限已过而失败。原因在夹具：`CheckpointMemoryState` 的注释写明不能在业务 HTTP 处理中调用，因为它要等待该处理持有的 ticket；v1 恰好在在途请求自己的上游钩子里同步调用它，必然自锁。生产中它由定时循环在单独的 goroutine 里运行。终结本身返回了 200、债务归零。基线测试同次通过。
+
+**v2（运行前提交）。** 只改这一处：checkpoint 从钩子里以单独 goroutine 启动（60 秒期限），等终结释放 ticket 后在 ENOSPC 下完成；在拿到其结果后检查状态健康、无新增自有临时文件。其余门槛不变。
