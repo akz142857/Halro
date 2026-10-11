@@ -873,3 +873,16 @@ I-03 仍不关闭，还缺：
 checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实时也因期限已过而失败。原因在夹具：`CheckpointMemoryState` 的注释写明不能在业务 HTTP 处理中调用，因为它要等待该处理持有的 ticket；v1 恰好在在途请求自己的上游钩子里同步调用它，必然自锁。生产中它由定时循环在单独的 goroutine 里运行。终结本身返回了 200、债务归零。基线测试同次通过。
 
 **v2（运行前提交）。** 只改这一处：checkpoint 从钩子里以单独 goroutine 启动（60 秒期限），等终结释放 ticket 后在 ENOSPC 下完成；在拿到其结果后检查状态健康、无新增自有临时文件。其余门槛不变。
+
+**v2：ENOSPC 部分通过；空间恢复后失败，查出一个与 ENOSPC 无关的产品缺陷。** ENOSPC 下四个写入方（包括与请求并行的 checkpoint）都通过了全部硬门槛；终结 200、债务归零，新请求 503。空间恢复后，封存成功换了 WAL，随后 Usage 磁盘维护失败（`authenticated store requires reopen and native eligibility check`）。
+
+归因（诊断测试未提交，源码和输出在证据目录；同一夹具，不填盘、不发请求，逐步执行）：
+- 物理终结储备开启时，**Roll（封存）之后、下一个请求之前做 checkpoint**，checkpoint 以 `align selected Ledger maintenance Roll: maintenance Roll reduction failed` 失败，Ledger 投影随即退役：之后的业务请求报 `ledger projection is not available`。Roll 之后先有一个请求，再 checkpoint、关闭、重开都正常。
+- **Roll 之后直接关闭**：关闭时的 checkpoint 同样失败，**重开失败**：`open selected Ledger root: authenticated seal does not match independently validated startup authority`。
+- 逻辑预算（不开物理储备）下同样的顺序全部正常。
+- 机制：Roll 之后 checkpoint 的 `alignStandaloneMaintenanceRoll` 调用 `AdvanceFromNative` 写入新位置，走 `updateHAPhysicalRestoredDeltaLocked` 的 Standalone 分支直接 `store.Update`；物理模式下存储写入要求已绑定的物理分配（`update.go` 的 `physicalUpdate`），checkpoint 没有，写入以 `ErrPhysicalAllocation` 被拒，失败使投影永久退役。请求的持久 Apply 在已预付的终结工作区里写，所以先有请求就没事。
+- 生产可达：`ledger.seal.enabled` 与 `resource_budget.physical_terminal_reserve` 都是运营者选项，配置校验不禁止同时开启。封存在 Parquet 定时任务末尾执行，空闲实例在下一个请求之前就会遇到 checkpoint 或关闭。
+- 另一个现象（两种预算下都有）：Roll 之后的 Usage 磁盘维护申请 288 MiB RAM（之前 8 MiB），在本夹具预算下被拒；先有请求再维护时则报 `ErrRecovery`。未归因。
+- 实验补丁 `experiment-defer-align.patch`（未提交）：物理模式下 Roll 尚未对齐时 checkpoint 推迟、不写投影。在线场景修好（推迟后下一请求对齐，checkpoint、关闭、重开正常）；但 **Roll 后直接关闭仍无法重开**，说明根因还在启动校验：启动不接受“已保存的 seal 在旧 generation、原生头是之后一次完整的物理 Roll（offset 0、序号/哈希/epoch 相同）”。修复要改启动时的 fail-closed 校验或 Roll 本身，属于账务权威路径的设计决定，暂停等用户裁定。
+
+本批到此 2026-10-11 12:48，§36 暂停。
