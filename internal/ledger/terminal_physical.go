@@ -515,6 +515,37 @@ func (l *Log) transferPhysicalRollOwnerLocked(previousBytes int64) error {
 	return l.preparePhysicalDerivedLocked(context.Background(), PhysicalDerivedSuccessor, 0)
 }
 
+// alignPhysicalRollProjectionLocked records the completed Roll in the Ledger
+// projection: the successor's head, with the same sequence, chain hash and
+// epoch and no fact applied. It runs under native.mu after the owner transfer
+// reopened the receipt on the successor, through one prepaid root slot, so
+// the projection never names a sealed generation across a checkpoint, Close
+// or restart.
+func (l *Log) alignPhysicalRollProjectionLocked() (resultErr error) {
+	o := l.physical.Load()
+	// HA roles reduce Rolls through their own confirmed paths; this is the
+	// Standalone selected owner's obligation only.
+	if o == nil || l.startupProvenance == nil || l.startupProvenance.ha != nil || l.options.Replica {
+		return nil
+	}
+	p := o.projection
+	ctx := context.Background()
+	cow, err := p.store.ReservePhysicalTerminals(ctx, 1)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, cow.Close()) }()
+	target := ReplayAnchor{Head: Watermark{Generation: l.generation, Offset: 0, Sequence: l.chainSequence}, Hash: l.chainHash, Epoch: l.chainEpoch}
+	u, err := p.store.PreparePhysicalUpdate(ctx, cow)
+	if err != nil {
+		return err
+	}
+	_, applyErr := p.store.Update(u.Bind(ctx), authenticatedLedgerCut(p.scope, target), func(tx *authenticatedstate.Transaction) error {
+		return projectionRowsPut(authenticatedProjectionRows{tx}, "meta", []byte("position"), projectionPosition{target.Head, target.Hash, target.Epoch})
+	})
+	return errors.Join(applyErr, u.Finish(true, applyErr))
+}
+
 func (l *Log) ReservePhysicalTerminals(ctx context.Context, count int) (*TerminalPhysicalWindow, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

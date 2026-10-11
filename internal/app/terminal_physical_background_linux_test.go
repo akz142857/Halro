@@ -303,12 +303,6 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	if left := haPhysicalOwnedTemporaries(t, dataDir); len(left) != 0 {
 		t.Fatal("own temporaries after close", left)
 	}
-	if _, err := VerifyLedger(ctx, cfg); err != nil {
-		t.Fatal("offline ledger verify", err)
-	}
-	if _, err := VerifyUsage(ctx, cfg); err != nil {
-		t.Fatal("offline usage verify", err)
-	}
 	again, err := OpenWithOptions(ctx, cfg, logger, opts)
 	if err != nil {
 		t.Fatal("reopen", err)

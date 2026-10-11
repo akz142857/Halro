@@ -432,6 +432,9 @@ func (l *Log) rollLocked(sealedAt time.Time, expected *Segment) (result SealResu
 	if err := l.transferPhysicalRollOwnerLocked(pending.Length); err != nil {
 		return SealResult{}, err
 	}
+	if err := l.alignPhysicalRollProjectionLocked(); err != nil {
+		return SealResult{}, err
+	}
 	return SealResult{
 		Sealed: pending, Rolled: true, Active: l.generation,
 		Bytes: pending.Length, Records: pending.LastSequence - pending.FirstSequence + 1,

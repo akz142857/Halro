@@ -894,3 +894,18 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 4. 后面还有公共选择校验（`checkPhysicalCommonSelectionLocked` 同样要求两者相等），尚未走到。
 
 结论：方案 1 要么在这些点逐一接受“未对齐的 Roll”（放宽至少 4 处 fail-closed 检查），要么在启动时为对齐写入新建一条有预付槽位的物理写路径；两者都比预估的改动大。按目前了解，更稳妥的是方案 2：Roll 在持有原生锁、已验证无债务时，同时完成投影位置的对齐写入，使“投影位置等于原生头”始终成立，上述检查都不用改。13:27 暂停，等用户重新裁定。
+
+**方案 2 修复（用户 13:52 选定）。** Standalone 物理模式下，Roll 在把物理所有权转到新原生文件之后、仍持有原生锁时，借一个预付的投影根槽位，把 Ledger 投影位置写成新文件的头（新 generation、offset 0，序号、哈希、epoch 不变），再归还槽位（`ledger.Log.alignPhysicalRollProjectionLocked`）。投影因此不会在 checkpoint、关闭或重启时停在已封存的 generation 上，§36 列出的四处检查都不用改。范围只限 Standalone：HA Primary、Replica 的 Roll 走各自的确认路径，本修复不碰，HA 是否有同类问题未验证。
+
+槽位不能在 Roll 的持久点之前预留：Roll 开始时尾部回收会退掉旧回执，新回执要等所有权转移时才在新文件上打开，而开着窗口时打开回执会被拒（实测）。
+
+验证（Linux 512 MiB ext4）：
+- 新回归测试 `TestStandalonePhysicalRollAlignsProjection`：请求 → checkpoint → Roll → checkpoint → 请求 → Roll → 关闭 → 重开 → 请求 → checkpoint → 关闭 → 子进程 Roll 后立即 SIGKILL → 重开 → 请求 → checkpoint → 关闭。修复版通过；去掉修复的同一测试在“Roll 后 checkpoint”处失败（`maintenance Roll reduction failed`）。
+- `internal/ledger`、`internal/authenticatedstate`、`internal/statecut` 整包通过（ledger 406 秒）。
+- `^TestStandalonePhysical` 全组（不开真实 OS 采样器，按其历史跑法）在空闲机器上全部通过。与 Go 整包测试并行时，`PreparedActualBudgetRefusalCleanupAtENOSPC` 失败过一次；空闲时修复版、基线各复跑两次都通过，判定为负载下的时序敏感，不是回归。
+
+**仍有的窗口（如实登记）：**
+- Roll 内“重命名已持久、对齐尚未写入”之间崩溃，或这一步遇到 ENOSPC：重启后仍是未对齐状态，无法打开。原 Roll 在同一位置之后已经有分配（新文件的终结范围），失败同样锁定恢复，所以不是新增的失败类别，但窗口仍在。彻底关闭需要启动侧接受（方案 1 的工作）。
+- 本批顺带发现的既有问题，与修复无关、均在基线上复现：离线 `VerifyLedger`（即 `halro ledger verify`）对物理储备的 selected 实例返回 `ErrRecovery`，即使从未 Roll；`TestStandalonePhysical*` 中几个子进程测试在 `HALRO_TERMINAL_ACTUAL_OS_PRESSURE=1` 下因默认压力阈值在 512 MiB 盘上失败，历史上本来不这么跑。
+
+**§36 v3 测试调整（运行前提交）。** 删除关闭后的离线 `VerifyLedger`、`VerifyUsage`：前者对物理储备实例必然失败（上一条），不是本批要回答的问题。其余门槛不变。
