@@ -946,3 +946,20 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 未改：`PreparePhysicalUpdate(ctx, nil)` 本身会现场分配新槽位，不要求没有预付窗口，守卫看起来比必要的严；但它在物理储备的 fail-closed 路径上，为什么要求 0 尚未核实，不凭推断放宽。
 
 §36 结论仍待定：ENOSPC 门槛在 v2～v4 都通过；完整测试现在被窗口裁剪守卫挡住。2026-10-11 17:44 暂停，等用户裁定。
+
+**窗口裁剪守卫：查清意图后修复（用户 17:44 后选定）。**
+- 意图：契约 `docs/contracts/memory-bounded-maintenance.zh-CN.md` 与原证据 `evidence/physical-usage-window-v1-2026-10-07/` 都写明，物理窗口裁剪“在全部终结债务之上分配普通 COW 候选，不消费原生帧的未来窗口”，即设计上与预付的根共存。
+- 根因一（回归）：`290b0b93`（2026-10-10，实时追赶改为 8 条一批）让一批多帧只做一次物理更新、只消费一个预付根。物理储备为每个原生帧各预付一个根，于是多余的根留在 `remaining` 里。按“两边都构建、同输入运行”归因：`usage` 的 Linux 物理测试（ext4，`Physical` 组）在 `290b0b93^` 上 43 条全部通过，在 `290b0b93` 和 HEAD 上同样 5 条失败（`TestUsagePhysicalSelectedEachFrameCatchupAndKnownRetirement` 等，断言追赶后 `remaining == 0`，实测 4）。这些测试需要 ext4 环境，门禁不跑，所以一直没被发现。
+- 根因二（设计内的窗口）：Roll 为后继 generation 的第一帧预付一个根（`seal.go` 的 `PhysicalDerivedRoll, 1`，`33ee0c26` 起就有）。逐步诊断：开启 0 → 请求后 5 → 追赶后 0 → Roll 后 2 → 追赶后 1。这一个根要到下一个请求被追赶后才消费。定时任务每轮先跑 Usage 维护、最后封存，所以封存后的下一轮裁剪一定被拒；没有流量的实例会一直被拒。
+- 修复：物理模式下实时追赶回到每帧一次更新（`typed_live_advance.go`，非物理仍 8 条一批）；窗口守卫去掉 `remaining != 0`，保留 `failure`、`applied == anchor == 原生 head`、冻结 source lane。修复一之后，追赶完成时剩下的只可能是为尚未写入的帧预付的根。`retirePhysicalCatchupAfterCommon` 的 `remaining == 0` 是退休操作的条件，不改。
+- 我中途先只放宽守卫（未提交），随后查出根因一，判断那样会掩盖回归，于是撤回、改为两处一起修。如实记录。
+
+**验证（18:10 前，Linux 512 MiB ext4）。**
+- 新回归测试 `TestStandalonePhysicalUsageWindowPrunesBesideTerminalReserve`：两个请求、Roll、完整 Usage 维护（30 天截止）、以未来截止时间裁剪到完成，累计事实不变；再处理请求、checkpoint、关闭、重开并核对。两处都不修时在维护的裁剪处失败；只修根因一时同样失败；两处都修时通过。根因一由上面 5 条 `usage` 测试覆盖（修后 43/43）。
+- `^TestStandalonePhysical` 组与 `TestSelectedPhysicalUsageHistoricalStartupPruneAndReopen` 21 条通过（不开真实 OS 采样器）。
+
+**§36 v7：Usage 维护通过，卡在 Governance 导出的功能缺口上。** ENOSPC 下四个写入方结果与 v2～v4 相同；空间恢复后 collector、checkpoint、封存、Usage 维护都成功；Governance 导出报 `accounting export requires a disk owner`（`ledger.ErrGovernanceExportBackend`）。
+- 测试修正（如实登记）：原夹具直接调 `WriteExportWithDefinitionOwner`，不是生产路径。管理端 handler 在该错误时回退到 legacy 快照导出。现把这两步提成 `Runtime.writeGovernanceExport`，handler 与测试共用，行为不变。
+- 回退后仍然失败：`WithGovernanceExport` 只有 bbolt `LedgerProjection` 实现，selected 七根的认证 Ledger 投影没有；legacy 回退又要求旧 State。所以 selected（memory-state）实例上 Governance 导出没有任何可用路径。现有导出测试 `governance_export_owners_test.go` 用的是 bbolt 磁盘 owner，没覆盖 selected。这是功能缺口，不是本批引入，§36 登记时误以为它可用。
+
+§36 结论仍待定：ENOSPC 门槛在 v2～v7 都通过；完整测试现在只差空间恢复后的 Governance 导出（及其后的 `VerifyExportContext`、新请求、重开）。2026-10-11 18:10 暂停，等用户裁定。
