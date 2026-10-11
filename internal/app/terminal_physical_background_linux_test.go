@@ -298,9 +298,11 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	if err := r.CheckpointMemoryState(ctx); err != nil {
 		t.Fatal("final checkpoint after space returned", err)
 	}
-	if after := serve("req_background_after_space"); after.Code != http.StatusOK || calls.Load() != 2 {
+	after := serve("req_background_after_space")
+	if after.Code != http.StatusOK || calls.Load() != 2 || after.Header().Get("X-Request-ID") == "" {
 		t.Fatal("admission after space returned", after.Code, after.Body.String())
 	}
+	afterID := after.Header().Get("X-Request-ID")
 	if err := r.usageCollector.CatchUp(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +323,7 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	if err := again.selectedState.generation.WaitStartupAudit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{requestID, "req_background_after_space"} {
+	for _, id := range []string{requestID, afterID} {
 		q, found, err := again.selectedState.generation.Owners.Ledger.ReadRequest(ctx, id)
 		if err != nil || !found || q.Finalized == nil {
 			t.Fatal("reopen lost a terminal", id, found, err)

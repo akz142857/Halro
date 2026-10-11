@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -539,6 +540,8 @@ const haPhysicalFixtureFillBound = 6 << 30
 
 // haPhysicalOwnedTemporaries lists files under dataDir named by the
 // temporary patterns the persistent owners create before a rename.
+var archiveDateStepState = regexp.MustCompile(`^\.archive-date-[a-z-]+-v1\.json$`)
+
 func haPhysicalOwnedTemporaries(t *testing.T, dataDir string) []string {
 	t.Helper()
 	prefixes := []string{".metadata-journal-", ".selected-rotation-", ".seed-manifest-", ".reseed-required-", ".totp-watermark-", ".maintenance-", ".state-", ".object-source-", ".capture-", ".archive-", ".ndjson-", ".usage-", ".manifest-"}
@@ -548,6 +551,11 @@ func haPhysicalOwnedTemporaries(t *testing.T, dataDir string) []string {
 			return err
 		}
 		name := d.Name()
+		// Usage date maintenance keeps its resumable step state under fixed
+		// names; those are durable progress, not abandoned scratch.
+		if archiveDateStepState.MatchString(name) {
+			return nil
+		}
 		if strings.HasSuffix(name, ".tmp") {
 			left = append(left, path)
 			return nil
