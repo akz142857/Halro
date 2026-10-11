@@ -909,3 +909,11 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 本批顺带发现的既有问题，与修复无关、均在基线上复现：离线 `VerifyLedger`（即 `halro ledger verify`）对物理储备的 selected 实例返回 `ErrRecovery`，即使从未 Roll；`TestStandalonePhysical*` 中几个子进程测试在 `HALRO_TERMINAL_ACTUAL_OS_PRESSURE=1` 下因默认压力阈值在 512 MiB 盘上失败，历史上本来不这么跑。
 
 **§36 v3 测试调整（运行前提交）。** 删除关闭后的离线 `VerifyLedger`、`VerifyUsage`：前者对物理储备实例必然失败（上一条），不是本批要回答的问题。其余门槛不变。
+
+**v3（修复 `2622a913` 后）：ENOSPC 部分再次全部通过；空间恢复后在 Usage 磁盘维护处失败，原因已从 Roll 缺陷转为容量。** ENOSPC 下四个写入方的结果与 v2 相同，全部通过硬门槛；空间恢复后 collector、checkpoint、封存（换了 WAL、状态健康）都成功。Usage 磁盘维护报 `reserve Usage archive RAM=301989888 startup=false: resource budget exhausted`：
+- 288 MiB 是归档重新校验的工作区（`limits.FileBytes` 256 MiB + 32 MiB，`archive_date_verify.go`/`archive_verify.go`）。Roll 后 Usage 源 generation 变了，下一次维护必须重新校验归档，所以 Roll 之前只要 8 MiB、之后要 288 MiB。
+- 失败时预算快照（诊断补丁未提交）：IO 类只占约 36 MiB（上限 512 MiB），所以不是 IO 类上限；normal 池已用 452 MiB、normal claims 64。是字节还是 claim 耗尽、是本夹具预算偏小还是生产配置同样会卡住，未定。
+- 配置校验里没有为这 288 MiB 工作区留位置（`config/resource_budget.go` 无相应项）。如果某个合法配置装不下它，Roll 之后 Usage 磁盘维护会每轮只记一条警告、永远推进不了。这属于容量（D-04）问题，不是 ENOSPC。
+- 逻辑预算（8 GiB 夹具）下 Roll 后的同一维护也报过同样的拒绝（§36 v2 归因记录）。
+
+§36 结论待定：ENOSPC 下的争用门槛（本批要回答的问题）在 v2、v3 都通过，但完整测试因 Roll 后的容量问题无法走完恢复阶段，按登记不算通过。2026-10-11 14:20 暂停，等用户裁定。
