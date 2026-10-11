@@ -971,3 +971,6 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 注入（读完失败路径后确定）：
   - A：去掉 `verifyPhysicalRollNoDebtLocked` 的 `o.debt != 0 || o.active != 0`。ENOSPC 下封存不 Roll 正是靠它：在途请求持有终结储备时拒绝 Roll。注入后封存会带着储备 Roll，预期在“`PhysicalTerminalDebt` 仍为 2 / 链头不变 / 状态健康”中至少一条失败。生效判据：ENOSPC 下 ledger-seal 的结果不再是“deferred without rolling”。
   - B：`governance.Manager.WriteExportWithDefinitionOwner` 入口先 `MkdirAll` 目标目录。模拟失败导出留下半成品，预期在“导出失败目标目录不存在”处失败（ENOSPC 下建目录本身可能 ENOSPC，所以至少在空间恢复后的拒绝处失败）。生效判据：目标目录被创建。
+
+**§36 v8 结果与 v9 登记。** v8 两次都在空间恢复后的新请求处失败（502 `provider_error`）。原因是夹具：上游钩子把第二次调用一律当作“容量耗尽后上游又被调用”报错，而登记的门槛本来就要求空间恢复后的新请求到达上游（`calls == 2`）。之前的版本从没走到这一步。ENOSPC 部分、Usage 维护、Governance 拒绝在 v8 两次中都通过；基线测试在同一二进制上通过。
+v9 只改夹具：空间恢复后置位，恢复后的调用照常返回；恢复前的第二次调用仍然报错。门槛与注入不变。

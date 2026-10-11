@@ -147,11 +147,18 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	var filled int64
 	var outcomes []backgroundWriterOutcome
 	var hookErr error
+	// After space returns, an admitted request reaches upstream as usual; the
+	// ENOSPC work below belongs to the first call alone.
+	var spaceReturned atomic.Bool
 	adapter := &selectedCompletionAdapter{contentCanaryAdapter: &contentCanaryAdapter{}, beforeReturn: func() (resultErr error) {
-		defer func() { hookErr = resultErr }()
 		if calls.Add(1) != 1 {
-			return errors.New("upstream ran again after capacity exhaustion")
+			if spaceReturned.Load() {
+				return nil
+			}
+			hookErr = errors.New("upstream ran again after capacity exhaustion")
+			return hookErr
 		}
+		defer func() { hookErr = resultErr }()
 		if debt := r.ledger.PhysicalTerminalDebt(); debt != 2 {
 			return fmt.Errorf("native terminal vector not prepaid: %d", debt)
 		}
@@ -263,6 +270,7 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	if err := os.Remove(fillerPath); err != nil {
 		t.Fatal(err)
 	}
+	spaceReturned.Store(true)
 	if err := waitBackgroundPressure(r, false); err != nil {
 		t.Fatal(err)
 	}
