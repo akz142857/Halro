@@ -823,3 +823,43 @@ I-03 仍不关闭，还缺：
 - 其他后台写入方在 ENOSPC 下的争用（§31）。
 
 本批 2026-10-10 23:59 开始，2026-10-11 00:13 完成，约 14 分钟（时间取自分支创建与提交记录）。
+
+## 36. 后台写入方在真实 ENOSPC 下与终结储备的争用（I-03）
+
+本节第一部分在运行实验前提交，结果按设计 §9.2 写在后面，门槛事后不调宽。本批 2026-10-11 12:29 开始，基于 `024515d0`（第 10 轮门禁通过并已推送）。
+
+**范围。** §31 登记的“导出、备份、重建等其他后台写入方在 ENOSPC 下的争用”。设计 §6.1 规定“该储备不能被导出、备份或重建占用”，§6 规定“后台预算不足：延迟后台工作；不影响必要结算资源”。此前只测过在线 checkpoint。本批先做单机 selected Runtime（物理终结储备开启，`PhysicalTerminalReserve=true`），HA Primary + Replica 的版本读完 HA 夹具后另行登记，不在本次登记内。
+
+服务运行时 Parquet 定时任务依次调用的写入方，以及本批的取舍（依据都在代码里）：
+
+| 写入方 | 本批 | 依据 |
+| --- | --- | --- |
+| Usage 磁盘维护 `maintainUsageDiskCycle`（collector 追账、日期维护、导出、窗口裁剪） | 测 | — |
+| Ledger 封存 `sealLedgerGeneration`（Roll + 封存后校验） | 测 | 生产下限 16 MiB；测试在 Runtime 打开后把阈值设为 1，使封存立即到期，走的仍是生产函数 |
+| Governance 导出 `WriteExportWithDefinitionOwner`（管理端触发，写 `governance/export/<id>`） | 测 | 设计点名“导出” |
+| 公共 checkpoint `CheckpointMemoryState` | 测 | 已有 ENOSPC 证据，放在同一轮里一起核对 |
+| Ledger 段压缩 | 不测 | Usage 为磁盘模式时 `ledgerArchivedThrough` 直接返回 false，不进入写入；测试断言 `r.usage.disk != nil` |
+| Metadata 日志截断 | 不测 | selected Metadata facade 返回 `ErrFacadeMaintenance`；测试断言截断被拒 |
+| 失败记录过期清理 | 不测 | 只删除文件 |
+| 备份 | 不测 | 离线命令，不与服务共存 |
+
+**固定配置（运行前提交）。** `TestStandalonePhysicalBackgroundWritersAtENOSPC`（`internal/app/terminal_physical_background_linux_test.go`；需 `HALRO_TERMINAL_ENOSPC_ROOT`、`HALRO_TERMINAL_ENOSPC_FS=ext4`、`HALRO_TERMINAL_ACTUAL_OS_PRESSURE=1`）：
+- 环境：512 MiB ext4、容器内存 2 GiB、无 swap、2 CPU、`GOMAXPROCS=2`、`GOMEMLIMIT=768MiB`；runner 为证据目录内的 `runner-512.py pattern`。
+- 夹具：与 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens` 相同（`physicalTerminalBudgetFixture`、Ledger 投影 56 MiB、物理终结储备、真实 OS 采样器 `physicalTerminalActualOSPressurePolicy`）。定时循环先停掉，写入方由测试逐个直接调用。
+- 流程：一个真实 HTTP 请求进入上游时（终结已预付，`PhysicalTerminalDebt=2`），外部文件写到真实 ENOSPC，等采样器进入压力；然后依次运行四个写入方，每个之前若有空闲块先重新填满。之后让上游返回，完成终结；再发一个新请求，应被拒。删除外部文件，等采样器回到 Healthy，四个写入方各再运行一次；再发一个新请求，应成功。关闭后跑离线 `VerifyLedger`、`VerifyUsage`，重开读两个终结。
+- 硬门槛（ENOSPC 下每个写入方运行后）：
+  - 记账状态保持 `AccountingHealthy`（不锁定恢复）；
+  - `PhysicalTerminalDebt` 仍为 2（不动用已预付的储备）；
+  - Ledger 链头与哈希不变（后台写入不追加账务事实）；
+  - 自有临时文件集合与运行前相同（`haPhysicalOwnedTemporaries` 的模式）；
+  - Governance 导出若失败，目标目录不存在。
+  写入方本身可以成功也可以返回错误，结果只记录。
+- 硬门槛（终结与恢复后）：
+  - 已接受请求返回 200、上游只调用一次、债务归零、终结事实可读；ENOSPC 下新请求 503 且不到上游；
+  - 空间恢复后：collector 追账、checkpoint 成功；封存真的换了活动 WAL inode 且状态仍健康；Usage 磁盘维护返回 nil；Governance 导出成功且 `VerifyExportContext` 通过；新请求 200；
+  - 关闭后无自有临时文件；离线 `VerifyLedger`、`VerifyUsage` 通过；重开后两个终结都可读。
+- 只记录：每个写入方在 ENOSPC 下返回的错误、外部填充字节数。
+- 判定为无效（不算通过，修夹具后作为新版本重跑）：四个写入方在 ENOSPC 下都返回 nil 且没有任何可见动作，说明夹具没有让它们碰到磁盘。
+- 通过标准：连续两次通过；基线 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens` 同一二进制复跑通过；反向验证须让本测试失败。注入在读完各写入方失败路径后确定并在结果中写明理由，每个注入须先确认生效、再确认测试在对应门槛处失败。
+
+基线：本批开始时，`024515d0` 上的 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens`（真实 OS 采样器）在 512 MiB ext4 下通过，耗时 8 秒。
