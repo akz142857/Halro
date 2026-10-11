@@ -1003,3 +1003,37 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 - HEAD（`c0db1b56`）：47 个通过，99 个跳过，0 个失败，约 1 分钟。跳过的都是要求专用小文件系统或子进程角色的测试（`HALRO_*_ENOSPC_ROOT`、`HALRO_EXT4_ROOT` 等），与 CI 的普通 runner 相同。它们仍然只作为登记证据运行，不在门禁内。
 - 反向验证：在独立 worktree 里恢复 `290b0b93` 的物理模式批量追账，并确认改动已生效；脚本以 exit 1 失败，失败的是 `TestUsagePhysicalSelectedEachFrameCatchupAndKnownRetirement`、`TestUsagePhysicalActualCollectorPrepaidWatermarksAtPressure`。当时记录的另外 3 个失败需要 `HALRO_EXT4_ROOT`，在门禁里会跳过。
 - 仍未覆盖：上述 99 个专用夹具测试。要让它们进门禁，需要为每类夹具准备专用文件系统并控制运行时长，另行登记。
+
+## 37. §36 的 HA 一半：HA 成员的后台写入方在真实 ENOSPC 下与终结储备的争用（I-03）
+
+本节第一部分在运行实验前提交，结果写在后面，门槛事后不调宽。2026-10-11 23:50 登记，基于 `b2cfd5db`（第 11 轮门禁通过并已推送）。
+
+**读代码得到的范围（用户 23:40 选定按 foundation 级登记）。**
+- 公开 HA 物理启动仍关闭：`openHASelectedApplication` 遇到 `PhysicalTerminalReserve` 直接返回 “HA physical terminal vector is not prepared”（`ha_selected_application.go`）。§31～§35 都在 foundation 夹具上测，本节同样，结论只是 foundation 证据。
+- HA selected Runtime 不启动 `runUsageMaintenance`（`startHASelectedPrimaryWorkers` 的列表里没有），Replica 不启动任何后台任务。所以单机 §36 的定时封存、Usage 磁盘维护、定时 checkpoint 在 HA 上都没有调用方；HA 上实际存在的写入方只有 Primary 的 Usage collector（`usageCollector.Run`）、管理端 Governance 导出、各成员的在线 checkpoint（`checkpointHAPhysicalOnline`，由 `CheckpointMemoryState` 的 HA 分支调用，但 HA 上目前没有定时调用它）。
+- 新开放项：HA selected 没有维护循环（无封存、无 Usage 日期维护与窗口裁剪、无定时 checkpoint）。它对长期运行的影响本批未验证。
+
+| 写入方 | ENOSPC 下 | 空间恢复后 | 依据 |
+| --- | --- | --- | --- |
+| Primary Usage collector `CatchUp` | 测 | 须返回 nil | 生产只在 Primary 运行 |
+| Primary Ledger `Roll` | 测，须不换代 | 不测 | 无 HA 调用方；有债务时 `rollLocked` 应拒绝。空间恢复后真的 Roll 会走一条不可达且未对齐的路径（§36 的对齐修复只覆盖 Standalone），不作为本节门槛 |
+| Governance 导出 `writeGovernanceExport`（管理端调用的同一函数，装上 HA 应用接入的 owner） | 测 | 须以 `ErrGovernanceExportBackend` 干净拒绝且不留目标 | 与单机 v8 同一功能缺口 |
+| 各成员在线 checkpoint | 测（5 秒上限） | 须成功（`checkpointHASustained`，允许 §33 v4 的 `ErrPhysicalCredit` 推迟重试） | — |
+
+**固定配置。** `TestHAPhysicalBackgroundWritersAtENOSPC`（两节点）与 `TestHAPhysicalThreeMemberBackgroundWritersAtENOSPC`（三节点），`internal/app/ha_terminal_physical_background_linux_test.go`；需 `HALRO_HA_SUSTAINED_PRESSURE=1`、`HALRO_EXT4_ROOT`。严格传输（`openHAPhysicalBusinessGroup(..., strict=true, &policy, nil)`），每个成员由真实采样器 `selectedCapacityPressure()` 驱动压力，测试不设置压力。runner 沿用 §35：两节点 `runner-3072.py`、三节点 `runner-6144.py`（2 GiB 内存、2 CPU、`GOMEMLIMIT=768MiB`、`HALRO_HA_RECOVERY_RESERVE_MIB=1259`）。
+
+**流程。** 接受一个请求（`peerPhysicalTerminalAdmission` + `BeginRequestDetailed`），各 Replica 应用；外部文件写到真实 ENOSPC，等所有成员的采样器进入 Pressured；依次运行上表的写入方，每个之前若有空闲块先补满。然后在零空闲块下完成已接受的终结，Replica 应用；无在途请求时新准入须被拒（压力或物理停止线）。删除外部文件，等所有成员回到 Healthy，按上表“空间恢复后”运行；再接受并完成一个新请求。各成员收尾关闭，重开后每个成员都能读到两个终结。
+
+**硬门槛（ENOSPC 下每个写入方运行后，对每个成员）。**
+- 不进入恢复（`recovery` 为 false，原生 Ledger 状态 `AccountingHealthy`）；
+- `PhysicalTerminalDebt` 与写入方运行前相同（Primary 运行前须非零，否则夹具无效）；
+- Ledger 链头与哈希不变；
+- 自有临时文件集合不变（`haPhysicalOwnedTemporaries`）；
+- Governance 导出若失败，目标不存在；Roll 不得换代。
+写入方本身成功或返回错误只记录。
+
+**硬门槛（终结与恢复后）。** 已接受终结在 `haSustainedTerminalWithin`（5 秒）内完成，Replica 可读；压力进入 `haSampledEnterWithin`（5 秒）、退出 `haSampledExitWithin`（10 秒）内完成；空间恢复后上表各项满足、新请求完成；收尾后无自有临时文件；重开后所有成员读到两个终结。
+
+**只记录。** 每个写入方的返回值、接受时各成员的债务、checkpoint 推迟次数与最长耗时。
+
+**通过标准。** 两节点、三节点各连续两次通过；同一二进制复跑 §35 的 `TestHAPhysicalThreeMemberReserveSampledPressure` 通过。反向注入在读完写入方失败路径后确定，结果中写明理由；每个注入先确认生效，再确认测试在对应门槛处失败。
