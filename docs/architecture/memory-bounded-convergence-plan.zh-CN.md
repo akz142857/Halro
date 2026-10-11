@@ -1051,3 +1051,5 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 - D（`checkpointHAPhysicalOnline` 任何错误都锁存恢复）：在 ENOSPC 下 `checkpoint-0` 后的“不进入恢复”门槛失败。满足。
 - A-HA（去掉 `BeforeRoll` 的 peer credit 拒绝和 `rollLocked` 的债务检查）：测试通过。Roll 改为被压力准入拒绝（“new resource admission stopped by pressure”），储备仍没有被动用。与单机 A 系列相同的结论：储备有多层保护，去掉前两层后还有压力准入；登记的“在对应门槛失败”对储备类门槛未达到，偏差保留，不改写登记。
 - 判定：按登记，两节点、三节点各两次通过，基线通过；D 满足，B 部分满足，A-HA 未满足。§37 是否接受由用户裁定。
+
+**§37 判定：接受（用户 2026-10-12 00:03 裁定）。** 依据：v2 两节点、三节点各连续两次通过，同一二进制 §35 基线通过；注入 D 在对应门槛失败。B 只在空间恢复后的同类门槛失败（ENOSPC 下注入本身拿不到块），A-HA 被压力准入挡下、测试通过，这两项偏差保留在 v2 结果里，不追溯改写登记。结论只是 foundation 证据：公开 HA 物理启动仍关闭。开放项：HA selected 没有维护循环；HA 物理 `BeforeRoll` 在装有 peer credit 时总是拒绝 Roll。
