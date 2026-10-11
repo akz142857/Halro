@@ -41,6 +41,12 @@ subset of the crash-point and legacy-recovery matrices, and `HALRO_STRESS=1`
 Or run it as one target: `make full-check`. That is the gate — it is what the
 release assessments from v0.8.2 onward record, and it needs Node 22 to match CI,
 because it rebuilds the committed bundle and compares it.
+Off Linux it also needs Docker: a macOS host compiles none of the Linux-only
+tests (`_linux_test.go`, `//go:build linux`, and the ones that skip without
+ext4), and CI runs only for `main` and pull requests, so `full-check` runs them
+in a Linux container on a fresh ext4 `TMPDIR` (`make linux-only-check`,
+`scripts/linux-only-tests.sh`). It reports passed and skipped counts per
+package; tests gated on a dedicated small filesystem still skip there, as in CI.
 
 `make check` is the shorter loop (fmt-check, test, race, vet, frontend-test,
 observability-check). It is **not** the full gate and this file used to say it

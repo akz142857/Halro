@@ -53,7 +53,7 @@ WEB_SOURCES := $(shell find web/src web/scripts -type f) \
 WEB_DEPS_STAMP := web/node_modules/.halro-install-stamp
 WEB_BUILD_STAMP := web/node_modules/.halro-build-stamp
 
-.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check check full-check clean version FORCE
+.PHONY: help init-help setup init reset start dev build deadman frontend frontend-test frontend-production-check backup stats test cover race vet fmt-check observability-check linux-only-check check full-check clean version FORCE
 
 help:
 	@echo "Halro Makefile commands:"
@@ -78,7 +78,8 @@ help:
 	@echo "  vet                  Run go vet"
 	@echo "  observability-check  Validate observability configuration"
 	@echo "  check                The iterating loop: fmt-check, test, race, vet, frontend-test, observability-check. Not the gate"
-	@echo "  full-check           The gate before a push: check plus typecheck, production build and bundle-drift (needs Node 22)"
+	@echo "  linux-only-check     Run the Linux-only tests in Docker on a fresh ext4 TMPDIR (needs Docker)"
+	@echo "  full-check           The gate before a push: check plus typecheck, production build and bundle-drift (needs Node 22; off Linux also linux-only-check)"
 	@echo "  clean                Remove binaries and frontend build stamps"
 	@echo "  version              Show the release identity this build would carry"
 	@echo ""
@@ -207,7 +208,14 @@ observability-check:
 
 check: fmt-check test race vet frontend-test observability-check
 
-full-check: check frontend-production-check
+# A non-Linux host compiles none of the Linux-only tests, and CI runs only for
+# main and pull requests, so off Linux the gate runs them itself in a Linux
+# container (scripts/linux-only-tests.sh says which and why). On Linux,
+# `test` already builds them.
+linux-only-check:
+	scripts/linux-only-tests.sh run
+
+full-check: check frontend-production-check $(if $(filter Linux,$(shell uname -s)),,linux-only-check)
 
 # Nothing enforced gofmt, so an unformatted file reached main and stayed there.
 # The convention in CLAUDE.md is only a convention until something fails on it.

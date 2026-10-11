@@ -998,3 +998,8 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 **§36 判定：接受（用户 2026-10-11 20:30 裁定）。** 依据：v10 连续两次通过，同一二进制基线通过；注入 B 在对应门槛失败。A 系列不改为“满足”，而是记为结论：Standalone 物理模式下，后台写入方在 ENOSPC 下动用终结储备，需要同时越过 `rollLocked` 债务检查、`verifyPhysicalRollNoDebtLocked`、多处压力准入和物理预分配四层；去掉前三层仍被第四层拒绝。登记的“每个注入在对应门槛失败”对储备类门槛未达到，这一偏差保留在 v10 结果里，不追溯改写登记。§36 的 HA 一半仍未登记。
 
 **下一项：Linux 专属测试进门禁。** 核实“usage ext4 测试不在门禁内”时发现缺口更大：13 个包共 85 个 `_linux_test.go`，macOS 上的 `make full-check` 全部不编译；CI 只在 `main` 推送和 PR 上运行，本分支没有 PR，所以这些测试在本分支上从未被任何门禁执行。`290b0b93` 的回归由此潜伏。
+
+**Linux 专属测试进入门禁（2026-10-11 20:38）。** 新增 `scripts/linux-only-tests.sh` 与 `make linux-only-check`。名单按 GOOS=linux 与 GOOS=darwin 的测试文件集之差，再加上在非 Linux 或非 ext4 时跳过的可移植文件，目前为 15 个包、163 个测试。运行方式：交叉编译测试二进制，在 `ubuntu:24.04` 容器内新建 8 GiB ext4 回环盘作为 `TMPDIR`，以 nobody 身份在只读源码的包目录下运行；每个包报告通过、跳过、失败的数量和跳过原因。非 Linux 主机上，`make full-check` 会包含这一步。
+- HEAD（`c0db1b56`）：47 个通过，99 个跳过，0 个失败，约 1 分钟。跳过的都是要求专用小文件系统或子进程角色的测试（`HALRO_*_ENOSPC_ROOT`、`HALRO_EXT4_ROOT` 等），与 CI 的普通 runner 相同。它们仍然只作为登记证据运行，不在门禁内。
+- 反向验证：在独立 worktree 里恢复 `290b0b93` 的物理模式批量追账，并确认改动已生效；脚本以 exit 1 失败，失败的是 `TestUsagePhysicalSelectedEachFrameCatchupAndKnownRetirement`、`TestUsagePhysicalActualCollectorPrepaidWatermarksAtPressure`。当时记录的另外 3 个失败需要 `HALRO_EXT4_ROOT`，在门禁里会跳过。
+- 仍未覆盖：上述 99 个专用夹具测试。要让它们进门禁，需要为每类夹具准备专用文件系统并控制运行时长，另行登记。
