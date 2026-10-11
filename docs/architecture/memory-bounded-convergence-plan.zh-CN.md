@@ -963,3 +963,11 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 回退后仍然失败：`WithGovernanceExport` 只有 bbolt `LedgerProjection` 实现，selected 七根的认证 Ledger 投影没有；legacy 回退又要求旧 State。所以 selected（memory-state）实例上 Governance 导出没有任何可用路径。现有导出测试 `governance_export_owners_test.go` 用的是 bbolt 磁盘 owner，没覆盖 selected。这是功能缺口，不是本批引入，§36 登记时误以为它可用。
 
 §36 结论仍待定：ENOSPC 门槛在 v2～v7 都通过；完整测试现在只差空间恢复后的 Governance 导出（及其后的 `VerifyExportContext`、新请求、重开）。2026-10-11 18:10 暂停，等用户裁定。
+
+**§36 v8 登记（用户选定方案 1，运行前提交）。**
+- 门槛变动（如实登记，不算调宽 ENOSPC 部分）：“空间恢复后 Governance 导出成功且 `VerifyExportContext` 通过”改为“空间恢复后 Governance 导出返回 `ledger.ErrGovernanceExportBackend`、状态仍 `AccountingHealthy`、目标目录不存在”。原因见 v7：selected 实例尚无导出源。其余门槛不变，包括新请求 200、关闭后无自有临时文件、重开后两个终结可读。
+- 开放项：selected（memory-state）实例的 Governance 导出，需要给认证 Ledger 投影实现 `WithGovernanceExport`（或等价的有界导出源）；在此之前管理端导出在这类实例上返回 503。
+- 通过标准不变：连续两次通过；同一二进制复跑基线 `TestStandalonePhysicalTerminalActualENOSPCCompletesAndReopens`；反向注入各自先确认生效、再确认测试在对应门槛失败。
+- 注入（读完失败路径后确定）：
+  - A：去掉 `verifyPhysicalRollNoDebtLocked` 的 `o.debt != 0 || o.active != 0`。ENOSPC 下封存不 Roll 正是靠它：在途请求持有终结储备时拒绝 Roll。注入后封存会带着储备 Roll，预期在“`PhysicalTerminalDebt` 仍为 2 / 链头不变 / 状态健康”中至少一条失败。生效判据：ENOSPC 下 ledger-seal 的结果不再是“deferred without rolling”。
+  - B：`governance.Manager.WriteExportWithDefinitionOwner` 入口先 `MkdirAll` 目标目录。模拟失败导出留下半成品，预期在“导出失败目标目录不存在”处失败（ENOSPC 下建目录本身可能 ENOSPC，所以至少在空间恢复后的拒绝处失败）。生效判据：目标目录被创建。

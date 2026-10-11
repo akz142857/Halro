@@ -21,7 +21,6 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/requestmeta"
@@ -279,11 +278,14 @@ func TestStandalonePhysicalBackgroundWritersAtENOSPC(t *testing.T) {
 	if err := r.maintainUsageDiskCycle(ctx, time.Now()); err != nil {
 		t.Fatal("usage disk cycle after space returned", err)
 	}
-	if err := exportAt("gex_after_space"); err != nil {
-		t.Fatal("governance export after space returned", err)
+	// A selected install has no Governance export source yet (board §36 v7:
+	// only the bbolt Ledger projection serves one, and the legacy fallback
+	// needs the old State). It must refuse cleanly, not half-publish.
+	if err := exportAt("gex_after_space"); !errors.Is(err, ledger.ErrGovernanceExportBackend) || r.status.Load() != ledger.AccountingHealthy {
+		t.Fatal("selected Governance export after space returned did not refuse cleanly", err, r.status.Load())
 	}
-	if _, err := governance.VerifyExportContext(ctx, filepath.Join(exportRoot, "gex_after_space")); err != nil {
-		t.Fatal("governance export after space returned does not verify", err)
+	if _, err := os.Lstat(filepath.Join(exportRoot, "gex_after_space")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("refused Governance export left a target", err)
 	}
 	if err := r.CheckpointMemoryState(ctx); err != nil {
 		t.Fatal("final checkpoint after space returned", err)
