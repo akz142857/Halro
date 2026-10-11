@@ -177,7 +177,11 @@ func exerciseHAPhysicalBackgroundWritersAtENOSPC(t *testing.T, members int) {
 	for _, w := range writers {
 		if err := unix.Statfs(root, &fs); err != nil || fs.Bavail != 0 {
 			// A writer that freed blocks would let the next run off-pressure.
-			if err := exhaustHAPhysicalFixture(fills[1], haPhysicalFixtureFillBound); err != nil {
+			// v2: each refill is a file of its own; the helper creates, never
+			// appends.
+			refill := filepath.Join(root, "foreign-background-refill-"+w.name)
+			fills = append(fills, refill)
+			if err := exhaustHAPhysicalFixture(refill, haPhysicalFixtureFillBound); err != nil {
 				t.Fatal("refill before", w.name, err)
 			}
 		}

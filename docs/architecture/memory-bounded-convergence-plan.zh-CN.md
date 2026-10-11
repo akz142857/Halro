@@ -1037,3 +1037,5 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 **只记录。** 每个写入方的返回值、接受时各成员的债务、checkpoint 推迟次数与最长耗时。
 
 **通过标准。** 两节点、三节点各连续两次通过；同一二进制复跑 §35 的 `TestHAPhysicalThreeMemberReserveSampledPressure` 通过。反向注入在读完写入方失败路径后确定，结果中写明理由；每个注入先确认生效，再确认测试在对应门槛处失败。
+
+**v1：夹具错误，无效（两节点，2026-10-11 23:53）。** ENOSPC 下六个写入方都通过了每个成员的硬门槛（不进入恢复、债务不变、链头不变、无自有临时文件）。接受时债务：Primary 2，Replica 31。返回值：collector `nil`；Roll 被 `BeforeRoll` 拒绝（“original Replica physical IO promise unavailable or changed”），没有走到债务检查；Governance 导出 “governance journal is unavailable”；Primary checkpoint 与 Replica checkpoint 都因同一 Replica promise 拒绝。随后在终结前补满时失败：`exhaustHAPhysicalFixture` 只新建不追加，循环里已建过 `foreign-background-refill`。v2 只改夹具：循环中每次补满用按写入方命名的独立文件。门槛不变。
