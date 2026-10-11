@@ -886,3 +886,11 @@ checkpoint 一直等到测试的 4 分钟期限才返回，之后读终结事实
 - 实验补丁 `experiment-defer-align.patch`（未提交）：物理模式下 Roll 尚未对齐时 checkpoint 推迟、不写投影。在线场景修好（推迟后下一请求对齐，checkpoint、关闭、重开正常）；但 **Roll 后直接关闭仍无法重开**，说明根因还在启动校验：启动不接受“已保存的 seal 在旧 generation、原生头是之后一次完整的物理 Roll（offset 0、序号/哈希/epoch 相同）”。修复要改启动时的 fail-closed 校验或 Roll 本身，属于账务权威路径的设计决定，暂停等用户裁定。
 
 本批到此 2026-10-11 12:48，§36 暂停。
+
+**方案 1 尝试（用户 13:19 选定；未提交，补丁 `experiment-option1-partial.patch`）。** 逐步追踪后发现，“投影位置等于原生头”这一不变式在多处 fail-closed 检查里成立，Roll 后未对齐的状态会依次撞上：
+1. 运行中 checkpoint 的对齐（`alignStandaloneMaintenanceRoll`）：推迟补丁可解决。
+2. 启动物理恢复：Roll 时物理回执已随所有权转到新原生文件（声明全部匹配），失败点是 COW 根按原生头的 cut 解码，而根里仍是 Roll 前的 cut；失败会毒化存储。改为按 Roll 前的 cut 恢复（并要求无债务）后，Ledger 根可以打开。
+3. 启动恢复的前缀确认（`selectedRecoveryWriter.ConfirmRecoveryPrefix` 要求投影位置等于原生头）：仍失败，报 `confirm authenticated recovery prefix through 2: verify maintenance Ledger prefix`，并锁定恢复。
+4. 后面还有公共选择校验（`checkPhysicalCommonSelectionLocked` 同样要求两者相等），尚未走到。
+
+结论：方案 1 要么在这些点逐一接受“未对齐的 Roll”（放宽至少 4 处 fail-closed 检查），要么在启动时为对齐写入新建一条有预付槽位的物理写路径；两者都比预估的改动大。按目前了解，更稳妥的是方案 2：Roll 在持有原生锁、已验证无债务时，同时完成投影位置的对齐写入，使“投影位置等于原生头”始终成立，上述检查都不用改。13:27 暂停，等用户重新裁定。
