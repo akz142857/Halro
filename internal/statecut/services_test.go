@@ -234,7 +234,7 @@ func TestCommonSelectedServicesBudgetRefusalClosesGenerationWithoutRecoveryWrite
 	before := o.Sources.NativeLedger.Stats().Records
 	// Leave only 16 MiB of ordinary RAM: the actual authenticated recovery
 	// view requires 64 MiB before reading or appending a single input.
-	hold, err := o.Sources.Budget.TryAcquire(resourcebudget.IO, resourcebudget.Cost{RAM: (1 << 30) - o.Sources.Budget.Snapshot().Normal.RAM - (24 << 20)})
+	hold, err := o.Sources.Budget.TryAcquire(resourcebudget.IO, resourcebudget.Cost{RAM: (1 << 30) - commonFixtureRecoveryRAM - o.Sources.Budget.Snapshot().Normal.RAM - (16 << 20)})
 	if err != nil {
 		t.Fatal(err)
 	}

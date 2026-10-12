@@ -1480,3 +1480,36 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - **问题 2 的判定，事先定下：**
   - 如果重启能恢复、内容不变、审计校验通过，就判定为失败封闭，不修。
   - 如果重启失败，就作为缺陷另行处理。
+
+### 40.14 v6 / 点 4 第二轮结果与点 4 v3 登记（2026-10-12 19:47）
+
+**回归（mac）。**
+- metadatastate、usage、resourcebudget 通过。
+- statecut 有一例失败：`TestCommonSelectedServicesBudgetRefusalClosesGenerationWithoutRecoveryWrites`。它按旧的 8 MiB Recovery 储备计算占用量，夹具改为 256 MiB 后超出了容量。改为由夹具常量 `commonFixtureRecoveryRAM` 推算，仍然只留 16 MiB 普通 RAM。改后 statecut 全包通过。
+
+**点 2 v6 接受。** `p2v6-run-1`～`-9` 全部通过，A 支 7 次、B 支 2 次。
+- **修复 A 在 Linux 上的直接证据：** `p2v6-run-4` 正是 v5 失败的路径，目录推进处被压力拒绝。这次恢复在 Recovery 作用域中成功，状态保持 0；释放空间后 checkpoint 成功，Close 返回 nil。
+- **B 支两次**（run 8、9）：目录推进撞上 ENOSPC 后恢复成功、状态保持 0，随后请求在 WAL 写入第 209 条记录后，投影写入撞上 ENOSPC，造成锁定。
+  - 重启后 Usage 104→105，Ledger 头 208→210。
+  - Close 只报锁定导致的错误，按 E1-2b 判定为正确报告。
+- 点 2 的反向验证见 §40.11 的 `p2v4-reverse-1`。该二进制不包含修复 A，但反向编辑的对象（状态锁定）与 v6 相同。
+
+**点 4 第二轮（`p4b-run-1`）未通过：8 分钟超时，没有一档在物化中撞上 ENOSPC。**
+- **超时的原因：** 每档之后都删除了填充文件，于是每档都要以 O_SYNC 重新写满约 500 MiB。
+- **覆盖不到的原因：** 剩余 0～64 块的每一档，物化步骤都先被真实采样器的压力拒绝（`new resource admission stopped by pressure`）。物化开始前就要申请准入，采样器在填充期间已经察觉到磁盘满。
+- 超时前完成的各档中，暂存清理、重开健康、探针项目、审计校验都没有报错。
+- 反向运行 `p4b-reverse-1` 恰好赶在采样器之前，在剩余 0 块时就在物化中撞上 ENOSPC，并因“failed materialization kept fees”失败。这说明 ENOSPC 能否落进物化取决于时序，命令层面无法稳定覆盖。
+
+**点 4 v3 登记（本节在任何 v3 运行之前提交）：**
+1. **组件测试（新增，`internal/metadatastate`，Linux，ext4，手动压力保持 Healthy）：** 新增一个只供测试的包级阶段钩子，生产为 nil，在 `bbolt.Open` 成功后调用。分两种情形：
+   - **(i) open 前填满：** 直接调用 `MaterializeMetadata`，`Open` 写首页时撞上 ENOSPC。这是修复 B 的真实路径。
+   - **(ii) 打开后填满：** 钩子按剩余空间 h ∈ {0, 1, 2, 4, 8, 16} 块填充，写入事务时撞上 ENOSPC。
+   - 每种情形的门槛：错误链里有 `syscall.ENOSPC`，没有 `ownedfile.ErrRetirement`；镜像文件不存在；费用 `Used` 与调用前相同；释放空间后同一调用成功。
+   - (ii) 中至少一档在写入事务时撞上 ENOSPC。
+   - 连续通过两次。
+   - **反向验证：** 去掉失败路径上的 `image.Discard()`，必须失败；再去掉修复 B，情形 (i) 必须失败。
+2. **命令层测试（保留，门槛修订）：**
+   - 每档之后不再删除填充文件，只截短 64 MiB，留出重开所需的空间。
+   - “至少一档在物化中撞上 ENOSPC”这一项移到组件测试，因为命令层面由真实采样器先拒绝，这是上面查明的事实。
+   - 其余门槛不变：没有暂存或镜像残留；物化步骤失败时费用归还；没有发布失败的归档；失败后重开健康、探针项目不变、`VerifyAudit` 通过；释放空间后备份能通过校验。
+   - 连续通过两次。

@@ -41,6 +41,8 @@ func commonGovernanceEvent() governance.Event {
 	return governance.Event{EventID: "gov_out_common", ProjectID: "prj_common", WorkUnitID: "wku_common", DefinitionID: "odef_result", DefinitionVersion: 1, OutcomeID: "out_common", Value: "accepted", ReporterKeyID: "key_common", ObservedAt: now, IngestedAt: now, Revision: 1, IdempotencyKeyHash: "sha256:" + strings.Repeat("1", 64), RequestFingerprint: "sha256:" + strings.Repeat("2", 64)}
 }
 
+const commonFixtureRecoveryRAM = 256 << 20
+
 func newCommonFixture(t *testing.T) *commonFixture {
 	return newCommonFixtureWithGovernanceOptions(t, governance.Options{})
 }
@@ -59,8 +61,10 @@ func newCommonFixtureWithGovernanceOptions(t *testing.T, governanceOptions gover
 	for i := range limits.Classes {
 		limits.Classes[i] = limits.Total
 	}
-	limits.Classes[resourcebudget.Recovery] = resourcebudget.Cost{RAM: 256 << 20}
-	limits.RecoveryReserve = resourcebudget.Cost{RAM: 256 << 20}
+	// The live checkpoint's Usage restore draws about 128 MiB and 8 claims of
+	// Recovery at once (board §40.13).
+	limits.Classes[resourcebudget.Recovery] = resourcebudget.Cost{RAM: commonFixtureRecoveryRAM}
+	limits.RecoveryReserve = resourcebudget.Cost{RAM: commonFixtureRecoveryRAM}
 	limits.RecoveryClaims = 16
 	limits.Classes[resourcebudget.Control] = resourcebudget.Cost{RAM: 128 * resourcebudget.ClaimRAMBytes}
 	manager, err := resourcebudget.New(limits)
