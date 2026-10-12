@@ -1632,3 +1632,38 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 5. 反向验证：把 F1 的回收去掉，至少一个会留下临时文件的命令必须在门槛 3 上失败。
 
 发现违例时，记为发现并报给用户，不在本项里顺手修。
+
+### 42.1 E2 结果（2026-10-13 00:15）
+
+**门槛 1 的登记修正（如实记录）。** 登记时漏读了 `command_metadata_budget.go`：命令作用域给每个元数据文件路径保留一个 8 KiB 的描述 RAM，连同磁盘上限一起保留到作用域结束，注释写明是设计。第一次运行时 4 个 app 命令都只多出这一项，数值精确等于 8 KiB × 元数据文件 owner 数。门槛 1 因此改为精确等式：
+- Recovery 类的 RAM 等于 8 KiB × 元数据文件 owner 数，且这些 owner 保留各自的磁盘上限；
+- Control 类的 RAM 等于 claim 数 × 1 KiB；
+- 其余类别的 RAM 与未确认字节都为 0。
+
+没有引入容差。
+
+**测试。** `internal/app/command_restart_e2_test.go`（5 个命令），`cmd/halro/metadata_migration_e2_test.go`（元数据迁移）。都只在 `HALRO_E2=1` 时运行：其中的发现尚未裁定，测试会失败，不能进常规门禁。
+
+**SIGKILL 落点（每个只跑一次）。**
+- `backup create`：writer 回调里，暂存已建好、尚未写归档。
+- `backup restore`：归档已解出到暂存之后。
+- `usage compact`：第一步提交之后。
+- `usage prune`：第二个 Usage 引用目录出现时（进入回收阶段）。没有回调，由父进程监视 TMPDIR 触发。
+- `ledger seal`：最终观察回调里，封存完成、关闭之前。
+- 元数据迁移：`staging-synced` 边界，沿用已有的真实 SIGKILL 子进程。
+
+**结果。**
+
+| 命令 | 门槛 1 | 门槛 2 | 门槛 3 | 门槛 4 |
+| --- | --- | --- | --- | --- |
+| backup create | 通过 | 通过 | **未通过**：TMPDIR 留下 `halro-segment-directory-*.idx` | 通过 |
+| backup restore | 通过 | 通过 | **未通过**：数据目录上一级留下 `.halro-restore-stage-*`，内含完整解出的数据副本（ledger、audit、governance、metadata、config），重跑 restore 不回收 | 通过 |
+| usage compact | 通过 | 通过 | **未通过**：TMPDIR 留下 `halro-usage-verify-*`（`ledger.db`、`usage.db`） | 通过 |
+| usage prune | 通过 | 通过 | **未通过**：同上，TMPDIR 留下 `halro-usage-verify-*` | 通过 |
+| ledger seal | 通过 | 通过 | 通过 | 通过 |
+| 元数据迁移 | **未通过**：完整命令正常退出后，Background 类仍有一个带 4 KiB RAM、48 MiB 磁盘的 owner。认证存储 Close 时本应释放这 4 KiB，根因未查实 | 通过 | **未通过**：数据目录内留下 `memory-state.interrupted-0/migration.intent`。这是迁移的既定设计（被打断的候选不当作权威，只保留不删除），没有回收者 | 不适用（夹具无 Usage） |
+
+- 门槛 2 全部通过：6 个命令在两条路径结束后，启动清单的 `ChargeBytes` 都与独立复算相等。
+- 门槛 5：去掉 F1 的备份暂存回收后，`backup create` 在门槛 3 上多报出整个 `.halro-backup-stage-*`。恢复 F1 后，只剩 TMPDIR 那一项。
+
+**待用户裁定。** 以上发现按登记都不在本项里修。
