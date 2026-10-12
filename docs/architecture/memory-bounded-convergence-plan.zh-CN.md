@@ -1206,3 +1206,35 @@ B 支（锁定：填满期间出现业务错误）：
 - 如果仍有压力拒绝或其他与锁定无关的错误，就作为缺陷单独修。
 
 运行设置与点 1 相同：512 MiB ext4，`runner-512.py`，`HALRO_TERMINAL_ACTUAL_OS_PRESSURE=1`。
+
+### 40.3 点 2 v2 结果与 v3 登记（2026-10-12 16:46）
+
+**v2 未通过。** 第 1 次运行（`p2v2-run-1`）：
+- 填满后，checkpoint 被压力拒绝。
+- 第一个请求在 `BeginRequestDetailed` 处收到 `new resource admission stopped by pressure`，状态健康。
+- v2 只把 503 或 nil 算作“未失败”，于是这次被判为“第一个业务错误不是 ENOSPC”。
+
+**原因是测试的分类与生产不一致。** 生产网关在 Provider 调用之前就把 `BeginRequestDetailed` 的任何错误映射为 503 `accounting_unavailable`（`internal/gateway/service.go:496`），这一步还没有接纳任何工作。测试 handler 直接调用记账，没有这一层映射。v1 的“既不是完整结算也不是 503”也有同样的问题。v1 当时没有区分失败发生在 Begin 还是 Finalize，所以那次失败的阶段已无法确定。
+
+v2 的结论保持为“未通过”。本节在任何 v3 运行之前提交。
+
+**v3 分类（替换 v2 的“业务错误”判定，按失败阶段区分）：**
+- **准入拒绝**：中间件返回 503，或 Begin 返回错误。生产中两者都是 Provider 调用之前的 503。
+- **接纳后失败**：Begin 成功、Finalize 返回错误。
+- **完整结算**：Begin 与 Finalize 都成功。
+
+**v3 门槛。** 两支的划分不变（A：状态始终健康；B：出现锁定）。
+
+A 支：
+- 填满后的 checkpoint 失败，错误链里有 `syscall.ENOSPC` 或 `resourcebudget.ErrPressure`。
+- 每个请求要么完整结算，要么被准入拒绝；Begin 返回的错误必须是 `ErrPressure`。不允许出现接纳后失败。
+- 释放空间、压力回到 Healthy 后，checkpoint 成功，Close 返回 nil。
+- 重启后 Usage 请求总数等于基线加完整结算数；Ledger 头不回退。
+
+B 支：
+- 第一个非压力失败（Begin 或 Finalize）的错误链里有 `syscall.ENOSPC`，此时状态为 `AccountingUnavailable` 或 `AccountingRecoveryRequired`。
+- 锁定之后，没有任何请求完整结算，checkpoint 失败。
+- 释放空间后状态不降回。Close 只记录，不判定（E1-2b）。
+- 重启后状态健康。Usage 请求总数在 [基线 + 完整结算数, 基线 + 完整结算数 + ENOSPC 失败数] 之内；Ledger 头不回退。
+
+共同门槛、次数（每支各 2 次，上限 10 次）、反向验证和 E1-2b 都与 §40.2 相同。
