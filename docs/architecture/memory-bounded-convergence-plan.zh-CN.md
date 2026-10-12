@@ -1154,3 +1154,19 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 - 点 4：去掉镜像 Discard。
 
 **不在本批。** HA selected（I-06）；历史规模（D-04/M3）。
+
+### 40.1 E1 结果（进行中，2026-10-12 15:42）
+
+**点 1 接受。** `TestStoreRepackAtActualENOSPCKeepsSelectedPack`（`2b42510c`）在 512 MiB ext4 上连续两次通过。两个注入点都以真实 ENOSPC 失败；候选在失败返回前就被清理，目录里只剩选中包；预算与注入前相同；释放空间后 repack、重开得到的目录与未注入的对照运行一致。反向验证：去掉失败路径对候选 owner 的 Retire 后，`repack-pages-created` 残留 `repack.unqualified-0`，`repack-pages-synced` 的下一次 repack 被拒（“requires reopen”），两例都失败。证据在被忽略的 `docs/verification/performance/2026-10-12-e1/`。
+
+**点 2 v1 未通过登记门槛。** `TestSelectedCheckpointAtActualENOSPCKeepsAcceptedFacts`：
+- 第一次正式运行（`p2-run-1b`）：checkpoint 以 ENOSPC 失败（`directory/root.next.pending`，没有走到 repack），状态仍为健康；随后的请求在原生 Ledger 写入第 209 条记录后，认证 Ledger 投影写 `ledger/pages` 时撞上 ENOSPC，请求以错误结束，既不是完整结算，也不是 503。门槛不满足。（更早一次运行因夹具配置无效在打开前失败，没有进入实验。）
+
+诊断运行（不计入验收，测试改为只记录）查明的事实：
+- 结果取决于时机。采样器先察觉时，checkpoint 被压力干净拒绝（`new resource admission stopped by pressure`，三次）。请求赶在采样器之前到达时有两种情形：
+  - WAL 追加就失败，状态变为 `AccountingUnavailable`，没有持久事实。
+  - WAL 已写入、投影应用失败，状态变为 `AccountingRecoveryRequired`。
+- 两种情形下，后续请求都以 `ledger projection is not available` 失败；释放空间后 checkpoint 仍然失败，进程内不会恢复；Close 返回错误（`checkpoint audit log: new resource admission stopped by pressure`）。
+- 重启后恢复：状态健康，已写入 WAL 的那条事实被计入（Usage 103→104，Ledger 头 206→208），没有丢失；WAL 未写入的情形下没有新事实。
+
+**解读。** 非物理模式（`physical_terminal_reserve` 默认关闭）在采样器察觉之前遇到的 ENOSPC，按失败封闭处理：锁定、拒绝后续工作、重启恢复，不丢已持久化的事实。§23 的“拒绝新工作而服务继续”只有物理终结储备才能保证（§31～§37）。所以登记的点 2 门槛用在非物理模式上并不成立。是改门槛（需要用户裁定，不能事后放宽），还是把进程内恢复作为缺陷来修，留待用户决定。
