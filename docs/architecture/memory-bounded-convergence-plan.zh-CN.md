@@ -1408,3 +1408,22 @@ B 支：
 **修复后的 Linux 复核：** 修复 1 针对的 `p2v3-run-2` 路径（恢复失败）在 v4 的 10 次运行中没有再出现，修复 1 的证据目前只来自 §40.6 的确定性测试。
 
 **v5 登记（只增加次数，不改门槛）：** 门槛与 v4 相同，只为 B 支补证。另起最多 30 次运行，直到新增 2 次 B 支通过为止；A 支照常判定，任何一次失败都算失败。
+
+### 40.11 点 3、点 4 结果与点 2 反向验证（2026-10-12 18:47）
+
+**点 3 接受。** `p3-run-1`、`-2` 连续通过。
+- 剩余 0 块：失败在 `mkdir`。
+- 剩余 1～6 块：失败都发生在写 `summary.db` 的过程中（即 bbolt 暂存库已经建立），共 5 档。
+- 剩余 8 块及以上：被压力拒绝。
+- 每一档的暂存都被移除，状态保持健康；释放空间后，结果与参照逐字节相同。
+- 反向验证（`p3-reverse-1`，`summaryCleanup` 不删除文件）失败：参照查询留下的暂存使下一次查询在 `mkdir` 处得到 `file exists`，测试报 “summary scratch survived the query”。
+
+**点 2 反向验证失败，构成证据。** `p2v4-reverse-1` 中，状态锁定被改为不做任何事。checkpoint 在目录推进处撞上 ENOSPC，Usage 恢复失败，状态仍为 0；释放空间后 checkpoint 报 `disk Usage projection is retired`，测试失败。这正是 §40.4 缺陷的路径：修复 1 去掉后，真实环境中会再次出现。
+
+**点 4 未通过。** `p4-run-1` 在剩余 0 块时就失败，查出两个问题：
+1. **失败的镜像连同暂存目录一起被保留。** 物化写 `metadata.db` 时撞上 ENOSPC，错误被标为 `ownedfile.ErrRetirement`（“actual IO retirement is uncertain”）。`createBackupWithWriter` 的清理遇到 `ErrRetirement` 就跳过，于是 `.halro-backup-stage-*` 留在输出目录里。离线命令退出后，没有任何东西会回收它，每次失败的备份都会多留一个。
+2. **备份命令在 ENOSPC 下写了在线 Metadata 根。** 同一次运行中出现 `checkpoint audit log: metadata native/projection boundary requires close and authenticated recovery`，以及写 `memory-state/metadata-root/root.pending` 时撞上 ENOSPC。也就是说，备份命令（审计检查点）会写 selected 的 Metadata 根，在 ENOSPC 下使 Metadata 所有者进入需要恢复的状态。这次运行在检查 Metadata 根是否逐字节不变之前就已失败，下一次打开能否恢复也还没有验证。
+
+点 4 的反向运行（`p4-reverse-1`）在同一处失败。因为正向运行本身就没通过，这次反向运行不构成证据。
+
+E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及生产代码，修不修、按什么范围修，交用户裁定。
