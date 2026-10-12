@@ -149,6 +149,9 @@ func putMetadataImageRow(tx *bbolt.Tx, row authenticatedstate.Row) error {
 // DB. The owner lock freezes delta/trim and Close cancels and joins the complete
 // construction. This conservative profile charges the complete target mapping
 // plus fixed workspace; it refuses a ceiling that cannot fit the shared budget.
+// materializeCreate creates the image file; tests replace it to make Open fail.
+var materializeCreate = ownedfile.Create
+
 func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selected AuthenticatedMetadataSealReference, maxBytes int64, reservation resourcebudget.Permit) (result *MetadataImage, resultErr error) {
 	if b == nil || !filepath.IsAbs(output) || maxBytes <= 0 || maxBytes > int64(^uint(0)>>1)-BaselineSourceRAMBytes {
 		return nil, ErrSource
@@ -213,18 +216,23 @@ func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selec
 			}
 		}
 	}()
-	handedToEngine := false
+	var handed *os.File
 	db, err = bbolt.Open(output, 0o600, &bbolt.Options{FreelistType: bbolt.FreelistMapType, MaxSize: int(maxBytes), OpenFile: func(path string, flags int, mode os.FileMode) (*os.File, error) {
-		file, owner, err := ownedfile.Create(path, flags, mode)
+		file, owner, err := materializeCreate(path, flags, mode)
 		if err == nil {
 			image.owner = owner
-			handedToEngine = true
+			handed = file
 		}
 		return file, err
 	}})
 	if err != nil {
-		if handedToEngine {
-			err = errors.Join(ownedfile.ErrRetirement, err)
+		// bbolt closes the file on a failed Open but drops the close error.
+		// Closing it again proves the handle is gone: ErrClosed means bbolt
+		// closed it, nil means this did. Anything else stays uncertain.
+		if handed != nil {
+			if closeErr := handed.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+				err = errors.Join(ownedfile.ErrRetirement, err, closeErr)
+			}
 		}
 		return nil, err
 	}
