@@ -1096,3 +1096,61 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 **转出 I-03。** Roll 的崩溃窗口转 I-12；HA 维护循环和 HA 物理 `BeforeRoll` 转 I-06/I-12；引用任务转 D-04。
 
 **流程。** 四项做完后只跑一次门禁，通过即关闭 I-03（计数变为 6 完成 / 19 开放），然后转 I-06。每个实验先登记门槛、提交后再运行；事后不放宽门槛，并做反向验证。
+
+## 40. E1 登记：新旧投影共存与 bbolt 扩页下的真实 ENOSPC（I-03 收尾）
+
+2026-10-12 15:34 登记，基于 `82b8b821`。本节在运行任何实验前提交；结果另起小节记录，不回改本节的门槛。工作上限 2 小时。
+
+**先查清 selected 路径上实际有哪些点。** 设计 §9.1 写的是“新旧投影共存、bbolt 扩页”，但 selected 实例的运行时主路径已经基本不用 bbolt：
+- Usage 与 Governance 用 typed 认证页包（`OpenSelectedTypedUsageProjection`、`OpenSelectedTypedGovernanceProjection`），Ledger 用认证投影，Metadata 走 facade。
+- `usage.RestoreDiskLedgerDerivative` 与 `governance.(*AuthenticatedGovernanceProjection).RestoreProjection`（恢复到新 bbolt）只有测试调用，不在生产路径上。
+- Usage 固定重建的暂存是 `scratchstate` 分页文件，不是 bbolt；只在迁移激活时运行。
+
+据此，selected 路径上剩下的点如下。
+
+| 点 | 场景 | 新旧共存 / 扩页 | 现有真实 ENOSPC 证据 | 本批 |
+| --- | --- | --- | --- | --- |
+| 1 | 认证页包 repack：候选包写在当前选中包旁边 | 共存 | 只有 SIGKILL（`repack_crash_test.go`）与 headroom 测试 | 做（组件） |
+| 2 | 非物理 selected Runtime 的在线 checkpoint（含到期 repack） | 共存 | §36/§37 只覆盖物理终结储备模式 | 做（Runtime） |
+| 3 | 管理端 Usage 汇总的 bbolt 暂存 `summary.db` | bbolt 扩页 | 无 | 做 |
+| 4 | selected 备份物化 Metadata 镜像（`MaterializeMetadata`，bbolt） | 共存 + 扩页 | 备份 ENOSPC 测试只覆盖密文输出 | 做 |
+| — | 两个缓存槽轮换的 checkpoint | 共存 | §36/§37 | 引用 |
+| — | 迁移激活（含 Usage 固定重建、Metadata 重建） | 共存 | §29/§30 | 引用 |
+| — | scratchstate 块缓存 | 扩页 | `TestScratchBlockBankActualENOSPCPoisonsCandidateAndKeepsFees` | 引用 |
+| — | 物理模式 repack | 共存 | 候选空间预先 fallocate，不会在写入时 ENOSPC；headroom 测试 | 引用 |
+
+密钥轮换同样调用 `MaterializeMetadata`，函数本身由点 4 覆盖；轮换命令自己的失败清理不在本批，记为 I-03 之外的开放项，交用户裁定归属。
+
+**统一做法。** 真实 Linux、隔离 ext4（`HALRO_EXT4_ROOT`），用外部文件把文件系统填到真实 ENOSPC；每个点连续通过两次才算接受。
+
+**各点门槛（沿用 §23：拒绝新工作、保留已接纳的事实与费用、只清理自己的临时文件、重启后恢复）。**
+
+点 1（`internal/authenticatedstate`，可用包内 `s.hook`）。注入在 `repack-pages-created`（候选页拷贝时撞上 ENOSPC）与 `repack-pages-synced`（写根时撞上 ENOSPC）两处：
+- Repack 返回的错误包含 `syscall.ENOSPC`，没有别的错误。
+- 当前选中包的 inode、字节与根不变；全部行与注入前逐项相同。
+- 候选只可能残留在非选中槽；释放空间后，下一次 Repack 或重新打开会将其回收。预算 `Used` 回到注入前基线，不泄漏也不重复计费。
+- 释放空间后 Repack 成功；重新打开后行不变。
+
+点 2（`internal/app`，非物理 selected Standalone，真实采样器）。先累积足以触发 repack 的死页，再填满，然后调用 `CheckpointMemoryState`：
+- checkpoint 失败，错误链里有 ENOSPC；Runtime 状态保持 `AccountingHealthy`，不进入恢复。
+- 填满期间，新请求要么完整结算，要么被 503 拒绝；不存在已接纳却丢失的请求。注入前已结算的 Ledger 与 Usage 事实不变。
+- 数据目录里不残留本次 checkpoint 自己的临时文件。
+- 释放空间后 checkpoint 成功；Close 后重启，全部已结算事实都在。
+
+点 3（`internal/app`，selected Runtime）。填满后发管理端 Usage 汇总请求：
+- 请求失败（非 2xx，或 handler 返回错误），不返回部分结果。
+- 暂存目录被移除；在线 Usage 读取不受影响，状态保持健康。
+- 释放空间后同一查询成功，并与填满前的参照结果相同。
+
+点 4（`internal/app`，selected 备份）。为 `snapshotSelectedBackupMetadata` 加一个不导出的阶段钩子，生产传 nil，与 §30 做法相同；注入在物化开始前：
+- 备份以 ENOSPC 失败；镜像文件与暂存被移除。
+- 在线 Metadata 逐字节不变，IO 费用释放。
+- 释放空间后同一命令成功，`backup verify` 通过。
+
+**反向验证（每点一项，必须失败）。**
+- 点 1：去掉失败后对候选槽的回收。
+- 点 2：把 ENOSPC 误判为 `ErrRecovery`。
+- 点 3：去掉暂存清理。
+- 点 4：去掉镜像 Discard。
+
+**不在本批。** HA selected（I-06）；历史规模（D-04/M3）。
