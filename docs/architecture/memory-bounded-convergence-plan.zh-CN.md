@@ -1266,3 +1266,32 @@ B 支：
 - 没有复现计数，只出现过 1 次。
 - 没有生产修复。修复属于生产代码改动，范围交用户裁定。
 - 点 2 门槛不变，结论“未通过”。
+
+### 40.5 §40.4 缺陷的修复登记（2026-10-12 18:33，用户裁定“现在修”）
+
+**修复内容（生产代码，两处）：**
+1. **恢复失败时锁定状态。** 位置是 `internal/statecut/services_checkpoint.go` 的 `publishSelectedCheckpointLocked`。live checkpoint 在 `BindTypedMaintenance` 之后失败时，退出前会调用 `ActivateTypedLive` 把 Usage 投影恢复为实时状态。修复后，如果这次恢复也失败，就调用 `NativeLedger.Status().RequireRecovery()`。理由：此时 Usage 实时所有者仍绑在已关闭的维护租约上，只有重启能重新绑定，与 `finishPhysicalCommonSelectionWithWorkspaceLocked` 失败时的处理一致。
+2. **被拒绝的读取不再报成损坏。** 位置是 `internal/usage/typed_rows.go` 中 `usageEngine.View` 的 COW 分支。读取失败时（`tx.failure`，例如压力拒绝），回调或前置检查因为读不到行而得出的“损坏”结论不可信。修复后，只要读取失败且失败本身不是 `ErrDiskUsageCorrupt`，就只返回读取失败本身，不再附加 `ErrDiskUsageCorrupt`。
+
+**不在本次修复内（记为后续）：**
+- 让恢复免受新工作准入的压力约束：恢复的是已有状态，理应不必申请新准入，但这属于设计改动。修复后，压力下的恢复失败会按失败封闭锁定，需要重启。
+- `Update` 与其他读取路径的同类误判。
+
+**确定性测试**（`internal/statecut`，跨平台，进入普通 `make test`）：
+- 新增一个不导出的阶段钩子，生产为 nil，与 §30 做法相同。它在 `AdvanceFromNative` 之前被调用，返回的错误替代目录推进。
+- **注入例**：钩子把资源管理器置为 `Pressured`，并返回注入错误。门槛：
+  - checkpoint 返回的错误链里有注入错误。
+  - Ledger 状态为 `AccountingRecoveryRequired`。
+  - 错误链里有 `resourcebudget.ErrPressure`，没有 `usage.ErrDiskUsageCorrupt`。
+- **对照例**：钩子只返回注入错误，压力保持 Healthy。门槛：
+  - 恢复成功，状态保持 `AccountingHealthy`。
+  - 去掉钩子后的下一次 checkpoint 成功。这说明锁定只在恢复失败时发生，没有扩大范围。
+
+**反向验证（两项都必须失败，并确认替换确实生效）：**
+- 去掉修复 1：注入例因状态仍健康而失败。
+- 去掉修复 2：注入例因错误链里有 `ErrDiskUsageCorrupt` 而失败。
+
+**修复之后：**
+- 先把点 2 测试的分支判定改成按状态，与 §40.2 的定义一致。原来按“是否出现请求失败”判定，这是测试缺陷：锁定也可能来自 checkpoint 本身。
+- 然后按 v3 门槛在 Linux 上重跑点 2：每支各 2 次，上限 10 次。
+- 再做 §40.2 登记的反向验证。
