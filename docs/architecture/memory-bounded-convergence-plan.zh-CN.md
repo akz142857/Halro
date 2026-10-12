@@ -1427,3 +1427,25 @@ B 支：
 点 4 的反向运行（`p4-reverse-1`）在同一处失败。因为正向运行本身就没通过，这次反向运行不构成证据。
 
 E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及生产代码，修不修、按什么范围修，交用户裁定。
+
+### 40.12 点 2 v5 第 1 次未通过：一次压力拒绝就锁定了状态（2026-10-12 18:48）
+
+`p2v5-run-1` 的过程：
+- 填满后，checkpoint 在目录推进处被压力拒绝（错误链里没有 ENOSPC）。
+- 退出时恢复 Usage，恢复在 `ValidateNativeWriter` 中报 `verify maintenance Ledger prefix: new resource admission stopped by pressure`。
+- 状态变为 `AccountingRecoveryRequired`。v4 门槛要求“最先造成锁定的操作必须撞上 ENOSPC”，因此判为失败。按规则，v5 在此停止。
+
+**原因：这个问题在修复之前就存在，不是修复 1 引入的。**
+- 位置是 `internal/ledger/maintenance.go`（`verify maintenance Ledger prefix`）。验证失败时，除 `ErrProjectionDiskLimit` 与 busy 外一律调用 `RequireRecovery`，`resourcebudget.ErrPressure` 不在豁免之列。
+- §40.6 中修复前的诊断（压力注入例得到状态 3）走的也是这条路径。
+
+**影响：**
+- 非物理模式下，只要压力出现在 checkpoint 绑定 Usage 之后、恢复完成之前，就会把一次可重试的拒绝变成必须重启。
+- 这与 §23“拒绝新工作而服务继续”中由压力承担的那一半相冲突：压力本来是“拒绝但继续”的机制，在这里却触发了锁定。
+
+**根因与修复 1 是同一个：** 恢复已有状态时，仍然要申请受压力约束的新准入（§40.5 中记为“后续”的那一项）。可选方向：
+- **(a)** 恢复复用 checkpoint 已经持有的许可。
+- **(b)** 让维护前缀验证把压力拒绝和容量拒绝一样豁免（`ErrProjectionDiskLimit` 已有先例）；恢复失败仍由修复 1 锁定，所以单独做 (b) 并不能避免重启。
+- **(c)** 在绑定 Usage 之前，就先取得恢复所需的全部准入。
+
+这是设计改动，交用户裁定。在裁定之前，点 2 保持“未通过”。
