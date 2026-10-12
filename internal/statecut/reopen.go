@@ -65,6 +65,7 @@ type ReopenedStandalone struct {
 	servicesCancel          context.CancelFunc
 	servicesClosing         bool
 	checkpointLease         *ledger.MaintenanceLease
+	checkpointPhase         func(string) error // Test only; nil in production.
 }
 
 func (r *ReopenedStandalone) Close() error {

@@ -139,6 +139,9 @@ func (r *ReopenedStandalone) publishSelectedCheckpointLocked(ctx context.Context
 			var restoreErr error
 			if bound {
 				restoreErr = r.Owners.Usage.ActivateTypedLive(context.WithoutCancel(ctx), r.Owners.NativeLedger, r.Owners.Budget)
+				if r.checkpointPhase != nil {
+					restoreErr = errors.Join(restoreErr, r.checkpointPhase("usage-restore"))
+				}
 			}
 			resultErr = errors.Join(resultErr, restoreErr, lease.Close())
 			r.Owners.Lease, r.checkpointLease = previousLease, nil
@@ -151,6 +154,11 @@ func (r *ReopenedStandalone) publishSelectedCheckpointLocked(ctx context.Context
 		return result, fmt.Errorf("bind selected Usage maintenance: %w", err)
 	}
 	bound = true
+	if r.checkpointPhase != nil {
+		if err := r.checkpointPhase("directory-advance"); err != nil {
+			return result, fmt.Errorf("advance selected Ledger directory: %w", err)
+		}
+	}
 	if _, err := r.Owners.Directory.AdvanceFromNative(ctx, r.Owners.NativeLedger, lease, r.Owners.Ledger); err != nil {
 		return result, fmt.Errorf("advance selected Ledger directory: %w", err)
 	}

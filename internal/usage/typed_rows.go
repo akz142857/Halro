@@ -30,6 +30,7 @@ type usageEngine struct {
 	live            bool
 	selectedStartup bool
 	selectedHA      bool
+	pinned          func() // Test only; nil in production.
 }
 
 type usageTx struct {
@@ -163,6 +164,9 @@ func (e *usageEngine) View(fn func(*usageTx) error) (resultErr error) {
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, pin.Close()) }()
+	if e.pinned != nil {
+		e.pinned()
+	}
 	tx := &usageTx{pin: pin, ctx: ctx}
 	marker, found, err := pin.Get(ctx, []byte{0})
 	if err != nil || !found || !bytes.Equal(marker, []byte{byte(TypedUsageSealCodec)}) {

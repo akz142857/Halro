@@ -1295,3 +1295,28 @@ B 支：
 - 先把点 2 测试的分支判定改成按状态，与 §40.2 的定义一致。原来按“是否出现请求失败”判定，这是测试缺陷：锁定也可能来自 checkpoint 本身。
 - 然后按 v3 门槛在 Linux 上重跑点 2：每支各 2 次，上限 10 次。
 - 再做 §40.2 登记的反向验证。
+
+### 40.6 §40.5 测试设计的修订（在修复代码之前提交）
+
+按 §40.5 写的注入例，在修复前的代码上**并没有**复现缺陷。在目录推进时置为 `Pressured` 后，恢复失败在 `ActivateTypedLive` 的 `ValidateNativeWriter`（`verify maintenance Ledger prefix`），这条路径本来就会锁定状态。Linux 上的失败路径不同：`ValidateNativeWriter` 已经通过，压力出现在 `View` 拿到快照之后、读 `meta/state` 之前，单一的压力开关触发不到这个时序。因此把测试拆成两个，每个对应一处修复：
+
+**`internal/statecut`：`TestSelectedLiveCheckpointLatchesWhenUsageRestoreFails`**
+- 阶段钩子增加 `usage-restore` 点：在真实的 `ActivateTypedLive` 之后，把钩子返回的错误并入恢复错误。
+- **restore-failed 例**：注入目录推进失败和恢复失败。门槛：错误链里两者都有，状态为 `AccountingRecoveryRequired`。
+- **restored 例**：只注入目录推进失败。门槛：状态保持健康，下一次 checkpoint 成功。
+
+**`internal/usage`：`TestTypedViewReportsRefusedReadNotCorruption`**
+- `usageEngine` 增加一个只供测试的 `pinned` 钩子，生产为 nil，在 `View` 拿到快照之后调用。测试在这个钩子里置为 `Pressured`。
+- 门槛：
+  - 错误链里有 `ErrPressure`，没有 `ErrDiskUsageCorrupt`。
+  - 恢复 Healthy 后 `ReadStats` 成功，投影没有退役。
+- 修复前，这个测试得到的错误与 Linux 上 `p2v3-run-2` 的完全相同（`row or index is invalid` 加 `new resource admission stopped by pressure`）。
+
+**修复前已经运行过（属于诊断，不计入验收）：**
+- restore-failed 例失败（状态 0），restored 例通过。
+- View 例失败，错误同上。
+
+修复后：
+- 两个测试都必须通过。
+- 反向验证仍按 §40.5，分别去掉修复 1 和修复 2。
+- §40.5 中的点 2 Linux 重跑计划不变。
