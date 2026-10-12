@@ -1053,3 +1053,24 @@ v10 只改夹具：新请求改用响应里的 X-Request-ID；助手按精确模
 - 判定：按登记，两节点、三节点各两次通过，基线通过；D 满足，B 部分满足，A-HA 未满足。§37 是否接受由用户裁定。
 
 **§37 判定：接受（用户 2026-10-12 00:03 裁定）。** 依据：v2 两节点、三节点各连续两次通过，同一二进制 §35 基线通过；注入 D 在对应门槛失败。B 只在空间恢复后的同类门槛失败（ENOSPC 下注入本身拿不到块），A-HA 被压力准入挡下、测试通过，这两项偏差保留在 v2 结果里，不追溯改写登记。结论只是 foundation 证据：公开 HA 物理启动仍关闭。开放项：HA selected 没有维护循环；HA 物理 `BeforeRoll` 在装有 peer credit 时总是拒绝 Roll。
+
+## 38. selected 实例的 Governance 导出（§36 v7 登记的功能缺口）
+
+2026-10-12 用户选定。§36 v7 查明：`WithGovernanceExport` 只有 bbolt `LedgerProjection` 实现，legacy 回退要求旧 State，所以 selected（memory-state）实例、包括 HA selected，管理端 Governance 导出没有任何可用路径，固定返回 `ErrGovernanceExportBackend`。
+
+**读代码得到的事实。** 认证 Ledger 投影与 bbolt 投影共用同一个 `applyProjectionRecord`，所以 `export_work_units`、`export_runs` 两个按对象记录创建/关闭序号的桶，以及 `export_work_unit_count`、`export_run_count` 两个计数，认证投影早已在写；缺的只是读这一侧。selected 与 HA selected 的 budget owner 都内嵌 `*ledger.AuthenticatedLedgerProjection`，方法实现在投影上即可被 `budget.Manager.WithGovernanceExport` 看到，budget、governance、app 三层都不用改。
+
+**实现。**
+- `ledger/governance_export.go`：导出视图不再直接持有 bbolt 事务，改为经 `governanceExportSource` 每页打开一次有界读取（行、当前位置、按键序的索引遍历）。截面判定、分页进度、源字节上限、as-of 还原、成熟度批次重试的逻辑原样保留，只把 `*bbolt.Tx` 换成通用的 `projectionRows`。bbolt 数据源保留原有的投影 generation 校验。
+- `ledger/authenticated_governance_export.go`：认证数据源。每页是一个独立的 `authenticatedPointJob`（独立 pin、IO 费用当页释放），页与页之间、以及发布期间都不持有 pin，截面靠 as-of 位置还原；Roll 或同序号哈希变化撤销截面（与 bbolt 同一判定）。HA 业务读取的已确认位置限制由 `authenticatedReadJob` 照常施加。
+- 锁忙：认证读取只尝试取锁，写入方短暂持锁或四个 pin 槽占满时立即返回 `ErrBusy`。导出要连续读很多页，任何一页的瞬时忙都会让整次导出作废，所以数据源按 `authenticated_writer.go` 的先例退避重试（1 ms 起、50 ms 封顶、至多 30 秒），且只在回调尚未进入时重试，避免把读了一半的页重复累加。
+- 导出格式、manifest、`VerifyExport` 均不变。不需要重新初始化数据目录。
+
+**验证。**
+- `internal/ledger` 新测试：同一 WAL 构建的认证投影与 bbolt 参照投影，导出的 WorkUnit、Run、截面与成熟度在每页 1 行、2 行、最大行数下逐项相同；截面后追加 WorkUnit 关闭、Run 关闭与新 WorkUnit 并 `AdvanceFromNative`（导出期间独占推进能执行，说明页间不持锁），截面内仍是打开状态、新对象不出现；持有 owner 写锁 20 ms 期间读页能等到释放。反向：去掉重试，锁测试以 `authenticated snapshot reader busy` 失败。
+- `internal/app` 新测试 `TestSelectedRuntimeGovernanceExportPublishesAccountingCut`：真实 selected Runtime，经管理端同一函数 `writeGovernanceExport` 导出，`VerifyExport` 通过，manifest 的 Ledger 水位等于原生链头，四个数据集计数正确，状态仍健康。反向：移走认证投影的实现，测试以 `accounting export requires a disk owner` 失败。
+- 现有 bbolt 导出测试（ledger、budget、governance、app）不变通过。
+
+**§36/§37 门槛恢复（如实登记）。** §36 v8 因功能缺口把“空间恢复后 Governance 导出成功且 `VerifyExportContext` 通过”临时改为“干净拒绝”，§37 照此登记。缺口已补，两个测试改回原门槛：空间恢复后导出成功、`VerifyExportContext` 通过且水位与 manifest 一致；ENOSPC 下的门槛（拒绝、无目标、不进入恢复）不变。同一二进制（`suite.test` sha256 前缀 `a4af2401c5014215`，基于 `4afe69e2` 加本节改动）在 Linux ext4 真实采样器下：单机 512 MiB 连续两次通过，HA 两节点 3 GiB、三节点 6 GiB 各连续两次通过；ENOSPC 下导出仍报 “governance journal is unavailable”，与 §36/§37 相同。证据在被忽略的 `docs/verification/performance/2026-10-12-selected-export/`。
+
+**仍开放。** HA 上导出只在 Primary 有意义，Replica 的管理端行为未单独验证；公开 HA 物理启动仍关闭（§37），所以 HA 部分仍只是 foundation 证据。

@@ -87,7 +87,7 @@
 6. 已关闭：会话断开导致 ticket 结果未知的问题，按用户裁定采用原样重发（看板 §24）。剩余：管理审计批次所有者在结果未知时仍被标记退休。
 7. 单机压缩测试在 `Physical` 批次中偶发失败（修复后 1/7、未修复 0/4、单独 10/10；§24 最终版本的批次中未再出现），`context canceled` 原因链未归因（看板 §23-2）；门禁第 3 轮的锁忙失败是另一现象，已由 §25 修复。
 8. 已关闭：突发负载写满 Usage/Ledger projection 页包（看板 §26）。
-9. selected（memory-state）实例没有 Governance 导出路径：`WithGovernanceExport` 只有 bbolt `LedgerProjection` 实现，legacy 回退要求旧 State；管理端导出在这类实例上拒绝（看板 §36 v7/v8，§37 同）。**下一项。**
+9. 已关闭：selected（memory-state）实例的 Governance 导出由认证 Ledger 投影提供，§36/§37 的导出门槛恢复为“成功且校验通过”（看板 §38）。
 10. HA selected 没有维护循环（无定时封存、Usage 日期维护与窗口裁剪、定时 checkpoint），长期运行影响未验证；HA 物理 `BeforeRoll` 在装有 peer credit 时总是拒绝 Roll（看板 §37）。
 11. D-04：reference 作业的映射记账；HA 成员的 Usage 维护 IO 下限（Replica 576 MiB 投影使下限约 1.5 GiB，超过 normal 池），Linux 剖面 `selectedCapacityBudget` 被新下限拒绝（看板 §36）。
 12. Standalone 物理 Roll 在“重命名已持久、投影对齐未写入”之间崩溃或遇 ENOSPC，重启后仍无法打开（看板 §36 方案 2 的残留窗口）；离线 `VerifyLedger` 在物理 selected 实例上失败（既有）。
@@ -98,7 +98,7 @@
 
 1. 门禁记录：`72c1bd8d` 上通过（8716 秒）；`21df8609` 上第 2 轮因诊断代码混入工作树中止；第 3 轮 race 分片失败（锁忙，看板 §25）；`c640bd40` 上第 4 轮于 2026-10-10 00:51 启动，8752 秒，`exit=0`，无 `FAIL`/`panic`。随后合入 `memory-bounded-busy-head`（`d237342c`）与 `memory-bounded-usage-pack`（`dcb6746a`），针对性回归（新增 app 测试及其 race、ledger/authenticatedstate race、authenticatedstate/usage/ledger 整包）发现并修复 `PackUsage` 锁忙缺陷（`3db39877`），复跑受影响测试后在 `88bff47f` 上起第 5 轮门禁（10:50），39 分钟后在 app 第 4 分片失败，原因是测试写死缓存槽位（看板 §26，`9c88ee24` 修复）。第 6 轮门禁在 `dca5324d` 上于 2026-10-10 11:37 启动，9326 秒，`exit=0`，无 `FAIL`/`panic`；该提交已按用户确认推送到 origin。日志在被忽略的 `docs/verification/performance/2026-10-10-final-gate-6/full-check.log`，判读方法：末尾 `exit=0` 为通过；`grep -E '^(FAIL|--- FAIL|panic)'` 查失败；末尾是 `gate process ended without exit line` 表示进程被中断，需要重跑。第 7 轮 race 失败（`9a861004` 修复）；第 8～11 轮分别在 `9a861004`、`a56aa669`、`024515d0`、`b2cfd5db` 上通过并推送，第 11 轮起含 `linux-only-check`。第 12 轮在 `38e987a8` 上：`make check` 部分 8182 秒通过，`frontend-production-check` 因 shell 的 Node 是 v24 而停止；随后用 Node 22 只补跑 `frontend-production-check` 与 `linux-only-check`（63 秒，`exit=0`，Linux 专属 65 通过 / 100 跳过 / 0 失败，`dist` 无漂移，日志 `2026-10-12-final-gate-12/remainder-node22.log`），按用户确认推送。**起门禁前把 Node 22 放在 PATH 最前面**（`~/.nvm/versions/node/v22.18.0/bin`）。门禁运行期间不得改动主工作区。之后的新提交推送前仍需完整门禁与用户确认。ENOSPC 测试需小镜像：`docs/verification/performance/2026-10-09-enospc-regression/` 下的 `runner-512.py` / `runner-1536.py`。
 2. I-03 已补真实 ENOSPC 下的双端终结与重启（§23）、回复丢失的有界解决（§24）、三节点真实 ENOSPC（§27）、归档多文件发布 ENOSPC（§28）、HA 激活迁移 ENOSPC（§29）、Standalone 迁移 ENOSPC（§30）、HA 储备保护（§31）、固定容量配置下的持续压力（§32）、HA 物理储备下的持续压力（§33 两节点、§34 三节点，严格传输）与真实采样器下的三节点版本（§35）；后台写入方在 ENOSPC 下的争用已由单机（§36）与 HA foundation（§37）接受；I-03 整项仍开放：历史规模（D-04/P2 阻断）、动态输出盘、所有权移交与有限等待的原有缺口；另登记崩溃后 `.archive-*.tmp` 无人回收（§28）。
-3. 用户 2026-10-12 选定下一项：selected 实例的 Governance 导出（§3.3-9）；其余候选为 D-04 reference 作业记账、HA 维护循环。
+3. selected 实例的 Governance 导出已完成（看板 §38，未推送，推送前需完整门禁与用户确认）；剩余候选为 D-04 reference 作业记账、HA 维护循环。
 4. 之后继续 S2 逐项接受：I-03 → I-06 → I-04/I-05 HA 部分 → I-11 → I-12 → I-07～I-10 → O-01/O-02 → V-01 → V-02；十万冷构建在 M3。
 
 ## 5. 常用命令
