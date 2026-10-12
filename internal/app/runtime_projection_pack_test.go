@@ -73,7 +73,7 @@ func runProjectionPackBurst(t *testing.T, configure func(*config.ResourceBudget)
 	if err != nil {
 		t.Fatal(err)
 	}
-	revision := r.selectedState.generation.Seal.Revision
+	revision := selectedSealRevision(r)
 	packs := r.projectionPacks()
 	// Business work holds the same tickets a gateway handler does: a
 	// checkpoint joins it, and either gate sheds new work with 503.
@@ -107,7 +107,7 @@ func runProjectionPackBurst(t *testing.T, configure func(*config.ResourceBudget)
 						time.Sleep(time.Millisecond)
 					}
 				}
-				t.Log("progress", i, "revision", r.selectedState.generation.Seal.Revision, "pack", n, used, usable, ok, "shed", shed)
+				t.Log("progress", i, "revision", selectedSealRevision(r), "pack", n, used, usable, ok, "shed", shed)
 				if ok && used > usable {
 					t.Fatal("pack filled past its usable room", n, used, usable)
 				}
@@ -121,10 +121,10 @@ func runProjectionPackBurst(t *testing.T, configure func(*config.ResourceBudget)
 	if err != nil || stats.Totals.Requests != before.Totals.Requests+int64(requests) {
 		t.Fatal("burst Usage", before.Totals.Requests, stats.Totals.Requests, err)
 	}
-	if r.selectedState.generation.Seal.Revision <= revision {
+	if selectedSealRevision(r) <= revision {
 		t.Fatal("fill never triggered a checkpoint", revision)
 	}
-	t.Log("checkpoints", r.selectedState.generation.Seal.Revision-revision, "shed", shed)
+	t.Log("checkpoints", selectedSealRevision(r)-revision, "shed", shed)
 	if err := r.Close(); err != nil {
 		t.Fatal("close after the burst", err)
 	}
@@ -190,4 +190,12 @@ func TestPackShortfallBounds(t *testing.T) {
 			t.Fatal(c, got)
 		}
 	}
+}
+
+// selectedSealRevision reads the published revision under the live checkpoint
+// job lock: the fill trigger checkpoints in the background during the burst.
+func selectedSealRevision(r *Runtime) uint64 {
+	r.liveCheckpoint.job.Lock()
+	defer r.liveCheckpoint.job.Unlock()
+	return r.selectedState.generation.Seal.Revision
 }
