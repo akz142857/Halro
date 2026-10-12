@@ -152,6 +152,9 @@ func putMetadataImageRow(tx *bbolt.Tx, row authenticatedstate.Row) error {
 // materializeCreate creates the image file; tests replace it to make Open fail.
 var materializeCreate = ownedfile.Create
 
+// materializePhase is a test-only hook; it is nil in production.
+var materializePhase func(string)
+
 func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selected AuthenticatedMetadataSealReference, maxBytes int64, reservation resourcebudget.Permit) (result *MetadataImage, resultErr error) {
 	if b == nil || !filepath.IsAbs(output) || maxBytes <= 0 || maxBytes > int64(^uint(0)>>1)-BaselineSourceRAMBytes {
 		return nil, ErrSource
@@ -235,6 +238,9 @@ func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selec
 			}
 		}
 		return nil, err
+	}
+	if materializePhase != nil {
+		materializePhase("opened")
 	}
 	pin, err := b.store.Snapshot(ctx)
 	if err != nil {
