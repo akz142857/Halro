@@ -499,7 +499,7 @@ Replica 应用、晋升、回退和重建要核对 confirmed ordering index 与�
 | D-04b | 生产容量校准 / 性能、运维 | D-01，D-04a | 未开始（随 D-01 暂缓） | 用生产 heap/RSS/cgroup 曲线校准 D-04a 的门槛与余量 |
 | I-01 | pprof 与 runtime 诊断 / 后端 | A-01 | 完成（本地实现验收） | `internal/diagnostics`、CLI 接线与内存指标及相关测试；生产现场采集归 D-01 |
 | I-02 | 移除只读 watermark 的全量 Snapshot / 后端 | A-01 | 完成 | 启动和 summary 改用只读位置接口；checkpoint 与 summary 语义回归通过，10k watermark 为 0 B/op、0 allocs/op |
-| I-03 | 共享 RAM/磁盘预算及终结储备 / 后端、运维 | D-04a | 进行中（共享预算及局部物理路径；HA 完整向量未接受） | 所有权移交、压力迟滞、有限等待、终结额度与 ENOSPC 行为可验证 |
+| I-03 | 共享 RAM/磁盘预算及终结储备 / 后端、运维 | D-04a | 进行中（收尾线已定：E1/A1/E2/F1，见[看板 §39](memory-bounded-convergence-plan.zh-CN.md#39-i-03-收尾线2026-10-12-用户裁定)；其余条件转 D-04、D-01/R-01、I-06、I-12、V-02） | 所有权移交、压力迟滞、有限等待、终结额度与 ENOSPC 行为可验证 |
 | I-04 | Ledger 磁盘投影及读取迁移 / 账务、存储 | A-03，D-02，I-03 | 进行中（selected Ledger 已接；全部角色/容量待验收） | 历史/幂等/余额索引、原子水位、价格/治理/备份 cursor、锁序和失败封闭 |
 | I-05 | request/attempt 两级有界恢复 / 账务 | I-04，I-06 确认接口（HA 模式） | 进行中（跨页/超新增预算/连续 SIGKILL 及迟后联动局部通过；公共 HA/依赖/资源/增长待接受） | 独立枚举全部 pending attempts 与未 finalized requests；校验已 finalized request 的迟后 settlement 原归属并保留摘要；attempt 释放/保守结算及确定性幂等 finalized，不丢弃、不重复、不受新增限额阻断；孤儿请求不残留活跃额度；迟后 settlement 的 Usage 联动随本项交付，不重建活跃累加器 |
 | I-06 | HA 未确认窗口与角色 generation / HA | I-03，I-04 | 进行中（TLS/增量已接；物理切换及三节点故障矩阵待完成） | 有限帧窗口、未确认准入、允许前缀缩小后重建与原子切换；维护复制启动与恢复目标前缀确认接口，不依赖业务 ready，不回退裸 watermark |
