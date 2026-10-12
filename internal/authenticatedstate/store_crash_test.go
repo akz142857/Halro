@@ -37,6 +37,9 @@ func TestStoreCOWCrashHelper(t *testing.T) {
 			if e := syscall.Kill(os.Getpid(), syscall.SIGKILL); e != nil {
 				t.Fatal(e)
 			}
+			// kill may return before delivery; returning here would let the
+			// next step (the rename after root-synced) run first.
+			select {}
 		}
 		return nil
 	}

@@ -44,7 +44,11 @@ func TestStandalonePhysicalPreparationSIGKILLHelper(t *testing.T) {
 	if phase := os.Getenv("HALRO_PHYSICAL_FIRST_SEAL_PHASE"); phase != "" {
 		options.physicalPreparationPhase = func(reached string) error {
 			if reached == phase {
-				return syscall.Kill(os.Getpid(), syscall.SIGKILL)
+				if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+					return err
+				}
+				// kill may return before delivery; park so no later step runs.
+				select {}
 			}
 			return nil
 		}

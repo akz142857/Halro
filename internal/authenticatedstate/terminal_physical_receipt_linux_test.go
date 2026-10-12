@@ -94,6 +94,8 @@ func TestPhysicalReceiptSIGKILLHelper(t *testing.T) {
 			if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
 				t.Fatal(err)
 			}
+			// kill may return before delivery; park so no later step runs.
+			select {}
 		}
 		return nil
 	}

@@ -91,6 +91,8 @@ func TestPhysicalSealCycleSIGKILLHelper(t *testing.T) {
 		if actual == phase {
 			fmt.Println("ACTUAL_PHYSICAL_SEAL_PHASE", phase)
 			_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			// kill may return before delivery; park so no later step runs.
+			select {}
 		}
 		return nil
 	}

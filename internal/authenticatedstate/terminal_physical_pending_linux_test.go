@@ -52,6 +52,8 @@ func TestPhysicalPendingRenameSIGKILLHelper(t *testing.T) {
 	s.hook = func(at string) error {
 		if at == phase {
 			syscall.Kill(os.Getpid(), syscall.SIGKILL)
+			// kill may return before delivery; park so no later step runs.
+			select {}
 		}
 		return nil
 	}
