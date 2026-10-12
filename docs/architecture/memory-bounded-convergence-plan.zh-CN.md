@@ -1609,3 +1609,26 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - `resourcebudget` 全包通过。
 
 **未覆盖。** channel 收发、`select`、互斥锁、IO 本身（见 §41 的范围）。
+
+## 42. E2 登记：6 个命令的正常退出与 SIGKILL（I-03 收尾）
+
+2026-10-13 00:03 登记，基于 `b9cf3651`。运行前提交；门槛事后不放宽。
+
+**判据在代码里的含义（登记前已核对）。**
+- 命令的预算 Manager 只存在于进程内。重启后的“接手清单”就是 `diskinventory.Reconcile` 对整个数据目录的重新扫描（`preparePersistentInventory`），它不信任任何保存下来的计数。
+- 持久费用只有磁盘费用。RAM 与未确认字节都不跨进程，所以“正常退出后只剩持久 claim”可以检查为：命令返回后，共享 Manager 的 `Used.RAM` 只剩这些 claim 自身的控制开销（claim 数 × `ClaimRAMBytes`），`Used.Unconfirmed` 为 0。
+- `diskinventory` 文档写明：启动基线与各消费者另行预留的增长上限，可能保守地重复计算。这是设计如此，本项不测，也不算违例。
+
+**做法。**
+- `backup create`、`backup restore`、`usage compact`、`usage prune`、`ledger seal` 共用一个带预算、开启持久清单的离线 Standalone 夹具（`budgetedBackupOperationFixture` 一类）。元数据迁移（`halro metadata migrate`）沿用 `cmd/halro` 已有的真实 SIGKILL 夹具。
+- SIGKILL 落点：子进程从命令的内部入口运行，用已有的观察回调（`createBackupWithWriter` 的 writer、`restoreBackupWithExtract` 的 extract、`compactUsageDisk` 的 afterStep、`sealLedger` 的 observe），在命令中途写标记文件后挂起，父进程随即 SIGKILL。没有回调的命令，在确认可用的落点之后再写进结果，不新增生产代码钩子。
+- 每个命令都跑一次正常退出（子进程跑完），一次 SIGKILL 后在同一数据目录重跑该命令直到完成。每种只跑一次，不做多次统计。
+
+**门槛（每个命令）。**
+1. 正常退出：命令返回后，`Used.RAM` = claim 数 × `ClaimRAMBytes`，`Used.Unconfirmed` = 0。
+2. 两条路径结束后，都对数据目录做一次持久清单 `Reconcile`。基线的 `ChargeBytes` 必须等于测试按同一规则（每个文件取逻辑大小与已分配字节的较大者，加目录已分配块）独立算出的值。
+3. 不泄漏：SIGKILL 后重跑完成，数据目录与输出目录的文件集合，在把随机部分（数字串、长十六进制串）规范化之后，与正常退出路径的集合相同，不能多出文件。
+4. 不重复计费：两条路径结束后 `VerifyUsage` 都没有缺行、多行或重复行，且行数相同。
+5. 反向验证：把 F1 的回收去掉，至少一个会留下临时文件的命令必须在门槛 3 上失败。
+
+发现违例时，记为发现并报给用户，不在本项里顺手修。
