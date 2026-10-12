@@ -1320,3 +1320,24 @@ B 支：
 - 两个测试都必须通过。
 - 反向验证仍按 §40.5，分别去掉修复 1 和修复 2。
 - §40.5 中的点 2 Linux 重跑计划不变。
+
+### 40.7 修复结果与点 2 v4 登记（2026-10-12 18:38）
+
+**修复（`450ed1e2`）：**
+- **修复 1**：恢复失败时调用 `RequireRecovery`。
+- **修复 2**：`View` 中被拒绝的读取只返回拒绝本身。
+
+**修复后两个确定性测试都通过。**
+
+**反向验证（都失败，替换确认生效）：**
+- 去掉 `RequireRecovery`：restore-failed 例报“failed Usage restore left accounting unlatched 0”。
+- 让 `usageReadRefused` 恒为 false：View 例报“refused read reported as corruption”。
+
+**点 2 v4 登记。** 测试的分支判定改为按状态（v3 的测试是按请求失败判定的），并补上 v3 门槛没有覆盖的情形：锁定由 checkpoint 本身造成，例如修复 1 生效的那条路径。
+- **B 支第一条门槛改为**：最先造成锁定的操作，错误链里必须有 `syscall.ENOSPC`，这个操作可以是 checkpoint，也可以是请求。在锁定之前失败的请求，必须在失败时就造成锁定。
+- **其余门槛不变**，包括：
+  - 锁定后没有请求完整结算。
+  - 填满期间没有新增文件。
+  - 每支各 2 次、上限 10 次。
+  - 重启后的 Usage 范围。
+- **反向验证仍按 §40.2**：让 `Status.MarkUnavailable` 与 `RequireRecovery` 不做任何事，B 支必须失败。

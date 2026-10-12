@@ -24,7 +24,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// E1 point 2 (board §40.2, §40.3): a non-physical selected Standalone checkpoints at
+// E1 point 2 (board §40.2, §40.3, §40.7): a non-physical selected Standalone checkpoints at
 // real ENOSPC with dead pages accumulated, so the compact candidate would be
 // written beside the selected packs. Without the physical reserve the outcome
 // is fail-closed: either the sampler sheds first and nothing latches (branch
@@ -159,37 +159,44 @@ func TestSelectedCheckpointAtActualENOSPCKeepsAcceptedFacts(t *testing.T) {
 	if n, err := fillForeignUntilENOSPC(fillerPath, int(statfs.Bsize)); err != nil {
 		t.Fatal("fill", n, err)
 	}
+	isLatched := func() bool {
+		s := r.status.Load()
+		return s == ledger.AccountingUnavailable || s == ledger.AccountingRecoveryRequired
+	}
+	// The branch is the accounting status (§40.2, §40.7): whichever operation
+	// first latches, checkpoint or request, must have met ENOSPC.
 	checkpointErr := r.CheckpointMemoryState(ctx)
 	t.Log("checkpoint at ENOSPC", checkpointErr, "status", r.status.Load())
+	latched := isLatched()
+	if latched && !errors.Is(checkpointErr, syscall.ENOSPC) {
+		t.Fatal("checkpoint latched accounting without ENOSPC", checkpointErr)
+	}
 	shed, completed, enospc := 0, 0, 0
-	var firstErr error
 	for i := 0; i < 3; i++ {
+		wasLatched := latched
 		stage, err := request(fmt.Sprintf("e1_full_%d", i))
+		latched = isLatched()
 		t.Log("request at ENOSPC", i, stage, err, "status", r.status.Load())
 		switch {
 		case stage == "" && err == nil:
-			if firstErr != nil {
-				t.Fatal("request settled after the accounting latch", i)
+			if latched {
+				t.Fatal("request settled under the accounting latch", i)
 			}
 			completed++
 		case stage == "shed" && (err == nil || errors.Is(err, resourcebudget.ErrPressure)):
 			shed++
 		default:
-			if firstErr == nil {
-				firstErr = err
-				if !errors.Is(err, syscall.ENOSPC) {
-					t.Fatal("first non-pressure failure at ENOSPC is not ENOSPC", stage, err)
-				}
-				if s := r.status.Load(); s != ledger.AccountingUnavailable && s != ledger.AccountingRecoveryRequired {
-					t.Fatal("ENOSPC failure did not latch accounting", stage, s, err)
-				}
+			if !latched {
+				t.Fatal("request failure at ENOSPC did not latch accounting", stage, r.status.Load(), err)
+			}
+			if !wasLatched && !errors.Is(err, syscall.ENOSPC) {
+				t.Fatal("latching request failure is not ENOSPC", stage, err)
 			}
 			if errors.Is(err, syscall.ENOSPC) {
 				enospc++
 			}
 		}
 	}
-	latched := firstErr != nil
 	if latched {
 		if err := r.CheckpointMemoryState(ctx); err == nil {
 			t.Fatal("checkpoint succeeded after the accounting latch")
