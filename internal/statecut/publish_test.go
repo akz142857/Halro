@@ -59,9 +59,9 @@ func newCommonFixtureWithGovernanceOptions(t *testing.T, governanceOptions gover
 	for i := range limits.Classes {
 		limits.Classes[i] = limits.Total
 	}
-	limits.Classes[resourcebudget.Recovery] = resourcebudget.Cost{RAM: 8 << 20}
-	limits.RecoveryReserve = resourcebudget.Cost{RAM: 8 << 20}
-	limits.RecoveryClaims = 4
+	limits.Classes[resourcebudget.Recovery] = resourcebudget.Cost{RAM: 256 << 20}
+	limits.RecoveryReserve = resourcebudget.Cost{RAM: 256 << 20}
+	limits.RecoveryClaims = 16
 	limits.Classes[resourcebudget.Control] = resourcebudget.Cost{RAM: 128 * resourcebudget.ClaimRAMBytes}
 	manager, err := resourcebudget.New(limits)
 	if err != nil {

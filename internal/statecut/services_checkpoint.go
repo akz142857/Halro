@@ -132,13 +132,18 @@ func (r *ReopenedStandalone) publishSelectedCheckpointLocked(ctx context.Context
 	r.Owners.Lease = lease
 	r.checkpointLease = lease
 	bound := false
+	var restore resourcebudget.Permit
 	if live {
 		defer func() {
 			// Preserve source identity even if the caller canceled after durable Publish.
 			// Healthy candidate rejection can resume; a latched native/root fault cannot.
 			var restoreErr error
 			if bound {
-				restoreErr = r.Owners.Usage.ActivateTypedLive(context.WithoutCancel(ctx), r.Owners.NativeLedger, r.Owners.Budget)
+				// Restoring existing state is not new work: its reads draw on the
+				// Recovery permit taken before binding, so pressure cannot refuse it.
+				restoreErr = restore.WithRecoveryScope(context.WithoutCancel(ctx), func(ctx context.Context) error {
+					return r.Owners.Usage.ActivateTypedLive(ctx, r.Owners.NativeLedger, r.Owners.Budget)
+				})
 				if r.checkpointPhase != nil {
 					restoreErr = errors.Join(restoreErr, r.checkpointPhase("usage-restore"))
 				}
@@ -147,12 +152,21 @@ func (r *ReopenedStandalone) publishSelectedCheckpointLocked(ctx context.Context
 					r.Owners.NativeLedger.Status().RequireRecovery()
 				}
 			}
+			if _, err := restore.Cost(); err == nil {
+				restoreErr = errors.Join(restoreErr, restore.Release())
+			}
 			resultErr = errors.Join(resultErr, restoreErr, lease.Close())
 			r.Owners.Lease, r.checkpointLease = previousLease, nil
 		}()
 	}
 	if err := alignStandaloneMaintenanceRoll(ctx, r.Owners, lease); err != nil {
 		return result, fmt.Errorf("align selected Ledger maintenance Roll: %w", err)
+	}
+	if live {
+		// Admit the restore before binding: a refusal here leaves Usage live.
+		if restore, err = r.Owners.Budget.TryAcquireRecovery(resourcebudget.Cost{RAM: resourcebudget.ClaimRAMBytes}); err != nil {
+			return result, fmt.Errorf("admit selected Usage restore: %w", err)
+		}
 	}
 	if err := r.Owners.Usage.BindTypedMaintenance(ctx, r.Owners.NativeLedger, lease, r.Owners.Ledger, r.Owners.Budget); err != nil {
 		return result, fmt.Errorf("bind selected Usage maintenance: %w", err)
