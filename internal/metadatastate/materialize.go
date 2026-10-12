@@ -144,17 +144,14 @@ func putMetadataImageRow(tx *bbolt.Tx, row authenticatedstate.Row) error {
 	return bucket.Put(key, row.Value)
 }
 
+// materializePhase is a test-only hook; it is nil in production.
+var materializePhase func(string)
+
 // MaterializeMetadata reconstructs an exclusive bbolt file from the exact
 // selected root, using finite row/byte batches. It never copies a live ordinary
 // DB. The owner lock freezes delta/trim and Close cancels and joins the complete
 // construction. This conservative profile charges the complete target mapping
 // plus fixed workspace; it refuses a ceiling that cannot fit the shared budget.
-// materializeCreate creates the image file; tests replace it to make Open fail.
-var materializeCreate = ownedfile.Create
-
-// materializePhase is a test-only hook; it is nil in production.
-var materializePhase func(string)
-
 func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selected AuthenticatedMetadataSealReference, maxBytes int64, reservation resourcebudget.Permit) (result *MetadataImage, resultErr error) {
 	if b == nil || !filepath.IsAbs(output) || maxBytes <= 0 || maxBytes > int64(^uint(0)>>1)-BaselineSourceRAMBytes {
 		return nil, ErrSource
@@ -219,23 +216,18 @@ func (b *Baseline) MaterializeMetadata(ctx context.Context, output string, selec
 			}
 		}
 	}()
-	var handed *os.File
+	handedToEngine := false
 	db, err = bbolt.Open(output, 0o600, &bbolt.Options{FreelistType: bbolt.FreelistMapType, MaxSize: int(maxBytes), OpenFile: func(path string, flags int, mode os.FileMode) (*os.File, error) {
-		file, owner, err := materializeCreate(path, flags, mode)
+		file, owner, err := ownedfile.Create(path, flags, mode)
 		if err == nil {
 			image.owner = owner
-			handed = file
+			handedToEngine = true
 		}
 		return file, err
 	}})
 	if err != nil {
-		// bbolt closes the file on a failed Open but drops the close error.
-		// Closing it again proves the handle is gone: ErrClosed means bbolt
-		// closed it, nil means this did. Anything else stays uncertain.
-		if handed != nil {
-			if closeErr := handed.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
-				err = errors.Join(ownedfile.ErrRetirement, err, closeErr)
-			}
+		if handedToEngine {
+			err = errors.Join(ownedfile.ErrRetirement, err)
 		}
 		return nil, err
 	}

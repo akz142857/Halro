@@ -16,11 +16,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// E1 point 4 component (board §40.14): the selected backup's Metadata image is
-// a bbolt file. Real ENOSPC while bbolt writes its first pages inside Open, or
-// while a later transaction writes rows, is an ordinary failure: no image, no
-// retained fee, no retirement debt, and the same call succeeds once space
-// returns. Pressure stays Healthy here; the command test covers the sampler.
+// E1 point 4 component (board §40.14, §40.15): the selected backup's Metadata
+// image is a bbolt file. Real ENOSPC while a transaction writes rows into the
+// opened image is an ordinary failure: no image, no retained fee, and the same
+// call succeeds once space returns. ENOSPC inside bbolt's Open is retirement
+// debt by design. Pressure stays Healthy; the command test covers the sampler.
 func TestMetadataImageAtActualENOSPCRemovesImageAndFees(t *testing.T) {
 	root := os.Getenv("HALRO_TERMINAL_ENOSPC_ROOT")
 	if root == "" {
@@ -96,6 +96,21 @@ func TestMetadataImageAtActualENOSPCRemovesImageAndFees(t *testing.T) {
 		}
 		t.Log("opened", opened, "headroom", headroom, "reached", reached, "enospc", errors.Is(err, syscall.ENOSPC), err)
 		met := false
+		if err != nil && !opened {
+			// bbolt drops its own close error when Open fails, so a closed FD
+			// cannot prove the mapping retired: the image stays as debt, by
+			// design (ownedfile.OpenExclusiveBolt), with its file and fee.
+			if image == nil || !errors.Is(err, ownedfile.ErrRetirement) || !errors.Is(err, syscall.ENOSPC) {
+				t.Fatal("failed Open was not kept as retirement debt", image != nil, err)
+			}
+			if _, statErr := os.Lstat(output); statErr != nil {
+				t.Fatal("retirement debt lost its file", statErr)
+			}
+			if err := image.Discard(); !errors.Is(err, ownedfile.ErrRetirement) {
+				t.Fatal("retirement debt licensed deletion", err)
+			}
+			return true
+		}
 		if err != nil {
 			if image != nil || errors.Is(err, ownedfile.ErrRetirement) {
 				t.Fatal("ENOSPC image left retirement debt", image != nil, err)
