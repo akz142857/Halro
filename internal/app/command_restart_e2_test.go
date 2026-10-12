@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"syscall"
 	"testing"
@@ -283,6 +284,10 @@ func e2Inventory(t *testing.T, cfg config.Config) int64 {
 	return got
 }
 
+// e2AcceptedResidue is the TMPDIR residue a killed command leaves, accepted
+// and documented by the user's decision (board §42.2); its reclaim is D-01/R-01.
+var e2AcceptedResidue = regexp.MustCompile(`^tmp/(halro-segment-directory-#\.idx|halro-usage-verify-#(/(ledger|usage)\.db)?)$`)
+
 var e2Random = regexp.MustCompile(`[0-9a-f]{16,}|[0-9]{4,}|[a-z0-9]{26}`)
 
 // e2Tree lists the data and output trees with random name parts normalized.
@@ -323,9 +328,6 @@ func e2Usage(t *testing.T, cfg config.Config) usage.ReconciliationReport {
 }
 
 func TestE2CommandsCleanExitAndSIGKILL(t *testing.T) {
-	if os.Getenv("HALRO_E2") != "1" {
-		t.Skip("E2 evidence harness (board §42.1): set HALRO_E2=1; its open findings fail it")
-	}
 	for _, command := range []string{"backup-create", "backup-restore", "usage-compact", "usage-prune", "ledger-seal"} {
 		t.Run(command, func(t *testing.T) {
 			clean := e2Fixture(t, command)
@@ -351,9 +353,19 @@ func TestE2CommandsCleanExitAndSIGKILL(t *testing.T) {
 			if killedUsage.ParquetRecords != cleanUsage.ParquetRecords || killedUsage.LedgerRecords != cleanUsage.LedgerRecords {
 				t.Fatal("Usage rows differ after SIGKILL", cleanUsage, killedUsage)
 			}
-			if extra, missing := e2Diff(killedTree, cleanTree), e2Diff(cleanTree, killedTree); len(extra) != 0 || len(missing) != 0 {
+			extra, missing := e2Diff(killedTree, cleanTree), e2Diff(cleanTree, killedTree)
+			var accepted []string
+			extra = slices.DeleteFunc(extra, func(name string) bool {
+				if e2AcceptedResidue.MatchString(name) {
+					accepted = append(accepted, name)
+					return true
+				}
+				return false
+			})
+			if len(extra) != 0 || len(missing) != 0 {
 				t.Fatal("files after SIGKILL differ from a clean exit; extra:", extra, "missing:", missing)
 			}
+			t.Log("accepted TMPDIR residue (board §42.2)", accepted)
 		})
 	}
 }

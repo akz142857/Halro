@@ -4,9 +4,9 @@ import (
 	"context"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"syscall"
 	"testing"
@@ -26,9 +26,6 @@ import (
 // restart; the startup inventory must match the disk and the trees must
 // match. The fixture has no Usage, so gate 4 does not apply.
 func TestE2MetadataMigrationCleanExitAndSIGKILL(t *testing.T) {
-	if os.Getenv("HALRO_E2") != "1" {
-		t.Skip("E2 evidence harness (board §42.1): set HALRO_E2=1; its open findings fail it")
-	}
 	run := func(t *testing.T, cfg config.Config, a metadataMigrationArguments) *resourcebudget.Manager {
 		m := migrationRestartManager(t)
 		ctx, err := backup.NewWorkspaceBudget(context.Background(), 16<<20, func(ctx context.Context, size int64) (func() error, error) {
@@ -162,14 +159,23 @@ func TestE2MetadataMigrationCleanExitAndSIGKILL(t *testing.T) {
 	}
 	s := commandManager.Snapshot()
 	claims := int64(s.NormalClaims + s.RecoveryClaims)
+	// The created Metadata store keeps its fixed 4 KiB cleanup/control RAM
+	// with its persistent receipt until Discard retires the namespace
+	// (authenticatedstate.(*Store).Close); the candidate stays for review.
 	for class, cost := range s.Classes {
 		want := int64(0)
-		if resourcebudget.Class(class) == resourcebudget.Control {
+		switch resourcebudget.Class(class) {
+		case resourcebudget.Background:
+			want = 4096
+		case resourcebudget.Control:
 			want = claims * resourcebudget.ClaimRAMBytes
 		}
 		if cost.RAM != want || cost.Unconfirmed != 0 {
-			t.Error("clean migration kept non-persistent charges", class, cost, s.Classes)
+			t.Fatal("clean migration kept non-persistent charges", class, cost, s.Classes)
 		}
+	}
+	if s.Classes[resourcebudget.Background].Disk < commandCfg.ResourceBudget.MetadataStoreDiskBytes {
+		t.Fatal("created Metadata store lost its disk ceiling", s.Classes)
 	}
 	t.Log("persistent charges after the clean migration command", s.Used, "claims", claims)
 
@@ -186,6 +192,21 @@ func TestE2MetadataMigrationCleanExitAndSIGKILL(t *testing.T) {
 	killedCharge, killedTree := inventory(t, killedCfg), tree(t, killedCfg)
 	t.Log("inventory charge clean", cleanCharge, "after SIGKILL", killedCharge)
 	extra, missing := e2MigrationDiff(killedTree, cleanTree), e2MigrationDiff(cleanTree, killedTree)
+	// An interrupted candidate is preserved, never used as authority and never
+	// deleted automatically: accepted and documented (board §42.2).
+	interrupted := regexp.MustCompile(`^data/memory-state\.interrupted-[0-9]+(/migration\.intent)?$`)
+	var accepted []string
+	extra = slices.DeleteFunc(extra, func(name string) bool {
+		if interrupted.MatchString(name) {
+			accepted = append(accepted, name)
+			return true
+		}
+		return false
+	})
+	t.Log("accepted preserved candidate (board §42.2)", accepted)
+	if len(accepted) == 0 {
+		t.Fatal("the kill left no interrupted candidate; the boundary was not reached")
+	}
 	if len(extra) != 0 || len(missing) != 0 {
 		t.Fatal("files after SIGKILL differ from a clean exit; extra:", extra, "missing:", missing)
 	}
