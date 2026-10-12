@@ -1667,3 +1667,18 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - 门槛 5：去掉 F1 的备份暂存回收后，`backup create` 在门槛 3 上多报出整个 `.halro-backup-stage-*`。恢复 F1 后，只剩 TMPDIR 那一项。
 
 **待用户裁定。** 以上发现按登记都不在本项里修。
+
+### 42.2 E2 发现的处理（用户裁定：按建议执行）
+
+2026-10-13 00:31 记录。
+
+1. **restore 暂存（已修，`33371250`）。** restore 先解包、后拿数据目录锁，所以 F1 的“拿到锁即属主已退出”在这里不成立：并发的另一个 restore 可能正在写它自己的暂存。改为逐个暂存证明存活：
+   - 属主对暂存里的 `owner.lock` 持有排他 flock，并写入所恢复的数据目录；暂存删除成功后才释放锁；如果暂存成了退役债务，就把锁一直持有到进程退出（文件句柄保持可达，避免被 GC 关闭）。
+   - 下一次 restore 在检查剩余空间之前，删除同一数据目录下能拿到锁的暂存。
+
+   确定性测试覆盖了已退出、存活、其他数据目录、无记录、退役债务 5 种情况。反向验证 3 处都按预期失败：去掉回收调用、去掉存活判断、去掉持锁记录。E2 复验 restore 通过。
+2. **迁移的 4 KiB 不是缺陷。** `authenticatedstate.(*Store).Close` 的注释写明：创建者把固定的清理和控制 RAM 与持久回执一起保留，直到 Discard 退役命名空间；迁移成功后候选按设计保留供审阅。迁移测试的门槛 1 因此改为精确等式：Background 类恰好是 4 KiB，且保留存储的磁盘上限。
+3. **TMPDIR 私有引用**（`halro-segment-directory-*.idx`、`halro-usage-verify-*`、`halro-usage-maintenance-*`）：写入 `docs/guides/backup-restore.md`（Interrupted commands and leftover files），回收转 D-01/R-01。
+4. **被打断的迁移候选**（`memory-state.interrupted-N`、`.unqualified-N`）：接受，写入同一节。已核实这些名字在 bootstrap 提交前会让默认启动拒绝（`memoryMigrationNamespacePresent`），所以文档写明：只有迁移完成、激活后的服务器能启动之后，才可以离线归档或删除；每类只有 4 个槽位。
+
+**测试进入常规测试集**（`cb11ce06`）。去掉 `HALRO_E2` 开关；只放行第 3、4 项明确列出的残留名字，其他任何多出的文件仍判失败。迁移测试还要求 SIGKILL 后确实留下了被打断的候选，以证明落点确实到达。6 个命令全部通过。

@@ -335,6 +335,31 @@ review its provenance and the Provider's current terms, then perform the
 recently re-authenticated restore confirmation or create a valid successor.
 The confirmation is appended to Audit.
 
+## Interrupted commands and leftover files
+
+An offline command that is killed (`SIGKILL`, OOM, host loss) cannot run its
+own cleanup. What it leaves behind, and who removes it:
+
+- `.halro-backup-stage-*` beside a backup output, and
+  `.halro-restore-stage-*` beside the data directory (a restore stage holds a
+  full extracted copy of the restored data): the next `backup create` to the
+  same output directory, or the next `backup restore` of the same data
+  directory, removes stages it can prove were left by an exited process.
+  A stage still owned by a running process, or recorded for another data
+  directory, is kept.
+- Private references in `TMPDIR` — `halro-segment-directory-*.idx`,
+  `halro-usage-verify-*` and `halro-usage-maintenance-*` — are not reclaimed
+  automatically. They hold derived data only. Delete them when no Halro
+  command or server is running, or point `TMPDIR` at a directory the host
+  clears on boot.
+- `memory-state.interrupted-N` and `memory-state.unqualified-N` inside the
+  data directory after an interrupted `halro metadata migrate --activate-runtime`
+  are preserved on purpose and are never used as authority. Leave them in
+  place until the migration has completed and the activated server starts;
+  after that they are inert and may be archived or deleted offline. Only
+  four slots of each exist, so a fifth interrupted attempt is refused until
+  retained generations are archived.
+
 ## Retention and restore drills
 
 - create and verify a backup before every upgrade, migration, Master Key
