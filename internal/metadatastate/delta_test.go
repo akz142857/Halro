@@ -426,7 +426,13 @@ func TestDeltaReplayAuthenticatesExcludedTailAndAppliesOnlyExplicitPrefix(t *tes
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, err := f.WriteAt([]byte{0xff}, head.Offset-1); err != nil {
+				// Flip the tail byte: writing a constant leaves it unchanged
+				// when it already holds that value (1 in 256 runs).
+				last := make([]byte, 1)
+				if _, err := f.ReadAt(last, head.Offset-1); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.WriteAt([]byte{last[0] ^ 0xff}, head.Offset-1); err != nil {
 					t.Fatal(err)
 				}
 				if err := f.Close(); err != nil {
