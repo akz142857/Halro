@@ -5,10 +5,8 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"io"
-	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -17,17 +15,19 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 	"golang.org/x/sys/unix"
 )
 
-// E1 point 4 (board §40, §40.9): a selected backup materializes the Metadata
+// E1 point 4 (board §40, §40.9, §40.13): a selected backup materializes the Metadata
 // root into a bbolt image in the staging directory beside its output. With the
 // filesystem full except for a swept headroom at the start of that step, each
 // backup either succeeds and verifies or fails whole: no staging or image is
-// left, the step returns every fee it took, and the selected Metadata root is
-// byte-for-byte unchanged. At least one headroom must meet ENOSPC inside the
-// materialization itself.
+// left, the step returns every fee it took, and the selected state reopens
+// healthy with its Metadata and audit intact. At least one headroom must meet
+// ENOSPC inside the materialization itself.
 func TestSelectedBackupMetadataImageAtActualENOSPC(t *testing.T) {
 	root := os.Getenv("HALRO_TERMINAL_ENOSPC_ROOT")
 	if root == "" || os.Getenv("HALRO_TERMINAL_ACTUAL_OS_PRESSURE") != "1" {
@@ -56,15 +56,39 @@ func TestSelectedBackupMetadataImageAtActualENOSPC(t *testing.T) {
 	cfg.ResourceBudget = &limits
 	pressure := physicalTerminalActualOSPressurePolicy()
 	cfg = activateClosedRuntimeMemoryStateFixtureWithPressure(t, ctx, cfg, instance, false, &pressure)
-	r, err := OpenWithOptions(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{AllowGeneratedSetupToken: true})
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	probe := domain.Project{ID: "prj_e1_backup_probe", Name: "E1 backup probe", Enabled: true}
+	r, err := OpenWithOptions(ctx, cfg, logger, OpenOptions{AllowGeneratedSetupToken: true})
 	if err != nil {
 		t.Fatal("selected Runtime", err)
 	}
 	if r.selectedState == nil {
 		t.Fatal("fixture is not a selected Runtime")
 	}
+	if probe, err = r.store.PutProject(ctx, probe, 0, nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.Close(); err != nil {
 		t.Fatal(err)
+	}
+	// A successful backup also writes the Metadata root (its audit
+	// checkpoint), so the selected state is judged by reopening it (§40.13).
+	reopenHealthy := func(headroom int64) {
+		r, err := OpenWithOptions(ctx, cfg, logger, OpenOptions{AllowGeneratedSetupToken: true})
+		if err != nil {
+			t.Fatal("selected Runtime after failed backup", headroom, err)
+		}
+		got, getErr := r.store.GetProject(ctx, probe.ID)
+		status := r.status.Load()
+		if err := r.Close(); err != nil {
+			t.Fatal("close after failed backup", headroom, err)
+		}
+		if getErr != nil || got.Name != probe.Name || got.Revision != probe.Revision || status != ledger.AccountingHealthy {
+			t.Fatal("selected state after failed backup", headroom, got, getErr, status)
+		}
+		if _, err := VerifyAudit(ctx, cfg); err != nil {
+			t.Fatal("audit after failed backup", headroom, err)
+		}
 	}
 	configPath := filepath.Join(directory, "config.yaml")
 	if err := os.WriteFile(configPath, []byte("version: 2\n"), 0o600); err != nil {
@@ -74,25 +98,6 @@ func TestSelectedBackupMetadataImageAtActualENOSPC(t *testing.T) {
 	outputDir := filepath.Join(directory, "out")
 	if err := os.Mkdir(outputDir, 0o700); err != nil {
 		t.Fatal(err)
-	}
-	metadataRoot := filepath.Join(memoryStateDirectory(cfg), "metadata-root")
-	digest := func() map[string][32]byte {
-		files := map[string][32]byte{}
-		if err := filepath.WalkDir(metadataRoot, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return err
-			}
-			b, err := os.ReadFile(path)
-			files[path] = sha256.Sum256(b)
-			return err
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return files
-	}
-	before := digest()
-	if len(before) == 0 {
-		t.Fatal("no selected Metadata root files", metadataRoot)
 	}
 	staged := func() []string {
 		names, err := filepath.Glob(filepath.Join(outputDir, ".halro-backup-*"))
@@ -134,14 +139,8 @@ func TestSelectedBackupMetadataImageAtActualENOSPC(t *testing.T) {
 		if left := staged(); len(left) != 0 {
 			t.Fatal("backup left staging or image", headroom, left)
 		}
-		if got := digest(); len(got) != len(before) {
-			t.Fatal("selected Metadata root changed", headroom)
-		} else {
-			for path, sum := range before {
-				if got[path] != sum {
-					t.Fatal("selected Metadata root changed", headroom, path)
-				}
-			}
+		if createErr != nil {
+			reopenHealthy(headroom)
 		}
 		if done && stepErr != nil && feesAfter != feesBefore {
 			t.Fatal("failed materialization kept fees", headroom, feesBefore, feesAfter)
