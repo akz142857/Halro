@@ -169,10 +169,16 @@ func (e *usageEngine) View(fn func(*usageTx) error) (resultErr error) {
 	}
 	tx := &usageTx{pin: pin, ctx: ctx}
 	marker, found, err := pin.Get(ctx, []byte{0})
+	if usageReadRefused(err) {
+		return err
+	}
 	if err != nil || !found || !bytes.Equal(marker, []byte{byte(TypedUsageSealCodec)}) {
 		return errors.Join(ErrDiskUsageCorrupt, err)
 	}
 	state, found, err := diskUsageGet[diskUsageState](tx, "meta", []byte("state"))
+	if usageReadRefused(tx.failure) {
+		return tx.failure
+	}
 	if err != nil || !found || state.Version != diskUsageVersion {
 		return errors.Join(ErrDiskUsageCorrupt, err, tx.failure)
 	}
@@ -180,7 +186,18 @@ func (e *usageEngine) View(fn func(*usageTx) error) (resultErr error) {
 	if err != nil || identity.Cut != typedUsageCut(usageStateAnchor(state)) {
 		return errors.Join(ErrDiskUsageCorrupt, err)
 	}
-	return errors.Join(fn(tx), tx.failure, ctx.Err())
+	callbackErr := fn(tx)
+	if usageReadRefused(tx.failure) {
+		return errors.Join(tx.failure, ctx.Err())
+	}
+	return errors.Join(callbackErr, tx.failure, ctx.Err())
+}
+
+// usageReadRefused reports a read that failed without reading the rows, such
+// as a pressure refusal. Whatever the caller concluded from the missing row
+// is not evidence of corruption, so the refusal is reported alone.
+func usageReadRefused(err error) bool {
+	return err != nil && !errors.Is(err, ErrDiskUsageCorrupt) && !errors.Is(err, authenticatedstate.ErrCorrupt)
 }
 func (e *usageEngine) Update(fn func(*usageTx) error) error {
 	ctx := e.ctx

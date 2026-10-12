@@ -27,12 +27,7 @@ func TestSelectedLiveCheckpointLatchesWhenUsageRestoreFails(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			retired := false
-			t.Cleanup(func() {
-				if !retired {
-					retireSelectedFixture(t, f, r)
-				}
-			})
+			t.Cleanup(func() { retireSelectedFixture(t, f, r) })
 			if _, err := r.StartSelectedServices(ctx, SelectedServicesOptions{Authority: o.Authority, Timezone: "UTC", QueueCapacity: 4}); err != nil {
 				t.Fatal(err)
 			}
@@ -66,9 +61,6 @@ func TestSelectedLiveCheckpointLatchesWhenUsageRestoreFails(t *testing.T) {
 			if status != ledger.AccountingRecoveryRequired {
 				t.Fatal("failed Usage restore left accounting unlatched", status, err)
 			}
-			// The latch is the reset path; a latched generation is not adopted.
-			retired = true
-			t.Log("close after latch", r.Close())
 		})
 	}
 }

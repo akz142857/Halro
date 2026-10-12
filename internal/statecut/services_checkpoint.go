@@ -142,6 +142,10 @@ func (r *ReopenedStandalone) publishSelectedCheckpointLocked(ctx context.Context
 				if r.checkpointPhase != nil {
 					restoreErr = errors.Join(restoreErr, r.checkpointPhase("usage-restore"))
 				}
+				if restoreErr != nil {
+					// Usage stays bound to this closing lease; only a restart rebinds it.
+					r.Owners.NativeLedger.Status().RequireRecovery()
+				}
 			}
 			resultErr = errors.Join(resultErr, restoreErr, lease.Close())
 			r.Owners.Lease, r.checkpointLease = previousLease, nil
