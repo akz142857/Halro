@@ -48,31 +48,84 @@ type AccountingExportReader interface {
 	WithGovernanceExport(context.Context, func(GovernanceExportView) error) error
 }
 
+// A governance export source opens one bounded read of the current projection
+// rows. Nothing survives a read, so a fixed cut never holds a reader between
+// pages; the view rebuilds the cut from the as-of lifecycle positions instead.
+type governanceExportSource interface {
+	exportRead(context.Context, func(governanceExportRead) error) error
+}
+
+type governanceExportRead struct {
+	rows     projectionRows
+	position projectionPosition
+	// walk visits an index in key order from start (inclusive) until visit stops.
+	walk func(index string, start []byte, visit func(key, value []byte) (bool, error)) error
+}
+
+type boltGovernanceExportSource struct {
+	p          *LedgerProjection
+	generation [16]byte
+	captured   bool
+}
+
+func (s *boltGovernanceExportSource) exportRead(ctx context.Context, fn func(governanceExportRead) error) error {
+	return s.p.governanceCapacityView(ctx, func(tx *bbolt.Tx) error {
+		// Maintenance replaces the projection generation and revokes the cut.
+		if !s.captured {
+			s.generation, s.captured = s.p.generation, true
+		} else if s.generation != s.p.generation {
+			return ErrProjectionUnavailable
+		}
+		pos, ok, err := projectionGet[projectionPosition](tx, "meta", []byte("position"))
+		if err != nil || !ok {
+			return errors.Join(ErrProjectionCorrupt, err)
+		}
+		return fn(governanceExportRead{rows: boltProjectionRows{tx}, position: pos, walk: func(index string, start []byte, visit func(key, value []byte) (bool, error)) error {
+			b := tx.Bucket([]byte(index))
+			if b == nil {
+				return ErrProjectionCorrupt
+			}
+			c := b.Cursor()
+			for k, value := c.Seek(start); k != nil; k, value = c.Next() {
+				stop, err := visit(k, value)
+				if err != nil || stop {
+					return err
+				}
+			}
+			return nil
+		}})
+	})
+}
+
 // Complete must succeed AFTER all facts have been read and BEFORE publication.
 // It joins finite reads, checks owner/generation, seals and clears references.
 // Callbacks run outside all DB transactions; the accounting Manager retains its
 // operation ticket through the entire callback, including file publication.
 func (p *LedgerProjection) WithGovernanceExport(ctx context.Context, visit func(GovernanceExportView) error) error {
+	return withGovernanceExport(ctx, &boltGovernanceExportSource{p: p}, visit)
+}
+
+func withGovernanceExport(ctx context.Context, src governanceExportSource, visit func(GovernanceExportView) error) error {
 	if visit == nil {
 		return ErrGovernanceExportIncomplete
 	}
-	v := &projectionExportView{p: p, operationCtx: ctx, active: true}
-	if err := p.governanceCapacityView(ctx, func(tx *bbolt.Tx) error {
-		pos, ok, err := projectionGet[projectionPosition](tx, "meta", []byte("position"))
-		if err != nil || !ok {
-			return errors.Join(ErrProjectionCorrupt, err)
-		}
-		v.head, v.hash, v.generation = pos.Watermark, pos.Hash, p.generation
+	v := &projectionExportView{src: src, operationCtx: ctx, active: true}
+	if err := src.exportRead(ctx, func(r governanceExportRead) error {
+		v.head, v.hash = r.position.Watermark, r.position.Hash
 		for _, list := range []*exportProgress{&v.units, &v.runs} {
 			name := "export_work_unit_count"
 			if list == &v.runs {
 				name = "export_run_count"
 			}
-			if raw := tx.Bucket([]byte("meta")).Get([]byte(name)); len(raw) == 0 || len(raw) > 20 {
+			raw, found, err := r.rows.get("meta", []byte(name))
+			if err != nil {
+				return err
+			}
+			if !found || len(raw) == 0 || len(raw) > 20 {
 				return ErrProjectionCorrupt
 			}
-			count, found, err := projectionGet[uint64](tx, "meta", []byte(name))
-			if err != nil || !found || count > v.head.Sequence {
+			count, err := decodeProjectionValue[uint64](raw)
+			if err != nil || count > v.head.Sequence {
 				return errors.Join(ErrProjectionCorrupt, err)
 			}
 			list.expected = count
@@ -101,11 +154,10 @@ type exportProgress struct {
 
 type projectionExportView struct {
 	mu                sync.Mutex
-	p                 *LedgerProjection
+	src               governanceExportSource
 	operationCtx      context.Context
 	head              Watermark
 	hash              [32]byte
-	generation        [16]byte
 	active, completed bool
 	failure           error
 	units, runs       exportProgress
@@ -119,12 +171,12 @@ func (v *projectionExportView) close() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.active = false
-	v.p = nil
+	v.src = nil
 	v.operationCtx = nil
 	v.pendingMaturity = nil
 }
-func (v *projectionExportView) read(ctx context.Context, fn func(*bbolt.Tx, projectionPosition) error) error {
-	if !v.active || v.p == nil {
+func (v *projectionExportView) read(ctx context.Context, fn func(governanceExportRead) error) error {
+	if !v.active || v.src == nil {
 		return ErrGovernanceExportClosed
 	}
 	if v.failure != nil {
@@ -132,20 +184,17 @@ func (v *projectionExportView) read(ctx context.Context, fn func(*bbolt.Tx, proj
 	}
 	err := v.operationCtx.Err()
 	if err == nil {
-		err = v.p.governanceCapacityView(ctx, func(tx *bbolt.Tx) error {
+		err = v.src.exportRead(ctx, func(r governanceExportRead) error {
 			if err := v.operationCtx.Err(); err != nil {
 				return err
 			}
-			pos, ok, err := projectionGet[projectionPosition](tx, "meta", []byte("position"))
-			if err != nil || !ok {
-				return errors.Join(ErrProjectionCorrupt, err)
-			}
+			pos := r.position
 			// Maintenance/generation changes revoke the cut; ordinary same-generation
 			// appends may proceed. Same-sequence source positions/hash cannot change.
-			if v.generation != v.p.generation || pos.Watermark.Generation != v.head.Generation || v.head.After(pos.Watermark) || pos.Watermark.Sequence == v.head.Sequence && (pos.Watermark != v.head || pos.Hash != v.hash) {
+			if pos.Watermark.Generation != v.head.Generation || v.head.After(pos.Watermark) || pos.Watermark.Sequence == v.head.Sequence && (pos.Watermark != v.head || pos.Hash != v.hash) {
 				return ErrProjectionUnavailable
 			}
-			if err := fn(tx, pos); err != nil {
+			if err := fn(r); err != nil {
 				return err
 			}
 			return v.operationCtx.Err()
@@ -164,14 +213,14 @@ func (v *projectionExportView) Complete(ctx context.Context) error {
 	if !v.active {
 		return ErrGovernanceExportClosed
 	}
-	err := v.read(ctx, func(*bbolt.Tx, projectionPosition) error {
+	err := v.read(ctx, func(governanceExportRead) error {
 		if !v.units.done || !v.runs.done || len(v.pendingMaturity) != 0 {
 			return ErrGovernanceExportIncomplete
 		}
 		return nil
 	})
 	v.active = false
-	v.p = nil
+	v.src = nil
 	v.operationCtx = nil
 	v.pendingMaturity = nil
 	v.completed = err == nil
@@ -250,18 +299,21 @@ func updateGovernanceExportPositions(tx projectionRows, s *State, r Record) erro
 	}
 	return projectionRowsPut(tx, bucket, []byte(id), pos)
 }
-func readExportPosition(tx *bbolt.Tx, bucket, id string, current uint64) (governanceExportPosition, error) {
-	raw := tx.Bucket([]byte(bucket)).Get([]byte(id))
-	if len(raw) == 0 || len(raw) > 256 {
+func readExportPosition(rows projectionRows, bucket, id string, current uint64) (governanceExportPosition, error) {
+	raw, found, err := rows.get(bucket, []byte(id))
+	if err != nil {
+		return governanceExportPosition{}, err
+	}
+	if !found || len(raw) == 0 || len(raw) > 256 {
 		return governanceExportPosition{}, ErrProjectionCorrupt
 	}
-	pos, ok, err := projectionGet[governanceExportPosition](tx, bucket, []byte(id))
-	if err != nil || !ok || pos.ID != id || pos.Created == 0 || pos.Created > current || pos.Closed != 0 && (pos.Closed <= pos.Created || pos.Closed > current) {
+	pos, err := decodeProjectionValue[governanceExportPosition](raw)
+	if err != nil || pos.ID != id || pos.Created == 0 || pos.Created > current || pos.Closed != 0 && (pos.Closed <= pos.Created || pos.Closed > current) {
 		return governanceExportPosition{}, errors.Join(ErrProjectionCorrupt, err)
 	}
 	return pos, nil
 }
-func exportPage[T any](ctx context.Context, v *projectionExportView, o GovernanceListOptions, index, bucket string, validID func(string) bool, decode func(*bbolt.Tx, string, governanceExportPosition, projectionPosition, *int) (T, error)) (GovernanceListPage[T], error) {
+func exportPage[T any](ctx context.Context, v *projectionExportView, o GovernanceListOptions, index, bucket string, validID func(string) bool, decode func(projectionRows, string, governanceExportPosition, projectionPosition, *int) (T, error)) (GovernanceListPage[T], error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if !v.active {
@@ -278,69 +330,66 @@ func exportPage[T any](ctx context.Context, v *projectionExportView, o Governanc
 		return GovernanceListPage[T]{}, ErrProjectionPageLimit
 	}
 	page := GovernanceListPage[T]{Items: make([]T, 0)}
-	err := v.read(ctx, func(tx *bbolt.Tx, current projectionPosition) error {
-		b := tx.Bucket([]byte(index))
-		positions := tx.Bucket([]byte(bucket))
-		if b == nil || positions == nil {
-			return ErrProjectionCorrupt
-		}
+	err := v.read(ctx, func(r governanceExportRead) error {
 		if progress.seen == progress.expected {
 			return nil
 		}
-		c := b.Cursor()
-		k, value := c.Seek([]byte(o.After))
-		if o.After != "" && bytes.Equal(k, []byte(o.After)) {
-			k, value = c.Next()
-		}
+		current := r.position
 		last, sourceBytes := "", 0
-		for ; k != nil; k, value = c.Next() {
+		return r.walk(index, []byte(o.After), func(k, value []byte) (bool, error) {
+			if o.After != "" && bytes.Equal(k, []byte(o.After)) {
+				return false, nil
+			}
 			if err := ctx.Err(); err != nil {
-				return err
+				return false, err
 			}
 			if page.Scanned == o.Limits.Rows {
 				page.NextID = last
-				return nil
+				return true, nil
 			}
 			if len(k) > domain.MaxGovernanceIDLength || !bytes.Equal(k, value) || !validID(string(k)) {
-				return ErrProjectionCorrupt
+				return false, ErrProjectionCorrupt
 			}
 			id := string(k)
-			raw := positions.Get(k)
-			if len(raw) == 0 || len(raw) > 256 {
-				return ErrProjectionCorrupt
+			raw, found, err := r.rows.get(bucket, k)
+			if err != nil {
+				return false, err
+			}
+			if !found || len(raw) == 0 || len(raw) > 256 {
+				return false, ErrProjectionCorrupt
 			}
 			if len(raw) > o.Limits.Bytes-sourceBytes {
 				if page.Scanned == 0 {
-					return ErrProjectionPageLimit
+					return false, ErrProjectionPageLimit
 				}
 				page.NextID = last
-				return nil
+				return true, nil
 			}
 			// Commit source/scan progress only after a whole row fits. An excluded
 			// future creation still counts against the physical page budget.
 			before := sourceBytes
 			sourceBytes += len(raw)
-			pos, err := readExportPosition(tx, bucket, id, current.Watermark.Sequence)
+			pos, err := readExportPosition(r.rows, bucket, id, current.Watermark.Sequence)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if pos.Created <= v.head.Sequence {
-				row, err := decode(tx, id, pos, current, &sourceBytes)
+				row, err := decode(r.rows, id, pos, current, &sourceBytes)
 				if errors.Is(err, ErrProjectionPageLimit) && page.Scanned > 0 {
 					sourceBytes = before
 					page.NextID = last
-					return nil
+					return true, nil
 				}
 				if err != nil {
-					return err
+					return false, err
 				}
 				page.Items = append(page.Items, row)
 			}
 			page.Scanned++
 			last = id
 			page.Bytes = sourceBytes
-		}
-		return nil
+			return false, nil
+		})
 	})
 	if err != nil {
 		return GovernanceListPage[T]{}, err
@@ -366,26 +415,26 @@ func exportSourceBytes(raw []byte, used *int, limit int) error {
 	*used += len(raw)
 	return nil
 }
-func exportWorkUnit(tx *bbolt.Tx, id string, pos governanceExportPosition, cut, current uint64, used *int, limit int) (domain.WorkUnit, cohortVersion, error) {
-	b := tx.Bucket([]byte("work_units"))
-	if b == nil {
-		return domain.WorkUnit{}, cohortVersion{}, ErrProjectionCorrupt
-	}
-	if err := exportSourceBytes(b.Get(projectionIDKey(id)), used, limit); err != nil {
+func exportWorkUnit(rows projectionRows, id string, pos governanceExportPosition, cut uint64, used *int, limit int) (domain.WorkUnit, cohortVersion, error) {
+	raw, _, err := rows.get("work_units", projectionIDKey(id))
+	if err != nil {
 		return domain.WorkUnit{}, cohortVersion{}, err
 	}
-	w, ok, err := projectionGet[domain.WorkUnit](tx, "work_units", projectionIDKey(id))
-	if err != nil || !ok || w.ID != id || w.Validate() != nil || (w.Status == domain.WorkUnitClosed) != (pos.Closed != 0) {
+	if err := exportSourceBytes(raw, used, limit); err != nil {
+		return domain.WorkUnit{}, cohortVersion{}, err
+	}
+	w, err := decodeProjectionValue[domain.WorkUnit](raw)
+	if err != nil || w.ID != id || w.Validate() != nil || (w.Status == domain.WorkUnitClosed) != (pos.Closed != 0) {
 		return domain.WorkUnit{}, cohortVersion{}, errors.Join(ErrProjectionCorrupt, err)
 	}
-	raw, seq, err := cohortVersionRaw(tx, id, cut)
+	raw, seq, err := cohortVersionRowsRaw(rows, id, cut)
 	if err != nil || seq < pos.Created {
 		return domain.WorkUnit{}, cohortVersion{}, errors.Join(ErrProjectionCorrupt, err)
 	}
 	if err := exportSourceBytes(raw, used, limit); err != nil {
 		return domain.WorkUnit{}, cohortVersion{}, err
 	}
-	version, err := readCohortVersion(tx, id, seq)
+	version, err := readCohortRowsVersion(rows, id, seq)
 	if err != nil {
 		return domain.WorkUnit{}, cohortVersion{}, err
 	}
@@ -399,8 +448,8 @@ func exportWorkUnit(tx *bbolt.Tx, id string, pos governanceExportPosition, cut, 
 	return w, version, nil
 }
 func (v *projectionExportView) ReadWorkUnitPage(ctx context.Context, o GovernanceListOptions) (GovernanceListPage[GovernanceExportWorkUnit], error) {
-	return exportPage(ctx, v, o, "work_units_list", "export_work_units", domain.ValidWorkUnitID, func(tx *bbolt.Tx, id string, pos governanceExportPosition, current projectionPosition, used *int) (GovernanceExportWorkUnit, error) {
-		w, _, err := exportWorkUnit(tx, id, pos, v.head.Sequence, current.Watermark.Sequence, used, o.Limits.Bytes)
+	return exportPage(ctx, v, o, "work_units_list", "export_work_units", domain.ValidWorkUnitID, func(rows projectionRows, id string, pos governanceExportPosition, _ projectionPosition, used *int) (GovernanceExportWorkUnit, error) {
+		w, _, err := exportWorkUnit(rows, id, pos, v.head.Sequence, used, o.Limits.Bytes)
 		if err != nil {
 			return GovernanceExportWorkUnit{}, err
 		}
@@ -408,16 +457,16 @@ func (v *projectionExportView) ReadWorkUnitPage(ctx context.Context, o Governanc
 	})
 }
 func (v *projectionExportView) ReadRunPage(ctx context.Context, o GovernanceListOptions) (GovernanceListPage[GovernanceExportRun], error) {
-	return exportPage(ctx, v, o, "runs_list", "export_runs", domain.ValidRunID, func(tx *bbolt.Tx, id string, pos governanceExportPosition, current projectionPosition, used *int) (GovernanceExportRun, error) {
-		b := tx.Bucket([]byte("runs"))
-		if b == nil {
-			return GovernanceExportRun{}, ErrProjectionCorrupt
-		}
-		if err := exportSourceBytes(b.Get(projectionIDKey(id)), used, o.Limits.Bytes); err != nil {
+	return exportPage(ctx, v, o, "runs_list", "export_runs", domain.ValidRunID, func(rows projectionRows, id string, pos governanceExportPosition, _ projectionPosition, used *int) (GovernanceExportRun, error) {
+		raw, _, err := rows.get("runs", projectionIDKey(id))
+		if err != nil {
 			return GovernanceExportRun{}, err
 		}
-		row, ok, err := projectionGet[domain.Run](tx, "runs", projectionIDKey(id))
-		if err != nil || !ok || row.ID != id || row.Validate() != nil || (row.Status == domain.RunClosed) != (pos.Closed != 0) {
+		if err := exportSourceBytes(raw, used, o.Limits.Bytes); err != nil {
+			return GovernanceExportRun{}, err
+		}
+		row, err := decodeProjectionValue[domain.Run](raw)
+		if err != nil || row.ID != id || row.Validate() != nil || (row.Status == domain.RunClosed) != (pos.Closed != 0) {
 			return GovernanceExportRun{}, errors.Join(ErrProjectionCorrupt, err)
 		}
 		if pos.Closed == 0 || pos.Closed > v.head.Sequence {
@@ -450,11 +499,8 @@ func (v *projectionExportView) ReadMaturityPage(ctx context.Context, refs []Work
 		}
 	}
 	result := WorkUnitMaturityPage{Items: make([]WorkUnitMaturity, 0, len(refs)), Watermark: v.head}
-	err := v.read(ctx, func(tx *bbolt.Tx, current projectionPosition) error {
-		positions := tx.Bucket([]byte("export_work_units"))
-		if positions == nil {
-			return ErrProjectionCorrupt
-		}
+	err := v.read(ctx, func(r governanceExportRead) error {
+		current := r.position
 		used := 0
 		cache := make(map[WorkUnitReference]WorkUnitMaturity, len(refs))
 		for _, ref := range refs {
@@ -466,8 +512,11 @@ func (v *projectionExportView) ReadMaturityPage(ctx context.Context, refs []Work
 				continue
 			}
 			row := WorkUnitMaturity{Reference: ref}
-			raw := positions.Get([]byte(ref.WorkUnitID))
-			if raw != nil {
+			raw, found, err := r.rows.get("export_work_units", []byte(ref.WorkUnitID))
+			if err != nil {
+				return err
+			}
+			if found {
 				if len(raw) > 256 {
 					return ErrProjectionCorrupt
 				}
@@ -475,12 +524,12 @@ func (v *projectionExportView) ReadMaturityPage(ctx context.Context, refs []Work
 					return ErrProjectionPageLimit
 				}
 				used += len(raw)
-				pos, err := readExportPosition(tx, "export_work_units", ref.WorkUnitID, current.Watermark.Sequence)
+				pos, err := readExportPosition(r.rows, "export_work_units", ref.WorkUnitID, current.Watermark.Sequence)
 				if err != nil {
 					return err
 				}
 				if pos.Created <= v.head.Sequence {
-					w, version, err := exportWorkUnit(tx, ref.WorkUnitID, pos, v.head.Sequence, current.Watermark.Sequence, &used, GovernanceListMaxBytes)
+					w, version, err := exportWorkUnit(r.rows, ref.WorkUnitID, pos, v.head.Sequence, &used, GovernanceListMaxBytes)
 					if err != nil {
 						return err
 					}
@@ -489,8 +538,11 @@ func (v *projectionExportView) ReadMaturityPage(ctx context.Context, refs []Work
 					}
 				}
 			} else {
-				units := tx.Bucket([]byte("work_units"))
-				if units == nil || units.Get(projectionIDKey(ref.WorkUnitID)) != nil {
+				_, exists, err := r.rows.get("work_units", projectionIDKey(ref.WorkUnitID))
+				if err != nil {
+					return err
+				}
+				if exists {
 					return ErrProjectionCorrupt
 				}
 			}

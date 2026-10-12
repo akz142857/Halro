@@ -158,7 +158,7 @@ func TestGovernanceExportFixedCutSurvivesLaterWritesWithoutOpenReader(t *testing
 		if err := view.Complete(ctx); err != nil {
 			return err
 		}
-		if saved.p != nil || saved.operationCtx != nil || saved.pendingMaturity != nil {
+		if saved.src != nil || saved.operationCtx != nil || saved.pendingMaturity != nil {
 			t.Fatal("sealed view retained owner")
 		}
 		return nil
@@ -241,7 +241,7 @@ func TestGovernanceExportCompletionRequiresFactsAndOperationContext(t *testing.T
 			if mode == "cancel-root" && !errors.Is(err, context.Canceled) {
 				t.Fatal(err)
 			}
-			if saved.p != nil || saved.operationCtx != nil || saved.pendingMaturity != nil {
+			if saved.src != nil || saved.operationCtx != nil || saved.pendingMaturity != nil {
 				t.Fatal("callback exit retained references")
 			}
 		})

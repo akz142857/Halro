@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/governance"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/resourcebudget"
 	"golang.org/x/sys/unix"
@@ -259,13 +260,13 @@ func exerciseHAPhysicalBackgroundWritersAtENOSPC(t *testing.T, members int) {
 	if err := primary.business.collector.CatchUp(ctx); err != nil {
 		t.Fatal("Primary collector after space returned", err)
 	}
-	// HA selected has no Governance export source either (board §36 v8): it
-	// must refuse cleanly, not half-publish.
-	if err := exportAt("gex_after_space"); !errors.Is(err, ledger.ErrGovernanceExportBackend) {
-		t.Fatal("HA Governance export after space returned did not refuse cleanly", err)
-	}
-	if _, err := os.Lstat(filepath.Join(exportRoot, "gex_after_space")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("refused Governance export left a target", err)
+	// Space is back: the Primary exports its authenticated projection's cut
+	// and the result verifies (board §38 restores the gate §37 registered as
+	// a refusal).
+	if manifest, err := exporter.writeGovernanceExport(ctx, filepath.Join(exportRoot, "gex_after_space")); err != nil {
+		t.Fatal("HA Governance export after space returned", err)
+	} else if verified, err := governance.VerifyExportContext(ctx, filepath.Join(exportRoot, "gex_after_space")); err != nil || verified.AccountingWatermark != manifest.AccountingWatermark {
+		t.Fatal("published HA Governance export does not verify", err)
 	}
 	deferrals, longest := checkpointHASustained(t, ctx, group.owners, 0)
 	waitHAPhysicalCreditWindow(t, ctx, primary, len(replicas))
