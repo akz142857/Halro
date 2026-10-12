@@ -523,6 +523,14 @@ func restoreBackupWithExtract(
 		return RestoreResult{}, errors.New("Recovery Slot confirmation requires explicit Recovery restore mode")
 	}
 	dataParent := filepath.Dir(cfg.Storage.DataDir)
+	absoluteData, err := filepath.Abs(cfg.Storage.DataDir)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	// Reclaimed before the headroom check, which those leftovers would fail.
+	if _, err := reclaimRestoreStages(dataParent, absoluteData); err != nil {
+		return RestoreResult{}, fmt.Errorf("reclaim interrupted restore staging: %w", err)
+	}
 	if err := checkOperationDiskHeadroom(ctx, cfg, dataParent); err != nil {
 		return RestoreResult{}, err
 	}
@@ -561,9 +569,11 @@ func restoreBackupWithExtract(
 		restoreReportDebt(ctx, err)
 		return RestoreResult{}, err
 	}
+	var stageOwner *os.File
 	defer func() {
 		cleanupErr := retireRestoreStage(ctx, stagingRoot, stagingIdentity, parentIdentity, resultErr)
 		restoreReportDebt(ctx, cleanupErr)
+		cleanupErr = errors.Join(cleanupErr, releaseRestoreStage(stageOwner, cleanupErr == nil))
 		resultErr = errors.Join(resultErr, cleanupErr)
 		if cleanupErr == nil {
 			resultErr = errors.Join(resultErr, restoreWorkspacePermit.Release())
@@ -573,6 +583,9 @@ func restoreBackupWithExtract(
 		}
 	}()
 	if err := os.Chmod(stagingRoot, 0o700); err != nil {
+		return RestoreResult{}, err
+	}
+	if stageOwner, err = holdRestoreStage(stagingRoot, absoluteData); err != nil {
 		return RestoreResult{}, err
 	}
 	extractRoot := filepath.Join(stagingRoot, "extract")
