@@ -1238,3 +1238,31 @@ B 支：
 - 重启后状态健康。Usage 请求总数在 [基线 + 完整结算数, 基线 + 完整结算数 + ENOSPC 失败数] 之内；Ledger 头不回退。
 
 共同门槛、次数（每支各 2 次，上限 10 次）、反向验证和 E1-2b 都与 §40.2 相同。
+
+### 40.4 点 2 v3 结果：未通过，查到一个失败封闭缺陷（2026-10-12 16:49）
+
+驱动按 §40.2 的规则运行，任何一次失败即停止。
+
+**第 1 次（`p2v3-run-1`）：A 支，通过。**
+- 填满后，checkpoint 失败（`bind selected Usage maintenance: ledger projection native source verification failed`，错误链里有 ENOSPC 或压力），状态健康。
+- 3 个请求都在 Begin 处被压力拒绝。
+- 释放空间后 checkpoint 成功，Close 返回 nil。
+- 重启后 Usage 106→106，Ledger 头不变。
+
+**第 2 次（`p2v3-run-2`）：A 支，未通过。**
+- 填满后，checkpoint 在 `advance selected Ledger directory`（写 `directory/root.next.pending`）处撞上 ENOSPC。
+- 同一个错误链里，`publishSelectedCheckpointLocked` 退出时的恢复步骤 `Usage.ActivateTypedLive` 也失败了，报 `disk Usage projection row or index is invalid` 与 `new resource admission stopped by pressure`。
+- 状态仍为 `AccountingHealthy`（0）。3 个请求都被压力拒绝。
+- 释放空间、压力回到 Healthy 后，checkpoint 失败：`disk Usage projection is retired`、`maintenance Ledger owner is unavailable`。
+
+**缺陷（`internal/statecut/services_checkpoint.go` 中 `publishSelectedCheckpointLocked` 的 live 恢复）：**
+- 在 `BindTypedMaintenance` 之后失败的 checkpoint，会在退出时调用 `ActivateTypedLive` 把 Usage 投影恢复为实时状态。这次恢复失败了，失败只被并入返回的错误，没有锁定 Ledger 状态。
+- 结果是 Usage 实时投影已经不可用，之后每次 checkpoint 都失败，只有重启才能恢复，而 Runtime 却一直报告健康。
+- 内存有界的设计依赖 checkpoint 推进，所以这是“状态健康却已不能推进”的失败开放形状，违反失败封闭。
+- 次要问题：恢复读 `meta/state` 时，被压力拒绝的读取会与 `ErrDiskUsageCorrupt` 一起返回，错误文本写成“row or index is invalid”，把一次压力拒绝报成了损坏。
+- 是什么把投影标记为退役，尚未定位到具体代码行。
+
+**还没有做的：**
+- 没有复现计数，只出现过 1 次。
+- 没有生产修复。修复属于生产代码改动，范围交用户裁定。
+- 点 2 门槛不变，结论“未通过”。
