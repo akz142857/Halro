@@ -1364,3 +1364,28 @@ B 支：
 **次数与反向验证：**
 - 连续通过两次。
 - 反向验证：把 `summaryCleanup` 换成只关闭 DB、不删除文件和目录。必须因暂存残留而失败，并确认替换确实生效。
+
+### 40.9 点 4 登记补充（在任何点 4 运行之前提交）
+
+**阶段钩子。** 选用一个不导出的 context 键 `selectedBackupMetadataPhaseKey`，生产 context 从不携带它。它有两个阶段：
+- `materialize`：在镜像费用申请之前。
+- `materialize-done`：在本步骤的所有费用归还之后，并带上本步骤的错误。
+
+**剩余空间扫描**，理由同 §40.8：完全填满时，ENOSPC 可能落在物化之前的步骤上。
+- h ∈ {0, 1, 2, 4, 8, 16, 32, 64, 128, 256} 个块。
+- 对每个 h：在 `materialize` 阶段填到真实 ENOSPC，再截短 h 个块，然后运行完整的 `CreateBackupWithOptions`。
+- 备份输出与暂存目录都在 ext4 上；暂存目录建在输出目录旁边。
+
+**每个 h 的门槛：**
+- 备份结束后，输出目录中没有 `.halro-backup-*` 暂存或镜像残留。
+- `memory-state/metadata-root` 下所有文件逐字节不变。
+- 如果物化步骤失败，`materialize-done` 时预算 `Used` 等于 `materialize` 时的值，即本步骤的费用全部归还。
+- 如果备份失败，没有发布任何归档；如果备份成功，`VerifyBackup` 通过。
+
+**整体门槛：**
+- 至少有一个 h 的物化步骤本身以 ENOSPC 失败，并且整个命令的错误链里也有 ENOSPC。做不到就记为未覆盖，算未通过。
+- 释放空间后，同一命令成功，`VerifyBackup` 通过。
+
+**次数与反向验证：**
+- 连续通过两次。
+- 反向验证：去掉 `MaterializeMetadata` 失败路径上的 `image.Discard()`。必须失败：费用未归还，或镜像残留。要确认替换确实生效。
