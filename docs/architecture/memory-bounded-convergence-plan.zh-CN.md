@@ -1587,3 +1587,25 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - 每项都有非空的上界来源。凡是没有计时上界的，写明原因；不把它们写成有上界。
 - 反向验证：在生产代码中加一个清单外的等待点，测试失败；删去清单中的一项，测试失败。
 - 发现没有任何上界、又不属于“等待已进入的工作结束”的等待点时，记为发现，报给用户，不在本项里顺手修。
+
+### 41.1 A1 结果
+
+**交付。** `internal/resourcebudget/wait_points_test.go`：清单 85 项（合计 89 处调用），契约测试 `TestWaitPointInventory` 用 `go/parser` 扫描 `internal/` 的生产代码，清单外的等待点或已经不存在的清单项都判失败。
+
+**清单概况。**
+- 排队等待 9 处：上界都是 `MaxWorkQueueWait`（30 秒）或调用方更早的期限。
+- 带参数的等待 48 处，分两类：
+  - 复制确认与恢复目标（`WaitConfirmed`、`WaitRecovery*`）：上界为调用方 ctx，复制不可用时立即返回。关停时用的是 `RunWithReady` 的 shutdownCtx。
+  - 启动审计（`WaitStartupAudit`、`Wait`、`WaitReady`）：上界为调用方 ctx，以及审计自身的期限（`startupaudit.MaxDeadline` 15 分钟，进度超时不超过 30 秒）。各 Close 先取消审计，再汇合。
+- 汇合等待 32 处，全部没有自己的计时上界，由被汇合的、已经进入的工作结束来决定，其中可能包括不响应取消的物理 IO（与 §9 一致，记为未退役）。只有 `budget.(*Manager).applyDurableRecord` 例外：ctx 取消时经 `context.AfterFunc` 唤醒，上界为调用方 ctx。
+
+**没有逐层核对的 3 项**（已在清单里注明 “not traced in A1”）：告警投递扇出、deadman 探测、管理端 catalog 拉取的汇合。它们的上界取决于各自出站调用的超时，本项没有逐层核实。三者都不在内存受限状态路径上。
+
+**发现。** 没有发现既无上界、又不是“汇合已进入工作”的等待点。
+
+**证据。**
+- 契约测试通过。
+- 反向验证两项都按预期失败：在生产代码里加一个清单外的 `Wait()`，报 unlisted；删去清单中 `usage/typed_rows.go` 一项，报 unlisted。
+- `resourcebudget` 全包通过。
+
+**未覆盖。** channel 收发、`select`、互斥锁、IO 本身（见 §41 的范围）。
