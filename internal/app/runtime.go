@@ -898,7 +898,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 			reserveArchiveDisk = usageArchiveDiskBudget.reserve
 			reserveArchiveRAM = usageArchiveDiskBudget.readerReservation(cfg)
 		}
-		usageExporter, err = usage.NewExporterWithContext(ctx, cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat, ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: reserveArchiveRAM, ReserveArchiveWorkRAM: usageArchiveDiskBudget.workReservation()})
+		usageExporter, err = usage.NewExporterWithContext(ctx, cfg.UsagePath(), usage.Options{ReclaimCrashTemporaries: true, Format: cfg.Usage.ExportFormat, ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: reserveArchiveRAM, ReserveArchiveWorkRAM: usageArchiveDiskBudget.workReservation()})
 		if err != nil {
 			metadata.Close()
 			secretVault.Close()

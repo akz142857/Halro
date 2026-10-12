@@ -86,7 +86,8 @@ func createBackupWithWriter(ctx context.Context, cfg config.Config, configPath, 
 	if pathWithin(absoluteOutput, cfg.Storage.DataDir) {
 		return backup.Manifest{}, errors.New("backup output must be outside the live data directory")
 	}
-	if err := checkOperationDiskHeadroom(ctx, cfg, filepath.Dir(absoluteOutput)); err != nil {
+	absoluteData, err := filepath.Abs(cfg.Storage.DataDir)
+	if err != nil {
 		return backup.Manifest{}, err
 	}
 	dataLock, err := lock.Acquire(cfg.Storage.DataDir)
@@ -102,6 +103,13 @@ func createBackupWithWriter(ctx context.Context, cfg config.Config, configPath, 
 			result = backup.Manifest{}
 		}
 	}()
+	// Reclaimed before the headroom check, which those leftovers would fail.
+	if _, err := reclaimBackupStaging(filepath.Dir(absoluteOutput), absoluteData); err != nil {
+		return backup.Manifest{}, fmt.Errorf("reclaim failed backup staging: %w", err)
+	}
+	if err := checkOperationDiskHeadroom(ctx, cfg, filepath.Dir(absoluteOutput)); err != nil {
+		return backup.Manifest{}, err
+	}
 	if options.Replica {
 		if err := refuseLegacySeedMemoryState(ctx, cfg); err != nil {
 			return backup.Manifest{}, err
@@ -1137,6 +1145,13 @@ func createBackupSnapshotWithLedgerWriter(
 		resultErr = errors.Join(resultErr, cleanupErr)
 	}()
 	if err := os.Chmod(staging, 0o700); err != nil {
+		return backup.Manifest{}, err
+	}
+	absoluteData, err := filepath.Abs(cfg.Storage.DataDir)
+	if err != nil {
+		return backup.Manifest{}, err
+	}
+	if err := writeBackupStagingOwner(staging, absoluteData); err != nil {
 		return backup.Manifest{}, err
 	}
 	metadataSnapshot := filepath.Join(staging, "metadata.db")

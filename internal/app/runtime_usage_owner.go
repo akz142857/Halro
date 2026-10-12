@@ -86,7 +86,7 @@ func (o *runtimeUsageOwner) bindNativeArchive(ctx context.Context, cfg config.Co
 		reserveArchiveDisk = archiveBudget.reserve
 	}
 	reserveArchiveRAM := archiveBudget.readerReservation(cfg)
-	options := usage.Options{Format: cfg.Usage.ExportFormat, ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: reserveArchiveRAM, ReserveArchiveWorkRAM: archiveBudget.workReservation(), DatePolicyKey: o.nativeKey[:], DatePolicyPrefix: func(ctx context.Context, head ledger.Watermark) (ledger.ProjectionPrefix, error) {
+	options := usage.Options{ReclaimCrashTemporaries: true, Format: cfg.Usage.ExportFormat, ArchiveDiskBytes: usageArchiveDiskCeiling(cfg), ReserveArchiveDisk: reserveArchiveDisk, ReserveArchiveRAM: reserveArchiveRAM, ReserveArchiveWorkRAM: archiveBudget.workReservation(), DatePolicyKey: o.nativeKey[:], DatePolicyPrefix: func(ctx context.Context, head ledger.Watermark) (ledger.ProjectionPrefix, error) {
 		if o.checkRole != nil {
 			if err := o.checkRole(); err != nil {
 				return ledger.ProjectionPrefix{}, err

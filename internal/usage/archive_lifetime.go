@@ -118,5 +118,10 @@ func (e *Exporter) Close() error {
 	e.dateReclaimReplay = nil
 	e.dateDataProof = nil
 	e.dateProof = nil
+	// A failed Close may leave owned temporaries; keep the root counted so
+	// no later Exporter of this process reclaims them.
+	if err == nil && e.rootRegistered.CompareAndSwap(true, false) {
+		unregisterArchiveRoot(e.root)
+	}
 	return err
 }

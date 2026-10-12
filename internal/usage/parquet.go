@@ -182,6 +182,8 @@ type Exporter struct {
 	archiveDiskReserve    func(context.Context, int64) (func() error, error)
 	archiveRAMReserve     func(context.Context) (func() error, error)
 	archiveWorkRAMReserve func(context.Context, int64) (func() error, error)
+	// rootRegistered is set while this Exporter counts in liveArchiveRoots.
+	rootRegistered atomic.Bool
 }
 
 // Options configures what NewExporterWithOptions writes new partitions as.
@@ -209,6 +211,11 @@ type Options struct {
 	// Both are required for date activation/reclamation, but not ordinary export.
 	DatePolicyKey    []byte
 	DatePolicyPrefix func(context.Context, ledger.Watermark) (ledger.ProjectionPrefix, error)
+	// ReclaimCrashTemporaries removes the archive temporaries a killed
+	// process left under root, before the archive inventory. Only a caller
+	// holding the data directory's exclusive lock may set it; it is skipped
+	// while another Exporter of this process is live on root.
+	ReclaimCrashTemporaries bool
 }
 
 type RetentionReport struct {
@@ -274,14 +281,26 @@ func NewExporterWithContext(ctx context.Context, root string, options Options) (
 		exporter.datePolicyPrefix, exporter.datePolicyReady = options.DatePolicyPrefix, true
 	}
 	constructed := false
+	first := registerArchiveRoot(exporter.root)
+	exporter.rootRegistered.Store(true)
 	defer func() {
 		if !constructed {
 			clear(exporter.datePolicyKey[:])
 			exporter.datePolicyPrefix = nil
+			exporter.rootRegistered.Store(false)
+			unregisterArchiveRoot(exporter.root)
 		}
 	}()
 	if _, err := rand.Read(exporter.cursorKey[:]); err != nil {
 		return nil, err
+	}
+	if options.ReclaimCrashTemporaries && first {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		_, err := reclaimArchiveCrashTemporaries(ctx, exporter.root)
+		cancel()
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("usage archive crash temporaries: %w", err)
+		}
 	}
 	if exporter.archiveDiskCeiling > 0 {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
