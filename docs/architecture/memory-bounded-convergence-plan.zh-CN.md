@@ -1449,3 +1449,34 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - **(c)** 在绑定 Usage 之前，就先取得恢复所需的全部准入。
 
 这是设计改动，交用户裁定。在裁定之前，点 2 保持“未通过”。
+
+### 40.13 用户裁定后的修复登记：恢复先取得准入（方案 c），点 4 的修复与门槛修订（2026-10-12 19:32）
+
+用户采纳方案 (c)，点 4 按建议处理。本节在任何验收运行之前提交；下面写到的诊断都不计入验收。
+
+**A. 恢复先取得准入（`internal/statecut/services_checkpoint.go`）**
+- live checkpoint 在 `BindTypedMaintenance` 之前，先用 `Budget.TryAcquireRecovery` 取得一个 Recovery 父许可，RAM 为 `resourcebudget.ClaimRAMBytes`。取不到就返回 `admit selected Usage restore`，此时 Usage 还没有被绑定，保持实时状态。
+- 退出时的 `ActivateTypedLive` 在 `restore.WithRecoveryScope` 中运行：它派生的 IO/Background RAM 准入都从专用 Recovery 储备扣除，不受压力影响。父许可在退出时释放。修复 1（恢复失败就锁定）保留。
+- **诊断实测（statecut 夹具）：** 恢复同时需要 7～8 个 Recovery claim、64～128 MiB 的 Recovery RAM。claim 为 4～6 时、RAM 为 64 MiB 时都失败，claim 为 8、RAM 为 128 MiB 时通过。
+- **为什么生产配置能容纳：**
+  - 配置校验要求 Recovery 储备不少于 `accounting_recovery_ram_bytes`（≥128 MiB）加上其他 Recovery 用途。
+  - 运行时的账务恢复（`authenticated_recovery_resources.go`）要求至少 8 个 Recovery claim，储备不少于“恢复量 + 派生读取 + claim”。
+  - checkpoint 只在状态健康时运行，不会与账务恢复同时进行，所以这次恢复落在同一份已核定的额度内。这是推理，由 Linux 实测验证。
+- **测试夹具改动：** `publish_test.go` 的 Recovery 改为 256 MiB 和 16 个 claim（原为 8 MiB、4 个，容纳不下恢复）。只增加容量，其他 statecut 测试需要全包回归。
+- **确定性测试新增 `restored-under-pressure` 例：** 在目录推进时置为 `Pressured`。门槛：恢复成功，状态保持健康；压力回到 Healthy 后，下一次 checkpoint 成功。restored 与 restore-failed 两例不变。
+- **反向验证：** 恢复不再放进 `WithRecoveryScope`，`restored-under-pressure` 必须失败。
+- **点 2 v6（Linux）：** 门槛与 v4 相同。A 支至少 2 次、B 支至少 2 次，上限 30 次，任何一次失败即停。B 支出现概率约为 1/10，所以上限定为 30。
+
+**B. 点 4 问题 1：bbolt 打开失败后，确定句柄已释放的就正常清理（`internal/metadatastate/materialize.go`）**
+- **现状：** `bbolt.Open` 在文件建好之后失败时，bbolt 会自行关闭文件，但忽略关闭的错误（`_ = db.close()`），所以 `MaterializeMetadata` 把失败标成 `ownedfile.ErrRetirement`。备份清理看到这个标记就跳过，暂存目录被保留。
+- **修复：** 保存交给 bbolt 的 `*os.File`。`Open` 失败后，由我们再调用一次 `Close`：如果返回 `os.ErrClosed`（bbolt 已关闭）或 nil（由我们关闭），句柄就确定已释放，不再标记 `ErrRetirement`，按普通失败删除镜像、归还费用。其他关闭错误仍标记 `ErrRetirement`。
+- **确定性测试：** 新增一个只供测试的创建函数替换点（包级变量，生产时就是 `ownedfile.Create`）。测试让它返回同一文件的只读句柄，bbolt 初始化写页会失败。门槛：错误不含 `ErrRetirement`，镜像不存在，费用归还。
+- **反向验证：** 去掉修复，测试必须失败。
+
+**C. 点 4 门槛修订（前提错误）**
+- **诊断（mac，selected 夹具）：** 一次**成功**的备份会改 `metadata-root/active.root` 与 `pages`，因为备份命令会写审计检查点。所以 §40 的“在线 Metadata 逐字节不变”前提不成立，这条门槛撤销。
+- **改为：** 每次失败的备份之后，selected Runtime 能重新打开且状态健康；填满前写入的探针项目内容不变；`VerifyAudit` 通过。这同时回答问题 2：在 ENOSPC 下写 Metadata 根后，重启能否恢复。
+- **点 4 其余门槛与 §40.9 相同**：没有暂存或镜像残留、物化费用归还、没有发布失败的归档、成功的备份能通过校验、至少一档在物化中撞上 ENOSPC、连续两次通过。反向验证仍是去掉 `image.Discard()`。
+- **问题 2 的判定，事先定下：**
+  - 如果重启能恢复、内容不变、审计校验通过，就判定为失败封闭，不修。
+  - 如果重启失败，就作为缺陷另行处理。
