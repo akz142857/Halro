@@ -1786,3 +1786,31 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 **其他检查。** `cmd/halro`、`internal/store/bolt` 全包通过；`internal/app` 中 Initialize/SelectedInit/Bootstrap 相关测试通过；init 测试的 race 通过；`go vet` 通过。
 
 **留给 R-2/R-4。** `halro start` 首次运行时的自动初始化仍走原引擎，因为默认配置没有资源预算。
+
+## 47. R-0 登记：macOS 的主机压力源（用户裁定 2026-10-13）
+
+2026-10-13 记录，在实现之前提交。
+
+**为什么。** R-2 删除原引擎后，Halro 只剩 selected 引擎，而它的压力采样在没有 cgroup 时按设计拒绝（`resourcebudget/sampler_darwin.go` 的 `verifyCgroupFS` 恒返回 `ErrInvalid`）。Halro 发布 darwin 二进制和 Homebrew macOS，删除后将完全不能在 macOS 上运行。用户裁定：给 macOS 加主机压力源，放在 R-2 之前。
+
+**核对过的前提。**
+- 本机真实采样只有 `CgroupUnavailable` 一个问题；磁盘和 inode 都有效（可用约 160 GB、inode 约 15.6 亿）。
+- macOS 把空闲内存几乎都用作缓存（本机 `vm.page_free_count` 约 4800 页 × 16 KiB ≈ 78 MB / 24 GiB），所以“空闲页”不能当可用内存。内核自己的内存压力指标是 `kern.memorystatus_level`（可用内存百分比，本机 40）。
+- 压力判定（`pressure.go`）把 `Groups[0].Current` 与 `CgroupEnter/Exit` 比较，并对每个有上限的组检查 `Max - Current` 与 `HeadroomEnter/Exit`。`CgroupID` 变化记为 `SourceChanged`。
+
+**设计。** 仅 darwin：
+- 用一个“主机组”填 `Groups[0]`：`Current` = 本进程的 Go 运行时内存（与 `RuntimeUsed` 同源，纯 Go 二进制的主体），`Max` = `Current` + 主机可用内存，`MaxLimited` = true；`GroupCount` = 1。主机可用内存 = `kern.memorystatus_level` / 100 × `hw.memsize`。含义：进程所在的“组”上限就是主机还能给它的内存，余量检查即主机余量检查。
+- `CgroupID` = SHA-256(固定前缀, `hw.memsize`, `kern.boottime`)，同一次开机内不变，重启后变化。
+- 读不到或数值无效（level 不在 0～100、memsize 为 0、溢出）时仍报 `CgroupUnavailable`，不替换成无限值。
+- Linux 和其他平台不变。
+
+**取舍（写进运维文档）。** macOS 上没有容器上限，只有主机级保护：进程自身内存对 `cgroup_enter_bytes` 判定，主机余量对 `headroom_*` 判定。
+
+**判据（事后不放宽）。**
+1. 换算函数的确定性测试：给定 level 与 memsize 得到正确的可用字节；level > 100、memsize = 0、溢出时报错。
+2. 采样器测试（用桩替换主机读取，任何平台都能跑）：主机组填入 `Groups[0]`、`GroupCount` = 1、`CgroupID` 固定；主机读取失败时 `Issues` 含 `CgroupUnavailable`。
+3. 真实 macOS：本机真实采样不再含 `CgroupUnavailable`；真实二进制 `halro init`（selected）成功，`halro serve` 先后两次 ready。
+4. 反向验证：去掉 darwin 的主机组接线，判据 3 的真实采样重新出现 `CgroupUnavailable`。
+5. Linux 不变：`resourcebudget` 的 Linux 采样测试在门禁的 Linux 容器中通过。
+
+**后续顺序（同时更新）。** R-0 → R-4（默认配置可推导出完整预算，让 `halro start` 在默认配置下初始化 selected）→ R-2（删除原引擎；先在一个测试文件上试点测试迁移，量出耗时再估全部）→ R-3、R-5。
