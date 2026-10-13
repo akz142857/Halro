@@ -276,9 +276,13 @@ func TestStoreDeleteRangeCorruptBoundaryCannotPublish(t *testing.T) {
 	}
 }
 
-func TestStoreDeleteRangeCallbackFailureKeepsPublishedRootAndRequiresReopen(t *testing.T) {
+// Board §57: a transaction's new nodes reach the pack only at commit, so a
+// callback that fails after DeleteRange has written nothing. The published root
+// stays current and the store stays healthy; nothing needs a reopen.
+func TestStoreDeleteRangeCallbackFailureKeepsPublishedRootWithoutWritingPages(t *testing.T) {
 	s, options := testStore(t, 64)
 	before := s.current
+	extent := s.physicalExtent
 	failure := errors.New("native frame reduction failed")
 	receipt, err := s.Update(context.Background(), nextCut(1), func(tx *Transaction) error {
 		if _, err := tx.DeleteRange([]byte("key_000003"), []byte("key_000053")); err != nil {
@@ -289,9 +293,22 @@ func TestStoreDeleteRangeCallbackFailureKeepsPublishedRootAndRequiresReopen(t *t
 	if !errors.Is(err, failure) || receipt != (UpdateReceipt{}) || s.current != before {
 		t.Fatal(receipt, err)
 	}
-	if _, err := s.Snapshot(context.Background()); !errors.Is(err, ErrRecovery) {
-		t.Fatal("unpublished append stayed queryable", err)
+	if s.physicalExtent != extent {
+		t.Fatal("failed batch wrote pages", extent, s.physicalExtent)
 	}
+	snapshot, err := s.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal("healthy store refused a read after a failed batch", err)
+	}
+	if err := snapshot.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update(context.Background(), nextCut(1), func(tx *Transaction) error {
+		return tx.Put([]byte("key_after_failure"), []byte("v"))
+	}); err != nil {
+		t.Fatal("healthy store refused the next batch", err)
+	}
+	options.ExpectedCut = nextCut(1)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -300,8 +317,8 @@ func TestStoreDeleteRangeCallbackFailureKeepsPublishedRootAndRequiresReopen(t *t
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	if len(storeRows(t, reopened)) != 64 {
-		t.Fatal("failed batch published prefix")
+	if len(storeRows(t, reopened)) != 65 {
+		t.Fatal("failed batch published a prefix or the next batch was lost")
 	}
 }
 

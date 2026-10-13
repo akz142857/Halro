@@ -193,7 +193,7 @@ func TestSnapshotCursorBindsRootAndRange(t *testing.T) {
 }
 func firstLeaf(t testing.TB, s *Snapshot, key []byte) node {
 	t.Helper()
-	q := query{context.Background(), s, 0, 128}
+	q := query{context.Background(), s, 0, 128, nil}
 	d := descriptor{count: s.current.count, height: s.current.height, ref: s.current.root}
 	for {
 		n, e := q.load(d)
@@ -456,7 +456,7 @@ func TestSnapshotSignedChildMetadataMustMatchActualPage(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			o := testOptions(t)
 			s, path := testBuild(t, o, 20)
-			q := query{context.Background(), s, 0, 32}
+			q := query{context.Background(), s, 0, 32, nil}
 			root, e := q.load(descriptor{count: s.current.count, height: s.current.height, ref: s.current.root})
 			if e != nil {
 				t.Fatal(e)

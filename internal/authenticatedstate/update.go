@@ -50,6 +50,7 @@ type Transaction struct {
 	start                                                      uint64
 	reads, readCalls, returnedBytes, writes, inputBytes, nodes int
 	limits                                                     updateLimits
+	pending                                                    txPending
 	closed                                                     bool
 	failure                                                    atomic.Pointer[storeFault]
 }
@@ -82,7 +83,7 @@ func (t *Transaction) view() *Snapshot {
 	return &Snapshot{file: t.store.pack, current: t.candidate, key: t.store.key}
 }
 func (t *Transaction) query() *query {
-	return &query{ctx: t.ctx, snapshot: t.view(), reads: t.reads, maxReads: t.limits.pages}
+	return &query{ctx: t.ctx, snapshot: t.view(), reads: t.reads, maxReads: t.limits.pages, pending: &t.pending}
 }
 func (t *Transaction) get(key []byte) ([]byte, bool, error) {
 	if !validKey(key) || t.readCalls >= t.limits.calls {
@@ -150,6 +151,10 @@ func (t *Transaction) Range(o RangeOptions) (Page, error) {
 		return Page{}, t.fail(ErrLimit)
 	}
 	t.readCalls++
+	// The page cursor binds the candidate header, which needs real references.
+	if e := t.flushPending(); e != nil {
+		return Page{}, t.fail(e)
+	}
 	view := t.view()
 	b, e := (cowRoot{cut: t.cut, revision: t.revision, content: t.candidate}).encode(t.store.key)
 	if e != nil {
@@ -184,26 +189,26 @@ func (t *Transaction) append(raw []byte) (ref, error) {
 	}
 	return r, nil
 }
+
+// writeNode records a new node in the transaction; it reaches the pack only if
+// still reachable when pending work is written out (board §57).
 func (t *Transaction) writeNode(n node) (descriptor, error) {
-	raw, e := encodeNode(n, t.candidate.extent)
-	if e != nil {
+	if e := t.ctx.Err(); e != nil {
 		return descriptor{}, e
 	}
-	r, e := t.append(raw)
-	if e != nil {
-		return descriptor{}, e
+	if len(n.children) > fanout || n.height == 0 || n.height > maxHeight {
+		return descriptor{}, ErrLimit
 	}
-	t.nodes++
+	owned := n
+	owned.children = append([]descriptor(nil), n.children...)
+	r := t.pending.add(pendingEntry{node: &owned}, 1, pendingNodeSize(owned))
 	lo, hi := n.bounds()
 	return descriptor{bytes.Clone(lo), bytes.Clone(hi), n.count, n.height, r}, nil
 }
 func (t *Transaction) leaf(key, value []byte) (descriptor, error) {
 	blob := make([]byte, len(value)+1)
 	copy(blob[1:], value)
-	v, e := t.append(blob)
-	if e != nil {
-		return descriptor{}, e
-	}
+	v := t.pending.add(pendingEntry{value: blob}, uint32(len(blob)), len(blob))
 	return t.writeNode(node{key: key, value: v, count: 1, height: 1})
 }
 func (t *Transaction) branch(children []descriptor) (descriptor, error) {
@@ -391,7 +396,7 @@ func (t *Transaction) mutate(key, value []byte, remove bool) error {
 	t.candidate.count = root.count
 	t.candidate.height = root.height
 	t.candidate.root = root.ref
-	return nil
+	return t.boundPending()
 }
 func (t *Transaction) Put(key, value []byte) error {
 	if e := t.enter(); e != nil {
@@ -525,6 +530,9 @@ func (s *Store) update(ctx context.Context, cut [32]byte, limits updateLimits, a
 		return result, callbackErr
 	}
 	if e = ctx.Err(); e != nil {
+		return result, e
+	}
+	if e = tx.flushPending(); e != nil {
 		return result, e
 	}
 	if e = s.phase("pages-written"); e != nil {

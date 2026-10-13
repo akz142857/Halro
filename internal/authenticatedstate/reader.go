@@ -21,6 +21,7 @@ type query struct {
 	ctx             context.Context
 	snapshot        *Snapshot
 	reads, maxReads int
+	pending         *txPending // a transaction's unwritten nodes, read from memory
 }
 
 func (q *query) read(r ref, max uint32) ([]byte, error) {
@@ -48,12 +49,25 @@ func (q *query) read(r ref, max uint32) ([]byte, error) {
 	return b, nil
 }
 func (q *query) load(d descriptor) (node, error) {
-	b, e := q.read(d.ref, maxNodeBytes)
-	if e != nil {
-		return node{}, e
+	var n node
+	if q.pending != nil && isPending(d.ref) {
+		if e := q.pendingRead(); e != nil {
+			return node{}, e
+		}
+		var ok bool
+		if n, ok = q.pending.node(d.ref); !ok {
+			return node{}, ErrCorrupt
+		}
+	} else {
+		b, e := q.read(d.ref, maxNodeBytes)
+		if e != nil {
+			return node{}, e
+		}
+		if n, e = decodeNode(b, q.snapshot.current.extent); e != nil {
+			return node{}, ErrCorrupt
+		}
 	}
-	n, e := decodeNode(b, q.snapshot.current.extent)
-	if e != nil || n.count != d.count || n.height != d.height {
+	if n.count != d.count || n.height != d.height {
 		return node{}, ErrCorrupt
 	}
 	lo, hi := n.bounds()
@@ -62,10 +76,34 @@ func (q *query) load(d descriptor) (node, error) {
 	}
 	return n, nil
 }
+
+// pendingRead counts an in-memory read like a pack read, keeping the same
+// per-transaction read limits.
+func (q *query) pendingRead() error {
+	if e := q.ctx.Err(); e != nil {
+		return e
+	}
+	if q.reads >= q.maxReads {
+		return ErrLimit
+	}
+	q.reads++
+	return nil
+}
 func (q *query) value(r ref) ([]byte, error) {
-	b, e := q.read(r, MaxValueBytes+1)
-	if e != nil {
-		return nil, e
+	var b []byte
+	if q.pending != nil && isPending(r) {
+		if e := q.pendingRead(); e != nil {
+			return nil, e
+		}
+		var ok bool
+		if b, ok = q.pending.value(r); !ok {
+			return nil, ErrCorrupt
+		}
+	} else {
+		var e error
+		if b, e = q.read(r, MaxValueBytes+1); e != nil {
+			return nil, e
+		}
 	}
 	if b[0] != 0 {
 		return nil, ErrCorrupt

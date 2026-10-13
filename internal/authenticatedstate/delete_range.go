@@ -131,5 +131,5 @@ func (t *Transaction) DeleteRange(lo, hi []byte) (removed uint64, resultErr erro
 		root = n.children[0]
 	}
 	t.candidate.count, t.candidate.height, t.candidate.root = root.count, root.height, root.ref
-	return removed, nil
+	return removed, t.boundPending()
 }
