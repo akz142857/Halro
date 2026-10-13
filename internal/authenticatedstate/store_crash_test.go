@@ -54,7 +54,7 @@ func TestStoreCOWCrashHelper(t *testing.T) {
 	t.Fatal("crash hook was not reached")
 }
 func TestStoreActualSIGKILLRetainsWholeEligibleRoot(t *testing.T) {
-	phases := []string{"pages-written", "pages-synced", "root-written", "root-synced", "root-renamed", "directory-synced"}
+	phases := []string{"pages-written", "pages-synced", "root-created", "root-written", "root-synced", "root-renamed", "directory-synced"}
 	for index, phase := range phases {
 		t.Run(phase, func(t *testing.T) {
 			s, o := testStore(t, 20)
@@ -85,7 +85,7 @@ func TestStoreActualSIGKILLRetainsWholeEligibleRoot(t *testing.T) {
 			if e = os.Remove(filepath.Join(s.dir, "phase-reached")); e != nil {
 				t.Fatal(e)
 			}
-			if index >= 4 {
+			if index >= 5 {
 				o.ExpectedCut = nextCut(1)
 			}
 			reopened, e := OpenStore(context.Background(), s.dir, o)
@@ -93,7 +93,7 @@ func TestStoreActualSIGKILLRetainsWholeEligibleRoot(t *testing.T) {
 				t.Fatal(e)
 			}
 			rows := storeRows(t, reopened)
-			if index < 4 {
+			if index < 5 {
 				if len(rows) != 20 || string(rows[1].Value) != "value_000001" {
 					t.Fatal("partial old root")
 				}
@@ -111,5 +111,58 @@ func TestStoreActualSIGKILLRetainsWholeEligibleRoot(t *testing.T) {
 				t.Fatal(e)
 			}
 		})
+	}
+}
+
+// Only the empty name an ordinary commit crashed before writing is reclaimed.
+// A physical receipt or a non-empty partial name still refuses the open.
+func TestStoreOpenReclaimsOnlyEmptyOrdinaryPendingRoot(t *testing.T) {
+	s, o := testStore(t, 20)
+	pending := s.slotPath(s.packSlot, "root.pending")
+	receipt := s.receiptPath(0)
+	if e := s.Close(); e != nil {
+		t.Fatal(e)
+	}
+	for _, refused := range []struct {
+		name            string
+		pending, marker []byte
+	}{{"short pending", []byte{1}, nil}, {"physical receipt present", []byte{}, []byte{}}} {
+		if e := os.WriteFile(pending, refused.pending, 0600); e != nil {
+			t.Fatal(e)
+		}
+		if refused.marker != nil {
+			if e := os.WriteFile(receipt, refused.marker, 0600); e != nil {
+				t.Fatal(e)
+			}
+		}
+		if reopened, e := OpenStore(context.Background(), s.dir, o); e == nil {
+			reopened.Close()
+			t.Fatal(refused.name, "reclaimed")
+		}
+		if _, e := os.Lstat(pending); e != nil {
+			t.Fatal(refused.name, "removed pending", e)
+		}
+		if e := os.Remove(pending); e != nil {
+			t.Fatal(e)
+		}
+		if refused.marker != nil {
+			if e := os.Remove(receipt); e != nil {
+				t.Fatal(e)
+			}
+		}
+	}
+	if e := os.WriteFile(pending, nil, 0600); e != nil {
+		t.Fatal(e)
+	}
+	reopened, e := OpenStore(context.Background(), s.dir, o)
+	if e != nil {
+		t.Fatal("empty ordinary pending refused", e)
+	}
+	defer reopened.Close()
+	if _, e := os.Lstat(pending); !errors.Is(e, os.ErrNotExist) {
+		t.Fatal("empty ordinary pending kept", e)
+	}
+	if rows := storeRows(t, reopened); len(rows) != 20 {
+		t.Fatal("reclaim changed the selected root", len(rows))
 	}
 }

@@ -408,19 +408,25 @@ func openStore(ctx context.Context, dir string, o StoreOptions, readParent *Stor
 		return nil, e
 	}
 	pending := s.slotPath(s.packSlot, "root.pending")
-	if _, e = os.Lstat(pending); e == nil && !o.PhysicalRecovery {
+	if pendingStat, e := os.Lstat(pending); e == nil && !o.PhysicalRecovery {
 		if o.ReadOnly {
 			return nil, ErrRecovery
 		}
-		b, pendingInfo, e := readFixed(pending, cowRootBytes)
-		if e != nil {
-			return nil, errors.Join(ErrRecovery, e)
-		}
-		var cut [32]byte
-		copy(cut[:], b[8:40])
-		candidate, e := decodeCOWRoot(b, o.Key, o.Scope, cut)
-		if e != nil || candidate.content.id != physical.content.id || candidate.revision != physical.revision+1 || candidate.content.extent < physical.content.extent || candidate.content.extent > uint64(s.info.Size()) {
-			return nil, ErrRecovery
+		pendingInfo := pendingStat
+		if empty, e := s.emptyOrdinaryPending(pendingStat); e != nil {
+			return nil, e
+		} else if !empty {
+			var b []byte
+			b, pendingInfo, e = readFixed(pending, cowRootBytes)
+			if e != nil {
+				return nil, errors.Join(ErrRecovery, e)
+			}
+			var cut [32]byte
+			copy(cut[:], b[8:40])
+			candidate, e := decodeCOWRoot(b, o.Key, o.Scope, cut)
+			if e != nil || candidate.content.id != physical.content.id || candidate.revision != physical.revision+1 || candidate.content.extent < physical.content.extent || candidate.content.extent > uint64(s.info.Size()) {
+				return nil, ErrRecovery
+			}
 		}
 		if e = removeCaptured(pending, pendingInfo); e != nil {
 			return nil, e
@@ -450,6 +456,23 @@ func openStore(ctx context.Context, dir string, o StoreOptions, readParent *Stor
 	}
 	failed = false
 	return s, nil
+}
+
+// An ordinary commit creates root.pending empty and writes the whole root in
+// one later write, so a crash between the two leaves a zero-length name that
+// carries no root. Only that exact shape is reclaimed, and only when no
+// physical receipt exists: a physical slot renamed to root.pending is also
+// empty, and its receipt, not this open, decides what happens to it.
+func (s *Store) emptyOrdinaryPending(info os.FileInfo) (bool, error) {
+	if !info.Mode().IsRegular() || info.Size() != 0 || info.Mode().Perm()&0077 != 0 {
+		return false, nil
+	}
+	for bank := 0; bank < 2; bank++ {
+		if _, err := os.Lstat(s.receiptPath(bank)); !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return true, nil
 }
 func (s *Store) checkPack() error {
 	if s.pack == nil {
@@ -541,6 +564,9 @@ func (s *Store) publish(ctx context.Context, next cowRoot) (resultErr error) {
 		}
 	}()
 
+	if e = s.phase("root-created"); e != nil {
+		return e
+	}
 	n, e := f.Write(b)
 	if e != nil || n != len(b) {
 		return errors.Join(e, io.ErrShortWrite)
