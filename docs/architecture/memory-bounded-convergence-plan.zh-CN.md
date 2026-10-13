@@ -1827,3 +1827,19 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 另外：`internal/config` 全包、`internal/app` 中配置文档与压力相关测试、前端 vitest（690 个）通过。配置说明（`default.yaml`、`config.example.yaml`）已写明 macOS 上阈值的含义。
 
 **顺带观察。** selected 激活会在数据目录的父目录留下一个 `.halro-publication-<id>.lock`（macOS、Linux 两次真实运行都有）。是不是有意为之，还没有核对，记为待查。
+
+## 48. R-4 起草时测得的成本（2026-10-13，R-4 暂停）
+
+为 R-4 选默认值时，先核对 2 GiB 下能放多大的投影、每个请求占多少空间。用的是一次性探针（未提交），配置为 `selectedRuntimeBudgetFixture`（投影上限各 64 MiB）。请求只走账务路径（Begin→Reserve→Settle→Finalize），没有上游，单线程顺序执行。
+
+**1. 2 GiB 下投影上限约 150 MiB。** `UsageMaintenanceIOMinimum` 把投影映射按 RAM 计费，约为两个投影上限之和再加 64 MiB（64 MiB → 映射 192 MiB；256 MiB → 576 MiB；1 GiB → 2112 MiB），另加账务恢复 128 MiB 等常驻项。在 2 GiB 总额、1 GiB Recovery 储备下，Standalone 的 Usage 维护周期只能容纳每个投影约 150 MiB。现有 2 GiB 容量剖面 `selectedCapacityBudget`（投影 8 GiB）需要 IO RAM 约 16.3 GiB，过不了 `ValidateStandaloneUsageMaintenance`（与看板 §36 的记录一致）。
+
+**2. 投影写放大约 45 倍。** Linux ext4（Docker、2 GiB cgroup）上，每个请求原生 WAL 约 2.1 KB，Ledger 投影根增长约 93 KB；macOS 上约 90 KB。Usage 投影根先长到约 48 MB 后持平。按约 90 KB/请求计，64 MiB 的 Ledger 投影约 520 个请求就满（macOS 实测第 518 个请求报 `authenticated store pack needs reclamation before the next update`，这是 §26 设计的背压：拒绝新写入、等 checkpoint 回收），150 MiB 约 1600 个请求就要回收一次。
+
+**3. 单请求顺序耗时：Linux ext4 约 54 ms，macOS 约 140 ms。** 即单线程约 19 请求/秒（Linux）。并发下能否合批提高吞吐，未测。
+
+**4. 在线 checkpoint 期间业务返回 503。** `withMemoryCheckpointRequest` 在 checkpoint 暂停期间对新业务请求返回 `503 Retry-After: 1`（探针中约每 10 秒一次）。暂停时长未测。
+
+**5. 顺带澄清。** 直接调用 `r.accounting` 的测试会在 checkpoint 暂停时得到 `accounting manager is retired`：`enterOperation` 在 `paused != nil` 时也返回 `ErrAccountingRetired`。生产请求经过上面的请求门，不受影响；但这个错误名会误导排查，记为待改。
+
+**结论。** 这些数字直接决定 2 GiB、只用 selected 引擎的第一个发布能否成立：投影上限约 150 MiB、每约 1600 个请求回收一次、每次回收期间 503、单线程约 19 请求/秒。R-2 删除原引擎不可逆，建议在 R-2 之前先跑一次登记过的容量探针，回答并发吞吐、p99、checkpoint 暂停时长和频率，再决定是否继续这条路线。R-4 暂停，等用户裁定。
