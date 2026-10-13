@@ -1959,3 +1959,17 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - 热路径的锚点对是（Usage 上次处理的位置，Ledger 投影的引用位置），新的 `from` 等于上一次调用证明过的 `to`，可能早于缓存的头部。所以缓存同时记住上一次证明过的两个锚点，等于它们的锚点视为已证明；其他锚点仍必须不早于缓存位置，并由本次重放实际看到。
 
 **新发现：投影写满后整体不可用（未修，待裁定）。** 同一次复测中，并发 16 跑到第 1329 个请求时（约 22 请求/秒，p50 666 ms），Ledger 与 Usage 投影根都长到约 251 MB，即 256 MiB 上限。之后剩下的 18671 个请求全部以 `ledger projection is not available` 失败，约 50 秒内没有恢复。这不是 §26 设计的反压（`ErrCapacity`，整笔拒绝、等 checkpoint 回收后恢复），而是投影变为不可用。cgroup 峰值 1.09 GiB。另外，投影从 83 MB 长到 251 MB 只用了约 3300 个请求（每请求约 50 KB），期间 11 次 checkpoint 没有把空间收回来。原因未查。
+
+## 52. 投影写满导致停服且无法重启（2026-10-13 23:45，排查结果）
+
+本地确定性复现：`selectedInitFixture`（投影上限 64 MiB），并发 16，经业务请求门顺序提交账务请求（一次性探针，未提交）。三次运行结果一致：约第 510～810 个请求后，其余请求全部失败。
+
+**缺陷 A：checkpoint 在 Usage 投影满时无法回收空间。** Usage 投影先满。checkpoint 需要先让 Usage 追上原生日志，追赶本身又要往这个已满的 pack 写入，于是每次都报 `typed Usage catch-up native anchor verification: authenticated store pack needs reclamation before the next update`，日志中 `memory state common checkpoint deferred` 反复出现。回收空间的操作依赖空间，形成循环。
+
+**缺陷 B：已持久化的原生记录在投影上应用失败，投影随即不可用。** 随后 Ledger 投影也满了。某次 Settle/Finalize 的原生记录已经写入 WAL，同步应用到 Ledger 投影时报 `ErrCapacity`。这一步已不能拒绝，原生状态进入需要恢复，之后所有请求报 `ledger projection is not available` 或 `selected Ledger startup requires historical audit before writes or readiness`。§26 的准入只在请求进入时检查一次空间，并发 16 个请求同时通过后各自继续消耗，没有为已接纳请求的后续写入预留 pack 空间。
+
+**缺陷 C：无法重启，调大上限也不行。** 关闭时报 `catch up drained Usage: ledger projection is not available`。重新打开时，把 seal 之后的增量重放进 Ledger 根失败（`open selected Ledger root: native record 1385: authenticated store pack needs reclamation`）。把两个投影上限都翻倍后再打开，Ledger 根通过，但 Usage 根同样失败（`open selected Usage root: ...`）。运维无法通过配置恢复，实例需要人工处理。
+
+**与 §51.1 的关系。** Docker 复测中并发 16 的停服就是这一现象（256 MiB 上限、约 3300 个请求）。每个请求让投影增长约 50 KB，checkpoint 回收不了，所以任何上限都只是推迟发生的时间。
+
+**评估。** A、B、C 都是协议层面的问题，修复要动 checkpoint 与回收的顺序、准入预留和启动重放路径，每一项都要单独登记设计，工作量以天计。
