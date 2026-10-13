@@ -1880,3 +1880,14 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 **归因（代码 + 转储）。** 超时时 16 个工作 goroutine 里，14 个在 `resourcebudget.AcquireWorkLane` 等待，1 个在 Ledger 内执行。`budget/authenticated_owner.go` 的 `withOwnedAppendWorkspace` 让所有账务写入经过同一个容量为 1 的写入道（`appendGate.lane`），最多 16 个等待者，第 17 个直接得到 `ErrExhausted`，所以并发 64 还会产生错误。每个请求有 4 次写入（Begin、Reserve、Settle、Finalize），每次都在这条道里完成原生追加、认证 COW 应用和落盘，单次约 50 ms，没有跨请求合批。所以吞吐上限约为 1 / (4 × 单次写入时长)，并发只能排队，不能提速；并发 16 更慢，推测是 checkpoint 更频繁和 CPU 争用（2 核），未单独核实。
 
 **影响。** “只保留 selected 引擎、2 GiB”的第一个发布在当前写入路径下不能承受业务负载。R-2（删除原引擎）不能进行。需要用户裁定路线。
+
+## 50. 对照与拆解登记（用户裁定 2026-10-13，只测不改）
+
+**目的。** 在决定“做合批提交”还是“换路线”之前，补两项数据。本节只记录数字，不设通过线，不改产品代码。
+
+1. **原引擎对照。** 同一探针（`TestSelectedCapacityProbe`，`HALRO_SELECTED_CAPACITY_PROBE_ENGINE=legacy`）、同一容器环境（2 GiB、2 CPU、8 GiB ext4）、同一负载（并发 1/16/64，请求数 2000/2万/2万），跑原引擎一次。测试时限 100 分钟。
+2. **selected 单次写入拆解。** selected 引擎、并发 1、300 个请求（`HALRO_SELECTED_CAPACITY_PROBE_PLAN=1:300`）：
+   - 一次在 `strace -f -c` 下，统计每个请求的 fsync/fdatasync/写入次数和耗时；
+   - 一次带 `-test.cpuprofile`，看 CPU 时间在认证计算（HMAC/SHA）、COW 页编码和其他部分的分布。
+
+探针为此加了两个开关：引擎选择、请求计划。§49 的判定只针对默认计划下的 selected 引擎，开关打开时不做判定。

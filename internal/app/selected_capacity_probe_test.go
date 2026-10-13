@@ -99,24 +99,34 @@ func TestSelectedCapacityProbe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 	cfg, configPath, _ := selectedInitFixture(t)
-	limits, pressure := selectedCapacityProbeBudget(), selectedCapacityProbePressure()
-	cfg.ResourceBudget, cfg.ResourcePressure = &limits, &pressure
-	if err := limits.Validate(&pressure, cfg.Server.MaxRequestBytes); err != nil {
-		t.Fatal("probe budget", err)
-	}
-	if err := limits.ValidateStandaloneUsageMaintenance(); err != nil {
-		t.Fatal("probe budget", err)
-	}
-	if initialized, err := initializeSelected(ctx, cfg, configPath, nil, nil); err != nil || !initialized {
-		t.Fatal("initialize", initialized, err)
+	// Board §50: the same workload against the original engine is a comparison
+	// only; the §49 thresholds judge the selected engine alone.
+	legacy := os.Getenv("HALRO_SELECTED_CAPACITY_PROBE_ENGINE") == "legacy"
+	if legacy {
+		cfg.ResourceBudget, cfg.ResourcePressure = nil, nil
+		if err := Initialize(cfg); err != nil {
+			t.Fatal("initialize original engine", err)
+		}
+	} else {
+		limits, pressure := selectedCapacityProbeBudget(), selectedCapacityProbePressure()
+		cfg.ResourceBudget, cfg.ResourcePressure = &limits, &pressure
+		if err := limits.Validate(&pressure, cfg.Server.MaxRequestBytes); err != nil {
+			t.Fatal("probe budget", err)
+		}
+		if err := limits.ValidateStandaloneUsageMaintenance(); err != nil {
+			t.Fatal("probe budget", err)
+		}
+		if initialized, err := initializeSelected(ctx, cfg, configPath, nil, nil); err != nil || !initialized {
+			t.Fatal("initialize", initialized, err)
+		}
 	}
 	r, err := OpenWithOptions(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), OpenOptions{AllowGeneratedSetupToken: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer r.Close()
-	if r.selectedState == nil {
-		t.Fatal("probe did not open the selected engine")
+	if (r.selectedState == nil) != legacy {
+		t.Fatal("probe opened the wrong engine", legacy)
 	}
 	project := domain.Project{ID: "prj_capacity", Name: "capacity", Enabled: true}
 	if _, err := r.store.PutProject(ctx, project, 0, nil); err != nil {
@@ -158,7 +168,19 @@ func TestSelectedCapacityProbe(t *testing.T) {
 	}()
 	var sequence atomic.Int64
 	var levels []selectedCapacityLevel
-	for _, plan := range []struct{ concurrency, requests int }{{1, 2000}, {16, 20000}, {64, 20000}} {
+	plans := []struct{ concurrency, requests int }{{1, 2000}, {16, 20000}, {64, 20000}}
+	if spec := os.Getenv("HALRO_SELECTED_CAPACITY_PROBE_PLAN"); spec != "" {
+		// "concurrency:requests,..." for the §50 measurements; §49 used the default.
+		plans = plans[:0]
+		for _, item := range strings.Split(spec, ",") {
+			var c, n int
+			if _, err := fmt.Sscanf(item, "%d:%d", &c, &n); err != nil || c < 1 || n < 1 {
+				t.Fatal("probe plan", item, err)
+			}
+			plans = append(plans, struct{ concurrency, requests int }{c, n})
+		}
+	}
+	for _, plan := range plans {
 		pauseMu.Lock()
 		pauses = pauses[:0]
 		pauseMu.Unlock()
@@ -234,6 +256,9 @@ func TestSelectedCapacityProbe(t *testing.T) {
 	}
 	t.Logf("cgroup peak %d bytes", peak)
 
+	if legacy || os.Getenv("HALRO_SELECTED_CAPACITY_PROBE_PLAN") != "" {
+		return // §50 measurements are descriptive; only the §49 run is judged
+	}
 	// Registered thresholds (board §49); any miss is a failed route, never widened.
 	var misses []string
 	for _, level := range levels {
