@@ -1702,3 +1702,21 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 - Linux（ext4，非 root）跑 `authenticatedstate` 全包：140 通过，12 跳过，0 失败。
 
 **下一步。** 在 `3fc03fb7` 之上重跑完整门禁（门禁 18）。
+
+## 44. 门禁 18 失败：HA 启动失败路径的数据竞争（I-03 收尾）
+
+2026-10-13 13:53 记录。
+
+**现象。** 门禁 18（`fe318b63`，`exit=2`，10848 s）中 `make test` 全部通过，在 race 阶段 `internal/app` 有一个失败：`TestDefaultHASelectedRuntimeUsesActualSevenRootsAndTLSReady`，报 `race detected during execution of test`。
+
+**根因。** `finishHASelectedPrimaryStartupOwned` 在 defer 中不持 `f.mu` 就把失败并入 `f.applyErr`。同一时刻 `/ready` 走 `businessHealthError`，在 `f.mu` 下读 `applyErr`。另一个写入点（`ha_selected_transport.go` 的 apply 失败）本来就持锁。这段代码来自 `0ee6fd87`，是本分支之前就有的缺陷。
+
+**修复（`d61124ab`）。** 新增 `retainApplyErr`，在 `f.mu` 下写入；启动失败路径改用它。启动 worker 在独立 goroutine 中运行，不持 `f.mu`，不会死锁。
+
+**验证。**
+- 新增 `TestHASelectedRetainedApplyErrorIsVisibleToConcurrentReadiness`（`-race`）通过。反向验证：去掉 `retainApplyErr` 里的锁（确认文件里已没有 `f.mu.Lock`），race 检测器报 `DATA RACE`。
+- 门禁失败的测试单独加 `-race` 跑一次通过。
+
+**未处理的同类写入。** 业务回调结束时（`ha_memory_state_foundation.go` 约 734 行）在 `f.lifecycle` 下而不是 `f.mu` 下写 `closeErr`，`/ready` 在 `f.mu` 下读它。只在 credit 释放失败时发生，门禁没有触发过。留待用户决定是否一并处理。
+
+**下一步。** 在本修复之上重跑完整门禁（门禁 19）。
