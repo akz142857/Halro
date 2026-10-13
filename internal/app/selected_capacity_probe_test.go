@@ -54,6 +54,8 @@ type selectedCapacityLevel struct {
 	Seconds          float64 `json:"seconds"`
 	Throughput       float64 `json:"requests_per_second"`
 	P50Ms            float64 `json:"p50_ms"`
+	P50FirstTenthMs  float64 `json:"p50_first_tenth_ms"` // in completion order (board §51)
+	P50LastTenthMs   float64 `json:"p50_last_tenth_ms"`
 	P99Ms            float64 `json:"p99_ms"`
 	MaxMs            float64 `json:"max_ms"`
 	Pauses           int     `json:"checkpoint_pauses"`
@@ -218,6 +220,14 @@ func TestSelectedCapacityProbe(t *testing.T) {
 		wg.Wait()
 		level.Seconds = time.Since(start).Seconds()
 		level.Throughput = float64(level.Completed) / level.Seconds
+		if tenth := len(latencies) / 10; tenth > 0 {
+			median := func(part []time.Duration) float64 {
+				part = slices.Clone(part)
+				slices.Sort(part)
+				return float64(part[len(part)/2]) / float64(time.Millisecond)
+			}
+			level.P50FirstTenthMs, level.P50LastTenthMs = median(latencies[:tenth]), median(latencies[len(latencies)-tenth:])
+		}
 		slices.Sort(latencies)
 		if len(latencies) > 0 {
 			at := func(q float64) float64 {
