@@ -1738,3 +1738,29 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 5. 容量目标**维持 2 GiB**，运行前登记固定输入和门槛。
 
 下一步：按审查 §3，把发布范围内每一项的完成条件写进看板，再开始实施。
+
+## 46. R-1 登记：`halro init` 直接产生 selected 实例
+
+2026-10-13 记录，在实现之前提交。依据[第一个发布的完成条件](memory-bounded-release-conditions.zh-CN.md) R-1，以及用户的修订裁定：复用已验证的激活路径。
+
+**核对过的前提。**
+- selected 实例目前只能由 `metadata migrate --activate-runtime` 从一份加密备份激活产生（`cmd/halro/metadata_migrate.go`）。`backup restore` 只还原交换格式（bbolt Metadata + 原生日志），密钥轮换也用 `metadatastate.BuildFromBackup` 从备份重建。所以建库代码和备份写入代码本来就要保留。
+- 激活的输入：主密钥、由它派生的 Ledger/Metadata journal 密钥、身份（32 字节）、实例 ID、密钥代数、一份归档。实例 ID 原引擎在第一次启动时才写入（`runtime.go` 的 `SeedInstanceID`），所以 init 必须在打归档之前写入。
+- 中断后重来（`PrepareMemoryRuntimeMigrationDirectory` 的 Restart）要求身份、实例 ID、密钥代数和归档密文摘要都与中断前相同，所以归档必须跨崩溃保留，身份必须可以重新算出。
+- `CreateBackup` 拒绝写进数据目录，并自己取数据目录锁。
+
+**设计。** `halro init` 在 Standalone 配置下按以下阶段运行，每个阶段可以从磁盘状态判断出来：
+1. 空目录 → 现有 `Initialize` 写出交换格式，再写入实例 ID。
+2. 在数据目录旁的固定路径（`<data_dir 的父目录>/.<data_dir 名>.init.hmbk`）创建内部归档，先写 `.pending` 再改名。归档密钥和身份都由主密钥经 HKDF 派生，不在磁盘上留新的密钥材料。
+3. 取数据目录锁，等待压力监视器 Healthy，然后依次运行 `PrepareMemoryRuntimeMigrationDirectory`（已有 `memory-state` 命名空间时带 Restart）、`PrepareFormat2FromBackup`、`ActivatePreparedMemoryRuntime`。
+4. 删除内部归档。
+
+重跑时：已有 `memory-state.bootstrap.pending` 走 `ResumeMemoryRuntimeActivation`；已有 `memory-state.bootstrap` 只删除残留的内部归档，然后报告已初始化；阶段 1 中途留下的不完整状态，沿用现有规则拒绝，不自动修复。
+
+**判据（事后不放宽）。**
+1. 空目录上 `init` 后，Runtime 打开的是 selected 状态（`selectedState != nil`）。能提交一个请求并完成终结，关闭后重开能读到它。
+2. 在每个阶段边界被 SIGKILL 后重跑 `init`，最终满足判据 1，且数据目录旁不留下内部归档。阶段边界包括：交换格式写完、归档 `.pending`、归档改名后、命名空间准备的各个钩子、激活的 6 个检查点、删除归档之前。
+3. 数据目录非空（有不认识的文件）时拒绝；已初始化的实例重跑 `init --if-needed` 时不做改动。
+4. 反向验证：去掉“已有 `bootstrap.pending` 走 resume”的分支后，判据 2 中 `bootstrap-pending-synced` 之后的阶段会失败。
+
+**不在本项。** `halro start` 首次运行时的自动初始化（默认配置没有资源预算，selected 需要它），放到 R-2/R-4。HA 仍走原路径，到 R-3 再拒绝。
