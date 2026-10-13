@@ -1814,3 +1814,16 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 5. Linux 不变：`resourcebudget` 的 Linux 采样测试在门禁的 Linux 容器中通过。
 
 **后续顺序（同时更新）。** R-0 → R-4（默认配置可推导出完整预算，让 `halro start` 在默认配置下初始化 selected）→ R-2（删除原引擎；先在一个测试文件上试点测试迁移，量出耗时再估全部）→ R-3、R-5。
+
+### 47.1 R-0 结果（2026-10-13 17:53）
+
+实现见 `e4bc072e`。判据全部通过：
+1. `TestDarwinHostAvailableIsTheKernelShareOfMemory`：换算正确（24 GiB × 40% = 10307921510 字节，按 floor(memsize × level / 100) 精确计算），level > 100、memsize = 0、超过 int64 时报 `ErrInvalid`；开机时间不同则身份不同。
+2. `TestSamplerHostGroupStandsInForAMissingCgroup`（任何平台都跑）：主机组填入 `Groups[0]` = {Current 50, Max 450, MaxLimited}，`GroupCount` = 1，身份固定；读取失败、负值、溢出、缺身份、进程内存不可用时都报 `CgroupUnavailable`，组字段清零。原有 cgroup 测试的夹具显式置 `host = nil`，在所有平台上继续覆盖 cgroup 路径。
+3. 真实 macOS：`TestDarwinRealSamplerReportsAHostGroup` 通过；真实二进制 `halro init` 产出 selected 实例，`init --if-needed` 不改动，`halro serve` 两次 ready，日志无 ERROR。
+4. 反向验证：darwin 的 `platformHostMemory` 改为返回 nil（已确认改动生效）后，真实采样 `Issues` = 2（`CgroupUnavailable`），判据 3 的测试失败；恢复后通过。
+5. Linux：`resourcebudget` 的采样与压力测试在 Linux 容器（ext4）中通过；Linux 的 `platformHostMemory` 返回 nil，路径不变。`wait_points_test` 在容器中因没有源码目录而失败，与本项无关，门禁会在源码树里跑它。
+
+另外：`internal/config` 全包、`internal/app` 中配置文档与压力相关测试、前端 vitest（690 个）通过。配置说明（`default.yaml`、`config.example.yaml`）已写明 macOS 上阈值的含义。
+
+**顺带观察。** selected 激活会在数据目录的父目录留下一个 `.halro-publication-<id>.lock`（macOS、Linux 两次真实运行都有）。是不是有意为之，还没有核对，记为待查。
