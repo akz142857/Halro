@@ -2,5 +2,6 @@
 
 package resourcebudget
 
-func diskSpace(string) (diskSignal, error)    { return diskSignal{}, ErrInvalid }
-func verifyCgroupFS(string) ([16]byte, error) { return [16]byte{}, ErrInvalid }
+func diskSpace(string) (diskSignal, error)           { return diskSignal{}, ErrInvalid }
+func verifyCgroupFS(string) ([16]byte, error)        { return [16]byte{}, ErrInvalid }
+func platformHostMemory() func() (hostMemory, error) { return nil }

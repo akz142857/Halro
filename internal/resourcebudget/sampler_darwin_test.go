@@ -54,3 +54,39 @@ func TestDarwinDiskHeadroomSamplesRealFilesystemWithoutCgroupCredit(t *testing.T
 		t.Fatalf("non-Linux directory credited as cgroup: %v", err)
 	}
 }
+
+func TestDarwinHostAvailableIsTheKernelShareOfMemory(t *testing.T) {
+	for _, tc := range []struct {
+		level   uint32
+		memsize uint64
+		want    int64
+	}{{40, 24 << 30, 10307921510}, {0, 8 << 30, 0}, {100, 8 << 30, 8 << 30}, {33, 101, 33}, {100, math.MaxInt64, math.MaxInt64}} {
+		got, err := hostAvailable(tc.level, tc.memsize)
+		if err != nil || got != tc.want {
+			t.Fatal(tc, got, err)
+		}
+	}
+	for _, tc := range []struct {
+		level   uint32
+		memsize uint64
+	}{{101, 8 << 30}, {40, 0}, {40, math.MaxInt64 + 1}} {
+		if _, err := hostAvailable(tc.level, tc.memsize); !errors.Is(err, ErrInvalid) {
+			t.Fatal("invalid host memory accepted", tc, err)
+		}
+	}
+	a, b := darwinHostIdentity(24<<30, 100, 5), darwinHostIdentity(24<<30, 101, 5)
+	if a == b || a == ([32]byte{}) || a != darwinHostIdentity(24<<30, 100, 5) {
+		t.Fatal("host identity does not follow the boot", a, b)
+	}
+}
+
+func TestDarwinRealSamplerReportsAHostGroup(t *testing.T) {
+	s, err := NewSampler(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample := s.Sample(context.Background())
+	if sample.Issues&(CgroupUnavailable|DiskUnavailable|RuntimeUnavailable) != 0 || sample.GroupCount != 1 || !sample.Groups[0].MaxLimited || sample.Groups[0].Max <= sample.Groups[0].Current {
+		t.Fatal("real macOS sample", sample.Issues, sample.GroupCount, sample.Groups[0])
+	}
+}

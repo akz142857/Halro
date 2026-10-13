@@ -29,6 +29,7 @@ func samplerFixture(t *testing.T, member, root, point string) (*Sampler, map[str
 			break
 		}
 	}
+	s.host = nil // these cases exercise the cgroup path on every platform
 	s.now = func() time.Time { return time.Unix(1000, 0) }
 	s.runtime = func() (int64, error) { return 50, nil }
 	s.disk = func(string) (diskSignal, error) { return diskSignal{500, 50}, nil }
@@ -345,5 +346,33 @@ func TestSamplerSelectedMountOrLeafReplacementResetsCooling(t *testing.T) {
 	s.verifyCgroup = func(string) ([16]byte, error) { calls++; return [16]byte{byte(calls)}, nil }
 	if sample := s.Sample(context.Background()); sample.Issues&CgroupUnavailable == 0 {
 		t.Fatal("directory replacement during sample", sample)
+	}
+}
+
+func TestSamplerHostGroupStandsInForAMissingCgroup(t *testing.T) {
+	s, _ := samplerFixture(t, "/work", "/", "/cg")
+	s.read = func(string, int) ([]byte, error) { return nil, os.ErrNotExist }
+	identity := [32]byte{7}
+	s.host = func() (hostMemory, error) { return hostMemory{available: 400, identity: identity}, nil }
+	sample := s.Sample(context.Background())
+	if sample.Issues != 0 || sample.GroupCount != 1 || sample.CgroupID != identity || sample.Groups[0] != (GroupMemory{Current: 50, Max: 450, MaxLimited: true}) {
+		t.Fatal("host group", sample)
+	}
+	for name, host := range map[string]func() (hostMemory, error){
+		"unreadable":       func() (hostMemory, error) { return hostMemory{}, os.ErrNotExist },
+		"negative":         func() (hostMemory, error) { return hostMemory{available: -1, identity: identity}, nil },
+		"overflow":         func() (hostMemory, error) { return hostMemory{available: 1<<63 - 1, identity: identity}, nil },
+		"missing-identity": func() (hostMemory, error) { return hostMemory{available: 400}, nil },
+	} {
+		s.host = host
+		sample := s.Sample(context.Background())
+		if sample.Issues&CgroupUnavailable == 0 || sample.GroupCount != 0 || sample.CgroupID != ([32]byte{}) || sample.Groups[0] != (GroupMemory{}) {
+			t.Fatal(name, "invalid host signal accepted", sample)
+		}
+	}
+	s.host = func() (hostMemory, error) { return hostMemory{available: 400, identity: identity}, nil }
+	s.runtime = func() (int64, error) { return 0, os.ErrNotExist }
+	if sample := s.Sample(context.Background()); sample.Issues&CgroupUnavailable == 0 || sample.GroupCount != 0 {
+		t.Fatal("host group without process memory", sample)
 	}
 }

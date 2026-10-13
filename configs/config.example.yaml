@@ -859,9 +859,11 @@ logging:
 # @description.zh-CN 可选的 Linux cgroup v2/runtime/statfs 门禁，默认不启用。
 # @description.zh-CN 全部数值须按目标 profile 校准；下面 0 为无效占位，不是默认或建议值。
 # @description.zh-CN 尚不替代共享逻辑预算/持久化储备；动态 inode 文件系统可能保持未知。
+# @description.zh-CN macOS 没有 cgroup：cgroup 进入/退出线判定本进程的 Go 内存，余量线判定主机可用内存（kern.memorystatus_level × hw.memsize），没有容器上限。
 # @description.en-US Optional Linux cgroup v2/runtime/statfs gate, disabled by default.
 # @description.en-US Calibrate every value for the target profile; zeros below are invalid placeholders, not defaults or recommendations.
 # @description.en-US Does not replace logical budgets or durable completion reserves; dynamic-inode filesystems may remain unknown.
+# @description.en-US macOS has no cgroup: the cgroup thresholds judge this process's Go memory and the headroom thresholds judge host-available memory (kern.memorystatus_level × hw.memsize); there is no container ceiling.
 # resource_pressure:
 #   # @title.zh-CN Go 内存进入线
 #   # @title.en-US Go memory enter threshold

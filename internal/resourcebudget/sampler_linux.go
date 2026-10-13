@@ -48,3 +48,6 @@ func verifyCgroupFS(path string) ([16]byte, error) {
 	binary.LittleEndian.PutUint64(identity[8:], uint64(object.Ino))
 	return identity, nil
 }
+
+// Linux samples the process's cgroup; it has no host stand-in.
+func platformHostMemory() func() (hostMemory, error) { return nil }

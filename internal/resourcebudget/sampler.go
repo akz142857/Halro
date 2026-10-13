@@ -20,6 +20,14 @@ const scalarLimit = 128
 
 type diskSignal struct{ available, inodes int64 }
 
+// hostMemory is a host-level memory signal for platforms without cgroups:
+// the bytes the host can still give this process, and an identity that
+// changes when the host does (a reboot).
+type hostMemory struct {
+	available int64
+	identity  [32]byte
+}
+
 // Sampler does bounded synchronous reads. It creates no goroutine and never
 // writes kernel controls. OS calls cannot be force-cancelled; old samples expire.
 type Sampler struct {
@@ -28,6 +36,7 @@ type Sampler struct {
 	now          func() time.Time
 	read         func(string, int) ([]byte, error)
 	runtime      func() (int64, error)
+	host         func() (hostMemory, error) // nil where cgroups are sampled
 	disk         func(string) (diskSignal, error)
 	verifyCgroup func(string) ([16]byte, error)
 }
@@ -46,7 +55,7 @@ func NewSampler(dataDir string) (*Sampler, error) {
 	if scratchDir != dataDir {
 		diskPaths = append(diskPaths, scratchDir)
 	}
-	return &Sampler{dataDir: dataDir, diskPaths: diskPaths, now: time.Now, read: boundedText, runtime: runtimeSignal, disk: diskSpace, verifyCgroup: verifyCgroupFS}, nil
+	return &Sampler{dataDir: dataDir, diskPaths: diskPaths, now: time.Now, read: boundedText, runtime: runtimeSignal, host: platformHostMemory(), disk: diskSpace, verifyCgroup: verifyCgroupFS}, nil
 }
 
 func boundedText(path string, limit int) ([]byte, error) {
@@ -222,8 +231,15 @@ func (s *Sampler) Sample(ctx context.Context) Sample {
 		result.Issues |= SampleCancelled
 		return result
 	}
-	if err := s.collectCgroup(ctx, &result); err != nil {
+	groupErr := error(nil)
+	if s.host != nil {
+		groupErr = s.collectHost(&result)
+	} else {
+		groupErr = s.collectCgroup(ctx, &result)
+	}
+	if groupErr != nil {
 		result.Issues |= CgroupUnavailable
+		result.Groups[0] = GroupMemory{}
 		result.GroupCount = 0
 		result.CgroupID = [32]byte{}
 	}
@@ -280,6 +296,27 @@ func (s *Sampler) DiskHeadroom(ctx context.Context, extraPath string) (available
 		return 0, 0, ErrInvalid
 	}
 	return available, inodes, ctx.Err()
+}
+
+// collectHost stands in for a cgroup where the platform has none: the process
+// is one group whose limit is what the host can still give it, so the cgroup
+// thresholds judge the process and the headroom thresholds judge the host. An
+// unreadable or invalid host signal fails closed like a missing cgroup.
+func (s *Sampler) collectHost(result *Sample) error {
+	if result.Issues&RuntimeUnavailable != 0 {
+		return ErrInvalid
+	}
+	h, err := s.host()
+	if err != nil {
+		return err
+	}
+	if h.available < 0 || result.RuntimeUsed < 0 || result.RuntimeUsed > math.MaxInt64-h.available || h.identity == ([32]byte{}) {
+		return ErrInvalid
+	}
+	result.Groups[0] = GroupMemory{Current: result.RuntimeUsed, Max: result.RuntimeUsed + h.available, MaxLimited: true}
+	result.GroupCount = 1
+	result.CgroupID = h.identity
+	return nil
 }
 
 func (s *Sampler) collectCgroup(ctx context.Context, result *Sample) error {
