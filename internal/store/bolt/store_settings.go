@@ -254,6 +254,21 @@ func (s *Store) SeedInstanceAccountingSettings(timezone string, now time.Time) (
 	return settings, err
 }
 
+// InstanceID reads the seeded instance ID without writing; ErrNotFound means
+// SeedInstanceID has not run.
+func (s *Store) InstanceID() (string, error) {
+	var instanceID string
+	err := s.view(func(tx *Tx) error {
+		raw := tx.Bucket(bucketMeta).Get(keyInstanceID)
+		if raw == nil {
+			return ErrNotFound
+		}
+		instanceID = string(raw)
+		return nil
+	})
+	return instanceID, err
+}
+
 // SeedInstanceID generates and persists a UUID-shaped identity the first
 // time an instance starts, and returns the same value on every call after
 // that. It exists for ADR 0015: an anchor names the instance that emitted

@@ -195,6 +195,7 @@ func printMasterKeyCustodyNotice(out io.Writer, cfg config.Config) {
 
 var (
 	initializeCommand      = app.Initialize
+	initializeSelected     = app.InitializeSelected
 	verifyRecoveryCommand  = app.VerifyRecoverySlot
 	rotateKMSCommand       = app.RotateKMSMasterKey
 	rewrapKMSCommand       = app.RewrapKMSKey
@@ -772,6 +773,23 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		if err := hardenSecretHandlingCommand(); err != nil {
 			return err
+		}
+		if cfg.ResourceBudget != nil {
+			// A configured shared budget selects the memory-bounded engine:
+			// the instance is activated from its own internal archive.
+			initialized, err := initializeSelected(context.Background(), cfg, *configPath)
+			if err != nil {
+				return err
+			}
+			if !initialized {
+				if !*ifNeeded {
+					return errors.New("Halro is already initialized")
+				}
+				fmt.Fprintln(os.Stdout, "Halro is already initialized; unchanged")
+				return nil
+			}
+			fmt.Fprintln(os.Stdout, "Halro initialized")
+			return nil
 		}
 		if *ifNeeded {
 			initialized, err := app.InitializeExplicitIfNeeded(cfg)
