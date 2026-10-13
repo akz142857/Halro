@@ -27,3 +27,11 @@ func (f *haSelectedRuntimeFoundation) businessHealthError(ctx context.Context) e
 	}
 	return errors.Join(reopened.BusinessHealthError(ctx), f.ctx.Err())
 }
+
+// retainApplyErr records a failed apply where businessHealthError reads it:
+// readiness probes run concurrently with the startup worker.
+func (f *haSelectedRuntimeFoundation) retainApplyErr(err error) {
+	f.mu.Lock()
+	f.applyErr = errors.Join(f.applyErr, err)
+	f.mu.Unlock()
+}

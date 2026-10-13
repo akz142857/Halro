@@ -56,7 +56,7 @@ func (f *haSelectedRuntimeFoundation) finishHASelectedPrimaryStartupOwned(ctx co
 	defer func() {
 		if resultErr != nil {
 			c.NativeLedger.Status().RequireRecovery()
-			f.applyErr = errors.Join(f.applyErr, resultErr)
+			f.retainApplyErr(resultErr)
 		}
 	}()
 	if _, err := f.recoverHASelectedAccountingMode(ctx, c.Lease, true); err != nil {
