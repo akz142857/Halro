@@ -1832,7 +1832,7 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 
 为 R-4 选默认值时，先核对 2 GiB 下能放多大的投影、每个请求占多少空间。用的是一次性探针（未提交），配置为 `selectedRuntimeBudgetFixture`（投影上限各 64 MiB）。请求只走账务路径（Begin→Reserve→Settle→Finalize），没有上游，单线程顺序执行。
 
-**1. 2 GiB 下投影上限约 150 MiB。** `UsageMaintenanceIOMinimum` 把投影映射按 RAM 计费，约为两个投影上限之和再加 64 MiB（64 MiB → 映射 192 MiB；256 MiB → 576 MiB；1 GiB → 2112 MiB），另加账务恢复 128 MiB 等常驻项。在 2 GiB 总额、1 GiB Recovery 储备下，Standalone 的 Usage 维护周期只能容纳每个投影约 150 MiB。现有 2 GiB 容量剖面 `selectedCapacityBudget`（投影 8 GiB）需要 IO RAM 约 16.3 GiB，过不了 `ValidateStandaloneUsageMaintenance`（与看板 §36 的记录一致）。
+**1. 2 GiB 下投影上限约 150 MiB（更正见 §49：把 IO 类别给到 960 MiB 时可到 320 MiB）。** `UsageMaintenanceIOMinimum` 把投影映射按 RAM 计费，约为两个投影上限之和再加 64 MiB（64 MiB → 映射 192 MiB；256 MiB → 576 MiB；1 GiB → 2112 MiB），另加账务恢复 128 MiB 等常驻项。在 2 GiB 总额、1 GiB Recovery 储备下，Standalone 的 Usage 维护周期只能容纳每个投影约 150 MiB。现有 2 GiB 容量剖面 `selectedCapacityBudget`（投影 8 GiB）需要 IO RAM 约 16.3 GiB，过不了 `ValidateStandaloneUsageMaintenance`（与看板 §36 的记录一致）。
 
 **2. 投影写放大约 45 倍。** Linux ext4（Docker、2 GiB cgroup）上，每个请求原生 WAL 约 2.1 KB，Ledger 投影根增长约 93 KB；macOS 上约 90 KB。Usage 投影根先长到约 48 MB 后持平。按约 90 KB/请求计，64 MiB 的 Ledger 投影约 520 个请求就满（macOS 实测第 518 个请求报 `authenticated store pack needs reclamation before the next update`，这是 §26 设计的背压：拒绝新写入、等 checkpoint 回收），150 MiB 约 1600 个请求就要回收一次。
 
@@ -1843,3 +1843,25 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 **5. 顺带澄清。** 直接调用 `r.accounting` 的测试会在 checkpoint 暂停时得到 `accounting manager is retired`：`enterOperation` 在 `paused != nil` 时也返回 `ErrAccountingRetired`。生产请求经过上面的请求门，不受影响；但这个错误名会误导排查，记为待改。
 
 **结论。** 这些数字直接决定 2 GiB、只用 selected 引擎的第一个发布能否成立：投影上限约 150 MiB、每约 1600 个请求回收一次、每次回收期间 503、单线程约 19 请求/秒。R-2 删除原引擎不可逆，建议在 R-2 之前先跑一次登记过的容量探针，回答并发吞吐、p99、checkpoint 暂停时长和频率，再决定是否继续这条路线。R-4 暂停，等用户裁定。
+
+## 49. 容量探针登记（用户裁定 2026-10-13，在运行之前提交）
+
+**目的。** R-2 删除原引擎之前，回答 selected 引擎在 2 GiB 下能否承受业务负载。
+
+**对 §48 的更正。** 把 IO 类别 RAM 设为 960 MiB（normal 1 GiB 中的大部分），`Validate` 和 `ValidateStandaloneUsageMaintenance` 在投影上限 96～320 MiB 时都通过（已核对）。§48 说的约 150 MiB 是按 IO 512 MiB 算的。
+
+**固定输入。**
+- 测试：`TestSelectedCapacityProbe`（`internal/app/selected_capacity_probe_test.go`，需 `HALRO_SELECTED_CAPACITY_PROBE=1`）。
+- 预算 `selectedCapacityProbeBudget`：总 RAM 2 GiB、Recovery 与 Recovery 储备各 1 GiB、IO 960 MiB、Ledger/Usage 投影上限各 256 MiB；运行前在测试里再次校验通过。压力 `selectedCapacityProbePressure`：runtime 1 GiB/900 MiB，cgroup 1.5 GiB/1.25 GiB，余量 64/128 MiB，磁盘 128/256 MiB，采样 100 ms；用真实采样器。
+- 环境：ubuntu:24.04 arm64 容器，`--memory 2g --cpus 2`，数据目录和 TMPDIR 在新建的 8 GiB ext4 上。
+- 负载：同一实例上依次跑并发 1（2000 个请求）、16（2 万）、64（2 万）。每个请求经过业务请求门（checkpoint 暂停时等待重试），再走 Begin→Reserve→Settle→Finalize，没有上游。设计内的反压（`authenticatedstate.ErrCapacity`、`resourcebudget.ErrPressure`）计为拒绝，请求按错误终结；其他任何错误计为错误。
+- 延迟从进入请求门算起，含 checkpoint 等待。checkpoint 暂停由 1 ms 轮询 `liveCheckpoint.paused` 测得。
+
+**门槛（用户选定的工程建议值，事后不放宽）。**
+1. 各并发级别错误数为 0。
+2. 各并发级别拒绝不超过 1%。
+3. 单次 checkpoint 暂停不超过 2 秒。
+4. 并发 64：吞吐不低于 100 请求/秒，p99 不超过 1 秒。
+5. cgroup 峰值（`memory.peak`）不超过 1.5 GiB。
+
+任一项不达标即判定路线未通过，记录归因后转入用户裁定，不重跑同一配置。只跑一次。
