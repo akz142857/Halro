@@ -1764,3 +1764,25 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 4. 反向验证：去掉“已有 `bootstrap.pending` 走 resume”的分支后，判据 2 中 `bootstrap-pending-synced` 之后的阶段会失败。
 
 **不在本项。** `halro start` 首次运行时的自动初始化（默认配置没有资源预算，selected 需要它），放到 R-2/R-4。HA 仍走原路径，到 R-3 再拒绝。
+
+### 46.1 R-1 结果（2026-10-13 17:40）
+
+实现见 `030f5b95`：`internal/app/init_selected.go`，`halro init` 在配置了资源预算时走它。
+
+**对登记的两处更正（属于前提，不是放宽判据）。**
+- 恢复分支的条件应为“已有 `active.seal`”，不是“已有 `bootstrap.pending`”。共同 seal 发布之前中断时，Restart 准备会把 `bootstrap.pending` 连同其他中断产物一起移入保留槽，现有迁移测试（`memory_state_activation_enospc_linux_test.go`）也是这样判断的。按登记的写法，`bootstrap-pending-synced` 处被杀后重跑会失败。
+- 实例 ID 只能在内部归档创建之前写入。之后的任何 Metadata 写入都会移动归档所绑定的原生位置，导致重启检查失败。归档之后改为只读读取，为此给 `boltstore.Store` 加了只读的 `InstanceID()`。
+
+**判据结果。**
+1. 通过：`TestSelectedInitializationProducesAReopenableSelectedInstance`。init 后 `selectedState != nil`；请求终结后重开，Usage 读到费用 7；重跑 init 不做改动；数据目录旁不留归档。
+2. 通过：`TestSelectedInitializationSIGKILLAtEveryBoundaryResumes` 覆盖 17 个阶段边界（`HALRO_STRESS=1` 全跑，普通运行跑其中 6 个代表）。每个边界被真实 SIGKILL 后重跑 init 都能完成，selected 实例能连续两次打开，不留归档。
+3. 通过：`TestSelectedInitializationRefusesAForeignDataDirectory`。数据目录里有不认识的文件时拒绝，不写数据目录，不建归档和主密钥。
+4. 通过（按上面更正后的前提）：把 `active.seal` 恢复分支改成永不进入（已确认改动生效），`common-seal-published`、`bootstrap-activated` 两个阶段失败；在 seal 之前的阶段走 Restart，不受影响。恢复后重新通过。
+
+**真实二进制。** Linux arm64 构建，在 Docker 里新建的 3 GiB ext4 上（2 GiB cgroup）：`halro init` 成功，产出 `memory-state.bootstrap` 和 `active.seal`，不留内部归档；`init --if-needed` 报告已初始化；`halro serve` 先后两次在约 1.2 秒内 ready，日志里没有 ERROR。
+
+**环境事实。** selected 引擎只能在 Linux 上、并且数据目录和 TMPDIR 位于能报告 inode 数的文件系统上运行。macOS 没有 cgroup，Docker Desktop 的 overlay 和绑定挂载不报告 inode 数，这两种情况下压力采样都按设计失败封闭（`DiskUnavailable` / `CgroupUnavailable`）。发布文档需要写明。
+
+**其他检查。** `cmd/halro`、`internal/store/bolt` 全包通过；`internal/app` 中 Initialize/SelectedInit/Bootstrap 相关测试通过；init 测试的 race 通过；`go vet` 通过。
+
+**留给 R-2/R-4。** `halro start` 首次运行时的自动初始化仍走原引擎，因为默认配置没有资源预算。
