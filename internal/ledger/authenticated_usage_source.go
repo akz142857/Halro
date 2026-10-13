@@ -249,22 +249,29 @@ func (s *authenticatedUsageSource) VerifyAnchors(ctx context.Context, anchors [2
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer func() { stop(); cancel() }()
 	var seen [2]bool
+	var last ReplayAnchor // the furthest anchor this replay itself reached
 	observe := func(a ReplayAnchor) {
+		last = a
 		for i := range anchors {
 			seen[i] = seen[i] || a == anchors[i]
 		}
 	}
-	from := ReplayAnchor{}
+	root := ReplayAnchor{}
 	if native.startupProvenance != nil && !s.completeHistory {
-		from = native.startupSaved
+		root = native.startupSaved
 		for _, a := range anchors {
-			if projectionPrefixBefore(a.Head, from.Head) {
+			if projectionPrefixBefore(a.Head, root.Head) {
 				return ErrProjectionCursor
 			}
 		}
 	}
+	// Resume from the furthest position this process itself proved on the chain
+	// from the same root (§51); consumer anchors are still never proof.
+	from, proven := native.anchors.resume(root, s.completeHistory, native.generation, anchors)
+	seen = proven
 	observe(from)
 	head, err := native.replayAuthenticatedLocked(c, from, 0, func(r Record) error {
+		native.anchors.replayed.Add(1)
 		observe(ReplayAnchor{Head: Watermark{Generation: r.Generation, Offset: r.Offset, Sequence: r.Sequence}, Hash: r.Hash, Epoch: r.Epoch})
 		return c.Err()
 	}, func(a ReplayAnchor) error { observe(a); return c.Err() })
@@ -274,9 +281,17 @@ func (s *authenticatedUsageSource) VerifyAnchors(ctx context.Context, anchors [2
 	}
 	s.mu.Unlock()
 	if err != nil || head != s.head.Head || !seen[0] || !seen[1] {
+		native.anchors.forget()
 		return fmt.Errorf("source boundary verification (head matches=%t anchors=%t/%t): %w", head == s.head.Head, seen[0], seen[1], errors.Join(ErrProjectionSource, err, c.Err()))
 	}
-	return s.Check(c)
+	if err := s.Check(c); err != nil {
+		native.anchors.forget()
+		return err
+	}
+	if last.Head == head {
+		native.anchors.remember(root, s.completeHistory, last, anchors)
+	}
+	return nil
 }
 func (s *authenticatedUsageSource) readRequest(ctx context.Context, id string) (ProjectedRequest, bool, error) {
 	if err := authenticatedPointID(id); err != nil {

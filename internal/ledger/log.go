@@ -113,6 +113,7 @@ func (v *chainVerifier) verify() bool { return v != nil && len(v.key) == 32 }
 
 type Log struct {
 	mu                  sync.Mutex
+	anchors             verifiedAnchorCache
 	lifecycle           sync.RWMutex
 	admission           sync.Mutex
 	mutating            int
