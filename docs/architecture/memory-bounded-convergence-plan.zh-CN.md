@@ -1943,3 +1943,19 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 3. 反向验证：去掉对缓存的使用后，判据 1 失败。
 4. 性能复测（同 §50 环境）：并发 1、2000 个请求，最后 200 个的 p50 不超过前 200 个的 1.5 倍；并记录并发 16 的吞吐（只记录，不设线）。
 5. 回归：`internal/ledger`、`internal/usage` 全包通过，`internal/app` 中 selected 相关测试通过，受影响包跑 race。
+
+### 51.1 结果（2026-10-13 23:38）
+
+修复见 `915b417b`；探针加了按完成顺序的前后十分之一中位数（`20c66a4b`）。
+
+1. 通过。`TestSelectedAnchorVerificationReplayDoesNotGrowWithHistory`：每 40 个请求重放 160 条记录（每请求 4 条），6 批完全相同。
+2. 通过。`TestVerifyAnchorsStillRejectsForgedAnchorsAfterACachedVerification`：缓存位置上的伪造哈希被拒绝，失败后缓存清空；早于缓存位置的伪造锚点被拒绝；之后合法锚点从起点重放。`TestVerifiedAnchorCacheResumesOnlyFromItsOwnRootAndGeneration`：换起点、Roll 后（代号变化）、完整历史模式、早于缓存位置且未证明的锚点，都不使用缓存。
+3. 通过。`resume` 改为总是返回起点后（已确认改动生效），判据 1 失败：每批重放 25760 → 281722 条；恢复后通过。
+4. 通过。同 §50 环境，并发 1、2000 个请求：16.1 请求/秒（修复前 5.05），p50 60 ms，前十分之一中位数 59.6 ms、后十分之一 59.2 ms；checkpoint 最长暂停 0.47 秒（修复前 0.98 秒）。与原引擎（33.4/s）的差距从约 6.6 倍缩小到约 2 倍。
+5. 通过。`internal/ledger`、`internal/usage` 全包，`internal/app` 中 selected 相关测试（1062 秒）通过；锚点相关测试 race 通过。
+
+**设计调整（实现中发现，未放宽判据）。**
+- 完整历史模式不使用缓存。`TestSelectedCompleteUsageSourceReauthenticatesOldPrefixAcrossCompressedRoll` 要求完整历史来源每次重新认证整个已保存前缀，用来发现审计之后的旧前缀损坏。这是有意的保证，保持不变。登记里写的取舍因此只适用于常规来源（从启动点验证）。
+- 热路径的锚点对是（Usage 上次处理的位置，Ledger 投影的引用位置），新的 `from` 等于上一次调用证明过的 `to`，可能早于缓存的头部。所以缓存同时记住上一次证明过的两个锚点，等于它们的锚点视为已证明；其他锚点仍必须不早于缓存位置，并由本次重放实际看到。
+
+**新发现：投影写满后整体不可用（未修，待裁定）。** 同一次复测中，并发 16 跑到第 1329 个请求时（约 22 请求/秒，p50 666 ms），Ledger 与 Usage 投影根都长到约 251 MB，即 256 MiB 上限。之后剩下的 18671 个请求全部以 `ledger projection is not available` 失败，约 50 秒内没有恢复。这不是 §26 设计的反压（`ErrCapacity`，整笔拒绝、等 checkpoint 回收后恢复），而是投影变为不可用。cgroup 峰值 1.09 GiB。另外，投影从 83 MB 长到 251 MB 只用了约 3300 个请求（每请求约 50 KB），期间 11 次 checkpoint 没有把空间收回来。原因未查。
