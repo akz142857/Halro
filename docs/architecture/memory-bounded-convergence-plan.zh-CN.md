@@ -1682,3 +1682,23 @@ E1 登记的 2 小时工作上限早已超出。点 4 的两个问题都涉及�
 4. **被打断的迁移候选**（`memory-state.interrupted-N`、`.unqualified-N`）：接受，写入同一节。已核实这些名字在 bootstrap 提交前会让默认启动拒绝（`memoryMigrationNamespacePresent`），所以文档写明：只有迁移完成、激活后的服务器能启动之后，才可以离线归档或删除；每类只有 4 个槽位。
 
 **测试进入常规测试集**（`cb11ce06`）。去掉 `HALRO_E2` 开关；只放行第 3、4 项明确列出的残留名字，其他任何多出的文件仍判失败。迁移测试还要求 SIGKILL 后确实留下了被打断的候选，以证明落点确实到达。6 个命令全部通过。
+
+## 43. 门禁 17 失败：空 `root.pending` 导致永久拒绝打开（I-03 收尾）
+
+2026-10-13 10:49 记录。
+
+**现象。** 门禁 17（`900eb29f`，`exit=2`，1995 s）在 `make test` 中只有一个失败：`internal/app` 的 `TestHAMemoryPendingPrimaryActualSIGKILLReopensSavedSevenRoots`，重开报 `authenticated store requires reopen and native eligibility check` / `authenticated snapshot corrupt or unavailable`。单独 8 路并行跑 200 次全部通过，属于时序窗口。
+
+**根因。** 普通提交（非 physical）先用 `ownedfile.Create` 建出空的 `root.pending`，之后才一次写入整个 root。两步之间被 SIGKILL，会留下长度为 0 的 `root.pending`；打开时 `readFixed` 因长度不符返回 `ErrCorrupt`，`store.go` 再并上 `ErrRecovery`，之后每次打开都拒绝。SIGKILL 矩阵原来没有落在这两步之间的阶段。这是本分支之前就有的缺陷，不是 E1/E2 引入的。
+
+**修复（`3fc03fb7`）。**
+- 打开时，仅当 `root.pending` 是长度为 0、权限私有的普通文件，且两个 physical 回执（`terminal.physical.0/1`）都不存在时，才删除它并同步目录。physical 槽位改名成 `root.pending` 后同样为空，它的去留由回执决定，所以有回执时仍拒绝。非空的残缺文件仍拒绝。只读打开不变。
+- SIGKILL 矩阵新增 `root-created` 阶段。修复前它复现了与门禁 17 完全相同的报错。
+
+**验证。**
+- `root-created` 修复前失败、修复后通过。
+- 新增 `TestStoreOpenReclaimsOnlyEmptyOrdinaryPendingRoot`：短文件拒绝、有 physical 回执拒绝、空文件回收且选中的 root 不变。反向验证：去掉回执检查后，该测试失败。
+- mac 上 `authenticatedstate`、`metadatastate` 全包通过；`internal/app` 中 HA SIGKILL 相关测试跑 3 次通过。
+- Linux（ext4，非 root）跑 `authenticatedstate` 全包：140 通过，12 跳过，0 失败。
+
+**下一步。** 在 `3fc03fb7` 之上重跑完整门禁（门禁 18）。
