@@ -2145,3 +2145,78 @@ Usage 的 28.7 行：attempt 明细 1 行（约 800 B）、请求摘要 1 行（
 3. checkpoint 暂停随活数据线性增长，约 2400 请求起超过 2 秒线。
 
 共同的根源是：多项操作的成本随**全部历史**增长（完整重建、全量 repack），而不是随增量增长。下一步需要用户裁定方向，然后再登记设计。
+
+## 60. 登记：把随全部历史增长的两项操作改为增量（用户裁定 2026-10-14，在实现之前提交）
+
+**目标。** §59.1 的三道上限，判据沿用 §49：2 GiB cgroup 内写入 10 万个请求，checkpoint 暂停不超过 2 秒。
+
+### 60.0 登记前的测量（2026-10-14 23:05，只测不改）
+
+临时探针（未提交，测后删除），macOS，2 GiB 生产预算，并发 16。日志：`ref60.log`，在被忽略的 `docs/verification/performance/2026-10-14-remeasure57/` 下。
+
+| 历史请求数 | 现有 reference（两个 bbolt 全量重建） | 选定模式启动时用的 typed reference（只重建 Usage，借用实际 Ledger owner） |
+| --- | --- | --- |
+| 2000 | 1.79 s | 8.08 s |
+| 6000 | 5.98 s | 31.99 s |
+
+| 历史请求数 | checkpoint，有 repack | checkpoint，无 repack（紧接着再做一次） |
+| --- | --- | --- |
+| 2000 | 未触发 repack：0.25 s | 0.15 s、0.14 s |
+| 6000 | 2.34 s（memory-state 244 MB → 205 MB） | 0.36 s、0.37 s |
+
+结论：
+1. 不能直接把每小时任务换成启动时那套 typed reference。它不按内存计费，但慢约 5 倍（约 5.3 ms/请求，外推到 10 万个请求约 9 分钟）。所以 reference 必须真正增量，而不只是换个存储。
+2. 6000 个请求时，checkpoint 暂停约 85% 花在 repack 上，§59.1 的判断成立。但不做 repack 的部分也从 0.15 s 涨到了 0.36 s，同样随历史增长：线性外推到 10 万个请求会超过 2 秒。原因尚未查明，单独列为 60.B。
+
+### 60.A checkpoint repack 改为“后台预复制 + 暂停内只补增量”
+
+**核对过的前提。**
+- `prepareRepack`（`authenticatedstate/repack.go`）在暂停内持有 `s.mu`，从当前根把整棵可达树复制进非活动槽（`copyTree`），然后 fsync。成本随活数据线性增长。
+- COW pack 只追加：一个根引用的页面，在本 store 下一次 repack/retire 之前不会改变。`Store.Snapshot` 能钉住一个根，用独立的 fd 做 pread 读取，不持有 `s.mu`；但钉住期间 `prepareRepack` 会拒绝（`ErrBusy`）。
+- 节点编码中，子引用的偏移是 pack 内的位置，所以复制后的父节点必须重新编码。现有 `copyTree` 本来就是这样做的。
+
+**设计。**
+- 预复制阶段在 checkpoint 暂停之前运行，业务照常：对满足 repack 条件的 store（与现有条件相同：超过一半，或剩余空间不足），先退休非活动槽（现有的 `retireInactivePack`），再创建 intent 和 pages。然后钉住当前根 R0（pack 长度 E0），按现有 `copyTree` 把 R0 的整棵树写入新 pages 并 fsync，释放钉住。记录 R0 的描述符、E0 和复制出的根 C0；这些只保存在内存的 `StoreRepack` 候选里，不写成任何权威。
+- 暂停内的补增量阶段替代现在的整树复制：从当前根出发，偏移不小于 E0 的节点是 R0 之后才写的，照现有方式复制（重新编码）。偏移小于 E0 的子树在 R0 时就已存在且不可变，它在 C0 里必定有一份副本。查找方法是沿键范围同时下降 R0 树和 C0 树（两棵树结构相同），找到引用完全相等（偏移、长度、摘要都一致）的节点，取它在 C0 中的描述符，不重新复制。找不到就是错误：放弃这次 repack，回滚，保持当前根不变。RAM 仍只与树高有关；工作量与 R0 之后写入的节点数乘以树高成正比，不随全部历史增长。
+- 之后的“节省不足 1/8 就放弃”、header、两个根文件、receipt、提交和回滚都与现在相同，只是 fsync 的增量很小。
+- 崩溃恢复不变：预复制阶段的 pages 只有 intent、没有根，现有恢复会把它当作未完成的 repack 删除。
+- 不改格式，不改认证，不改公共发布顺序。
+
+**判据（事后不放宽）。**
+1. 确定性测试：预复制之后再写入 k 行，补增量阶段实际复制的节点数不超过“R0 之后写入且仍可达的节点数”，且与总行数无关（在两种总行数下 k 相同，复制数相同）。最终的树逐行等于当前根，并通过现有的 `verifyRepackTree`。
+2. 反向验证：补增量阶段改为整树复制后，判据 1 失败。
+3. 安全测试：在 C0 中伪造一个引用不匹配的节点时，repack 放弃且当前根不变；预复制阶段与补增量阶段之间崩溃或 Close，恢复后与现有 repack 中断时的处理一致。现有 `repack_crash_test`、`repack_preparation_test` 全部通过。
+4. 回归：`authenticatedstate`、`metadatastate`、`ledger`、`usage`、`governance`、`statecut` 全包，`internal/app` selected 子集，受影响包跑 race。
+5. 效果复测（同 60.0 探针）：6000 个请求时，有 repack 的 checkpoint 暂停与无 repack 的相差不超过 0.3 s。
+
+### 60.B 不做 repack 的暂停部分随历史增长（先只测）
+
+只测不改：在 2000、6000 个请求下，把一次不做 repack 的 checkpoint 拆成各阶段计时（各 owner 暂停、prepare caches、各 store 发布与 fsync、恢复），找出随历史增长的那一段。之后再登记修法。
+
+### 60.C reference job 改为持久的增量 reference（**含取舍，需用户确认后才实现**）
+
+**核对过的前提。**
+- 选定模式下，Usage 投影不按上限计入 RAM（`bindSelectedRuntimeUsage` 不调用 `acquireUsageProjectionDisk`）。把上限绑在 RAM 上的，只有每小时任务的 bbolt mmap（`acquireUsageReferenceBudget`），以及按同样口径计算的配置校验 `UsageMaintenanceIOMinimum`。
+- 启动时（`restoreSelectedUsageDiskWindow`）已经在用 typed reference，并借用实际选定的 Ledger owner 作为读取方，不重建 Ledger。所以“reference 借用实际 Ledger owner”是已经接受的信任模型。
+- 日期核对、回收与窗口绑定的各个步骤，接受的参数都是 `*usage.DiskProjection`，并不关心它背后是 bbolt 还是 typed。
+
+**设计。**
+- 选定模式下，每小时任务不再新建两个 bbolt。改为维护一个私有、持久的 typed Usage reference：完整历史、不裁剪，放在 memory-state 下的固定目录，用 Usage 密钥认证。读取方借用实际选定的 Ledger owner（与启动时相同）。
+- 每次任务开始时：原生写入冻结在当前头部；先校验 reference 保存的回放锚点确实是原生链上的前缀（与 `BindVerifiedWindow` 对 reference 锚点的要求相同），根也能通过认证。通过后，只回放锚点之后的新记录。校验失败、读到损坏或配置变化时，丢弃它，并在后台按现有方式完整重建：这条路径正确但慢，重建期间不发放窗口许可。
+- 之后的核对、回收、`BindVerifiedWindow` 步骤原样使用这个 reference。任务结束时，如果它的 pack 超过一半，就在任务内对它 repack（私有，不涉及业务暂停）。
+- 删掉选定模式下 bbolt reference 的 RAM 计费；配置校验在选定模式下改为按 typed 工作区计算。投影上限此后只受磁盘预算约束。
+
+**取舍（需用户知悉并确认）。** 现在每小时的 reference 都是“全新的”：从原生日志从零重建，不依赖任何保存下来的派生状态。改为持久增量之后，reference 是跨任务、跨重启保留的派生状态，由密钥认证、锚定在原生链上，但不再每次从零推导。如果某次写入 reference 的行因为 reducer 或持久化缺陷而出错，这个错误会一直保留，而不会在下一个小时被重新推导覆盖；只有校验失败或人工触发完整重建时才会纠正。§51 对锚点验证做过同类取舍（同一进程内不重复读已验证前缀）。另一个方案是保留全新重建、只把上限从 RAM 解绑：在 10 万个请求时，每小时约需 9 分钟（60.0 的 typed 数字），并且必须去掉 1 分钟时限。
+
+**判据（事后不放宽，确认后适用）。**
+1. 确定性测试：连续两次任务之间新增 k 个请求，第二次任务实际回放的记录数只等于这 k 个请求的记录数。
+2. 反向验证：改为每次从零回放后，判据 1 失败。
+3. 安全测试：reference 锚点不在原生链上、根认证失败、文件被删或被替换时，任务都拒绝使用它，并走完整重建；重建完成之前不发放窗口许可。
+4. 现有日期核对、回收、窗口测试全部通过（参数类型不变）。
+5. 效果：在 10 万个请求的历史上，每小时任务在 1 分钟时限内完成；2 GiB 预算的配置校验在投影上限设为磁盘大小（不小于 2 GiB）时通过。
+
+### 60.D 合并判据（最后执行）
+
+60.A、60.C 完成，60.B 修好后，按 §49 探针在 Linux 2 GiB cgroup 中写入 10 万个请求：没有错误，退让不超过 1%，checkpoint 暂停不超过 2 秒，cgroup 峰值不超过 1.5 GiB，每小时任务至少成功运行一次。
+
+**实施顺序。** 先 60.A（不涉及信任取舍），同时做 60.B 的测量；60.C 等用户对取舍做出决定后再动手。
