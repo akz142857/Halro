@@ -111,6 +111,12 @@ func TestTypedLiveActualPartialCOWWriteWithdrawsOwnerAndPreservesCause(t *testin
 		if err := tx.Put([]byte("actual-private-partial"), []byte("written")); err != nil {
 			return err
 		}
+		// Board §57: a Put alone stays in the transaction until commit; the
+		// in-transaction Range writes it out, so the failure below follows a
+		// real page append.
+		if _, err := tx.Range(authenticatedstate.RangeOptions{MaxRows: 1, MaxBytes: 1 << 16, MaxPages: 64}); err != nil {
+			return err
+		}
 		return injected
 	}, func() error { return nil }); !errors.Is(err, injected) {
 		t.Fatal(err)
