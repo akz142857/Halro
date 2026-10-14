@@ -2048,3 +2048,57 @@ Usage 的 28.7 行：attempt 明细 1 行（约 800 B）、请求摘要 1 行（
 4. 失败安全测试：回调在任何写出之前返回错误时，pack 长度不变、store 未被 poison，下一次更新正常。
 5. 回归：`internal/authenticatedstate` 全包（含已有的认证、篡改、崩溃测试）、`metadatastate`、`ledger`、`usage`、`statecut` 全包，`internal/app` 中 selected 相关测试；受影响包跑 race。
 6. 效果复测（只记录，不设线）：§56 的每请求写入字节；§55 的两层门、64 MiB、并发 16 运行的吞吐；以及投影写满后关闭再重启是否成功（§55 未答的一项）。
+
+### 57.1 结果（2026-10-14 11:45）
+
+判据 1～5 已在实现提交（`14b31b74`）时通过。回归中 `usage` 包有一个测试按旧约定写（Put 后回调失败应留下恢复债务）；§57 之后 Put 在提交前不写页面，测试改为先用事务内 Range 强制写出，再失败（`bf39620e`）。其余包、race、`internal/app` selected 子集全部通过。
+
+判据 6 效果复测（macOS，同一个临时探针分别构建改动前 `5888ef94` 与改动后，日志在被忽略的 `docs/verification/performance/2026-10-14-remeasure57/`）：
+
+| 项目 | 改动前 | 改动后 |
+| --- | --- | --- |
+| Usage 每请求写入 pack（预热 100 后 200 个，并发 1，256 MiB） | 596 KB | 199 KB |
+| Ledger 每请求写入 pack | 93 KB | 64 KB |
+| 并发 1 吞吐 | 5.4 请求/秒 | 5.9 请求/秒 |
+| 两层门、64 MiB、并发 16：写满前完成的请求 | 1908 | 2181（另两次 2191、2166） |
+| 写满后关闭再重开 | 成功，157 ms | 成功，147 ms |
+| 重开后单个请求 | 成功 | 成功 |
+
+写满期间除探针主动停止造成的 `context canceled` 外没有错误。存储格式没变，所以活数据基本不变，写满点只提高约 14%。§55 未答的“写满后能否重启”：能。
+
+探针第一版把 checkpoint 准入拿了两次（外层自己拿一次，`selectedCapacityRequest` 内部又拿一次），checkpoint 暂停时自锁，停在 371 个请求。这是探针缺陷，不是产品缺陷；修正后重跑，卡死那次的日志保留在 `deadlocked-harness/`。
+
+## 58. 缺陷：重启后准入没有估计，写满的实例会被推入 Usage 永久停滞（2026-10-14，登记）
+
+**复现。** 按 §57.1 写满（64 MiB，并发 16），关闭、重开，立刻用并发 16 发 200 个请求。三个时点检查 Usage 追平（`burst2.log`）：
+
+| 时点 | Usage 追平 |
+| --- | --- |
+| 写满停滞时（关闭前） | 正常 |
+| 重开后、突发前 | 正常 |
+| 突发之后 | 失败：`authenticated store pack needs reclamation before the next update`，之后 4 分钟内一直如此 |
+
+突发中正好 16 个请求完成，其余全部 503 退让。Ledger 没有出错，账务正确；卡住的是 Usage 投影，业务随之持续 503。
+
+**原因（已核对代码）。**
+1. 准入估计不跨重启：`usagePackObservation.recordBytes` 与 `projectionPackObservation.recordBytes` 只在内存里，重开后为零；`packShortfall` 对零估计“不拒绝”。于是重开后第一波并发请求不经空间检查全部放行。
+2. 放行的工作把 Usage pack 推过 `appendLimit` 线后，归约在更新前干净地停下（`capacityStop`），但 checkpoint 发布要求 Usage 先完全追平（`BindTypedMaintenance`：Ledger/Usage/原生位置必须一致），而只有 checkpoint 能 repack。于是形成 §52 缺陷 A 的循环：要追平需要空间，要空间需要 checkpoint，checkpoint 需要先追平。§55 说“准入挡住了，触发不到”，只在不重启时成立。
+
+**修复（本条只修触发点）。** 没有观测值时，不再视为“无估计、不拒绝”，改用保守下限 512 KiB/记录（`projectionPackUnobservedRecordBytes`）；一旦观测到实际值，照原样用观测到的最大值。依据：本次实测观测最大值 Usage 约 105 KB/记录、Ledger 约 22 KB/记录，下限留约 5 倍余量。代价：重开后、第一次观测之前，单个请求需要约 8 MiB 剩余空间（2 × 512 KiB × 8 条）才放行。
+
+**判据（事后不放宽）。**
+1. 确定性测试：`packShortfall` 在零观测时按下限计算（剩余 < 2 × 下限 × 欠账即拒绝）；有观测时行为不变。
+2. 复现场景重跑（同一探针）：突发之后 Usage 追平成功，除 503 退让和等待超时外没有其它错误。反向证据已有：修复前的 `burst.log`、`burst2.log`。
+3. 回归：`internal/app` 的投影满载准入测试（`TestSelectedRuntime*BurstReclaimsPackBeforeItFills`、`TestPackShortfallBounds`）。
+
+**不在本条范围。** 缺陷 A 的循环本身仍在：任何让 Usage 在追平前用尽空间的路径（例如估计偏小）都会走到这里。是否让 checkpoint 在 Usage 停在容量线时仍能回收，需要单独登记设计。
+
+## 59. 核实：投影上限为什么按内存计费，以及 checkpoint 暂停与 pack 大小（用户裁定 2026-10-14，只测不改）
+
+**背景。** 估算表明只改存储格式达不到 D-04a（2 GiB 内 10 万请求）：每请求数据本身就有 Usage 9.1 KB、Ledger 3.8 KB，10 万请求光数据约 1.3 GB；而 2 GiB 预算下两个投影各约 256 MiB。格式改造最多把活数据减半（约 1.5～2 万请求）。投影本身用 pread 读页面、不做 mmap，但 Usage 维护的 reference job 把两个投影的整个上限按 bbolt mmap 计入 RAM（`usage_reference_budget.go`、`UsageMaintenanceIOMinimum`），这才是把上限绑在 RAM 上的地方。
+
+**要回答的两个问题。**
+1. selected 模式下 reference job 实际做什么：是否为两个投影建全尺寸 bbolt 副本并 mmap，用途是什么，实测其 RSS/映射是否接近计费值，能否改成不需要整个映射。
+2. checkpoint 暂停时长与 pack 中活数据量的关系：在两种活数据规模下各测一次暂停时长，与 §49 登记的 2 秒线对照。
+
+**产出。** 只记录事实和数字，不改代码；之后再登记设计。
