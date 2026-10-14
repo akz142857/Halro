@@ -2084,14 +2084,26 @@ Usage 的 28.7 行：attempt 明细 1 行（约 800 B）、请求摘要 1 行（
 1. 准入估计不跨重启：`usagePackObservation.recordBytes` 与 `projectionPackObservation.recordBytes` 只在内存里，重开后为零；`packShortfall` 对零估计“不拒绝”。于是重开后第一波并发请求不经空间检查全部放行。
 2. 放行的工作把 Usage pack 推过 `appendLimit` 线后，归约在更新前干净地停下（`capacityStop`），但 checkpoint 发布要求 Usage 先完全追平（`BindTypedMaintenance`：Ledger/Usage/原生位置必须一致），而只有 checkpoint 能 repack。于是形成 §52 缺陷 A 的循环：要追平需要空间，要空间需要 checkpoint，checkpoint 需要先追平。§55 说“准入挡住了，触发不到”，只在不重启时成立。
 
-**修复（本条只修触发点）。** 没有观测值时，不再视为“无估计、不拒绝”，改用保守下限 512 KiB/记录（`projectionPackUnobservedRecordBytes`）；一旦观测到实际值，照原样用观测到的最大值。依据：本次实测观测最大值 Usage 约 105 KB/记录、Ledger 约 22 KB/记录，下限留约 5 倍余量。代价：重开后、第一次观测之前，单个请求需要约 8 MiB 剩余空间（2 × 512 KiB × 8 条）才放行。
+**修复（本条只修触发点）。** 某个 pack 还没有观测值、且未越过可用线时，只放行持有“首发名额”（一个原子标志）的那一个请求，它处理完才释放；其余请求 503 退让。放行的请求会产生第一个观测值（Ledger 在追加内同步产生，Usage 在归约后产生），之后照原样用观测到的最大值。风险从“一整波并发未经检查”收窄到“一个请求”。
+
+修正记录（实现过程中发现，判据不变）：
+1. 登记时的第一版是“无观测时按 512 KiB/记录的保守下限估计”（实测观测最大值 Usage 约 105 KB/记录、Ledger 约 22 KB/记录）。回归 `TestSelectedRuntimeLedgerBurstReclaimsPackBeforeItFills`（Ledger 16 MiB）超时：小 pack 的剩余空间永远不到 2 × 512 KiB × 8，第一个请求进不来，也就永远得不到观测值，形成活锁。
+2. 第二版是“无观测时欠账不超过一个请求”。欠账按门内请求数计算，被退让的请求在检查那一刻也算在内，所以并发时大家互相把对方算进去，谁都进不来（复现场景重开后突发 `done=0`；全新启动遇上并发流量同样会这样）。改为上面的显式首发名额；新增 `TestProjectionPackBootstrapAdmitsOneAtATimeWithoutStarving`：16 个并发请求在无观测时同一时刻最多一个在内，且全部最终通过。反向验证：名额改成总是放行时，测试失败（同时在内 16 个）。
 
 **判据（事后不放宽）。**
-1. 确定性测试：`packShortfall` 在零观测时按下限计算（剩余 < 2 × 下限 × 欠账即拒绝）；有观测时行为不变。
+1. 确定性测试：`packShortfall` 在零观测时报告“无观测”（越过可用线时报告不足）；无观测时并发请求经首发名额一次一个、且不饿死；有观测时行为不变。
 2. 复现场景重跑（同一探针）：突发之后 Usage 追平成功，除 503 退让和等待超时外没有其它错误。反向证据已有：修复前的 `burst.log`、`burst2.log`。
 3. 回归：`internal/app` 的投影满载准入测试（`TestSelectedRuntime*BurstReclaimsPackBeforeItFills`、`TestPackShortfallBounds`）。
 
 **不在本条范围。** 缺陷 A 的循环本身仍在：任何让 Usage 在追平前用尽空间的路径（例如估计偏小）都会走到这里。是否让 checkpoint 在 Usage 停在容量线时仍能回收，需要单独登记设计。
+
+### 58.1 结果（2026-10-14 19:20，修复 `6870fb89`）
+
+1. 确定性测试通过：`TestPackShortfallBounds`（零观测报告“无观测”，越过可用线报告不足）、`TestProjectionPackBootstrapAdmitsOneAtATimeWithoutStarving`（16 个并发请求，同一时刻最多一个在内，全部最终通过）。反向验证：名额改为总是放行时，后者失败（同时在内 16 个）。
+2. 复现场景单独重跑（`burst-fixed3b.log`）：写满在 2198 个请求；重开后并发 16 突发，首发名额放行 1 个，其余 503 退让；突发之后 Usage 追平成功，Usage 可读，除退让和等待超时外没有其它错误。修复前同一位置失败（`burst.log`、`burst2.log`）。
+3. 回归：投影满载准入测试全部通过；`internal/app` selected 相关子集（与 §57 回归同一模式）通过（`app58.log`，1776 秒）。
+
+另一次与回归并行的运行（`burst-fixed3.log`）因 CPU 争用未写满，不作为判据证据；它显示全新启动遇上并发 16 时 30 秒完成 100 个请求，没有互相阻挡。
 
 ## 59. 核实：投影上限为什么按内存计费，以及 checkpoint 暂停与 pack 大小（用户裁定 2026-10-14，只测不改）
 
