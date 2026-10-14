@@ -101,6 +101,9 @@ type projectionPackAdmission struct {
 	once     sync.Once
 	wake     chan struct{}
 	shedding atomic.Bool
+	// bootstrap is held by the one request admitted while a pack has no
+	// observed record (board §58).
+	bootstrap atomic.Bool
 }
 
 func (a *projectionPackAdmission) wakeup() chan struct{} {
@@ -116,16 +119,38 @@ func (a *projectionPackAdmission) shed() {
 	}
 }
 
+// admit decides one request. Without a shortfall it admits; a pack with room
+// but no observed record admits only the holder of the bootstrap slot, which
+// release frees when the request has finished.
+func (a *projectionPackAdmission) admit(short, unobserved bool) (release func(), ok bool) {
+	switch {
+	case short:
+		return nil, false
+	case !unobserved:
+		a.shedding.Store(false)
+		return func() {}, true
+	case a.bootstrap.CompareAndSwap(false, true):
+		return func() { a.bootstrap.Store(false) }, true
+	}
+	return nil, false
+}
+
 // projectionPackShortfall reports whether a page pack written for every
 // admitted request lacks room for twice the largest observed bytes per record
 // times the records it still owes. The Usage projection owes the unreduced
 // Ledger suffix plus a bound for every admitted request. The Ledger projection
 // applies each record synchronously inside the append, so it owes the
-// per-request bound. A pack with no observed record has no estimate and sheds
-// nothing.
-func (r *Runtime) projectionPackShortfall() bool {
+// per-request bound.
+//
+// A pack with room but no observed record reports unobserved instead: the
+// caller then admits one request at a time through a single bootstrap slot.
+// Observations live in memory, so every reopen starts without them, and
+// admitting unchecked work let a full pack's first burst push Usage past where
+// it can catch up, which a checkpoint cannot reclaim before Usage has caught up
+// (board §58). The request holding the slot produces the first observation.
+func (r *Runtime) projectionPackShortfall() (short, unobserved bool) {
 	if r.selectedState == nil || r.ledger == nil {
-		return false
+		return false, false
 	}
 	l := &r.liveCheckpoint
 	l.mu.Lock()
@@ -139,30 +164,33 @@ func (r *Runtime) projectionPackShortfall() bool {
 		if head.Sequence > applied {
 			backlog = head.Sequence - applied
 		}
-		if packShortfall(used, usable, perRecord, saturatingAdd(backlog, requests)) {
-			return true
-		}
+		s, u := packShortfall(used, usable, perRecord, saturatingAdd(backlog, requests))
+		short, unobserved = short || s, unobserved || u
 	}
 	if r.selectedState.generation != nil {
 		if owner := r.selectedState.generation.Owners.Ledger; owner != nil {
 			used, usable, perRecord := owner.PackAdmission()
-			if packShortfall(used, usable, perRecord, requests) {
-				return true
-			}
+			s, u := packShortfall(used, usable, perRecord, requests)
+			short, unobserved = short || s, unobserved || u
 		}
 	}
-	return false
+	return short, unobserved && !short
 }
 
-func packShortfall(used, usable, perRecord, owed uint64) bool {
-	if perRecord == 0 || usable == 0 {
-		return false
+// packShortfall judges one pack. Without an observed record it judges only
+// whether the pack has passed its usable room, and reports unobserved.
+func packShortfall(used, usable, perRecord, owed uint64) (short, unobserved bool) {
+	if usable == 0 {
+		return false, false
+	}
+	if perRecord == 0 {
+		return used >= usable, used < usable
 	}
 	var room uint64
 	if used < usable {
 		room = usable - used
 	}
-	return room < saturatingMul(saturatingMul(perRecord, owed), 2)
+	return room < saturatingMul(saturatingMul(perRecord, owed), 2), false
 }
 
 func saturatingAdd(a, b uint64) uint64 {
@@ -183,8 +211,12 @@ func saturatingMul(a, b uint64) uint64 {
 // request being decided is already counted among the admitted.
 func (r *Runtime) withProjectionPackAdmission(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/health/live" || request.URL.Path == "/health/ready" || !r.projectionPackShortfall() {
-			r.projectionPack.shedding.Store(false)
+		if request.URL.Path == "/health/live" || request.URL.Path == "/health/ready" {
+			next.ServeHTTP(w, request)
+			return
+		}
+		if release, ok := r.projectionPack.admit(r.projectionPackShortfall()); ok {
+			defer release()
 			next.ServeHTTP(w, request)
 			return
 		}

@@ -1845,7 +1845,7 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 		case <-r.projectionPack.wakeup():
 			if r.selectedState != nil && fill.dueWhileShedding(time.Now()) {
 				checkpoint()
-				if r.projectionPackShortfall() {
+				if short, _ := r.projectionPackShortfall(); short {
 					r.logger.Warn("a projection page pack still lacks room for admitted work after reclamation; new requests remain shed until it catches up (usage_projection_disk_bytes or ledger_projection_disk_bytes may be too small for this load)")
 				}
 			}

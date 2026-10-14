@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,18 +179,59 @@ func TestProjectionPackFillTriggersFromTheReclaimedBaselineAndSpacesCheckpoints(
 func TestPackShortfallBounds(t *testing.T) {
 	for _, c := range []struct {
 		used, usable, perRecord, owed uint64
-		short                         bool
+		short, unobserved             bool
 	}{
-		{0, 100, 0, 1000, false},         // no observed record, no estimate
-		{0, 0, 10, 1, false},             // no observed pack
-		{80, 100, 10, 1, false},          // room 20 == 2*10*1
-		{81, 100, 10, 1, true},           // room 19 < 20
-		{120, 100, 1, 1, true},           // past usable: no room
-		{0, 100, 1 << 40, 1 << 40, true}, // saturating reserve
+		{0, 100, 0, 1000, false, true},          // no observed record: bootstrap slot decides
+		{100, 100, 0, 1, true, false},           // no observed record, no usable room
+		{0, 0, 10, 1, false, false},             // no observed pack
+		{80, 100, 10, 1, false, false},          // room 20 == 2*10*1
+		{81, 100, 10, 1, true, false},           // room 19 < 20
+		{120, 100, 1, 1, true, false},           // past usable: no room
+		{0, 100, 1 << 40, 1 << 40, true, false}, // saturating reserve
 	} {
-		if got := packShortfall(c.used, c.usable, c.perRecord, c.owed); got != c.short {
-			t.Fatal(c, got)
+		if short, unobserved := packShortfall(c.used, c.usable, c.perRecord, c.owed); short != c.short || unobserved != c.unobserved {
+			t.Fatal(c, short, unobserved)
 		}
+	}
+}
+
+// Board §58: while a pack has no observed record, concurrent requests pass one
+// at a time through the bootstrap slot, and every one of them eventually does.
+func TestProjectionPackBootstrapAdmitsOneAtATimeWithoutStarving(t *testing.T) {
+	var a projectionPackAdmission
+	if _, ok := a.admit(true, false); ok {
+		t.Fatal("short pack admitted")
+	}
+	var inside, most atomic.Int64
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				release, ok := a.admit(false, true)
+				if !ok {
+					time.Sleep(time.Millisecond)
+					continue
+				}
+				n := inside.Add(1)
+				for m := most.Load(); n > m && !most.CompareAndSwap(m, n); m = most.Load() {
+				}
+				time.Sleep(2 * time.Millisecond)
+				inside.Add(-1)
+				release()
+				return
+			}
+		}()
+	}
+	wg.Wait()
+	if most.Load() != 1 {
+		t.Fatal("unobserved packs admitted concurrent requests", most.Load())
+	}
+	if release, ok := a.admit(false, false); !ok {
+		t.Fatal("observed pack with room refused")
+	} else {
+		release()
 	}
 }
 
