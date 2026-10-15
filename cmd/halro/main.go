@@ -35,7 +35,6 @@ import (
 	"github.com/akz142857/Halro/internal/hostsecurity"
 	"github.com/akz142857/Halro/internal/logging"
 	"github.com/akz142857/Halro/internal/masterkey"
-	"github.com/akz142857/Halro/internal/replication"
 	"github.com/akz142857/Halro/internal/safelog"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	storelock "github.com/akz142857/Halro/internal/store/lock"
@@ -231,7 +230,6 @@ var topLevelCommands = []commandDescriptor{
 	{"serve", "halro serve [flags]", "serve a prepared data directory"},
 	{"healthcheck", "halro healthcheck [flags]", "check loopback readiness"},
 	{"config", "halro config <check|migrate> [--config <path>]", "validate or migrate configuration without starting Halro"},
-	{"cluster", "halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]", "seed, inspect, promote, hand off, maintain, report backup evidence, or leave an authenticated HA member"},
 	{"version", "halro version", "print build and time-zone database identity"},
 }
 
@@ -274,334 +272,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		return nil
 	}
 	switch arguments[0] {
-	case "cluster":
-		if len(arguments) < 2 {
-			return errors.New("usage: halro cluster <establish|seed-approve|seed-install|status|promote|stepdown|report-backup|maintenance|leave> [flags]")
-		}
-		switch arguments[1] {
-		case "establish":
-			flags := flag.NewFlagSet("cluster establish", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			roleValue := flags.String("role", "", "initial role: primary or replica")
-			incarnation := flags.String("incarnation", "", "shared cluster incarnation")
-			term := flags.Uint64("term", 1, "initial positive term")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if *incarnation == "" {
-				return errors.New("cluster establish requires --incarnation")
-			}
-			if replication.Role(*roleValue) == replication.RoleReplica {
-				return errors.New("Replica establishment requires cluster seed-install so the approved staging snapshot is verified")
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			if err := app.EstablishMemberState(context.Background(), cfg, replication.Role(*roleValue), *incarnation, *term); err != nil {
-				return err
-			}
-			fmt.Fprintf(os.Stdout, "Established %s member %s in cluster %s incarnation %s at term %d\n",
-				*roleValue, cfg.Replication.NodeID, cfg.Replication.ClusterID, *incarnation, *term)
-			return nil
-		case "seed-approve":
-			flags := flag.NewFlagSet("cluster seed-approve", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "source Primary configuration file")
-			target := flags.String("target", "", "configured target Replica node ID")
-			output := flags.String("output", "", "absolute output path for the approved seed manifest")
-			username := flags.String("username", "admin", "local administrator username")
-			passwordFile := flags.String("password-file", "", "absolute path to the administrator password; otherwise read stdin")
-			totpFile := flags.String("totp-file", "", "absolute path to a current TOTP code when MFA is active")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			password, err := readPasswordInput(os.Stdin, *passwordFile)
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			var totpCode string
-			if *totpFile != "" {
-				if !filepath.IsAbs(*totpFile) {
-					return errors.New("--totp-file must be an absolute path")
-				}
-				payload, readErr := os.ReadFile(*totpFile)
-				if readErr != nil {
-					return readErr
-				}
-				totpCode = strings.TrimSpace(string(payload))
-				clear(payload)
-			}
-			manifest, err := app.CreateSeedManifest(context.Background(), cfg, *target, *output, *username, password, totpCode)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(manifest)
-		case "seed-install":
-			flags := flag.NewFlagSet("cluster seed-install", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "target Replica configuration file")
-			staging := flags.String("staging", "", "absolute sibling staging data directory")
-			manifestPath := flags.String("manifest", "", "absolute approved seed manifest path")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			state, err := app.InstallSeedSnapshot(context.Background(), cfg, *staging, *manifestPath)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
-				"role": state.Role, "term": state.Term, "applied_index": state.AppliedIndex,
-			})
-		case "status":
-			flags := flag.NewFlagSet("cluster status", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			state, err := app.ClusterStatus(context.Background(), cfg)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"cluster_id": state.ClusterID, "incarnation": state.Incarnation, "node_id": state.NodeID,
-				"role": state.Role, "term": state.Term, "promised_term": state.PromisedTerm,
-				"durable_index": state.DurableIndex, "confirmed_index": state.ConfirmedIndex,
-				"applied_index": state.AppliedIndex, "projection": state.Projection, "peers": state.Peers,
-			})
-		case "promote":
-			flags := flag.NewFlagSet("cluster promote", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			expectTerm := flags.Uint64("expect-term", 0, "authenticated local term inspected by the operator")
-			expectIndex := flags.Uint64("expect-index", 0, "authenticated local applied index inspected by the operator")
-			oldPrimary := flags.String("old-primary", "", "node ID of the fenced former Primary")
-			fencedBy := flags.String("old-primary-fenced-by", "", "pod-deleted-pvc-retained or node-isolated")
-			self := flags.Bool("self", false, "re-establish this stopped Primary in a newer term")
-			noPeerPromise := flags.Bool("no-peer-promise", false, "allow an unavailable two-member cluster to remain unable to confirm writes")
-			username := flags.String("username", "admin", "local administrator username")
-			passwordFile := flags.String("password-file", "", "absolute path to the administrator password; otherwise read stdin")
-			totpFile := flags.String("totp-file", "", "absolute path to a current TOTP code when MFA is active")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			if *self {
-				if *oldPrimary == "" {
-					*oldPrimary = cfg.Replication.NodeID
-				}
-				if *fencedBy == "" {
-					*fencedBy = replication.FenceSelfStopped
-				}
-			}
-			password, err := readPasswordInput(os.Stdin, *passwordFile)
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			var totpCode string
-			if *totpFile != "" {
-				if !filepath.IsAbs(*totpFile) {
-					return errors.New("--totp-file must be an absolute path")
-				}
-				payload, readErr := os.ReadFile(*totpFile)
-				if readErr != nil {
-					return readErr
-				}
-				totpCode = strings.TrimSpace(string(payload))
-				clear(payload)
-			}
-			result, err := app.PromoteMember(context.Background(), cfg, app.PromoteMemberOptions{
-				ExpectedTerm: *expectTerm, ExpectedAppliedIndex: *expectIndex,
-				OldPrimaryNodeID: *oldPrimary, FencedBy: *fencedBy, NoPeerPromise: *noPeerPromise,
-				Self: *self, Username: *username, Password: password, TOTPCode: totpCode,
-			})
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"cluster_id": result.State.ClusterID, "incarnation": result.State.Incarnation,
-				"node_id": result.State.NodeID, "role": result.State.Role, "term": result.State.Term,
-				"promised_term": result.State.PromisedTerm, "applied_index": result.State.AppliedIndex,
-				"peer_promises": result.Promises,
-			})
-		case "stepdown":
-			flags := flag.NewFlagSet("cluster stepdown", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file for the stopped target Replica")
-			to := flags.String("to", "", "target Replica node ID; must match this config")
-			from := flags.String("from", "", "current Primary node ID")
-			expectTerm := flags.Uint64("expect-term", 0, "authenticated target term inspected by the operator")
-			expectIndex := flags.Uint64("expect-index", 0, "authenticated target applied index inspected by the operator")
-			username := flags.String("username", "admin", "local administrator username")
-			passwordFile := flags.String("password-file", "", "absolute path to the administrator password; otherwise read stdin")
-			totpFile := flags.String("totp-file", "", "absolute path to a current TOTP code when MFA is active")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			password, err := readPasswordInput(os.Stdin, *passwordFile)
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			var totpCode string
-			if *totpFile != "" {
-				if !filepath.IsAbs(*totpFile) {
-					return errors.New("--totp-file must be an absolute path")
-				}
-				payload, readErr := os.ReadFile(*totpFile)
-				if readErr != nil {
-					return readErr
-				}
-				totpCode = strings.TrimSpace(string(payload))
-				clear(payload)
-			}
-			result, err := app.StepdownMember(context.Background(), cfg, *to, app.PromoteMemberOptions{
-				ExpectedTerm: *expectTerm, ExpectedAppliedIndex: *expectIndex, OldPrimaryNodeID: *from,
-				Username: *username, Password: password, TOTPCode: totpCode,
-			})
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"from_node": *from, "to_node": result.State.NodeID, "term": result.State.Term,
-				"applied_index": result.State.AppliedIndex, "peer_promises": result.Promises,
-			})
-		case "report-backup":
-			flags := flag.NewFlagSet("cluster report-backup", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			backupPath := flags.String("file", "", "encrypted Replica backup file")
-			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
-			username := flags.String("username", "admin", "local administrator username")
-			passwordFile := flags.String("password-file", "", "absolute path to the administrator password; otherwise read stdin")
-			totpFile := flags.String("totp-file", "", "absolute path to a current TOTP code when MFA is active")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			if *backupPath == "" || *keyPath == "" {
-				return errors.New("cluster report-backup requires --file and --key-file")
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			key, err := backuppkg.LoadKeyFile(*keyPath)
-			if err != nil {
-				return err
-			}
-			defer clear(key)
-			password, err := readPasswordInput(os.Stdin, *passwordFile)
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			var totpCode string
-			if *totpFile != "" {
-				if !filepath.IsAbs(*totpFile) {
-					return errors.New("--totp-file must be an absolute path")
-				}
-				payload, readErr := os.ReadFile(*totpFile)
-				if readErr != nil {
-					return readErr
-				}
-				totpCode = strings.TrimSpace(string(payload))
-				clear(payload)
-			}
-			manifest, err := app.ReportReplicaBackup(context.Background(), cfg, *backupPath, key, *username, password, totpCode)
-			if err != nil {
-				return err
-			}
-			return json.NewEncoder(os.Stdout).Encode(map[string]any{
-				"backup_id": manifest.BackupID, "source_node_id": manifest.SourceNodeID,
-				"applied_index": manifest.AppliedIndex, "status": "reported",
-			})
-		case "maintenance":
-			if len(arguments) < 3 || (arguments[2] != "on" && arguments[2] != "off") {
-				return errors.New("usage: halro cluster maintenance <on|off> [--config <path>]")
-			}
-			enabled := arguments[2] == "on"
-			flags := flag.NewFlagSet("cluster maintenance "+arguments[2], flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			if err := flags.Parse(arguments[3:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := app.SetMemberMaintenance(context.Background(), cfg, enabled); err != nil {
-				return err
-			}
-			state := "disabled"
-			if enabled {
-				state = "enabled"
-			}
-			fmt.Fprintf(os.Stdout, "Replica maintenance mode %s\n", state)
-			return nil
-		case "leave":
-			flags := flag.NewFlagSet("cluster leave", flag.ContinueOnError)
-			configPath := flags.String("config", "config.yaml", "configuration file")
-			confirm := flags.String("confirm", "", "exact cluster_id/node_id confirmation")
-			username := flags.String("username", "admin", "local administrator username")
-			passwordFile := flags.String("password-file", "", "absolute path to the administrator password; otherwise read stdin")
-			if err := flags.Parse(arguments[2:]); err != nil {
-				return err
-			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{SkipListenerValidation: true})
-			if err != nil {
-				return err
-			}
-			if err := hardenSecretHandlingCommand(); err != nil {
-				return err
-			}
-			password, err := readPasswordInput(os.Stdin, *passwordFile)
-			if err != nil {
-				return err
-			}
-			defer clear(password)
-			if err := app.LeaveMember(context.Background(), cfg, *confirm, *username, password); err != nil {
-				return err
-			}
-			fmt.Fprintln(os.Stdout, "Cluster membership removed; delete replication configuration before starting Standalone")
-			return nil
-		default:
-			return fmt.Errorf("unknown cluster command %q", arguments[1])
-		}
 	case "pricing":
 		if len(arguments) < 2 || arguments[1] != "migrate" {
 			return errors.New("usage: halro pricing migrate --dry-run --report <path> | --resolution-file <path> --apply")
@@ -618,11 +288,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
-		}
-		if *apply {
-			if err := rejectReplicationMutation(cfg, "pricing migrate --apply"); err != nil {
-				return err
-			}
 		}
 		metadataPath := filepath.Join(cfg.Storage.DataDir, cfg.Storage.MetadataFile)
 		offlineLock, err := storelock.Acquire(cfg.Storage.DataDir)
@@ -687,13 +352,8 @@ func run(arguments []string, logger *slog.Logger) error {
 		if *allowInsecure {
 			logger.Warn("insecure public Gateway override enabled")
 		}
-		initialized := false
-		if cfg.Replication == nil {
-			initialized, err = app.InitializeIfNeeded(cfg)
-			if err != nil {
-				return err
-			}
-		} else if err := replication.RequireMemberRuntime(cfg.Storage.DataDir, true, "start"); err != nil {
+		initialized, err := app.InitializeIfNeeded(cfg)
+		if err != nil {
 			return err
 		}
 		if initialized {
@@ -759,9 +419,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectReplicationMutation(cfg, "init"); err != nil {
-			return err
-		}
 		if err := hardenSecretHandlingCommand(); err != nil {
 			return err
 		}
@@ -814,9 +471,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
-			return err
-		}
-		if err := rejectReplicationMutation(cfg, "bootstrap"); err != nil {
 			return err
 		}
 		if err := hardenSecretHandlingCommand(); err != nil {
@@ -879,9 +533,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		if err != nil {
 			return err
 		}
-		if err := rejectReplicationMutation(cfg, "admin "+command); err != nil {
-			return err
-		}
 		if command == "reset-mfa" {
 			if *passwordFile != "" || *ifNeeded || *operationID != "" {
 				return errors.New("reset-mfa does not accept password or bootstrap flags")
@@ -933,12 +584,8 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
 			}
-			cfg, err := config.Load(*configPath, config.LoadOptions{})
-			if err != nil {
+			if _, err := config.Load(*configPath, config.LoadOptions{}); err != nil {
 				return err
-			}
-			for _, warning := range cfg.Warnings() {
-				fmt.Fprintf(os.Stdout, "warning: %s\n", warning)
 			}
 			fmt.Fprintln(os.Stdout, "configuration valid")
 			return nil
@@ -975,9 +622,6 @@ func run(arguments []string, logger *slog.Logger) error {
 				if err != nil {
 					return err
 				}
-				if err := rejectReplicationMutation(cfg, "key slot status"); err != nil {
-					return err
-				}
 				result, err := inspectKMSSlotsCommand(context.Background(), cfg)
 				if err != nil {
 					return err
@@ -1001,9 +645,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "key slot revoke"); err != nil {
-				return err
-			}
 			result, err := revokeKMSCommand(context.Background(), cfg, app.KMSRevokeOptions{
 				SlotID: *slotID, ConfirmSlotID: *confirmSlotID,
 				ExpectedDescriptorRevision: *expectedDescriptorRevision,
@@ -1024,9 +665,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "key recover"); err != nil {
-				return err
-			}
 			result, err := verifyRecoveryCommand(context.Background(), cfg, *confirmedSlot)
 			if err != nil {
 				return err
@@ -1043,9 +681,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
-				return err
-			}
-			if err := rejectReplicationMutation(cfg, "key rotate"); err != nil {
 				return err
 			}
 			var result app.KeyRotationResult
@@ -1078,9 +713,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "key rewrap"); err != nil {
-				return err
-			}
 			result, err := rewrapKMSCommand(context.Background(), cfg, app.KMSRewrapOptions{
 				Purpose: masterkey.KeySlotPurpose(*purpose), SlotID: *slotID, KeyReference: *keyReference, Compromised: *compromised,
 			})
@@ -1100,9 +732,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "key create"); err != nil {
-				return err
-			}
 			result, err := app.CreateProjectKey(context.Background(), cfg, *projectID, *name)
 			if err != nil {
 				return err
@@ -1118,9 +747,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
-				return err
-			}
-			if err := rejectReplicationMutation(cfg, "key disable"); err != nil {
 				return err
 			}
 			if err := app.DisableProjectKey(context.Background(), cfg, *keyID); err != nil {
@@ -1143,7 +769,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			configPath := flags.String("config", "config.yaml", "configuration file")
 			outputPath := flags.String("output", "", "encrypted backup output file")
 			keyPath := flags.String("key-file", "", "32-byte backup key file with mode 0600")
-			replicaBackup := flags.Bool("replica", false, "create a read-only backup from a stopped Replica")
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
 			}
@@ -1154,11 +779,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if !*replicaBackup {
-				if err := rejectReplicationMutation(cfg, "backup create"); err != nil {
-					return err
-				}
-			}
 			key, err := backuppkg.LoadKeyFile(*keyPath)
 			if err != nil {
 				return err
@@ -1168,8 +788,8 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			manifest, err := app.CreateBackupWithOptions(
-				context.Background(), cfg, *configPath, absoluteOutput, key, app.CreateBackupOptions{Replica: *replicaBackup},
+			manifest, err := app.CreateBackup(
+				context.Background(), cfg, *configPath, absoluteOutput, key,
 			)
 			if err != nil {
 				return err
@@ -1203,7 +823,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			confirmation := flags.String("confirm-backup-id", "", "exact verified backup ID")
 			useRecovery := flags.Bool("use-recovery-slot", false, "explicitly unlock the staged backup with the configured Recovery Slot")
 			confirmRecovery := flags.String("confirm-recovery-slot", "", "exact configured Recovery Slot ID")
-			incarnation := flags.String("incarnation", "", "new cluster incarnation required when restoring an HA backup")
 			if err := flags.Parse(arguments[2:]); err != nil {
 				return err
 			}
@@ -1221,7 +840,7 @@ func run(arguments []string, logger *slog.Logger) error {
 			defer clear(key)
 			result, err := restoreBackupCommand(
 				context.Background(), cfg, *backupPath, key, *confirmation,
-				app.RestoreOptions{UseRecoverySlot: *useRecovery, ConfirmRecoverySlot: *confirmRecovery, NewIncarnation: *incarnation},
+				app.RestoreOptions{UseRecoverySlot: *useRecovery, ConfirmRecoverySlot: *confirmRecovery},
 			)
 			if err != nil {
 				return err
@@ -1251,18 +870,12 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		switch arguments[1] {
 		case "suspensions":
-			if err := rejectReplicationMutation(cfg, "route suspensions"); err != nil {
-				return err
-			}
 			items, err := app.ListStoredRouteSuspensions(context.Background(), cfg)
 			if err != nil {
 				return err
 			}
 			return json.NewEncoder(os.Stdout).Encode(map[string]any{"items": items})
 		case "clear-suspension":
-			if err := rejectReplicationMutation(cfg, "route clear-suspension"); err != nil {
-				return err
-			}
 			if *scopeID == "" {
 				return errors.New("--scope-id is required; take it from `halro route suspensions`")
 			}
@@ -1287,11 +900,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
 			return err
-		}
-		if arguments[1] != "verify" {
-			if err := rejectReplicationMutation(cfg, "usage "+arguments[1]); err != nil {
-				return err
-			}
 		}
 		switch arguments[1] {
 		case "compact":
@@ -1344,9 +952,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			if err != nil {
 				return err
 			}
-			if err := rejectReplicationMutation(cfg, "audit verify"); err != nil {
-				return err
-			}
 			if err := hardenSecretHandlingCommand(); err != nil {
 				return err
 			}
@@ -1367,9 +972,6 @@ func run(arguments []string, logger *slog.Logger) error {
 			}
 			cfg, err := config.Load(*configPath, config.LoadOptions{})
 			if err != nil {
-				return err
-			}
-			if err := rejectReplicationMutation(cfg, "audit verify-anchor"); err != nil {
 				return err
 			}
 			if err := hardenSecretHandlingCommand(); err != nil {
@@ -1399,9 +1001,6 @@ func run(arguments []string, logger *slog.Logger) error {
 		}
 		cfg, err := config.Load(*configPath, config.LoadOptions{})
 		if err != nil {
-			return err
-		}
-		if err := rejectReplicationMutation(cfg, "ledger "+arguments[1]); err != nil {
 			return err
 		}
 		if arguments[1] == "seal" {
@@ -1597,9 +1196,6 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 			"error_file_max_files", cfg.Logging.ErrorFile.FileLimit())
 	}
 	logger.Info("logging configured", logAttributes...)
-	for _, warning := range cfg.Warnings() {
-		logger.Warn("configuration warning", "detail", warning)
-	}
 	if cfg.Gateway.FailureCapture.Enabled {
 		// The one feature that begins persisting material a caller wrote is the
 		// one that should not be discoverable only by reading config.yaml or
@@ -1622,26 +1218,29 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	guidePrinted := false
-	for {
-		if waited, err := app.WaitForMemberMaintenance(ctx, cfg, logger); err != nil {
-			return err
-		} else if waited {
-			logger.Info("Replica maintenance mode disabled; opening member runtime")
+	runtime, err := app.OpenWithOptions(ctx, cfg, logger, app.OpenOptions{AllowGeneratedSetupToken: printGuide})
+	if err != nil {
+		return err
+	}
+	defer runtime.Close()
+	runtime.SetReloadSources(configPath, logControls)
+	// SIGHUP is only answered once the runtime has loaded its certificates and
+	// bound its listeners, which is exactly what the ready hook marks. Starting
+	// the watcher any earlier would let a signal read the material while startup
+	// is still writing it.
+	var stopReloads func()
+	defer func() {
+		if stopReloads != nil {
+			stopReloads()
 		}
-		runtime, err := app.OpenWithOptions(ctx, cfg, logger, app.OpenOptions{AllowGeneratedSetupToken: printGuide && !guidePrinted})
-		if err != nil {
-			return err
-		}
-		runtime.SetReloadSources(configPath, logControls)
-		// SIGHUP is only answered once the runtime has loaded its certificates and
-		// bound its listeners, which is exactly what the ready hook marks.
-		var stopReloads func()
-		ready := func() error {
+	}()
+	ready := func() error {
+		stopReloads = watchReloadSignal(runtime, logger)
+		return nil
+	}
+	if printGuide {
+		ready = func() error {
 			stopReloads = watchReloadSignal(runtime, logger)
-			if !printGuide || guidePrinted {
-				return nil
-			}
 			status, err := runtime.SetupStatus(ctx)
 			if err != nil {
 				return err
@@ -1663,26 +1262,14 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 			if token, display, err := runtime.TakeGeneratedSetupToken(ctx); err != nil {
 				return err
 			} else if display {
+				// This is deliberately written directly to the controlling process,
+				// not through structured application logging.
 				fmt.Fprintf(os.Stderr, "One-time setup token: %s\n", token)
 			}
-			guidePrinted = true
 			return nil
 		}
-		runErr := runtime.RunWithReady(ctx, ready)
-		if stopReloads != nil {
-			stopReloads()
-		}
-		closeErr := runtime.Close()
-		if errors.Is(runErr, app.ErrMaintenanceRequested) && closeErr == nil {
-			logger.Info("Replica entered maintenance mode; data directory lock released")
-			continue
-		}
-		return errors.Join(runErr, closeErr)
 	}
-}
-
-func rejectReplicationMutation(cfg config.Config, operation string) error {
-	return replication.GuardUnavailableRuntime(cfg.Storage.DataDir, cfg.Replication != nil, operation)
+	return runtime.RunWithReady(ctx, ready)
 }
 
 // watchReloadSignal answers SIGHUP for as long as the returned stop has not

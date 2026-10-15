@@ -1,7 +1,6 @@
 package metadatajournal
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
@@ -62,48 +61,6 @@ type Log struct {
 	// does. A reader comparing a projection against this log needs it: a
 	// projection below the cut cannot be caught up from here.
 	trimmedThrough uint64
-	afterDurable   func(DurableBatch) (uint64, error)
-	waitConfirmed  func(context.Context, uint64) error
-	replica        bool
-	terminalErr    error
-}
-
-type DurableBatch struct {
-	Epoch         uint64
-	FirstSequence uint64
-	LastSequence  uint64
-	Frames        []byte
-}
-
-// SetAfterDurable installs the HA ordering callback after the journal is
-// attached and before authoritative writes are admitted. It is one-shot so a
-// running store cannot silently change which replication tenure owns commits.
-func (l *Log) SetAfterDurable(callback func(DurableBatch) (uint64, error), waitConfirmed func(context.Context, uint64) error) error {
-	if callback == nil || waitConfirmed == nil {
-		return errors.New("metadata journal durability and confirmation callbacks are required together")
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil {
-		return errors.New("metadata journal is closed")
-	}
-	if l.replica {
-		return errors.New("metadata journal is replica-owned")
-	}
-	if l.afterDurable != nil {
-		return errors.New("metadata journal durable callback is already installed")
-	}
-	l.afterDurable = callback
-	l.waitConfirmed = waitConfirmed
-	return nil
-}
-
-// AppendReceipt binds a committed metadata-journal frame to the global
-// replication index allocated after its source fsync. A zero index is the
-// Standalone path.
-type AppendReceipt struct {
-	Record           Record
-	ReplicationIndex uint64
 }
 
 // Head is where the file ends: the position a projection is compared against.
@@ -124,16 +81,6 @@ type Head struct {
 // append. A file that does not exist yet is not created here: a journal starts
 // at an epoch, and StartEpoch is the call that says which one.
 func Open(path string, key []byte) (*Log, error) {
-	return open(path, key, false)
-}
-
-// OpenReplica opens an existing epoch for physical frame landing and refuses
-// local semantic appends.
-func OpenReplica(path string, key []byte) (*Log, error) {
-	return open(path, key, true)
-}
-
-func open(path string, key []byte, replica bool) (*Log, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("metadata journal key must be %d bytes", KeySize)
 	}
@@ -146,11 +93,12 @@ func open(path string, key []byte, replica bool) (*Log, error) {
 		file.Close()
 		return nil, err
 	}
+	// A torn tail is a crash during append, and it is repaired rather than
+	// refused for the same reason the Audit log repairs one: the frame was
+	// never acknowledged to anybody, because the bbolt transaction that would
+	// have committed alongside it had not committed either. Anything the frame
+	// described is therefore absent from the projection too.
 	if partial {
-		if replica {
-			file.Close()
-			return nil, fmt.Errorf("%w: replica metadata journal has a partial tail that must be reconciled against ordering", ErrCorrupt)
-		}
 		if err := file.Truncate(head.Offset); err != nil {
 			file.Close()
 			return nil, fmt.Errorf("truncate partial metadata journal tail: %w", err)
@@ -169,7 +117,6 @@ func open(path string, key []byte, replica bool) (*Log, error) {
 		path: path, key: append([]byte(nil), key...),
 		epoch: head.Epoch, sequence: head.Sequence, offset: head.Offset, lastHash: head.Hash,
 		trimmedThrough: head.TrimmedThrough,
-		replica:        replica,
 	}, nil
 }
 
@@ -259,81 +206,36 @@ func publish(path string, contents []byte) error {
 // describing work the database has not done, and open-time reconciliation
 // replays it.
 func (l *Log) Append(ops []Op) (Record, error) {
-	receipt, err := l.AppendWithReceipt(ops)
-	return receipt.Record, err
-}
-
-// AppendWithReceipt writes one operations frame and returns the replication
-// token without waiting on the network. The bbolt transaction must commit
-// before its caller invokes WaitConfirmed.
-func (l *Log) AppendWithReceipt(ops []Op) (AppendReceipt, error) {
 	if len(ops) == 0 {
-		return AppendReceipt{}, errors.New("an operations frame with no operations would record nothing")
+		return Record{}, errors.New("an operations frame with no operations would record nothing")
 	}
 	payload, err := encodePayload(KindOperations, ops, EpochHeader{}, TrimAnchor{})
 	if err != nil {
-		return AppendReceipt{}, err
+		return Record{}, err
 	}
 	if len(payload) > MaxPayloadSize {
-		return AppendReceipt{}, fmt.Errorf("metadata transaction records %d bytes, over the %d byte frame limit",
+		return Record{}, fmt.Errorf("metadata transaction records %d bytes, over the %d byte frame limit",
 			len(payload), MaxPayloadSize)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.file == nil {
-		return AppendReceipt{}, errors.New("metadata journal is closed")
-	}
-	if l.replica {
-		return AppendReceipt{}, errors.New("metadata journal is replica-owned and refuses local append")
-	}
-	if l.terminalErr != nil {
-		return AppendReceipt{}, fmt.Errorf("metadata journal requires restart after an uncertain durable callback: %w", l.terminalErr)
+		return Record{}, errors.New("metadata journal is closed")
 	}
 	sequence := l.sequence + 1
 	frame, hash := encodeFrame(l.key, KindOperations, l.epoch, sequence, l.lastHash, payload)
 	if err := writeFull(l.durability, frame); err != nil {
-		l.terminalErr = err
-		return AppendReceipt{}, fmt.Errorf("append metadata journal: %w", err)
+		return Record{}, fmt.Errorf("append metadata journal: %w", err)
 	}
 	if err := l.durability.Sync(); err != nil {
-		l.terminalErr = err
-		return AppendReceipt{}, fmt.Errorf("sync metadata journal: %w", err)
+		return Record{}, fmt.Errorf("sync metadata journal: %w", err)
 	}
 	record := Record{
 		Kind: KindOperations, Epoch: l.epoch, Sequence: sequence,
 		Ops: ops, Hash: hash, Offset: l.offset,
 	}
 	l.sequence, l.offset, l.lastHash = sequence, l.offset+int64(len(frame)), hash
-	replicationIndex := uint64(0)
-	if l.afterDurable != nil {
-		var err error
-		replicationIndex, err = l.afterDurable(DurableBatch{
-			Epoch: l.epoch, FirstSequence: sequence, LastSequence: sequence,
-			Frames: append([]byte(nil), frame...),
-		})
-		if err != nil {
-			l.terminalErr = err
-			return AppendReceipt{}, fmt.Errorf("record durable metadata batch for replication: %w", err)
-		}
-		if replicationIndex == 0 {
-			err = errors.New("metadata durable callback returned replication index zero")
-			l.terminalErr = err
-			return AppendReceipt{}, err
-		}
-	}
-	return AppendReceipt{Record: record, ReplicationIndex: replicationIndex}, nil
-}
-
-// WaitConfirmed waits for the receipt's global index. It is deliberately a
-// separate call so bbolt can commit before a network wait begins.
-func (l *Log) WaitConfirmed(ctx context.Context, receipt AppendReceipt) error {
-	if receipt.ReplicationIndex == 0 {
-		return nil
-	}
-	if l.waitConfirmed == nil {
-		return errors.New("metadata confirmation callback is not configured")
-	}
-	return l.waitConfirmed(ctx, receipt.ReplicationIndex)
+	return record, nil
 }
 
 // Head is where the file ends right now.
@@ -344,33 +246,6 @@ func (l *Log) Head() Head {
 		Epoch: l.epoch, Sequence: l.sequence, Offset: l.offset, Hash: l.lastHash,
 		TrimmedThrough: l.trimmedThrough,
 	}
-}
-
-// ReplayRange visits a stable authenticated operations prefix while holding
-// the append mutex. It is used by the Replica projection so a concurrent
-// receive cannot expose a half-written frame to an independent descriptor.
-func (l *Log) ReplayRange(after, through uint64, visit func(Record) error) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.file == nil {
-		return errors.New("metadata journal is closed")
-	}
-	if through < after || through > l.sequence || after < l.trimmedThrough {
-		return errors.New("metadata replay range is outside the durable journal")
-	}
-	head, partial, err := scan(l.file, l.key, func(record Record) error {
-		if record.Kind == KindOperations && record.Sequence > after && record.Sequence <= through && visit != nil {
-			return visit(record)
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if partial || head.Epoch != l.epoch || head.Sequence != l.sequence || head.Hash != l.lastHash {
-		return fmt.Errorf("%w: metadata replay snapshot does not match durable head", ErrCorrupt)
-	}
-	return nil
 }
 
 func (l *Log) Close() error {
@@ -389,9 +264,6 @@ func writeFull(writer io.Writer, data []byte) error {
 		n, err := writer.Write(data[written:])
 		if err != nil {
 			return err
-		}
-		if n == 0 {
-			return io.ErrShortWrite
 		}
 		written += n
 	}
@@ -425,16 +297,14 @@ func Verify(path string, key []byte) (Head, error) {
 // a torn final frame, which is a crash rather than corruption; every other
 // disagreement is ErrCorrupt.
 func scan(file io.ReadSeeker, key []byte, visit func(Record) error) (Head, bool, error) {
-	return scanFrom(file, key, Head{}, true, visit)
-}
-
-func scanFrom(file io.ReadSeeker, key []byte, head Head, first bool, visit func(Record) error) (Head, bool, error) {
 	if len(key) != KeySize {
 		return Head{}, false, fmt.Errorf("metadata journal key must be %d bytes", KeySize)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return Head{}, false, err
 	}
+	var head Head
+	first := true
 	for {
 		header := make([]byte, frameHeaderSize)
 		n, err := io.ReadFull(file, header)

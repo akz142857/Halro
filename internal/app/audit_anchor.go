@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/config"
-	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
@@ -55,19 +54,10 @@ func (r *Runtime) runAuditAnchorMaintenance(ctx context.Context) {
 			return
 		}
 		now := time.Now().UTC()
-		anchor := boltstore.AuditAnchor{
+		if err := r.store.AppendAuditAnchor(boltstore.AuditAnchor{
 			Sequence: sequence, Records: summary.Records, LastHash: summary.LastHash,
 			Bytes: summary.Bytes, InstanceID: r.instanceID, ObservedAt: now,
-		}
-		if r.replication != nil {
-			state := r.replication.publisher.Snapshot()
-			if state.Role != replication.RolePrimary {
-				return
-			}
-			anchor.ClusterID, anchor.Incarnation = state.ClusterID, state.Incarnation
-			anchor.NodeID, anchor.Term = state.NodeID, state.Term
-		}
-		if err := r.store.AppendAuditAnchor(anchor); err != nil {
+		}); err != nil {
 			r.logger.Warn("audit anchor emission failed", "error", err)
 			r.anchorEmitFailures.Add(1)
 			return
