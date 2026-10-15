@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
 
@@ -33,7 +34,10 @@ func walkSequencesBackward(bucket *bbolt.Bucket, before uint64, visit func(seque
 		if key == nil {
 			key, value = cursor.Last()
 		}
-		for key != nil && binary.BigEndian.Uint64(key) >= before {
+		for key != nil && (len(key) != 8 || binary.BigEndian.Uint64(key) >= before) {
+			if len(key) != 8 {
+				return errors.New("usage history sequence key is malformed")
+			}
 			key, value = cursor.Prev()
 		}
 	}
@@ -72,7 +76,12 @@ func walkPrefixBackward(bucket *bbolt.Bucket, prefix string, before uint64, visi
 	} else {
 		key, _ = cursor.Prev()
 	}
-	for ; key != nil && bytes.HasPrefix(key, start) && len(key) == len(start)+8; key, _ = cursor.Prev() {
+	for ; key != nil && bytes.HasPrefix(key, start); key, _ = cursor.Prev() {
+		// A longer key belongs to another id that begins with this one and
+		// the separator; it is skipped, not taken for the end of the prefix.
+		if len(key) != len(start)+8 {
+			continue
+		}
 		if err := visit(binary.BigEndian.Uint64(key[len(start):])); err != nil {
 			if errors.Is(err, errStopWalk) {
 				return nil
@@ -89,7 +98,10 @@ func walkPrefixForward(bucket *bbolt.Bucket, prefix string, visit func(sequence 
 	start = append(start, prefix...)
 	start = append(start, historyRequestSeparator)
 	cursor := bucket.Cursor()
-	for key, _ := cursor.Seek(start); key != nil && bytes.HasPrefix(key, start) && len(key) == len(start)+8; key, _ = cursor.Next() {
+	for key, _ := cursor.Seek(start); key != nil && bytes.HasPrefix(key, start); key, _ = cursor.Next() {
+		if len(key) != len(start)+8 {
+			continue
+		}
 		if err := visit(binary.BigEndian.Uint64(key[len(start):])); err != nil {
 			return err
 		}
@@ -173,9 +185,19 @@ func (s *HistoryStore) dayRollups(tx *bbolt.Tx, periodID string, timezoneVersion
 // RollupRange walks the stored daily rows whose accounting date falls in
 // [startPeriodID, endPeriodID], in key order. An empty bound is open on that
 // side. Period ids are fixed-width local dates, so key order is chronological
-// and the walk stops at the first row past the end.
-func (s *HistoryStore) RollupRange(startPeriodID, endPeriodID string, visit func(domain.RollupKey, domain.DailyRollup) error) error {
-	return s.db.View(func(tx *bbolt.Tx) error {
+// and the walk stops at the first row past the end. The watermark is the
+// position the rows describe, read in the same transaction; it is zero for an
+// index that has written nothing.
+func (s *HistoryStore) RollupRange(startPeriodID, endPeriodID string, visit func(domain.RollupKey, domain.DailyRollup) error) (ledger.Watermark, error) {
+	var watermark ledger.Watermark
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		if raw := tx.Bucket(historyMeta).Get(historyKeyState); raw != nil {
+			var state HistoryState
+			if err := s.getSealed(historyMeta, historyKeyState, raw, &state); err != nil {
+				return err
+			}
+			watermark = state.Watermark
+		}
 		cursor := tx.Bucket(historyRollups).Cursor()
 		for key, value := cursor.Seek([]byte(startPeriodID)); key != nil; key, value = cursor.Next() {
 			parsed, err := domain.DecodeRollupKey(string(key))
@@ -195,6 +217,7 @@ func (s *HistoryStore) RollupRange(startPeriodID, endPeriodID string, visit func
 		}
 		return nil
 	})
+	return watermark, err
 }
 
 // hoursSince reads the hourly rows from since on, oldest first.

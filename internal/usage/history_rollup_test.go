@@ -66,7 +66,7 @@ func TestUsageRollupKeysSurviveSlashesInDimensionValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := map[string]int64{}
-	if err := store.RollupRange("2026-08-30", "2026-08-30",
+	if _, err := store.RollupRange("2026-08-30", "2026-08-30",
 		func(key domain.RollupKey, row domain.DailyRollup) error {
 			if key.Dimension != domain.RollupDimensionProviderModel {
 				return nil
@@ -97,7 +97,7 @@ func providerModelKey(value string) string {
 func dimensionRows(t *testing.T, store *HistoryStore) map[string]domain.DailyRollup {
 	t.Helper()
 	rows := map[string]domain.DailyRollup{}
-	if err := store.RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
+	if _, err := store.RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
 		if key.Dimension == domain.RollupDimensionProviderModel {
 			rows[key.DimensionKey] = row
 		}

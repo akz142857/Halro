@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/usage"
 )
 
@@ -208,7 +209,7 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 	if groupBy != "" && groupBy != reportDimension {
 		wanted = append(wanted, groupBy)
 	}
-	rows, changes, err := r.collectSummaryRows(start, end, wanted, filterValue)
+	rows, changes, watermark, err := r.collectSummaryRows(start, end, wanted, filterValue)
 	if err != nil {
 		adminStoreError(writer)
 		return
@@ -224,7 +225,7 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 		"buckets":            buckets,
 		"totals":             totals,
 		"timezone_changes":   changes,
-		"watermark_sequence": r.usage.Watermark().Sequence,
+		"watermark_sequence": watermark.Sequence,
 		"time_context":       timing,
 	}
 	if groupBy != "" {
@@ -260,7 +261,7 @@ type summaryRow struct {
 // same one.
 func (r *Runtime) collectSummaryRows(
 	start, end string, dimensions []string, filterValue string,
-) (map[string][]summaryRow, []summaryTimezoneChange, error) {
+) (map[string][]summaryRow, []summaryTimezoneChange, ledger.Watermark, error) {
 	wanted := map[string]struct{}{}
 	for _, dimension := range dimensions {
 		wanted[dimension] = struct{}{}
@@ -286,13 +287,16 @@ func (r *Runtime) collectSummaryRows(
 		}
 		return existing.Add(row)
 	}
-	// Stored rows only: the pending increment is flushed first, so the rows
-	// and the watermark the response reports describe the same position.
+	// Stored rows only, flushed first so they are current. The watermark is
+	// read in the same transaction as the rows: the collector may apply more
+	// records meanwhile, and the response must not claim a position its rows
+	// do not cover.
 	if err := r.usage.Flush(); err != nil {
-		return nil, nil, err
+		return nil, nil, ledger.Watermark{}, err
 	}
-	if err := r.usage.History().RollupRange(start, end, keep); err != nil {
-		return nil, nil, err
+	watermark, err := r.usage.History().RollupRange(start, end, keep)
+	if err != nil {
+		return nil, nil, ledger.Watermark{}, err
 	}
 	rows := make([]summaryRow, 0, len(merged))
 	for key, row := range merged {
@@ -311,7 +315,7 @@ func (r *Runtime) collectSummaryRows(
 	for _, row := range rows {
 		byDimension[row.key.Dimension] = append(byDimension[row.key.Dimension], row)
 	}
-	return byDimension, summaryTimezoneChanges(rows), nil
+	return byDimension, summaryTimezoneChanges(rows), watermark, nil
 }
 
 // summaryTimezoneChanges reports where the accounting timezone generation

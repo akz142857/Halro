@@ -110,7 +110,7 @@ func rollupRowsOf(t testing.TB, aggregate *Aggregate) map[string]domain.DailyRol
 		t.Fatal(err)
 	}
 	rows := map[string]domain.DailyRollup{}
-	if err := aggregate.History().RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
+	if _, err := aggregate.History().RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
 		rows[key.Encode()] = row
 		return nil
 	}); err != nil {

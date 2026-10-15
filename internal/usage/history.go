@@ -277,6 +277,14 @@ func sequenceKey(sequence uint64) []byte {
 	return key
 }
 
+// isAnomaly is what files an attempt under the anomalies index, and what a
+// read through that index checks the authenticated row against: the index
+// entries carry no MAC of their own, so an entry is only believed when the row
+// it names agrees with it.
+func isAnomaly(attempt AttemptEvent) bool {
+	return attempt.Status != "success" || attempt.RetryCount > 0 || attempt.FallbackCount > 0
+}
+
 func compositeKey(prefix string, sequence uint64) []byte {
 	key := make([]byte, 0, len(prefix)+9)
 	key = append(key, prefix...)
@@ -346,7 +354,7 @@ func (s *HistoryStore) commit(batch *historyBatch) error {
 			if err := projectAttempts.Put(compositeKey(attempt.ProjectID, attempt.Sequence), nil); err != nil {
 				return err
 			}
-			if attempt.Status != "success" || attempt.RetryCount > 0 || attempt.FallbackCount > 0 {
+			if isAnomaly(*attempt) {
 				if err := anomalies.Put(key, nil); err != nil {
 					return err
 				}

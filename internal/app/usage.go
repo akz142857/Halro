@@ -123,7 +123,7 @@ func RebuildUsageSummary(ctx context.Context, cfg config.Config) (SummaryRebuild
 	defer closeResources()
 	report := SummaryRebuildReport{Watermark: aggregate.Watermark(), RollupVersion: domain.RollupVersion}
 	days := make(map[string]struct{})
-	if err := aggregate.History().RollupRange("", "", func(key domain.RollupKey, _ domain.DailyRollup) error {
+	if _, err := aggregate.History().RollupRange("", "", func(key domain.RollupKey, _ domain.DailyRollup) error {
 		report.RollupRows++
 		days[domain.RollupDayPrefix(key.PeriodID, key.TimezoneVersion)] = struct{}{}
 		return nil
