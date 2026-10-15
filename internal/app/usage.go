@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/akz142857/Halro/internal/durable"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -79,6 +81,11 @@ func PruneUsage(
 		return usage.RetentionReport{}, err
 	}
 	defer dataLock.Close()
+	// The archive is only touched under an authenticated Ledger: a directory
+	// whose authority cannot be verified is not one to delete files from.
+	if err := replayUsageLedger(ctx, cfg, func([]byte) error { return nil }, func(ledger.Record) error { return nil }); err != nil {
+		return usage.RetentionReport{}, fmt.Errorf("replay usage ledger: %w", err)
+	}
 	exporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
 	if err != nil {
 		return usage.RetentionReport{}, err
@@ -167,6 +174,7 @@ func openUsageOffline(
 	}
 	var history *usage.HistoryStore
 	scratch := ""
+	var historyKey []byte
 	closeResources := func() error {
 		var errs []error
 		if history != nil {
@@ -176,20 +184,24 @@ func openUsageOffline(
 			errs = append(errs, os.RemoveAll(scratch))
 		}
 		errs = append(errs, dataLock.Close())
+		clear(historyKey)
 		return errors.Join(errs...)
 	}
 	var aggregate *usage.Aggregate
+	// The index is always built in a scratch directory. A rebuild installs it
+	// only once the whole Ledger has authenticated and replayed, so a refused
+	// or interrupted command leaves the data directory as it found it.
 	prepare := func(ledgerKey []byte) error {
-		path := cfg.HistoryPath()
-		if !rebuild {
-			dir, err := os.MkdirTemp("", "halro-usage-*")
-			if err != nil {
-				return err
-			}
-			scratch, path = dir, filepath.Join(dir, "history.db")
-		}
 		var err error
-		history, aggregate, err = openFreshHistory(path, ledgerKey)
+		if historyKey, err = vault.DeriveHistoryHMACKey(ledgerKey); err != nil {
+			return err
+		}
+		dir, err := os.MkdirTemp("", "halro-usage-*")
+		if err != nil {
+			return err
+		}
+		scratch = dir
+		history, aggregate, err = openFreshHistory(filepath.Join(dir, "history.db"), ledgerKey)
 		return err
 	}
 	if err := replayUsageLedger(ctx, cfg, prepare, func(record ledger.Record) error {
@@ -205,12 +217,66 @@ func openUsageOffline(
 		closeResources()
 		return nil, nil, nil, err
 	}
+	if rebuild {
+		if err := history.Close(); err != nil {
+			closeResources()
+			return nil, nil, nil, err
+		}
+		history = nil
+		if err := installHistory(filepath.Join(scratch, "history.db"), cfg.HistoryPath()); err != nil {
+			closeResources()
+			return nil, nil, nil, fmt.Errorf("install rebuilt usage history: %w", err)
+		}
+		if history, _, err = usage.OpenHistory(cfg.HistoryPath(), historyKey); err != nil {
+			closeResources()
+			return nil, nil, nil, err
+		}
+		if aggregate, err = usage.RestoreAggregate(history); err != nil {
+			closeResources()
+			return nil, nil, nil, err
+		}
+	}
 	exporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
 	if err != nil {
 		closeResources()
 		return nil, nil, nil, err
 	}
 	return aggregate, exporter, closeResources, nil
+}
+
+// installHistory copies a rebuilt index into place: written beside the target,
+// synced, then renamed over it, so the target is either the old index or the
+// complete new one.
+func installHistory(source, target string) (err error) {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	staged := target + ".rebuild"
+	out, err := os.OpenFile(staged, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			os.Remove(staged)
+		}
+	}()
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := errors.Join(out.Sync(), out.Close()); err != nil {
+		return err
+	}
+	if err := os.Rename(staged, target); err != nil {
+		return err
+	}
+	return durable.SyncDirectory(filepath.Dir(target))
 }
 
 // Authenticate before opening an exporter or a writable metadata handle. A
