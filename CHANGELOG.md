@@ -8,6 +8,10 @@ semantic versioning.
 
 ### Added
 
+- `halro start` can serve Go profiles on a loopback-only, opt-in listener
+  (`HALRO_PPROF_LISTEN=127.0.0.1:6060`) so memory growth can be attributed in
+  production. It is off unless the variable is set.
+
 - Kimi Code and the operator-enabled Claude subscription product are available
   as explicit provider offerings, kept separate from their metered products so
   credentials cannot silently spend the wrong balance. Claude subscription
