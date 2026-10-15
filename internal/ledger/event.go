@@ -1028,6 +1028,45 @@ func (s *State) Balance(projectID, periodID string, timezoneVersion uint64) Bala
 	return s.balances[BalanceKey{ProjectID: projectID, PeriodID: periodID, TimezoneVersion: timezoneVersion}]
 }
 
+// PeriodKey names one accounting day under one timezone generation, across
+// every project.
+type PeriodKey struct {
+	PeriodID        string
+	TimezoneVersion uint64
+}
+
+// PeriodTotals adds the balances up per accounting day across projects, and
+// reports the days some lease is still open against: a settlement may yet land
+// in those, so their totals are not final.
+func (s *State) PeriodTotals() (totals map[PeriodKey]Balance, open map[PeriodKey]bool, watermark Watermark, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	totals, open = make(map[PeriodKey]Balance), make(map[PeriodKey]bool)
+	for key, balance := range s.balances {
+		period := PeriodKey{PeriodID: key.PeriodID, TimezoneVersion: key.TimezoneVersion}
+		total := totals[period]
+		for _, pair := range []struct {
+			into  *int64
+			value int64
+		}{
+			{&total.ReservedMicrosUSD, balance.ReservedMicrosUSD},
+			{&total.CommittedMicrosUSD, balance.CommittedMicrosUSD},
+			{&total.InputTokens, balance.InputTokens},
+			{&total.OutputTokens, balance.OutputTokens},
+			{&total.UnknownAttempts, balance.UnknownAttempts},
+		} {
+			if *pair.into, err = checkedAdd(*pair.into, pair.value); err != nil {
+				return nil, nil, Watermark{}, err
+			}
+		}
+		totals[period] = total
+	}
+	for _, reservation := range s.reservations {
+		open[PeriodKey{PeriodID: reservation.Key.PeriodID, TimezoneVersion: reservation.Key.TimezoneVersion}] = true
+	}
+	return totals, open, s.watermark, nil
+}
+
 func (s *State) PendingReservations() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

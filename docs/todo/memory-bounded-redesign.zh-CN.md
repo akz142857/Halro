@@ -356,7 +356,11 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 
 ### 12.7 合计对账（D3 第三行，P1 留下的）
 
-快照任务写快照前，先让历史索引追到同一个 WAL 位置，再把 `history.db` 里每个项目、每天的日汇总，与内存里的 `balances` 比对已提交成本和 token 数。不一致时计数 `halro_usage_history_reconcile_mismatches_total`，控制台汇总接口返回提示。它能发现索引里被删掉的行和索引条目。
+每小时（随 Parquet 导出的维护周期）一次：先让历史索引追到 Ledger 头部，再把 `history.db` 里每天的**合计行**，与内存里同一天所有项目 `balances` 之和比对已知成本、provider token 数和未知成本次数。用合计行而不用项目行，是因为项目维度有键数上限，超出的项目会并入其他行。
+
+只比对不会再变的日子：48 小时之前、并且没有任何未结算租约的那天。更近的日子两边可能还在各自追加结算。
+
+不一致时计数 `halro_usage_history_reconcile_mismatches_total`，按天写错误日志并提示用 `usage rebuild-summary` 重建；`halro_usage_history_reconciled_periods` 是上一次比对的天数。它能发现被删掉的明细、汇总行和索引条目。控制台上的提示留到 P4。
 
 ### 12.8 本阶段不做
 

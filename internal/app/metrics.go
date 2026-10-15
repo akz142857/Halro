@@ -218,6 +218,12 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_usage_history_file_bytes", "gauge",
 		"Size of the usage history index file.")
 	fmt.Fprintf(output, "halro_usage_history_file_bytes %d\n", writes.FileBytes)
+	metricHeader(output, "halro_usage_history_reconciled_periods", "gauge",
+		"Accounting days the last reconciliation compared against the usage history.")
+	fmt.Fprintf(output, "halro_usage_history_reconciled_periods %d\n", r.reconciledPeriods.Load())
+	metricHeader(output, "halro_usage_history_reconcile_mismatches_total", "counter",
+		"Accounting days whose usage history totals disagreed with the accounting totals; rebuild the history.")
+	fmt.Fprintf(output, "halro_usage_history_reconcile_mismatches_total %d\n", r.reconcileMismatches.Load())
 	metricHeader(output, "halro_usage_history_row_auth_failures_total", "counter",
 		"Usage history reads that met a row failing authentication; rebuild the index from the Ledger.")
 	fmt.Fprintf(output, "halro_usage_history_row_auth_failures_total %d\n", writes.RowAuthFailures)
