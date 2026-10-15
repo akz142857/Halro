@@ -1,6 +1,6 @@
 # 内存有界的历史存储：重新设计
 
-- 状态：P0 完成（#406）；P1 完成，结果见 [P0 基线](../verification/memory-bounded-baseline.zh-CN.md) §5。
+- 状态：P0 完成（#406）；P1 完成（#407、#408），结果见 [P0 基线](../verification/memory-bounded-baseline.zh-CN.md) §5；P2 实施细则见 §12，待确认。
 - 取代：[内存有界状态与历史持久化改造方案（第一版，已归档）](../prd/memory-bounded-state-design-v1.zh-CN.md)。第一版的实现保留在 `memory-bounded-state` 分支，不合并。
 - 适用范围：单机（Standalone）。HA 代码已移到 `ha` 分支（#404），本方案完成后 HA 基于新的 `main` 继续，见 §9。
 - 基线：`main` @ `dc704030`，即 v0.8.5 加上之后的非 HA 修复。生产运行的正是 v0.8.5（GHCR 镜像 digest 与 `v0.8.5` 一致）。
@@ -286,3 +286,93 @@ HA 代码在 `ha` 分支（`098a3214`）。本方案落地后，HA 基于新的 
 1. heap profile 里不再出现 Usage 的消费者；
 2. 吞吐和 p99 不低于基线；
 3. 并发 64 下索引落后不超过 5 秒。
+
+## 12. P2 实施细则（Ledger）
+
+2026-10-16 写于开工前，依据是对 `main` @ `1911e018` 上 `ledger.State` 全部读取方的盘点。带 ★ 的是与 §5 / §7 不同、需要确认的决定。
+
+### 12.1 现状（代码核对）
+
+| 字段 | 1M 历史时 | 何时删除 | 生产代码里的读取方 |
+| --- | --- | --- | --- |
+| `leaseRecords` | 0.90 GB | **从不**（结算后仍保留） | `RecoverDeploymentPricePins`（每次启动核对**全部**已提交的价格 pin）、备份时的 `ValidateDeploymentPriceReferences` |
+| `settled` | 0.86 GB | 从不 | 备份校验（遍历全部）；`GovernanceSnapshot` 经 `settledByWorkUnit` 取尝试，唯一的用处是 `admin_outcomes.go:243` 按 WorkUnit 累加已知成本、估算成本和未知次数 |
+| `eventDigests` | 0.44 GB | 从不 | 只有 `Apply`：同一 EventID 再次出现时比对内容 |
+| `balances` | 小 | 从不 | 预算判断和控制台，只读当前期间。期间按天划分，条数 = 项目数 × 天数，**随天数增长，不随请求数增长** |
+| `reservations`、`requestRuns`、`activeByWorkUnit`、`pendingByWorkUnit` | 小 | 结算 / 结束时删除 | 预算、恢复、指标 |
+| `workUnits`、`runs`、`runsByWorkUnit`、`governanceIdempotency` | 基线里为 0（探针不建 WorkUnit） | 从不 | 治理接口、预算。`EventRunCreated` 为了数一个 WorkUnit 下的 Run，会扫描**全部** Run |
+
+启动时间的另一半在 `ledger.OpenWithOptions`：它把活动 WAL 文件完整读两遍，一遍校验哈希链，一遍算滚动摘要（1M 历史约 51 s）。封存默认关闭，默认段大小 8 GiB，所以 1M 历史的 3 GB WAL 就是一个活动文件。**只做快照达不到 10 秒的启动预算。**
+
+价格 pin 在 `halro.db` 里，已提交的 pin 也从不删除，每个按版本定价的尝试一条。
+
+### 12.2 热状态
+
+| 保留 | 上限由什么决定 |
+| --- | --- |
+| `reservations` 和对应的 `leaseRecords`（结算时一并删除） | 在途尝试数 |
+| `requestRuns`、`activeByWorkUnit`、`pendingByWorkUnit` | 在途请求数 |
+| `balances` ★ | 项目数 × 天数。每条约 150 字节，100 个项目一年约 5 MB。§5 原计划把已关闭期间移入索引；这里先全部留在内存，P4 再按需要移 |
+| `workUnits`、`runs`、`runsByWorkUnit`、`governanceIdempotency` ★ | 治理操作数，与请求数无关。§7 原计划在 P2 移入索引；这里留到 P3，与 Governance 历史一起处理。P2 只修掉 `EventRunCreated` 扫全部 Run 的问题，改用 `runsByWorkUnit` 计数 |
+| 每个 WorkUnit 的成本合计：已知成本、估算成本、未知次数（新增） | WorkUnit 数。替代 `settled` 和 `settledByWorkUnit`，`admin_outcomes` 直接读合计 |
+| 最近 65536 个事件的摘要（环形，约 6 MB） | 固定 |
+
+移出内存：`settled`、`settledByWorkUnit`、结算后的 `leaseRecords`、超出窗口的 `eventDigests`。这三项在基线里合计 2.2 GB，结算后的明细已经在 P1 的 `history.db` 里，不需要新的索引。
+
+热状态的大小作为指标导出；超过 128 MiB 时告警（§6）。在 P3 处理治理字段之前，拒绝新请求只针对在途数超限，不针对治理字段。
+
+### 12.3 `Apply` 的校验怎么变
+
+| 现在的校验 | 之后 |
+| --- | --- |
+| EventID 已出现过，内容不同 → 拒绝；内容相同 → 跳过 | 只在最近 65536 个事件内检查。会重复写入的只有确定性的恢复事件（`evt_recovery_…`），两份副本都在同一次启动的恢复过程里，相隔很近。恢复在快照任务启动之前完成，所以两份不会被快照隔开 |
+| 为已结算的尝试再建预留 → 拒绝 | 只对窗口内的尝试有效。尝试 ID 是 128 位随机数，WAL 又有 HMAC 链，旧 ID 被重用只可能是伪造，而伪造过不了链校验 |
+| 结算没有预留的尝试 → 拒绝 | 不变 |
+
+### 12.4 快照
+
+- 文件 `data/ledger-state.snap`，用 `durable` 写临时文件、fsync、rename、目录 fsync。
+- 内容：格式版本、对应的 WAL 位置（generation、offset、sequence）和该位置的链哈希，以及 §12.2 的全部字段。整个文件一个 HMAC，密钥从 Ledger 密钥经 HKDF 派生，标签 `halro:ledger-hot-state-mac-key:v1`。
+- 每 60 秒，或 WAL 每增长 64 MiB 写一次。在读锁内复制热状态，在锁外编码、计算 MAC 和写盘。请求路径不增加 fsync。
+- 格式版本不对或 MAC 不对：记录告警，走全量重建（§12.5 第 4 步）。
+
+### 12.5 启动
+
+1. 打开 Ledger。★ **封存默认开启，`ledger.seal.max_active_bytes` 默认从 8 GiB 降到 256 MiB**，这样活动文件最多 256 MiB，Open 的两遍读取有了上限。封存、校验、压缩都是现有功能，只改默认值。已有实例升级后第一次维护周期就会滚动一次。
+2. 读快照，验证 MAC，检查它的位置不超过 WAL 头部，并且该位置的链哈希与 WAL 一致。
+3. 从快照所在 generation 的**开头**校验哈希链，只回放快照位置之后的记录。读量最多是两个段（约 512 MiB），与历史长度无关。从段中间开始会跳过已封存帧的认证，所以不这样做。
+4. 没有快照或校验失败时，从第一帧重建，但只保留热状态，内存仍有上限。这是升级后第一次启动和恢复时才走的路，耗时仍随历史增长。
+5. 价格 pin 恢复 ★：只处理未提交的 pin，以及 `LedgerSequence` 在快照位置之后的已提交 pin。更早的 pin 在写出覆盖它们的快照之前，已经在之前的启动里核对过。全量核对移到离线命令和备份校验。
+
+### 12.6 读取方改造
+
+| 读取方 | 改成 |
+| --- | --- |
+| `admin_outcomes` 的成本汇总 | 读每个 WorkUnit 的合计，不再遍历尝试 |
+| `GovernanceSnapshot(IncludeAttempts)` | 删除这个选项，唯一的调用方已改读合计 |
+| `RecoverDeploymentPricePins` | 按 §12.5 第 5 步 |
+| `ValidateDeploymentPriceReferences`（备份创建和恢复，离线） | 流式读 WAL，逐条检查结算事件和 pin，不在内存里建全量状态 |
+| `SettledAttempt`、`SettledAttempts`、`AccountingLease`（已结算部分） | 删除 |
+
+### 12.7 合计对账（D3 第三行，P1 留下的）
+
+快照任务写快照前，先让历史索引追到同一个 WAL 位置，再把 `history.db` 里每个项目、每天的日汇总，与内存里的 `balances` 比对已提交成本和 token 数。不一致时计数 `halro_usage_history_reconcile_mismatches_total`，控制台汇总接口返回提示。它能发现索引里被删掉的行和索引条目。
+
+### 12.8 本阶段不做
+
+- 治理字段移入索引（P3）。
+- 已关闭期间的 `balances` 移入索引（P4，视实测增长决定）。
+- `halro history verify` / `rebuild`（P4）。
+
+### 12.9 退出时测量
+
+用 P0 的探针，在同一 Linux 容器里测量，对照 §6 全部预算：
+
+1. heap：1 万、10 万、100 万历史下 GC 后的 heap，增量不超过 32 MiB；
+2. 有快照时，100 万历史冷启动不超过 10 秒；没有快照时的全量重建耗时照实记录；
+3. 吞吐不低于基线的 95%，p99 不超过基线的 110%（并发 1、16、64）；
+4. 每请求 fsync 不多于基线；
+5. 热状态在项目数和在途数取配置上限时不超过 128 MiB；
+6. 新增生产代码行数（预计 2500–3500 行，上限 1 万行）。
+
+任何一项不达标，停下来记录原因并裁定。
