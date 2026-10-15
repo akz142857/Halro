@@ -7,22 +7,14 @@ import (
 	"github.com/akz142857/Halro/internal/domain"
 )
 
-// The console window as a governed setting.
-//
-// It is the one setting in this file whose change is destructive: shortening
-// the window trims the attempt history the moment the next export tick runs,
-// and what is trimmed is gone from memory — it lives on in the Parquet archive,
-// but the console cannot page into it. That is why the write requires the
-// caller to say so rather than inferring consent from the number.
+// The console window as a governed setting: how many days the attempt log and
+// the failed-request list show by default. Changing it discards nothing — the
+// usage history index keeps every attempt whatever the window says.
 
 type usageSettingsResponse struct {
 	ConsoleWindowDays int   `json:"console_window_days"`
 	Presets           []int `json:"presets"`
 	MinDays           int   `json:"min_days"`
-	// MaxDays is the archive's retention: the console must not offer to page
-	// back further than the archive keeps, or the screen promises history
-	// nothing holds.
-	MaxDays int `json:"max_days"`
 	// ConfigFileDays and ConfigFileInEffect are reported for the same reason the
 	// accounting settings report them: an operator who edited config.yaml should
 	// be able to see at a glance that the file is no longer what decides this.
@@ -35,8 +27,7 @@ type usageSettingsResponse struct {
 // consoleWindowDays is the live window every read of it goes through.
 //
 // Falling back to config.yaml is not a second source of truth: the pointer is
-// only nil before Open finishes seeding it, and answering zero there would let
-// a trim run with no window at all.
+// only nil before Open finishes seeding it.
 func (r *Runtime) consoleWindowDays() int {
 	if settings := r.usageSettings.Load(); settings != nil {
 		return settings.ConsoleWindowDays
@@ -49,7 +40,6 @@ func (r *Runtime) usageSettingsBody(settings domain.InstanceUsageSettings) usage
 		ConsoleWindowDays:  settings.ConsoleWindowDays,
 		Presets:            domain.ConsoleWindowPresets,
 		MinDays:            domain.MinInstanceConsoleWindowDays,
-		MaxDays:            r.config.Usage.RetentionDays,
 		ConfigFileDays:     r.config.Usage.ConsoleWindowDays,
 		ConfigFileInEffect: r.config.Usage.ConsoleWindowDays == settings.ConsoleWindowDays,
 		UpdatedAt:          settings.UpdatedAt,
@@ -74,11 +64,6 @@ func (r *Runtime) updateAdminUsageSettings(writer http.ResponseWriter, request *
 	}
 	var input struct {
 		ConsoleWindowDays *int `json:"console_window_days"`
-		// AcknowledgeTrim is the caller stating that they know a shorter window
-		// discards history. It is required only when the window shrinks, so the
-		// console can ask once, at the moment the answer matters, rather than
-		// putting a checkbox beside a setting that is usually harmless.
-		AcknowledgeTrim bool `json:"acknowledge_trim"`
 	}
 	if err := decodeAdminJSON(request, &input); err != nil {
 		adminBadRequestCode(writer, "invalid_request", "invalid request")
@@ -100,28 +85,6 @@ func (r *Runtime) updateAdminUsageSettings(writer http.ResponseWriter, request *
 	current := r.usageSettings.Load()
 	if current == nil {
 		adminStoreError(writer)
-		return
-	}
-	// The archive's retention is the ceiling. It lives in config.yaml rather
-	// than here because it governs files on disk rather than a screen, and a
-	// window longer than it would page into partitions that have been pruned.
-	//
-	// A stored window can nonetheless sit above it: retention is edited in the
-	// file and can be lowered under a window that was already saved. Refusing
-	// every value above the ceiling then leaves the operator wedged — the value
-	// they have is illegal, and so is every step toward legality but the last
-	// one. So a move that shortens the window is always allowed, even while it
-	// is still above the ceiling: it is the direction that fixes the state.
-	if retention := r.config.Usage.RetentionDays; retention >= 1 &&
-		settings.ConsoleWindowDays > retention &&
-		settings.ConsoleWindowDays >= current.ConsoleWindowDays {
-		adminBadRequestCode(writer, "console_window_exceeds_retention",
-			"console window cannot exceed the archive's retention")
-		return
-	}
-	if settings.ConsoleWindowDays < current.ConsoleWindowDays && !input.AcknowledgeTrim {
-		adminBadRequestCode(writer, "console_window_trim_unacknowledged",
-			"shortening the console window discards attempt history and must be acknowledged")
 		return
 	}
 	stored, err := r.store.PutInstanceUsageSettings(settings, expected)

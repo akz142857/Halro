@@ -31,13 +31,11 @@ export interface TimeContext {
  * accumulating would redefine what budgets already enforced against it meant.
  */
 export interface UsageSettings {
-  /** How far back the attempt log and the failed-request list can page. */
+  /** How many days the attempt log and the failed-request list show by default. */
   console_window_days: number;
-  /** What the console offers; any value between min and max is accepted. */
+  /** What the console offers; any value from min_days up is accepted. */
   presets: number[];
   min_days: number;
-  /** The archive's retention — the console must not promise more history. */
-  max_days: number;
   /** What config.yaml says, and whether it is still what takes effect. */
   config_file_days: number;
   config_file_in_effect: boolean;
