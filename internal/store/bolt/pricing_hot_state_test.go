@@ -83,7 +83,7 @@ func TestPinLeftPreparedByAFailedCommitIsCommittedAtStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.RecoverDeploymentPricePins(context.Background(), state); err != nil {
+	if err := store.RecoverDeploymentPricePins(context.Background(), state.AccountingLease, state.Watermark().Sequence); err != nil {
 		t.Fatal(err)
 	}
 	pin, found := pinState(t, store, "att_failed_commit")
@@ -109,7 +109,7 @@ func TestCommittedPinOfASettledAttemptPassesStartup(t *testing.T) {
 	if _, ok := state.AccountingLease("att_settled"); ok {
 		t.Fatal("a settled attempt kept its lease")
 	}
-	if err := store.RecoverDeploymentPricePins(context.Background(), state); err != nil {
+	if err := store.RecoverDeploymentPricePins(context.Background(), state.AccountingLease, state.Watermark().Sequence); err != nil {
 		t.Fatal(err)
 	}
 	if pin, found := pinState(t, store, "att_settled"); !found || pin.State != domain.PricePinCommitted {
@@ -173,4 +173,21 @@ func TestPriceReferenceCheckStreamsTheLedger(t *testing.T) {
 			t.Fatalf("a prepared pin passed: %v", err)
 		}
 	})
+}
+
+// A committed pin whose lease lies after the position this start replayed from
+// must meet that lease: every priced lease after it was read on the way in.
+func TestCommittedPinAfterTheReplayedPositionMustMeetItsLease(t *testing.T) {
+	store := openHotStatePricing(t)
+	lease, _ := pinnedAttempt(t, store, "att_after", 9, "success")
+	if _, err := store.CommitDeploymentPricePin(context.Background(), "att_after", mustDigest(t, lease.Event.PriceSnapshot), lease.Sequence, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	none := func(string) (ledger.Record, bool) { return ledger.Record{}, false }
+	if err := store.RecoverDeploymentPricePins(context.Background(), none, 8); err == nil || !strings.Contains(err.Error(), "has no Ledger lease") {
+		t.Fatalf("a committed pin after the replayed position passed without its lease: %v", err)
+	}
+	if err := store.RecoverDeploymentPricePins(context.Background(), none, 9); err != nil {
+		t.Fatalf("a committed pin at the replayed position was refused: %v", err)
+	}
 }

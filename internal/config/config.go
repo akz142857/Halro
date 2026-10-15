@@ -1338,6 +1338,12 @@ func (c Config) UsagePath() string {
 
 // HistoryPath is the usage history index, a derivative of the Ledger that is
 // rebuilt from it whenever it cannot be trusted.
+// LedgerStatePath is the accounting state snapshot. It is derived from the
+// Ledger beside it and is rebuilt from the Ledger when absent or untrusted.
+func (c Config) LedgerStatePath() string {
+	return filepath.Join(c.Storage.DataDir, "ledger", "state.snap")
+}
+
 func (c Config) HistoryPath() string {
 	return filepath.Join(c.Storage.DataDir, "history", "history.db")
 }

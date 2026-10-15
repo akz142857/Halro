@@ -233,6 +233,18 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 		sealedBytes += segment.Length
 		sealedStored += segment.StoredLength
 	}
+	metricHeader(output, "halro_ledger_state_snapshot_sequence", "gauge",
+		"Ledger sequence the last accounting state snapshot describes; a start replays from here.")
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_sequence %d\n", r.ledgerSnapshotSequence.Load())
+	metricHeader(output, "halro_ledger_state_snapshot_bytes", "gauge",
+		"Size of the last accounting state snapshot, which is the size of the accounting state.")
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_bytes %d\n", r.ledgerSnapshotBytes.Load())
+	metricHeader(output, "halro_ledger_state_snapshot_timestamp_seconds", "gauge",
+		"Unix time the last accounting state snapshot was written.")
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_timestamp_seconds %d\n", r.ledgerSnapshotUnix.Load())
+	metricHeader(output, "halro_ledger_state_snapshot_failures_total", "counter",
+		"Accounting state snapshots that could not be written.")
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_failures_total %d\n", r.ledgerSnapshotFailures.Load())
 	metricHeader(output, "halro_ledger_active_bytes", "gauge",
 		"Bytes in the ledger generation currently being appended to.")
 	fmt.Fprintf(output, "halro_ledger_active_bytes %d\n", r.ledger.ActiveBytes())

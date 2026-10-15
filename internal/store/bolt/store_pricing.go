@@ -1046,15 +1046,18 @@ func quarantineIncoherentPricingHighWatersTx(tx *bbolt.Tx) error {
 // RecoverPendingLeases, so every lease a prepared pin could belong to and that
 // has not settled is still in the state.
 //
-// The state holds the leases of attempts in flight and of attempts settled
-// because their pin failed to commit (ledger.OutcomePinCommitFailed), which
-// are exactly the leases a prepared pin can have. A prepared pin with none was
-// never followed by a lease and is deleted. A committed pin with none belongs
-// to a settled attempt; it was checked against its lease when it was
-// committed, and the backup check replays the Ledger to check it again.
-func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.State) error {
-	if state == nil {
-		return errors.New("ledger state is required for price pin recovery")
+// lease finds the leases of attempts in flight, of attempts settled because
+// their pin failed to commit (ledger.OutcomePinCommitFailed) — together exactly
+// the leases a prepared pin can have — and of the priced leases replayed this
+// start. A prepared pin with none was never followed by a lease and is
+// deleted. A committed pin with none is an error if its lease lies after
+// checkedThrough, where every priced lease was replayed this start; at or
+// before it, the pin belongs to a settled attempt whose lease has left the
+// state. Such a pin was committed with the sequence its own lease append
+// returned, and the backup check replays the Ledger to check it again.
+func (s *Store) RecoverDeploymentPricePins(ctx context.Context, lease func(attemptID string) (ledger.Record, bool), checkedThrough uint64) error {
+	if lease == nil {
+		return errors.New("ledger leases are required for price pin recovery")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1077,10 +1080,14 @@ func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.St
 			if err := intent.Validate(); err != nil {
 				return err
 			}
-			lease, exists := state.AccountingLease(intent.AttemptID)
+			lease, exists := lease(intent.AttemptID)
 			if !exists {
 				if intent.State == domain.PricePinPrepared {
 					deletes = append(deletes, bytes.Clone(key))
+					return nil
+				}
+				if intent.LedgerSequence > checkedThrough {
+					return fmt.Errorf("committed price pin %q has no Ledger lease", intent.AttemptID)
 				}
 				return nil
 			}
