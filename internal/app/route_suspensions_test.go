@@ -152,7 +152,7 @@ func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testi
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestOfflineRouteSuspensionClearKeepsAnIntentWhenAuditDeliveryFails(t *testi
 		t.Fatal(err)
 	}
 
-	store, err = openMetadataForTest(t, cfg)
+	store, err = boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
