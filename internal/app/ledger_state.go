@@ -30,6 +30,8 @@ const (
 // accountingStateRuntime is what the runtime keeps for the accounting state
 // beyond the state itself.
 type accountingStateRuntime struct {
+	// fromSnapshot reports that this start resumed from a snapshot.
+	fromSnapshot   bool
 	snapshots      ledgerStateSnapshots
 	reconciliation usageReconciliation
 }

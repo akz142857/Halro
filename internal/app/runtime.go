@@ -756,7 +756,7 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		store:               metadata,
 		ledger:              ledgerLog,
 		state:               ledgerState,
-		accountingState:     accountingStateRuntime{snapshots: ledgerStateSnapshots{key: ledgerStateKey}},
+		accountingState:     accountingStateRuntime{fromSnapshot: openedState.fromSnapshot, snapshots: ledgerStateSnapshots{key: ledgerStateKey}},
 		status:              accountingStatus,
 		governance:          governanceRuntime{log: governanceLog, manager: governanceManager},
 		vault:               secretVault,
