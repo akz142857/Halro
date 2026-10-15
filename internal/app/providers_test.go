@@ -12,6 +12,7 @@ import (
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/safetransport"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -55,7 +56,7 @@ func seedProvider(t *testing.T, cfg config.Config, mismatch bool) {
 		t.Fatal(err)
 	}
 	defer secretVault.Close()
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +21,6 @@ import (
 	"github.com/akz142857/Halro/internal/id"
 	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/masterkey"
-	"github.com/akz142857/Halro/internal/replication"
 	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/store/lock"
 	"github.com/akz142857/Halro/internal/usage"
@@ -36,33 +34,8 @@ func CreateBackup(
 	outputPath string,
 	backupKey []byte,
 ) (backup.Manifest, error) {
-	return CreateBackupWithOptions(ctx, cfg, configPath, outputPath, backupKey, CreateBackupOptions{})
-}
-
-type CreateBackupOptions struct {
-	Replica bool
-}
-
-func CreateBackupWithOptions(
-	ctx context.Context,
-	cfg config.Config,
-	configPath string,
-	outputPath string,
-	backupKey []byte,
-	options CreateBackupOptions,
-) (backup.Manifest, error) {
 	if err := ctx.Err(); err != nil {
 		return backup.Manifest{}, err
-	}
-	if options.Replica {
-		if cfg.Replication == nil {
-			return backup.Manifest{}, errors.New("backup --replica requires replication configuration")
-		}
-		if err := replication.RequireMemberRuntime(cfg.Storage.DataDir, true, "backup create --replica"); err != nil {
-			return backup.Manifest{}, err
-		}
-	} else if cfg.Replication != nil {
-		return backup.Manifest{}, errors.New("an HA member backup requires explicit --replica on a stopped Replica")
 	}
 	absoluteConfig, err := filepath.Abs(configPath)
 	if err != nil {
@@ -80,49 +53,17 @@ func CreateBackupWithOptions(
 		return backup.Manifest{}, fmt.Errorf("acquire offline backup lock: %w", err)
 	}
 	defer dataLock.Close()
-	var metadata *boltstore.Store
-	if options.Replica {
-		metadata, err = boltstore.OpenReplica(cfg.MetadataPath())
-	} else {
-		metadata, err = boltstore.Open(cfg.MetadataPath())
-	}
+	metadata, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	defer metadata.Close()
-	var masterKey []byte
-	if options.Replica {
-		masterKey, err = unlockMemberMasterKey(ctx, cfg)
-	} else {
-		masterKey, err = unlockMasterKey(ctx, cfg, metadata)
-	}
+	masterKey, err := unlockMasterKey(ctx, cfg, metadata)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	fingerprint := sha256.Sum256(masterKey)
 	fingerprintText := "sha256:" + hex.EncodeToString(fingerprint[:])
-	var memberState *replication.MemberState
-	var memberClusterKey []byte
-	if options.Replica {
-		state, stateErr := replication.ReadStateWithMasterKey(cfg.ReplicationStatePath(), masterKey)
-		if stateErr != nil {
-			clear(masterKey)
-			return backup.Manifest{}, stateErr
-		}
-		if state.Role != replication.RoleReplica || state.AppliedIndex != state.DurableIndex {
-			clear(masterKey)
-			return backup.Manifest{}, errors.New("Replica backup requires role=replica and applied_index == durable_index")
-		}
-		memberState = &state
-		derived, deriveErr := replication.DeriveClusterKey(masterKey, state.Incarnation)
-		if deriveErr != nil {
-			clear(masterKey)
-			return backup.Manifest{}, deriveErr
-		}
-		memberClusterKey = append([]byte(nil), derived[:]...)
-		clear(derived[:])
-		defer clear(memberClusterKey)
-	}
 	secretVault, err := vault.New(masterKey)
 	if err != nil {
 		clear(masterKey)
@@ -140,66 +81,32 @@ func CreateBackupWithOptions(
 		return backup.Manifest{}, err
 	}
 	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
+	secretVault.Close()
+	clear(masterKey)
 	if err != nil {
-		secretVault.Close()
-		clear(masterKey)
 		clear(auditKey)
 		return backup.Manifest{}, err
 	}
-	if options.Replica {
-		governanceKey, deriveErr := vault.DeriveGovernanceHMACKey(ledgerKey)
-		if deriveErr != nil {
-			secretVault.Close()
-			clear(masterKey)
-			clear(auditKey)
-			clear(ledgerKey)
-			return backup.Manifest{}, deriveErr
-		}
-		metadataKey, loadErr := loadMetadataJournalHMACKey(metadata, secretVault, masterKey)
-		if loadErr == nil {
-			loadErr = recoverReplicaForBackup(cfg, *memberState, memberClusterKey, ledgerKey, auditKey, governanceKey, metadataKey)
-		}
-		clear(governanceKey)
-		clear(metadataKey)
-		if loadErr != nil {
-			secretVault.Close()
-			clear(masterKey)
-			clear(auditKey)
-			clear(ledgerKey)
-			return backup.Manifest{}, loadErr
-		}
-	}
-	secretVault.Close()
-	clear(masterKey)
-	var auditLog *audit.Log
-	if options.Replica {
-		auditLog, err = audit.OpenWithOptions(cfg.AuditPath(), auditKey, audit.Options{Replica: true, RequireExisting: true})
-	} else {
-		auditLog, err = audit.Open(cfg.AuditPath(), auditKey)
-	}
+	auditLog, err := audit.Open(cfg.AuditPath(), auditKey)
 	clear(auditKey)
 	if err != nil {
 		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
 	defer auditLog.Close()
-	if err := verifyBackupAuditCheckpoint(metadata, auditLog.Summary(), options.Replica); err != nil {
+	if err := reconcileAuditCheckpoint(metadata, auditLog.Summary()); err != nil {
 		clear(ledgerKey)
 		return backup.Manifest{}, err
 	}
-	if !options.Replica {
-		if err := appendBackupAudit(ctx, metadata, auditLog, "requested", ""); err != nil {
-			clear(ledgerKey)
-			return backup.Manifest{}, err
-		}
+	if err := appendBackupAudit(ctx, metadata, auditLog, "requested", ""); err != nil {
+		clear(ledgerKey)
+		return backup.Manifest{}, err
 	}
+
 	manifest, createErr := createBackupSnapshot(
-		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText, ledgerKey, memberState, memberClusterKey,
+		ctx, cfg, absoluteConfig, absoluteOutput, backupKey, metadata, fingerprintText, ledgerKey,
 	)
 	clear(ledgerKey)
-	if options.Replica {
-		return manifest, createErr
-	}
 	outcome := "success"
 	reason := ""
 	if createErr != nil {
@@ -211,119 +118,6 @@ func CreateBackupWithOptions(
 		return backup.Manifest{}, errors.Join(createErr, auditErr)
 	}
 	return manifest, nil
-}
-
-func recoverReplicaForBackup(
-	cfg config.Config,
-	state replication.MemberState,
-	clusterKey, ledgerKey, auditKey, governanceKey, metadataKey []byte,
-) error {
-	journal, err := replication.OpenExistingOrderingJournal(
-		cfg.OrderingJournalPath(), clusterKey, state.ClusterID, state.Incarnation,
-		state.DurableIndex, state.OrderingHeadMAC,
-	)
-	if err != nil {
-		return err
-	}
-	defer journal.Close()
-	head, _, headMAC := journal.Head()
-	if head != state.DurableIndex || headMAC != state.OrderingHeadMAC {
-		return errors.New("Replica backup requires runtime recovery because ordering is ahead of authenticated member state")
-	}
-	source, err := replication.NewNativeSource(replication.NativeSourceOptions{
-		LedgerPath: cfg.LedgerPath(), AuditPath: cfg.AuditPath(), GovernancePath: cfg.GovernancePath(),
-		MetadataPath: filepathMetadataJournal(cfg), ProviderObjectDir: providerObjectSourceDir(cfg),
-		LedgerKey: ledgerKey, AuditKey: auditKey, GovernanceKey: governanceKey, MetadataKey: metadataKey,
-	})
-	if err != nil {
-		return err
-	}
-	defer source.Close()
-	if err := replication.RecoverReplicaStores(journal, source); err != nil {
-		return fmt.Errorf("reconcile Replica stores before backup: %w", err)
-	}
-	want, err := journal.StoreCursorsThrough(state.AppliedIndex)
-	if err != nil {
-		return err
-	}
-	for store := replication.StoreLedger; store <= replication.StoreMetadata; store++ {
-		actual, err := source.Cursor(store)
-		if err != nil {
-			return err
-		}
-		if actual != want[store-replication.StoreLedger] {
-			return fmt.Errorf("Replica backup store %s ended at %d/%d, want authenticated applied prefix %d/%d",
-				replicationStoreName(store), actual.Generation, actual.Sequence,
-				want[store-replication.StoreLedger].Generation, want[store-replication.StoreLedger].Sequence)
-		}
-	}
-	return nil
-}
-
-func verifyBackupAuditCheckpoint(metadata *boltstore.Store, summary audit.Summary, readOnly bool) error {
-	if !readOnly {
-		return reconcileAuditCheckpoint(metadata, summary)
-	}
-	checkpoint, err := metadata.AuditCheckpoint()
-	if err != nil {
-		return fmt.Errorf("load audit checkpoint: %w", err)
-	}
-	if checkpoint.Records > summary.Records || checkpoint.Records == summary.Records &&
-		(checkpoint.Bytes != summary.Bytes || checkpoint.LastHash != summary.LastHash) {
-		return errors.New("audit log does not match its trusted checkpoint")
-	}
-	return nil
-}
-
-func verifyGovernanceReplicaBackup(metadata *boltstore.Store, log *governance.Log, key []byte) error {
-	summary := log.Summary()
-	anchor, err := metadata.GovernanceJournalAnchor()
-	if err != nil {
-		if errors.Is(err, boltstore.ErrNotFound) && summary.Records == 0 {
-			_, replayErr := log.Replay(func(record governance.Record) error { return record.Event.Validate() })
-			return replayErr
-		}
-		return errGovernanceAnchorMismatch
-	}
-	if !governance.VerifyJournalAnchorAuth(key, anchor.Sequence, anchor.Offset, anchor.Hash, anchor.Authentication) ||
-		anchor.Sequence > summary.Records || anchor.Offset > summary.Bytes {
-		return errGovernanceAnchorMismatch
-	}
-	anchorMatched := false
-	_, err = log.Replay(func(record governance.Record) error {
-		if err := record.Event.Validate(); err != nil {
-			return err
-		}
-		if record.Sequence == anchor.Sequence {
-			if record.Offset != anchor.Offset || record.Hash != anchor.Hash {
-				return errGovernanceAnchorMismatch
-			}
-			anchorMatched = true
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if !anchorMatched {
-		return errGovernanceAnchorMismatch
-	}
-	return nil
-}
-
-func replicationStoreName(store replication.Store) string {
-	switch store {
-	case replication.StoreLedger:
-		return "ledger"
-	case replication.StoreAudit:
-		return "audit"
-	case replication.StoreGovernance:
-		return "governance"
-	case replication.StoreMetadata:
-		return "metadata"
-	default:
-		return "unknown"
-	}
 }
 
 func VerifyBackup(path string, backupKey []byte) (backup.Manifest, error) {
@@ -343,14 +137,11 @@ type RestoreResult struct {
 	SchemaVersionAfter             uint64   `json:"schema_version_after"`
 	RestoredEnabledGatewayKeyCount int      `json:"restored_enabled_gateway_key_count"`
 	RestoredEnabledGatewayKeyIDs   []string `json:"restored_enabled_gateway_key_ids"`
-	ClusterIncarnation             string   `json:"cluster_incarnation,omitempty"`
-	ClusterRole                    string   `json:"cluster_role,omitempty"`
 }
 
 type RestoreOptions struct {
 	UseRecoverySlot     bool
 	ConfirmRecoverySlot string
-	NewIncarnation      string
 }
 
 func RestoreBackup(
@@ -394,16 +185,6 @@ func restoreBackupWithFactory(
 	if confirmBackupID == "" || confirmBackupID != manifest.BackupID {
 		return RestoreResult{}, errors.New("restore confirmation must exactly match the verified backup id")
 	}
-	isHABackup := manifest.FormatVersion == 4
-	if isHABackup {
-		if cfg.Replication == nil || options.NewIncarnation == "" || options.NewIncarnation == manifest.ClusterIncarnation {
-			return RestoreResult{}, errors.New("HA restore requires replication configuration and a new --incarnation")
-		}
-	} else if cfg.Replication != nil {
-		return RestoreResult{}, errors.New("a Standalone backup cannot be restored directly as an HA member; restore Standalone then seed the cluster")
-	} else if options.NewIncarnation != "" {
-		return RestoreResult{}, errors.New("--incarnation is valid only for an HA backup restore")
-	}
 	if cfg.Storage.MasterKey.Mode == config.MasterKeyModeFile && pathWithin(cfg.Storage.MasterKey.File, cfg.Storage.DataDir) {
 		return RestoreResult{}, errors.New("restore requires storage.master_key.file outside storage.data_dir")
 	}
@@ -434,14 +215,6 @@ func restoreBackupWithFactory(
 		return RestoreResult{}, err
 	}
 	stageData := filepath.Join(extractRoot, "data")
-	if isHABackup {
-		// Archived member files are evidence only. Reusing their term,
-		// incarnation or ordering prefix would let a retained old PVC rejoin the
-		// restored cluster.
-		if err := os.RemoveAll(filepath.Join(stageData, replication.ClusterDirectoryName)); err != nil {
-			return RestoreResult{}, fmt.Errorf("remove archived cluster evidence before restore: %w", err)
-		}
-	}
 	archiveMetadata := filepath.Join(stageData, "metadata.db")
 	stageMetadata := filepath.Join(stageData, cfg.Storage.MetadataFile)
 	if archiveMetadata != stageMetadata {
@@ -449,20 +222,10 @@ func restoreBackupWithFactory(
 			return RestoreResult{}, err
 		}
 	}
-	// The archived journal is evidence, not state to resume. A restore is a
-	// whole-file publish of the projection, so the chain the archive carries
-	// stops describing the database the moment it is published (§6.1.4, §12.2).
-	// It is withdrawn before validation, because validation is also where the
-	// restored directory's own epoch is opened — and that has to be a new one,
-	// not a continuation of somebody else's chain.
-	if err := os.Remove(filepath.Join(stageData, boltstore.MetadataJournalFileName)); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return RestoreResult{}, fmt.Errorf("withdraw the archived metadata journal: %w", err)
-	}
 	if err := validateRestoreStage(ctx, cfg, stageData, manifest, purpose, factory); err != nil {
 		return RestoreResult{}, err
 	}
-	stageStore, err := boltstore.OpenForWholeFilePublish(stageMetadata)
+	stageStore, err := boltstore.Open(stageMetadata)
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("open staged metadata for authentication invalidation: %w", err)
 	}
@@ -481,13 +244,6 @@ func restoreBackupWithFactory(
 	closeErr := stageStore.Close()
 	if err := errors.Join(schemaErr, gatewayKeysErr, quarantineErr, invalidateErr, closeErr); err != nil {
 		return RestoreResult{}, fmt.Errorf("invalidate restored admin authentication: %w", err)
-	}
-	if isHABackup {
-		stageCfg := cfg
-		stageCfg.Storage.DataDir = stageData
-		if err := EstablishMemberState(ctx, stageCfg, replication.RolePrimary, options.NewIncarnation, 1); err != nil {
-			return RestoreResult{}, fmt.Errorf("establish restored HA incarnation: %w", err)
-		}
 	}
 
 	liveLock, err := lock.Acquire(cfg.Storage.DataDir)
@@ -541,13 +297,6 @@ func restoreBackupWithFactory(
 		SchemaVersionBefore:        manifest.Metadata.SchemaVersion, SchemaVersionAfter: schemaVersionAfter,
 		RestoredEnabledGatewayKeyCount: len(restoredEnabledGatewayKeyIDs),
 		RestoredEnabledGatewayKeyIDs:   restoredEnabledGatewayKeyIDs,
-		ClusterIncarnation:             options.NewIncarnation,
-		ClusterRole: func() string {
-			if isHABackup {
-				return string(replication.RolePrimary)
-			}
-			return ""
-		}(),
 	}, nil
 }
 
@@ -560,7 +309,7 @@ func validateRestoreStage(
 	factory kmsWrapperFactory,
 ) error {
 	legacyPricingState, legacyStateErr := boltstore.LegacyPricingBackupState(filepath.Join(stageData, cfg.Storage.MetadataFile))
-	metadata, err := boltstore.OpenForWholeFilePublish(filepath.Join(stageData, cfg.Storage.MetadataFile))
+	metadata, err := boltstore.Open(filepath.Join(stageData, cfg.Storage.MetadataFile))
 	if err != nil {
 		return fmt.Errorf("open staged metadata: %w", err)
 	}
@@ -627,25 +376,11 @@ func validateRestoreStage(
 		return err
 	}
 	ledgerKey, err := loadLedgerHMACKey(metadata, secretVault, masterKey)
-	if err != nil {
-		secretVault.Close()
-		clear(masterKey)
-		clear(auditKey)
-		return err
-	}
-	// Open the restored projection's journal epoch here, while the staged tree
-	// is still staged: the rename below publishes the database and its journal
-	// together, so there is no window in which a data directory follows an
-	// epoch whose file does not exist. Deferring it to the first start left
-	// exactly that window, and `halro doctor` was right to call it a
-	// divergence — which is how it was found.
-	journalErr := attachStagedMetadataJournal(metadata, secretVault, masterKey)
 	secretVault.Close()
 	clear(masterKey)
-	if journalErr != nil {
+	if err != nil {
 		clear(auditKey)
-		clear(ledgerKey)
-		return journalErr
+		return err
 	}
 	governanceKey, err := vault.DeriveGovernanceHMACKey(ledgerKey)
 	if err != nil {
@@ -798,22 +533,14 @@ func createBackupSnapshot(
 	metadata *boltstore.Store,
 	masterFingerprint string,
 	ledgerKey []byte,
-	memberState *replication.MemberState,
-	memberClusterKey []byte,
 ) (backup.Manifest, error) {
 	status := ledger.NewStatus()
-	var ledgerLog *ledger.Log
-	var err error
-	if memberState != nil {
-		ledgerLog, err = ledger.OpenWithOptions(cfg.LedgerPath(), status, ledger.Options{ChainKey: ledgerKey, Replica: true, RequireExisting: true})
-	} else {
-		ledgerLog, err = ledger.Open(cfg.LedgerPath(), status)
-	}
+	ledgerLog, err := ledger.Open(cfg.LedgerPath(), status)
 	if err != nil {
 		return backup.Manifest{}, err
 	}
 	manifest, createErr := createBackupSnapshotWithLedger(
-		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey, memberState, memberClusterKey,
+		ctx, cfg, configPath, outputPath, backupKey, metadata, masterFingerprint, ledgerLog, ledgerKey,
 	)
 	closeErr := ledgerLog.Close()
 	return manifest, errors.Join(createErr, closeErr)
@@ -828,8 +555,6 @@ func createBackupSnapshotWithLedger(
 	masterFingerprint string,
 	ledgerLog *ledger.Log,
 	ledgerKey []byte,
-	memberState *replication.MemberState,
-	memberClusterKey []byte,
 ) (backup.Manifest, error) {
 	if err := ctx.Err(); err != nil {
 		return backup.Manifest{}, err
@@ -842,21 +567,11 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	defer clear(governanceKey)
-	var governanceLog *governance.Log
-	if memberState != nil {
-		governanceLog, err = governance.OpenWithOptions(cfg.GovernancePath(), governanceKey, governance.Options{Replica: true, RequireExisting: true})
-	} else {
-		governanceLog, err = governance.Open(cfg.GovernancePath(), governanceKey)
-	}
+	governanceLog, err := governance.Open(cfg.GovernancePath(), governanceKey)
 	if err != nil {
 		return backup.Manifest{}, fmt.Errorf("open Governance Journal for backup: %w", err)
 	}
-	if memberState != nil {
-		if err := verifyGovernanceReplicaBackup(metadata, governanceLog, governanceKey); err != nil {
-			governanceLog.Close()
-			return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for Replica backup: %w", err)
-		}
-	} else if _, err := restoreGovernanceState(metadata, governanceLog, governanceKey); err != nil {
+	if _, err := restoreGovernanceState(metadata, governanceLog, governanceKey); err != nil {
 		governanceLog.Close()
 		return backup.Manifest{}, fmt.Errorf("verify Governance Journal anchor for backup: %w", err)
 	}
@@ -874,27 +589,9 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	metadataSnapshot := filepath.Join(staging, "metadata.db")
-	if err := os.MkdirAll(filepath.Dir(metadataSnapshot), 0o700); err != nil {
-		return backup.Manifest{}, err
-	}
 	metadataInfo, err := metadata.Snapshot(metadataSnapshot)
 	if err != nil {
 		return backup.Manifest{}, err
-	}
-	// Copied after the snapshot, so the journal in the archive is at least as
-	// long as the position the snapshot recorded. The other direction would be
-	// a journal that cannot explain the database beside it.
-	metadataJournalSnapshot := filepath.Join(staging, boltstore.MetadataJournalFileName)
-	journalStaged := true
-	if err := copyFileForBackup(metadata.MetadataJournalPath(), metadataJournalSnapshot); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return backup.Manifest{}, fmt.Errorf("stage metadata journal: %w", err)
-		}
-		// A data directory that has not started since the journal was
-		// introduced has none yet, and the database is its own starting
-		// projection. The manifest's zero epoch says so; inventing an empty
-		// file would claim a chain that does not exist.
-		journalStaged = false
 	}
 	pricingBackupState, err := metadata.PricingBackupState()
 	if err != nil {
@@ -1005,50 +702,9 @@ func createBackupSnapshotWithLedger(
 	files := []backup.SourceFile{
 		{ArchivePath: "config/config.yaml", LocalPath: configPath},
 		{ArchivePath: "data/metadata.db", LocalPath: metadataSnapshot},
-
 		{ArchivePath: "data/ledger/ledger.wal", LocalPath: ledgerSnapshot},
 		{ArchivePath: "data/audit/audit.log", LocalPath: cfg.AuditPath()},
 		{ArchivePath: "data/governance/governance.journal", LocalPath: cfg.GovernancePath()},
-	}
-	var clusterOptions backup.CreateOptions
-	if memberState != nil {
-		journal, err := replication.OpenExistingOrderingJournal(
-			cfg.OrderingJournalPath(), memberClusterKey,
-			memberState.ClusterID, memberState.Incarnation, memberState.DurableIndex, memberState.OrderingHeadMAC,
-		)
-		if err != nil {
-			return backup.Manifest{}, err
-		}
-		cursors, cursorErr := journal.StoreCursorsThrough(memberState.AppliedIndex)
-		closeErr := journal.Close()
-		if err := errors.Join(cursorErr, closeErr); err != nil {
-			return backup.Manifest{}, err
-		}
-		perStore := make(map[string]backup.StoreHead, 4)
-		for store := replication.StoreLedger; store <= replication.StoreMetadata; store++ {
-			cursor := cursors[store-replication.StoreLedger]
-			perStore[replicationStoreName(store)] = backup.StoreHead{Generation: cursor.Generation, Sequence: cursor.Sequence}
-		}
-		files = append(files,
-			backup.SourceFile{ArchivePath: "data/cluster/state.json", LocalPath: cfg.ReplicationStatePath()},
-			backup.SourceFile{ArchivePath: "data/cluster/ordering.journal", LocalPath: cfg.OrderingJournalPath()},
-		)
-		metadataHead := perStore["metadata"]
-		clusterOptions = backup.CreateOptions{
-			ClusterID: memberState.ClusterID, ClusterIncarnation: memberState.Incarnation,
-			SourceNodeID: memberState.NodeID, SourceRole: string(memberState.Role), Term: memberState.Term,
-			AppliedIndex: memberState.AppliedIndex, MetadataJournalEpoch: metadataHead.Generation,
-			MetadataJournalSequence: metadataHead.Sequence, PerStoreHead: perStore,
-		}
-	}
-	if journalStaged {
-		// The journal's current epoch (HA design §12.1). A restore does not
-		// reuse it — restore is a whole-file publish and starts a fresh epoch —
-		// but without it the archive cannot show that the metadata snapshot
-		// sits at the position its manifest claims.
-		files = append(files, backup.SourceFile{
-			ArchivePath: "data/" + boltstore.MetadataJournalFileName, LocalPath: metadataJournalSnapshot,
-		})
 	}
 	for _, name := range stagedSegments {
 		files = append(files, backup.SourceFile{
@@ -1065,7 +721,7 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	files = append(files, objectFiles...)
-	createOptions := backup.CreateOptions{
+	return backup.Create(backup.CreateOptions{
 		OutputPath: outputPath, BackupKey: backupKey, Files: files,
 		Metadata: metadataInfo, LedgerWatermark: ledgerWatermark,
 		LedgerChainHeadSequence: chainSequence, LedgerChainHeadOffset: chainOffset,
@@ -1077,17 +733,7 @@ func createBackupSnapshotWithLedger(
 		PricingStateSHA256: pricingBackupState.StateSHA256, PendingIntentSHA256: pricingBackupState.PendingIntentSHA256, PendingIntents: pricingBackupState.PendingIntents,
 		MasterKeyFingerprint: masterFingerprint, Build: buildinfo.Current(),
 		KeySlotDescriptorSHA256: descriptorDigest,
-	}
-	createOptions.ClusterID = clusterOptions.ClusterID
-	createOptions.ClusterIncarnation = clusterOptions.ClusterIncarnation
-	createOptions.SourceNodeID = clusterOptions.SourceNodeID
-	createOptions.SourceRole = clusterOptions.SourceRole
-	createOptions.Term = clusterOptions.Term
-	createOptions.AppliedIndex = clusterOptions.AppliedIndex
-	createOptions.MetadataJournalEpoch = clusterOptions.MetadataJournalEpoch
-	createOptions.MetadataJournalSequence = clusterOptions.MetadataJournalSequence
-	createOptions.PerStoreHead = clusterOptions.PerStoreHead
-	return backup.Create(createOptions)
+	})
 }
 
 func backupProviderObjectFiles(ctx context.Context, metadata *boltstore.Store, root string) ([]backup.SourceFile, error) {
@@ -1190,45 +836,4 @@ func appendBackupAudit(
 func pathWithin(candidate, directory string) bool {
 	relative, err := filepath.Rel(filepath.Clean(directory), filepath.Clean(candidate))
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator))
-}
-
-// copyFileForBackup stages one file into the archive's staging directory.
-//
-// It copies rather than referencing the live path because the staging
-// directory is what the archive is built from, and a file that changed between
-// staging and archiving would produce a manifest describing bytes the archive
-// does not contain.
-func copyFileForBackup(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
-}
-
-// attachStagedMetadataJournal publishes the next journal epoch into a staged
-// data directory.
-//
-// The staged store records nothing — it is how the next projection is built,
-// not an operation inside one — but the attach itself writes the epoch and the
-// applied sequence on the raw transaction, and creates the file. Both travel
-// with the rename.
-func attachStagedMetadataJournal(store *boltstore.Store, secretVault *vault.Vault, masterKey []byte) error {
-	if _, err := attachMetadataJournal(store, secretVault, masterKey, "backup restore"); err != nil {
-		return fmt.Errorf("publish the restored metadata journal epoch: %w", err)
-	}
-	return nil
 }

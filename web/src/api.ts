@@ -45,7 +45,6 @@ import type {
 	MasterKeyCustody,
   SetupStatus,
   SystemStatus,
-  ClusterStatus,
   SystemConfig,
   ModelCatalogInfo,
   TokenGuardPolicy,
@@ -269,8 +268,6 @@ export const api = {
 	masterKeyCustody: () => request<MasterKeyCustody>("/master-key/custody").then((value) => value.data),
   systemStatus: () =>
     request<SystemStatus>("/system/status").then((value) => value.data),
-  clusterStatus: () =>
-    request<ClusterStatus>("/cluster/status").then((value) => value.data),
   systemConfig: () =>
     request<SystemConfig>("/system/config").then((value) => value.data),
   /** What this build can serve: capability keys, and per profile the defaults,

@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func (s *Store) RuntimeSettings() (domain.RuntimeSettings, error) {
 	var settings domain.RuntimeSettings
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyRuntimeSettings)
 		if raw == nil {
 			return ErrNotFound
@@ -28,7 +29,7 @@ func (s *Store) PutRuntimeSettings(settings domain.RuntimeSettings, expectedRevi
 	if err := settings.Validate(); err != nil {
 		return domain.RuntimeSettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		currentRevision := uint64(0)
 		if raw := bucket.Get(keyRuntimeSettings); raw != nil {
@@ -53,7 +54,7 @@ func (s *Store) PutRuntimeSettings(settings domain.RuntimeSettings, expectedRevi
 
 func (s *Store) InstanceUISettings() (domain.InstanceUISettings, error) {
 	var settings domain.InstanceUISettings
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyInstanceUISettings)
 		if raw == nil {
 			return ErrNotFound
@@ -70,7 +71,7 @@ func (s *Store) PutInstanceUISettings(settings domain.InstanceUISettings, expect
 	if err := settings.Validate(); err != nil {
 		return domain.InstanceUISettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		currentRevision := uint64(0)
 		if raw := bucket.Get(keyInstanceUISettings); raw != nil {
@@ -95,7 +96,7 @@ func (s *Store) PutInstanceUISettings(settings domain.InstanceUISettings, expect
 
 func (s *Store) InstanceUsageSettings() (domain.InstanceUsageSettings, error) {
 	var settings domain.InstanceUsageSettings
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyInstanceUsageSettings)
 		if raw == nil {
 			return ErrNotFound
@@ -112,7 +113,7 @@ func (s *Store) PutInstanceUsageSettings(settings domain.InstanceUsageSettings, 
 	if err := settings.Validate(); err != nil {
 		return domain.InstanceUsageSettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		currentRevision := uint64(0)
 		if raw := bucket.Get(keyInstanceUsageSettings); raw != nil {
@@ -147,7 +148,7 @@ func (s *Store) SeedInstanceUsageSettings(consoleWindowDays int, now time.Time) 
 	if err := settings.Validate(); err != nil {
 		return domain.InstanceUsageSettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		if raw := bucket.Get(keyInstanceUsageSettings); raw != nil {
 			var current domain.InstanceUsageSettings
@@ -172,7 +173,7 @@ func (s *Store) SeedInstanceUsageSettings(consoleWindowDays int, now time.Time) 
 
 func (s *Store) InstanceAccountingSettings() (domain.InstanceAccountingSettings, error) {
 	var settings domain.InstanceAccountingSettings
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyInstanceAccountingSettings)
 		if raw == nil {
 			return ErrNotFound
@@ -189,7 +190,7 @@ func (s *Store) PutInstanceAccountingSettings(settings domain.InstanceAccounting
 	if err := settings.Validate(); err != nil {
 		return domain.InstanceAccountingSettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		currentRevision := uint64(0)
 		if raw := bucket.Get(keyInstanceAccountingSettings); raw != nil {
@@ -231,7 +232,7 @@ func (s *Store) SeedInstanceAccountingSettings(timezone string, now time.Time) (
 	if err := settings.Validate(); err != nil {
 		return domain.InstanceAccountingSettings{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		if raw := bucket.Get(keyInstanceAccountingSettings); raw != nil {
 			if err := json.Unmarshal(raw, &settings); err != nil {
@@ -262,7 +263,7 @@ func (s *Store) SeedInstanceID(candidate string) (string, error) {
 		return "", errors.New("candidate instance ID cannot be empty")
 	}
 	instanceID := candidate
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketMeta)
 		if raw := bucket.Get(keyInstanceID); raw != nil {
 			instanceID = string(raw)

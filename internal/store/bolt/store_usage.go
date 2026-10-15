@@ -11,6 +11,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	bbolt "go.etcd.io/bbolt"
 )
 
 // UsageRollupState is the durable position of the daily rollup: which
@@ -81,7 +82,7 @@ func (s *Store) PutUsageCheckpoint(
 	// segments would name records nobody can read, and a checkpoint that
 	// advanced without its increment would leave the rollup describing a prefix
 	// of the WAL nobody can name.
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if current := meta.Get(keyUsageCheckpoint); current != nil {
 			var saved usageCheckpoint
@@ -124,7 +125,7 @@ func (s *Store) PutUsageCheckpoint(
 // encoded in memory while the aggregate is rebuilt.
 func (s *Store) UsageCheckpointSegmentPayload(id uint64) ([]byte, error) {
 	var payload []byte
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketUsageCheckpointSegments)
 		if bucket == nil {
 			return ErrNotFound
@@ -161,7 +162,7 @@ func usageSegmentKey(id uint64) []byte {
 // same order. Choosing the largest values instead would need the day to be
 // finished, and an accounting day never provably is: a request admitted at
 // 23:59 and settled at 00:02 is charged to the day it was admitted on.
-func applyUsageRollupDelta(tx *Tx, rollup map[string]domain.DailyRollup) error {
+func applyUsageRollupDelta(tx *bbolt.Tx, rollup map[string]domain.DailyRollup) error {
 	if len(rollup) == 0 {
 		return nil
 	}
@@ -225,7 +226,7 @@ func applyUsageRollupDelta(tx *Tx, rollup map[string]domain.DailyRollup) error {
 // storedDimensionKeys reports which values one day's one dimension already
 // holds. RollupOtherKey is excluded: it is the overflow row, not one of the
 // values the cap counts.
-func storedDimensionKeys(bucket *Bucket, prefix string) (map[string]struct{}, error) {
+func storedDimensionKeys(bucket *bbolt.Bucket, prefix string) (map[string]struct{}, error) {
 	keys := map[string]struct{}{}
 	cursor := bucket.Cursor()
 	seek := []byte(prefix)
@@ -239,7 +240,7 @@ func storedDimensionKeys(bucket *Bucket, prefix string) (map[string]struct{}, er
 	return keys, nil
 }
 
-func mergeRollupRow(bucket *Bucket, key domain.RollupKey, increment domain.DailyRollup) error {
+func mergeRollupRow(bucket *bbolt.Bucket, key domain.RollupKey, increment domain.DailyRollup) error {
 	encoded := []byte(key.Encode())
 	row := increment
 	if existing := bucket.Get(encoded); existing != nil {
@@ -261,7 +262,7 @@ func mergeRollupRow(bucket *Bucket, key domain.RollupKey, increment domain.Daily
 
 func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
 	var saved usageCheckpoint
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyUsageCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -284,7 +285,7 @@ func (s *Store) UsageCheckpoint() (ledger.Watermark, []byte, error) {
 // UsageRollupState reports where the stored rollup stands.
 func (s *Store) UsageRollupState() (UsageRollupState, error) {
 	var state UsageRollupState
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyUsageRollupState)
 		if raw == nil {
 			return ErrNotFound
@@ -306,7 +307,7 @@ func (s *Store) UsageRollupState() (UsageRollupState, error) {
 // WAL from zero — every row counted twice, with nothing in the logs to say so.
 // The Ledger remains authoritative; the next start rebuilds both from it.
 func (s *Store) ResetUsageDerivatives() error {
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if err := meta.Delete(keyUsageCheckpoint); err != nil {
 			return err
@@ -341,7 +342,7 @@ func (s *Store) UsageRollupRange(
 	startPeriodID, endPeriodID string,
 	visit func(domain.RollupKey, domain.DailyRollup) error,
 ) error {
-	return s.view(func(tx *Tx) error {
+	return s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketUsageDailyRollup)
 		if bucket == nil {
 			return errors.New("usage rollup bucket is missing")
@@ -373,14 +374,14 @@ func (s *Store) PutTokenGuardCheckpoint(payload []byte) error {
 		return errors.New("Token Guard checkpoint payload is invalid")
 	}
 	copyPayload := bytes.Clone(payload)
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketMeta).Put(keyTokenGuardCheckpoint, copyPayload)
 	})
 }
 
 func (s *Store) TokenGuardCheckpoint() ([]byte, error) {
 	var payload []byte
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyTokenGuardCheckpoint)
 		if raw == nil {
 			return ErrNotFound
@@ -392,7 +393,7 @@ func (s *Store) TokenGuardCheckpoint() ([]byte, error) {
 }
 
 func (s *Store) DeleteTokenGuardCheckpoint() error {
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketMeta).Delete(keyTokenGuardCheckpoint)
 	})
 }
@@ -409,7 +410,7 @@ func (s *Store) PutRedactionPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.RedactionPolicy{}, err
 	}
-	err := s.updateContext(ctx, func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if err := putVersioned(
 			tx.Bucket(bucketRedactionPolicies),
 			policy.ID,
@@ -455,7 +456,7 @@ func (s *Store) PutTokenGuardPolicy(
 	if err := ctx.Err(); err != nil {
 		return domain.TokenGuardPolicy{}, err
 	}
-	err := s.updateContext(ctx, func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if err := putVersioned(tx.Bucket(bucketTokenGuardPolicies), policy.ID, expectedRevision, &policy); err != nil {
 			return err
 		}
@@ -496,7 +497,7 @@ func (s *Store) PutAlertWebhook(
 	if err := ctx.Err(); err != nil {
 		return domain.AlertWebhook{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if webhook.CredentialID != "" &&
 			tx.Bucket(bucketCredentials).Get([]byte(webhook.CredentialID)) == nil {
 			return fmt.Errorf("credential %q: %w", webhook.CredentialID, ErrNotFound)
@@ -535,7 +536,7 @@ func (s *Store) PutAlertWebhookBundle(
 	if err := ctx.Err(); err != nil {
 		return domain.AlertWebhook{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if credential != nil {
 			if err := putVersioned(
 				tx.Bucket(bucketCredentials),

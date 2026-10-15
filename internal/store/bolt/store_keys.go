@@ -10,13 +10,14 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/masterkey"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func (s *Store) PutVaultKeyCheck(value []byte) error {
 	if len(value) == 0 {
 		return errors.New("vault key check cannot be empty")
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta.Get(keyVaultCheck) != nil {
 			return ErrAlreadyExists
@@ -27,7 +28,7 @@ func (s *Store) PutVaultKeyCheck(value []byte) error {
 
 func (s *Store) VaultKeyCheck() ([]byte, error) {
 	var value []byte
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyVaultCheck)
 		if raw == nil {
 			return ErrNotFound
@@ -46,7 +47,7 @@ func (s *Store) PutVaultKeyring(keyring VaultKeyring) error {
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		if meta.Get(keyVaultKeyring) != nil {
 			return ErrAlreadyExists
@@ -84,7 +85,7 @@ func (s *Store) PutKeySlotDescriptor(ctx context.Context, descriptor masterkey.K
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -101,7 +102,7 @@ func (s *Store) KeySlotDescriptor(ctx context.Context) (masterkey.KeySlotDescrip
 	if err := ctx.Err(); err != nil {
 		return descriptor, err
 	}
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
 		if raw == nil {
 			return ErrNotFound
@@ -290,16 +291,7 @@ func (s *Store) initializeKeySlotStateWithHook(ctx context.Context, state KeySlo
 		{name: "audit_checkpoint", key: keyAuditCheckpoint, value: checkpoint},
 		{name: "ledger_hmac_envelope", key: keyLedgerHMACEnvelope, value: state.LedgerHMACEnvelope},
 	}
-	// Absent on an instance initialised before the journal existed; the attach
-	// that follows derives one rather than finding an empty value here.
-	if len(state.MetadataJournalHMACEnvelope) > 0 {
-		values = append(values, struct {
-			name  string
-			key   []byte
-			value []byte
-		}{name: "metadata_journal_hmac_envelope", key: keyMetadataHMACEnvelope, value: state.MetadataJournalHMACEnvelope})
-	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -347,7 +339,7 @@ func (s *Store) replaceKeySlotDescriptorWithHook(
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -435,7 +427,7 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 			}
 		}
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if options.KeySlotDescriptor != nil {
 			raw := tx.Bucket(bucketMeta).Get(keyKeySlotDescriptor)
 			if raw == nil {
@@ -506,13 +498,6 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 		if err := meta.Put(keyAuditHMACEnvelope, options.AuditHMACEnvelope); err != nil {
 			return err
 		}
-		// Absent on an instance that predates the journal, which has no
-		// envelope to re-wrap; the attach after the publish derives one.
-		if len(options.MetadataJournalHMACEnvelope) > 0 {
-			if err := meta.Put(keyMetadataHMACEnvelope, options.MetadataJournalHMACEnvelope); err != nil {
-				return err
-			}
-		}
 		if err := meta.Put(keyLedgerHMACEnvelope, options.LedgerHMACEnvelope); err != nil {
 			return err
 		}
@@ -571,7 +556,7 @@ func (s *Store) RewriteVaultMaterial(options VaultRewrite) error {
 }
 
 func (s *Store) ClearVaultRotationBridge() error {
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		meta := tx.Bucket(bucketMeta)
 		raw := meta.Get(keyVaultKeyring)
 		if raw == nil {

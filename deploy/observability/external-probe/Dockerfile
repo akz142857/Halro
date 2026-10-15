@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.9-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS build
 ARG SOURCE_DATE_EPOCH=0
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,7 +12,6 @@ RUN go mod download
 COPY cmd/halro-deadman ./cmd/halro-deadman
 COPY internal/buildinfo ./internal/buildinfo
 COPY internal/deadman ./internal/deadman
-COPY internal/hahealth ./internal/hahealth
 COPY internal/safelog ./internal/safelog
 COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /licenses/
 # The same identity the tarball and .deb carry. A probe deployed as a container

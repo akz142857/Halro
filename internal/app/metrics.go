@@ -490,7 +490,6 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 			strconv.Quote(deploymentID), value)
 	}
 	r.writeReloadMetrics(output)
-	r.writeReplicationMetrics(output)
 	return output.Flush()
 }
 

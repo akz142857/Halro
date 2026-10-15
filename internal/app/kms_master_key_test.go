@@ -19,6 +19,7 @@ import (
 	"github.com/akz142857/Halro/internal/kms/awskms"
 	"github.com/akz142857/Halro/internal/kms/fakekms"
 	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 	"github.com/akz142857/Halro/internal/vault"
 )
 
@@ -100,7 +101,7 @@ func TestKMSInitializationPublishesIndependentVerifiedSlotsWithoutPlaintextKey(t
 	if state, err := InspectInitialization(cfg); err != nil || state != InitializationSystemReady {
 		t.Fatalf("state=%q err=%v", state, err)
 	}
-	store, err := openMetadataReadForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,48 +166,6 @@ func TestKMSInitializationPublishesIndependentVerifiedSlotsWithoutPlaintextKey(t
 		return nil
 	}); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestMemberKeySlotUnlockNeverCreatesOrMigratesMetadata(t *testing.T) {
-	cfg := kmsAppTestConfig(t)
-	harness := newKMSAppHarness(t)
-	masterKey := bytes.Repeat([]byte{0x5a}, 32)
-	if err := initializeKMS(context.Background(), cfg, kmsInitializationOptions{
-		factory: harness.factory, random: bytes.NewReader(masterKey),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(cfg.MetadataPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	unlocked, err := unlockMemberMasterKeyWithFactory(context.Background(), cfg, harness.factory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(unlocked)
-	if !bytes.Equal(unlocked, masterKey) {
-		t.Fatal("member startup unlocked the wrong Master Key")
-	}
-	after, err := os.ReadFile(cfg.MetadataPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("member Master Key unlock mutated metadata")
-	}
-
-	missing := kmsAppTestConfig(t)
-	missingHarness := newKMSAppHarness(t)
-	if _, err := unlockMemberMasterKeyWithFactory(context.Background(), missing, missingHarness.factory); err == nil {
-		t.Fatal("member Master Key unlock created missing metadata")
-	}
-	if _, err := os.Stat(missing.MetadataPath()); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing member metadata was touched: %v", err)
-	}
-	if missingHarness.callCount() != 0 {
-		t.Fatal("missing member metadata reached KMS")
 	}
 }
 
@@ -275,7 +234,7 @@ func TestKeySlotStartDoesNotAutoInitializeOrTrustFilePresence(t *testing.T) {
 	if harness.callCount() != 0 {
 		t.Fatal("Runtime auto-initialization path called KMS")
 	}
-	store, err := openMetadataReadForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}

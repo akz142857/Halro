@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/metadatajournal"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func keyedResource(project, provider, deployment string, profile domain.ProviderProfileID, id string, keyHash [32]byte, now time.Time) domain.ProviderResource {
@@ -19,39 +19,6 @@ func keyedResource(project, provider, deployment string, profile domain.Provider
 		IdempotencyKeyHash: keyHash, RequestFingerprint: sha256.Sum256([]byte("body")),
 		CreationStatus: "reserved", Status: "pending",
 		CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(24 * time.Hour),
-	}
-}
-
-func TestProviderResourceWaitsForConfirmationBeforeInFlightReturns(t *testing.T) {
-	store, instance, deployment, project := tombstoneChain(t)
-	var nextIndex uint64
-	var waits []uint64
-	if err := store.SetMetadataJournalAfterDurable(func(metadatajournal.DurableBatch) (uint64, error) {
-		nextIndex++
-		return nextIndex, nil
-	}, func(_ context.Context, index uint64) error {
-		waits = append(waits, index)
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	record, err := store.PutProviderResource(context.Background(), keyedResource(
-		project.ID, instance.ID, deployment.ID, instance.ProfileID, "idm_confirmed", sha256.Sum256([]byte("confirmed-before-provider")), now,
-	), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(waits) != 0 {
-		t.Fatalf("reserved resource unexpectedly waited: %v", waits)
-	}
-	record.CreationStatus = "in_flight"
-	record.UpdatedAt = now.Add(time.Second)
-	if _, err := store.PutProviderResource(context.Background(), record, record.Revision); err != nil {
-		t.Fatal(err)
-	}
-	if len(waits) != 1 || waits[0] != 2 {
-		t.Fatalf("in-flight transition waits=%v, want [2]", waits)
 	}
 }
 
@@ -87,7 +54,7 @@ func TestIdempotencyLookupReportsAbsenceWithoutAnError(t *testing.T) {
 	// The mechanism, not just its result: the lookup is one Get because the
 	// write maintains an entry, and a test that only asked the accessor would
 	// pass just as well against the full-bucket scan this replaced.
-	if err := store.view(func(tx *Tx) error {
+	if err := store.db.View(func(tx *bbolt.Tx) error {
 		entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash))
 		if string(entry) != created.ID {
 			t.Fatalf("index entry = %q, want %q", entry, created.ID)
@@ -125,7 +92,7 @@ func TestDeletingAResourceFreesItsIdempotencyKey(t *testing.T) {
 	// caller sees would notice — but every reaped record would leave an entry
 	// behind, and the bucket the index exists to stop walking would be the one
 	// growing without bound.
-	if err := store.view(func(tx *Tx) error {
+	if err := store.db.View(func(tx *bbolt.Tx) error {
 		if entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash)); entry != nil {
 			t.Fatalf("the deleted record left an index entry naming %q", entry)
 		}
@@ -136,7 +103,7 @@ func TestDeletingAResourceFreesItsIdempotencyKey(t *testing.T) {
 	if _, err := store.PutProviderResource(ctx, second, 0); err != nil {
 		t.Fatalf("the freed key was refused: %v", err)
 	}
-	if err := store.view(func(tx *Tx) error {
+	if err := store.db.View(func(tx *bbolt.Tx) error {
 		entry := tx.Bucket(bucketProviderResourceIdem).Get(providerResourceIdemKey(project.ID, domain.ResourceInferenceCall, keyHash))
 		if string(entry) != second.ID {
 			t.Fatalf("index entry = %q, want it to name the record that now holds the key", entry)
@@ -163,7 +130,7 @@ func TestSchemaFortyBuildsTheIndexFromExistingRecords(t *testing.T) {
 
 	// Back to schema 39: no index bucket, no migration record, and a record
 	// that has to be found without either.
-	if err := store.update(func(tx *Tx) error {
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
 		if err := tx.DeleteBucket(bucketProviderResourceIdem); err != nil {
 			return err
 		}
@@ -180,7 +147,7 @@ func TestSchemaFortyBuildsTheIndexFromExistingRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := openForTest(t, path)
+	migrated, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

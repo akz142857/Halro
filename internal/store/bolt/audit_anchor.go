@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"go.etcd.io/bbolt"
 )
 
 // auditAnchorRetention bounds the local ring: emitted roughly every 5
@@ -22,17 +24,12 @@ const auditAnchorRetention = 1000
 // no event payloads, so it is safe to send somewhere with weaker
 // confidentiality than the audit log itself.
 type AuditAnchor struct {
-	Sequence    uint64    `json:"sequence"`
-	Records     uint64    `json:"records"`
-	LastHash    [32]byte  `json:"last_hash"`
-	Bytes       int64     `json:"bytes"`
-	InstanceID  string    `json:"instance_id"`
-	ClusterID   string    `json:"cluster_id,omitempty"`
-	Incarnation string    `json:"incarnation,omitempty"`
-	NodeID      string    `json:"node_id,omitempty"`
-	Term        uint64    `json:"term,omitempty"`
-	TargetID    string    `json:"target_id,omitempty"`
-	ObservedAt  time.Time `json:"observed_at"`
+	Sequence   uint64    `json:"sequence"`
+	Records    uint64    `json:"records"`
+	LastHash   [32]byte  `json:"last_hash"`
+	Bytes      int64     `json:"bytes"`
+	InstanceID string    `json:"instance_id"`
+	ObservedAt time.Time `json:"observed_at"`
 }
 
 func auditAnchorKey(sequence uint64) []byte {
@@ -49,20 +46,11 @@ func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 	if anchor.InstanceID == "" || anchor.ObservedAt.IsZero() {
 		return errors.New("audit anchor is incomplete")
 	}
-	clusterFields := 0
-	for _, present := range []bool{anchor.ClusterID != "", anchor.Incarnation != "", anchor.NodeID != "", anchor.Term != 0} {
-		if present {
-			clusterFields++
-		}
-	}
-	if clusterFields != 0 && clusterFields != 4 {
-		return errors.New("HA audit anchor identity is incomplete")
-	}
 	encoded, err := json.Marshal(anchor)
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")
@@ -122,7 +110,7 @@ func (s *Store) AppendAuditAnchor(anchor AuditAnchor) error {
 // incrementally without re-fetching what it already has.
 func (s *Store) AuditAnchorsSince(since uint64) ([]AuditAnchor, error) {
 	var anchors []AuditAnchor
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")
@@ -145,7 +133,7 @@ func (s *Store) AuditAnchorsSince(since uint64) ([]AuditAnchor, error) {
 func (s *Store) LatestAuditAnchor() (AuditAnchor, error) {
 	var anchor AuditAnchor
 	found := false
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		if bucket == nil {
 			return errors.New("audit anchor bucket is missing")

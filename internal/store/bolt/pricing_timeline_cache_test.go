@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	bbolt "go.etcd.io/bbolt"
 )
 
 // The audited timeline is cached because auditing it means decoding every
@@ -16,7 +18,7 @@ import (
 
 func cachedTimelineStore(t *testing.T, deploymentID string) *Store {
 	t.Helper()
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +135,7 @@ func TestBrokenTimelineIsNeverCachedAsUsable(t *testing.T) {
 	forged := newStoredPrice("price_forged", "dep_broken", time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
 	forged.Version, forged.Revision = 1, 1
 	forged.CreatedAt = base
-	if err := store.update(func(tx *Tx) error {
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
 		return putDeploymentPriceVersionTx(tx, forged)
 	}); err != nil {
 		t.Fatal(err)

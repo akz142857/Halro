@@ -13,9 +13,10 @@ import (
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/ledger"
+	bbolt "go.etcd.io/bbolt"
 )
 
-func migrateVersionedDeploymentPricing(tx *Tx, step func(string) error) error {
+func migrateVersionedDeploymentPricing(tx *bbolt.Tx, step func(string) error) error {
 	for _, item := range []struct {
 		name  []byte
 		label string
@@ -54,7 +55,7 @@ func (s *Store) PricingIdempotencyRequestSHA256(ctx context.Context, keySHA256 s
 		return "", false, err
 	}
 	var record pricingIdempotencyRecord
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketPricingIdempotency).Get([]byte(keySHA256))
 		if raw == nil {
 			return nil
@@ -64,7 +65,7 @@ func (s *Store) PricingIdempotencyRequestSHA256(ctx context.Context, keySHA256 s
 	return record.RequestSHA256, record.KeySHA256 != "", err
 }
 
-func migrateDeployments(tx *Tx, step func(string) error) error {
+func migrateDeployments(tx *bbolt.Tx, step func(string) error) error {
 	if err := migrationStep(step, "before_create_deployments_bucket"); err != nil {
 		return err
 	}
@@ -129,7 +130,7 @@ func (s *Store) PutDeployment(ctx context.Context, deployment domain.Deployment,
 	if err := ctx.Err(); err != nil {
 		return domain.Deployment{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		rawProvider := tx.Bucket(bucketProviders).Get([]byte(deployment.ProviderID))
 		if rawProvider == nil {
 			return fmt.Errorf("provider %q: %w", deployment.ProviderID, ErrNotFound)
@@ -250,7 +251,7 @@ func (s *Store) createDeploymentPriceVersion(ctx context.Context, price domain.D
 	}
 	var effectiveIntent *domain.PricingAuditIntent
 	replayed := false
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if keySHA256 != "" {
 			idempotency := tx.Bucket(bucketPricingIdempotency)
 			if raw := idempotency.Get([]byte(keySHA256)); raw != nil {
@@ -403,7 +404,7 @@ func (s *Store) GetDeploymentPriceVersion(ctx context.Context, deploymentID, pri
 		return domain.DeploymentPriceVersion{}, err
 	}
 	var price domain.DeploymentPriceVersion
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(priceID))
 		if raw == nil {
 			return ErrNotFound
@@ -424,7 +425,7 @@ func (s *Store) ListDeploymentPriceVersions(ctx context.Context, deploymentID st
 		return nil, err
 	}
 	var prices []domain.DeploymentPriceVersion
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
 		if timeline == nil {
 			if tx.Bucket(bucketDeployments).Get([]byte(deploymentID)) == nil {
@@ -581,7 +582,7 @@ func (s *Store) PricingReadiness(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.view(func(tx *Tx) error {
+	return s.db.View(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketDeploymentPricingHighWater).ForEach(func(_, raw []byte) error {
 			if raw == nil {
 				return nil
@@ -606,7 +607,7 @@ func (s *Store) PricingQuarantineCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	count := 0
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketDeploymentPricingHighWater).ForEach(func(_, raw []byte) error {
 			if raw == nil {
 				return nil
@@ -629,7 +630,7 @@ func (s *Store) DeploymentPricingQuarantine(ctx context.Context, deploymentID st
 		return false, "", err
 	}
 	var high domain.DeploymentPricingHighWater
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketDeploymentPricingHighWater).Get([]byte(deploymentID))
 		if raw == nil {
 			return nil
@@ -648,7 +649,7 @@ func (s *Store) QuarantineRestoredScheduledPrices(ctx context.Context, backupCre
 		return 0, nil
 	}
 	count := 0
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		due := make(map[string]domain.DeploymentPriceVersion)
 		if err := tx.Bucket(bucketDeploymentPriceVersions).ForEach(func(_, raw []byte) error {
 			var price domain.DeploymentPriceVersion
@@ -711,7 +712,7 @@ func (s *Store) confirmRestoredPricing(ctx context.Context, deploymentID string,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPricingHighWater)
 		raw := bucket.Get([]byte(deploymentID))
 		if raw == nil {
@@ -768,7 +769,7 @@ func (s *Store) PrepareDeploymentPricePin(ctx context.Context, deploymentID, att
 	// price still serves under the unknown-price policy). Only genuine faults are
 	// returned as errors, so only they can spoil a batch.
 	var outcome error
-	err := s.batch(func(tx *Tx) error {
+	err := s.batch(func(tx *bbolt.Tx) error {
 		// Everything the caller reads is reset here, not accumulated across
 		// runs: this body may execute more than once for a single call, and a
 		// re-run happens in a fresh transaction that can observe state another
@@ -926,7 +927,7 @@ func (s *Store) CommitDeploymentPricePin(ctx context.Context, attemptID, snapsho
 	// See PrepareDeploymentPricePin: expected outcomes travel in outcome so they
 	// cannot abort a batch shared with unrelated deployments' commits.
 	var outcome error
-	err := s.batch(func(tx *Tx) error {
+	err := s.batch(func(tx *bbolt.Tx) error {
 		intent, outcome = domain.PricePinIntent{}, nil
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))
@@ -974,7 +975,7 @@ func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketDeploymentPricePins)
 		raw := bucket.Get([]byte(attemptID))
 		if raw == nil {
@@ -991,7 +992,7 @@ func (s *Store) DeletePreparedDeploymentPricePin(ctx context.Context, attemptID 
 	})
 }
 
-func quarantineIncoherentPricingHighWatersTx(tx *Tx) error {
+func quarantineIncoherentPricingHighWatersTx(tx *bbolt.Tx) error {
 	highWaterBucket := tx.Bucket(bucketDeploymentPricingHighWater)
 	updates := make(map[string]domain.DeploymentPricingHighWater)
 	if err := highWaterBucket.ForEach(func(key, raw []byte) error {
@@ -1047,7 +1048,7 @@ func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.St
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		if err := quarantineIncoherentPricingHighWatersTx(tx); err != nil {
 			return err
 		}
@@ -1112,7 +1113,7 @@ func (s *Store) RecoverDeploymentPricePins(ctx context.Context, state *ledger.St
 	})
 }
 
-func selectDeploymentPriceVersionTx(tx *Tx, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
+func selectDeploymentPriceVersionTx(tx *bbolt.Tx, deploymentID string, selectedAt time.Time) (domain.DeploymentPriceVersion, error) {
 	timeline := tx.Bucket(bucketDeploymentPriceTimeline).Bucket([]byte(deploymentID))
 	if timeline == nil {
 		return domain.DeploymentPriceVersion{}, domain.ErrPriceUnavailable
@@ -1148,7 +1149,7 @@ func (s *Store) cancelDeploymentPriceVersion(ctx context.Context, deploymentID, 
 		return domain.DeploymentPriceVersion{}, err
 	}
 	var price domain.DeploymentPriceVersion
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		raw := tx.Bucket(bucketDeploymentPriceVersions).Get([]byte(priceID))
 		if raw == nil {
 			return ErrNotFound
@@ -1206,7 +1207,7 @@ func (s *Store) cancelDeploymentPriceVersion(ctx context.Context, deploymentID, 
 	return price, err
 }
 
-func putDeploymentPriceVersionTx(tx *Tx, price domain.DeploymentPriceVersion) error {
+func putDeploymentPriceVersionTx(tx *bbolt.Tx, price domain.DeploymentPriceVersion) error {
 	if err := price.Validate(); err != nil {
 		return err
 	}

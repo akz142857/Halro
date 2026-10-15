@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 // maxRouteSuspensions bounds the bucket.
@@ -42,7 +43,7 @@ func (s *Store) PutRouteSuspension(ctx context.Context, suspension domain.RouteS
 	if err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketRouteSuspensions)
 		if bucket == nil {
 			return errors.New("route suspensions bucket is missing")
@@ -63,7 +64,7 @@ func (s *Store) DeleteRouteSuspension(ctx context.Context, kind, key string) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketRouteSuspensions)
 		if bucket == nil {
 			return errors.New("route suspensions bucket is missing")
@@ -91,7 +92,7 @@ func (s *Store) DeleteRouteSuspensionWithAuditIntent(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketRouteSuspensions)
 		if bucket == nil {
 			return errors.New("route suspensions bucket is missing")
@@ -120,7 +121,7 @@ func (s *Store) ListRouteSuspensions(ctx context.Context) ([]domain.RouteSuspens
 		return nil, err
 	}
 	var suspensions []domain.RouteSuspension
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketRouteSuspensions)
 		if bucket == nil {
 			return nil

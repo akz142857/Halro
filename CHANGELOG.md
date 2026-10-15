@@ -8,19 +8,6 @@ semantic versioning.
 
 ### Added
 
-- The Admin Console now has a read-only Cluster status page for the local HA
-  member's role, term, replication indexes, and authenticated peer sessions.
-  Standalone instances show their mode explicitly; the HA test guide describes
-  how to validate each member and exercise failover in an isolated environment.
-
-- High-availability repository foundations now cover the versioned metadata
-  journal, Primary-to-Replica replication protocol, mTLS member identity and
-  revocation, confirmed-prefix recovery, promotion and seed workflows,
-  provider-object replication, Kubernetes examples, deterministic failure
-  scenarios, and production acceptance/rollback runbooks. These are repository
-  gates; a target environment still has to complete the documented G0-G7 and
-  soak acceptance before HA is claimed in production.
-
 - Kimi Code and the operator-enabled Claude subscription product are available
   as explicit provider offerings, kept separate from their metered products so
   credentials cannot silently spend the wrong balance. Claude subscription

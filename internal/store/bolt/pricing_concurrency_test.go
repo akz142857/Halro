@@ -18,11 +18,12 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func newPricedStore(t *testing.T, deploymentID string, effectiveFrom time.Time) *Store {
 	t.Helper()
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestPricePinPreparationSurvivesBatchSiblingFailures(t *testing.T) {
 				}
 				// A sibling that always fails: every batch it lands in is rolled
 				// back and its survivors re-run.
-				_ = store.batch(func(*Tx) error { return errors.New("poisoned batch sibling") })
+				_ = store.db.Batch(func(*bbolt.Tx) error { return errors.New("poisoned batch sibling") })
 			}
 		}()
 	}

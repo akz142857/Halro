@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 type capabilityDetectionIdempotency struct {
@@ -25,7 +26,7 @@ func (s *Store) CreateModelCapabilityDetection(ctx context.Context, detection do
 		return domain.ModelCapabilityDetection{}, false, err
 	}
 	var replayed bool
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		idem := tx.Bucket(bucketCapabilityDetectionIdem)
 		if raw := idem.Get([]byte(detection.IdempotencyKeyHash)); raw != nil {
 			var record capabilityDetectionIdempotency
@@ -93,7 +94,7 @@ func (s *Store) PutModelCapabilityDetection(ctx context.Context, detection domai
 	if err := ctx.Err(); err != nil {
 		return domain.ModelCapabilityDetection{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if err := detection.Validate(); err != nil {
 			return err
 		}
@@ -119,7 +120,7 @@ func (s *Store) DeleteModelCapabilityDetection(ctx context.Context, id string) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketModelCapabilityDetections)
 		raw := bucket.Get([]byte(id))
 		if raw == nil {
@@ -166,7 +167,7 @@ func (s *Store) InterruptModelCapabilityDetections(ctx context.Context, now time
 		return 0, err
 	}
 	count := 0
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketModelCapabilityDetections)
 		// Collected first, written after the walk. Writing under ForEach mutates
 		// the bucket the cursor is walking, which bbolt leaves undefined: a value
