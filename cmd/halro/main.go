@@ -31,6 +31,7 @@ import (
 	"github.com/akz142857/Halro/internal/bearercred"
 	"github.com/akz142857/Halro/internal/buildinfo"
 	"github.com/akz142857/Halro/internal/config"
+	"github.com/akz142857/Halro/internal/diagnostics"
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/hostsecurity"
 	"github.com/akz142857/Halro/internal/logging"
@@ -1218,6 +1219,11 @@ func runRuntime(cfg config.Config, configPath string, logger *slog.Logger, print
 	)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	closeDiagnostics, err := diagnostics.Start(os.Getenv("HALRO_PPROF_LISTEN"), logger)
+	if err != nil {
+		return err
+	}
+	defer closeDiagnostics()
 	runtime, err := app.OpenWithOptions(ctx, cfg, logger, app.OpenOptions{AllowGeneratedSetupToken: printGuide})
 	if err != nil {
 		return err

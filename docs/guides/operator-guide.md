@@ -1475,6 +1475,14 @@ a WAL/Audit/Parquet set from another epoch.
   verified Backup ID. The live directory remains unchanged on preflight failure.
 - Disk usage grows: inspect retention settings, Parquet manifest verification,
   WAL/checkpoint progress, and backup copies. See `docs/contracts/usage-storage.md`.
+- Memory grows: start `halro start` with `HALRO_PPROF_LISTEN=127.0.0.1:6060`
+  and collect `curl -o heap.pb.gz http://127.0.0.1:6060/debug/pprof/heap`
+  (read it with `go tool pprof`) plus `/debug/runtime` for `MemStats`. The
+  listener is off unless the variable is set, accepts only a literal loopback
+  address, and has no authentication, so reach it over SSH or
+  `kubectl port-forward`, never by publishing the port. Profiles record stack
+  traces and allocation sizes, not memory contents; still treat them as
+  internal material.
 
 Operational references: `docs/contracts/metrics-reference.md`, `docs/guides/backup-restore.md`,
 `docs/verification/crash-recovery-matrix.md`, `docs/contracts/usage-storage.md`,
