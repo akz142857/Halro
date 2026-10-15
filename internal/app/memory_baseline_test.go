@@ -39,7 +39,8 @@ import (
 //
 // HALRO_MEMORY_BASELINE_SIZES (default 10000,100000,1000000) and
 // HALRO_MEMORY_BASELINE_WINDOW (default 10s per concurrency level) shape it.
-// Results go to <output dir>/results.jsonl, with a heap profile per size.
+// Results go to <output dir>/results.jsonl, with a heap profile and a CPU
+// profile of the reopen per size.
 
 const (
 	memoryBaselineProjects = 16
@@ -128,12 +129,21 @@ func TestMemoryBaseline(t *testing.T) {
 		if err := r.Close(); err != nil {
 			t.Fatalf("close at %d: %v", result.History, err)
 		}
+		cpuProfile, err := os.Create(filepath.Join(out, fmt.Sprintf("cpu-open-%d.pb.gz", result.History)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(cpuProfile); err != nil {
+			t.Fatal(err)
+		}
 		started := time.Now()
 		r, err = Open(ctx, cfg, logger)
+		result.OpenSeconds = time.Since(started).Seconds()
+		pprof.StopCPUProfile()
+		cpuProfile.Close()
 		if err != nil {
 			t.Fatalf("reopen at %d: %v", result.History, err)
 		}
-		result.OpenSeconds = time.Since(started).Seconds()
 
 		runtime.GC()
 		runtime.GC()

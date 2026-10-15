@@ -86,6 +86,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 
 | 文档 | 内容 |
 | --- | --- |
+| [内存有界重设计 · P0 基线](verification/memory-bounded-baseline.zh-CN.md) | 2026-10-15 在 Linux 容器里用固定探针测 `main`：历史从 1 万到 100 万请求，常驻 heap 从 50 MiB 线性涨到 4.1 GiB（约每请求 4.4 KB，Ledger 约 2.3 GB、Usage 约 1.7 GB），冷启动从 0.7 s 涨到 205～231 s（GC 占 CPU 73%，WAL 被扫两遍）；吞吐与 p99 不随历史变化。后续阶段对照本页 |
 | [生产验证执行方案](verification/production-validation-plan.zh-CN.md) | 从候选冻结开始，依次完成真实 Provider、安全边界、告警与恢复、容量与 24 小时浸泡、正式发布和四方签署 |
 | [生产验证执行记录 · 2026-09-18](verification/production-validation-run-260918.zh-CN.md) | 在候选 `f09ed2d` 上执行该方案中不需要外部授权的部分（G0 条件通过、G1/G3/G4 的本机 E3 子集）。首轮 22 条发现修掉 10 条，对修复本身的第二轮评审再出 13 条（含一条把 fail-closed 放行的自造回归，已回退）；G2/G5/G6/G7 因缺真实账户、生产形态环境与四方签署而 `BLOCKED`，结论维持 `NO-GO / PRODUCTION UNVERIFIED` |
 | [生产验证执行记录 · 2026-09-25 · G0 重新冻结](verification/production-validation-run-260925-g0.zh-CN.md) | 把 260918-PV-F-01 关掉：9 个 PR 全部合入后用干净提交 `9e0d73c7` 重跑 G0——完整门禁与 CI 在同一 SHA 上通过，版本串不再带 `-dirty`，制品 digest 在固定 `SOURCE_DATE_EPOCH` 下可复现。重跑本身发现 `make build` 会留下一个自称来自不干净树的旧 `halro-deadman`（260925-PV-F-01，已修并加门禁）。G0 因缺发布制品与签名停在 `CONDITIONAL PASS`，整体仍 `NO-GO` |
@@ -143,7 +144,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
 | [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 已实现部分（含 metadata journal）于 2026-10-15 移出 `main`，保存在 `ha` 分支待评审（#404）；内存有界的重新设计完成后再继续 |
-| [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 提案待评审，未开工；§6 的预算待确认 |
+| [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 已评审（#405），§6 预算 2026-10-15 确认；P0 基线已测，见 [P0 基线](verification/memory-bounded-baseline.zh-CN.md) |
 | [实例自述文档与 Agent 操作通道](todo/agent-self-description-plan.zh-CN.md) | 实例把「我是什么、我能做什么、怎么配置我」服务出去：网关口的 `.well-known` 北向自述与 `GET /v1/models`，管理口登录后的 `GET /admin/api/v1/skill.md`；路由表由 `chi.Walk` 从同一棵树生成 | 提案待评审；`internal/selfdescribe` 不存在。不引入机器凭据，MCP 执行通道留待自述文档落地后单独评审 |
 
 ## 草稿 · `drafts/`
