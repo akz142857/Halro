@@ -7,6 +7,8 @@ import (
 	"sort"
 	"time"
 
+	bbolt "go.etcd.io/bbolt"
+
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
 )
@@ -76,75 +78,140 @@ type Anomaly struct {
 	FallbackCount  int       `json:"fallback_count"`
 }
 
+// ErrInvalidQuery marks a query the caller got wrong, as opposed to a read
+// the history index failed.
+var ErrInvalidQuery = errors.New("invalid usage query")
+
+type invalidQueryError string
+
+func (e invalidQueryError) Error() string        { return string(e) }
+func (e invalidQueryError) Is(target error) bool { return target == ErrInvalidQuery }
+
+func invalidQuery(message string) error { return invalidQueryError(message) }
+
 func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 	if query.Limit < 1 || query.Limit > 100 {
-		return AttemptPage{}, errors.New("usage page limit must be between 1 and 100")
+		return AttemptPage{}, invalidQuery("usage page limit must be between 1 and 100")
 	}
 	if query.AccountRegionID != domain.RegionNone && query.AccountRegionID != domain.RegionCN && query.AccountRegionID != domain.RegionGlobal {
-		return AttemptPage{}, errors.New("usage account region is invalid")
+		return AttemptPage{}, invalidQuery("usage account region is invalid")
 	}
 	if !query.ProviderFailureReason.Valid() {
-		return AttemptPage{}, errors.New("usage provider failure reason is invalid")
+		return AttemptPage{}, invalidQuery("usage provider failure reason is invalid")
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	if err := a.Flush(); err != nil {
+		return AttemptPage{}, err
+	}
 	page := AttemptPage{Attempts: make([]AttemptEvent, 0, query.Limit+1)}
-	for index := len(a.attempts) - 1; index >= 0; index-- {
-		attempt := a.attempts[index]
-		if query.BeforeSequence > 0 && attempt.Sequence >= query.BeforeSequence {
-			continue
+	err := a.history.db.View(func(tx *bbolt.Tx) error {
+		scanned := 0
+		consider := func(attempt AttemptEvent) error {
+			scanned++
+			if attemptMatches(attempt, query) {
+				page.Attempts = append(page.Attempts, attempt)
+				if len(page.Attempts) == query.Limit+1 {
+					page.Attempts = page.Attempts[:query.Limit]
+					page.NextCursor = EncodeCursor(page.Attempts[len(page.Attempts)-1].Sequence)
+					return errStopWalk
+				}
+			}
+			// The budget is spent: hand back what this page found and where
+			// the walk stopped, rather than reading on through the history.
+			if scanned >= historyScanBudget {
+				page.NextCursor = EncodeCursor(attempt.Sequence)
+				return errStopWalk
+			}
+			return nil
 		}
-		if query.ProjectID != "" && attempt.ProjectID != query.ProjectID ||
-			query.WorkUnitID != "" && attempt.WorkUnitID != query.WorkUnitID ||
-			query.RunID != "" && attempt.RunID != query.RunID ||
-			query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
-			query.OfferingID != "" && attempt.OfferingID != query.OfferingID ||
-			query.AccountRegionID != "" && attempt.AccountRegionID != query.AccountRegionID ||
-			query.ProviderFailureReason != "" && attempt.ProviderFailureReason != query.ProviderFailureReason ||
-			query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
-			query.RequestID != "" && attempt.RequestID != query.RequestID ||
-			query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
-			query.ProviderModel != "" && attempt.ProviderModel != query.ProviderModel ||
-			query.Status != "" && attempt.Status != query.Status ||
-			!query.Start.IsZero() && attempt.CompletedAt.Before(query.Start) ||
-			!query.End.IsZero() && !attempt.CompletedAt.Before(query.End) {
-			continue
+		// The narrowest index the query names decides which entries are
+		// walked; every filter is still applied to each attempt.
+		byIndex := func(bucket []byte, prefix string) error {
+			return walkPrefixBackward(tx.Bucket(bucket), prefix, query.BeforeSequence, func(sequence uint64) error {
+				attempt, err := a.history.attemptAt(tx, sequence)
+				if err != nil {
+					return err
+				}
+				return consider(attempt)
+			})
 		}
-		page.Attempts = append(page.Attempts, attempt)
-		if len(page.Attempts) == query.Limit+1 {
-			page.Attempts = page.Attempts[:query.Limit]
-			page.NextCursor = EncodeCursor(page.Attempts[len(page.Attempts)-1].Sequence)
-			break
+		switch {
+		case query.RequestID != "":
+			return byIndex(historyRequestAttempts, query.RequestID)
+		case query.ProjectID != "":
+			return byIndex(historyProjectAttempts, query.ProjectID)
+		default:
+			return walkSequencesBackward(tx.Bucket(historyAttempts), query.BeforeSequence, func(sequence uint64, raw []byte) error {
+				attempt, err := a.history.decodeAttempt(sequenceKey(sequence), raw)
+				if err != nil {
+					return err
+				}
+				return consider(attempt)
+			})
 		}
+	})
+	if err != nil {
+		return AttemptPage{}, err
 	}
 	return page, nil
 }
 
-func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+func attemptMatches(attempt AttemptEvent, query AttemptQuery) bool {
+	return !(query.ProjectID != "" && attempt.ProjectID != query.ProjectID ||
+		query.WorkUnitID != "" && attempt.WorkUnitID != query.WorkUnitID ||
+		query.RunID != "" && attempt.RunID != query.RunID ||
+		query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
+		query.OfferingID != "" && attempt.OfferingID != query.OfferingID ||
+		query.AccountRegionID != "" && attempt.AccountRegionID != query.AccountRegionID ||
+		query.ProviderFailureReason != "" && attempt.ProviderFailureReason != query.ProviderFailureReason ||
+		query.DeploymentID != "" && attempt.DeploymentID != query.DeploymentID ||
+		query.RequestID != "" && attempt.RequestID != query.RequestID ||
+		query.RequestedModel != "" && attempt.RequestedModel != query.RequestedModel ||
+		query.ProviderModel != "" && attempt.ProviderModel != query.ProviderModel ||
+		query.Status != "" && attempt.Status != query.Status ||
+		!query.Start.IsZero() && attempt.CompletedAt.Before(query.Start) ||
+		!query.End.IsZero() && !attempt.CompletedAt.Before(query.End))
+}
+
+// RequestDetail is one request and its attempts. A request still in flight is
+// answered from memory, with the attempts that have already settled.
+func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool, error) {
+	if err := a.Flush(); err != nil {
+		return RequestDetail{}, false, err
+	}
 	var result RequestDetail
 	found := false
-	for index := len(a.summaries) - 1; index >= 0; index-- {
-		if a.summaries[index].RequestID == requestID {
-			result.Summary = a.summaries[index]
-			found = true
-			break
-		}
+	if summary, ok := a.activeRequest(requestID); ok {
+		result.Summary, found = summary, true
 	}
-	if active := a.requests[requestID]; active != nil {
-		result.Summary = active.summary
-		found = true
+	err := a.history.db.View(func(tx *bbolt.Tx) error {
+		if !found {
+			raw := tx.Bucket(historyRequestIndex).Get([]byte(requestID))
+			if raw == nil {
+				return nil
+			}
+			if len(raw) != 8 {
+				return errHistoryRowTampered
+			}
+			summary, err := a.history.summaryAt(tx, binary.BigEndian.Uint64(raw))
+			if err != nil {
+				return err
+			}
+			if summary.RequestID != requestID {
+				return errHistoryRowTampered
+			}
+			result.Summary, found = summary, true
+		}
+		attempts, err := a.history.requestAttempts(tx, requestID)
+		result.Attempts = attempts
+		return err
+	})
+	if err != nil {
+		return RequestDetail{}, false, err
 	}
 	if !found {
-		return RequestDetail{}, false
+		return RequestDetail{}, false, nil
 	}
-	for _, attempt := range a.attempts {
-		if attempt.RequestID == requestID {
-			result.Attempts = append(result.Attempts, attempt)
-		}
-	}
-	return result, true
+	return result, true, nil
 }
 
 // Period is the accounting day a dashboard reports on, as a half-open UTC
@@ -172,104 +239,67 @@ func (p Period) Includes(periodID string, timezoneVersion uint64) bool {
 	return periodID == p.ID && timezoneVersion == p.TimezoneVersion
 }
 
-func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+// Dashboard is one accounting day's figures, the last seven days by hour, and
+// the day's most recent anomalies.
+//
+// The day's totals and breakdowns are read from the daily rollup, and the
+// hours from the hourly rows: both are stored increments, so the cost of a
+// dashboard does not depend on how much traffic the day or the week carried.
+// Request latency percentiles are therefore read off a histogram and report the
+// upper bound of the bucket they fall in, the same answer the summary view
+// gives for the same day.
+func (a *Aggregate) Dashboard(now time.Time, period Period) (Dashboard, error) {
+	if err := a.Flush(); err != nil {
+		return Dashboard{}, err
+	}
 	since := now.Add(-7 * 24 * time.Hour).UTC().Truncate(time.Hour)
 	result := Dashboard{
-		Active: uint64(len(a.requests)), Watermark: a.watermark.Sequence,
+		Active: a.activeCount(), Watermark: a.Watermark().Sequence,
 		Hourly:          make([]Bucket, 0, 7*24),
 		RecentAnomalies: make([]Anomaly, 0, 5),
 		Breakdowns: map[string]map[string][]Breakdown{
 			"project": {}, "provider": {}, "offering": {}, "requested_model": {}, "provider_model": {},
 		},
 	}
-	hourIndexes := make(map[int64]int, len(a.hourly))
-	for _, bucket := range a.hourly {
-		if !bucket.Hour.Before(since) {
-			// Request quality is rebuilt from terminal request summaries below. That
-			// keeps restored checkpoints from needing a schema migration and prevents
-			// an hourly bucket from being reused as an accounting-period boundary.
-			bucket.Requests = 0
-			bucket.RequestErrors = 0
-			bucket.RequestLatencySamples = 0
-			bucket.RequestLatencyP50Millis = 0
-			bucket.RequestLatencyP95Millis = 0
-			hourIndexes[bucket.Hour.UTC().Truncate(time.Hour).Unix()] = len(result.Hourly)
-			result.Hourly = append(result.Hourly, bucket)
-		}
-	}
-	hourlyRequestLatencies := make(map[int64][]int64, len(result.Hourly))
-	todayRequestLatencies := make([]int64, 0)
-	for _, summary := range a.summaries {
-		if summary.CompletedAt.IsZero() {
-			continue
-		}
-		hour := summary.CompletedAt.UTC().Truncate(time.Hour)
-		if bucketIndex, ok := hourIndexes[hour.Unix()]; ok {
-			result.Hourly[bucketIndex].Requests++
-			if summary.Outcome != "success" {
-				result.Hourly[bucketIndex].RequestErrors++
-			}
-			if latency, ok := requestLatencyMillis(summary); ok {
-				hourlyRequestLatencies[hour.Unix()] = append(hourlyRequestLatencies[hour.Unix()], latency)
-			}
-		}
-		if period.Includes(summary.PeriodID, summary.PeriodTimezoneVersion) {
-			result.Today.Requests++
-			if summary.Outcome != "success" {
-				result.Today.RequestErrors++
-			}
-			if latency, ok := requestLatencyMillis(summary); ok {
-				todayRequestLatencies = append(todayRequestLatencies, latency)
-			}
-		}
-	}
-	// Provider usage can be unavailable after an ambiguous failure. Such attempts
-	// are deliberately settled against a conservative token upper bound. Preserve
-	// that accounting total while exposing the estimated portion separately so
-	// operators do not mistake an upper bound for Provider-reported consumption.
 	breakdowns := map[string]map[string]*Breakdown{
 		"project": {}, "provider": {}, "offering": {}, "requested_model": {}, "provider_model": {},
 	}
-	for index := len(a.attempts) - 1; index >= 0; index-- {
-		attempt := a.attempts[index]
-		hour := attempt.CompletedAt.UTC().Truncate(time.Hour)
-		if attempt.TokensEstimated {
-			if bucketIndex, ok := hourIndexes[hour.Unix()]; ok {
-				result.Hourly[bucketIndex].EstimatedInputTokens += attempt.ProviderInputTokens
-				result.Hourly[bucketIndex].EstimatedOutputTokens += attempt.ProviderOutputTokens
+	err := a.history.db.View(func(tx *bbolt.Tx) error {
+		if err := a.history.dayRollups(tx, period.ID, period.TimezoneVersion, func(key domain.RollupKey, row domain.DailyRollup) error {
+			if key.Dimension == domain.RollupDimensionTotal {
+				result.Today = rollupBucket(row)
+				return nil
 			}
-		}
-		if period.Includes(attempt.PeriodID, attempt.PeriodTimezoneVersion) {
-			result.Today.Attempts++
-			result.Today.InputTokens += attempt.ProviderInputTokens
-			result.Today.OutputTokens += attempt.ProviderOutputTokens
-			if cost, ok := attempt.KnownCostMicrosUSD(); ok {
-				result.Today.CostMicrosUSD += cost
-			} else {
-				result.Today.UnknownAttempts++
-			}
-			if attempt.Status != "success" {
-				result.Today.Errors++
-			}
-			result.Today.LatencyMillis += attempt.LatencyMillis
-			if attempt.TokensEstimated {
-				result.Today.EstimatedInputTokens += attempt.ProviderInputTokens
-				result.Today.EstimatedOutputTokens += attempt.ProviderOutputTokens
-			}
-			if attempt.CostEstimated {
-				if cost, ok := attempt.KnownCostMicrosUSD(); ok {
-					result.Today.EstimatedCostMicrosUSD += cost
+			if groups, ok := breakdowns[key.Dimension]; ok {
+				groups[key.DimensionKey] = &Breakdown{
+					Key: key.DimensionKey, Calls: row.Attempts, InputTokens: row.InputTokens,
+					OutputTokens: row.OutputTokens, CostMicrosUSD: row.CostMicrosUSD,
+					EstimatedCostMicros: row.EstimatedCostMicrosUSD, UnknownAttempts: row.UnknownAttempts,
+					Errors: row.Errors,
 				}
 			}
-			addBreakdown(breakdowns["project"], attempt.ProjectID, attempt)
-			addBreakdown(breakdowns["provider"], attempt.ProviderID, attempt)
-			addBreakdown(breakdowns["offering"], string(attempt.OfferingID), attempt)
-			addBreakdown(breakdowns["requested_model"], attempt.RequestedModel, attempt)
-			addBreakdown(breakdowns["provider_model"], attempt.ProviderModel, attempt)
-			if len(result.RecentAnomalies) < 5 &&
-				(attempt.Status != "success" || attempt.RetryCount > 0 || attempt.FallbackCount > 0) {
+			return nil
+		}); err != nil {
+			return err
+		}
+		hours, err := a.history.hoursSince(tx, since)
+		if err != nil {
+			return err
+		}
+		for _, row := range hours {
+			bucket := row.Bucket
+			bucket.RequestLatencyP50Millis, _ = ApproximateLatencyPercentile(row.RequestLatencyBuckets, row.RequestLatencyOverflow, 50)
+			bucket.RequestLatencyP95Millis, _ = ApproximateLatencyPercentile(row.RequestLatencyBuckets, row.RequestLatencyOverflow, 95)
+			result.Hourly = append(result.Hourly, bucket)
+		}
+		scanned := 0
+		return walkSequencesBackward(tx.Bucket(historyAnomalies), 0, func(sequence uint64, _ []byte) error {
+			scanned++
+			attempt, err := a.history.attemptAt(tx, sequence)
+			if err != nil {
+				return err
+			}
+			if period.Includes(attempt.PeriodID, attempt.PeriodTimezoneVersion) {
 				result.RecentAnomalies = append(result.RecentAnomalies, Anomaly{
 					RequestID: attempt.RequestID, AttemptID: attempt.AttemptID,
 					CompletedAt: attempt.CompletedAt, ProjectID: attempt.ProjectID,
@@ -280,13 +310,14 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 					RetryCount: attempt.RetryCount, FallbackCount: attempt.FallbackCount,
 				})
 			}
-		}
-	}
-	setRequestLatency(&result.Today, todayRequestLatencies)
-	for hour, latencies := range hourlyRequestLatencies {
-		if bucketIndex, ok := hourIndexes[hour]; ok {
-			setRequestLatency(&result.Hourly[bucketIndex], latencies)
-		}
+			if len(result.RecentAnomalies) == 5 || scanned >= historyScanBudget {
+				return errStopWalk
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return Dashboard{}, err
 	}
 	for dimension, groups := range breakdowns {
 		result.Breakdowns[dimension] = map[string][]Breakdown{
@@ -295,33 +326,22 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) Dashboard {
 			"errors": topBreakdowns(groups, 5, "errors"),
 		}
 	}
-	sortBuckets(result.Hourly)
-	return result
+	return result, nil
 }
 
-func addBreakdown(groups map[string]*Breakdown, key string, attempt AttemptEvent) {
-	if key == "" {
-		return
+// rollupBucket presents one day's total row as a dashboard bucket.
+func rollupBucket(row domain.DailyRollup) Bucket {
+	bucket := Bucket{
+		Requests: row.Requests, RequestErrors: row.RequestErrors,
+		RequestLatencySamples: row.RequestLatencySamples,
+		Attempts:              row.Attempts, InputTokens: row.InputTokens, OutputTokens: row.OutputTokens,
+		EstimatedInputTokens: row.EstimatedInputTokens, EstimatedOutputTokens: row.EstimatedOutputTokens,
+		CostMicrosUSD: row.CostMicrosUSD, EstimatedCostMicrosUSD: row.EstimatedCostMicrosUSD,
+		UnknownAttempts: row.UnknownAttempts, Errors: row.Errors, LatencyMillis: row.LatencyMillis,
 	}
-	item := groups[key]
-	if item == nil {
-		item = &Breakdown{Key: key}
-		groups[key] = item
-	}
-	item.Calls++
-	item.InputTokens += attempt.ProviderInputTokens
-	item.OutputTokens += attempt.ProviderOutputTokens
-	if cost, ok := attempt.KnownCostMicrosUSD(); ok {
-		item.CostMicrosUSD += cost
-		if attempt.CostEstimated {
-			item.EstimatedCostMicros += cost
-		}
-	} else {
-		item.UnknownAttempts++
-	}
-	if attempt.Status != "success" {
-		item.Errors++
-	}
+	bucket.RequestLatencyP50Millis, _ = ApproximateLatencyPercentile(row.RequestLatencyBuckets, row.RequestLatencyOverflow, 50)
+	bucket.RequestLatencyP95Millis, _ = ApproximateLatencyPercentile(row.RequestLatencyBuckets, row.RequestLatencyOverflow, 95)
+	return bucket
 }
 
 func topBreakdowns(groups map[string]*Breakdown, limit int, metric string) []Breakdown {
@@ -348,31 +368,6 @@ func topBreakdowns(groups map[string]*Breakdown, limit int, metric string) []Bre
 	return items
 }
 
-func requestLatencyMillis(summary RequestSummary) (int64, bool) {
-	if summary.AcceptedAt.IsZero() || !summary.CompletedAt.After(summary.AcceptedAt) {
-		return 0, false
-	}
-	return summary.CompletedAt.Sub(summary.AcceptedAt).Milliseconds(), true
-}
-
-func setRequestLatency(bucket *Bucket, latencies []int64) {
-	if bucket == nil || len(latencies) == 0 {
-		return
-	}
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	bucket.RequestLatencySamples = int64(len(latencies))
-	bucket.RequestLatencyP50Millis = percentile(latencies, 50)
-	bucket.RequestLatencyP95Millis = percentile(latencies, 95)
-}
-
-func percentile(sorted []int64, percent int) int64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	index := (len(sorted)*percent + 99) / 100
-	return sorted[index-1]
-}
-
 func EncodeCursor(sequence uint64) string {
 	var raw [8]byte
 	binary.BigEndian.PutUint64(raw[:], sequence)
@@ -392,13 +387,4 @@ func DecodeCursor(value string) (uint64, error) {
 		return 0, errors.New("invalid usage cursor")
 	}
 	return sequence, nil
-}
-
-func sortBuckets(buckets []Bucket) {
-	for index := 1; index < len(buckets); index++ {
-		for current := index; current > 0 &&
-			buckets[current].Hour.Before(buckets[current-1].Hour); current-- {
-			buckets[current], buckets[current-1] = buckets[current-1], buckets[current]
-		}
-	}
 }

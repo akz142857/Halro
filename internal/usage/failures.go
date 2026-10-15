@@ -1,8 +1,9 @@
 package usage
 
 import (
-	"errors"
 	"time"
+
+	bbolt "go.etcd.io/bbolt"
 
 	"github.com/akz142857/Halro/internal/domain"
 	"github.com/akz142857/Halro/internal/provider"
@@ -106,101 +107,70 @@ type FailurePage struct {
 // than a success, newest first.
 func (a *Aggregate) QueryFailedRequests(query FailureQuery) (FailurePage, error) {
 	if query.Limit < 1 || query.Limit > 100 {
-		return FailurePage{}, errors.New("usage page limit must be between 1 and 100")
+		return FailurePage{}, invalidQuery("usage page limit must be between 1 and 100")
 	}
 	if query.AccountRegionID != domain.RegionNone && query.AccountRegionID != domain.RegionCN && query.AccountRegionID != domain.RegionGlobal {
-		return FailurePage{}, errors.New("usage account region is invalid")
+		return FailurePage{}, invalidQuery("usage account region is invalid")
 	}
 	if !query.ProviderFailureReason.Valid() {
-		return FailurePage{}, errors.New("usage provider failure reason is invalid")
+		return FailurePage{}, invalidQuery("usage provider failure reason is invalid")
 	}
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	// The rows this page can contain, chosen before any attempt is touched. The
-	// attempt index is then built for those rows alone, which is what keeps a
-	// page's cost proportional to a page: indexing the whole window built a map
-	// with an entry per request held — tens of millions on a busy instance,
-	// hundreds of megabytes, allocated per call and under the read lock the
-	// usage collector needs — in order to return at most a hundred rows.
-	//
-	// A query that filters on attempt fields still needs every request's
-	// attempts to decide which rows qualify, so it indexes the window. That
-	// path is the console's advanced filter rather than its default view, and
-	// one pass over the attempts is still cheaper there than a scan per row.
-	candidates := a.failureCandidates(query)
-	attemptsByRequest := a.indexAttempts(candidates, attemptFiltered(query))
-
+	if err := a.Flush(); err != nil {
+		return FailurePage{}, err
+	}
+	// The failed index holds only the requests that did not succeed, newest
+	// first, so the default view reads a page and stops. A filter on attempt
+	// fields reads each candidate's attempts through the request index; the
+	// scan budget bounds what one page may examine either way.
 	page := FailurePage{Failures: make([]RequestFailure, 0, query.Limit+1)}
-	for _, summary := range candidates {
-		indexes := attemptsByRequest[summary.RequestID]
-		if !a.attemptsMatch(indexes, query) {
-			continue
-		}
-		page.Failures = append(page.Failures, RequestFailure{
-			RequestID: summary.RequestID, ProjectID: summary.ProjectID, KeyID: summary.KeyID,
-			RequestedModel: summary.RequestedModel, Outcome: summary.Outcome,
-			Sequence: summary.Sequence, AcceptedAt: summary.AcceptedAt,
-			CompletedAt: summary.CompletedAt, Attempts: summary.Attempts,
-			Fallbacks: summary.Fallbacks, LastFailure: a.lastFailure(indexes),
+	err := a.history.db.View(func(tx *bbolt.Tx) error {
+		scanned := 0
+		return walkSequencesBackward(tx.Bucket(historyFailed), query.BeforeSequence, func(sequence uint64, _ []byte) error {
+			scanned++
+			summary, err := a.history.summaryAt(tx, sequence)
+			if err != nil {
+				return err
+			}
+			if summaryMatches(summary, query) {
+				attempts, err := a.history.requestAttempts(tx, summary.RequestID)
+				if err != nil {
+					return err
+				}
+				if attemptsMatch(attempts, query) {
+					page.Failures = append(page.Failures, RequestFailure{
+						RequestID: summary.RequestID, ProjectID: summary.ProjectID, KeyID: summary.KeyID,
+						RequestedModel: summary.RequestedModel, Outcome: summary.Outcome,
+						Sequence: summary.Sequence, AcceptedAt: summary.AcceptedAt,
+						CompletedAt: summary.CompletedAt, Attempts: summary.Attempts,
+						Fallbacks: summary.Fallbacks, LastFailure: lastFailure(attempts),
+					})
+					if len(page.Failures) == query.Limit+1 {
+						page.Failures = page.Failures[:query.Limit]
+						page.NextCursor = EncodeCursor(page.Failures[len(page.Failures)-1].Sequence)
+						return errStopWalk
+					}
+				}
+			}
+			if scanned >= historyScanBudget {
+				page.NextCursor = EncodeCursor(sequence)
+				return errStopWalk
+			}
+			return nil
 		})
-		if len(page.Failures) == query.Limit+1 {
-			page.Failures = page.Failures[:query.Limit]
-			page.NextCursor = EncodeCursor(page.Failures[len(page.Failures)-1].Sequence)
-			break
-		}
+	})
+	if err != nil {
+		return FailurePage{}, err
 	}
 	return page, nil
 }
 
-// failureCandidates walks the summaries newest first and keeps the rows a page
-// could contain, applying every filter that does not need an attempt.
-//
-// Without an attempt filter the walk stops at one page: nothing further can
-// appear in the result. With one it collects the whole matching window, because
-// any of those rows may be the one that survives.
-func (a *Aggregate) failureCandidates(query FailureQuery) []RequestSummary {
-	filtered := attemptFiltered(query)
-	candidates := make([]RequestSummary, 0, query.Limit+1)
-	for index := len(a.summaries) - 1; index >= 0; index-- {
-		summary := a.summaries[index]
-		if summary.Outcome == "" || summary.Outcome == "success" {
-			continue
-		}
-		if query.BeforeSequence > 0 && summary.Sequence >= query.BeforeSequence {
-			continue
-		}
-		if query.ProjectID != "" && summary.ProjectID != query.ProjectID ||
+func summaryMatches(summary RequestSummary, query FailureQuery) bool {
+	return summary.Outcome != "" && summary.Outcome != "success" &&
+		!(query.ProjectID != "" && summary.ProjectID != query.ProjectID ||
 			query.RequestID != "" && summary.RequestID != query.RequestID ||
 			query.RequestedModel != "" && summary.RequestedModel != query.RequestedModel ||
 			!query.Start.IsZero() && summary.CompletedAt.Before(query.Start) ||
-			!query.End.IsZero() && !summary.CompletedAt.Before(query.End) {
-			continue
-		}
-		candidates = append(candidates, summary)
-		if !filtered && len(candidates) == query.Limit+1 {
-			break
-		}
-	}
-	return candidates
-}
-
-// indexAttempts maps request to attempt positions for the rows that need it.
-func (a *Aggregate) indexAttempts(candidates []RequestSummary, filtered bool) map[string][]int {
-	wanted := make(map[string]struct{}, len(candidates))
-	for _, summary := range candidates {
-		wanted[summary.RequestID] = struct{}{}
-	}
-	indexed := make(map[string][]int, len(wanted))
-	for index, attempt := range a.attempts {
-		if !filtered {
-			if _, needed := wanted[attempt.RequestID]; !needed {
-				continue
-			}
-		}
-		indexed[attempt.RequestID] = append(indexed[attempt.RequestID], index)
-	}
-	return indexed
+			!query.End.IsZero() && !summary.CompletedAt.Before(query.End))
 }
 
 func attemptFiltered(query FailureQuery) bool {
@@ -211,13 +181,12 @@ func attemptFiltered(query FailureQuery) bool {
 // attemptsMatch applies the attempt-scoped filters. A query that names none of
 // them keeps every request, including the ones with no attempts at all — which
 // is what makes the unfiltered list add up to the summary card's count.
-func (a *Aggregate) attemptsMatch(indexes []int, query FailureQuery) bool {
+func attemptsMatch(attempts []AttemptEvent, query FailureQuery) bool {
 	if query.ProviderID == "" && query.OfferingID == "" && query.AccountRegionID == "" &&
 		query.ProviderFailureReason == "" && query.DeploymentID == "" && query.ProviderModel == "" {
 		return true
 	}
-	for _, index := range indexes {
-		attempt := a.attempts[index]
+	for _, attempt := range attempts {
 		if query.ProviderID != "" && attempt.ProviderID != query.ProviderID ||
 			query.OfferingID != "" && attempt.OfferingID != query.OfferingID ||
 			query.AccountRegionID != "" && attempt.AccountRegionID != query.AccountRegionID ||
@@ -246,12 +215,12 @@ func (a *Aggregate) attemptsMatch(indexes []int, query FailureQuery) bool {
 // same defect the terminal ERROR log was fixed for, on the other side of the
 // same event stream. So a chain that ends in success carries no provider
 // context at all, exactly like a request that never reached an upstream.
-func (a *Aggregate) lastFailure(indexes []int) *FailureContext {
-	if len(indexes) > 0 && a.attempts[indexes[len(indexes)-1]].Status == "success" {
+func lastFailure(attempts []AttemptEvent) *FailureContext {
+	if len(attempts) > 0 && attempts[len(attempts)-1].Status == "success" {
 		return nil
 	}
-	for position := len(indexes) - 1; position >= 0; position-- {
-		attempt := a.attempts[indexes[position]]
+	for position := len(attempts) - 1; position >= 0; position-- {
+		attempt := attempts[position]
 		if attempt.Status == "success" {
 			continue
 		}

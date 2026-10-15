@@ -124,12 +124,18 @@ func (r *Runtime) getAdminOnboardingReadiness(writer http.ResponseWriter, reques
 		resources.PriceReady[deployment.ID] = priceErr == nil
 	}
 
+	evidence, err := r.usage.OnboardingEvidence()
+	if err != nil {
+		r.logger.Error("usage history read failed", "error", err)
+		adminStoreError(writer)
+		return
+	}
 	writeJSON(writer, http.StatusOK, evaluateOnboardingReadiness(
-		now, resources, r.usage.Metrics(), r.usage.Snapshot(),
+		now, resources, r.usage.Metrics(), evidence,
 	))
 }
 
-func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, metrics usage.Metrics, snapshot usage.Snapshot) onboardingReadiness {
+func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, metrics usage.Metrics, evidence usage.OnboardingEvidence) onboardingReadiness {
 	credentialReady := make(map[string]domain.Credential)
 	for _, credential := range resources.Credentials {
 		if len(credential.Ciphertext) > 0 && !internalCredentialType(credential.Type) {
@@ -178,27 +184,15 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 	// credential, Project grant, and Gateway Key worked together. Keep it tied
 	// to the exact attempt IDs and revision timestamps so a later edit still
 	// invalidates the evidence.
-	successfulRequests := make(map[string]struct{})
-	for _, request := range snapshot.Requests {
-		if request.Outcome == "success" {
-			successfulRequests[request.RequestID] = struct{}{}
-		}
+	for deploymentID, at := range evidence.Deployments {
+		successfulDeployment[deploymentID] = at
 	}
-	for _, attempt := range snapshot.Attempts {
-		if attempt.Status != "success" {
-			continue
-		}
-		if _, ok := successfulRequests[attempt.RequestID]; !ok {
-			continue
-		}
-		if newest := successfulDeployment[attempt.DeploymentID]; attempt.DeploymentID != "" && attempt.CompletedAt.After(newest) {
-			successfulDeployment[attempt.DeploymentID] = attempt.CompletedAt
-		}
-		if newest := successfulRoute[attempt.RouteID]; attempt.RouteID != "" && attempt.CompletedAt.After(newest) {
-			successfulRoute[attempt.RouteID] = attempt.CompletedAt
-		}
-		at := attempt.CompletedAt
-		recordProbe(attempt.ProviderID, &at)
+	for routeID, at := range evidence.Routes {
+		successfulRoute[routeID] = at
+	}
+	for providerID, at := range evidence.Providers {
+		at := at
+		recordProbe(providerID, &at)
 	}
 
 	hasProvider := false
@@ -434,7 +428,7 @@ func evaluateOnboardingReadiness(now time.Time, resources onboardingResources, m
 		result.Goals[3].DetailCode = "request_succeeded"
 	} else if accessReady {
 		result.State = onboardingReadyToVerify
-		if verification := latestOnboardingVerification(snapshot); verification != nil && verification.Outcome != "success" {
+		if verification := latestOnboardingVerification(evidence); verification != nil && verification.Outcome != "success" {
 			result.State = onboardingVerifyFailed
 			result.LastVerification = verification
 			result.Goals[3].DetailCode = "request_failed"
@@ -471,22 +465,18 @@ func providerTestIsCurrent(instance domain.ProviderInstance, runtimeID string) b
 	return instance.EgressProxyID == "" || runtimeID != "" && instance.LastTestRuntimeID == runtimeID
 }
 
-func latestOnboardingVerification(snapshot usage.Snapshot) *onboardingVerification {
-	if len(snapshot.Requests) == 0 {
+func latestOnboardingVerification(evidence usage.OnboardingEvidence) *onboardingVerification {
+	if evidence.Latest == nil {
 		return nil
 	}
-	request := snapshot.Requests[len(snapshot.Requests)-1]
+	request := evidence.Latest
 	verification := &onboardingVerification{
 		Outcome: request.Outcome, RequestID: request.RequestID, RequestedModel: request.RequestedModel,
 		CompletedAt: request.CompletedAt,
 	}
-	for index := len(snapshot.Attempts) - 1; index >= 0; index-- {
-		attempt := snapshot.Attempts[index]
-		if attempt.RequestID == request.RequestID {
-			verification.HTTPStatus = attempt.HTTPStatus
-			verification.ErrorClass = attempt.ErrorClass
-			break
-		}
+	if attempt := evidence.LatestAttempt; attempt != nil {
+		verification.HTTPStatus = attempt.HTTPStatus
+		verification.ErrorClass = attempt.ErrorClass
 	}
 	return verification
 }

@@ -25,8 +25,8 @@ import (
 // The memory-bounded redesign's fixed probe (docs/todo/memory-bounded-redesign.zh-CN.md
 // §6, phase P0). It grows the accounting history to each requested size and,
 // at every size, measures what the budgets are written against: live heap
-// after GC, cold-start time, and request throughput and latency at
-// concurrency 1, 16 and 64. Every later phase reruns this same probe, so its
+// after GC, cold-start time, request throughput and latency at concurrency 1,
+// 16 and 64, and how far the usage history index trails the Ledger. Every later phase reruns this same probe, so its
 // shape is fixed here rather than reinvented per phase.
 //
 // Requests take the default Gateway path's accounting lifecycle — begin,
@@ -55,6 +55,9 @@ type memoryBaselineLevel struct {
 	P50Ms             float64 `json:"p50_ms"`
 	P99Ms             float64 `json:"p99_ms"`
 	LedgerSyncsPerReq float64 `json:"ledger_syncs_per_request"`
+	// HistoryMaxLagSeconds is how far the usage history index trailed the
+	// Ledger head at worst during the window, in seconds of Ledger writes.
+	HistoryMaxLagSeconds float64 `json:"history_max_lag_seconds"`
 }
 
 type memoryBaselineResult struct {
@@ -156,7 +159,30 @@ func TestMemoryBaseline(t *testing.T) {
 
 		for _, concurrency := range []int{1, 16, 64} {
 			syncsBefore := r.ledger.Stats().Syncs
+			headBefore, _, _ := r.ledger.ChainHead()
+			stopSampling := make(chan struct{})
+			sampled := make(chan uint64)
+			go func() {
+				var maxLag uint64
+				ticker := time.NewTicker(100 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						head, _, _ := r.ledger.ChainHead()
+						if committed := r.usage.HistoryStats().Committed.Sequence; head.Sequence > committed {
+							maxLag = max(maxLag, head.Sequence-committed)
+						}
+					case <-stopSampling:
+						sampled <- maxLag
+						return
+					}
+				}
+			}()
 			latencies := memoryBaselineDrive(t, r, &sequence, concurrency, 0, window)
+			close(stopSampling)
+			maxLagRecords := <-sampled
+			headAfter, _, _ := r.ledger.ChainHead()
 			level := memoryBaselineLevel{
 				Concurrency: concurrency,
 				Requests:    int64(len(latencies)),
@@ -168,6 +194,9 @@ func TestMemoryBaseline(t *testing.T) {
 				level.P99Ms = float64(latencies[len(latencies)*99/100]) / float64(time.Millisecond)
 				level.LedgerSyncsPerReq = float64(r.ledger.Stats().Syncs-syncsBefore) / float64(len(latencies))
 			}
+			if rate := float64(headAfter.Sequence-headBefore.Sequence) / window.Seconds(); rate > 0 {
+				level.HistoryMaxLagSeconds = float64(maxLagRecords) / rate
+			}
 			result.Levels = append(result.Levels, level)
 		}
 
@@ -178,9 +207,10 @@ func TestMemoryBaseline(t *testing.T) {
 		if _, err := fmt.Fprintf(results, "%s\n", line); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("history=%d heap=%.1fMiB open=%.2fs fill=%.0f/s c1=%.0f/s c16=%.0f/s c64=%.0f/s p99(c64)=%.1fms",
+		t.Logf("history=%d heap=%.1fMiB open=%.2fs fill=%.0f/s c1=%.0f/s c16=%.0f/s c64=%.0f/s p99(c64)=%.1fms lag(c64)=%.2fs",
 			result.History, float64(result.HeapAllocBytes)/(1<<20), result.OpenSeconds, result.FillPerSecond,
-			result.Levels[0].Throughput, result.Levels[1].Throughput, result.Levels[2].Throughput, result.Levels[2].P99Ms)
+			result.Levels[0].Throughput, result.Levels[1].Throughput, result.Levels[2].Throughput, result.Levels[2].P99Ms,
+			result.Levels[2].HistoryMaxLagSeconds)
 	}
 }
 

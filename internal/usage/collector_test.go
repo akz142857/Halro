@@ -28,7 +28,7 @@ func TestCollectorQueueSaturationDoesNotBlockLedgerAndCatchesUpExactly(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	collector, err := NewCollector(aggregate, log, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -53,12 +53,12 @@ func TestCollectorQueueSaturationDoesNotBlockLedgerAndCatchesUpExactly(t *testin
 	if after.QueueDepth != 0 || after.Lagging {
 		t.Fatalf("after catch-up=%#v", after)
 	}
-	expected := NewAggregate()
+	expected := newTestAggregate(t)
 	if _, err := log.Replay(ledger.Watermark{}, expected.Apply); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(aggregate.Snapshot(), expected.Snapshot()) || aggregate.Metrics() != expected.Metrics() {
-		t.Fatalf("catch-up differs from authoritative replay\nactual=%#v\nexpected=%#v", aggregate.Snapshot(), expected.Snapshot())
+	if !reflect.DeepEqual(snapshotOf(t, aggregate), snapshotOf(t, expected)) || aggregate.Metrics() != expected.Metrics() {
+		t.Fatalf("catch-up differs from authoritative replay\nactual=%#v\nexpected=%#v", snapshotOf(t, aggregate), snapshotOf(t, expected))
 	}
 }
 
@@ -89,7 +89,7 @@ func TestCollectorCatchUpRebuildsTheRollupExactly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	// One slot, so the queue saturates and the collector starts dropping
 	// notifications rather than blocking the durable path.
 	collector, err := NewCollector(aggregate, log, 1)
@@ -107,30 +107,23 @@ func TestCollectorCatchUpRebuildsTheRollupExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expected := NewAggregate()
+	expected := newTestAggregate(t)
 	if _, err := log.Replay(ledger.Watermark{}, expected.Apply); err != nil {
 		t.Fatal(err)
 	}
-	caught, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
+	caught, replayed := rollupRowsOf(t, aggregate), rollupRowsOf(t, expected)
+	if !reflect.DeepEqual(caught, replayed) {
+		t.Fatalf("catch-up rollup has %d rows, replay has %d", len(caught), len(replayed))
 	}
-	replayed, err := expected.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(caught.Rollup, replayed.Rollup) {
-		t.Fatalf("catch-up rollup has %d rows, replay has %d", len(caught.Rollup), len(replayed.Rollup))
-	}
-	if len(caught.Rollup) == 0 {
+	if len(caught) == 0 {
 		t.Fatal("the fixture produced no rollup rows to compare")
 	}
 
 	// And the row the whole thing is keyed on agrees with the aggregate it was
 	// accumulated beside.
-	totals := aggregate.Snapshot().Totals
+	totals := snapshotOf(t, aggregate).Totals
 	var rolledUp domain.DailyRollup
-	for encoded, row := range caught.Rollup {
+	for encoded, row := range caught {
 		key, decodeErr := domain.DecodeRollupKey(encoded)
 		if decodeErr != nil {
 			t.Fatal(decodeErr)

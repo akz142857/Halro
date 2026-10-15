@@ -1363,6 +1363,12 @@ func (c Config) UsagePath() string {
 	return filepath.Join(c.Storage.DataDir, "usage")
 }
 
+// HistoryPath is the usage history index, a derivative of the Ledger that is
+// rebuilt from it whenever it cannot be trusted.
+func (c Config) HistoryPath() string {
+	return filepath.Join(c.Storage.DataDir, "history", "history.db")
+}
+
 func (c Config) AuditPath() string {
 	return filepath.Join(c.Storage.DataDir, "audit", "audit.log")
 }

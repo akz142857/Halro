@@ -22,7 +22,7 @@ func TestExporterPublishesVerifiableIdempotentPartitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstDay := time.Date(2026, 7, 30, 23, 59, 0, 0, time.UTC)
-	snapshot := Snapshot{Attempts: []AttemptEvent{
+	snapshot := exportFixture{Attempts: []AttemptEvent{
 		{
 			EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 			Sequence: 4, AttemptNumber: 1, ProjectID: "project_1", KeyID: "key_1",
@@ -87,7 +87,7 @@ func TestExporterReconciliationRejectsMissingAndDuplicateEventIDs(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		exported := Snapshot{Attempts: []AttemptEvent{
+		exported := exportFixture{Attempts: []AttemptEvent{
 			{EventID: "event_1", RequestID: "r1", AttemptID: "a1", Sequence: 1, ProjectID: "p", StartedAt: now, CompletedAt: now, Status: "success"},
 			{EventID: "event_3", RequestID: "r3", AttemptID: "a3", Sequence: 3, ProjectID: "p", StartedAt: now, CompletedAt: now, Status: "success"},
 		}}
@@ -106,7 +106,7 @@ func TestExporterReconciliationRejectsMissingAndDuplicateEventIDs(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		snapshot := Snapshot{Attempts: []AttemptEvent{
+		snapshot := exportFixture{Attempts: []AttemptEvent{
 			{EventID: "duplicate", RequestID: "r1", AttemptID: "a1", Sequence: 1, ProjectID: "p", StartedAt: now, CompletedAt: now, Status: "success"},
 			{EventID: "duplicate", RequestID: "r2", AttemptID: "a2", Sequence: 2, ProjectID: "p", StartedAt: now, CompletedAt: now, Status: "success"},
 		}}
@@ -124,7 +124,7 @@ func TestExporterPublishesAndVerifiesEmptyManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := exporter.Export(Snapshot{})
+	manifest, err := exporter.Export(exportFixture{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestExporterDetectsParquetTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
 		CompletedAt: time.Now().UTC(), Status: "success",
@@ -175,7 +175,7 @@ func TestManifestBelowTheReadableRangeIsRefused(t *testing.T) {
 	if err := exporter.commitManifest(stale); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exporter.Export(Snapshot{}); err == nil {
+	if _, err := exporter.Export(exportFixture{}); err == nil {
 		t.Fatal("a manifest below the readable range must be refused, not upgraded")
 	}
 	if err := exporter.Verify(nil); err == nil {
@@ -216,7 +216,7 @@ func TestExporterUpgradesPreviousSchemaManifestRatherThanRejectingIt(t *testing.
 		if err := exporter.commitManifest(stale); err != nil {
 			t.Fatal(err)
 		}
-		snapshot := Snapshot{Attempts: []AttemptEvent{{
+		snapshot := exportFixture{Attempts: []AttemptEvent{{
 			EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
 			ProviderInputTokens: 100, ProviderOutputTokens: 10,
 			ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
@@ -243,7 +243,7 @@ func TestExportedRowsPreserveProviderTokenTiers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "tiered", Sequence: 1, AttemptID: "a", ProjectID: "p",
 		ProviderInputTokens: 100, ProviderOutputTokens: 10,
 		ProviderCachedInputTokens: 80, ProviderCacheWriteInputTokens: 5,
@@ -283,7 +283,7 @@ func TestExportedRowsPreserveRunAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "attributed", RequestID: "req_1", AttemptID: "att_1", Sequence: 1,
 		ProjectID: "p", WorkUnitID: "wku_1", RunID: "run_1",
 		StartedAt: time.Now().UTC(), CompletedAt: time.Now().UTC(), Status: "success",
@@ -314,7 +314,7 @@ func TestExporterPrunesOnlyExpiredPartitions(t *testing.T) {
 	}
 	old := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	recent := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
-	snapshot := Snapshot{Attempts: []AttemptEvent{
+	snapshot := exportFixture{Attempts: []AttemptEvent{
 		{EventID: "old", RequestID: "r1", AttemptID: "a1", Sequence: 2,
 			ProjectID: "p", StartedAt: old, CompletedAt: old, Status: "success"},
 		{EventID: "recent", RequestID: "r2", AttemptID: "a2", Sequence: 5,
@@ -354,7 +354,7 @@ func TestVerifyAcceptsRowsWrittenAtThePreviousSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
 		CompletedAt: time.Now().UTC(), Status: "success",

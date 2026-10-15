@@ -16,12 +16,9 @@ const (
 
 func rollupRows(t *testing.T, aggregate *Aggregate) map[domain.RollupKey]domain.DailyRollup {
 	t.Helper()
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows := make(map[domain.RollupKey]domain.DailyRollup, len(snapshot.Rollup))
-	for encoded, row := range snapshot.Rollup {
+	stored := rollupRowsOf(t, aggregate)
+	rows := make(map[domain.RollupKey]domain.DailyRollup, len(stored))
+	for encoded, row := range stored {
 		key, err := domain.DecodeRollupKey(encoded)
 		if err != nil {
 			t.Fatal(err)
@@ -108,9 +105,9 @@ func mixedTraffic(t *testing.T, aggregate *Aggregate) time.Time {
 // which. Latency percentiles are excluded on purpose — the rollup keeps a
 // histogram, because a P95 cannot be summed across days.
 func TestRollupTotalMatchesDashboardToday(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := mixedTraffic(t, aggregate)
-	today := aggregate.Dashboard(now.Add(time.Hour), Period{ID: rollupDay, TimezoneVersion: rollupVersion}).Today
+	today := dashboardOf(t, aggregate, now.Add(time.Hour), Period{ID: rollupDay, TimezoneVersion: rollupVersion}).Today
 	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
 
 	for _, field := range []struct {
@@ -147,7 +144,7 @@ func TestRollupTotalMatchesDashboardToday(t *testing.T) {
 // additions to them. Presenting them as a second column that gets added is the
 // reconciliation error this schema exists to prevent.
 func TestRollupEstimatedColumnsAreSubsets(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	mixedTraffic(t, aggregate)
 	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
 	if total.EstimatedInputTokens > total.InputTokens ||
@@ -165,7 +162,7 @@ func TestRollupEstimatedColumnsAreSubsets(t *testing.T) {
 // to the total. A dimension that quietly dropped an attempt would show a
 // smaller bill than the total and give two answers to one question.
 func TestRollupDimensionsSumToTotal(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	mixedTraffic(t, aggregate)
 	rows := rollupRows(t, aggregate)
 	total := rollupRow(t, rows, domain.RollupDimensionTotal, domain.RollupTotalKey)
@@ -193,7 +190,7 @@ func TestRollupDimensionsSumToTotal(t *testing.T) {
 // and the requested model. A provider row claiming a share of a request would
 // be inventing one, since a single request can span providers.
 func TestRollupRequestMetricsStayOnRequestDimensions(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	mixedTraffic(t, aggregate)
 	rows := rollupRows(t, aggregate)
 
@@ -219,7 +216,7 @@ func TestRollupRequestMetricsStayOnRequestDimensions(t *testing.T) {
 // inside Apply so that it is refused with it, rather than being counted by a
 // caller that cannot tell a duplicate from a fresh event.
 func TestRollupRefusesDuplicateEventIDs(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	mixedTraffic(t, aggregate)
 	before := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
 
@@ -231,9 +228,9 @@ func TestRollupRefusesDuplicateEventIDs(t *testing.T) {
 	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 99, Offset: 9900, Event: replay}); err != nil {
 		t.Fatal(err)
 	}
-	after := rollupRows(t, aggregate)
-	if len(after) != 0 {
-		t.Fatalf("a duplicate produced a rollup increment: %#v", after)
+	after := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
+	if after.Attempts != before.Attempts || after.CostMicrosUSD != before.CostMicrosUSD {
+		t.Fatalf("a duplicate was counted: before=%#v after=%#v", before, after)
 	}
 	if before.Attempts != 3 {
 		t.Fatalf("fixture attempts=%d", before.Attempts)
@@ -244,7 +241,7 @@ func TestRollupRefusesDuplicateEventIDs(t *testing.T) {
 // cannot: the count is what a later percentile is computed against, so an
 // unbounded tail has to be counted somewhere.
 func TestRollupCountsLatencyAboveTheLastBucket(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	slow := ledger.Event{EventID: "slow", Kind: ledger.EventAttemptSettled, RequestID: "req_slow",
 		AttemptID: "att_slow", ProjectID: "prj_a", PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
 		OccurredAt: time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
@@ -264,15 +261,15 @@ func TestRollupCountsLatencyAboveTheLastBucket(t *testing.T) {
 	}
 }
 
-// A failed durable write must not lose the events it covered. The increment is
+// A failed durable write must not lose the events it covered. The batch is
 // handed back and merged with whatever arrived while the write was in flight,
-// so the next round persists both.
-func TestReturnCheckpointMergesTheUnwrittenIncrement(t *testing.T) {
-	aggregate := NewAggregate()
+// so the next flush persists both.
+func TestAReturnedBatchMergesWithWhatArrivedSince(t *testing.T) {
+	aggregate := newTestAggregate(t)
 	now := mixedTraffic(t, aggregate)
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
+	batch, empty := aggregate.takeBatch()
+	if empty {
+		t.Fatal("the fixture produced nothing to write")
 	}
 	later := ledger.Event{EventID: "late", Kind: ledger.EventAttemptSettled, RequestID: "req_late",
 		AttemptID: "att_late", ProjectID: "prj_a", PeriodID: rollupDay, PeriodTimezoneVersion: rollupVersion,
@@ -281,12 +278,13 @@ func TestReturnCheckpointMergesTheUnwrittenIncrement(t *testing.T) {
 	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 500, Offset: 50000, Event: later}); err != nil {
 		t.Fatal(err)
 	}
-	if err := aggregate.ReturnCheckpoint(snapshot); err != nil {
-		t.Fatal(err)
-	}
+	aggregate.returnBatch(batch)
 	total := rollupRow(t, rollupRows(t, aggregate), domain.RollupDimensionTotal, domain.RollupTotalKey)
 	if total.Attempts != 4 || total.CostMicrosUSD != 205 {
 		t.Fatalf("merged increment lost or duplicated work: %#v", total)
+	}
+	if attempts := len(snapshotOf(t, aggregate).Attempts); attempts != 4 {
+		t.Fatalf("%d attempts reached the index, want 4", attempts)
 	}
 }
 
@@ -295,7 +293,7 @@ func TestReturnCheckpointMergesTheUnwrittenIncrement(t *testing.T) {
 // midnight and settled just after is charged, in the stored row, to the day it
 // reserved budget against.
 func TestRollupFilesLateSettlementUnderTheAdmittedDay(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	midnight := time.Date(2026, 8, 30, 16, 0, 0, 0, time.UTC) // 2026-08-31 00:00 in Asia/Shanghai
 	events := []ledger.Event{
 		{EventID: "late_accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_late",
@@ -342,7 +340,7 @@ func TestRollupFilesLateSettlementUnderTheAdmittedDay(t *testing.T) {
 // never derives its own, so the missing label simply has no row; a rollup that
 // filled a range would invent a day that never existed.
 func TestRollupHasNoRowForADateThatNeverExisted(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	for index, day := range []string{"2011-12-29", "2011-12-31"} {
 		event := ledger.Event{
 			EventID: "settled_" + day, Kind: ledger.EventAttemptSettled, RequestID: "req_" + day,
@@ -392,7 +390,7 @@ func TestApproximateP95StaysInsideItsBucket(t *testing.T) {
 			}
 			histogram[index]++
 		}
-		exact := percentile(sorted, 95)
+		exact := sorted[(len(sorted)*95+99)/100-1]
 		approximate, beyond := ApproximateLatencyPercentile(histogram, overflow, 95)
 		if beyond {
 			t.Fatalf("%v: the fixture was supposed to stay inside the buckets", latencies)

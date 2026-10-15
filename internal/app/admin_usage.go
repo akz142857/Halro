@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -41,9 +42,14 @@ func (r *Runtime) adminDashboard(writer http.ResponseWriter, request *http.Reque
 	// totals are the work stamped with this period at admission, not the work
 	// that happened to finish inside its interval, so a request that crosses
 	// midnight is reported by exactly one day.
-	dashboard := r.usage.Dashboard(now, usage.Period{
+	dashboard, err := r.usage.Dashboard(now, usage.Period{
 		ID: period.ID, TimezoneVersion: period.TimezoneVersion,
 	})
+	if err != nil {
+		r.logger.Error("usage dashboard read failed", "error", err)
+		adminStoreError(writer)
+		return
+	}
 	accountingStatus := r.status.Load()
 	draining := r.draining.Load()
 	activation := r.activation.status()
@@ -449,8 +455,13 @@ func (r *Runtime) adminUsage(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	page, err := r.usage.QueryAttempts(query)
-	if err != nil {
+	if errors.Is(err, usage.ErrInvalidQuery) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		r.logger.Error("usage history read failed", "error", err)
+		adminStoreError(writer)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -531,8 +542,13 @@ func (r *Runtime) adminUsageFailures(writer http.ResponseWriter, request *http.R
 		return
 	}
 	page, err := r.usage.QueryFailedRequests(query)
-	if err != nil {
+	if errors.Is(err, usage.ErrInvalidQuery) {
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		r.logger.Error("usage history read failed", "error", err)
+		adminStoreError(writer)
 		return
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{
@@ -549,7 +565,12 @@ func (r *Runtime) adminUsageRequest(writer http.ResponseWriter, request *http.Re
 		writeJSON(writer, http.StatusBadRequest, map[string]string{"error": "invalid request ID"})
 		return
 	}
-	detail, exists := r.usage.RequestDetail(requestID)
+	detail, exists, err := r.usage.RequestDetail(requestID)
+	if err != nil {
+		r.logger.Error("usage history read failed", "error", err)
+		adminStoreError(writer)
+		return
+	}
 	if !exists {
 		writeJSON(writer, http.StatusNotFound, map[string]string{"error": "usage request not found"})
 		return
@@ -767,7 +788,14 @@ func configNodeKind(node *yaml.Node) string {
 	return "text"
 }
 
+// syncUsageAdmin brings the history index up to the Ledger before a read, so
+// the console shows the request that just finished. While the opening build is
+// still running it does not wait for it — on a long history that is minutes —
+// and the read answers from what the index already holds, with its watermark.
 func (r *Runtime) syncUsageAdmin(writer http.ResponseWriter, request *http.Request) bool {
+	if r.usageCollector.Building() {
+		return true
+	}
 	if err := r.usageCollector.CatchUp(request.Context()); err != nil {
 		writeJSON(writer, http.StatusServiceUnavailable, map[string]string{"error": "usage analytics unavailable"})
 		return false

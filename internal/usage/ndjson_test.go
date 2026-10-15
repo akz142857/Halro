@@ -22,7 +22,7 @@ func TestExporterNDJSONPublishesVerifiableIdempotentPartitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
-	snapshot := Snapshot{
+	snapshot := exportFixture{
 		Attempts: []AttemptEvent{
 			{
 				EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1", Sequence: 1,
@@ -69,7 +69,7 @@ func TestExporterNDJSONDetectsTampering(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
 		CompletedAt: time.Now().UTC(), Status: "success",
@@ -99,7 +99,7 @@ func TestExporterMixedParquetAndNDJSONManifestVerifiesTogether(t *testing.T) {
 	}
 	day1 := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	day2 := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
-	firstSnapshot := Snapshot{Attempts: []AttemptEvent{{
+	firstSnapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1", Sequence: 1,
 		ProjectID: "project_1", CostMicrosUSD: ledger.MicrosUSD(5), StartedAt: day1, CompletedAt: day1, Status: "success",
 	}}}
@@ -111,7 +111,7 @@ func TestExporterMixedParquetAndNDJSONManifestVerifiesTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullSnapshot := Snapshot{Attempts: append(append([]AttemptEvent{}, firstSnapshot.Attempts...), AttemptEvent{
+	fullSnapshot := exportFixture{Attempts: append(append([]AttemptEvent{}, firstSnapshot.Attempts...), AttemptEvent{
 		EventID: "event_2", RequestID: "request_2", AttemptID: "attempt_2", Sequence: 2,
 		ProjectID: "project_1", CostMicrosUSD: ledger.MicrosUSD(9), StartedAt: day2, CompletedAt: day2, Status: "success",
 	})}
@@ -150,7 +150,7 @@ func TestManifestEntryWithNoFormatFieldStillVerifiesAsParquet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 1, ProjectID: "project_1", StartedAt: time.Now().UTC(),
 		CompletedAt: time.Now().UTC(), Status: "success",

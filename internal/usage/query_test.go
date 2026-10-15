@@ -10,7 +10,7 @@ import (
 )
 
 func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	var sequence uint64
 	for requestIndex := 1; requestIndex <= 3; requestIndex++ {
@@ -83,11 +83,11 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 	if err != nil || len(runFiltered.Attempts) != 1 || runFiltered.Attempts[0].RequestID != "req_2" {
 		t.Fatalf("run filtered=%#v err=%v", runFiltered, err)
 	}
-	detail, exists := aggregate.RequestDetail("req_2")
+	detail, exists := detailOf(t, aggregate, "req_2")
 	if !exists || len(detail.Attempts) != 1 || detail.Summary.RequestID != "req_2" {
 		t.Fatalf("detail=%#v exists=%v", detail, exists)
 	}
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
+	dashboard := dashboardOf(t, aggregate, now.Add(time.Hour), stampedDay())
 	if dashboard.Today.Requests != 3 || dashboard.Today.Attempts != 3 ||
 		dashboard.Today.InputTokens != 6 {
 		t.Fatalf("dashboard=%#v", dashboard)
@@ -99,7 +99,7 @@ func TestUsageCursorFilteringRequestDetailAndDashboard(t *testing.T) {
 }
 
 func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	for index, event := range []ledger.Event{
 		{EventID: "estimated", Kind: ledger.EventAttemptSettled, RequestID: "req_estimated",
@@ -119,7 +119,7 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
+	dashboard := dashboardOf(t, aggregate, now.Add(time.Hour), stampedDay())
 	if dashboard.Today.InputTokens != 16 || dashboard.Today.OutputTokens != 16_551 {
 		t.Fatalf("accounting totals changed: %#v", dashboard.Today)
 	}
@@ -133,7 +133,7 @@ func TestDashboardSeparatesConservativeTokenEstimates(t *testing.T) {
 }
 
 func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	events := []ledger.Event{
 		{EventID: "failed", Kind: ledger.EventAttemptSettled, RequestID: "req_failed",
@@ -154,7 +154,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(now.Add(time.Hour), stampedDay())
+	dashboard := dashboardOf(t, aggregate, now.Add(time.Hour), stampedDay())
 	projects := dashboard.Breakdowns["project"]["calls"]
 	if len(projects) != 1 || projects[0].Key != "project_a" || projects[0].Calls != 2 ||
 		projects[0].Errors != 1 || projects[0].CostMicrosUSD != 3_000 || projects[0].EstimatedCostMicros != 2_000 {
@@ -174,7 +174,7 @@ func TestDashboardBuildsTodayBreakdownsAndRecentAnomalies(t *testing.T) {
 }
 
 func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
-	dashboard := NewAggregate().Dashboard(time.Now(), stampedDay())
+	dashboard := dashboardOf(t, newTestAggregate(t), time.Now(), stampedDay())
 	if dashboard.Hourly == nil || dashboard.RecentAnomalies == nil {
 		t.Fatalf("empty dashboard collections must encode as arrays: %#v", dashboard)
 	}
@@ -191,7 +191,7 @@ func TestEmptyDashboardUsesEmptyCollections(t *testing.T) {
 }
 
 func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	base := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	requests := []struct {
 		id      string
@@ -214,14 +214,17 @@ func TestDashboardReportsFinalRequestSLIs(t *testing.T) {
 		}
 	}
 
-	dashboard := aggregate.Dashboard(base.Add(time.Hour), stampedDay())
+	// Percentiles are read off the latency histogram and report the upper
+	// bound of the bucket they fall in: 100ms is a bound itself, and 900ms
+	// lands in the bucket that ends at 1000ms.
+	dashboard := dashboardOf(t, aggregate, base.Add(time.Hour), stampedDay())
 	if dashboard.Today.Requests != 2 || dashboard.Today.RequestErrors != 1 ||
 		dashboard.Today.RequestLatencySamples != 2 || dashboard.Today.RequestLatencyP50Millis != 100 ||
-		dashboard.Today.RequestLatencyP95Millis != 900 {
+		dashboard.Today.RequestLatencyP95Millis != 1000 {
 		t.Fatalf("request SLI totals=%#v", dashboard.Today)
 	}
 	if len(dashboard.Hourly) != 1 || dashboard.Hourly[0].RequestErrors != 1 ||
-		dashboard.Hourly[0].RequestLatencyP95Millis != 900 {
+		dashboard.Hourly[0].RequestLatencyP95Millis != 1000 {
 		t.Fatalf("request SLI hourly=%#v", dashboard.Hourly)
 	}
 }

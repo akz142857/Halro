@@ -201,7 +201,17 @@ func NewExporterWithOptions(root string, options Options) (*Exporter, error) {
 	return exporter, nil
 }
 
-func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
+// AttemptSource yields stored attempts in ledger order. history.db is the one
+// the running instance exports from.
+type AttemptSource interface {
+	AttemptsAfter(after uint64, visit func(AttemptEvent) error) error
+}
+
+// exportChunkRows bounds one partition file, and with it what an export holds
+// in memory at once.
+const exportChunkRows = 50000
+
+func (e *Exporter) Export(source AttemptSource) (Manifest, error) {
 	manifest, err := e.LoadManifest()
 	manifestMissing := errors.Is(err, os.ErrNotExist)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -226,40 +236,51 @@ func (e *Exporter) Export(snapshot Snapshot) (Manifest, error) {
 		}
 		manifest.SchemaVersion = parquetSchemaVersion
 	}
-	pending := make([]AttemptEvent, 0)
-	for _, attempt := range snapshot.Attempts {
-		if attempt.Sequence > manifest.LastSequence {
-			pending = append(pending, attempt)
+	// Attempts arrive in ledger order and are cut into partitions as they
+	// come: a new file when the date changes or the chunk is full. Only one
+	// chunk is held at a time, so the first export of a long history costs a
+	// chunk of memory rather than the history.
+	exported := false
+	var chunk []AttemptEvent
+	chunkDate := ""
+	publish := func() error {
+		if len(chunk) == 0 {
+			return nil
 		}
+		entry, err := e.publishPartition(chunkDate, chunk)
+		if err != nil {
+			return err
+		}
+		manifest.Files = append(manifest.Files, entry)
+		if entry.MaxSequence > manifest.LastSequence {
+			manifest.LastSequence = entry.MaxSequence
+		}
+		chunk, exported = chunk[:0], true
+		return nil
 	}
-	sort.Slice(pending, func(i, j int) bool { return pending[i].Sequence < pending[j].Sequence })
-	if len(pending) == 0 {
+	if err := source.AttemptsAfter(manifest.LastSequence, func(attempt AttemptEvent) error {
+		date := attempt.CompletedAt.UTC().Format("2006-01-02")
+		if date != chunkDate || len(chunk) >= exportChunkRows {
+			if err := publish(); err != nil {
+				return err
+			}
+			chunkDate = date
+		}
+		chunk = append(chunk, attempt)
+		return nil
+	}); err != nil {
+		return Manifest{}, err
+	}
+	if err := publish(); err != nil {
+		return Manifest{}, err
+	}
+	if !exported {
 		if manifestMissing || manifestUpgraded {
 			if err := e.commitManifest(manifest); err != nil {
 				return Manifest{}, err
 			}
 		}
 		return manifest, nil
-	}
-	byDate := make(map[string][]AttemptEvent)
-	var dates []string
-	for _, attempt := range pending {
-		date := attempt.CompletedAt.UTC().Format("2006-01-02")
-		if _, exists := byDate[date]; !exists {
-			dates = append(dates, date)
-		}
-		byDate[date] = append(byDate[date], attempt)
-	}
-	sort.Strings(dates)
-	for _, date := range dates {
-		entry, err := e.publishPartition(date, byDate[date])
-		if err != nil {
-			return Manifest{}, err
-		}
-		manifest.Files = append(manifest.Files, entry)
-		if entry.MaxSequence > manifest.LastSequence {
-			manifest.LastSequence = entry.MaxSequence
-		}
 	}
 	sort.Slice(manifest.Files, func(i, j int) bool {
 		return manifest.Files[i].MinSequence < manifest.Files[j].MinSequence
@@ -282,7 +303,7 @@ func (e *Exporter) LoadManifest() (Manifest, error) {
 	return manifest, nil
 }
 
-func (e *Exporter) Verify(snapshot *Snapshot) error {
+func (e *Exporter) Verify(source AttemptSource) error {
 	manifest, err := e.LoadManifest()
 	if err != nil {
 		return err
@@ -324,43 +345,30 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 		(len(manifest.Files) > 0 && lastSequence != manifest.LastSequence) {
 		return errors.New("usage manifest last sequence does not match its files")
 	}
-	if snapshot != nil {
-		// The window's lower edge. Below it the aggregate has been pruned, so
-		// there is nothing on this side to compare — and the rows on the
-		// Parquet side come out of the comparison with it, by row rather than
-		// by file, because one partition covers a whole day and a floor almost
-		// always falls inside a file rather than between two.
-		//
-		// This narrows the comparison; it does not relax it. Everything at or
-		// above the floor is still matched one for one, by count and by
-		// content. A snapshot that dropped records without declaring a floor is
-		// still refused, which is what keeps this from becoming a way to hide
-		// a lossy export.
-		floor := max(firstRetainedSequence, snapshot.Floor)
-		if snapshot.Floor > 0 {
-			for eventID, row := range canonicalRows {
-				if uint64(row.Sequence) < floor {
-					delete(seen, eventID)
+	if source != nil {
+		// Everything the archive still holds is matched one for one, by count
+		// and by content, against the attempts the source holds in the same
+		// range.
+		expected := 0
+		if firstRetainedSequence > 0 {
+			if err := source.AttemptsAfter(firstRetainedSequence-1, func(attempt AttemptEvent) error {
+				if attempt.Sequence > manifest.LastSequence {
+					return errStopWalk
 				}
+				expected++
+				if _, exists := seen[attempt.EventID]; !exists {
+					return fmt.Errorf("usage reconciliation missing event %s", attempt.EventID)
+				}
+				if row, exists := canonicalRows[attempt.EventID]; exists && row != narrowToSchema(toParquetAttempt(attempt), row.SchemaVersion) {
+					return fmt.Errorf("usage reconciliation content mismatch for event %s", attempt.EventID)
+				}
+				return nil
+			}); err != nil && !errors.Is(err, errStopWalk) {
+				return err
 			}
 		}
-		expected := make(map[string]AttemptEvent)
-		for _, attempt := range snapshot.Attempts {
-			if firstRetainedSequence > 0 && attempt.Sequence >= floor &&
-				attempt.Sequence <= manifest.LastSequence {
-				expected[attempt.EventID] = attempt
-			}
-		}
-		if len(expected) != len(seen) {
-			return fmt.Errorf("usage reconciliation mismatch: parquet=%d ledger=%d", len(seen), len(expected))
-		}
-		for eventID := range expected {
-			if _, exists := seen[eventID]; !exists {
-				return fmt.Errorf("usage reconciliation missing event %s", eventID)
-			}
-			if row, exists := canonicalRows[eventID]; exists && row != narrowToSchema(toParquetAttempt(expected[eventID]), row.SchemaVersion) {
-				return fmt.Errorf("usage reconciliation content mismatch for event %s", eventID)
-			}
+		if expected != len(seen) {
+			return fmt.Errorf("usage reconciliation mismatch: parquet=%d ledger=%d", len(seen), expected)
 		}
 	}
 	return nil
@@ -369,9 +377,9 @@ func (e *Exporter) Verify(snapshot *Snapshot) error {
 // Reconcile verifies checksums, schemas, summaries, duplicate Event IDs and
 // the retained Ledger-to-Parquet set before returning explicit zero-difference
 // counts suitable for an offline release/operations gate.
-func (e *Exporter) Reconcile(snapshot Snapshot) (ReconciliationReport, error) {
+func (e *Exporter) Reconcile(source AttemptSource) (ReconciliationReport, error) {
 	report := ReconciliationReport{}
-	if err := e.Verify(&snapshot); err != nil {
+	if err := e.Verify(source); err != nil {
 		return report, err
 	}
 	manifest, err := e.LoadManifest()
@@ -387,66 +395,18 @@ func (e *Exporter) Reconcile(snapshot Snapshot) (ReconciliationReport, error) {
 			firstRetained = entry.MinSequence
 		}
 	}
-	// The comparison runs over the range both sides still claim to hold, which
-	// is not the same as the range Parquet holds. The aggregate serves a
-	// console window and is pruned behind it, so below its floor there is
-	// nothing left to compare — counting those as missing would report the
-	// window working as a reconciliation failure, and doctor would refuse.
-	//
-	// Parquet's rows below the floor come off the same way, and by row rather
-	// than by file: one partition covers a whole day, so a floor almost always
-	// falls inside a file rather than between two. Subtracting whole files
-	// either kept rows the aggregate no longer has or discarded rows it does.
-	floor := max(firstRetained, snapshot.Floor)
-	if snapshot.Floor > 0 {
-		below, err := e.rowsBelow(manifest, floor)
-		if err != nil {
-			return report, err
-		}
-		if err := addInt64(&report.ParquetRecords, -below); err != nil {
-			return report, err
-		}
-	}
-	for _, attempt := range snapshot.Attempts {
-		if firstRetained > 0 && attempt.Sequence >= floor && attempt.Sequence <= manifest.LastSequence {
+	if firstRetained > 0 {
+		if err := source.AttemptsAfter(firstRetained-1, func(attempt AttemptEvent) error {
+			if attempt.Sequence > manifest.LastSequence {
+				return errStopWalk
+			}
 			report.LedgerRecords++
+			return nil
+		}); err != nil && !errors.Is(err, errStopWalk) {
+			return report, err
 		}
 	}
 	return report, nil
-}
-
-// rowsBelow counts the exported rows the aggregate's window no longer covers.
-//
-// Only the partitions that straddle or precede the floor are read; the ones
-// entirely above it are answered from the manifest, which is what keeps a long
-// archive from being re-read on every reconciliation.
-func (e *Exporter) rowsBelow(manifest Manifest, floor uint64) (int64, error) {
-	var below int64
-	for _, entry := range manifest.Files {
-		if entry.MinSequence >= floor {
-			continue
-		}
-		if entry.MaxSequence < floor {
-			if err := addInt64(&below, entry.Records); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		path, err := e.safeManifestPath(entry.Path)
-		if err != nil {
-			return 0, err
-		}
-		rows, err := readAttemptRows(path, entry.format())
-		if err != nil {
-			return 0, err
-		}
-		for _, row := range rows {
-			if uint64(row.Sequence) < floor {
-				below++
-			}
-		}
-	}
-	return below, nil
 }
 
 func (e *Exporter) PruneBefore(cutoff time.Time) (RetentionReport, error) {
