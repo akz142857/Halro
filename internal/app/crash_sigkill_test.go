@@ -154,21 +154,13 @@ func TestSIGKILLLeavesEveryReportedRequestRecoverable(t *testing.T) {
 
 	// 2. The offline diagnostic agrees the directory is intact: Ledger chain
 	//    authenticated against its checkpoint, metadata journal level with its
-	//    projection, Parquet manifest verified.
-	report, err := Doctor(context.Background(), cfg)
-	// Name the checks that failed. "One or more checks failed" sends whoever
-	// reads a CI log back to reproduce something that only happens sometimes;
-	// the report already knows which ones, so the failure should say.
-	if err != nil || !report.Healthy {
-		var failed []string
-		for _, check := range report.Checks {
-			if check.Status == "fail" {
-				failed = append(failed, fmt.Sprintf("%s: %s", check.Name, check.Detail))
-			}
-		}
-		t.Fatalf("doctor after the kill: %v; %d failed check(s):\n  %s",
-			err, len(failed), strings.Join(failed, "\n  "))
-	}
+	//    projection, Parquet manifest verified. One finding is allowed here and
+	//    nowhere else: a kill that lands inside the Ledger's write(2) leaves a
+	//    torn frame after the committed offset — Linux returns a short write
+	//    to a process with SIGKILL pending — and the read-only doctor reports
+	//    that rather than truncating it. Recovery owns the repair, so the
+	//    second doctor run, after recovery, must find nothing at all.
+	tornTail := doctorAfterKill(t, cfg, "before recovery", true)
 
 	// 3. Every request the child said it had settled is still there. This is
 	//    what the idle manual run could not test: the child reported only after
@@ -178,13 +170,46 @@ func TestSIGKILLLeavesEveryReportedRequestRecoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after the kill: %v", err)
 	}
-	defer runtime.Close()
 	recovered := settledRequestIDs(t, runtime)
 	for _, requestID := range reported {
 		if _, found := recovered[requestID]; !found {
+			runtime.Close()
 			t.Fatalf("request %s was reported settled and is absent after recovery", requestID)
 		}
 	}
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("close after recovery: %v", err)
+	}
+	if tornTail {
+		doctorAfterKill(t, cfg, "after recovery", false)
+	}
+}
+
+// doctorAfterKill runs the offline doctor and fails on any failed check, except
+// the Ledger's partial tail when allowTornTail is set; it reports whether that
+// one was seen. Every failed check is named: "one or more checks failed" sends
+// whoever reads a CI log back to reproduce something that only happens
+// sometimes, and the report already knows which ones.
+func doctorAfterKill(t *testing.T, cfg config.Config, when string, allowTornTail bool) bool {
+	t.Helper()
+	report, err := Doctor(context.Background(), cfg)
+	var failed []string
+	tornTail := false
+	for _, check := range report.Checks {
+		if check.Status != "fail" {
+			continue
+		}
+		if allowTornTail && check.Name == "ledger" && strings.HasPrefix(check.Detail, "partial WAL tail after committed offset") {
+			tornTail = true
+			continue
+		}
+		failed = append(failed, fmt.Sprintf("%s: %s", check.Name, check.Detail))
+	}
+	if len(failed) > 0 || (err != nil || !report.Healthy) && !tornTail {
+		t.Fatalf("doctor %s: %v; %d failed check(s):\n  %s",
+			when, err, len(failed), strings.Join(failed, "\n  "))
+	}
+	return tornTail
 }
 
 // runUntilKilled starts the child, waits for it to report enough settled
