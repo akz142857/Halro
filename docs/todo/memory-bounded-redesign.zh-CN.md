@@ -1,6 +1,6 @@
 # 内存有界的历史存储：重新设计
 
-- 状态：**提案待评审**（2026-10-15）。未开工，`main` 上没有任何对应代码。
+- 状态：P0 完成（#406）；P1 完成，结果见 [P0 基线](../verification/memory-bounded-baseline.zh-CN.md) §5。
 - 取代：[内存有界状态与历史持久化改造方案（第一版，已归档）](../prd/memory-bounded-state-design-v1.zh-CN.md)。第一版的实现保留在 `memory-bounded-state` 分支，不合并。
 - 适用范围：单机（Standalone）。HA 代码已移到 `ha` 分支（#404），本方案完成后 HA 基于新的 `main` 继续，见 §9。
 - 基线：`main` @ `dc704030`，即 v0.8.5 加上之后的非 HA 修复。生产运行的正是 v0.8.5（GHCR 镜像 digest 与 `v0.8.5` 一致）。

@@ -69,6 +69,25 @@ semantic versioning.
 
 ### Changed
 
+- Usage history moved out of memory into an on-disk index,
+  `data/history/history.db`. Every settled attempt and finished request is kept
+  there, written in batches off the request path with a per-row HMAC, and
+  rebuilt from the Ledger whenever it cannot be trusted. Memory for usage no
+  longer grows with history: at one million requests of history the resident
+  heap is about 1.3 GB smaller and a cold start no longer reloads the usage
+  window. The first start after upgrading builds the index from the Ledger in
+  the background; readiness does not wait for it. `halro.db` migrates to schema
+  41, which drops the old usage checkpoint and daily rollup tables.
+- `usage.console_window_days` and Settings → Instance now set only the default
+  range of the attempt log and the failed-request list. Shortening it discards
+  nothing, so it no longer asks for confirmation, and it is no longer bounded by
+  `usage.retention_days`; `acknowledge_trim` and `max_days` are gone from the
+  settings API. Dashboard request-latency percentiles are read from the hourly
+  histogram, the same way the summary view reads them.
+- The `halro_usage_window_*` and `halro_usage_checkpoint_*` metrics are
+  replaced by `halro_usage_history_*`, which report pending rows, the stored
+  watermark, build state and write cost.
+
 - **The configuration schema version advances, and a configuration file now says
   which shape it is.** `version` shipped as `1` in every release from v0.3.0 to
   v0.8.5 — across two retirements — so the key recorded nothing and the
