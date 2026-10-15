@@ -112,7 +112,7 @@ func (s *HistoryStore) decodeAttempt(key, raw []byte) (AttemptEvent, error) {
 		return AttemptEvent{}, err
 	}
 	if attempt.Sequence != binary.BigEndian.Uint64(key) {
-		return AttemptEvent{}, errHistoryRowTampered
+		return AttemptEvent{}, s.tampered()
 	}
 	return attempt, nil
 }
@@ -128,7 +128,7 @@ func (s *HistoryStore) summaryAt(tx *bbolt.Tx, sequence uint64) (RequestSummary,
 		return RequestSummary{}, err
 	}
 	if summary.Sequence != sequence {
-		return RequestSummary{}, errHistoryRowTampered
+		return RequestSummary{}, s.tampered()
 	}
 	return summary, nil
 }
@@ -142,7 +142,7 @@ func (s *HistoryStore) requestAttempts(tx *bbolt.Tx, requestID string) ([]Attemp
 			return err
 		}
 		if attempt.RequestID != requestID {
-			return errHistoryRowTampered
+			return s.tampered()
 		}
 		attempts = append(attempts, attempt)
 		return nil

@@ -78,6 +78,7 @@ an authentication boundary.
 | `halro_usage_history_page_writes_total` | counter | none |
 | `halro_usage_history_free_pages` | gauge | none |
 | `halro_usage_history_file_bytes` | gauge | none |
+| `halro_usage_history_row_auth_failures_total` | counter | none |
 | `halro_ledger_active_bytes` | gauge | none |
 | `halro_ledger_sealed_generations` | gauge | none |
 | `halro_ledger_sealed_bytes` | gauge | none |

@@ -203,14 +203,14 @@ func (a *Aggregate) RequestDetail(requestID string) (RequestDetail, bool, error)
 				return nil
 			}
 			if len(raw) != 8 {
-				return errHistoryRowTampered
+				return a.history.tampered()
 			}
 			summary, err := a.history.summaryAt(tx, binary.BigEndian.Uint64(raw))
 			if err != nil {
 				return err
 			}
 			if summary.RequestID != requestID {
-				return errHistoryRowTampered
+				return a.history.tampered()
 			}
 			result.Summary, found = summary, true
 		}

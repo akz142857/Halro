@@ -170,3 +170,86 @@ func billOneRequestThrough(t *testing.T, accounting *budget.Manager, requestID s
 		t.Fatal(err)
 	}
 }
+
+// walkRecorder is the Ledger as the collector sees it, recording each walk.
+type walkRecorder struct {
+	log       *ledger.Log
+	aggregate *Aggregate
+	walks     []int
+	appliedIn bool
+}
+
+func (w *walkRecorder) Replay(from ledger.Watermark, visit func(ledger.Record) error) (ledger.Watermark, error) {
+	start := w.aggregate.Watermark()
+	visited := 0
+	head, err := w.log.Replay(from, func(record ledger.Record) error {
+		visited++
+		if err := visit(record); err != nil {
+			return err
+		}
+		if w.aggregate.Watermark() != start {
+			w.appliedIn = true
+		}
+		return nil
+	})
+	w.walks = append(w.walks, visited)
+	return head, err
+}
+
+// A walk holds the Ledger's writer mutex, so the catch-up applying or writing
+// history inside one stalls every append for the length of the gap — on the
+// first start after an upgrade, the whole Ledger.
+func TestCollectorCatchUpReplaysInChunksOutsideTheLedgerWalk(t *testing.T) {
+	log, err := ledger.OpenWithOptions(filepath.Join(t.TempDir(), "ledger.wal"), nil, ledger.Options{MaxBatch: 1, ChainKey: testChainKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	accounting, err := budget.New(log, ledger.NewState(), mustResolver(t, "Asia/Shanghai"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 20; index++ {
+		billOneRequestThrough(t, accounting, fmt.Sprintf("request_%03d", index), index)
+	}
+
+	aggregate := newTestAggregate(t)
+	recorder := &walkRecorder{log: log, aggregate: aggregate}
+	collector, err := NewCollector(aggregate, recorder, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector.replayChunk = 7
+	if err := collector.Build(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.appliedIn {
+		t.Fatal("the catch-up applied a record while the Ledger walk was still open")
+	}
+	if len(recorder.walks) < 3 {
+		t.Fatalf("walks = %v, want the gap split into chunks", recorder.walks)
+	}
+	for _, visited := range recorder.walks {
+		// One past the chunk: the record that finds the chunk full stops the walk.
+		if visited > collector.replayChunk+1 {
+			t.Fatalf("walks = %v, a walk visited more than one chunk", recorder.walks)
+		}
+	}
+
+	expected := newTestAggregate(t)
+	if _, err := log.Replay(ledger.Watermark{}, expected.Apply); err != nil {
+		t.Fatal(err)
+	}
+	if err := expected.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Watermark() != expected.Watermark() {
+		t.Fatalf("watermark = %#v, full replay = %#v", aggregate.Watermark(), expected.Watermark())
+	}
+	if caught, replayed := rollupRowsOf(t, aggregate), rollupRowsOf(t, expected); !reflect.DeepEqual(caught, replayed) {
+		t.Fatalf("chunked rollup has %d rows, full replay has %d", len(caught), len(replayed))
+	}
+	if got, want := snapshotOf(t, aggregate).Totals, snapshotOf(t, expected).Totals; got != want {
+		t.Fatalf("totals = %#v, full replay = %#v", got, want)
+	}
+}

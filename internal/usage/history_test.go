@@ -62,6 +62,11 @@ func TestHistoryRefusesAnAlteredRow(t *testing.T) {
 	if _, _, err := aggregate.RequestDetail("req_1"); !errors.Is(err, errHistoryRowTampered) {
 		t.Fatalf("an altered attempt row was read back: err=%v", err)
 	}
+	// The read fails rather than rebuilding the index under the operator; the
+	// counter is what tells them to.
+	if got := store.WriteStats().RowAuthFailures; got != 1 {
+		t.Fatalf("row authentication failures = %d, want 1", got)
+	}
 }
 
 // A history.db written under another key — another instance's, or one whose

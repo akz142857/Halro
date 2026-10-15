@@ -30,7 +30,12 @@ type CollectorStats struct {
 const (
 	historyFlushInterval = 250 * time.Millisecond
 	historyFlushRecords  = 2000
+	// replayChunkRecords bounds how many records one Ledger walk collects
+	// while it holds the Ledger's writer mutex.
+	replayChunkRecords = 2000
 )
+
+var errReplayChunkFull = errors.New("usage replay chunk is full")
 
 // Collector keeps derivative Usage aggregation off the durable append path.
 // Queue overflow drops only derivative notifications and marks the collector
@@ -44,6 +49,8 @@ type Collector struct {
 	dropped   atomic.Uint64
 	flushFail atomic.Uint64
 	building  atomic.Bool
+	// replayChunk is replayChunkRecords outside tests.
+	replayChunk int
 }
 
 // NewCollector starts lagging: the aggregate resumes from the history index's
@@ -55,7 +62,7 @@ func NewCollector(aggregate *Aggregate, replayer Replayer, capacity int) (*Colle
 	if aggregate == nil || replayer == nil || capacity < 1 {
 		return nil, errors.New("aggregate, replayer, and positive queue capacity are required")
 	}
-	collector := &Collector{aggregate: aggregate, replayer: replayer, queue: make(chan ledger.Record, capacity)}
+	collector := &Collector{aggregate: aggregate, replayer: replayer, queue: make(chan ledger.Record, capacity), replayChunk: replayChunkRecords}
 	collector.lagging.Store(true)
 	return collector, nil
 }
@@ -129,17 +136,7 @@ func (c *Collector) CatchUp(ctx context.Context) error {
 		// Always replay the suffix: a worker may already have dequeued a
 		// durable record while waiting for applyMu, so queue depth alone is not
 		// a sufficient read barrier.
-		if _, err := c.replayer.Replay(c.aggregate.Watermark(), func(record ledger.Record) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := c.aggregate.Apply(record); err != nil {
-				return err
-			}
-			// A long gap — the first start after an upgrade replays the whole
-			// Ledger — is written as it goes, so memory stays one batch deep.
-			return c.aggregate.FlushIfFull()
-		}); err != nil {
+		if err := c.replayToHead(ctx); err != nil {
 			return err
 		}
 		c.drainLocked()
@@ -148,6 +145,47 @@ func (c *Collector) CatchUp(ctx context.Context) error {
 			return c.aggregate.Flush()
 		}
 		c.lagging.Store(true)
+	}
+}
+
+// replayToHead applies the Ledger from the index watermark to its head, one
+// bounded chunk per Replay. Replay holds the Ledger's writer mutex for its whole
+// walk, so a walk that also applied and wrote history would stall every append
+// for as long as the gap takes — on the first start after an upgrade, the whole
+// Ledger. Each walk therefore only collects a chunk and stops; the chunk is
+// applied and written after the lock is released, and the next walk resumes
+// after its last record. Memory stays one chunk deep.
+func (c *Collector) replayToHead(ctx context.Context) error {
+	from := c.aggregate.Watermark()
+	chunk := make([]ledger.Record, 0, c.replayChunk)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		chunk = chunk[:0]
+		_, err := c.replayer.Replay(from, func(record ledger.Record) error {
+			if len(chunk) == cap(chunk) {
+				return errReplayChunkFull
+			}
+			chunk = append(chunk, record)
+			return nil
+		})
+		if err != nil && !errors.Is(err, errReplayChunkFull) {
+			return err
+		}
+		for _, record := range chunk {
+			if err := c.aggregate.Apply(record); err != nil {
+				return err
+			}
+			if err := c.aggregate.FlushIfFull(); err != nil {
+				return err
+			}
+		}
+		if err == nil {
+			return nil
+		}
+		last := chunk[len(chunk)-1]
+		from = ledger.Watermark{Generation: last.Generation, Offset: last.Offset, Sequence: last.Sequence}
 	}
 }
 

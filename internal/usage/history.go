@@ -129,6 +129,10 @@ type HistoryStore struct {
 	// so a write that grows with the file shows up as a rising average.
 	commits     atomic.Uint64
 	commitNanos atomic.Int64
+	// rowAuthFailures counts reads that met a row failing authentication.
+	// The read errors rather than skipping the row; this is what makes the
+	// failure visible to an operator, who rebuilds the index from the Ledger.
+	rowAuthFailures atomic.Uint64
 }
 
 // HistoryWriteStats describes what writing the index costs.
@@ -143,6 +147,8 @@ type HistoryWriteStats struct {
 	PendingPages  int
 	FreelistBytes int
 	FileBytes     int64
+	// RowAuthFailures counts reads that met a row failing authentication.
+	RowAuthFailures uint64
 }
 
 func (s *HistoryStore) WriteStats() HistoryWriteStats {
@@ -151,6 +157,7 @@ func (s *HistoryStore) WriteStats() HistoryWriteStats {
 		Commits: s.commits.Load(), CommitSeconds: time.Duration(s.commitNanos.Load()).Seconds(),
 		PageWrites: stats.TxStats.GetWrite(), WriteSeconds: stats.TxStats.GetWriteTime().Seconds(),
 		FreePages: stats.FreePageN, PendingPages: stats.PendingPageN, FreelistBytes: stats.FreelistInuse,
+		RowAuthFailures: s.rowAuthFailures.Load(),
 	}
 	_ = s.db.View(func(tx *bbolt.Tx) error {
 		result.FileBytes = tx.Size()
@@ -248,13 +255,20 @@ func (s *HistoryStore) putSealed(bucket *bbolt.Bucket, name, key []byte, value a
 // a way nobody could see.
 func (s *HistoryStore) getSealed(name, key, raw []byte, target any) error {
 	if len(raw) < historyMACSize {
-		return errHistoryRowTampered
+		return s.tampered()
 	}
 	body, tag := raw[:len(raw)-historyMACSize], raw[len(raw)-historyMACSize:]
 	if !hmac.Equal(tag, s.mac(name, key, body)) {
-		return errHistoryRowTampered
+		return s.tampered()
 	}
 	return json.Unmarshal(body, target)
+}
+
+// tampered counts a row that failed authentication and returns the error the
+// read fails with.
+func (s *HistoryStore) tampered() error {
+	s.rowAuthFailures.Add(1)
+	return errHistoryRowTampered
 }
 
 func sequenceKey(sequence uint64) []byte {
