@@ -62,7 +62,7 @@ func allRollupRows(t *testing.T, cfg config.Config) map[domain.RollupKey]domain.
 	}
 	defer history.Close()
 	rows := map[domain.RollupKey]domain.DailyRollup{}
-	if err := history.RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
+	if _, err := history.RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
 		rows[key] = row
 		return nil
 	}); err != nil {

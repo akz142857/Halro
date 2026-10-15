@@ -131,6 +131,11 @@ func (a *Aggregate) QueryFailedRequests(query FailureQuery) (FailurePage, error)
 			if err != nil {
 				return err
 			}
+			// The failed index carries no MAC of its own; the row it names
+			// must agree that the request failed.
+			if summary.Outcome == "success" {
+				return a.history.tampered()
+			}
 			if pastStart(summary.CompletedAt, query.Start) {
 				return errStopWalk
 			}

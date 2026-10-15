@@ -128,20 +128,25 @@ func (a *Aggregate) QueryAttempts(query AttemptQuery) (AttemptPage, error) {
 		}
 		// The narrowest index the query names decides which entries are
 		// walked; every filter is still applied to each attempt.
-		byIndex := func(bucket []byte, prefix string) error {
+		// An index entry carries no MAC of its own, so the authenticated row
+		// it names must agree with it.
+		byIndex := func(bucket []byte, prefix string, field func(AttemptEvent) string) error {
 			return walkPrefixBackward(tx.Bucket(bucket), prefix, query.BeforeSequence, func(sequence uint64) error {
 				attempt, err := a.history.attemptAt(tx, sequence)
 				if err != nil {
 					return err
+				}
+				if field(attempt) != prefix {
+					return a.history.tampered()
 				}
 				return consider(attempt)
 			})
 		}
 		switch {
 		case query.RequestID != "":
-			return byIndex(historyRequestAttempts, query.RequestID)
+			return byIndex(historyRequestAttempts, query.RequestID, func(attempt AttemptEvent) string { return attempt.RequestID })
 		case query.ProjectID != "":
-			return byIndex(historyProjectAttempts, query.ProjectID)
+			return byIndex(historyProjectAttempts, query.ProjectID, func(attempt AttemptEvent) string { return attempt.ProjectID })
 		default:
 			return walkSequencesBackward(tx.Bucket(historyAttempts), query.BeforeSequence, func(sequence uint64, raw []byte) error {
 				attempt, err := a.history.decodeAttempt(sequenceKey(sequence), raw)
@@ -311,6 +316,9 @@ func (a *Aggregate) Dashboard(now time.Time, period Period) (Dashboard, error) {
 			attempt, err := a.history.attemptAt(tx, sequence)
 			if err != nil {
 				return err
+			}
+			if !isAnomaly(attempt) {
+				return a.history.tampered()
 			}
 			if period.Includes(attempt.PeriodID, attempt.PeriodTimezoneVersion) {
 				result.RecentAnomalies = append(result.RecentAnomalies, Anomaly{
