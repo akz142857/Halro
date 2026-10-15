@@ -58,6 +58,7 @@ ADR 保留在 `docs/adr/` 顶层：这是业界通用路径，且 `tools/m11/rel
 | [Provider 适配缺口 — 待决与待建](prd/provider-adaptation-gaps.zh-CN.md) | 决定过程的记录。#0 与 §5 十条已修；#4 已关闭；#1/#2 阻塞于凭据、#3b 未排期、能力上限三份真相仍在，逐条见下面的未完成项清单 |
 | [Anthropic Message Batches 实施方案](prd/anthropic-batches-plan.zh-CN.md) | 五个切片全部完成，见 [ADR 0021](adr/0021-provider-resource-upstream-twin.md)；真实账号端到端只走到创建成功，结果核对从未完成，§5.1 记的批处理窗口在 2026-08-15 00:10:43 关闭 |
 | [适配链条的未完成项](prd/adaptation-open-items.zh-CN.md) | 上面两份归档时留下的未完成项清单：§1 八条已修，§2 「能力上限三份真相」已由下面一份关闭，其余三项等外部凭据或排期，§3 是一处撤销的记录 |
+| [内存有界状态与历史持久化改造方案（第一版）](prd/memory-bounded-state-design-v1.zh-CN.md) | **未落地，路线已放弃**（2026-10-15）。实现留在 `memory-bounded-state` 分支，不合并；放弃原因见文首归档说明。由 todo 中的「内存有界的历史存储：重新设计」取代 |
 | [分时价位（按日时段折扣）](prd/time-of-day-pricing-review.zh-CN.md) | 采纳方案 B 并已实施，见 [ADR 0023](adr/0023-time-of-day-pricing.md)。价格版本可携带按供应商本地时段的费率表，档位在预留时刻定档并写入价格快照；空规则表 = 全天一档，**不需要迁移，不需要重新初始化数据目录** |
 | [适用能力改由服务端统一下发](prd/provider-capability-single-source.zh-CN.md) | 两轮全部实施并合入（PR #182）。六处 switch 收敛成 `internal/domain/provider_table.go`，新增只读端点 `GET /admin/api/v1/provider-profiles`，控制台不再镜像能力矩阵；请求契约改为扁平能力集，`bindings` 由服务端拆分——这是 API 形状变更，见 §10.8 |
 | [DeepSeek 适配方案](prd/deepseek-adaptation-plan.zh-CN.md) | 片 1–5 全部完成。片 1–4（缓存用量解码、字段申报按真实子集、thinking 映射、目录订正）2026-08-17 实施；片 5 于 2026-08-20 在真实账号跑通，`thinking` 拼写、`none` 关得掉、`hit + miss = prompt_tokens` 三条推断全部被证实（该文 §11）。仍未测量：思考开着时 `max_tokens` 算不算思维链——现实现按保守读法申报 `max_completion_tokens`。这次不是 GA 发版证据，未走 `tests/provider-matrix` |
@@ -141,7 +142,8 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [告警投递适配方案](todo/alert-delivery-design.md) | 告警契约、平台格式、签名、企业网络与投递结果分类 | 提案待评审；`internal/alert` 今天只有 dispatcher |
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
-| [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 提案待评审，未实现 |
+| [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 已实现部分（含 metadata journal）于 2026-10-15 移出 `main`，保存在 `ha` 分支待评审（#404）；内存有界的重新设计完成后再继续 |
+| [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 提案待评审，未开工；§6 的预算待确认 |
 | [实例自述文档与 Agent 操作通道](todo/agent-self-description-plan.zh-CN.md) | 实例把「我是什么、我能做什么、怎么配置我」服务出去：网关口的 `.well-known` 北向自述与 `GET /v1/models`，管理口登录后的 `GET /admin/api/v1/skill.md`；路由表由 `chi.Walk` 从同一棵树生成 | 提案待评审；`internal/selfdescribe` 不存在。不引入机器凭据，MCP 执行通道留待自述文档落地后单独评审 |
 
 ## 草稿 · `drafts/`
