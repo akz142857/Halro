@@ -14,7 +14,6 @@ import (
 	"github.com/akz142857/Halro/internal/provider"
 	"github.com/akz142857/Halro/internal/safelog"
 	"github.com/akz142857/Halro/internal/semantic"
-	"github.com/akz142857/Halro/internal/usage"
 )
 
 // The word "failure" means four different things along one request, and the
@@ -56,7 +55,7 @@ func runFailureScenario(t *testing.T, f *fixture, call func() error) failureCoun
 	_ = call()
 
 	counts := failureCounts{}
-	aggregate := usage.NewAggregate()
+	aggregate := newUsageAggregateForTest(t)
 	if _, err := f.log.Replay(ledger.Watermark{}, func(record ledger.Record) error {
 		if record.Event.Kind == ledger.EventRequestFinalized {
 			counts.outcome = record.Event.Outcome

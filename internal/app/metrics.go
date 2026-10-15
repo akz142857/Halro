@@ -184,34 +184,43 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	metricHeader(output, "halro_failure_capture_saturated", "gauge",
 		"1 when the current day's capture budget has been reached and failures are no longer captured.")
 	fmt.Fprintf(output, "halro_failure_capture_saturated %d\n", boolMetric(capture.Saturated))
-	windowed := r.usage.Windowed()
-	metricHeader(output, "halro_usage_window_attempts", "gauge",
-		"Attempts resident in the usage aggregate the console reads.")
-	fmt.Fprintf(output, "halro_usage_window_attempts %d\n", windowed.Attempts)
-	metricHeader(output, "halro_usage_window_requests", "gauge",
-		"Request summaries resident in the usage aggregate the console reads.")
-	fmt.Fprintf(output, "halro_usage_window_requests %d\n", windowed.Summaries)
-	metricHeader(output, "halro_usage_window_floor_sequence", "gauge",
-		"Lowest ledger sequence the usage aggregate still holds; 0 when it has never been trimmed.")
-	fmt.Fprintf(output, "halro_usage_window_floor_sequence %d\n", windowed.Floor)
-	metricHeader(output, "halro_usage_window_trimmed_total", "counter",
-		"Attempts removed from the usage aggregate by the console window.")
-	fmt.Fprintf(output, "halro_usage_window_trimmed_total %d\n", windowed.TrimmedAttempts)
-	// What the stored checkpoint costs, which is a different question from what
-	// the window holds. The bytes gauge is the whole checkpoint; the last-write
-	// gauge is what one tick actually rewrote. The gap between them is the
-	// point of the segmented format, and the two converging would mean it has
-	// stopped working — a tick rewriting the window again.
-	checkpointed := r.usage.Checkpointed()
-	metricHeader(output, "halro_usage_checkpoint_segments", "gauge",
-		"Segments holding the stored usage checkpoint.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_segments %d\n", checkpointed.Segments)
-	metricHeader(output, "halro_usage_checkpoint_bytes", "gauge",
-		"Bytes the stored usage checkpoint occupies across all its segments.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_bytes %d\n", checkpointed.Bytes)
-	metricHeader(output, "halro_usage_checkpoint_open_segment_bytes", "gauge",
-		"Bytes in the one segment a checkpoint tick rewrites.")
-	fmt.Fprintf(output, "halro_usage_checkpoint_open_segment_bytes %d\n", checkpointed.OpenSegmentBytes)
+	// The usage history index: how much waits in memory for the next write,
+	// how far the stored rows reach, and whether writing them is failing.
+	// Pending records staying high, or the stored watermark falling behind
+	// the Ledger, means the index is not keeping up.
+	history := r.usage.HistoryStats()
+	collector := r.usageCollector.Stats()
+	metricHeader(output, "halro_usage_history_pending_records", "gauge",
+		"Attempts and request summaries applied but not yet written to the usage history index.")
+	fmt.Fprintf(output, "halro_usage_history_pending_records %d\n", history.PendingRecords)
+	metricHeader(output, "halro_usage_history_watermark_sequence", "gauge",
+		"Highest ledger sequence the usage history index has stored.")
+	fmt.Fprintf(output, "halro_usage_history_watermark_sequence %d\n", history.Committed.Sequence)
+	metricHeader(output, "halro_usage_history_flush_failures_total", "counter",
+		"Usage history writes that failed and were retried.")
+	fmt.Fprintf(output, "halro_usage_history_flush_failures_total %d\n", collector.FlushFailures)
+	metricHeader(output, "halro_usage_history_building", "gauge",
+		"1 while the usage history index replays the Ledger after a start.")
+	fmt.Fprintf(output, "halro_usage_history_building %d\n", boolMetric(r.usageCollector.Building()))
+	writes := r.usage.History().WriteStats()
+	metricHeader(output, "halro_usage_history_commits_total", "counter",
+		"Batch transactions written to the usage history index.")
+	fmt.Fprintf(output, "halro_usage_history_commits_total %d\n", writes.Commits)
+	metricHeader(output, "halro_usage_history_commit_seconds_total", "counter",
+		"Time spent in usage history batch transactions, fsync included.")
+	fmt.Fprintf(output, "halro_usage_history_commit_seconds_total %.6f\n", writes.CommitSeconds)
+	metricHeader(output, "halro_usage_history_page_writes_total", "counter",
+		"Pages written to the usage history index.")
+	fmt.Fprintf(output, "halro_usage_history_page_writes_total %d\n", writes.PageWrites)
+	metricHeader(output, "halro_usage_history_free_pages", "gauge",
+		"Free pages the usage history index holds for reuse.")
+	fmt.Fprintf(output, "halro_usage_history_free_pages %d\n", writes.FreePages)
+	metricHeader(output, "halro_usage_history_file_bytes", "gauge",
+		"Size of the usage history index file.")
+	fmt.Fprintf(output, "halro_usage_history_file_bytes %d\n", writes.FileBytes)
+	metricHeader(output, "halro_usage_history_row_auth_failures_total", "counter",
+		"Usage history reads that met a row failing authentication; rebuild the index from the Ledger.")
+	fmt.Fprintf(output, "halro_usage_history_row_auth_failures_total %d\n", writes.RowAuthFailures)
 	// The WAL's own shape. Active bytes is what sealing bounds; sealed bytes is
 	// what it moved out of the way and is still keeping. Read together they say
 	// whether the growth an operator is watching is in the file being written

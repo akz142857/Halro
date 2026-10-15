@@ -2,8 +2,8 @@ package usage
 
 import (
 	"errors"
+	"fmt"
 	"math"
-	"sort"
 	"sync"
 	"time"
 
@@ -164,17 +164,6 @@ type Bucket struct {
 	LatencyMillis           int64     `json:"latency_millis"`
 }
 
-type Snapshot struct {
-	Watermark ledger.Watermark `json:"watermark"`
-	// Floor is the console window's lower edge: below it this aggregate no
-	// longer holds anything, so reconciliation has nothing to compare there.
-	Floor    uint64           `json:"floor,omitempty"`
-	Totals   Bucket           `json:"totals"`
-	Hourly   []Bucket         `json:"hourly"`
-	Attempts []AttemptEvent   `json:"attempts"`
-	Requests []RequestSummary `json:"requests"`
-}
-
 type Metrics struct {
 	RequestsSuccess       uint64
 	RequestsError         uint64
@@ -192,63 +181,80 @@ type Metrics struct {
 	UnknownAttempts       uint64
 }
 
-type requestAccumulator struct {
-	summary RequestSummary
-}
-
+// Aggregate is the bounded, in-memory side of Usage: requests still in flight,
+// the running counters, and the increment that has not reached history.db
+// yet. Everything that grows with history — settled attempts, finished request
+// summaries, hourly and daily rollups — is written to the history index in
+// batches and read back from there. Memory therefore depends on how many
+// requests are in flight and how much arrives between two flushes, not on how
+// long the instance has been running.
 type Aggregate struct {
-	// rollupView coordinates the external store transaction with summary reads.
-	// The aggregate lock alone cannot cover a bbolt write: TakeCheckpoint must
-	// release it before encoding so collection can continue. A summary needs a
-	// view in which the stored rows and the pending increment cross that
-	// boundary together.
-	rollupView   sync.RWMutex
-	mu           sync.RWMutex
-	watermark    ledger.Watermark
+	history *HistoryStore
+	// flushMu serializes Flush, so batches reach the store in ledger order.
+	flushMu sync.Mutex
+
+	mu        sync.RWMutex
+	watermark ledger.Watermark
+	// committed is the watermark of the last batch the store accepted.
+	committed    ledger.Watermark
 	eventIDs     map[string]struct{}
 	eventIDOrder []string
 	started      map[string]time.Time
-	requests     map[string]*requestAccumulator
-	attempts     []AttemptEvent
-	summaries    []RequestSummary
-	hourly       map[int64]Bucket
-	// rollupDelta is the daily-rollup increment that has not been persisted
-	// yet. It lives here, behind the same lock as the watermark, because Apply
-	// is the only place that knows an event was neither a duplicate nor a
-	// replay — the Collector cannot tell, and startup replay and CatchUp both
-	// bypass it entirely.
-	rollupDelta map[domain.RollupKey]*domain.DailyRollup
-	// attemptsDropped and summariesDropped count records trimmed off the front
-	// of each slice whose array slot has not been reclaimed yet. They are what
-	// decides when a sweep pays for a compaction; see PruneBefore.
-	attemptsDropped  int
-	summariesDropped int
-	// floor is the lowest ledger sequence still held. Zero means nothing has
-	// been pruned and the aggregate claims everything.
-	floor uint64
-	// segments, nextSegmentID and persistedThrough are what the aggregate
-	// knows about its own stored checkpoint: which segments hold the records
-	// already on disk, what the next segment will be called, and the ledger
-	// sequence those segments cover. They move only when the store has accepted
-	// a write — see CommitCheckpoint.
-	segments         []CheckpointSegmentRef
-	nextSegmentID    uint64
-	persistedThrough uint64
-	// trimmed counts what this process has removed. Process-local on purpose:
-	// it is a rate signal for "is the window working", not an accounting
-	// figure, and a counter that survived restarts would need a home in the
-	// checkpoint for no benefit.
-	trimmed uint64
-	totals  Bucket
-	metrics Metrics
+	requests     map[string]*pendingRequest
+	totals       Bucket
+	metrics      Metrics
+
+	// The increment since the last flush. dirtyRequests and dirtyStarted name
+	// the in-flight entries whose stored copy is stale; the flush writes their
+	// current value, or deletes them if they have finished.
+	batchAttempts  []AttemptEvent
+	batchSummaries []RequestSummary
+	hourly         map[int64]hourlyRow
+	rollupDelta    map[domain.RollupKey]*domain.DailyRollup
+	successes      map[string]time.Time
+	dirtyRequests  map[string]struct{}
+	dirtyStarted   map[string]struct{}
 }
 
-func NewAggregate() *Aggregate {
+// NewAggregate starts an empty aggregate over an empty history store.
+func NewAggregate(history *HistoryStore) *Aggregate {
 	return &Aggregate{
+		history:  history,
 		eventIDs: make(map[string]struct{}), started: make(map[string]time.Time),
-		requests: make(map[string]*requestAccumulator), hourly: make(map[int64]Bucket),
-		rollupDelta: make(map[domain.RollupKey]*domain.DailyRollup),
+		requests: make(map[string]*pendingRequest), hourly: make(map[int64]hourlyRow),
+		rollupDelta:   make(map[domain.RollupKey]*domain.DailyRollup),
+		successes:     make(map[string]time.Time),
+		dirtyRequests: make(map[string]struct{}), dirtyStarted: make(map[string]struct{}),
 	}
+}
+
+// RestoreAggregate resumes from what history.db holds: its watermark, counters
+// and in-flight state. The caller replays the Ledger from Watermark() on.
+func RestoreAggregate(history *HistoryStore) (*Aggregate, error) {
+	aggregate := NewAggregate(history)
+	state, pending, started, err := history.loadState()
+	if errors.Is(err, errHistoryStateMissing) {
+		return aggregate, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	aggregate.watermark, aggregate.totals, aggregate.metrics = state.Watermark, state.Totals, state.Metrics
+	aggregate.committed = state.Watermark
+	for _, eventID := range state.EventIDs {
+		aggregate.rememberEventID(eventID)
+	}
+	for requestID, request := range pending {
+		request := request
+		aggregate.requests[requestID] = &request
+	}
+	aggregate.started = started
+	return aggregate, nil
+}
+
+// History is the store this aggregate writes to, for readers.
+func (a *Aggregate) History() *HistoryStore {
+	return a.history
 }
 
 func (a *Aggregate) Apply(record ledger.Record) error {
@@ -271,7 +277,7 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 	}
 	accumulator := a.requests[event.RequestID]
 	if accumulator == nil {
-		accumulator = &requestAccumulator{summary: RequestSummary{
+		accumulator = &pendingRequest{Summary: RequestSummary{
 			RequestID: event.RequestID, ProjectID: event.ProjectID, KeyID: event.KeyID,
 			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
 			RequestedModel:        event.RequestedModel,
@@ -280,204 +286,396 @@ func (a *Aggregate) Apply(record ledger.Record) error {
 		}}
 		a.requests[event.RequestID] = accumulator
 	}
+	a.dirtyRequests[event.RequestID] = struct{}{}
 	switch event.Kind {
 	case ledger.EventRequestAccepted:
-		accumulator.summary.AcceptedAt = event.OccurredAt
+		accumulator.Summary.AcceptedAt = event.OccurredAt
 	case ledger.EventAttemptStarted:
 		a.started[event.AttemptID] = event.OccurredAt
+		a.dirtyStarted[event.AttemptID] = struct{}{}
 	case ledger.EventAttemptSettled:
-		committedCost, costKnown := event.KnownCommittedMicrosUSD()
-		var committedCostValue *int64
-		if costKnown {
-			value := committedCost
-			committedCostValue = &value
-		}
-		evidenceStatus, costStatus := domain.PriceEvidenceLegacyUnversioned, domain.CostValueKnown
-		var priceSnapshot *domain.PriceSnapshot
-		var inputCost, outputCost, fixedCost *int64
-		if event.PriceSnapshot != nil {
-			copy := event.PriceSnapshot.Clone()
-			priceSnapshot = &copy
-			evidenceStatus, costStatus = copy.PriceEvidenceStatus, copy.CostValueStatus
-			if copy.CostValueStatus == domain.CostValueKnown {
-				inputValue, outputValue, fixedValue := event.InputCostMicrosUSD, event.OutputCostMicrosUSD, event.FixedCostMicrosUSD
-				inputCost, outputCost, fixedCost = &inputValue, &outputValue, &fixedValue
-			}
-		}
-		tags := attemptCostTags(event, evidenceStatus)
-		startedAt := a.started[event.AttemptID]
-		if startedAt.IsZero() {
-			startedAt = event.OccurredAt.Add(-time.Duration(event.LatencyMillis) * time.Millisecond)
-		}
-		attempt := AttemptEvent{
-			EventID: event.EventID, RequestID: event.RequestID, AttemptID: event.AttemptID,
-			Sequence: record.Sequence, AttemptNumber: event.AttemptNumber,
-			ProjectID: event.ProjectID, KeyID: event.KeyID, RouteID: event.RouteID,
-			WorkUnitID: event.WorkUnitID, RunID: event.RunID,
-			DeploymentID:          event.DeploymentID,
-			PeriodID:              event.PeriodID,
-			PeriodTimezoneVersion: event.PeriodTimezoneVersion,
-			ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
-			OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
-			ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
-			ProviderOutputTokens:          event.ProviderOutputTokens,
-			ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
-			ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
-			ProviderReasoningTokens:       event.ProviderReasoningTokens,
-			PreparedOutputTokens:          event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
-			LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
-			PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
-			Tags:          tags,
-			CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated,
-			TokenUsageSource: event.TokenUsageSource,
-			StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
-			ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
-			ProviderCode: event.ProviderCode, ProviderFailureReason: event.ProviderFailureReason,
-			ProviderRequestID: event.ProviderRequestID, FailurePhase: event.FailurePhase,
-			Retryable: event.Retryable, Ambiguous: event.Ambiguous,
-			FailureSemanticsRecorded: event.FailureSemanticsRecorded,
-			LatencyMillis:            event.LatencyMillis, RetryCount: event.RetryCount,
-			FallbackCount: event.FallbackCount,
-		}
-		a.attempts = append(a.attempts, attempt)
-		if err := addInt64(&accumulator.summary.Attempts, 1); err != nil {
+		if err := a.applySettled(record, accumulator); err != nil {
 			return err
 		}
-		if err := addInt64(&accumulator.summary.InputTokens, event.ProviderInputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&accumulator.summary.OutputTokens, event.ProviderOutputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&accumulator.summary.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if !costKnown {
-			if err := addInt64(&accumulator.summary.UnknownAttempts, 1); err != nil {
-				return err
-			}
-		}
-		if int64(event.FallbackCount) > accumulator.summary.Fallbacks {
-			accumulator.summary.Fallbacks = int64(event.FallbackCount)
-		}
-		hour := event.OccurredAt.UTC().Truncate(time.Hour)
-		bucket := a.hourly[hour.Unix()]
-		bucket.Hour = hour
-		if err := addInt64(&bucket.Attempts, 1); err != nil {
-			return err
-		}
-		if err := addInt64(&bucket.InputTokens, event.ProviderInputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&bucket.OutputTokens, event.ProviderOutputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&bucket.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if !costKnown {
-			if err := addInt64(&bucket.UnknownAttempts, 1); err != nil {
-				return err
-			}
-		}
-		if err := addInt64(&bucket.LatencyMillis, event.LatencyMillis); err != nil {
-			return err
-		}
-		if event.Outcome != "success" {
-			if err := addInt64(&bucket.Errors, 1); err != nil {
-				return err
-			}
-		}
-		a.hourly[hour.Unix()] = bucket
-		if err := addInt64(&a.totals.Attempts, 1); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.InputTokens, event.ProviderInputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.OutputTokens, event.ProviderOutputTokens); err != nil {
-			return err
-		}
-		if err := addInt64(&a.totals.CostMicrosUSD, committedCost); err != nil {
-			return err
-		}
-		if !costKnown {
-			if err := addInt64(&a.totals.UnknownAttempts, 1); err != nil {
-				return err
-			}
-			a.metrics.UnknownAttempts++
-		}
-		if err := addInt64(&a.totals.LatencyMillis, event.LatencyMillis); err != nil {
-			return err
-		}
-		if event.Outcome != "success" {
-			if err := addInt64(&a.totals.Errors, 1); err != nil {
-				return err
-			}
-			a.metrics.AttemptsError++
-		} else {
-			a.metrics.AttemptsSuccess++
-		}
-		if err := addUint64(&a.metrics.InputTokens, uint64(event.ProviderInputTokens)); err != nil {
-			return err
-		}
-		if err := addUint64(&a.metrics.OutputTokens, uint64(event.ProviderOutputTokens)); err != nil {
-			return err
-		}
-		if err := addUint64(&a.metrics.CostMicrosUSD, uint64(committedCost)); err != nil {
-			return err
-		}
-		if err := addUint64(&a.metrics.AttemptLatencyMillis, uint64(event.LatencyMillis)); err != nil {
-			return err
-		}
-		recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
-		if err := a.addAttemptRollup(event, record.Sequence, committedCost, costKnown); err != nil {
-			return err
-		}
-		delete(a.started, event.AttemptID)
 	case ledger.EventRequestFinalized:
-		accumulator.summary.Outcome = event.Outcome
-		accumulator.summary.CompletedAt = event.OccurredAt
-		accumulator.summary.Sequence = record.Sequence
-		a.summaries = append(a.summaries, accumulator.summary)
-		delete(a.requests, event.RequestID)
-		hour := event.OccurredAt.UTC().Truncate(time.Hour)
-		bucket := a.hourly[hour.Unix()]
-		bucket.Hour = hour
-		if err := addInt64(&bucket.Requests, 1); err != nil {
-			return err
-		}
-		a.hourly[hour.Unix()] = bucket
-		if err := addInt64(&a.totals.Requests, 1); err != nil {
-			return err
-		}
-		if event.Outcome == "success" {
-			a.metrics.RequestsSuccess++
-		} else {
-			a.metrics.RequestsError++
-		}
-		var latencyMillis uint64
-		latencyKnown := !accumulator.summary.AcceptedAt.IsZero() &&
-			event.OccurredAt.After(accumulator.summary.AcceptedAt)
-		if latencyKnown {
-			latencyMillis = uint64(event.OccurredAt.Sub(
-				accumulator.summary.AcceptedAt,
-			).Milliseconds())
-			if err := addUint64(&a.metrics.RequestLatencyMillis, latencyMillis); err != nil {
-				return err
-			}
-			recordLatency(&a.metrics.RequestLatencyBuckets, latencyMillis)
-		}
-		if err := a.addRequestRollup(event, record.Sequence, latencyMillis, latencyKnown); err != nil {
-			return err
-		}
-		if err := addUint64(&a.metrics.Fallbacks, uint64(accumulator.summary.Fallbacks)); err != nil {
+		if err := a.applyFinalized(record, accumulator); err != nil {
 			return err
 		}
 	}
 	a.rememberEventID(event.EventID)
 	a.watermark = ledger.Watermark{Generation: record.Generation, Offset: record.Offset, Sequence: record.Sequence}
 	return nil
+}
+
+func (a *Aggregate) applySettled(record ledger.Record, accumulator *pendingRequest) error {
+	event := record.Event
+	committedCost, costKnown := event.KnownCommittedMicrosUSD()
+	var committedCostValue *int64
+	if costKnown {
+		value := committedCost
+		committedCostValue = &value
+	}
+	evidenceStatus, costStatus := domain.PriceEvidenceLegacyUnversioned, domain.CostValueKnown
+	var priceSnapshot *domain.PriceSnapshot
+	var inputCost, outputCost, fixedCost *int64
+	if event.PriceSnapshot != nil {
+		copy := event.PriceSnapshot.Clone()
+		priceSnapshot = &copy
+		evidenceStatus, costStatus = copy.PriceEvidenceStatus, copy.CostValueStatus
+		if copy.CostValueStatus == domain.CostValueKnown {
+			inputValue, outputValue, fixedValue := event.InputCostMicrosUSD, event.OutputCostMicrosUSD, event.FixedCostMicrosUSD
+			inputCost, outputCost, fixedCost = &inputValue, &outputValue, &fixedValue
+		}
+	}
+	startedAt := a.started[event.AttemptID]
+	if startedAt.IsZero() {
+		startedAt = event.OccurredAt.Add(-time.Duration(event.LatencyMillis) * time.Millisecond)
+	}
+	attempt := AttemptEvent{
+		EventID: event.EventID, RequestID: event.RequestID, AttemptID: event.AttemptID,
+		Sequence: record.Sequence, AttemptNumber: event.AttemptNumber,
+		ProjectID: event.ProjectID, KeyID: event.KeyID, RouteID: event.RouteID,
+		WorkUnitID: event.WorkUnitID, RunID: event.RunID,
+		DeploymentID:          event.DeploymentID,
+		PeriodID:              event.PeriodID,
+		PeriodTimezoneVersion: event.PeriodTimezoneVersion,
+		ProviderID:            event.ProviderID, RequestedModel: event.RequestedModel,
+		OfferingID: event.OfferingID, ProfileID: event.ProfileID, AccountRegionID: event.AccountRegionID,
+		ProviderModel: event.ProviderModel, ProviderInputTokens: event.ProviderInputTokens,
+		ProviderOutputTokens:          event.ProviderOutputTokens,
+		ProviderCachedInputTokens:     event.ProviderCachedInputTokens,
+		ProviderCacheWriteInputTokens: event.ProviderCacheWriteInputTokens,
+		ProviderReasoningTokens:       event.ProviderReasoningTokens,
+		PreparedOutputTokens:          event.PreparedOutputTokens, CostMicrosUSD: committedCostValue,
+		LeaseMode: event.LeaseMode, PriceEvidenceStatus: evidenceStatus, CostValueStatus: costStatus,
+		PriceSnapshot: priceSnapshot, InputCostMicrosUSD: inputCost, OutputCostMicrosUSD: outputCost, FixedCostMicrosUSD: fixedCost,
+		Tags:          attemptCostTags(event, evidenceStatus),
+		CostEstimated: event.CostEstimated, TokensEstimated: event.TokenEstimated,
+		TokenUsageSource: event.TokenUsageSource,
+		StartedAt:        startedAt, CompletedAt: event.OccurredAt, Status: event.Outcome,
+		ErrorClass: event.ErrorClass, HTTPStatus: event.HTTPStatus,
+		ProviderCode: event.ProviderCode, ProviderFailureReason: event.ProviderFailureReason,
+		ProviderRequestID: event.ProviderRequestID, FailurePhase: event.FailurePhase,
+		Retryable: event.Retryable, Ambiguous: event.Ambiguous,
+		FailureSemanticsRecorded: event.FailureSemanticsRecorded,
+		LatencyMillis:            event.LatencyMillis, RetryCount: event.RetryCount,
+		FallbackCount: event.FallbackCount,
+	}
+	a.batchAttempts = append(a.batchAttempts, attempt)
+	summary := &accumulator.Summary
+	if err := addInt64(&summary.Attempts, 1); err != nil {
+		return err
+	}
+	if err := addInt64(&summary.InputTokens, event.ProviderInputTokens); err != nil {
+		return err
+	}
+	if err := addInt64(&summary.OutputTokens, event.ProviderOutputTokens); err != nil {
+		return err
+	}
+	if err := addInt64(&summary.CostMicrosUSD, committedCost); err != nil {
+		return err
+	}
+	if !costKnown {
+		if err := addInt64(&summary.UnknownAttempts, 1); err != nil {
+			return err
+		}
+	}
+	if int64(event.FallbackCount) > summary.Fallbacks {
+		summary.Fallbacks = int64(event.FallbackCount)
+	}
+	if event.Outcome == "success" {
+		for _, key := range []string{
+			successKey(successDeployment, event.DeploymentID),
+			successKey(successRoute, event.RouteID),
+			successKey(successProvider, event.ProviderID),
+		} {
+			if key == "" {
+				continue
+			}
+			if accumulator.Successes == nil {
+				accumulator.Successes = make(map[string]time.Time)
+			}
+			if event.OccurredAt.After(accumulator.Successes[key]) {
+				accumulator.Successes[key] = event.OccurredAt
+			}
+		}
+	}
+
+	// The same contribution goes to the hour it finished in and to the running
+	// totals, so the two can never disagree about one attempt.
+	var contribution Bucket
+	contribution.Attempts = 1
+	contribution.InputTokens, contribution.OutputTokens = event.ProviderInputTokens, event.ProviderOutputTokens
+	contribution.CostMicrosUSD, contribution.LatencyMillis = committedCost, event.LatencyMillis
+	if !costKnown {
+		contribution.UnknownAttempts = 1
+	}
+	if event.Outcome != "success" {
+		contribution.Errors = 1
+	}
+	// Provider usage can be unavailable after an ambiguous failure. Such attempts
+	// are settled against a conservative token upper bound; the estimated part is
+	// carried separately so an upper bound is never mistaken for reported usage.
+	if event.TokenEstimated {
+		contribution.EstimatedInputTokens, contribution.EstimatedOutputTokens = event.ProviderInputTokens, event.ProviderOutputTokens
+	}
+	if event.CostEstimated && costKnown {
+		contribution.EstimatedCostMicrosUSD = committedCost
+	}
+	hour := event.OccurredAt.UTC().Truncate(time.Hour)
+	row := a.hourly[hour.Unix()]
+	if err := row.add(hourlyRow{Bucket: contribution}); err != nil {
+		return err
+	}
+	row.Bucket.Hour = hour
+	a.hourly[hour.Unix()] = row
+	if err := a.totals.add(contribution); err != nil {
+		return err
+	}
+
+	if !costKnown {
+		a.metrics.UnknownAttempts++
+	}
+	if event.Outcome != "success" {
+		a.metrics.AttemptsError++
+	} else {
+		a.metrics.AttemptsSuccess++
+	}
+	if err := addUint64(&a.metrics.InputTokens, uint64(event.ProviderInputTokens)); err != nil {
+		return err
+	}
+	if err := addUint64(&a.metrics.OutputTokens, uint64(event.ProviderOutputTokens)); err != nil {
+		return err
+	}
+	if err := addUint64(&a.metrics.CostMicrosUSD, uint64(committedCost)); err != nil {
+		return err
+	}
+	if err := addUint64(&a.metrics.AttemptLatencyMillis, uint64(event.LatencyMillis)); err != nil {
+		return err
+	}
+	recordLatency(&a.metrics.AttemptLatencyBuckets, uint64(event.LatencyMillis))
+	if err := a.addAttemptRollup(event, record.Sequence, committedCost, costKnown); err != nil {
+		return err
+	}
+	if _, ok := a.started[event.AttemptID]; ok {
+		delete(a.started, event.AttemptID)
+		a.dirtyStarted[event.AttemptID] = struct{}{}
+	}
+	return nil
+}
+
+func (a *Aggregate) applyFinalized(record ledger.Record, accumulator *pendingRequest) error {
+	event := record.Event
+	summary := accumulator.Summary
+	summary.Outcome = event.Outcome
+	summary.CompletedAt = event.OccurredAt
+	summary.Sequence = record.Sequence
+	a.batchSummaries = append(a.batchSummaries, summary)
+	delete(a.requests, event.RequestID)
+	if event.Outcome == "success" {
+		for key, at := range accumulator.Successes {
+			if at.After(a.successes[key]) {
+				a.successes[key] = at
+			}
+		}
+	}
+
+	var latencyMillis uint64
+	latencyKnown := !summary.AcceptedAt.IsZero() && event.OccurredAt.After(summary.AcceptedAt)
+	if latencyKnown {
+		latencyMillis = uint64(event.OccurredAt.Sub(summary.AcceptedAt).Milliseconds())
+	}
+	hour := event.OccurredAt.UTC().Truncate(time.Hour)
+	row := a.hourly[hour.Unix()]
+	row.Bucket.Hour = hour
+	if err := addInt64(&row.Bucket.Requests, 1); err != nil {
+		return err
+	}
+	if event.Outcome != "success" {
+		if err := addInt64(&row.Bucket.RequestErrors, 1); err != nil {
+			return err
+		}
+	}
+	if latencyKnown {
+		if err := addInt64(&row.Bucket.RequestLatencySamples, 1); err != nil {
+			return err
+		}
+		if index, overflow := latencyBucketIndex(latencyMillis); overflow {
+			row.RequestLatencyOverflow++
+		} else {
+			row.RequestLatencyBuckets[index]++
+		}
+	}
+	a.hourly[hour.Unix()] = row
+	if err := addInt64(&a.totals.Requests, 1); err != nil {
+		return err
+	}
+	if event.Outcome == "success" {
+		a.metrics.RequestsSuccess++
+	} else {
+		a.metrics.RequestsError++
+	}
+	if latencyKnown {
+		if err := addUint64(&a.metrics.RequestLatencyMillis, latencyMillis); err != nil {
+			return err
+		}
+		recordLatency(&a.metrics.RequestLatencyBuckets, latencyMillis)
+	}
+	if err := a.addRequestRollup(event, record.Sequence, latencyMillis, latencyKnown); err != nil {
+		return err
+	}
+	return addUint64(&a.metrics.Fallbacks, uint64(summary.Fallbacks))
+}
+
+// PendingRecords reports how many rows wait for the next flush.
+func (a *Aggregate) PendingRecords() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.batchAttempts) + len(a.batchSummaries)
+}
+
+// FlushIfFull writes the pending batch once it reaches the flush size. A
+// caller replaying a long stretch of the Ledger calls it after each record so
+// memory stays one batch deep.
+func (a *Aggregate) FlushIfFull() error {
+	if a.PendingRecords() < historyFlushRecords {
+		return nil
+	}
+	return a.Flush()
+}
+
+// Flush writes everything applied since the previous flush, together with the
+// watermark it reaches, in one transaction. A failed write hands the increment
+// back, so the next flush writes it again rather than losing it.
+func (a *Aggregate) Flush() error {
+	a.flushMu.Lock()
+	defer a.flushMu.Unlock()
+	batch, empty := a.takeBatch()
+	if empty {
+		return nil
+	}
+	if err := a.history.commit(batch); err != nil {
+		a.returnBatch(batch)
+		return fmt.Errorf("write usage history: %w", err)
+	}
+	a.mu.Lock()
+	a.committed = batch.state.Watermark
+	a.mu.Unlock()
+	return nil
+}
+
+// HistoryStats describes the index's progress for metrics.
+type HistoryStats struct {
+	PendingRecords int
+	Applied        ledger.Watermark
+	Committed      ledger.Watermark
+}
+
+func (a *Aggregate) HistoryStats() HistoryStats {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return HistoryStats{
+		PendingRecords: len(a.batchAttempts) + len(a.batchSummaries),
+		Applied:        a.watermark, Committed: a.committed,
+	}
+}
+
+func (a *Aggregate) takeBatch() (*historyBatch, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.watermark.Sequence == 0 {
+		return nil, true
+	}
+	batch := &historyBatch{
+		state: HistoryState{
+			Watermark: a.watermark, Totals: a.totals, Metrics: a.metrics,
+			EventIDs: append([]string(nil), a.eventIDOrder...),
+		},
+		attempts: a.batchAttempts, summaries: a.batchSummaries, hourly: a.hourly,
+		rollup: make(map[string]domain.DailyRollup, len(a.rollupDelta)), successes: a.successes,
+		pendingPut: map[string]pendingRequest{}, pendingDelete: map[string]struct{}{},
+		startedPut: map[string]time.Time{}, startedDelete: map[string]struct{}{},
+	}
+	for key, row := range a.rollupDelta {
+		batch.rollup[key.Encode()] = *row
+	}
+	for requestID := range a.dirtyRequests {
+		if request, ok := a.requests[requestID]; ok {
+			batch.pendingPut[requestID] = clonePendingRequest(*request)
+		} else {
+			batch.pendingDelete[requestID] = struct{}{}
+		}
+	}
+	for attemptID := range a.dirtyStarted {
+		if at, ok := a.started[attemptID]; ok {
+			batch.startedPut[attemptID] = at
+		} else {
+			batch.startedDelete[attemptID] = struct{}{}
+		}
+	}
+	a.batchAttempts, a.batchSummaries = nil, nil
+	a.hourly = make(map[int64]hourlyRow)
+	a.rollupDelta = make(map[domain.RollupKey]*domain.DailyRollup)
+	a.successes = make(map[string]time.Time)
+	a.dirtyRequests, a.dirtyStarted = make(map[string]struct{}), make(map[string]struct{})
+	return batch, false
+}
+
+// returnBatch puts an unwritten increment back in front of whatever arrived
+// while the write was in flight. In-flight entries need only be marked dirty
+// again: the next flush reads their current value.
+func (a *Aggregate) returnBatch(batch *historyBatch) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.batchAttempts = append(batch.attempts, a.batchAttempts...)
+	a.batchSummaries = append(batch.summaries, a.batchSummaries...)
+	for hour, row := range batch.hourly {
+		current := a.hourly[hour]
+		if err := current.add(row); err == nil {
+			current.Bucket.Hour = row.Bucket.Hour
+			a.hourly[hour] = current
+		}
+	}
+	for encoded, row := range batch.rollup {
+		key, err := domain.DecodeRollupKey(encoded)
+		if err != nil {
+			continue
+		}
+		if existing := a.rollupDelta[key]; existing != nil {
+			_ = existing.Add(row)
+		} else {
+			pending := row
+			a.rollupDelta[key] = &pending
+		}
+	}
+	for key, at := range batch.successes {
+		if at.After(a.successes[key]) {
+			a.successes[key] = at
+		}
+	}
+	for requestID := range batch.pendingPut {
+		a.dirtyRequests[requestID] = struct{}{}
+	}
+	for requestID := range batch.pendingDelete {
+		a.dirtyRequests[requestID] = struct{}{}
+	}
+	for attemptID := range batch.startedPut {
+		a.dirtyStarted[attemptID] = struct{}{}
+	}
+	for attemptID := range batch.startedDelete {
+		a.dirtyStarted[attemptID] = struct{}{}
+	}
+}
+
+func clonePendingRequest(request pendingRequest) pendingRequest {
+	if request.Successes != nil {
+		successes := make(map[string]time.Time, len(request.Successes))
+		for key, value := range request.Successes {
+			successes[key] = value
+		}
+		request.Successes = successes
+	}
+	return request
 }
 
 func (a *Aggregate) rememberEventID(eventID string) {
@@ -490,6 +688,43 @@ func (a *Aggregate) rememberEventID(eventID string) {
 		delete(a.eventIDs, a.eventIDOrder[0])
 		a.eventIDOrder = a.eventIDOrder[1:]
 	}
+}
+
+func (a *Aggregate) Metrics() Metrics {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := a.metrics
+	result.ActiveRequests = uint64(len(a.requests))
+	return result
+}
+
+func (a *Aggregate) Watermark() ledger.Watermark {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.watermark
+}
+
+// Totals is every request and attempt this aggregate has applied.
+func (a *Aggregate) Totals() Bucket {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.totals
+}
+
+func (a *Aggregate) activeRequest(requestID string) (RequestSummary, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	request, ok := a.requests[requestID]
+	if !ok {
+		return RequestSummary{}, false
+	}
+	return request.Summary, true
+}
+
+func (a *Aggregate) activeCount() uint64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return uint64(len(a.requests))
 }
 
 func addInt64(target *int64, delta int64) error {
@@ -538,38 +773,6 @@ func attemptCostTags(event ledger.Event, evidence domain.PriceEvidenceStatus) []
 	return tags
 }
 
-func (a *Aggregate) Metrics() Metrics {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	result := a.metrics
-	result.ActiveRequests = uint64(len(a.requests))
-	return result
-}
-
-func (a *Aggregate) Watermark() ledger.Watermark {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.watermark
-}
-
-func (a *Aggregate) Snapshot() Snapshot {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	result := Snapshot{
-		Watermark: a.watermark, Floor: a.floor, Totals: a.totals,
-		Attempts: append([]AttemptEvent(nil), a.attempts...),
-		Requests: append([]RequestSummary(nil), a.summaries...),
-		Hourly:   make([]Bucket, 0, len(a.hourly)),
-	}
-	for _, bucket := range a.hourly {
-		result.Hourly = append(result.Hourly, bucket)
-	}
-	sort.Slice(result.Hourly, func(i, j int) bool {
-		return result.Hourly[i].Hour.Before(result.Hourly[j].Hour)
-	})
-	return result
-}
-
 func containsTag(tags []string, wanted string) bool {
 	for _, tag := range tags {
 		if tag == wanted {
@@ -577,20 +780,4 @@ func containsTag(tags []string, wanted string) bool {
 		}
 	}
 	return false
-}
-
-func cloneStarted(source map[string]time.Time) map[string]time.Time {
-	result := make(map[string]time.Time, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
-}
-
-func cloneHourly(source map[int64]Bucket) map[int64]Bucket {
-	result := make(map[int64]Bucket, len(source))
-	for key, value := range source {
-		result[key] = value
-	}
-	return result
 }

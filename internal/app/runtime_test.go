@@ -382,10 +382,7 @@ func TestUsageAggregateMatchesReplayAfterRestart(t *testing.T) {
 	if err := runtime.accounting.Finalize(context.Background(), request, "success"); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	before := runtime.usage.Snapshot()
+	before := dumpUsage(t, runtime)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +391,7 @@ func TestUsageAggregateMatchesReplayAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	after := runtime.usage.Snapshot()
+	after := dumpUsage(t, runtime)
 	if before.Totals != after.Totals || len(after.Attempts) != 1 || len(after.Requests) != 1 {
 		t.Fatalf("before=%#v after=%#v", before, after)
 	}

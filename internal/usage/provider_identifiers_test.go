@@ -60,10 +60,10 @@ func applyEvents(t *testing.T, aggregate *Aggregate, events []ledger.Event) {
 
 func TestProviderIdentifiersSurviveTheDerivation(t *testing.T) {
 	now := time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC)
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	applyEvents(t, aggregate, failureIdentifierEvents(now))
 
-	detail, exists := aggregate.RequestDetail("req_1")
+	detail, exists := detailOf(t, aggregate, "req_1")
 	if !exists || len(detail.Attempts) != 1 {
 		t.Fatalf("detail = %#v", detail)
 	}
@@ -109,28 +109,29 @@ func TestProviderIdentifiersSurviveTheDerivation(t *testing.T) {
 }
 
 // Rebuilding from the ledger has to land where the incremental path did, or the
-// checkpoint has become a second source of truth for these fields.
+// history index has become a second source of truth for these fields.
 func TestProviderIdentifiersMatchAfterCheckpointAndRebuild(t *testing.T) {
 	now := time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC)
 	events := failureIdentifierEvents(now)
 
-	incremental := NewAggregate()
+	incremental := newTestAggregate(t)
 	applyEvents(t, incremental, events)
+	want := snapshotOf(t, incremental).Attempts[0]
 	restored, err := restoreOneRound(incremental)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuilt := NewAggregate()
+	rebuilt := newTestAggregate(t)
 	applyEvents(t, rebuilt, events)
 
 	for name, aggregate := range map[string]*Aggregate{"restored": restored, "rebuilt": rebuilt} {
-		detail, exists := aggregate.RequestDetail("req_1")
+		detail, exists := detailOf(t, aggregate, "req_1")
 		if !exists || len(detail.Attempts) != 1 {
 			t.Fatalf("%s: detail = %#v", name, detail)
 		}
-		if !reflect.DeepEqual(detail.Attempts[0], incremental.attempts[0]) {
+		if !reflect.DeepEqual(detail.Attempts[0], want) {
 			t.Fatalf("%s attempt differs from the incremental one:\n%#v\n%#v",
-				name, detail.Attempts[0], incremental.attempts[0])
+				name, detail.Attempts[0], want)
 		}
 	}
 }
@@ -146,7 +147,7 @@ func TestParquetKeepsAndNarrowsTheProviderIdentifiers(t *testing.T) {
 		t.Fatal(err)
 	}
 	day := time.Date(2026, 8, 22, 10, 0, 0, 0, time.UTC)
-	snapshot := Snapshot{Attempts: []AttemptEvent{{
+	snapshot := exportFixture{Attempts: []AttemptEvent{{
 		EventID: "event_1", RequestID: "request_1", AttemptID: "attempt_1",
 		Sequence: 4, AttemptNumber: 1, ProjectID: "project_1", KeyID: "key_1",
 		RouteID: "route_1", ProviderID: "provider_1", RequestedModel: "chat",

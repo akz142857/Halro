@@ -18,7 +18,7 @@ import (
 // one is addressed by index and counted by several tests.
 func unrenderableFixture(t *testing.T) *Aggregate {
 	t.Helper()
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 	var sequence uint64
 	apply := func(event ledger.Event) {
@@ -111,27 +111,58 @@ func TestAChainThatEndsInFailureStillExplainsTheRequest(t *testing.T) {
 	}
 }
 
-// A page's cost has to be proportional to a page. Indexing the whole window
-// built a map with an entry per request held — tens of millions on a busy
-// instance — allocated per call, under the read lock the usage collector needs,
-// in order to return at most a hundred rows.
-func TestTheFailureIndexIsBuiltForThePageNotTheWindow(t *testing.T) {
-	aggregate := NewAggregate()
-	for index := range 500 {
-		aggregate.attempts = append(aggregate.attempts, AttemptEvent{
-			RequestID: "req_" + strconv.Itoa(index), AttemptID: "att", Status: "provider_error",
-		})
-	}
-	candidates := []RequestSummary{{RequestID: "req_1"}, {RequestID: "req_2"}}
+// A page's cost has to be bounded whatever the history behind it. A filter
+// that matches nothing would otherwise read every failed request ever stored
+// to say so; with the scan budget it stops, returns what it found, and hands
+// back a cursor to continue from.
+func TestAFailurePageExaminesAtMostTheScanBudget(t *testing.T) {
+	previous := historyScanBudget
+	historyScanBudget = 10
+	t.Cleanup(func() { historyScanBudget = previous })
 
-	indexed := aggregate.indexAttempts(candidates, false)
-	if len(indexed) != len(candidates) {
-		t.Fatalf("indexed %d requests for a %d-row page", len(indexed), len(candidates))
+	aggregate := newTestAggregate(t)
+	at := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	var sequence uint64
+	for index := range 25 {
+		requestID := "req_" + strconv.Itoa(index)
+		for _, event := range []ledger.Event{
+			{EventID: requestID + "_settled", Kind: ledger.EventAttemptSettled, RequestID: requestID,
+				AttemptID: requestID + "_att", AttemptNumber: 1, ProjectID: "project", PeriodID: "period",
+				ProviderID: "provider_a", OccurredAt: at, Outcome: "provider_error", CommittedMicrosUSD: ledger.MicrosUSD(1)},
+			{EventID: requestID + "_final", Kind: ledger.EventRequestFinalized, RequestID: requestID,
+				ProjectID: "project", PeriodID: "period", OccurredAt: at, Outcome: "provider_error"},
+		} {
+			sequence++
+			if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: sequence, Offset: int64(sequence * 100), Event: event}); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-
-	// The advanced filter still needs every request's attempts to decide which
-	// rows qualify, and says so by asking for them.
-	if all := aggregate.indexAttempts(candidates, true); len(all) != 500 {
-		t.Fatalf("an attempt-filtered query indexed %d requests, want the window", len(all))
+	page, err := aggregate.QueryFailedRequests(FailureQuery{Limit: 5, ProviderID: "provider_nobody_used"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Failures) != 0 || page.NextCursor == "" {
+		t.Fatalf("a page past the budget returned %d rows and cursor %q, want none and a cursor", len(page.Failures), page.NextCursor)
+	}
+	// The cursor resumes below the last examined row, so paging on walks the
+	// rest of the history a budget at a time and then ends.
+	pages := 1
+	for cursor := page.NextCursor; cursor != ""; pages++ {
+		before, err := DecodeCursor(cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next, err := aggregate.QueryFailedRequests(FailureQuery{Limit: 5, ProviderID: "provider_nobody_used", BeforeSequence: before})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cursor = next.NextCursor
+		if pages > 10 {
+			t.Fatal("paging never reached the end of the history")
+		}
+	}
+	if pages != 3 {
+		t.Fatalf("25 failed requests at a budget of 10 took %d pages, want 3", pages)
 	}
 }

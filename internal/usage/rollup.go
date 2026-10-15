@@ -11,31 +11,6 @@ import (
 // a silently truncated tail.
 var _ = [domain.RollupLatencyBuckets]uint64([latencyBucketCount]uint64{})
 
-// CheckpointSnapshot is one persistence round: the aggregate's own state and
-// the rollup increment that has accumulated since the previous round. The two
-// travel together because they are written in a single bbolt transaction —
-// letting the checkpoint advance without its increment would leave a stored
-// rollup that describes a prefix of the WAL nobody can name.
-type CheckpointSnapshot struct {
-	Watermark ledger.Watermark
-	// Head is the small, always-rewritten part of the checkpoint; Segments are
-	// the record segments this round adds or replaces, and RemovedSegments the
-	// ones the window has trimmed past. All of them, and the increment below,
-	// are written in one transaction.
-	Head            []byte
-	Segments        []CheckpointSegment
-	RemovedSegments []uint64
-	// Rollup maps an encoded domain.RollupKey to the increment for that row.
-	Rollup map[string]domain.DailyRollup
-
-	// segments and nextSegmentID are what the aggregate adopts once the store
-	// has accepted the write — see CommitCheckpoint. They are not the caller's
-	// business, which is why a failed write needs no unwinding beyond handing
-	// the increment back.
-	segments      []CheckpointSegmentRef
-	nextSegmentID uint64
-}
-
 // rollupRow returns the pending increment for key, creating it stamped with
 // the event's accounting identity. The period comes off the event — stamped at
 // admission and inherited downstream — so the day a row belongs to is never
@@ -66,6 +41,7 @@ func rollupDimensions(event ledger.Event, requestLevel bool) []domain.RollupKey 
 		{domain.RollupDimensionProvider, event.ProviderID},
 		{domain.RollupDimensionDeployment, event.DeploymentID},
 		{domain.RollupDimensionProviderModel, event.ProviderModel},
+		{domain.RollupDimensionOffering, string(event.OfferingID)},
 	}
 	for _, candidate := range candidates {
 		if candidate.value == "" {
@@ -182,89 +158,6 @@ func latencyBucketIndex(latencyMillis uint64) (int, bool) {
 		}
 	}
 	return 0, true
-}
-
-// takeRollupDelta hands the pending increment to the caller and starts a fresh
-// one. The caller owns durability from here: on a failed write it must give the
-// increment back with returnRollupDelta, or the events it covers are counted
-// nowhere.
-func (a *Aggregate) takeRollupDelta() map[string]domain.DailyRollup {
-	encoded := make(map[string]domain.DailyRollup, len(a.rollupDelta))
-	for key, row := range a.rollupDelta {
-		encoded[key.Encode()] = *row
-	}
-	a.rollupDelta = make(map[domain.RollupKey]*domain.DailyRollup)
-	return encoded
-}
-
-// ReturnCheckpoint puts an unwritten increment back. It merges rather than
-// replaces, because events kept arriving while the write was in flight.
-func (a *Aggregate) ReturnCheckpoint(snapshot CheckpointSnapshot) error {
-	if len(snapshot.Rollup) == 0 {
-		return nil
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	for encoded, row := range snapshot.Rollup {
-		key, err := domain.DecodeRollupKey(encoded)
-		if err != nil {
-			return err
-		}
-		existing := a.rollupDelta[key]
-		if existing == nil {
-			pending := row
-			a.rollupDelta[key] = &pending
-			continue
-		}
-		if err := existing.Add(row); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// PendingRollupRows reports how many rows are waiting to be persisted. It
-// exists for tests and diagnostics, not for accounting.
-func (a *Aggregate) PendingRollupRows() int {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return len(a.rollupDelta)
-}
-
-// PendingRollup copies the increment that has not reached disk yet, without
-// draining it.
-//
-// A summary read merges this with the stored rows. Without it the console
-// would report a total that lags by up to a checkpoint interval while the
-// dashboard beside it — which reads the same aggregate directly — reports the
-// current one, and the two would disagree for a minute at a time with no way
-// for an operator to tell which was right.
-func (a *Aggregate) PendingRollup() map[string]domain.DailyRollup {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	pending := make(map[string]domain.DailyRollup, len(a.rollupDelta))
-	for key, row := range a.rollupDelta {
-		pending[key.Encode()] = *row
-	}
-	return pending
-}
-
-// WithRollupCheckpoint excludes summary reads while a caller moves a rollup
-// increment from memory into the checkpoint store. Apply remains independent:
-// events arriving during the write accumulate in the new pending increment.
-func (a *Aggregate) WithRollupCheckpoint(write func()) {
-	a.rollupView.Lock()
-	defer a.rollupView.Unlock()
-	write()
-}
-
-// WithRollupView holds the checkpoint boundary stable while a summary combines
-// stored rows with a snapshot of the pending increment. The callback may read
-// the checkpoint store; it must not begin a checkpoint write itself.
-func (a *Aggregate) WithRollupView(read func(map[string]domain.DailyRollup) error) error {
-	a.rollupView.RLock()
-	defer a.rollupView.RUnlock()
-	return read(a.PendingRollup())
 }
 
 // ApproximateLatencyPercentile reads a percentile off a stored histogram.

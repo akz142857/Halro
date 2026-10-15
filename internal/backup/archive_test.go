@@ -46,7 +46,6 @@ func TestEncryptedBackupCreateVerifyAndSecretConfidentiality(t *testing.T) {
 		},
 		Metadata:             boltstore.MetadataInfo{SchemaVersion: 2, TxID: 7, MinimumLedgerReaderVersion: "v4", LedgerFeatureEpoch: 4},
 		LedgerWatermark:      ledger.Watermark{Generation: 1, Offset: 123, Sequence: 4},
-		CheckpointWatermark:  ledger.Watermark{Generation: 1, Offset: 100, Sequence: 3},
 		UsageManifestVersion: 1,
 		LedgerFeatureEpoch:   4, MinimumLedgerReaderVersion: "v4", PricingStateSHA256: "sha256:" + strings.Repeat("1", 64), PendingIntentSHA256: "sha256:" + strings.Repeat("2", 64),
 		MasterKeyFingerprint: "sha256:" + strings.Repeat("0", 64),

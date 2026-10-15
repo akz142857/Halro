@@ -19,7 +19,7 @@ import (
 // pins in the gateway; this is the same taxonomy seen from the read side.
 func failureFixture(t *testing.T) *Aggregate {
 	t.Helper()
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
 	var sequence uint64
 	apply := func(event ledger.Event) {

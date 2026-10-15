@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
 
@@ -193,7 +192,7 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(history) != 40 ||
+	if len(history) != 41 ||
 		history[0] != (MigrationRecord{Version: 1, Name: "initial_schema"}) ||
 		history[1] != (MigrationRecord{Version: 2, Name: "migration_history"}) ||
 		history[2] != (MigrationRecord{Version: 3, Name: "deployments"}) ||
@@ -233,7 +232,8 @@ func TestMetadataMigrationFromV1IsAtomicAndRecorded(t *testing.T) {
 		history[36] != (MigrationRecord{Version: 37, Name: "usage_provider_attribution_boundary"}) ||
 		history[37] != (MigrationRecord{Version: 38, Name: "provider_egress_proxy_compatibility_fence"}) ||
 		history[38] != (MigrationRecord{Version: 39, Name: "route_suspensions"}) ||
-		history[39] != (MigrationRecord{Version: 40, Name: "provider_resource_idempotency_index"}) {
+		history[39] != (MigrationRecord{Version: 40, Name: "provider_resource_idempotency_index"}) ||
+		history[40] != (MigrationRecord{Version: 41, Name: "drop_usage_derivatives"}) {
 		t.Fatalf("history=%#v", history)
 	}
 }
@@ -803,29 +803,6 @@ func createV1Metadata(t *testing.T, path string) {
 	}
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestUsageCheckpointPersistenceAndMonotonicity(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
-	if err := store.PutUsageCheckpoint(first, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err != nil {
-		t.Fatal(err)
-	}
-	got, payload, err := store.UsageCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != first || string(payload) != `{"version":1}` {
-		t.Fatalf("watermark=%#v payload=%s", got, payload)
-	}
-	older := ledger.Watermark{Generation: 1, Offset: 50, Sequence: 1}
-	if err := store.PutUsageCheckpoint(older, []byte(`{"version":1}`), nil, nil, domain.RollupVersion, nil); err == nil {
-		t.Fatal("expected a backwards checkpoint to be rejected")
 	}
 }
 

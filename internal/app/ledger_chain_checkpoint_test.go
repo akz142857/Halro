@@ -2,13 +2,13 @@ package app
 
 import (
 	"context"
+	"github.com/akz142857/Halro/internal/usage"
 	"io"
 	"log/slog"
 	"os"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/ledger"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // seedLedgerActivity writes one accepted request so the WAL holds at least one
@@ -76,14 +76,14 @@ func TestDeletedLedgerIsRejectedByChainCheckpoint(t *testing.T) {
 	}
 }
 
-// TestUsageCheckpointAheadOfLedgerHeadIsDiscarded covers the second-order
-// damage from the same wipe. The usage checkpoint keeps its own watermark, and
+// TestUsageHistoryAheadOfLedgerHeadIsDiscarded covers the second-order damage
+// from the same wipe. The usage history index keeps its own watermark, and
 // resuming from an offset the shortened WAL no longer reaches makes the next
 // replay land in the middle of whatever gets written next — surfacing minutes
-// later as corruption, far away from the deletion that caused it. The
-// aggregate is a derivative, so discarding it and rebuilding is always
-// available and always correct.
-func TestUsageCheckpointAheadOfLedgerHeadIsDiscarded(t *testing.T) {
+// later as corruption, far away from the deletion that caused it. The index
+// is a derivative, so discarding it and rebuilding is always available and
+// always correct.
+func TestUsageHistoryAheadOfLedgerHeadIsDiscarded(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -101,28 +101,29 @@ func TestUsageCheckpointAheadOfLedgerHeadIsDiscarded(t *testing.T) {
 	if err := runtime.accounting.Finalize(context.Background(), request, "success"); err != nil {
 		t.Fatal(err)
 	}
-	runtime.saveUsageCheckpoint()
-	if runtime.usage.Snapshot().Watermark.Offset == 0 {
-		t.Fatal("expected a non-zero usage watermark to have been checkpointed")
+	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.usage.HistoryStats().Committed.Offset == 0 {
+		t.Fatal("expected a non-zero usage watermark to have been stored")
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	store, err := boltstore.Open(cfg.MetadataPath())
+	// An empty head is what a wiped WAL replays to. The index recorded a real
+	// offset a moment ago, so it is now describing bytes that are gone.
+	ledgerKey := ledgerKeyForTest(t, cfg)
+	defer clear(ledgerKey)
+	history, restored, err := openUsageHistory(cfg, ledgerKey, ledger.Watermark{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	// An empty head is what a wiped WAL replays to. The checkpoint recorded a
-	// real offset a moment ago, so it is now describing bytes that are gone.
-	restored, watermark, err := restoreUsageAggregate(
-		store, ledger.Watermark{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
-	)
-	if err != nil {
-		t.Fatal(err)
+	defer history.Close()
+	if restored.Watermark().Offset != 0 {
+		t.Fatalf("usage history ahead of the ledger head must be discarded: watermark=%+v", restored.Watermark())
 	}
-	if watermark.Offset != 0 || restored.Snapshot().Watermark.Offset != 0 {
-		t.Fatalf("usage checkpoint ahead of the ledger head must be discarded: watermark=%+v", watermark)
+	if _, err := history.State(); !usage.IsHistoryEmpty(err) {
+		t.Fatalf("the discarded index still holds a position: %v", err)
 	}
 }

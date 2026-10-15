@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	bbolt "go.etcd.io/bbolt"
 )
 
@@ -24,8 +22,9 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watermark := ledger.Watermark{Generation: 1, Sequence: 1, Offset: 1}
-	if err := store.PutUsageCheckpoint(watermark, []byte(`{"version":13}`), nil, nil, domain.RollupVersion, nil); err != nil {
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(bucketMeta).Put(keyUsageCheckpoint, []byte(`{"watermark":{"generation":1,"sequence":1,"offset":1},"payload":"e30="}`))
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.db.Update(func(tx *bbolt.Tx) error {
@@ -92,8 +91,13 @@ func TestMigration37FencesOldReadersAndDropsTheUsageCheckpoint(t *testing.T) {
 	if version, err := migrated.SchemaVersion(); err != nil || version != schemaVersion {
 		t.Fatalf("schema=%d err=%v, want %d", version, err, schemaVersion)
 	}
-	if _, _, err := migrated.UsageCheckpoint(); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("schema-13 usage checkpoint survived migration: %v", err)
+	if err := migrated.db.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket(bucketMeta).Get(keyUsageCheckpoint) != nil {
+			t.Fatal("schema-13 usage checkpoint survived migration")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := migrated.db.View(func(tx *bbolt.Tx) error {

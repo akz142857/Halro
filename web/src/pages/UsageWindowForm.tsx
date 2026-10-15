@@ -3,20 +3,16 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNotify } from "../notifications";
 import { api } from "../api";
-import { ErrorState, Field, Modal } from "../components";
+import { ErrorState, Field } from "../components";
 import { useInstantFormatter } from "../format";
 import { useIsReadOnly } from "../session";
 import type { UsageSettings } from "../types";
 
 /**
- * How far back the console pages.
+ * How many days the attempt log and the failed-request list show by default.
  *
- * Lengthening this is free and takes effect on the next export tick.
- * Shortening it is destructive: the attempt log and the failed-request list are
- * served from an in-memory aggregate, and what falls outside the window is
- * trimmed out of it. The confirmation says so in those terms — the records are
- * not deleted, they stay in the archive, but nothing on these screens can reach
- * them again.
+ * Changing it in either direction discards nothing: every attempt stays in the
+ * usage history index, and a list can always be asked for an older range.
  */
 export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
   const { t } = useTranslation();
@@ -24,29 +20,19 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
   const formatInstant = useInstantFormatter();
   const queryClient = useQueryClient();
   const [days, setDays] = useState(settings.console_window_days);
-  const [confirming, setConfirming] = useState(false);
   useEffect(() => setDays(settings.console_window_days), [settings.console_window_days]);
   const { notify } = useNotify();
   const save = useMutation({
-    mutationFn: (acknowledge: boolean) => api.updateUsageSettings(days, acknowledge, settings.revision),
+    mutationFn: () => api.updateUsageSettings(days, settings.revision),
     onSuccess: () => {
       notify({ tone: "success", title: t("settings.notifyUsageWindowSaved"), description: String(days) });
       return queryClient.invalidateQueries({ queryKey: ["usage-settings"] });
     },
-    // Closed on failure too, not only on success. The error renders inside the
-    // form, and the modal is a full-page portal on top of it — so a save that
-    // was refused (a revision conflict with another admin, most likely) used to
-    // leave the operator looking at an unchanged dialog with the reason hidden
-    // behind it, and pressing confirm again appearing to do nothing.
-    onSettled: () => setConfirming(false),
   });
-  // Presets the archive cannot back are dropped rather than shown disabled: an
-  // option that exists only to be refused is a worse answer than not offering
-  // it. The value in force is always present, even when it is not a preset.
-  const choices = Array.from(
-    new Set([...settings.presets.filter((preset) => preset <= settings.max_days), settings.console_window_days]),
-  ).sort((left, right) => left - right);
-  const shrinking = days < settings.console_window_days;
+  // The value in force is always offered, even when it is not a preset.
+  const choices = Array.from(new Set([...settings.presets, settings.console_window_days])).sort(
+    (left, right) => left - right,
+  );
   const changed = days !== settings.console_window_days;
   return (
     <section className="panel settings-card">
@@ -57,13 +43,6 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
         <div>
           <dt>{t("settings.usageWindowCurrent")}</dt>
           <dd>{t("settings.usageWindowDays", { count: settings.console_window_days })}</dd>
-        </div>
-        <div>
-          <dt>{t("settings.usageWindowArchive")}</dt>
-          <dd>
-            {t("settings.usageWindowDays", { count: settings.max_days })}
-            <small>{t("settings.usageWindowArchiveHint")}</small>
-          </dd>
         </div>
         <div>
           <dt>{t("settings.usageWindowUpdated")}</dt>
@@ -83,11 +62,7 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
         aria-busy={save.isPending}
         onSubmit={(event) => {
           event.preventDefault();
-          if (shrinking) {
-            setConfirming(true);
-            return;
-          }
-          save.mutate(false);
+          save.mutate();
         }}
       >
         <Field label={t("settings.usageWindowLabel")} hint={t("settings.usageWindowHint")}>
@@ -108,30 +83,6 @@ export function UsageWindowForm({ settings }: { settings: UsageSettings }) {
           </button>
         </div>
       </form>
-      {confirming && (
-        <Modal title={t("settings.usageWindowConfirmTitle")} onClose={() => setConfirming(false)}>
-          {/* The modal only pads a child it recognises; bare content runs to
-              the edges. .confirmation-dialog is that child. */}
-          <div className="confirmation-dialog">
-            <p>{t("settings.usageWindowConfirmLead", { from: settings.console_window_days, to: days })}</p>
-            <ul className="settings-consequences">
-              <li>{t("settings.usageWindowConfirmTrim")}</li>
-              <li>{t("settings.usageWindowConfirmArchive", { days: settings.max_days })}</li>
-              <li>{t("settings.usageWindowConfirmIrreversible")}</li>
-            </ul>
-            <div className="form-actions">
-              <button className="button" onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
-              <button
-                className="button primary"
-                disabled={readOnly || save.isPending}
-                onClick={() => save.mutate(true)}
-              >
-                {save.isPending ? t("settings.saving") : t("settings.usageWindowConfirmAction")}
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </section>
   );
 }

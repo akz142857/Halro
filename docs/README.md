@@ -144,7 +144,7 @@ Markdown 编进二进制，由 `internal/app/admin_master_key_runbook.go` 提供
 | [DLP（脱敏与数据防泄漏）升级方案](todo/dlp-upgrade-plan.zh-CN.md) | 敏感数据标识符、检测配置文件、DLP 策略、Project 绑定与编译快照 | 提案待评审；四层拆分尚未进 `internal/domain` |
 | [路由准入设计](todo/route-eligibility-design.zh-CN.md) | 把熔断器、探针健康与额度/订阅挂起合成一个准入门；作用域由失败自己声明，`FailureReason` 成为路由输入 | 提案待评审；`internal/routegate` 不存在，额度用尽今天不触发回退 |
 | [Halro HA 架构设计](todo/halro-ha-architecture.zh-CN.md) | 三节点同步复制 + 人工提升；账务只在 Provider I/O 前的两个事件与吊销类写上等待，RPO=0；自动故障切换是 §19 的未决问题 | 已实现部分（含 metadata journal）于 2026-10-15 移出 `main`，保存在 `ha` 分支待评审（#404）；内存有界的重新设计完成后再继续 |
-| [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 已评审（#405），§6 预算 2026-10-15 确认；P0 基线已测，见 [P0 基线](verification/memory-bounded-baseline.zh-CN.md) |
+| [内存有界的历史存储：重新设计](todo/memory-bounded-redesign.zh-CN.md) | 内存与历史规模、请求速率无关：权威日志不变，热状态有上限并整体 MAC 快照，历史明细进独立 `history.db` 由后台从 WAL 追赶；数据默认永久保留；预算先于方案 | 已评审（#405），§6 预算 2026-10-15 确认；P0（#406）与 P1（Usage 历史索引）完成，实测见 [基线与各阶段结果](verification/memory-bounded-baseline.zh-CN.md) |
 | [实例自述文档与 Agent 操作通道](todo/agent-self-description-plan.zh-CN.md) | 实例把「我是什么、我能做什么、怎么配置我」服务出去：网关口的 `.well-known` 北向自述与 `GET /v1/models`，管理口登录后的 `GET /admin/api/v1/skill.md`；路由表由 `chi.Walk` 从同一棵树生成 | 提案待评审；`internal/selfdescribe` 不存在。不引入机器凭据，MCP 执行通道留待自述文档落地后单独评审 |
 
 ## 草稿 · `drafts/`

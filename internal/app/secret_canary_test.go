@@ -113,10 +113,7 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 	}
 	exposed.Write(gatewayResponse.Body.Bytes())
 
-	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := runtime.usage.Snapshot()
+	snapshot := dumpUsage(t, runtime)
 	if len(snapshot.Attempts) != 1 || len(snapshot.Requests) != 1 {
 		t.Fatalf("usage was not finalized: %#v", snapshot)
 	}
@@ -125,13 +122,12 @@ func TestSecretCanaryNeverReachesTelemetryPersistenceOrAdminSurfaces(t *testing.
 		t.Fatal(err)
 	}
 	exposed.Write(snapshotJSON)
-	if _, err := runtime.usageExporter.Export(snapshot); err != nil {
+	if _, err := runtime.usageExporter.Export(runtime.usage.History()); err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.usageExporter.Verify(&snapshot); err != nil {
+	if err := runtime.usageExporter.Verify(runtime.usage.History()); err != nil {
 		t.Fatal(err)
 	}
-	runtime.saveUsageCheckpoint()
 
 	metricsToken, err := MetricsToken(cfg)
 	if err != nil {

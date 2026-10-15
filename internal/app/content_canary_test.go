@@ -172,17 +172,13 @@ func TestContentCanaryNeverPersistsOutsideTheResponsePath(t *testing.T) {
 
 	// Force every derivative to disk. Without this the sweep races the
 	// collector and a leak could hide in an unflushed buffer.
-	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	snapshot := runtime.usage.Snapshot()
+	snapshot := dumpUsage(t, runtime)
 	if len(snapshot.Requests) != 2 {
 		t.Fatalf("expected both requests to finalize, got %#v", snapshot)
 	}
-	if _, err := runtime.usageExporter.Export(snapshot); err != nil {
+	if _, err := runtime.usageExporter.Export(runtime.usage.History()); err != nil {
 		t.Fatal(err)
 	}
-	runtime.saveUsageCheckpoint()
 
 	contentCanaries := []string{
 		promptContentCanary, systemContentCanary, toolArgumentsCanary,

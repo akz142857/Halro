@@ -15,7 +15,9 @@ import (
 // Version 2 re-cut the latency histogram: one bucket used to cover 30s to 120s,
 // which is precisely the range a request occupies when the gateway's own
 // deadlines cut it. See usage.LatencyBucketsMillis.
-const RollupVersion = 2
+// Version 3 added the offering dimension, which the dashboard's breakdowns read
+// now that they come from the rollup rather than from a scan of attempts.
+const RollupVersion = 3
 
 // RollupLatencyBuckets is the number of latency histogram buckets a rollup row
 // carries. It mirrors usage.LatencyBucketsMillis; usage asserts the two agree
@@ -33,6 +35,7 @@ const (
 	RollupDimensionProvider       = "provider"
 	RollupDimensionDeployment     = "deployment"
 	RollupDimensionProviderModel  = "provider_model"
+	RollupDimensionOffering       = "offering"
 )
 
 // RollupTotalKey is the dimension key the total row carries. The total is
@@ -82,6 +85,7 @@ var rollupDimensions = map[string]bool{
 	RollupDimensionProvider:       true,
 	RollupDimensionDeployment:     true,
 	RollupDimensionProviderModel:  true,
+	RollupDimensionOffering:       true,
 }
 
 // IsRollupDimension reports whether name is a dimension the rollup stores.

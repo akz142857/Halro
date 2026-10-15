@@ -45,7 +45,13 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 		if err := tx.Bucket(bucketMeta).Put(keyUsageCheckpoint, []byte("legacy-checkpoint")); err != nil {
 			return err
 		}
-		if err := tx.Bucket(bucketUsageCheckpointSegments).Put(usageSegmentKey(1), []byte("legacy-segment")); err != nil {
+		// A schema-35 file still had the segment bucket; this build no longer
+		// creates it, so the fixture puts it back.
+		segments, err := tx.CreateBucketIfNotExists(bucketUsageCheckpointSegments)
+		if err != nil {
+			return err
+		}
+		if err := segments.Put([]byte{0, 0, 0, 0, 0, 0, 0, 1}, []byte("legacy-segment")); err != nil {
 			return err
 		}
 		if err := tx.Bucket(bucketMigrationHistory).Delete(versionKey(36)); err != nil {
@@ -116,17 +122,14 @@ func TestMigration36BackfillsInferenceOnlyAndCreatesRunGovernanceBuckets(t *test
 	if err != nil || gate.FeatureEpoch != 5 || gate.MinimumReaderVersion != "v5" {
 		t.Fatalf("gate=%#v err=%v", gate, err)
 	}
-	if _, _, err := migrated.UsageCheckpoint(); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("stale usage checkpoint survived attribution migration: %v", err)
-	}
+	// The checkpoint this migration cleared is gone for good by the current
+	// schema: migration 41 drops the usage derivatives' old home entirely.
 	if err := migrated.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(bucketUsageCheckpointSegments)
-		if bucket == nil {
-			t.Fatal("usage checkpoint segment bucket is missing")
+		if tx.Bucket(bucketMeta).Get(keyUsageCheckpoint) != nil {
+			t.Fatal("stale usage checkpoint survived the migrations")
 		}
-		key, _ := bucket.Cursor().First()
-		if key != nil {
-			t.Fatalf("stale usage checkpoint segment survived: %q", key)
+		if tx.Bucket(bucketUsageCheckpointSegments) != nil {
+			t.Fatal("the usage checkpoint segment bucket survived the migrations")
 		}
 		return nil
 	}); err != nil {

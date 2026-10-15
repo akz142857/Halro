@@ -15,7 +15,6 @@ function settings(overrides: Partial<UsageSettings> = {}): UsageSettings {
     console_window_days: 90,
     presets: [30, 60, 90, 180],
     min_days: 7,
-    max_days: 90,
     config_file_days: 90,
     config_file_in_effect: true,
     updated_at: "2026-09-01T00:00:00Z",
@@ -27,10 +26,9 @@ function settings(overrides: Partial<UsageSettings> = {}): UsageSettings {
 describe("UsageWindowForm", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  // Shortening the window trims the attempt log on the next export tick. The
-  // confirmation is the whole point of the form: the number alone gives an
-  // operator no reason to expect anything to disappear.
-  it("confirms before shortening, and says what is lost and what is not", async () => {
+  // Neither direction discards anything — every attempt stays in the history
+  // index — so neither asks for a confirmation.
+  it("saves a shorter window without a confirmation", async () => {
     const save = vi.spyOn(api, "updateUsageSettings").mockResolvedValue({
       data: settings({ console_window_days: 30, config_file_in_effect: false, revision: 4 }),
       etag: '"4"',
@@ -40,17 +38,11 @@ describe("UsageWindowForm", () => {
     fireEvent.change(screen.getByLabelText(/窗口长度/), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "保存窗口" }));
 
-    expect(await screen.findByText("缩短窗口会丢弃调用历史")).toBeInTheDocument();
-    expect(screen.getByText(/Parquet 归档仍保留 90 天/)).toBeInTheDocument();
-    expect(save).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "缩短窗口" }));
-    await waitFor(() => expect(save).toHaveBeenCalledWith(30, true, 3));
+    await waitFor(() => expect(save).toHaveBeenCalledWith(30, 3));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  // Lengthening discards nothing, so asking would be a dialog that teaches an
-  // operator to click through dialogs.
-  it("saves a longer window without a confirmation", async () => {
+  it("saves a longer window", async () => {
     const save = vi.spyOn(api, "updateUsageSettings").mockResolvedValue({
       data: settings({ console_window_days: 90, revision: 4 }), etag: '"4"',
     });
@@ -59,36 +51,24 @@ describe("UsageWindowForm", () => {
     fireEvent.change(screen.getByLabelText(/窗口长度/), { target: { value: "90" } });
     fireEvent.click(screen.getByRole("button", { name: "保存窗口" }));
 
-    await waitFor(() => expect(save).toHaveBeenCalledWith(90, false, 3));
-    expect(screen.queryByText("缩短窗口会丢弃调用历史")).not.toBeInTheDocument();
+    await waitFor(() => expect(save).toHaveBeenCalledWith(90, 3));
   });
 
-  // A preset the archive cannot back is not offered. An option that exists only
-  // to be refused by the server is a worse answer than not showing it.
-  it("offers no window longer than the archive keeps", () => {
-    renderWithClient(<UsageWindowForm settings={settings({ console_window_days: 30, max_days: 60 })} />);
+  it("offers every preset and the value in force", () => {
+    renderWithClient(<UsageWindowForm settings={settings({ console_window_days: 45 })} />);
     const options = screen.getAllByRole("option").map((option) => option.textContent);
-    expect(options).toEqual(["30 天", "60 天"]);
+    expect(options).toEqual(["30 天", "45 天", "60 天", "90 天", "180 天"]);
   });
 
-  // A refused save has to be visible. The error renders in the form and the
-  // confirmation is a portal on top of it, so a dialog left open would hide the
-  // one thing the operator needs — and clicking confirm again would look like
-  // the button had stopped working.
-  it("closes the confirmation when the save is refused, so the reason is visible", async () => {
-    const save = vi.spyOn(api, "updateUsageSettings").mockRejectedValue(
-      new Error("revision conflict"),
-    );
+  // A refused save has to be visible in the form.
+  it("shows why a save was refused", async () => {
+    vi.spyOn(api, "updateUsageSettings").mockRejectedValue(new Error("revision conflict"));
     renderWithClient(<UsageWindowForm settings={settings()} />);
 
     fireEvent.change(screen.getByLabelText(/窗口长度/), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "保存窗口" }));
-    fireEvent.click(await screen.findByRole("button", { name: "缩短窗口" }));
 
-    await waitFor(() => expect(save).toHaveBeenCalled());
-    await waitFor(() =>
-      expect(screen.queryByText("缩短窗口会丢弃调用历史")).not.toBeInTheDocument(),
-    );
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
   });
 
   // config.yaml seeds this once. Without the notice, an operator edits the file,

@@ -405,22 +405,34 @@ func validateRestoreStage(
 	}
 	status := ledger.NewStatus()
 	ledgerLog, err := ledger.OpenWithOptions(filepath.Join(stageData, "ledger", "ledger.wal"), status, ledger.Options{ChainKey: ledgerKey})
-	clear(ledgerKey)
 	if err != nil {
+		clear(ledgerKey)
 		return fmt.Errorf("open staged Ledger: %w", err)
 	}
 	chainHead, chainHash, chainVerified := ledgerLog.ChainHead()
 	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
-	aggregate := usage.NewAggregate()
+	// The staged index is the restored instance's own: it is built here, while
+	// the Ledger is replayed for verification anyway, so the restored instance
+	// starts with its history already in place.
+	stagedHistory, aggregate, err := openFreshHistory(filepath.Join(stageData, "history", "history.db"), ledgerKey)
+	clear(ledgerKey)
+	if err != nil {
+		ledgerLog.Close()
+		return fmt.Errorf("create staged usage history: %w", err)
+	}
+	defer stagedHistory.Close()
 	stagedLedgerState := ledger.NewState()
 	watermark, replayErr := ledgerLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
 		if err := stagedLedgerState.Apply(record); err != nil {
 			return err
 		}
-		return aggregate.Apply(record)
+		if err := aggregate.Apply(record); err != nil {
+			return err
+		}
+		return aggregate.FlushIfFull()
 	})
 	closeErr := ledgerLog.Close()
-	if err := errors.Join(replayErr, closeErr); err != nil {
+	if err := errors.Join(replayErr, closeErr, aggregate.Flush()); err != nil {
 		return fmt.Errorf("replay staged Ledger: %w", err)
 	}
 	if watermark != manifest.LedgerWatermark {
@@ -459,8 +471,7 @@ func validateRestoreStage(
 		return err
 	}
 	if _, err := exporter.LoadManifest(); err == nil {
-		snapshot := aggregate.Snapshot()
-		if err := exporter.Verify(&snapshot); err != nil {
+		if err := exporter.Verify(stagedHistory); err != nil {
 			return fmt.Errorf("verify staged Usage: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -616,16 +627,27 @@ func createBackupSnapshotWithLedger(
 	}
 	chainHead, chainHash, chainVerified := snapshotLog.ChainHead()
 	chainSequence, chainOffset := chainHead.Sequence, chainHead.Offset
-	ledgerAggregate := usage.NewAggregate()
+	// The archive is verified against the snapshot it ships, through a
+	// scratch index in the staging directory: the instance's own history.db
+	// may trail the snapshot, and is not archived — a restore rebuilds it.
+	scratchHistory, ledgerAggregate, err := openFreshHistory(filepath.Join(staging, "history.db"), ledgerKey)
+	if err != nil {
+		snapshotLog.Close()
+		return backup.Manifest{}, err
+	}
+	defer scratchHistory.Close()
 	ledgerState := ledger.NewState()
 	replayedWatermark, replayErr := snapshotLog.Replay(ledger.Watermark{}, func(record ledger.Record) error {
 		if err := ledgerState.Apply(record); err != nil {
 			return err
 		}
-		return ledgerAggregate.Apply(record)
+		if err := ledgerAggregate.Apply(record); err != nil {
+			return err
+		}
+		return ledgerAggregate.FlushIfFull()
 	})
 	closeErr := snapshotLog.Close()
-	if err := errors.Join(replayErr, closeErr); err != nil {
+	if err := errors.Join(replayErr, closeErr, ledgerAggregate.Flush()); err != nil {
 		return backup.Manifest{}, err
 	}
 	if replayedWatermark != ledgerWatermark {
@@ -633,40 +655,6 @@ func createBackupSnapshotWithLedger(
 	}
 	if err := metadata.ValidateDeploymentPriceReferences(ledgerState); err != nil {
 		return backup.Manifest{}, fmt.Errorf("validate pricing references before backup: %w", err)
-	}
-	// A stored checkpoint this build cannot read is a position the archive
-	// cannot name, not a reason to refuse the archive. The Usage checkpoint is
-	// a rebuildable derivative of the Ledger, and startup already answers this
-	// exact question that way: restoreUsageAggregate clears both derivatives
-	// and replays the WAL, whatever the reason. Answering it differently here
-	// gave one data directory two verdicts.
-	//
-	// It also made the previous release's own data directory unbackupable at
-	// the moment a backup matters most. The checkpoint payload version moved
-	// 7 -> 8 in v0.5.0, so a v0.4.0 directory reaches this branch on the first
-	// `backup create` after the upgrade — and by then Open has already migrated
-	// the metadata schema past what the v0.4.0 binary will open, so neither
-	// binary could produce a backup. Recording no checkpoint position costs
-	// nothing: metadata.db is archived byte for byte, so a restored copy rebuilds
-	// exactly as the source directory would on its next start.
-	//
-	// A store-level failure stays fatal. That is a broken database rather than
-	// an unreadable derivative, and it is not a state a previous release
-	// legitimately produces.
-	checkpoint, checkpointHead, err := metadata.UsageCheckpoint()
-	if errors.Is(err, boltstore.ErrNotFound) {
-		checkpoint = ledger.Watermark{}
-	} else if err != nil {
-		return backup.Manifest{}, err
-	} else {
-		checkpointAggregate, restoreErr := usage.RestoreCheckpoint(
-			checkpointHead, metadata.UsageCheckpointSegmentPayload)
-		if restoreErr != nil || checkpointAggregate.Snapshot().Watermark != checkpoint {
-			checkpoint = ledger.Watermark{}
-		}
-	}
-	if checkpoint.After(ledgerWatermark) {
-		return backup.Manifest{}, errors.New("usage checkpoint is ahead of the Ledger")
 	}
 	usageManifestVersion := 0
 	descriptorDigest := ""
@@ -691,7 +679,7 @@ func createBackupSnapshotWithLedger(
 		return backup.Manifest{}, err
 	}
 	if loaded, err := exporter.LoadManifest(); err == nil {
-		if err := exporter.Verify(pointerTo(ledgerAggregate.Snapshot())); err != nil {
+		if err := exporter.Verify(scratchHistory); err != nil {
 			return backup.Manifest{}, fmt.Errorf("verify usage before backup: %w", err)
 		}
 		usageManifest = &loaded
@@ -728,8 +716,8 @@ func createBackupSnapshotWithLedger(
 		LedgerChainHeadHash: chainHash, LedgerChainVerified: chainVerified,
 		GovernanceSequence: governanceSummary.Records, GovernanceOffset: governanceSummary.Bytes,
 		GovernanceHeadHash: governanceSummary.LastHash, GovernanceFormatVersion: 1,
-		CheckpointWatermark: checkpoint, UsageManifestVersion: usageManifestVersion,
-		LedgerFeatureEpoch: metadataInfo.LedgerFeatureEpoch, MinimumLedgerReaderVersion: metadataInfo.MinimumLedgerReaderVersion,
+		UsageManifestVersion: usageManifestVersion,
+		LedgerFeatureEpoch:   metadataInfo.LedgerFeatureEpoch, MinimumLedgerReaderVersion: metadataInfo.MinimumLedgerReaderVersion,
 		PricingStateSHA256: pricingBackupState.StateSHA256, PendingIntentSHA256: pricingBackupState.PendingIntentSHA256, PendingIntents: pricingBackupState.PendingIntents,
 		MasterKeyFingerprint: masterFingerprint, Build: buildinfo.Current(),
 		KeySlotDescriptorSHA256: descriptorDigest,

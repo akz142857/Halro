@@ -119,7 +119,7 @@ out. Important groups are:
 - `admin`: session/idle limits, login rate, external origin, setup-token file,
   and setup-token TTL;
 - `usage`: timezone, WAL batching, checkpoint/Parquet cadence, retention, and the
-  console window's initial length (`console_window_days`, owned by Settings →
+  console's initial default range (`console_window_days`, owned by Settings →
   Instance after the first start);
 - `gateway`: route/attempt/stream deadlines, active probe interval, deferred
   response workers, and failure capture;
@@ -536,83 +536,51 @@ the HTTP metrics and the audit log account for those.
 
 #### How far back the console pages
 
-`usage.console_window_days` (default 30) bounds the attempt log and the
-failed-request list. **The file seeds it once and has no say afterwards**: the
-value lives in the metadata store and is changed under Settings → Instance,
-where it is versioned, audited, and — because shortening it discards history —
-confirmed. An operator who edits the file on a running install and restarts will
-find the console still showing what they set in the console, which is the point.
+Every settled attempt and every finished request is kept in the usage history
+index, `data/history/history.db`, for as long as the instance runs. The index
+is a derivative of the Ledger: it is written in batches off the request path,
+each batch together with the Ledger position it reaches, and it is rebuilt from
+the Ledger whenever it cannot be trusted (another format version, another key,
+or a position past the Ledger's head). Each row carries an HMAC, so a row
+edited or moved on disk is refused rather than reported.
 
-It is a different setting from `usage.retention_days` (default 90), and the
-difference is worth knowing before either is changed:
+`usage.console_window_days` (default 30) is only the console's **default
+range**: how many days the attempt log and the failed-request list show before
+the operator asks for an older range. It discards nothing and costs no memory,
+so changing it needs no confirmation. **The file seeds it once and has no say
+afterwards**: the value lives in the metadata store and is changed under
+Settings → Instance, where it is versioned and audited.
 
-| Setting | Bounds | Cost of a long value |
+It is a different setting from `usage.retention_days` (default 90), which
+bounds the Parquet archive on disk and nothing else:
+
+| Setting | Decides | Cost of a long value |
 | --- | --- | --- |
-| `usage.console_window_days` | The in-memory aggregate the two console tabs read | Memory, about 1 KB per attempt, plus the same again for the checkpoint on disk |
-| `usage.retention_days` | The Parquet archive on disk | Disk only; partitions are columnar and one day is measured in kilobytes |
+| `usage.console_window_days` | The lists' default range | None |
+| `usage.retention_days` | How long Parquet partitions are kept | Disk only |
 
-Both have a floor of 7 days, and it is the same floor: the console window may
-not go below seven days, and it may not exceed the archive, so an archive
-shorter than that leaves the pair with no value that satisfies both. A file that
-sets a short retention and never mentions the window gets a window equal to the
-retention rather than the usual thirty days.
+Usage history therefore no longer sizes the container. Memory for usage is the
+requests in flight plus one pending batch (at most 2000 rows or 250 ms of
+traffic); the index itself lives on disk and in the page cache, which the
+kernel can reclaim under pressure. The accounting Ledger's own replayed state
+still grows with history until the Ledger snapshot lands
+(`docs/todo/memory-bounded-redesign.zh-CN.md`, phase P2); size the container
+against `docs/verification/memory-bounded-baseline.zh-CN.md` until then.
 
-So a long archive is cheap and a long console window is not. Binding them to one
-value would make an operator who needs ninety days of archive pay for it in
-memory; they are separate for that reason. The console window must be at least 7
-days, because the overview's chart reads seven days out of the same aggregate,
-and no longer than the archive, because the screen should not promise history the
-archive no longer holds.
+A start resumes the index from its stored position and replays only the Ledger
+after it, off the start path: readiness does not wait for it. The first start
+after an upgrade, a restore without `history.db`, or a `halro usage
+rebuild-summary` replays the whole Ledger in the background; while it runs,
+`halro_usage_history_building` is 1 and the console answers from what has been
+indexed so far.
 
-**Size it against your throughput, not against how much history you would like.**
-An attempt costs about a kilobyte twice over — once resident, because the
-console reads the aggregate out of memory, and once on disk, because the
-checkpoint holds the same records so a restart does not have to replay the whole
-WAL to get them back:
-
-| Throughput | Attempts in a 30-day window | Resident memory | Checkpoint on disk |
-| --- | --- | --- | --- |
-| 0.1/s | 260 thousand | ~0.27 GB | 0.28 GB |
-| 1/s | 2.6 million | ~2.7 GB | 2.8 GB |
-| 10/s | 26 million | ~27 GB | 27.1 GB |
-| 100/s | 260 million | ~272 GB | 271 GB |
-
-**Memory is the binding constraint, and it is a floor rather than a spike.** The
-aggregate is resident for as long as the process runs, so an instance at ten
-requests a second wants tens of gigabytes of RAM for a thirty-day window whether
-or not anything is being written. Size the container against the resident column
-and shorten the window until it fits; the archive keeps the history either way,
-and `halro usage` can export it. The shipped Kubernetes manifests set a memory
-limit for a small install — raise it deliberately rather than discovering the
-ceiling as an OOM kill.
-
-What a checkpoint *tick* costs is no longer part of that decision. The
-checkpoint is a head plus a series of immutable record segments, and a tick
-rewrites the head and the one open segment — bounded at four mebibytes, whatever
-the window's length — so its cost follows what arrived since the last tick, not
-what the window holds. Three metrics say whether that is still true:
-`halro_usage_checkpoint_bytes` is the whole checkpoint,
-`halro_usage_checkpoint_open_segment_bytes` is what a tick rewrites, and
-`halro_usage_checkpoint_segments` is how many segments hold it. The first two
-converging would mean a tick is writing the window again.
-
-The one exception is the first checkpoint after a cold start with no usable
-checkpoint — an upgrade that changed the format, a rebuild, a `halro usage
-rebuild-summary`. That one pass encodes the whole window, in segments, and every
-tick after it is incremental again.
-
-Shortening the window is the one destructive change in that screen. What falls
-outside it is trimmed out of memory on the next export tick and the two tabs can
-no longer reach it; the records themselves stay in the Parquet archive, and
-`halro usage` can still export them, but lengthening the window again does not
-bring them back — that takes a rebuild by replaying the ledger. The console asks
-for an explicit confirmation on the way down and none on the way up.
-
-The window is trimmed on the Parquet export tick, and only up to what that
-export has actually written. If the export stalls, the trimming stalls with it
-and the aggregate grows — deliberately: an aggregate that grows is a problem,
-one that discards history the archive never received is a defect. Nothing is
-lost to the trim that is not already in a partition.
+Six metrics say how the index is keeping up: `halro_usage_history_pending_records`
+(rows waiting for the next batch), `halro_usage_history_watermark_sequence` (how
+far the index reaches; compare it with the Ledger's), and the write-cost counters
+`halro_usage_history_commits_total`, `halro_usage_history_commit_seconds_total`
+and `halro_usage_history_page_writes_total`, with
+`halro_usage_history_flush_failures_total` counting batches that had to be
+retried.
 
 #### Keeping the ledger from being one file that only grows
 
@@ -627,7 +595,7 @@ rolled off whole: renamed to `ledger-<N>.wal`, recorded in
 `<data_dir>/ledger/segments.json`, and replaced by an empty successor whose
 first frame continues the same hash chain. On a later maintenance tick, once
 everything in that generation has reached both the Parquet archive and the
-durable usage checkpoint, `ledger.seal.compress` replaces it with
+usage history index, `ledger.seal.compress` replaces it with
 `ledger-<N>.seg.gz` — measured at 5.4x on a real `ledger.wal`, with the
 plaintext length and checksum verified before anything points at the compressed
 copy.
@@ -848,12 +816,10 @@ Existing databases are initialized with `zh-CN`; older administrator records
 without a locale are interpreted as `system`.
 
 The console window is metadata in the same sense. `GET`/`PUT
-/admin/api/v1/settings/usage` read and change how far back the attempt log and
-the failed-request list can page, with the same CSRF, `If-Match` and audit
-discipline. A `PUT` that shortens the window is refused with
-`console_window_trim_unacknowledged` unless it carries `acknowledge_trim`,
-because the trim discards attempt history the moment the next export tick runs;
-lengthening it needs no acknowledgement, because nothing is lost by it.
+/admin/api/v1/settings/usage` read and change the default range of the attempt
+log and the failed-request list, with the same CSRF, `If-Match` and audit
+discipline. Neither direction discards anything, so neither needs an
+acknowledgement.
 
 ### Time zones
 

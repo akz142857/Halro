@@ -75,11 +75,11 @@ func TestTodaySpansTheWholeDSTDay(t *testing.T) {
 			if hours := int(end.Sub(start).Hours()); hours != testCase.hours {
 				t.Fatalf("fixture day is %d hours, want %d", hours, testCase.hours)
 			}
-			aggregate := NewAggregate()
+			aggregate := newTestAggregate(t)
 			for hour := 0; hour < testCase.hours; hour++ {
 				settledAt(t, aggregate, uint64(hour+1), start.Add(time.Duration(hour)*time.Hour), "2026-10-25", 1)
 			}
-			dashboard := aggregate.Dashboard(start.Add(time.Hour), Period{ID: "2026-10-25", TimezoneVersion: 1})
+			dashboard := dashboardOf(t, aggregate, start.Add(time.Hour), Period{ID: "2026-10-25", TimezoneVersion: 1})
 			if dashboard.Today.Attempts != int64(testCase.hours) {
 				t.Fatalf("today counted %d attempts over a %d hour day", dashboard.Today.Attempts, testCase.hours)
 			}
@@ -93,7 +93,7 @@ func TestTodaySpansTheWholeDSTDay(t *testing.T) {
 // the same call in a different day from the one that paid for it.
 func TestTodayFollowsTheStampNotTheCompletionInstant(t *testing.T) {
 	start, end := localDay(t, "Asia/Shanghai", time.Date(2026, time.August, 6, 3, 0, 0, 0, time.UTC))
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	// Admitted on the 6th, settled three minutes into the 7th.
 	settledAt(t, aggregate, 1, end.Add(2*time.Minute), "2026-08-06", 1)
 	// Admitted on the 7th, settled immediately — inside the 7th, not the 6th.
@@ -101,11 +101,11 @@ func TestTodayFollowsTheStampNotTheCompletionInstant(t *testing.T) {
 	// An ordinary call in the middle of the 6th.
 	settledAt(t, aggregate, 3, start.Add(12*time.Hour), "2026-08-06", 1)
 
-	sixth := aggregate.Dashboard(end, Period{ID: "2026-08-06", TimezoneVersion: 1})
+	sixth := dashboardOf(t, aggregate, end, Period{ID: "2026-08-06", TimezoneVersion: 1})
 	if sixth.Today.Attempts != 2 {
 		t.Fatalf("the 6th counted %d attempts, want the two it was charged for", sixth.Today.Attempts)
 	}
-	seventh := aggregate.Dashboard(end, Period{ID: "2026-08-07", TimezoneVersion: 1})
+	seventh := dashboardOf(t, aggregate, end, Period{ID: "2026-08-07", TimezoneVersion: 1})
 	if seventh.Today.Attempts != 1 {
 		t.Fatalf("the 7th counted %d attempts, want 1", seventh.Today.Attempts)
 	}
@@ -116,12 +116,12 @@ func TestTodayFollowsTheStampNotTheCompletionInstant(t *testing.T) {
 // different days, so the version is part of the identity.
 func TestTodayDistinguishesTimezoneVersions(t *testing.T) {
 	start, _ := localDay(t, "Asia/Shanghai", time.Date(2026, time.August, 6, 3, 0, 0, 0, time.UTC))
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	settledAt(t, aggregate, 1, start.Add(time.Hour), "2026-08-06", 1)
 	settledAt(t, aggregate, 2, start.Add(2*time.Hour), "2026-08-06", 2)
 
-	first := aggregate.Dashboard(start.Add(3*time.Hour), Period{ID: "2026-08-06", TimezoneVersion: 1})
-	second := aggregate.Dashboard(start.Add(3*time.Hour), Period{ID: "2026-08-06", TimezoneVersion: 2})
+	first := dashboardOf(t, aggregate, start.Add(3*time.Hour), Period{ID: "2026-08-06", TimezoneVersion: 1})
+	second := dashboardOf(t, aggregate, start.Add(3*time.Hour), Period{ID: "2026-08-06", TimezoneVersion: 2})
 	if first.Today.Attempts != 1 || second.Today.Attempts != 1 {
 		t.Fatalf("versions were merged: v1=%d v2=%d", first.Today.Attempts, second.Today.Attempts)
 	}

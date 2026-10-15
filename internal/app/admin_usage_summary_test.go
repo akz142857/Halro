@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -104,7 +103,7 @@ func getSummary(t *testing.T, runtime *Runtime, cookie *http.Cookie, path string
 // screens has no way to tell which is right if they disagree, so they must not.
 func TestUsageSummaryAgreesWithDashboardForToday(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 2)
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 
 	summary := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day")
 	dashboardResponse := authenticatedAdminGet(t, runtime, cookie, "/admin/api/v1/dashboard")
@@ -144,69 +143,13 @@ func TestUsageSummaryAgreesWithDashboardForToday(t *testing.T) {
 	}
 }
 
-// The rollup reaches disk on a checkpoint tick, up to a minute behind. A read
-// that only looked at disk would report a smaller number than the dashboard
-// beside it for that minute, with nothing to explain the gap.
-func TestUsageSummaryIncludesTheUnpersistedIncrement(t *testing.T) {
+// The rollup reaches disk in batches. The summary writes the pending batch
+// before it reads, so it never reports less than the dashboard beside it.
+func TestUsageSummaryIncludesTheLatestRequest(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 1)
-	// Deliberately no saveUsageCheckpoint: nothing has been written yet.
-	if runtime.usage.PendingRollupRows() == 0 {
-		t.Fatal("fixture wrote the increment before the assertion could test it")
-	}
 	summary := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day")
 	if summary.Totals.Attempts != 1 {
-		t.Fatalf("summary hid work that has not been checkpointed yet: %#v", summary.Totals)
-	}
-}
-
-func TestUsageSummaryWaitsForInFlightCheckpointOutcome(t *testing.T) {
-	runtime, cookie := summaryRuntime(t, 1)
-	checkpointTaken := make(chan struct{})
-	releaseCheckpoint := make(chan struct{})
-	checkpointDone := make(chan error, 1)
-	go runtime.usage.WithRollupCheckpoint(func() {
-		snapshot, err := runtime.usage.TakeCheckpoint()
-		if err != nil {
-			checkpointDone <- err
-			close(checkpointTaken)
-			return
-		}
-		close(checkpointTaken)
-		<-releaseCheckpoint
-		checkpointDone <- runtime.usage.ReturnCheckpoint(snapshot)
-	})
-	<-checkpointTaken
-
-	type result struct {
-		response summaryResponse
-		status   int
-		err      error
-	}
-	requestStarted := make(chan struct{})
-	summaryDone := make(chan result, 1)
-	go func() {
-		request := httptest.NewRequest(http.MethodGet, "/admin/api/v1/usage/summary?granularity=day", nil)
-		request.AddCookie(cookie)
-		recorder := httptest.NewRecorder()
-		close(requestStarted)
-		runtime.adminRouter().ServeHTTP(recorder, request)
-		var body summaryResponse
-		err := json.Unmarshal(recorder.Body.Bytes(), &body)
-		summaryDone <- result{response: body, status: recorder.Code, err: err}
-	}()
-	<-requestStarted
-	select {
-	case premature := <-summaryDone:
-		t.Fatalf("summary crossed an unresolved checkpoint boundary: status=%d body=%#v err=%v", premature.status, premature.response, premature.err)
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseCheckpoint)
-	if err := <-checkpointDone; err != nil {
-		t.Fatal(err)
-	}
-	completed := <-summaryDone
-	if completed.err != nil || completed.status != http.StatusOK || completed.response.Totals.Attempts != 1 {
-		t.Fatalf("summary after checkpoint return: status=%d attempts=%d err=%v", completed.status, completed.response.Totals.Attempts, completed.err)
+		t.Fatalf("summary hid work that has not been written yet: %#v", summary.Totals)
 	}
 }
 
@@ -232,7 +175,7 @@ func TestUsageSummaryRefusesGroupByCombinedWithAFilter(t *testing.T) {
 // provider served no requests".
 func TestUsageSummaryOmitsRequestCountsOnProviderGroups(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 1)
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 
 	byProject := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?group_by=project")
 	if len(byProject.Groups) != 1 || byProject.Groups[0].Requests == nil || *byProject.Groups[0].Requests != 1 {
@@ -253,7 +196,7 @@ func TestUsageSummaryOmitsRequestCountsOnProviderGroups(t *testing.T) {
 // request identity was picked — 26 attempts and, beside them, no requests.
 func TestUsageSummaryTotalsSurviveAGroupingWithoutRequestIdentity(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 2)
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 
 	ungrouped := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day")
 	byProvider := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?granularity=day&group_by=provider")
@@ -285,7 +228,7 @@ func TestUsageSummaryTotalsSurviveAGroupingWithoutRequestIdentity(t *testing.T) 
 // for it, with the true leader hidden inside __other__.
 func TestUsageSummaryRanksTheBreakdownBeforeFoldingIt(t *testing.T) {
 	runtime, cookie := summaryRuntime(t, 1)
-	runtime.saveUsageCheckpoint()
+	syncUsageHistory(t, runtime)
 
 	byCost := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?group_by=project&sort=cost")
 	byTokens := getSummary(t, runtime, cookie, "/admin/api/v1/usage/summary?group_by=project&sort=tokens&order=asc")

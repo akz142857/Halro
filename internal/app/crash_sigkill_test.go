@@ -170,11 +170,16 @@ func TestSIGKILLLeavesEveryReportedRequestRecoverable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after the kill: %v", err)
 	}
-	recovered := settledRequestIDs(t, runtime)
+	// The usage history is rebuilt off the start path; CatchUp waits for it.
+	if err := runtime.usageCollector.CatchUp(context.Background()); err != nil {
+		runtime.Close()
+		t.Fatalf("usage history catch-up after the kill: %v", err)
+	}
 	for _, requestID := range reported {
-		if _, found := recovered[requestID]; !found {
+		detail, found, err := runtime.usage.RequestDetail(requestID)
+		if err != nil || !found || len(detail.Attempts) == 0 {
 			runtime.Close()
-			t.Fatalf("request %s was reported settled and is absent after recovery", requestID)
+			t.Fatalf("request %s was reported settled and is absent after recovery (found=%v err=%v)", requestID, found, err)
 		}
 	}
 	if err := runtime.Close(); err != nil {
@@ -271,23 +276,4 @@ func runUntilKilled(t *testing.T, root string) []string {
 		t.Fatalf("the child was not killed by SIGKILL: %v", exitErr)
 	}
 	return reported
-}
-
-// settledRequestIDs reads back which request IDs the recovered instance holds a
-// terminal record for.
-func settledRequestIDs(t *testing.T, runtime *Runtime) map[string]struct{} {
-	t.Helper()
-	snapshot := runtime.usage.Snapshot()
-	found := make(map[string]struct{}, len(snapshot.Attempts))
-	for _, attempt := range snapshot.Attempts {
-		found[attempt.RequestID] = struct{}{}
-	}
-	for _, summary := range snapshot.Requests {
-		found[summary.RequestID] = struct{}{}
-	}
-	if len(found) == 0 {
-		t.Fatalf("the recovered instance holds no attempts at all (%d attempts, %d requests)",
-			len(snapshot.Attempts), len(snapshot.Requests))
-	}
-	return found
 }

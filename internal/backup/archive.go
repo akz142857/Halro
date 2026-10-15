@@ -42,7 +42,6 @@ type Manifest struct {
 	Encrypted                  bool                   `json:"encrypted"`
 	Metadata                   boltstore.MetadataInfo `json:"metadata"`
 	LedgerWatermark            ledger.Watermark       `json:"ledger_watermark"`
-	CheckpointWatermark        ledger.Watermark       `json:"checkpoint_watermark"`
 	UsageManifestVersion       int                    `json:"usage_manifest_version"`
 	LedgerFeatureEpoch         uint8                  `json:"ledger_feature_epoch,omitempty"`
 	MinimumLedgerReaderVersion string                 `json:"minimum_ledger_reader_version,omitempty"`
@@ -75,7 +74,6 @@ type CreateOptions struct {
 	Files                      []SourceFile
 	Metadata                   boltstore.MetadataInfo
 	LedgerWatermark            ledger.Watermark
-	CheckpointWatermark        ledger.Watermark
 	UsageManifestVersion       int
 	LedgerFeatureEpoch         uint8
 	MinimumLedgerReaderVersion string
@@ -145,7 +143,6 @@ func Create(options CreateOptions) (Manifest, error) {
 		FormatVersion: formatVersion, BackupID: backupID,
 		CreatedAt: options.Now().UTC(), Encrypted: true,
 		Metadata: options.Metadata, LedgerWatermark: options.LedgerWatermark,
-		CheckpointWatermark:  options.CheckpointWatermark,
 		UsageManifestVersion: options.UsageManifestVersion,
 		LedgerFeatureEpoch:   options.LedgerFeatureEpoch, MinimumLedgerReaderVersion: options.MinimumLedgerReaderVersion,
 		LedgerChainHeadSequence: options.LedgerChainHeadSequence, LedgerChainHeadOffset: options.LedgerChainHeadOffset,
@@ -293,7 +290,6 @@ func Verify(archivePath string, backupKey []byte) (Manifest, error) {
 		manifest.BackupID == "" || manifest.CreatedAt.IsZero() ||
 		manifest.Metadata.SchemaVersion == 0 ||
 		manifest.Metadata.TxID == 0 ||
-		manifest.CheckpointWatermark.After(manifest.LedgerWatermark) ||
 		!validFingerprint(manifest.MasterKeyFingerprint) {
 		return Manifest{}, errors.New("backup manifest is invalid")
 	}

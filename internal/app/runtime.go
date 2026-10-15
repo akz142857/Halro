@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -393,19 +394,19 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		secretVault.Close()
 		return fail(err)
 	}
-	usageAggregate, usageWatermark, err := restoreUsageAggregate(metadata, ledgerHead, logger)
+	usageHistory, usageAggregate, err := openUsageHistory(cfg, ledgerKey, ledgerHead, logger)
 	if err != nil {
 		ledgerLog.Close()
 		metadata.Close()
 		secretVault.Close()
 		return fail(err)
 	}
-	if _, err := ledgerLog.Replay(usageWatermark, usageAggregate.Apply); err != nil {
-		ledgerLog.Close()
-		metadata.Close()
-		secretVault.Close()
-		return fail(fmt.Errorf("replay usage aggregate: %w", err))
-	}
+	closeUsageHistory := true
+	defer func() {
+		if closeUsageHistory {
+			usageHistory.Close()
+		}
+	}()
 	usageExporter, err := usage.NewExporterWithOptions(cfg.UsagePath(), usage.Options{Format: cfg.Usage.ExportFormat})
 	if err != nil {
 		ledgerLog.Close()
@@ -930,29 +931,26 @@ func OpenWithOptions(ctx context.Context, cfg config.Config, logger *slog.Logger
 		return fail(fmt.Errorf("initialize usage settings: %w", err))
 	}
 	runtime.usageSettings.Store(&usageSettings)
-	// The window is stored, the archive's retention is in the file, and the two
-	// can be edited independently — so the invariant they are validated against
-	// at write time can be broken afterwards by lowering retention alone. Say
-	// so rather than letting the console quietly page further back than the
-	// archive can rebuild. Not fatal: the records the console is showing are
-	// real, and refusing to start over a screen would be a worse trade than
-	// naming the discrepancy and letting the operator close it.
-	if retention := cfg.Usage.RetentionDays; retention >= 1 && usageSettings.ConsoleWindowDays > retention {
-		logger.Warn("the console window is longer than the archive it is bounded by",
-			"console_window_days", usageSettings.ConsoleWindowDays, "retention_days", retention,
-			"consequence", "the console can page back further than the archive can rebuild after a restart",
-			"remedy", "shorten the window under Settings -> Instance, or raise usage.retention_days")
-	}
 	cleanupAdminSessions = false
+	closeUsageHistory = false
 	backgroundContext, backgroundCancel := context.WithCancel(context.Background())
 	runtime.backgroundCtx = backgroundContext
 	runtime.backgroundCancel = backgroundCancel
 	runtime.alerts.SetObserver(runtime.auditAlertDelivery)
 	runtime.alerts.Start()
-	runtime.backgroundWait.Add(10)
+	runtime.backgroundWait.Add(11)
 	go func() {
 		defer runtime.backgroundWait.Done()
 		runtime.usageCollector.Run(backgroundContext)
+	}()
+	// The index resumes from its own watermark. Replaying the suffix happens
+	// here rather than on the start path, so a long gap — the first start
+	// after an upgrade builds the whole index — does not hold back ready.
+	go func() {
+		defer runtime.backgroundWait.Done()
+		if err := runtime.usageCollector.Build(backgroundContext); err != nil && backgroundContext.Err() == nil {
+			runtime.logger.Warn("usage history catch-up failed; it is retried on the next maintenance tick", "error", err)
+		}
 	}()
 	go func() {
 		defer runtime.backgroundWait.Done()
@@ -1098,73 +1096,54 @@ func restoreGovernanceState(metadata *boltstore.Store, governanceLog *governance
 	return state, nil
 }
 
-// head is the watermark the ledger actually replayed to. A checkpoint that
-// claims to have consumed more of the WAL than the WAL contains describes a
-// log that has since shrunk, and resuming from it would seek past the real
-// data and land mid-frame on whatever is written next — a corruption reported
-// minutes later, far from its cause. Rebuilding from scratch is always safe:
-// the aggregate is a derivative, and the WAL is the authority.
+// openUsageHistory opens the usage history index and resumes the aggregate
+// from it.
 //
-// The daily rollup is discarded with it, always. The two are written in one
-// transaction and describe the same prefix of the WAL, so keeping one while
-// the other rebuilds from zero would count every stored row a second time —
-// silently, because a replay reports no error. That is also why a reset
-// failure refuses the start instead of degrading: serving doubled totals is
-// worse than not serving.
-func restoreUsageAggregate(
-	store *boltstore.Store,
+// The index is a derivative of the Ledger, so every doubt about it ends in a
+// rebuild rather than a refusal to start: another format version or another
+// key (OpenHistory empties it), unreadable state, or a watermark past the
+// Ledger head — an index that claims more of the WAL than the WAL holds
+// describes a log that has since shrunk, and resuming from it would seek past
+// the real data. Rows and the watermark they describe are written in one
+// transaction, so an index that is merely behind is resumed, never doubled.
+func openUsageHistory(
+	cfg config.Config,
+	ledgerKey []byte,
 	head ledger.Watermark,
 	logger *slog.Logger,
-) (*usage.Aggregate, ledger.Watermark, error) {
-	aggregate, watermark, reason := loadUsageCheckpoint(store, head)
+) (*usage.HistoryStore, *usage.Aggregate, error) {
+	historyKey, err := vault.DeriveHistoryHMACKey(ledgerKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer clear(historyKey)
+	if err := os.MkdirAll(filepath.Dir(cfg.HistoryPath()), 0o700); err != nil {
+		return nil, nil, fmt.Errorf("create usage history directory: %w", err)
+	}
+	store, rebuilt, err := usage.OpenHistory(cfg.HistoryPath(), historyKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rebuilt {
+		logger.Warn("usage history rebuilt from the ledger", "reason", "format version or key changed")
+	}
+	aggregate, err := usage.RestoreAggregate(store)
+	reason := ""
+	switch {
+	case err != nil:
+		reason = fmt.Sprintf("usage history state unreadable: %v", err)
+	case aggregate.Watermark().After(head):
+		reason = "usage history is ahead of the ledger head"
+	}
 	if reason == "" {
-		return aggregate, watermark, nil
+		return store, aggregate, nil
 	}
-	logger.Warn("usage derivatives rebuilt from the ledger", "reason", reason)
-	if err := store.ResetUsageDerivatives(); err != nil {
-		return nil, ledger.Watermark{}, fmt.Errorf("reset usage derivatives: %w", err)
+	logger.Warn("usage history rebuilt from the ledger", "reason", reason)
+	if err := store.Reset(); err != nil {
+		store.Close()
+		return nil, nil, fmt.Errorf("reset usage history: %w", err)
 	}
-	return usage.NewAggregate(), ledger.Watermark{}, nil
-}
-
-// loadUsageCheckpoint returns the restored aggregate, or the reason it cannot
-// be trusted. Every rejection path names itself so the log says which one fired
-// rather than only that something was ignored.
-func loadUsageCheckpoint(store *boltstore.Store, head ledger.Watermark) (*usage.Aggregate, ledger.Watermark, string) {
-	watermark, headPayload, err := store.UsageCheckpoint()
-	if errors.Is(err, boltstore.ErrNotFound) {
-		return nil, ledger.Watermark{}, "no usage checkpoint"
-	}
-	if err != nil {
-		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint unreadable: %v", err)
-	}
-	aggregate, err := usage.RestoreCheckpoint(headPayload, store.UsageCheckpointSegmentPayload)
-	if err != nil {
-		return nil, ledger.Watermark{}, fmt.Sprintf("usage checkpoint rejected: %v", err)
-	}
-	if aggregate.Snapshot().Watermark != watermark {
-		return nil, ledger.Watermark{}, "usage checkpoint envelope does not match its payload"
-	}
-	if watermark.After(head) {
-		return nil, ledger.Watermark{}, "usage checkpoint is ahead of the ledger head"
-	}
-	rollup, err := store.UsageRollupState()
-	if errors.Is(err, boltstore.ErrNotFound) {
-		return nil, ledger.Watermark{}, "usage rollup state is missing"
-	}
-	if err != nil {
-		return nil, ledger.Watermark{}, fmt.Sprintf("usage rollup state unreadable: %v", err)
-	}
-	if rollup.Version != domain.RollupVersion {
-		return nil, ledger.Watermark{}, fmt.Sprintf(
-			"usage rollup version %d is not %d", rollup.Version, domain.RollupVersion)
-	}
-	// Equality, not ordering: a rollup that lags its checkpoint would have the
-	// gap replayed into rows that already counted it.
-	if rollup.Watermark != watermark {
-		return nil, ledger.Watermark{}, "usage rollup and checkpoint describe different ledger positions"
-	}
-	return aggregate, watermark, ""
+	return store, usage.NewAggregate(store), nil
 }
 
 func (r *Runtime) runUsageMaintenance(ctx context.Context) {
@@ -1175,7 +1154,8 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 	for {
 		select {
 		case <-checkpointTicker.C:
-			r.saveUsageCheckpoint()
+			r.catchUpUsageHistory()
+			r.advanceLedgerChainCheckpoint()
 			r.saveTokenGuardCheckpoint()
 			// Settles the stored record once a scheduled timezone change is
 			// due. The resolver already reports the new zone from the effective
@@ -1186,13 +1166,8 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			}
 		case <-parquetTicker.C:
 			r.exportUsageParquet()
-			// After the export, never before: the trim is bounded by how far
-			// the export has got, and reading that watermark before writing it
-			// would hold the window one tick behind for no reason.
-			r.pruneUsageWindow()
-			// And the archive last, so a partition is only ever removed after
-			// the console window that might still have been reading it has
-			// already moved past.
+			// After the export, so a partition is only ever removed once its
+			// successor has been written.
 			r.pruneUsageArchive()
 			// Retention is swept on the same tick rather than on a timer of its
 			// own: this store's promise is that captured caller material is
@@ -1207,7 +1182,6 @@ func (r *Runtime) runUsageMaintenance(ctx context.Context) {
 			r.sealLedgerGeneration()
 			r.compactLedgerSegments()
 		case <-ctx.Done():
-			r.saveUsageCheckpoint()
 			r.saveTokenGuardCheckpoint()
 			r.exportUsageParquet()
 			// A process whose uptime never reaches one export interval — a
@@ -1230,73 +1204,13 @@ func (r *Runtime) saveTokenGuardCheckpoint() {
 	}
 }
 
-func (r *Runtime) saveUsageCheckpoint() {
+// catchUpUsageHistory closes any gap the collector opened by dropping live
+// records under load, by replaying them from the Ledger into the index.
+func (r *Runtime) catchUpUsageHistory() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.usageCollector.CatchUp(ctx); err != nil {
-		r.logger.Warn("usage checkpoint catch-up failed", "error", err)
-		return
-	}
-	r.usage.WithRollupCheckpoint(r.saveUsageCheckpointCoordinated)
-}
-
-// saveUsageCheckpointCoordinated runs while the aggregate's rollup view is
-// exclusively held. That lock deliberately spans TakeCheckpoint, the bbolt
-// transaction, and Commit/Return: a summary can therefore observe either the
-// old stored rows plus the old pending increment, or the new stored rows plus
-// the new increment, never the drained gap or both copies.
-func (r *Runtime) saveUsageCheckpointCoordinated() {
-	snapshot, err := r.usage.TakeCheckpoint()
-	if err != nil {
-		r.logger.Warn("usage checkpoint encode failed", "error", err)
-		return
-	}
-	// An empty round means nothing has happened since the last one — no new
-	// records, no increment, nothing the window has trimmed past. Writing it
-	// anyway would fsync byte-identical bytes every interval for the life of an
-	// idle instance.
-	if len(snapshot.Head) == 0 {
-		return
-	}
-	// TakeCheckpoint drained the rollup increment, so every path from here that
-	// does not persist it has to hand it back. Dropping it would leave those
-	// events counted in no stored row and in no later increment.
-	if snapshot.Watermark.Sequence == 0 {
-		r.returnUsageCheckpoint(snapshot)
-		return
-	}
-	if err := r.store.PutUsageCheckpoint(
-		snapshot.Watermark, snapshot.Head, usageCheckpointSegments(snapshot),
-		snapshot.RemovedSegments, domain.RollupVersion, snapshot.Rollup,
-	); err != nil {
-		r.logger.Warn("usage checkpoint save failed", "error", err)
-		r.returnUsageCheckpoint(snapshot)
-		return
-	}
-	// Only now does the aggregate treat those segments as stored. A write that
-	// failed above leaves it proposing the same round again on the next tick,
-	// which is why nothing has to be unwound but the increment.
-	r.usage.CommitCheckpoint(snapshot)
-	r.advanceLedgerChainCheckpoint()
-}
-
-// usageCheckpointSegments hands the round's segments to the store in its own
-// terms. The two types are deliberately separate: the store persists opaque
-// payloads addressed by id and has no business knowing what a segment holds.
-func usageCheckpointSegments(snapshot usage.CheckpointSnapshot) []boltstore.UsageCheckpointSegment {
-	if len(snapshot.Segments) == 0 {
-		return nil
-	}
-	segments := make([]boltstore.UsageCheckpointSegment, 0, len(snapshot.Segments))
-	for _, segment := range snapshot.Segments {
-		segments = append(segments, boltstore.UsageCheckpointSegment{ID: segment.ID, Payload: segment.Payload})
-	}
-	return segments
-}
-
-func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
-	if err := r.usage.ReturnCheckpoint(snapshot); err != nil {
-		r.logger.Error("usage rollup increment could not be restored", "error", err)
+		r.logger.Warn("usage history catch-up failed", "error", err)
 	}
 }
 
@@ -1305,8 +1219,8 @@ func (r *Runtime) returnUsageCheckpoint(snapshot usage.CheckpointSnapshot) {
 // whatever the last restart saw, so an instance up for a month protected only
 // the frames written before it started: everything since could be truncated
 // back to that point and still reconcile cleanly on the next boot. Riding the
-// usage checkpoint's ticker bounds that window to one interval and costs a
-// small bbolt write on a path that already does a larger one.
+// checkpoint ticker bounds that window to one interval for a small bbolt
+// write.
 func (r *Runtime) advanceLedgerChainCheckpoint() {
 	head, hash, ok := r.ledger.ChainHead()
 	if !ok {
@@ -1329,13 +1243,11 @@ func (r *Runtime) advanceLedgerChainCheckpoint() {
 }
 
 func (r *Runtime) exportUsageParquet() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := r.usageCollector.CatchUp(ctx); err != nil {
-		r.logger.Warn("usage parquet catch-up failed", "error", err)
+	if err := r.usage.Flush(); err != nil {
+		r.logger.Warn("usage parquet export skipped; history write failed", "error", err)
 		return
 	}
-	if _, err := r.usageExporter.Export(r.usage.Snapshot()); err != nil {
+	if _, err := r.usageExporter.Export(r.usage.History()); err != nil {
 		r.logger.Warn("usage parquet export failed", "error", err)
 	}
 }
@@ -1570,6 +1482,10 @@ func (r *Runtime) Close() error {
 		r.clearSetupToken()
 		r.backgroundCancel()
 		r.backgroundWait.Wait()
+		// The collector has stopped; whatever it applied but had not yet
+		// written goes to the index now, so the next start resumes from here
+		// rather than replaying it.
+		historyErr := r.usage.Flush()
 		r.alerts.Close()
 		captureCtx, cancelCapture := context.WithTimeout(context.Background(), r.config.Server.ShutdownTimeout.Value())
 		captureErr := r.gatewayService.ShutdownFailureCapture(captureCtx)
@@ -1582,6 +1498,8 @@ func (r *Runtime) Close() error {
 		r.closeErr = errors.Join(
 			auditErr,
 			captureErr,
+			historyErr,
+			r.usage.History().Close(),
 			func() error {
 				r.providers.Close()
 				return nil

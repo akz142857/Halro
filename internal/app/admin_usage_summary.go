@@ -224,7 +224,7 @@ func (r *Runtime) adminUsageSummary(writer http.ResponseWriter, request *http.Re
 		"buckets":            buckets,
 		"totals":             totals,
 		"timezone_changes":   changes,
-		"watermark_sequence": r.usage.Snapshot().Watermark.Sequence,
+		"watermark_sequence": r.usage.Watermark().Sequence,
 		"time_context":       timing,
 	}
 	if groupBy != "" {
@@ -286,21 +286,12 @@ func (r *Runtime) collectSummaryRows(
 		}
 		return existing.Add(row)
 	}
-	if err := r.usage.WithRollupView(func(pending map[string]domain.DailyRollup) error {
-		if err := r.store.UsageRollupRange(start, end, keep); err != nil {
-			return err
-		}
-		for encoded, row := range pending {
-			key, err := domain.DecodeRollupKey(encoded)
-			if err != nil {
-				return err
-			}
-			if err := keep(key, row); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	// Stored rows only: the pending increment is flushed first, so the rows
+	// and the watermark the response reports describe the same position.
+	if err := r.usage.Flush(); err != nil {
+		return nil, nil, err
+	}
+	if err := r.usage.History().RollupRange(start, end, keep); err != nil {
 		return nil, nil, err
 	}
 	rows := make([]summaryRow, 0, len(merged))

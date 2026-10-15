@@ -256,19 +256,13 @@ type Usage struct {
 	CheckpointInterval     Duration `yaml:"checkpoint_interval"`
 	ParquetInterval        Duration `yaml:"parquet_interval"`
 	// RetentionDays bounds the Parquet archive — how long exported partitions
-	// are kept. It is not what the console can page through; see
-	// ConsoleWindowDays.
+	// are kept. It does not bound what the console can page through: that is
+	// the usage history index, which keeps every attempt.
 	RetentionDays int `yaml:"retention_days"`
-	// ConsoleWindowDays bounds the in-memory aggregate the attempt log and the
-	// failed-request list are served from.
-	//
-	// It is a separate setting from RetentionDays because the two answer
-	// different questions — how far back the screen goes, and how long the
-	// archive is kept — and binding them would make an operator who needs a
-	// long archive pay for it in memory. An attempt costs about a kilobyte
-	// resident and about the same again in the checkpoint that holds it, so
-	// this setting is a standing memory cost in a way the archive's length is
-	// not; see the operator guide's sizing table.
+	// ConsoleWindowDays seeds the console's default range — how many days the
+	// attempt log and the failed-request list show before the operator asks
+	// for more. It costs nothing: everything outside it stays in the usage
+	// history index and is one range change away.
 	ConsoleWindowDays int `yaml:"console_window_days"`
 	// ExportFormat selects the container new Usage partitions are written in
 	// (ADR 0017): "parquet" (default) or "ndjson". Existing partitions are
@@ -277,8 +271,7 @@ type Usage struct {
 }
 
 // The console window's default and floor. Thirty days is long enough that an
-// operator investigating last month's incident still finds it, and short enough
-// that the checkpoint stays a fixed cost rather than a growing one.
+// operator investigating last month's incident finds it in the default view.
 const (
 	DefaultConsoleWindowDays = 30
 	MinConsoleWindowDays     = 7
@@ -916,14 +909,7 @@ func (c *Config) Normalize() error {
 		c.Usage.RetentionDays = 90
 	}
 	if c.Usage.ConsoleWindowDays == 0 {
-		// Defaulted against the archive, not to a constant. A file that set a
-		// short retention and never mentioned the console window was valid
-		// before this setting existed, and filling in a flat thirty days would
-		// make Validate refuse to start over a key the operator never wrote.
 		c.Usage.ConsoleWindowDays = DefaultConsoleWindowDays
-		if c.Usage.RetentionDays >= MinConsoleWindowDays && c.Usage.RetentionDays < DefaultConsoleWindowDays {
-			c.Usage.ConsoleWindowDays = c.Usage.RetentionDays
-		}
 	}
 	if c.Usage.ExportFormat == "" {
 		c.Usage.ExportFormat = UsageExportFormatParquet
@@ -1270,29 +1256,16 @@ func (c Config) Validate(opts LoadOptions) error {
 	if c.Usage.ParquetInterval <= 0 {
 		problems = append(problems, errors.New("usage.parquet_interval must be positive"))
 	}
-	// The archive's floor is the console's floor, because the window may not
-	// exceed the archive and the window may not go below seven days. Allowing a
-	// shorter retention left the two constraints with no value that satisfies
-	// both — a config that could be written but never started.
-	if c.Usage.RetentionDays < MinConsoleWindowDays {
-		problems = append(problems, fmt.Errorf(
-			"usage.retention_days must be at least %d, because usage.console_window_days may not go below that and may not exceed it",
-			MinConsoleWindowDays))
+	if c.Usage.RetentionDays < 1 {
+		problems = append(problems, errors.New("usage.retention_days must be at least 1"))
 	}
-	// Seven is the floor because the overview's own chart reads seven days of
-	// hourly buckets and request summaries out of the same aggregate; a shorter
-	// window would leave that chart with holes rather than with less history.
+	// Seven is the floor because the overview's chart spans seven days; a
+	// shorter default range would show less in the lists than on the chart
+	// beside them.
 	if c.Usage.ConsoleWindowDays < MinConsoleWindowDays {
 		problems = append(problems, fmt.Errorf(
 			"usage.console_window_days must be at least %d, because the overview reads that many days",
 			MinConsoleWindowDays))
-	}
-	// And it cannot exceed the archive: the console would be promising a
-	// history the archive no longer holds, and the window is only safe to trim
-	// down to what has been exported.
-	if c.Usage.RetentionDays >= MinConsoleWindowDays && c.Usage.ConsoleWindowDays > c.Usage.RetentionDays {
-		problems = append(problems, errors.New(
-			"usage.console_window_days cannot exceed usage.retention_days"))
 	}
 	if c.Usage.ExportFormat != UsageExportFormatParquet && c.Usage.ExportFormat != UsageExportFormatNDJSON {
 		problems = append(problems, errors.New("usage.export_format must be parquet or ndjson"))
@@ -1361,6 +1334,12 @@ func (c Config) LedgerPath() string {
 
 func (c Config) UsagePath() string {
 	return filepath.Join(c.Storage.DataDir, "usage")
+}
+
+// HistoryPath is the usage history index, a derivative of the Ledger that is
+// rebuilt from it whenever it cannot be trusted.
+func (c Config) HistoryPath() string {
+	return filepath.Join(c.Storage.DataDir, "history", "history.db")
 }
 
 func (c Config) AuditPath() string {

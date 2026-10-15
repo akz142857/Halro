@@ -1,14 +1,21 @@
-package bolt
+package usage
 
 import (
-	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
+	bbolt "go.etcd.io/bbolt"
 )
+
+// The daily rollup's merge rules, exercised directly against the history
+// index the way a batch commit applies them.
+
+func putRollupDelta(store *HistoryStore, delta map[string]domain.DailyRollup) error {
+	return store.db.Update(func(tx *bbolt.Tx) error {
+		return store.applyRollupDelta(tx.Bucket(historyRollups), delta)
+	})
+}
 
 func rollupIncrement(attempts, cost int64) domain.DailyRollup {
 	row := domain.DailyRollup{Attempts: attempts, CostMicrosUSD: cost}
@@ -23,103 +30,16 @@ func totalRollupKey() domain.RollupKey {
 	}
 }
 
-// Each round writes only what happened since the last one, so a stored row is
-// the sum of every increment that reached it. Anything else would make the
-// incremental path and a full rebuild produce different numbers from the same
-// ledger.
-func TestUsageRollupIncrementsAccumulate(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	key := totalRollupKey().Encode()
-
-	first := ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2}
-	if err := store.PutUsageCheckpoint(first, []byte(`{"version":8}`), nil, nil, domain.RollupVersion,
-		map[string]domain.DailyRollup{key: rollupIncrement(1, 90)}); err != nil {
-		t.Fatal(err)
-	}
-	second := ledger.Watermark{Generation: 1, Offset: 200, Sequence: 4}
-	if err := store.PutUsageCheckpoint(second, []byte(`{"version":8}`), nil, nil, domain.RollupVersion,
-		map[string]domain.DailyRollup{key: rollupIncrement(2, 40)}); err != nil {
-		t.Fatal(err)
-	}
-
-	var stored domain.DailyRollup
-	if err := store.UsageRollupRange("2026-08-30", "2026-08-30",
-		func(_ domain.RollupKey, row domain.DailyRollup) error {
-			stored = row
-			return nil
-		}); err != nil {
-		t.Fatal(err)
-	}
-	if stored.Attempts != 3 || stored.CostMicrosUSD != 130 || stored.Timezone != "Asia/Shanghai" {
-		t.Fatalf("stored=%#v", stored)
-	}
-	state, err := store.UsageRollupState()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.Version != domain.RollupVersion || state.Watermark != second {
-		t.Fatalf("state=%#v", state)
-	}
-}
-
 // The key names the accounting day and so does the row. If they can disagree,
 // one day's traffic can be filed under another's heading and the total that
 // reads by key prefix would silently include it.
 func TestUsageRollupRejectsRowsThatContradictTheirKey(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestHistory(t)
 	mismatched := rollupIncrement(1, 10)
 	mismatched.PeriodID = "2026-08-31"
-	err = store.PutUsageCheckpoint(
-		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
-		map[string]domain.DailyRollup{totalRollupKey().Encode(): mismatched},
-	)
+	err := putRollupDelta(store, map[string]domain.DailyRollup{totalRollupKey().Encode(): mismatched})
 	if err == nil {
 		t.Fatal("a row filed under another day's key was accepted")
-	}
-}
-
-// The two derivatives are discarded together. Leaving the rows behind while the
-// checkpoint goes would double every stored number on the next replay.
-func TestResetUsageDerivativesClearsBothViews(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if err := store.PutUsageCheckpoint(
-		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
-		map[string]domain.DailyRollup{totalRollupKey().Encode(): rollupIncrement(1, 90)},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ResetUsageDerivatives(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := store.UsageCheckpoint(); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("checkpoint survived the reset: %v", err)
-	}
-	if _, err := store.UsageRollupState(); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("rollup state survived the reset: %v", err)
-	}
-	rows := 0
-	if err := store.UsageRollupRange("", "", func(domain.RollupKey, domain.DailyRollup) error {
-		rows++
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if rows != 0 {
-		t.Fatalf("%d rollup rows survived the reset", rows)
 	}
 }
 
@@ -127,11 +47,7 @@ func TestResetUsageDerivativesClearsBothViews(t *testing.T) {
 // "models/...", Bedrock inference profiles are ARNs — so the separator has to
 // be one the key cannot contain, and the scan has to stay inside its prefix.
 func TestUsageRollupKeysSurviveSlashesInDimensionValues(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestHistory(t)
 	slashed := domain.RollupKey{
 		PeriodID: "2026-08-30", TimezoneVersion: 2,
 		Dimension: domain.RollupDimensionProviderModel, DimensionKey: "models/gemini-2.5/pro",
@@ -142,18 +58,15 @@ func TestUsageRollupKeysSurviveSlashesInDimensionValues(t *testing.T) {
 	}
 	otherRow := domain.DailyRollup{Attempts: 5}
 	otherRow.Identity("2026-08-31", 2, "Asia/Shanghai", 1, 2)
-	if err := store.PutUsageCheckpoint(
-		ledger.Watermark{Generation: 1, Offset: 100, Sequence: 2},
-		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion,
-		map[string]domain.DailyRollup{
-			slashed.Encode(): rollupIncrement(1, 90),
-			other.Encode():   otherRow,
-		},
+	if err := putRollupDelta(store, map[string]domain.DailyRollup{
+		slashed.Encode(): rollupIncrement(1, 90),
+		other.Encode():   otherRow,
+	},
 	); err != nil {
 		t.Fatal(err)
 	}
 	seen := map[string]int64{}
-	if err := store.UsageRollupRange("2026-08-30", "2026-08-30",
+	if err := store.RollupRange("2026-08-30", "2026-08-30",
 		func(key domain.RollupKey, row domain.DailyRollup) error {
 			if key.Dimension != domain.RollupDimensionProviderModel {
 				return nil
@@ -181,10 +94,10 @@ func providerModelKey(value string) string {
 	}.Encode()
 }
 
-func dimensionRows(t *testing.T, store *Store) map[string]domain.DailyRollup {
+func dimensionRows(t *testing.T, store *HistoryStore) map[string]domain.DailyRollup {
 	t.Helper()
 	rows := map[string]domain.DailyRollup{}
-	if err := store.UsageRollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
+	if err := store.RollupRange("", "", func(key domain.RollupKey, row domain.DailyRollup) error {
 		if key.Dimension == domain.RollupDimensionProviderModel {
 			rows[key.DimensionKey] = row
 		}
@@ -200,20 +113,13 @@ func dimensionRows(t *testing.T, store *Store) map[string]domain.DailyRollup {
 // and the folded row still carries its attempts so the dimension keeps adding
 // up to the day's total.
 func TestUsageRollupBoundsKeysPerDimension(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestHistory(t)
 	delta := map[string]domain.DailyRollup{}
 	overflow := domain.MaxRollupKeysPerDimension + 5
 	for index := 0; index < overflow; index++ {
 		delta[providerModelKey(fmt.Sprintf("vendor/model-%03d", index))] = cappedIncrement(uint64(index+1), 10)
 	}
-	if err := store.PutUsageCheckpoint(
-		ledger.Watermark{Generation: 1, Offset: 100, Sequence: uint64(overflow)},
-		[]byte(`{"version":8}`), nil, nil, domain.RollupVersion, delta,
-	); err != nil {
+	if err := putRollupDelta(store, delta); err != nil {
 		t.Fatal(err)
 	}
 	rows := dimensionRows(t, store)
@@ -245,21 +151,14 @@ func TestUsageRollupBoundsKeysPerDimension(t *testing.T) {
 // sequence that first produced each row is what makes those the same.
 func TestUsageRollupCapIsIndependentOfIncrementBatching(t *testing.T) {
 	oneShot := func(t *testing.T, batches int) map[string]domain.DailyRollup {
-		store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer store.Close()
+		store := newTestHistory(t)
 		overflow := domain.MaxRollupKeysPerDimension + 7
 		batch := map[string]domain.DailyRollup{}
 		flush := func(sequence uint64) {
 			if len(batch) == 0 {
 				return
 			}
-			if err := store.PutUsageCheckpoint(
-				ledger.Watermark{Generation: 1, Offset: int64(sequence) * 10, Sequence: sequence},
-				[]byte(`{"version":8}`), nil, nil, domain.RollupVersion, batch,
-			); err != nil {
+			if err := putRollupDelta(store, batch); err != nil {
 				t.Fatal(err)
 			}
 			batch = map[string]domain.DailyRollup{}

@@ -2,22 +2,18 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/akz142857/Halro/internal/budget"
 	"github.com/akz142857/Halro/internal/domain"
-	"github.com/akz142857/Halro/internal/ledger"
 	"github.com/akz142857/Halro/internal/provider"
-	boltstore "github.com/akz142857/Halro/internal/store/bolt"
-	"github.com/akz142857/Halro/internal/usage"
 )
 
-func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.T) {
+func TestDeletingUsageHistoryRebuildsIdenticalIndexFromLedger(t *testing.T) {
 	cfg := testConfig(t)
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
@@ -56,24 +52,14 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 	if err := runtime.accounting.Finalize(context.Background(), request, "success"); err != nil {
 		t.Fatal(err)
 	}
-	runtime.saveUsageCheckpoint()
-	expected := runtime.usage.Snapshot()
-	if expected.Watermark.Sequence == 0 {
-		t.Fatal("checkpoint did not advance")
+	expected := dumpUsage(t, runtime)
+	if runtime.usage.Watermark().Sequence == 0 {
+		t.Fatal("the usage history did not advance")
 	}
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}
-
-	store, err := boltstore.Open(cfg.MetadataPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ResetUsageDerivatives(); err != nil {
-		store.Close()
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
+	if err := os.Remove(cfg.HistoryPath()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,13 +70,13 @@ func TestDeletingUsageCheckpointRebuildsIdenticalAggregateFromLedger(t *testing.
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	actual := reopened.usage.Snapshot()
+	actual := dumpUsage(t, reopened)
 	if !reflect.DeepEqual(actual, expected) {
-		t.Fatalf("rebuilt aggregate differs:\nactual=%#v\nexpected=%#v", actual, expected)
+		t.Fatalf("rebuilt history differs:\nactual=%#v\nexpected=%#v", actual, expected)
 	}
 }
 
-func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T) {
+func TestRecoveredLeaseAttributionSurvivesUsageHistoryAndParquet(t *testing.T) {
 	for _, started := range []bool{false, true} {
 		t.Run(map[bool]string{false: "not_started", true: "started"}[started], func(t *testing.T) {
 			cfg := testConfig(t)
@@ -128,11 +114,7 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := recovered.usageCollector.CatchUp(context.Background()); err != nil {
-				recovered.Close()
-				t.Fatal(err)
-			}
-			assertRecovered := func(snapshot usage.Snapshot) {
+			assertRecovered := func(snapshot usageDump) {
 				t.Helper()
 				for _, got := range snapshot.Attempts {
 					if got.AttemptID != attempt.AttemptID {
@@ -145,14 +127,12 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 				}
 				t.Fatalf("recovered attempt %q is absent from Usage", attempt.AttemptID)
 			}
-			snapshot := recovered.usage.Snapshot()
-			assertRecovered(snapshot)
-			recovered.saveUsageCheckpoint()
-			if _, err := recovered.usageExporter.Export(snapshot); err != nil {
+			assertRecovered(dumpUsage(t, recovered))
+			if _, err := recovered.usageExporter.Export(recovered.usage.History()); err != nil {
 				recovered.Close()
 				t.Fatal(err)
 			}
-			if err := recovered.usageExporter.Verify(&snapshot); err != nil {
+			if err := recovered.usageExporter.Verify(recovered.usage.History()); err != nil {
 				recovered.Close()
 				t.Fatal(err)
 			}
@@ -165,68 +145,7 @@ func TestRecoveredLeaseAttributionSurvivesUsageCheckpointAndParquet(t *testing.T
 				t.Fatal(err)
 			}
 			defer checkpointed.Close()
-			assertRecovered(checkpointed.usage.Snapshot())
+			assertRecovered(dumpUsage(t, checkpointed))
 		})
 	}
-}
-
-func TestCheckpointWatermarkRejectsAlreadyAggregatedLedgerPrefix(t *testing.T) {
-	aggregate := usage.NewAggregate()
-	records := []ledger.Record{
-		checkpointRecord(1, 100, ledger.EventRequestAccepted),
-		checkpointRecord(2, 200, ledger.EventRequestFinalized),
-	}
-	for _, record := range records {
-		if err := aggregate.Apply(record); err != nil {
-			t.Fatal(err)
-		}
-	}
-	snapshot, err := aggregate.TakeCheckpoint()
-	if err != nil {
-		t.Fatal(err)
-	}
-	watermark := snapshot.Watermark
-	segments := map[uint64][]byte{}
-	for _, segment := range snapshot.Segments {
-		segments[segment.ID] = segment.Payload
-	}
-	restored, err := usage.RestoreCheckpoint(snapshot.Head, func(id uint64) ([]byte, error) {
-		payload, ok := segments[id]
-		if !ok {
-			return nil, fmt.Errorf("segment %d is missing", id)
-		}
-		return payload, nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if watermark != (ledger.Watermark{
-		Generation: 1, Offset: records[1].Offset, Sequence: records[1].Sequence,
-	}) {
-		t.Fatalf("watermark=%#v", watermark)
-	}
-	// Skipped rather than refused: the checkpoint now carries the dedup window,
-	// so a record already folded in is recognised by its event ID and ignored,
-	// which is how Apply has always treated a duplicate. The invariant worth
-	// asserting is that it changed nothing, not which of the two guards caught
-	// it — the monotonic-sequence check still refuses anything older than the
-	// window.
-	if err := restored.Apply(records[0]); err != nil {
-		t.Fatalf("re-applying a checkpointed record: %v", err)
-	}
-	if !reflect.DeepEqual(restored.Snapshot(), aggregate.Snapshot()) {
-		t.Fatal("replaying a checkpointed prefix changed the aggregate")
-	}
-}
-
-func checkpointRecord(sequence uint64, offset int64, kind ledger.EventKind) ledger.Record {
-	event := ledger.Event{
-		EventID: "evt_" + string(rune('0'+sequence)), Kind: kind,
-		RequestID: "request_1", ProjectID: "project_1", PeriodID: "2026-07-31",
-		OccurredAt: time.Date(2026, 7, 31, 12, 0, int(sequence), 0, time.UTC),
-	}
-	if kind == ledger.EventRequestFinalized {
-		event.Outcome = "success"
-	}
-	return ledger.Record{Generation: 1, Sequence: sequence, Offset: offset, Event: event}
 }

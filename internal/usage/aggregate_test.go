@@ -14,26 +14,26 @@ import (
 
 func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testing.T) {
 	records := checkpointKillPointRecords(25) // 125 durable records, 126 boundaries.
-	expected := NewAggregate()
+	expected := newTestAggregate(t)
 	for _, record := range records {
 		if err := expected.Apply(record); err != nil {
 			t.Fatal(err)
 		}
 	}
-	expectedSnapshot, expectedMetrics := expected.Snapshot(), expected.Metrics()
+	expectedSnapshot, expectedMetrics := snapshotOf(t, expected), expected.Metrics()
 	for killPoint := 0; killPoint <= len(records); killPoint++ {
 		for _, checkpointCommitted := range []bool{false, true} {
 			checkpointEnd := killPoint
 			if !checkpointCommitted && checkpointEnd > 0 {
 				checkpointEnd--
 			}
-			prefix := NewAggregate()
+			prefix := newTestAggregate(t)
 			for _, record := range records[:checkpointEnd] {
 				if err := prefix.Apply(record); err != nil {
 					t.Fatalf("kill=%d committed=%t prefix: %v", killPoint, checkpointCommitted, err)
 				}
 			}
-			recovered := NewAggregate()
+			recovered := newTestAggregate(t)
 			if checkpointEnd > 0 {
 				var err error
 				recovered, err = restoreOneRound(prefix)
@@ -46,7 +46,7 @@ func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testin
 					t.Fatalf("kill=%d committed=%t replay: %v", killPoint, checkpointCommitted, err)
 				}
 			}
-			if actual := recovered.Snapshot(); !reflect.DeepEqual(actual, expectedSnapshot) {
+			if actual := snapshotOf(t, recovered); !reflect.DeepEqual(actual, expectedSnapshot) {
 				t.Fatalf("kill=%d committed=%t snapshot mismatch\nactual=%#v\nexpected=%#v", killPoint, checkpointCommitted, actual, expectedSnapshot)
 			}
 			if actual := recovered.Metrics(); actual != expectedMetrics {
@@ -57,7 +57,7 @@ func TestCheckpointRecoveryMatchesFullReplayAcrossOneHundredKillPoints(t *testin
 }
 
 func TestAggregateRejectsInt64Overflow(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	aggregate.totals.CostMicrosUSD = math.MaxInt64
 	event := ledger.Event{EventID: "overflow", Kind: ledger.EventAttemptSettled, RequestID: "req", AttemptID: "att", ProjectID: "p", PeriodID: "2026-08-04", OccurredAt: time.Now().UTC(), CommittedMicrosUSD: ledger.MicrosUSD(1), Outcome: "success"}
 	if err := aggregate.Apply(ledger.Record{Generation: 1, Sequence: 1, Offset: 1, Event: event}); err == nil {
@@ -83,7 +83,7 @@ func usagePriceSnapshot(t *testing.T, mode domain.BillingMode, selectedAt time.T
 }
 
 func TestAggregatePreservesKnownFreeUnknownAndLegacySemantics(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	free := usagePriceSnapshot(t, domain.BillingModeFree, now)
 	unknown := domain.NewUnknownPriceSnapshot(now)
@@ -97,7 +97,7 @@ func TestAggregatePreservesKnownFreeUnknownAndLegacySemantics(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snapshot := aggregate.Snapshot()
+	snapshot := snapshotOf(t, aggregate)
 	if snapshot.Totals.CostMicrosUSD != 7 || snapshot.Totals.UnknownAttempts != 1 {
 		t.Fatalf("totals=%#v", snapshot.Totals)
 	}
@@ -159,7 +159,7 @@ func checkpointKillPointRecords(requests int) []ledger.Record {
 }
 
 func TestAggregateBuildsAttemptAndRequestViewsIdempotently(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	events := []ledger.Event{
 		{EventID: "accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_1", ProjectID: "p",
@@ -189,7 +189,7 @@ func TestAggregateBuildsAttemptAndRequestViewsIdempotently(t *testing.T) {
 			}
 		}
 	}
-	snapshot := aggregate.Snapshot()
+	snapshot := snapshotOf(t, aggregate)
 	if snapshot.Totals.Requests != 1 || snapshot.Totals.Attempts != 1 ||
 		snapshot.Totals.InputTokens != 3 || snapshot.Totals.OutputTokens != 2 ||
 		snapshot.Totals.CostMicrosUSD != 7 {
@@ -211,7 +211,7 @@ func TestAggregateBuildsAttemptAndRequestViewsIdempotently(t *testing.T) {
 }
 
 func TestAggregatePreservesRunAttributionAndSkipsLifecycleRows(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	lifecycle := ledger.Event{
 		EventID: "work_unit_created", Kind: ledger.EventWorkUnitCreated,
@@ -240,7 +240,7 @@ func TestAggregatePreservesRunAttributionAndSkipsLifecycleRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	snapshot := aggregate.Snapshot()
+	snapshot := snapshotOf(t, aggregate)
 	if len(snapshot.Attempts) != 1 || len(snapshot.Requests) != 1 {
 		t.Fatalf("snapshot rows=%d/%d", len(snapshot.Attempts), len(snapshot.Requests))
 	}
@@ -251,7 +251,7 @@ func TestAggregatePreservesRunAttributionAndSkipsLifecycleRows(t *testing.T) {
 }
 
 func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	for index, event := range []ledger.Event{
 		{EventID: "accepted", Kind: ledger.EventRequestAccepted, RequestID: "req_1",
@@ -268,13 +268,13 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	watermark := aggregate.Snapshot().Watermark
+	watermark := snapshotOf(t, aggregate).Watermark
 	restored, err := restoreOneRound(aggregate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Snapshot().Watermark != watermark {
-		t.Fatalf("restored watermark=%#v want=%#v", restored.Snapshot().Watermark, watermark)
+	if snapshotOf(t, restored).Watermark != watermark {
+		t.Fatalf("restored watermark=%#v want=%#v", snapshotOf(t, restored).Watermark, watermark)
 	}
 	for index, event := range []ledger.Event{
 		{EventID: "settled", Kind: ledger.EventAttemptSettled, RequestID: "req_1",
@@ -293,7 +293,7 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 			t.Fatal(err)
 		}
 	}
-	state := restored.Snapshot()
+	state := snapshotOf(t, restored)
 	if state.Totals.Requests != 1 || state.Totals.Attempts != 1 ||
 		len(state.Requests) != 1 || state.Requests[0].KeyID != "k" ||
 		state.Attempts[0].StartedAt != now.Add(time.Millisecond) {
@@ -308,7 +308,7 @@ func TestCheckpointRestoresActiveRequestAndContinuesMonotonically(t *testing.T) 
 // remembers the first — but the checkpoint did not carry that memory, so an
 // aggregate restored between the two frames added the cost a second time.
 func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
-	aggregate := NewAggregate()
+	aggregate := newTestAggregate(t)
 	settled := ledger.Record{Generation: 1, Sequence: 1, Offset: 100, Event: ledger.Event{
 		EventID: "evt_settled", Kind: ledger.EventAttemptSettled,
 		RequestID: "req_1", AttemptID: "att_1", ProjectID: "prj_1",
@@ -318,7 +318,7 @@ func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
 	if err := aggregate.Apply(settled); err != nil {
 		t.Fatal(err)
 	}
-	before := aggregate.Snapshot().Totals
+	before := snapshotOf(t, aggregate).Totals
 
 	restored, err := restoreOneRound(aggregate)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestCheckpointCarriesTheDedupWindow(t *testing.T) {
 	if err := restored.Apply(duplicate); err != nil {
 		t.Fatal(err)
 	}
-	after := restored.Snapshot().Totals
+	after := snapshotOf(t, restored).Totals
 	if after.CostMicrosUSD != before.CostMicrosUSD || after.Attempts != before.Attempts {
 		t.Fatalf("a re-emitted event was counted again after restore: cost=%d attempts=%d, want cost=%d attempts=%d",
 			after.CostMicrosUSD, after.Attempts, before.CostMicrosUSD, before.Attempts)

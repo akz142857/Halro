@@ -42,8 +42,13 @@ type failuresEnvelope struct {
 // only reads from, and would not let the test choose a rejection.
 func seedFailures(t *testing.T, runtime *Runtime) {
 	t.Helper()
-	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
-	var sequence uint64
+	// Inside the console's default range: the list shows the last
+	// console_window_days unless asked for another range.
+	now := time.Now().UTC().Add(-time.Hour)
+	// The opening build replays the Ledger into the same aggregate; seeding
+	// waits for it and continues above where it ended.
+	syncUsageHistory(t, runtime)
+	sequence := runtime.usage.Watermark().Sequence
 	apply := func(event ledger.Event) {
 		t.Helper()
 		sequence++

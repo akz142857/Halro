@@ -12,7 +12,7 @@ func TestOnboardingRequiresOneUsableTopology(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
 	resources := readyOnboardingResources(now)
 
-	ready := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	ready := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if ready.State != onboardingReadyToVerify || ready.CompletedGoals != 3 || ready.Goals[3].State != onboardingGoalCurrent {
 		t.Fatalf("ready=%#v", ready)
 	}
@@ -20,7 +20,7 @@ func TestOnboardingRequiresOneUsableTopology(t *testing.T) {
 	// Every resource still exists, but the Project now grants a different public
 	// model. Independent item counts would report 4/4; a topology check must not.
 	resources.Projects[0].AllowedModels = []string{"another-model"}
-	detached := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	detached := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if detached.State != onboardingConfiguring || detached.CompletedGoals != 2 || detached.Goals[2].DetailCode != "project_route_unavailable" {
 		t.Fatalf("detached=%#v", detached)
 	}
@@ -45,7 +45,7 @@ func TestOnboardingRejectsDeploymentThatIsNotCurrentlyUsable(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			resources := readyOnboardingResources(now)
 			test.mutate(&resources)
-			result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+			result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 			if result.CompletedGoals != 1 || result.Goals[1].State != onboardingGoalCurrent || result.Goals[1].DetailCode != test.detail {
 				t.Fatalf("result=%#v", result)
 			}
@@ -83,7 +83,7 @@ func TestOnboardingAcceptsADownstreamProbeAsProviderEvidence(t *testing.T) {
 			resources.Providers[0].UpdatedAt = now.Add(-time.Hour)
 			test.probe(&resources)
 
-			result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+			result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 			if result.Goals[0].State != onboardingGoalComplete || result.Goals[0].DetailCode != "provider_ready" {
 				t.Fatalf("connect goal=%#v", result.Goals[0])
 			}
@@ -101,12 +101,12 @@ func TestOnboardingRequiresCurrentRuntimeEvidenceForProxyProvider(t *testing.T) 
 	resources.Deployments[0].LastTestedAt = &probed
 	resources.Routes[0].LastTestedAt = &probed
 
-	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
 		t.Fatalf("stale runtime proxy test passed readiness: %#v", result)
 	}
 	resources.Providers[0].LastTestRuntimeID = resources.EgressRuntimeIDs["corp-egress"]
-	result = evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	result = evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.Goals[0].State != onboardingGoalComplete {
 		t.Fatalf("current runtime proxy test did not pass readiness: %#v", result.Goals[0])
 	}
@@ -119,7 +119,7 @@ func TestOnboardingDoesNotCountInternalProxyAuthenticationAsProviderCredential(t
 			ID: "credential_proxy", Type: providerEgressCredentialType, Ciphertext: []byte("sealed"),
 		}},
 		PriceReady: map[string]bool{},
-	}, usage.Metrics{}, usage.Snapshot{})
+	}, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.Goals[0].DetailCode != "credential_missing" {
 		t.Fatalf("internal credential advanced onboarding: %#v", result.Goals[0])
 	}
@@ -138,7 +138,7 @@ func TestOnboardingRejectsDownstreamProbeOlderThanTheProvider(t *testing.T) {
 	resources.Deployments[0].LastTestedAt = &probed
 	resources.Routes[0].LastTestedAt = &probed
 
-	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
 		t.Fatalf("result=%#v", result)
 	}
@@ -152,7 +152,7 @@ func TestOnboardingRejectsDownstreamProbeWithoutAnInstant(t *testing.T) {
 	resources.Providers[0].LastTestStatus = ""
 	resources.Providers[0].LastTestRevision = 0
 
-	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.CompletedGoals != 0 || result.Goals[0].DetailCode != "provider_test_required" {
 		t.Fatalf("result=%#v", result)
 	}
@@ -160,13 +160,13 @@ func TestOnboardingRejectsDownstreamProbeWithoutAnInstant(t *testing.T) {
 
 func TestOnboardingKeepsFailedVerificationRecoverable(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
-	snapshot := usage.Snapshot{
-		Requests: []usage.RequestSummary{{
+	snapshot := usage.OnboardingEvidence{
+		Latest: &usage.RequestSummary{
 			RequestID: "request_failed", RequestedModel: "halro-chat", Outcome: "provider_error", CompletedAt: now,
-		}},
-		Attempts: []usage.AttemptEvent{{
+		},
+		LatestAttempt: &usage.AttemptEvent{
 			RequestID: "request_failed", Status: "provider_error", HTTPStatus: 502, ErrorClass: "upstream_timeout", CompletedAt: now,
-		}},
+		},
 	}
 	result := evaluateOnboardingReadiness(now, readyOnboardingResources(now), usage.Metrics{RequestsError: 1}, snapshot)
 	if result.State != onboardingVerifyFailed || result.CompletedGoals != 3 || result.Goals[3].State != onboardingGoalError || result.LastVerification == nil {
@@ -179,7 +179,7 @@ func TestOnboardingKeepsFailedVerificationRecoverable(t *testing.T) {
 
 func TestOnboardingCompletesOnlyAfterSuccessfulFinalization(t *testing.T) {
 	now := time.Date(2026, 8, 8, 10, 0, 0, 0, time.UTC)
-	result := evaluateOnboardingReadiness(now, readyOnboardingResources(now), usage.Metrics{RequestsSuccess: 1}, usage.Snapshot{})
+	result := evaluateOnboardingReadiness(now, readyOnboardingResources(now), usage.Metrics{RequestsSuccess: 1}, usage.OnboardingEvidence{})
 	if result.State != onboardingFirstValueReached || result.CompletedGoals != 4 || result.Goals[3].State != onboardingGoalComplete {
 		t.Fatalf("result=%#v", result)
 	}
@@ -194,12 +194,10 @@ func TestOnboardingAcceptsSuccessfulRouteTrafficAsPublicationEvidence(t *testing
 	resources.Providers[0].UpdatedAt = now.Add(-time.Hour)
 	resources.Deployments[0].UpdatedAt = now.Add(-time.Hour)
 	resources.Routes[0].UpdatedAt = now.Add(-time.Hour)
-	snapshot := usage.Snapshot{
-		Requests: []usage.RequestSummary{{RequestID: "request_1", Outcome: "success", CompletedAt: now}},
-		Attempts: []usage.AttemptEvent{{
-			RequestID: "request_1", RouteID: "route_1", DeploymentID: "deployment_1", ProviderID: "provider_1",
-			Status: "success", CompletedAt: now,
-		}},
+	snapshot := usage.OnboardingEvidence{
+		Deployments: map[string]time.Time{"deployment_1": now},
+		Routes:      map[string]time.Time{"route_1": now},
+		Providers:   map[string]time.Time{"provider_1": now},
 	}
 
 	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{RequestsSuccess: 1}, snapshot)
@@ -218,12 +216,10 @@ func TestOnboardingSuccessfulTrafficDoesNotSurviveALaterRouteEdit(t *testing.T) 
 	resources := readyOnboardingResources(now)
 	resources.Routes[0].LastTestStatus = ""
 	resources.Routes[0].UpdatedAt = now
-	snapshot := usage.Snapshot{
-		Requests: []usage.RequestSummary{{RequestID: "request_1", Outcome: "success", CompletedAt: now.Add(-time.Minute)}},
-		Attempts: []usage.AttemptEvent{{
-			RequestID: "request_1", RouteID: "route_1", DeploymentID: "deployment_1", ProviderID: "provider_1",
-			Status: "success", CompletedAt: now.Add(-time.Minute),
-		}},
+	snapshot := usage.OnboardingEvidence{
+		Deployments: map[string]time.Time{"deployment_1": now.Add(-time.Minute)},
+		Routes:      map[string]time.Time{"route_1": now.Add(-time.Minute)},
+		Providers:   map[string]time.Time{"provider_1": now.Add(-time.Minute)},
 	}
 
 	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, snapshot)
@@ -237,7 +233,7 @@ func TestOnboardingRejectsExpiredKey(t *testing.T) {
 	resources := readyOnboardingResources(now)
 	expired := now.Add(-time.Minute)
 	resources.Keys[0].ExpiresAt = &expired
-	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.Snapshot{})
+	result := evaluateOnboardingReadiness(now, resources, usage.Metrics{}, usage.OnboardingEvidence{})
 	if result.CompletedGoals != 2 || result.Goals[2].DetailCode != "key_missing" {
 		t.Fatalf("result=%#v", result)
 	}
