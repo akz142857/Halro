@@ -1,5 +1,7 @@
 # Halro HA 架构设计
 
+> **2026-10-15：HA 代码已从 `main` 撤出，保存在 `ha` 分支待评审。** 撤出的是 #360（metadata journal，Phase 0a）、#362 中 journal 相关部分、#378、#379、#384、#385、#386，以及 `c8b97b1b`（v0.8.5 评审修复）中的 HA 部分。原因：生产内存问题（v0.8.5，不含 HA）要先在不含 HA 的 `main` 上修复，之后 HA 再基于修复后的 `main` 继续。下文描述的实现状态以 `ha` 分支为准，在 `main` 上不成立。
+
 - 状态：Proposed（2026-09-20）。**Phase 0a 已实现并合入 `main`**（2026-09-25，
   [#360](https://github.com/akz142857/Halro/pull/360)，`d1633269`）——metadata journal 已经在代码里。
   本文的 `replication` 配置、`halro cluster` 子命令与复制协议**仍不存在**，一行未写
