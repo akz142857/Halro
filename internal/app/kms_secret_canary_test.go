@@ -18,6 +18,7 @@ import (
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/masterkey"
 	"github.com/akz142857/Halro/internal/safelog"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 const kmsMasterKeyCanary = "M11KMS_MASTER_KEY_CANARY_1234567"
@@ -41,7 +42,7 @@ func TestKMSMasterKeyCanaryNeverReachesPersistenceTelemetryErrorsOrHeapProfile(t
 	}
 	clear(keyMaterial)
 
-	store, err := openMetadataReadForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}

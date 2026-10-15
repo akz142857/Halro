@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/masterkey"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 type appTestSlotUnwrapper struct {
@@ -23,7 +24,7 @@ func TestKeySlotVerificationRejectsValidKeyFromAnotherVault(t *testing.T) {
 	if err := Initialize(cfg); err != nil {
 		t.Fatal(err)
 	}
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}

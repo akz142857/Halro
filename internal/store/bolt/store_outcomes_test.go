@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func TestOutcomeDefinitionActiveLimitAlsoAppliesWhenReenabling(t *testing.T) {
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestOutcomeDefinitionActiveLimitAlsoAppliesWhenReenabling(t *testing.T) {
 }
 
 func TestGovernanceCheckpointSegmentsRoundTripAndReset(t *testing.T) {
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestGovernanceCheckpointSegmentsRoundTripAndReset(t *testing.T) {
 }
 
 func TestGovernanceCheckpointReclaimsUnreferencedSegments(t *testing.T) {
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +91,7 @@ func TestGovernanceCheckpointReclaimsUnreferencedSegments(t *testing.T) {
 	if err := store.SaveGovernanceCheckpoint(2, 200, journalHash, sha256.Sum256(second), authentication, second); err != nil {
 		t.Fatal(err)
 	}
-	err = store.view(func(tx *Tx) error {
+	err = store.db.View(func(tx *bbolt.Tx) error {
 		count := 0
 		if err := tx.Bucket(bucketGovernanceCheckpointSegments).ForEach(func(_, _ []byte) error { count++; return nil }); err != nil {
 			return err

@@ -7,11 +7,13 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"go.etcd.io/bbolt"
 )
 
 func openAuditAnchorStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := openForTest(t, filepath.Join(t.TempDir(), "metadata.db"))
+	store, err := Open(filepath.Join(t.TempDir(), "metadata.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +83,7 @@ func TestAppendAuditAnchorPrunesEveryKeyBelowTheCutoff(t *testing.T) {
 	store := openAuditAnchorStore(t)
 	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
 	const overshoot = 5
-	if err := store.update(func(tx *Tx) error {
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		for sequence := uint64(1); sequence <= auditAnchorRetention+overshoot; sequence++ {
 			encoded, err := json.Marshal(AuditAnchor{
@@ -135,7 +137,7 @@ func TestAppendAuditAnchorPrunesEveryKeyBelowTheCutoff(t *testing.T) {
 func TestAppendAuditAnchorPrunesKeysSharingTheWrittenPage(t *testing.T) {
 	store := openAuditAnchorStore(t)
 	now := time.Date(2026, time.August, 6, 0, 0, 0, 0, time.UTC)
-	if err := store.update(func(tx *Tx) error {
+	if err := store.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketAuditAnchors)
 		for _, sequence := range []uint64{1, 2, 3, 4, 5, 6, auditAnchorRetention + 6} {
 			encoded, err := json.Marshal(AuditAnchor{

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 // Migration 30 gives every stored price a cache-read rate. The reconstruction
@@ -17,11 +18,11 @@ import (
 // every cached token free on prices nobody re-entered.
 func TestMigration30ReconstructsTheCacheReadRateFromTheInputRate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "metadata.db")
-	store, err := openForTest(t, path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.update(func(tx *Tx) error {
+	err = store.db.Update(func(tx *bbolt.Tx) error {
 		price := map[string]any{
 			"id": "price_legacy", "deployment_id": "dep_legacy", "version": 1, "revision": 1,
 			"billing_mode": "metered", "currency": "USD", "formula_version": "usd_token_v1",
@@ -78,14 +79,14 @@ func TestMigration30ReconstructsTheCacheReadRateFromTheInputRate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := openForTest(t, path)
+	migrated, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer migrated.Close()
 
 	var price domain.DeploymentPriceVersion
-	err = viewRaw(migrated.db, func(tx *Tx) error {
+	err = migrated.db.View(func(tx *bbolt.Tx) error {
 		return json.Unmarshal(tx.Bucket(bucketDeploymentPriceVersions).Get([]byte("price_legacy")), &price)
 	})
 	if err != nil {

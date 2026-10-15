@@ -19,7 +19,7 @@ import (
 func olderSchemaMetadata(t *testing.T, version uint64) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "halro.db")
-	store, err := openStagedMetadataForTest(t, path)
+	store, err := boltstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestADiagnosticRefusesAnOlderSchemaInsteadOfMigratingIt(t *testing.T) {
 
 func TestADiagnosticAcceptsTheCurrentSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "halro.db")
-	store, err := openStagedMetadataForTest(t, path)
+	store, err := boltstore.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}

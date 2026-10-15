@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 // Migration 32 replaces json_mode with json_object and structured_outputs.
@@ -79,7 +80,7 @@ func TestMigration32SplitsJSONModeIntoItsTwoHalves(t *testing.T) {
 	}
 	writeV31Records(t, path, instance, deployment)
 
-	store, err := openForTest(t, path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatalf("a v31 directory was refused rather than brought forward: %v", err)
 	}
@@ -156,11 +157,11 @@ func assertJSONHalvesOff(t *testing.T, where string, capabilities domain.Provide
 // then stamps the schema version back so the next Open runs the migration.
 func writeV31Records(t *testing.T, path string, instance domain.ProviderInstance, deployment domain.Deployment) {
 	t.Helper()
-	store, err := openForTest(t, path)
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.update(func(tx *Tx) error {
+	err = store.db.Update(func(tx *bbolt.Tx) error {
 		providerRecord, err := asV31Record(instance)
 		if err != nil {
 			return err
@@ -224,7 +225,7 @@ func asV31Record(value any) (map[string]json.RawMessage, error) {
 	return record, nil
 }
 
-func putV31Record(tx *Tx, bucket []byte, id string, record map[string]json.RawMessage) error {
+func putV31Record(tx *bbolt.Tx, bucket []byte, id string, record map[string]json.RawMessage) error {
 	encoded, err := json.Marshal(record)
 	if err != nil {
 		return err

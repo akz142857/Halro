@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func (s *Store) PutProject(ctx context.Context, project domain.Project, expectedRevision uint64, intent *domain.AdminAuditIntent) (domain.Project, error) {
@@ -19,7 +20,7 @@ func (s *Store) PutProject(ctx context.Context, project domain.Project, expected
 	if err := ctx.Err(); err != nil {
 		return domain.Project{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		if err := putVersioned(tx.Bucket(bucketProjects), project.ID, expectedRevision, &project); err != nil {
 			return err
 		}
@@ -64,7 +65,7 @@ func (s *Store) PutGatewayKey(ctx context.Context, key domain.GatewayKey, expect
 	if err := ctx.Err(); err != nil {
 		return domain.GatewayKey{}, err
 	}
-	err := s.update(func(tx *Tx) error {
+	err := s.db.Update(func(tx *bbolt.Tx) error {
 		rawProject := tx.Bucket(bucketProjects).Get([]byte(key.ProjectID))
 		if rawProject == nil {
 			return fmt.Errorf("project %q: %w", key.ProjectID, ErrNotFound)
@@ -111,7 +112,7 @@ func (s *Store) FindGatewayKeyByHash(ctx context.Context, hash [32]byte) (domain
 		return domain.GatewayKey{}, err
 	}
 	var key domain.GatewayKey
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		id := tx.Bucket(bucketGatewayKeyHash).Get(hash[:])
 		if id == nil {
 			return ErrNotFound

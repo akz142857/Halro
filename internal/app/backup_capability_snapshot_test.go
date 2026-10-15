@@ -13,6 +13,7 @@ import (
 
 	"github.com/akz142857/Halro/internal/config"
 	"github.com/akz142857/Halro/internal/domain"
+	boltstore "github.com/akz142857/Halro/internal/store/bolt"
 )
 
 // §15 requires backup and restore to preserve the capability snapshot. It rides
@@ -41,7 +42,7 @@ func TestBackupRestorePreservesCapabilitySnapshotAndManagedProxy(t *testing.T) {
 	if before.Source == "" || before.ModelRevision == "" || before.CapturedAt.IsZero() {
 		t.Fatalf("bootstrap produced no usable snapshot to test with: %+v", before)
 	}
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestBackupRestorePreservesCapabilitySnapshotAndManagedProxy(t *testing.T) {
 	// Move the deployment on after the backup, so a restore that quietly kept
 	// live data would be visible rather than looking like success.
 	mutateDeploymentSnapshot(t, cfg, bootstrap.DeploymentID)
-	store, err = openMetadataForTest(t, cfg)
+	store, err = boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +93,7 @@ func TestBackupRestorePreservesCapabilitySnapshotAndManagedProxy(t *testing.T) {
 	if !reflect.DeepEqual(restored, before) {
 		t.Fatalf("restored snapshot differs:\n before=%+v\n after =%+v", before, restored)
 	}
-	store, err = openMetadataForTest(t, cfg)
+	store, err = boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +123,7 @@ func TestBackupRestorePreservesCapabilitySnapshotAndManagedProxy(t *testing.T) {
 
 func readDeploymentSnapshot(t *testing.T, cfg config.Config, id string) domain.ModelCapabilitySnapshot {
 	t.Helper()
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +137,7 @@ func readDeploymentSnapshot(t *testing.T, cfg config.Config, id string) domain.M
 
 func mutateDeploymentSnapshot(t *testing.T, cfg config.Config, id string) {
 	t.Helper()
-	store, err := openMetadataForTest(t, cfg)
+	store, err := boltstore.Open(cfg.MetadataPath())
 	if err != nil {
 		t.Fatal(err)
 	}

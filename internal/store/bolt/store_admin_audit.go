@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/akz142857/Halro/internal/domain"
+	bbolt "go.etcd.io/bbolt"
 )
 
 // maxAdminAuditIntents bounds how many undelivered admin audit intents may
@@ -25,7 +26,7 @@ const maxAdminAuditIntents = 4096
 // The caller passes nil when the mutation is not operator-initiated — startup
 // reconciliation and internal maintenance write the same records through paths
 // that already have their own audit story.
-func putAdminAuditIntentTx(tx *Tx, intent *domain.AdminAuditIntent) error {
+func putAdminAuditIntentTx(tx *bbolt.Tx, intent *domain.AdminAuditIntent) error {
 	if intent == nil {
 		return nil
 	}
@@ -60,7 +61,7 @@ func (s *Store) ListPendingAdminAuditIntents(ctx context.Context) ([]domain.Admi
 		return nil, err
 	}
 	var intents []domain.AdminAuditIntent
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketAdminAuditIntents).ForEach(func(_, raw []byte) error {
 			if raw == nil {
 				return nil
@@ -97,7 +98,7 @@ func (s *Store) DeleteAdminAuditIntent(ctx context.Context, eventID string) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return s.update(func(tx *Tx) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
 		return tx.Bucket(bucketAdminAuditIntents).Delete([]byte(eventID))
 	})
 }
@@ -108,7 +109,7 @@ func (s *Store) PendingAdminAuditIntentCount(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	count := 0
-	err := s.view(func(tx *Tx) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		count = tx.Bucket(bucketAdminAuditIntents).Stats().KeyN
 		return nil
 	})
