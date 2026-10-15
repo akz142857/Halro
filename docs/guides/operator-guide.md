@@ -584,13 +584,19 @@ retried.
 
 #### Keeping the ledger from being one file that only grows
 
-The accounting write-ahead log is replayed from byte zero on every start, so
-nothing in it can be deleted. Until sealing, that meant one file that grew for
+The accounting write-ahead log is the authority every balance is rebuilt from,
+so nothing in it can be deleted. Unsealed, that meant one file that grew for
 the life of the instance — about 5 KB per request, or roughly 4 GB a day at ten
 requests per second, forever.
 
-`ledger.seal.enabled` (off by default) changes the shape of that. Once the
-active generation passes `ledger.seal.max_active_bytes` (default 8 GiB) it is
+A start no longer replays it from byte zero: it resumes from the accounting
+state snapshot (`<data_dir>/ledger/state.snap`, written once a minute and at
+shutdown) and replays only what follows. Opening the log still reads the whole
+*active* file, though, so its size is what decides how long a start takes —
+which is why sealing is now on by default.
+
+`ledger.seal.enabled` (on by default) changes the shape of that. Once the
+active generation passes `ledger.seal.max_active_bytes` (default 256 MiB) it is
 rolled off whole: renamed to `ledger-<N>.wal`, recorded in
 `<data_dir>/ledger/segments.json`, and replaced by an empty successor whose
 first frame continues the same hash chain. On a later maintenance tick, once
@@ -606,6 +612,12 @@ active file, so balances still rebuild from the whole history, and
 than only the one being written. What sealing gives you is a bounded active
 file, a 5x smaller archive, and — because a sealed generation is immutable and
 named — the ability to move old generations onto cheaper storage yourself.
+
+A `config.yaml` written by an earlier release spells out `enabled: false` and
+`max_active_bytes: 8589934592`, and an explicit value wins over the new default.
+Set `enabled: true` and `max_active_bytes: 268435456` there to get starts that
+do not grow with the history; the first maintenance tick after that seals the
+existing file.
 
 `halro ledger seal` draws the boundary on demand. It takes the data directory
 lock, so it is an offline command: use it before copying a data directory or

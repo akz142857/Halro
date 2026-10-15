@@ -293,9 +293,11 @@ type Ledger struct {
 
 // LedgerSeal controls whether the WAL is allowed to stop being one file.
 //
-// Default off. Sealing is the only mechanism in this system that lets the
-// accounting authority's bytes move, and turning it on should be a decision an
-// operator makes about their disk, not something a default does to them.
+// Default on. Opening the Ledger reads the whole active generation twice — to
+// authenticate its chain and to seed its digest — so an unsealed WAL makes
+// every start as slow as the history is long, whatever the accounting state
+// snapshot saves. Sealing bounds the active generation, and with it the start.
+// Nothing sealed is deleted; replay still reads every generation.
 type LedgerSeal struct {
 	Enabled bool `yaml:"enabled"`
 	// MaxActiveBytes is the size the active generation may reach before it is
@@ -312,7 +314,10 @@ type LedgerSeal struct {
 // than this rolls often enough that the manifest, not the frames, becomes the
 // bulk of the directory, and every roll is a full fsync of a renamed file.
 const (
-	DefaultLedgerSealMaxActiveBytes = int64(8) << 30
+	// At the P0 baseline's rate — a 3 GB active file opened in 51 s — about
+	// four seconds, leaving the snapshot's suffix replay room inside the
+	// ten-second start budget.
+	DefaultLedgerSealMaxActiveBytes = int64(256) << 20
 	MinLedgerSealMaxActiveBytes     = int64(16) << 20
 )
 

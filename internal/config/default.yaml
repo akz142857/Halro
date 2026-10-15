@@ -182,12 +182,12 @@ ledger:
   # the file being written stays bounded, and the sealed ones can be compressed
   # (about 5.6x on real frames) or moved off the box.
   #
-  # Off by default. This is the only mechanism that lets the accounting
-  # authority's bytes move, and turning it on should be a decision about a
-  # specific disk.
+  # On by default. Opening the Ledger reads the whole active generation, so
+  # its size is what bounds how long a start takes; 256 MiB keeps a start
+  # within seconds however long the history is.
   seal:
-    enabled: false
-    max_active_bytes: 8589934592
+    enabled: true
+    max_active_bytes: 268435456
     compress: true
 
 gateway:
