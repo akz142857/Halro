@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -23,6 +24,12 @@ import (
 // reconcileSettledAfter, with no lease still open against it. A younger day
 // may still be gaining settlements on one side before the other.
 const reconcileSettledAfter = 48 * time.Hour
+
+// usageReconciliation is what the last reconciliation found, for metrics.
+type usageReconciliation struct {
+	periods    atomic.Int64
+	mismatches atomic.Uint64
+}
 
 // reconcilePeriods compares the history's daily totals for the days before
 // cutoff (all days when cutoff is empty) with the accounting totals, skipping
@@ -87,11 +94,11 @@ func (r *Runtime) reconcileUsageHistory(now time.Time) {
 		r.logger.Warn("usage history reconciliation failed", "error", err)
 		return
 	}
-	r.reconciledPeriods.Store(int64(checked))
+	r.accountingState.reconciliation.periods.Store(int64(checked))
 	if len(mismatched) == 0 {
 		return
 	}
-	r.reconcileMismatches.Add(uint64(len(mismatched)))
+	r.accountingState.reconciliation.mismatches.Add(uint64(len(mismatched)))
 	for _, period := range mismatched {
 		r.logger.Error("usage history disagrees with the accounting totals; rebuild it with usage rebuild-summary",
 			"period_id", period.PeriodID, "timezone_version", period.TimezoneVersion)

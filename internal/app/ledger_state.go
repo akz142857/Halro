@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/akz142857/Halro/internal/domain"
@@ -25,6 +26,23 @@ const (
 	ledgerStateSnapshotBytes    = int64(64) << 20
 	ledgerStateSnapshotPoll     = 5 * time.Second
 )
+
+// accountingStateRuntime is what the runtime keeps for the accounting state
+// beyond the state itself.
+type accountingStateRuntime struct {
+	snapshots      ledgerStateSnapshots
+	reconciliation usageReconciliation
+}
+
+// ledgerStateSnapshots is the snapshot writer's key and what it last wrote,
+// for metrics.
+type ledgerStateSnapshots struct {
+	key      []byte
+	sequence atomic.Uint64
+	bytes    atomic.Int64
+	unix     atomic.Int64
+	failures atomic.Uint64
+}
 
 // openedLedgerState is the accounting state as a start rebuilt it, with what
 // price pin recovery needs to know about how.
@@ -153,9 +171,14 @@ func sealedSegment(log *ledger.Log, generation uint64) (ledger.Segment, bool) {
 }
 
 // runLedgerStateSnapshots writes a snapshot once a minute, or sooner once the
-// Ledger has grown by ledgerStateSnapshotBytes, so a start replays a bounded
-// suffix however busy the instance is. It starts after lease recovery, so a
-// recovery settlement written twice is never split across a snapshot.
+// Ledger has grown by ledgerStateSnapshotBytes or rolled, so a start replays a
+// bounded suffix however busy the instance is. It starts after lease recovery,
+// so a recovery settlement written twice is never split across a snapshot.
+//
+// The roll is checked on the same poll. Opening the Ledger reads the whole
+// active generation, so the generation has to be held near its configured size
+// for the start to stay bounded; checked only on the hourly maintenance tick,
+// a busy instance wrote gigabytes past it.
 func (r *Runtime) runLedgerStateSnapshots(ctx context.Context) {
 	ticker := time.NewTicker(ledgerStateSnapshotPoll)
 	defer ticker.Stop()
@@ -167,6 +190,7 @@ func (r *Runtime) runLedgerStateSnapshots(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
+		r.sealLedgerGeneration()
 		nowGeneration, nowBytes := r.ledger.Generation(), r.ledger.ActiveBytes()
 		grown := nowGeneration != generation || nowBytes-bytes >= ledgerStateSnapshotBytes
 		if !grown && time.Since(last) < ledgerStateSnapshotInterval {
@@ -180,16 +204,16 @@ func (r *Runtime) runLedgerStateSnapshots(ctx context.Context) {
 // writeLedgerStateSnapshot writes one snapshot unless the state has not moved
 // since the last.
 func (r *Runtime) writeLedgerStateSnapshot() {
-	if r.state.Watermark().Sequence == r.ledgerSnapshotSequence.Load() {
+	if r.state.Watermark().Sequence == r.accountingState.snapshots.sequence.Load() {
 		return
 	}
-	watermark, size, err := ledger.WriteStateSnapshot(r.config.LedgerStatePath(), r.ledgerStateKey, r.state)
+	watermark, size, err := ledger.WriteStateSnapshot(r.config.LedgerStatePath(), r.accountingState.snapshots.key, r.state)
 	if err != nil {
-		r.ledgerSnapshotFailures.Add(1)
+		r.accountingState.snapshots.failures.Add(1)
 		r.logger.Warn("ledger state snapshot was not written", "error", err)
 		return
 	}
-	r.ledgerSnapshotSequence.Store(watermark.Sequence)
-	r.ledgerSnapshotBytes.Store(int64(size))
-	r.ledgerSnapshotUnix.Store(time.Now().Unix())
+	r.accountingState.snapshots.sequence.Store(watermark.Sequence)
+	r.accountingState.snapshots.bytes.Store(int64(size))
+	r.accountingState.snapshots.unix.Store(time.Now().Unix())
 }

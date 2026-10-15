@@ -242,7 +242,7 @@ func TestRuntimeShutdownWritesTheStateTheNextStartResumesFrom(t *testing.T) {
 		}
 	}
 	closed := runtime.state.Watermark()
-	stateKey := append([]byte(nil), runtime.ledgerStateKey...)
+	stateKey := append([]byte(nil), runtime.accountingState.snapshots.key...)
 	if err := runtime.Close(); err != nil {
 		t.Fatal(err)
 	}

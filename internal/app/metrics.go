@@ -220,10 +220,10 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	fmt.Fprintf(output, "halro_usage_history_file_bytes %d\n", writes.FileBytes)
 	metricHeader(output, "halro_usage_history_reconciled_periods", "gauge",
 		"Accounting days the last reconciliation compared against the usage history.")
-	fmt.Fprintf(output, "halro_usage_history_reconciled_periods %d\n", r.reconciledPeriods.Load())
+	fmt.Fprintf(output, "halro_usage_history_reconciled_periods %d\n", r.accountingState.reconciliation.periods.Load())
 	metricHeader(output, "halro_usage_history_reconcile_mismatches_total", "counter",
 		"Accounting days whose usage history totals disagreed with the accounting totals; rebuild the history.")
-	fmt.Fprintf(output, "halro_usage_history_reconcile_mismatches_total %d\n", r.reconcileMismatches.Load())
+	fmt.Fprintf(output, "halro_usage_history_reconcile_mismatches_total %d\n", r.accountingState.reconciliation.mismatches.Load())
 	metricHeader(output, "halro_usage_history_row_auth_failures_total", "counter",
 		"Usage history reads that met a row failing authentication; rebuild the index from the Ledger.")
 	fmt.Fprintf(output, "halro_usage_history_row_auth_failures_total %d\n", writes.RowAuthFailures)
@@ -241,16 +241,16 @@ func (r *Runtime) writeMetrics(ctx context.Context, writer http.ResponseWriter) 
 	}
 	metricHeader(output, "halro_ledger_state_snapshot_sequence", "gauge",
 		"Ledger sequence the last accounting state snapshot describes; a start replays from here.")
-	fmt.Fprintf(output, "halro_ledger_state_snapshot_sequence %d\n", r.ledgerSnapshotSequence.Load())
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_sequence %d\n", r.accountingState.snapshots.sequence.Load())
 	metricHeader(output, "halro_ledger_state_snapshot_bytes", "gauge",
 		"Size of the last accounting state snapshot, which is the size of the accounting state.")
-	fmt.Fprintf(output, "halro_ledger_state_snapshot_bytes %d\n", r.ledgerSnapshotBytes.Load())
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_bytes %d\n", r.accountingState.snapshots.bytes.Load())
 	metricHeader(output, "halro_ledger_state_snapshot_timestamp_seconds", "gauge",
 		"Unix time the last accounting state snapshot was written.")
-	fmt.Fprintf(output, "halro_ledger_state_snapshot_timestamp_seconds %d\n", r.ledgerSnapshotUnix.Load())
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_timestamp_seconds %d\n", r.accountingState.snapshots.unix.Load())
 	metricHeader(output, "halro_ledger_state_snapshot_failures_total", "counter",
 		"Accounting state snapshots that could not be written.")
-	fmt.Fprintf(output, "halro_ledger_state_snapshot_failures_total %d\n", r.ledgerSnapshotFailures.Load())
+	fmt.Fprintf(output, "halro_ledger_state_snapshot_failures_total %d\n", r.accountingState.snapshots.failures.Load())
 	metricHeader(output, "halro_ledger_active_bytes", "gauge",
 		"Bytes in the ledger generation currently being appended to.")
 	fmt.Fprintf(output, "halro_ledger_active_bytes %d\n", r.ledger.ActiveBytes())

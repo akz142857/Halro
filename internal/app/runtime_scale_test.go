@@ -88,7 +88,11 @@ const (
 	// alternative — a struct to hold one uint64 — would cost a field anyway
 	// and buy nothing. Raised so 260918-PV-F-19's alerting has something to
 	// fire on.
-	runtimeFieldBudget = 77
+	//
+	// 78: the accounting state snapshot and the usage history reconciliation
+	// that checks the history against it (memory-bounded redesign P2), as one
+	// field holding both rather than seven.
+	runtimeFieldBudget = 78
 	runtimeMutexBudget = 10
 )
 
